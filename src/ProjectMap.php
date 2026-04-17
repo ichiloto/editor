@@ -510,6 +510,7 @@ final class ProjectMap
      */
     public function save(): string
     {
+
         $target = $this->resolveSaveTarget();
         $dataPayload = "<?php\n\nreturn " . self::exportPhpValue($this->editableData) . ";\n";
         $mapPayload = "<?php\n\nreturn <<<'ICHILOTO_MAP'\n"

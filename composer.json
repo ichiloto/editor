@@ -1,33 +1,37 @@
 {
-    "name": "ichiloto/editor",
-    "description": "A simple TUI editor for the ichiloto game engine.",
-    "type": "library",
-    "require": {
-        "symfony/console": "^8.0",
-        "league/climate": "^3.10",
-        "laravel/prompts": "^0.3.14",
-        "php-tui/php-tui": "^0.2.1",
-        "atatusoft-ltd/termutil": "^1.1"
+  "name": "ichiloto/editor",
+  "description": "A simple TUI editor for the ichiloto game engine.",
+  "type": "library",
+  "require": {
+    "symfony/console": "^8.0",
+    "league/climate": "^3.10",
+    "laravel/prompts": "^0.3.14",
+    "php-tui/php-tui": "^0.2.1",
+    "atatusoft-ltd/termutil": "^1.1",
+    "ext-mbstring": "*"
+  },
+  "require-dev": {
+    "pestphp/pest": "^4.4",
+    "phpstan/phpstan": "^2.1"
+  },
+  "license": "MIT",
+  "autoload": {
+    "psr-4": {
+      "Ichiloto\\Editor\\": "src/"
     },
-    "require-dev": {
-        "pestphp/pest": "^4.4",
-        "phpstan/phpstan": "^2.1"
-    },
-    "license": "MIT",
-    "autoload": {
-        "psr-4": {
-            "Ichiloto\\Editor\\": "src/"
-        }
-    },
-    "authors": [
-        {
-            "name": "Andrew Masiye",
-            "email": "amasiye313@gmail.com"
-        }
-    ],
-    "config": {
-        "allow-plugins": {
-            "pestphp/pest-plugin": true
-        }
+    "files": [
+      "src/Util/Helpers.php"
+    ]
+  },
+  "authors": [
+    {
+      "name": "Andrew Masiye",
+      "email": "amasiye313@gmail.com"
     }
+  ],
+  "config": {
+    "allow-plugins": {
+      "pestphp/pest-plugin": true
+    }
+  }
 }

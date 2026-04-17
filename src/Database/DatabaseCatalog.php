@@ -18,8 +18,8 @@ final class DatabaseCatalog
     {
         return [
             new DatabaseCategoryDefinition('actors', 'Actors', 'Manage playable character records.', true),
-            new DatabaseCategoryDefinition('classes', 'Classes', 'Define growth, roles, and class data.'),
-            new DatabaseCategoryDefinition('skills', 'Skills', 'Author active and passive skill entries.'),
+            new DatabaseCategoryDefinition('classes', 'Classes', 'Define growth, roles, and class data.', true),
+            new DatabaseCategoryDefinition('skills', 'Skills', 'Author active and passive skill entries.', true),
             new DatabaseCategoryDefinition('items', 'Items', 'Manage consumables, key items, and resources.'),
             new DatabaseCategoryDefinition('weapons', 'Weapons', 'Configure weapon stats and restrictions.'),
             new DatabaseCategoryDefinition('armors', 'Armors', 'Configure armor stats and resistances.'),
@@ -29,7 +29,7 @@ final class DatabaseCatalog
             new DatabaseCategoryDefinition('animations', 'Animations', 'Create reusable keyframed effects.', true),
             new DatabaseCategoryDefinition('tilesets', 'Tilesets', 'Assign tiles and terrain behavior.'),
             new DatabaseCategoryDefinition('common_events', 'Common Events', 'Create reusable event scripts.'),
-            new DatabaseCategoryDefinition('system', 'System', 'Configure system-wide project settings.'),
+            new DatabaseCategoryDefinition('system', 'System', 'Configure system-wide project settings.', true),
             new DatabaseCategoryDefinition('types', 'Types', 'Manage element and weapon-type tables.'),
             new DatabaseCategoryDefinition('terms', 'Terms', 'Customize UI labels and message terms.'),
         ];

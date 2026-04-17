@@ -12,19 +12,22 @@ use RuntimeException;
 /**
  * Represents the currently opened Ichiloto project in the editor.
  */
-final class ProjectWorkspace
+final readonly class ProjectWorkspace
 {
     /**
      * @param ProjectMap[] $maps
      */
     public function __construct(
-        public readonly string $projectRoot,
-        public readonly string $projectName,
-        public readonly string $mainFile,
-        public readonly array $maps,
-        public readonly array $mapIds,
-        public readonly ProjectActorDatabase $actorDatabase,
-        public readonly ProjectAnimationDatabase $animationDatabase,
+        public string                   $projectRoot,
+        public string                   $projectName,
+        public string                   $mainFile,
+        public array                    $maps,
+        public array                    $mapIds,
+        public ProjectActorDatabase     $actorDatabase,
+        public ProjectClassDatabase     $classDatabase,
+        public ProjectSkillDatabase     $skillDatabase,
+        public ProjectAnimationDatabase $animationDatabase,
+        public ProjectSystemDatabase    $systemDatabase,
     ) {
     }
 
@@ -68,7 +71,10 @@ final class ProjectWorkspace
             maps: $maps = self::discoverMaps($projectRoot),
             mapIds: array_map(static fn(ProjectMap $map): string => $map->mapId, $maps),
             actorDatabase: ProjectActorDatabase::fromProject($projectRoot),
+            classDatabase: ProjectClassDatabase::fromProject($projectRoot),
+            skillDatabase: ProjectSkillDatabase::fromProject($projectRoot),
             animationDatabase: ProjectAnimationDatabase::fromProject($projectRoot),
+            systemDatabase: ProjectSystemDatabase::fromProject($projectRoot),
         );
     }
 
@@ -114,19 +120,19 @@ final class ProjectWorkspace
      */
     public function getAssetLines(int $selectedMapIndex = 0): array
     {
-        $lines = ['Assets', '', 'Maps'];
+        $lines = ["Maps"];
 
         if ($this->mapIds === []) {
-            $lines[] = '  (none found)';
+            $lines[] = "  (none found)";
             return $lines;
         }
 
         foreach ($this->mapIds as $mapId) {
-            $lines[] = sprintf('  %s', $mapId);
+            $lines[] = sprintf("  %s", $mapId);
         }
 
-        if (isset($lines[3 + $selectedMapIndex])) {
-            $lines[3 + $selectedMapIndex] = sprintf('> %s', $this->mapIds[$selectedMapIndex]);
+        if (isset($lines[1 + $selectedMapIndex])) {
+            $lines[1 + $selectedMapIndex] = sprintf("> %s", $this->mapIds[$selectedMapIndex]);
         }
 
         return $lines;

@@ -11,14 +11,21 @@ use Atatusoft\Termutil\IO\Enumerations\MouseTrackingMode;
 use Atatusoft\Termutil\IO\Mouse\Enumerations\MouseButton;
 use Ichiloto\Editor\Database\DatabaseCatalog;
 use Ichiloto\Editor\Database\DatabaseCategoryDefinition;
+use Ichiloto\Editor\Debug\Debug;
 use Ichiloto\Editor\Events\EventTypeCatalog;
 use Ichiloto\Editor\Inspector\InputControl;
 use Ichiloto\Editor\Inspector\InputControlType;
-use Ichiloto\Engine\Animations\Animation;
-use Ichiloto\Engine\Animations\AnimationCue;
-use Ichiloto\Engine\Animations\AnimationPlayer;
-use Ichiloto\Engine\Animations\AnimationTargetPosition;
+use Ichiloto\Engine\Entities\Enumerations\ItemScopeNumber;
+use Ichiloto\Engine\Entities\Enumerations\ItemScopeSide;
+use Ichiloto\Engine\Entities\Enumerations\ItemScopeStatus;
+use Ichiloto\Engine\Entities\Enumerations\Occasion;
+use Ichiloto\Engine\Entities\Magic\MagicEffectType;
+use Ichiloto\Engine\Entities\Roles\ExperienceCurveGenerator;
+use Ichiloto\Engine\Entities\Roles\ParameterCurveGenerator;
 use RuntimeException;
+if (! class_exists(__NAMESPACE__ . chr(92) . 'Animation', false)) { class_alias('Ichiloto' . chr(92) . 'Engine' . chr(92) . 'Animations' . chr(92) . 'Animation', __NAMESPACE__ . chr(92) . 'Animation'); }
+if (! class_exists(__NAMESPACE__ . chr(92) . 'AnimationCue', false)) { class_alias('Ichiloto' . chr(92) . 'Engine' . chr(92) . 'Animations' . chr(92) . 'AnimationCue', __NAMESPACE__ . chr(92) . 'AnimationCue'); }
+if (! class_exists(__NAMESPACE__ . chr(92) . 'AnimationPlayer', false)) { class_alias('Ichiloto' . chr(92) . 'Engine' . chr(92) . 'Animations' . chr(92) . 'AnimationPlayer', __NAMESPACE__ . chr(92) . 'AnimationPlayer'); }
 use Throwable;
 
 /**
@@ -32,7 +39,10 @@ final class Editor
     private const string MODE_MAP = 'map';
     private const string MODE_EVENT = 'event';
     private const string DATABASE_CATEGORY_ACTORS = 'actors';
+    private const string DATABASE_CATEGORY_CLASSES = 'classes';
+    private const string DATABASE_CATEGORY_SKILLS = 'skills';
     private const string DATABASE_CATEGORY_ANIMATIONS = 'animations';
+    private const string DATABASE_CATEGORY_SYSTEM = 'system';
     private const string DATABASE_FOCUS_CATEGORIES = 'database_categories';
     private const string DATABASE_FOCUS_LIST = 'database_list';
     private const string DATABASE_FOCUS_SETTINGS = 'database_settings';
@@ -68,6 +78,30 @@ final class Editor
     private int $selectedInspectorFieldIndex = 0;
     private int $selectedEventTypeIndex = 0;
     private int $selectedDestinationIndex = 0;
+    private int $selectedLootIndex = 0;
+    private bool $isLootDialogOpen = false;
+    private ?string $lootDialogMarker = null;
+    private ?LootType $lootDialogType = null;
+    /**
+     * @var string[]|null
+     */
+    private ?array $lootDialogPath = null;
+    /**
+     * @var array<int, array{name: string, description: string, icon: string, type: string}>
+     */
+    private array $lootDialogEntries = [];
+    private int $selectedEventOptionIndex = 0;
+    private bool $isEventOptionDialogOpen = false;
+    private ?string $eventOptionDialogMarker = null;
+    /**
+     * @var string[]|null
+     */
+    private ?array $eventOptionDialogPath = null;
+    private string $eventOptionDialogTitle = 'Options';
+    /**
+     * @var array<int, array{label: string, value: string, description: string}>
+     */
+    private array $eventOptionDialogEntries = [];
     private ?string $eventTypeDialogMarker = null;
     /**
      * @var string[]|null
@@ -97,6 +131,8 @@ final class Editor
     private int $databaseCategoryIndex = 9;
     private string $databaseFocus = self::DATABASE_FOCUS_LIST;
     private int $databaseSelectedActorIndex = 0;
+    private int $databaseSelectedClassIndex = 0;
+    private int $databaseSelectedSkillIndex = 0;
     private int $databaseSelectedAnimationIndex = 0;
     private int $databaseSelectedSettingIndex = 0;
     private int $databaseSelectedFrameIndex = 1;
@@ -117,9 +153,18 @@ final class Editor
     private ?array $lastTerminalSize = null;
     private string $previousTerminalSettings = '';
     private bool $usesAlternateScreen = false;
+    private bool $isFullRenderPending = false;
 
     public function __construct(private readonly string $projectRoot)
     {
+        set_exception_handler(function (Throwable $e) {
+            $this->handleException($e);
+        });
+
+        set_error_handler(function (int $errno, string $errstr, string $errfile, int $errline) {
+            $this->handleException(new RuntimeException("Error {$errno}: {$errstr} in {$errfile} on line {$errline}"));
+            return true;
+        });
     }
 
     /**
@@ -133,10 +178,13 @@ final class Editor
 
         try {
             while ($this->isRunning) {
-                $this->renderIfNeeded();
                 $this->handleInput();
+                $this->update();
+                $this->render();
                 usleep(50_000);
             }
+        } catch (Throwable $e) {
+            $this->handleException($e);
         } finally {
             $this->shutdown();
         }
@@ -165,6 +213,12 @@ final class Editor
         $this->isDestinationSpawnSelectionOpen = false;
         $this->isDestinationSpawnConfirmationOpen = false;
         $this->isDatabaseOpen = false;
+        $this->selectedEventOptionIndex = 0;
+        $this->isEventOptionDialogOpen = false;
+        $this->eventOptionDialogMarker = null;
+        $this->eventOptionDialogPath = null;
+        $this->eventOptionDialogTitle = 'Options';
+        $this->eventOptionDialogEntries = [];
         $this->selectedPaintSymbol = ' ';
         $this->activeMousePaintButton = null;
         $this->lastMousePaintPoint = null;
@@ -172,6 +226,12 @@ final class Editor
         $this->selectedInspectorFieldIndex = 0;
         $this->selectedEventTypeIndex = 0;
         $this->selectedDestinationIndex = 0;
+        $this->selectedLootIndex = 0;
+        $this->isLootDialogOpen = false;
+        $this->lootDialogMarker = null;
+        $this->lootDialogType = null;
+        $this->lootDialogPath = null;
+        $this->lootDialogEntries = [];
         $this->eventTypeDialogMarker = null;
         $this->destinationDialogPath = null;
         $this->destinationDialogMarker = null;
@@ -179,10 +239,11 @@ final class Editor
         $this->isInspectorEditing = false;
         $this->inspectorEditBuffer = '';
         $this->inspectorEditCursorIndex = 0;
-        $this->databaseCategoryIndex = DatabaseCatalog::indexOf(self::DATABASE_CATEGORY_ANIMATIONS);
+        $this->databaseCategoryIndex = DatabaseCatalog::indexOf(self::DATABASE_CATEGORY_ACTORS);
         $this->databaseFocus = self::DATABASE_FOCUS_LIST;
         $this->databaseSelectedActorIndex = 0;
-        $this->databaseSelectedAnimationIndex = 0;
+        $this->databaseSelectedClassIndex = 0;
+        $this->databaseSelectedSkillIndex = 0;
         $this->databaseSelectedSettingIndex = 0;
         $this->databaseSelectedFrameIndex = 1;
         $this->databasePreviewCursorX = 0;
@@ -216,7 +277,7 @@ final class Editor
 
         $this->lastTerminalSize = $size;
         $this->isRunning = true;
-        $this->render();
+        $this->requestFullRender();
     }
 
     /**
@@ -243,11 +304,21 @@ final class Editor
     }
 
     /**
-     * Re-renders the shell when the terminal size changes.
+     * Advances editor state that is not owned by a direct input handler.
      *
      * @return void
      */
-    private function renderIfNeeded(): void
+    private function update(): void
+    {
+        $this->syncTerminalSizeIfNeeded();
+    }
+
+    /**
+     * Reconciles the editor shell against terminal resize events.
+     *
+     * @return void
+     */
+    private function syncTerminalSizeIfNeeded(): void
     {
         $size = $this->getTerminalSize();
 
@@ -262,7 +333,17 @@ final class Editor
 
         $this->lastTerminalSize = $size;
         $this->clampCanvasOffsets();
-        $this->render();
+        $this->requestFullRender();
+    }
+
+    /**
+     * Marks the editor shell for a full redraw on the next render phase.
+     *
+     * @return void
+     */
+    private function requestFullRender(): void
+    {
+        $this->isFullRenderPending = true;
     }
 
     /**
@@ -302,6 +383,15 @@ final class Editor
 
         if ($this->isDestinationDialogOpen) {
             $this->handleDestinationDialogInput($input, $normalizedInput);
+            return;
+        }
+        if ($this->isLootDialogOpen) {
+            $this->handleLootDialogInput($input, $normalizedInput);
+            return;
+        }
+
+        if ($this->isEventOptionDialogOpen) {
+            $this->handleEventOptionDialogInput($input, $normalizedInput);
             return;
         }
 
@@ -365,7 +455,7 @@ final class Editor
             $this->clampCursor();
             $this->clampCanvasOffsets();
             $this->statusMessage = 'Workspace refreshed.';
-            $this->render();
+            $this->requestFullRender();
             return;
         }
 
@@ -660,10 +750,11 @@ final class Editor
         }
 
         $this->isDatabaseOpen = true;
-        $this->databaseCategoryIndex = DatabaseCatalog::indexOf(self::DATABASE_CATEGORY_ANIMATIONS);
+        $this->databaseCategoryIndex = DatabaseCatalog::indexOf(self::DATABASE_CATEGORY_ACTORS);
         $this->databaseFocus = self::DATABASE_FOCUS_LIST;
         $this->databaseSelectedActorIndex = 0;
-        $this->databaseSelectedAnimationIndex = 0;
+        $this->databaseSelectedClassIndex = 0;
+        $this->databaseSelectedSkillIndex = 0;
         $this->databaseSelectedSettingIndex = 0;
         $this->databaseSelectedFrameIndex = 1;
         $this->isDatabaseEditing = false;
@@ -690,7 +781,7 @@ final class Editor
         $this->isDatabasePreviewPlaying = false;
         $this->databasePlaybackFlashColor = null;
         $this->statusMessage = 'Database closed.';
-        $this->render();
+        $this->requestFullRender();
     }
 
     /**
@@ -883,7 +974,7 @@ final class Editor
         $this->databaseCategoryIndex = $nextIndex;
         $this->databaseSelectedSettingIndex = 0;
         $this->statusMessage = sprintf('%s database selected.', $categories[$nextIndex]->label);
-        $this->renderDatabaseArea();
+        $this->renderDatabaseArea(true);
     }
 
     /**
@@ -896,6 +987,16 @@ final class Editor
     {
         if ($this->isActorsDatabaseSelected()) {
             $this->moveDatabaseActorSelection($step);
+            return;
+        }
+
+        if ($this->isClassesDatabaseSelected()) {
+            $this->moveDatabaseClassSelection($step);
+            return;
+        }
+
+        if ($this->isSkillsDatabaseSelected()) {
+            $this->moveDatabaseSkillSelection($step);
             return;
         }
 
@@ -929,6 +1030,58 @@ final class Editor
         $this->statusMessage = sprintf('Selected actor %s.', $actors[$nextIndex]->getName());
         $this->renderDatabasePanes(['list', 'settings', 'cue', 'frames', 'preview']);
     }
+
+    /**
+     * Moves the selected class entry.
+     *
+     * @param int $step The entry step.
+     * @return void
+     */
+    private function moveDatabaseClassSelection(int $step): void
+    {
+        $classes = $this->workspace?->classDatabase->getClasses() ?? [];
+
+        if ($classes === []) {
+            return;
+        }
+
+        $nextIndex = max(0, min(count($classes) - 1, $this->databaseSelectedClassIndex + $step));
+
+        if ($nextIndex === $this->databaseSelectedClassIndex) {
+            return;
+        }
+
+        $this->databaseSelectedClassIndex = $nextIndex;
+        $this->databaseSelectedSettingIndex = 0;
+        $this->statusMessage = sprintf('Selected class %s.', $classes[$nextIndex]->getName());
+        $this->renderDatabasePanes(['list', 'settings', 'cue', 'frames', 'preview']);
+    }
+    /**
+     * Moves the selected skill entry.
+     *
+     * @param int $step The entry step.
+     * @return void
+     */
+    private function moveDatabaseSkillSelection(int $step): void
+    {
+        $skills = $this->workspace?->skillDatabase->getSkills() ?? [];
+
+        if ($skills === []) {
+            return;
+        }
+
+        $nextIndex = max(0, min(count($skills) - 1, $this->databaseSelectedSkillIndex + $step));
+
+        if ($nextIndex === $this->databaseSelectedSkillIndex) {
+            return;
+        }
+
+        $this->databaseSelectedSkillIndex = $nextIndex;
+        $this->databaseSelectedSettingIndex = 0;
+        $this->statusMessage = sprintf("Selected skill %s.", $skills[$nextIndex]->getName());
+        $this->renderDatabasePanes(["list", "settings", "cue", "frames", "preview"]);
+    }
+
 
     /**
      * Moves the selected animation entry.
@@ -1242,7 +1395,7 @@ final class Editor
         $this->isCharacterMapOpen = true;
         $this->characterPaletteIndex = 0;
         $this->statusMessage = 'Character map open.';
-        $this->render();
+        $this->requestFullRender();
     }
 
     /**
@@ -1334,7 +1487,7 @@ final class Editor
         $this->replaceCurrentSymbol($symbol);
         $this->isCharacterMapOpen = false;
         $this->statusMessage = sprintf('Placed %s.', $symbol === ' ' ? 'space' : $symbol);
-        $this->render();
+        $this->requestFullRender();
     }
 
     /**
@@ -1347,7 +1500,7 @@ final class Editor
     {
         $this->isCharacterMapOpen = false;
         $this->statusMessage = $statusMessage;
-        $this->render();
+        $this->requestFullRender();
     }
 
     /**
@@ -1919,6 +2072,179 @@ final class Editor
         $this->renderSelectionDependentArea();
     }
 
+
+    private function openLootDialog(string $marker, array $path, string $currentLoot, LootType $lootType): void
+    {
+        if ($marker === '' || $path === []) {
+            $this->statusMessage = 'Unable to open loot picker.';
+            $this->renderFooter();
+            return;
+        }
+
+        $entries = $this->loadLootDialogEntries($lootType);
+
+        if ($entries === []) {
+            $this->statusMessage = sprintf('No %s are available.', mb_strtolower($this->getLootTypeLabel($lootType, plural: true)));
+            $this->renderFooter();
+            return;
+        }
+
+        $this->lootDialogEntries = $entries;
+        $this->selectedLootIndex = $this->resolveLootSelectionIndex($currentLoot);
+        $this->lootDialogMarker = $marker;
+        $this->lootDialogType = $lootType;
+        $this->lootDialogPath = $path;
+        $this->isLootDialogOpen = true;
+        $this->statusMessage = sprintf('Choose %s for %s.', mb_strtolower($this->getLootTypeLabel($lootType)), $marker);
+        $this->renderSelectionDependentArea();
+    }
+
+    private function handleLootDialogInput(string $input, string $normalizedInput): void
+    {
+        if ($input === chr(27) || $this->isPlainShortcut($normalizedInput, 'c')) {
+            $this->closeLootDialog('Loot selection cancelled.');
+            return;
+        }
+
+        if (str_contains($input, chr(27) . '[A') || $this->isPlainShortcut($normalizedInput, 'k')) {
+            $this->moveLootSelection(-1);
+            return;
+        }
+
+        if (str_contains($input, chr(27) . '[B') || $this->isPlainShortcut($normalizedInput, 'j')) {
+            $this->moveLootSelection(1);
+            return;
+        }
+
+        if ($input === chr(10) || $input === chr(13)) {
+            $this->applySelectedLoot();
+        }
+    }
+
+    private function moveLootSelection(int $step): void
+    {
+        if ($this->lootDialogEntries === []) {
+            return;
+        }
+
+        $nextIndex = max(0, min(count($this->lootDialogEntries) - 1, $this->selectedLootIndex + $step));
+
+        if ($nextIndex === $this->selectedLootIndex) {
+            return;
+        }
+
+        $this->selectedLootIndex = $nextIndex;
+        $this->renderOverlays();
+    }
+
+    private function applySelectedLoot(): void
+    {
+        $selectedMap = $this->getSelectedMap();
+        $selectedEntry = $this->lootDialogEntries[$this->selectedLootIndex] ?? null;
+
+        if (! $selectedMap instanceof ProjectMap || ! is_array($selectedEntry) || ! is_string($this->lootDialogMarker) || $this->lootDialogMarker === '' || ! is_array($this->lootDialogPath)) {
+            $this->closeLootDialog('Unable to set loot.');
+            return;
+        }
+
+        $selectedMap->setEventField($this->lootDialogMarker, $this->lootDialogPath, $selectedEntry['name']);
+        $lootTypeLabel = $this->getLootTypeLabel($this->lootDialogType ?? LootType::ITEM);
+        $this->closeLootDialog(sprintf('Set %s to %s.', mb_strtolower($lootTypeLabel), $selectedEntry['name']));
+    }
+
+    private function closeLootDialog(string $statusMessage): void
+    {
+        $this->isLootDialogOpen = false;
+        $this->lootDialogMarker = null;
+        $this->lootDialogType = null;
+        $this->lootDialogPath = null;
+        $this->lootDialogEntries = [];
+        $this->selectedLootIndex = 0;
+        $this->statusMessage = $statusMessage;
+        $this->renderSelectionDependentArea();
+    }
+
+    private function openEventOptionDialog(string $marker, array $path, string $title, array $entries, string $currentValue): void
+    {
+        if ($marker === '' || $path === [] || $entries === []) {
+            $this->statusMessage = 'Unable to open option picker.';
+            $this->renderFooter();
+            return;
+        }
+
+        $this->eventOptionDialogMarker = $marker;
+        $this->eventOptionDialogPath = $path;
+        $this->eventOptionDialogTitle = $title;
+        $this->eventOptionDialogEntries = $entries;
+        $this->selectedEventOptionIndex = $this->resolveEventOptionSelectionIndex($currentValue);
+        $this->isEventOptionDialogOpen = true;
+        $this->statusMessage = sprintf('Choose %s for %s.', mb_strtolower($title), $marker);
+        $this->renderSelectionDependentArea();
+    }
+
+    private function handleEventOptionDialogInput(string $input, string $normalizedInput): void
+    {
+        if ($input === chr(27) || $this->isPlainShortcut($normalizedInput, 'c')) {
+            $this->closeEventOptionDialog('Selection cancelled.');
+            return;
+        }
+
+        if (str_contains($input, chr(27) . '[A') || $this->isPlainShortcut($normalizedInput, 'k')) {
+            $this->moveEventOptionSelection(-1);
+            return;
+        }
+
+        if (str_contains($input, chr(27) . '[B') || $this->isPlainShortcut($normalizedInput, 'j')) {
+            $this->moveEventOptionSelection(1);
+            return;
+        }
+
+        if ($input === chr(10) || $input === chr(13)) {
+            $this->applySelectedEventOption();
+        }
+    }
+
+    private function moveEventOptionSelection(int $step): void
+    {
+        if ($this->eventOptionDialogEntries === []) {
+            return;
+        }
+
+        $nextIndex = max(0, min(count($this->eventOptionDialogEntries) - 1, $this->selectedEventOptionIndex + $step));
+
+        if ($nextIndex === $this->selectedEventOptionIndex) {
+            return;
+        }
+
+        $this->selectedEventOptionIndex = $nextIndex;
+        $this->renderOverlays();
+    }
+
+    private function applySelectedEventOption(): void
+    {
+        $selectedMap = $this->getSelectedMap();
+        $selectedEntry = $this->eventOptionDialogEntries[$this->selectedEventOptionIndex] ?? null;
+
+        if (! $selectedMap instanceof ProjectMap || ! is_array($selectedEntry) || ! is_string($this->eventOptionDialogMarker) || $this->eventOptionDialogMarker === '' || ! is_array($this->eventOptionDialogPath)) {
+            $this->closeEventOptionDialog('Unable to set option.');
+            return;
+        }
+
+        $selectedMap->setEventField($this->eventOptionDialogMarker, $this->eventOptionDialogPath, $selectedEntry['value']);
+        $this->closeEventOptionDialog(sprintf('Set %s to %s.', mb_strtolower($this->eventOptionDialogTitle), $selectedEntry['label']));
+    }
+
+    private function closeEventOptionDialog(string $statusMessage): void
+    {
+        $this->isEventOptionDialogOpen = false;
+        $this->eventOptionDialogMarker = null;
+        $this->eventOptionDialogPath = null;
+        $this->eventOptionDialogTitle = 'Options';
+        $this->eventOptionDialogEntries = [];
+        $this->selectedEventOptionIndex = 0;
+        $this->statusMessage = $statusMessage;
+        $this->renderSelectionDependentArea();
+    }
     /**
      * Starts the destination spawn-point selection flow on the chosen map.
      *
@@ -2111,7 +2437,7 @@ final class Editor
         $this->clampCursor();
         $this->clampCanvasOffsets();
         $this->clampInspectorSelection();
-        $this->render();
+        $this->requestFullRender();
     }
 
     /**
@@ -2360,18 +2686,12 @@ final class Editor
             return;
         }
 
-        $nextIndex = max(0, min(count($fields) - 1, $this->selectedInspectorFieldIndex + $step));
-
-        if ($nextIndex === $this->selectedInspectorFieldIndex) {
-            return;
-        }
-
-        $this->selectedInspectorFieldIndex = $nextIndex;
+        $this->selectedInspectorFieldIndex = max(0, min(count($fields) - 1, $this->selectedInspectorFieldIndex + $step));
         $this->renderInspectorArea();
     }
 
     /**
-     * Keeps the inspector selection within the available field list.
+     * Clamps the inspector selection to the visible field list.
      *
      * @return void
      */
@@ -2433,6 +2753,28 @@ final class Editor
             return;
         }
 
+        if ($this->isChestTypeField($field)) {
+            $this->openEventOptionDialog(
+                (string) ($field['marker'] ?? ''),
+                (array) ($field['path'] ?? []),
+                'Chest Type',
+                $this->getChestTypeOptionEntries(),
+                (string) ($field['value'] ?? ''),
+            );
+            return;
+        }
+
+        if ($this->isLootTypeField($field)) {
+            $this->openEventOptionDialog(
+                (string) ($field['marker'] ?? ''),
+                (array) ($field['path'] ?? []),
+                'Loot Type',
+                $this->getLootTypeOptionEntries(),
+                (string) ($field['value'] ?? ''),
+            );
+            return;
+        }
+
         if ($this->isDestinationMapField($field)) {
             $this->openDestinationDialog(
                 (string) ($field['marker'] ?? ''),
@@ -2442,7 +2784,115 @@ final class Editor
             return;
         }
 
+        $lootType = $this->resolveLootFieldType($field);
+
+        if ($this->isLootField($field) && $lootType instanceof LootType) {
+            $this->openLootDialog(
+                (string) ($field['marker'] ?? ''),
+                (array) ($field['path'] ?? []),
+                (string) ($field['value'] ?? ''),
+                $lootType,
+            );
+            return;
+        }
+
         $this->beginInspectorEdit();
+    }
+
+    /**
+     * Returns whether the field should open the loot picker.
+     *
+     * @param array<string, mixed> $field The inspector field descriptor.
+     * @return bool
+     */
+    private function isLootField(array $field): bool
+    {
+        if (
+            ($field['target'] ?? null) !== 'event'
+            || (($field['path'] ?? []) != ['data', 'loot'])
+        ) {
+            return false;
+        }
+
+        return $this->isDialogSelectableLootType($this->resolveLootFieldType($field));
+    }
+
+    /**
+     * Resolves the event loot type for the current inspector field.
+     *
+     * @param array<string, mixed> $field The inspector field descriptor.
+     * @return LootType|null
+     */
+    private function resolveLootFieldType(array $field): ?LootType
+    {
+        if (
+            ($field['target'] ?? null) !== 'event'
+            || (($field['path'] ?? []) != ['data', 'loot'])
+        ) {
+            return null;
+        }
+
+        $marker = (string) ($field['marker'] ?? '');
+
+        if ($marker === '') {
+            return null;
+        }
+
+        $selectedMap = $this->getSelectedMap();
+
+        if (! $selectedMap instanceof ProjectMap) {
+            return null;
+        }
+
+        $definition = $selectedMap->getEventDefinition($marker);
+        $eventData = is_array($definition) ? ($definition['data'] ?? null) : null;
+
+        if (! is_array($eventData)) {
+            return null;
+        }
+
+        return $this->resolveLootTypeValue($eventData['lootType'] ?? null);
+    }
+
+    /**
+     * Resolves a stored loot type into the enum when possible.
+     *
+     * @param mixed $value The stored loot type value.
+     * @return LootType|null
+     */
+    private function resolveLootTypeValue(mixed $value): ?LootType
+    {
+        if ($value instanceof LootType) {
+            return $value;
+        }
+
+        if (! is_string($value) || $value === '') {
+            return null;
+        }
+
+        return LootType::tryFrom($value);
+    }
+
+    /**
+     * Returns whether the given loot type should use the picker dialog.
+     *
+     * @param LootType|null $lootType The resolved loot type.
+     * @return bool
+     */
+    private function isDialogSelectableLootType(?LootType $lootType): bool
+    {
+        return in_array(
+            $lootType,
+            [
+                LootType::ITEM,
+                LootType::SKILL,
+                LootType::SPELL,
+                LootType::WEAPON,
+                LootType::ARMOR,
+                LootType::ACCESSORY,
+            ],
+            true,
+        );
     }
 
     /**
@@ -2688,6 +3138,26 @@ final class Editor
     }
 
     /**
+     * Returns whether the Classes database is active.
+     *
+     * @return bool
+     */
+    private function isClassesDatabaseSelected(): bool
+    {
+        return $this->getSelectedDatabaseCategoryDefinition()->key === self::DATABASE_CATEGORY_CLASSES;
+    }
+
+
+    /**
+     * Returns whether the Skills database is active.
+     *
+     * @return bool
+     */
+    private function isSkillsDatabaseSelected(): bool
+    {
+        return $this->getSelectedDatabaseCategoryDefinition()->key === self::DATABASE_CATEGORY_SKILLS;
+    }
+    /**
      * Returns whether the Animations database is active.
      *
      * @return bool
@@ -2695,6 +3165,16 @@ final class Editor
     private function isAnimationsDatabaseSelected(): bool
     {
         return $this->getSelectedDatabaseCategoryDefinition()->key === self::DATABASE_CATEGORY_ANIMATIONS;
+    }
+
+    /**
+     * Returns whether the System database is active.
+     *
+     * @return bool
+     */
+    private function isSystemDatabaseSelected(): bool
+    {
+        return $this->getSelectedDatabaseCategoryDefinition()->key === self::DATABASE_CATEGORY_SYSTEM;
     }
 
     /**
@@ -2722,11 +3202,39 @@ final class Editor
     }
 
     /**
+     * Returns the selected skill from the project database.
+     *
+     * @return ProjectSkill|null
+     */
+    private function getSelectedSkill(): ?ProjectSkill
+    {
+        if (! $this->isSkillsDatabaseSelected()) {
+            return null;
+        }
+
+        return $this->workspace?->skillDatabase->getSkillByIndex($this->databaseSelectedSkillIndex);
+    }
+
+    /**
+     * Returns the selected class from the project database.
+     *
+     * @return ProjectClass|null
+     */
+    private function getSelectedClass(): ?ProjectClass
+    {
+        if (! $this->isClassesDatabaseSelected()) {
+            return null;
+        }
+
+        return $this->workspace?->classDatabase->getClassByIndex($this->databaseSelectedClassIndex);
+    }
+
+    /**
      * Returns the selected animation from the project database.
      *
      * @return Animation|null
      */
-    private function getSelectedAnimation(): ?Animation
+    private function getSelectedAnimation()
     {
         if (! $this->isAnimationsDatabaseSelected()) {
             return null;
@@ -2748,6 +3256,16 @@ final class Editor
 
         if ($this->isActorsDatabaseSelected()) {
             $this->createDatabaseActor();
+            return;
+        }
+
+        if ($this->isSkillsDatabaseSelected()) {
+            $this->createDatabaseSkill();
+            return;
+        }
+
+        if ($this->isClassesDatabaseSelected()) {
+            $this->createDatabaseClass();
             return;
         }
 
@@ -2776,6 +3294,44 @@ final class Editor
     }
 
     /**
+     * Creates a new class entry in the project database.
+     *
+     * @return void
+     */
+    private function createDatabaseClass(): void
+    {
+        if (! $this->workspace instanceof ProjectWorkspace) {
+            return;
+        }
+
+        $this->databaseSelectedClassIndex = $this->workspace->classDatabase->addClass();
+        $this->databaseSelectedSettingIndex = 0;
+        $this->databaseFocus = self::DATABASE_FOCUS_SETTINGS;
+        $this->statusMessage = "Created a new class.";
+        $this->renderDatabasePanes(["list", "settings", "cue", "frames", "preview"]);
+        $this->beginDatabaseEdit();
+    }
+
+    /**
+     * Creates a new skill entry in the project database.
+     *
+     * @return void
+     */
+    private function createDatabaseSkill(): void
+    {
+        if (! $this->workspace instanceof ProjectWorkspace) {
+            return;
+        }
+
+        $this->databaseSelectedSkillIndex = $this->workspace->skillDatabase->addSkill();
+        $this->databaseSelectedSettingIndex = 0;
+        $this->databaseFocus = self::DATABASE_FOCUS_SETTINGS;
+        $this->statusMessage = "Created a new skill.";
+        $this->renderDatabasePanes(["list", "settings", "cue", "frames", "preview"]);
+        $this->beginDatabaseEdit();
+    }
+
+    /**
      * Creates a new animation entry in the project database.
      *
      * @return void
@@ -2791,8 +3347,8 @@ final class Editor
         $this->databaseSelectedSettingIndex = 0;
         $this->databaseFocus = self::DATABASE_FOCUS_SETTINGS;
         $this->centerDatabasePreviewCursor();
-        $this->statusMessage = 'Created a new animation.';
-        $this->renderDatabasePanes(['list', 'settings', 'cue', 'frames', 'preview']);
+        $this->statusMessage = "Created a new animation.";
+        $this->renderDatabasePanes(["list", "settings", "cue", "frames", "preview"]);
         $this->beginDatabaseEdit();
     }
 
@@ -2810,12 +3366,21 @@ final class Editor
         try {
             if ($this->isActorsDatabaseSelected()) {
                 $this->workspace->actorDatabase->save();
-                $this->statusMessage = 'Actor database saved.';
+                $this->statusMessage = "Actor database saved.";
+            } elseif ($this->isClassesDatabaseSelected()) {
+                $this->workspace->classDatabase->save();
+                $this->statusMessage = "Class database saved.";
+            } elseif ($this->isSkillsDatabaseSelected()) {
+                $this->workspace->skillDatabase->save();
+                $this->statusMessage = "Skill database saved.";
             } elseif ($this->isAnimationsDatabaseSelected()) {
                 $this->workspace->animationDatabase->save();
-                $this->statusMessage = 'Animation database saved.';
+                $this->statusMessage = "Animation database saved.";
+            } elseif ($this->isSystemDatabaseSelected()) {
+                $this->workspace->systemDatabase->save();
+                $this->statusMessage = "System database saved.";
             } else {
-                $this->statusMessage = 'This database category is not editable yet.';
+                $this->statusMessage = "This database category is not editable yet.";
             }
         } catch (Throwable $throwable) {
             $this->statusMessage = $throwable->getMessage();
@@ -2833,6 +3398,18 @@ final class Editor
     {
         if ($this->isActorsDatabaseSelected()) {
             return $this->getDatabaseActorSettingsFields();
+        }
+
+        if ($this->isClassesDatabaseSelected()) {
+            return $this->getDatabaseClassSettingsFields();
+        }
+
+        if ($this->isSkillsDatabaseSelected()) {
+            return $this->getDatabaseSkillSettingsFields();
+        }
+
+        if ($this->isSystemDatabaseSelected()) {
+            return $this->getDatabaseSystemSettingsFields();
         }
 
         $animation = $this->getSelectedAnimation();
@@ -2898,6 +3475,7 @@ final class Editor
         ];
     }
 
+
     /**
      * Returns the editable settings fields for the selected actor.
      *
@@ -2955,6 +3533,143 @@ final class Editor
                 'field' => 'currentAp',
             ],
         ];
+    }
+
+    /**
+     * Returns the editable settings fields for the selected class.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private function getDatabaseClassSettingsFields(): array
+    {
+        $class = $this->getSelectedClass();
+
+        if (! $class instanceof ProjectClass) {
+            return [];
+        }
+
+        $experienceCurve = $class->getExperienceCurve();
+
+        return [
+            [
+                'label' => 'Name',
+                'value' => $class->getName(),
+                'control' => new InputControl(InputControlType::TEXT, $class->getName()),
+                'field' => 'name',
+            ],
+            [
+                'label' => 'Description',
+                'value' => $class->getDescription(),
+                'control' => new InputControl(InputControlType::TEXT, $class->getDescription()),
+                'field' => 'description',
+            ],
+            [
+                'label' => 'Initial Level',
+                'value' => (string) $class->getInitialLevel(),
+                'control' => new InputControl(InputControlType::INTEGER, (string) $class->getInitialLevel()),
+                'field' => 'initialLevel',
+            ],
+            [
+                'label' => 'Max Level',
+                'value' => (string) $class->getMaxLevel(),
+                'control' => new InputControl(InputControlType::INTEGER, (string) $class->getMaxLevel()),
+                'field' => 'maxLevel',
+            ],
+            [
+                'label' => 'EXP Base',
+                'value' => (string) $experienceCurve['baseValue'],
+                'control' => new InputControl(InputControlType::INTEGER, (string) $experienceCurve['baseValue']),
+                'field' => 'expBaseValue',
+            ],
+            [
+                'label' => 'EXP Extra',
+                'value' => (string) $experienceCurve['extraValue'],
+                'control' => new InputControl(InputControlType::INTEGER, (string) $experienceCurve['extraValue']),
+                'field' => 'expExtraValue',
+            ],
+            [
+                'label' => 'EXP Accel A',
+                'value' => (string) $experienceCurve['accelerationA'],
+                'control' => new InputControl(InputControlType::INTEGER, (string) $experienceCurve['accelerationA']),
+                'field' => 'expAccelerationA',
+            ],
+            [
+                'label' => 'EXP Accel B',
+                'value' => (string) $experienceCurve['accelerationB'],
+                'control' => new InputControl(InputControlType::INTEGER, (string) $experienceCurve['accelerationB']),
+                'field' => 'expAccelerationB',
+            ],
+            ...$this->getDatabaseClassBaseValueFields($class),
+        ];
+    }
+
+    /**
+     * Returns the editable settings fields for the selected skill.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private function getDatabaseSkillSettingsFields(): array
+    {
+        $skill = $this->getSelectedSkill();
+
+        if (! $skill instanceof ProjectSkill) {
+            return [];
+        }
+
+        $scope = $skill->getScope();
+        $invocation = $skill->getInvocation();
+
+        return [
+            ['label' => 'Name', 'value' => $skill->getName(), 'control' => new InputControl(InputControlType::TEXT, $skill->getName()), 'field' => 'name'],
+            ['label' => 'Description', 'value' => $skill->getDescription(), 'control' => new InputControl(InputControlType::TEXT, $skill->getDescription()), 'field' => 'description'],
+            ['label' => 'Type', 'value' => $skill->getType(), 'options' => ['basic', 'special', 'magic'], 'field' => 'type'],
+            ['label' => 'Icon', 'value' => $skill->getIcon(), 'control' => new InputControl(InputControlType::TEXT, $skill->getIcon()), 'field' => 'icon'],
+            ['label' => 'Cost', 'value' => (string) $skill->getCost(), 'control' => new InputControl(InputControlType::INTEGER, (string) $skill->getCost()), 'field' => 'cost'],
+            ['label' => 'Cooldown', 'value' => (string) $skill->getCooldown(), 'control' => new InputControl(InputControlType::INTEGER, (string) $skill->getCooldown()), 'field' => 'cooldown'],
+            ['label' => 'Occasion', 'value' => $skill->getOccasion(), 'options' => array_map(static fn(Occasion $occasion): string => $occasion->value, Occasion::cases()), 'field' => 'occasion'],
+            ['label' => 'Scope Side', 'value' => (string) ($scope['side'] ?? ItemScopeSide::ENEMY->value), 'options' => array_map(static fn(ItemScopeSide $side): string => $side->value, ItemScopeSide::cases()), 'field' => 'scopeSide'],
+            ['label' => 'Scope Number', 'value' => (string) ($scope['number'] ?? ItemScopeNumber::ONE->value), 'options' => array_map(static fn(ItemScopeNumber $number): string => $number->value, ItemScopeNumber::cases()), 'field' => 'scopeNumber'],
+            ['label' => 'Scope Status', 'value' => (string) ($scope['status'] ?? ItemScopeStatus::ALIVE->value), 'options' => array_map(static fn(ItemScopeStatus $status): string => $status->value, ItemScopeStatus::cases()), 'field' => 'scopeStatus'],
+            ['label' => 'Target Count', 'value' => (string) ($scope['targetCount'] ?? ''), 'control' => new InputControl(InputControlType::INTEGER, (string) ($scope['targetCount'] ?? '')), 'field' => 'scopeTargetCount'],
+            ['label' => 'Invoke Text', 'value' => (string) ($invocation['message'] ?? ''), 'control' => new InputControl(InputControlType::TEXT, (string) ($invocation['message'] ?? '')), 'field' => 'invocationMessage'],
+            ['label' => 'Invoke Speed', 'value' => (string) ($invocation['speed'] ?? 0), 'control' => new InputControl(InputControlType::INTEGER, (string) ($invocation['speed'] ?? 0)), 'field' => 'invocationSpeed'],
+            ['label' => 'Accuracy', 'value' => (string) ($invocation['accuracy'] ?? 0), 'control' => new InputControl(InputControlType::INTEGER, (string) ($invocation['accuracy'] ?? 0)), 'field' => 'invocationAccuracy'],
+            ['label' => 'Repeat', 'value' => (string) ($invocation['repeat'] ?? 1), 'control' => new InputControl(InputControlType::INTEGER, (string) ($invocation['repeat'] ?? 1)), 'field' => 'invocationRepeat'],
+            ['label' => 'AP Gain', 'value' => (string) ($invocation['apGain'] ?? 10), 'control' => new InputControl(InputControlType::INTEGER, (string) ($invocation['apGain'] ?? 10)), 'field' => 'invocationApGain'],
+            ['label' => 'Effect Type', 'value' => $skill->getEffectType() ?? MagicEffectType::DESTRUCTIVE->value, 'options' => array_map(static fn(MagicEffectType $effectType): string => $effectType->value, MagicEffectType::cases()), 'field' => 'effectType'],
+        ];
+    }
+    /**
+     * Returns the editable class base-value fields.
+     *
+     * @param ProjectClass $class The selected class.
+     * @return array<int, array<string, mixed>>
+     */
+    private function getDatabaseClassBaseValueFields(ProjectClass $class): array
+    {
+        $fieldMap = [
+            'HP Base' => ['field' => 'totalHpBaseValue', 'curve' => 'totalHp'],
+            'MP Base' => ['field' => 'totalMpBaseValue', 'curve' => 'totalMp'],
+            'ATK Base' => ['field' => 'attackBaseValue', 'curve' => 'attack'],
+            'DEF Base' => ['field' => 'defenceBaseValue', 'curve' => 'defence'],
+            'MAT Base' => ['field' => 'magicAttackBaseValue', 'curve' => 'magicAttack'],
+            'MDF Base' => ['field' => 'magicDefenceBaseValue', 'curve' => 'magicDefence'],
+            'SPD Base' => ['field' => 'speedBaseValue', 'curve' => 'speed'],
+        ];
+        $fields = [];
+
+        foreach ($fieldMap as $label => $definition) {
+            $curve = $class->getParameterCurve($definition['curve']);
+            $value = (string) $curve['baseValue'];
+            $fields[] = [
+                'label' => $label,
+                'value' => $value,
+                'control' => new InputControl(InputControlType::INTEGER, $value),
+                'field' => $definition['field'],
+            ];
+        }
+
+        return $fields;
     }
 
     /**
@@ -3018,6 +3733,7 @@ final class Editor
             $this->commitDatabaseEdit();
             return;
         }
+
 
         $fields = $this->getDatabaseSettingsFields();
         $field = $fields[$this->databaseSelectedSettingIndex] ?? null;
@@ -3125,6 +3841,47 @@ final class Editor
     }
 
     /**
+     * Returns the editable settings fields for the project system.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private function getDatabaseSystemSettingsFields(): array
+    {
+        if (! $this->workspace instanceof ProjectWorkspace) {
+            return [];
+        }
+
+        $system = $this->workspace->systemDatabase;
+
+        return [
+            [
+                'label' => 'Battle Engine',
+                'value' => $system->getBattleEngine(),
+                'options' => ['traditional', 'active_time'],
+                'field' => 'battleEngine',
+            ],
+            [
+                'label' => 'ATB Mode',
+                'value' => $system->getAtbMode(),
+                'options' => ['wait'],
+                'field' => 'atbMode',
+            ],
+            [
+                'label' => 'ATB Base Fill Rate',
+                'value' => (string) $system->getAtbBaseFillRate(),
+                'control' => new InputControl(InputControlType::INTEGER, (string) $system->getAtbBaseFillRate()),
+                'field' => 'atbBaseFillRate',
+            ],
+            [
+                'label' => 'ATB Speed Factor %',
+                'value' => (string) $system->getAtbSpeedFactorPercent(),
+                'control' => new InputControl(InputControlType::INTEGER, (string) $system->getAtbSpeedFactorPercent()),
+                'field' => 'atbSpeedFactorPercent',
+            ],
+        ];
+    }
+
+    /**
      * Applies one database settings value.
      *
      * @param string $field The field identifier.
@@ -3144,6 +3901,32 @@ final class Editor
                 in_array($field, ['name', 'description'], true) ? trim($rawValue) : max(0, intval($rawValue)),
             );
 
+            return;
+        }
+
+        if ($this->isClassesDatabaseSelected()) {
+            $this->workspace->classDatabase->setField(
+                $this->databaseSelectedClassIndex,
+                $field,
+                in_array($field, ['name', 'description', 'note'], true) ? trim($rawValue) : max(0, intval($rawValue)),
+            );
+
+            return;
+        }
+
+        if ($this->isSkillsDatabaseSelected()) {
+            $value = in_array($field, ["cost", "cooldown", "invocationSpeed", "invocationAccuracy", "invocationRepeat", "invocationApGain"], true)
+                ? max(0, intval($rawValue))
+                : ($field === "scopeTargetCount" ? $rawValue : trim($rawValue));
+            $this->workspace->skillDatabase->setField($this->databaseSelectedSkillIndex, $field, $value);
+            return;
+        }
+
+        if ($this->isSystemDatabaseSelected()) {
+            $value = in_array($field, ['battleEngine', 'atbMode'], true)
+                ? trim($rawValue)
+                : max(0, intval($rawValue));
+            $this->workspace->systemDatabase->setField($field, $value);
             return;
         }
 
@@ -3684,6 +4467,21 @@ final class Editor
      */
     private function render(): void
     {
+        if (! $this->isFullRenderPending) {
+            return;
+        }
+
+        $this->isFullRenderPending = false;
+        $this->renderFullScreen();
+    }
+
+    /**
+     * Draws the full editor shell.
+     *
+     * @return void
+     */
+    private function renderFullScreen(): void
+    {
         if (! $this->workspace instanceof ProjectWorkspace) {
             throw new RuntimeException('The editor workspace is not loaded.');
         }
@@ -4006,6 +4804,76 @@ final class Editor
         $window->render();
     }
 
+    private function renderLootDialogOverlay(array $layout): void
+    {
+        $entries = $this->lootDialogEntries;
+        $selectedEntry = $entries[$this->selectedLootIndex] ?? null;
+        $contentWidth = min(68, max(48, $layout['width'] - 12));
+        $contentHeight = min(max(12, count($entries) + 7), max(12, $layout['height'] - 8));
+        $availableRows = max(1, $contentHeight - 2);
+        $listRows = max(1, $availableRows - 4);
+        $rows = $this->buildLootDialogRows($entries, $listRows);
+        $left = max(2, intdiv($layout['width'] - $contentWidth, 2));
+        $top = max(2, intdiv($layout['height'] - $contentHeight, 2));
+
+        if (is_array($selectedEntry)) {
+            $rows[] = '';
+            $rows[] = sprintf('Name: %s', $selectedEntry['name']);
+            $rows[] = sprintf('Type: %s', $selectedEntry['type']);
+            $rows[] = $selectedEntry['description'];
+        }
+
+        $window = new EditorWindow(
+            title: $this->getLootTypeLabel($this->lootDialogType ?? LootType::ITEM, plural: true),
+            help: 'Enter:Select  Esc:Cancel',
+            position: ['x' => $left, 'y' => $top],
+            width: $contentWidth,
+            height: $contentHeight,
+            foregroundColor: Color::LIGHT_BLUE,
+            content: $this->fitLines(
+                $rows,
+                $this->getWindowContentWidth($contentWidth),
+                $availableRows,
+            ),
+        );
+
+        $window->render();
+    }
+
+    private function renderEventOptionDialogOverlay(array $layout): void
+    {
+        $entries = $this->eventOptionDialogEntries;
+        $selectedEntry = $entries[$this->selectedEventOptionIndex] ?? null;
+        $contentWidth = min(60, max(40, $layout["width"] - 14));
+        $contentHeight = min(max(9, count($entries) + 6), max(9, $layout["height"] - 10));
+        $availableRows = max(1, $contentHeight - 2);
+        $listRows = max(1, $availableRows - 3);
+        $rows = $this->buildEventOptionDialogRows($entries, $listRows);
+        $left = max(2, intdiv($layout["width"] - $contentWidth, 2));
+        $top = max(2, intdiv($layout["height"] - $contentHeight, 2));
+
+        if (is_array($selectedEntry)) {
+            $rows[] = "";
+            $rows[] = (string) ($selectedEntry["description"] ?? "");
+        }
+
+        $window = new EditorWindow(
+            title: $this->eventOptionDialogTitle,
+            help: "Enter:Select  Esc:Cancel",
+            position: ["x" => $left, "y" => $top],
+            width: $contentWidth,
+            height: $contentHeight,
+            foregroundColor: Color::LIGHT_BLUE,
+            content: $this->fitLines(
+                $rows,
+                $this->getWindowContentWidth($contentWidth),
+                $availableRows,
+            ),
+        );
+
+        $window->render();
+    }
+
     /**
      * Renders the event type picker overlay.
      *
@@ -4145,6 +5013,7 @@ final class Editor
                 sprintf('Map: %s', $mapId),
                 sprintf('Spawn Point: (%d, %d)', $this->cursorX, $this->cursorY),
                 '',
+
                 'Apply this destination and return to the source event?',
                 '',
             ],
@@ -4233,6 +5102,342 @@ final class Editor
         return array_slice($rows, $startRow, $availableRows);
     }
 
+    private function loadLootDialogEntries(LootType $lootType): array
+    {
+        return match ($lootType) {
+            LootType::ITEM,
+            LootType::WEAPON,
+            LootType::ARMOR,
+            LootType::ACCESSORY => $this->loadInventoryLootDialogEntries($lootType),
+            LootType::SKILL => $this->loadSkillLootDialogEntries(),
+            LootType::SPELL => $this->loadSpellLootDialogEntries(),
+            default => [],
+        };
+    }
+
+    /**
+     * Loads inventory-backed loot entries for the requested loot type.
+     *
+     * @param LootType $lootType The loot type being edited.
+     * @return array<int, array{name: string, description: string, icon: string, type: string}>
+     */
+    private function loadInventoryLootDialogEntries(LootType $lootType): array
+    {
+        $itemsPath = $this->projectRoot . '/assets/Data/items.php';
+
+        if (! is_file($itemsPath)) {
+            return [];
+        }
+
+        $items = require $itemsPath;
+
+        if (! is_array($items)) {
+            return [];
+        }
+
+        $entries = [];
+
+        foreach ($items as $item) {
+            if (! is_object($item) || ! isset($item->name) || ! $this->matchesLootInventoryType($item, $lootType)) {
+                continue;
+            }
+
+            $entries[] = [
+                'name' => (string) $item->name,
+                'description' => (string) ($item->description ?? ''),
+                'icon' => trim((string) ($item->icon ?? '')),
+                'type' => $this->getLootTypeLabel($lootType),
+            ];
+        }
+
+        usort($entries, static fn(array $left, array $right): int => strcmp($left['name'], $right['name']));
+
+        return $entries;
+    }
+
+    /**
+     * Loads skill-based loot entries.
+     *
+     * @return array<int, array{name: string, description: string, icon: string, type: string}>
+     */
+    private function loadSkillLootDialogEntries(): array
+    {
+        $skillsPath = $this->projectRoot . '/assets/Data/skills.php';
+
+        if (! is_file($skillsPath)) {
+            return [];
+        }
+
+        $skills = require $skillsPath;
+
+        if (! is_array($skills)) {
+            return [];
+        }
+
+        $entries = [];
+
+        foreach ($skills as $skill) {
+            if (! is_object($skill) || ! isset($skill->name)) {
+                continue;
+            }
+
+            $entries[] = [
+                'name' => (string) $skill->name,
+                'description' => (string) ($skill->description ?? ''),
+                'icon' => trim((string) ($skill->icon ?? '')),
+                'type' => 'Skill',
+            ];
+        }
+
+        usort($entries, static fn(array $left, array $right): int => strcmp($left['name'], $right['name']));
+
+        return $entries;
+    }
+
+    /**
+     * Loads magic/spell loot entries.
+     *
+     * @return array<int, array{name: string, description: string, icon: string, type: string}>
+     */
+    private function loadSpellLootDialogEntries(): array
+    {
+        $magicPath = $this->projectRoot . '/assets/Data/magic.php';
+
+        if (! is_file($magicPath)) {
+            return [];
+        }
+
+        $spells = require $magicPath;
+
+        if (! is_array($spells)) {
+            return [];
+        }
+
+        $entries = [];
+
+        foreach ($spells as $spell) {
+            if (! is_object($spell) || ! isset($spell->name)) {
+                continue;
+            }
+
+            $entries[] = [
+                'name' => (string) $spell->name,
+                'description' => (string) ($spell->description ?? ''),
+                'icon' => trim((string) ($spell->icon ?? '')),
+                'type' => 'Spell',
+            ];
+        }
+
+        usort($entries, static fn(array $left, array $right): int => strcmp($left['name'], $right['name']));
+
+        return $entries;
+    }
+
+    /**
+     * Returns whether the given inventory object matches the selected loot type.
+     *
+     * @param object $item The inventory object to inspect.
+     * @param LootType $lootType The loot type being edited.
+     * @return bool
+     */
+    private function matchesLootInventoryType(object $item, LootType $lootType): bool
+    {
+        return match ($lootType) {
+            LootType::ITEM => $item instanceof Item
+                && ! $item instanceof Weapon
+                && ! $item instanceof Armor
+                && ! $item instanceof Accessory,
+            LootType::WEAPON => $item instanceof Weapon,
+            LootType::ARMOR => $item instanceof Armor,
+            LootType::ACCESSORY => $item instanceof Accessory,
+            default => false,
+        };
+    }
+
+    private function resolveLootSelectionIndex(string $currentLoot): int
+    {
+        foreach ($this->lootDialogEntries as $index => $entry) {
+            if ($entry['name'] === $currentLoot) {
+                return $index;
+            }
+        }
+
+        return 0;
+    }
+
+    private function buildLootDialogRows(array $entries, int $availableRows): array
+    {
+        $rows = [];
+        $selectedRowIndex = 0;
+        $groupByType = count(array_unique(array_column($entries, 'type'))) > 1;
+        $currentType = null;
+
+        foreach ($entries as $index => $entry) {
+            if ($groupByType && $entry['type'] !== $currentType) {
+                $currentType = $entry['type'];
+                $rows[] = sprintf('[%s]', $currentType === '' ? 'Unknown' : $currentType);
+            }
+
+            if ($index === $this->selectedLootIndex) {
+                $selectedRowIndex = count($rows);
+            }
+
+            $prefix = $index === $this->selectedLootIndex ? '>' : ' ';
+            $icon = $entry['icon'] === '' ? '-' : $entry['icon'];
+            $rows[] = sprintf('%s %s %s', $prefix, $icon, $entry['name']);
+        }
+
+        if (count($rows) <= $availableRows) {
+            return $rows;
+        }
+
+        $startRow = max(0, min(count($rows) - $availableRows, $selectedRowIndex - intdiv($availableRows, 2)));
+
+        return array_slice($rows, $startRow, $availableRows);
+    }
+
+
+    private function isChestTypeField(array $field): bool
+    {
+        return ($field['target'] ?? null) === 'event'
+            && (($field['path'] ?? []) === ['data', 'chestType']);
+    }
+
+    private function isLootTypeField(array $field): bool
+    {
+        return ($field['target'] ?? null) === 'event'
+            && (($field['path'] ?? []) === ['data', 'lootType']);
+    }
+
+    private function getChestTypeOptionEntries(): array
+    {
+        return [
+            [
+                'label' => 'Common',
+                'value' => ChestType::COMMON->value,
+                'description' => 'Standard chest presentation for ordinary treasure.',
+            ],
+            [
+                'label' => 'Rare',
+                'value' => ChestType::RARE->value,
+                'description' => 'Highlights a chest that should feel less common.',
+            ],
+            [
+                'label' => 'Epic',
+                'value' => ChestType::EPIC->value,
+                'description' => 'Marks a chest carrying high-value treasure.',
+            ],
+            [
+                'label' => 'Legendary',
+                'value' => ChestType::LEGENDARY->value,
+                'description' => 'Reserved for the most special chest rewards.',
+            ],
+        ];
+    }
+
+    /**
+     * Returns the editor-facing label for a loot type.
+     *
+     * @param LootType $lootType The loot type to label.
+     * @param bool $plural Whether to return the plural form.
+     * @return string
+     */
+    private function getLootTypeLabel(LootType $lootType, bool $plural = false): string
+    {
+        return match ($lootType) {
+            LootType::ITEM => $plural ? 'Items' : 'Item',
+            LootType::GOLD => 'Gold',
+            LootType::EXPERIENCE => 'Experience',
+            LootType::SKILL => $plural ? 'Skills' : 'Skill',
+            LootType::SPELL => $plural ? 'Spells' : 'Spell',
+            LootType::WEAPON => $plural ? 'Weapons' : 'Weapon',
+            LootType::ARMOR => 'Armor',
+            LootType::ACCESSORY => $plural ? 'Accessories' : 'Accessory',
+        };
+    }
+
+    private function getLootTypeOptionEntries(): array
+    {
+        return [
+            [
+                'label' => 'Item',
+                'value' => LootType::ITEM->value,
+                'description' => 'Rewards an item from the project item database.',
+            ],
+            [
+                'label' => 'Gold',
+                'value' => LootType::GOLD->value,
+                'description' => 'Awards currency directly when the chest is opened.',
+            ],
+            [
+                'label' => 'Experience',
+                'value' => LootType::EXPERIENCE->value,
+                'description' => 'Awards experience directly when claimed.',
+            ],
+            [
+                'label' => 'Skill',
+                'value' => LootType::SKILL->value,
+                'description' => 'Rewards a learnable skill identifier.',
+            ],
+            [
+                'label' => 'Spell',
+                'value' => LootType::SPELL->value,
+                'description' => 'Rewards a spell identifier.',
+            ],
+            [
+                'label' => 'Weapon',
+                'value' => LootType::WEAPON->value,
+                'description' => 'Rewards a weapon identifier.',
+            ],
+            [
+                'label' => 'Armor',
+                'value' => LootType::ARMOR->value,
+                'description' => 'Rewards an armor identifier.',
+            ],
+            [
+                'label' => 'Accessory',
+                'value' => LootType::ACCESSORY->value,
+                'description' => 'Rewards an accessory identifier.',
+            ],
+        ];
+    }
+
+    private function resolveEventOptionSelectionIndex(string $currentValue): int
+    {
+        foreach ($this->eventOptionDialogEntries as $index => $entry) {
+            if (($entry["value"] ?? null) === $currentValue) {
+                return $index;
+            }
+        }
+
+        return 0;
+    }
+
+    private function buildEventOptionDialogRows(array $entries, int $availableRows): array
+    {
+        $rows = [];
+        $selectedRowIndex = 0;
+
+        foreach ($entries as $index => $entry) {
+            if ($index === $this->selectedEventOptionIndex) {
+                $selectedRowIndex = count($rows);
+            }
+
+            $rows[] = sprintf(
+                "%s %s",
+                $index === $this->selectedEventOptionIndex ? ">" : " ",
+                (string) ($entry["label"] ?? ""),
+            );
+        }
+
+        if (count($rows) <= $availableRows) {
+            return $rows;
+        }
+
+        $startRow = max(0, min(count($rows) - $availableRows, $selectedRowIndex - intdiv($availableRows, 2)));
+
+        return array_slice($rows, $startRow, $availableRows);
+    }
     /**
      * Resolves a stored trigger class into a user-facing event type label.
      *
@@ -4284,25 +5489,44 @@ final class Editor
             18,
             $innerWidth - $minimumListWidth - $minimumRightWidth - ($gutter * 2)
         );
-        $categoryWidth = max(
-            18,
-            min(24, min($maximumCategoryWidth, $categoryContentWidth + 4))
-        );
+        $categoryWidth = min($maximumCategoryWidth, $categoryContentWidth + 4)
+                |> (fn($x) => min(24, $x))
+                |> (fn($x) => max(18, $x));
         $listWidth = max(
             $minimumListWidth,
             min(24, $innerWidth - $categoryWidth - $minimumRightWidth - ($gutter * 2))
         );
         $rightWidth = max(30, $innerWidth - $categoryWidth - $listWidth - ($gutter * 2));
-        $topHeight = $this->isActorsDatabaseSelected() ? 12 : 10;
-        $framesWidth = $this->isActorsDatabaseSelected() ? 18 : 10;
+        $topHeight = $this->isClassesDatabaseSelected()
+            ? 17
+            : ($this->isSkillsDatabaseSelected() ? 18 : ($this->isActorsDatabaseSelected() ? 12 : 10));
+        $framesWidth = $this->isClassesDatabaseSelected()
+            ? 24
+            : ($this->isSkillsDatabaseSelected() ? 30 : ($this->isActorsDatabaseSelected() ? 18 : 10));
         $previewWidth = max(20, $rightWidth - $framesWidth - $gutter);
         $previewHeight = max(8, $innerHeight - $topHeight - $gutter);
-        $settingsWidth = max(18, min(28, intdiv($rightWidth - $gutter, 2)));
+        $settingsWidth = intdiv($rightWidth - $gutter, 2)
+                |> (fn($x) => min(28, $x))
+                |> (fn($x) => max(18, $x));
         $cueWidth = $rightWidth - $settingsWidth - $gutter;
 
         if ($cueWidth < 18) {
             $cueWidth = 18;
             $settingsWidth = max(18, $rightWidth - $cueWidth - $gutter);
+        }
+        if ($this->isSkillsDatabaseSelected()) {
+            $settingsWidth = max(34, min($rightWidth - 22 - $gutter, 38));
+            $cueWidth = max(22, $rightWidth - $settingsWidth - $gutter);
+            $framesWidth = max(30, min($rightWidth - 24 - $gutter, 34));
+            $previewWidth = max(24, $rightWidth - $framesWidth - $gutter);
+            if ($cueWidth < 22) {
+                $cueWidth = 22;
+                $settingsWidth = max(30, $rightWidth - $cueWidth - $gutter);
+            }
+            if ($previewWidth < 24) {
+                $previewWidth = 24;
+                $framesWidth = max(24, $rightWidth - $previewWidth - $gutter);
+            }
         }
 
         return [
@@ -4481,9 +5705,10 @@ final class Editor
         $label = (string) ($field['label'] ?? 'Field');
         $leftText = sprintf('> %s: ', $label);
         $settingsContentWidth = $this->getWindowContentWidth($layout['settingsWidth']);
-        $maxValueWidth = max(0, $settingsContentWidth - mb_strwidth($leftText));
-        $visibleValue = mb_strimwidth($this->databaseEditBuffer, 0, $maxValueWidth, '');
-        $visibleCursorIndex = min($this->databaseEditCursorIndex, mb_strlen($visibleValue));
+        $availableValueWidth = max(1, $settingsContentWidth - mb_strwidth($leftText));
+        $visibleStart = max(0, $this->databaseEditCursorIndex - $availableValueWidth + 1);
+        $visibleValue = mb_substr($this->databaseEditBuffer, $visibleStart, $availableValueWidth);
+        $visibleCursorIndex = max(0, min($this->databaseEditCursorIndex - $visibleStart, mb_strlen($visibleValue)));
         $cursorOffset = min(
             $settingsContentWidth - 1,
             mb_strwidth($leftText . mb_substr($visibleValue, 0, $visibleCursorIndex))
@@ -4556,15 +5781,15 @@ final class Editor
     {
         return new EditorWindow(
             title: $this->getSelectedDatabaseCategory(),
-            help: $this->isActorsDatabaseSelected() || $this->isAnimationsDatabaseSelected() ? 'Shift+A:New' : '',
-            position: ['x' => $layout['innerX'] + $layout['categoryWidth'] + $layout['gutter'], 'y' => $layout['innerY']],
-            width: $layout['listWidth'],
-            height: $layout['innerHeight'],
+            help: $this->isActorsDatabaseSelected() || $this->isClassesDatabaseSelected() || $this->isSkillsDatabaseSelected() || $this->isAnimationsDatabaseSelected() ? "Shift+A:New" : "",
+            position: ["x" => $layout["innerX"] + $layout["categoryWidth"] + $layout["gutter"], "y" => $layout["innerY"]],
+            width: $layout["listWidth"],
+            height: $layout["innerHeight"],
             foregroundColor: $this->resolveDatabasePaneColor(self::DATABASE_FOCUS_LIST),
             content: $this->fitLines(
                 $this->getDatabaseListLines(),
-                $this->getWindowContentWidth($layout['listWidth']),
-                $layout['innerHeight'] - 2
+                $this->getWindowContentWidth($layout["listWidth"]),
+                $layout["innerHeight"] - 2
             ),
         );
     }
@@ -4601,16 +5826,16 @@ final class Editor
     private function createDatabaseCueWindow(array $layout): EditorWindow
     {
         return new EditorWindow(
-            title: $this->isActorsDatabaseSelected() ? 'Collections' : 'SE and Flash Timing',
-            help: '',
-            position: ['x' => $layout['innerX'] + $layout['categoryWidth'] + $layout['listWidth'] + $layout['settingsWidth'] + ($layout['gutter'] * 3), 'y' => $layout['innerY']],
-            width: $layout['cueWidth'],
-            height: $layout['topHeight'],
+            title: $this->isActorsDatabaseSelected() ? "Collections" : ($this->isClassesDatabaseSelected() ? "Experience Curve" : ($this->isSkillsDatabaseSelected() ? "Effects" : ($this->isSystemDatabaseSelected() ? "Battle Settings" : "SE and Flash Timing"))),
+            help: "",
+            position: ["x" => $layout["innerX"] + $layout["categoryWidth"] + $layout["listWidth"] + $layout["settingsWidth"] + ($layout["gutter"] * 3), "y" => $layout["innerY"]],
+            width: $layout["cueWidth"],
+            height: $layout["topHeight"],
             foregroundColor: Color::WHITE,
             content: $this->fitLines(
                 $this->getDatabaseCueLines(),
-                $this->getWindowContentWidth($layout['cueWidth']),
-                $layout['topHeight'] - 2
+                $this->getWindowContentWidth($layout["cueWidth"]),
+                $layout["topHeight"] - 2
             ),
         );
     }
@@ -4624,16 +5849,16 @@ final class Editor
     private function createDatabaseFramesWindow(array $layout): EditorWindow
     {
         return new EditorWindow(
-            title: $this->isActorsDatabaseSelected() ? 'Stats' : 'Frames',
-            help: $this->isActorsDatabaseSelected() ? '' : 'Up/Down:Frame',
-            position: ['x' => $layout['innerX'] + $layout['categoryWidth'] + $layout['listWidth'] + ($layout['gutter'] * 2), 'y' => $layout['innerY'] + $layout['topHeight'] + $layout['gutter']],
-            width: $layout['framesWidth'],
-            height: $layout['previewHeight'],
+            title: $this->isActorsDatabaseSelected() ? "Stats" : ($this->isClassesDatabaseSelected() ? "Stat Curves" : ($this->isSkillsDatabaseSelected() ? "Scope" : ($this->isSystemDatabaseSelected() ? "Notes" : "Frames"))),
+            help: $this->isActorsDatabaseSelected() || $this->isClassesDatabaseSelected() || $this->isSkillsDatabaseSelected() || $this->isSystemDatabaseSelected() ? "" : "Up/Down:Frame",
+            position: ["x" => $layout["innerX"] + $layout["categoryWidth"] + $layout["listWidth"] + ($layout["gutter"] * 2), "y" => $layout["innerY"] + $layout["topHeight"] + $layout["gutter"]],
+            width: $layout["framesWidth"],
+            height: $layout["previewHeight"],
             foregroundColor: $this->resolveDatabasePaneColor(self::DATABASE_FOCUS_FRAMES),
             content: $this->fitLines(
                 $this->getDatabaseFrameLines(),
-                $this->getWindowContentWidth($layout['framesWidth']),
-                $layout['previewHeight'] - 2
+                $this->getWindowContentWidth($layout["framesWidth"]),
+                $layout["previewHeight"] - 2
             ),
         );
     }
@@ -4647,31 +5872,47 @@ final class Editor
     private function createDatabasePreviewWindow(array $layout): EditorWindow
     {
         return new EditorWindow(
-            title: 'Preview',
-            help: $this->isActorsDatabaseSelected() ? '' : 'Type:Paint  Shift+P:Play',
-            position: ['x' => $layout['innerX'] + $layout['categoryWidth'] + $layout['listWidth'] + $layout['framesWidth'] + ($layout['gutter'] * 3), 'y' => $layout['innerY'] + $layout['topHeight'] + $layout['gutter']],
-            width: $layout['previewWidth'],
-            height: $layout['previewHeight'],
+            title: "Preview",
+            help: $this->isActorsDatabaseSelected() || $this->isClassesDatabaseSelected() || $this->isSkillsDatabaseSelected() || $this->isSystemDatabaseSelected() ? "" : "Type:Paint  Shift+P:Play",
+            position: ["x" => $layout["innerX"] + $layout["categoryWidth"] + $layout["listWidth"] + $layout["framesWidth"] + ($layout["gutter"] * 3), "y" => $layout["innerY"] + $layout["topHeight"] + $layout["gutter"]],
+            width: $layout["previewWidth"],
+            height: $layout["previewHeight"],
             foregroundColor: $this->resolveDatabasePaneColor(self::DATABASE_FOCUS_PREVIEW),
-            content: $this->isActorsDatabaseSelected()
+            content: ($this->isActorsDatabaseSelected() || $this->isClassesDatabaseSelected() || $this->isSkillsDatabaseSelected() || $this->isSystemDatabaseSelected())
                 ? $this->fitLines(
                     $this->getDatabasePreviewLines(),
-                    $this->getWindowContentWidth($layout['previewWidth']),
-                    $layout['previewHeight'] - 2
+                    $this->getWindowContentWidth($layout["previewWidth"]),
+                    $layout["previewHeight"] - 2
                 )
-                : array_fill(0, max(1, $layout['previewHeight'] - 2), ''),
+                : array_fill(0, max(1, $layout["previewHeight"] - 2), ""),
         );
     }
 
     /**
      * Returns the list lines for the active Database category.
      *
+        if ($this->isSkillsDatabaseSelected()) {
+            return $this->getDatabaseSkillCueLines();
+        }
+
      * @return string[]
      */
     private function getDatabaseListLines(): array
     {
         if ($this->isActorsDatabaseSelected()) {
             return $this->getDatabaseActorListLines();
+        }
+
+        if ($this->isClassesDatabaseSelected()) {
+            return $this->getDatabaseClassListLines();
+        }
+
+        if ($this->isSkillsDatabaseSelected()) {
+            return $this->getDatabaseSkillListLines();
+        }
+
+        if ($this->isSystemDatabaseSelected()) {
+            return $this->getDatabaseSystemListLines();
         }
 
         if ($this->isAnimationsDatabaseSelected()) {
@@ -4712,6 +5953,54 @@ final class Editor
     }
 
     /**
+     * Returns the class list lines.
+     *
+     * @return string[]
+     */
+    private function getDatabaseClassListLines(): array
+    {
+        $classes = $this->workspace?->classDatabase->getClasses() ?? [];
+
+        if ($classes === []) {
+            return ['No classes yet.', '', 'Shift+A to create one.'];
+        }
+
+        $lines = [];
+
+        foreach ($classes as $index => $class) {
+            $prefix = $index === $this->databaseSelectedClassIndex ? '> ' : '  ';
+            $dirty = $class->isDirty() ? ' *' : '';
+            $lines[] = sprintf('%s%04d %s%s', $prefix, $class->id, $class->getName(), $dirty);
+        }
+
+        return $lines;
+    }
+    /**
+     * Returns the skill list lines.
+     *
+     * @return string[]
+     */
+    private function getDatabaseSkillListLines(): array
+    {
+        $skills = $this->workspace?->skillDatabase->getSkills() ?? [];
+
+        if ($skills === []) {
+            return ["No skills yet.", "", "Shift+A to create one."];
+        }
+
+        $lines = [];
+
+        foreach ($skills as $index => $skill) {
+            $prefix = $index === $this->databaseSelectedSkillIndex ? "> " : "  ";
+            $dirty = $skill->isDirty() ? " *" : "";
+            $lines[] = sprintf("%s%04d %s%s", $prefix, $skill->id, $skill->getName(), $dirty);
+        }
+
+        return $lines;
+    }
+
+
+    /**
      * Returns the animation list lines.
      *
      * @return string[]
@@ -4732,6 +6021,18 @@ final class Editor
         }
 
         return $lines;
+    }
+
+    /**
+     * Returns the system list lines.
+     *
+     * @return string[]
+     */
+    private function getDatabaseSystemListLines(): array
+    {
+        $dirty = $this->workspace?->systemDatabase->isDirty() === true ? ' *' : '';
+
+        return [sprintf('> Project System%s', $dirty)];
     }
 
     /**
@@ -4766,7 +6067,9 @@ final class Editor
             $value = (string) ($field['value'] ?? '');
 
             if ($this->isDatabaseEditing && $index === $this->databaseSelectedSettingIndex) {
-                $value = $this->databaseEditBuffer;
+                $availableValueWidth = max(1, $this->getWindowContentWidth($this->resolveDatabaseLayout($this->resolveLayout())["settingsWidth"]) - mb_strwidth(sprintf("%s%s: ", $prefix, $field["label"] ?? "Field")));
+                $visibleStart = max(0, $this->databaseEditCursorIndex - $availableValueWidth + 1);
+                $value = mb_substr($this->databaseEditBuffer, $visibleStart, $availableValueWidth);
             }
 
             $lines[] = sprintf('%s%s: %s', $prefix, $field['label'] ?? 'Field', $value);
@@ -4784,6 +6087,18 @@ final class Editor
     {
         if ($this->isActorsDatabaseSelected()) {
             return $this->getDatabaseActorCollectionLines();
+        }
+
+        if ($this->isClassesDatabaseSelected()) {
+            return $this->getDatabaseClassExperienceLines();
+        }
+
+        if ($this->isSkillsDatabaseSelected()) {
+            return $this->getDatabaseSkillCueLines();
+        }
+
+        if ($this->isSystemDatabaseSelected()) {
+            return $this->getDatabaseSystemCueLines();
         }
 
         $animation = $this->getSelectedAnimation();
@@ -4828,6 +6143,54 @@ final class Editor
     }
 
     /**
+     * Returns the system battle summary lines.
+     *
+     * @return string[]
+     */
+    private function getDatabaseSystemCueLines(): array
+    {
+        if (! $this->workspace instanceof ProjectWorkspace) {
+            return ['No system settings loaded.'];
+        }
+
+        $system = $this->workspace->systemDatabase;
+
+        return [
+            sprintf('Engine: %s', $system->getBattleEngine()),
+            sprintf('ATB Mode: %s', $system->getAtbMode()),
+            sprintf('Base Fill Rate: %d', $system->getAtbBaseFillRate()),
+            sprintf('Speed Factor: %d%%', $system->getAtbSpeedFactorPercent()),
+        ];
+    }
+
+    /**
+     * Returns the class experience summary lines.
+     *
+     * @return string[]
+     */
+    private function getDatabaseClassExperienceLines(): array
+    {
+        $class = $this->getSelectedClass();
+
+        if (! $class instanceof ProjectClass) {
+            return ['No class selected.'];
+        }
+
+        $curve = $class->getExperienceCurve();
+
+        return [
+            sprintf('Base: %d', $curve['baseValue']),
+            sprintf('Extra: %d', $curve['extraValue']),
+            sprintf('Accel A: %d', $curve['accelerationA']),
+            sprintf('Accel B: %d', $curve['accelerationB']),
+            '',
+            sprintf('Initial Lv: %d', $class->getInitialLevel()),
+            sprintf('Max Lv: %d', $class->getMaxLevel()),
+            sprintf('Traits: %d', count($class->getTraits())),
+        ];
+    }
+
+    /**
      * Returns the actor collection summary lines.
      *
      * @return string[]
@@ -4857,6 +6220,23 @@ final class Editor
     }
 
     /**
+     * Returns the skill effect summary lines.
+     *
+     * @return string[]
+     */
+    private function getDatabaseSkillCueLines(): array
+    {
+        $skill = $this->getSelectedSkill();
+
+        if (! $skill instanceof ProjectSkill) {
+            return ["No skill selected."];
+        }
+
+        return $skill->getEffectSummaryLines();
+    }
+
+
+    /**
      * Returns the frame list lines.
      *
      * @return string[]
@@ -4866,6 +6246,18 @@ final class Editor
         if ($this->isActorsDatabaseSelected()) {
             return $this->getDatabaseActorStatLines();
         }
+
+        if ($this->isClassesDatabaseSelected()) {
+            return $this->getDatabaseClassCurveLines();
+        }
+
+        if ($this->isSystemDatabaseSelected()) {
+            return $this->getDatabaseSystemFrameLines();
+        }
+        if ($this->isSkillsDatabaseSelected()) {
+            return $this->getDatabaseSkillFrameLines();
+        }
+
 
         $animation = $this->getSelectedAnimation();
 
@@ -4883,6 +6275,103 @@ final class Editor
         }
 
         return $lines;
+    }
+
+    /**
+     * Returns the class curve summary lines.
+     *
+     * @return string[]
+     */
+    private function getDatabaseClassCurveLines(): array
+    {
+        $class = $this->getSelectedClass();
+
+        if (! $class instanceof ProjectClass) {
+            return ['No class selected.'];
+        }
+
+        $labelMap = [
+            'totalHp' => 'HP',
+            'totalMp' => 'MP',
+            'attack' => 'ATK',
+            'defence' => 'DEF',
+            'magicAttack' => 'MAT',
+            'magicDefence' => 'MDF',
+            'speed' => 'SPD',
+            'grace' => 'GRC',
+            'evasion' => 'EVA',
+        ];
+        $lines = [];
+
+        foreach ($class->getParameterCurves() as $key => $curve) {
+            $lines[] = sprintf(
+                '%-3s %d +%d / %d',
+                $labelMap[$key] ?? strtoupper($key),
+                $curve['baseValue'],
+                $curve['extraGrowth'],
+                $curve['flatIncrement'],
+            );
+        }
+
+        return $lines;
+    }
+
+    /**
+     * Returns the skill scope summary lines.
+     *
+     * @return string[]
+     */
+    private function getDatabaseSkillFrameLines(): array
+    {
+        $skill = $this->getSelectedSkill();
+
+        if (! $skill instanceof ProjectSkill) {
+            return ["No skill selected."];
+        }
+
+        $scope = $skill->getScope();
+        $invocation = $skill->getInvocation();
+
+        return [
+            sprintf("Side: %s", (string) ($scope["side"] ?? "Enemy")),
+            sprintf("Number: %s", (string) ($scope["number"] ?? "One")),
+            sprintf("Status: %s", (string) ($scope["status"] ?? "Alive")),
+            sprintf("Targets: %s", ($scope["targetCount"] ?? null) === null ? "Auto" : (string) $scope["targetCount"]),
+            "",
+            sprintf("Occasion: %s", $skill->getOccasion()),
+            sprintf("Repeat: %d", (int) ($invocation["repeat"] ?? 1)),
+            sprintf("AP Gain: %d", (int) ($invocation["apGain"] ?? 10)),
+        ];
+    }
+
+    /**
+     * Returns system behavior notes.
+     *
+     * @return string[]
+     */
+    private function getDatabaseSystemFrameLines(): array
+    {
+        if (! $this->workspace instanceof ProjectWorkspace) {
+            return ['No system settings loaded.'];
+        }
+
+        $system = $this->workspace->systemDatabase;
+
+        if ($system->getBattleEngine() !== 'active_time') {
+            return [
+                'Traditional turn-based battles.',
+                'ATB settings are stored but inactive.',
+                'Switch Battle Engine to active_time',
+                'to enable gauge-driven turns.',
+            ];
+        }
+
+        return [
+            'Active Time Battle is enabled.',
+            'Mode: wait',
+            'This first slice uses wait-mode flow',
+            'during command selection and resolution.',
+        ];
     }
 
     /**
@@ -4925,23 +6414,158 @@ final class Editor
             $actor = $this->getSelectedActor();
 
             if (! $actor instanceof ProjectActor) {
-                return ['No actor selected.'];
+                return ["No actor selected."];
             }
 
             $images = $actor->getImages();
             $battleLines = $actor->getBattleSpriteLines();
 
             return [
-                sprintf('Actor ID: %s', $actor->id),
-                sprintf('Field sprites: %d', count($images['field'] ?? [])),
-                sprintf('Dialog portraits: %d', count($images['dialog'] ?? [])),
-                '',
-                'Battle Sprite',
-                ...($battleLines !== [] ? $battleLines : ['(no battle sprite configured)']),
+                sprintf("Actor ID: %s", $actor->id),
+                sprintf("Field sprites: %d", count($images["field"] ?? [])),
+                sprintf("Dialog portraits: %d", count($images["dialog"] ?? [])),
+                "",
+                "Battle Sprite",
+                ...($battleLines !== [] ? $battleLines : ["(no battle sprite configured)"]),
             ];
         }
 
+        if ($this->isClassesDatabaseSelected()) {
+            return $this->getDatabaseClassPreviewLines();
+        }
+
+        if ($this->isSkillsDatabaseSelected()) {
+            return $this->getDatabaseSkillPreviewLines();
+        }
+
+        if ($this->isSystemDatabaseSelected()) {
+            return $this->getDatabaseSystemPreviewLines();
+        }
+
         return [];
+    }
+
+    /**
+     * Returns the preview lines for the selected skill.
+     *
+     * @return string[]
+     */
+    private function getDatabaseSkillPreviewLines(): array
+    {
+        $skill = $this->getSelectedSkill();
+
+        if (! $skill instanceof ProjectSkill) {
+            return ["No skill selected."];
+        }
+
+        $scope = $skill->getScope();
+        $invocation = $skill->getInvocation();
+        $lines = [
+            sprintf("Skill ID: %04d", $skill->id),
+            sprintf("Name: %s", $skill->getName()),
+            sprintf("Type: %s", ucfirst($skill->getType())),
+            sprintf("Occasion: %s", $skill->getOccasion()),
+            sprintf("Cost: %d MP", $skill->getCost()),
+            sprintf("Cooldown: %d", $skill->getCooldown()),
+            "",
+            sprintf("Scope: %s / %s / %s", (string) ($scope["side"] ?? "Enemy"), (string) ($scope["number"] ?? "One"), (string) ($scope["status"] ?? "Alive")),
+            sprintf("Invoke: %s", (string) ($invocation["message"] ?? "")),
+            "",
+            "Effects",
+        ];
+
+        return array_merge($lines, $skill->getEffectSummaryLines());
+    }
+    /**
+     * Returns the preview lines for the system database.
+     *
+     * @return string[]
+     */
+    private function getDatabaseSystemPreviewLines(): array
+    {
+        if (! $this->workspace instanceof ProjectWorkspace) {
+            return ['No system settings loaded.'];
+        }
+
+        $system = $this->workspace->systemDatabase;
+        $engine = $system->getBattleEngine();
+
+        if ($engine === 'active_time') {
+            return [
+                'Battle Engine',
+                'Active Time Battle',
+                '',
+                sprintf('Mode: %s', $system->getAtbMode()),
+                sprintf('Base Fill Rate: %d', $system->getAtbBaseFillRate()),
+                sprintf('Speed Factor: %d%%', $system->getAtbSpeedFactorPercent()),
+                '',
+                'This engine fills battler gauges',
+                'continuously and resolves actions',
+                'as battlers become ready.',
+            ];
+        }
+
+
+        return [
+            'Battle Engine',
+            'Traditional Turn-Based',
+            '',
+            'Battlers act in a queued round order.',
+            'ATB settings are ignored until you',
+            'switch the project to active_time.',
+        ];
+    }
+
+    /**
+     * Returns the preview lines for the selected class.
+     *
+     * @return string[]
+     */
+    private function getDatabaseClassPreviewLines(): array
+    {
+        $class = $this->getSelectedClass();
+
+        if (! $class instanceof ProjectClass) {
+            return ['No class selected.'];
+        }
+
+        $experienceCurve = $class->getExperienceCurve();
+        $experienceGenerator = new ExperienceCurveGenerator(
+            baseValue: $experienceCurve['baseValue'],
+            extraValue: $experienceCurve['extraValue'],
+            accelerationA: $experienceCurve['accelerationA'],
+            accelerationB: $experienceCurve['accelerationB'],
+        );
+        $hpCurve = $class->getParameterCurve('totalHp');
+        $mpCurve = $class->getParameterCurve('totalMp');
+        $attackCurve = $class->getParameterCurve('attack');
+        $hpGenerator = new ParameterCurveGenerator(1, $hpCurve['baseValue'], $hpCurve['extraGrowth'], $hpCurve['flatIncrement']);
+        $mpGenerator = new ParameterCurveGenerator(1, $mpCurve['baseValue'], $mpCurve['extraGrowth'], $mpCurve['flatIncrement']);
+        $attackGenerator = new ParameterCurveGenerator(1, $attackCurve['baseValue'], $attackCurve['extraGrowth'], $attackCurve['flatIncrement']);
+        $sampleLevels = [1, 10, 25, 50, 99];
+        $lines = [
+            sprintf('Class ID: %04d', $class->id),
+            sprintf('Name: %s', $class->getName()),
+            '',
+            'Curve Samples',
+        ];
+
+        foreach ($sampleLevels as $level) {
+            if ($level > $class->getMaxLevel()) {
+                continue;
+            }
+
+            $lines[] = sprintf(
+                'Lv%02d HP%-4d MP%-3d ATK%-3d EXP%-6d',
+                $level,
+                $hpGenerator->getValue($level),
+                $mpGenerator->getValue($level),
+                $attackGenerator->getValue($level),
+                $experienceGenerator->getValue($level),
+            );
+        }
+
+        return $lines;
     }
 
     /**
@@ -5160,10 +6784,21 @@ final class Editor
             return;
         }
 
+        if ($this->isLootDialogOpen) {
+            $this->renderLootDialogOverlay($layout);
+            return;
+        }
+
+        if ($this->isEventOptionDialogOpen) {
+            $this->renderEventOptionDialogOverlay($layout);
+            return;
+        }
+
         if ($this->isDestinationSpawnConfirmationOpen) {
             $this->renderDestinationSpawnConfirmationOverlay($layout);
             return;
         }
+
 
         if ($this->isDestinationSpawnSelectionOpen) {
             $this->renderDestinationSpawnSelectionOverlay($layout);
@@ -5369,5 +7004,17 @@ final class Editor
                 ),
             ], $contentWidth, 2),
         );
+    }
+
+    private function handleException(Throwable $e): void
+    {
+        Console::disableMouseReporting();
+        Console::cursor()->show();
+        Console::restoreSettings();
+        if ($this->usesAlternateScreen) {
+            echo "\033[?1049l";
+        }
+        echo Color::RESET->value;
+        Debug::error($e);
     }
 }
