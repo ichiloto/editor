@@ -24,6 +24,12 @@ enum Modal: string
      */
     case UNSAVED_CHANGES_GUARD = 'unsaved_changes_guard';
     /**
+     * The database entry deletion confirmation. Sits in the safety group so
+     * it consumes everything while open — a destructive prompt must never
+     * compete with the Database screen beneath it for keystrokes.
+     */
+    case DATABASE_ENTRY_DELETE_CONFIRMATION = 'database_entry_delete_confirmation';
+    /**
      * The folder-move confirmation raised by a renaming save.
      */
     case RENAME_CONFIRMATION = 'rename_confirmation';

@@ -117,6 +117,45 @@ final class ProjectAnimationDatabase
     }
 
     /**
+     * Removes the animation at the given index (rewritten to disk on save,
+     * so re-inserting at the same index is a complete undo).
+     *
+     * @param int $index The animation index.
+     * @return Animation|null The removed animation, or null when the index is unknown.
+     */
+    public function removeAnimation(int $index): ?Animation
+    {
+        $animations = array_values($this->animations);
+        $animation = $animations[$index] ?? null;
+
+        if (! $animation instanceof Animation) {
+            return null;
+        }
+
+        array_splice($animations, $index, 1);
+        $this->animations = $animations;
+        $this->isDirty = true;
+
+        return $animation;
+    }
+
+    /**
+     * Re-inserts a previously removed animation (the undo of removeAnimation()).
+     *
+     * @param int $index The index to restore the animation at.
+     * @param Animation $animation The animation to restore.
+     * @return void
+     */
+    public function insertAnimation(int $index, Animation $animation): void
+    {
+        $animations = array_values($this->animations);
+        $index = max(0, min(count($animations), $index));
+        array_splice($animations, $index, 0, [$animation]);
+        $this->animations = $animations;
+        $this->isDirty = true;
+    }
+
+    /**
      * Updates a basic animation field.
      *
      * @param int $index The animation index.

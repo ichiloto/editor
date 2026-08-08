@@ -118,6 +118,47 @@ final class ProjectClassDatabase
     }
 
     /**
+     * Removes the class at the given index.
+     *
+     * The database asset is only rewritten on save, so undo (re-insert at
+     * the same index) fully restores the entry.
+     *
+     * @param int $index The class index.
+     * @return ProjectClass|null The removed class, or null when the index is unknown.
+     */
+    public function removeClass(int $index): ?ProjectClass
+    {
+        $classes = array_values($this->classes);
+        $class = $classes[$index] ?? null;
+
+        if (! $class instanceof ProjectClass) {
+            return null;
+        }
+
+        array_splice($classes, $index, 1);
+        $this->classes = $classes;
+        $this->isDirty = true;
+
+        return $class;
+    }
+
+    /**
+     * Re-inserts a previously removed class (the undo of removeClass()).
+     *
+     * @param int $index The index to restore the class at.
+     * @param ProjectClass $class The class to restore.
+     * @return void
+     */
+    public function insertClass(int $index, ProjectClass $class): void
+    {
+        $classes = array_values($this->classes);
+        $index = max(0, min(count($classes), $index));
+        array_splice($classes, $index, 0, [$class]);
+        $this->classes = $classes;
+        $this->isDirty = true;
+    }
+
+    /**
      * Updates one class field.
      *
      * @param int $index The class index.

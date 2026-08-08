@@ -131,41 +131,66 @@ final class CommandPalette
      */
     public static function filter(array $items, string $query): array
     {
+        $labels = array_map(static fn(PaletteItem $item): string => $item->label, array_values($items));
+        $items = array_values($items);
+
+        return array_values(array_map(
+            static fn(int $key): PaletteItem => $items[$key],
+            self::filterLabels($labels, $query),
+        ));
+    }
+
+    /**
+     * Ranks a keyed label list against a query.
+     *
+     * This is the one matcher in the editor: the palette, the `/` filters in
+     * the Assets list, the database lists, and the picker dialogs all rank
+     * through here, so "how does search behave" has exactly one answer.
+     *
+     * @param array<array-key, string> $labels The candidate labels, keyed by whatever identity the caller tracks.
+     * @param string $query The fuzzy query.
+     * @return array<int, array-key> The matching keys, best match first; every key when the query is blank.
+     */
+    public static function filterLabels(array $labels, string $query): array
+    {
         $query = mb_strtolower(trim($query));
 
         if ($query === '') {
-            return array_values($items);
+            return array_keys($labels);
         }
 
         $scored = [];
+        $order = 0;
 
-        foreach (array_values($items) as $index => $item) {
-            $score = self::score(mb_strtolower($item->label), $query);
+        foreach ($labels as $key => $label) {
+            $score = self::rank($label, $query);
+            $order++;
 
             if ($score === null) {
                 continue;
             }
 
-            $scored[] = ['score' => $score, 'index' => $index, 'item' => $item];
+            $scored[] = ['score' => $score, 'order' => $order, 'key' => $key];
         }
 
         usort(
             $scored,
-            static fn(array $left, array $right): int => [$left['score'], $left['index']] <=> [$right['score'], $right['index']],
+            static fn(array $left, array $right): int => [$left['score'], $left['order']] <=> [$right['score'], $right['order']],
         );
 
-        return array_map(static fn(array $entry): PaletteItem => $entry['item'], $scored);
+        return array_map(static fn(array $entry): int|string => $entry['key'], $scored);
     }
 
     /**
-     * Scores one lowercased label against a lowercased query.
+     * Scores one label against a query (both matched case-insensitively).
      *
      * @param string $label The candidate label.
-     * @param string $query The query.
+     * @param string $query The query, already lowercased and trimmed.
      * @return int|null The rank (lower is better), or null when unmatched.
      */
-    private static function score(string $label, string $query): ?int
+    public static function rank(string $label, string $query): ?int
     {
+        $label = mb_strtolower($label);
         $substringPosition = mb_strpos($label, $query);
 
         if ($substringPosition !== false) {

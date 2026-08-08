@@ -319,7 +319,112 @@ stay maintainable at similar scale:
 - Typed inspector controls: boolean toggle, float, enum picker; one enum
   idiom everywhere; visible non-editable rows; snackbar-style toast queue
 
-### Phase 5 — Authoring power
+### Phase 5 — Authoring power ✅ *shipped 2026-08*
+> Status: implemented. **Canvas tools** (src/Canvas/) sit on the Phase 2
+> stroke machinery: `ToolGeometry` answers *which cells does this gesture
+> touch* (Bresenham line — now the one implementation, shared with the mouse
+> drag's gap filling — rectangle outline/fill, square brush footprint,
+> 4-connected flood fill), and one commit path, `applyCanvasWrites()`, turns
+> any cell set into a single `PaintStrokeCommand`. A filled rectangle, a
+> flood fill, a cut, and a paste each undo in exactly one Ctrl+Z (unit-proven
+> per tool). The active tool is modal and always visible in the footer
+> (`Tool: Rect Fill 2 @0,0 [5x3] clip 2x1` — tool, brush width, live anchor,
+> selection, clipboard). New keys, all control bytes so no authorable glyph
+> was reserved (`!`, `hjkl`, and `/` stay paintable), all registered with
+> labels so the `?` overlay documents them automatically, and all
+> canvas-focus gated so they fall through to the focused pane elsewhere:
+> **Ctrl+N** next tool (Brush → Line → Rect → Rect Fill → Select),
+> **Ctrl+W** brush width (1/2/3/5), **Ctrl+F** flood fill from the cursor,
+> **Ctrl+K** eyedropper, **Ctrl+L** copy ("lift") the selection,
+> **Ctrl+X** cut, **Ctrl+U** paste/stamp at the cursor (repeatable — each
+> stamp is its own undo step). Enter is the universal tool verb: it paints
+> under the brush, sets the anchor for a two-point tool, and completes the
+> shape or selection on the second press; Esc pops the pending anchor, then
+> the selection, before any other Esc level. Typing a glyph under a shape or
+> select tool now *loads the brush* instead of dabbing at the cursor
+> (the brush itself still paints on type, unchanged). The clipboard is
+> layer-tagged, so a block lifted from the event layer refuses to land on
+> tiles. Ctrl+B/Ctrl+C/Ctrl+V were deliberately avoided: ^C is still the
+> terminal's SIGINT escape hatch and ^V is IEXTEN's literal-next.
+> **Incremental `/` filter** (`UI/ListFilter`) narrows the Assets list, the
+> Database entry lists, and all four picker dialogs (destination, loot,
+> option, event type). Ranking is *not* a second algorithm: `CommandPalette`
+> grew a public `filterLabels()`/`rank()` that the palette itself now routes
+> through, so search behaves identically everywhere. Filtered lists move
+> selection through visible rows only, the caret shows in the pane title
+> (`Assets [Focus] /ove_`), a committed query keeps narrowing while returning
+> the arrows to navigation, and Esc clears the filter one level before
+> closing the surface. The Assets caret joins the inspector edit gate ahead
+> of the global binding table, so a query may contain `?`, `/`, or a Ctrl+key
+> without firing it. **Navigation stack** (src/Navigation/) generalizes the
+> destination round trip into **Ctrl+G go-to-definition** and **Ctrl+B Back**
+> over a bounded 50-entry stack of restore closures: actor→class (the new
+> reference field), event→destination map (with the configured spawn point,
+> also from the Inspector's Destination row), and skill→animation by name.
+> Back restores map index, cursor, viewport, pane focus, editing mode, and
+> the whole Database selection; a reload clears the stack along with the
+> history, filters, and clipboard. **Database entry deletion** finally
+> exists: **Del** in the entry list raises a Phase 4 destructive confirm
+> (Enter/Esc/N cancel, only an explicit `y` deletes) as a *safety* modal that
+> consumes everything while open, and every deletion is undoable —
+> actors, classes, skills, quests, and animations all remove in memory and
+> re-insert at their original index on Ctrl+Z. Honest note: the file effect
+> is deferred to the next save (single-file databases are rewritten whole;
+> a deleted actor's asset file is staged and unlinked at save time), so undo
+> before saving costs nothing and undo after saving re-creates the entry on
+> the following save. **The actor `class` field** landed as an enum picker
+> over the `name` values in the project's `assets/Data/classes.php`, written
+> to the actor's `data['class']` — matching the engine's new `ClassStore` /
+> `Character::fromArray()` contract — with a `none` sentinel that removes the
+> key entirely. The payload's top-level `'class' => Character::class` (the
+> entity FQCN) is never touched. Option cycling became case-insensitive on
+> match and verbatim on write, so the picker stores `Vanguard`, not
+> `vanguard`; the editor also reads `data['role']` as the engine's documented
+> alias. **Dirty markers** reached the surfaces that lacked them: the header
+> carries the one global answer (`Project: X  *  unsaved changes (Ctrl+A
+> saves all)`), the Database list-window title carries the category marker so
+> animations and system — which track dirtiness per file, not per entry —
+> show unsaved state where the author is looking, and animation rows carry
+> the file-level marker explicitly. **Backups** (src/Backup/) are the
+> autosave answer, and the design choice is deliberate: the editor never
+> silently writes an author's source files, so "autosave" here means *a
+> timestamped copy taken immediately before an overwriting save*, never a
+> background write into the original. It is **off by default** and opt-in per
+> project via `ichiloto.json` → `editor.backups`
+> (`{"enabled": true, "retain": 5, "directory": ".ichiloto/backups"}`), with
+> `ICHILOTO_EDITOR_BACKUPS=1|0` and `ICHILOTO_EDITOR_BACKUP_RETAIN=N`
+> overriding it for a single session. Copies mirror the project-relative path
+> under the backup root, retention prunes oldest-first per source file, a
+> backup failure warns but never blocks the save, and the current policy is
+> printed in the `?` overlay. Every save path is covered: single-map Ctrl+S
+> (all three split files), Ctrl+A Save All, and each Database save.
+> The `?` overlay grew past a 30-row terminal once the canvas tools landed,
+> so it now pages through the same `ScrollWindow` (↑/↓, with the help line
+> switching to `Arrows:Scroll  Esc:Close` only when there is more to see) and
+> widened to 84 columns.
+> Tests grew 143 → 198 (canvas geometry + one-command-undo per tool, the
+> shared matcher and its three filter surfaces, navigation push/pop/bounds
+> and both go-to-definition hops, deletion confirm semantics and undo, the
+> actor class round trip through a real save, and the backup writer's
+> enable/mirror/prune behaviour); the golden ANSI frame was regenerated
+> deliberately for exactly two changes — the Assets help line
+> (`/:Filter  Del:Delete`) and the footer's new `| Tool: Brush 1` segment.
+> Live expect smoke on `examples/last-legend` (filled rectangle → one
+> Ctrl+Z → flood fill → `/` filter → Ctrl+D → actor class picker → Ctrl+G →
+> Ctrl+B → Ctrl+Q answered `y`) passed with all 130 `assets/**` files
+> checksum-identical before and after.
+> Deferrals, with reasons: skills carry no animation *reference* in the
+> engine data model (only a `MagicEffectType`), so skill→animation resolves
+> by name and says so when nothing matches — revisit when the engine adds a
+> real reference; the canvas draws no on-screen preview of the pending
+> line/rectangle or the selection rectangle (the footer reports anchor and
+> selection instead) because the preview pipeline renders through
+> `ProjectMap::renderPreview` and overlaying transient cells there is a
+> Phase 6 rendering change; mouse-driven selection and mouse interaction
+> inside the palette remain unimplemented (keyboard only); the `/` filter
+> does not reach the character map or the command palette (the palette *is*
+> the filter); and periodic background snapshots were rejected in favour of
+> the save-time backup above.
 - Canvas tools: brush sizes, line, rectangle (outline/filled), flood fill,
   eyedropper key, rectangular select with copy/cut/paste/stamp — all cheap
   atop the existing stroke code

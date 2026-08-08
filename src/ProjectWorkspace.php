@@ -118,9 +118,10 @@ final readonly class ProjectWorkspace
      * Returns tree lines for the asset sidebar.
      *
      * @param int $selectedMapIndex The selected map index.
+     * @param int[]|null $visibleIndexes The map indexes surviving the `/` filter, in display order; null shows every map.
      * @return string[]
      */
-    public function getAssetLines(int $selectedMapIndex = 0): array
+    public function getAssetLines(int $selectedMapIndex = 0, ?array $visibleIndexes = null): array
     {
         $lines = ["Maps"];
 
@@ -129,7 +130,20 @@ final readonly class ProjectWorkspace
             return $lines;
         }
 
-        foreach ($this->mapIds as $index => $mapId) {
+        $indexes = $visibleIndexes ?? array_keys($this->mapIds);
+
+        if ($indexes === []) {
+            $lines[] = "  (no matches)";
+            return $lines;
+        }
+
+        foreach ($indexes as $index) {
+            $mapId = $this->mapIds[$index] ?? null;
+
+            if ($mapId === null) {
+                continue;
+            }
+
             $prefix = $index === $selectedMapIndex ? '> ' : '  ';
             $dirty = $this->maps[$index]->isDirty() ? ' *' : '';
             $lines[] = sprintf('%s%s%s', $prefix, $mapId, $dirty);

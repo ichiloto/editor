@@ -36,6 +36,63 @@ function fixturePath(string $relativePath = ''): string
 }
 
 /**
+ * Copies the sample fixture project into a throwaway directory so a test may
+ * exercise real save paths without ever touching the checked-in fixture.
+ */
+function makeTemporaryProject(string $prefix = 'ichiloto-editor-'): string
+{
+    $root = sys_get_temp_dir() . '/' . uniqid($prefix, true);
+    mkdir($root, 0777, true);
+    copyDirectoryRecursively(fixturePath('sample-project'), $root);
+
+    return $root;
+}
+
+/**
+ * Recursively copies a directory tree.
+ */
+function copyDirectoryRecursively(string $source, string $destination): void
+{
+    foreach (scandir($source) ?: [] as $entry) {
+        if ($entry === '.' || $entry === '..') {
+            continue;
+        }
+
+        $sourcePath = $source . '/' . $entry;
+        $destinationPath = $destination . '/' . $entry;
+
+        if (is_dir($sourcePath)) {
+            @mkdir($destinationPath, 0777, true);
+            copyDirectoryRecursively($sourcePath, $destinationPath);
+            continue;
+        }
+
+        copy($sourcePath, $destinationPath);
+    }
+}
+
+/**
+ * Recursively removes a directory tree created by makeTemporaryProject().
+ */
+function removeDirectoryRecursively(string $directory): void
+{
+    if (! is_dir($directory)) {
+        return;
+    }
+
+    foreach (scandir($directory) ?: [] as $entry) {
+        if ($entry === '.' || $entry === '..') {
+            continue;
+        }
+
+        $path = $directory . '/' . $entry;
+        is_dir($path) ? removeDirectoryRecursively($path) : @unlink($path);
+    }
+
+    @rmdir($directory);
+}
+
+/**
  * Creates an Editor instance for white-box tests without booting a terminal
  * session, and immediately restores the global handlers its constructor
  * installs so test failures surface normally.

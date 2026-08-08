@@ -112,6 +112,45 @@ final class ProjectQuestDatabase
     }
 
     /**
+     * Removes the quest at the given index (rewritten to disk on save, so
+     * re-inserting at the same index is a complete undo).
+     *
+     * @param int $index The quest index.
+     * @return ProjectQuest|null The removed quest, or null when the index is unknown.
+     */
+    public function removeQuest(int $index): ?ProjectQuest
+    {
+        $quests = array_values($this->quests);
+        $quest = $quests[$index] ?? null;
+
+        if (! $quest instanceof ProjectQuest) {
+            return null;
+        }
+
+        array_splice($quests, $index, 1);
+        $this->quests = $quests;
+        $this->isDirty = true;
+
+        return $quest;
+    }
+
+    /**
+     * Re-inserts a previously removed quest (the undo of removeQuest()).
+     *
+     * @param int $index The index to restore the quest at.
+     * @param ProjectQuest $quest The quest to restore.
+     * @return void
+     */
+    public function insertQuest(int $index, ProjectQuest $quest): void
+    {
+        $quests = array_values($this->quests);
+        $index = max(0, min(count($quests), $index));
+        array_splice($quests, $index, 0, [$quest]);
+        $this->quests = $quests;
+        $this->isDirty = true;
+    }
+
+    /**
      * Applies one flat settings-field edit onto a quest.
      *
      * @param int $index The quest index.

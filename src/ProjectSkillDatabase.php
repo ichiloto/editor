@@ -69,6 +69,45 @@ final class ProjectSkillDatabase
         if ($skill instanceof ProjectSkill) { $skill->setField($field, $value); $this->isDirty = true; }
     }
 
+    /**
+     * Removes the skill at the given index (rewritten to disk on save, so
+     * re-inserting at the same index is a complete undo).
+     *
+     * @param int $index The skill index.
+     * @return ProjectSkill|null The removed skill, or null when the index is unknown.
+     */
+    public function removeSkill(int $index): ?ProjectSkill
+    {
+        $skills = array_values($this->skills);
+        $skill = $skills[$index] ?? null;
+
+        if (! $skill instanceof ProjectSkill) {
+            return null;
+        }
+
+        array_splice($skills, $index, 1);
+        $this->skills = $skills;
+        $this->isDirty = true;
+
+        return $skill;
+    }
+
+    /**
+     * Re-inserts a previously removed skill (the undo of removeSkill()).
+     *
+     * @param int $index The index to restore the skill at.
+     * @param ProjectSkill $skill The skill to restore.
+     * @return void
+     */
+    public function insertSkill(int $index, ProjectSkill $skill): void
+    {
+        $skills = array_values($this->skills);
+        $index = max(0, min(count($skills), $index));
+        array_splice($skills, $index, 0, [$skill]);
+        $this->skills = $skills;
+        $this->isDirty = true;
+    }
+
     public function save(): void
     {
         $directory = dirname($this->path);

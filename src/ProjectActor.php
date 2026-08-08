@@ -12,6 +12,11 @@ use RuntimeException;
 final class ProjectActor
 {
     /**
+     * The sentinel option meaning "no class reference" in the editor picker.
+     */
+    public const string CLASS_NONE = 'none';
+
+    /**
      * @param array<string, mixed> $payload
      */
     public function __construct(
@@ -132,6 +137,25 @@ final class ProjectActor
     }
 
     /**
+     * Returns the character class this actor references by name.
+     *
+     * The reference lives at `data.class` — a plain class *name* matching a
+     * `name` in the project's `assets/Data/classes.php`, which the engine's
+     * ClassStore hydrates into a CharacterRole. It is deliberately NOT the
+     * payload's top-level `class` key: that one is the entity's PHP FQCN
+     * (`Ichiloto\Engine\Entities\Character`) and must survive every save
+     * untouched.
+     *
+     * @return string The class name, or an empty string when unassigned.
+     */
+    public function getClassName(): string
+    {
+        $className = $this->getData()['class'] ?? $this->getData()['role'] ?? '';
+
+        return is_string($className) ? $className : '';
+    }
+
+    /**
      * Returns the actor level.
      *
      * @return int
@@ -244,6 +268,21 @@ final class ProjectActor
     {
         if (! isset($this->payload['data']) || ! is_array($this->payload['data'])) {
             $this->payload['data'] = [];
+        }
+
+        if ($field === 'class') {
+            $className = trim((string) $value);
+
+            // "None" clears the reference outright rather than persisting an
+            // empty string the engine would have to special-case.
+            if ($className === '' || strtolower($className) === self::CLASS_NONE) {
+                unset($this->payload['data']['class']);
+            } else {
+                $this->payload['data']['class'] = $className;
+            }
+
+            $this->isDirty = true;
+            return;
         }
 
         if (in_array($field, ['name', 'description', 'level', 'currentExp'], true)) {

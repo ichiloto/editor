@@ -14,6 +14,14 @@ final class ProjectActorDatabase
     /**
      * @param ProjectActor[] $actors
      */
+    /**
+     * @var array<string, string> Asset paths staged for deletion on the next save.
+     */
+    private array $pendingDeletions = [];
+
+    /**
+     * @param ProjectActor[] $actors
+     */
     public function __construct(
         public readonly string $directory,
         private array $actors = [],
@@ -110,6 +118,65 @@ final class ProjectActorDatabase
     }
 
     /**
+     * Removes the actor at the given index from the in-memory database.
+     *
+     * The asset file is not touched here: the removal is staged and applied
+     * on the next save, so an undo before saving costs nothing and an undo
+     * after saving simply re-creates the file on the following save. This is
+     * what makes entry deletion undoable at all.
+     *
+     * @param int $index The actor index.
+     * @return ProjectActor|null The removed actor, or null when the index is unknown.
+     */
+    public function removeActor(int $index): ?ProjectActor
+    {
+        $actors = array_values($this->actors);
+        $actor = $actors[$index] ?? null;
+
+        if (! $actor instanceof ProjectActor) {
+            return null;
+        }
+
+        array_splice($actors, $index, 1);
+        $this->actors = $actors;
+
+        if (is_file($actor->path)) {
+            $this->pendingDeletions[$actor->path] = $actor->path;
+        }
+
+        $this->isDirty = true;
+
+        return $actor;
+    }
+
+    /**
+     * Re-inserts a previously removed actor (the undo of removeActor()).
+     *
+     * @param int $index The index to restore the actor at.
+     * @param ProjectActor $actor The actor to restore.
+     * @return void
+     */
+    public function insertActor(int $index, ProjectActor $actor): void
+    {
+        $actors = array_values($this->actors);
+        $index = max(0, min(count($actors), $index));
+        array_splice($actors, $index, 0, [$actor]);
+        $this->actors = $actors;
+        unset($this->pendingDeletions[$actor->path]);
+        $this->isDirty = true;
+    }
+
+    /**
+     * Returns the asset paths staged for deletion on the next save.
+     *
+     * @return string[]
+     */
+    public function getPendingDeletions(): array
+    {
+        return array_values($this->pendingDeletions);
+    }
+
+    /**
      * Updates one actor field.
      *
      * @param int $index The actor index.
@@ -139,6 +206,16 @@ final class ProjectActorDatabase
         if (! is_dir($this->directory) && ! mkdir($this->directory, 0777, true) && ! is_dir($this->directory)) {
             throw new RuntimeException("Unable to create {$this->directory}.");
         }
+
+        // Staged deletions run first so re-creating an entry with a removed
+        // entry's id in the same session still lands on disk.
+        foreach ($this->pendingDeletions as $path) {
+            if (is_file($path) && ! @unlink($path)) {
+                throw new RuntimeException("Unable to remove {$path}.");
+            }
+        }
+
+        $this->pendingDeletions = [];
 
         foreach ($this->actors as $actor) {
             $actor->save();
