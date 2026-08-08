@@ -5,6 +5,10 @@ declare(strict_types=1);
 namespace Ichiloto\Editor;
 
 use FilesystemIterator;
+use Ichiloto\Editor\Database\EngineDataBootstrap;
+use Ichiloto\Editor\Database\ProjectRecordDatabase;
+use Ichiloto\Editor\Database\RecordSchema;
+use Ichiloto\Editor\Database\RecordSchemaCatalog;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
 use RuntimeException;
@@ -16,6 +20,7 @@ final readonly class ProjectWorkspace
 {
     /**
      * @param ProjectMap[] $maps
+     * @param array<string, ProjectRecordDatabase> $recordDatabases Schema-driven categories, keyed by category key.
      */
     public function __construct(
         public string                   $projectRoot,
@@ -29,7 +34,19 @@ final readonly class ProjectWorkspace
         public ProjectAnimationDatabase $animationDatabase,
         public ProjectSystemDatabase    $systemDatabase,
         public ProjectQuestDatabase     $questDatabase,
+        public array                    $recordDatabases = [],
     ) {
+    }
+
+    /**
+     * Returns the schema-driven database for a category key.
+     *
+     * @param string $categoryKey The Database category key.
+     * @return ProjectRecordDatabase|null
+     */
+    public function getRecordDatabase(string $categoryKey): ?ProjectRecordDatabase
+    {
+        return $this->recordDatabases[$categoryKey] ?? null;
     }
 
     /**
@@ -65,6 +82,11 @@ final readonly class ProjectWorkspace
         $projectName = (string) ($config['name'] ?? basename($projectRoot));
         $mainFile = (string) ($config['main'] ?? '');
 
+        // enemies.php constructs BattleRewards, which demands a registered
+        // item store; without this the category would report a bootstrap
+        // failure instead of the author's enemies.
+        EngineDataBootstrap::ensure($projectRoot);
+
         return new self(
             projectRoot: $projectRoot,
             projectName: $projectName,
@@ -77,6 +99,10 @@ final readonly class ProjectWorkspace
             animationDatabase: ProjectAnimationDatabase::fromProject($projectRoot),
             systemDatabase: ProjectSystemDatabase::fromProject($projectRoot),
             questDatabase: ProjectQuestDatabase::fromProject($projectRoot),
+            recordDatabases: array_map(
+                static fn(RecordSchema $schema): ProjectRecordDatabase => ProjectRecordDatabase::fromProject($projectRoot, $schema),
+                RecordSchemaCatalog::all(),
+            ),
         );
     }
 
@@ -165,6 +191,12 @@ final readonly class ProjectWorkspace
             }
         }
 
+        foreach ($this->recordDatabases as $database) {
+            if ($database->isDirty()) {
+                return true;
+            }
+        }
+
         return $this->actorDatabase->isDirty()
             || $this->classDatabase->isDirty()
             || $this->skillDatabase->isDirty()
@@ -202,6 +234,7 @@ final readonly class ProjectWorkspace
             animationDatabase: $this->animationDatabase,
             systemDatabase: $this->systemDatabase,
             questDatabase: $this->questDatabase,
+            recordDatabases: $this->recordDatabases,
         );
     }
 

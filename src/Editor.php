@@ -16,6 +16,7 @@ use Ichiloto\Editor\Canvas\Clipboard;
 use Ichiloto\Editor\Canvas\ToolGeometry;
 use Ichiloto\Editor\Database\DatabaseCatalog;
 use Ichiloto\Editor\Database\DatabaseCategoryDefinition;
+use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Debug\Debug;
 use Ichiloto\Editor\Events\EventTypeCatalog;
 use Ichiloto\Editor\History\Command;
@@ -28,9 +29,12 @@ use Ichiloto\Editor\IO\InputDecoder;
 use Ichiloto\Editor\IO\InputRouter;
 use Ichiloto\Editor\IO\KeyBinding;
 use Ichiloto\Editor\Navigation\NavigationEntry;
+use Ichiloto\Editor\Playtest\PlaytestLauncher;
+use Ichiloto\Editor\Playtest\PlaytestOverlay;
 use Ichiloto\Editor\Navigation\NavigationStack;
 use Ichiloto\Editor\Runtime\EditorLoop;
 use Ichiloto\Editor\Runtime\TerminalHost;
+use Ichiloto\Editor\Theme\EditorTheme;
 use Ichiloto\Editor\Status\StatusLevel;
 use Ichiloto\Editor\Status\Toast;
 use Ichiloto\Editor\Status\ToastQueue;
@@ -133,6 +137,7 @@ final class Editor
      * throttled size probe, and the buffered frame writer.
      */
     private readonly TerminalHost $terminal;
+    private EditorTheme $theme;
     /**
      * The deadline-budget frame loop driving the session.
      */
@@ -387,6 +392,15 @@ final class Editor
     private int $databaseSelectedSkillIndex = 0;
     private int $databaseSelectedQuestIndex = 0;
     private int $databaseSelectedAnimationIndex = 0;
+    /**
+     * Selected entry index per schema-driven category, keyed by category key.
+     *
+     * The hand-written categories each own a field; the Phase 6 categories
+     * share this map so adding a category costs a schema, not a field.
+     *
+     * @var array<string, int>
+     */
+    private array $databaseSelectedRecordIndexes = [];
     private int $databaseSelectedSettingIndex = 0;
     private int $databaseSelectedFrameIndex = 1;
     private int $databasePreviewCursorX = 0;
@@ -543,6 +557,7 @@ final class Editor
         $this->backups = new BackupWriter(BackupSettings::fromProject($projectRoot), $projectRoot);
         $this->history = new CommandHistory(self::HISTORY_CAPACITY);
         $this->terminal = new TerminalHost(self::TERMINAL_SIZE_PROBE_INTERVAL_SECONDS);
+        $this->theme = EditorTheme::default();
         $this->loop = new EditorLoop(self::FRAME_BUDGET_MICROSECONDS, $this->terminal);
         $this->inspectorFieldEditor = new TextFieldEditor();
         $this->databaseFieldEditor = new TextFieldEditor();
@@ -643,6 +658,7 @@ final class Editor
     private function boot(): void
     {
         $this->workspace = ProjectWorkspace::fromProject($this->projectRoot);
+        $this->applyProjectTheme();
         $this->selectedAssetIndex = 0;
         $this->focusedPane = self::FOCUS_ASSETS;
         $this->editingMode = self::MODE_MAP;
@@ -1020,6 +1036,7 @@ final class Editor
             KeyBinding::exact("\x10", $this->openCommandPalette(...), 'Ctrl+P', 'Open the command palette'),
             KeyBinding::exact("\x07", $this->goToDefinition(...), 'Ctrl+G', 'Go to definition (actor→class, skill→animation, event→map)'),
             KeyBinding::exact("\x02", $this->navigateBack(...), 'Ctrl+B', 'Back to the previous location'),
+            KeyBinding::exact("\x14", $this->startPlaytest(...), 'Ctrl+T', 'Playtest the selected map from the cursor'),
             KeyBinding::when(
                 fn(string $input): bool => $input === '/' && $this->focusedPane === self::FOCUS_ASSETS,
                 $this->openAssetFilter(...),
@@ -1612,6 +1629,18 @@ final class Editor
             return;
         }
 
+        // Shift+O/Shift+X are the one sub-list idiom: quest objectives, skit
+        // beats, troop members, and event-script commands all use them.
+        if ($this->getSelectedRecordDatabase()?->schema->subList !== null && $this->isShiftLetterShortcut($input, 'O')) {
+            $this->addDatabaseRecordSubItem();
+            return;
+        }
+
+        if ($this->getSelectedRecordDatabase()?->schema->subList !== null && $this->isShiftLetterShortcut($input, 'X')) {
+            $this->removeDatabaseRecordSubItem();
+            return;
+        }
+
         if ($this->databaseFocus === self::DATABASE_FOCUS_SETTINGS && ($input === "\n" || $input === "\r")) {
             $this->beginDatabaseEdit();
             return;
@@ -1781,7 +1810,10 @@ final class Editor
 
         if ($this->isAnimationsDatabaseSelected()) {
             $this->moveDatabaseAnimationSelection($step);
+            return;
         }
+
+        $this->moveDatabaseRecordSelection($step);
     }
 
     /**
@@ -3214,6 +3246,67 @@ final class Editor
     }
 
     /**
+     * Launches the game on the selected map, spawning at the cursor.
+     *
+     * The author's project is never modified: `PlaytestOverlay` builds a
+     * temporary root of symlinks with a generated `system.php` and an isolated
+     * save directory, and the overlay is torn down when the game exits. The
+     * engine offers no starting-map override today, so this is the honest way
+     * to do it — see the Phase 6 deferral note in `docs/roadmap.md`.
+     *
+     * @return void
+     */
+    private function startPlaytest(): void
+    {
+        $selectedMap = $this->getSelectedMap();
+
+        if (! $this->workspace instanceof ProjectWorkspace || ! $selectedMap instanceof ProjectMap) {
+            $this->setStatus('Select a map before starting a playtest.', StatusLevel::WARN);
+            $this->renderFooter();
+            return;
+        }
+
+        if ($selectedMap->isDirty()) {
+            // The playtest reads the map through a symlink, so an unsaved
+            // edit simply would not appear. Say so rather than confuse.
+            $this->setStatus('Save this map (Ctrl+S) before playtesting — the game reads the file on disk.', StatusLevel::WARN);
+            $this->renderFooter();
+            return;
+        }
+
+        $overlay = null;
+
+        try {
+            $overlay = PlaytestOverlay::create(
+                $this->workspace->projectRoot,
+                $selectedMap->mapId,
+                $this->cursorX,
+                $this->cursorY,
+            );
+            $launcher = PlaytestLauncher::discover();
+
+            $this->terminal->suspendForChildProcess();
+
+            try {
+                $launcher->run($overlay);
+            } finally {
+                $this->terminal->resumeAfterChildProcess($this->lastTerminalSize);
+            }
+
+            $this->setStatus(
+                sprintf('Playtest finished (%s at %d,%d).', $selectedMap->mapId, $this->cursorX, $this->cursorY),
+                StatusLevel::SUCCESS,
+            );
+        } catch (Throwable $throwable) {
+            $this->setErrorStatus($throwable, 'Playtest');
+        } finally {
+            $overlay?->destroy();
+        }
+
+        $this->requestFullRender();
+    }
+
+    /**
      * Requests an editor exit, guarding unsaved changes behind a prompt.
      *
      * @return void
@@ -3460,6 +3553,7 @@ final class Editor
         $lines[] = 'Canvas: ' . $this->describeCanvasToolUsage();
         $lines[] = sprintf('Active tool: %s.', $this->describeCanvasToolState());
         $lines[] = $this->backups->settings->describe();
+        $lines[] = $this->theme->describe();
 
         return $lines;
     }
@@ -3559,6 +3653,7 @@ final class Editor
             new PaletteItem('Save All', 'Ctrl+A', fn() => $this->saveAllAssets()),
             new PaletteItem('Undo', 'Ctrl+Z', fn() => $this->performUndo()),
             new PaletteItem('Redo', 'Ctrl+Y', fn() => $this->performRedo()),
+            new PaletteItem('Playtest Selected Map', 'Ctrl+T', fn() => $this->startPlaytest()),
             new PaletteItem('Reload Workspace', 'Ctrl+R', fn() => $this->requestReload()),
             new PaletteItem('Tool: Map Mode', '%', function (): void {
                 $this->closeDatabaseIfOpen();
@@ -3752,7 +3847,7 @@ final class Editor
             );
         }
 
-        return [];
+        return $this->getSelectedRecordDatabase()?->getEntryLabels() ?? [];
     }
 
     /**
@@ -3808,7 +3903,7 @@ final class Editor
             $this->isSkillsDatabaseSelected() => $this->databaseSelectedSkillIndex,
             $this->isQuestsDatabaseSelected() => $this->databaseSelectedQuestIndex,
             $this->isAnimationsDatabaseSelected() => $this->databaseSelectedAnimationIndex,
-            default => 0,
+            default => $this->getSelectedRecordIndex(),
         };
     }
 
@@ -3828,7 +3923,7 @@ final class Editor
             $this->isSkillsDatabaseSelected() => $this->databaseSelectedSkillIndex = $index,
             $this->isQuestsDatabaseSelected() => $this->databaseSelectedQuestIndex = $index,
             $this->isAnimationsDatabaseSelected() => $this->databaseSelectedAnimationIndex = $index,
-            default => null,
+            default => $this->setSelectedRecordIndex($index),
         };
     }
 
@@ -3956,6 +4051,16 @@ final class Editor
             return;
         }
 
+        // A read-only category refuses before the destructive prompt appears,
+        // rather than opening a confirmation that could only fail.
+        $recordDatabase = $this->getSelectedRecordDatabase();
+
+        if ($recordDatabase instanceof ProjectRecordDatabase && ! $recordDatabase->isEditable()) {
+            $this->setStatus($this->describeRecordReadOnly($recordDatabase), StatusLevel::WARN);
+            $this->renderFooter();
+            return;
+        }
+
         $this->pendingDatabaseDeletion = [
             'category' => $this->getSelectedDatabaseCategoryDefinition()->key,
             'index' => $index,
@@ -4039,11 +4144,11 @@ final class Editor
                 fn(): ?object => $workspace->animationDatabase->removeAnimation($index),
                 static fn(object $entry) => $workspace->animationDatabase->insertAnimation($index, $entry),
             ),
-            default => null,
+            default => $this->buildRecordDeletionCommand($pending['category'], $index, $label),
         };
 
         if (! $command instanceof Command) {
-            $this->closeDatabaseEntryDeleteConfirmation('This category does not support entry deletion yet.');
+            $this->closeDatabaseEntryDeleteConfirmation($this->describeUndeletableCategory($pending['category']));
             return;
         }
 
@@ -4054,6 +4159,46 @@ final class Editor
         $this->closeDatabaseEntryDeleteConfirmation(
             sprintf('Deleted %s. Ctrl+Z restores it; the file changes on save.', $label),
         );
+    }
+
+    /**
+     * Builds the deletion command for a schema-driven category.
+     *
+     * @param string $categoryKey The category key.
+     * @param int $index The entry index.
+     * @param string $label The entry label.
+     * @return Command|null
+     */
+    private function buildRecordDeletionCommand(string $categoryKey, int $index, string $label): ?Command
+    {
+        $database = $this->workspace?->getRecordDatabase($categoryKey);
+
+        if (! $database instanceof ProjectRecordDatabase || ! $database->isEditable()) {
+            return null;
+        }
+
+        return $this->buildDatabaseDeletionCommand(
+            sprintf('Delete %s %s', $database->schema->entryNoun, $label),
+            static fn(): ?object => $database->removeRecord($index),
+            static fn(object $entry) => $database->insertRecord($index, $entry),
+        );
+    }
+
+    /**
+     * Explains why a category refused an entry deletion.
+     *
+     * @param string $categoryKey The category key.
+     * @return string
+     */
+    private function describeUndeletableCategory(string $categoryKey): string
+    {
+        $database = $this->workspace?->getRecordDatabase($categoryKey);
+
+        if ($database instanceof ProjectRecordDatabase && ! $database->isEditable()) {
+            return sprintf('Read-only: %s.', $database->getReadOnlyReason() ?? 'this category cannot be written');
+        }
+
+        return 'This category does not support entry deletion yet.';
     }
 
     /**
@@ -4586,6 +4731,10 @@ final class Editor
             );
         }
 
+        if ($database instanceof ProjectRecordDatabase) {
+            return $database->getBackupPaths();
+        }
+
         return property_exists($database, 'path') ? [(string) $database->path] : [];
     }
 
@@ -4600,7 +4749,7 @@ final class Editor
             return [];
         }
 
-        return [
+        $databases = [
             'Actors' => $this->workspace->actorDatabase,
             'Classes' => $this->workspace->classDatabase,
             'Skills' => $this->workspace->skillDatabase,
@@ -4608,6 +4757,16 @@ final class Editor
             'Animations' => $this->workspace->animationDatabase,
             'System' => $this->workspace->systemDatabase,
         ];
+
+        // Read-only categories never join Save All: they hold no edits, and
+        // asking them to save would raise instead of no-op.
+        foreach ($this->workspace->recordDatabases as $categoryKey => $recordDatabase) {
+            if ($recordDatabase->isEditable()) {
+                $databases[DatabaseCatalog::at(DatabaseCatalog::indexOf($categoryKey))->label] = $recordDatabase;
+            }
+        }
+
+        return $databases;
     }
 
     /**
@@ -6410,6 +6569,216 @@ final class Editor
     }
 
     /**
+     * Returns whether a schema-driven (Phase 6) category is active.
+     *
+     * @return bool
+     */
+    private function isRecordDatabaseSelected(): bool
+    {
+        return $this->getSelectedRecordDatabase() instanceof ProjectRecordDatabase;
+    }
+
+    /**
+     * Returns the schema-driven database behind the active category.
+     *
+     * @return ProjectRecordDatabase|null
+     */
+    private function getSelectedRecordDatabase(): ?ProjectRecordDatabase
+    {
+        return $this->workspace?->getRecordDatabase($this->getSelectedDatabaseCategoryDefinition()->key);
+    }
+
+    /**
+     * Returns the selected entry index for the active schema-driven category.
+     *
+     * @return int
+     */
+    private function getSelectedRecordIndex(): int
+    {
+        return $this->databaseSelectedRecordIndexes[$this->getSelectedDatabaseCategoryDefinition()->key] ?? 0;
+    }
+
+    /**
+     * Sets the selected entry index for the active schema-driven category.
+     *
+     * @param int $index The entry index.
+     * @return void
+     */
+    private function setSelectedRecordIndex(int $index): void
+    {
+        $this->databaseSelectedRecordIndexes[$this->getSelectedDatabaseCategoryDefinition()->key] = max(0, $index);
+    }
+
+    /**
+     * Moves the selected entry in a schema-driven category.
+     *
+     * @param int $step The selection step.
+     * @return void
+     */
+    private function moveDatabaseRecordSelection(int $step): void
+    {
+        $database = $this->getSelectedRecordDatabase();
+
+        if (! $database instanceof ProjectRecordDatabase || $database->getRecords() === []) {
+            return;
+        }
+
+        $nextIndex = $this->resolveDatabaseSelectionStep($this->getSelectedRecordIndex(), $step);
+
+        if ($nextIndex === $this->getSelectedRecordIndex()) {
+            return;
+        }
+
+        $this->setSelectedRecordIndex($nextIndex);
+        $this->databaseSelectedSettingIndex = 0;
+        $this->statusMessage = sprintf(
+            'Selected %s %s.',
+            $database->schema->entryNoun,
+            $database->getEntryLabels()[$nextIndex] ?? '',
+        );
+        $this->renderDatabasePanes(['list', 'settings']);
+    }
+
+    /**
+     * Creates a new entry in a schema-driven category.
+     *
+     * @return void
+     */
+    private function createDatabaseRecord(): void
+    {
+        $database = $this->getSelectedRecordDatabase();
+
+        if (! $database instanceof ProjectRecordDatabase) {
+            return;
+        }
+
+        if (! $database->isEditable()) {
+            $this->setStatus($this->describeRecordReadOnly($database), StatusLevel::WARN);
+            $this->renderDatabaseArea();
+            return;
+        }
+
+        $index = $database->addRecord();
+
+        if ($index === null) {
+            $this->setStatus(
+                sprintf('%s entries cannot be created from the editor.', ucfirst($database->schema->entryNoun)),
+                StatusLevel::WARN,
+            );
+            $this->renderDatabaseArea();
+            return;
+        }
+
+        $this->setSelectedRecordIndex($index);
+        $this->databaseSelectedSettingIndex = 0;
+        $this->databaseFocus = self::DATABASE_FOCUS_SETTINGS;
+        $this->setStatus(sprintf('Created a new %s.', $database->schema->entryNoun), StatusLevel::SUCCESS);
+        $this->renderDatabaseArea();
+        $this->beginDatabaseEdit();
+    }
+
+    /**
+     * Appends a sub-list entry (a beat, member, or command) and records it
+     * for undo.
+     *
+     * @return void
+     */
+    private function addDatabaseRecordSubItem(): void
+    {
+        $database = $this->getSelectedRecordDatabase();
+        $subList = $database?->schema->subList;
+
+        if (! $database instanceof ProjectRecordDatabase || $subList === null) {
+            return;
+        }
+
+        if (! $database->isEditable()) {
+            $this->setStatus($this->describeRecordReadOnly($database), StatusLevel::WARN);
+            $this->renderDatabaseArea();
+            return;
+        }
+
+        $recordIndex = $this->getSelectedRecordIndex();
+        $entryIndex = $database->addSubItem($recordIndex);
+
+        if ($entryIndex === null) {
+            return;
+        }
+
+        $entry = $database->getRecordByIndex($recordIndex)?->getSubList($subList->key)[$entryIndex] ?? [];
+
+        $this->recordCommand(new GenericCommand(
+            sprintf('%s add', ucfirst($subList->singular)),
+            static fn() => $database->insertSubItem($recordIndex, $entryIndex, $entry),
+            static fn() => $database->removeSubItem($recordIndex, $entryIndex),
+        ));
+
+        $this->setStatus(sprintf('Added %s %d.', $subList->singular, $entryIndex + 1), StatusLevel::SUCCESS);
+        $this->renderDatabaseArea();
+    }
+
+    /**
+     * Removes the last sub-list entry and records it for undo.
+     *
+     * @return void
+     */
+    private function removeDatabaseRecordSubItem(): void
+    {
+        $database = $this->getSelectedRecordDatabase();
+        $subList = $database?->schema->subList;
+
+        if (! $database instanceof ProjectRecordDatabase || $subList === null) {
+            return;
+        }
+
+        if (! $database->isEditable()) {
+            $this->setStatus($this->describeRecordReadOnly($database), StatusLevel::WARN);
+            $this->renderDatabaseArea();
+            return;
+        }
+
+        $recordIndex = $this->getSelectedRecordIndex();
+        $entryIndex = $database->countSubItems($recordIndex) - 1;
+
+        if ($entryIndex < 0) {
+            $this->setStatus(sprintf('No %s to remove.', $subList->singular), StatusLevel::WARN);
+            $this->renderFooter();
+            return;
+        }
+
+        $removed = $database->removeSubItem($recordIndex, $entryIndex);
+
+        if ($removed === null) {
+            return;
+        }
+
+        $this->recordCommand(new GenericCommand(
+            sprintf('%s remove', ucfirst($subList->singular)),
+            static fn() => $database->removeSubItem($recordIndex, $entryIndex),
+            static fn() => $database->insertSubItem($recordIndex, $entryIndex, $removed),
+        ));
+
+        $this->databaseSelectedSettingIndex = 0;
+        $this->setStatus(sprintf('Removed %s %d.', $subList->singular, $entryIndex + 1), StatusLevel::SUCCESS);
+        $this->renderDatabaseArea();
+    }
+
+    /**
+     * Phrases a read-only category's reason for the status line.
+     *
+     * @param ProjectRecordDatabase $database The read-only database.
+     * @return string
+     */
+    private function describeRecordReadOnly(ProjectRecordDatabase $database): string
+    {
+        return sprintf(
+            '%s is read-only: %s.',
+            $this->getSelectedDatabaseCategoryDefinition()->label,
+            $database->getReadOnlyReason() ?? 'this category cannot be written',
+        );
+    }
+
+    /**
      * Returns whether the Actors database is active.
      *
      * @return bool
@@ -6522,7 +6891,10 @@ final class Editor
 
         if ($this->isAnimationsDatabaseSelected()) {
             $this->createDatabaseAnimation();
+            return;
         }
+
+        $this->createDatabaseRecord();
     }
 
     /**
@@ -6738,6 +7110,17 @@ final class Editor
                 $this->backupBeforeSave(...$this->getDatabaseBackupPaths($this->workspace->systemDatabase));
                 $this->workspace->systemDatabase->save();
                 $this->setStatus('System database saved.', StatusLevel::SUCCESS);
+            } elseif (($recordDatabase = $this->getSelectedRecordDatabase()) instanceof ProjectRecordDatabase) {
+                if (! $recordDatabase->isEditable()) {
+                    $this->setStatus($this->describeRecordReadOnly($recordDatabase), StatusLevel::WARN);
+                } else {
+                    $this->backupBeforeSave(...$this->getDatabaseBackupPaths($recordDatabase));
+                    $recordDatabase->save();
+                    $this->setStatus(
+                        sprintf('%s database saved.', $this->getSelectedDatabaseCategoryDefinition()->label),
+                        StatusLevel::SUCCESS,
+                    );
+                }
             } else {
                 $this->setStatus('This database category is not editable yet.', StatusLevel::WARN);
             }
@@ -6773,6 +7156,12 @@ final class Editor
 
         if ($this->isSystemDatabaseSelected()) {
             return $this->getDatabaseSystemSettingsFields();
+        }
+
+        $recordDatabase = $this->getSelectedRecordDatabase();
+
+        if ($recordDatabase instanceof ProjectRecordDatabase) {
+            return $recordDatabase->getSettingsFields($this->getSelectedRecordIndex());
         }
 
         $animation = $this->getSelectedAnimation();
@@ -7299,6 +7688,7 @@ final class Editor
             'quest' => $this->databaseSelectedQuestIndex,
             'animation' => $this->databaseSelectedAnimationIndex,
             'frame' => $this->databaseSelectedFrameIndex,
+            'records' => $this->databaseSelectedRecordIndexes,
         ];
 
         $this->applyDatabaseFieldValue($fieldId, $rawValue);
@@ -7318,7 +7708,7 @@ final class Editor
      * Applies a database value onto a pinned entry identity, restoring the
      * live selection afterwards.
      *
-     * @param array{category: int, actor: int, class: int, skill: int, quest: int, animation: int, frame: int} $identity The pinned selection.
+     * @param array{category: int, actor: int, class: int, skill: int, quest: int, animation: int, frame: int, records?: array<string, int>} $identity The pinned selection.
      * @param string $field The field identifier.
      * @param string $rawValue The raw value to apply.
      * @return void
@@ -7333,6 +7723,7 @@ final class Editor
             $this->databaseSelectedQuestIndex,
             $this->databaseSelectedAnimationIndex,
             $this->databaseSelectedFrameIndex,
+            $this->databaseSelectedRecordIndexes,
         ];
         $this->databaseCategoryIndex = $identity['category'];
         $this->databaseSelectedActorIndex = $identity['actor'];
@@ -7341,6 +7732,7 @@ final class Editor
         $this->databaseSelectedQuestIndex = $identity['quest'];
         $this->databaseSelectedAnimationIndex = $identity['animation'];
         $this->databaseSelectedFrameIndex = $identity['frame'];
+        $this->databaseSelectedRecordIndexes = $identity['records'] ?? $this->databaseSelectedRecordIndexes;
 
         try {
             $this->applyDatabaseFieldValue($field, $rawValue);
@@ -7353,6 +7745,7 @@ final class Editor
                 $this->databaseSelectedQuestIndex,
                 $this->databaseSelectedAnimationIndex,
                 $this->databaseSelectedFrameIndex,
+                $this->databaseSelectedRecordIndexes,
             ] = $liveSelection;
         }
     }
@@ -7411,6 +7804,15 @@ final class Editor
                 ? trim($rawValue)
                 : max(0, intval($rawValue));
             $this->workspace->systemDatabase->setField($field, $value);
+            return;
+        }
+
+        $recordDatabase = $this->getSelectedRecordDatabase();
+
+        if ($recordDatabase instanceof ProjectRecordDatabase) {
+            // The schema owns coercion, so no per-category intval/trim rules
+            // are needed here.
+            $recordDatabase->setField($this->getSelectedRecordIndex(), $field, $rawValue);
             return;
         }
 
@@ -8307,10 +8709,23 @@ final class Editor
     private function resolvePaneColor(?string $pane = null): Color
     {
         if ($pane !== null && $this->focusedPane === $pane) {
-            return Color::LIGHT_BLUE;
+            // The focused pane wears the game's own menu selection color, so
+            // the editor reads as part of the product it builds.
+            return $this->theme->selectionColor;
         }
 
         return Color::WHITE;
+    }
+
+    /**
+     * Adopts the opened project's border pack and selection color.
+     *
+     * @return void
+     */
+    private function applyProjectTheme(): void
+    {
+        $this->theme = EditorTheme::fromProject($this->projectRoot);
+        EditorWindow::useBorderPack($this->theme->borderPack);
     }
 
     /**

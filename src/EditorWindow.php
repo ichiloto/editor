@@ -5,13 +5,69 @@ declare(strict_types=1);
 namespace Ichiloto\Editor;
 
 use Atatusoft\Termutil\IO\Enumerations\Color;
+use Atatusoft\Termutil\UI\Windows\BorderPack;
 use Atatusoft\Termutil\UI\Windows\Window;
+use Atatusoft\Termutil\UI\Windows\WindowAlignment;
+use Atatusoft\Termutil\UI\Windows\WindowPadding;
+use Atatusoft\Termutil\UI\Windows\Enumerations\HorizontalAlignment;
+use Atatusoft\Termutil\UI\Windows\Enumerations\VerticalAlignment;
 
 /**
  * Provides editor-safe window rendering without clipping ANSI-colored borders.
  */
 final class EditorWindow extends Window
 {
+    /**
+     * The border characters every editor window falls back to.
+     *
+     * The editor sets this once at boot from the opened project's
+     * `ui.menu.border`, so windows created all over the coordinator pick up
+     * the project's look without each call site knowing about theming.
+     */
+    private static ?BorderPack $defaultBorderPack = null;
+
+    /**
+     * Sets the border pack new windows use when the caller does not pass one.
+     *
+     * @param BorderPack|null $borderPack The project's border pack, or null to reset.
+     * @return void
+     */
+    public static function useBorderPack(?BorderPack $borderPack): void
+    {
+        self::$defaultBorderPack = $borderPack;
+    }
+
+    /**
+     * @inheritDoc
+     */
+    public function __construct(
+        string $title = '',
+        string $help = '',
+        array $position = [0, 0],
+        int $width = self::DEFAULT_WINDOW_WIDTH,
+        int $height = self::DEFAULT_WINDOW_HEIGHT,
+        ?BorderPack $borderPack = null,
+        WindowAlignment $alignment = new WindowAlignment(HorizontalAlignment::LEFT, VerticalAlignment::MIDDLE),
+        WindowPadding $padding = new WindowPadding(rightPadding: 1, leftPadding: 1),
+        Color $backgroundColor = Color::BLACK,
+        ?Color $foregroundColor = null,
+        array $content = [],
+    ) {
+        parent::__construct(
+            $title,
+            $help,
+            $position,
+            $width,
+            $height,
+            $borderPack ?? self::$defaultBorderPack ?? new BorderPack(),
+            $alignment,
+            $padding,
+            $backgroundColor,
+            $foregroundColor,
+            $content,
+        );
+    }
+
     /**
      * @inheritDoc
      */

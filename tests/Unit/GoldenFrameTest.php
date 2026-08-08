@@ -7,11 +7,15 @@ use Ichiloto\Editor\ProjectWorkspace;
 /**
  * Renders one full editor frame into a string using the same output
  * buffering the live loop uses, with the terminal size pinned.
+ *
+ * The project theme is applied exactly as boot() applies it, so the snapshot
+ * shows what an author actually sees rather than the unthemed defaults.
  */
 function renderGoldenFrame(int $width, int $height): string
 {
   $editor = createEditorForTesting(fixturePath('sample-project'));
   setEditorProperty($editor, 'workspace', ProjectWorkspace::fromProject(fixturePath('sample-project')));
+  callEditorMethod($editor, 'applyProjectTheme');
   setEditorProperty($editor, 'lastTerminalSize', ['width' => $width, 'height' => $height]);
 
   ob_start();

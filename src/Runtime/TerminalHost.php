@@ -95,6 +95,40 @@ final class TerminalHost
     }
 
     /**
+     * Hands the terminal back to the shell so a child process can own it.
+     *
+     * Used by the playtest launcher: the game needs cooked-mode input, its
+     * own screen, and no mouse reporting, and it must not inherit the
+     * editor's raw-mode tty.
+     *
+     * @return void
+     */
+    public function suspendForChildProcess(): void
+    {
+        Console::disableMouseReporting();
+        Console::cursor()->show();
+        echo Color::RESET->value;
+        $this->leaveAlternateScreen();
+        $this->restoreTerminalSettings();
+    }
+
+    /**
+     * Retakes the terminal after a child process exits.
+     *
+     * @param array{width: int, height: int} $size The terminal size to restore.
+     * @return void
+     */
+    public function resumeAfterChildProcess(array $size): void
+    {
+        $this->enterRawMode();
+        $this->enterAlternateScreen();
+        $this->applySize($size);
+        Console::enableMouseReporting(MouseTrackingMode::CELL_MOTION_TRACKING);
+        Console::cursor()->hide();
+        $this->clearScreen();
+    }
+
+    /**
      * Initializes the Console layer for a session at the given size.
      *
      * @param array{width: int, height: int} $size The terminal size.

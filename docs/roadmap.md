@@ -434,7 +434,123 @@ stay maintainable at similar scale:
 - Database entry deletion; add the missing actor `class` reference field
 - Dirty markers everywhere; autosave/backup file option
 
-### Phase 6 — Product completeness (tracks the engine roadmap)
+### Phase 6 — Product completeness (tracks the engine roadmap) ✅ *shipped 2026-08*
+> Status: implemented. **The ten stub categories are gone**, replaced by one
+> schema-driven engine (`src/Database/`) rather than ten hand-wired code
+> paths: a `RecordSchema` declares where a category's records live, what an
+> entry is called, and which fields the settings pane offers, and
+> `ProjectRecordDatabase` supplies listing, flattened settings rows, typed
+> coercion, dirty tracking, Save All participation, identity-pinned undo, and
+> entry deletion for all of them. Adding a category now costs a schema
+> declaration (`RecordSchemaCatalog`), not a field on the coordinator — the
+> Editor gained one `array<string,int>` selection map and ~8 dispatch
+> branches for eleven categories. Three storage shapes are supported:
+> `LIST_FILE` (states, troops, items/weapons/armors, enemies), `DIRECTORY`
+> (one file per record — skits, event scripts), and `CONFIG_SUBTREE` (terms,
+> flattened out of `config.php`'s `vocab`/`messages` trees), plus a
+> `FILE_LISTING` mode that inventories a directory *without evaluating it*
+> (types — requiring those enum declarations into the editor's process risks
+> a redeclaration fatal).
+> **Editability is detected, never declared.** `PhpDataFile` loads a data
+> file, keeps everything from `<?php` up to the top-level `return`
+> byte-for-byte, and regenerates only the returned expression through an
+> enum-aware exporter (`PhpValueExporter`, which emits `\Vendor\Enum::CASE`).
+> A category is writable only when two probes pass: every leaf is a scalar,
+> array, or enum case; and no comment sits *inside* the returned data, since
+> a rewrite would drop it. So **items, weapons, armors, and enemies are
+> read-only with an honest status message** — those files are PHP that
+> *builds* data (`enemies.php` shares `BasicSkill` instances between enemies
+> through local variables; `items.php` constructs effects inline), and
+> regenerating them would mean inventing source. They are fully *browsable*
+> instead: an enemy shows level, all eight stats, sprite, battle rewards, and
+> element affinities, and every write path (`setField`, `addRecord`,
+> `removeRecord`, `save`) refuses with the reason. Re-author such a file as a
+> plain array and the editor picks it up as editable with no editor change.
+> **Terms** is genuinely editable — `config.php` round-trips including its
+> enum values — but is read-only for `last-legend` today because its config
+> carries inline comments; the message says exactly that, and moving the
+> comments above `return` restores editing. **Tilesets** stays visible and
+> honest: the engine has no tileset system, so the category explains that map
+> tiles are painted on the canvas instead. **States** and **troops** are
+> fully editable (troop members flatten to `member0Enemy`/`member0Position0`
+> rows), and optional keys *disappear* when cleared rather than being written
+> as `0`/`false`, matching the engine's defaults.
+> **Two new editors landed for the newer engine systems.** *Skits*
+> (`assets/Data/Skits/*.php`, a new Database category) edit id/title/where/
+> conditions/speed plus flattened `beat<N>Speaker`/`beat<N>Text` rows;
+> `Shift+A` creates one as its own file, and since `SkitManager` keys skits by
+> their payload `id` rather than filename, editing an id needs no rename.
+> *Event scripts* fill the long-empty **Common Events** category
+> (`assets/Events/*.php`): the entry list is script ids, and the settings pane
+> flattens the command list with **per-type field sets** — a `text` command
+> shows Speaker/Text, a `transfer` shows Map/X/Y — covering all 15 interpreter
+> command types. `Shift+O`/`Shift+X` became the *one* sub-list idiom
+> (quest objectives, skit beats, troop members, event commands), and
+> `ConditionCodec` became the one representation of the engine's world-condition
+> grammar, shared by quest prerequisites, skit conditions, and `branch` arms.
+> **Playtest-from-editor is `Ctrl+T`** and does not mutate the project. The
+> engine offers no starting-map or spawn override — verified: `play` passes
+> zero argv and zero env to the game, and every engine path is
+> CWD-relative — so `PlaytestOverlay` works with that grain: a temp root of
+> symlinks back to the real project, with exactly two entries replaced by real
+> ones (a generated `assets/Data/system.php` carrying the spawn, and an empty
+> `.data/` so playtest saves cannot touch the author's slots). Maps and assets
+> are symlinks, so the playtest runs against live files; the overlay is
+> deleted on exit; teardown guards `is_link()` before descending so it can
+> never recurse into the project. `TerminalHost` grew
+> `suspendForChildProcess()`/`resumeAfterChildProcess()` to hand the tty over
+> and take it back. The editor refuses to playtest a *dirty* map rather than
+> silently running the on-disk version.
+> **The manual is real**: `docs/manual.md` (531 lines) plus six task guides
+> under `docs/guides/` (1,096 lines total) — index, make-a-new-map,
+> add-an-npc, wire-a-quest, author-a-cutscene, write-a-skit — following the
+> Sendama console's structure and its "current behavior:" hedging idiom.
+> `tests/Unit/ManualCoverageTest.php` is the staleness guard: every key token
+> in every registered binding must appear backticked in the manual, every
+> Database category must be named, every schema's backing path must be
+> documented, every event command type must be listed, all six guides must
+> exist, and every relative doc link must resolve. Website pages were drafted
+> under `docs/website/` (two `guide/tooling-loop/` pages with the site's YAML
+> front matter) and deliberately **not** written into the website repo.
+> **Theming** reads the project's own `ui.menu.border` and
+> `ui.menu.selection_color` from `config.php`: engine border packs are
+> translated into termutil's `BorderPack` (the engine exposes static getters,
+> termutil wants a value object) and applied to every window through a static
+> default on `EditorWindow`, so no call site needed changing; the focused
+> pane is drawn in the game's own selection color via `resolvePaneColor()`.
+> Unresolvable or absent theme keys fall back silently — a bad config never
+> stops a project opening. The active theme prints in the `?` overlay.
+> Tests grew 198 → 250 (record engine load/edit/save round-trips per storage
+> shape, header preservation, the interior-comment guard, read-only refusal on
+> every write path, per-category fixtures for states/troops/items/terms/types,
+> the skit and event-script editors including per-type command fields and
+> bare-list saves, editor-level selection/undo/Save-All wiring, playtest
+> overlay isolation proven by checksumming the project before and after, five
+> theming cases, and the manual coverage guard). The golden ANSI frame was
+> regenerated deliberately for exactly one change — the focused pane's border
+> escape moved from `\033[1;34m` to `\033[1;33m`, the fixture project's
+> configured selection color — with the frame otherwise byte-identical
+> (5,800 bytes before and after). Live expect smoke on `examples/last-legend`
+> passed with every `assets/**` file checksum-identical before and after.
+> Deferrals, with reasons: **the summon timeline editor is out of scope** and
+> untouched — it is a sequencing UI of a different shape and deserves its own
+> phase. Nested event arms (`choice.options`, `branch.then`/`else`) are shown
+> as fixed rows and round-trip untouched rather than being flattened into the
+> settings pane, which would be unreadable, or dropped, which would be worse.
+> The editor still cannot point a map marker at a `ScriptEventTrigger` — the
+> event-type catalog carries five types and the `scriptId` is wired by hand;
+> that is the obvious next Phase 7 item now that scripts are authorable. Map
+> `npcs` (the wandering-character array) remain hand-authored. Event scripts
+> cannot be renamed from the editor because renaming the file would silently
+> break every map referencing the old `scriptId`. Terms editing needs a
+> comment-preserving surgical writer before it works on comment-carrying
+> configs; the same guard is *not* yet applied to the pre-Phase-6 categories
+> (quests, classes, skills), which would still drop an interior comment on
+> save — worth retrofitting. And the playtest still lands on the title screen:
+> booting straight into the field needs an engine hook in
+> `GameLoader::loadNewGame()` (override `mapId`/`playerPosition`) plus
+> `Game::start()` (skip scene 0), which is engine-side work this phase
+> deliberately did not do.
 - Implement the 10 stub database categories (items, weapons, armors,
   enemies, troops, states, terms, common events, tilesets, types)
 - New editors as engine systems land: quests, skits, cutscene command

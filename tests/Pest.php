@@ -26,6 +26,44 @@ spl_autoload_register(static function (string $class): void {
 });
 
 /**
+ * Builds an unbooted editor over a throwaway copy of the fixture project, so
+ * a test may exercise the real save paths.
+ */
+function deletionEditor(string $root): Editor
+{
+    $editor = createEditorForTesting($root);
+    setEditorProperty($editor, 'workspace', Ichiloto\Editor\ProjectWorkspace::fromProject($root));
+    setEditorProperty($editor, 'lastTerminalSize', ['width' => 120, 'height' => 40]);
+    setEditorProperty($editor, 'isRunning', true);
+
+    return $editor;
+}
+
+/**
+ * Opens the Database screen on a category with the entry list focused.
+ */
+function openDatabaseCategory(Editor $editor, string $category): void
+{
+    callEditorMethod($editor, 'dispatchInput', "\x04");
+    setEditorProperty($editor, 'databaseCategoryIndex', Ichiloto\Editor\Database\DatabaseCatalog::indexOf($category));
+    setEditorProperty($editor, 'databaseFocus', 'database_list');
+}
+
+/**
+ * Loads one schema-driven Database category from a project root.
+ */
+function loadRecordDatabase(string $projectRoot, string $categoryKey): Ichiloto\Editor\Database\ProjectRecordDatabase
+{
+    $schema = Ichiloto\Editor\Database\RecordSchemaCatalog::forKey($categoryKey);
+
+    if ($schema === null) {
+        throw new RuntimeException("No record schema for category {$categoryKey}.");
+    }
+
+    return Ichiloto\Editor\Database\ProjectRecordDatabase::fromProject($projectRoot, $schema);
+}
+
+/**
  * Returns the absolute path of a test fixture.
  */
 function fixturePath(string $relativePath = ''): string

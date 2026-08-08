@@ -2,34 +2,7 @@
 
 declare(strict_types=1);
 
-use Ichiloto\Editor\Database\DatabaseCatalog;
-use Ichiloto\Editor\Editor;
 use Ichiloto\Editor\ProjectActorDatabase;
-use Ichiloto\Editor\ProjectWorkspace;
-
-/**
- * Builds an unbooted editor over a throwaway copy of the fixture project, so
- * deletion tests may exercise the real save path.
- */
-function deletionEditor(string $root): Editor
-{
-    $editor = createEditorForTesting($root);
-    setEditorProperty($editor, 'workspace', ProjectWorkspace::fromProject($root));
-    setEditorProperty($editor, 'lastTerminalSize', ['width' => 120, 'height' => 40]);
-    setEditorProperty($editor, 'isRunning', true);
-
-    return $editor;
-}
-
-/**
- * Opens the Database screen on a category with the entry list focused.
- */
-function openDatabaseCategory(Editor $editor, string $category): void
-{
-    callEditorMethod($editor, 'dispatchInput', "\x04");
-    setEditorProperty($editor, 'databaseCategoryIndex', DatabaseCatalog::indexOf($category));
-    setEditorProperty($editor, 'databaseFocus', 'database_list');
-}
 
 it('defaults the entry delete confirmation to Cancel: Enter does not delete', function () {
     $root = makeTemporaryProject();
@@ -137,11 +110,33 @@ it('refuses deletion in categories that have no entries', function () {
 
     try {
         $editor = deletionEditor($root);
-        openDatabaseCategory($editor, 'items');
+        // The engine has no tileset system, so the category is genuinely empty.
+        openDatabaseCategory($editor, 'tilesets');
         callEditorMethod($editor, 'dispatchInput', "\033[3~");
 
         expect(getEditorProperty($editor, 'isDatabaseEntryDeleteConfirmationOpen'))->toBeFalse()
             ->and(getEditorProperty($editor, 'statusMessage'))->toContain('does not support entry deletion');
+    } finally {
+        removeDirectoryRecursively($root);
+    }
+});
+
+it('refuses deletion in a read-only category before prompting', function () {
+    $root = makeTemporaryProject();
+    $before = (string) file_get_contents($root . '/assets/Data/items.php');
+
+    try {
+        $editor = deletionEditor($root);
+        openDatabaseCategory($editor, 'items');
+
+        // The category lists real entries, so this is not an "empty" refusal.
+        expect(callEditorMethod($editor, 'getDatabaseEntryLabels'))->not->toBeEmpty();
+
+        callEditorMethod($editor, 'dispatchInput', "\033[3~");
+
+        expect(getEditorProperty($editor, 'isDatabaseEntryDeleteConfirmationOpen'))->toBeFalse()
+            ->and(getEditorProperty($editor, 'statusMessage'))->toContain('read-only')
+            ->and((string) file_get_contents($root . '/assets/Data/items.php'))->toBe($before);
     } finally {
         removeDirectoryRecursively($root);
     }
