@@ -29,7 +29,9 @@ final class InputControl
     {
         return match ($this->type) {
             InputControlType::TEXT,
-            InputControlType::INTEGER => true,
+            InputControlType::INTEGER,
+            InputControlType::FLOAT => true,
+            InputControlType::BOOLEAN,
             InputControlType::FILE_PATH => false,
         };
     }
@@ -46,12 +48,17 @@ final class InputControl
         return match ($this->type) {
             InputControlType::TEXT => $symbol !== "\t",
             InputControlType::INTEGER => $this->acceptsIntegerSymbol($symbol, $buffer),
+            InputControlType::FLOAT => $this->acceptsFloatSymbol($symbol, $buffer),
+            InputControlType::BOOLEAN,
             InputControlType::FILE_PATH => false,
         };
     }
 
     /**
-     * Applies a numeric increment if supported by the control.
+     * Applies a step adjustment if supported by the control.
+     *
+     * Integers and floats step by the control's step size; booleans toggle
+     * regardless of direction (the one consistent left/right idiom).
      *
      * @param string $buffer The current raw buffer.
      * @param int $delta The increment delta.
@@ -59,13 +66,47 @@ final class InputControl
      */
     public function adjust(string $buffer, int $delta): string
     {
-        if ($this->type !== InputControlType::INTEGER) {
-            return $buffer;
+        if ($this->type === InputControlType::INTEGER) {
+            $currentValue = (int) trim($buffer === '' ? '0' : $buffer);
+
+            return (string) ($currentValue + ($delta * $this->step));
         }
 
-        $currentValue = (int) trim($buffer === '' ? '0' : $buffer);
+        if ($this->type === InputControlType::FLOAT) {
+            $currentValue = (float) trim($buffer === '' ? '0' : $buffer);
 
-        return (string) ($currentValue + ($delta * $this->step));
+            return self::formatFloat($currentValue + ($delta * $this->step));
+        }
+
+        if ($this->type === InputControlType::BOOLEAN) {
+            return self::parseBoolean($buffer) ? 'false' : 'true';
+        }
+
+        return $buffer;
+    }
+
+    /**
+     * Parses a raw buffer into a boolean value.
+     *
+     * @param string $buffer The raw buffer.
+     * @return bool
+     */
+    public static function parseBoolean(string $buffer): bool
+    {
+        return in_array(strtolower(trim($buffer)), ['true', '1', 'yes', 'on'], true);
+    }
+
+    /**
+     * Formats a float without noise digits (trailing zeros / bare points).
+     *
+     * @param float $value The value to format.
+     * @return string
+     */
+    public static function formatFloat(float $value): string
+    {
+        $formatted = rtrim(rtrim(number_format($value, 6, '.', ''), '0'), '.');
+
+        return $formatted === '' || $formatted === '-' ? '0' : $formatted;
     }
 
     /**
@@ -83,5 +124,26 @@ final class InputControl
 
         return $symbol === '-'
             && $buffer === '';
+    }
+
+    /**
+     * Determines whether a float control accepts the given symbol.
+     *
+     * @param string $symbol The typed symbol.
+     * @param string $buffer The current raw buffer.
+     * @return bool
+     */
+    private function acceptsFloatSymbol(string $symbol, string $buffer): bool
+    {
+        if (preg_match('/^\d$/', $symbol) === 1) {
+            return true;
+        }
+
+        if ($symbol === '-') {
+            return $buffer === '';
+        }
+
+        return $symbol === '.'
+            && ! str_contains($buffer, '.');
     }
 }

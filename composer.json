@@ -4,9 +4,6 @@
   "type": "library",
   "require": {
     "symfony/console": "^8.0",
-    "league/climate": "^3.10",
-    "laravel/prompts": "^0.3.14",
-    "php-tui/php-tui": "^0.2.1",
     "atatusoft-ltd/termutil": "^1.1",
     "ext-mbstring": "*"
   },

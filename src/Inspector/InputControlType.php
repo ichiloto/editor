@@ -11,5 +11,7 @@ enum InputControlType: string
 {
     case TEXT = 'text';
     case INTEGER = 'integer';
+    case FLOAT = 'float';
+    case BOOLEAN = 'boolean';
     case FILE_PATH = 'file_path';
 }

@@ -28,6 +28,7 @@ final readonly class ProjectWorkspace
         public ProjectSkillDatabase     $skillDatabase,
         public ProjectAnimationDatabase $animationDatabase,
         public ProjectSystemDatabase    $systemDatabase,
+        public ProjectQuestDatabase     $questDatabase,
     ) {
     }
 
@@ -75,6 +76,7 @@ final readonly class ProjectWorkspace
             skillDatabase: ProjectSkillDatabase::fromProject($projectRoot),
             animationDatabase: ProjectAnimationDatabase::fromProject($projectRoot),
             systemDatabase: ProjectSystemDatabase::fromProject($projectRoot),
+            questDatabase: ProjectQuestDatabase::fromProject($projectRoot),
         );
     }
 
@@ -127,15 +129,66 @@ final readonly class ProjectWorkspace
             return $lines;
         }
 
-        foreach ($this->mapIds as $mapId) {
-            $lines[] = sprintf("  %s", $mapId);
-        }
-
-        if (isset($lines[1 + $selectedMapIndex])) {
-            $lines[1 + $selectedMapIndex] = sprintf("> %s", $this->mapIds[$selectedMapIndex]);
+        foreach ($this->mapIds as $index => $mapId) {
+            $prefix = $index === $selectedMapIndex ? '> ' : '  ';
+            $dirty = $this->maps[$index]->isDirty() ? ' *' : '';
+            $lines[] = sprintf('%s%s%s', $prefix, $mapId, $dirty);
         }
 
         return $lines;
+    }
+
+    /**
+     * Returns whether any map or database holds unsaved changes.
+     *
+     * @return bool
+     */
+    public function hasUnsavedChanges(): bool
+    {
+        foreach ($this->maps as $map) {
+            if ($map->isDirty()) {
+                return true;
+            }
+        }
+
+        return $this->actorDatabase->isDirty()
+            || $this->classDatabase->isDirty()
+            || $this->skillDatabase->isDirty()
+            || $this->animationDatabase->isDirty()
+            || $this->systemDatabase->isDirty()
+            || $this->questDatabase->isDirty();
+    }
+
+    /**
+     * Returns a workspace with one map swapped for a fresh instance, keeping
+     * every other loaded object intact (no whole-workspace reload).
+     *
+     * The map list is re-sorted by map id so a renamed map lands where a
+     * full rescan would have placed it.
+     *
+     * @param int $index The map index being replaced.
+     * @param ProjectMap $map The replacement map.
+     * @return self
+     */
+    public function withReplacedMap(int $index, ProjectMap $map): self
+    {
+        $maps = $this->maps;
+        $maps[$index] = $map;
+        usort($maps, static fn(ProjectMap $left, ProjectMap $right): int => strcmp($left->mapId, $right->mapId));
+
+        return new self(
+            projectRoot: $this->projectRoot,
+            projectName: $this->projectName,
+            mainFile: $this->mainFile,
+            maps: $maps,
+            mapIds: array_map(static fn(ProjectMap $workspaceMap): string => $workspaceMap->mapId, $maps),
+            actorDatabase: $this->actorDatabase,
+            classDatabase: $this->classDatabase,
+            skillDatabase: $this->skillDatabase,
+            animationDatabase: $this->animationDatabase,
+            systemDatabase: $this->systemDatabase,
+            questDatabase: $this->questDatabase,
+        );
     }
 
     /**

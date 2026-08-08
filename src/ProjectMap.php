@@ -24,6 +24,10 @@ final class ProjectMap
      */
     private array $editableData;
     private bool $isDirty = false;
+    /**
+     * Memoized widest-row width; invalidated when the grid dimensions change.
+     */
+    private ?int $cachedWidth = null;
 
     /**
      * @param string[] $tileLines
@@ -132,13 +136,17 @@ final class ProjectMap
      */
     public function getWidth(): int
     {
+        if ($this->cachedWidth !== null) {
+            return $this->cachedWidth;
+        }
+
         $width = 0;
 
         foreach ($this->tileCells as $row) {
             $width = max($width, count($row));
         }
 
-        return $width;
+        return $this->cachedWidth = $width;
     }
 
     /**
@@ -293,6 +301,87 @@ final class ProjectMap
     }
 
     /**
+     * Returns every distinct event marker painted on the grid.
+     *
+     * @return string[]
+     */
+    public function getPlacedEventMarkers(): array
+    {
+        $markers = [];
+
+        foreach ($this->eventCells as $row) {
+            foreach ($row as $symbol) {
+                if (trim($symbol) !== '') {
+                    $markers[$symbol] = $symbol;
+                }
+            }
+        }
+
+        return array_values($markers);
+    }
+
+    /**
+     * Captures the editable grid state for undoable whole-grid mutations
+     * (resize, event bounds rewrites).
+     *
+     * @return array{tiles: array<int, array<int, array{symbol: string, prefix: string, suffix: string}>>, events: array<int, array<int, string>>}
+     */
+    public function captureGridSnapshot(): array
+    {
+        return [
+            'tiles' => $this->tileCells,
+            'events' => $this->eventCells,
+        ];
+    }
+
+    /**
+     * Restores a previously captured grid snapshot.
+     *
+     * @param array{tiles: array<int, array<int, array{symbol: string, prefix: string, suffix: string}>>, events: array<int, array<int, string>>} $snapshot The captured state.
+     * @return void
+     */
+    public function restoreGridSnapshot(array $snapshot): void
+    {
+        $this->tileCells = $snapshot['tiles'];
+        $this->eventCells = $snapshot['events'];
+        $this->cachedWidth = null;
+        $this->isDirty = true;
+    }
+
+    /**
+     * Returns a top-level map metadata field value.
+     *
+     * @param string $field The field to read.
+     * @return mixed
+     */
+    public function getMapField(string $field): mixed
+    {
+        return $this->editableData[$field] ?? null;
+    }
+
+    /**
+     * Reads a nested event field value (the undo counterpart of setEventField).
+     *
+     * @param string $marker The event marker.
+     * @param string[] $path The nested data path.
+     * @return mixed
+     */
+    public function getEventField(string $marker, array $path): mixed
+    {
+        $reference = $this->editableData['events'][$marker] ?? null;
+
+        foreach ($path as $segment) {
+            if (! is_array($reference) || ! array_key_exists($segment, $reference)) {
+                return null;
+            }
+
+            $reference = $reference[$segment];
+        }
+
+        return $reference;
+    }
+
+    /**
      * Returns the event marker located at the given coordinate.
      *
      * @param int $x The cell x coordinate.
@@ -414,6 +503,7 @@ final class ProjectMap
             $this->eventCells[] = array_fill(0, $width, ' ');
         }
 
+        $this->cachedWidth = null;
         $this->isDirty = true;
     }
 
@@ -470,6 +560,23 @@ final class ProjectMap
     }
 
     /**
+     * Removes the definition for the given event marker (the undo counterpart
+     * of a first-time setEventDefinition).
+     *
+     * @param string $marker The event marker.
+     * @return void
+     */
+    public function removeEventDefinition(string $marker): void
+    {
+        if (! isset($this->editableData['events'][$marker])) {
+            return;
+        }
+
+        unset($this->editableData['events'][$marker]);
+        $this->isDirty = true;
+    }
+
+    /**
      * Updates the rectangular bounds of an event marker.
      *
      * @param string $marker The event marker.
@@ -501,6 +608,28 @@ final class ProjectMap
         }
 
         $this->isDirty = true;
+    }
+
+    /**
+     * Returns where the next save() will write, so callers can detect and
+     * confirm a folder move before any file is touched.
+     *
+     * @return array{mapId: string, directory: string, dataPath: string, mapPath: string, eventPath: string}
+     */
+    public function getSaveTarget(): array
+    {
+        return $this->resolveSaveTarget();
+    }
+
+    /**
+     * Returns whether saving would move the map folder (the rename flow that
+     * deletes the current directory).
+     *
+     * @return bool
+     */
+    public function willMoveOnSave(): bool
+    {
+        return $this->resolveSaveTarget()['directory'] !== $this->directory;
     }
 
     /**
@@ -812,7 +941,9 @@ final class ProjectMap
     {
         $mapsRoot = $this->getMapsRoot();
         $baseName = self::slugify($this->getDisplayName(), basename($this->directory));
-        $region = self::slugify($this->getRegion());
+        // An empty region must stay empty — falling back to the default slug
+        // would silently relocate region-less maps into a "new-map" folder.
+        $region = self::slugify($this->getRegion(), '');
         $relativePath = $region !== '' ? $region . DIRECTORY_SEPARATOR . $baseName : $baseName;
         $directory = $mapsRoot . DIRECTORY_SEPARATOR . $relativePath;
         $mapId = str_replace(DIRECTORY_SEPARATOR, '/', $relativePath);

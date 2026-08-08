@@ -29,6 +29,7 @@ final class DatabaseCatalog
             new DatabaseCategoryDefinition('animations', 'Animations', 'Create reusable keyframed effects.', true),
             new DatabaseCategoryDefinition('tilesets', 'Tilesets', 'Assign tiles and terrain behavior.'),
             new DatabaseCategoryDefinition('common_events', 'Common Events', 'Create reusable event scripts.'),
+            new DatabaseCategoryDefinition('quests', 'Quests', 'Author quests, objectives, and rewards.', true),
             new DatabaseCategoryDefinition('system', 'System', 'Configure system-wide project settings.', true),
             new DatabaseCategoryDefinition('types', 'Types', 'Manage element and weapon-type tables.'),
             new DatabaseCategoryDefinition('terms', 'Terms', 'Customize UI labels and message terms.'),

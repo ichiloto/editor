@@ -1,0 +1,352 @@
+# Ichiloto Editor — Audit & Development Roadmap
+
+*Assessment date: August 2026. Compiled from three audits: a measured
+performance/architecture trace of the Ichiloto editor, a comparative study of
+the hand-built Sendama console editor (the responsiveness benchmark), and an
+authoring-UX review. All measurements taken on this machine.*
+
+## The one-paragraph diagnosis
+
+The editor is not slow because PHP is slow — **a full frame of real rendering
+computes in 0.3–0.5 ms**. It is slow because the main loop polls the keyboard
+at **~6.4 Hz** (a blocking 100 ms stdin read + a `shell_exec('stty size')`
+fork every iteration + an unconditional 50 ms sleep), drops input events (one
+event per tick; key-repeat bursts coalesce into a single move; extra mouse
+events are discarded), amplifies latency exactly when you hold a key (an
+escape-sequence "completion" retry loop costs up to +80 ms), and repaints by
+forking `system("clear")` then issuing ~270 unbuffered write syscalls. The
+Sendama editor proves the fix on the same terminal stack: non-blocking
+drained input, an offline escape tokenizer, overwrite-in-place rendering, a
+16.6 ms frame cadence — **≈17 ms key-to-pixel versus Ichiloto's worst-case
+~230 ms plus a fork**. Beneath the latency sits a 7,020-line / 232-method /
+66-field god object with render calls scattered across 150 sites, no undo,
+three silent data-loss paths, no tests, and 2.6 MB of declared-but-unused UI
+dependencies. The good news: the top latency fixes are hours of work, not a
+redesign.
+
+## The measured contrast
+
+| | Ichiloto editor | Sendama console (benchmark) |
+| --- | --- | --- |
+| Loop sleep | `usleep(50_000)` — 20 fps ceiling | `usleep(16_666)` — 60 fps target |
+| Stdin | `stty min 0 time 1` → `fread` blocks up to **100 ms** | `stream_set_blocking(STDIN, false)` + full drain, never blocks |
+| Escape sequences | retry loop: up to 8 × 10 ms sleeps per read | offline longest-match tokenizer, zero extra reads |
+| Key repeat | burst coalesces to **one** move; held `j` paints letters | repeat coalescing + 50 ms synthetic hold → smooth ~20 Hz |
+| Terminal size | `shell_exec('stty size')` **every iteration** (6.66 ms) | every 10th frame, early-return when unchanged |
+| Repaint | `system("clear")` fork (5.07 ms) + ~270 unbuffered writes | overwrite-in-place; `clear` at exactly one site |
+| Idle overlay | full-screen repaint pathways | dirty-flagged: idle modal writes **zero bytes** |
+| Events consumed per tick | 1 (rest discarded) | queued, none dropped |
+| **Felt key→pixel latency** | **~157–230 ms + fork** | **~17 ms** |
+
+## Ranked findings
+
+### Performance (measured)
+1. `stty size` subprocess every loop iteration — 6.66 ms, unthrottled
+   (`Editor.php:4516` via `update()`). The engine's `Game::syncScreenSize()`
+   has the same bug (its "throttle" variables aren't `static`).
+2. Blocking `fread` with 100 ms termios timeout; no `stream_select`, no
+   non-blocking mode (`Editor.php:261, 475`).
+3. One input event per tick; extra key/mouse events in the same read buffer
+   silently discarded (`Editor.php:354`, `1518`, `1621`).
+4. Escape-sequence completion loop sleeps up to 80 ms and mis-judges
+   multi-event bursts as incomplete — a positive-feedback lag amplifier
+   (`Editor.php:488-526`).
+5. `system("clear")` fork on every full redraw (5.07 ms) + fresh 24×80 grid
+   allocated and never read (`termutil Console::clear`).
+6. ~270 unbuffered `write()` syscalls per frame; no `ob_start` anywhere —
+   the visible tearing (`EditorWindow::renderAt`).
+7. Blocking animation preview freezes input entirely (`Editor.php:4112`).
+8. Per-frame recomputation: inspector fields built twice per render, full
+   O(W×H) event-bounds scans per mouse-move, layout re-derived 5–7× per
+   frame, map width recounted per call.
+9. Whole-workspace reload (all maps + all databases re-required and
+   re-parsed) on save/duplicate/delete/Ctrl+R — 28 ms cold and growing
+   linearly with project size.
+
+### Architecture
+- One 7,020-line final class holding ~63% of all editor code; five
+  distinguishable applications (map canvas, inspector, database suite,
+  dialogs, terminal host) interleaved in one namespace of methods.
+- Render is a side effect of input: 150 direct render call sites; the loop's
+  `render()` is nearly always a no-op; no single frame boundary to attach
+  diffing or budgets to. Two byte-identical render helpers.
+- 11 boolean modal flags dispatched by two hand-ordered `if` cascades that
+  must be kept in sync manually; no modal stack.
+- php-tui, laravel/prompts, league/climate: declared, installed (2.6 MB),
+  **zero uses**. The editor hand-rolls what php-tui's buffer/diff model
+  provides. Meanwhile `EditorWindow` forks the termutil `Window` to fix a
+  rendering bug that never flowed upstream.
+- `set_error_handler` escalates every PHP notice into a terminal teardown —
+  then keeps running with a wrecked screen.
+- **Zero tests** (pest + phpstan sit unused in require-dev); two git commits.
+
+### Safety & UX (worst first)
+1. **No undo/redo of any kind.**
+2. **Silent data loss**: saving map A reloads the workspace and wipes unsaved
+   edits on maps B–N; Ctrl+R discards everything unconditionally; Ctrl+Q
+   exits with no dirty check; the Assets list has no dirty markers.
+3. **Rename = rm -rf**: save derives the target folder from the editable
+   Name/Region and deletes the old directory without confirmation.
+4. Keyboard palette holes: `!` is swallowed globally (can't be typed or
+   painted anywhere); `hjkl` steal 8 glyphs; `%^@` reserved; cancel is
+   Esc/`c`/`n` depending on context; Enter is the destructive default on
+   delete confirmations.
+5. No scrolling in Assets/Inspector/Database-settings lists — selection and
+   edit caret walk off-screen (dialogs scroll correctly; the algorithm
+   exists).
+6. Single truncated status line is the only feedback channel; errors and
+   successes look identical; exceptions get cut off mid-message.
+7. No help overlay, no keymap screen, no command palette; the Database key
+   (`!`) is documented nowhere on screen.
+8. Database entries cannot be deleted; 10 of 15 categories are
+   indistinguishable dead shells; booleans/floats edited as raw text; two
+   contradictory enum idioms; no validation before save (dangling map refs,
+   spawn points out of range all save fine).
+9. Single-cell keyboard painting only — no fill, rect, line, brush size,
+   region copy/paste, or multi-select. (Mouse drag painting is the one bulk
+   tool, and it's good.)
+
+### Worth keeping (the good bones)
+Mouse drag-painting with Bresenham gap-filling and eyedropper;
+the destination/spawn-point round trip (navigate to the target map, pick the
+cell in context, return with full state restored — the model for all future
+cross-references); loot pickers backed by real project data; dialog list
+scrolling; atomic tmp+rename file writes; styled-tile round-tripping;
+dirty flags already plumbed through every data model; the live class-curve
+preview; helpful empty states; live resize handling.
+
+## The plan
+
+### Phase 1 — The responsiveness sprint (quick wins, no redesign) ✅ *shipped 2026-08*
+> Status: implemented. `InputDecoder` (src/IO/InputDecoder.php, unit-tested)
+> replaces the blocking reader: non-blocking drained stdin, offline escape
+> tokenizer, per-token dispatch (a key-repeat burst now lands one event per
+> press). The loop runs a 16.6 ms deadline budget with the whole frame
+> emitted as a single buffered write; the size probe is throttled to 250 ms;
+> `system("clear")` is gone; animation preview is a non-blocking state
+> (Shift+P toggles); warnings no longer tear the session down; layout and
+> map-width are memoized. Item 3's Sendama-style synthetic hold window was
+> deliberately deferred — native terminal repeat now arrives intact, which
+> already reads correctly — revisit with Phase 3's input router if needed.
+Port the proven Sendama mechanics onto the existing structure. Expected to
+recover ~90% of felt latency:
+1. Non-blocking stdin: `stream_set_blocking(STDIN, false)` +
+   `stream_get_contents` drain per tick (kills the 100 ms read timeout)
+2. Offline escape tokenizer (longest-match table + SGR mouse regex) feeding
+   a persistent event queue; consume the queue each tick (kills the 80 ms
+   retry amplifier, fixes dropped input and the paint-a-`j` bug)
+3. Key-repeat coalescing + ~50 ms synthetic hold window for smooth held-key
+   movement
+4. Throttle `stty size` to every 10th frame with early-return when
+   unchanged; fix the identical non-static-throttle bug in the engine's
+   `Game::syncScreenSize()` while at it
+5. Replace `system("clear")` with `\033[2J\033[H`; clear only when leaving
+   full-screen overlays; overwrite-in-place otherwise
+6. Wrap frame output in `ob_start`/`ob_end_flush` — one write per frame,
+   no tearing
+7. Drop the loop sleep to a 16.6 ms deadline-based budget (only after 1–5)
+8. Make animation preview a state ticked from `update()` instead of a
+   blocking call
+9. Scope the error handler to real errors; stop tearing down the terminal
+   for notices
+10. Memoize per-frame derived data (layout, inspector fields, map width);
+    delete the duplicate render helper
+
+### Phase 2 — The safety sprint (before any refactor invites regressions) ✅ *shipped 2026-08*
+> Status: implemented. Command-object undo/redo (`src/History/`, 500-entry
+> cap) covers tile/event paints — a mouse drag coalesces into one stroke
+> command — plus map resize, metadata, event fields/types/bounds, the
+> dialog-driven edits (loot, options, destination+spawn), database field
+> edits (identity-pinned so undo hits the right entry after the selection
+> moves), and animation frame painting. Ctrl+Z undoes; redo is Ctrl+Y (and
+> Ctrl+Shift+Z where the terminal reports CSI-u) — boot now un-maps the tty
+> susp/dsusp characters so those keys reach the decoder instead of
+> suspending the process. Save persists just the edited map in place; a
+> rename swaps in one re-parsed map via `ProjectWorkspace::withReplacedMap`
+> instead of reloading the workspace, and demands explicit confirmation
+> before the folder move (fixing, in passing, the empty-region slug bug that
+> silently relocated region-less maps into `new-map/`). Dirty `*` markers in
+> the Assets list and DB categories, Ctrl+A Save All (skips pending renames
+> with a warning), and an unsaved-changes guard on Ctrl+Q/Ctrl+R with a
+> save-all-and-continue option. Status messages are typed
+> (info/success/warn/error), colored, auto-expiring; Ctrl+E opens a detail
+> overlay that points at logs/error.log. Pre-save validation warns — never
+> blocks — on dangling destination refs, markers without definitions, and
+> out-of-range spawn points. Tests grew 12 → 58: history
+> push/undo/redo/coalescing/cap, ProjectMap parse/mutate/render/save,
+> validator, layout math, editor-level undo, and a golden ANSI frame
+> snapshot rendered through the ob_start+reflection harness. Deferred: undo
+> for map create/duplicate/delete and DB entry creation (filesystem/identity
+> operations with their own confirmations; entry deletion arrives in Phase
+> 5), and history clears when a reload or rename replaces the loaded map
+> instances. Also fixed: the `AnimationTargetPosition` fatal at
+> Editor.php:3457 (missing import) along with the same latent missing
+> imports for LootType, ChestType, Item, Weapon, Armor, and Accessory.
+> Addendum (2026-08): the Quests database category landed on top of this —
+> `assets/Data/quests.php` load/edit/save with flattened objective fields
+> (Shift+O/Shift+X add/remove), dirty markers, Save All, identity-pinned
+> undo/redo, and a settings-pane scroll window; tests 58 → 66.
+1. Command-object undo/redo (Ctrl+Z / Ctrl+Shift+Z) over every mutation,
+   with stroke-level coalescing for mouse drags
+2. Stop reloading the whole workspace on save — persist the one map,
+   in place
+3. Global dirty registry: markers in the Assets list and all DB categories,
+   Save All, and an unsaved-changes guard on Ctrl+Q and Ctrl+R
+4. Explicit confirmation when save would move/delete a map folder
+   (rename flow)
+5. Typed, auto-expiring status messages (info/success/warn/error) + an
+   error-detail overlay; point at the log file
+6. Pre-save validation pass (dangling destination refs, markers without
+   definitions, out-of-range spawn points) — warn, don't block
+7. First tests: the input tokenizer, `ProjectMap` parse/mutate/render,
+   layout math, and golden-frame render snapshots (the `ob_start` +
+   reflection harness used to measure this audit works today)
+
+### Phase 3 — Decomposition (the structural fix) ✅ *shipped 2026-08*
+> Status: implemented as an incremental extraction — Editor.php remains the
+> coordinator, delegating to eight new collaborators. `EditorLoop`
+> (src/Runtime/EditorLoop.php) owns the 16.6 ms deadline-budget tick;
+> `TerminalHost` (src/Runtime/TerminalHost.php) owns every terminal side
+> effect — stty snapshot/raw mode, susp/dsusp undef, alt-screen, mouse
+> reporting, the throttled size probe, clear-screen, and the buffered
+> one-write-per-frame writer. `InputRouter` (src/IO/InputRouter.php) +
+> `KeyBinding` consume the decoder queue and replace the hand-ordered
+> dispatch cascade with modal handler registrations, global interceptors
+> (Ctrl+E, `!`, mouse), an ordered base binding table, and a focused-pane
+> fallback; `ModalStack` + a priority-ordered `Modal` enum (src/UI/) replace
+> the 12 modal booleans — the old `is*Open` fields survive as property hooks
+> over the stack, so dispatch and overlay rendering now share one ordering
+> (unit-proven equivalent to the cascade). A `Panel` base
+> (update/render/handleInput contract, focus gating, per-panel dirty flag)
+> with `AssetsPanel`/`CanvasPanel`/`InspectorPanel` makes render a function
+> of state: the ~135 in-handler render calls now mark panels dirty and the
+> loop flushes once per tick — an idle frame writes zero bytes (tested).
+> `DatabaseScreen` owns the Database screen's pane registry, dirty set, and
+> fixed paint order with the six pane painters registered against it. The
+> duplicated inspector/database edit buffers collapsed into one
+> `TextFieldEditor` (+`TextFieldKeyResult`), byte-for-byte preserving the
+> key grammar. Dependency decision: committed to termutil — php-tui,
+> laravel/prompts, and league/climate were grep-verified unreferenced and
+> removed from composer.json/vendor (~2.6 MB); swapping rendering engines
+> mid-refactor was judged higher risk than keeping the proven
+> EditorWindow/termutil path. Tests grew 66 → 99 (golden ANSI frame still
+> byte-identical; new suites cover TextFieldEditor, ModalStack, InputRouter
+> routing order, and editor-level dirty/flush/undo-through-router
+> behavior); live expect smoke (boot → Tab cycle → paint → undo → Database
+> → Quests → Esc → Ctrl+Q guard → exit) passed with checksummed-zero
+> project writes. Deferred: moving the pane/dialog content builders (the
+> `getDatabase*Lines`, dialog overlay, and window-body methods, ~5k lines)
+> off the coordinator into their panels — the seams now exist and Phase 4/5
+> should relocate bodies as they touch them; promoting `EditorWindow`'s
+> ANSI fix upstream into termutil (outside this repo); Phase 1's synthetic
+> key-repeat hold window (still unnecessary — native repeat arrives intact
+> through the router).
+Split along the panel seam, following the Sendama shape that is proven to
+stay maintainable at similar scale:
+- `EditorLoop` (tick/timing), `TerminalHost` (termios, size, alt-screen,
+  mouse, buffered writer), `InputDecoder`/`InputRouter` (tokenizer, queue,
+  per-mode binding tables), `ModalStack` (replaces the 11 booleans and both
+  dispatch cascades)
+- A `Panel` base (update/render contract, focus, per-panel dirty flag,
+  `hasFocus()` early-return) with `AssetsPanel`, `CanvasPanel`,
+  `InspectorPanel`; the Database becomes its own screen with its own panels
+- Render becomes a function of state: handlers mutate and mark dirty; the
+  loop renders once per tick; per-panel dirty flags mean idle costs nothing
+- Extract the duplicated inspector/database edit buffers into one
+  `TextFieldEditor`
+- Decide the dependency story once: either adopt php-tui's Display/Buffer
+  (already installed) or commit to termutil and delete php-tui, prompts, and
+  climate from composer.json; promote `EditorWindow`'s ANSI fix upstream so
+  engine and editor share one Window implementation
+
+### Phase 4 — Input & UX coherence ✅ *shipped 2026-08*
+> Status: implemented. **The Database now opens on Ctrl+D (F2 works too —
+> both the `\033OQ` and `\033[12~` encodings)**: a control byte can never
+> collide with an authorable glyph and it matches the Ctrl+letter global
+> family; the same key toggles the screen closed. `!` and `hjkl`/`HJKL`
+> paint on the canvas again (arrows remain the only cursor movement; the
+> `!` reservation in the animation preview is gone too — the new costs are
+> `?` and Ctrl+P, reserved for help/palette; the character map remains the
+> escape hatch for reserved glyphs). Esc pops exactly one level everywhere
+> — edit → pane, help/palette → what's beneath, one dialog, one screen —
+> and Esc is the one cancel key: the scattered `c` cancel aliases are gone
+> (`n` survives as the explicit "No" on yes/no prompts). The destructive
+> confirmations (map delete, folder-move rename, discard-changes guard)
+> now default to Cancel: Enter cancels, only an explicit `y` confirms;
+> overlay copy updated to match. Scrolling: the DB-settings window formula
+> was generalized into `UI/ScrollWindow` and now also drives the Assets
+> list, the Inspector, and the palette list (selected row lands at
+> `min(sel, visible-1)`, which the live edit cursors already assumed).
+> `?` opens a help overlay generated from `InputRouter::describeBindings()`
+> — KeyBinding grew keyLabel/description fields, so documented shortcuts
+> can never drift from the dispatch table (unit-proven) — and the header's
+> empty help slot now carries the permanent hint
+> `?:Help  Ctrl+P:Palette  Ctrl+D / F2:Database`. Ctrl+P opens a command
+> palette (UI/CommandPalette + PaletteItem): fuzzy substring-then-
+> subsequence ranking over actions (save/save-all/undo/redo/reload/quit),
+> tools (map/event mode, character map, help), every map, every database
+> category (jumps straight to it, opening the screen if needed), and the
+> event markers placed on the selected map (jumps to the marker in event
+> mode). Typed inspector controls: event-data booleans and floats now get
+> BOOLEAN/FLOAT controls (Enter toggles a boolean; floats accept digits,
+> one `.`, leading `-`, and step on ↑/↓ while editing), and ←/→ in the
+> Inspector adopts the quests-pane idiom everywhere — cycle enum options
+> (chest/loot types included), toggle booleans, step numbers — with undo
+> recorded per adjustment. Visible-but-fixed rows render distinctly
+> (`Label · value` instead of the editable `Label: value`). Statuses now
+> flow through a snackbar toast queue (Status/Toast + ToastQueue): INFO
+> stays an instant ticker, SUCCESS/WARN/ERROR hold the line for their TTL
+> while later messages queue (higher severity preempts and requeues the
+> displaced toast; duplicates collapse; backlog capped at 5, surfaced as
+> "(+N queued)" in the footer). Tests grew 99 → 142 (ScrollWindow,
+> ToastQueue, CommandPalette filtering, router rebind/F2/`!`-free,
+> Esc-one-level, help-derived-from-bindings, default-to-Cancel
+> confirmations, inspector stepping/typed controls); the golden frame
+> snapshot was regenerated deliberately for the new header hint and the
+> non-editable row styling. Deferred: help/palette cannot open while a
+> picker dialog is up (Esc out first — dialogs consume all input by
+> design); palette entries for individual database *entries* (needs the
+> Phase 5 filter work); mouse interaction inside the palette; and `?`
+> painting on canvas/preview (character map covers it).
+- Rebind Database off `!` (freeing it for authoring); drop `hjkl` from the
+  canvas (freeing 8 glyphs); one cancel key (Esc pops exactly one level);
+  destructive confirmations default to Cancel and require explicit `y`
+- Scrolling for Assets/Inspector/DB-settings (lift the dialog algorithm)
+- Help overlay on `?` generated from the binding tables (can never go
+  stale); permanent hint line in the header's empty help slot
+- Command palette (jump to map/category/event/tool/save) — solves search
+  and discoverability in one screen
+- Typed inspector controls: boolean toggle, float, enum picker; one enum
+  idiom everywhere; visible non-editable rows; snackbar-style toast queue
+
+### Phase 5 — Authoring power
+- Canvas tools: brush sizes, line, rectangle (outline/filled), flood fill,
+  eyedropper key, rectangular select with copy/cut/paste/stamp — all cheap
+  atop the existing stroke code
+- Incremental filter (`/`) in Assets, DB lists, and pickers
+- Navigation stack: generalize the destination round-trip into
+  go-to-definition (actor→class, skill→animation, event→map) with Back
+- Database entry deletion; add the missing actor `class` reference field
+- Dirty markers everywhere; autosave/backup file option
+
+### Phase 6 — Product completeness (tracks the engine roadmap)
+- Implement the 10 stub database categories (items, weapons, armors,
+  enemies, troops, states, terms, common events, tilesets, types)
+- New editors as engine systems land: quests, skits, cutscene command
+  lists, summon timeline editor
+- Playtest-from-editor (launch `play` on the current map with a temp spawn)
+- A real editor manual (the Sendama console maintains a 646-line manual plus
+  task guides — same standard here), plus website docs pages
+- Theming: respect the project's border pack and selection color so the
+  editor feels like part of the product family
+
+## Sequencing notes
+- Phase 1 is days of work and transforms perceived quality; do it first and
+  ship it alone.
+- Phase 2 before Phase 3: refactoring without undo, dirty guards, or tests
+  risks authors' data while the ground moves.
+- The Phase 2 test harness (golden-frame snapshots via output buffering) is
+  the safety net that makes Phase 3's decomposition mechanical rather than
+  brave.
+- Phases 4–5 ride on Phase 3's binding tables and panel model; attempting
+  them on the god object doubles their cost.
