@@ -123,11 +123,16 @@ it('refuses deletion in categories that have no entries', function () {
 
 it('refuses deletion in a read-only category before prompting', function () {
     $root = makeTemporaryProject();
-    $before = (string) file_get_contents($root . '/assets/Data/items.php');
+    $typesPath = $root . '/assets/Data/Types';
+    $hash = static fn(): string => md5(implode('', array_map(
+        static fn(string $file): string => (string) file_get_contents($file),
+        glob($typesPath . '/*.php') ?: []
+    )));
+    $before = $hash();
 
     try {
         $editor = deletionEditor($root);
-        openDatabaseCategory($editor, 'items');
+        openDatabaseCategory($editor, 'types');
 
         // The category lists real entries, so this is not an "empty" refusal.
         expect(callEditorMethod($editor, 'getDatabaseEntryLabels'))->not->toBeEmpty();
@@ -136,7 +141,7 @@ it('refuses deletion in a read-only category before prompting', function () {
 
         expect(getEditorProperty($editor, 'isDatabaseEntryDeleteConfirmationOpen'))->toBeFalse()
             ->and(getEditorProperty($editor, 'statusMessage'))->toContain('read-only')
-            ->and((string) file_get_contents($root . '/assets/Data/items.php'))->toBe($before);
+            ->and($hash())->toBe($before);
     } finally {
         removeDirectoryRecursively($root);
     }

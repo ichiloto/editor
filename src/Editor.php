@@ -7474,12 +7474,23 @@ final class Editor
                 'options' => array_map(static fn(QuestObjectiveType $objectiveType): string => $objectiveType->value, QuestObjectiveType::cases()),
                 'field' => sprintf('objective%dType', $index),
             ];
-            $fields[] = [
+            $reference = self::questObjectiveReference($type);
+            $targetField = [
                 'label' => $label . ' Target',
                 'value' => $target,
-                'control' => new InputControl(InputControlType::TEXT, $target),
                 'field' => sprintf('objective%dTarget', $index),
             ];
+
+            // What a target may be depends on what the objective asks for, so
+            // the picker follows the type: an item to collect, an enemy to
+            // defeat, a map to reach.
+            if ($reference !== null) {
+                $targetField['reference'] = $reference;
+            } else {
+                $targetField['control'] = new InputControl(InputControlType::TEXT, $target);
+            }
+
+            $fields[] = $targetField;
             $fields[] = [
                 'label' => $label . ' Qty',
                 'value' => $quantity,
@@ -10339,6 +10350,26 @@ final class Editor
         return $lines;
     }
 
+
+    /**
+     * Returns what an objective of the given type points at.
+     *
+     * A flag names a switch or story event the world sets, which is authored
+     * text rather than a record, so it stays typed.
+     *
+     * @param string $type The objective type.
+     * @return string|null The kind of reference, or null when it is free text.
+     */
+    private static function questObjectiveReference(string $type): ?string
+    {
+        return match (QuestObjectiveType::tryFrom($type)) {
+            QuestObjectiveType::COLLECT => 'items',
+            QuestObjectiveType::DEFEAT => 'enemies',
+            QuestObjectiveType::REACH_MAP => 'maps',
+            QuestObjectiveType::TALK_TO => 'actors',
+            default => null,
+        };
+    }
 
     /**
      * Returns the quest list lines.

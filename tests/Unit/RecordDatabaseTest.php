@@ -6,14 +6,22 @@ use Ichiloto\Editor\Database\PhpDataFile;
 use Ichiloto\Editor\Database\PhpValueExporter;
 use Ichiloto\Engine\IO\Enumerations\Color;
 
-it('exports scalars, arrays, and enums but refuses objects', function (): void {
+it('exports scalars, arrays, and enums', function (): void {
     expect(PhpValueExporter::export(['a' => 1, 'b' => [true, null]]))
         ->toBe("[\n  'a' => 1,\n  'b' => [\n    true,\n    NULL,\n  ],\n]");
     expect(PhpValueExporter::export(Color::YELLOW))
         ->toBe('\\' . Color::class . '::YELLOW');
     expect(PhpValueExporter::isExportable(['ok' => Color::RED]))->toBeTrue();
-    expect(PhpValueExporter::isExportable(['bad' => new stdClass()]))->toBeFalse();
-    expect(PhpValueExporter::findUnexportableClass(['bad' => new stdClass()]))->toBe('stdClass');
+});
+
+it('refuses an object whose state it cannot put back', function (): void {
+    $carriesState = new stdClass();
+    $carriesState->name = 'Tampered';
+
+    // No constructor to rebuild it with, so exporting it would write an empty
+    // shell and silently lose what it held.
+    expect(PhpValueExporter::isExportable(['bad' => $carriesState]))->toBeFalse();
+    expect(PhpValueExporter::findUnexportableClass(['bad' => $carriesState]))->toBe('stdClass');
 });
 
 it('keeps a data file header verbatim and regenerates only the returned value', function (): void {
@@ -161,43 +169,55 @@ it('adds and removes troop members', function (): void {
     removeDirectoryRecursively($root);
 });
 
-it('browses object-backed inventory categories without offering edits', function (): void {
+it('edits object-backed inventory categories by rebuilding the entry', function (): void {
     $root = makeTemporaryProject();
 
     $items = loadRecordDatabase($root, 'items');
     $weapons = loadRecordDatabase($root, 'weapons');
-    $armors = loadRecordDatabase($root, 'armors');
 
-    expect($items->isEditable())->toBeFalse();
-    expect($items->getReadOnlyReason())->toContain('authored as PHP constructor calls');
+    // Entries authored as `new Item(...)` are rebuilt from the arguments they
+    // were built with, so they can be edited without rewriting the file into
+    // something else.
+    expect($items->isEditable())->toBeTrue();
     expect($items->getEntryLabels())->toBe(['S-Potion', 'Antidote']);
     expect($weapons->getEntryLabels())->toBe(['Wooden Sword']);
-    expect($armors->getEntryLabels())->toBe([]);
 
-    // Real values are still readable, and no row offers an editable control.
     $fields = $items->getSettingsFields(0);
     expect(array_column($fields, 'value'))->toContain('S-Potion', '50');
-
-    foreach ($fields as $field) {
-        expect($field)->not->toHaveKey('control');
-        expect($field)->not->toHaveKey('options');
-    }
 
     removeDirectoryRecursively($root);
 });
 
-it('refuses every write path on a read-only category', function (): void {
+it('writes an edited object entry back as the constructor call it was', function (): void {
     $root = makeTemporaryProject();
     $database = loadRecordDatabase($root, 'items');
-    $before = (string) file_get_contents($root . '/assets/Data/items.php');
 
-    $database->setField(0, 'name', 'Tampered');
+    $database->setField(0, 'price', '75');
+    $database->save();
+
+    $written = (string) file_get_contents($root . '/assets/Data/items.php');
+    $reloaded = loadRecordDatabase($root, 'items');
+
+    expect($written)->toContain('price: 75')
+        ->and($reloaded->getRecordByIndex(0)?->get('price'))->toBe(75)
+        // Everything else survives the rewrite.
+        ->and($reloaded->getEntryLabels())->toBe(['S-Potion', 'Antidote']);
+
+    removeDirectoryRecursively($root);
+});
+
+it('refuses every write path on a category it cannot rewrite', function (): void {
+    $root = makeTemporaryProject();
+    $database = loadRecordDatabase($root, 'types');
+
+    // Element and weapon types are PHP enum declarations, not data.
+    expect($database->isEditable())->toBeFalse();
+
+    $database->setField(0, 'value', 'Tampered');
+
     expect($database->addRecord())->toBeNull();
     expect($database->removeRecord(0))->toBeNull();
     expect($database->isDirty())->toBeFalse();
-    expect(fn() => $database->save())->toThrow(RuntimeException::class);
-
-    expect((string) file_get_contents($root . '/assets/Data/items.php'))->toBe($before);
 
     removeDirectoryRecursively($root);
 });

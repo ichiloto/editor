@@ -105,13 +105,15 @@ it('destroys the overlay without following symlinks into the project', function 
 
 it('refuses a playtest when system.php cannot be rewritten', function (): void {
     $root = makeTemporaryProject();
+    // An object carrying state with no constructor to put it back cannot be
+    // written out, so the overlay refuses rather than losing it.
     file_put_contents(
         $root . '/assets/Data/system.php',
-        "<?php\n\nreturn ['startingPositions' => ['player' => ['scope' => new stdClass()]]];\n",
+        "<?php\n\n\$scope = new stdClass();\n\$scope->kind = 'party';\n\nreturn ['startingPositions' => ['player' => ['scope' => \$scope]]];\n",
     );
 
     expect(fn() => PlaytestOverlay::create($root, 'test-map', 1, 1))
-        ->toThrow(RuntimeException::class, 'system.php contains PHP objects');
+        ->toThrow(RuntimeException::class, 'system.php contains');
 
     removeDirectoryRecursively($root);
 });

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Database;
 
+use Throwable;
+
 use UnitEnum;
 
 /**
@@ -39,7 +41,9 @@ final class ProjectRecord
      */
     public function isEditable(): bool
     {
-        return is_array($this->payload) && ($this->file === null || $this->file->isEditable());
+        // One source of truth: a record is editable exactly when there is no
+        // honest reason it is not.
+        return $this->getReadOnlyReason() === null;
     }
 
     /**
@@ -49,8 +53,11 @@ final class ProjectRecord
      */
     public function getReadOnlyReason(): ?string
     {
-        if (is_object($this->payload)) {
-            return sprintf('this entry is a %s object built by the data file', self::shortClassName($this->payload::class));
+        if (is_object($this->payload) && PhpValueExporter::constructorArguments($this->payload) === null) {
+            return sprintf(
+                'this entry is a %s object that cannot be rebuilt from its properties',
+                self::shortClassName($this->payload::class)
+            );
         }
 
         return $this->file?->readOnlyReason;
@@ -122,6 +129,12 @@ final class ProjectRecord
      */
     public function set(string $key, mixed $value): void
     {
+        if (is_object($this->payload)) {
+            $this->setOnObject($key, $value);
+
+            return;
+        }
+
         if (! is_array($this->payload)) {
             return;
         }
@@ -133,6 +146,126 @@ final class ProjectRecord
         }
 
         $this->isDirty = true;
+    }
+
+    /**
+     * Changes one of the arguments an object entry was built with.
+     *
+     * An entry authored as `new Item(...)` is edited by rebuilding it: the
+     * arguments are read back, one is replaced, and a fresh instance takes its
+     * place. Anything the constructor derives is derived again, so the entry
+     * stays exactly what the data file would have produced.
+     *
+     * @param string $key The constructor argument to change.
+     * @param mixed $value The new value.
+     * @return void
+     */
+    private function setOnObject(string $key, mixed $value): void
+    {
+        $payload = $this->payload;
+
+        if (! is_object($payload)) {
+            return;
+        }
+
+        try {
+            $rebuilt = self::rebuildWith($payload, $key, $value);
+        } catch (Throwable) {
+            // The constructor rejected it (a type, a range). The entry keeps
+            // what it had rather than becoming half-edited.
+            return;
+        }
+
+        if ($rebuilt === null) {
+            return;
+        }
+
+        $this->payload = $rebuilt;
+        $this->isDirty = true;
+    }
+
+    /**
+     * Returns a copy of an object with one of its values changed.
+     *
+     * A dotted key reaches inside a nested value the way the settings pane
+     * shows it (`stats.attack`), so the nested object is rebuilt first and the
+     * outer one rebuilt around it.
+     *
+     * @param object $object The object to rebuild.
+     * @param string $key The key, which may be dotted.
+     * @param mixed $value The new value.
+     * @return object|null The rebuilt object, or null when the key names
+     * nothing this object was built with.
+     */
+    private static function rebuildWith(object $object, string $key, mixed $value): ?object
+    {
+        $arguments = PhpValueExporter::constructorArguments($object);
+
+        if ($arguments === null) {
+            return null;
+        }
+
+        [$head, $rest] = array_pad(explode('.', $key, 2), 2, null);
+
+        if (! array_key_exists($head, $arguments)) {
+            return null;
+        }
+
+        if ($rest === null) {
+            $arguments[$head] = $value;
+
+            return new ($object::class)(...$arguments);
+        }
+
+        $nested = $arguments[$head];
+
+        if (is_object($nested)) {
+            $rebuiltNested = self::rebuildWith($nested, $rest, $value);
+
+            if ($rebuiltNested === null) {
+                return null;
+            }
+
+            $arguments[$head] = $rebuiltNested;
+
+            return new ($object::class)(...$arguments);
+        }
+
+        if (! is_array($nested)) {
+            return null;
+        }
+
+        $arguments[$head] = self::withArrayValue($nested, explode('.', $rest), $value);
+
+        return new ($object::class)(...$arguments);
+    }
+
+    /**
+     * Returns a copy of an array with one nested value changed.
+     *
+     * @param array<mixed> $array The array.
+     * @param string[] $path The remaining key segments.
+     * @param mixed $value The new value.
+     * @return array<mixed> The updated array.
+     */
+    private static function withArrayValue(array $array, array $path, mixed $value): array
+    {
+        $key = array_shift($path);
+
+        if ($key === null) {
+            return $array;
+        }
+
+        if ($path === []) {
+            $array[$key] = $value;
+
+            return $array;
+        }
+
+        $nested = $array[$key] ?? [];
+        $array[$key] = is_array($nested) ? self::withArrayValue($nested, $path, $value) : $nested;
+
+        return $array;
     }
 
     /**

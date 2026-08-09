@@ -652,10 +652,47 @@ final class ProjectRecordDatabase
             throw new RuntimeException('No backing file to save.');
         }
 
-        $this->file->save(array_map(
-            static fn(ProjectRecord $record): array|object => $record->toArray(),
-            $this->getRecords(),
-        ));
+        $this->file->save($this->mergeIntoFilePayload());
+    }
+
+    /**
+     * Rebuilds the whole file around this category's records.
+     *
+     * Items, weapons, armors, and accessories share `items.php`, and a
+     * category only holds the entries its filter accepts. Writing just those
+     * would delete the rest of the file, so the original payload is walked and
+     * this category's entries are substituted where they sat.
+     *
+     * @return array<int, mixed> The payload to write.
+     */
+    private function mergeIntoFilePayload(): array
+    {
+        $original = is_array($this->file?->payload) ? array_values($this->file->payload) : [];
+        $records = $this->getRecords();
+        $filter = $this->schema->recordFilter;
+        $payload = [];
+        $position = 0;
+
+        foreach ($original as $entry) {
+            if ($filter !== null && ! $filter($entry)) {
+                // Another category's entry. It keeps its place untouched.
+                $payload[] = $entry;
+
+                continue;
+            }
+
+            if (isset($records[$position])) {
+                $payload[] = $records[$position]->toArray();
+                $position++;
+            }
+        }
+
+        // Records added since the file was read go after the ones it had.
+        for ($count = count($records); $position < $count; $position++) {
+            $payload[] = $records[$position]->toArray();
+        }
+
+        return $payload;
     }
 
     /**

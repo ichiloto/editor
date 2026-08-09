@@ -55,13 +55,12 @@ it('marks which entry is selected', function () {
 
 it('says why a category cannot be edited rather than looking broken', function () {
     $root = makeTemporaryProject();
-    $database = loadRecordDatabase($root, 'items');
+    $database = loadRecordDatabase($root, 'types');
 
-    // The fixture's items are authored as constructor calls, which the editor
-    // browses but never rewrites.
+    // Element and weapon types are PHP enum declarations, not data.
     expect($database->isEditable())->toBeFalse();
 
-    $text = implode("\n", databaseListLinesFor($root, 'items'));
+    $text = implode("\n", databaseListLinesFor($root, 'types'));
 
     expect($text)->toContain($database->getReadOnlyReason() ?? 'read only');
 });

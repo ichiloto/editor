@@ -4,6 +4,10 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Database;
 
+use ReflectionClass;
+use ReflectionMethod;
+use ReflectionException;
+use RuntimeException;
 use UnitEnum;
 
 /**
@@ -97,6 +101,10 @@ final class PhpValueExporter
             return '\\' . $value::class . '::' . $value->name;
         }
 
+        if (is_object($value)) {
+            return self::exportObject($value, $indentLevel);
+        }
+
         if (! is_array($value)) {
             return var_export($value, true);
         }
@@ -128,6 +136,145 @@ final class PhpValueExporter
     }
 
     /**
+     * Exports an object as the constructor call that rebuilds it.
+     *
+     * Data files like `items.php` are authored as `new Item(...)` rather than
+     * arrays, and an author editing one expects it to stay that way. Named
+     * arguments are used throughout, so the file reads as what it is and a
+     * later change to the constructor's parameter order cannot silently
+     * reorder anyone's data.
+     *
+     * @param object $value The object.
+     * @param int $indentLevel The indentation depth.
+     * @return string The constructor call.
+     */
+    private static function exportObject(object $value, int $indentLevel): string
+    {
+        $arguments = self::constructorArguments($value);
+
+        if ($arguments === null) {
+            // Unreachable for a value that passed the exportability probe;
+            // kept honest for callers that skipped it.
+            throw new RuntimeException(sprintf('%s cannot be rebuilt from its properties.', $value::class));
+        }
+
+        if ($arguments === []) {
+            return sprintf('new \\%s()', $value::class);
+        }
+
+        $indent = str_repeat('  ', $indentLevel);
+        $nextIndent = str_repeat('  ', $indentLevel + 1);
+        $lines = [sprintf('new \\%s(', $value::class)];
+
+        foreach ($arguments as $name => $argument) {
+            $lines[] = sprintf('%s%s: %s,', $nextIndent, $name, self::export($argument, $indentLevel + 1));
+        }
+
+        $lines[] = "{$indent})";
+
+        return implode("\n", $lines);
+    }
+
+    /**
+     * Reads back the arguments an object was built with.
+     *
+     * A parameter is only recoverable when the object kept it under the same
+     * name, which promoted properties guarantee and hand-written constructors
+     * usually honour. Anything else cannot be rebuilt, and the file that holds
+     * it stays read-only rather than being rewritten into something else.
+     *
+     * @param object $value The object.
+     * @return array<string, mixed>|null The arguments, or null when it cannot be rebuilt.
+     */
+    public static function constructorArguments(object $value): ?array
+    {
+        $reflection = new ReflectionClass($value);
+        $constructor = $reflection->getConstructor();
+
+        if ($constructor === null) {
+            // Nothing to rebuild it from. An object carrying state with no
+            // constructor to put it back would be exported as an empty shell,
+            // silently losing what it held.
+            return self::propertyNames($value) === [] ? [] : null;
+        }
+
+        $arguments = [];
+
+        foreach ($constructor->getParameters() as $parameter) {
+            $name = $parameter->getName();
+
+            if ($parameter->isVariadic() || ! $reflection->hasProperty($name)) {
+                return null;
+            }
+
+            $property = $reflection->getProperty($name);
+
+            if (! $property->isInitialized($value)) {
+                return null;
+            }
+
+            $arguments[$name] = $property->getValue($value);
+        }
+
+        $arguments = self::withoutDefaults($constructor, $arguments);
+
+        // A property set outside the constructor cannot be put back by
+        // calling it, so anything holding one is not rebuildable either.
+        foreach (self::propertyNames($value) as $property) {
+            if (! $reflection->hasProperty($property)) {
+                return null;
+            }
+        }
+
+        return $arguments;
+    }
+
+    /**
+     * Drops the arguments that are already the constructor's defaults.
+     *
+     * A rewritten file should read like the one an author wrote, not like a
+     * dump of every parameter a class happens to take. Everything is written
+     * as a named argument, so any default can be left out wherever it sits.
+     *
+     * @param ReflectionMethod $constructor The constructor.
+     * @param array<string, mixed> $arguments The arguments read back.
+     * @return array<string, mixed> The arguments worth writing.
+     */
+    private static function withoutDefaults(ReflectionMethod $constructor, array $arguments): array
+    {
+        foreach ($constructor->getParameters() as $parameter) {
+            $name = $parameter->getName();
+
+            if (! array_key_exists($name, $arguments) || ! $parameter->isDefaultValueAvailable()) {
+                continue;
+            }
+
+            try {
+                $default = $parameter->getDefaultValue();
+            } catch (ReflectionException) {
+                continue;
+            }
+
+            if (self::export($arguments[$name]) === self::export($default)) {
+                unset($arguments[$name]);
+            }
+        }
+
+        return $arguments;
+    }
+
+    /**
+     * Returns the names of the properties an object actually carries.
+     *
+     * @param object $value The object.
+     * @return string[] The property names.
+     */
+    private static function propertyNames(object $value): array
+    {
+        return array_keys(get_object_vars($value));
+    }
+
+    /**
      * Walks a value and returns the first unexportable leaf it finds.
      *
      * @param mixed $value The value to probe.
@@ -154,7 +301,21 @@ final class PhpValueExporter
         }
 
         if (is_object($value)) {
-            return [$path, sprintf('a %s object', $value::class), $value::class];
+            $arguments = self::constructorArguments($value);
+
+            if ($arguments === null) {
+                return [$path, sprintf('a %s object that cannot be rebuilt from its properties', $value::class), $value::class];
+            }
+
+            foreach ($arguments as $name => $argument) {
+                $found = self::findUnexportable($argument, $path === '' ? $name : "{$path}.{$name}");
+
+                if ($found !== null) {
+                    return $found;
+                }
+            }
+
+            return null;
         }
 
         return [$path, sprintf('a %s value', get_debug_type($value)), null];

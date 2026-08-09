@@ -183,7 +183,7 @@ final class RecordSchemaCatalog
     }
 
     /**
-     * Weapons — the `Weapon` entries of `assets/Data/items.php`. Browsed only.
+     * Weapons — the `Weapon` entries of `assets/Data/items.php`. Edited by rebuilding the entry.
      *
      * @return RecordSchema
      */
@@ -197,9 +197,9 @@ final class RecordSchemaCatalog
             fields: [
                 ...self::inventoryFields(),
                 new RecordField('equipmentType', 'Equipment Type', isReadOnly: true),
-                new RecordField('parameterChanges.attack', 'Attack', InputControlType::INTEGER, isReadOnly: true),
-                new RecordField('parameterChanges.magicAttack', 'Magic Attack', InputControlType::INTEGER, isReadOnly: true),
-                new RecordField('parameterChanges.speed', 'Speed', InputControlType::INTEGER, isReadOnly: true),
+                new RecordField('parameterChanges.attack', 'Attack', InputControlType::INTEGER),
+                new RecordField('parameterChanges.magicAttack', 'Magic Attack', InputControlType::INTEGER),
+                new RecordField('parameterChanges.speed', 'Speed', InputControlType::INTEGER),
             ],
             labelKey: 'name',
             identityKey: 'name',
@@ -209,7 +209,7 @@ final class RecordSchemaCatalog
 
     /**
      * Armors and accessories — the `Armor`/`Accessory` entries of
-     * `assets/Data/items.php`. Browsed only.
+     * `assets/Data/items.php`. Edited by rebuilding the entry.
      *
      * @return RecordSchema
      */
@@ -223,9 +223,9 @@ final class RecordSchemaCatalog
             fields: [
                 ...self::inventoryFields(),
                 new RecordField('equipmentType', 'Equipment Type', isReadOnly: true),
-                new RecordField('parameterChanges.defence', 'Defence', InputControlType::INTEGER, isReadOnly: true),
-                new RecordField('parameterChanges.magicDefence', 'Magic Defence', InputControlType::INTEGER, isReadOnly: true),
-                new RecordField('parameterChanges.evasion', 'Evasion', InputControlType::INTEGER, isReadOnly: true),
+                new RecordField('parameterChanges.defence', 'Defence', InputControlType::INTEGER),
+                new RecordField('parameterChanges.magicDefence', 'Magic Defence', InputControlType::INTEGER),
+                new RecordField('parameterChanges.evasion', 'Evasion', InputControlType::INTEGER),
             ],
             labelKey: 'name',
             identityKey: 'name',
@@ -238,7 +238,7 @@ final class RecordSchemaCatalog
      *
      * The file builds `new Enemy(...)` objects and shares skill instances
      * between them through local variables, so it cannot be regenerated from
-     * the loaded values. Browsed only.
+     * the loaded values. Edited by rebuilding the entry.
      *
      * @return RecordSchema
      */
@@ -250,19 +250,19 @@ final class RecordSchemaCatalog
             storage: RecordStorage::LIST_FILE,
             relativePath: 'assets/Data/enemies.php',
             fields: [
-                new RecordField('name', 'Name', isReadOnly: true),
-                new RecordField('level', 'Level', InputControlType::INTEGER, isReadOnly: true),
-                new RecordField('imagePath', 'Sprite', isReadOnly: true),
-                new RecordField('stats.totalHp', 'HP', InputControlType::INTEGER, isReadOnly: true),
-                new RecordField('stats.totalMp', 'MP', InputControlType::INTEGER, isReadOnly: true),
-                new RecordField('stats.attack', 'Attack', InputControlType::INTEGER, isReadOnly: true),
-                new RecordField('stats.defence', 'Defence', InputControlType::INTEGER, isReadOnly: true),
-                new RecordField('stats.magicAttack', 'Magic Attack', InputControlType::INTEGER, isReadOnly: true),
-                new RecordField('stats.magicDefence', 'Magic Defence', InputControlType::INTEGER, isReadOnly: true),
-                new RecordField('stats.grace', 'Grace', InputControlType::INTEGER, isReadOnly: true),
-                new RecordField('stats.evasion', 'Evasion', InputControlType::INTEGER, isReadOnly: true),
-                new RecordField('rewards.experience', 'Reward EXP', InputControlType::INTEGER, isReadOnly: true),
-                new RecordField('rewards.gold', 'Reward Gold', InputControlType::INTEGER, isReadOnly: true),
+                new RecordField('name', 'Name'),
+                new RecordField('level', 'Level', InputControlType::INTEGER),
+                new RecordField('imagePath', 'Sprite'),
+                new RecordField('stats.totalHp', 'HP', InputControlType::INTEGER),
+                new RecordField('stats.totalMp', 'MP', InputControlType::INTEGER),
+                new RecordField('stats.attack', 'Attack', InputControlType::INTEGER),
+                new RecordField('stats.defence', 'Defence', InputControlType::INTEGER),
+                new RecordField('stats.magicAttack', 'Magic Attack', InputControlType::INTEGER),
+                new RecordField('stats.magicDefence', 'Magic Defence', InputControlType::INTEGER),
+                new RecordField('stats.grace', 'Grace', InputControlType::INTEGER),
+                new RecordField('stats.evasion', 'Evasion', InputControlType::INTEGER),
+                new RecordField('rewards.experience', 'Reward EXP', InputControlType::INTEGER),
+                new RecordField('rewards.gold', 'Reward Gold', InputControlType::INTEGER),
                 new RecordField('elementAffinities', 'Element Affinities', isReadOnly: true),
                 new RecordField('actionPatterns', 'Action Patterns', isReadOnly: true),
             ],
@@ -451,11 +451,11 @@ final class RecordSchemaCatalog
     private static function inventoryFields(): array
     {
         return [
-            new RecordField('name', 'Name', isReadOnly: true),
-            new RecordField('description', 'Description', isReadOnly: true),
-            new RecordField('icon', 'Icon', isReadOnly: true),
-            new RecordField('price', 'Price', InputControlType::INTEGER, isReadOnly: true),
-            new RecordField('quantity', 'Quantity', InputControlType::INTEGER, isReadOnly: true),
+            new RecordField('name', 'Name'),
+            new RecordField('description', 'Description'),
+            new RecordField('icon', 'Icon'),
+            new RecordField('price', 'Price', InputControlType::INTEGER),
+            new RecordField('quantity', 'Quantity', InputControlType::INTEGER),
         ];
     }
 

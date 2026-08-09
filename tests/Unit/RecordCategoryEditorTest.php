@@ -119,16 +119,27 @@ it('adds and removes a skit beat with Shift+O and Shift+X, both undoable', funct
 
 it('warns instead of editing when the category is read-only', function (): void {
     $root = makeTemporaryProject();
-    $before = (string) file_get_contents($root . '/assets/Data/items.php');
+    $typesPath = $root . '/assets/Data/Types';
+    $before = md5(implode('', array_map(
+        static fn(string $file): string => (string) file_get_contents($file),
+        glob($typesPath . '/*.php') ?: []
+    )));
 
     try {
         $editor = deletionEditor($root);
-        openDatabaseCategory($editor, 'items');
+
+        // Element and weapon types are PHP enum declarations, not data.
+        openDatabaseCategory($editor, 'types');
 
         callEditorMethod($editor, 'saveActiveDatabase');
 
+        $after = md5(implode('', array_map(
+            static fn(string $file): string => (string) file_get_contents($file),
+            glob($typesPath . '/*.php') ?: []
+        )));
+
         expect(getEditorProperty($editor, 'statusMessage'))->toContain('read-only')
-            ->and((string) file_get_contents($root . '/assets/Data/items.php'))->toBe($before);
+            ->and($after)->toBe($before);
     } finally {
         removeDirectoryRecursively($root);
     }
