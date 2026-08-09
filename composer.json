@@ -1,34 +1,37 @@
 {
-  "name": "ichiloto/editor",
-  "description": "A simple TUI editor for the ichiloto game engine.",
-  "type": "library",
-  "require": {
-    "symfony/console": "^8.0",
-    "atatusoft-ltd/termutil": "^1.1",
-    "ext-mbstring": "*"
-  },
-  "require-dev": {
-    "pestphp/pest": "^4.4",
-    "phpstan/phpstan": "^2.1"
-  },
-  "license": "MIT",
-  "autoload": {
-    "psr-4": {
-      "Ichiloto\\Editor\\": "src/"
+    "name": "ichiloto/editor",
+    "description": "A simple TUI editor for the ichiloto game engine.",
+    "type": "library",
+    "require": {
+        "symfony/console": "^8.0",
+        "atatusoft-ltd/termutil": "^1.1",
+        "ext-mbstring": "*"
     },
-    "files": [
-      "src/Util/Helpers.php"
-    ]
-  },
-  "authors": [
-    {
-      "name": "Andrew Masiye",
-      "email": "amasiye313@gmail.com"
+    "require-dev": {
+        "pestphp/pest": "^4.4",
+        "phpstan/phpstan": "^2.1"
+    },
+    "license": "MIT",
+    "autoload": {
+        "psr-4": {
+            "Ichiloto\\Editor\\": "src/"
+        },
+        "files": [
+            "src/Util/Helpers.php"
+        ]
+    },
+    "authors": [
+        {
+            "name": "Andrew Masiye",
+            "email": "amasiye313@gmail.com"
+        }
+    ],
+    "config": {
+        "allow-plugins": {
+            "pestphp/pest-plugin": true
+        }
+    },
+    "scripts": {
+        "analyse": "phpstan analyse --memory-limit=1G"
     }
-  ],
-  "config": {
-    "allow-plugins": {
-      "pestphp/pest-plugin": true
-    }
-  }
 }

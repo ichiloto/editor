@@ -1,0 +1,14 @@
+# Static analysis for the editor.
+#
+# The editor reads engine projects without depending on the engine: engine
+# types are referenced behind class_exists guards, and a few are aliased into
+# this namespace at runtime. Neither is visible to static analysis, so those
+# names are ignored here rather than pretended into existence.
+parameters:
+    level: 0
+    paths:
+        - src
+    reportUnmatchedIgnoredErrors: false
+    ignoreErrors:
+        - '#Ichiloto\\Engine#'
+        - '#Ichiloto\\Editor\\(Animation|AnimationCue|AnimationPlayer)#'
