@@ -24,6 +24,9 @@ final readonly class RecordField
      * @param bool $isReadOnly Whether the field is displayed but never edited.
      * @param int $step The step size for numeric adjustment.
      * @param RecordFieldCodec $codec How a list-shaped value projects onto one line.
+     * @param string|null $reference The kind of resource this names, when it
+     * names one. A reference is chosen from a picker rather than typed, so an
+     * author never has to remember or spell another record's name.
      */
     public function __construct(
         public string $key,
@@ -34,7 +37,21 @@ final readonly class RecordField
         public bool $isReadOnly = false,
         public int $step = 1,
         public RecordFieldCodec $codec = RecordFieldCodec::NONE,
+        public ?string $reference = null,
     ) {
+    }
+
+    /**
+     * Returns a field that names another resource.
+     *
+     * @param string $key The payload key.
+     * @param string $label The settings-pane label.
+     * @param string $category The kind of resource it names.
+     * @return self The field.
+     */
+    public static function reference(string $key, string $label, string $category): self
+    {
+        return new self($key, $label, reference: $category);
     }
 
     /**
@@ -53,6 +70,7 @@ final readonly class RecordField
             true,
             $this->step,
             $this->codec,
+            $this->reference,
         );
     }
 

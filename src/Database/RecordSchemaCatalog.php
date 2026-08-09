@@ -151,7 +151,7 @@ final class RecordSchemaCatalog
                 prefix: 'member',
                 singular: 'member',
                 fields: [
-                    new RecordField('enemy', 'Enemy'),
+                    RecordField::reference('enemy', 'Enemy', 'enemies'),
                     new RecordField('position.0', 'X', InputControlType::INTEGER),
                     new RecordField('position.1', 'Y', InputControlType::INTEGER),
                 ],
@@ -291,7 +291,7 @@ final class RecordSchemaCatalog
             fields: [
                 new RecordField('id', 'Id'),
                 new RecordField('title', 'Title'),
-                new RecordField('where', 'Where (map id)', removeWhenEmpty: true),
+                RecordField::reference('where', 'Where', 'maps'),
                 new RecordField('conditions', 'Conditions', removeWhenEmpty: true, codec: RecordFieldCodec::CONDITIONS),
                 new RecordField('speed', 'Speed (chars/sec)', InputControlType::INTEGER, removeWhenEmpty: true),
             ],
@@ -309,7 +309,7 @@ final class RecordSchemaCatalog
                 prefix: 'beat',
                 singular: 'beat',
                 fields: [
-                    new RecordField('speaker', 'Speaker'),
+                    RecordField::reference('speaker', 'Speaker', 'actors'),
                     new RecordField('text', 'Text'),
                 ],
                 blank: ['speaker' => 'Speaker', 'text' => 'Say something.'],

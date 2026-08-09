@@ -17,6 +17,8 @@ use Ichiloto\Editor\Canvas\ToolGeometry;
 use Ichiloto\Editor\Database\DatabaseCatalog;
 use Ichiloto\Editor\Database\DatabaseCategoryDefinition;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
+use Ichiloto\Editor\Database\ReferenceCatalog;
+use Ichiloto\Editor\Database\ReferencePicker;
 use Ichiloto\Editor\Debug\Debug;
 use Ichiloto\Editor\Events\EventTypeCatalog;
 use Ichiloto\Editor\History\Command;
@@ -360,6 +362,10 @@ final class Editor
      */
     private readonly TextFieldEditor $databaseFieldEditor;
     /**
+     * @var ReferencePicker Choosing what a reference field points at.
+     */
+    private readonly ReferencePicker $referencePicker;
+    /**
      * Legacy views over the inspector field editor; the hooks keep the many
      * existing readers/writers working against the one TextFieldEditor.
      */
@@ -561,6 +567,7 @@ final class Editor
         $this->loop = new EditorLoop(self::FRAME_BUDGET_MICROSECONDS, $this->terminal);
         $this->inspectorFieldEditor = new TextFieldEditor();
         $this->databaseFieldEditor = new TextFieldEditor();
+        $this->referencePicker = new ReferencePicker();
         $this->modals = new ModalStack();
         $this->assetsPanel = new AssetsPanel(
             self::FOCUS_ASSETS,
@@ -1523,6 +1530,11 @@ final class Editor
     {
         if ($input === "\x11") {
             $this->requestQuit();
+            return;
+        }
+
+        if ($this->referencePicker->isOpen()) {
+            $this->handleReferencePickerInput($input);
             return;
         }
 
@@ -7545,6 +7557,11 @@ final class Editor
             return;
         }
 
+        // A field that names another record is chosen from, never typed into.
+        if (is_string($field['reference'] ?? null) && $this->openReferencePicker($field)) {
+            return;
+        }
+
         $control = $this->getDatabaseFieldControl($field);
 
         if (! $control instanceof InputControl) {
@@ -7585,6 +7602,140 @@ final class Editor
             case TextFieldKeyResult::IGNORED:
                 return;
         }
+    }
+
+    /**
+     * Opens the picker on a field that names another record.
+     *
+     * @param array<string, mixed> $field The settings-pane field descriptor.
+     * @return bool True when the picker opened.
+     */
+    private function openReferencePicker(array $field): bool
+    {
+        if (! $this->workspace instanceof ProjectWorkspace) {
+            return false;
+        }
+
+        $category = (string) ($field['reference'] ?? '');
+        $label = (string) ($field['label'] ?? 'Reference');
+        $values = new ReferenceCatalog($this->workspace)->valuesFor($category);
+
+        $opened = $this->referencePicker->open(
+            (string) ($field['field'] ?? ''),
+            $label,
+            $category,
+            $values,
+            (string) ($field['value'] ?? ''),
+        );
+
+        if (! $opened) {
+            // Saying so beats opening an empty list, or worse, quietly doing
+            // nothing when the key is pressed.
+            $this->setStatus(
+                sprintf('This project defines no %s to choose from.', str_replace('_', ' ', $category)),
+                StatusLevel::WARN
+            );
+            $this->renderDatabasePanes(['settings']);
+
+            return true;
+        }
+
+        $this->statusMessage = sprintf('Choose %s.', lcfirst($label));
+        $this->renderDatabasePanes(['settings']);
+
+        return true;
+    }
+
+    /**
+     * Drives the reference picker.
+     *
+     * @param string $input The raw input.
+     * @return void
+     */
+    private function handleReferencePickerInput(string $input): void
+    {
+        if ($input === "\033" || $input === "\x1b") {
+            $this->referencePicker->close();
+            $this->statusMessage = 'Selection cancelled.';
+            $this->renderDatabasePanes(['settings']);
+
+            return;
+        }
+
+        if ($input === "\n" || $input === "\r") {
+            $this->commitReferenceSelection();
+
+            return;
+        }
+
+        if (str_contains($input, "\033[A")) {
+            $this->referencePicker->move(-1);
+            $this->renderDatabasePanes(['settings']);
+
+            return;
+        }
+
+        if (str_contains($input, "\033[B")) {
+            $this->referencePicker->move(1);
+            $this->renderDatabasePanes(['settings']);
+
+            return;
+        }
+
+        if ($input === "\x7f" || $input === "\x08") {
+            $this->referencePicker->backspace();
+            $this->renderDatabasePanes(['settings']);
+
+            return;
+        }
+
+        // Anything printable narrows the list, so a long list is reached by
+        // typing a few letters rather than scrolling.
+        if (mb_strlen($input) === 1 && ! ctype_cntrl($input)) {
+            $this->referencePicker->type($input);
+            $this->renderDatabasePanes(['settings']);
+        }
+    }
+
+    /**
+     * Stores what the picker was left on.
+     *
+     * @return void
+     */
+    private function commitReferenceSelection(): void
+    {
+        $selected = $this->referencePicker->selected();
+        $fieldId = $this->referencePicker->fieldId();
+        $label = $this->referencePicker->label();
+        $this->referencePicker->close();
+
+        if ($selected === null) {
+            $this->statusMessage = 'Nothing matched.';
+            $this->renderDatabasePanes(['settings']);
+
+            return;
+        }
+
+        $field = null;
+
+        foreach ($this->getDatabaseSettingsFields() as $candidate) {
+            if (is_array($candidate) && ($candidate['field'] ?? null) === $fieldId) {
+                $field = $candidate;
+            }
+        }
+
+        if (! is_array($field)) {
+            return;
+        }
+
+        try {
+            $this->applyDatabaseFieldValueRecorded($field, $selected);
+            $this->setStatus(sprintf('%s set to %s.', $label, $selected), StatusLevel::SUCCESS);
+        } catch (Throwable $throwable) {
+            $this->setErrorStatus($throwable, sprintf('%s selection', $label));
+        }
+
+        $this->renderDatabasePanes(['list', 'settings', 'cue', 'frames', 'preview']);
     }
 
     /**
@@ -9904,7 +10055,11 @@ final class Editor
     {
         return new EditorWindow(
             title: 'General Settings',
-            help: $this->isDatabaseEditing ? 'Enter:Apply  Esc:Cancel' : 'Enter:Edit',
+            help: match (true) {
+                $this->referencePicker->isOpen() => 'Enter:Choose  Type:Filter  Esc:Cancel',
+                $this->isDatabaseEditing => 'Enter:Apply  Esc:Cancel',
+                default => 'Enter:Edit',
+            },
             position: ['x' => $layout['innerX'] + $layout['categoryWidth'] + $layout['listWidth'] + ($layout['gutter'] * 2), 'y' => $layout['innerY']],
             width: $layout['settingsWidth'],
             height: $layout['topHeight'],
@@ -10221,6 +10376,10 @@ final class Editor
             return ['Select an entry to edit settings.'];
         }
 
+        if ($this->referencePicker->isOpen()) {
+            return $this->buildReferencePickerRows();
+        }
+
         $lines = [];
 
         foreach ($fields as $index => $field) {
@@ -10242,6 +10401,37 @@ final class Editor
         $visibleRows = max(1, $this->resolveDatabaseLayout($this->resolveLayout())['topHeight'] - 2);
 
         return ScrollWindow::slice($lines, $this->databaseSelectedSettingIndex, $visibleRows);
+    }
+
+    /**
+     * Returns the rows shown while a reference is being chosen.
+     *
+     * @return string[] The rows.
+     */
+    private function buildReferencePickerRows(): array
+    {
+        $matches = $this->referencePicker->matches();
+        $selectedIndex = $this->referencePicker->selectedIndex();
+        $filter = $this->referencePicker->filter();
+
+        $lines = [
+            sprintf('%s: %s', $this->referencePicker->label(), $filter === '' ? 'type to filter' : $filter),
+            '',
+        ];
+
+        if ($matches === []) {
+            $lines[] = '  Nothing matches.';
+
+            return $lines;
+        }
+
+        foreach ($matches as $index => $value) {
+            $lines[] = sprintf('%s%s', $index === $selectedIndex ? '> ' : '  ', $value);
+        }
+
+        $visibleRows = max(1, $this->resolveDatabaseLayout($this->resolveLayout())['topHeight'] - 4);
+
+        return [...array_slice($lines, 0, 2), ...ScrollWindow::slice(array_slice($lines, 2), $selectedIndex, $visibleRows)];
     }
 
     /**

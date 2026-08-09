@@ -782,6 +782,14 @@ final class ProjectRecordDatabase
             return $descriptor;
         }
 
+        if ($field->reference !== null) {
+            // Chosen, never typed: no control means the pane opens a picker
+            // instead of a text cursor.
+            $descriptor['reference'] = $field->reference;
+
+            return $descriptor;
+        }
+
         $descriptor['control'] = new InputControl($field->type, $value, $field->step);
 
         return $descriptor;
