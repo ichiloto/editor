@@ -10178,6 +10178,10 @@ final class Editor
             return $this->getDatabaseAnimationListLines();
         }
 
+        if ($this->getSelectedRecordDatabase() instanceof ProjectRecordDatabase) {
+            return $this->getDatabaseRecordListLines();
+        }
+
         $category = $this->getSelectedDatabaseCategoryDefinition();
 
         return [
@@ -10185,6 +10189,65 @@ final class Editor
             '',
             'Editor coming soon.',
         ];
+    }
+
+    /**
+     * Returns the list lines for a schema-driven category.
+     *
+     * Every category backed by a record schema lists the same way: the
+     * project's entries, marked where one is unsaved, narrowed by the filter,
+     * and telling an author how to add the first one when there are none.
+     *
+     * @return string[]
+     */
+    private function getDatabaseRecordListLines(): array
+    {
+        $database = $this->getSelectedRecordDatabase();
+
+        if (! $database instanceof ProjectRecordDatabase) {
+            return [];
+        }
+
+        $labels = $database->getEntryLabels();
+        $category = $this->getSelectedDatabaseCategoryDefinition();
+
+        if ($labels === []) {
+            return $database->isEditable()
+                ? [sprintf('No %s yet.', $category->label), '', 'Shift+A to create one.']
+                : [
+                    sprintf('No %s in this project.', strtolower($category->label)),
+                    '',
+                    $database->getReadOnlyReason() ?? '',
+                ];
+        }
+
+        $selectedIndex = $this->getSelectedRecordIndex();
+        $lines = [];
+
+        foreach ($this->getVisibleDatabaseEntryIndexes() as $index) {
+            $label = $labels[$index] ?? null;
+
+            if ($label === null) {
+                continue;
+            }
+
+            $prefix = $index === $selectedIndex ? '> ' : '  ';
+            $dirty = $database->getRecordByIndex($index)?->isDirty() ? ' *' : '';
+            $lines[] = sprintf('%s%s%s', $prefix, $label, $dirty);
+        }
+
+        if ($lines === []) {
+            return ['No matches.'];
+        }
+
+        // A read-only category says so once, rather than leaving an author
+        // wondering why nothing they type sticks.
+        if (! $database->isEditable() && ($reason = $database->getReadOnlyReason()) !== null) {
+            $lines[] = '';
+            $lines[] = $reason;
+        }
+
+        return $lines;
     }
 
     /**

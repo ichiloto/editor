@@ -5,7 +5,10 @@
 # this namespace at runtime. Neither is visible to static analysis, so those
 # names are ignored here rather than pretended into existence.
 parameters:
-    level: 0
+    # Level 3 is free here and catches more than names that do not resolve:
+    # an undefined property (`$category->title` for `label`) is a level 2
+    # rule, and this codebase was already clean of them.
+    level: 3
     paths:
         - src
     reportUnmatchedIgnoredErrors: false
