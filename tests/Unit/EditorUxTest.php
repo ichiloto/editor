@@ -287,11 +287,12 @@ it('scrolls the inspector so a deep selection stays visible', function () {
   // Selection inside the window: the list starts at the first field.
   expect(callEditorMethod($editor, 'getInspectorLines')[0])->toContain('Name');
 
-  // 120x40 → contentHeight 32 → 30 visible rows; push the selection past
-  // the last visible row and the window must slide by the difference.
-  setEditorProperty($editor, 'selectedInspectorFieldIndex', 31);
+  // One row past the last visible one, whatever the pane's height works out
+  // to, and the window slides by exactly that one row.
+  $visibleRows = callEditorMethod($editor, 'resolveLayout')['contentHeight'] - 2;
+  setEditorProperty($editor, 'selectedInspectorFieldIndex', $visibleRows);
 
-  expect(callEditorMethod($editor, 'getInspectorLines')[0])->toContain('Description');
+  expect(callEditorMethod($editor, 'getInspectorLines')[0])->toContain('Region');
 });
 
 it('scrolls the assets list so the selected map stays visible', function () {

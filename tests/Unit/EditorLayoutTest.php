@@ -22,14 +22,27 @@ it('derives the three-pane layout from the terminal size', function () {
     ->and($layout['rightWidth'])->toBe(34)
     ->and($layout['gutter'])->toBe(1)
     ->and($layout['centerWidth'])->toBe(180 - 32 - 34 - 4)
-    ->and($layout['contentHeight'])->toBe(50 - 8);
+    // Three header rows, a gutter, the content, a gutter, and the four-row
+    // status window: the content gets what is left.
+    ->and($layout['contentHeight'])->toBe(50 - 9);
+});
+
+it('leaves the status window room to be drawn', function () {
+  foreach ([24, 30, 39, 50, 80] as $height) {
+    $layout = callEditorMethod(layoutEditor(180, $height), 'resolveLayout');
+    $statusBottomRow = 5 + $layout['contentHeight'] + $layout['gutter'] + 3;
+
+    // Its last row past the bottom of the terminal is how a status message
+    // came to be drawn over the footer.
+    expect($statusBottomRow)->toBeLessThanOrEqual($height, "the status window overflows at {$height} rows");
+  }
 });
 
 it('clamps the layout at the minimum supported terminal size', function () {
   $layout = callEditorMethod(layoutEditor(80, 24), 'resolveLayout');
 
   expect($layout['centerWidth'])->toBe(30)
-    ->and($layout['contentHeight'])->toBe(16);
+    ->and($layout['contentHeight'])->toBe(15);
 });
 
 it('memoizes the layout until the terminal size changes', function () {

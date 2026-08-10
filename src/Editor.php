@@ -1462,6 +1462,16 @@ final class Editor
             return;
         }
 
+        if ($this->isShiftLetterShortcut($input, 'O')) {
+            $this->addInspectorListItem();
+            return;
+        }
+
+        if ($this->isShiftLetterShortcut($input, 'X') || str_contains($input, "\033[3~")) {
+            $this->removeInspectorListItem();
+            return;
+        }
+
         if (str_contains($input, "\033[A") || $this->isPlainShortcut($normalizedInput, 'k')) {
             $this->moveInspectorSelection(-1);
             return;
@@ -8914,7 +8924,7 @@ final class Editor
      * @param array<int, string> $path The current path.
      * @return array<int, array<string, mixed>>
      */
-    private function flattenInspectorFields(array $data, array $path): array
+    private function flattenInspectorFields(array $data, array $path, ?array $list = null): array
     {
         $fields = [];
 
@@ -8923,6 +8933,36 @@ final class Editor
             $nextPath = [...$path, $segment];
 
             if (is_array($value)) {
+                // A list of entries -- a shop's stock, an event's dialogue --
+                // is something an author adds to and removes from, so every
+                // field inside one remembers which list it belongs to.
+                if ($value !== [] && array_is_list($value) && ! array_key_exists('x', $value)) {
+                    $label = implode(' ', array_map(
+                        static fn(string $part): string => ucwords(str_replace(['_', '-'], ' ', $part)),
+                        array_slice($nextPath, 1)
+                    ));
+                    $fields[] = [
+                        'label' => sprintf('%s · %d', $label, count($value)),
+                        'value' => '',
+                        'editable' => false,
+                        'list' => ['path' => $nextPath, 'index' => 0],
+                    ];
+
+                    foreach ($value as $index => $entry) {
+                        $entryPath = [...$nextPath, (string) $index];
+                        $entryList = ['path' => $nextPath, 'index' => (int) $index];
+
+                        $fields = [
+                            ...$fields,
+                            ...(is_array($entry)
+                                ? $this->flattenInspectorFields($entry, $entryPath, $entryList)
+                                : $this->flattenInspectorFields([(string) $index => $entry], $nextPath, $entryList)),
+                        ];
+                    }
+
+                    continue;
+                }
+
                 if (array_key_exists('x', $value) && array_key_exists('y', $value) && is_scalar($value['x']) && is_scalar($value['y'])) {
                     $label = implode(' ', array_map(
                         static fn(string $part): string => ucwords(str_replace(['_', '-'], ' ', $part)),
@@ -8954,7 +8994,7 @@ final class Editor
                     continue;
                 }
 
-                $fields = [...$fields, ...$this->flattenInspectorFields($value, $nextPath)];
+                $fields = [...$fields, ...$this->flattenInspectorFields($value, $nextPath, $list)];
                 continue;
             }
 
@@ -8980,12 +9020,18 @@ final class Editor
                 is_float($value) => InputControlType::FLOAT,
                 default => InputControlType::TEXT,
             };
-            $fields[] = [
+            $leaf = [
                 'label' => $label,
                 'value' => $stringValue,
                 'control' => new InputControl($controlType, $stringValue),
                 'path' => $nextPath,
             ];
+
+            if (is_array($list)) {
+                $leaf['list'] = $list;
+            }
+
+            $fields[] = $leaf;
         }
 
         return $fields;
@@ -9143,7 +9189,11 @@ final class Editor
         $rightWidth = 34;
         $gutter = 1;
         $centerWidth = max(30, $width - $leftWidth - $rightWidth - ($gutter * 4));
-        $contentHeight = max(10, $height - 8);
+        // The shell is three rows of header, a gutter, the content, a gutter
+        // and a four-row status window. Taking one row too few for that put
+        // the status window's last row past the bottom of the terminal, so a
+        // message landed on the footer instead of in the window.
+        $contentHeight = max(10, $height - 9);
 
         $this->cachedLayoutSize = $size;
 
@@ -9970,6 +10020,159 @@ final class Editor
         return array_slice($rows, $startRow, $availableRows);
     }
 
+
+    /**
+     * Returns the list the inspector cursor is inside, if any.
+     *
+     * @return array{path: array<int, string>, index: int}|null The list.
+     */
+    private function selectedInspectorList(): ?array
+    {
+        $fields = $this->getInspectorFields();
+        $field = $fields[$this->selectedInspectorFieldIndex] ?? null;
+
+        if (! is_array($field) || ($field['target'] ?? null) !== 'event') {
+            return null;
+        }
+
+        $list = $field['list'] ?? null;
+
+        return is_array($list) ? $list : null;
+    }
+
+    /**
+     * Adds an entry to the list the inspector cursor is inside.
+     *
+     * The new entry is shaped like the one it follows -- the same keys, their
+     * values cleared -- because an author adding a second shop line means
+     * another line like the first, not an empty hole they have to describe.
+     *
+     * @return void
+     */
+    private function addInspectorListItem(): void
+    {
+        $selectedMap = $this->getSelectedMap();
+        $list = $this->selectedInspectorList();
+        $marker = $this->selectedEventMarkerForList();
+
+        if (! $selectedMap instanceof ProjectMap || $list === null || $marker === '') {
+            $this->setStatus('Nothing here is a list to add to.', StatusLevel::WARN);
+
+            return;
+        }
+
+        $entries = $selectedMap->getEventField($marker, $list['path']);
+        $entries = is_array($entries) ? array_values($entries) : [];
+        $template = $entries[$list['index']] ?? ($entries === [] ? '' : end($entries));
+        $position = min(count($entries), $list['index'] + 1);
+
+        array_splice($entries, $position, 0, [self::blankLike($template)]);
+
+        $this->applyInspectorListChange($selectedMap, $marker, $list['path'], $entries, 'Add list entry');
+        $this->setStatus(sprintf('Added %s %d.', $this->describeListPath($list['path']), $position + 1), StatusLevel::SUCCESS);
+    }
+
+    /**
+     * Removes the entry the inspector cursor is inside.
+     *
+     * @return void
+     */
+    private function removeInspectorListItem(): void
+    {
+        $selectedMap = $this->getSelectedMap();
+        $list = $this->selectedInspectorList();
+        $marker = $this->selectedEventMarkerForList();
+
+        if (! $selectedMap instanceof ProjectMap || $list === null || $marker === '') {
+            $this->setStatus('Nothing here is a list entry to remove.', StatusLevel::WARN);
+
+            return;
+        }
+
+        $entries = $selectedMap->getEventField($marker, $list['path']);
+        $entries = is_array($entries) ? array_values($entries) : [];
+
+        if (! array_key_exists($list['index'], $entries)) {
+            return;
+        }
+
+        array_splice($entries, $list['index'], 1);
+
+        $this->applyInspectorListChange($selectedMap, $marker, $list['path'], $entries, 'Remove list entry');
+        $this->clampInspectorSelection();
+        $this->setStatus(sprintf('Removed %s %d.', $this->describeListPath($list['path']), $list['index'] + 1), StatusLevel::SUCCESS);
+    }
+
+    /**
+     * Writes a changed list back, recording it so it can be undone.
+     *
+     * @param ProjectMap $map The map.
+     * @param string $marker The event marker.
+     * @param array<int, string> $path The list's path.
+     * @param array<int, mixed> $entries The list as it should be.
+     * @param string $label What to call the change.
+     * @return void
+     */
+    private function applyInspectorListChange(ProjectMap $map, string $marker, array $path, array $entries, string $label): void
+    {
+        $previous = $map->getEventField($marker, $path);
+        $previous = is_array($previous) ? array_values($previous) : [];
+
+        $map->setEventField($marker, $path, $entries);
+        $this->recordCommand(new GenericCommand(
+            $label,
+            static fn() => $map->setEventField($marker, $path, $entries),
+            static fn() => $map->setEventField($marker, $path, $previous),
+        ));
+        $this->renderSelectionDependentArea();
+    }
+
+    /**
+     * Returns the marker of the event the inspector cursor is in.
+     *
+     * @return string The marker, or an empty string.
+     */
+    private function selectedEventMarkerForList(): string
+    {
+        $fields = $this->getInspectorFields();
+        $field = $fields[$this->selectedInspectorFieldIndex] ?? null;
+
+        return is_array($field) ? (string) ($field['marker'] ?? '') : '';
+    }
+
+    /**
+     * Returns an entry shaped like the given one with nothing filled in.
+     *
+     * @param mixed $template The entry to copy the shape of.
+     * @return mixed The blank entry.
+     */
+    private static function blankLike(mixed $template): mixed
+    {
+        if (is_array($template)) {
+            return array_map(self::blankLike(...), $template);
+        }
+
+        return match (true) {
+            is_int($template) => 0,
+            is_float($template) => 0.0,
+            is_bool($template) => false,
+            default => '',
+        };
+    }
+
+    /**
+     * Names a list for a status message.
+     *
+     * @param array<int, string> $path The list's path.
+     * @return string The name, in the singular.
+     */
+    private static function describeListPath(array $path): string
+    {
+        $leaf = (string) ($path[array_key_last($path)] ?? 'entry');
+        $leaf = str_replace(['_', '-'], ' ', $leaf);
+
+        return mb_strtolower(rtrim($leaf, 's'));
+    }
 
     /**
      * Determines whether an event field names another resource.
@@ -12417,7 +12620,19 @@ final class Editor
 
         return new EditorWindow(
             title: $this->focusedPane === self::FOCUS_INSPECTOR ? 'Inspector [Focus]' : 'Inspector',
-            help: $this->isInspectorEditing ? 'Enter:Apply  Esc:Cancel' : 'Enter:Edit',
+            help: match (true) {
+                $this->isInspectorEditing => 'Enter:Apply  Esc:Cancel',
+                // Only where there is a list to act on: a hint for keys that
+                // would answer "nothing here is a list" is worse than none.
+                $this->selectedInspectorList() !== null => $this->fitHelp(
+                    $layout['rightWidth'],
+                    'Enter:Edit  Shift+O:Add  Shift+X/Del:Remove',
+                    'Enter:Edit  Shift+O:Add  Del:Remove',
+                    'Enter:Edit  Shift+O/Del:Add/Del',
+                    'Enter:Edit',
+                ),
+                default => 'Enter:Edit',
+            },
             position: ['x' => 2 + $layout['leftWidth'] + $layout['centerWidth'] + ($layout['gutter'] * 2), 'y' => 5],
             width: $layout['rightWidth'],
             height: $layout['contentHeight'],
