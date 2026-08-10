@@ -2,8 +2,10 @@
 
 namespace Ichiloto\Editor\Validation;
 
+use Ichiloto\Editor\Database\PhpDataFile;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Database\ReferenceCatalog;
+use Ichiloto\Editor\ProjectDirectoryContext;
 use Ichiloto\Editor\ProjectQuest;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
@@ -464,7 +466,47 @@ class ProjectValidator
       ...$this->checkSkitReferences($workspace, $known),
       ...$this->checkScriptReferences($workspace, $known),
       ...$this->checkMapReferences($workspace, $known),
+      ...$this->checkAchievementReferences($workspace, $known),
     ];
+  }
+
+  /**
+   * Checks manually authored achievement condition records.
+   *
+   * Achievements are not an editor Database category, but their conditions
+   * use the same runtime evaluator and must receive the same validation.
+   *
+   * @param ProjectWorkspace $workspace The project.
+   * @param array<string, string[]> $known What the project defines.
+   * @return Issue[] The issues found.
+   */
+  protected function checkAchievementReferences(ProjectWorkspace $workspace, array $known): array
+  {
+    $path = $workspace->projectRoot . '/assets/Data/achievements.php';
+    $file = ProjectDirectoryContext::run(
+      $workspace->projectRoot,
+      static fn(): PhpDataFile => PhpDataFile::load($path),
+    );
+
+    if (! is_array($file->payload)) {
+      return [];
+    }
+
+    $issues = [];
+
+    foreach ($file->payload as $achievement) {
+      if (! is_array($achievement)) {
+        continue;
+      }
+
+      $where = sprintf('achievement %s', strval($achievement['id'] ?? '(unnamed)'));
+      $issues = [
+        ...$issues,
+        ...$this->checkConditions((array) ($achievement['conditions'] ?? []), $where, $known),
+      ];
+    }
+
+    return $issues;
   }
 
   /**

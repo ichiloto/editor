@@ -180,6 +180,29 @@ it('reports an unknown condition type with its content context', function () {
         ->and($issues[0]->hint)->toContain('inaccessible');
 });
 
+it('validates conditions in manually authored achievements', function () {
+    $root = makeTemporaryProject();
+    file_put_contents($root . '/assets/Data/achievements.php', <<<'PHP'
+    <?php
+
+    return [
+      [
+        'id' => 'unsafe-achievement',
+        'name' => 'Unsafe Achievement',
+        'conditions' => [
+          ['type' => 'obsolete_flag', 'name' => 'old-condition'],
+        ],
+      ],
+    ];
+    PHP);
+
+    $issues = issuesMentioning(validateProject($root), 'unknown condition type "obsolete_flag"');
+
+    expect($issues)->toHaveCount(1)
+        ->and($issues[0]->severity)->toBe(Severity::ERROR)
+        ->and($issues[0]->where)->toBe('achievement unsafe-achievement');
+});
+
 it('catches a script command naming something the project does not have', function () {
     $root = makeTemporaryProject();
     file_put_contents($root . '/assets/Events/errand.php', <<<'PHP'
