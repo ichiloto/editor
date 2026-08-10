@@ -10224,6 +10224,14 @@ final class Editor
      * @param array{width: int, height: int, leftWidth: int, rightWidth: int, gutter: int, centerWidth: int, contentHeight: int} $layout The base editor layout.
      * @return array<string, int>
      */
+    /**
+     * What the settings and cue panes may take of the Database's right side.
+     */
+    private const int DATABASE_SETTINGS_MINIMUM_WIDTH = 34;
+    private const int DATABASE_SETTINGS_MAXIMUM_WIDTH = 96;
+    private const int DATABASE_CUE_MINIMUM_WIDTH = 22;
+    private const int DATABASE_CUE_MAXIMUM_WIDTH = 48;
+
     private function resolveDatabaseLayout(array $layout): array
     {
         $rootX = 2;
@@ -10264,24 +10272,29 @@ final class Editor
             : ($this->isSkillsDatabaseSelected() || $this->isQuestsDatabaseSelected() ? 30 : ($this->isActorsDatabaseSelected() ? 18 : 10));
         $previewWidth = max(20, $rightWidth - $framesWidth - $gutter);
         $previewHeight = max(8, $innerHeight - $topHeight - $gutter);
-        $settingsWidth = intdiv($rightWidth - $gutter, 2)
-                |> (fn($x) => min(28, $x))
-                |> (fn($x) => max(18, $x));
-        $cueWidth = $rightWidth - $settingsWidth - $gutter;
+        // The settings pane holds label-and-value lines that truncate, and the
+        // cue beside it holds short summaries. So the cue takes what its
+        // content needs and the settings pane takes the rest: a wider
+        // terminal should widen the pane doing the reading, not the one with
+        // room to spare.
+        $cueWidth = min(self::DATABASE_CUE_MAXIMUM_WIDTH, max(self::DATABASE_CUE_MINIMUM_WIDTH, intdiv($rightWidth, 3)));
+        $settingsWidth = min(
+            self::DATABASE_SETTINGS_MAXIMUM_WIDTH,
+            max(self::DATABASE_SETTINGS_MINIMUM_WIDTH, $rightWidth - $cueWidth - $gutter)
+        );
+        $cueWidth = max(self::DATABASE_CUE_MINIMUM_WIDTH, $rightWidth - $settingsWidth - $gutter);
 
-        if ($cueWidth < 18) {
-            $cueWidth = 18;
-            $settingsWidth = max(18, $rightWidth - $cueWidth - $gutter);
+        // Narrow enough that neither pane can have its minimum: share out
+        // what there is rather than draw past the edge.
+        if ($settingsWidth + $cueWidth + $gutter > $rightWidth) {
+            $cueWidth = max(1, intdiv($rightWidth - $gutter, 3));
+            $settingsWidth = max(1, $rightWidth - $cueWidth - $gutter);
         }
+
         if ($this->isSkillsDatabaseSelected() || $this->isQuestsDatabaseSelected()) {
-            $settingsWidth = max(34, min($rightWidth - 22 - $gutter, 38));
-            $cueWidth = max(22, $rightWidth - $settingsWidth - $gutter);
             $framesWidth = max(30, min($rightWidth - 24 - $gutter, 34));
             $previewWidth = max(24, $rightWidth - $framesWidth - $gutter);
-            if ($cueWidth < 22) {
-                $cueWidth = 22;
-                $settingsWidth = max(30, $rightWidth - $cueWidth - $gutter);
-            }
+
             if ($previewWidth < 24) {
                 $previewWidth = 24;
                 $framesWidth = max(24, $rightWidth - $previewWidth - $gutter);
