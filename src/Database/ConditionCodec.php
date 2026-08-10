@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Database;
 
+use Ichiloto\Engine\Core\WorldConditionType;
+
 /**
  * Encodes and decodes the engine's world-condition arrays as a single
  * editable line.
@@ -20,8 +22,15 @@ namespace Ichiloto\Editor\Database;
  */
 final class ConditionCodec
 {
-    /** The condition types the engine's evaluator understands. */
-    public const array TYPES = ['quest', 'switch', 'event', 'variable', 'item', 'key_item'];
+    /**
+     * Returns the condition types the engine's evaluator understands.
+     *
+     * @return string[]
+     */
+    public static function types(): array
+    {
+        return WorldConditionType::values();
+    }
 
     /**
      * Encodes a list of conditions into the one-line editable form.
@@ -120,7 +129,7 @@ final class ConditionCodec
         $type = strtolower($parts[0] ?? '');
         $name = $parts[1] ?? '';
 
-        if ($name === '' || ! in_array($type, self::TYPES, true)) {
+        if ($name === '' || ! in_array($type, self::types(), true)) {
             return null;
         }
 

@@ -5,6 +5,7 @@ declare(strict_types=1);
 use Ichiloto\Editor\Database\ConditionCodec;
 use Ichiloto\Editor\Database\ConditionEditor;
 use Ichiloto\Editor\ProjectWorkspace;
+use Ichiloto\Engine\Core\WorldConditionType;
 
 /**
  * Opens an editor on an encoded condition line.
@@ -19,6 +20,10 @@ function conditionEditorOn(string $encoded): ConditionEditor
 
     return $editor;
 }
+
+it('uses the runtime condition vocabulary', function () {
+    expect(ConditionCodec::types())->toBe(WorldConditionType::values());
+});
 
 it('gives back the line it was opened on', function () {
     $line = 'quest:breakfast-duty:active; !switch:door_open; item:S-Potion:3';

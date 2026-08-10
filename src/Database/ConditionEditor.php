@@ -213,7 +213,7 @@ final class ConditionEditor
             return;
         }
 
-        $types = ConditionCodec::TYPES;
+        $types = ConditionCodec::types();
         $index = array_search(strval($condition['type'] ?? ''), $types, true);
         $index = is_int($index) ? $index : 0;
         $type = $types[(($index + $step) % count($types) + count($types)) % count($types)];

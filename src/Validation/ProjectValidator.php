@@ -7,6 +7,7 @@ use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\ProjectQuest;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
+use Ichiloto\Engine\Core\WorldConditionType;
 
 /**
  * Checks a project's content for the mistakes that are otherwise found by
@@ -340,6 +341,7 @@ class ProjectValidator
     $items = $this->labelsOf($workspace, 'items');
     $foes = [...$this->labelsOf($workspace, 'troops'), ...$this->labelsOf($workspace, 'enemies')];
     $questIds = array_map(static fn(ProjectQuest $quest): string => $quest->getId(), $quests);
+    $known = ['quests' => $questIds, 'inventory' => $items];
 
     foreach ($quests as $quest) {
       $questId = $quest->getId();
@@ -352,19 +354,8 @@ class ProjectValidator
       $issues = [
         ...$issues,
         ...$this->checkObjectives($quest, $where, $workspace->mapIds, $items, $foes),
+        ...$this->checkConditions($quest->getPrerequisites(), $where, $known, true),
       ];
-
-      foreach ($quest->getPrerequisites() as $prerequisite) {
-        $name = trim(strval($prerequisite['name'] ?? ''));
-
-        if (strval($prerequisite['type'] ?? '') === 'quest' && $name !== '' && ! in_array($name, $questIds, true)) {
-          $issues[] = Issue::error(
-            $where,
-            sprintf('It waits on the quest "%s", which does not exist.', $name),
-            'The quest can never be accepted. Check the id.'
-          );
-        }
-      }
     }
 
     return $issues;
@@ -620,6 +611,8 @@ class ProjectValidator
         $issues = [
           ...$issues,
           ...$this->checkConditions((array) ($definition['conditions'] ?? []), $where, $known),
+          ...$this->checkDialogueVariants((array) ($data['dialogue'] ?? []), $where, $known),
+          ...$this->checkCommands((array) ($data['script'] ?? []), $where, $known),
           ...$this->checkReference(strval($data['bgm'] ?? ''), 'bgm', 'track', $where, $known),
           ...$this->checkReference(strval($data['sfx'] ?? ''), 'sfx', 'sound', $where, $known),
         ];
@@ -633,6 +626,49 @@ class ProjectValidator
           }
         }
       }
+
+      foreach ((array) ($map->data['npcs'] ?? []) as $npc) {
+        if (! is_array($npc)) {
+          continue;
+        }
+
+        $where = sprintf('%s NPC %s', $map->mapId, strval($npc['name'] ?? '(unnamed)'));
+        $issues = [
+          ...$issues,
+          ...$this->checkConditions((array) ($npc['conditions'] ?? []), $where, $known),
+          ...$this->checkDialogueVariants((array) ($npc['dialogue'] ?? []), $where, $known),
+          ...$this->checkCommands((array) ($npc['script'] ?? []), $where, $known),
+        ];
+      }
+    }
+
+    return $issues;
+  }
+
+  /**
+   * Checks conditional dialogue variants and their event-command scripts.
+   *
+   * Plain dialogue pages contain neither key and therefore pass through.
+   *
+   * @param array<int, mixed> $dialogue The authored dialogue entry.
+   * @param string $where Where the dialogue lives.
+   * @param array<string, string[]> $known What the project defines.
+   * @return Issue[] The issues found.
+   */
+  protected function checkDialogueVariants(array $dialogue, string $where, array $known): array
+  {
+    $issues = [];
+
+    foreach ($dialogue as $variant) {
+      if (! is_array($variant)) {
+        continue;
+      }
+
+      $issues = [
+        ...$issues,
+        ...$this->checkConditions((array) ($variant['conditions'] ?? []), $where, $known),
+        ...$this->checkCommands((array) ($variant['script'] ?? []), $where, $known),
+      ];
     }
 
     return $issues;
@@ -648,9 +684,15 @@ class ProjectValidator
    * @param array<int, mixed> $conditions The conditions.
    * @param string $where Where they live.
    * @param array<string, string[]> $known What the project defines.
+   * @param bool $questPrerequisites Whether quest references are acceptance prerequisites.
    * @return Issue[] The issues found.
    */
-  protected function checkConditions(array $conditions, string $where, array $known): array
+  protected function checkConditions(
+    array $conditions,
+    string $where,
+    array $known,
+    bool $questPrerequisites = false
+  ): array
   {
     $issues = [];
 
@@ -659,9 +701,34 @@ class ProjectValidator
         continue;
       }
 
+      $type = strval($condition['type'] ?? '');
+
+      if (! WorldConditionType::tryFrom($type) instanceof WorldConditionType) {
+        $issues[] = Issue::error(
+          $where,
+          sprintf('It uses the unknown condition type "%s".', $type !== '' ? $type : '(empty)'),
+          'The runtime fails unknown conditions closed, so this guarded content is inaccessible.'
+        );
+        continue;
+      }
+
       $name = strval($condition['name'] ?? '');
 
-      $issues = [...$issues, ...match (strval($condition['type'] ?? '')) {
+      if ($questPrerequisites && $type === WorldConditionType::QUEST->value) {
+        $trimmedName = trim($name);
+
+        if ($trimmedName !== '' && ! in_array($trimmedName, $known['quests'] ?? [], true)) {
+          $issues[] = Issue::error(
+            $where,
+            sprintf('It waits on the quest "%s", which does not exist.', $trimmedName),
+            'The quest can never be accepted. Check the id.'
+          );
+        }
+
+        continue;
+      }
+
+      $issues = [...$issues, ...match ($type) {
         'quest' => $this->checkReference($name, 'quests', 'quest', $where, $known),
         'item', 'key_item' => $this->checkReference($name, 'inventory', 'item', $where, $known),
         default => [],

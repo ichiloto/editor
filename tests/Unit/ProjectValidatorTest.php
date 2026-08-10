@@ -154,6 +154,32 @@ it('catches a skit waiting on a quest that does not exist', function () {
         ->and(issuesMentioning(validateProject($root), 'kitchen_visited'))->toBe([]);
 });
 
+it('reports an unknown condition type with its content context', function () {
+    $root = makeTemporaryProject();
+    file_put_contents($root . '/assets/Data/Skits/breakfast-banter.php', <<<'PHP'
+    <?php
+
+    return [
+      'id' => 'breakfast-banter',
+      'title' => 'Breakfast Banter',
+      'where' => 'test-map',
+      'conditions' => [
+        ['type' => 'phase_of_moon', 'name' => 'full'],
+      ],
+      'beats' => [
+        ['speaker' => 'Liora', 'text' => 'This must remain guarded.'],
+      ],
+    ];
+    PHP);
+
+    $issues = issuesMentioning(validateProject($root), 'unknown condition type "phase_of_moon"');
+
+    expect($issues)->toHaveCount(1)
+        ->and($issues[0]->severity)->toBe(Severity::ERROR)
+        ->and($issues[0]->where)->toBe('skit breakfast-banter')
+        ->and($issues[0]->hint)->toContain('inaccessible');
+});
+
 it('catches a script command naming something the project does not have', function () {
     $root = makeTemporaryProject();
     file_put_contents($root . '/assets/Events/errand.php', <<<'PHP'
