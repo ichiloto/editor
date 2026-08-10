@@ -73,7 +73,9 @@ final class PhpDataFile
             );
         }
 
-        [$header, $hasInteriorComment] = self::partitionSource($source);
+        $sourceMetadata = PhpDataSource::inspect($source);
+        $header = $sourceMetadata['header'];
+        $hasInteriorComment = $sourceMetadata['hasInteriorComment'];
         $offendingClass = PhpValueExporter::findUnexportableClass($payload);
 
         if ($offendingClass !== null) {
@@ -170,60 +172,4 @@ final class PhpDataFile
         }
     }
 
-    /**
-     * Splits a source file at its top-level `return`.
-     *
-     * @param string $source The file source.
-     * @return array{0: string, 1: bool} The verbatim header and whether a comment sits inside the data.
-     */
-    private static function partitionSource(string $source): array
-    {
-        $tokens = token_get_all($source);
-        $header = '';
-        $depth = 0;
-        $sawReturn = false;
-        $hasInteriorComment = false;
-
-        foreach ($tokens as $token) {
-            if (is_string($token)) {
-                if (! $sawReturn) {
-                    $header .= $token;
-                }
-
-                if ($token === '(' || $token === '[' || $token === '{') {
-                    $depth++;
-                } elseif ($token === ')' || $token === ']' || $token === '}') {
-                    $depth--;
-                }
-
-                continue;
-            }
-
-            [$id, $text] = $token;
-
-            if ($id === T_RETURN && $depth === 0 && ! $sawReturn) {
-                $sawReturn = true;
-                continue;
-            }
-
-            if ($id === T_COMMENT || $id === T_DOC_COMMENT) {
-                if ($sawReturn) {
-                    $hasInteriorComment = true;
-                }
-            }
-
-            if (! $sawReturn) {
-                $header .= $text;
-            }
-        }
-
-        if (! $sawReturn) {
-            // No top-level return at all: keep the whole file as header so a
-            // save would be a no-op rather than a truncation. Callers still
-            // treat a null payload as "nothing to edit".
-            return ["<?php\n\n", false];
-        }
-
-        return [$header, $hasInteriorComment];
-    }
 }

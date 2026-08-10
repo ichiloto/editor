@@ -85,6 +85,39 @@ it('round-trips the example file shape losslessly through save', function () {
   }
 });
 
+it('preserves the quest file prologue, header, and unedited fields', function () {
+  $root = scratchQuestProject();
+  $path = $root . '/assets/Data/quests.php';
+  $quests = require $path;
+  $quests[0]['productionMetadata'] = ['owner' => 'narrative', 'revision' => 3];
+  $header = <<<'PHP'
+<?php
+
+declare(strict_types=1);
+
+// Production quest definitions. Keep this file-level header.
+
+PHP;
+  file_put_contents($path, $header . 'return ' . var_export($quests, true) . ";\n");
+  $original = require $path;
+
+  $database = ProjectQuestDatabase::fromProject($root);
+  $database->save();
+
+  $savedSource = (string) file_get_contents($path);
+  $saved = require $path;
+  $reloaded = ProjectQuestDatabase::fromProject($root);
+
+  expect($saved)->toBe($original)
+    ->and($savedSource)->toStartWith($header)
+    ->and($savedSource)->toContain('// Production quest definitions. Keep this file-level header.')
+    ->and($saved[0]['productionMetadata'])->toBe(['owner' => 'narrative', 'revision' => 3])
+    ->and(array_map(
+      static fn(\Ichiloto\Editor\ProjectQuest $quest): array => $quest->toArray(),
+      $reloaded->getQuests(),
+    ))->toBe($original);
+});
+
 it('builds the quest settings fields with the five objective types', function () {
   // Regression guard mirroring the AnimationTargetPosition test: the field
   // builder must resolve QuestObjectiveType and flatten the objectives.

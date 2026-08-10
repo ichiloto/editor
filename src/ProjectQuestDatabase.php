@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor;
 
+use Ichiloto\Editor\Database\PhpDataSource;
 use Ichiloto\Editor\Database\Slug;
-
 use RuntimeException;
 
 /**
@@ -20,11 +20,13 @@ final class ProjectQuestDatabase
      * @param string $path The quests.php path.
      * @param ProjectQuest[] $quests The loaded quests.
      * @param bool $isDirty Whether structural changes are unsaved.
+     * @param string $sourceHeader Verbatim source before the top-level return.
      */
     public function __construct(
         public readonly string $path,
         private array $quests = [],
         private bool $isDirty = false,
+        private string $sourceHeader = "<?php\n\n",
     ) {
     }
 
@@ -45,6 +47,7 @@ final class ProjectQuestDatabase
             return new self($path, []);
         }
 
+        $source = (string) file_get_contents($path);
         $payload = require $path;
 
         if (! is_array($payload)) {
@@ -59,7 +62,11 @@ final class ProjectQuestDatabase
             }
         }
 
-        return new self($path, $quests);
+        return new self(
+            $path,
+            $quests,
+            sourceHeader: PhpDataSource::inspect($source)['header'],
+        );
     }
 
     /**
@@ -289,7 +296,7 @@ final class ProjectQuestDatabase
             throw new RuntimeException("Unable to create {$directory}.");
         }
 
-        $payload = "<?php\n\nreturn " . self::exportPhpValue(array_map(
+        $payload = $this->sourceHeader . 'return ' . self::exportPhpValue(array_map(
             static fn(ProjectQuest $quest): array => $quest->toArray(),
             $this->getQuests()
         )) . ";\n";

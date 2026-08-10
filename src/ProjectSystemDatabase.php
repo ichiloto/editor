@@ -184,16 +184,14 @@ final class ProjectSystemDatabase
             ];
         $battle = is_array($data['battle'] ?? null) ? $data['battle'] : [];
         $activeTime = is_array($battle['activeTime'] ?? null) ? $battle['activeTime'] : [];
-        $data['battle'] = [
-            'engine' => strval($battle['engine'] ?? 'traditional') === 'active_time'
-                ? 'active_time'
-                : 'traditional',
-            'activeTime' => [
-                'mode' => 'wait',
-                'baseFillRate' => max(1, intval($activeTime['baseFillRate'] ?? 35)),
-                'speedFactorPercent' => max(0, intval($activeTime['speedFactorPercent'] ?? 35)),
-            ],
-        ];
+        $battle['engine'] = strval($battle['engine'] ?? 'traditional') === 'active_time'
+            ? 'active_time'
+            : 'traditional';
+        $activeTime['mode'] = 'wait';
+        $activeTime['baseFillRate'] = max(1, intval($activeTime['baseFillRate'] ?? 35));
+        $activeTime['speedFactorPercent'] = max(0, intval($activeTime['speedFactorPercent'] ?? 35));
+        $battle['activeTime'] = $activeTime;
+        $data['battle'] = $battle;
 
         return $data;
     }
