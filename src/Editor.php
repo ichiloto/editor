@@ -3584,6 +3584,23 @@ final class Editor
         $lines[] = 'Everywhere: Arrows move/adjust, Enter activates, and Esc';
         $lines[] = 'backs out exactly one level (edit, dialog, screen).';
         $lines[] = '';
+        $lines[] = 'Database';
+        $lines[] = '  Shift+A / Del      add or remove an entry';
+        $lines[] = '  Shift+O / Shift+X  add or remove an objective, beat,';
+        $lines[] = '                     troop member or script command';
+        $lines[] = '  Del                the same, on the settings field';
+        $lines[] = '                     the cursor is on';
+        $lines[] = '  Enter              edit, or open the picker on a field';
+        $lines[] = '                     that names another record';
+        $lines[] = '';
+        $lines[] = 'Conditions (Enter on a Conditions or Prereqs field)';
+        $lines[] = '  a / d              add or remove a condition';
+        $lines[] = '  t / T              cycle its type';
+        $lines[] = '  n                  choose or type what it names';
+        $lines[] = '  x / X              cycle the status, value or count';
+        $lines[] = '  !                  it has to not hold';
+        $lines[] = '  Enter / Esc        keep or discard the list';
+        $lines[] = '';
         $lines[] = 'Canvas: ' . $this->describeCanvasToolUsage();
         $lines[] = sprintf('Active tool: %s.', $this->describeCanvasToolState());
         $lines[] = $this->backups->settings->describe();
@@ -7658,6 +7675,33 @@ final class Editor
     }
 
     /**
+     * Returns the fullest form of a pane's key hint that its border fits.
+     *
+     * A hint cut off mid-word ("Shift+X/De") is worse than a shorter one that
+     * reads: it looks like a bug and it teaches nothing. Callers pass the
+     * forms they would like in order, longest first, and the last is the one
+     * that has to fit anywhere.
+     *
+     * @param int $windowWidth The window's full width.
+     * @param string ...$candidates The forms, longest first.
+     * @return string The one that fits.
+     */
+    private function fitHelp(int $windowWidth, string ...$candidates): string
+    {
+        // EditorWindow spends a corner and a border character before the
+        // label, and keeps one for the closing corner.
+        $available = max(0, $windowWidth - 3);
+
+        foreach ($candidates as $candidate) {
+            if (mb_strwidth($candidate) <= $available) {
+                return $candidate;
+            }
+        }
+
+        return '';
+    }
+
+    /**
      * Determines whether the selected record has a list to add to.
      *
      * @return bool True when it has.
@@ -10495,7 +10539,15 @@ final class Editor
             title: $this->getSelectedDatabaseCategory()
                 . ($this->isDatabaseCategoryDirty($this->getSelectedDatabaseCategoryDefinition()->key) ? ' *' : '')
                 . $this->databaseFilter->describe(),
-            help: $supportsEntries ? "Shift+A:New  /:Filter  Del:Delete" : "",
+            help: $supportsEntries
+                ? $this->fitHelp(
+                    $layout['listWidth'],
+                    'Shift+A:New  /:Filter  Del:Delete',
+                    'Shift+A:New  /:Filter  Del',
+                    'Shift+A:New  /:Filter',
+                    '/:Filter',
+                )
+                : '',
             position: ["x" => $layout["innerX"] + $layout["categoryWidth"] + $layout["gutter"], "y" => $layout["innerY"]],
             width: $layout["listWidth"],
             height: $layout["innerHeight"],
@@ -10519,10 +10571,29 @@ final class Editor
         return new EditorWindow(
             title: 'General Settings',
             help: match (true) {
-                $this->referencePicker->isOpen() => 'Enter:Choose  Type:Filter  Esc:Cancel',
-                $this->conditionEditor->isOpen() => 'a:Add  d:Delete  t/T:Type  n:Name  x/X:Value  !:Not  Enter:Done  Esc:Cancel',
+                $this->referencePicker->isOpen() => $this->fitHelp(
+                    $layout['settingsWidth'],
+                    'Enter:Choose  Type:Filter  Esc:Cancel',
+                    'Enter:Choose  Esc:Cancel',
+                    'Enter:Choose',
+                ),
+                $this->conditionEditor->isOpen() => $this->fitHelp(
+                    $layout['settingsWidth'],
+                    'a:Add  d:Del  t:Type  n:Name  x:Value  !:Not  Enter:Done  Esc:Cancel',
+                    'a:Add  d:Del  t:Type  n:Name  x:Value  !:Not  Enter:Done',
+                    'a/d:Add/Del  t:Type  n:Name  x:Value  !:Not',
+                    'a/d:Add/Del  t/n/x:Edit  ?:Help',
+                    '?:Help',
+                ),
                 $this->isDatabaseEditing => 'Enter:Apply  Esc:Cancel',
-                $this->hasDatabaseSubList() => 'Enter:Edit  Shift+O:Add  Shift+X/Del:Remove',
+                $this->hasDatabaseSubList() => $this->fitHelp(
+                    $layout['settingsWidth'],
+                    'Enter:Edit  Shift+O:Add  Shift+X/Del:Remove',
+                    'Enter:Edit  Shift+O:Add  Del:Remove',
+                    'Enter:Edit  Shift+O/Del:Add/Del',
+                    'Enter:Edit  ?:Help',
+                    'Enter:Edit',
+                ),
                 default => 'Enter:Edit',
             },
             position: ['x' => $layout['innerX'] + $layout['categoryWidth'] + $layout['listWidth'] + ($layout['gutter'] * 2), 'y' => $layout['innerY']],
@@ -10547,7 +10618,9 @@ final class Editor
     {
         return new EditorWindow(
             title: $this->isActorsDatabaseSelected() ? "Collections" : ($this->isClassesDatabaseSelected() ? "Experience Curve" : ($this->isSkillsDatabaseSelected() ? "Effects" : ($this->isQuestsDatabaseSelected() ? "Objectives" : ($this->isSystemDatabaseSelected() ? "Battle Settings" : "SE and Flash Timing")))),
-            help: $this->isQuestsDatabaseSelected() ? "Shift+O:Add  Shift+X:Del" : "",
+            help: $this->isQuestsDatabaseSelected()
+                ? $this->fitHelp($layout['cueWidth'], 'Shift+O:Add  Shift+X:Del', 'Shift+O/X:Add/Del', '?:Help')
+                : '',
             position: ["x" => $layout["innerX"] + $layout["categoryWidth"] + $layout["listWidth"] + $layout["settingsWidth"] + ($layout["gutter"] * 3), "y" => $layout["innerY"]],
             width: $layout["cueWidth"],
             height: $layout["topHeight"],
