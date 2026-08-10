@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Ichiloto\Editor\Database\ReferenceCatalog;
+use Ichiloto\Editor\Database\RecordSchemaCatalog;
 use Ichiloto\Editor\ProjectWorkspace;
 
 /**
@@ -91,4 +92,41 @@ it('offers nothing for audio a project has none of', function () {
 
     expect($catalog->valuesFor('sfx'))->toBe([])
         ->and(ReferenceCatalog::knows('sfx'))->toBeTrue();
+});
+
+it('picks rather than spells what an event script command names', function () {
+    $variants = [];
+
+    foreach (RecordSchemaCatalog::all()['common_events']->subList?->variants ?? [] as $type => $fields) {
+        foreach ($fields as $field) {
+            $variants[$type][$field->key] = $field->reference;
+        }
+    }
+
+    // Each of these is handed straight to a store or loader by the
+    // interpreter, so a name that matches nothing does nothing.
+    expect($variants['give_item']['item'])->toBe('inventory')
+        ->and($variants['play_music']['music'])->toBe('bgm')
+        ->and($variants['play_sound']['sound'])->toBe('sfx')
+        ->and($variants['accept_quest']['id'])->toBe('quests')
+        ->and($variants['transfer']['map'])->toBe('maps')
+        ->and($variants['start_battle']['troop'])->toBe('troops');
+});
+
+it('leaves a switch, a variable and a story event as names to invent', function () {
+    $variants = [];
+
+    foreach (RecordSchemaCatalog::all()['common_events']->subList?->variants ?? [] as $type => $fields) {
+        foreach ($fields as $field) {
+            $variants[$type][$field->key] = $field->reference;
+        }
+    }
+
+    // Nothing in the project declares these up front; the author names them
+    // where they are set and reads them back where they matter.
+    expect($variants['set_switch']['name'])->toBeNull()
+        ->and($variants['set_variable']['name'])->toBeNull()
+        ->and($variants['record_event']['name'])->toBeNull()
+        // A speaker may be a passer-by who exists in no database.
+        ->and($variants['text']['name'])->toBeNull();
 });

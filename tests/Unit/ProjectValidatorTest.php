@@ -76,9 +76,35 @@ function writeConsistentQuests(string $root): void
     PHP);
 }
 
+/**
+ * Rewrites the temporary project's skit so it only names things it has.
+ *
+ * Same story as the quests: the fixture's skit plays on a map from a bigger
+ * project and waits on one of its quests.
+ *
+ * @param string $root The project root.
+ * @return void
+ */
+function writeConsistentSkits(string $root): void
+{
+    file_put_contents($root . '/assets/Data/Skits/breakfast-banter.php', <<<'PHP'
+    <?php
+
+    return [
+      'id' => 'breakfast-banter',
+      'title' => 'Breakfast Banter',
+      'where' => 'test-map',
+      'beats' => [
+        ['speaker' => 'Liora', 'text' => 'An errand for your mom? Really?'],
+      ],
+    ];
+    PHP);
+}
+
 it('passes a project with nothing wrong with it', function () {
     $root = makeTemporaryProject();
     writeConsistentQuests($root);
+    writeConsistentSkits($root);
 
     expect(validateProject($root))->toBe([]);
 });
@@ -89,9 +115,72 @@ it('finds the dangling references in the shipped sample project', function () {
     // exactly the kind of drift the check exists to catch.
     $issues = validateProject(fixturePath('sample-project'));
 
-    expect(issuesMentioning($issues, 'happyville/town-center'))->toHaveCount(1)
+    // The map is named twice: a quest objective goes there, and the skit
+    // plays there.
+    expect(issuesMentioning($issues, 'happyville/town-center'))->toHaveCount(2)
         ->and(issuesMentioning($issues, 'S-Mana'))->toHaveCount(1)
-        ->and(issuesMentioning($issues, 'Sewer Rat'))->toHaveCount(1);
+        ->and(issuesMentioning($issues, 'Sewer Rat'))->toHaveCount(1)
+        // The skit's own condition waits on a quest the fixture does define,
+        // and a reference that resolves is not a finding.
+        ->and(issuesMentioning($issues, 'breakfast-duty'))->toHaveCount(0);
+});
+
+it('catches a skit waiting on a quest that does not exist', function () {
+    $root = makeTemporaryProject();
+    file_put_contents($root . '/assets/Data/Skits/breakfast-banter.php', <<<'PHP'
+    <?php
+
+    return [
+      'id' => 'breakfast-banter',
+      'title' => 'Breakfast Banter',
+      'where' => 'test-map',
+      'conditions' => [
+        ['type' => 'quest', 'name' => 'no-such-quest', 'status' => 'active'],
+        ['type' => 'switch', 'name' => 'kitchen_visited'],
+      ],
+      'beats' => [
+        ['speaker' => 'Liora', 'text' => 'An errand for your mom? Really?'],
+      ],
+    ];
+    PHP);
+
+    $issues = issuesMentioning(validateProject($root), 'no-such-quest');
+
+    expect($issues)->toHaveCount(1)
+        ->and($issues[0]->severity)->toBe(Severity::ERROR)
+        // The skit simply never plays, which is why it is worth saying.
+        ->and($issues[0]->where)->toBe('skit breakfast-banter')
+        // A switch is a name the author invents; nothing declares it.
+        ->and(issuesMentioning(validateProject($root), 'kitchen_visited'))->toBe([]);
+});
+
+it('catches a script command naming something the project does not have', function () {
+    $root = makeTemporaryProject();
+    file_put_contents($root . '/assets/Events/errand.php', <<<'PHP'
+    <?php
+
+    return [
+      ['type' => 'play_music', 'music' => 'no-such-track'],
+      ['type' => 'choice', 'prompt' => 'Well?', 'options' => [
+        ['text' => 'Take it', 'then' => [
+          ['type' => 'give_item', 'item' => 'No-Such-Potion'],
+          ['type' => 'branch', 'conditions' => [['type' => 'item', 'name' => 'Nothing At All']], 'then' => [
+            ['type' => 'start_battle', 'troop' => 'No-Such-Troop'],
+          ]],
+        ]],
+      ]],
+    ];
+    PHP);
+
+    $issues = validateProject($root);
+
+    // Every one of these is nested a level deeper than the last, and a
+    // command that quietly does nothing is the hardest kind of bug to see.
+    expect(issuesMentioning($issues, 'No-Such-Potion'))->toHaveCount(1)
+        ->and(issuesMentioning($issues, 'Nothing At All'))->toHaveCount(1)
+        ->and(issuesMentioning($issues, 'No-Such-Troop'))->toHaveCount(1)
+        // A missing track is quieter than that: a warning, not an error.
+        ->and(issuesMentioning($issues, 'no-such-track')[0]->severity)->toBe(Severity::WARNING);
 });
 
 it('catches a marker placed on a map that defines no such event', function () {

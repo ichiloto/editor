@@ -496,32 +496,34 @@ final class RecordSchemaCatalog
                 new RecordField('name', 'Story Event'),
             ],
             'give_item' => [
-                new RecordField('item', 'Item'),
+                // The interpreter hands this to the item store, which holds
+                // everything in items.php.
+                RecordField::reference('item', 'Item', 'inventory'),
                 new RecordField('quantity', 'Quantity', InputControlType::INTEGER),
             ],
             'give_gold' => [
                 new RecordField('amount', 'Amount', InputControlType::INTEGER),
             ],
             'play_sound' => [
-                new RecordField('sound', 'Sound'),
+                RecordField::reference('sound', 'Sound', 'sfx'),
             ],
             'play_music' => [
-                new RecordField('music', 'Music'),
+                RecordField::reference('music', 'Music', 'bgm'),
             ],
             'accept_quest' => [
-                new RecordField('id', 'Quest Id'),
+                RecordField::reference('id', 'Quest', 'quests'),
             ],
             'move_player' => [
                 new RecordField('x', 'X', InputControlType::INTEGER),
                 new RecordField('y', 'Y', InputControlType::INTEGER),
             ],
             'transfer' => [
-                new RecordField('map', 'Map Id'),
+                RecordField::reference('map', 'Map', 'maps'),
                 new RecordField('x', 'X', InputControlType::INTEGER),
                 new RecordField('y', 'Y', InputControlType::INTEGER),
             ],
             'start_battle' => [
-                new RecordField('troop', 'Troop'),
+                RecordField::reference('troop', 'Troop', 'troops'),
             ],
             'branch' => [
                 new RecordField('conditions', 'Conditions', codec: RecordFieldCodec::CONDITIONS),

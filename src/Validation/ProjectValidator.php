@@ -2,6 +2,8 @@
 
 namespace Ichiloto\Editor\Validation;
 
+use Ichiloto\Editor\Database\ProjectRecordDatabase;
+use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\ProjectQuest;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
@@ -36,6 +38,7 @@ class ProjectValidator
     $issues = [
       ...$this->checkMaps($workspace),
       ...$this->checkQuests($workspace),
+      ...$this->checkReferences($workspace),
     ];
 
     usort(
@@ -440,5 +443,270 @@ class ProjectValidator
     }
 
     return $names;
+  }
+
+  /**
+   * Checks everything that names another resource.
+   *
+   * The editor's pickers keep new references honest, but a project also
+   * holds hand-written condition lines, scripts authored in an editor of the
+   * author's choosing, and data that predates the picker. A name that
+   * matches nothing fails silently at runtime -- a skit that never plays, a
+   * command that gives no item -- so it is worth saying here.
+   *
+   * @param ProjectWorkspace $workspace The project.
+   * @return Issue[] The issues found.
+   */
+  protected function checkReferences(ProjectWorkspace $workspace): array
+  {
+    $catalog = new ReferenceCatalog($workspace);
+    $known = [
+      'quests' => $catalog->valuesFor('quests'),
+      'maps' => $catalog->valuesFor('maps'),
+      'troops' => $catalog->valuesFor('troops'),
+      'inventory' => $catalog->valuesFor('inventory'),
+      'bgm' => $catalog->valuesFor('bgm'),
+      'sfx' => $catalog->valuesFor('sfx'),
+    ];
+
+    return [
+      ...$this->checkSkitReferences($workspace, $known),
+      ...$this->checkScriptReferences($workspace, $known),
+      ...$this->checkMapReferences($workspace, $known),
+    ];
+  }
+
+  /**
+   * Checks the skits' map and conditions.
+   *
+   * @param ProjectWorkspace $workspace The project.
+   * @param array<string, string[]> $known What the project defines.
+   * @return Issue[] The issues found.
+   */
+  protected function checkSkitReferences(ProjectWorkspace $workspace, array $known): array
+  {
+    $database = $workspace->getRecordDatabase('skits');
+
+    if (! $database instanceof ProjectRecordDatabase) {
+      return [];
+    }
+
+    $issues = [];
+
+    foreach ($database->getRecords() as $record) {
+      $skit = (array) $record->toArray();
+      $where = sprintf('skit %s', strval($skit['id'] ?? '(unnamed)'));
+      $map = trim(strval($skit['where'] ?? ''));
+
+      if ($map !== '' && ! in_array($map, $known['maps'], true)) {
+        $issues[] = Issue::error(
+          $where,
+          sprintf('It plays on the map "%s", which does not exist.', $map),
+          'The skit can never trigger. Check the map id.'
+        );
+      }
+
+      $issues = [...$issues, ...$this->checkConditions((array) ($skit['conditions'] ?? []), $where, $known)];
+    }
+
+    return $issues;
+  }
+
+  /**
+   * Checks the event scripts' commands.
+   *
+   * @param ProjectWorkspace $workspace The project.
+   * @param array<string, string[]> $known What the project defines.
+   * @return Issue[] The issues found.
+   */
+  protected function checkScriptReferences(ProjectWorkspace $workspace, array $known): array
+  {
+    $database = $workspace->getRecordDatabase('common_events');
+
+    if (! $database instanceof ProjectRecordDatabase) {
+      return [];
+    }
+
+    $issues = [];
+
+    foreach ($database->getRecords() as $record) {
+      $script = (array) $record->toArray();
+      $where = sprintf('event script %s', strval($script['__scriptId'] ?? '(unnamed)'));
+
+      $issues = [...$issues, ...$this->checkCommands((array) ($script['commands'] ?? []), $where, $known)];
+    }
+
+    return $issues;
+  }
+
+  /**
+   * Checks a command list, following the arms a command branches into.
+   *
+   * @param array<int, mixed> $commands The commands.
+   * @param string $where Where they live.
+   * @param array<string, string[]> $known What the project defines.
+   * @return Issue[] The issues found.
+   */
+  protected function checkCommands(array $commands, string $where, array $known): array
+  {
+    $issues = [];
+
+    foreach ($commands as $command) {
+      if (! is_array($command)) {
+        continue;
+      }
+
+      $type = strval($command['type'] ?? '');
+      $named = match ($type) {
+        'give_item' => ['inventory', 'item', 'item'],
+        'play_music' => ['bgm', 'music', 'track'],
+        'play_sound' => ['sfx', 'sound', 'sound'],
+        'accept_quest' => ['quests', 'id', 'quest'],
+        'transfer' => ['maps', 'map', 'map'],
+        'start_battle' => ['troops', 'troop', 'troop'],
+        default => null,
+      };
+
+      if (is_array($named)) {
+        [$category, $key, $noun] = $named;
+        $issues = [
+          ...$issues,
+          ...$this->checkReference(strval($command[$key] ?? ''), $category, $noun, $where, $known),
+        ];
+      }
+
+      $issues = [...$issues, ...$this->checkConditions((array) ($command['conditions'] ?? []), $where, $known)];
+
+      // A choice hides its commands one level down, per option.
+      foreach ((array) ($command['options'] ?? []) as $option) {
+        if (is_array($option)) {
+          $issues = [...$issues, ...$this->checkCommands((array) ($option['then'] ?? []), $where, $known)];
+        }
+      }
+
+      foreach (['then', 'else'] as $arm) {
+        $issues = [...$issues, ...$this->checkCommands((array) ($command[$arm] ?? []), $where, $known)];
+      }
+    }
+
+    return $issues;
+  }
+
+  /**
+   * Checks the maps' audio, conditions and shop stock.
+   *
+   * @param ProjectWorkspace $workspace The project.
+   * @param array<string, string[]> $known What the project defines.
+   * @return Issue[] The issues found.
+   */
+  protected function checkMapReferences(ProjectWorkspace $workspace, array $known): array
+  {
+    $issues = [];
+
+    foreach ($workspace->maps as $map) {
+      $issues = [
+        ...$issues,
+        ...$this->checkReference(strval($map->data['bgm'] ?? ''), 'bgm', 'track', $map->mapId, $known),
+      ];
+
+      foreach ((array) ($map->data['events'] ?? []) as $marker => $definition) {
+        if (! is_array($definition)) {
+          continue;
+        }
+
+        $where = sprintf('%s event %s', $map->mapId, strval($marker));
+        $data = (array) ($definition['data'] ?? []);
+
+        $issues = [
+          ...$issues,
+          ...$this->checkConditions((array) ($definition['conditions'] ?? []), $where, $known),
+          ...$this->checkReference(strval($data['bgm'] ?? ''), 'bgm', 'track', $where, $known),
+          ...$this->checkReference(strval($data['sfx'] ?? ''), 'sfx', 'sound', $where, $known),
+        ];
+
+        foreach ((array) ($data['items'] ?? []) as $stock) {
+          if (is_array($stock)) {
+            $issues = [
+              ...$issues,
+              ...$this->checkReference(strval($stock['item'] ?? ''), 'inventory', 'item', $where, $known),
+            ];
+          }
+        }
+      }
+    }
+
+    return $issues;
+  }
+
+  /**
+   * Checks the conditions the engine's evaluator will read.
+   *
+   * Only the types naming a record are checked: a switch, story event or
+   * variable is a name the author invents, and nothing in the project
+   * declares it up front.
+   *
+   * @param array<int, mixed> $conditions The conditions.
+   * @param string $where Where they live.
+   * @param array<string, string[]> $known What the project defines.
+   * @return Issue[] The issues found.
+   */
+  protected function checkConditions(array $conditions, string $where, array $known): array
+  {
+    $issues = [];
+
+    foreach ($conditions as $condition) {
+      if (! is_array($condition)) {
+        continue;
+      }
+
+      $name = strval($condition['name'] ?? '');
+
+      $issues = [...$issues, ...match (strval($condition['type'] ?? '')) {
+        'quest' => $this->checkReference($name, 'quests', 'quest', $where, $known),
+        'item', 'key_item' => $this->checkReference($name, 'inventory', 'item', $where, $known),
+        default => [],
+      }];
+    }
+
+    return $issues;
+  }
+
+  /**
+   * Checks one name against what the project defines.
+   *
+   * @param string $value The name as authored.
+   * @param string $category What kind of thing it names.
+   * @param string $noun What to call it.
+   * @param string $where Where it was written.
+   * @param array<string, string[]> $known What the project defines.
+   * @return Issue[] The issue, if there is one.
+   */
+  protected function checkReference(string $value, string $category, string $noun, string $where, array $known): array
+  {
+    $value = trim($value);
+
+    if ($value === '' || in_array($value, $known[$category] ?? [], true)) {
+      return [];
+    }
+
+    if (in_array($category, ['bgm', 'sfx'], true)) {
+      if (str_contains($value, '/')) {
+        // The engine also takes a path relative to assets, which this has no
+        // business second-guessing.
+        return [];
+      }
+
+      return [Issue::warning(
+        $where,
+        sprintf('It plays the %s "%s", which the project has no file for.', $noun, $value),
+        'Nothing will be heard. Check the name, or add the file.'
+      )];
+    }
+
+    return [Issue::error(
+      $where,
+      sprintf('It names the %s "%s", which does not exist.', $noun, $value),
+      'It will silently do nothing at runtime. Check the name.'
+    )];
   }
 }
