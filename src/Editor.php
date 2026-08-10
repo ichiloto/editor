@@ -17,6 +17,8 @@ use Ichiloto\Editor\Canvas\ToolGeometry;
 use Ichiloto\Editor\Database\DatabaseCatalog;
 use Ichiloto\Editor\Database\DatabaseCategoryDefinition;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
+use Ichiloto\Editor\Database\ConditionCodec;
+use Ichiloto\Editor\Database\ConditionEditor;
 use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\Database\ReferencePicker;
 use Ichiloto\Editor\Debug\Debug;
@@ -365,6 +367,14 @@ final class Editor
      * @var ReferencePicker Choosing what a reference field points at.
      */
     private readonly ReferencePicker $referencePicker;
+    private readonly ConditionEditor $conditionEditor;
+    /**
+     * The settings-field id the picker carries when it was opened to name a
+     * condition rather than to set a field.
+     */
+    private const string CONDITION_NAME_FIELD = '__condition_name';
+    private bool $isConditionNaming = false;
+    private string $conditionNameBuffer = '';
     /**
      * Legacy views over the inspector field editor; the hooks keep the many
      * existing readers/writers working against the one TextFieldEditor.
@@ -392,7 +402,7 @@ final class Editor
         }
     }
     private int $databaseCategoryIndex = 9;
-    private string $databaseFocus = self::DATABASE_FOCUS_LIST;
+    private string $databaseFocus = self::DATABASE_FOCUS_CATEGORIES;
     private int $databaseSelectedActorIndex = 0;
     private int $databaseSelectedClassIndex = 0;
     private int $databaseSelectedSkillIndex = 0;
@@ -568,6 +578,7 @@ final class Editor
         $this->inspectorFieldEditor = new TextFieldEditor();
         $this->databaseFieldEditor = new TextFieldEditor();
         $this->referencePicker = new ReferencePicker();
+        $this->conditionEditor = new ConditionEditor();
         $this->modals = new ModalStack();
         $this->assetsPanel = new AssetsPanel(
             self::FOCUS_ASSETS,
@@ -708,7 +719,7 @@ final class Editor
         $this->inspectorEditBuffer = '';
         $this->inspectorEditCursorIndex = 0;
         $this->databaseCategoryIndex = DatabaseCatalog::indexOf(self::DATABASE_CATEGORY_ACTORS);
-        $this->databaseFocus = self::DATABASE_FOCUS_LIST;
+        $this->databaseFocus = self::DATABASE_FOCUS_CATEGORIES;
         $this->databaseSelectedActorIndex = 0;
         $this->databaseSelectedClassIndex = 0;
         $this->databaseSelectedSkillIndex = 0;
@@ -1485,7 +1496,7 @@ final class Editor
 
         $this->isDatabaseOpen = true;
         $this->databaseCategoryIndex = DatabaseCatalog::indexOf(self::DATABASE_CATEGORY_ACTORS);
-        $this->databaseFocus = self::DATABASE_FOCUS_LIST;
+        $this->databaseFocus = self::DATABASE_FOCUS_CATEGORIES;
         $this->databaseSelectedActorIndex = 0;
         $this->databaseSelectedClassIndex = 0;
         $this->databaseSelectedSkillIndex = 0;
@@ -1535,6 +1546,11 @@ final class Editor
 
         if ($this->referencePicker->isOpen()) {
             $this->handleReferencePickerInput($input);
+            return;
+        }
+
+        if ($this->conditionEditor->isOpen()) {
+            $this->handleConditionEditorInput($input);
             return;
         }
 
@@ -7586,6 +7602,12 @@ final class Editor
             return;
         }
 
+        if (($field['conditions'] ?? false) === true) {
+            $this->openConditionEditor($field);
+
+            return;
+        }
+
         $control = $this->getDatabaseFieldControl($field);
 
         if (! $control instanceof InputControl) {
@@ -7626,6 +7648,229 @@ final class Editor
             case TextFieldKeyResult::IGNORED:
                 return;
         }
+    }
+
+    /**
+     * Opens the condition editor on a field that holds a condition list.
+     *
+     * @param array<string, mixed> $field The settings-pane field descriptor.
+     * @return void
+     */
+    private function openConditionEditor(array $field): void
+    {
+        $this->conditionEditor->open(
+            (string) ($field['field'] ?? ''),
+            (string) ($field['label'] ?? 'Conditions'),
+            ConditionCodec::decodeAll((string) ($field['value'] ?? '')),
+        );
+
+        $this->statusMessage = 'Building conditions.';
+        $this->renderDatabasePanes(['settings']);
+    }
+
+    /**
+     * Handles input while conditions are being built.
+     *
+     * @param string $input The raw input.
+     * @return void
+     */
+    private function handleConditionEditorInput(string $input): void
+    {
+        if ($this->isConditionNaming) {
+            $this->handleConditionNameInput($input);
+
+            return;
+        }
+
+        if ($input === "\033" || $input === "\x1b") {
+            $this->conditionEditor->close();
+            $this->statusMessage = 'Conditions unchanged.';
+            $this->renderDatabasePanes(['settings']);
+
+            return;
+        }
+
+        if ($input === "\n" || $input === "\r") {
+            $this->commitConditions();
+
+            return;
+        }
+
+        $handled = match (true) {
+            str_contains($input, "\033[A") => $this->conditionEditor->move(-1),
+            str_contains($input, "\033[B") => $this->conditionEditor->move(1),
+            $input === 'a' => $this->conditionEditor->add(),
+            $input === 'd' => $this->conditionEditor->remove(),
+            $input === 't' => $this->conditionEditor->cycleType(1),
+            $input === 'T' => $this->conditionEditor->cycleType(-1),
+            $input === 'x' => $this->conditionEditor->cycleExtra(1),
+            $input === 'X' => $this->conditionEditor->cycleExtra(-1),
+            $input === '!' => $this->conditionEditor->toggleNegate(),
+            $input === 'n' => $this->beginConditionName(),
+            default => null,
+        };
+
+        unset($handled);
+        $this->renderDatabasePanes(['settings']);
+    }
+
+    /**
+     * Starts setting what the selected condition names.
+     *
+     * A quest or an item is chosen from the project; a switch, story event or
+     * variable is a name the author invents, so that one is typed.
+     *
+     * @return void
+     */
+    private function beginConditionName(): void
+    {
+        $reference = $this->conditionEditor->nameReference();
+        $condition = $this->conditionEditor->selected();
+
+        if ($reference === null || $condition === null || ! $this->workspace instanceof ProjectWorkspace) {
+            return;
+        }
+
+        if (! is_string($reference['category'])) {
+            $this->isConditionNaming = true;
+            $this->conditionNameBuffer = strval($condition['name'] ?? '');
+            $this->statusMessage = sprintf('Naming the %s.', mb_strtolower($reference['label']));
+
+            return;
+        }
+
+        $values = new ReferenceCatalog($this->workspace)->valuesFor($reference['category']);
+
+        if (! $this->referencePicker->open(
+            self::CONDITION_NAME_FIELD,
+            $reference['label'],
+            $reference['category'],
+            $values,
+            strval($condition['name'] ?? ''),
+        )) {
+            $this->setStatus(
+                sprintf('This project defines no %s to choose from.', str_replace('_', ' ', $reference['category'])),
+                StatusLevel::WARN
+            );
+        }
+    }
+
+    /**
+     * Handles input while a condition's name is being typed.
+     *
+     * @param string $input The raw input.
+     * @return void
+     */
+    private function handleConditionNameInput(string $input): void
+    {
+        if ($input === "\033" || $input === "\x1b") {
+            $this->isConditionNaming = false;
+            $this->conditionNameBuffer = '';
+            $this->statusMessage = 'Name unchanged.';
+            $this->renderDatabasePanes(['settings']);
+
+            return;
+        }
+
+        if ($input === "\n" || $input === "\r") {
+            $this->conditionEditor->setName(trim($this->conditionNameBuffer));
+            $this->isConditionNaming = false;
+            $this->conditionNameBuffer = '';
+            $this->statusMessage = 'Building conditions.';
+            $this->renderDatabasePanes(['settings']);
+
+            return;
+        }
+
+        if ($input === "\x7f" || $input === "\x08") {
+            $this->conditionNameBuffer = mb_substr(
+                $this->conditionNameBuffer,
+                0,
+                max(0, mb_strlen($this->conditionNameBuffer) - 1)
+            );
+            $this->renderDatabasePanes(['settings']);
+
+            return;
+        }
+
+        if (mb_strlen($input) === 1 && ! ctype_cntrl($input)) {
+            $this->conditionNameBuffer .= $input;
+            $this->renderDatabasePanes(['settings']);
+        }
+    }
+
+    /**
+     * Stores the conditions as the line the data file holds.
+     *
+     * @return void
+     */
+    private function commitConditions(): void
+    {
+        $fieldId = $this->conditionEditor->fieldId();
+        $label = $this->conditionEditor->label();
+        $encoded = $this->conditionEditor->encoded();
+        $this->conditionEditor->close();
+
+        $field = null;
+
+        foreach ($this->getDatabaseSettingsFields() as $candidate) {
+            if (is_array($candidate) && ($candidate['field'] ?? null) === $fieldId) {
+                $field = $candidate;
+            }
+        }
+
+        if (! is_array($field)) {
+            return;
+        }
+
+        try {
+            $this->applyDatabaseFieldValueRecorded($field, $encoded);
+            $this->setStatus(sprintf('%s updated.', $label), StatusLevel::SUCCESS);
+        } catch (Throwable $throwable) {
+            $this->setErrorStatus($throwable, sprintf('%s edit', $label));
+        }
+
+        $this->renderDatabasePanes(['list', 'settings', 'cue', 'frames', 'preview']);
+    }
+
+    /**
+     * Returns the rows shown while conditions are being built.
+     *
+     * @return string[] The rows.
+     */
+    private function buildConditionEditorRows(): array
+    {
+        $rows = $this->conditionEditor->rows();
+
+        if ($this->isConditionNaming) {
+            $reference = $this->conditionEditor->nameReference();
+
+            return [
+                sprintf('%s: %s', $reference['label'] ?? 'Name', $this->conditionNameBuffer),
+                '',
+                '  Enter to accept, Esc to leave it alone.',
+            ];
+        }
+
+        $lines = [sprintf('%s · %d', $this->conditionEditor->label(), count($rows)), ''];
+
+        if ($rows === []) {
+            $lines[] = '  None. Every condition holds, so this always runs.';
+            $lines[] = '';
+            $lines[] = '  a to add one.';
+
+            return $lines;
+        }
+
+        $selectedIndex = $this->conditionEditor->selectedIndex();
+
+        foreach ($rows as $index => $row) {
+            $lines[] = sprintf('%s%s', $index === $selectedIndex ? '> ' : '  ', $row);
+        }
+
+        $visibleRows = max(1, $this->resolveDatabaseLayout($this->resolveLayout())['topHeight'] - 4);
+
+        return [...array_slice($lines, 0, 2), ...ScrollWindow::slice(array_slice($lines, 2), $selectedIndex, $visibleRows)];
     }
 
     /**
@@ -7732,6 +7977,19 @@ final class Editor
         $fieldId = $this->referencePicker->fieldId();
         $label = $this->referencePicker->label();
         $this->referencePicker->close();
+
+        if ($fieldId === self::CONDITION_NAME_FIELD) {
+            // Opened from the condition editor, which is still the thing
+            // being edited; the field itself is written when that closes.
+            if ($selected !== null) {
+                $this->conditionEditor->setName($selected);
+            }
+
+            $this->statusMessage = 'Building conditions.';
+            $this->renderDatabasePanes(['settings']);
+
+            return;
+        }
 
         if ($selected === null) {
             $this->statusMessage = 'Nothing matched.';
@@ -10171,6 +10429,7 @@ final class Editor
             title: 'General Settings',
             help: match (true) {
                 $this->referencePicker->isOpen() => 'Enter:Choose  Type:Filter  Esc:Cancel',
+                $this->conditionEditor->isOpen() => 'a:Add  d:Delete  t/T:Type  n:Name  x/X:Value  !:Not  Enter:Done  Esc:Cancel',
                 $this->isDatabaseEditing => 'Enter:Apply  Esc:Cancel',
                 default => 'Enter:Edit',
             },
@@ -10575,6 +10834,10 @@ final class Editor
 
         if ($this->referencePicker->isOpen()) {
             return $this->buildReferencePickerRows();
+        }
+
+        if ($this->conditionEditor->isOpen()) {
+            return $this->buildConditionEditorRows();
         }
 
         $lines = [];

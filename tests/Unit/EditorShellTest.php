@@ -141,9 +141,10 @@ it('opens the status detail overlay above the Database screen', function () {
     ->and(getEditorProperty($editor, 'isDatabaseOpen'))->toBeTrue();
 
   // While the safety modal is up, database keys must not reach the screen.
+  $focusBefore = getEditorProperty($editor, 'databaseFocus');
   callEditorMethod($editor, 'dispatchInput', "\t");
 
-  expect(getEditorProperty($editor, 'databaseFocus'))->toBe('database_list');
+  expect(getEditorProperty($editor, 'databaseFocus'))->toBe($focusBefore);
 });
 
 it('flushes queued Database panes while the screen is open', function () {

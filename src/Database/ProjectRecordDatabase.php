@@ -827,6 +827,14 @@ final class ProjectRecordDatabase
             return $descriptor;
         }
 
+        if ($field->codec === RecordFieldCodec::CONDITIONS) {
+            // A condition list is built a part at a time. The encoded line is
+            // still what gets stored, but nobody has to write it.
+            $descriptor['conditions'] = true;
+
+            return $descriptor;
+        }
+
         $descriptor['control'] = new InputControl($field->type, $value, $field->step);
 
         return $descriptor;
