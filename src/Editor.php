@@ -6120,6 +6120,19 @@ final class Editor
             return;
         }
 
+        $reference = $this->resolveEventReferenceField($field);
+
+        if (is_array($reference)) {
+            $this->openEventReferenceDialog(
+                (string) ($field['marker'] ?? ''),
+                (array) ($field['path'] ?? []),
+                $reference['title'],
+                $reference['category'],
+                (string) ($field['value'] ?? ''),
+            );
+            return;
+        }
+
         $lootType = $this->resolveLootFieldType($field);
 
         if ($this->isLootField($field) && $lootType instanceof LootType) {
@@ -8484,6 +8497,17 @@ final class Editor
         foreach ($this->flattenInspectorFields($eventData, ['data']) as $field) {
             $field['marker'] = $marker;
             $field['target'] = 'event';
+
+            $reference = $this->resolveEventReferenceField($field);
+
+            if (is_array($reference)) {
+                // A reference is chosen, never spelled: dropping the control
+                // is what stops the field being typed into, leaving the
+                // picker as the only way to set it.
+                $field['reference'] = $reference['category'];
+                unset($field['control']);
+            }
+
             $fields[] = $field;
         }
 
@@ -9553,6 +9577,85 @@ final class Editor
         return array_slice($rows, $startRow, $availableRows);
     }
 
+
+    /**
+     * Determines whether an event field names another resource.
+     *
+     * A door's destination and a chest's loot have flows of their own; this
+     * covers the rest, so a track, a sound, or a shop's stock is chosen from
+     * what the project actually has rather than spelled from memory.
+     *
+     * @param array<string, mixed> $field The inspector field descriptor.
+     * @return array{category: string, title: string}|null The kind of
+     *   reference and what to call the picker, or null when the field names
+     *   nothing.
+     */
+    private function resolveEventReferenceField(array $field): ?array
+    {
+        if (($field['target'] ?? null) !== 'event') {
+            return null;
+        }
+
+        $path = array_values((array) ($field['path'] ?? []));
+
+        if (($path[0] ?? null) !== 'data' || count($path) < 2) {
+            return null;
+        }
+
+        $leaf = (string) $path[array_key_last($path)];
+
+        return match (true) {
+            $leaf === 'bgm' => ['category' => 'bgm', 'title' => 'Music'],
+            $leaf === 'sfx' => ['category' => 'sfx', 'title' => 'Sound Effect'],
+            // A shop's stock is data.items.N.item. The leaf alone would also
+            // match an unrelated event that happened to call a field "item".
+            $leaf === 'item' && ($path[1] ?? null) === 'items'
+                => ['category' => 'inventory', 'title' => 'Item'],
+            default => null,
+        };
+    }
+
+    /**
+     * Opens the picker for an event field that names another resource.
+     *
+     * @param string $marker The event marker.
+     * @param array<int, string> $path The path within the event definition.
+     * @param string $title What to call the picker.
+     * @param string $category The kind of reference.
+     * @param string $currentValue What the field is set to now.
+     * @return void
+     */
+    private function openEventReferenceDialog(
+        string $marker,
+        array $path,
+        string $title,
+        string $category,
+        string $currentValue,
+    ): void {
+        if (! $this->workspace instanceof ProjectWorkspace) {
+            return;
+        }
+
+        $entries = array_map(
+            static fn(string $value): array => ['label' => $value, 'value' => $value, 'description' => ''],
+            new ReferenceCatalog($this->workspace)->valuesFor($category),
+        );
+
+        if ($entries === []) {
+            // Nothing to choose from is worth saying. Opening an empty dialog
+            // reads as a broken editor, and falling through to typing would
+            // put back the guesswork the picker exists to remove.
+            $this->setStatus(
+                sprintf('This project has no %s to choose from.', mb_strtolower($title)),
+                StatusLevel::WARN
+            );
+            $this->renderFooter();
+
+            return;
+        }
+
+        $this->openEventOptionDialog($marker, $path, $title, $entries, $currentValue);
+    }
 
     private function isChestTypeField(array $field): bool
     {
