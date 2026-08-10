@@ -18,6 +18,7 @@ use Ichiloto\Editor\Database\DatabaseCatalog;
 use Ichiloto\Editor\Database\DatabaseCategoryDefinition;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Database\ConditionCodec;
+use Ichiloto\Editor\Database\QuestReferences;
 use Ichiloto\Editor\Database\ConditionEditor;
 use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\Database\ReferencePicker;
@@ -1666,6 +1667,11 @@ final class Editor
 
         if ($this->getSelectedRecordDatabase()?->schema->subList !== null && $this->isShiftLetterShortcut($input, 'X')) {
             $this->removeDatabaseRecordSubItem();
+            return;
+        }
+
+        if ($this->databaseFocus === self::DATABASE_FOCUS_SETTINGS && str_contains($input, "\033[3~")) {
+            $this->removeDatabaseSubItem();
             return;
         }
 
@@ -7481,14 +7487,15 @@ final class Editor
         }
 
         $fields = [
-            ['label' => 'Id', 'value' => $quest->getId(), 'control' => new InputControl(InputControlType::TEXT, $quest->getId()), 'field' => 'id'],
+            // Derived from the name, so an id is never invented or mistyped.
+            ['label' => 'Id', 'value' => $quest->getId(), 'field' => 'id'],
             ['label' => 'Name', 'value' => $quest->getName(), 'control' => new InputControl(InputControlType::TEXT, $quest->getName()), 'field' => 'name'],
             ['label' => 'Description', 'value' => $quest->getDescription(), 'control' => new InputControl(InputControlType::TEXT, $quest->getDescription()), 'field' => 'description'],
             ['label' => 'Giver', 'value' => $quest->getGiver(), 'control' => new InputControl(InputControlType::TEXT, $quest->getGiver()), 'field' => 'giver'],
             ['label' => 'Reward Gold', 'value' => (string) $quest->getRewardGold(), 'control' => new InputControl(InputControlType::INTEGER, (string) $quest->getRewardGold()), 'field' => 'rewardGold'],
             ['label' => 'Reward EXP', 'value' => (string) $quest->getRewardExperience(), 'control' => new InputControl(InputControlType::INTEGER, (string) $quest->getRewardExperience()), 'field' => 'rewardExperience'],
             ['label' => 'Reward Items', 'value' => $quest->getRewardItemsString(), 'control' => new InputControl(InputControlType::TEXT, $quest->getRewardItemsString()), 'field' => 'rewardItems'],
-            ['label' => 'Prereqs', 'value' => $quest->getPrerequisitesString(), 'control' => new InputControl(InputControlType::TEXT, $quest->getPrerequisitesString()), 'field' => 'prerequisites'],
+            ['label' => 'Prereqs', 'value' => $quest->getPrerequisitesString(), 'conditions' => true, 'field' => 'prerequisites'],
         ];
 
         foreach ($quest->getObjectives() as $index => $objective) {
@@ -7647,6 +7654,84 @@ final class Editor
                 return;
             case TextFieldKeyResult::IGNORED:
                 return;
+        }
+    }
+
+    /**
+     * Determines whether the selected record has a list to add to.
+     *
+     * @return bool True when it has.
+     */
+    private function hasDatabaseSubList(): bool
+    {
+        return $this->isQuestsDatabaseSelected()
+            || $this->getSelectedRecordDatabase()?->schema->subList !== null;
+    }
+
+    /**
+     * Removes whichever kind of sub-item the settings cursor is on.
+     *
+     * @return void
+     */
+    private function removeDatabaseSubItem(): void
+    {
+        if ($this->isQuestsDatabaseSelected()) {
+            $this->removeDatabaseQuestObjective();
+
+            return;
+        }
+
+        if ($this->getSelectedRecordDatabase()?->schema->subList !== null) {
+            $this->removeDatabaseRecordSubItem();
+        }
+    }
+
+    /**
+     * Renames the selected quest, and its id with it where that is safe.
+     *
+     * @param string $name The new name.
+     * @return void
+     */
+    private function renameSelectedQuest(string $name): void
+    {
+        if (! $this->workspace instanceof ProjectWorkspace) {
+            return;
+        }
+
+        $questDatabase = $this->workspace->questDatabase;
+        $questIndex = $this->databaseSelectedQuestIndex;
+        $quest = $questDatabase->getQuestByIndex($questIndex);
+
+        if (! $quest instanceof ProjectQuest) {
+            return;
+        }
+
+        $previousName = $quest->getName();
+        $previousId = $quest->getId();
+        $isReferenced = new QuestReferences($this->workspace)->exist($previousId);
+        $newId = $questDatabase->renameQuest($questIndex, $name, ! $isReferenced);
+
+        $this->recordCommand(new GenericCommand(
+            'Quest rename',
+            static fn() => $questDatabase->renameQuest($questIndex, $name, ! $isReferenced),
+            static function () use ($questDatabase, $questIndex, $previousName, $previousId): void {
+                $questDatabase->renameQuest($questIndex, $previousName, false);
+                $questDatabase->setField($questIndex, 'id', $previousId);
+            },
+        ));
+
+        if (is_string($newId)) {
+            $this->setStatus(sprintf('Renamed. Its id is now %s.', $newId), StatusLevel::SUCCESS);
+
+            return;
+        }
+
+        if ($isReferenced) {
+            // Saying so beats an id that silently stops matching its name.
+            $this->setStatus(
+                sprintf('Renamed. Its id stays %s, which other things point at.', $previousId),
+                StatusLevel::INFO
+            );
         }
     }
 
@@ -8225,6 +8310,12 @@ final class Editor
         }
 
         if ($this->isQuestsDatabaseSelected()) {
+            if ($field === 'name') {
+                $this->renameSelectedQuest(trim($rawValue));
+
+                return;
+            }
+
             $isIntegerField = in_array($field, ['rewardGold', 'rewardExperience'], true)
                 || preg_match('/^objective\d+Quantity$/', $field) === 1;
             $value = $isIntegerField ? max(0, intval($rawValue)) : trim($rawValue);
@@ -10431,6 +10522,7 @@ final class Editor
                 $this->referencePicker->isOpen() => 'Enter:Choose  Type:Filter  Esc:Cancel',
                 $this->conditionEditor->isOpen() => 'a:Add  d:Delete  t/T:Type  n:Name  x/X:Value  !:Not  Enter:Done  Esc:Cancel',
                 $this->isDatabaseEditing => 'Enter:Apply  Esc:Cancel',
+                $this->hasDatabaseSubList() => 'Enter:Edit  Shift+O:Add  Shift+X/Del:Remove',
                 default => 'Enter:Edit',
             },
             position: ['x' => $layout['innerX'] + $layout['categoryWidth'] + $layout['listWidth'] + ($layout['gutter'] * 2), 'y' => $layout['innerY']],

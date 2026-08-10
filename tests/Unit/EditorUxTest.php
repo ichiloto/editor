@@ -79,6 +79,9 @@ it('pops exactly one level per Esc: settings edit, then the Database screen', fu
   callEditorMethod($editor, 'dispatchInput', "\x04");
   setEditorProperty($editor, 'databaseCategoryIndex', DatabaseCatalog::indexOf('quests'));
   setEditorProperty($editor, 'databaseFocus', 'database_settings');
+  // A quest's id is derived rather than typed, so the name is the first
+  // field there is anything to pop out of.
+  setEditorProperty($editor, 'databaseSelectedSettingIndex', 1);
   callEditorMethod($editor, 'dispatchInput', "\n");
 
   expect(getEditorProperty($editor, 'isDatabaseEditing'))->toBeTrue();

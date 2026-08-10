@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor;
 
+use Ichiloto\Editor\Database\Slug;
+
 use RuntimeException;
 
 /**
@@ -96,19 +98,63 @@ final class ProjectQuestDatabase
      */
     public function addQuest(string $name = 'New Quest'): int
     {
-        $existingIds = array_map(static fn(ProjectQuest $quest): string => $quest->getId(), $this->quests);
-        $id = 'new-quest';
-        $suffix = 2;
-
-        while (in_array($id, $existingIds, true)) {
-            $id = 'new-quest-' . $suffix;
-            $suffix++;
-        }
-
-        $this->quests[] = ProjectQuest::createBlank($id, $name);
+        $this->quests[] = ProjectQuest::createBlank(Slug::unique($name, $this->getQuestIds(), 'quest'), $name);
         $this->isDirty = true;
 
         return count($this->quests) - 1;
+    }
+
+    /**
+     * Returns every quest id in the project.
+     *
+     * @return string[] The ids.
+     */
+    public function getQuestIds(): array
+    {
+        return array_map(static fn(ProjectQuest $quest): string => $quest->getId(), $this->quests);
+    }
+
+    /**
+     * Renames a quest, taking the id with it while that is still safe.
+     *
+     * An id is what triggers grant and conditions wait on, and renaming the
+     * quest does not rewrite those. So the id keeps up with the name until
+     * something points at it, and holds still afterwards -- which is the
+     * point at which changing it would break the game rather than tidy it.
+     *
+     * @param int $index The quest index.
+     * @param string $name The new name.
+     * @param bool $mayChangeId Whether nothing points at the current id.
+     * @return string|null The new id when it changed, or null when it did not.
+     */
+    public function renameQuest(int $index, string $name, bool $mayChangeId): ?string
+    {
+        $quest = $this->getQuestByIndex($index);
+
+        if (! $quest instanceof ProjectQuest) {
+            return null;
+        }
+
+        $quest->setField('name', $name);
+        $this->isDirty = true;
+
+        if (! $mayChangeId) {
+            return null;
+        }
+
+        $taken = array_values(array_filter(
+            $this->getQuestIds(),
+            static fn(string $id): bool => $id !== $quest->getId()
+        ));
+        $id = Slug::unique($name, $taken, 'quest');
+
+        if ($id === $quest->getId()) {
+            return null;
+        }
+
+        $quest->setField('id', $id);
+
+        return $id;
     }
 
     /**
