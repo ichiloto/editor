@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Database;
 
+use Ichiloto\Editor\ProjectDirectoryContext;
 use Ichiloto\Engine\Util\Config\ConfigStore;
 use Ichiloto\Engine\Util\Stores\ItemStore;
 use Throwable;
@@ -24,10 +25,10 @@ use Throwable;
  */
 final class EngineDataBootstrap
 {
-    private static bool $hasAttempted = false;
+    private static ?string $loadedProjectRoot = null;
 
     /**
-     * Registers the engine's item store once per process.
+     * Registers the engine's item store for the current project.
      *
      * The store constructor reads `assets/Data/items.php` relative to the
      * process working directory, so the project root is borrowed for the call
@@ -38,35 +39,28 @@ final class EngineDataBootstrap
      */
     public static function ensure(string $projectRoot): void
     {
-        if (self::$hasAttempted) {
-            return;
-        }
-
-        self::$hasAttempted = true;
-
         if (! class_exists(ConfigStore::class) || ! class_exists(ItemStore::class)) {
             return;
         }
 
-        if (ConfigStore::has(ItemStore::class)) {
+        $canonicalRoot = realpath($projectRoot);
+
+        if ($canonicalRoot === false) {
             return;
         }
 
-        $previousDirectory = getcwd();
+        if (self::$loadedProjectRoot === $canonicalRoot && ConfigStore::has(ItemStore::class)) {
+            return;
+        }
 
         try {
-            if (! @chdir($projectRoot)) {
-                return;
-            }
-
-            ConfigStore::put(ItemStore::class, new ItemStore());
+            ProjectDirectoryContext::run($canonicalRoot, static function (string $root): void {
+                ConfigStore::put(ItemStore::class, new ItemStore());
+                self::$loadedProjectRoot = $root;
+            });
         } catch (Throwable) {
             // The project's items.php is unreadable or malformed; the
             // categories that depend on it will say so themselves.
-        } finally {
-            if (is_string($previousDirectory)) {
-                @chdir($previousDirectory);
-            }
         }
     }
 
@@ -77,6 +71,6 @@ final class EngineDataBootstrap
      */
     public static function reset(): void
     {
-        self::$hasAttempted = false;
+        self::$loadedProjectRoot = null;
     }
 }

@@ -67,6 +67,20 @@ final readonly class ProjectWorkspace
      */
     public static function fromProject(string $projectRoot): self
     {
+        return ProjectDirectoryContext::run(
+            $projectRoot,
+            static fn(string $canonicalRoot): self => self::loadFromProject($canonicalRoot),
+        );
+    }
+
+    /**
+     * Loads a workspace while the process is scoped to its absolute root.
+     *
+     * @param string $projectRoot Absolute project root.
+     * @return self
+     */
+    private static function loadFromProject(string $projectRoot): self
+    {
         $configPath = rtrim($projectRoot, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . 'ichiloto.json';
 
         if (! is_file($configPath)) {
