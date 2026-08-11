@@ -7,6 +7,7 @@ namespace Ichiloto\Editor\Events;
 use Ichiloto\Engine\Events\Triggers\ChestEventTrigger;
 use Ichiloto\Engine\Events\Triggers\DialogueEventTrigger;
 use Ichiloto\Engine\Events\Triggers\ShopEventTrigger;
+use Ichiloto\Engine\Events\Triggers\ScriptEventTrigger;
 use Ichiloto\Engine\Events\Triggers\SleepEventTrigger;
 use Ichiloto\Engine\Events\Triggers\TransferPlayerTrigger;
 
@@ -30,6 +31,21 @@ final class EventTypeCatalog
         }
 
         self::$definitions = [
+            new EventTypeDefinition(
+                label: 'Story Script',
+                className: ScriptEventTrigger::class,
+                description: 'Runs a resumable event script by stable script id.',
+                defaultData: [
+                    'scriptId' => '',
+                    'mode' => 'action',
+                    'reusable' => false,
+                ],
+                defaultDefinitionFields: [
+                    'conditions' => [],
+                    'sets' => [],
+                    'whenBlocked' => '',
+                ],
+            ),
             new EventTypeDefinition(
                 label: 'Dialogue',
                 className: DialogueEventTrigger::class,

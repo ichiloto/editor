@@ -193,6 +193,40 @@ final class ProjectRecordDatabase
                     sprintf('%s %d %s', ucfirst($subList->singular), $entryIndex + 1, $field->label),
                 );
             }
+
+            $nestedList = $subList->nestedListFor($entry);
+
+            if ($nestedList === null) {
+                continue;
+            }
+
+            foreach (array_values((array) ($entry[$nestedList->key] ?? [])) as $nestedIndex => $nestedEntry) {
+                if (! is_array($nestedEntry)) {
+                    continue;
+                }
+
+                foreach ($nestedList->fieldsFor($nestedEntry) as $field) {
+                    $fields[] = self::describeField(
+                        $field,
+                        self::displayValue($field, self::readNested($nestedEntry, $field->key)),
+                        self::nestedSubFieldId(
+                            $subList->prefix,
+                            $entryIndex,
+                            $nestedList->prefix,
+                            $nestedIndex,
+                            $field->key,
+                        ),
+                        $isEditable,
+                        sprintf(
+                            '%s %d Step %d %s',
+                            ucfirst($subList->singular),
+                            $entryIndex + 1,
+                            $nestedIndex + 1,
+                            $field->label,
+                        ),
+                    );
+                }
+            }
         }
 
         return $fields;
@@ -215,6 +249,25 @@ final class ProjectRecordDatabase
         }
 
         $subList = $this->schema->subList;
+
+        if ($subList !== null) {
+            $nestedPattern = '/^'
+                . preg_quote($subList->prefix, '/')
+                . '(\d+)([A-Za-z][A-Za-z0-9]*?)(\d+)([A-Za-z][A-Za-z0-9]*)$/';
+
+            if (preg_match($nestedPattern, $fieldId, $matches) === 1) {
+                $this->setNestedSubField(
+                    $record,
+                    $subList,
+                    intval($matches[1]),
+                    $matches[2],
+                    intval($matches[3]),
+                    $matches[4],
+                    $rawValue,
+                );
+                return;
+            }
+        }
 
         if ($subList !== null && preg_match('/^' . preg_quote($subList->prefix, '/') . '(\d+)([A-Za-z][A-Za-z0-9]*)$/', $fieldId, $matches) === 1) {
             $this->setSubField($record, $subList, intval($matches[1]), $matches[2], $rawValue);
@@ -416,6 +469,108 @@ final class ProjectRecordDatabase
         }
 
         return count($this->getRecordByIndex($index)?->getSubList($subList->key) ?? []);
+    }
+
+    /**
+     * Resolves a settings field to the nested list owned by its parent entry.
+     *
+     * @return array{parentIndex: int, nestedIndex: int|null, list: RecordSubList}|null
+     */
+    public function nestedSubListContext(int $index, string $fieldId): ?array
+    {
+        $record = $this->getRecordByIndex($index);
+        $subList = $this->schema->subList;
+
+        if (! $record instanceof ProjectRecord || $subList === null) {
+            return null;
+        }
+
+        if (preg_match('/^' . preg_quote($subList->prefix, '/') . '(\d+)/', $fieldId, $parentMatch) !== 1) {
+            return null;
+        }
+
+        $parentIndex = intval($parentMatch[1]);
+        $entry = $record->getSubList($subList->key)[$parentIndex] ?? null;
+        $nestedList = is_array($entry) ? $subList->nestedListFor($entry) : null;
+
+        if ($nestedList === null) {
+            return null;
+        }
+
+        $nestedIndex = null;
+        $pattern = '/^'
+            . preg_quote($subList->prefix, '/')
+            . preg_quote((string) $parentIndex, '/')
+            . preg_quote(ucfirst($nestedList->prefix), '/')
+            . '(\d+)/';
+
+        if (preg_match($pattern, $fieldId, $nestedMatch) === 1) {
+            $nestedIndex = intval($nestedMatch[1]);
+        }
+
+        return ['parentIndex' => $parentIndex, 'nestedIndex' => $nestedIndex, 'list' => $nestedList];
+    }
+
+    /** Appends an entry to a variant-owned nested list. */
+    public function addNestedSubItem(int $index, int $parentIndex, ?array $entry = null): ?int
+    {
+        $context = $this->nestedListForParent($index, $parentIndex);
+
+        if ($context === null || ! $this->isEditable() || ! $context['record']->isEditable()) {
+            return null;
+        }
+
+        $entries = array_values((array) ($context['parent'][$context['list']->key] ?? []));
+        $entries[] = $entry ?? $context['list']->blank;
+        $this->writeNestedSubList($context, $entries);
+
+        return count($entries) - 1;
+    }
+
+    /** Removes an entry from a variant-owned nested list. */
+    public function removeNestedSubItem(int $index, int $parentIndex, int $nestedIndex): ?array
+    {
+        $context = $this->nestedListForParent($index, $parentIndex);
+
+        if ($context === null || ! $this->isEditable() || ! $context['record']->isEditable()) {
+            return null;
+        }
+
+        $entries = array_values((array) ($context['parent'][$context['list']->key] ?? []));
+
+        if (! array_key_exists($nestedIndex, $entries) || ! is_array($entries[$nestedIndex])) {
+            return null;
+        }
+
+        [$removed] = array_splice($entries, $nestedIndex, 1);
+        $this->writeNestedSubList($context, $entries);
+
+        return $removed;
+    }
+
+    /** Re-inserts an entry into a variant-owned nested list for undo. */
+    public function insertNestedSubItem(int $index, int $parentIndex, int $nestedIndex, array $entry): void
+    {
+        $context = $this->nestedListForParent($index, $parentIndex);
+
+        if ($context === null) {
+            return;
+        }
+
+        $entries = array_values((array) ($context['parent'][$context['list']->key] ?? []));
+        $nestedIndex = max(0, min(count($entries), $nestedIndex));
+        array_splice($entries, $nestedIndex, 0, [$entry]);
+        $this->writeNestedSubList($context, $entries);
+    }
+
+    /** Returns the current number of nested entries for one parent. */
+    public function countNestedSubItems(int $index, int $parentIndex): int
+    {
+        $context = $this->nestedListForParent($index, $parentIndex);
+
+        return $context === null
+            ? 0
+            : count((array) ($context['parent'][$context['list']->key] ?? []));
     }
 
     /**
@@ -791,6 +946,102 @@ final class ProjectRecordDatabase
         }
     }
 
+    /** Applies one field edit inside a variant-owned nested list. */
+    private function setNestedSubField(
+        ProjectRecord $record,
+        RecordSubList $subList,
+        int $entryIndex,
+        string $nestedPrefixToken,
+        int $nestedIndex,
+        string $fieldToken,
+        string $rawValue,
+    ): void {
+        $entries = $record->getSubList($subList->key);
+        $entry = $entries[$entryIndex] ?? null;
+        $nestedList = is_array($entry) ? $subList->nestedListFor($entry) : null;
+
+        if (
+            $nestedList === null
+            || mb_strtolower($nestedPrefixToken) !== mb_strtolower(ucfirst($nestedList->prefix))
+        ) {
+            return;
+        }
+
+        $nestedEntries = array_values((array) ($entry[$nestedList->key] ?? []));
+
+        if (! is_array($nestedEntries[$nestedIndex] ?? null)) {
+            return;
+        }
+
+        foreach ($nestedList->fieldsFor($nestedEntries[$nestedIndex]) as $field) {
+            if (self::fieldToken($field->key) !== $fieldToken || $field->isReadOnly) {
+                continue;
+            }
+
+            $nestedEntries[$nestedIndex] = self::writeNested(
+                $nestedEntries[$nestedIndex],
+                explode('.', $field->key),
+                self::coerce($field, $rawValue),
+            );
+            $entries[$entryIndex][$nestedList->key] = $nestedEntries;
+            $record->setSubList($subList->key, $entries);
+            $this->isDirty = true;
+
+            return;
+        }
+    }
+
+    /**
+     * Resolves one parent entry and its schema-owned nested list.
+     *
+     * @return array{record: ProjectRecord, entries: array<int, array<string, mixed>>, parentIndex: int, parent: array<string, mixed>, list: RecordSubList}|null
+     */
+    private function nestedListForParent(int $index, int $parentIndex): ?array
+    {
+        $record = $this->getRecordByIndex($index);
+        $subList = $this->schema->subList;
+
+        if (! $record instanceof ProjectRecord || $subList === null) {
+            return null;
+        }
+
+        $entries = $record->getSubList($subList->key);
+        $parent = $entries[$parentIndex] ?? null;
+        $nestedList = is_array($parent) ? $subList->nestedListFor($parent) : null;
+
+        if (! is_array($parent) || $nestedList === null) {
+            return null;
+        }
+
+        return [
+            'record' => $record,
+            'entries' => $entries,
+            'parentIndex' => $parentIndex,
+            'parent' => $parent,
+            'list' => $nestedList,
+        ];
+    }
+
+    /**
+     * Stores a changed nested list back through its owning ProjectRecord.
+     *
+     * @param array{record: ProjectRecord, entries: array<int, array<string, mixed>>, parentIndex: int, parent: array<string, mixed>, list: RecordSubList} $context
+     * @param array<int, array<string, mixed>> $nestedEntries
+     */
+    private function writeNestedSubList(array $context, array $nestedEntries): void
+    {
+        $subList = $this->schema->subList;
+
+        if ($subList === null) {
+            return;
+        }
+
+        $entries = $context['entries'];
+        $entries[$context['parentIndex']][$context['list']->key] = array_values($nestedEntries);
+        $context['record']->setSubList($subList->key, $entries);
+        $this->isDirty = true;
+    }
+
     /**
      * Builds one settings-field descriptor.
      *
@@ -1017,6 +1268,21 @@ final class ProjectRecordDatabase
     public static function subFieldId(string $prefix, int $entryIndex, string $key): string
     {
         return $prefix . $entryIndex . self::fieldToken($key);
+    }
+
+    /** Returns the flattened id for a nested sub-list field. */
+    public static function nestedSubFieldId(
+        string $prefix,
+        int $entryIndex,
+        string $nestedPrefix,
+        int $nestedIndex,
+        string $key,
+    ): string {
+        return $prefix
+            . $entryIndex
+            . ucfirst($nestedPrefix)
+            . $nestedIndex
+            . self::fieldToken($key);
     }
 
     /**

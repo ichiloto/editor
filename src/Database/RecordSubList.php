@@ -22,6 +22,9 @@ final readonly class RecordSubList
      * @param array<string, mixed> $blank The payload of a freshly appended entry.
      * @param array<string, RecordField[]> $variants Per-`type` field overrides, keyed by type value.
      * @param string|null $variantKey The entry key selecting a variant (e.g. `type`).
+     * @param array<string, RecordSubList> $nestedLists Per-variant nested
+     * lists. Event movement routes use this to edit structured `steps`
+     * without flattening them into free text.
      */
     public function __construct(
         public string $key,
@@ -31,6 +34,7 @@ final readonly class RecordSubList
         public array $blank,
         public array $variants = [],
         public ?string $variantKey = null,
+        public array $nestedLists = [],
     ) {
     }
 
@@ -52,5 +56,17 @@ final readonly class RecordSubList
         $variant = strval($entry[$this->variantKey] ?? '');
 
         return [...$this->fields, ...($this->variants[$variant] ?? [])];
+    }
+
+    /**
+     * Returns the nested list exposed by this entry's current variant.
+     */
+    public function nestedListFor(array $entry): ?self
+    {
+        if ($this->variantKey === null) {
+            return null;
+        }
+
+        return $this->nestedLists[strval($entry[$this->variantKey] ?? '')] ?? null;
     }
 }

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Database;
 
 use Ichiloto\Editor\Inspector\InputControlType;
+use Ichiloto\Engine\Events\Interpreter\EventInterpreter;
 use Ichiloto\Engine\Entities\Enemies\Enemy;
 use Ichiloto\Engine\Entities\Inventory\Accessory;
 use Ichiloto\Engine\Entities\Inventory\Armor;
@@ -26,26 +27,10 @@ final class RecordSchemaCatalog
     /**
      * The event-script command types the engine's interpreter understands.
      *
-     * Mirrors `EventInterpreter::execute()`; an unknown type is skipped by
-     * the engine with a warning, so keeping this list honest matters.
+     * Imported from the runtime so the editor cannot drift into a duplicate
+     * command registry.
      */
-    public const array EVENT_COMMAND_TYPES = [
-        'text',
-        'choice',
-        'wait',
-        'set_switch',
-        'set_variable',
-        'record_event',
-        'give_item',
-        'give_gold',
-        'play_sound',
-        'play_music',
-        'accept_quest',
-        'move_player',
-        'transfer',
-        'start_battle',
-        'branch',
-    ];
+    public const array EVENT_COMMAND_TYPES = EventInterpreter::COMMAND_TYPES;
 
     /**
      * Returns every schema-driven category, keyed by Database category key.
@@ -354,6 +339,20 @@ final class RecordSchemaCatalog
                 blank: ['type' => 'text', 'name' => '', 'text' => 'Something happens.'],
                 variants: self::eventCommandVariants(),
                 variantKey: 'type',
+                nestedLists: [
+                    'move_route' => new RecordSubList(
+                        key: 'steps',
+                        prefix: 'step',
+                        singular: 'route step',
+                        fields: [
+                            new RecordField('direction', 'Direction', options: ['up', 'down', 'left', 'right']),
+                            new RecordField('count', 'Count', InputControlType::INTEGER),
+                            RecordField::boolean('faceOnly', 'Face Only'),
+                            new RecordField('seconds', 'Seconds', InputControlType::FLOAT, removeWhenEmpty: true),
+                        ],
+                        blank: ['direction' => 'down', 'count' => 1, 'faceOnly' => false],
+                    ),
+                ],
             ),
             listPayloadKey: 'commands',
         );
@@ -517,6 +516,19 @@ final class RecordSchemaCatalog
                 new RecordField('x', 'X', InputControlType::INTEGER),
                 new RecordField('y', 'Y', InputControlType::INTEGER),
             ],
+            'move_route' => [
+                new RecordField('subject', 'Subject', options: ['player', 'npc']),
+                new RecordField('npcId', 'NPC Id', removeWhenEmpty: true),
+                new RecordField('secondsPerStep', 'Seconds Per Step', InputControlType::FLOAT, removeWhenEmpty: true),
+                new RecordField('speed', 'Steps Per Second', InputControlType::FLOAT, removeWhenEmpty: true),
+                new RecordField(
+                    'wait',
+                    'Wait For Completion',
+                    InputControlType::BOOLEAN,
+                    ['true'],
+                    removeWhenEmpty: false,
+                ),
+            ],
             'transfer' => [
                 RecordField::reference('map', 'Map', 'maps'),
                 new RecordField('x', 'X', InputControlType::INTEGER),
@@ -524,6 +536,8 @@ final class RecordSchemaCatalog
             ],
             'start_battle' => [
                 RecordField::reference('troop', 'Troop', 'troops'),
+                new RecordField('resultVariable', 'Result Variable', removeWhenEmpty: true),
+                new RecordField('defeatPolicy', 'Defeat Policy', options: ['game_over', 'continue'], removeWhenEmpty: true),
             ],
             'branch' => [
                 new RecordField('conditions', 'Conditions', codec: RecordFieldCodec::CONDITIONS),

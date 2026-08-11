@@ -1671,12 +1671,16 @@ final class Editor
         // Shift+O/Shift+X are the one sub-list idiom: quest objectives, skit
         // beats, troop members, and event-script commands all use them.
         if ($this->getSelectedRecordDatabase()?->schema->subList !== null && $this->isShiftLetterShortcut($input, 'O')) {
-            $this->addDatabaseRecordSubItem();
+            $this->selectedDatabaseNestedContext() !== null
+                ? $this->addDatabaseNestedSubItem()
+                : $this->addDatabaseRecordSubItem();
             return;
         }
 
         if ($this->getSelectedRecordDatabase()?->schema->subList !== null && $this->isShiftLetterShortcut($input, 'X')) {
-            $this->removeDatabaseRecordSubItem();
+            $this->selectedDatabaseNestedContext() !== null
+                ? $this->removeDatabaseNestedSubItem()
+                : $this->removeDatabaseRecordSubItem();
             return;
         }
 
@@ -5902,14 +5906,13 @@ final class Editor
         $definition = EventTypeCatalog::at($this->selectedEventTypeIndex);
         $currentDefinition = $selectedMap->getEventDefinition($marker);
         $currentClassName = is_array($currentDefinition) ? (string) ($currentDefinition['class'] ?? '') : '';
-        $eventData = $currentClassName === $definition->className && is_array($currentDefinition['data'] ?? null)
-            ? $currentDefinition['data']
-            : $definition->defaultData;
-
-        $newDefinition = [
-            'class' => $definition->className,
-            'data' => $eventData,
-        ];
+        $newDefinition = $currentClassName === $definition->className && is_array($currentDefinition)
+            ? $currentDefinition
+            : [
+                'class' => $definition->className,
+                'data' => $definition->defaultData,
+                ...$definition->defaultDefinitionFields,
+            ];
         $selectedMap->setEventDefinition($marker, $newDefinition);
         $this->recordCommand(new GenericCommand(
             'Event type change',
@@ -6838,6 +6841,101 @@ final class Editor
     }
 
     /**
+     * Returns the nested list owned by the command under the settings cursor.
+     *
+     * @return array{parentIndex: int, nestedIndex: int|null, list: \Ichiloto\Editor\Database\RecordSubList}|null
+     */
+    private function selectedDatabaseNestedContext(): ?array
+    {
+        $database = $this->getSelectedRecordDatabase();
+
+        if (! $database instanceof ProjectRecordDatabase) {
+            return null;
+        }
+
+        $field = $this->getDatabaseSettingsFields()[$this->databaseSelectedSettingIndex] ?? null;
+        $fieldId = is_array($field) ? strval($field['field'] ?? '') : '';
+
+        return $database->nestedSubListContext($this->getSelectedRecordIndex(), $fieldId);
+    }
+
+    /** Appends a structured nested item, such as a movement-route step. */
+    private function addDatabaseNestedSubItem(): void
+    {
+        $database = $this->getSelectedRecordDatabase();
+        $context = $this->selectedDatabaseNestedContext();
+
+        if (! $database instanceof ProjectRecordDatabase || $context === null) {
+            return;
+        }
+
+        $recordIndex = $this->getSelectedRecordIndex();
+        $parentIndex = $context['parentIndex'];
+        $nestedIndex = $database->addNestedSubItem($recordIndex, $parentIndex);
+
+        if ($nestedIndex === null) {
+            return;
+        }
+
+        $entry = $database->getRecordByIndex($recordIndex)?->getSubList(
+            $database->schema->subList?->key ?? ''
+        )[$parentIndex][$context['list']->key][$nestedIndex] ?? [];
+
+        $this->recordCommand(new GenericCommand(
+            sprintf('%s add', ucfirst($context['list']->singular)),
+            static fn() => $database->insertNestedSubItem($recordIndex, $parentIndex, $nestedIndex, $entry),
+            static fn() => $database->removeNestedSubItem($recordIndex, $parentIndex, $nestedIndex),
+        ));
+        $this->setStatus(
+            sprintf('Added %s %d.', $context['list']->singular, $nestedIndex + 1),
+            StatusLevel::SUCCESS,
+        );
+        $this->renderDatabaseArea();
+    }
+
+    /** Removes the selected (or last) structured nested item with undo. */
+    private function removeDatabaseNestedSubItem(): void
+    {
+        $database = $this->getSelectedRecordDatabase();
+        $context = $this->selectedDatabaseNestedContext();
+
+        if (! $database instanceof ProjectRecordDatabase || $context === null) {
+            return;
+        }
+
+        $recordIndex = $this->getSelectedRecordIndex();
+        $parentIndex = $context['parentIndex'];
+        $nestedIndex = $context['nestedIndex']
+            ?? ($database->countNestedSubItems($recordIndex, $parentIndex) - 1);
+
+        if ($nestedIndex < 0) {
+            $this->setStatus(sprintf('No %s to remove.', $context['list']->singular), StatusLevel::WARN);
+            return;
+        }
+
+        $removed = $database->removeNestedSubItem($recordIndex, $parentIndex, $nestedIndex);
+
+        if ($removed === null) {
+            return;
+        }
+
+        $this->recordCommand(new GenericCommand(
+            sprintf('%s remove', ucfirst($context['list']->singular)),
+            static fn() => $database->removeNestedSubItem($recordIndex, $parentIndex, $nestedIndex),
+            static fn() => $database->insertNestedSubItem($recordIndex, $parentIndex, $nestedIndex, $removed),
+        ));
+        $this->databaseSelectedSettingIndex = min(
+            $this->databaseSelectedSettingIndex,
+            max(0, count($this->getDatabaseSettingsFields()) - 1),
+        );
+        $this->setStatus(
+            sprintf('Removed %s %d.', $context['list']->singular, $nestedIndex + 1),
+            StatusLevel::SUCCESS,
+        );
+        $this->renderDatabaseArea();
+    }
+
+    /**
      * Phrases a read-only category's reason for the status line.
      *
      * @param ProjectRecordDatabase $database The read-only database.
@@ -7736,7 +7834,9 @@ final class Editor
         }
 
         if ($this->getSelectedRecordDatabase()?->schema->subList !== null) {
-            $this->removeDatabaseRecordSubItem();
+            $this->selectedDatabaseNestedContext() !== null
+                ? $this->removeDatabaseNestedSubItem()
+                : $this->removeDatabaseRecordSubItem();
         }
     }
 
@@ -8893,13 +8993,44 @@ final class Editor
         $fields = [];
         $eventData = $definition['data'] ?? [];
 
-        if (! is_array($eventData)) {
-            return $fields;
+        if (is_array($eventData)) {
+            $fields = $this->decorateEventInspectorFields(
+                $marker,
+                $this->flattenInspectorFields($eventData, ['data']),
+            );
         }
 
-        foreach ($this->flattenInspectorFields($eventData, ['data']) as $field) {
+        $rootFields = array_diff_key($definition, ['class' => true, 'data' => true]);
+
+        return [
+            ...$fields,
+            ...$this->decorateEventInspectorFields(
+                $marker,
+                $this->flattenInspectorFields($rootFields, []),
+            ),
+        ];
+    }
+
+    /**
+     * Adds event context, pickers, and enum controls to flattened fields.
+     *
+     * @param array<int, array<string, mixed>> $fields The raw fields.
+     * @return array<int, array<string, mixed>>
+     */
+    private function decorateEventInspectorFields(string $marker, array $fields): array
+    {
+        $decorated = [];
+
+        foreach ($fields as $field) {
             $field['marker'] = $marker;
             $field['target'] = 'event';
+
+            $path = array_values((array) ($field['path'] ?? []));
+
+            if ($path === ['data', 'mode']) {
+                $field['options'] = ['action', 'auto'];
+                unset($field['control']);
+            }
 
             $reference = $this->resolveEventReferenceField($field);
 
@@ -8911,10 +9042,10 @@ final class Editor
                 unset($field['control']);
             }
 
-            $fields[] = $field;
+            $decorated[] = $field;
         }
 
-        return $fields;
+        return $decorated;
     }
 
     /**
@@ -8936,16 +9067,20 @@ final class Editor
                 // A list of entries -- a shop's stock, an event's dialogue --
                 // is something an author adds to and removes from, so every
                 // field inside one remembers which list it belongs to.
-                if ($value !== [] && array_is_list($value) && ! array_key_exists('x', $value)) {
+                if ($this->isInspectorListValue($nextPath, $value)) {
                     $label = implode(' ', array_map(
                         static fn(string $part): string => ucwords(str_replace(['_', '-'], ' ', $part)),
-                        array_slice($nextPath, 1)
+                        ($nextPath[0] ?? null) === 'data' ? array_slice($nextPath, 1) : $nextPath
                     ));
                     $fields[] = [
                         'label' => sprintf('%s · %d', $label, count($value)),
                         'value' => '',
                         'editable' => false,
-                        'list' => ['path' => $nextPath, 'index' => 0],
+                        'list' => [
+                            'path' => $nextPath,
+                            'index' => max(0, count($value) - 1),
+                            'blank' => $this->blankInspectorListEntry($nextPath),
+                        ],
                     ];
 
                     foreach ($value as $index => $entry) {
@@ -8966,7 +9101,7 @@ final class Editor
                 if (array_key_exists('x', $value) && array_key_exists('y', $value) && is_scalar($value['x']) && is_scalar($value['y'])) {
                     $label = implode(' ', array_map(
                         static fn(string $part): string => ucwords(str_replace(['_', '-'], ' ', $part)),
-                        array_slice($nextPath, 1)
+                        ($nextPath[0] ?? null) === 'data' ? array_slice($nextPath, 1) : $nextPath
                     ));
                     $fields[] = [
                         'label' => $label,
@@ -9002,7 +9137,9 @@ final class Editor
                 continue;
             }
 
-            $displayPath = array_slice($nextPath, 1);
+            $displayPath = ($nextPath[0] ?? null) === 'data'
+                ? array_slice($nextPath, 1)
+                : $nextPath;
             $label = implode(' ', array_map(
                 static fn(string $part): string => ctype_digit($part)
                     ? '#' . ((int) $part + 1)
@@ -9035,6 +9172,51 @@ final class Editor
         }
 
         return $fields;
+    }
+
+    /**
+     * Distinguishes authored lists from associative configuration blocks.
+     *
+     * Empty arrays need an explicit known-list name because PHP cannot tell
+     * an empty list from an empty map.
+     *
+     * @param array<int, string> $path The candidate path.
+     * @param array<mixed> $value The candidate value.
+     */
+    private function isInspectorListValue(array $path, array $value): bool
+    {
+        if (! array_is_list($value) || array_key_exists('x', $value)) {
+            return false;
+        }
+
+        if ($value !== []) {
+            return true;
+        }
+
+        return in_array(
+            (string) ($path[array_key_last($path)] ?? ''),
+            ['conditions', 'sets', 'dialogue', 'items', 'script', 'steps', 'options'],
+            true,
+        );
+    }
+
+    /**
+     * Returns the structured first row for an empty inspector list.
+     *
+     * @param array<int, string> $path The list path.
+     * @return array<string, mixed>
+     */
+    private function blankInspectorListEntry(array $path): array
+    {
+        return match ((string) ($path[array_key_last($path)] ?? '')) {
+            'conditions' => ['type' => 'switch', 'name' => '', 'value' => true],
+            'sets' => ['type' => 'switch', 'name' => '', 'value' => true],
+            'script' => ['type' => 'text', 'name' => '', 'text' => ''],
+            'steps' => ['direction' => 'down', 'count' => 1, 'faceOnly' => false],
+            'options' => ['text' => '', 'then' => []],
+            'items' => ['item' => '', 'price' => 0],
+            default => ['name' => '', 'text' => ''],
+        };
     }
 
     /**
@@ -10063,7 +10245,7 @@ final class Editor
 
         $entries = $selectedMap->getEventField($marker, $list['path']);
         $entries = is_array($entries) ? array_values($entries) : [];
-        $template = $entries[$list['index']] ?? ($entries === [] ? '' : end($entries));
+        $template = $entries[$list['index']] ?? ($list['blank'] ?? ($entries === [] ? '' : end($entries)));
         $position = min(count($entries), $list['index'] + 1);
 
         array_splice($entries, $position, 0, [self::blankLike($template)]);
@@ -10201,6 +10383,7 @@ final class Editor
         $leaf = (string) $path[array_key_last($path)];
 
         return match (true) {
+            $path === ['data', 'scriptId'] => ['category' => 'common_events', 'title' => 'Event Script'],
             $leaf === 'bgm' => ['category' => 'bgm', 'title' => 'Music'],
             $leaf === 'sfx' => ['category' => 'sfx', 'title' => 'Sound Effect'],
             // A shop's stock is data.items.N.item. The leaf alone would also
