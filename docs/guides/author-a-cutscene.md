@@ -6,9 +6,11 @@ for cutscenes, notes, and scripted moments.
 ## What An Event Script Is
 
 One file per script under `assets/Events`, returning an ordered list of command
-maps. The engine's interpreter walks the list top to bottom. A failing command
-is logged and skipped rather than aborting the script, so a typo costs you one
-beat, not the whole scene.
+maps. The engine's interpreter walks the list top to bottom. Dialogue,
+choices, waits, movement routes, transfers, and battles yield or suspend and
+then resume through the game loop. Unknown command types retain the runtime's
+legacy warn-and-skip behavior, but validation reports them as authoring errors;
+other command failures stop the session with a controlled diagnostic.
 
 The filename stem is the script id: `assets/Events/dresser-note.php` is the
 script `dresser-note`.
@@ -49,9 +51,30 @@ The full vocabulary:
 | `play_music` | Music | |
 | `accept_quest` | Quest Id | Starts a quest from a scene |
 | `move_player` | X, Y | |
+| `move_route` | Subject, NPC Id, Wait, Seconds Per Step, Speed, Steps | Awaited cardinal route; see below |
 | `transfer` | Map Id, X, Y | |
-| `start_battle` | Troop | Switches scenes — put it last |
+| `start_battle` | Troop, Result Variable, Defeat Policy | Suspends and resumes through battle return |
 | `branch` | Conditions, Then, Else | See below |
+
+## Movement Routes
+
+`move_route` uses a structured step list rather than a free-text PHP field.
+Set `Subject` to `player` or `npc`. NPC routes require the target's stable,
+map-local `id`; display names are not script identity.
+
+Move the settings cursor onto one of the route's `Step` rows:
+
+- `Shift+O` adds a step to that route.
+- `Shift+X` or `Delete` removes a route step.
+- `Left` / `Right` cycles `Direction` (`up`, `down`, `left`, `right`) and
+  `Face Only`; edit `Count` for repeated cells.
+
+`Seconds Per Step` sets route pacing, while `Speed` expresses steps per
+second. A step may carry its own seconds value when authored in PHP. Leave
+`Wait` true: Phase 7 supports deterministic sequential routes, not parallel
+actors. Movement uses the engine's normal passability and collision. A blocked
+step fails the script immediately with route context instead of hanging or
+being skipped.
 
 ## Branching
 
@@ -66,6 +89,22 @@ outer script here and the nested arms in your editor of choice.
 The reason is deliberate: flattening a command *tree* into one settings pane
 would be unreadable, and dropping the tree on save would be worse than not
 offering the edit.
+
+## Continue After A Transfer Or Battle
+
+`transfer` may have later commands. The interpreter suspends before the normal
+map load, lets map and NPC managers configure, and resumes the same in-memory
+session on the destination map.
+
+`start_battle` may also have later commands. Set its optional `Result Variable`
+to expose `victory`, `defeat`, or `escape` to a later `branch`; leave it empty
+to write nothing. `Defeat Policy` is `game_over` by default, preserving normal
+defeat. Choose `continue` only when this particular scripted battle is meant to
+return a defeat result and carry on.
+
+While either continuation is pending, numbered/manual save and quicksave are
+blocked. Transfer autosave waits until the full event and its completion writes
+succeed. Active sessions are not stored in save files.
 
 ## What Saving Preserves
 
@@ -87,10 +126,15 @@ the `return` and editing resumes.
 
 ## Run It From A Map
 
-Current limit: the editor cannot yet point a map marker at a script. The five
-event types it places are Dialogue, Transfer Player, Shop, Sleep, and Chest.
+Switch the canvas to Event mode, paint or select a marker, and choose **Story
+Script** in the Event Type picker. In the Inspector:
 
-To run a script, add a `ScriptEventTrigger` to the map's `.data.php` by hand:
+1. Select `Script Id` and choose the Common Event from its reference picker.
+2. Set `Mode` to `action` or `auto`.
+3. Turn `Reusable` off for a one-shot event.
+4. Add any root `Conditions`, completion `Sets`, or `When Blocked` message.
+
+The resulting definition is the existing runtime shape:
 
 ```php
 'E' => [
@@ -106,12 +150,24 @@ To run a script, add a `ScriptEventTrigger` to the map's `.data.php` by hand:
 Then paint the matching `E` marker on the event layer in the editor, and the
 script runs when the player interacts with that tile.
 
+A one-shot Story Script records completion only after its final command and
+completion writes succeed. Auto and action triggers refuse re-entry while the
+session is active, so input cannot duplicate an item, quest, or story flag.
+
 ## Check It
 
 `Ctrl+A` saves everything, then `Ctrl+T` playtests from the cursor. Stand next
 to the marker and interact.
 
 If nothing happens, check that the `scriptId` matches the filename stem exactly
-and that the marker letter matches the key in `events`.
+and that the marker letter matches the key in `events`. Project validation also
+reports missing scripts, duplicate NPC IDs, missing route targets where map
+context is known, malformed route steps/timing, unknown commands, bad result
+variables, and invalid defeat policies.
+
+Current limits: the editor preserves but does not structurally edit nested
+choice/branch trees. Cutscene skipping and finalizers, camera and fade
+commands, field-animation commands, parallel routes, patrol routes,
+pathfinding, and full NPC creation/placement remain deferred.
 
 Continue with [Write a Skit](write-a-skit.md).

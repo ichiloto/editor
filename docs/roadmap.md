@@ -582,6 +582,40 @@ or migration/alias TUI was added. The manifest remains deliberately authored
 as PHP because migration registration is executable project code; a safe
 specialized editor is outside WP1.
 
+## Production-hardening extension — resumable story-event authoring ✅ *shipped 2026-08*
+
+> Status: shipped as an extension to the Phase 6 schema-driven Database and
+> map inspector plus the existing Phase 7 validator. It follows the Engine's
+> shipped Phase 4 `EventInterpreter`; no parallel cutscene editor, command
+> registry, validator, or roadmap numbering was introduced.
+
+The Event Type catalog and map inspector now author **Story Script**
+(`ScriptEventTrigger`) with a Common Events-backed script picker,
+`action`/`auto` mode, reusable/one-shot behavior, root conditions, completion
+writes, and blocked text. Existing definitions retain supported unknown fields
+when their type is reselected.
+
+Common Events take their command vocabulary directly from
+`EventInterpreter::COMMAND_TYPES`. `move_route` uses the established nested
+sub-list idiom for structured cardinal steps, including player/NPC subject,
+stable NPC ID, count, facing-only, timing/speed, and the required awaited
+policy. Step add/remove uses the existing dirty tracking, Save All, and
+identity-pinned undo/redo machinery. `start_battle` exposes the existing troop
+picker plus optional result variable and explicit `game_over`/`continue`
+defeat policy. Unknown supported fields continue to round-trip.
+
+`ProjectValidator` now reports missing ScriptEventTrigger script references,
+unsupported trigger fields/modes, duplicate map-local NPC IDs, missing route
+targets when map context is available, malformed steps/directions/counts,
+unsafe parallel routes, invalid timing/speed, invalid result variables and
+defeat policies, and commands outside the shared runtime vocabulary. Referenced
+Common Events are rechecked with their triggering map's NPC context.
+
+Explicitly deferred: full NPC creation/placement, nested choice/branch editor
+redesign, cutscene skipping/finalizers, camera/fade/field-animation commands,
+parallel and patrol routes, pathfinding, summon timeline editing, and event
+session save serialization.
+
 ## Sequencing notes
 - Phase 1 is days of work and transforms perceived quality; do it first and
   ship it alone.

@@ -238,6 +238,14 @@ editable.
 
 The Destination row on an event is a reference: `Ctrl+G` follows it.
 
+In Event mode, painting or selecting a marker with no definition opens the
+Event Type picker. **Story Script** creates the engine's
+`ScriptEventTrigger`. Its inspector exposes `Script Id`, `Mode`
+(`action`/`auto`), `Reusable`, `Conditions`, `Sets`, and `When Blocked`.
+Select `Script Id` and use the reference picker to choose an existing Common
+Event; the value is not free-typed. Conditions and completion writes use the
+same structured inspector-list controls as other event types.
+
 ## Database Screen
 
 `Ctrl+D` or `F2` opens the Database screen over the main shell; the same key
@@ -252,8 +260,9 @@ Controls:
 - `Left` / `Right`: cycle an enum option or step a number
 - `Shift+A`: create a new entry in the current category
 - `Delete`: delete the selected entry (destructive confirmation)
-- `Shift+O`: append a sub-list entry (objective, beat, member, command)
-- `Shift+X`: remove the last sub-list entry
+- `Shift+O`: append a sub-list entry (objective, beat, member, command, or
+  movement-route step when a route-step row is selected)
+- `Shift+X`: remove the last sub-list entry at the selected level
 - `/`: filter the entry list
 - `Ctrl+S`: save the current category
 
@@ -381,11 +390,21 @@ Supported command types, matching the engine's interpreter:
 | `play_music` | Music |
 | `accept_quest` | Quest Id |
 | `move_player` | X, Y |
+| `move_route` | Subject, NPC Id, Wait, Seconds Per Step, Speed, Steps |
 | `transfer` | Map Id, X, Y |
-| `start_battle` | Troop |
+| `start_battle` | Troop, Result Variable, Defeat Policy |
 | `branch` | Conditions, Then (fixed), Else (fixed) |
 
 `Shift+O` appends a command, `Shift+X` removes the last one.
+
+For `move_route`, place the settings cursor on one of its `Step` rows before
+using `Shift+O`, `Shift+X`, or `Delete`; the operation then adds or removes a
+step inside that command instead of changing the outer command list. Each step
+has a cardinal `Direction`, repeat `Count`, and `Face Only` flag. Subject is
+`player` or `npc`; NPC routes require the stable map-local NPC `id` authored in
+the map data. Routes in this phase are sequential and awaited, so `Wait` must
+remain true. Set either seconds-per-step (with an optional per-step override)
+or speed in steps per second.
 
 Current limit: nested arms are shown but not edited. A `choice` command's
 `Options` and a `branch` command's `Then` / `Else` appear as fixed rows, and
@@ -393,7 +412,22 @@ their contents round-trip untouched when you save. Editing a nested arm means
 editing the file directly — flattening a command tree into one settings pane
 would be unreadable, and dropping it on save would be worse.
 
-`start_battle` switches scenes, so make it the last command in a script.
+`start_battle` may occur in the middle of a script. The event suspends until
+the existing battle return path restores the field, then continues with the
+next command. `Result Variable` is optional and receives `victory`, `defeat`,
+or `escape`; leaving it empty writes nothing. `Defeat Policy` defaults to
+`game_over`. Select `continue` only for a scripted battle that is explicitly
+allowed to return after defeat.
+
+Story-event sessions also survive an authored `transfer` in memory. While a
+session is active, manual save and quicksave are blocked and transfer
+autosaves are deferred until successful completion; the editor does not
+author or serialize execution checkpoints.
+
+Current limits: choice options and branch arms are preserved but not
+structurally edited; there is no cutscene skipping, camera/focus or screen-fade
+command, field-animation command, parallel movement route, NPC patrol-route
+authoring, pathfinding, or complete NPC placement editor.
 
 ### Condition Lines
 
