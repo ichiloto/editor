@@ -424,6 +424,12 @@ session is active, manual save and quicksave are blocked and transfer
 autosaves are deferred until successful completion; the editor does not
 author or serialize execution checkpoints.
 
+The runtime and editor use the same event-command vocabulary. Validation
+reports an unknown command before playtesting, while the runtime independently
+fails closed if validation was skipped: no later or enclosing command runs,
+completion state and rewards remain unapplied, deferred autosave is discarded,
+and field input plus saving return for a corrected retry.
+
 Current limits: choice options and branch arms are preserved but not
 structurally edited; there is no cutscene skipping, camera/focus or screen-fade
 command, field-animation command, parallel movement route, NPC patrol-route

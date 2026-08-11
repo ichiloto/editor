@@ -605,6 +605,13 @@ identity-pinned undo/redo machinery. `start_battle` exposes the existing troop
 picker plus optional result variable and explicit `game_over`/`continue`
 defeat policy. Unknown supported fields continue to round-trip.
 
+The shared vocabulary is also an execution boundary rather than editor-only
+advice. Validation reports unknown command types, and the runtime independently
+fails an unknown top-level or nested command without running later/parent
+commands or applying completion state, rewards, or a deferred autosave. Its
+controlled diagnostic retains script/frame/origin context, and cleanup makes
+field input, saving, and corrected trigger retry available again.
+
 `ProjectValidator` now reports missing ScriptEventTrigger script references,
 unsupported trigger fields/modes, duplicate map-local NPC IDs, missing route
 targets when map context is available, malformed steps/directions/counts,

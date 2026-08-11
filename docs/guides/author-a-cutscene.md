@@ -8,9 +8,12 @@ for cutscenes, notes, and scripted moments.
 One file per script under `assets/Events`, returning an ordered list of command
 maps. The engine's interpreter walks the list top to bottom. Dialogue,
 choices, waits, movement routes, transfers, and battles yield or suspend and
-then resume through the game loop. Unknown command types retain the runtime's
-legacy warn-and-skip behavior, but validation reports them as authoring errors;
-other command failures stop the session with a controlled diagnostic.
+then resume through the game loop. Unknown command types are validation errors
+and also fail the runtime session immediately if validation was skipped. Later
+and enclosing commands do not run; completion writes, one-shot state, rewards,
+and deferred autosaves remain unapplied. The controlled diagnostic includes the
+script, command, nested frame, and available map/marker/source context, after
+which field input and saving are available and the corrected trigger can retry.
 
 The filename stem is the script id: `assets/Events/dresser-note.php` is the
 script `dresser-note`.

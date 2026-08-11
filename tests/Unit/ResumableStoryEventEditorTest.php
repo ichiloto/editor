@@ -73,6 +73,29 @@ it('uses the runtime command vocabulary and exposes battle continuation fields',
         ->and($battleFields['defeatPolicy']->options)->toBe(['game_over', 'continue']);
 });
 
+it('accepts every runtime command type and still rejects vocabulary drift', function (): void {
+    $root = makeTemporaryProject();
+    writePhase7ArrayFile(
+        $root . '/assets/Events/runtime-vocabulary.php',
+        array_map(
+            static fn(string $type): array => ['type' => $type],
+            EventInterpreter::COMMAND_TYPES,
+        ),
+    );
+
+    $issues = new ProjectValidator()->validate(ProjectWorkspace::fromProject($root));
+    $vocabularyIssues = array_values(array_filter(
+        $issues,
+        static fn($issue): bool => str_contains($issue->where, 'runtime-vocabulary')
+            && str_contains($issue->message, 'unknown event command type'),
+    ));
+
+    expect(RecordSchemaCatalog::EVENT_COMMAND_TYPES)->toBe(EventInterpreter::COMMAND_TYPES)
+        ->and($vocabularyIssues)->toBe([]);
+
+    removeDirectoryRecursively($root);
+});
+
 it('edits route commands and nested steps without flattening their payload', function (): void {
     $root = makeTemporaryProject();
     $database = loadRecordDatabase($root, 'common_events');
