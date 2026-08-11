@@ -43,29 +43,50 @@ Every edit lives in memory until a save, and every save path is listed under
 
 ## Layout Overview
 
-The main shell is three panels between a header and a status footer:
+The main shell is three panels between a header and a status footer. This is
+the editor rendering itself at 100x24 against the test fixture project, so it
+is what the code draws rather than a sketch of it:
 
 ```text
-┌─ Ichiloto Editor ─────────────────────────────────────────┐
-│ Project: Last Legend                                      │
-└─ ?:Help  Ctrl+P:Palette  Ctrl+D / F2:Database ────────────┘
-┌─ Assets ─────┐┌─ Canvas ───────────────┐┌─ Inspector ────┐
-│ Maps         ││ Preview: happyville/home││  Name: Home    │
-│ > happyville ││ ############            ││  Region: ...   │
-└─ /:Filter ───┘└─ %:Map  ^:Event  @:Chars┘└─ Enter:Edit ───┘
-┌─ Status ──────────────────────────────────────────────────┐
-│ Selected map: happyville/home | Focus: Assets | Tool: ...  │
-└───────────────────────────────────────────────────────────┘
+ ┌─Ichiloto Editor────────────────────────────────────────────────────────────────────────────────┐
+ │ Project: Sample Project                                                                        │
+ └─?:Help  Ctrl+P:Palette  Ctrl+D / F2:Database───────────────────────────────────────────────────┘
+ ┌─Assets [Focus]───────────────┐ ┌─Canvas─────────────────────┐ ┌─Inspector──────────────────────┐
+ │ Maps                         │ │ Preview: test-map          │ │   Name: Test Map               │
+ │ > test-map                   │ │ Test Map |  | 12 x 5 | vie │ │   Region:                      │
+ │                              │ │ ############               │ │   Description: A tiny fixture  │
+ │                              │ │ #  ~~~     #               │ │   Size                         │
+ │                              │ │ #          #               │ │     X: 12                      │
+ │                              │ │ #          #               │ │     Y: 5                       │
+ │                              │ │ ############               │ │   Events · 1                   │
+ │                              │ │                            │ │   Triggers · 0                 │
+ │                              │ │                            │ │                                │
+ │                              │ │                            │ │                                │
+ │                              │ │                            │ │                                │
+ │                              │ │                            │ │                                │
+ │                              │ │                            │ │                                │
+ └─/:Filter  Del:Delete─────────┘ └─%:Map  ^:Event  @:Chars────┘ └─Enter:Edit─────────────────────┘
+ ┌─Status─────────────────────────────────────────────────────────────────────────────────────────┐
+ │ Selected map: test-map | Focus: Assets | Mode: Map | Tool: Brush 1                             │
+ │ Cursor: (0, 0) | Viewport: (0, 0) | Ready.                                                     │
+ └─?:Help  Ctrl+P:Palette  Tab:Pane  Enter:Edit  Ctrl+S:Save  Ctrl+A:Save All  Ctrl+Z:Undo  Ctrl+Y┘
 ```
 
 - `Assets` lists every map discovered under `assets/Maps`.
 - `Canvas` previews and paints the selected map.
 - `Inspector` shows the fields of whatever is selected.
 - The `Status` footer carries the current selection, mode, active canvas tool,
-  and the most recent message.
+  and, on its second line, the cursor, the viewport, and the most recent
+  message.
+
+Each panel writes its own keys into its bottom border, and shortens them on a
+narrow terminal rather than cutting one in half — so what a panel offers is
+always on the panel. `?` lists everything at any width.
 
 The header's second line is a permanent hint; the header's first line shows the
-project name and a `*` marker when anything is unsaved.
+project name and a `*` marker when anything is unsaved. The focused panel
+carries `[Focus]` in its title and is drawn in the project's own selection
+color.
 
 ## The Focus Model
 
