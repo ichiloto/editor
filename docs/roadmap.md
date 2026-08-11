@@ -561,6 +561,27 @@ stay maintainable at similar scale:
 - Theming: respect the project's border pack and selection color so the
   editor feels like part of the product family
 
+## Production-hardening extension — save-compatibility validation ✅ *shipped 2026-08*
+
+> Status: shipped. Manifest validation, focused/full regression coverage,
+> static analysis, Composer validation, and validation through the existing
+> Console entry point are complete. This follows the existing Phase 2
+> validation conventions and Phase 6 schema-driven database architecture; it
+> does not renumber either phase or introduce another editor roadmap.
+
+The existing `ProjectValidator` now validates the project-owned
+`assets/Data/save-compatibility.php` manifest using the Engine's shared
+content-category vocabulary. It reports missing or invalid content versions,
+bad categories and one-shot event identities, self-aliases, cycles,
+contradictory mappings, alias/tombstone conflicts, verifiable missing targets,
+and incomplete, duplicate, or impossibly ordered migration chains through the
+same issue/status path as all other project validation.
+
+No parallel validation command, condition registry, generic record database,
+or migration/alias TUI was added. The manifest remains deliberately authored
+as PHP because migration registration is executable project code; a safe
+specialized editor is outside WP1.
+
 ## Sequencing notes
 - Phase 1 is days of work and transforms perceived quality; do it first and
   ship it alone.
