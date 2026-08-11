@@ -3327,7 +3327,7 @@ final class Editor
                 $this->cursorX,
                 $this->cursorY,
             );
-            $launcher = PlaytestLauncher::discover();
+            $launcher = PlaytestLauncher::discover(projectRoot: $this->workspace->projectRoot);
 
             $this->terminal->suspendForChildProcess();
 

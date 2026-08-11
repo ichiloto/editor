@@ -139,23 +139,83 @@ it('runs the play command against the overlay without tmux', function (): void {
     removeDirectoryRecursively($root);
 });
 
-it('finds the workspace console binary by default', function (): void {
-    $expected = dirname(__DIR__, 3) . '/console/bin/ichiloto';
+it('prefers the console the project itself installed', function (): void {
+    $root = makeTemporaryProject();
+    mkdir($root . '/vendor/bin', 0o777, true);
+    touch($root . '/vendor/bin/ichiloto');
+    file_put_contents($root . '/assets/Data/system.php', "<?php\n\nreturn ['startingPositions' => ['player' => []]];\n");
 
-    if (! is_file($expected)) {
-        expect(true)->toBeTrue();
+    $overlay = PlaytestOverlay::create($root, 'test-map', 0, 0);
 
-        return;
+    try {
+        // How a game project installs the tooling, and the only copy
+        // guaranteed to match the engine that project depends on.
+        expect(PlaytestLauncher::discover(projectRoot: $root)->buildCommand($overlay))
+            ->toContain(escapeshellarg($root . '/vendor/bin/ichiloto'));
+    } finally {
+        $overlay->destroy();
+        removeDirectoryRecursively($root);
     }
+});
+
+it('finds a console installed globally, on PATH', function (): void {
+    $binDirectory = sys_get_temp_dir() . '/' . uniqid('ichiloto-bin-', true);
+    mkdir($binDirectory, 0o777, true);
+    touch($binDirectory . '/ichiloto');
+
+    $previousPath = (string) getenv('PATH');
+    putenv('PATH=' . $binDirectory);
 
     $root = makeTemporaryProject();
     file_put_contents($root . '/assets/Data/system.php', "<?php\n\nreturn ['startingPositions' => ['player' => []]];\n");
     $overlay = PlaytestOverlay::create($root, 'test-map', 0, 0);
 
     try {
-        expect(PlaytestLauncher::discover()->buildCommand($overlay))->toContain(escapeshellarg($expected));
+        // `composer global require ichiloto/console`, which is an install
+        // with no vendor directory anywhere near the project.
+        expect(PlaytestLauncher::discover()->buildCommand($overlay))
+            ->toContain(escapeshellarg($binDirectory . '/ichiloto'));
     } finally {
+        putenv('PATH=' . $previousPath);
         $overlay->destroy();
         removeDirectoryRecursively($root);
+        @unlink($binDirectory . '/ichiloto');
+        @rmdir($binDirectory);
     }
+});
+
+it('looks where the tooling is installed before where it is developed', function (): void {
+    $candidates = new ReflectionMethod(PlaytestLauncher::class, 'candidates')
+        ->invoke(null, null, '/srv/my-game');
+
+    $projectVendor = array_search('/srv/my-game/vendor/bin/ichiloto', $candidates, true);
+    $sideBySide = array_search(dirname(__DIR__, 3) . '/console/bin/ichiloto', $candidates, true);
+
+    // The packages sitting side by side is how they are developed, not how
+    // anyone installs them, so it is the last thing tried rather than the
+    // first.
+    expect($projectVendor)->toBe(0)
+        ->and($sideBySide)->toBe(count($candidates) - 1);
+});
+
+it('says where it looked when there is no console to find', function (): void {
+    $message = '';
+
+    try {
+        // A path nothing can resolve, so the message is what the author gets.
+        PlaytestLauncher::discover(projectRoot: '/nowhere');
+    } catch (RuntimeException $exception) {
+        $message = $exception->getMessage();
+    }
+
+    if ($message === '') {
+        // This machine has the packages checked out side by side, so
+        // discovery succeeded — which is itself the fallback working.
+        expect(PlaytestLauncher::discover(projectRoot: '/nowhere'))->toBeInstanceOf(PlaytestLauncher::class);
+
+        return;
+    }
+
+    expect($message)->toContain('ICHILOTO_CONSOLE_BIN')
+        ->and($message)->toContain('/nowhere/vendor/bin/ichiloto');
 });

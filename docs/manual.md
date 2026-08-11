@@ -13,11 +13,18 @@ For task-oriented walkthroughs, start with [docs/guides/README.md](guides/README
 ## Starting the Editor
 
 The editor opens one Ichiloto project — a directory containing `ichiloto.json`.
+Run it from inside the project:
 
 ```bash
-cd examples/last-legend
-php ../../console/bin/ichiloto edit
+cd my-game
+ichiloto edit
 ```
+
+That is the command when the tooling is installed globally
+(`composer global require ichiloto/console`, with Composer's `bin` directory on
+your `PATH`). A project that requires `ichiloto/console` itself runs
+`vendor/bin/ichiloto edit` instead. Both open the current directory, so nothing
+here depends on where the project lives.
 
 Options:
 
@@ -489,8 +496,11 @@ Current limits, both engine-side:
   "New Game". Booting straight into the field would need an engine hook in
   `GameLoader::loadNewGame()` and `Game::start()`.
 
-Set `ICHILOTO_CONSOLE_BIN` if the console binary is not at
-`../console/bin/ichiloto` relative to the editor package.
+`Ctrl+T` needs the console binary, which it looks for in this order: the
+project's own `vendor/bin/ichiloto`, any `vendor/bin/ichiloto` above the
+installed editor package, then `ichiloto` on your `PATH`. Set
+`ICHILOTO_CONSOLE_BIN` to override all of that. If none of them match, the
+error names every path it tried.
 
 ## Theming
 

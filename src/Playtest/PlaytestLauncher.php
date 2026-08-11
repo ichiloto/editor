@@ -23,19 +23,22 @@ final class PlaytestLauncher
     }
 
     /**
-     * Locates the console entry point next to the editor package.
+     * Locates the console entry point.
+     *
+     * Where it lives depends on how the tooling was installed, not on how
+     * this repository happens to be laid out: a project that requires the
+     * console has it in its own vendor directory, a global install puts it on
+     * PATH, and this package may itself be installed under someone else's
+     * vendor tree. All of those are looked for before the side-by-side
+     * checkout the packages are developed in.
      *
      * @param string|null $override An explicit path (`ICHILOTO_CONSOLE_BIN`).
+     * @param string|null $projectRoot The project being edited, if known.
      * @return self
      */
-    public static function discover(?string $override = null): self
+    public static function discover(?string $override = null, ?string $projectRoot = null): self
     {
-        $candidates = array_filter([
-            $override,
-            (string) getenv('ICHILOTO_CONSOLE_BIN') ?: null,
-            dirname(__DIR__, 3) . '/console/bin/ichiloto',
-            dirname(__DIR__, 2) . '/vendor/bin/ichiloto',
-        ]);
+        $candidates = self::candidates($override, $projectRoot);
 
         foreach ($candidates as $candidate) {
             if (is_file($candidate)) {
@@ -43,9 +46,91 @@ final class PlaytestLauncher
             }
         }
 
-        throw new RuntimeException(
-            'Could not find the ichiloto console binary — set ICHILOTO_CONSOLE_BIN to its path.',
-        );
+        throw new RuntimeException(sprintf(
+            "Could not find the ichiloto console binary — set ICHILOTO_CONSOLE_BIN to its path.\nLooked in:\n  %s",
+            implode("\n  ", $candidates),
+        ));
+    }
+
+    /**
+     * Returns where the console binary might be, best guess first.
+     *
+     * @param string|null $override An explicit path.
+     * @param string|null $projectRoot The project being edited, if known.
+     * @return string[] The paths to try.
+     */
+    private static function candidates(?string $override, ?string $projectRoot): array
+    {
+        return array_values(array_unique(array_filter([
+            $override,
+            (string) getenv('ICHILOTO_CONSOLE_BIN') ?: null,
+            // A project that requires ichiloto/console.
+            is_string($projectRoot) && $projectRoot !== ''
+                ? rtrim($projectRoot, DIRECTORY_SEPARATOR) . '/vendor/bin/ichiloto'
+                : null,
+            // This package installed under a vendor tree, the project's or
+            // the console's own.
+            ...self::vendorBinariesAbove(),
+            // Installed globally.
+            self::binaryOnPath(),
+            // The packages checked out side by side, which is how they are
+            // developed rather than how they are installed.
+            dirname(__DIR__, 3) . '/console/bin/ichiloto',
+        ])));
+    }
+
+    /**
+     * Returns every `vendor/bin/ichiloto` in a directory above this package.
+     *
+     * @return string[] The paths.
+     */
+    private static function vendorBinariesAbove(): array
+    {
+        $paths = [];
+        $directory = dirname(__DIR__, 2);
+
+        // Deep enough to climb out of `vendor/ichiloto/editor` and any
+        // directory nesting a project keeps above it.
+        for ($depth = 0; $depth < 8; $depth++) {
+            $paths[] = $directory . '/vendor/bin/ichiloto';
+            $parent = dirname($directory);
+
+            if ($parent === $directory) {
+                break;
+            }
+
+            $directory = $parent;
+        }
+
+        return $paths;
+    }
+
+    /**
+     * Returns the console binary found on PATH, if it is there.
+     *
+     * @return string|null The path, or null when PATH has no ichiloto.
+     */
+    private static function binaryOnPath(): ?string
+    {
+        $path = (string) getenv('PATH');
+
+        if ($path === '') {
+            return null;
+        }
+
+        foreach (explode(PATH_SEPARATOR, $path) as $directory) {
+            if ($directory === '') {
+                continue;
+            }
+
+            $candidate = rtrim($directory, DIRECTORY_SEPARATOR) . '/ichiloto';
+
+            if (is_file($candidate)) {
+                return $candidate;
+            }
+        }
+
+        return null;
     }
 
     /**
