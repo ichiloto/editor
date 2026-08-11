@@ -30,9 +30,6 @@ Current limits worth knowing before you plan a session:
 - **Wandering NPCs.** The `npcs` array in a map's `.data.php` file — the
   characters that walk a patrol area — is authored by hand. The editor places
   *event* characters, which are stationary and interactive.
-- **Script event triggers.** The editor authors event command lists in the
-  Database, but a map marker cannot yet be set to *run* one; wire the
-  `scriptId` into the map's `.data.php` by hand.
 - **Items, weapons, armors, enemies.** These files are PHP constructor calls,
   so the editor browses them and refuses to rewrite them. See the manual's
   [category table](../manual.md#editable-and-read-only-categories).

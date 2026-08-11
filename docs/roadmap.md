@@ -537,9 +537,10 @@ stay maintainable at similar scale:
 > phase. Nested event arms (`choice.options`, `branch.then`/`else`) are shown
 > as fixed rows and round-trip untouched rather than being flattened into the
 > settings pane, which would be unreadable, or dropped, which would be worse.
-> The editor still cannot point a map marker at a `ScriptEventTrigger` — the
-> event-type catalog carries five types and the `scriptId` is wired by hand;
-> that is the obvious next Phase 7 item now that scripts are authorable. Map
+> At the original Phase 7 shipment, the editor could not point a map marker
+> at a `ScriptEventTrigger`: the event-type catalog carried five types and
+> `scriptId` was wired by hand. The production-hardening extension below now
+> adds Story Script marker authoring and a Common Events-backed picker. Map
 > `npcs` (the wandering-character array) remain hand-authored. Event scripts
 > cannot be renamed from the editor because renaming the file would silently
 > break every map referencing the old `scriptId`. Terms editing needs a
