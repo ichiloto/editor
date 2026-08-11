@@ -42,6 +42,7 @@ class ProjectValidator
       ...$this->checkMaps($workspace),
       ...$this->checkQuests($workspace),
       ...$this->checkReferences($workspace),
+      ...new SaveCompatibilityValidator()->validate($workspace),
     ];
 
     usort(

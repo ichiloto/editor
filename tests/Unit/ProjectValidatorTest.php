@@ -101,6 +101,12 @@ function writeConsistentSkits(string $root): void
     PHP);
 }
 
+/** Writes a save compatibility manifest into a disposable project. */
+function writeSaveCompatibilityManifest(string $root, string $source): void
+{
+    file_put_contents($root . '/assets/Data/save-compatibility.php', $source);
+}
+
 it('passes a project with nothing wrong with it', function () {
     $root = makeTemporaryProject();
     writeConsistentQuests($root);
@@ -400,4 +406,151 @@ it('sorts what will crash the game above what is merely dead', function () {
     $issues = validateProject($root);
 
     expect($issues[0]->severity)->toBe(Severity::ERROR);
+});
+
+it('accepts a complete sequential compatibility manifest with catalog-backed targets', function () {
+    $root = makeTemporaryProject();
+    writeConsistentQuests($root);
+    writeConsistentSkits($root);
+    writeSaveCompatibilityManifest($root, <<<'PHP'
+    <?php
+
+    return [
+      'contentVersion' => 1,
+      'migrations' => [
+        ['from' => 0, 'to' => 1, 'class' => 'FixtureContentVersion0To1'],
+      ],
+      'aliases' => [
+        'maps' => [['from' => 'old-map', 'to' => 'test-map']],
+        'quests' => [['from' => 'old-errand', 'to' => 'errand']],
+        'states' => [['from' => 'old-poison', 'to' => 'poison']],
+      ],
+      'tombstones' => [],
+    ];
+    PHP);
+
+    expect(validateProject($root))->toBe([]);
+});
+
+it('reports invalid and negative content versions plus missing migration steps', function () {
+    $root = makeTemporaryProject();
+    writeSaveCompatibilityManifest($root, <<<'PHP'
+    <?php
+
+    return [
+      'contentVersion' => '2',
+      'migrations' => [],
+      'aliases' => [],
+      'tombstones' => [],
+    ];
+    PHP);
+
+    expect(issuesMentioning(validateProject($root), 'contentVersion must be a non-negative integer'))->toHaveCount(1);
+
+    writeSaveCompatibilityManifest($root, <<<'PHP'
+    <?php
+
+    return [
+      'contentVersion' => 2,
+      'migrations' => [
+        ['from' => 0, 'to' => 1, 'class' => 'FirstMigration'],
+      ],
+      'aliases' => [],
+      'tombstones' => [],
+    ];
+    PHP);
+
+    expect(issuesMentioning(validateProject($root), 'Content migration step 1 to 2 is missing'))->toHaveCount(1);
+
+    writeSaveCompatibilityManifest($root, <<<'PHP'
+    <?php
+
+    return [
+      'contentVersion' => -1,
+      'migrations' => [],
+      'aliases' => [],
+      'tombstones' => [],
+    ];
+    PHP);
+
+    expect(issuesMentioning(validateProject($root), 'contentVersion must be a non-negative integer'))->toHaveCount(1);
+});
+
+it('detects alias cycles self aliases contradictions and tombstone conflicts', function () {
+    $root = makeTemporaryProject();
+    writeSaveCompatibilityManifest($root, <<<'PHP'
+    <?php
+
+    return [
+      'contentVersion' => 0,
+      'migrations' => [],
+      'aliases' => [
+        'maps' => [
+          ['from' => 'a', 'to' => 'b'],
+          ['from' => 'b', 'to' => 'a'],
+          ['from' => 'same', 'to' => 'same'],
+          ['from' => 'old', 'to' => 'test-map'],
+          ['from' => 'old', 'to' => 'missing-map'],
+        ],
+      ],
+      'tombstones' => [
+        'maps' => ['old'],
+      ],
+    ];
+    PHP);
+
+    $issues = validateProject($root);
+
+    expect(issuesMentioning($issues, 'contains a cycle'))->not->toBe([])
+        ->and(issuesMentioning($issues, 'is a self-alias'))->toHaveCount(1)
+        ->and(issuesMentioning($issues, 'mapped to both'))->toHaveCount(1)
+        ->and(issuesMentioning($issues, 'both an alias source and an incompatible tombstone'))->toHaveCount(1);
+});
+
+it('detects invalid categories one-shot syntax and missing catalog targets', function () {
+    $root = makeTemporaryProject();
+    writeSaveCompatibilityManifest($root, <<<'PHP'
+    <?php
+
+    return [
+      'contentVersion' => 0,
+      'migrations' => [],
+      'aliases' => [
+        'unknown_kind' => [['from' => 'old', 'to' => 'new']],
+        'maps' => [['from' => 'old-map', 'to' => 'no-such-map']],
+        'one_shot_events' => [['from' => 'bad-event', 'to' => 'test-map:A']],
+      ],
+      'tombstones' => [],
+    ];
+    PHP);
+
+    $issues = validateProject($root);
+
+    expect(issuesMentioning($issues, 'not a saved-content category'))->toHaveCount(1)
+        ->and(issuesMentioning($issues, 'exact mapId:marker syntax'))->toHaveCount(1)
+        ->and(issuesMentioning($issues, 'Alias target "no-such-map" is not defined'))->toHaveCount(1);
+});
+
+it('detects duplicate migration steps and impossible registration order', function () {
+    $root = makeTemporaryProject();
+    writeSaveCompatibilityManifest($root, <<<'PHP'
+    <?php
+
+    return [
+      'contentVersion' => 3,
+      'migrations' => [
+        ['from' => 1, 'to' => 2, 'class' => 'SecondMigration'],
+        ['from' => 0, 'to' => 1, 'class' => 'FirstMigration'],
+        ['from' => 0, 'to' => 1, 'class' => 'DuplicateFirstMigration'],
+      ],
+      'aliases' => [],
+      'tombstones' => [],
+    ];
+    PHP);
+
+    $issues = validateProject($root);
+
+    expect(issuesMentioning($issues, 'registered more than once'))->toHaveCount(1)
+        ->and(issuesMentioning($issues, 'impossible order'))->toHaveCount(2)
+        ->and(issuesMentioning($issues, 'Content migration step 2 to 3 is missing'))->toHaveCount(1);
 });

@@ -24,6 +24,7 @@ final readonly class ProjectWorkspace
      */
     public function __construct(
         public string                   $projectRoot,
+        public string                   $projectId,
         public string                   $projectName,
         public string                   $mainFile,
         public array                    $maps,
@@ -94,6 +95,7 @@ final readonly class ProjectWorkspace
         }
 
         $projectName = (string) ($config['name'] ?? basename($projectRoot));
+        $projectId = trim((string) ($config['id'] ?? ''));
         $mainFile = (string) ($config['main'] ?? '');
 
         // enemies.php constructs BattleRewards, which demands a registered
@@ -103,6 +105,7 @@ final readonly class ProjectWorkspace
 
         return new self(
             projectRoot: $projectRoot,
+            projectId: $projectId,
             projectName: $projectName,
             mainFile: $mainFile,
             maps: $maps = self::discoverMaps($projectRoot),
@@ -238,6 +241,7 @@ final readonly class ProjectWorkspace
 
         return new self(
             projectRoot: $this->projectRoot,
+            projectId: $this->projectId,
             projectName: $this->projectName,
             mainFile: $this->mainFile,
             maps: $maps,
