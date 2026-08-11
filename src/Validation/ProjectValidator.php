@@ -10,6 +10,8 @@ use Ichiloto\Editor\ProjectQuest;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Engine\Core\WorldConditionType;
+use Ichiloto\Engine\Events\Interpreter\EventInterpreter;
+use Ichiloto\Engine\Events\Interpreter\MovementRouteRunner;
 
 /**
  * Checks a project's content for the mistakes that are otherwise found by
@@ -29,6 +31,7 @@ class ProjectValidator
    * The trigger classes whose data this knows how to check.
    */
   protected const string TRANSFER_TRIGGER = 'TransferPlayerTrigger';
+  protected const string SCRIPT_TRIGGER = 'ScriptEventTrigger';
 
   /**
    * Checks a whole project.
@@ -71,6 +74,7 @@ class ProjectValidator
         ...$this->checkEventMarkers($map),
         ...$this->checkDoors($map, $workspace->mapIds),
         ...$this->checkEncounters($map, $troops),
+        ...$this->checkNpcIdentities($map),
         ...$this->checkDuplicateKeys($map),
       ];
     }
@@ -233,6 +237,45 @@ class ProjectValidator
         'Encounters have no rate, so the engine uses its default of 15 steps.',
         "Set 'rate' to the average number of steps between fights."
       );
+    }
+
+    return $issues;
+  }
+
+  /**
+   * Checks stable NPC identities used by authored movement routes.
+   *
+   * NPC ids remain optional for existing definitions, but every non-empty id
+   * must be unique within its map.
+   *
+   * @return Issue[] The issues found.
+   */
+  protected function checkNpcIdentities(ProjectMap $map): array
+  {
+    $seen = [];
+    $issues = [];
+
+    foreach ((array) ($map->data['npcs'] ?? []) as $index => $npc) {
+      if (! is_array($npc)) {
+        continue;
+      }
+
+      $id = trim(strval($npc['id'] ?? ''));
+
+      if ($id === '') {
+        continue;
+      }
+
+      if (isset($seen[$id])) {
+        $issues[] = Issue::error(
+          $map->mapId,
+          sprintf('NPC id "%s" is used more than once (entries %d and %d).', $id, $seen[$id] + 1, $index + 1),
+          'NPC route targets must be unique within a map.'
+        );
+        continue;
+      }
+
+      $seen[$id] = $index;
     }
 
     return $issues;
@@ -461,6 +504,7 @@ class ProjectValidator
       'inventory' => $catalog->valuesFor('inventory'),
       'bgm' => $catalog->valuesFor('bgm'),
       'sfx' => $catalog->valuesFor('sfx'),
+      'common_events' => $catalog->valuesFor('common_events'),
     ];
 
     return [
@@ -581,7 +625,14 @@ class ProjectValidator
    * @param array<string, string[]> $known What the project defines.
    * @return Issue[] The issues found.
    */
-  protected function checkCommands(array $commands, string $where, array $known): array
+  protected function checkCommands(
+    array $commands,
+    string $where,
+    array $known,
+    ?array $npcIds = null,
+    ?string $mapId = null,
+    array $npcIdsByMap = [],
+  ): array
   {
     $issues = [];
 
@@ -591,6 +642,15 @@ class ProjectValidator
       }
 
       $type = strval($command['type'] ?? '');
+
+      if (! in_array($type, EventInterpreter::COMMAND_TYPES, true)) {
+        $issues[] = Issue::error(
+          $where,
+          sprintf('It uses the unknown event command type "%s".', $type !== '' ? $type : '(empty)'),
+          'Choose a command supported by the runtime EventInterpreter.'
+        );
+      }
+
       $named = match ($type) {
         'give_item' => ['inventory', 'item', 'item'],
         'play_music' => ['bgm', 'music', 'track'],
@@ -609,18 +669,204 @@ class ProjectValidator
         ];
       }
 
+      if ($type === 'move_route') {
+        $issues = [
+          ...$issues,
+          ...$this->checkMovementRoute($command, $where, $npcIds, $mapId),
+        ];
+      }
+
+      if ($type === 'start_battle') {
+        $issues = [
+          ...$issues,
+          ...$this->checkBattleContinuation($command, $where),
+        ];
+      }
+
       $issues = [...$issues, ...$this->checkConditions((array) ($command['conditions'] ?? []), $where, $known)];
 
       // A choice hides its commands one level down, per option.
       foreach ((array) ($command['options'] ?? []) as $option) {
         if (is_array($option)) {
-          $issues = [...$issues, ...$this->checkCommands((array) ($option['then'] ?? []), $where, $known)];
+          $issues = [...$issues, ...$this->checkCommands(
+            (array) ($option['then'] ?? []),
+            $where,
+            $known,
+            $npcIds,
+            $mapId,
+            $npcIdsByMap,
+          )];
         }
       }
 
       foreach (['then', 'else'] as $arm) {
-        $issues = [...$issues, ...$this->checkCommands((array) ($command[$arm] ?? []), $where, $known)];
+        $issues = [...$issues, ...$this->checkCommands(
+          (array) ($command[$arm] ?? []),
+          $where,
+          $known,
+          $npcIds,
+          $mapId,
+          $npcIdsByMap,
+        )];
       }
+
+      if ($type === 'transfer') {
+        $destination = trim(strval($command['map'] ?? ''));
+
+        if ($destination !== '' && array_key_exists($destination, $npcIdsByMap)) {
+          $mapId = $destination;
+          $npcIds = $npcIdsByMap[$destination];
+        } else {
+          $mapId = $destination !== '' ? $destination : $mapId;
+          $npcIds = null;
+        }
+      }
+    }
+
+    return $issues;
+  }
+
+  /**
+   * Checks one deterministic, awaited movement route.
+   *
+   * @param array<string, mixed> $command The route command.
+   * @param string[]|null $npcIds Current-map NPC ids, or null without map context.
+   * @return Issue[] The issues found.
+   */
+  protected function checkMovementRoute(array $command, string $where, ?array $npcIds, ?string $mapId): array
+  {
+    $issues = [];
+    $subject = strtolower(trim(strval($command['subject'] ?? 'player')));
+
+    if (! in_array($subject, ['player', 'npc'], true)) {
+      $issues[] = Issue::error(
+        $where,
+        sprintf('A movement route uses unsupported subject "%s".', $subject !== '' ? $subject : '(empty)'),
+        'Choose player or npc.'
+      );
+    }
+
+    $npcId = trim(strval($command['npcId'] ?? ''));
+
+    if ($subject === 'npc' && $npcId === '') {
+      $issues[] = Issue::error($where, 'An NPC movement route has no npcId.', 'Choose a stable current-map NPC id.');
+    } elseif ($subject === 'npc' && $npcIds !== null && ! in_array($npcId, $npcIds, true)) {
+      $issues[] = Issue::error(
+        $where,
+        sprintf('The route targets NPC id "%s", which is not on map "%s".', $npcId, $mapId ?? '(unknown)'),
+        'Add that stable id to the map NPC or choose an id that exists.'
+      );
+    }
+
+    $wait = $command['wait'] ?? true;
+
+    if (! is_bool($wait) || ! $wait) {
+      $issues[] = Issue::error(
+        $where,
+        'A movement route has an invalid wait value.',
+        'Parallel routes are not resumable in this extension; routes must be awaited.'
+      );
+    }
+
+    foreach (['secondsPerStep' => false, 'speed' => true] as $key => $mustBePositive) {
+      if (! array_key_exists($key, $command)) {
+        continue;
+      }
+
+      $value = $command[$key];
+      $valid = is_numeric($value) && ($mustBePositive ? floatval($value) > 0.0 : floatval($value) >= 0.0);
+
+      if (! $valid) {
+        $issues[] = Issue::error(
+          $where,
+          sprintf('Movement-route %s must be %s.', $key, $mustBePositive ? 'greater than zero' : 'zero or greater'),
+          'Use a valid numeric route timing value.'
+        );
+      }
+    }
+
+    $steps = $command['steps'] ?? null;
+
+    if (! is_array($steps) || $steps === []) {
+      $issues[] = Issue::error($where, 'A movement route has no steps.', 'Add at least one structured route step.');
+
+      return $issues;
+    }
+
+    foreach ($steps as $index => $step) {
+      if (! is_array($step)) {
+        $issues[] = Issue::error($where, sprintf('Movement-route step %d is malformed.', $index + 1), 'Each step must be an array.');
+        continue;
+      }
+
+      $direction = strtolower(trim(strval($step['direction'] ?? '')));
+
+      if (! in_array($direction, MovementRouteRunner::DIRECTIONS, true)) {
+        $issues[] = Issue::error(
+          $where,
+          sprintf('Movement-route step %d uses unsupported direction "%s".', $index + 1, $direction !== '' ? $direction : '(empty)'),
+          'Choose up, down, left, or right.'
+        );
+      }
+
+      $count = $step['count'] ?? 1;
+
+      if (! is_numeric($count) || intval($count) < 0 || floatval($count) !== floatval(intval($count))) {
+        $issues[] = Issue::error(
+          $where,
+          sprintf('Movement-route step %d has an invalid count.', $index + 1),
+          'Step counts must be whole numbers of zero or more.'
+        );
+      }
+
+      if (array_key_exists('seconds', $step) && (! is_numeric($step['seconds']) || floatval($step['seconds']) < 0.0)) {
+        $issues[] = Issue::error(
+          $where,
+          sprintf('Movement-route step %d has invalid timing.', $index + 1),
+          'Per-step seconds must be zero or greater.'
+        );
+      }
+
+      if (array_key_exists('faceOnly', $step) && ! is_bool($step['faceOnly'])) {
+        $issues[] = Issue::error(
+          $where,
+          sprintf('Movement-route step %d has an invalid faceOnly value.', $index + 1),
+          'Facing-only must be a boolean value.'
+        );
+      }
+    }
+
+    return $issues;
+  }
+
+  /** @return Issue[] Invalid optional start_battle continuation fields. */
+  protected function checkBattleContinuation(array $command, string $where): array
+  {
+    $issues = [];
+
+    if (trim(strval($command['troop'] ?? '')) === '') {
+      $issues[] = Issue::error($where, 'A start_battle command names no troop.', 'Choose a configured troop.');
+    }
+
+    if (
+      array_key_exists('resultVariable', $command)
+      && (! is_string($command['resultVariable']) || trim($command['resultVariable']) === '')
+    ) {
+      $issues[] = Issue::error(
+        $where,
+        'A start_battle resultVariable is empty or malformed.',
+        'Remove the optional field or name the world variable that receives the result.'
+      );
+    }
+
+    $defeatPolicy = strval($command['defeatPolicy'] ?? 'game_over');
+
+    if (! in_array($defeatPolicy, ['game_over', 'continue'], true)) {
+      $issues[] = Issue::error(
+        $where,
+        sprintf('A start_battle command uses invalid defeatPolicy "%s".', $defeatPolicy),
+        'Choose game_over or continue.'
+      );
     }
 
     return $issues;
@@ -636,6 +882,8 @@ class ProjectValidator
   protected function checkMapReferences(ProjectWorkspace $workspace, array $known): array
   {
     $issues = [];
+    $npcIdsByMap = $this->npcIdsByMap($workspace);
+    $eventScripts = $this->eventScriptsById($workspace);
 
     foreach ($workspace->maps as $map) {
       $issues = [
@@ -650,15 +898,39 @@ class ProjectValidator
 
         $where = sprintf('%s event %s', $map->mapId, strval($marker));
         $data = (array) ($definition['data'] ?? []);
+        $class = strval($definition['class'] ?? '');
+        $currentNpcIds = $npcIdsByMap[$map->mapId] ?? [];
 
         $issues = [
           ...$issues,
           ...$this->checkConditions((array) ($definition['conditions'] ?? []), $where, $known),
           ...$this->checkDialogueVariants((array) ($data['dialogue'] ?? []), $where, $known),
-          ...$this->checkCommands((array) ($data['script'] ?? []), $where, $known),
+          ...$this->checkCommands(
+            (array) ($data['script'] ?? []),
+            $where,
+            $known,
+            $currentNpcIds,
+            $map->mapId,
+            $npcIdsByMap,
+          ),
           ...$this->checkReference(strval($data['bgm'] ?? ''), 'bgm', 'track', $where, $known),
           ...$this->checkReference(strval($data['sfx'] ?? ''), 'sfx', 'sound', $where, $known),
         ];
+
+        if (str_contains($class, self::SCRIPT_TRIGGER)) {
+          $issues = [
+            ...$issues,
+            ...$this->checkScriptTrigger(
+              $definition,
+              $where,
+              $known,
+              $eventScripts,
+              $currentNpcIds,
+              $map->mapId,
+              $npcIdsByMap,
+            ),
+          ];
+        }
 
         foreach ((array) ($data['items'] ?? []) as $stock) {
           if (is_array($stock)) {
@@ -680,8 +952,190 @@ class ProjectValidator
           ...$issues,
           ...$this->checkConditions((array) ($npc['conditions'] ?? []), $where, $known),
           ...$this->checkDialogueVariants((array) ($npc['dialogue'] ?? []), $where, $known),
-          ...$this->checkCommands((array) ($npc['script'] ?? []), $where, $known),
+          ...$this->checkCommands(
+            (array) ($npc['script'] ?? []),
+            $where,
+            $known,
+            $npcIdsByMap[$map->mapId] ?? [],
+            $map->mapId,
+            $npcIdsByMap,
+          ),
         ];
+      }
+    }
+
+    return $issues;
+  }
+
+  /**
+   * Checks ScriptEventTrigger's runtime-recognized fields and script picker.
+   *
+   * @param array<string, mixed> $definition The map event definition.
+   * @param array<string, string[]> $known Known project references.
+   * @param array<string, array<int, mixed>> $eventScripts Script payloads by id.
+   * @param string[] $npcIds Current-map NPC ids.
+   * @param array<string, string[]> $npcIdsByMap NPC ids by map.
+   * @return Issue[] The issues found.
+   */
+  protected function checkScriptTrigger(
+    array $definition,
+    string $where,
+    array $known,
+    array $eventScripts,
+    array $npcIds,
+    string $mapId,
+    array $npcIdsByMap,
+  ): array {
+    $issues = [];
+    $allowedRootFields = ['class', 'data', 'conditions', 'sets', 'whenBlocked'];
+
+    foreach (array_diff(array_keys($definition), $allowedRootFields) as $field) {
+      $issues[] = Issue::error(
+        $where,
+        sprintf('ScriptEventTrigger uses unsupported root field "%s".', $field),
+        'Use class, data, conditions, sets, or whenBlocked.'
+      );
+    }
+
+    $data = $definition['data'] ?? null;
+
+    if (! is_array($data)) {
+      return [...$issues, Issue::error($where, 'ScriptEventTrigger data is malformed.', 'Store its settings in a data array.')];
+    }
+
+    $allowedDataFields = ['scriptId', 'script', 'mode', 'reusable'];
+
+    foreach (array_diff(array_keys($data), $allowedDataFields) as $field) {
+      $issues[] = Issue::error(
+        $where,
+        sprintf('ScriptEventTrigger uses unsupported data field "%s".', $field),
+        'Use scriptId, script, mode, or reusable.'
+      );
+    }
+
+    $scriptId = trim(strval($data['scriptId'] ?? ''));
+    $inlineScript = $data['script'] ?? [];
+
+    if ($scriptId === '' && (! is_array($inlineScript) || $inlineScript === [])) {
+      $issues[] = Issue::error(
+        $where,
+        'ScriptEventTrigger names no scriptId and has no inline script.',
+        'Choose an event script from the script-id picker.'
+      );
+    }
+
+    if ($scriptId !== '') {
+      $issues = [
+        ...$issues,
+        ...$this->checkReference($scriptId, 'common_events', 'event script', $where, $known),
+      ];
+
+      if (isset($eventScripts[$scriptId])) {
+        $issues = [
+          ...$issues,
+          ...$this->checkCommands(
+            $eventScripts[$scriptId],
+            $where,
+            $known,
+            $npcIds,
+            $mapId,
+            $npcIdsByMap,
+          ),
+        ];
+      }
+    }
+
+    $mode = strval($data['mode'] ?? 'action');
+
+    if (! in_array($mode, ['action', 'auto'], true)) {
+      $issues[] = Issue::error(
+        $where,
+        sprintf('ScriptEventTrigger uses unsupported mode "%s".', $mode),
+        'Choose action or auto.'
+      );
+    }
+
+    if (array_key_exists('reusable', $data) && ! is_bool($data['reusable'])) {
+      $issues[] = Issue::error($where, 'ScriptEventTrigger reusable must be boolean.', 'Choose true or false.');
+    }
+
+    $issues = [
+      ...$issues,
+      ...$this->checkStateWrites((array) ($definition['sets'] ?? []), $where),
+    ];
+
+    return $issues;
+  }
+
+  /** @return array<string, string[]> Stable non-empty NPC ids by map id. */
+  protected function npcIdsByMap(ProjectWorkspace $workspace): array
+  {
+    $idsByMap = [];
+
+    foreach ($workspace->maps as $map) {
+      $idsByMap[$map->mapId] = [];
+
+      foreach ((array) ($map->data['npcs'] ?? []) as $npc) {
+        if (! is_array($npc)) {
+          continue;
+        }
+
+        $id = trim(strval($npc['id'] ?? ''));
+
+        if ($id !== '') {
+          $idsByMap[$map->mapId][] = $id;
+        }
+      }
+    }
+
+    return $idsByMap;
+  }
+
+  /** @return array<string, array<int, mixed>> Event command payloads by script id. */
+  protected function eventScriptsById(ProjectWorkspace $workspace): array
+  {
+    $database = $workspace->getRecordDatabase('common_events');
+    $scripts = [];
+
+    if (! $database instanceof ProjectRecordDatabase) {
+      return $scripts;
+    }
+
+    foreach ($database->getRecords() as $record) {
+      $payload = (array) $record->toArray();
+      $id = trim(strval($payload['__scriptId'] ?? ''));
+
+      if ($id !== '') {
+        $scripts[$id] = (array) ($payload['commands'] ?? []);
+      }
+    }
+
+    return $scripts;
+  }
+
+  /** @return Issue[] Invalid completion writes. */
+  protected function checkStateWrites(array $writes, string $where): array
+  {
+    $issues = [];
+
+    foreach ($writes as $write) {
+      if (! is_array($write)) {
+        $issues[] = Issue::error($where, 'A completion write is malformed.', 'Each write must be a structured array.');
+        continue;
+      }
+
+      $type = strval($write['type'] ?? '');
+
+      if (! in_array($type, ['switch', 'variable', 'event', 'quest'], true)) {
+        $issues[] = Issue::error(
+          $where,
+          sprintf('A completion write uses unsupported type "%s".', $type !== '' ? $type : '(empty)'),
+          'Choose switch, variable, event, or quest.'
+        );
+      }
+
+      if (trim(strval($write['name'] ?? '')) === '') {
+        $issues[] = Issue::error($where, 'A completion write names no state.', 'Name the switch, variable, event, or quest.');
       }
     }
 
