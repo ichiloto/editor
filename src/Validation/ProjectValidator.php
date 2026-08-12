@@ -44,6 +44,7 @@ class ProjectValidator
     $issues = [
       ...$this->checkMaps($workspace),
       ...$this->checkQuests($workspace),
+      ...$this->checkSummons($workspace),
       ...$this->checkReferences($workspace),
       ...new SaveCompatibilityValidator()->validate($workspace),
     ];
@@ -52,6 +53,319 @@ class ProjectValidator
       $issues,
       static fn(Issue $a, Issue $b): int => [$a->severity->value, $a->where] <=> [$b->severity->value, $b->where]
     );
+
+    return $issues;
+  }
+
+  /**
+   * Checks authored summon gates, wielder policies, linked actions, and
+   * actor starting assignments without imposing any game-specific names.
+   *
+   * @return Issue[]
+   */
+  protected function checkSummons(ProjectWorkspace $workspace): array
+  {
+    $root = $workspace->projectRoot . '/assets/Cutscenes/Summons';
+    $paths = glob($root . '/*/*.data.php') ?: [];
+
+    if ($paths === []) {
+      return $this->checkActorSummonAssignments($workspace, []);
+    }
+
+    $catalog = new ReferenceCatalog($workspace);
+    $known = [
+      'quests' => $catalog->valuesFor('quests'),
+      'inventory' => $catalog->valuesFor('inventory'),
+    ];
+    $actorNames = array_map(
+      static fn(\Ichiloto\Editor\ProjectActor $actor): string => $actor->getName(),
+      $workspace->actorDatabase->getActors(),
+    );
+    $skillNames = array_map(
+      static fn(\Ichiloto\Editor\ProjectSkill $skill): string => $skill->getName(),
+      $workspace->skillDatabase->getSkills(),
+    );
+    $definitions = [];
+    $issues = [];
+
+    foreach ($paths as $path) {
+      $file = ProjectDirectoryContext::run(
+        $workspace->projectRoot,
+        static fn(): PhpDataFile => PhpDataFile::load($path),
+      );
+      $data = $file->payload;
+      $fallbackId = basename(dirname($path));
+
+      if (! is_array($data)) {
+        $issues[] = Issue::error(
+          'summon ' . $fallbackId,
+          'Its definition is malformed.',
+          'The summon data file must return an array.',
+        );
+        continue;
+      }
+
+      $idValue = $data['id'] ?? $fallbackId;
+      $id = is_string($idValue) ? trim($idValue) : '';
+      $where = 'summon ' . ($id !== '' ? $id : $fallbackId);
+      $definitions[strtolower($id)] = $data;
+      $linkedActionValue = $data['linkedActionId'] ?? '';
+      $linkedAction = is_string($linkedActionValue) ? trim($linkedActionValue) : '';
+
+      if ($id === '') {
+        $issues[] = Issue::error($where, 'Its id is empty or malformed.', 'Use a stable non-empty string summon id.');
+      }
+
+      if ($linkedAction === '') {
+        $issues[] = Issue::error($where, 'It has no linkedActionId.', 'Link the summon to an authored battle action.');
+      } elseif (! in_array($linkedAction, $skillNames, true)) {
+        $issues[] = Issue::error(
+          $where,
+          sprintf('It links to action "%s", which does not exist.', $linkedAction),
+          'Choose an action from assets/Data/skills.php.',
+        );
+      }
+
+      $issues = [
+        ...$issues,
+        ...$this->checkSummonAvailability($data, $where, $known),
+        ...$this->checkSummonWielders($data, $where, $actorNames),
+      ];
+    }
+
+    return [
+      ...$issues,
+      ...$this->checkActorSummonAssignments($workspace, $definitions),
+    ];
+  }
+
+  /** @return Issue[] */
+  protected function checkSummonAvailability(array $data, string $where, array $known): array
+  {
+    if (! array_key_exists('availability', $data)) {
+      return [];
+    }
+
+    $availability = $data['availability'];
+
+    if (! is_array($availability)) {
+      return [Issue::error($where, 'Its availability block is malformed.', 'Use an array with a non-empty conditions list.')];
+    }
+
+    $conditions = $availability['conditions'] ?? null;
+
+    if (! is_array($conditions) || ! array_is_list($conditions) || $conditions === []) {
+      return [Issue::error(
+        $where,
+        'Its availability conditions are malformed or empty.',
+        'Declare a non-empty list using the shared world-condition vocabulary.',
+      )];
+    }
+
+    $issues = [];
+
+    foreach ($conditions as $index => $condition) {
+      if (! is_array($condition)) {
+        $issues[] = Issue::error(
+          $where,
+          sprintf('Availability condition %d is malformed.', $index + 1),
+          'Each condition must be an array.',
+        );
+        continue;
+      }
+
+      $type = $condition['type'] ?? null;
+      $name = $condition['name'] ?? null;
+
+      if (! is_string($type) || trim($type) === '') {
+        $issues[] = Issue::error(
+          $where,
+          sprintf('Availability condition %d has a malformed type.', $index + 1),
+          'Use a type from the shared world-condition vocabulary.',
+        );
+      }
+
+      if (! is_string($name) || trim($name) === '') {
+        $issues[] = Issue::error(
+          $where,
+          sprintf('Availability condition %d has no name.', $index + 1),
+          'Name the world value this condition reads.',
+        );
+      }
+    }
+
+    return [...$issues, ...$this->checkConditions($conditions, $where, $known)];
+  }
+
+  /** @return Issue[] */
+  protected function checkSummonWielders(array $data, string $where, array $actorNames): array
+  {
+    if (! array_key_exists('wielders', $data)) {
+      return [];
+    }
+
+    $wielders = $data['wielders'];
+
+    if (! is_array($wielders)) {
+      return [Issue::error($where, 'Its wielder policy is malformed.', 'Use an array with a valid mode and tenancy.')];
+    }
+
+    $issues = [];
+    $modeValue = $wielders['mode'] ?? 'all';
+    $tenancyValue = $wielders['tenancy'] ?? 'shared';
+    $mode = is_string($modeValue) ? strtolower(trim($modeValue)) : '';
+    $tenancy = is_string($tenancyValue) ? strtolower(trim($tenancyValue)) : '';
+
+    if (! in_array($mode, ['all', 'roles', 'characters'], true)) {
+      $issues[] = Issue::error($where, sprintf('It uses invalid wielder mode "%s".', $mode), 'Choose all, roles, or characters.');
+    }
+
+    if (! in_array($tenancy, ['shared', 'exclusive'], true)) {
+      $issues[] = Issue::error($where, sprintf('It uses invalid tenancy "%s".', $tenancy), 'Choose shared or exclusive.');
+    }
+
+    if ($mode === 'characters') {
+      $characters = $wielders['characters'] ?? null;
+
+      if (! is_array($characters) || $characters === []) {
+        $issues[] = Issue::error($where, 'Its character eligibility list is empty or malformed.', 'Name at least one project actor.');
+      } else {
+        foreach ($characters as $character) {
+          $name = is_string($character) ? trim($character) : '';
+
+          if ($name === '' || ! in_array($name, $actorNames, true)) {
+            $issues[] = Issue::error(
+              $where,
+              sprintf('Its eligible character "%s" does not exist.', $name !== '' ? $name : '(malformed)'),
+              'Use an exact actor identity from assets/Data/Actors.',
+            );
+          }
+        }
+      }
+    }
+
+    if ($mode === 'roles') {
+      $roles = $wielders['roles'] ?? null;
+      $validRoles = is_array($roles) && array_is_list($roles) && $roles !== [];
+
+      if ($validRoles) {
+        foreach ($roles as $role) {
+          if (! is_string($role) || trim($role) === '') {
+            $validRoles = false;
+            break;
+          }
+        }
+      }
+
+      if (! $validRoles) {
+        $issues[] = Issue::error($where, 'Its role eligibility list is empty or malformed.', 'Name at least one project class or role.');
+      }
+    }
+
+    return $issues;
+  }
+
+  /**
+   * @param array<string, array<string, mixed>> $definitions
+   * @return Issue[]
+   */
+  protected function checkActorSummonAssignments(ProjectWorkspace $workspace, array $definitions): array
+  {
+    $issues = [];
+    $holders = [];
+
+    foreach ($workspace->actorDatabase->getActors() as $actor) {
+      $assignments = $actor->getSummons();
+      $where = 'actor ' . $actor->getName();
+
+      if (! is_array($assignments) || ! array_is_list($assignments)) {
+        $issues[] = Issue::error($where, 'Its summon assignments are malformed.', 'Use a list of summon ids.');
+        continue;
+      }
+
+      $normalizedAssignments = array_map(
+        static fn(mixed $assignment): string => is_string($assignment) ? strtolower(trim($assignment)) : '',
+        $assignments,
+      );
+
+      if (count($normalizedAssignments) !== count(array_unique($normalizedAssignments))) {
+        $issues[] = Issue::error(
+          $where,
+          'Its summon assignments contain duplicate ids.',
+          'List each starting summon at most once.',
+        );
+      }
+
+      foreach ($assignments as $assignment) {
+        $summonId = is_string($assignment) ? trim($assignment) : '';
+        $normalizedSummonId = strtolower($summonId);
+
+        if ($summonId === '' || ! isset($definitions[$normalizedSummonId])) {
+          $issues[] = Issue::error(
+            $where,
+            sprintf('It references missing summon "%s".', $summonId !== '' ? $summonId : '(malformed)'),
+            'Use an authored summon id.',
+          );
+          continue;
+        }
+
+        $definition = $definitions[$normalizedSummonId];
+        $wielders = is_array($definition['wielders'] ?? null) ? $definition['wielders'] : null;
+        $modeValue = $wielders['mode'] ?? 'all';
+        $mode = is_string($modeValue) ? strtolower(trim($modeValue)) : '';
+        $eligible = match ($mode) {
+          'characters' => in_array($actor->getName(), (array) ($wielders['characters'] ?? []), true),
+          'roles' => in_array($actor->getClassName(), (array) ($wielders['roles'] ?? []), true),
+          'all' => true,
+          default => false,
+        };
+
+        if ($wielders !== null && ! $eligible) {
+          $issues[] = Issue::error(
+            $where,
+            sprintf('It is not eligible to hold summon "%s".', $summonId),
+            'Change the actor assignment or the generic wielder policy.',
+          );
+        }
+
+        $conditions = is_array($definition['availability']['conditions'] ?? null)
+          ? $definition['availability']['conditions']
+          : [];
+        $hasStoryLock = array_filter(
+          $conditions,
+          static fn(mixed $condition): bool => is_array($condition) && ($condition['type'] ?? null) === 'event',
+        ) !== [];
+
+        if ($hasStoryLock) {
+          $issues[] = Issue::error(
+            $where,
+            sprintf('It starts with story-locked summon "%s".', $summonId),
+            'Remove the starting assignment; preserve legal assignments only in saves after unlock.',
+          );
+        }
+
+        $holders[$normalizedSummonId][] = $actor->getName();
+      }
+    }
+
+    foreach ($holders as $summonId => $actorNames) {
+      $wielders = $definitions[$summonId]['wielders'] ?? null;
+
+      $tenancy = is_array($wielders) && is_string($wielders['tenancy'] ?? null)
+        ? strtolower(trim($wielders['tenancy']))
+        : 'shared';
+
+      if (is_array($wielders)
+        && $tenancy === 'exclusive'
+        && count($actorNames) > 1
+      ) {
+        $issues[] = Issue::error(
+          'summon ' . $summonId,
+          sprintf('Exclusive starting ownership is duplicated across %s.', implode(', ', $actorNames)),
+          'An exclusive summon may have at most one starting holder.',
+        );
+      }
+    }
 
     return $issues;
   }
@@ -1198,7 +1512,18 @@ class ProjectValidator
         continue;
       }
 
-      $type = strval($condition['type'] ?? '');
+      $typeValue = $condition['type'] ?? null;
+
+      if (! is_string($typeValue)) {
+        $issues[] = Issue::error(
+          $where,
+          'It has a malformed condition type.',
+          'Use a string from the shared world-condition vocabulary.'
+        );
+        continue;
+      }
+
+      $type = $typeValue;
 
       if (! WorldConditionType::tryFrom($type) instanceof WorldConditionType) {
         $issues[] = Issue::error(
@@ -1209,7 +1534,18 @@ class ProjectValidator
         continue;
       }
 
-      $name = strval($condition['name'] ?? '');
+      $nameValue = $condition['name'] ?? null;
+
+      if (! is_string($nameValue)) {
+        $issues[] = Issue::error(
+          $where,
+          'It has a malformed condition name.',
+          'Use a non-empty string world-state identity.'
+        );
+        continue;
+      }
+
+      $name = $nameValue;
 
       if ($questPrerequisites && $type === WorldConditionType::QUEST->value) {
         $trimmedName = trim($name);

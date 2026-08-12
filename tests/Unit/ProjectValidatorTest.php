@@ -107,6 +107,37 @@ function writeSaveCompatibilityManifest(string $root, string $source): void
     file_put_contents($root . '/assets/Data/save-compatibility.php', $source);
 }
 
+/** Writes a plain summon definition and its required timeline fixture. */
+function writeValidatorSummon(string $root, string $id, array $data): void
+{
+    $directory = $root . '/assets/Cutscenes/Summons/' . $id;
+    mkdir($directory, 0777, true);
+    file_put_contents($directory . '/' . $id . '.data.php', "<?php\n\nreturn " . var_export($data, true) . ";\n");
+    file_put_contents(
+        $directory . '/' . $id . '.timeline.php',
+        "<?php\n\nreturn ['fps' => 12, 'lengthFrames' => 1, 'tracks' => [], 'cues' => []];\n",
+    );
+}
+
+/** Writes an actor with an explicit class name and starting summon ids. */
+function writeValidatorActor(string $root, string $fileId, string $name, string $className, mixed $summons): void
+{
+    $data = [
+        'class' => 'Ichiloto\\Engine\\Entities\\Character',
+        'data' => [
+            'name' => $name,
+            'class' => $className,
+            'currentExp' => 0,
+            'stats' => ['currentHp' => 100, 'currentMp' => 20, 'currentAp' => 10],
+            'summons' => $summons,
+        ],
+    ];
+    file_put_contents(
+        $root . '/assets/Data/Actors/' . $fileId . '.php',
+        "<?php\n\nreturn " . var_export($data, true) . ";\n",
+    );
+}
+
 it('passes a project with nothing wrong with it', function () {
     $root = makeTemporaryProject();
     writeConsistentQuests($root);
@@ -184,6 +215,131 @@ it('reports an unknown condition type with its content context', function () {
         ->and($issues[0]->severity)->toBe(Severity::ERROR)
         ->and($issues[0]->where)->toBe('skit breakfast-banter')
         ->and($issues[0]->hint)->toContain('inaccessible');
+});
+
+it('validates generic summon availability, policies, identities, and linked actions', function () {
+    $root = makeTemporaryProject();
+    writeConsistentQuests($root);
+    writeConsistentSkits($root);
+    writeValidatorSummon($root, 'unsafe-summon', [
+        'id' => 'unsafe-summon',
+        'name' => 'Unsafe Summon',
+        'linkedActionId' => 'Missing Action',
+        'availability' => [
+            'conditions' => [['type' => 'lunar_phase', 'name' => 'full']],
+        ],
+        'wielders' => [
+            'mode' => 'characters',
+            'characters' => ['No Such Actor'],
+            'tenancy' => 'forever',
+        ],
+    ]);
+
+    $issues = validateProject($root);
+
+    expect(issuesMentioning($issues, 'unknown condition type "lunar_phase"'))->toHaveCount(1)
+        ->and(issuesMentioning($issues, 'invalid tenancy "forever"'))->toHaveCount(1)
+        ->and(issuesMentioning($issues, 'eligible character "No Such Actor"'))->toHaveCount(1)
+        ->and(issuesMentioning($issues, 'links to action "Missing Action"'))->toHaveCount(1);
+});
+
+it('rejects invalid summon starting assignments and duplicate exclusive holders', function () {
+    $root = makeTemporaryProject();
+    writeConsistentQuests($root);
+    writeConsistentSkits($root);
+    writeValidatorSummon($root, 'bound-summon', [
+        'id' => 'bound-summon',
+        'name' => 'Bound Summon',
+        'linkedActionId' => 'Missing Action',
+        'availability' => ['conditions' => [['type' => 'event', 'name' => 'summon_unlocked']]],
+        'wielders' => [
+            'mode' => 'characters',
+            'characters' => ['Kaelion'],
+            'tenancy' => 'exclusive',
+        ],
+    ]);
+    writeValidatorActor($root, 'Kaelion', 'Kaelion', 'Vanguard', ['bound-summon', 'missing-summon']);
+    writeValidatorActor($root, 'Other', 'Other', 'Vanguard', ['bound-summon']);
+
+    $issues = validateProject($root);
+
+    expect(issuesMentioning($issues, 'starts with story-locked summon "bound-summon"'))->toHaveCount(2)
+        ->and(issuesMentioning($issues, 'references missing summon "missing-summon"'))->toHaveCount(1)
+        ->and(issuesMentioning($issues, 'not eligible to hold summon "bound-summon"'))->toHaveCount(1)
+        ->and(issuesMentioning($issues, 'Exclusive starting ownership is duplicated'))->toHaveCount(1);
+});
+
+it('reports malformed availability and actor assignment payloads', function () {
+    $root = makeTemporaryProject();
+    writeConsistentQuests($root);
+    writeConsistentSkits($root);
+    writeValidatorSummon($root, 'malformed-summon', [
+        'id' => 'malformed-summon',
+        'name' => 'Malformed Summon',
+        'linkedActionId' => 'Missing Action',
+        'availability' => 'always',
+        'wielders' => ['mode' => 'all', 'tenancy' => 'exclusive'],
+    ]);
+    writeValidatorActor($root, 'Kaelion', 'Kaelion', 'Vanguard', 'malformed-summon');
+
+    $issues = validateProject($root);
+
+    expect(issuesMentioning($issues, 'availability block is malformed'))->toHaveCount(1)
+        ->and(issuesMentioning($issues, 'summon assignments are malformed'))->toHaveCount(1);
+});
+
+it('reports malformed declared summon policy and condition fields without coercing them', function () {
+    $root = makeTemporaryProject();
+    writeConsistentQuests($root);
+    writeConsistentSkits($root);
+    writeValidatorSummon($root, 'malformed-fields', [
+        'id' => 'malformed-fields',
+        'name' => 'Malformed Fields',
+        'linkedActionId' => 'Missing Action',
+        'availability' => ['conditions' => [['type' => ['event'], 'name' => ['unlock']]]],
+        'wielders' => ['mode' => ['all'], 'tenancy' => ['shared']],
+    ]);
+
+    $issues = validateProject($root);
+
+    expect(issuesMentioning($issues, 'malformed type'))->not->toBe([])
+        ->and(issuesMentioning($issues, 'has no name'))->not->toBe([])
+        ->and(issuesMentioning($issues, 'invalid wielder mode'))->toHaveCount(1)
+        ->and(issuesMentioning($issues, 'invalid tenancy'))->toHaveCount(1);
+});
+
+it('matches actor summon assignments to definition ids case-insensitively like runtime', function () {
+    $root = makeTemporaryProject();
+    writeConsistentQuests($root);
+    writeConsistentSkits($root);
+    writeValidatorSummon($root, 'signature-summon', [
+        'id' => 'Signature-Summon',
+        'name' => 'Signature Summon',
+        'linkedActionId' => 'Missing Action',
+        'wielders' => ['mode' => 'characters', 'characters' => ['One'], 'tenancy' => 'exclusive'],
+    ]);
+    writeValidatorActor($root, 'One', 'One', 'Hero', ['signature-summon']);
+
+    expect(issuesMentioning(validateProject($root), 'references missing summon'))->toBe([]);
+});
+
+it('rejects non-list and duplicate actor summon assignments', function () {
+    $root = makeTemporaryProject();
+    writeConsistentQuests($root);
+    writeConsistentSkits($root);
+    writeValidatorSummon($root, 'shared-summon', [
+        'id' => 'shared-summon',
+        'name' => 'Shared Summon',
+        'linkedActionId' => 'Missing Action',
+        'wielders' => ['mode' => 'all', 'tenancy' => 'shared'],
+    ]);
+    writeValidatorActor($root, 'One', 'One', 'Hero', ['shared-summon', 'shared-summon']);
+    writeValidatorActor($root, 'Two', 'Two', 'Hero', ['primary' => 'shared-summon']);
+
+    $issues = validateProject($root);
+
+    expect(issuesMentioning($issues, 'summon assignments contain duplicate ids'))->toHaveCount(1)
+        ->and(issuesMentioning($issues, 'summon assignments are malformed'))->toHaveCount(1);
 });
 
 it('validates conditions in manually authored achievements', function () {

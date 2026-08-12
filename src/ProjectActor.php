@@ -175,6 +175,12 @@ final class ProjectActor
         return (int) ($this->getData()['currentExp'] ?? 0);
     }
 
+    /** Returns the actor's authored starting summon assignments verbatim. */
+    public function getSummons(): mixed
+    {
+        return $this->getData()['summons'] ?? [];
+    }
+
     /**
      * Returns the actor stats payload.
      *
