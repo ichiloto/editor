@@ -509,6 +509,7 @@ final class RecordSchemaCatalog
             'give_gold' => [
                 new RecordField('amount', 'Amount', InputControlType::INTEGER),
             ],
+            'recover_party' => [],
             'play_sound' => [
                 RecordField::reference('sound', 'Sound', 'sfx'),
             ],

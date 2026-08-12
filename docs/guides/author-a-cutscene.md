@@ -50,6 +50,7 @@ The full vocabulary:
 | `record_event` | Story Event | What conditions test with `event:` |
 | `give_item` | Item, Quantity | Item must exist in `items.php` |
 | `give_gold` | Amount | Negative debits |
+| `recover_party` | none | Fully restores travelling members and clears battle-only states |
 | `play_sound` | Sound | |
 | `play_music` | Music | |
 | `accept_quest` | Quest Id | Starts a quest from a scene |
