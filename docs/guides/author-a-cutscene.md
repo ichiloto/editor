@@ -56,7 +56,7 @@ The full vocabulary:
 | `move_player` | X, Y | |
 | `move_route` | Subject, NPC Id, Wait, Seconds Per Step, Speed, Steps | Awaited cardinal route; see below |
 | `transfer` | Map Id, X, Y | |
-| `start_battle` | Troop, Result Variable, Defeat Policy | Suspends and resumes through battle return |
+| `start_battle` | Troop, Result Variable, Defeat Policy, Escape Policy | Suspends and resumes through battle return |
 | `branch` | Conditions, Then, Else | See below |
 
 ## Movement Routes
@@ -104,6 +104,11 @@ to expose `victory`, `defeat`, or `escape` to a later `branch`; leave it empty
 to write nothing. `Defeat Policy` is `game_over` by default, preserving normal
 defeat. Choose `continue` only when this particular scripted battle is meant to
 return a defeat result and carry on.
+
+Set optional `Escape Policy` to `allowed` or `forbidden` when this scripted
+battle must override its troop. When omitted, the troop policy applies; when
+neither source declares one, escape remains allowed. Forbidden battles omit
+the Escape command, and runtime resolution rechecks the policy.
 
 While either continuation is pending, numbered/manual save and quicksave are
 blocked. Transfer autosave waits until the full event and its completion writes

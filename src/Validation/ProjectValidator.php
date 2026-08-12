@@ -44,6 +44,7 @@ class ProjectValidator
     $issues = [
       ...$this->checkMaps($workspace),
       ...$this->checkQuests($workspace),
+      ...$this->checkTroops($workspace),
       ...$this->checkSummons($workspace),
       ...$this->checkReferences($workspace),
       ...new SaveCompatibilityValidator()->validate($workspace),
@@ -53,6 +54,42 @@ class ProjectValidator
       $issues,
       static fn(Issue $a, Issue $b): int => [$a->severity->value, $a->where] <=> [$b->severity->value, $b->where]
     );
+
+    return $issues;
+  }
+
+  /**
+   * Checks optional troop-level battle policy without requiring older data
+   * sets to declare it. The runtime defaults an omitted policy to allowed.
+   *
+   * @return Issue[]
+   */
+  protected function checkTroops(ProjectWorkspace $workspace): array
+  {
+    $database = $workspace->getRecordDatabase('troops');
+
+    if (! $database instanceof ProjectRecordDatabase) {
+      return [];
+    }
+
+    $issues = [];
+
+    foreach ($database->getRecords() as $record) {
+      $policy = $record->get('escapePolicy');
+
+      if ($policy === null || $policy === '') {
+        continue;
+      }
+
+      if (! is_string($policy) || ! in_array($policy, ['allowed', 'forbidden'], true)) {
+        $name = trim(strval($record->get('name') ?? '')) ?: '(unnamed)';
+        $issues[] = Issue::error(
+          'troop ' . $name,
+          sprintf('It has invalid escapePolicy "%s".', is_scalar($policy) ? strval($policy) : get_debug_type($policy)),
+          'Use allowed or forbidden, or omit the field to use the allowed default.',
+        );
+      }
+    }
 
     return $issues;
   }
@@ -1181,6 +1218,18 @@ class ProjectValidator
         sprintf('A start_battle command uses invalid defeatPolicy "%s".', $defeatPolicy),
         'Choose game_over or continue.'
       );
+    }
+
+    if (array_key_exists('escapePolicy', $command)) {
+      $escapePolicy = $command['escapePolicy'];
+
+      if (! is_string($escapePolicy) || ! in_array(strtolower(trim($escapePolicy)), ['allowed', 'forbidden'], true)) {
+        $issues[] = Issue::error(
+          $where,
+          sprintf('A start_battle command uses invalid escapePolicy "%s".', is_scalar($escapePolicy) ? strval($escapePolicy) : get_debug_type($escapePolicy)),
+          'Choose allowed or forbidden, or remove the override to inherit the troop and default policy.'
+        );
+      }
     }
 
     return $issues;

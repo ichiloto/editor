@@ -133,8 +133,12 @@ it('edits troop members through flattened sub-list fields', function (): void {
     $fields = $database->getSettingsFields(0);
     $fieldIds = array_column($fields, 'field');
 
-    expect($fieldIds)->toContain('name', 'member0Enemy', 'member0Position0', 'member0Position1', 'member1Enemy');
+    expect($fieldIds)->toContain('name', 'escapePolicy', 'member0Enemy', 'member0Position0', 'member0Position1', 'member1Enemy');
 
+    $escapePolicy = $fields[array_search('escapePolicy', $fieldIds, true)];
+    expect($escapePolicy['options'] ?? null)->toBe(['allowed', 'forbidden']);
+
+    $database->setField(0, 'escapePolicy', 'forbidden');
     $database->setField(0, 'member1Enemy', 'Great Wolf');
     $database->setField(0, 'member1Position1', '12');
     $database->save();
@@ -143,6 +147,7 @@ it('edits troop members through flattened sub-list fields', function (): void {
 
     expect($payload[0]['enemies'][1]['enemy'])->toBe('Great Wolf');
     expect($payload[0]['enemies'][1]['position'])->toBe([15, 12]);
+    expect($payload[0]['escapePolicy'])->toBe('forbidden');
     // The key the editor never showed survives.
     expect($payload[0])->toHaveKey('events');
 

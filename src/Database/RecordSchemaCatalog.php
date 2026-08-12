@@ -122,6 +122,12 @@ final class RecordSchemaCatalog
             relativePath: 'assets/Data/troops.php',
             fields: [
                 new RecordField('name', 'Name'),
+                new RecordField(
+                    'escapePolicy',
+                    'Escape Policy',
+                    options: ['allowed', 'forbidden'],
+                    removeWhenEmpty: true,
+                ),
             ],
             labelKey: 'name',
             identityKey: 'name',
@@ -538,6 +544,7 @@ final class RecordSchemaCatalog
                 RecordField::reference('troop', 'Troop', 'troops'),
                 new RecordField('resultVariable', 'Result Variable', removeWhenEmpty: true),
                 new RecordField('defeatPolicy', 'Defeat Policy', options: ['game_over', 'continue'], removeWhenEmpty: true),
+                new RecordField('escapePolicy', 'Escape Policy', options: ['allowed', 'forbidden'], removeWhenEmpty: true),
             ],
             'branch' => [
                 new RecordField('conditions', 'Conditions', codec: RecordFieldCodec::CONDITIONS),

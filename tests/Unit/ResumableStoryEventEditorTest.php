@@ -69,8 +69,9 @@ it('uses the runtime command vocabulary and exposes battle continuation fields',
 
     expect(RecordSchemaCatalog::EVENT_COMMAND_TYPES)->toBe(EventInterpreter::COMMAND_TYPES)
         ->and($battleFields['troop']->reference)->toBe('troops')
-        ->and($battleFields)->toHaveKeys(['resultVariable', 'defeatPolicy'])
-        ->and($battleFields['defeatPolicy']->options)->toBe(['game_over', 'continue']);
+        ->and($battleFields)->toHaveKeys(['resultVariable', 'defeatPolicy', 'escapePolicy'])
+        ->and($battleFields['defeatPolicy']->options)->toBe(['game_over', 'continue'])
+        ->and($battleFields['escapePolicy']->options)->toBe(['allowed', 'forbidden']);
 });
 
 it('accepts every runtime command type and still rejects vocabulary drift', function (): void {
@@ -221,12 +222,15 @@ it('validates script references, stable NPC identities, routes, and battle conti
         ['type' => 'move_route', 'subject' => 'npc', 'npcId' => 'missing-npc', 'wait' => 'true', 'speed' => 0, 'steps' => [
             ['direction' => 'diagonal', 'count' => -1, 'faceOnly' => 'false'],
         ]],
-        ['type' => 'start_battle', 'troop' => '', 'resultVariable' => '', 'defeatPolicy' => 'always_win'],
+        ['type' => 'start_battle', 'troop' => '', 'resultVariable' => '', 'defeatPolicy' => 'always_win', 'escapePolicy' => 'sometimes'],
         ['type' => 'parallel_cutscene'],
+    ]);
+    writePhase7ArrayFile($root . '/assets/Data/troops.php', [
+        ['name' => 'Malformed Policy Troop', 'escapePolicy' => 'sometimes', 'enemies' => []],
     ]);
 
     $issues = new ProjectValidator()->validate(ProjectWorkspace::fromProject($root));
-    $messages = array_map(static fn($issue): string => $issue->message, $issues);
+    $messages = array_map(static fn($issue): string => $issue->where . ': ' . $issue->message, $issues);
     $joined = implode("\n", $messages);
 
     expect($joined)->toContain('NPC id "guide" is used more than once')
@@ -238,6 +242,8 @@ it('validates script references, stable NPC identities, routes, and battle conti
         ->and($joined)->toContain('unknown event command type "parallel_cutscene"')
         ->and($joined)->toContain('invalid wait value')
         ->and($joined)->toContain('speed must be greater than zero')
+        ->and($joined)->toContain('invalid escapePolicy "sometimes"')
+        ->and($joined)->toContain('troop Malformed Policy Troop')
         ->and($joined)->toContain('unsupported direction "diagonal"')
         ->and($joined)->toContain('invalid count')
         ->and($joined)->toContain('invalid faceOnly value')

@@ -327,8 +327,11 @@ skill effects use, with `$target` bound to the afflicted battler.
 
 ### Troops
 
-Encounter groups. Each troop has a `Name` and a list of members, flattened into
-the settings pane as `Member 1 Enemy`, `Member 1 X`, `Member 1 Y`, and so on.
+Encounter groups. Each troop has a `Name`, an optional `Escape Policy`, and a
+list of members flattened into the settings pane as `Member 1 Enemy`,
+`Member 1 X`, `Member 1 Y`, and so on. An omitted escape policy preserves the
+engine default (`allowed`); choose `forbidden` for a battle that must be won or
+resolved by its authored continuation.
 
 `Shift+O` appends a member, `Shift+X` removes the last one. The `Enemy` value
 must match a name in the Enemies category.
@@ -392,7 +395,7 @@ Supported command types, matching the engine's interpreter:
 | `move_player` | X, Y |
 | `move_route` | Subject, NPC Id, Wait, Seconds Per Step, Speed, Steps |
 | `transfer` | Map Id, X, Y |
-| `start_battle` | Troop, Result Variable, Defeat Policy |
+| `start_battle` | Troop, Result Variable, Defeat Policy, Escape Policy |
 | `branch` | Conditions, Then (fixed), Else (fixed) |
 
 `Shift+O` appends a command, `Shift+X` removes the last one.
