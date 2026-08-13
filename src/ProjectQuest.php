@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor;
 
+use Ichiloto\Editor\Database\ConditionCodec;
 use Ichiloto\Engine\Quests\QuestObjectiveType;
 
 /**
@@ -132,7 +133,8 @@ final class ProjectQuest
     /**
      * Applies one flat settings-field edit.
      *
-     * Objective fields arrive as `objective{index}{Type|Target|Quantity|Description}`
+     * Objective fields arrive as
+     * `objective{index}{Type|Target|Quantity|Description|RevealedDescription|RevealConditions}`
      * with a zero-based objective index.
      *
      * @param string $field The field identifier.
@@ -141,7 +143,7 @@ final class ProjectQuest
      */
     public function setField(string $field, mixed $value): void
     {
-        if (preg_match('/^objective(\d+)(Type|Target|Quantity|Description)$/', $field, $matches) === 1) {
+        if (preg_match('/^objective(\d+)(Type|Target|Quantity|Description|RevealedDescription|RevealConditions)$/', $field, $matches) === 1) {
             $this->setObjectiveField(intval($matches[1]), $matches[2], $value);
             return;
         }
@@ -352,7 +354,7 @@ final class ProjectQuest
      * Applies one objective sub-field edit.
      *
      * @param int $index The objective index.
-     * @param string $key The objective key (Type|Target|Quantity|Description).
+     * @param string $key The objective key.
      * @param mixed $value The edited value.
      * @return void
      */
@@ -402,6 +404,26 @@ final class ProjectQuest
                     unset($objective['description']);
                 } else {
                     $objective['description'] = $description;
+                }
+
+                break;
+            case 'RevealedDescription':
+                $description = trim(strval($value));
+
+                if ($description === '') {
+                    unset($objective['revealedDescription']);
+                } else {
+                    $objective['revealedDescription'] = $description;
+                }
+
+                break;
+            case 'RevealConditions':
+                $conditions = ConditionCodec::decodeAll(strval($value));
+
+                if ($conditions === []) {
+                    unset($objective['revealConditions']);
+                } else {
+                    $objective['revealConditions'] = $conditions;
                 }
 
                 break;

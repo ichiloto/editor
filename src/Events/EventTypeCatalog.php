@@ -44,6 +44,7 @@ final class EventTypeCatalog
                     'conditions' => [],
                     'sets' => [],
                     'whenBlocked' => '',
+                    'cue' => ['symbol' => '', 'color' => 'bright-yellow'],
                 ],
             ),
             new EventTypeDefinition(
@@ -58,6 +59,7 @@ final class EventTypeCatalog
                         ],
                     ],
                 ],
+                defaultDefinitionFields: ['cue' => ['symbol' => '', 'color' => 'bright-yellow']],
             ),
             new EventTypeDefinition(
                 label: 'Transfer Player',
@@ -73,6 +75,7 @@ final class EventTypeCatalog
                         '🧍',
                     ],
                 ],
+                defaultDefinitionFields: ['cue' => ['symbol' => '', 'color' => 'bright-yellow']],
             ),
             new EventTypeDefinition(
                 label: 'Shop',
@@ -84,6 +87,7 @@ final class EventTypeCatalog
                     'buyRate' => 1.0,
                     'sellRate' => 0.5,
                 ],
+                defaultDefinitionFields: ['cue' => ['symbol' => '', 'color' => 'bright-yellow']],
             ),
             new EventTypeDefinition(
                 label: 'Sleep',
@@ -103,6 +107,7 @@ final class EventTypeCatalog
                     ],
                     'cost' => 0,
                 ],
+                defaultDefinitionFields: ['cue' => ['symbol' => '', 'color' => 'bright-yellow']],
             ),
             new EventTypeDefinition(
                 label: 'Chest',
@@ -115,6 +120,7 @@ final class EventTypeCatalog
                     'chestType' => 'common',
                     'lootType' => 'item',
                 ],
+                defaultDefinitionFields: ['cue' => ['symbol' => '', 'color' => 'bright-yellow']],
             ),
         ];
 

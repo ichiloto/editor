@@ -127,7 +127,7 @@ it('builds the quest settings fields with the five objective types', function ()
   $labels = array_column($fields, 'label');
   $typeField = $fields[array_search('Obj 1 Type', $labels, true)];
 
-  expect($labels)->toContain('Id', 'Name', 'Description', 'Giver', 'Reward Gold', 'Reward EXP', 'Reward Items', 'Prereqs', 'Obj 1 Type', 'Obj 1 Target', 'Obj 1 Qty', 'Obj 1 Text', 'Obj 2 Type')
+  expect($labels)->toContain('Id', 'Name', 'Description', 'Giver', 'Reward Gold', 'Reward EXP', 'Reward Items', 'Prereqs', 'Obj 1 Type', 'Obj 1 Target', 'Obj 1 Qty', 'Obj 1 Text', 'Obj 1 Revealed', 'Obj 1 Reveal When', 'Obj 2 Type')
     ->and($typeField['options'])->toBe(['talk_to', 'collect', 'defeat', 'reach_map', 'flag'])
     ->and($typeField['value'])->toBe('reach_map');
 });
@@ -145,6 +145,8 @@ it('edits, saves, and reloads a quest through the editor', function () {
   callEditorMethod($editor, 'applyDatabaseFieldValueRecorded', $fields[array_search('Name', $labels, true)], 'Morning Errand');
   callEditorMethod($editor, 'applyDatabaseFieldValueRecorded', $fields[array_search('Reward Gold', $labels, true)], '350');
   callEditorMethod($editor, 'applyDatabaseFieldValueRecorded', $fields[array_search('Obj 1 Target', $labels, true)], 'happyville/plaza');
+  callEditorMethod($editor, 'applyDatabaseFieldValueRecorded', $fields[array_search('Obj 1 Revealed', $labels, true)], 'Return to the east gate');
+  callEditorMethod($editor, 'applyDatabaseFieldValueRecorded', $fields[array_search('Obj 1 Reveal When', $labels, true)], 'event:east_gate_identified');
 
   /** @var ProjectWorkspace $workspace */
   $workspace = getEditorProperty($editor, 'workspace');
@@ -162,7 +164,9 @@ it('edits, saves, and reloads a quest through the editor', function () {
   expect($quest->getName())->toBe('Morning Errand')
     ->and($quest->getRewardGold())->toBe(350)
     ->and($quest->getObjectives()[0]['target'])->toBe('happyville/plaza')
-    ->and($quest->getObjectives()[0]['description'])->toBe('Visit the Happyville town center');
+    ->and($quest->getObjectives()[0]['description'])->toBe('Visit the Happyville town center')
+    ->and($quest->getObjectives()[0]['revealedDescription'])->toBe('Return to the east gate')
+    ->and($quest->getObjectives()[0]['revealConditions'])->toBe([['type' => 'event', 'name' => 'east_gate_identified']]);
 
   foreach ($reloaded->getQuests() as $entry) {
     expect(Quest::fromArray($entry->toArray()))->toBeInstanceOf(Quest::class);

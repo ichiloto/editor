@@ -41,7 +41,8 @@ it('creates ScriptEventTrigger through the active event type catalog and inspect
             'mode' => 'action',
             'reusable' => false,
         ])
-        ->and($definition)->toHaveKeys(['conditions', 'sets', 'whenBlocked']);
+        ->and($definition)->toHaveKeys(['conditions', 'sets', 'whenBlocked', 'cue'])
+        ->and($definition['cue'])->toBe(['symbol' => '', 'color' => 'bright-yellow']);
 
     $fields = callEditorMethod($editor, 'buildEventDataFields', 'E', $definition);
     $byPath = [];
@@ -53,7 +54,31 @@ it('creates ScriptEventTrigger through the active event type catalog and inspect
     expect($byPath['data.scriptId']['reference'] ?? null)->toBe('common_events')
         ->and($byPath['data.scriptId'])->not->toHaveKey('control')
         ->and($byPath['data.mode']['options'] ?? null)->toBe(['action', 'auto'])
-        ->and($byPath['data.reusable']['control'] ?? null)->not->toBeNull();
+        ->and($byPath['data.reusable']['control'] ?? null)->not->toBeNull()
+        ->and($byPath)->toHaveKeys(['cue.symbol', 'cue.color']);
+
+    $cueField = $byPath['cue.symbol'];
+    callEditorMethod($editor, 'applyInspectorFieldValue', $cueField, '!');
+    $definition = $workspace->maps[0]->getEventDefinition('E');
+
+    expect($definition['cue'])->toBe(['symbol' => '!', 'color' => 'bright-yellow']);
+
+    removeDirectoryRecursively($root);
+});
+
+it('exposes event cues on legacy definitions without changing them on inspection', function (): void {
+    $root = makeTemporaryProject();
+    $editor = createEditorForTesting($root);
+    setEditorProperty($editor, 'workspace', ProjectWorkspace::fromProject($root));
+    $definition = [
+        'class' => ScriptEventTrigger::class,
+        'data' => ['scriptId' => 'dresser-note', 'mode' => 'action', 'reusable' => false],
+    ];
+    $fields = callEditorMethod($editor, 'buildEventDataFields', 'E', $definition);
+    $paths = array_map(static fn(array $field): string => implode('.', (array) ($field['path'] ?? [])), $fields);
+
+    expect($paths)->toContain('cue.symbol', 'cue.color')
+        ->and($definition)->not->toHaveKey('cue');
 
     removeDirectoryRecursively($root);
 });

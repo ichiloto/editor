@@ -5907,7 +5907,14 @@ final class Editor
         $currentDefinition = $selectedMap->getEventDefinition($marker);
         $currentClassName = is_array($currentDefinition) ? (string) ($currentDefinition['class'] ?? '') : '';
         $newDefinition = $currentClassName === $definition->className && is_array($currentDefinition)
-            ? $currentDefinition
+            ? array_replace_recursive(
+                [
+                    'class' => $definition->className,
+                    'data' => $definition->defaultData,
+                    ...$definition->defaultDefinitionFields,
+                ],
+                $currentDefinition,
+            )
             : [
                 'class' => $definition->className,
                 'data' => $definition->defaultData,
@@ -7598,8 +7605,9 @@ final class Editor
      * Returns the editable settings fields for the selected quest.
      *
      * Objectives are flattened into per-objective field groups (type,
-     * target, quantity, description) so the flat settings pane can edit the
-     * nested list; Shift+O / Shift+X add and remove objectives.
+     * target, quantity, spoiler-safe text, and conditional revealed text) so
+     * the flat settings pane can edit the nested list; Shift+O / Shift+X add
+     * and remove objectives.
      *
      * @return array<int, array<string, mixed>>
      */
@@ -7629,6 +7637,8 @@ final class Editor
             $target = strval($objective['target'] ?? '');
             $quantity = (string) max(1, intval($objective['quantity'] ?? 1));
             $description = strval($objective['description'] ?? '');
+            $revealedDescription = strval($objective['revealedDescription'] ?? '');
+            $revealConditions = ConditionCodec::encodeAll((array) ($objective['revealConditions'] ?? []));
             $fields[] = [
                 'label' => $label . ' Type',
                 'value' => $type,
@@ -7663,6 +7673,18 @@ final class Editor
                 'value' => $description,
                 'control' => new InputControl(InputControlType::TEXT, $description),
                 'field' => sprintf('objective%dDescription', $index),
+            ];
+            $fields[] = [
+                'label' => $label . ' Revealed',
+                'value' => $revealedDescription,
+                'control' => new InputControl(InputControlType::TEXT, $revealedDescription),
+                'field' => sprintf('objective%dRevealedDescription', $index),
+            ];
+            $fields[] = [
+                'label' => $label . ' Reveal When',
+                'value' => $revealConditions,
+                'conditions' => true,
+                'field' => sprintf('objective%dRevealConditions', $index),
             ];
         }
 
@@ -9001,6 +9023,11 @@ final class Editor
         }
 
         $rootFields = array_diff_key($definition, ['class' => true, 'data' => true]);
+        // Cue is a generic trigger capability, including for definitions
+        // created before the field existed. Supplying an empty editor-only
+        // default exposes the opt-in without changing the stored event until
+        // the author actually edits it.
+        $rootFields['cue'] ??= ['symbol' => '', 'color' => 'bright-yellow'];
 
         return [
             ...$fields,

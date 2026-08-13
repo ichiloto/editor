@@ -12,6 +12,9 @@ use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Engine\Core\WorldConditionType;
 use Ichiloto\Engine\Events\Interpreter\EventInterpreter;
 use Ichiloto\Engine\Events\Interpreter\MovementRouteRunner;
+use Ichiloto\Engine\IO\Console\TerminalText;
+use InvalidArgumentException;
+use Symfony\Component\Console\Formatter\OutputFormatterStyle;
 
 /**
  * Checks a project's content for the mistakes that are otherwise found by
@@ -760,7 +763,7 @@ class ProjectValidator
 
       $issues = [
         ...$issues,
-        ...$this->checkObjectives($quest, $where, $workspace->mapIds, $items, $foes),
+        ...$this->checkObjectives($quest, $where, $workspace->mapIds, $items, $foes, $known),
         ...$this->checkConditions($quest->getPrerequisites(), $where, $known, true),
       ];
     }
@@ -776,9 +779,17 @@ class ProjectValidator
    * @param string[] $mapIds Every map in the project.
    * @param string[] $items Every item.
    * @param string[] $foes Every troop and enemy.
+   * @param array<string, string[]> $known Known project references.
    * @return Issue[] The issues found.
    */
-  protected function checkObjectives(ProjectQuest $quest, string $where, array $mapIds, array $items, array $foes): array
+  protected function checkObjectives(
+    ProjectQuest $quest,
+    string $where,
+    array $mapIds,
+    array $items,
+    array $foes,
+    array $known,
+  ): array
   {
     $objectives = $quest->getObjectives();
     $issues = [];
@@ -790,6 +801,40 @@ class ProjectValidator
     foreach ($objectives as $objective) {
       $type = strval($objective['type'] ?? '');
       $target = trim(strval($objective['target'] ?? ''));
+      $rawRevealedDescription = $objective['revealedDescription'] ?? '';
+      $revealedDescription = is_string($rawRevealedDescription) ? trim($rawRevealedDescription) : '';
+      $revealConditions = $objective['revealConditions'] ?? [];
+
+      if (! is_string($rawRevealedDescription)) {
+        $issues[] = Issue::error($where, 'An objective has malformed revealed text.', 'Use a string for revealedDescription.');
+      }
+
+      if (! is_array($revealConditions)) {
+        $issues[] = Issue::error($where, 'An objective has malformed reveal conditions.', 'Use a list of world conditions.');
+      }
+
+      if ($revealedDescription !== '' && (! is_array($revealConditions) || $revealConditions === [])) {
+        $issues[] = Issue::error(
+          $where,
+          'An objective has revealed text but no reveal conditions.',
+          'Add world conditions so the journal knows when that text is safe to show.'
+        );
+      }
+
+      if (is_array($revealConditions) && $revealConditions !== [] && $revealedDescription === '') {
+        $issues[] = Issue::error(
+          $where,
+          'An objective has reveal conditions but no revealed text.',
+          'Add the more specific journal text, or remove the unused conditions.'
+        );
+      }
+
+      if (is_array($revealConditions)) {
+        $issues = [
+          ...$issues,
+          ...$this->checkConditions($revealConditions, $where . ' objective reveal', $known),
+        ];
+      }
 
       if ($target === '') {
         $issues[] = Issue::error($where, sprintf('A "%s" objective names no target.', $type), 'It can never advance.');
@@ -1276,6 +1321,7 @@ class ProjectValidator
 
         $issues = [
           ...$issues,
+          ...$this->checkEventCue($definition['cue'] ?? null, $where),
           ...$this->checkConditions((array) ($definition['conditions'] ?? []), $where, $known),
           ...$this->checkDialogueVariants((array) ($data['dialogue'] ?? []), $where, $known),
           ...$this->checkCommands(
@@ -1360,13 +1406,13 @@ class ProjectValidator
     array $npcIdsByMap,
   ): array {
     $issues = [];
-    $allowedRootFields = ['class', 'data', 'conditions', 'sets', 'whenBlocked'];
+    $allowedRootFields = ['class', 'data', 'conditions', 'sets', 'whenBlocked', 'cue'];
 
     foreach (array_diff(array_keys($definition), $allowedRootFields) as $field) {
       $issues[] = Issue::error(
         $where,
         sprintf('ScriptEventTrigger uses unsupported root field "%s".', $field),
-        'Use class, data, conditions, sets, or whenBlocked.'
+        'Use class, data, conditions, sets, whenBlocked, or cue.'
       );
     }
 
@@ -1436,6 +1482,60 @@ class ProjectValidator
       ...$issues,
       ...$this->checkStateWrites((array) ($definition['sets'] ?? []), $where),
     ];
+
+    return $issues;
+  }
+
+  /**
+   * Checks optional player-visible event guidance without conflating it with
+   * the event-layer marker used by map data.
+   *
+   * @return Issue[] The issues found.
+   */
+  protected function checkEventCue(mixed $cue, string $where): array
+  {
+    if ($cue === null) {
+      return [];
+    }
+
+    if (! is_array($cue)) {
+      return [Issue::error($where, 'Its event cue is malformed.', 'Store cue symbol and color in a cue array.')];
+    }
+
+    $issues = [];
+    foreach (array_diff(array_keys($cue), ['symbol', 'color']) as $field) {
+      $issues[] = Issue::error($where, sprintf('Its event cue uses unsupported field "%s".', $field), 'Use symbol or color.');
+    }
+
+    $rawSymbol = $cue['symbol'] ?? '';
+    if (! is_string($rawSymbol)) {
+      return [...$issues, Issue::error($where, 'Its event cue symbol is malformed.', 'Use a string containing one terminal cell.')];
+    }
+
+    $symbol = trim($rawSymbol);
+    if ($symbol === '') {
+      return $issues;
+    }
+
+    if (TerminalText::symbolCount($symbol) !== 1 || TerminalText::displayWidth($symbol) !== 1) {
+      $issues[] = Issue::error($where, 'Its event cue does not occupy exactly one terminal cell.', 'Choose one single-cell symbol.');
+    }
+
+    $rawColor = $cue['color'] ?? 'bright-yellow';
+    if (! is_string($rawColor)) {
+      return [...$issues, Issue::error($where, 'Its event cue color is malformed.', 'Use a Symfony Console color string.')];
+    }
+
+    $color = trim($rawColor);
+    try {
+      new OutputFormatterStyle($color);
+    } catch (InvalidArgumentException) {
+      $issues[] = Issue::error(
+        $where,
+        sprintf('Its event cue uses invalid Symfony Console color "%s".', $color),
+        'Use a supported Console color name or color value.'
+      );
+    }
 
     return $issues;
   }

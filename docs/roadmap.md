@@ -624,6 +624,24 @@ redesign, cutscene skipping/finalizers, camera/fade/field-animation commands,
 parallel and patrol routes, pathfinding, summon timeline editing, and event
 session save serialization.
 
+## Production-hardening extension — progressive objectives and field cues ✅ *shipped 2026-08*
+
+> Status: shipped through the existing quest Database surface, map event
+> inspector, undo/redo path, and `ProjectValidator`. No second quest editor,
+> trigger catalog, or condition grammar was introduced.
+
+Each quest objective exposes spoiler-safe text, optional revealed text, and a
+Reveal When field backed by the existing condition editor and
+`ConditionCodec`. The validator rejects incomplete reveal pairs and validates
+their record references through the shared world-condition vocabulary.
+
+Every event type exposes an optional cue symbol and Symfony Console color in
+the existing inspector, including legacy definitions that predate cues.
+Inspecting a legacy event does not mutate it; editing the field writes through
+the normal nested event-field and undo/redo machinery. Validation rejects
+malformed, multi-cell, or invalid-color cues. Root `whenBlocked` remains an
+independent, intentional collision policy rather than a substitute for a cue.
+
 ## Sequencing notes
 - Phase 1 is days of work and transforms perceived quality; do it first and
   ship it alone.
