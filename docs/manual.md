@@ -396,6 +396,7 @@ Supported command types, matching the engine's interpreter:
 | `move_route` | Subject, NPC Id, Wait, Seconds Per Step, Speed, Steps |
 | `transfer` | Map Id, X, Y |
 | `start_battle` | Troop, Result Variable, Defeat Policy, Escape Policy |
+| `recover_party` | None |
 | `branch` | Conditions, Then (fixed), Else (fixed) |
 
 `Shift+O` appends a command, `Shift+X` removes the last one.
@@ -421,6 +422,11 @@ next command. `Result Variable` is optional and receives `victory`, `defeat`,
 or `escape`; leaving it empty writes nothing. `Defeat Policy` defaults to
 `game_over`. Select `continue` only for a scripted battle that is explicitly
 allowed to return after defeat.
+
+`recover_party` fully restores HP, MP, and AP for the whole travelling roster
+and clears battle-only state. It is intended for explicit story recovery
+points and does not change party order, equipment, progression, or persistent
+conditions.
 
 Story-event sessions also survive an authored `transfer` in memory. While a
 session is active, manual save and quicksave are blocked and transfer
