@@ -1321,7 +1321,7 @@ class ProjectValidator
 
         $issues = [
           ...$issues,
-          ...$this->checkEventCue($definition['cue'] ?? null, $where),
+          ...$this->checkEventCue($definition['cue'] ?? null, $where, $known),
           ...$this->checkConditions((array) ($definition['conditions'] ?? []), $where, $known),
           ...$this->checkDialogueVariants((array) ($data['dialogue'] ?? []), $where, $known),
           ...$this->checkCommands(
@@ -1492,7 +1492,7 @@ class ProjectValidator
    *
    * @return Issue[] The issues found.
    */
-  protected function checkEventCue(mixed $cue, string $where): array
+  protected function checkEventCue(mixed $cue, string $where, array $known): array
   {
     if ($cue === null) {
       return [];
@@ -1503,9 +1503,14 @@ class ProjectValidator
     }
 
     $issues = [];
-    foreach (array_diff(array_keys($cue), ['symbol', 'color']) as $field) {
-      $issues[] = Issue::error($where, sprintf('Its event cue uses unsupported field "%s".', $field), 'Use symbol or color.');
+    foreach (array_diff(array_keys($cue), ['symbol', 'color', 'conditions']) as $field) {
+      $issues[] = Issue::error($where, sprintf('Its event cue uses unsupported field "%s".', $field), 'Use symbol, color, or conditions.');
     }
+
+    $issues = [
+      ...$issues,
+      ...$this->checkConditions((array) ($cue['conditions'] ?? []), $where . ' cue', $known),
+    ];
 
     $rawSymbol = $cue['symbol'] ?? '';
     if (! is_string($rawSymbol)) {

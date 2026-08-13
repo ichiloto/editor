@@ -641,6 +641,9 @@ Inspecting a legacy event does not mutate it; editing the field writes through
 the normal nested event-field and undo/redo machinery. Validation rejects
 malformed, multi-cell, or invalid-color cues. Root `whenBlocked` remains an
 independent, intentional collision policy rather than a substitute for a cue.
+Runtime-authored cue conditions use the same fail-closed world-condition
+vocabulary as trigger conditions; strict validation accepts and checks that
+shared contract even though nested cue-condition authoring remains deferred.
 
 ## Sequencing notes
 - Phase 1 is days of work and transforms perceived quality; do it first and

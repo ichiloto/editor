@@ -146,6 +146,41 @@ it('passes a project with nothing wrong with it', function () {
     expect(validateProject($root))->toBe([]);
 });
 
+it('accepts conditional event cues from the shared runtime contract', function () {
+    $root = makeTemporaryProject();
+    writeConsistentQuests($root);
+    writeConsistentSkits($root);
+    editTestMapData(
+        $root,
+        static fn(string $source): string => str_replace(
+            "'data' => [\n        'lootType' => 'item',",
+            "'cue' => [\n        'symbol' => '!',\n        'color' => 'bright-yellow',\n        'conditions' => [['type' => 'event', 'name' => 'response_ready']],\n      ],\n      'data' => [\n        'lootType' => 'item',",
+            $source,
+        ),
+    );
+
+    expect(validateProject($root))->toBe([]);
+});
+
+it('validates conditional event cues with the shared condition vocabulary', function () {
+    $root = makeTemporaryProject();
+    writeConsistentQuests($root);
+    writeConsistentSkits($root);
+    editTestMapData(
+        $root,
+        static fn(string $source): string => str_replace(
+            "'data' => [\n        'lootType' => 'item',",
+            "'cue' => [\n        'symbol' => '!',\n        'conditions' => [['type' => 'weather_magic', 'name' => 'storm']],\n      ],\n      'data' => [\n        'lootType' => 'item',",
+            $source,
+        ),
+    );
+
+    $issues = issuesMentioning(validateProject($root), 'unknown condition type "weather_magic"');
+
+    expect($issues)->toHaveCount(1)
+        ->and($issues[0]->where)->toBe('test-map event E cue');
+});
+
 it('finds the dangling references in the shipped sample project', function () {
     // The fixture's quests came from a bigger project: they ask for a map, an
     // item, and an enemy it does not have. Worth asserting, because it is
