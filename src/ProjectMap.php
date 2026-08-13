@@ -452,6 +452,33 @@ final class ProjectMap
     }
 
     /**
+     * Reports whether every cell inside an event marker's bounds contains
+     * that marker. The runtime represents one marker as one rectangular
+     * trigger area and rejects sparse, cross-shaped, or disconnected areas.
+     */
+    public function isEventMarkerSolidRectangle(string $marker): bool
+    {
+        $bounds = $this->getEventBounds($marker);
+
+        if ($bounds === null) {
+            return false;
+        }
+
+        $maxX = $bounds['x'] + $bounds['width'];
+        $maxY = $bounds['y'] + $bounds['height'];
+
+        for ($y = $bounds['y']; $y < $maxY; $y++) {
+            for ($x = $bounds['x']; $x < $maxX; $x++) {
+                if ($this->getEventSymbol($x, $y) !== $marker) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    /**
      * Updates a top-level map metadata field.
      *
      * @param string $field The field to update.

@@ -483,6 +483,16 @@ class ProjectValidator
       );
     }
 
+    foreach ($placed as $marker) {
+      if (! $map->isEventMarkerSolidRectangle($marker)) {
+        $issues[] = Issue::error(
+          $map->mapId,
+          sprintf('Marker "%s" does not occupy one solid rectangle.', $marker),
+          'The engine rejects sparse, cross-shaped, and disconnected event markers when the map loads.'
+        );
+      }
+    }
+
     return $issues;
   }
 

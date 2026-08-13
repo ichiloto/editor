@@ -410,6 +410,29 @@ it('catches a marker placed on a map that defines no such event', function () {
         ->and($issues[0]->hint)->toContain('Unmapped event markers');
 });
 
+it('catches a marker that is not one solid rectangle', function () {
+    $root = makeTemporaryProject();
+    $path = $root . '/assets/Maps/test-map/test-map.event.php';
+
+    file_put_contents($path, <<<'PHP'
+    <?php
+
+    return " A  \nAAA \n    \n    ";
+    PHP);
+
+    editTestMapData($root, static fn(string $source): string => str_replace(
+        "'events' => [",
+        "'events' => [\n    'A' => ['class' => 'Ichiloto\\\\Engine\\\\Events\\\\Triggers\\\\DialogueEventTrigger', 'data' => []],",
+        $source
+    ));
+
+    $issues = issuesMentioning(validateProject($root), 'does not occupy one solid rectangle');
+
+    expect($issues)->toHaveCount(1)
+        ->and($issues[0]->severity)->toBe(Severity::ERROR)
+        ->and($issues[0]->hint)->toContain('cross-shaped');
+});
+
 it('catches an event defined but never placed', function () {
     $root = makeTemporaryProject();
 
