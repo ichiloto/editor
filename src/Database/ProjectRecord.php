@@ -208,7 +208,15 @@ final class ProjectRecord
         [$head, $rest] = array_pad(explode('.', $key, 2), 2, null);
 
         if (! array_key_exists($head, $arguments)) {
-            return null;
+            // Read-back trims arguments sitting at their defaults, but a
+            // trimmed argument is still the constructor's to set: without
+            // this, a fresh entry's Quantity -- or anything else left at its
+            // default -- silently refused every edit.
+            if (! self::constructorTakes($object, $head)) {
+                return null;
+            }
+
+            $arguments[$head] = $rest === null ? $value : self::currentPropertyValue($object, $head);
         }
 
         if ($rest === null) {
@@ -238,6 +246,44 @@ final class ProjectRecord
         $arguments[$head] = self::withArrayValue($nested, explode('.', $rest), $value);
 
         return new ($object::class)(...$arguments);
+    }
+
+    /**
+     * Determines whether an object's constructor takes a parameter.
+     *
+     * @param object $object The object.
+     * @param string $name The parameter name.
+     * @return bool True when it does.
+     */
+    private static function constructorTakes(object $object, string $name): bool
+    {
+        $constructor = new \ReflectionClass($object)->getConstructor();
+
+        foreach ($constructor?->getParameters() ?? [] as $parameter) {
+            if ($parameter->getName() === $name) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Reads the value an object currently holds for a promoted parameter.
+     *
+     * @param object $object The object.
+     * @param string $name The property name.
+     * @return mixed The value.
+     */
+    private static function currentPropertyValue(object $object, string $name): mixed
+    {
+        $reflection = new \ReflectionClass($object);
+
+        if (! $reflection->hasProperty($name)) {
+            return null;
+        }
+
+        return $reflection->getProperty($name)->getValue($object);
     }
 
     /**

@@ -44,6 +44,7 @@ final class ReferenceCatalog
         'bgm',
         'sfx',
         'enemy_sprites',
+        'elements',
     ];
 
     /**
@@ -103,6 +104,7 @@ final class ReferenceCatalog
             // Graphics/Enemies/<value>.txt, appending the extension itself,
             // so the file stems are the values.
             'enemy_sprites' => $this->fileValues('assets/Graphics/Enemies'),
+            'elements' => $this->elementValues(),
             'animations' => array_map(
                 static fn(object $animation): string => $animation->name ?? '',
                 $this->workspace->animationDatabase->getAnimations()
@@ -163,6 +165,39 @@ final class ReferenceCatalog
         sort($names);
 
         return $names;
+    }
+
+    /**
+     * Returns the elements the project's own element enum declares.
+     *
+     * A project defines its elements as a PHP enum under assets/Data/Types
+     * (the Types category), and the engine matches them by their string
+     * values. The cases are read from the source, so the list is available
+     * whether or not the enum is loaded.
+     *
+     * @return string[] The element values, in declaration order.
+     */
+    private function elementValues(): array
+    {
+        $directory = rtrim($this->workspace->projectRoot, '/') . '/assets/Data/Types';
+
+        if (! is_dir($directory)) {
+            return [];
+        }
+
+        foreach (glob($directory . '/*.php') ?: [] as $path) {
+            $source = (string) file_get_contents($path);
+
+            if (preg_match('/^\s*enum\s+\w*Element\w*\s*:/m', $source) !== 1) {
+                continue;
+            }
+
+            preg_match_all("/^\\s*case\\s+\\w+\\s*=\\s*'([^']+)'\\s*;/m", $source, $matches);
+
+            return $matches[1];
+        }
+
+        return [];
     }
 
     /**

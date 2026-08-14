@@ -39,6 +39,7 @@ final readonly class RecordField
         public RecordFieldCodec $codec = RecordFieldCodec::NONE,
         public ?string $reference = null,
         public ?string $enumClass = null,
+        public bool $allowsNone = false,
     ) {
     }
 

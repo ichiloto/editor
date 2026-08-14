@@ -21,4 +21,7 @@ enum RecordFieldCodec: string
 
     /** A list of plain strings, shown comma-separated. */
     case CSV_LIST = 'csv_list';
+
+    /** An element => multiplier map, edited a row at a time. */
+    case AFFINITIES = 'affinities';
 }

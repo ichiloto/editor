@@ -19,7 +19,9 @@ use Ichiloto\Editor\Database\DatabaseCategoryDefinition;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Database\ConditionCodec;
 use Ichiloto\Editor\Database\QuestReferences;
+use Ichiloto\Editor\Database\AffinityEditor;
 use Ichiloto\Editor\Database\ConditionEditor;
+use Ichiloto\Editor\Database\ElementAffinityCodec;
 use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\Database\ReferencePicker;
 use Ichiloto\Editor\Debug\Debug;
@@ -369,6 +371,12 @@ final class Editor
      */
     private readonly ReferencePicker $referencePicker;
     private readonly ConditionEditor $conditionEditor;
+    private readonly AffinityEditor $affinityEditor;
+    /**
+     * The settings-field id the picker carries when it was opened to choose
+     * an affinity row's element.
+     */
+    private const string AFFINITY_ELEMENT_FIELD = '__affinity_element';
     /**
      * The settings-field id the picker carries when it was opened to name a
      * condition rather than to set a field.
@@ -580,6 +588,7 @@ final class Editor
         $this->databaseFieldEditor = new TextFieldEditor();
         $this->referencePicker = new ReferencePicker();
         $this->conditionEditor = new ConditionEditor();
+        $this->affinityEditor = new AffinityEditor();
         $this->modals = new ModalStack();
         $this->assetsPanel = new AssetsPanel(
             self::FOCUS_ASSETS,
@@ -1562,6 +1571,11 @@ final class Editor
 
         if ($this->conditionEditor->isOpen()) {
             $this->handleConditionEditorInput($input);
+            return;
+        }
+
+        if ($this->affinityEditor->isOpen()) {
+            $this->handleAffinityEditorInput($input);
             return;
         }
 
@@ -3606,6 +3620,12 @@ final class Editor
         $lines[] = '                     the cursor is on';
         $lines[] = '  Enter              edit, or open the picker on a field';
         $lines[] = '                     that names another record';
+        $lines[] = '';
+        $lines[] = 'Elemental wards (Enter on an Elemental Wards field)';
+        $lines[] = '  a / d              add or remove a ward';
+        $lines[] = '  n                  choose the element';
+        $lines[] = '  x / X              cycle Weak, Resist, Null, Absorb';
+        $lines[] = '  Enter / Esc        keep or discard the list';
         $lines[] = '';
         $lines[] = 'Conditions (Enter on a Conditions or Prereqs field)';
         $lines[] = '  a / d              add or remove a condition';
@@ -7888,6 +7908,12 @@ final class Editor
             return;
         }
 
+        if (($field['affinities'] ?? false) === true) {
+            $this->openAffinityEditor($field);
+
+            return;
+        }
+
         $control = $this->getDatabaseFieldControl($field);
 
         if (! $control instanceof InputControl) {
@@ -8035,6 +8061,164 @@ final class Editor
                 StatusLevel::INFO
             );
         }
+    }
+
+    /**
+     * Opens the affinity editor on a field that holds an element map.
+     *
+     * @param array<string, mixed> $field The settings-pane field descriptor.
+     * @return void
+     */
+    private function openAffinityEditor(array $field): void
+    {
+        if (! $this->workspace instanceof ProjectWorkspace) {
+            return;
+        }
+
+        $elements = new ReferenceCatalog($this->workspace)->valuesFor('elements');
+
+        if ($elements === []) {
+            // No element enum, no rows to build: saying so beats an editor
+            // that opens with nothing to pick.
+            $this->setStatus(
+                'This project defines no element types under assets/Data/Types.',
+                StatusLevel::WARN
+            );
+            $this->renderDatabasePanes(['settings']);
+
+            return;
+        }
+
+        $this->affinityEditor->open(
+            (string) ($field['field'] ?? ''),
+            (string) ($field['label'] ?? 'Elemental'),
+            ElementAffinityCodec::decodeAll((string) ($field['value'] ?? '')),
+            $elements,
+        );
+
+        $this->statusMessage = 'Building elemental wards.';
+        $this->renderDatabasePanes(['settings']);
+    }
+
+    /**
+     * Handles input while affinities are being built.
+     *
+     * @param string $input The raw input.
+     * @return void
+     */
+    private function handleAffinityEditorInput(string $input): void
+    {
+        if ($input === "\033" || $input === "\x1b") {
+            $this->affinityEditor->close();
+            $this->statusMessage = 'Elemental wards unchanged.';
+            $this->renderDatabasePanes(['settings']);
+
+            return;
+        }
+
+        if ($input === "\n" || $input === "\r") {
+            $this->commitAffinities();
+
+            return;
+        }
+
+        match (true) {
+            str_contains($input, "\033[A") => $this->affinityEditor->move(-1),
+            str_contains($input, "\033[B") => $this->affinityEditor->move(1),
+            $input === 'a' => $this->affinityEditor->add(),
+            $input === 'd' => $this->affinityEditor->remove(),
+            $input === 'x' => $this->affinityEditor->cycleEffect(1),
+            $input === 'X' => $this->affinityEditor->cycleEffect(-1),
+            $input === 'n' => $this->beginAffinityElement(),
+            default => null,
+        };
+
+        $this->renderDatabasePanes(['settings']);
+    }
+
+    /**
+     * Opens the element picker for the selected affinity row.
+     *
+     * @return void
+     */
+    private function beginAffinityElement(): void
+    {
+        $row = $this->affinityEditor->selected();
+
+        if ($row === null) {
+            return;
+        }
+
+        $this->referencePicker->open(
+            self::AFFINITY_ELEMENT_FIELD,
+            'Element',
+            'elements',
+            $this->affinityEditor->elements(),
+            $row['element'],
+        );
+    }
+
+    /**
+     * Stores the affinities as the line the record layer decodes.
+     *
+     * @return void
+     */
+    private function commitAffinities(): void
+    {
+        $fieldId = $this->affinityEditor->fieldId();
+        $label = $this->affinityEditor->label();
+        $encoded = $this->affinityEditor->encoded();
+        $this->affinityEditor->close();
+
+        $field = null;
+
+        foreach ($this->getDatabaseSettingsFields() as $candidate) {
+            if (is_array($candidate) && ($candidate['field'] ?? null) === $fieldId) {
+                $field = $candidate;
+            }
+        }
+
+        if (! is_array($field)) {
+            return;
+        }
+
+        try {
+            $this->applyDatabaseFieldValueRecorded($field, $encoded);
+            $this->setStatus(sprintf('%s updated.', $label), StatusLevel::SUCCESS);
+        } catch (Throwable $throwable) {
+            $this->setErrorStatus($throwable, sprintf('%s edit', $label));
+        }
+
+        $this->renderDatabasePanes(['list', 'settings', 'cue', 'frames', 'preview']);
+    }
+
+    /**
+     * Returns the rows shown while affinities are being built.
+     *
+     * @return string[] The rows.
+     */
+    private function buildAffinityEditorRows(): array
+    {
+        $rows = $this->affinityEditor->describeRows();
+        $lines = [sprintf('%s · %d', $this->affinityEditor->label(), count($rows)), ''];
+
+        if ($rows === []) {
+            $lines[] = '  None. This piece is neutral to every element.';
+            $lines[] = '';
+            $lines[] = '  a to add a ward.';
+
+            return $lines;
+        }
+
+        $selectedIndex = $this->affinityEditor->selectedIndex();
+
+        foreach ($rows as $index => $row) {
+            $lines[] = sprintf('%s%s', $index === $selectedIndex ? '> ' : '  ', $row);
+        }
+
+        $visibleRows = max(1, $this->resolveDatabaseLayout($this->resolveLayout())['topHeight'] - 4);
+
+        return [...array_slice($lines, 0, 2), ...ScrollWindow::slice(array_slice($lines, 2), $selectedIndex, $visibleRows)];
     }
 
     /**
@@ -8276,6 +8460,12 @@ final class Editor
         $label = (string) ($field['label'] ?? 'Reference');
         $values = new ReferenceCatalog($this->workspace)->valuesFor($category);
 
+        if (($field['allowsNone'] ?? false) === true && $values !== []) {
+            // An optional reference needs a way back to nothing, or setting
+            // it once would be a dead end.
+            $values = ['(None)', ...$values];
+        }
+
         $opened = $this->referencePicker->open(
             (string) ($field['field'] ?? ''),
             $label,
@@ -8365,6 +8555,19 @@ final class Editor
         $label = $this->referencePicker->label();
         $this->referencePicker->close();
 
+        if ($fieldId === self::AFFINITY_ELEMENT_FIELD) {
+            // Opened from the affinity editor, which is still the thing
+            // being edited; the field itself is written when that closes.
+            if ($selected !== null) {
+                $this->affinityEditor->setElement($selected);
+            }
+
+            $this->statusMessage = 'Building elemental wards.';
+            $this->renderDatabasePanes(['settings']);
+
+            return;
+        }
+
         if ($fieldId === self::CONDITION_NAME_FIELD) {
             // Opened from the condition editor, which is still the thing
             // being edited; the field itself is written when that closes.
@@ -8398,8 +8601,14 @@ final class Editor
         }
 
         try {
+            // The record layer reads '(None)' as clearing the reference.
             $this->applyDatabaseFieldValueRecorded($field, $selected);
-            $this->setStatus(sprintf('%s set to %s.', $label, $selected), StatusLevel::SUCCESS);
+            $this->setStatus(
+                $selected === '(None)'
+                    ? sprintf('%s cleared.', $label)
+                    : sprintf('%s set to %s.', $label, $selected),
+                StatusLevel::SUCCESS,
+            );
         } catch (Throwable $throwable) {
             $this->setErrorStatus($throwable, sprintf('%s selection', $label));
         }
@@ -11129,6 +11338,13 @@ final class Editor
                     'Enter:Choose  Esc:Cancel',
                     'Enter:Choose',
                 ),
+                $this->affinityEditor->isOpen() => $this->fitHelp(
+                    $layout['settingsWidth'],
+                    'a:Add  d:Delete  n:Element  x/X:Effect  Enter:Done  Esc:Cancel',
+                    'a/d:Add/Del  n:Element  x:Effect  Enter:Done',
+                    'a/d:Add/Del  n/x:Edit  ?:Help',
+                    '?:Help',
+                ),
                 $this->conditionEditor->isOpen() => $this->fitHelp(
                     $layout['settingsWidth'],
                     'a:Add  d:Del  t:Type  n:Name  x:Value  !:Not  Enter:Done  Esc:Cancel',
@@ -11555,6 +11771,10 @@ final class Editor
 
         if ($this->conditionEditor->isOpen()) {
             return $this->buildConditionEditorRows();
+        }
+
+        if ($this->affinityEditor->isOpen()) {
+            return $this->buildAffinityEditorRows();
         }
 
         $lines = [];

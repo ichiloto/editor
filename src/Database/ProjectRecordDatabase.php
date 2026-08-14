@@ -1117,6 +1117,18 @@ final class ProjectRecordDatabase
             // instead of a text cursor.
             $descriptor['reference'] = $field->reference;
 
+            if ($field->allowsNone) {
+                $descriptor['allowsNone'] = true;
+            }
+
+            return $descriptor;
+        }
+
+        if ($field->codec === RecordFieldCodec::AFFINITIES) {
+            // Rows in a dedicated editor, like a condition list: the element
+            // picked, the effect cycled, the wire form written by the codec.
+            $descriptor['affinities'] = true;
+
             return $descriptor;
         }
 
@@ -1152,6 +1164,16 @@ final class ProjectRecordDatabase
             $conditions = ConditionCodec::decodeAll($trimmed);
 
             return $conditions === [] && $field->removeWhenEmpty ? null : $conditions;
+        }
+
+        if ($field->codec === RecordFieldCodec::AFFINITIES) {
+            // Empty decodes to [], which the exporter's default-trimming
+            // drops from a rebuilt constructor call.
+            return ElementAffinityCodec::decodeAll($trimmed);
+        }
+
+        if ($field->reference !== null && $field->allowsNone && in_array(mb_strtolower($trimmed), ['', '(none)', 'none'], true)) {
+            return null;
         }
 
         if ($field->codec === RecordFieldCodec::CSV_LIST) {
@@ -1203,6 +1225,7 @@ final class ProjectRecordDatabase
     {
         return match ($field->codec) {
             RecordFieldCodec::CONDITIONS => ConditionCodec::encodeAll(is_array($value) ? $value : []),
+            RecordFieldCodec::AFFINITIES => ElementAffinityCodec::encodeAll(is_array($value) ? $value : []),
             RecordFieldCodec::CSV_LIST => implode(', ', array_map(strval(...), is_array($value) ? $value : [])),
             RecordFieldCodec::NONE => ProjectRecord::stringify($value),
         };
