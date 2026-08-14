@@ -127,7 +127,7 @@ it('builds the quest settings fields with the five objective types', function ()
   $labels = array_column($fields, 'label');
   $typeField = $fields[array_search('Obj 1 Type', $labels, true)];
 
-  expect($labels)->toContain('Id', 'Name', 'Description', 'Giver', 'Reward Gold', 'Reward EXP', 'Reward Items', 'Prereqs', 'Obj 1 Type', 'Obj 1 Target', 'Obj 1 Qty', 'Obj 1 Text', 'Obj 1 Revealed', 'Obj 1 Reveal When', 'Obj 2 Type')
+  expect($labels)->toContain('Id', 'Name', 'Description', 'Giver', 'Reward Gold', 'Reward EXP', 'Prereqs', 'Obj 1 Type', 'Obj 1 Target', 'Obj 1 Qty', 'Obj 1 Text', 'Obj 1 Revealed', 'Obj 1 Reveal When', 'Obj 2 Type')
     ->and($typeField['options'])->toBe(['talk_to', 'collect', 'defeat', 'reach_map', 'flag'])
     ->and($typeField['value'])->toBe('reach_map');
 });

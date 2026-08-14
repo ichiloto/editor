@@ -7157,8 +7157,117 @@ final class Editor
      *
      * @return void
      */
+    /**
+     * Returns the reward slot the settings cursor is on, if it is on one.
+     *
+     * @return int|null The slot.
+     */
+    private function selectedQuestRewardSlot(): ?int
+    {
+        $field = $this->getDatabaseSettingsFields()[$this->databaseSelectedSettingIndex] ?? null;
+
+        if (is_array($field) && preg_match('/^rewardItem(\d+)$/', strval($field['field'] ?? '')) === 1) {
+            return intval(substr(strval($field['field']), strlen('rewardItem')));
+        }
+
+        return null;
+    }
+
+    /**
+     * Determines whether the cursor sits on the quest's reward fields, which
+     * is where adding a first reward item should work from.
+     *
+     * @return bool True when it does.
+     */
+    private function isQuestRewardListSelected(): bool
+    {
+        $field = $this->getDatabaseSettingsFields()[$this->databaseSelectedSettingIndex] ?? null;
+
+        return is_array($field)
+            && in_array($field['field'] ?? '', ['rewardGold', 'rewardExperience', 'rewardItems'], true);
+    }
+
+    /**
+     * Adds a reward item slot, below the cursor's slot when it is on one.
+     *
+     * @return void
+     */
+    private function addDatabaseQuestRewardItem(): void
+    {
+        if (! $this->workspace instanceof ProjectWorkspace) {
+            return;
+        }
+
+        $questDatabase = $this->workspace->questDatabase;
+        $questIndex = $this->databaseSelectedQuestIndex;
+        $slot = $questDatabase->addRewardItem($questIndex, $this->selectedQuestRewardSlot());
+
+        if ($slot === null) {
+            return;
+        }
+
+        $this->recordCommand(new GenericCommand(
+            'Reward item add',
+            static fn() => $questDatabase->insertRewardItem($questIndex, $slot, 'S-Potion'),
+            static fn() => $questDatabase->removeRewardItem($questIndex, $slot),
+        ));
+
+        // Land on the new row and open its picker: an unchosen placeholder
+        // is not what anyone wanted to add.
+        foreach ($this->getDatabaseSettingsFields() as $index => $field) {
+            if (($field['field'] ?? null) === sprintf('rewardItem%d', $slot)) {
+                $this->databaseSelectedSettingIndex = $index;
+                break;
+            }
+        }
+
+        $this->setStatus(sprintf('Reward item %d added.', $slot + 1), StatusLevel::SUCCESS);
+        $this->renderDatabasePanes(['list', 'settings', 'cue', 'frames', 'preview']);
+        $this->beginDatabaseEdit();
+    }
+
+    /**
+     * Removes the reward item slot the cursor is on.
+     *
+     * @return void
+     */
+    private function removeDatabaseQuestRewardItem(): void
+    {
+        $slot = $this->selectedQuestRewardSlot();
+
+        if ($slot === null || ! $this->workspace instanceof ProjectWorkspace) {
+            return;
+        }
+
+        $questDatabase = $this->workspace->questDatabase;
+        $questIndex = $this->databaseSelectedQuestIndex;
+        $removed = $questDatabase->removeRewardItem($questIndex, $slot);
+
+        if ($removed === null) {
+            return;
+        }
+
+        $this->databaseSelectedSettingIndex = min(
+            $this->databaseSelectedSettingIndex,
+            max(0, count($this->getDatabaseSettingsFields()) - 1)
+        );
+        $this->recordCommand(new GenericCommand(
+            'Reward item remove',
+            static fn() => $questDatabase->removeRewardItem($questIndex, $slot),
+            static fn() => $questDatabase->insertRewardItem($questIndex, $slot, $removed),
+        ));
+        $this->setStatus(sprintf('Reward item %d removed (%s).', $slot + 1, $removed), StatusLevel::SUCCESS);
+        $this->renderDatabasePanes(['list', 'settings', 'cue', 'frames', 'preview']);
+    }
+
     private function addDatabaseQuestObjective(): void
     {
+        if ($this->selectedQuestRewardSlot() !== null || $this->isQuestRewardListSelected()) {
+            $this->addDatabaseQuestRewardItem();
+
+            return;
+        }
+
         if (! $this->workspace instanceof ProjectWorkspace || ! $this->getSelectedQuest() instanceof ProjectQuest) {
             return;
         }
@@ -7191,6 +7300,12 @@ final class Editor
      */
     private function removeDatabaseQuestObjective(): void
     {
+        if ($this->selectedQuestRewardSlot() !== null) {
+            $this->removeDatabaseQuestRewardItem();
+
+            return;
+        }
+
         $quest = $this->getSelectedQuest();
 
         if (! $this->workspace instanceof ProjectWorkspace || ! $quest instanceof ProjectQuest) {
@@ -7627,9 +7742,20 @@ final class Editor
             ['label' => 'Giver', 'value' => $quest->getGiver(), 'control' => new InputControl(InputControlType::TEXT, $quest->getGiver()), 'field' => 'giver'],
             ['label' => 'Reward Gold', 'value' => (string) $quest->getRewardGold(), 'control' => new InputControl(InputControlType::INTEGER, (string) $quest->getRewardGold()), 'field' => 'rewardGold'],
             ['label' => 'Reward EXP', 'value' => (string) $quest->getRewardExperience(), 'control' => new InputControl(InputControlType::INTEGER, (string) $quest->getRewardExperience()), 'field' => 'rewardExperience'],
-            ['label' => 'Reward Items', 'value' => $quest->getRewardItemsString(), 'control' => new InputControl(InputControlType::TEXT, $quest->getRewardItemsString()), 'field' => 'rewardItems'],
             ['label' => 'Prereqs', 'value' => $quest->getPrerequisitesString(), 'conditions' => true, 'field' => 'prerequisites'],
         ];
+
+        // One row per reward item, picked from the inventory the engine's
+        // store resolves them against. Shift+O on a row adds a slot below
+        // it; Shift+X or Del removes the one the cursor is on.
+        foreach ($quest->getRewardItems() as $slot => $item) {
+            $fields[] = [
+                'label' => sprintf('Reward Item %d', $slot + 1),
+                'value' => $item,
+                'reference' => 'inventory',
+                'field' => sprintf('rewardItem%d', $slot),
+            ];
+        }
 
         foreach ($quest->getObjectives() as $index => $objective) {
             $label = sprintf('Obj %d', $index + 1);

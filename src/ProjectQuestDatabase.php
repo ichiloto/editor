@@ -284,6 +284,72 @@ final class ProjectQuestDatabase
     }
 
     /**
+     * Adds a reward item slot to a quest.
+     *
+     * @param int $index The quest index.
+     * @param int|null $afterSlot The slot to insert after, or null for the end.
+     * @return int|null The new slot, or null when the quest is unknown.
+     */
+    public function addRewardItem(int $index, ?int $afterSlot = null): ?int
+    {
+        $quest = $this->getQuestByIndex($index);
+
+        if (! $quest instanceof ProjectQuest) {
+            return null;
+        }
+
+        $this->isDirty = true;
+
+        return $quest->addRewardItem($afterSlot);
+    }
+
+    /**
+     * Removes a reward item slot from a quest.
+     *
+     * @param int $index The quest index.
+     * @param int $slot The slot.
+     * @return string|null The removed item name.
+     */
+    public function removeRewardItem(int $index, int $slot): ?string
+    {
+        $quest = $this->getQuestByIndex($index);
+
+        if (! $quest instanceof ProjectQuest) {
+            return null;
+        }
+
+        $removed = $quest->removeRewardItem($slot);
+
+        if ($removed !== null) {
+            $this->isDirty = true;
+        }
+
+        return $removed;
+    }
+
+    /**
+     * Puts a removed reward item back where it was.
+     *
+     * @param int $index The quest index.
+     * @param int $slot The slot it held.
+     * @param string $item The item name.
+     * @return void
+     */
+    public function insertRewardItem(int $index, int $slot, string $item): void
+    {
+        $quest = $this->getQuestByIndex($index);
+
+        if (! $quest instanceof ProjectQuest) {
+            return;
+        }
+
+        $items = $quest->getRewardItems();
+        array_splice($items, min($slot, count($items)), 0, [$item]);
+        $quest->setRewardItems($items);
+        $this->isDirty = true;
+    }
+
+    /**
      * Writes the quest asset back to disk.
      *
      * @return void

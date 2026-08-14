@@ -117,7 +117,82 @@ final class ProjectQuest
      */
     public function getRewardItemsString(): string
     {
-        return implode(', ', array_map(strval(...), (array) ($this->getRewards()['items'] ?? [])));
+        return implode(', ', $this->getRewardItems());
+    }
+
+    /**
+     * @return string[] The reward item names, as the engine's store resolves them.
+     */
+    public function getRewardItems(): array
+    {
+        return array_values(array_filter(
+            array_map(strval(...), (array) ($this->getRewards()['items'] ?? [])),
+            static fn(string $item): bool => trim($item) !== ''
+        ));
+    }
+
+    /**
+     * Stores the reward item list, dropping the key when it empties.
+     *
+     * @param string[] $items The item names.
+     * @return void
+     */
+    public function setRewardItems(array $items): void
+    {
+        $items = array_values(array_filter(
+            array_map(static fn(mixed $item): string => trim(strval($item)), $items),
+            static fn(string $item): bool => $item !== ''
+        ));
+        $rewards = $this->getRewards();
+
+        if ($items === []) {
+            unset($rewards['items']);
+        } else {
+            $rewards['items'] = $items;
+        }
+
+        $this->setRewards($rewards);
+    }
+
+    /**
+     * Adds a reward item slot after the given one, or at the end.
+     *
+     * @param int|null $afterIndex The slot to insert after.
+     * @return int The new slot's index.
+     */
+    public function addRewardItem(?int $afterIndex = null): int
+    {
+        $items = $this->getRewardItems();
+        $position = $afterIndex === null ? count($items) : min(count($items), $afterIndex + 1);
+
+        // A placeholder name, so the slot exists to be picked into; the
+        // picker replaces it before anything resolves it.
+        array_splice($items, $position, 0, ['S-Potion']);
+        $rewards = $this->getRewards();
+        $rewards['items'] = $items;
+        $this->setRewards($rewards);
+
+        return $position;
+    }
+
+    /**
+     * Removes a reward item slot.
+     *
+     * @param int $index The slot.
+     * @return string|null The removed name, or null when the slot is unknown.
+     */
+    public function removeRewardItem(int $index): ?string
+    {
+        $items = $this->getRewardItems();
+
+        if (! array_key_exists($index, $items)) {
+            return null;
+        }
+
+        [$removed] = array_splice($items, $index, 1);
+        $this->setRewardItems($items);
+
+        return $removed;
     }
 
     /**
@@ -145,6 +220,13 @@ final class ProjectQuest
     {
         if (preg_match('/^objective(\d+)(Type|Target|Quantity|Description|RevealedDescription|RevealConditions)$/', $field, $matches) === 1) {
             $this->setObjectiveField(intval($matches[1]), $matches[2], $value);
+            return;
+        }
+
+        if (preg_match('/^rewardItem(\d+)$/', $field, $matches) === 1) {
+            $items = $this->getRewardItems();
+            $items[intval($matches[1])] = trim(strval($value));
+            $this->setRewardItems($items);
             return;
         }
 
