@@ -439,8 +439,21 @@ fails closed if validation was skipped: no later or enclosing command runs,
 completion state and rewards remain unapplied, deferred autosave is discarded,
 and field input plus saving return for a corrected retry.
 
-Current limits: choice options and branch arms are preserved but not
-structurally edited; there is no cutscene skipping, camera/focus or screen-fade
+### Command Frames
+
+Choice options and branch arms are edited as frames, mirroring how the
+runtime executes them. A `choice` command lists each option as two rows: its
+text, editable in place, and a `Commands · N` row that opens the option's own
+command list on Enter. A `branch` shows `Then Commands` and `Else Commands`
+rows the same way. Inside a frame the pane shows only that list — the same
+rows, pickers, and Shift+O / Shift+X / Del as the top level, at any depth —
+and the pane title is the trail back out (`Commands › Choice 2 › Option 1`).
+Esc pops exactly one frame; at the top it closes the Database as before.
+
+Shift+O with the cursor on an option row adds an option to that choice;
+removing an option takes its whole arm with it, and undo puts both back.
+
+Current limits: there is no cutscene skipping, camera/focus or screen-fade
 command, field-animation command, parallel movement route, NPC patrol-route
 authoring, pathfinding, or complete NPC placement editor.
 

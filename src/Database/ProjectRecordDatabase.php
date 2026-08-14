@@ -194,48 +194,115 @@ final class ProjectRecordDatabase
         }
 
         foreach ($record->getSubList($subList->key) as $entryIndex => $entry) {
-            foreach ($subList->fieldsFor($entry) as $field) {
-                $fields[] = self::describeField(
-                    $field,
-                    self::displayValue($field, self::readNested($entry, $field->key)),
-                    self::subFieldId($subList->prefix, $entryIndex, $field->key),
-                    $isEditable,
-                    sprintf('%s %d %s', ucfirst($subList->singular), $entryIndex + 1, $field->label),
-                );
-            }
+            $fields = [...$fields, ...$this->describeSubEntryFields($subList, $entryIndex, $entry, $isEditable, [])];
+        }
 
-            $nestedList = $subList->nestedListFor($entry);
+        return $fields;
+    }
 
-            if ($nestedList === null) {
-                continue;
-            }
+    /**
+     * Describes one sub-list entry's rows, structural rows included.
+     *
+     * The same rows serve the top-level command list and any nested frame,
+     * so a command reads identically at every depth.
+     *
+     * @param RecordSubList $subList The sub-list schema.
+     * @param int $entryIndex The entry's index in its own list.
+     * @param array<string, mixed> $entry The entry payload.
+     * @param bool $isEditable Whether edits are accepted.
+     * @param array<int, int|string> $basePath The frame path this entry's list lives at.
+     * @return array<int, array<string, mixed>> The field descriptors.
+     */
+    private function describeSubEntryFields(RecordSubList $subList, int $entryIndex, array $entry, bool $isEditable, array $basePath): array
+    {
+        $fields = [];
 
-            foreach (array_values((array) ($entry[$nestedList->key] ?? [])) as $nestedIndex => $nestedEntry) {
-                if (! is_array($nestedEntry)) {
+        foreach ($subList->fieldsFor($entry) as $field) {
+            $fields[] = self::describeField(
+                $field,
+                self::displayValue($field, self::readNested($entry, $field->key)),
+                self::subFieldId($subList->prefix, $entryIndex, $field->key),
+                $isEditable,
+                sprintf('%s %d %s', ucfirst($subList->singular), $entryIndex + 1, $field->label),
+            );
+        }
+
+        $variant = $subList->variantKey !== null ? strval($entry[$subList->variantKey] ?? '') : '';
+
+        if ($variant === 'choice') {
+            // Each option is a row to rename and a frame to open. The arm's
+            // commands are edited inside the frame, exactly as the runtime
+            // executes them.
+            foreach (array_values((array) ($entry['options'] ?? [])) as $optionIndex => $option) {
+                if (! is_array($option)) {
                     continue;
                 }
 
-                foreach ($nestedList->fieldsFor($nestedEntry) as $field) {
-                    $fields[] = self::describeField(
-                        $field,
-                        self::displayValue($field, self::readNested($nestedEntry, $field->key)),
-                        self::nestedSubFieldId(
-                            $subList->prefix,
-                            $entryIndex,
-                            $nestedList->prefix,
-                            $nestedIndex,
-                            $field->key,
-                        ),
-                        $isEditable,
-                        sprintf(
-                            '%s %d Step %d %s',
-                            ucfirst($subList->singular),
-                            $entryIndex + 1,
-                            $nestedIndex + 1,
-                            $field->label,
-                        ),
-                    );
+                $armCount = count((array) ($option['then'] ?? []));
+                $label = sprintf('%s %d Option %d', ucfirst($subList->singular), $entryIndex + 1, $optionIndex + 1);
+                $text = strval($option['text'] ?? '');
+                $textField = [
+                    'label' => $label . ' Text',
+                    'value' => $text,
+                    'field' => sprintf('%s%dOption%dText', $subList->prefix, $entryIndex, $optionIndex),
+                ];
+
+                if ($isEditable) {
+                    $textField['control'] = new InputControl(InputControlType::TEXT, $text);
                 }
+
+                $fields[] = $textField;
+                $fields[] = [
+                    'label' => $label . ' Commands',
+                    'value' => sprintf('· %d', $armCount),
+                    'field' => sprintf('%s%dOption%dThen', $subList->prefix, $entryIndex, $optionIndex),
+                    'frame' => [...$basePath, $entryIndex, 'options', $optionIndex, 'then'],
+                ];
+            }
+        }
+
+        if ($variant === 'branch') {
+            foreach (['then' => 'Then', 'else' => 'Else'] as $armKey => $armLabel) {
+                $fields[] = [
+                    'label' => sprintf('%s %d %s Commands', ucfirst($subList->singular), $entryIndex + 1, $armLabel),
+                    'value' => sprintf('· %d', count((array) ($entry[$armKey] ?? []))),
+                    'field' => sprintf('%s%d%s', $subList->prefix, $entryIndex, $armLabel),
+                    'frame' => [...$basePath, $entryIndex, $armKey],
+                ];
+            }
+        }
+
+        $nestedList = $subList->nestedListFor($entry);
+
+        if ($nestedList === null) {
+            return $fields;
+        }
+
+        foreach (array_values((array) ($entry[$nestedList->key] ?? [])) as $nestedIndex => $nestedEntry) {
+            if (! is_array($nestedEntry)) {
+                continue;
+            }
+
+            foreach ($nestedList->fieldsFor($nestedEntry) as $field) {
+                $fields[] = self::describeField(
+                    $field,
+                    self::displayValue($field, self::readNested($nestedEntry, $field->key)),
+                    self::nestedSubFieldId(
+                        $subList->prefix,
+                        $entryIndex,
+                        $nestedList->prefix,
+                        $nestedIndex,
+                        $field->key,
+                    ),
+                    $isEditable,
+                    sprintf(
+                        '%s %d Step %d %s',
+                        ucfirst($subList->singular),
+                        $entryIndex + 1,
+                        $nestedIndex + 1,
+                        $field->label,
+                    ),
+                );
             }
         }
 
@@ -1332,6 +1399,485 @@ final class ProjectRecordDatabase
         $target[$key] = self::writeNested($child, $segments, $value);
 
         return $target;
+    }
+
+    /**
+     * Determines whether this category's commands nest into frames.
+     *
+     * @return bool True when choice options or branch arms can occur.
+     */
+    public function hasCommandFrames(): bool
+    {
+        $variants = $this->schema->subList?->variants ?? [];
+
+        return array_key_exists('choice', $variants) || array_key_exists('branch', $variants);
+    }
+
+    /**
+     * Returns the command list a frame path addresses.
+     *
+     * A path is segments from the record's top list: `[]` is the script
+     * itself, `[2, 'options', 0, 'then']` is the first option of the third
+     * command, `[4, 'else']` is a branch's else arm -- the same shape the
+     * runtime pushes as execution frames.
+     *
+     * @param int $recordIndex The record.
+     * @param array<int, int|string> $framePath The path.
+     * @return array<int, array<string, mixed>>|null The commands, or null when the path no longer resolves.
+     */
+    public function getFrameCommands(int $recordIndex, array $framePath): ?array
+    {
+        $subList = $this->schema->subList;
+        $record = $this->getRecordByIndex($recordIndex);
+
+        if ($subList === null || ! $record instanceof ProjectRecord) {
+            return null;
+        }
+
+        return self::frameListFrom($record->getSubList($subList->key), $framePath);
+    }
+
+    /**
+     * Returns the settings rows for one frame of a record's commands.
+     *
+     * The root frame includes the record's own fields, so the editor can use
+     * this one call wherever it showed getSettingsFields.
+     *
+     * @param int $recordIndex The record.
+     * @param array<int, int|string> $framePath The frame.
+     * @return array<int, array<string, mixed>> The field descriptors.
+     */
+    public function getFrameSettingsFields(int $recordIndex, array $framePath): array
+    {
+        if ($framePath === []) {
+            return $this->getSettingsFields($recordIndex);
+        }
+
+        $subList = $this->schema->subList;
+        $record = $this->getRecordByIndex($recordIndex);
+        $commands = $this->getFrameCommands($recordIndex, $framePath);
+
+        if ($subList === null || ! $record instanceof ProjectRecord || $commands === null) {
+            return [];
+        }
+
+        $isEditable = $this->isEditable() && $record->isEditable();
+        $fields = [];
+
+        foreach ($commands as $entryIndex => $entry) {
+            if (is_array($entry)) {
+                $fields = [...$fields, ...$this->describeSubEntryFields($subList, $entryIndex, $entry, $isEditable, $framePath)];
+            }
+        }
+
+        return $fields;
+    }
+
+    /**
+     * Applies one settings-field edit inside a frame.
+     *
+     * @param int $recordIndex The record.
+     * @param array<int, int|string> $framePath The frame.
+     * @param string $fieldId The frame-relative field id.
+     * @param string $rawValue The raw edited value.
+     * @return void
+     */
+    public function setFrameField(int $recordIndex, array $framePath, string $fieldId, string $rawValue): void
+    {
+        $subList = $this->schema->subList;
+        $record = $this->getRecordByIndex($recordIndex);
+        $commands = $this->getFrameCommands($recordIndex, $framePath);
+
+        if ($subList === null || ! $record instanceof ProjectRecord || $commands === null || ! $this->isEditable()) {
+            return;
+        }
+
+        $prefix = preg_quote($subList->prefix, '/');
+
+        if (preg_match('/^' . $prefix . '(\\d+)Option(\\d+)Text$/', $fieldId, $matches) === 1) {
+            // Option rows exist at every depth, the root included, and the
+            // plain setField has never heard of them.
+            $commands = self::withOptionText($commands, intval($matches[1]), intval($matches[2]), $rawValue);
+        } elseif ($framePath === []) {
+            // The root list is what setField already edits, steps and all.
+            $this->setField($recordIndex, $fieldId, $rawValue);
+
+            return;
+        } elseif (preg_match('/^' . $prefix . '(\\d+)([A-Za-z][A-Za-z0-9]*)$/', $fieldId, $matches) === 1) {
+            $entryIndex = intval($matches[1]);
+            $entry = $commands[$entryIndex] ?? null;
+
+            if (! is_array($entry)) {
+                return;
+            }
+
+            $written = $this->writeEntryFieldToken($subList, $entry, $matches[2], $rawValue);
+
+            if ($written === null) {
+                return;
+            }
+
+            $commands[$entryIndex] = $written;
+        } else {
+            return;
+        }
+
+        $this->writeFrameCommands($record, $subList, $framePath, $commands);
+    }
+
+    /**
+     * Adds a blank command to a frame.
+     *
+     * @param int $recordIndex The record.
+     * @param array<int, int|string> $framePath The frame.
+     * @param int|null $afterIndex The command to insert after, or null for the end.
+     * @return int|null The new command's index.
+     */
+    public function addFrameCommand(int $recordIndex, array $framePath, ?int $afterIndex = null): ?int
+    {
+        $subList = $this->schema->subList;
+        $record = $this->getRecordByIndex($recordIndex);
+        $commands = $this->getFrameCommands($recordIndex, $framePath);
+
+        if ($subList === null || ! $record instanceof ProjectRecord || $commands === null || ! $this->isEditable()) {
+            return null;
+        }
+
+        $position = $afterIndex === null ? count($commands) : min(count($commands), $afterIndex + 1);
+        array_splice($commands, $position, 0, [$subList->blank]);
+        $this->writeFrameCommands($record, $subList, $framePath, $commands);
+
+        return $position;
+    }
+
+    /**
+     * Puts a removed command back where it was.
+     *
+     * @param int $recordIndex The record.
+     * @param array<int, int|string> $framePath The frame.
+     * @param int $commandIndex The index it held.
+     * @param array<string, mixed> $command The command payload.
+     * @return void
+     */
+    public function insertFrameCommand(int $recordIndex, array $framePath, int $commandIndex, array $command): void
+    {
+        $subList = $this->schema->subList;
+        $record = $this->getRecordByIndex($recordIndex);
+        $commands = $this->getFrameCommands($recordIndex, $framePath);
+
+        if ($subList === null || ! $record instanceof ProjectRecord || $commands === null) {
+            return;
+        }
+
+        array_splice($commands, min($commandIndex, count($commands)), 0, [$command]);
+        $this->writeFrameCommands($record, $subList, $framePath, $commands);
+    }
+
+    /**
+     * Removes a command from a frame.
+     *
+     * @param int $recordIndex The record.
+     * @param array<int, int|string> $framePath The frame.
+     * @param int $commandIndex The command.
+     * @return array<string, mixed>|null The removed payload, for undo.
+     */
+    public function removeFrameCommand(int $recordIndex, array $framePath, int $commandIndex): ?array
+    {
+        $subList = $this->schema->subList;
+        $record = $this->getRecordByIndex($recordIndex);
+        $commands = $this->getFrameCommands($recordIndex, $framePath);
+
+        if ($subList === null || ! $record instanceof ProjectRecord || $commands === null || ! isset($commands[$commandIndex])) {
+            return null;
+        }
+
+        [$removed] = array_splice($commands, $commandIndex, 1);
+        $this->writeFrameCommands($record, $subList, $framePath, $commands);
+
+        return is_array($removed) ? $removed : null;
+    }
+
+    /**
+     * Adds an option to a choice command.
+     *
+     * @param int $recordIndex The record.
+     * @param array<int, int|string> $framePath The frame the choice sits in.
+     * @param int $commandIndex The choice command.
+     * @return int|null The new option's index.
+     */
+    public function addChoiceOption(int $recordIndex, array $framePath, int $commandIndex): ?int
+    {
+        $subList = $this->schema->subList;
+        $record = $this->getRecordByIndex($recordIndex);
+        $commands = $this->getFrameCommands($recordIndex, $framePath);
+        $entry = $commands[$commandIndex] ?? null;
+
+        if ($subList === null || ! $record instanceof ProjectRecord || ! is_array($entry) || ! $this->isEditable()) {
+            return null;
+        }
+
+        if (strval($entry[$subList->variantKey ?? 'type'] ?? '') !== 'choice') {
+            return null;
+        }
+
+        $options = array_values((array) ($entry['options'] ?? []));
+        $options[] = ['text' => 'New option', 'then' => []];
+        $commands[$commandIndex]['options'] = $options;
+        $this->writeFrameCommands($record, $subList, $framePath, $commands);
+
+        return count($options) - 1;
+    }
+
+    /**
+     * Puts a removed option back where it was.
+     *
+     * @param int $recordIndex The record.
+     * @param array<int, int|string> $framePath The frame the choice sits in.
+     * @param int $commandIndex The choice command.
+     * @param int $optionIndex The index it held.
+     * @param array<string, mixed> $option The option payload.
+     * @return void
+     */
+    public function insertChoiceOption(int $recordIndex, array $framePath, int $commandIndex, int $optionIndex, array $option): void
+    {
+        $subList = $this->schema->subList;
+        $record = $this->getRecordByIndex($recordIndex);
+        $commands = $this->getFrameCommands($recordIndex, $framePath);
+        $entry = $commands[$commandIndex] ?? null;
+
+        if ($subList === null || ! $record instanceof ProjectRecord || ! is_array($entry)) {
+            return;
+        }
+
+        $options = array_values((array) ($entry['options'] ?? []));
+        array_splice($options, min($optionIndex, count($options)), 0, [$option]);
+        $commands[$commandIndex]['options'] = $options;
+        $this->writeFrameCommands($record, $subList, $framePath, $commands);
+    }
+
+    /**
+     * Removes an option from a choice command, its arm included.
+     *
+     * @param int $recordIndex The record.
+     * @param array<int, int|string> $framePath The frame the choice sits in.
+     * @param int $commandIndex The choice command.
+     * @param int $optionIndex The option.
+     * @return array<string, mixed>|null The removed payload, for undo.
+     */
+    public function removeChoiceOption(int $recordIndex, array $framePath, int $commandIndex, int $optionIndex): ?array
+    {
+        $subList = $this->schema->subList;
+        $record = $this->getRecordByIndex($recordIndex);
+        $commands = $this->getFrameCommands($recordIndex, $framePath);
+        $entry = $commands[$commandIndex] ?? null;
+
+        if ($subList === null || ! $record instanceof ProjectRecord || ! is_array($entry)) {
+            return null;
+        }
+
+        $options = array_values((array) ($entry['options'] ?? []));
+
+        if (! isset($options[$optionIndex])) {
+            return null;
+        }
+
+        [$removed] = array_splice($options, $optionIndex, 1);
+        $commands[$commandIndex]['options'] = $options;
+        $this->writeFrameCommands($record, $subList, $framePath, $commands);
+
+        return is_array($removed) ? $removed : null;
+    }
+
+    /**
+     * Describes a frame path as a breadcrumb.
+     *
+     * @param array<int, int|string> $framePath The frame.
+     * @return string The breadcrumb.
+     */
+    public static function describeFrame(array $framePath): string
+    {
+        if ($framePath === []) {
+            return 'Commands';
+        }
+
+        $parts = ['Commands'];
+        $position = 0;
+
+        while ($position < count($framePath)) {
+            $commandNumber = intval($framePath[$position]) + 1;
+
+            if (($framePath[$position + 1] ?? null) === 'options') {
+                $parts[] = sprintf('Choice %d › Option %d', $commandNumber, intval($framePath[$position + 2]) + 1);
+                $position += 4;
+            } else {
+                $parts[] = sprintf('Branch %d › %s', $commandNumber, ucfirst(strval($framePath[$position + 1] ?? '')));
+                $position += 2;
+            }
+        }
+
+        return implode(' › ', $parts);
+    }
+
+    /**
+     * Walks a frame path down a command list.
+     *
+     * @param array<int, mixed> $rootList The record's top command list.
+     * @param array<int, int|string> $framePath The path.
+     * @return array<int, array<string, mixed>>|null The list, or null when the path breaks.
+     */
+    private static function frameListFrom(array $rootList, array $framePath): ?array
+    {
+        $list = array_values($rootList);
+        $position = 0;
+
+        while ($position < count($framePath)) {
+            $entry = $list[intval($framePath[$position])] ?? null;
+
+            if (! is_array($entry)) {
+                return null;
+            }
+
+            if (($framePath[$position + 1] ?? null) === 'options') {
+                $option = ((array) ($entry['options'] ?? []))[intval($framePath[$position + 2] ?? -1)] ?? null;
+
+                if (! is_array($option) || ($framePath[$position + 3] ?? null) !== 'then') {
+                    return null;
+                }
+
+                $list = array_values((array) ($option['then'] ?? []));
+                $position += 4;
+                continue;
+            }
+
+            $arm = $framePath[$position + 1] ?? null;
+
+            if ($arm !== 'then' && $arm !== 'else') {
+                return null;
+            }
+
+            $list = array_values((array) ($entry[$arm] ?? []));
+            $position += 2;
+        }
+
+        return $list;
+    }
+
+    /**
+     * Returns the root list with one frame's commands replaced.
+     *
+     * @param array<int, mixed> $list The list at the current depth.
+     * @param array<int, int|string> $framePath The remaining path.
+     * @param array<int, mixed> $frameList The frame's new commands.
+     * @return array<int, mixed> The rebuilt list.
+     */
+    private static function withFrameList(array $list, array $framePath, array $frameList): array
+    {
+        if ($framePath === []) {
+            return array_values($frameList);
+        }
+
+        $list = array_values($list);
+        $entryIndex = intval($framePath[0]);
+
+        if (! is_array($list[$entryIndex] ?? null)) {
+            return $list;
+        }
+
+        if (($framePath[1] ?? null) === 'options') {
+            $optionIndex = intval($framePath[2] ?? -1);
+            $options = array_values((array) ($list[$entryIndex]['options'] ?? []));
+
+            if (! is_array($options[$optionIndex] ?? null)) {
+                return $list;
+            }
+
+            $options[$optionIndex]['then'] = self::withFrameList(
+                (array) ($options[$optionIndex]['then'] ?? []),
+                array_slice($framePath, 4),
+                $frameList,
+            );
+            $list[$entryIndex]['options'] = $options;
+
+            return $list;
+        }
+
+        $arm = strval($framePath[1] ?? 'then');
+        $list[$entryIndex][$arm] = self::withFrameList(
+            (array) ($list[$entryIndex][$arm] ?? []),
+            array_slice($framePath, 2),
+            $frameList,
+        );
+
+        return $list;
+    }
+
+    /**
+     * Writes a frame's commands back through the record's top list.
+     *
+     * @param ProjectRecord $record The record.
+     * @param RecordSubList $subList The sub-list schema.
+     * @param array<int, int|string> $framePath The frame.
+     * @param array<int, mixed> $commands The frame's new commands.
+     * @return void
+     */
+    private function writeFrameCommands(ProjectRecord $record, RecordSubList $subList, array $framePath, array $commands): void
+    {
+        $record->setSubList(
+            $subList->key,
+            self::withFrameList($record->getSubList($subList->key), $framePath, $commands),
+        );
+        $this->isDirty = true;
+    }
+
+    /**
+     * Writes one variant field into an entry by its flattened token.
+     *
+     * @param RecordSubList $subList The sub-list schema.
+     * @param array<string, mixed> $entry The entry payload.
+     * @param string $token The field token.
+     * @param string $rawValue The raw edited value.
+     * @return array<string, mixed>|null The rewritten entry, or null when no field matched.
+     */
+    private function writeEntryFieldToken(RecordSubList $subList, array $entry, string $token, string $rawValue): ?array
+    {
+        foreach ($subList->fieldsFor($entry) as $field) {
+            if (self::fieldToken($field->key) !== $token || $field->isReadOnly) {
+                continue;
+            }
+
+            return self::writeNested($entry, explode('.', $field->key), self::coerce($field, $rawValue));
+        }
+
+        return null;
+    }
+
+    /**
+     * Replaces one option's text on a choice command.
+     *
+     * @param array<int, mixed> $commands The frame's commands.
+     * @param int $commandIndex The choice command.
+     * @param int $optionIndex The option.
+     * @param string $text The new text.
+     * @return array<int, mixed> The rewritten commands.
+     */
+    private static function withOptionText(array $commands, int $commandIndex, int $optionIndex, string $text): array
+    {
+        $entry = $commands[$commandIndex] ?? null;
+
+        if (! is_array($entry)) {
+            return $commands;
+        }
+
+        $options = array_values((array) ($entry['options'] ?? []));
+
+        if (! is_array($options[$optionIndex] ?? null)) {
+            return $commands;
+        }
+
+        $options[$optionIndex]['text'] = $text;
+        $commands[$commandIndex]['options'] = $options;
+
+        return $commands;
     }
 
     /**

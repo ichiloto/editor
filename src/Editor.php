@@ -23,6 +23,7 @@ use Ichiloto\Editor\Database\AffinityEditor;
 use Ichiloto\Editor\Database\ConditionEditor;
 use Ichiloto\Editor\Database\ElementAffinityCodec;
 use Ichiloto\Editor\Database\ReferenceCatalog;
+use Ichiloto\Editor\Database\RecordSubList;
 use Ichiloto\Editor\Database\ReferencePicker;
 use Ichiloto\Editor\Debug\Debug;
 use Ichiloto\Editor\Events\EventTypeCatalog;
@@ -372,6 +373,11 @@ final class Editor
     private readonly ReferencePicker $referencePicker;
     private readonly ConditionEditor $conditionEditor;
     private readonly AffinityEditor $affinityEditor;
+    /**
+     * @var array<int, int|string> The open command frame, per the runtime's
+     * own model: [] is the script, [2,'options',0,'then'] an option's arm.
+     */
+    private array $databaseCommandFramePath = [];
     /**
      * The settings-field id the picker carries when it was opened to choose
      * an affinity row's element.
@@ -1618,6 +1624,12 @@ final class Editor
         if ($input === "\033" && $this->databaseFilter->isActive()) {
             // Esc pops exactly one level: the live filter before the screen.
             $this->clearDatabaseFilter();
+            return;
+        }
+
+        if ($input === "\033" && $this->databaseCommandFramePath !== []) {
+            // Esc pops exactly one level: the open frame before the screen.
+            $this->leaveCommandFrame();
             return;
         }
 
@@ -3621,6 +3633,12 @@ final class Editor
         $lines[] = '  Enter              edit, or open the picker on a field';
         $lines[] = '                     that names another record';
         $lines[] = '';
+        $lines[] = 'Command frames (event scripts)';
+        $lines[] = '  Enter              open an option or branch arm';
+        $lines[] = '  Esc                back out one frame';
+        $lines[] = '  Shift+O / Shift+X  add or remove a command here, or an';
+        $lines[] = '                     option when the cursor is on one';
+        $lines[] = '';
         $lines[] = 'Elemental wards (Enter on an Elemental Wards field)';
         $lines[] = '  a / d              add or remove a ward';
         $lines[] = '  n                  choose the element';
@@ -3886,6 +3904,7 @@ final class Editor
         $this->databaseCategoryIndex = DatabaseCatalog::indexOf($categoryKey);
         $this->databaseFocus = self::DATABASE_FOCUS_LIST;
         $this->databaseSelectedSettingIndex = 0;
+        $this->databaseCommandFramePath = [];
         $this->statusMessage = sprintf('%s database selected.', DatabaseCatalog::at($this->databaseCategoryIndex)->label);
         $this->renderDatabaseArea(includeRoot: true);
     }
@@ -6710,6 +6729,12 @@ final class Editor
      */
     private function setSelectedRecordIndex(int $index): void
     {
+        if ($index !== $this->getSelectedRecordIndex()) {
+            // A frame is an address inside one record's commands; it means
+            // nothing on another record.
+            $this->databaseCommandFramePath = [];
+        }
+
         $this->databaseSelectedRecordIndexes[$this->getSelectedDatabaseCategoryDefinition()->key] = max(0, $index);
     }
 
@@ -6787,6 +6812,206 @@ final class Editor
      *
      * @return void
      */
+    /**
+     * Adds where the cursor points: an option to the choice it is on, or a
+     * command to the open frame below the cursor's command.
+     *
+     * @param ProjectRecordDatabase $database The category.
+     * @param RecordSubList $subList The sub-list schema.
+     * @return void
+     */
+    private function addDatabaseFrameItem(ProjectRecordDatabase $database, RecordSubList $subList): void
+    {
+        $recordIndex = $this->getSelectedRecordIndex();
+        $framePath = $this->databaseCommandFramePath;
+        $selectedId = (string) ($this->getDatabaseSettingsFields()[$this->databaseSelectedSettingIndex]['field'] ?? '');
+        $prefix = preg_quote($subList->prefix, '/');
+
+        if (preg_match('/^' . $prefix . '(\\d+)Option(\\d+)/', $selectedId, $matches) === 1) {
+            $commandIndex = intval($matches[1]);
+            $optionIndex = $database->addChoiceOption($recordIndex, $framePath, $commandIndex);
+
+            if ($optionIndex === null) {
+                return;
+            }
+
+            $option = ['text' => 'New option', 'then' => []];
+            $this->recordCommand(new GenericCommand(
+                'Option add',
+                static fn() => $database->insertChoiceOption($recordIndex, $framePath, $commandIndex, $optionIndex, $option),
+                static fn() => $database->removeChoiceOption($recordIndex, $framePath, $commandIndex, $optionIndex),
+            ));
+            $this->selectDatabaseFieldById(sprintf('%s%dOption%dText', $subList->prefix, $commandIndex, $optionIndex));
+            $this->setStatus(sprintf('Added option %d.', $optionIndex + 1), StatusLevel::SUCCESS);
+            $this->renderDatabaseArea();
+            $this->beginDatabaseEdit();
+
+            return;
+        }
+
+        $afterIndex = preg_match('/^' . $prefix . '(\\d+)/', $selectedId, $matches) === 1 ? intval($matches[1]) : null;
+        $commandIndex = $database->addFrameCommand($recordIndex, $framePath, $afterIndex);
+
+        if ($commandIndex === null) {
+            return;
+        }
+
+        $blank = $subList->blank;
+        $this->recordCommand(new GenericCommand(
+            sprintf('%s add', ucfirst($subList->singular)),
+            static fn() => $database->insertFrameCommand($recordIndex, $framePath, $commandIndex, $blank),
+            static fn() => $database->removeFrameCommand($recordIndex, $framePath, $commandIndex),
+        ));
+        $this->selectDatabaseFieldById(sprintf('%s%dType', $subList->prefix, $commandIndex));
+        $this->setStatus(sprintf('Added %s %d.', $subList->singular, $commandIndex + 1), StatusLevel::SUCCESS);
+        $this->renderDatabaseArea();
+    }
+
+    /**
+     * Removes what the cursor points at: an option with its whole arm, or
+     * the cursor's command from the open frame.
+     *
+     * @param ProjectRecordDatabase $database The category.
+     * @param RecordSubList $subList The sub-list schema.
+     * @return void
+     */
+    private function removeDatabaseFrameItem(ProjectRecordDatabase $database, RecordSubList $subList): void
+    {
+        $recordIndex = $this->getSelectedRecordIndex();
+        $framePath = $this->databaseCommandFramePath;
+        $selectedId = (string) ($this->getDatabaseSettingsFields()[$this->databaseSelectedSettingIndex]['field'] ?? '');
+        $prefix = preg_quote($subList->prefix, '/');
+
+        if (preg_match('/^' . $prefix . '(\\d+)Option(\\d+)/', $selectedId, $matches) === 1) {
+            $commandIndex = intval($matches[1]);
+            $optionIndex = intval($matches[2]);
+            $removed = $database->removeChoiceOption($recordIndex, $framePath, $commandIndex, $optionIndex);
+
+            if ($removed === null) {
+                return;
+            }
+
+            $armCount = count((array) ($removed['then'] ?? []));
+            $this->clampDatabaseSettingSelection();
+            $this->recordCommand(new GenericCommand(
+                'Option remove',
+                static fn() => $database->removeChoiceOption($recordIndex, $framePath, $commandIndex, $optionIndex),
+                static fn() => $database->insertChoiceOption($recordIndex, $framePath, $commandIndex, $optionIndex, $removed),
+            ));
+            $this->setStatus(
+                $armCount > 0
+                    ? sprintf('Removed option %d and its %d commands.', $optionIndex + 1, $armCount)
+                    : sprintf('Removed option %d.', $optionIndex + 1),
+                StatusLevel::SUCCESS,
+            );
+            $this->renderDatabaseArea();
+
+            return;
+        }
+
+        $commands = $database->getFrameCommands($recordIndex, $framePath) ?? [];
+        $commandIndex = preg_match('/^' . $prefix . '(\\d+)/', $selectedId, $matches) === 1
+            ? intval($matches[1])
+            : count($commands) - 1;
+        $removed = $database->removeFrameCommand($recordIndex, $framePath, $commandIndex);
+
+        if ($removed === null) {
+            return;
+        }
+
+        $this->clampDatabaseSettingSelection();
+        $this->recordCommand(new GenericCommand(
+            sprintf('%s remove', ucfirst($subList->singular)),
+            static fn() => $database->removeFrameCommand($recordIndex, $framePath, $commandIndex),
+            static fn() => $database->insertFrameCommand($recordIndex, $framePath, $commandIndex, $removed),
+        ));
+        $this->setStatus(sprintf('Removed %s %d.', $subList->singular, $commandIndex + 1), StatusLevel::SUCCESS);
+        $this->renderDatabaseArea();
+    }
+
+    /**
+     * Puts the settings cursor on a field by its id.
+     *
+     * @param string $fieldId The field id.
+     * @return void
+     */
+    private function selectDatabaseFieldById(string $fieldId): void
+    {
+        foreach ($this->getDatabaseSettingsFields() as $index => $field) {
+            if (($field['field'] ?? null) === $fieldId) {
+                $this->databaseSelectedSettingIndex = $index;
+
+                return;
+            }
+        }
+    }
+
+    /**
+     * Keeps the settings cursor inside the pane after rows disappear.
+     *
+     * @return void
+     */
+    private function clampDatabaseSettingSelection(): void
+    {
+        $this->databaseSelectedSettingIndex = min(
+            $this->databaseSelectedSettingIndex,
+            max(0, count($this->getDatabaseSettingsFields()) - 1),
+        );
+    }
+
+    /**
+     * Opens a command frame: an option's or a branch arm's own command list.
+     *
+     * @param array<int, int|string> $framePath The frame to open.
+     * @return void
+     */
+    private function enterCommandFrame(array $framePath): void
+    {
+        $database = $this->getSelectedRecordDatabase();
+
+        if (! $database instanceof ProjectRecordDatabase || $database->getFrameCommands($this->getSelectedRecordIndex(), $framePath) === null) {
+            return;
+        }
+
+        $this->databaseCommandFramePath = $framePath;
+        $this->databaseSelectedSettingIndex = 0;
+        $this->setStatus(ProjectRecordDatabase::describeFrame($framePath) . '.', StatusLevel::INFO);
+        $this->renderDatabasePanes(['settings', 'cue']);
+    }
+
+    /**
+     * Leaves the open command frame for the one enclosing it.
+     *
+     * @return void
+     */
+    private function leaveCommandFrame(): void
+    {
+        $path = $this->databaseCommandFramePath;
+
+        if ($path === []) {
+            return;
+        }
+
+        // An option arm ends [i, 'options', j, 'then']; a branch arm [i, arm].
+        $chunk = ($path[count($path) - 3] ?? null) === 'options' ? 4 : 2;
+        $enclosingCommand = intval($path[count($path) - $chunk]);
+        $this->databaseCommandFramePath = array_slice($path, 0, count($path) - $chunk);
+        $this->databaseSelectedSettingIndex = 0;
+
+        // Land back on the command the frame belonged to.
+        $prefix = $this->getSelectedRecordDatabase()?->schema->subList?->prefix ?? 'command';
+
+        foreach ($this->getDatabaseSettingsFields() as $index => $field) {
+            if (str_starts_with((string) ($field['field'] ?? ''), $prefix . $enclosingCommand)) {
+                $this->databaseSelectedSettingIndex = $index;
+                break;
+            }
+        }
+
+        $this->setStatus(ProjectRecordDatabase::describeFrame($this->databaseCommandFramePath) . '.', StatusLevel::INFO);
+        $this->renderDatabasePanes(['settings', 'cue']);
+    }
+
     private function addDatabaseRecordSubItem(): void
     {
         $database = $this->getSelectedRecordDatabase();
@@ -6799,6 +7024,11 @@ final class Editor
         if (! $database->isEditable()) {
             $this->setStatus($this->describeRecordReadOnly($database), StatusLevel::WARN);
             $this->renderDatabaseArea();
+            return;
+        }
+
+        if ($database->hasCommandFrames()) {
+            $this->addDatabaseFrameItem($database, $subList);
             return;
         }
 
@@ -6838,6 +7068,11 @@ final class Editor
         if (! $database->isEditable()) {
             $this->setStatus($this->describeRecordReadOnly($database), StatusLevel::WARN);
             $this->renderDatabaseArea();
+            return;
+        }
+
+        if ($database->hasCommandFrames()) {
+            $this->removeDatabaseFrameItem($database, $subList);
             return;
         }
 
@@ -7475,6 +7710,23 @@ final class Editor
         $recordDatabase = $this->getSelectedRecordDatabase();
 
         if ($recordDatabase instanceof ProjectRecordDatabase) {
+            if ($recordDatabase->hasCommandFrames()) {
+                $fields = $recordDatabase->getFrameSettingsFields(
+                    $this->getSelectedRecordIndex(),
+                    $this->databaseCommandFramePath,
+                );
+
+                if ($fields === [] && $this->databaseCommandFramePath !== []) {
+                    // The frame no longer resolves (an undo removed its
+                    // command): fall back to the script rather than a void.
+                    $this->databaseCommandFramePath = [];
+
+                    return $recordDatabase->getFrameSettingsFields($this->getSelectedRecordIndex(), []);
+                }
+
+                return $fields;
+            }
+
             return $recordDatabase->getSettingsFields($this->getSelectedRecordIndex());
         }
 
@@ -7910,6 +8162,12 @@ final class Editor
 
         if (($field['affinities'] ?? false) === true) {
             $this->openAffinityEditor($field);
+
+            return;
+        }
+
+        if (is_array($field['frame'] ?? null)) {
+            $this->enterCommandFrame($field['frame']);
 
             return;
         }
@@ -8847,6 +9105,17 @@ final class Editor
         if ($recordDatabase instanceof ProjectRecordDatabase) {
             // The schema owns coercion, so no per-category intval/trim rules
             // are needed here.
+            if ($recordDatabase->hasCommandFrames()) {
+                $recordDatabase->setFrameField(
+                    $this->getSelectedRecordIndex(),
+                    $this->databaseCommandFramePath,
+                    $field,
+                    $rawValue,
+                );
+
+                return;
+            }
+
             $recordDatabase->setField($this->getSelectedRecordIndex(), $field, $rawValue);
             return;
         }
@@ -11330,13 +11599,25 @@ final class Editor
     private function createDatabaseSettingsWindow(array $layout): EditorWindow
     {
         return new EditorWindow(
-            title: 'General Settings',
+            // Inside a frame the title is the trail back out of it.
+            title: $this->databaseCommandFramePath === []
+                ? 'General Settings'
+                : ProjectRecordDatabase::describeFrame($this->databaseCommandFramePath),
             help: match (true) {
                 $this->referencePicker->isOpen() => $this->fitHelp(
                     $layout['settingsWidth'],
                     'Enter:Choose  Type:Filter  Esc:Cancel',
                     'Enter:Choose  Esc:Cancel',
                     'Enter:Choose',
+                ),
+                $this->databaseCommandFramePath !== []
+                    && ! $this->isDatabaseEditing
+                    && ! $this->conditionEditor->isOpen()
+                    && ! $this->affinityEditor->isOpen() => $this->fitHelp(
+                    $layout['settingsWidth'],
+                    'Enter:Edit/Open  Esc:Back  Shift+O:Add  Shift+X/Del:Remove',
+                    'Enter:Open  Esc:Back  Shift+O/Del:Add/Del',
+                    'Esc:Back  ?:Help',
                 ),
                 $this->affinityEditor->isOpen() => $this->fitHelp(
                     $layout['settingsWidth'],

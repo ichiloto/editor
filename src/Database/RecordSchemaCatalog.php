@@ -553,7 +553,8 @@ final class RecordSchemaCatalog
             'choice' => [
                 new RecordField('prompt', 'Prompt', removeWhenEmpty: true),
                 new RecordField('title', 'Title', removeWhenEmpty: true),
-                new RecordField('options', 'Options', isReadOnly: true),
+                // Options become their own rows and frames; see
+                // ProjectRecordDatabase::describeSubEntryFields.
             ],
             'wait' => [
                 new RecordField('seconds', 'Seconds', InputControlType::FLOAT),
@@ -619,8 +620,7 @@ final class RecordSchemaCatalog
             ],
             'branch' => [
                 new RecordField('conditions', 'Conditions', codec: RecordFieldCodec::CONDITIONS),
-                new RecordField('then', 'Then', isReadOnly: true),
-                new RecordField('else', 'Else', isReadOnly: true),
+                // The arms become frames; see describeSubEntryFields.
             ],
         ];
     }
