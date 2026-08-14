@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Database;
 
+use BackedEnum;
+use Throwable;
+
 use Ichiloto\Editor\Inspector\InputControl;
 use Ichiloto\Editor\Inspector\InputControlType;
 use RuntimeException;
@@ -303,9 +306,33 @@ final class ProjectRecordDatabase
         $identityKey = $this->schema->identityKey;
         $recordId = '';
 
-        if ($identityKey !== null && array_key_exists($identityKey, $payload)) {
+        if ($this->schema->makeBlank !== null) {
+            // Object-backed categories: the blank is a real engine object, so
+            // it round-trips through the same constructor-call export as every
+            // other entry. An array here would save to nothing.
+            try {
+                $payload = ($this->schema->makeBlank)($this->makeUniqueIdentity(
+                    'New ' . ucwords($this->schema->entryNoun)
+                ));
+            } catch (Throwable) {
+                return null;
+            }
+
+            if (! is_object($payload)) {
+                return null;
+            }
+        }
+
+        if (is_array($payload) && $identityKey !== null && array_key_exists($identityKey, $payload)) {
             $payload[$identityKey] = $this->makeUniqueIdentity(strval($payload[$identityKey]));
             $recordId = strval($payload[$identityKey]);
+        }
+
+        if ($this->schema->recordFilter !== null && ! ($this->schema->recordFilter)($payload)) {
+            // Never append what the save merge would drop: a blank that is not
+            // a member of its own category vanishes on save, after the editor
+            // said it was created.
+            return null;
         }
 
         $sourcePath = null;
@@ -1119,6 +1146,18 @@ final class ProjectRecordDatabase
             ));
 
             return $items === [] && $field->removeWhenEmpty ? null : $items;
+        }
+
+        if ($field->enumClass !== null && is_subclass_of($field->enumClass, BackedEnum::class)) {
+            // The stored value is the enum case, not its string: an object
+            // rebuild hands it straight back to a typed constructor argument.
+            foreach ($field->enumClass::cases() as $case) {
+                if (mb_strtolower(strval($case->value)) === mb_strtolower($trimmed)) {
+                    return $case;
+                }
+            }
+
+            return null;
         }
 
         if ($field->options !== []) {

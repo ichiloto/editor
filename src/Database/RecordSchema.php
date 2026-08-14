@@ -45,6 +45,7 @@ final readonly class RecordSchema
         public ?string $listPayloadKey = null,
         public array $configPath = [],
         public ?Closure $recordFilter = null,
+        public ?Closure $makeBlank = null,
         public bool $isAlwaysReadOnly = false,
         public string $readOnlyNote = '',
     ) {

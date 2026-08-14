@@ -11,6 +11,11 @@ use Ichiloto\Engine\Entities\Inventory\Accessory;
 use Ichiloto\Engine\Entities\Inventory\Armor;
 use Ichiloto\Engine\Entities\Inventory\Items\Item;
 use Ichiloto\Engine\Entities\Inventory\Weapons\Weapon;
+use Ichiloto\Engine\Entities\Enumerations\ArmorType;
+use Ichiloto\Engine\Entities\Enumerations\WeaponType;
+use Ichiloto\Engine\Entities\ParameterChanges;
+use Ichiloto\Engine\Entities\Stats;
+use Ichiloto\Engine\Battle\BattleRewards;
 
 /**
  * The schemas behind the Database categories added in Phase 6.
@@ -170,6 +175,7 @@ final class RecordSchemaCatalog
             labelKey: 'name',
             identityKey: 'name',
             recordFilter: static fn(mixed $entry): bool => $entry instanceof Item,
+            makeBlank: static fn(string $name): object => new Item($name, 'What it does.', '✨', 0),
         );
     }
 
@@ -187,7 +193,12 @@ final class RecordSchemaCatalog
             relativePath: 'assets/Data/items.php',
             fields: [
                 ...self::inventoryFields(),
-                new RecordField('equipmentType', 'Equipment Type', isReadOnly: true),
+                new RecordField(
+                    'equipmentType',
+                    'Equipment Type',
+                    options: array_map(static fn(WeaponType $type): string => $type->value, WeaponType::cases()),
+                    enumClass: WeaponType::class,
+                ),
                 new RecordField('parameterChanges.attack', 'Attack', InputControlType::INTEGER),
                 new RecordField('parameterChanges.magicAttack', 'Magic Attack', InputControlType::INTEGER),
                 new RecordField('parameterChanges.speed', 'Speed', InputControlType::INTEGER),
@@ -195,6 +206,14 @@ final class RecordSchemaCatalog
             labelKey: 'name',
             identityKey: 'name',
             recordFilter: static fn(mixed $entry): bool => $entry instanceof Weapon,
+            makeBlank: static fn(string $name): object => new Weapon(
+                $name,
+                'What it does.',
+                '🗡',
+                0,
+                equipmentType: WeaponType::SWORD,
+                parameterChanges: new ParameterChanges(attack: 1),
+            ),
         );
     }
 
@@ -213,7 +232,12 @@ final class RecordSchemaCatalog
             relativePath: 'assets/Data/items.php',
             fields: [
                 ...self::inventoryFields(),
-                new RecordField('equipmentType', 'Equipment Type', isReadOnly: true),
+                new RecordField(
+                    'equipmentType',
+                    'Equipment Type',
+                    options: array_map(static fn(ArmorType $type): string => $type->value, ArmorType::cases()),
+                    enumClass: ArmorType::class,
+                ),
                 new RecordField('parameterChanges.defence', 'Defence', InputControlType::INTEGER),
                 new RecordField('parameterChanges.magicDefence', 'Magic Defence', InputControlType::INTEGER),
                 new RecordField('parameterChanges.evasion', 'Evasion', InputControlType::INTEGER),
@@ -221,6 +245,14 @@ final class RecordSchemaCatalog
             labelKey: 'name',
             identityKey: 'name',
             recordFilter: static fn(mixed $entry): bool => $entry instanceof Armor || $entry instanceof Accessory,
+            makeBlank: static fn(string $name): object => new Armor(
+                $name,
+                'What it protects against.',
+                '🛡',
+                0,
+                equipmentType: ArmorType::GENERAL_ARMOR,
+                parameterChanges: new ParameterChanges(defence: 1),
+            ),
         );
     }
 
@@ -260,6 +292,14 @@ final class RecordSchemaCatalog
             labelKey: 'name',
             identityKey: 'name',
             recordFilter: static fn(mixed $entry): bool => $entry instanceof Enemy,
+            makeBlank: static fn(string $name): object => new Enemy(
+                $name,
+                1,
+                new Stats(currentHp: 10, attack: 5, defence: 5, speed: 5),
+                '',
+                new BattleRewards(1, 1, []),
+                [],
+            ),
         );
     }
 
