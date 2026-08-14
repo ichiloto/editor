@@ -25,6 +25,47 @@ spl_autoload_register(static function (string $class): void {
     }
 });
 
+// The engine also autoloads its function helpers via composer "files";
+// authored data constructs engine objects whose constructors call them
+// (an Enemy loads its sprite through graphics()), so the mapping is
+// incomplete without them.
+foreach (['Constants.php', 'Helpers.php'] as $engineHelperFile) {
+    $engineHelperPath = dirname(__DIR__, 2) . '/engine/src/Util/' . $engineHelperFile;
+
+    if (is_file($engineHelperPath)) {
+        require_once $engineHelperPath;
+    }
+}
+
+// The helpers lean on the engine's own vendor packages (graphics() resolves
+// paths through Assegai\Util\Path). Registered after this suite's autoloader,
+// so the engine's map only fields what nothing here provides -- its phpunit
+// never shadows ours.
+$enginePsr4Path = dirname(__DIR__, 2) . '/engine/vendor/composer/autoload_psr4.php';
+
+if (is_file($enginePsr4Path)) {
+    /** @var array<string, string[]> $enginePsr4 */
+    $enginePsr4 = require $enginePsr4Path;
+
+    spl_autoload_register(static function (string $class) use ($enginePsr4): void {
+        foreach ($enginePsr4 as $prefix => $directories) {
+            if (! str_starts_with($class, $prefix)) {
+                continue;
+            }
+
+            foreach ($directories as $directory) {
+                $path = $directory . '/' . str_replace('\\', '/', substr($class, strlen($prefix))) . '.php';
+
+                if (is_file($path)) {
+                    require $path;
+
+                    return;
+                }
+            }
+        }
+    });
+}
+
 /**
  * Builds an unbooted editor over a throwaway copy of the fixture project, so
  * a test may exercise the real save paths.

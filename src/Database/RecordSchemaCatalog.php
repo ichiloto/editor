@@ -275,7 +275,7 @@ final class RecordSchemaCatalog
             fields: [
                 new RecordField('name', 'Name'),
                 new RecordField('level', 'Level', InputControlType::INTEGER),
-                new RecordField('imagePath', 'Sprite'),
+                RecordField::reference('imagePath', 'Sprite', 'enemy_sprites'),
                 new RecordField('stats.totalHp', 'HP', InputControlType::INTEGER),
                 new RecordField('stats.totalMp', 'MP', InputControlType::INTEGER),
                 new RecordField('stats.attack', 'Attack', InputControlType::INTEGER),
@@ -292,14 +292,35 @@ final class RecordSchemaCatalog
             labelKey: 'name',
             identityKey: 'name',
             recordFilter: static fn(mixed $entry): bool => $entry instanceof Enemy,
-            makeBlank: static fn(string $name): object => new Enemy(
-                $name,
-                1,
-                new Stats(currentHp: 10, attack: 5, defence: 5, speed: 5),
-                '',
-                new BattleRewards(1, 1, []),
-                [],
-            ),
+            // An Enemy loads its sprite in its constructor, so a blank needs a
+            // real file to point at; a project with no enemy sprites cannot
+            // author an enemy yet, and creation refuses rather than crashing.
+            makeBlank: static function (string $name, string $projectRoot): ?object {
+                $spriteDirectory = rtrim($projectRoot, DIRECTORY_SEPARATOR) . '/assets/Graphics/Enemies';
+                $sprites = is_dir($spriteDirectory)
+                    ? array_values(array_filter(
+                        (array) scandir($spriteDirectory),
+                        static fn(mixed $entry): bool => is_string($entry)
+                            && ! str_starts_with($entry, '.')
+                            && is_file($spriteDirectory . '/' . $entry),
+                    ))
+                    : [];
+
+                if ($sprites === []) {
+                    return null;
+                }
+
+                return new Enemy(
+                    $name,
+                    1,
+                    new Stats(currentHp: 10, attack: 5, defence: 5, speed: 5),
+                    // graphics() appends the extension itself, so the stem is
+                    // what an imagePath stores.
+                    pathinfo($sprites[0], PATHINFO_FILENAME),
+                    new BattleRewards(1, 1, []),
+                    [],
+                );
+            },
         );
     }
 

@@ -43,6 +43,7 @@ final class ReferenceCatalog
         'inventory',
         'bgm',
         'sfx',
+        'enemy_sprites',
     ];
 
     /**
@@ -98,6 +99,10 @@ final class ReferenceCatalog
                 ...$this->recordValues('armors'),
             ])),
             'bgm', 'sfx' => $this->audioValues($category),
+            // The engine loads an enemy's image as
+            // Graphics/Enemies/<value>.txt, appending the extension itself,
+            // so the file stems are the values.
+            'enemy_sprites' => $this->fileValues('assets/Graphics/Enemies'),
             'animations' => array_map(
                 static fn(object $animation): string => $animation->name ?? '',
                 $this->workspace->animationDatabase->getAnimations()
@@ -152,6 +157,34 @@ final class ReferenceCatalog
             }
 
             $names[] = pathinfo($entry, PATHINFO_FILENAME);
+        }
+
+        $names = array_values(array_unique($names));
+        sort($names);
+
+        return $names;
+    }
+
+    /**
+     * Returns the files a project has in a directory, names as stored.
+     *
+     * @param string $relativeDirectory The directory under the project root.
+     * @return string[] The filenames, sorted.
+     */
+    private function fileValues(string $relativeDirectory): array
+    {
+        $directory = rtrim($this->workspace->projectRoot, '/') . '/' . $relativeDirectory;
+
+        if (! is_dir($directory)) {
+            return [];
+        }
+
+        $names = [];
+
+        foreach ((array) scandir($directory) as $entry) {
+            if (is_string($entry) && ! str_starts_with($entry, '.') && is_file($directory . '/' . $entry)) {
+                $names[] = pathinfo($entry, PATHINFO_FILENAME);
+            }
         }
 
         $names = array_values(array_unique($names));

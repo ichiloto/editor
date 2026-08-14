@@ -62,7 +62,7 @@ final readonly class EditorTheme
         $path = rtrim($projectRoot, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . 'config.php';
 
         try {
-            $payload = PhpDataFile::load($path)->payload;
+            $payload = PhpDataFile::load($path, $projectRoot)->payload;
         } catch (Throwable) {
             return self::default();
         }

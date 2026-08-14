@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Database;
 
+use Ichiloto\Editor\ProjectDirectoryContext;
 use RuntimeException;
 use Throwable;
 
@@ -45,6 +46,31 @@ final class PhpDataFile
     }
 
     /**
+     * Evaluates a data file with the working directory pinned.
+     *
+     * Authored files call asset() and graphics(), and those resolve against
+     * the process working directory. Whether a category loads must not depend
+     * on where the process happens to stand -- an enemies.php that constructs
+     * its sprites read as "could not be evaluated" from any directory but the
+     * project's, and the whole category silently went read-only.
+     *
+     * @param string $path The data file path.
+     * @param string|null $workingDirectory The project root to evaluate under.
+     * @return mixed The file's payload.
+     */
+    private static function evaluate(string $path, ?string $workingDirectory): mixed
+    {
+        if ($workingDirectory === null || ! is_dir($workingDirectory)) {
+            return require $path;
+        }
+
+        return ProjectDirectoryContext::run(
+            $workingDirectory,
+            static fn(): mixed => require $path,
+        );
+    }
+
+    /**
      * Loads and probes a data file.
      *
      * A missing file is not an error — the database starts empty and the file
@@ -53,7 +79,7 @@ final class PhpDataFile
      * @param string $path The data file path.
      * @return self
      */
-    public static function load(string $path): self
+    public static function load(string $path, ?string $workingDirectory = null): self
     {
         if (! is_file($path)) {
             return new self($path, null, "<?php\n\n", false, null);
@@ -62,7 +88,7 @@ final class PhpDataFile
         $source = (string) file_get_contents($path);
 
         try {
-            $payload = require $path;
+            $payload = self::evaluate($path, $workingDirectory);
         } catch (Throwable $throwable) {
             return new self(
                 $path,

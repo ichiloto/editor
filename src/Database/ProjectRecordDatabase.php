@@ -7,6 +7,7 @@ namespace Ichiloto\Editor\Database;
 use BackedEnum;
 use Throwable;
 
+use Ichiloto\Editor\ProjectDirectoryContext;
 use Ichiloto\Editor\Inspector\InputControl;
 use Ichiloto\Editor\Inspector\InputControlType;
 use RuntimeException;
@@ -57,12 +58,18 @@ final class ProjectRecordDatabase
      */
     public static function fromProject(string $projectRoot, RecordSchema $schema): self
     {
+        // The categories evaluate authored files that construct engine
+        // objects, and creating an entry constructs them too. The runtime
+        // they need is this layer's to guarantee, not something every
+        // embedder has to know to arrange.
+        EngineDataBootstrap::ensure($projectRoot);
+
         $path = $schema->resolvePath($projectRoot);
 
         return match ($schema->storage) {
-            RecordStorage::LIST_FILE => self::loadListFile($path, $schema),
-            RecordStorage::DIRECTORY => self::loadDirectory($path, $schema),
-            RecordStorage::CONFIG_SUBTREE => self::loadConfigSubtree($path, $schema),
+            RecordStorage::LIST_FILE => self::loadListFile($path, $schema, $projectRoot),
+            RecordStorage::DIRECTORY => self::loadDirectory($path, $schema, $projectRoot),
+            RecordStorage::CONFIG_SUBTREE => self::loadConfigSubtree($path, $schema, $projectRoot),
             RecordStorage::FILE_LISTING => self::loadFileListing($path, $schema),
         };
     }
@@ -309,11 +316,19 @@ final class ProjectRecordDatabase
         if ($this->schema->makeBlank !== null) {
             // Object-backed categories: the blank is a real engine object, so
             // it round-trips through the same constructor-call export as every
-            // other entry. An array here would save to nothing.
+            // other entry. An array here would save to nothing. Engine
+            // constructors may load assets, so the factory runs from the
+            // project the way the authored file itself is evaluated.
+            $projectRoot = $this->resolveProjectRoot();
+
             try {
-                $payload = ($this->schema->makeBlank)($this->makeUniqueIdentity(
-                    'New ' . ucwords($this->schema->entryNoun)
-                ));
+                $name = $this->makeUniqueIdentity('New ' . ucwords($this->schema->entryNoun));
+                $payload = $projectRoot === null
+                    ? ($this->schema->makeBlank)($name, '')
+                    : ProjectDirectoryContext::run(
+                        $projectRoot,
+                        fn(string $root): mixed => ($this->schema->makeBlank)($name, $root),
+                    );
             } catch (Throwable) {
                 return null;
             }
@@ -632,9 +647,9 @@ final class ProjectRecordDatabase
      * @param RecordSchema $schema The category schema.
      * @return self
      */
-    private static function loadListFile(string $path, RecordSchema $schema): self
+    private static function loadListFile(string $path, RecordSchema $schema, ?string $projectRoot = null): self
     {
-        $file = PhpDataFile::load($path);
+        $file = PhpDataFile::load($path, $projectRoot);
         $payload = is_array($file->payload) ? $file->payload : [];
         $records = [];
 
@@ -664,14 +679,14 @@ final class ProjectRecordDatabase
      * @param RecordSchema $schema The category schema.
      * @return self
      */
-    private static function loadDirectory(string $path, RecordSchema $schema): self
+    private static function loadDirectory(string $path, RecordSchema $schema, ?string $projectRoot = null): self
     {
         $records = [];
         $files = is_dir($path) ? (glob($path . DIRECTORY_SEPARATOR . '*.php') ?: []) : [];
         sort($files);
 
         foreach ($files as $filename) {
-            $file = PhpDataFile::load($filename);
+            $file = PhpDataFile::load($filename, $projectRoot);
             $stem = basename($filename, '.php');
             $payload = $file->payload;
 
@@ -703,9 +718,9 @@ final class ProjectRecordDatabase
      * @param RecordSchema $schema The category schema.
      * @return self
      */
-    private static function loadConfigSubtree(string $path, RecordSchema $schema): self
+    private static function loadConfigSubtree(string $path, RecordSchema $schema, ?string $projectRoot = null): self
     {
-        $file = PhpDataFile::load($path);
+        $file = PhpDataFile::load($path, $projectRoot);
         $payload = is_array($file->payload) ? $file->payload : [];
         $records = [];
 
@@ -1344,6 +1359,22 @@ final class ProjectRecordDatabase
      * @param string $preferred The preferred identity.
      * @return string
      */
+    /**
+     * Recovers the project root this database was loaded against.
+     *
+     * @return string|null The root, or null when the path does not carry it.
+     */
+    private function resolveProjectRoot(): ?string
+    {
+        $suffix = DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $this->schema->relativePath);
+
+        if (str_ends_with($this->path, $suffix)) {
+            return substr($this->path, 0, -strlen($suffix));
+        }
+
+        return null;
+    }
+
     private function makeUniqueIdentity(string $preferred): string
     {
         $identityKey = $this->schema->identityKey ?? 'id';
