@@ -207,7 +207,9 @@ it('defaults the unsaved-changes guard to Cancel: Enter does not discard', funct
 
   /** @var ProjectWorkspace $workspace */
   $workspace = getEditorProperty($editor, 'workspace');
-  $workspace->getMapByIndex(0)->setTileSymbol(0, 0, '#');
+  // (1,1) is interior space; painting a wall there is a real change. The
+  // old (0,0) was already '#', which under content-based dirt is a no-op.
+  $workspace->getMapByIndex(0)->setTileSymbol(1, 1, '#');
 
   callEditorMethod($editor, 'dispatchInput', "\x11");
 

@@ -655,3 +655,18 @@ shared contract even though nested cue-condition authoring remains deferred.
   brave.
 - Phases 4–5 ride on Phase 3's binding tables and panel model; attempting
   them on the god object doubles their cost.
+
+## Save-integrity hardening — shipped 2026-08
+
+Three related defects, fixed at the root rather than per symptom. Map paths
+are stable identities: ordinary saves write in place, metadata never implies
+a rename, and moving is an explicit, fail-closed operation that warns that
+references are not migrated. Dirty state is a persisted-state fingerprint —
+content compared against the last successful save — shared by every saveable
+model through one trait, so undo can return an asset to pristine, a save
+partway through history checkpoints correctly, and a failed save never
+advances the baseline. Every write goes through one atomic writer that skips
+identical bytes, and clean saves are no-ops end to end: an untouched project
+saved wholesale is byte-for-byte unchanged (pinned by test against a
+disposable copy of the full game), and file-per-entry categories write only
+dirty, new, or deleted entries.

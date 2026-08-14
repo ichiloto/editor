@@ -524,8 +524,35 @@ cannot truncate your work. When a save regenerates a data file, everything from
 docblocks, `use` imports, blank lines, and the explanatory comment above a
 cutscene all survive.
 
-A save that would *move* a map folder — because you renamed its display name or
-region — asks for explicit confirmation first.
+### Stable map identities
+
+A map's project-relative path is its stable identity — doors transfer to it,
+quests reach for it, saves record it. The display name and region are
+metadata: editing them saves in place and never moves or renames the map's
+directory. A new map derives its initial path from its name once, at
+creation; after that, ordinary saves never infer a rename.
+
+Moving a map is its own operation — *Move Map to Derived Path* in the
+command palette. It shows the current and proposed ids, requires an explicit
+`y`, rejects collisions, and fails closed rather than half-moving. References
+are **not** migrated: anything naming the old id keeps naming it, and the
+prompt says so before you confirm.
+
+### Dirty means "differs from the last save"
+
+An asset is dirty exactly when its content differs from what the last
+successful save wrote — not because a mutator ran. Undoing your way back to
+the saved state clears the marker; redoing away restores it; saving partway
+through history simply sets a new checkpoint; a failed save leaves the old
+one intact. Setting a field to the value it already has, painting a tile
+with its own symbol, or resizing to the current size creates neither dirt
+nor a history entry.
+
+Clean saves are no-ops, everywhere: `Ctrl+S` on an unchanged asset or
+database writes nothing, keeps mtimes, and never canonicalizes authored
+formatting. File-per-entry categories (actors, skits, event scripts) write
+only their dirty, new, or explicitly deleted entries — saving one actor
+leaves every other actor file byte-for-byte untouched.
 
 ### Validation
 

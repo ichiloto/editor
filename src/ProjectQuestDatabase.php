@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor;
 
+use Ichiloto\Editor\History\TracksPersistedState;
+use Ichiloto\Editor\IO\AtomicFile;
+
 use Ichiloto\Editor\Database\PhpDataSource;
 use Ichiloto\Editor\Database\Slug;
 use RuntimeException;
@@ -16,6 +19,8 @@ use RuntimeException;
  */
 final class ProjectQuestDatabase
 {
+    use TracksPersistedState;
+
     /**
      * @param string $path The quests.php path.
      * @param ProjectQuest[] $quests The loaded quests.
@@ -25,9 +30,12 @@ final class ProjectQuestDatabase
     public function __construct(
         public readonly string $path,
         private array $quests = [],
-        private bool $isDirty = false,
+        bool $isDirty = false,
         private string $sourceHeader = "<?php\n\n",
     ) {
+        if (! $isDirty) {
+            $this->captureBaseline();
+        }
     }
 
     /**
@@ -82,20 +90,7 @@ final class ProjectQuestDatabase
         return $this->quests[$index] ?? null;
     }
 
-    public function isDirty(): bool
-    {
-        if ($this->isDirty) {
-            return true;
-        }
 
-        foreach ($this->quests as $quest) {
-            if ($quest->isDirty()) {
-                return true;
-            }
-        }
-
-        return false;
-    }
 
     /**
      * Appends a blank quest with a unique id.
@@ -106,7 +101,7 @@ final class ProjectQuestDatabase
     public function addQuest(string $name = 'New Quest'): int
     {
         $this->quests[] = ProjectQuest::createBlank(Slug::unique($name, $this->getQuestIds(), 'quest'), $name);
-        $this->isDirty = true;
+        $this->touchState();
 
         return count($this->quests) - 1;
     }
@@ -143,7 +138,7 @@ final class ProjectQuestDatabase
         }
 
         $quest->setField('name', $name);
-        $this->isDirty = true;
+        $this->touchState();
 
         if (! $mayChangeId) {
             return null;
@@ -182,7 +177,7 @@ final class ProjectQuestDatabase
 
         array_splice($quests, $index, 1);
         $this->quests = $quests;
-        $this->isDirty = true;
+        $this->touchState();
 
         return $quest;
     }
@@ -200,7 +195,7 @@ final class ProjectQuestDatabase
         $index = max(0, min(count($quests), $index));
         array_splice($quests, $index, 0, [$quest]);
         $this->quests = $quests;
-        $this->isDirty = true;
+        $this->touchState();
     }
 
     /**
@@ -217,7 +212,7 @@ final class ProjectQuestDatabase
 
         if ($quest instanceof ProjectQuest) {
             $quest->setField($field, $value);
-            $this->isDirty = true;
+            $this->touchState();
         }
     }
 
@@ -236,7 +231,7 @@ final class ProjectQuestDatabase
             return null;
         }
 
-        $this->isDirty = true;
+        $this->touchState();
 
         return $quest->addObjective($objective);
     }
@@ -259,7 +254,7 @@ final class ProjectQuestDatabase
         $removed = $quest->removeObjective($objectiveIndex);
 
         if ($removed !== null) {
-            $this->isDirty = true;
+            $this->touchState();
         }
 
         return $removed;
@@ -279,7 +274,7 @@ final class ProjectQuestDatabase
 
         if ($quest instanceof ProjectQuest) {
             $quest->insertObjective($objectiveIndex, $objective);
-            $this->isDirty = true;
+            $this->touchState();
         }
     }
 
@@ -298,7 +293,7 @@ final class ProjectQuestDatabase
             return null;
         }
 
-        $this->isDirty = true;
+        $this->touchState();
 
         return $quest->addRewardItem($afterSlot);
     }
@@ -321,7 +316,7 @@ final class ProjectQuestDatabase
         $removed = $quest->removeRewardItem($slot);
 
         if ($removed !== null) {
-            $this->isDirty = true;
+            $this->touchState();
         }
 
         return $removed;
@@ -346,7 +341,7 @@ final class ProjectQuestDatabase
         $items = $quest->getRewardItems();
         array_splice($items, min($slot, count($items)), 0, [$item]);
         $quest->setRewardItems($items);
-        $this->isDirty = true;
+        $this->touchState();
     }
 
     /**
@@ -362,18 +357,42 @@ final class ProjectQuestDatabase
             throw new RuntimeException("Unable to create {$directory}.");
         }
 
-        $payload = $this->sourceHeader . 'return ' . self::exportPhpValue(array_map(
-            static fn(ProjectQuest $quest): array => $quest->toArray(),
-            $this->getQuests()
-        )) . ";\n";
+        if (! $this->isDirty() && is_file($this->path)) {
+            return;
+        }
 
-        self::writeFileTransactionally($this->path, $payload);
+        AtomicFile::write($this->path, $this->buildPersistedPayload());
 
         foreach ($this->quests as $quest) {
             $quest->markClean();
         }
 
-        $this->isDirty = false;
+        $this->captureBaseline();
+    }
+
+    /**
+     * @inheritDoc
+     */
+    protected function dependencyVersion(): string
+    {
+        $versions = [];
+
+        foreach ($this->quests as $quest) {
+            $versions[] = $quest->stateVersion();
+        }
+
+        return count($this->quests) . ':' . implode(',', $versions);
+    }
+
+    /**
+     * @inheritDoc
+     */
+    protected function buildPersistedPayload(): string
+    {
+        return $this->sourceHeader . 'return ' . self::exportPhpValue(array_map(
+            static fn(ProjectQuest $quest): array => $quest->toArray(),
+            $this->getQuests()
+        )) . ";\n";
     }
 
     /**

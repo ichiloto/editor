@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor;
 
+use Ichiloto\Editor\History\TracksPersistedState;
+use Ichiloto\Editor\IO\AtomicFile;
+
 use RuntimeException;
 
 /**
@@ -11,6 +14,8 @@ use RuntimeException;
  */
 final class ProjectActor
 {
+    use TracksPersistedState;
+
     /**
      * The sentinel option meaning "no class reference" in the editor picker.
      */
@@ -23,8 +28,12 @@ final class ProjectActor
         public readonly string $id,
         public readonly string $path,
         private array $payload,
-        private bool $isDirty = false,
+        bool $isDirty = false,
     ) {
+        if (! $isDirty) {
+            // Loaded from disk: the current content is the saved content.
+            $this->captureBaseline();
+        }
     }
 
     /**
@@ -104,16 +113,6 @@ final class ProjectActor
             ],
             isDirty: true,
         );
-    }
-
-    /**
-     * Returns whether the actor has unsaved changes.
-     *
-     * @return bool
-     */
-    public function isDirty(): bool
-    {
-        return $this->isDirty;
     }
 
     /**
@@ -287,13 +286,13 @@ final class ProjectActor
                 $this->payload['data']['class'] = $className;
             }
 
-            $this->isDirty = true;
+            $this->touchState();
             return;
         }
 
         if (in_array($field, ['name', 'description', 'level', 'currentExp'], true)) {
             $this->payload['data'][$field] = $value;
-            $this->isDirty = true;
+            $this->touchState();
             return;
         }
 
@@ -321,7 +320,7 @@ final class ProjectActor
             }
 
             $this->payload['data']['stats'][$field] = (int) $value;
-            $this->isDirty = true;
+            $this->touchState();
         }
     }
 
@@ -338,13 +337,19 @@ final class ProjectActor
             throw new RuntimeException("Unable to create {$directory}.");
         }
 
-        $payload = "<?php\n\nuse Ichiloto\\Engine\\Entities\\Character;\n\nreturn [\n"
+        AtomicFile::write($this->path, $this->buildPersistedPayload());
+        $this->captureBaseline();
+    }
+
+    /**
+     * @inheritDoc
+     */
+    protected function buildPersistedPayload(): string
+    {
+        return "<?php\n\nuse Ichiloto\\Engine\\Entities\\Character;\n\nreturn [\n"
             . "  'class' => Character::class,\n"
             . "  'data' => " . self::exportPhpValue($this->getData(), 1) . ",\n"
             . "];\n";
-
-        self::writeFileTransactionally($this->path, $payload);
-        $this->isDirty = false;
     }
 
     /**

@@ -7,6 +7,7 @@ namespace Ichiloto\Editor\Database;
 use BackedEnum;
 use Throwable;
 
+use Ichiloto\Editor\History\TracksPersistedState;
 use Ichiloto\Editor\ProjectDirectoryContext;
 use Ichiloto\Editor\Inspector\InputControl;
 use Ichiloto\Editor\Inspector\InputControlType;
@@ -27,6 +28,8 @@ use RuntimeException;
  */
 final class ProjectRecordDatabase
 {
+    use TracksPersistedState;
+
     /**
      * @param RecordSchema $schema The category schema.
      * @param string $path The file or directory backing the category.
@@ -42,11 +45,14 @@ final class ProjectRecordDatabase
         public readonly string $path,
         private array $records = [],
         private ?PhpDataFile $file = null,
-        private bool $isDirty = false,
+        bool $isDirty = false,
         private ?string $readOnlyReason = null,
         private mixed $rootPayload = null,
         private array $stagedDeletions = [],
     ) {
+        if (! $isDirty) {
+            $this->captureBaseline();
+        }
     }
 
     /**
@@ -125,19 +131,46 @@ final class ProjectRecordDatabase
         return $this->readOnlyReason;
     }
 
-    public function isDirty(): bool
+    /**
+     * @inheritDoc
+     */
+    protected function dependencyVersion(): string
     {
-        if ($this->isDirty) {
-            return true;
-        }
+        $versions = [];
 
         foreach ($this->records as $record) {
-            if ($record->isDirty()) {
-                return true;
-            }
+            $versions[] = $record->stateVersion();
         }
 
-        return false;
+        return count($this->records) . ':' . implode(',', $versions)
+            . '|' . implode(';', array_values($this->stagedDeletions));
+    }
+
+    /**
+     * @inheritDoc
+     */
+    protected function buildPersistedPayload(): string
+    {
+        if (! $this->isEditable()) {
+            // A category that will never write has nothing to diverge from:
+            // it fingerprints as a constant and is never dirty. Building a
+            // payload here would also mean exporting the unexportable.
+            return '';
+        }
+
+        return match ($this->schema->storage) {
+            // The exact form each save would persist, so dirty means the
+            // save would change something and nothing else.
+            RecordStorage::LIST_FILE => PhpValueExporter::export($this->mergeIntoFilePayload()),
+            RecordStorage::DIRECTORY => implode("\0", array_map(
+                static fn(ProjectRecord $record): string => $record->recordId . '=' . PhpValueExporter::export($record->toArray()),
+                $this->records,
+            )) . '|' . implode(';', array_values($this->stagedDeletions)),
+            RecordStorage::CONFIG_SUBTREE, RecordStorage::FILE_LISTING => serialize([
+                array_map(static fn(ProjectRecord $record): array|object => $record->toArray(), $this->records),
+                array_values($this->stagedDeletions),
+            ]),
+        };
     }
 
     /**
@@ -357,7 +390,7 @@ final class ProjectRecordDatabase
             }
 
             $record->set($field->key, self::coerce($field, $rawValue));
-            $this->isDirty = true;
+            $this->touchState();
 
             return;
         }
@@ -431,7 +464,7 @@ final class ProjectRecordDatabase
         }
 
         $this->records[] = new ProjectRecord($payload, true, $sourcePath, $recordId, $file);
-        $this->isDirty = true;
+        $this->touchState();
 
         return count($this->records) - 1;
     }
@@ -457,7 +490,7 @@ final class ProjectRecordDatabase
 
         array_splice($records, $index, 1);
         $this->records = $records;
-        $this->isDirty = true;
+        $this->touchState();
 
         if ($record->sourcePath !== null && is_file($record->sourcePath)) {
             $this->stagedDeletions[$record->sourcePath] = $record->sourcePath;
@@ -479,7 +512,7 @@ final class ProjectRecordDatabase
         $index = max(0, min(count($records), $index));
         array_splice($records, $index, 0, [$record]);
         $this->records = $records;
-        $this->isDirty = true;
+        $this->touchState();
 
         if ($record->sourcePath !== null) {
             unset($this->stagedDeletions[$record->sourcePath]);
@@ -505,7 +538,7 @@ final class ProjectRecordDatabase
         $entries = $record->getSubList($subList->key);
         $entries[] = $entry ?? $subList->blank;
         $record->setSubList($subList->key, $entries);
-        $this->isDirty = true;
+        $this->touchState();
 
         return count($entries) - 1;
     }
@@ -534,7 +567,7 @@ final class ProjectRecordDatabase
 
         [$removed] = array_splice($entries, $entryIndex, 1);
         $record->setSubList($subList->key, $entries);
-        $this->isDirty = true;
+        $this->touchState();
 
         return $removed;
     }
@@ -560,7 +593,7 @@ final class ProjectRecordDatabase
         $entryIndex = max(0, min(count($entries), $entryIndex));
         array_splice($entries, $entryIndex, 0, [$entry]);
         $record->setSubList($subList->key, $entries);
-        $this->isDirty = true;
+        $this->touchState();
     }
 
     /**
@@ -693,6 +726,12 @@ final class ProjectRecordDatabase
             throw new RuntimeException(sprintf('%s is read-only: %s.', $this->schema->entryNoun, $this->readOnlyReason));
         }
 
+        if (! $this->isDirty()) {
+            // Nothing diverges from the last save; writing would only
+            // canonicalize authored formatting.
+            return;
+        }
+
         match ($this->schema->storage) {
             RecordStorage::LIST_FILE => $this->saveListFile(),
             RecordStorage::DIRECTORY => $this->saveDirectory(),
@@ -704,7 +743,7 @@ final class ProjectRecordDatabase
             $record->markClean();
         }
 
-        $this->isDirty = false;
+        $this->captureBaseline();
     }
 
     /**
@@ -973,7 +1012,9 @@ final class ProjectRecordDatabase
         foreach ($this->records as $record) {
             $file = $record->file;
 
-            if (! $file instanceof PhpDataFile) {
+            if (! $file instanceof PhpDataFile || ! $record->isDirty()) {
+                // A clean record's file already holds this content; skipping
+                // it keeps authored formatting and mtimes untouched.
                 continue;
             }
 
@@ -1049,7 +1090,7 @@ final class ProjectRecordDatabase
                 self::coerce($field, $rawValue),
             );
             $record->setSubList($subList->key, $entries);
-            $this->isDirty = true;
+            $this->touchState();
 
             return;
         }
@@ -1094,7 +1135,7 @@ final class ProjectRecordDatabase
             );
             $entries[$entryIndex][$nestedList->key] = $nestedEntries;
             $record->setSubList($subList->key, $entries);
-            $this->isDirty = true;
+            $this->touchState();
 
             return;
         }
@@ -1148,7 +1189,7 @@ final class ProjectRecordDatabase
         $entries = $context['entries'];
         $entries[$context['parentIndex']][$context['list']->key] = array_values($nestedEntries);
         $context['record']->setSubList($subList->key, $entries);
-        $this->isDirty = true;
+        $this->touchState();
     }
 
     /**
@@ -1826,7 +1867,7 @@ final class ProjectRecordDatabase
             $subList->key,
             self::withFrameList($record->getSubList($subList->key), $framePath, $commands),
         );
-        $this->isDirty = true;
+        $this->touchState();
     }
 
     /**

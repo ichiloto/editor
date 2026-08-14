@@ -132,7 +132,9 @@ it('restores a captured grid snapshot', function () {
   expect($map->getWidth())->toBe(12)
     ->and($map->getHeight())->toBe(5)
     ->and($map->getTileSymbol(1, 1))->toBe(' ')
-    ->and($map->isDirty())->toBeTrue();
+    // The snapshot restored the exact loaded content, and dirty is a fact
+    // about content now: back to the baseline is back to pristine.
+    ->and($map->isDirty())->toBeFalse();
 });
 
 it('round-trips nested event fields', function () {
@@ -163,15 +165,19 @@ it('rewrites event bounds as a filled rectangle', function () {
     ->and($map->getEventMarkerAt(5, 1))->toBeNull();
 });
 
-it('reports a pending folder move only when the name changes', function () {
+it('never treats metadata as a rename: the loaded path is identity', function () {
   $map = fixtureMap();
 
   expect($map->willMoveOnSave())->toBeFalse();
 
+  // The name and region are display metadata. Deriving a folder from them
+  // made every map whose metadata did not slug-match its path a permanent
+  // rename target; now the save target is the identity, always.
   $map->setMapField('name', 'Renamed Map');
+  $map->setMapField('region', 'Somewhere Entirely Else');
 
-  expect($map->willMoveOnSave())->toBeTrue()
-    ->and($map->getSaveTarget()['mapId'])->toBe('renamed-map');
+  expect($map->willMoveOnSave())->toBeFalse()
+    ->and($map->getSaveTarget()['mapId'])->toBe('test-map');
 });
 
 it('saves in place and preserves styled tile formatting', function () {
@@ -194,16 +200,64 @@ it('saves in place and preserves styled tile formatting', function () {
   }
 });
 
-it('moves the map folder when saving under a new name', function () {
+it('saves a renamed map in place, at its stable path', function () {
   [$root, $map] = scratchMapCopy();
 
   try {
     $map->setMapField('name', 'Harbor Town');
     $savedMapId = $map->save();
 
-    expect($savedMapId)->toBe('harbor-town')
-      ->and(is_dir($root . '/assets/Maps/harbor-town'))->toBeTrue()
-      ->and(is_dir($root . '/assets/Maps/test-map'))->toBeFalse();
+    // Doors transfer to test-map, saves record test-map: an ordinary save
+    // must never relocate what everything else points at.
+    expect($savedMapId)->toBe('test-map')
+      ->and(is_dir($root . '/assets/Maps/test-map'))->toBeTrue()
+      ->and(is_dir($root . '/assets/Maps/harbor-town'))->toBeFalse()
+      ->and(ProjectMap::fromDirectory($root . '/assets/Maps', $root . '/assets/Maps/test-map')->getDisplayName())
+        ->toBe('Harbor Town');
+  } finally {
+    removeScratchTree($root);
+  }
+});
+
+it('moves a map only through the explicit operation, which fails closed', function () {
+  [$root, $map] = scratchMapCopy();
+
+  try {
+    mkdir($root . '/assets/Maps/taken');
+
+    // A collision is rejected outright, and the map keeps its identity.
+    expect(fn() => $map->moveTo('taken'))->toThrow(RuntimeException::class)
+      ->and($map->mapId)->toBe('test-map');
+
+    $moved = $map->moveTo('harbor/waterfront');
+
+    expect($moved->mapId)->toBe('harbor/waterfront')
+      ->and(is_dir($root . '/assets/Maps/harbor/waterfront'))->toBeTrue()
+      ->and(is_file($root . '/assets/Maps/harbor/waterfront/waterfront.map.php'))->toBeTrue()
+      ->and(is_dir($root . '/assets/Maps/test-map'))->toBeFalse()
+      // The relocated map is freshly loaded, so it starts clean.
+      ->and($moved->isDirty())->toBeFalse();
+  } finally {
+    removeScratchTree($root);
+  }
+});
+
+it('makes an unchanged save a byte-for-byte no-op', function () {
+  [$root, $map] = scratchMapCopy();
+
+  try {
+    $before = [];
+
+    foreach (glob($root . '/assets/Maps/test-map/*.php') as $file) {
+      $before[basename($file)] = hash_file('sha256', $file);
+    }
+
+    $map->save();
+
+    foreach ($before as $name => $hash) {
+      expect(hash_file('sha256', $root . '/assets/Maps/test-map/' . $name))
+        ->toBe($hash, "{$name} was rewritten by a no-change save.");
+    }
   } finally {
     removeScratchTree($root);
   }

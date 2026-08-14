@@ -4,19 +4,26 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor;
 
+use Ichiloto\Editor\History\TracksPersistedState;
+
 /**
  * Represents one editable class entry inside the project database.
  */
 final class ProjectClass
 {
+    use TracksPersistedState;
+
     /**
      * @param array<string, mixed> $payload
      */
     public function __construct(
         public readonly int $id,
         private array $payload,
-        private bool $isDirty = false,
+        bool $isDirty = false,
     ) {
+        if (! $isDirty) {
+            $this->captureBaseline();
+        }
     }
 
     /**
@@ -80,9 +87,12 @@ final class ProjectClass
      *
      * @return bool
      */
-    public function isDirty(): bool
+    /**
+     * @inheritDoc
+     */
+    protected function buildPersistedPayload(): string
     {
-        return $this->isDirty;
+        return serialize($this->toArray());
     }
 
     /**
@@ -226,7 +236,7 @@ final class ProjectClass
     {
         if (in_array($field, ['name', 'description', 'note'], true)) {
             $this->payload[$field] = (string) $value;
-            $this->isDirty = true;
+            $this->touchState();
             return;
         }
 
@@ -236,13 +246,13 @@ final class ProjectClass
                 (int) ($this->payload['maxLevel'] ?? 99),
                 (int) $this->payload['initialLevel'],
             );
-            $this->isDirty = true;
+            $this->touchState();
             return;
         }
 
         if ($field === 'maxLevel') {
             $this->payload['maxLevel'] = max($this->getInitialLevel(), (int) $value);
-            $this->isDirty = true;
+            $this->touchState();
             return;
         }
 
@@ -259,7 +269,7 @@ final class ProjectClass
             }
 
             $this->payload['experienceCurve'][$experienceMap[$field]] = max(0, (int) $value);
-            $this->isDirty = true;
+            $this->touchState();
             return;
         }
 
@@ -287,7 +297,7 @@ final class ProjectClass
             }
 
             $this->payload['parameterCurves'][$curveKey]['baseValue'] = max(0, (int) $value);
-            $this->isDirty = true;
+            $this->touchState();
         }
     }
 

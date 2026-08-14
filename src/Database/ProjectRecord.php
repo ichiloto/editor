@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Database;
 
+use Ichiloto\Editor\History\TracksPersistedState;
+
 use Throwable;
 
 use UnitEnum;
@@ -18,6 +20,8 @@ use UnitEnum;
  */
 final class ProjectRecord
 {
+    use TracksPersistedState;
+
     /**
      * @param array<string, mixed>|object $payload The record payload.
      * @param bool $isDirty Whether the record holds unsaved edits.
@@ -27,11 +31,14 @@ final class ProjectRecord
      */
     public function __construct(
         private array|object $payload,
-        private bool $isDirty = false,
+        bool $isDirty = false,
         public readonly ?string $sourcePath = null,
         public readonly string $recordId = '',
         public readonly ?PhpDataFile $file = null,
     ) {
+        if (! $isDirty) {
+            $this->captureBaseline();
+        }
     }
 
     /**
@@ -63,9 +70,12 @@ final class ProjectRecord
         return $this->file?->readOnlyReason;
     }
 
-    public function isDirty(): bool
+    /**
+     * @inheritDoc
+     */
+    protected function buildPersistedPayload(): string
     {
-        return $this->isDirty;
+        return PhpValueExporter::export($this->payload);
     }
 
     /**
@@ -75,7 +85,7 @@ final class ProjectRecord
      */
     public function markClean(): void
     {
-        $this->isDirty = false;
+        $this->captureBaseline();
     }
 
     /**
@@ -145,7 +155,7 @@ final class ProjectRecord
             $this->payload[$key] = $value;
         }
 
-        $this->isDirty = true;
+        $this->touchState();
     }
 
     /**
@@ -181,7 +191,7 @@ final class ProjectRecord
         }
 
         $this->payload = $rebuilt;
-        $this->isDirty = true;
+        $this->touchState();
     }
 
     /**

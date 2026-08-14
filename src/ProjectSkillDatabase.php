@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor;
 
+use Ichiloto\Editor\History\TracksPersistedState;
+use Ichiloto\Editor\IO\AtomicFile;
+
 use Ichiloto\Engine\Entities\Enumerations\ItemScopeNumber;
 use Ichiloto\Engine\Entities\Enumerations\ItemScopeSide;
 use Ichiloto\Engine\Entities\Enumerations\ItemScopeStatus;
@@ -12,11 +15,16 @@ use RuntimeException;
 
 final class ProjectSkillDatabase
 {
+    use TracksPersistedState;
+
     public function __construct(
         public readonly string $path,
         private array $skills = [],
-        private bool $isDirty = false,
+        bool $isDirty = false,
     ) {
+        if (! $isDirty) {
+            $this->captureBaseline();
+        }
     }
 
     public static function fromProject(string $projectRoot): self
@@ -42,12 +50,6 @@ final class ProjectSkillDatabase
     }
 
     public function getSkills(): array { return array_values($this->skills); }
-    public function isDirty(): bool
-    {
-        if ($this->isDirty) { return true; }
-        foreach ($this->skills as $skill) { if ($skill->isDirty()) { return true; } }
-        return false;
-    }
 
     public function getSkillByIndex(int $index): ?ProjectSkill
     {
@@ -59,14 +61,14 @@ final class ProjectSkillDatabase
         $nextId = 1;
         foreach ($this->skills as $skill) { $nextId = max($nextId, $skill->id + 1); }
         $this->skills[] = ProjectSkill::createBlank($nextId, $name);
-        $this->isDirty = true;
+        $this->touchState();
         return count($this->skills) - 1;
     }
 
     public function setField(int $index, string $field, mixed $value): void
     {
         $skill = $this->getSkillByIndex($index);
-        if ($skill instanceof ProjectSkill) { $skill->setField($field, $value); $this->isDirty = true; }
+        if ($skill instanceof ProjectSkill) { $skill->setField($field, $value); $this->touchState(); }
     }
 
     /**
@@ -87,7 +89,7 @@ final class ProjectSkillDatabase
 
         array_splice($skills, $index, 1);
         $this->skills = $skills;
-        $this->isDirty = true;
+        $this->touchState();
 
         return $skill;
     }
@@ -105,7 +107,7 @@ final class ProjectSkillDatabase
         $index = max(0, min(count($skills), $index));
         array_splice($skills, $index, 0, [$skill]);
         $this->skills = $skills;
-        $this->isDirty = true;
+        $this->touchState();
     }
 
     public function save(): void
@@ -114,6 +116,33 @@ final class ProjectSkillDatabase
         if (is_dir($directory) === false && mkdir($directory, 0777, true) === false && is_dir($directory) === false) {
             throw new RuntimeException(sprintf("Unable to create %s.", $directory));
         }
+        if (! $this->isDirty() && is_file($this->path)) {
+            return;
+        }
+
+        AtomicFile::write($this->path, $this->buildPersistedPayload());
+        $this->captureBaseline();
+    }
+
+    /**
+     * @inheritDoc
+     */
+    protected function dependencyVersion(): string
+    {
+        $versions = [];
+
+        foreach ($this->skills as $skill) {
+            $versions[] = $skill->stateVersion();
+        }
+
+        return count($this->skills) . ':' . implode(',', $versions);
+    }
+
+    /**
+     * @inheritDoc
+     */
+    protected function buildPersistedPayload(): string
+    {
         $imports = $this->getImportLines();
         $definitions = array_map(fn(ProjectSkill $skill): string => $this->exportSkill($skill), $this->getSkills());
         $payload = [self::openTag(), self::emptyString()];
@@ -123,8 +152,8 @@ final class ProjectSkillDatabase
         foreach ($definitions as $definition) { $payload[] = $definition . self::comma(); }
         $payload[] = self::closingArray();
         $payload[] = self::emptyString();
-        self::writeFileTransactionally($this->path, implode(PHP_EOL, $payload));
-        $this->isDirty = false;
+
+        return implode(PHP_EOL, $payload);
     }
 
     private function getImportLines(): array

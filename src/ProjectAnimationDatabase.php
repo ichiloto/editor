@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor;
 
+use Ichiloto\Editor\History\TracksPersistedState;
+use Ichiloto\Editor\IO\AtomicFile;
+
 use Ichiloto\Engine\Animations\Animation;
 use Ichiloto\Engine\Animations\AnimationCue;
 use Ichiloto\Engine\Animations\AnimationTargetPosition;
@@ -14,14 +17,19 @@ use RuntimeException;
  */
 final class ProjectAnimationDatabase
 {
+    use TracksPersistedState;
+
     /**
      * @param Animation[] $animations
      */
     public function __construct(
         public readonly string $path,
         private array $animations = [],
-        private bool $isDirty = false,
+        bool $isDirty = false,
     ) {
+        if (! $isDirty) {
+            $this->captureBaseline();
+        }
     }
 
     /**
@@ -74,9 +82,15 @@ final class ProjectAnimationDatabase
      *
      * @return bool
      */
-    public function isDirty(): bool
+    /**
+     * @inheritDoc
+     */
+    protected function buildPersistedPayload(): string
     {
-        return $this->isDirty;
+        return "<?php\n\nreturn " . self::exportPhpValue(array_map(
+            static fn(Animation $animation): array => $animation->toArray(),
+            $this->getAnimations()
+        )) . ";\n";
     }
 
     /**
@@ -111,7 +125,7 @@ final class ProjectAnimationDatabase
             maxFrames: 5,
         );
         $this->animations[] = $animation;
-        $this->isDirty = true;
+        $this->touchState();
 
         return count($this->animations) - 1;
     }
@@ -134,7 +148,7 @@ final class ProjectAnimationDatabase
 
         array_splice($animations, $index, 1);
         $this->animations = $animations;
-        $this->isDirty = true;
+        $this->touchState();
 
         return $animation;
     }
@@ -152,7 +166,7 @@ final class ProjectAnimationDatabase
         $index = max(0, min(count($animations), $index));
         array_splice($animations, $index, 0, [$animation]);
         $this->animations = $animations;
-        $this->isDirty = true;
+        $this->touchState();
     }
 
     /**
@@ -178,7 +192,7 @@ final class ProjectAnimationDatabase
             default => null,
         };
 
-        $this->isDirty = true;
+        $this->touchState();
     }
 
     /**
@@ -207,7 +221,7 @@ final class ProjectAnimationDatabase
         }
 
         $animation->setCell($frameIndex, $x, $y, $symbol, $color);
-        $this->isDirty = true;
+        $this->touchState();
     }
 
     /**
@@ -241,7 +255,7 @@ final class ProjectAnimationDatabase
                 flashDurationFrames: $flashDurationFrames,
             ),
         );
-        $this->isDirty = true;
+        $this->touchState();
     }
 
     /**
@@ -257,13 +271,12 @@ final class ProjectAnimationDatabase
             throw new RuntimeException("Unable to create {$directory}.");
         }
 
-        $payload = "<?php\n\nreturn " . self::exportPhpValue(array_map(
-            static fn(Animation $animation): array => $animation->toArray(),
-            $this->getAnimations()
-        )) . ";\n";
+        if (! $this->isDirty() && is_file($this->path)) {
+            return;
+        }
 
-        self::writeFileTransactionally($this->path, $payload);
-        $this->isDirty = false;
+        AtomicFile::write($this->path, $this->buildPersistedPayload());
+        $this->captureBaseline();
     }
 
     /**

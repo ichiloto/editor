@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor;
 
+use Throwable;
+
 use RuntimeException;
 
 /**
@@ -25,7 +27,7 @@ final class ProjectActorDatabase
     public function __construct(
         public readonly string $directory,
         private array $actors = [],
-        private bool $isDirty = false,
+
     ) {
     }
 
@@ -77,7 +79,10 @@ final class ProjectActorDatabase
      */
     public function isDirty(): bool
     {
-        if ($this->isDirty) {
+        // Derived, never remembered: staged deletions are structure waiting
+        // to persist, and each actor answers for its own content. There is
+        // no flag to forget to clear.
+        if ($this->pendingDeletions !== []) {
             return true;
         }
 
@@ -112,7 +117,6 @@ final class ProjectActorDatabase
         $id = $this->getNextAvailableId($name);
         $path = $this->directory . DIRECTORY_SEPARATOR . $id . '.php';
         $this->actors[] = ProjectActor::createBlank($path, $id, self::humanizeId($id));
-        $this->isDirty = true;
 
         return count($this->actors) - 1;
     }
@@ -144,7 +148,6 @@ final class ProjectActorDatabase
             $this->pendingDeletions[$actor->path] = $actor->path;
         }
 
-        $this->isDirty = true;
 
         return $actor;
     }
@@ -163,7 +166,6 @@ final class ProjectActorDatabase
         array_splice($actors, $index, 0, [$actor]);
         $this->actors = $actors;
         unset($this->pendingDeletions[$actor->path]);
-        $this->isDirty = true;
     }
 
     /**
@@ -193,7 +195,6 @@ final class ProjectActorDatabase
         }
 
         $actor->setField($field, $value);
-        $this->isDirty = true;
     }
 
     /**
@@ -217,11 +218,30 @@ final class ProjectActorDatabase
 
         $this->pendingDeletions = [];
 
+        $firstFailure = null;
+
         foreach ($this->actors as $actor) {
-            $actor->save();
+            if (! $actor->isDirty()) {
+                // A clean actor's file is already exactly this content:
+                // writing it would only churn formatting and mtimes.
+                continue;
+            }
+
+            try {
+                $actor->save();
+            } catch (Throwable $throwable) {
+                // One failing actor must not block the rest, and it stays
+                // dirty because its baseline only advances on success.
+                $firstFailure ??= $throwable;
+            }
         }
 
-        $this->isDirty = false;
+        if ($firstFailure !== null) {
+            throw new RuntimeException(
+                sprintf('Some actors could not be saved: %s', $firstFailure->getMessage()),
+                previous: $firstFailure,
+            );
+        }
     }
 
     /**

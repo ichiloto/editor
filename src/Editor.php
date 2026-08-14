@@ -3753,6 +3753,7 @@ final class Editor
     {
         $items = [
             new PaletteItem('Save Map', 'Ctrl+S', fn() => $this->saveSelectedMap()),
+            new PaletteItem('Move Map to Derived Path', '', fn() => $this->beginExplicitMapMove()),
             new PaletteItem('Save All', 'Ctrl+A', fn() => $this->saveAllAssets()),
             new PaletteItem('Undo', 'Ctrl+Z', fn() => $this->performUndo()),
             new PaletteItem('Redo', 'Ctrl+Y', fn() => $this->performRedo()),
@@ -4907,16 +4908,8 @@ final class Editor
             return;
         }
 
-        if ($selectedMap->willMoveOnSave()) {
-            $this->isRenameConfirmationOpen = true;
-            $this->setStatus(
-                sprintf('Saving will move the map folder to %s — confirm.', $selectedMap->getSaveTarget()['mapId']),
-                StatusLevel::WARN,
-            );
-            $this->renderOverlays();
-            return;
-        }
-
+        // A map's path is its identity; an ordinary save writes in place and
+        // never infers a rename from metadata. Moving is its own operation.
         $this->performSaveSelectedMap();
     }
 
@@ -4948,8 +4941,87 @@ final class Editor
         if ($this->isPlainShortcut($normalizedInput, 'y')) {
             $this->isRenameConfirmationOpen = false;
             $this->toasts->dismissCurrent(microtime(true), StatusLevel::WARN);
-            $this->performSaveSelectedMap();
+            $this->performExplicitMapMove();
         }
+    }
+
+    /**
+     * Starts the explicit map-move flow: current id, proposed id, warning,
+     * confirmation. Never reachable from an ordinary save.
+     *
+     * @return void
+     */
+    private function beginExplicitMapMove(): void
+    {
+        $selectedMap = $this->getSelectedMap();
+
+        if (! $selectedMap instanceof ProjectMap) {
+            return;
+        }
+
+        $proposed = $this->deriveProposedMapId($selectedMap);
+
+        if ($proposed === $selectedMap->mapId) {
+            $this->setStatus(sprintf('%s already lives at its derived path; nothing to move.', $selectedMap->mapId));
+            $this->renderFooter();
+
+            return;
+        }
+
+        $this->isRenameConfirmationOpen = true;
+        $this->setStatus(
+            sprintf(
+                'Move %s to %s? References are NOT migrated: doors, quests, saves and one-shot events naming the old id will break — confirm with y.',
+                $selectedMap->mapId,
+                $proposed,
+            ),
+            StatusLevel::WARN,
+        );
+        $this->renderOverlays();
+    }
+
+    /**
+     * Performs the confirmed move, failing closed on any collision or error.
+     *
+     * @return void
+     */
+    private function performExplicitMapMove(): void
+    {
+        $selectedMap = $this->getSelectedMap();
+
+        if (! $selectedMap instanceof ProjectMap || ! $this->workspace instanceof ProjectWorkspace) {
+            return;
+        }
+
+        try {
+            $moved = $selectedMap->moveTo($this->deriveProposedMapId($selectedMap));
+            $this->workspace = $this->workspace->withReplacedMap($this->selectedAssetIndex, $moved);
+            $this->history->clear();
+            $this->setStatus(
+                sprintf('Moved to %s. References naming the old id were not migrated.', $moved->mapId),
+                StatusLevel::SUCCESS,
+            );
+        } catch (Throwable $throwable) {
+            $this->setErrorStatus($throwable, 'Map move');
+        }
+
+        $this->requestFullRender();
+    }
+
+    /**
+     * Derives the path the map's metadata proposes, for the move flow only.
+     *
+     * @param ProjectMap $map The map.
+     * @return string The proposed id.
+     */
+    private function deriveProposedMapId(ProjectMap $map): string
+    {
+        $name = strtolower(trim((string) preg_replace('/[^A-Za-z0-9]+/', '-', $map->getDisplayName())));
+        $name = trim($name, '-') !== '' ? trim($name, '-') : basename($map->directory);
+        $region = strtolower(trim((string) preg_replace('/[^A-Za-z0-9]+/', '-', $map->getRegion())));
+        $region = trim($region, '-');
+
+        return $region !== '' ? $region . '/' . $name : $name;
     }
 
     /**

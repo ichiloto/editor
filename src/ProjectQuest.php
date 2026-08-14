@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor;
 
+use Ichiloto\Editor\History\TracksPersistedState;
+
 use Ichiloto\Editor\Database\ConditionCodec;
 use Ichiloto\Engine\Quests\QuestObjectiveType;
 
@@ -15,14 +17,19 @@ use Ichiloto\Engine\Quests\QuestObjectiveType;
  */
 final class ProjectQuest
 {
+    use TracksPersistedState;
+
     /**
      * @param array<string, mixed> $payload The raw quest entry.
      * @param bool $isDirty Whether the quest holds unsaved edits.
      */
     public function __construct(
         private array $payload,
-        private bool $isDirty = false,
+        bool $isDirty = false,
     ) {
+        if (! $isDirty) {
+            $this->captureBaseline();
+        }
     }
 
     /**
@@ -45,19 +52,18 @@ final class ProjectQuest
         ], true);
     }
 
-    public function isDirty(): bool
-    {
-        return $this->isDirty;
-    }
 
     /**
-     * Clears the dirty marker after a successful save.
-     *
-     * @return void
+     * @inheritDoc
      */
+    protected function buildPersistedPayload(): string
+    {
+        return serialize($this->payload);
+    }
+
     public function markClean(): void
     {
-        $this->isDirty = false;
+        $this->captureBaseline();
     }
 
     public function getId(): string
@@ -236,7 +242,7 @@ final class ProjectQuest
 
                 if ($id !== '') {
                     $this->payload['id'] = $id;
-                    $this->isDirty = true;
+                    $this->touchState();
                 }
 
                 return;
@@ -244,7 +250,7 @@ final class ProjectQuest
             case 'giver':
             case 'description':
                 $this->payload[$field] = trim(strval($value));
-                $this->isDirty = true;
+                $this->touchState();
                 return;
             case 'rewardGold':
                 $this->setRewardAmount('gold', max(0, intval($value)));
@@ -273,7 +279,7 @@ final class ProjectQuest
                     $this->payload['prerequisites'] = $prerequisites;
                 }
 
-                $this->isDirty = true;
+                $this->touchState();
                 return;
         }
     }
@@ -289,7 +295,7 @@ final class ProjectQuest
         $objectives = $this->getObjectives();
         $objectives[] = $objective ?? ['type' => QuestObjectiveType::TALK_TO->value, 'target' => 'New Target'];
         $this->payload['objectives'] = $objectives;
-        $this->isDirty = true;
+        $this->touchState();
 
         return count($objectives) - 1;
     }
@@ -310,7 +316,7 @@ final class ProjectQuest
 
         [$removed] = array_splice($objectives, $index, 1);
         $this->payload['objectives'] = $objectives;
-        $this->isDirty = true;
+        $this->touchState();
 
         return $removed;
     }
@@ -328,7 +334,7 @@ final class ProjectQuest
         $index = max(0, min(count($objectives), $index));
         array_splice($objectives, $index, 0, [$objective]);
         $this->payload['objectives'] = $objectives;
-        $this->isDirty = true;
+        $this->touchState();
     }
 
     /**
@@ -429,7 +435,7 @@ final class ProjectQuest
             $this->payload['rewards'] = $rewards;
         }
 
-        $this->isDirty = true;
+        $this->touchState();
     }
 
     /**
@@ -513,7 +519,7 @@ final class ProjectQuest
 
         $objectives[$index] = $objective;
         $this->payload['objectives'] = $objectives;
-        $this->isDirty = true;
+        $this->touchState();
     }
 
     /**

@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor;
 
+use Ichiloto\Editor\History\TracksPersistedState;
+use Ichiloto\Editor\IO\AtomicFile;
+
 use RuntimeException;
 
 /**
@@ -11,14 +14,19 @@ use RuntimeException;
  */
 final class ProjectClassDatabase
 {
+    use TracksPersistedState;
+
     /**
      * @param ProjectClass[] $classes
      */
     public function __construct(
         public readonly string $path,
         private array $classes = [],
-        private bool $isDirty = false,
+        bool $isDirty = false,
     ) {
+        if (! $isDirty) {
+            $this->captureBaseline();
+        }
     }
 
     /**
@@ -71,20 +79,6 @@ final class ProjectClassDatabase
      *
      * @return bool
      */
-    public function isDirty(): bool
-    {
-        if ($this->isDirty) {
-            return true;
-        }
-
-        foreach ($this->classes as $class) {
-            if ($class->isDirty()) {
-                return true;
-            }
-        }
-
-        return false;
-    }
 
     /**
      * Returns the class at the requested index.
@@ -112,7 +106,7 @@ final class ProjectClassDatabase
         }
 
         $this->classes[] = ProjectClass::createBlank($nextId, $name);
-        $this->isDirty = true;
+        $this->touchState();
 
         return count($this->classes) - 1;
     }
@@ -137,7 +131,7 @@ final class ProjectClassDatabase
 
         array_splice($classes, $index, 1);
         $this->classes = $classes;
-        $this->isDirty = true;
+        $this->touchState();
 
         return $class;
     }
@@ -155,7 +149,7 @@ final class ProjectClassDatabase
         $index = max(0, min(count($classes), $index));
         array_splice($classes, $index, 0, [$class]);
         $this->classes = $classes;
-        $this->isDirty = true;
+        $this->touchState();
     }
 
     /**
@@ -175,7 +169,7 @@ final class ProjectClassDatabase
         }
 
         $class->setField($field, $value);
-        $this->isDirty = true;
+        $this->touchState();
     }
 
     /**
@@ -191,13 +185,37 @@ final class ProjectClassDatabase
             throw new RuntimeException("Unable to create {$directory}.");
         }
 
-        $payload = "<?php\n\nreturn " . self::exportPhpValue(array_map(
+        if (! $this->isDirty() && is_file($this->path)) {
+            return;
+        }
+
+        AtomicFile::write($this->path, $this->buildPersistedPayload());
+        $this->captureBaseline();
+    }
+
+    /**
+     * @inheritDoc
+     */
+    protected function dependencyVersion(): string
+    {
+        $versions = [];
+
+        foreach ($this->classes as $class) {
+            $versions[] = $class->stateVersion();
+        }
+
+        return count($this->classes) . ':' . implode(',', $versions);
+    }
+
+    /**
+     * @inheritDoc
+     */
+    protected function buildPersistedPayload(): string
+    {
+        return "<?php\n\nreturn " . self::exportPhpValue(array_map(
             static fn(ProjectClass $class): array => $class->toArray(),
             $this->getClasses()
         )) . ";\n";
-
-        self::writeFileTransactionally($this->path, $payload);
-        $this->isDirty = false;
     }
 
     /**

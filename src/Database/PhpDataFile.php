@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Database;
 
+use Ichiloto\Editor\IO\AtomicFile;
 use Ichiloto\Editor\ProjectDirectoryContext;
 use RuntimeException;
 use Throwable;
@@ -171,7 +172,7 @@ final class PhpDataFile
             throw new RuntimeException("Unable to create {$directory}.");
         }
 
-        self::writeTransactionally(
+        AtomicFile::write(
             $this->path,
             $this->header . 'return ' . PhpValueExporter::export($payload) . ";\n",
         );

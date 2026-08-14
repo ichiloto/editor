@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor;
 
+use Ichiloto\Editor\History\TracksPersistedState;
+use Ichiloto\Editor\IO\AtomicFile;
+
 use RuntimeException;
 
 /**
@@ -11,14 +14,19 @@ use RuntimeException;
  */
 final class ProjectSystemDatabase
 {
+    use TracksPersistedState;
+
     /**
      * @param array<string, mixed> $data
      */
     public function __construct(
         public readonly string $path,
         private array $data = [],
-        private bool $isDirty = false,
+        bool $isDirty = false,
     ) {
+        if (! $isDirty) {
+            $this->captureBaseline();
+        }
     }
 
     /**
@@ -55,9 +63,12 @@ final class ProjectSystemDatabase
      *
      * @return bool
      */
-    public function isDirty(): bool
+    /**
+     * @inheritDoc
+     */
+    protected function buildPersistedPayload(): string
     {
-        return $this->isDirty;
+        return "<?php\n\nreturn " . self::exportPhpValue(self::normalize($this->data)) . ";\n";
     }
 
     /**
@@ -134,7 +145,7 @@ final class ProjectSystemDatabase
                 return;
         }
 
-        $this->isDirty = true;
+        $this->touchState();
     }
 
     /**
@@ -150,9 +161,12 @@ final class ProjectSystemDatabase
             throw new RuntimeException("Unable to create {$directory}.");
         }
 
-        $payload = "<?php\n\nreturn " . self::exportPhpValue(self::normalize($this->data)) . ";\n";
-        self::writeFileTransactionally($this->path, $payload);
-        $this->isDirty = false;
+        if (! $this->isDirty() && is_file($this->path)) {
+            return;
+        }
+
+        AtomicFile::write($this->path, $this->buildPersistedPayload());
+        $this->captureBaseline();
     }
 
     /**

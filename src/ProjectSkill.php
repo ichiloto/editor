@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor;
 
+use Ichiloto\Editor\History\TracksPersistedState;
+
 use Ichiloto\Engine\Entities\Effects\SkillEffects\SkillEffect;
 use Ichiloto\Engine\Entities\Enumerations\Occasion;
 use Ichiloto\Engine\Entities\Magic\MagicEffectType;
@@ -14,11 +16,16 @@ use Ichiloto\Engine\Entities\Skills\SpecialSkill;
 
 final class ProjectSkill
 {
+    use TracksPersistedState;
+
     public function __construct(
         public readonly int $id,
         private array $payload,
-        private bool $isDirty = false,
+        bool $isDirty = false,
     ) {
+        if (! $isDirty) {
+            $this->captureBaseline();
+        }
     }
 
     public static function fromSkill(Skill $skill, int $id): self
@@ -90,9 +97,12 @@ final class ProjectSkill
         ], true);
     }
 
-    public function isDirty(): bool
+    /**
+     * @inheritDoc
+     */
+    protected function buildPersistedPayload(): string
     {
-        return $this->isDirty;
+        return serialize($this->toArray());
     }
 
     public function getType(): string { return strval($this->payload["type"] ?? "special"); }
@@ -111,26 +121,26 @@ final class ProjectSkill
     {
         if (in_array($field, ["name", "description", "icon", "type", "occasion", "effectType"], true)) {
             $this->payload[$field] = is_string($value) ? trim($value) : strval($value);
-            $this->isDirty = true;
+            $this->touchState();
             return;
         }
 
         if (in_array($field, ["cost", "cooldown"], true)) {
             $this->payload[$field] = max(0, intval($value));
-            $this->isDirty = true;
+            $this->touchState();
             return;
         }
         if (str_starts_with($field, "scope")) {
             $key = lcfirst(substr($field, 5));
             $this->payload["scope"][$key] = $field === "scopeTargetCount" ? (trim(strval($value)) === "" ? null : max(0, intval($value))) : strval($value);
-            $this->isDirty = true;
+            $this->touchState();
             return;
         }
 
         if (str_starts_with($field, "invocation")) {
             $key = lcfirst(substr($field, 10));
             $this->payload["invocation"][$key] = $key === "message" ? strval($value) : max(0, intval($value));
-            $this->isDirty = true;
+            $this->touchState();
         }
     }
 
