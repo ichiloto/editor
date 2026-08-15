@@ -46,6 +46,7 @@ final readonly class RecordSchema
         public array $configPath = [],
         public ?Closure $recordFilter = null,
         public ?Closure $makeBlank = null,
+        public array $commandLists = [],
         public bool $isAlwaysReadOnly = false,
         public string $readOnlyNote = '',
     ) {

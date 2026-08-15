@@ -24,4 +24,7 @@ enum RecordFieldCodec: string
 
     /** An element => multiplier map, edited a row at a time. */
     case AFFINITIES = 'affinities';
+
+    /** A list of world-state writes, in the engine's `sets` vocabulary. */
+    case WORLD_WRITES = 'world_writes';
 }

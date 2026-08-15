@@ -149,13 +149,55 @@ final class ProjectRecord
             return;
         }
 
-        if ($value === null) {
-            unset($this->payload[$key]);
-        } else {
-            $this->payload[$key] = $value;
+        // get() reads dotted paths; set() writes them, so a schema field
+        // like wanderArea.width lands inside wanderArea rather than as a
+        // flat key the runtime would never read.
+        $this->payload = self::withPathValue($this->payload, explode('.', $key), $value);
+        $this->touchState();
+    }
+
+    /**
+     * Returns an array with one dotted-path value replaced, removed on null.
+     *
+     * A parent left empty by a removal is removed too, so clearing the last
+     * wander bound leaves no `wanderArea => []` behind for the runtime to
+     * read as a one-tile area.
+     *
+     * @param array<string|int, mixed> $target The array.
+     * @param string[] $segments The path.
+     * @param mixed $value The value; null removes.
+     * @return array<string|int, mixed> The rewritten array.
+     */
+    private static function withPathValue(array $target, array $segments, mixed $value): array
+    {
+        $segment = array_shift($segments);
+
+        if ($segment === null) {
+            return $target;
         }
 
-        $this->touchState();
+        $key = is_numeric($segment) ? intval($segment) : $segment;
+
+        if ($segments === []) {
+            if ($value === null) {
+                unset($target[$key]);
+            } else {
+                $target[$key] = $value;
+            }
+
+            return $target;
+        }
+
+        $child = is_array($target[$key] ?? null) ? $target[$key] : [];
+        $child = self::withPathValue($child, $segments, $value);
+
+        if ($child === []) {
+            unset($target[$key]);
+        } else {
+            $target[$key] = $child;
+        }
+
+        return $target;
     }
 
     /**

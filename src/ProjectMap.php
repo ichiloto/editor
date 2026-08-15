@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor;
 
+use Ichiloto\Editor\Field\NpcCollection;
 use Ichiloto\Editor\History\TracksPersistedState;
 use Ichiloto\Editor\IO\AtomicFile;
 
@@ -359,6 +360,42 @@ final class ProjectMap
         $this->tileCells = $snapshot['tiles'];
         $this->eventCells = $snapshot['events'];
         $this->cachedWidth = null;
+        $this->touchState();
+    }
+
+    /**
+     * Returns the map's NPCs.
+     *
+     * @return NpcCollection The collection, read fresh from the map data.
+     */
+    public function getNpcs(): NpcCollection
+    {
+        return NpcCollection::fromMapData($this->editableData['npcs'] ?? null);
+    }
+
+    /**
+     * Stores a rewritten NPC collection.
+     *
+     * The one mutation path for `npcs`: the coordinator never reaches into
+     * the array. An unchanged collection is a no-op, so undoing to the saved
+     * list is clean by content, not by accident.
+     *
+     * @param NpcCollection $npcs The collection to store.
+     * @return void
+     */
+    public function setNpcs(NpcCollection $npcs): void
+    {
+        $entries = $npcs->toMapData();
+
+        if (($this->editableData['npcs'] ?? null) === $entries) {
+            return;
+        }
+
+        if ($entries === [] && ! array_key_exists('npcs', $this->editableData)) {
+            return;
+        }
+
+        $this->editableData['npcs'] = $entries;
         $this->touchState();
     }
 

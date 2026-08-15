@@ -49,10 +49,42 @@ final class ProjectRecordDatabase
         private ?string $readOnlyReason = null,
         private mixed $rootPayload = null,
         private array $stagedDeletions = [],
+        private ?\Closure $writeBack = null,
     ) {
         if (! $isDirty) {
             $this->captureBaseline();
         }
+    }
+
+    /**
+     * Builds a category over records another asset owns.
+     *
+     * The list is a map's `npcs`: this category edits the entries with the
+     * same panes, pickers, frames and undo identity as any file-backed
+     * category, and `save()` hands the rewritten list back through the
+     * writer instead of touching a file. The owning map persists it and
+     * fingerprints it; this category's own dirt is derived from its records.
+     *
+     * @param RecordSchema $schema The category schema (MAP_OWNED storage).
+     * @param string $ownerPath The owner's path, for messages and identity.
+     * @param array<int, mixed> $entries The current entries.
+     * @param \Closure(array<int, mixed>): void $writeBack Receives the rewritten list.
+     * @return self The category.
+     */
+    public static function overOwnedList(RecordSchema $schema, string $ownerPath, array $entries, \Closure $writeBack): self
+    {
+        $records = [];
+
+        foreach (array_values($entries) as $index => $entry) {
+            if (is_array($entry)) {
+                $records[] = new ProjectRecord($entry, false, null, strval($entry['id'] ?? $index));
+            }
+        }
+
+        $database = new self($schema, $ownerPath, $records);
+        $database->writeBack = $writeBack;
+
+        return $database;
     }
 
     /**
@@ -77,6 +109,7 @@ final class ProjectRecordDatabase
             RecordStorage::DIRECTORY => self::loadDirectory($path, $schema, $projectRoot),
             RecordStorage::CONFIG_SUBTREE => self::loadConfigSubtree($path, $schema, $projectRoot),
             RecordStorage::FILE_LISTING => self::loadFileListing($path, $schema),
+            RecordStorage::MAP_OWNED => throw new RuntimeException('Map-owned records are built over their owner, not loaded from a path.'),
         };
     }
 
@@ -166,7 +199,7 @@ final class ProjectRecordDatabase
                 static fn(ProjectRecord $record): string => $record->recordId . '=' . PhpValueExporter::export($record->toArray()),
                 $this->records,
             )) . '|' . implode(';', array_values($this->stagedDeletions)),
-            RecordStorage::CONFIG_SUBTREE, RecordStorage::FILE_LISTING => serialize([
+            RecordStorage::CONFIG_SUBTREE, RecordStorage::FILE_LISTING, RecordStorage::MAP_OWNED => serialize([
                 array_map(static fn(ProjectRecord $record): array|object => $record->toArray(), $this->records),
                 array_values($this->stagedDeletions),
             ]),
@@ -218,6 +251,17 @@ final class ProjectRecordDatabase
 
         foreach ($this->schema->fields as $field) {
             $fields[] = self::describeField($field, self::displayValue($field, $record->get($field->key)), $field->key, $isEditable);
+        }
+
+        foreach ($this->schema->commandLists as $listKey => $commandList) {
+            // A record-level command list (an NPC's inline script) is a
+            // frame to open, like a branch arm, never a wall of rows here.
+            $fields[] = [
+                'label' => ucfirst($commandList->singular) . 's',
+                'value' => sprintf('· %d', count($record->getSubList($listKey))),
+                'field' => 'commandList' . ucfirst($listKey),
+                'frame' => [$listKey],
+            ];
         }
 
         $subList = $this->schema->subList;
@@ -294,15 +338,21 @@ final class ProjectRecordDatabase
             }
         }
 
-        if ($variant === 'branch') {
-            foreach (['then' => 'Then', 'else' => 'Else'] as $armKey => $armLabel) {
-                $fields[] = [
-                    'label' => sprintf('%s %d %s Commands', ucfirst($subList->singular), $entryIndex + 1, $armLabel),
-                    'value' => sprintf('· %d', count((array) ($entry[$armKey] ?? []))),
-                    'field' => sprintf('%s%d%s', $subList->prefix, $entryIndex, $armLabel),
-                    'frame' => [...$basePath, $entryIndex, $armKey],
-                ];
-            }
+        $arms = $variant === 'branch' ? ['then' => 'Then', 'else' => 'Else'] : [];
+
+        foreach ($subList->commandArms as $armKey => $armLabel) {
+            // Arms every entry of this list may carry: a dialogue variant's
+            // own script, edited in a frame like a branch arm.
+            $arms[$armKey] = $armLabel;
+        }
+
+        foreach ($arms as $armKey => $armLabel) {
+            $fields[] = [
+                'label' => sprintf('%s %d %s Commands', ucfirst($subList->singular), $entryIndex + 1, $armLabel),
+                'value' => sprintf('· %d', count((array) ($entry[$armKey] ?? []))),
+                'field' => sprintf('%s%d%s', $subList->prefix, $entryIndex, ucfirst($armKey)),
+                'frame' => [...$basePath, $entryIndex, $armKey],
+            ];
         }
 
         $nestedList = $subList->nestedListFor($entry);
@@ -329,9 +379,10 @@ final class ProjectRecordDatabase
                     ),
                     $isEditable,
                     sprintf(
-                        '%s %d Step %d %s',
+                        '%s %d %s %d %s',
                         ucfirst($subList->singular),
                         $entryIndex + 1,
+                        ucfirst($nestedList->singular),
                         $nestedIndex + 1,
                         $field->label,
                     ),
@@ -737,6 +788,9 @@ final class ProjectRecordDatabase
             RecordStorage::DIRECTORY => $this->saveDirectory(),
             RecordStorage::CONFIG_SUBTREE => $this->saveConfigSubtree(),
             RecordStorage::FILE_LISTING => null,
+            RecordStorage::MAP_OWNED => $this->writeBack !== null
+                ? ($this->writeBack)(array_map(static fn(ProjectRecord $record): array|object => $record->toArray(), $this->getRecords()))
+                : null,
         };
 
         foreach ($this->records as $record) {
@@ -1240,6 +1294,12 @@ final class ProjectRecordDatabase
             return $descriptor;
         }
 
+        if ($field->codec === RecordFieldCodec::WORLD_WRITES) {
+            $descriptor['worldWrites'] = true;
+
+            return $descriptor;
+        }
+
         if ($field->codec === RecordFieldCodec::CONDITIONS) {
             // A condition list is built a part at a time. The encoded line is
             // still what gets stored, but nobody has to write it.
@@ -1278,6 +1338,12 @@ final class ProjectRecordDatabase
             // Empty decodes to [], which the exporter's default-trimming
             // drops from a rebuilt constructor call.
             return ElementAffinityCodec::decodeAll($trimmed);
+        }
+
+        if ($field->codec === RecordFieldCodec::WORLD_WRITES) {
+            $sets = WorldWriteCodec::decodeAll($trimmed);
+
+            return $sets === [] && $field->removeWhenEmpty ? null : $sets;
         }
 
         if ($field->reference !== null && $field->allowsNone && in_array(mb_strtolower($trimmed), ['', '(none)', 'none'], true)) {
@@ -1334,6 +1400,7 @@ final class ProjectRecordDatabase
         return match ($field->codec) {
             RecordFieldCodec::CONDITIONS => ConditionCodec::encodeAll(is_array($value) ? $value : []),
             RecordFieldCodec::AFFINITIES => ElementAffinityCodec::encodeAll(is_array($value) ? $value : []),
+            RecordFieldCodec::WORLD_WRITES => WorldWriteCodec::encodeAll(is_array($value) ? $value : []),
             RecordFieldCodec::CSV_LIST => implode(', ', array_map(strval(...), is_array($value) ? $value : [])),
             RecordFieldCodec::NONE => ProjectRecord::stringify($value),
         };
@@ -1449,9 +1516,13 @@ final class ProjectRecordDatabase
      */
     public function hasCommandFrames(): bool
     {
-        $variants = $this->schema->subList?->variants ?? [];
+        $subList = $this->schema->subList;
+        $variants = $subList?->variants ?? [];
 
-        return array_key_exists('choice', $variants) || array_key_exists('branch', $variants);
+        return array_key_exists('choice', $variants)
+            || array_key_exists('branch', $variants)
+            || ($subList !== null && $subList->commandArms !== [])
+            || $this->schema->commandLists !== [];
     }
 
     /**
@@ -1468,14 +1539,65 @@ final class ProjectRecordDatabase
      */
     public function getFrameCommands(int $recordIndex, array $framePath): ?array
     {
-        $subList = $this->schema->subList;
         $record = $this->getRecordByIndex($recordIndex);
 
-        if ($subList === null || ! $record instanceof ProjectRecord) {
+        if (! $record instanceof ProjectRecord) {
             return null;
         }
 
-        return self::frameListFrom($record->getSubList($subList->key), $framePath);
+        [$rootKey, $relativePath] = $this->splitFramePath($framePath);
+
+        if ($rootKey === null) {
+            return null;
+        }
+
+        return self::frameListFrom($record->getSubList($rootKey), $relativePath);
+    }
+
+    /**
+     * Returns the sub-list whose entries a frame holds.
+     *
+     * Inside any command frame the entries are event commands, whatever list
+     * the frame descended from; at the root it is the schema's own sub-list.
+     *
+     * @param array<int, int|string> $framePath The frame.
+     * @return RecordSubList|null The list.
+     */
+    private function frameSubList(array $framePath): ?RecordSubList
+    {
+        if ($framePath === []) {
+            return $this->schema->subList;
+        }
+
+        [$rootKey] = $this->splitFramePath($framePath);
+
+        if ($rootKey !== null && array_key_exists($rootKey, $this->schema->commandLists)) {
+            return $this->schema->commandLists[$rootKey];
+        }
+
+        // Descended from the sub-list into a command arm: commands from here
+        // down. The catalog's shared command list is what every arm holds.
+        return RecordSchemaCatalog::eventCommandList('commands');
+    }
+
+    /**
+     * Splits a frame path into the record key it starts from and the rest.
+     *
+     * A path beginning with a string names a record-level command list (an
+     * NPC's `script`); otherwise the record's sub-list is the root.
+     *
+     * @param array<int, int|string> $framePath The frame.
+     * @return array{0: string|null, 1: array<int, int|string>} Root key and remaining path.
+     */
+    private function splitFramePath(array $framePath): array
+    {
+        $first = $framePath[0] ?? null;
+
+        if (is_string($first) && array_key_exists($first, $this->schema->commandLists)) {
+            return [$first, array_slice($framePath, 1)];
+        }
+
+        return [$this->schema->subList?->key, $framePath];
     }
 
     /**
@@ -1494,9 +1616,9 @@ final class ProjectRecordDatabase
             return $this->getSettingsFields($recordIndex);
         }
 
-        $subList = $this->schema->subList;
         $record = $this->getRecordByIndex($recordIndex);
         $commands = $this->getFrameCommands($recordIndex, $framePath);
+        $subList = $this->frameSubList($framePath);
 
         if ($subList === null || ! $record instanceof ProjectRecord || $commands === null) {
             return [];
@@ -1552,7 +1674,7 @@ final class ProjectRecordDatabase
                 return;
             }
 
-            $written = $this->writeEntryFieldToken($subList, $entry, $matches[2], $rawValue);
+            $written = $this->writeEntryFieldToken($this->frameSubList($framePath) ?? $subList, $entry, $matches[2], $rawValue);
 
             if ($written === null) {
                 return;
@@ -1585,7 +1707,8 @@ final class ProjectRecordDatabase
         }
 
         $position = $afterIndex === null ? count($commands) : min(count($commands), $afterIndex + 1);
-        array_splice($commands, $position, 0, [$subList->blank]);
+        $frameList = $this->frameSubList($framePath) ?? $subList;
+        array_splice($commands, $position, 0, [$frameList->blank]);
         $this->writeFrameCommands($record, $subList, $framePath, $commands);
 
         return $position;
@@ -1792,7 +1915,7 @@ final class ProjectRecordDatabase
 
             $arm = $framePath[$position + 1] ?? null;
 
-            if ($arm !== 'then' && $arm !== 'else') {
+            if (! is_string($arm) || $arm === '') {
                 return null;
             }
 
@@ -1863,9 +1986,12 @@ final class ProjectRecordDatabase
      */
     private function writeFrameCommands(ProjectRecord $record, RecordSubList $subList, array $framePath, array $commands): void
     {
+        [$rootKey, $relativePath] = $this->splitFramePath($framePath);
+        $rootKey ??= $subList->key;
+
         $record->setSubList(
-            $subList->key,
-            self::withFrameList($record->getSubList($subList->key), $framePath, $commands),
+            $rootKey,
+            self::withFrameList($record->getSubList($rootKey), $relativePath, $commands),
         );
         $this->touchState();
     }

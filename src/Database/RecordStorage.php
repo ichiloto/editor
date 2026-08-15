@@ -26,4 +26,11 @@ enum RecordStorage: string
      * process and can fatal on redeclaration.
      */
     case FILE_LISTING = 'file_listing';
+
+    /**
+     * Records that live inside another asset's data (a map's `npcs`), read
+     * from and written back through that asset rather than a file of their
+     * own. The owner persists them; this category only edits them.
+     */
+    case MAP_OWNED = 'map_owned';
 }

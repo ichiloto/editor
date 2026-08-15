@@ -25,6 +25,9 @@ final readonly class RecordSubList
      * @param array<string, RecordSubList> $nestedLists Per-variant nested
      * lists. Event movement routes use this to edit structured `steps`
      * without flattening them into free text.
+     * @param array<string, string> $commandArms Event-command lists every
+     * entry may carry, key => label. A dialogue variant's `script` is
+     * opened as a frame this way, exactly like a branch arm.
      */
     public function __construct(
         public string $key,
@@ -35,6 +38,7 @@ final readonly class RecordSubList
         public array $variants = [],
         public ?string $variantKey = null,
         public array $nestedLists = [],
+        public array $commandArms = [],
     ) {
     }
 
@@ -63,6 +67,12 @@ final readonly class RecordSubList
      */
     public function nestedListFor(array $entry): ?self
     {
+        // A list every entry carries regardless of variant -- a dialogue
+        // variant's lines -- is keyed '*'.
+        if (isset($this->nestedLists['*'])) {
+            return $this->nestedLists['*'];
+        }
+
         if ($this->variantKey === null) {
             return null;
         }

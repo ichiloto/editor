@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Database;
 
+use Ichiloto\Editor\Field\ProjectNpc;
 use Ichiloto\Editor\Inspector\InputControlType;
 use Ichiloto\Engine\Events\Interpreter\EventInterpreter;
 use Ichiloto\Engine\Entities\Enemies\Enemy;
@@ -405,31 +406,7 @@ final class RecordSchemaCatalog
                     ['type' => 'text', 'name' => '', 'text' => 'Something happens.'],
                 ],
             ],
-            subList: new RecordSubList(
-                key: 'commands',
-                prefix: 'command',
-                singular: 'command',
-                fields: [
-                    new RecordField('type', 'Type', options: self::EVENT_COMMAND_TYPES),
-                ],
-                blank: ['type' => 'text', 'name' => '', 'text' => 'Something happens.'],
-                variants: self::eventCommandVariants(),
-                variantKey: 'type',
-                nestedLists: [
-                    'move_route' => new RecordSubList(
-                        key: 'steps',
-                        prefix: 'step',
-                        singular: 'route step',
-                        fields: [
-                            new RecordField('direction', 'Direction', options: ['up', 'down', 'left', 'right']),
-                            new RecordField('count', 'Count', InputControlType::INTEGER),
-                            RecordField::boolean('faceOnly', 'Face Only'),
-                            new RecordField('seconds', 'Seconds', InputControlType::FLOAT, removeWhenEmpty: true),
-                        ],
-                        blank: ['direction' => 'down', 'count' => 1, 'faceOnly' => false],
-                    ),
-                ],
-            ),
+            subList: self::eventCommandList('commands'),
             listPayloadKey: 'commands',
         );
     }
@@ -535,6 +512,130 @@ final class RecordSchemaCatalog
     }
 
     /**
+     * The schema for a map's NPCs, edited in the map's Inspector.
+     *
+     * Every field the engine's `NpcManager::configure()` reads, in the groups
+     * an author thinks in. The id is shown but not editable: it is what
+     * routes and diagnostics name, and nothing that names it would follow a
+     * rename. Dialogue is edited as conditional variants -- the runtime's
+     * own model, of which plain pages are the one-variant case with no
+     * conditions -- so the settings pane and the game agree about what a
+     * given entry means. Scripts are the shared event-command list.
+     *
+     * @return RecordSchema The schema.
+     */
+    public static function mapNpcs(): RecordSchema
+    {
+        return new RecordSchema(
+            key: 'map_npcs',
+            entryNoun: 'NPC',
+            storage: RecordStorage::MAP_OWNED,
+            relativePath: '',
+            fields: [
+                // Identity
+                new RecordField('id', 'Id', isReadOnly: true),
+                new RecordField('name', 'Name'),
+                // Placement
+                new RecordField('x', 'X', InputControlType::INTEGER),
+                new RecordField('y', 'Y', InputControlType::INTEGER),
+                // Appearance
+                new RecordField('sprite', 'Sprite'),
+                new RecordField('sprites.north', 'Facing North', removeWhenEmpty: true),
+                new RecordField('sprites.south', 'Facing South', removeWhenEmpty: true),
+                new RecordField('sprites.east', 'Facing East', removeWhenEmpty: true),
+                new RecordField('sprites.west', 'Facing West', removeWhenEmpty: true),
+                // Movement
+                new RecordField('movement', 'Movement', options: ProjectNpc::MOVEMENTS),
+                new RecordField('wanderArea.x', 'Wander X', InputControlType::INTEGER, removeWhenEmpty: true),
+                new RecordField('wanderArea.y', 'Wander Y', InputControlType::INTEGER, removeWhenEmpty: true),
+                new RecordField('wanderArea.width', 'Wander Width', InputControlType::INTEGER, removeWhenEmpty: true),
+                new RecordField('wanderArea.height', 'Wander Height', InputControlType::INTEGER, removeWhenEmpty: true),
+                // Visibility
+                new RecordField('conditions', 'Visible When', removeWhenEmpty: true, codec: RecordFieldCodec::CONDITIONS),
+                // Completion writes
+                new RecordField('sets', 'After Talking', removeWhenEmpty: true, codec: RecordFieldCodec::WORLD_WRITES),
+            ],
+            labelKey: 'name',
+            identityKey: 'id',
+            blank: [
+                'name' => 'New NPC',
+                'sprite' => '@',
+                'x' => 0,
+                'y' => 0,
+                'movement' => 'fixed',
+                'dialogue' => [['name' => 'New NPC', 'text' => 'Hello.']],
+            ],
+            subList: new RecordSubList(
+                key: 'dialogue',
+                prefix: 'variant',
+                singular: 'dialogue variant',
+                fields: [
+                    new RecordField('conditions', 'When', removeWhenEmpty: true, codec: RecordFieldCodec::CONDITIONS),
+                    new RecordField('sets', 'Then Set', removeWhenEmpty: true, codec: RecordFieldCodec::WORLD_WRITES),
+                ],
+                blank: ['lines' => [['name' => '', 'text' => 'Something to say.']]],
+                nestedLists: [
+                    '*' => new RecordSubList(
+                        key: 'lines',
+                        prefix: 'line',
+                        singular: 'line',
+                        fields: [
+                            RecordField::reference('name', 'Speaker', 'actors', allowsNone: true),
+                            new RecordField('text', 'Text'),
+                        ],
+                        blank: ['name' => '', 'text' => 'Something to say.'],
+                    ),
+                ],
+                // A variant's own script, edited as a frame like a branch arm.
+                commandArms: ['script' => 'Script'],
+            ),
+            // The NPC's inline script: the shared command vocabulary, in a
+            // frame. The runtime runs it INSTEAD of dialogue when non-empty.
+            commandLists: ['script' => self::eventCommandList('script')],
+        );
+    }
+
+    /**
+     * Returns the event-command list under a payload key.
+     *
+     * One command vocabulary, one editor: event scripts hold it under
+     * `commands`, an NPC's inline script under `script`, and a dialogue
+     * variant's under `script` too. Every surface that runs the interpreter
+     * edits the same list the same way.
+     *
+     * @param string $key The payload key holding the list.
+     * @return RecordSubList The command list.
+     */
+    public static function eventCommandList(string $key): RecordSubList
+    {
+        return new RecordSubList(
+            key: $key,
+            prefix: 'command',
+            singular: 'command',
+            fields: [
+                new RecordField('type', 'Type', options: self::EVENT_COMMAND_TYPES),
+            ],
+            blank: ['type' => 'text', 'name' => '', 'text' => 'Something happens.'],
+            variants: self::eventCommandVariants(),
+            variantKey: 'type',
+            nestedLists: [
+                'move_route' => new RecordSubList(
+                    key: 'steps',
+                    prefix: 'step',
+                    singular: 'route step',
+                    fields: [
+                        new RecordField('direction', 'Direction', options: ['up', 'down', 'left', 'right']),
+                        new RecordField('count', 'Count', InputControlType::INTEGER),
+                        RecordField::boolean('faceOnly', 'Face Only'),
+                        new RecordField('seconds', 'Seconds', InputControlType::FLOAT, removeWhenEmpty: true),
+                    ],
+                    blank: ['direction' => 'down', 'count' => 1, 'faceOnly' => false],
+                ),
+            ],
+        );
+    }
+
+    /**
      * Returns the per-type field sets for event-script commands.
      *
      * Nested arms (`choice.options`, `branch.then`/`else`) are shown as
@@ -596,7 +697,10 @@ final class RecordSchemaCatalog
             ],
             'move_route' => [
                 new RecordField('subject', 'Subject', options: ['player', 'npc']),
-                new RecordField('npcId', 'NPC Id', removeWhenEmpty: true),
+                // The stable ids of the map an author is working in; the
+                // picker reads the live collection, so a just-created NPC
+                // is offered at once.
+                new RecordField('npcId', 'NPC Id', reference: 'map_npcs', removeWhenEmpty: true, allowsNone: true),
                 new RecordField('secondsPerStep', 'Seconds Per Step', InputControlType::FLOAT, removeWhenEmpty: true),
                 new RecordField('speed', 'Steps Per Second', InputControlType::FLOAT, removeWhenEmpty: true),
                 new RecordField(

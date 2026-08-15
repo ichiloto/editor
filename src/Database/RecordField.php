@@ -51,9 +51,9 @@ final readonly class RecordField
      * @param string $category The kind of resource it names.
      * @return self The field.
      */
-    public static function reference(string $key, string $label, string $category): self
+    public static function reference(string $key, string $label, string $category, bool $allowsNone = false): self
     {
-        return new self($key, $label, reference: $category);
+        return new self($key, $label, reference: $category, allowsNone: $allowsNone);
     }
 
     /**
