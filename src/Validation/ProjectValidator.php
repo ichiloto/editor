@@ -1110,8 +1110,8 @@ class ProjectValidator
   }
 
   /**
-   * Checks where NPCs stand against each other, against event tiles, spawn
-   * tiles, and impassable tiles.
+   * Checks where NPCs stand against each other, against event tiles and
+   * spawn tiles.
    *
    * The game refuses to move onto a tile an NPC stands on, so a fixed NPC
    * on an event tile makes that event unreachable; a wanderer only blocks
@@ -1128,7 +1128,6 @@ class ProjectValidator
     $issues = [];
     $definitions = (array) ($map->data['events'] ?? []);
     $spawns = $this->spawnTilesOn($map, $workspace);
-    $collisions = $this->collisionDictionary($workspace);
 
     foreach ($anchors as $index => $anchor) {
       foreach ($anchors as $otherIndex => $other) {
@@ -1189,20 +1188,12 @@ class ProjectValidator
           );
         }
       }
-
-      if ($collisions !== null) {
-        $tile = $map->getTileSymbol($anchor['x'], $anchor['y']);
-
-        if (($collisions[$tile] ?? null) === 'SOLID') {
-          $issues[] = Issue::warning(
-            $anchor['where'],
-            sprintf('It stands on the impassable tile "%s" at (%d, %d).', $tile, $anchor['x'], $anchor['y']),
-            'The player can still speak to it from a neighbouring tile; make sure one is reachable.'
-          );
-        }
-      }
     }
 
+    // An NPC on a solid tile is not reported: the game refuses the tile
+    // because the NPC stands there, and the player speaks to it from a
+    // neighbour, exactly as on a floor tile -- an interactive sign placed
+    // over the map's own sign glyph is the ordinary case, not a mistake.
     return $issues;
   }
 
@@ -1261,47 +1252,6 @@ class ProjectValidator
     }
 
     return $spawns;
-  }
-
-  /**
-   * Returns the project's collision dictionary as glyph => collision name,
-   * or null when the project has none this can read.
-   *
-   * The engine loads assets/Maps/collisions.php, a PHP file returning
-   * glyph => CollisionType. It is read the same way, and anything that goes
-   * wrong means "unknown" rather than an issue: the file is the engine's to
-   * refuse, and it says so on launch.
-   *
-   * @param ProjectWorkspace $workspace The project.
-   * @return array<string, string>|null The dictionary.
-   */
-  protected function collisionDictionary(ProjectWorkspace $workspace): ?array
-  {
-    $path = rtrim($workspace->projectRoot, '/') . '/assets/Maps/collisions.php';
-
-    if (! is_file($path)) {
-      return null;
-    }
-
-    try {
-      $dictionary = (static fn(): mixed => require $path)();
-    } catch (\Throwable) {
-      return null;
-    }
-
-    if (! is_array($dictionary)) {
-      return null;
-    }
-
-    $byGlyph = [];
-
-    foreach ($dictionary as $glyph => $type) {
-      if ((is_string($glyph) || is_int($glyph)) && $type instanceof \UnitEnum) {
-        $byGlyph[strval($glyph)] = $type->name;
-      }
-    }
-
-    return $byGlyph;
   }
 
   /**
