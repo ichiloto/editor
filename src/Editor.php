@@ -1105,7 +1105,7 @@ final class Editor
         $router->onDatabaseShortcut($this->openDatabaseWindow(...));
         $router->setMouseInterceptor($this->handleMouseInput(...));
         $router->bindTextEditing(
-            fn(): bool => $this->isInspectorEditing || $this->assetFilter->isCapturing,
+            $this->isCapturingTypedText(...),
             $this->handleInlineTextInput(...),
         );
 
@@ -1363,7 +1363,44 @@ final class Editor
             return;
         }
 
-        $this->handleAssetFilterInput($input);
+        if ($this->assetFilter->isCapturing) {
+            $this->handleAssetFilterInput($input);
+            return;
+        }
+
+        // Every other capture belongs to the focused pane's own handler: the
+        // NPC name prompt and the map-local list on the canvas, the hosted
+        // record pane's edit, picker and sub-editors in the Inspector.
+        $this->handleFocusedPaneInput($input, strtolower($input));
+    }
+
+    /**
+     * Determines whether typed text is being captured outside the Database
+     * screen, so a glyph that is also a shortcut (?, %, ^, @) reaches the
+     * text and not the shortcut.
+     *
+     * The Database screen is a modal and routes its own keys; this covers
+     * the same captures where the Inspector hosts a record pane, plus the
+     * canvas prompts of NPC mode.
+     *
+     * @return bool True while something is taking typed text.
+     */
+    private function isCapturingTypedText(): bool
+    {
+        if ($this->isInspectorEditing || $this->assetFilter->isCapturing || $this->npcCreationInProgress !== null) {
+            return true;
+        }
+
+        if ($this->editingMode === self::MODE_NPC && $this->referencePicker->isOpen()) {
+            return true;
+        }
+
+        return $this->isNpcInspectorHosting() && (
+            $this->isDatabaseEditing
+            || $this->conditionEditor->isOpen()
+            || $this->worldWriteEditor->isOpen()
+            || $this->affinityEditor->isOpen()
+        );
     }
 
     /**
@@ -1489,6 +1526,16 @@ final class Editor
      */
     private function handleCanvasPaneInput(string $input, string $normalizedInput): void
     {
+        // A prompt or list open on the canvas in NPC mode owns every key,
+        // the mode glyphs included: a name may contain a % or an @.
+        if (
+            $this->editingMode === self::MODE_NPC
+            && ($this->npcCreationInProgress !== null || $this->referencePicker->isOpen())
+            && $this->handleNpcModeInput($input)
+        ) {
+            return;
+        }
+
         if (str_contains($input, '%')) {
             $this->setEditingMode(self::MODE_MAP);
             return;

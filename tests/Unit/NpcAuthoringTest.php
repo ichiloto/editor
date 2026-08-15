@@ -1064,3 +1064,32 @@ it('adds, edits and removes route steps under a move_route inside a hosted scrip
     expect(npcsOnDisk($path)[1]['script'][0]['steps'])->toHaveCount(2)
         ->and(implode("\n", npcIssueLines($root, Severity::ERROR)))->not->toContain('route has no steps');
 });
+
+it('types shortcut glyphs into hosted text fields and the name prompt instead of firing them', function () {
+    [$root] = npcProject([['id' => 'a', 'name' => 'Ann', 'sprite' => 'A', 'x' => 2, 'y' => 1, 'dialogue' => [['text' => 'Hi.']]]]);
+    $editor = npcEditor($root);
+    $map = npcMap($editor);
+
+    // The name prompt on the canvas: ? % ^ @ are letters here, not the
+    // help overlay or a mode switch.
+    createNpcThroughCanvas($editor, 5, 2, 'Who? 100% ^ @home');
+    expect($map->getNpcs()->get(1)?->getName())->toBe('Who? 100% ^ @home')
+        ->and(getEditorProperty($editor, 'editingMode'))->toBe('npc')
+        ->and(getEditorProperty($editor, 'modals')->has(\Ichiloto\Editor\UI\Modal::HELP))->toBeFalse();
+
+    // A hosted text edit in the Inspector: the same glyphs go into the line.
+    callEditorMethod($editor, 'selectNpc', 0);
+    setEditorProperty($editor, 'focusedPane', 'inspector');
+    restNpcCursorOn($editor, 'variant0Line0Text');
+    callEditorMethod($editor, 'dispatchInput', "\r");
+    foreach (mb_str_split(' Really? 50%') as $character) {
+        callEditorMethod($editor, 'dispatchInput', $character);
+    }
+    callEditorMethod($editor, 'dispatchInput', "\r");
+    expect($map->getNpcs()->get(0)?->getDialogue()[0]['text'])->toBe('Hi. Really? 50%')
+        ->and(getEditorProperty($editor, 'modals')->has(\Ichiloto\Editor\UI\Modal::HELP))->toBeFalse();
+
+    // Outside a capture, ? still opens help.
+    callEditorMethod($editor, 'dispatchInput', '?');
+    expect(getEditorProperty($editor, 'modals')->has(\Ichiloto\Editor\UI\Modal::HELP))->toBeTrue();
+});
