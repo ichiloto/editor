@@ -116,7 +116,7 @@ variant is spoken) and a `Script` (commands run after its lines).
 
 ## Run A Script Instead
 
-`Interaction` › `Scripts` opens a command frame with the same commands as a
+`Interaction` › `Script` opens a command frame with the same commands as a
 Common Event — text, choices, branches, gold, items, movement routes, and the
 rest. Fill it in and the game runs the script when the player talks to the NPC.
 

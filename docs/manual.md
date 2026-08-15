@@ -234,7 +234,7 @@ category uses — pickers, condition lines, world-write rows, command frames,
 | Appearance | `Sprite`, `Facing North/South/East/West` |
 | Movement | `Movement` (`fixed` / `wander`), and while wandering `Wander X/Y/Width/Height` |
 | Visibility | `Visible When` — a condition line |
-| Interaction | the dialogue variants and their lines, and `Scripts` (a command frame) |
+| Interaction | `Script` (a command frame), then the dialogue variants and their lines |
 | Completion Writes | `After Talking` — world-write rows |
 
 Rows read as the game will read them: an unset `Movement` shows `fixed`, an
@@ -256,7 +256,7 @@ unset `Sprite` shows `@`. Fields the game does not read are listed in a
   line's `Speaker` is picked by meaning: `(the NPC's name)` leaves it to the
   game to title the box with the NPC's current name, `(No speaker)` shows an
   untitled box, or an actor's name.
-- **Scripts.** `Scripts` opens a command frame with the same event commands as
+- **Scripts.** `Script` opens a command frame with the same event commands as
   a Common Event. A non-empty script **replaces** the dialogue at runtime; the
   pane says so with a `! Script replaces dialogue` row rather than deleting
   either. A variant's own `Script` runs after that variant's lines.

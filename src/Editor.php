@@ -8217,16 +8217,41 @@ final class Editor
      */
     private function enterCommandFrame(array $framePath): void
     {
-        $database = $this->getSelectedRecordDatabase();
+        $database = $this->activeRecordDatabase();
 
-        if (! $database instanceof ProjectRecordDatabase || $database->getFrameCommands($this->getSelectedRecordIndex(), $framePath) === null) {
+        if (! $database instanceof ProjectRecordDatabase || $database->getFrameCommands($this->activeRecordIndex(), $framePath) === null) {
             return;
         }
 
         $this->databaseCommandFramePath = $framePath;
         $this->databaseSelectedSettingIndex = 0;
-        $this->setStatus(ProjectRecordDatabase::describeFrame($framePath) . '.', StatusLevel::INFO);
+        $this->setStatus($database->describeFramePath($framePath) . '.', StatusLevel::INFO);
         $this->renderDatabasePanes(['settings', 'cue']);
+    }
+
+    /**
+     * Returns the record pane the frame keys act on: the map's NPCs while
+     * the Inspector hosts them, otherwise the Database's selected category.
+     *
+     * @return ProjectRecordDatabase|null The pane.
+     */
+    private function activeRecordDatabase(): ?ProjectRecordDatabase
+    {
+        return $this->isNpcInspectorHosting()
+            ? $this->npcInspector?->records()
+            : $this->getSelectedRecordDatabase();
+    }
+
+    /**
+     * Returns the record the frame keys act on, in the active pane.
+     *
+     * @return int The record index.
+     */
+    private function activeRecordIndex(): int
+    {
+        return $this->isNpcInspectorHosting()
+            ? ($this->selectedNpcIndex ?? 0)
+            : $this->getSelectedRecordIndex();
     }
 
     /**
@@ -8242,23 +8267,31 @@ final class Editor
             return;
         }
 
-        // An option arm ends [i, 'options', j, 'then']; a branch arm [i, arm].
-        $chunk = ($path[count($path) - 3] ?? null) === 'options' ? 4 : 2;
-        $enclosingCommand = intval($path[count($path) - $chunk]);
+        $database = $this->activeRecordDatabase();
+
+        // A record-level list is [key]; an option arm ends
+        // [i, 'options', j, 'then']; a branch or variant arm [i, arm].
+        $chunk = count($path) === 1 && is_string($path[0])
+            ? 1
+            : ((($path[count($path) - 3] ?? null) === 'options') ? 4 : 2);
+        $enclosingCommand = $chunk === 1 ? null : intval($path[count($path) - $chunk]);
         $this->databaseCommandFramePath = array_slice($path, 0, count($path) - $chunk);
         $this->databaseSelectedSettingIndex = 0;
 
-        // Land back on the command the frame belonged to.
-        $prefix = $this->getSelectedRecordDatabase()?->schema->subList?->prefix ?? 'command';
+        // Land back on the row the frame belonged to: the record's own list
+        // row, or the command (or sub-list entry) that holds the arm.
+        $landing = $chunk === 1
+            ? 'commandList' . ucfirst(strval($path[0]))
+            : (($this->databaseCommandFramePath === [] ? ($database?->schema->subList?->prefix ?? 'command') : 'command') . $enclosingCommand);
 
         foreach ($this->getDatabaseSettingsFields() as $index => $field) {
-            if (str_starts_with((string) ($field['field'] ?? ''), $prefix . $enclosingCommand)) {
+            if (str_starts_with((string) ($field['field'] ?? ''), $landing)) {
                 $this->databaseSelectedSettingIndex = $index;
                 break;
             }
         }
 
-        $this->setStatus(ProjectRecordDatabase::describeFrame($this->databaseCommandFramePath) . '.', StatusLevel::INFO);
+        $this->setStatus(($database?->describeFramePath($this->databaseCommandFramePath) ?? 'Commands') . '.', StatusLevel::INFO);
         $this->renderDatabasePanes(['settings', 'cue']);
     }
 
@@ -13156,7 +13189,8 @@ final class Editor
             // Inside a frame the title is the trail back out of it.
             title: $this->databaseCommandFramePath === []
                 ? 'General Settings'
-                : ProjectRecordDatabase::describeFrame($this->databaseCommandFramePath),
+                : ($this->getSelectedRecordDatabase()?->describeFramePath($this->databaseCommandFramePath)
+                    ?? ProjectRecordDatabase::describeFrame($this->databaseCommandFramePath)),
             help: match (true) {
                 $this->referencePicker->isOpen() => $this->fitHelp(
                     $layout['settingsWidth'],
@@ -15075,7 +15109,10 @@ final class Editor
         $contentWidth = $this->getWindowContentWidth($layout['rightWidth']);
 
         return new EditorWindow(
-            title: $this->focusedPane === self::FOCUS_INSPECTOR ? 'Inspector [Focus]' : 'Inspector',
+            title: ($this->isNpcInspectorHosting() && $this->databaseCommandFramePath !== []
+                    ? ($this->npcInspector?->records()->describeFramePath($this->databaseCommandFramePath) ?? 'Inspector')
+                    : 'Inspector')
+                . ($this->focusedPane === self::FOCUS_INSPECTOR ? ' [Focus]' : ''),
             help: match (true) {
                 $this->isInspectorEditing => 'Enter:Apply  Esc:Cancel',
                 // Only where there is a list to act on: a hint for keys that

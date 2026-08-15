@@ -257,7 +257,9 @@ final class ProjectRecordDatabase
             // A record-level command list (an NPC's inline script) is a
             // frame to open, like a branch arm, never a wall of rows here.
             $fields[] = [
-                'label' => ucfirst($commandList->singular) . 's',
+                // Named for what it is to the record (its Script), with the
+                // count of commands it holds.
+                'label' => ucfirst($listKey),
                 'value' => sprintf('%d', count($record->getSubList($listKey))),
                 'field' => 'commandList' . ucfirst($listKey),
                 'frame' => [$listKey],
@@ -1916,21 +1918,58 @@ final class ProjectRecordDatabase
      */
     public static function describeFrame(array $framePath): string
     {
-        if ($framePath === []) {
-            return 'Commands';
+        return self::describeFrameFrom($framePath, 'Commands', null);
+    }
+
+    /**
+     * Describes a frame in this schema's own words: a record-level list by
+     * its key (`Script`), a sub-list entry by its singular (`Variant 2 ›
+     * Script`), commands as choices and branches.
+     *
+     * @param array<int, int|string> $framePath The frame.
+     * @return string The trail.
+     */
+    public function describeFramePath(array $framePath): string
+    {
+        [$rootKey, $relative] = $this->splitFramePath($framePath);
+
+        if ($rootKey !== null && array_key_exists($rootKey, $this->schema->commandLists)) {
+            return self::describeFrameFrom($relative, ucfirst($rootKey), null);
         }
 
-        $parts = ['Commands'];
+        $subList = $this->schema->subList;
+        $firstLevel = $subList !== null && $subList->prefix !== 'command' ? ucfirst($subList->singular) : null;
+
+        return self::describeFrameFrom($relative, $firstLevel === null || $subList === null ? 'Commands' : ucfirst($subList->key), $firstLevel);
+    }
+
+    /**
+     * Walks a frame path into a trail.
+     *
+     * @param array<int, int|string> $framePath The frame, relative to the root list.
+     * @param string $root What the root list is called.
+     * @param string|null $firstLevelSingular What a first-level entry is called
+     *   when it is not a command (a dialogue variant), or null.
+     * @return string The trail.
+     */
+    private static function describeFrameFrom(array $framePath, string $root, ?string $firstLevelSingular): string
+    {
+        if ($framePath === []) {
+            return $root;
+        }
+
+        $parts = [$root];
         $position = 0;
 
         while ($position < count($framePath)) {
-            $commandNumber = intval($framePath[$position]) + 1;
+            $entryNumber = intval($framePath[$position]) + 1;
 
             if (($framePath[$position + 1] ?? null) === 'options') {
-                $parts[] = sprintf('Choice %d › Option %d', $commandNumber, intval($framePath[$position + 2]) + 1);
+                $parts[] = sprintf('Choice %d › Option %d', $entryNumber, intval($framePath[$position + 2]) + 1);
                 $position += 4;
             } else {
-                $parts[] = sprintf('Branch %d › %s', $commandNumber, ucfirst(strval($framePath[$position + 1] ?? '')));
+                $noun = $position === 0 && $firstLevelSingular !== null ? $firstLevelSingular : 'Branch';
+                $parts[] = sprintf('%s %d › %s', $noun, $entryNumber, ucfirst(strval($framePath[$position + 1] ?? '')));
                 $position += 2;
             }
         }

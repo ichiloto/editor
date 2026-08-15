@@ -949,3 +949,41 @@ it('loads an editor-written map through the engine\'s own NPC configuration', fu
         ->and($manager->npcAt(2, 1)?->id)->toBe('a')
         ->and($manager->visibleNpcs())->toHaveCount(2);
 });
+
+it('enters and leaves script frames from the hosted Inspector with Enter and Esc', function () {
+    [$root] = npcProject([['id' => 'a', 'name' => 'Ann', 'sprite' => 'A', 'x' => 2, 'y' => 1, 'dialogue' => [
+        ['lines' => [['text' => 'Hi.']]],
+        ['conditions' => [['type' => 'switch', 'name' => 'g']], 'lines' => [['text' => 'Open.']]],
+    ]]]);
+    $editor = npcEditor($root);
+    $map = npcMap($editor);
+    callEditorMethod($editor, 'selectNpc', 0);
+    setEditorProperty($editor, 'focusedPane', 'inspector');
+
+    // Enter on the record's Script row opens its (empty) frame, whose one
+    // row invites the first command; Shift+O adds it there.
+    restNpcCursorOn($editor, 'commandListScript');
+    callEditorMethod($editor, 'dispatchInput', "\r");
+    expect(getEditorProperty($editor, 'databaseCommandFramePath'))->toBe(['script'])
+        ->and(getEditorProperty($editor, 'statusMessage'))->toBe('Script.')
+        ->and(callEditorMethod($editor, 'getInspectorFields')[0]['field'] ?? null)->toBe('frameEmpty');
+    callEditorMethod($editor, 'dispatchInput', 'O');
+    expect($map->getNpcs()->get(0)?->getScript())->toHaveCount(1);
+
+    // Esc pops back out onto the Script row, not out of NPC mode.
+    callEditorMethod($editor, 'dispatchInput', "\033");
+    expect(getEditorProperty($editor, 'databaseCommandFramePath'))->toBe([])
+        ->and(getEditorProperty($editor, 'editingMode'))->toBe('npc')
+        ->and(callEditorMethod($editor, 'getInspectorFields')[getEditorProperty($editor, 'databaseSelectedSettingIndex')]['field'] ?? null)->toBe('commandListScript');
+
+    // A variant's script is a frame too, and the trail says whose.
+    restNpcCursorOn($editor, 'variant1Script');
+    callEditorMethod($editor, 'dispatchInput', "\r");
+    expect(getEditorProperty($editor, 'databaseCommandFramePath'))->toBe([1, 'script'])
+        ->and(getEditorProperty($editor, 'statusMessage'))->toBe('Dialogue › Dialogue variant 2 › Script.');
+    callEditorMethod($editor, 'dispatchInput', 'O');
+    expect($map->getNpcs()->get(0)?->getDialogue()[1]['script'])->toHaveCount(1);
+    callEditorMethod($editor, 'dispatchInput', "\033");
+    expect(getEditorProperty($editor, 'databaseCommandFramePath'))->toBe([])
+        ->and(callEditorMethod($editor, 'getInspectorFields')[getEditorProperty($editor, 'databaseSelectedSettingIndex')]['field'] ?? null)->toBe('variant1Conditions');
+});
