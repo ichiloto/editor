@@ -21,6 +21,11 @@ use Ichiloto\Editor\Database\ConditionCodec;
 use Ichiloto\Editor\Database\QuestReferences;
 use Ichiloto\Editor\Database\AffinityEditor;
 use Ichiloto\Editor\Database\ConditionEditor;
+use Ichiloto\Editor\Field\NpcInspector;
+use Ichiloto\Editor\Field\NpcReferences;
+use Ichiloto\Editor\Field\ProjectNpc;
+use Ichiloto\Editor\Database\WorldWriteEditor;
+use Ichiloto\Editor\Database\WorldWriteCodec;
 use Ichiloto\Editor\Database\ElementAffinityCodec;
 use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\Database\RecordSubList;
@@ -106,6 +111,7 @@ final class Editor
     private const string FOCUS_INSPECTOR = 'inspector';
     private const string MODE_MAP = 'map';
     private const string MODE_EVENT = 'event';
+    private const string MODE_NPC = 'npc';
     private const string DATABASE_CATEGORY_ACTORS = 'actors';
     private const string DATABASE_CATEGORY_CLASSES = 'classes';
     private const string DATABASE_CATEGORY_SKILLS = 'skills';
@@ -166,6 +172,17 @@ final class Editor
     private int $canvasOffsetX = 0;
     private int $canvasOffsetY = 0;
     private bool $showEventOverlay = false;
+    /**
+     * @var int|null The selected NPC's position in the map's collection,
+     * meaningful in NPC mode.
+     */
+    private ?int $selectedNpcIndex = null;
+    /**
+     * @var array{mapIndex: int, npcIndex: int}|null An NPC picked up on the
+     * canvas and awaiting a destination tile.
+     */
+    private ?array $npcMoveInProgress = null;
+    private ?NpcInspector $npcInspector = null;
     /**
      * The open-modal registry: one source of truth for input dispatch and
      * overlay rendering. The `is*Open` hooks below keep the historic boolean
@@ -373,6 +390,11 @@ final class Editor
     private readonly ReferencePicker $referencePicker;
     private readonly ConditionEditor $conditionEditor;
     private readonly AffinityEditor $affinityEditor;
+    private readonly WorldWriteEditor $worldWriteEditor;
+    private const string WORLD_WRITE_NAME_FIELD = '__world_write_name';
+    private bool $isWorldWriteNaming = false;
+    private string $worldWriteNameBuffer = '';
+    private bool $worldWriteNamingValue = false;
     /**
      * @var array<int, int|string> The open command frame, per the runtime's
      * own model: [] is the script, [2,'options',0,'then'] an option's arm.
@@ -595,6 +617,7 @@ final class Editor
         $this->referencePicker = new ReferencePicker();
         $this->conditionEditor = new ConditionEditor();
         $this->affinityEditor = new AffinityEditor();
+        $this->worldWriteEditor = new WorldWriteEditor();
         $this->modals = new ModalStack();
         $this->assetsPanel = new AssetsPanel(
             self::FOCUS_ASSETS,
@@ -1092,6 +1115,14 @@ final class Editor
                 'Canvas: cycle brush width (1 / 2 / 3 / 5)',
             ),
             KeyBinding::when(
+                $this->isCanvasShortcut("\x0f"),
+                fn() => $this->setEditingMode(
+                    $this->editingMode === self::MODE_NPC ? self::MODE_MAP : self::MODE_NPC,
+                ),
+                'Ctrl+O',
+                'Canvas: toggle NPC mode (place and edit the map\'s NPCs)',
+            ),
+            KeyBinding::when(
                 $this->isCanvasShortcut("\x06"),
                 $this->floodFillFromCursor(...),
                 'Ctrl+F',
@@ -1423,6 +1454,10 @@ final class Editor
             return;
         }
 
+        if ($this->editingMode === self::MODE_NPC && $this->handleNpcModeInput($input)) {
+            return;
+        }
+
         if ($input === "\n" || $input === "\r") {
             $this->applyCanvasToolAtCursor();
             return;
@@ -1464,6 +1499,725 @@ final class Editor
     }
 
     /**
+     * Handles Inspector input while it hosts the NPC pane.
+     *
+     * The keys are the Database settings pane's, because it is the same
+     * pane: Enter edits or opens (a picker, a condition or write editor, a
+     * command frame), Shift+O / Shift+X add and remove dialogue variants,
+     * lines and commands, Esc pops a frame, arrows move and adjust.
+     *
+     * @param string $input The raw input.
+     * @param string $normalizedInput The normalized input.
+     * @return void
+     */
+    private function handleNpcInspectorInput(string $input, string $normalizedInput): void
+    {
+        if ($this->referencePicker->isOpen()) {
+            $this->handleReferencePickerInput($input);
+
+            return;
+        }
+
+        if ($this->conditionEditor->isOpen()) {
+            $this->handleConditionEditorInput($input);
+
+            return;
+        }
+
+        if ($this->affinityEditor->isOpen()) {
+            $this->handleAffinityEditorInput($input);
+
+            return;
+        }
+
+        if ($this->worldWriteEditor->isOpen()) {
+            $this->handleWorldWriteEditorInput($input);
+
+            return;
+        }
+
+        if ($this->isDatabaseEditing) {
+            $this->handleDatabaseEditingInput($input);
+
+            return;
+        }
+
+        if ($this->selectedNpcIndex === null) {
+            return;
+        }
+
+        if ($input === "\033" && $this->databaseCommandFramePath !== []) {
+            $this->leaveCommandFrame();
+
+            return;
+        }
+
+        if ($input === "\n" || $input === "\r") {
+            $this->databaseSelectedSettingIndex = $this->selectedInspectorFieldIndex;
+            $this->beginDatabaseEdit();
+            $this->selectedInspectorFieldIndex = $this->databaseSelectedSettingIndex;
+
+            return;
+        }
+
+        if ($this->isShiftLetterShortcut($input, 'O')) {
+            $this->databaseSelectedSettingIndex = $this->selectedInspectorFieldIndex;
+            $this->addDatabaseNpcSubItem();
+            $this->selectedInspectorFieldIndex = $this->databaseSelectedSettingIndex;
+
+            return;
+        }
+
+        if ($this->isShiftLetterShortcut($input, 'X') || str_contains($input, "\033[3~")) {
+            $this->databaseSelectedSettingIndex = $this->selectedInspectorFieldIndex;
+            $this->removeDatabaseNpcSubItem();
+            $this->selectedInspectorFieldIndex = $this->databaseSelectedSettingIndex;
+
+            return;
+        }
+
+        if (str_contains($input, "\033[A")) {
+            $this->selectedInspectorFieldIndex = max(0, $this->selectedInspectorFieldIndex - 1);
+            $this->requestFullRender();
+
+            return;
+        }
+
+        if (str_contains($input, "\033[B")) {
+            $this->selectedInspectorFieldIndex = min(max(0, count($this->getInspectorFields()) - 1), $this->selectedInspectorFieldIndex + 1);
+            $this->requestFullRender();
+
+            return;
+        }
+
+        if (str_contains($input, "\033[D") || str_contains($input, "\033[C")) {
+            $this->databaseSelectedSettingIndex = $this->selectedInspectorFieldIndex;
+            $this->adjustDatabaseOptionField(str_contains($input, "\033[D") ? -1 : 1);
+
+            return;
+        }
+    }
+
+    /**
+     * Adds a sub-item where the Inspector cursor points: a command inside
+     * an open frame, an option on a choice, or a dialogue variant / line.
+     *
+     * @return void
+     */
+    private function addDatabaseNpcSubItem(): void
+    {
+        $map = $this->getSelectedMap();
+        $index = $this->selectedNpcIndex;
+
+        if (! $map instanceof ProjectMap || $index === null || $this->npcInspector === null) {
+            return;
+        }
+
+        $records = $this->npcInspector->records();
+        $before = $map->getNpcs();
+        $selectedId = (string) ($this->getDatabaseSettingsFields()[$this->databaseSelectedSettingIndex]['field'] ?? '');
+
+        if ($this->databaseCommandFramePath !== []) {
+            $after = preg_match('/^command(\\d+)/', $selectedId, $m) === 1 ? intval($m[1]) : null;
+            $records->addFrameCommand($index, $this->databaseCommandFramePath, $after);
+        } elseif (preg_match('/^variant(\\d+)Line/', $selectedId, $m) === 1) {
+            $records->addNestedSubItem($index, intval($m[1]));
+        } else {
+            $records->addSubItem($index);
+        }
+
+        $this->npcInspector->commit();
+        $this->recordNpcCollectionChange($map, $index, $before, 'NPC add');
+    }
+
+    /**
+     * Removes the sub-item the Inspector cursor points at.
+     *
+     * @return void
+     */
+    private function removeDatabaseNpcSubItem(): void
+    {
+        $map = $this->getSelectedMap();
+        $index = $this->selectedNpcIndex;
+
+        if (! $map instanceof ProjectMap || $index === null || $this->npcInspector === null) {
+            return;
+        }
+
+        $records = $this->npcInspector->records();
+        $before = $map->getNpcs();
+        $selectedId = (string) ($this->getDatabaseSettingsFields()[$this->databaseSelectedSettingIndex]['field'] ?? '');
+
+        if ($this->databaseCommandFramePath !== []) {
+            if (preg_match('/^command(\\d+)/', $selectedId, $m) === 1) {
+                $records->removeFrameCommand($index, $this->databaseCommandFramePath, intval($m[1]));
+            }
+        } elseif (preg_match('/^variant(\\d+)Line(\\d+)/', $selectedId, $m) === 1) {
+            $records->removeNestedSubItem($index, intval($m[1]), intval($m[2]));
+        } elseif (preg_match('/^variant(\\d+)/', $selectedId, $m) === 1) {
+            $records->removeSubItem($index, intval($m[1]));
+        } else {
+            return;
+        }
+
+        $this->npcInspector->commit();
+        $this->recordNpcCollectionChange($map, $index, $before, 'NPC remove');
+    }
+
+    /**
+     * Records a structural NPC change as one undo step, when it changed
+     * anything.
+     *
+     * @param ProjectMap $map The map.
+     * @param int $index The NPC.
+     * @param \Ichiloto\Editor\Field\NpcCollection $before The collection before.
+     * @param string $label The history label.
+     * @return void
+     */
+    private function recordNpcCollectionChange(ProjectMap $map, int $index, \Ichiloto\Editor\Field\NpcCollection $before, string $label): void
+    {
+        $after = $map->getNpcs();
+        $this->refreshNpcInspector();
+
+        if ($after->toMapData() === $before->toMapData()) {
+            $this->requestFullRender();
+
+            return;
+        }
+
+        $this->recordCommand(new GenericCommand(
+            $label,
+            function () use ($map, $after, $index): void {
+                $map->setNpcs($after);
+                $this->selectNpc($index);
+            },
+            function () use ($map, $before, $index): void {
+                $map->setNpcs($before);
+                $this->selectNpc($index);
+            },
+        ));
+        $this->clampDatabaseSettingSelection();
+        $this->requestFullRender();
+    }
+
+    /**
+     * Determines whether the Inspector is hosting the NPC record pane.
+     *
+     * @return bool True in NPC mode with the Database closed.
+     */
+    private function isNpcInspectorHosting(): bool
+    {
+        return ! $this->isDatabaseOpen && $this->editingMode === self::MODE_NPC;
+    }
+
+    /**
+     * Returns the selected NPC's record-pane fields, grouped and framed.
+     *
+     * @return array<int, array<string, mixed>> The field descriptors.
+     */
+    private function getNpcInspectorFields(): array
+    {
+        if ($this->npcInspector === null || $this->selectedNpcIndex === null) {
+            return [];
+        }
+
+        $records = $this->npcInspector->records();
+        $fields = $records->getFrameSettingsFields($this->selectedNpcIndex, $this->databaseCommandFramePath);
+
+        if ($fields === [] && $this->databaseCommandFramePath !== []) {
+            $this->databaseCommandFramePath = [];
+            $fields = $records->getFrameSettingsFields($this->selectedNpcIndex, []);
+        }
+
+        if ($this->databaseCommandFramePath !== []) {
+            return $fields;
+        }
+
+        // Group headings and honest notes, without changing any field id.
+        $npc = $this->getSelectedMap()?->getNpcs()->get($this->selectedNpcIndex);
+        $grouped = [];
+        $group = static fn(string $title): array => ['label' => $title, 'value' => '', 'editable' => false];
+        $notes = [];
+
+        if ($npc !== null && $npc->getId() === null) {
+            $notes[] = ['label' => '  ! No stable id', 'value' => 'move_route cannot target it', 'editable' => false];
+        }
+
+        if ($npc !== null && $npc->scriptShadowsDialogue()) {
+            $notes[] = ['label' => '  ! Script replaces dialogue', 'value' => 'the game runs the script', 'editable' => false];
+        }
+
+        if ($npc !== null && $npc->getUnknownFields() !== []) {
+            $notes[] = ['label' => '  Preserved fields', 'value' => implode(', ', $npc->getUnknownFields()), 'editable' => false];
+        }
+
+        $sections = [
+            'Identity' => ['id', 'name'],
+            'Placement' => ['x', 'y'],
+            'Appearance' => ['sprite', 'sprites.north', 'sprites.south', 'sprites.east', 'sprites.west'],
+            'Movement' => ['movement', 'wanderArea.x', 'wanderArea.y', 'wanderArea.width', 'wanderArea.height'],
+            'Visibility' => ['conditions'],
+            'Interaction' => ['commandListScript'],
+            'Completion Writes' => ['sets'],
+        ];
+        $byId = [];
+
+        foreach ($fields as $field) {
+            $byId[(string) ($field['field'] ?? '')][] = $field;
+        }
+
+        foreach ($sections as $title => $ids) {
+            $rows = [];
+
+            foreach ($ids as $id) {
+                foreach ($byId[$id] ?? [] as $field) {
+                    // Wander bounds only matter while wandering; loaded
+                    // values are kept, just not shown for a fixed NPC.
+                    if (str_starts_with($id, 'wanderArea.') && $npc !== null && ! $npc->wanders()) {
+                        continue;
+                    }
+
+                    $rows[] = $field;
+                    unset($byId[$id]);
+                }
+            }
+
+            if ($rows !== []) {
+                $grouped[] = $group($title);
+                $grouped = [...$grouped, ...$rows];
+            }
+
+            if ($title === 'Identity') {
+                $grouped = [...$grouped, ...$notes];
+            }
+
+            if ($title === 'Interaction') {
+                // Everything left is dialogue: variants, their lines,
+                // and their frames.
+                foreach ($byId as $id => $rest) {
+                    if (str_starts_with($id, 'variant')) {
+                        $grouped = [...$grouped, ...$rest];
+                        unset($byId[$id]);
+                    }
+                }
+            }
+        }
+
+        foreach ($byId as $rest) {
+            $grouped = [...$grouped, ...$rest];
+        }
+
+        return $grouped;
+    }
+
+    /**
+     * Applies an NPC field edit through the record pane and the map, and
+     * records it: the undo restores the whole previous collection, so list
+     * position and every other field come back exactly.
+     *
+     * @param array<string, mixed> $field The field descriptor.
+     * @param string $rawValue The raw value.
+     * @return void
+     */
+    private function applyNpcFieldValueRecorded(array $field, string $rawValue): void
+    {
+        $map = $this->getSelectedMap();
+        $index = $this->selectedNpcIndex;
+
+        if (! $map instanceof ProjectMap || $index === null || $this->npcInspector === null) {
+            return;
+        }
+
+        $before = $map->getNpcs();
+        $fieldId = (string) ($field['field'] ?? '');
+        $this->npcInspector->records()->setFrameField($index, $this->databaseCommandFramePath, $fieldId, $rawValue);
+        $this->npcInspector->commit();
+        $after = $map->getNpcs();
+
+        if ($after->toMapData() === $before->toMapData()) {
+            // A same-value edit: no history, no dirt.
+            $this->refreshNpcInspector();
+
+            return;
+        }
+
+        $this->refreshNpcInspector();
+        $this->recordCommand(new GenericCommand(
+            sprintf('NPC %s edit', $field['label'] ?? 'field'),
+            function () use ($map, $after, $index): void {
+                $map->setNpcs($after);
+                $this->selectNpc($index);
+            },
+            function () use ($map, $before, $index): void {
+                $map->setNpcs($before);
+                $this->selectNpc($index);
+            },
+        ));
+    }
+
+    /**
+     * Handles the keys NPC mode owns on the canvas.
+     *
+     * Enter selects the NPC under the cursor, or creates one there; M picks
+     * the selected NPC up and the next Enter sets it down; D duplicates; Del
+     * removes, reference-safely. Everything else falls through to ordinary
+     * cursor movement -- painting is not what this mode is for, so typed
+     * glyphs are ignored rather than silently painted under an NPC.
+     *
+     * @param string $input The raw input.
+     * @return bool True when the key was consumed.
+     */
+    private function handleNpcModeInput(string $input): bool
+    {
+        $map = $this->getSelectedMap();
+
+        if (! $map instanceof ProjectMap) {
+            return false;
+        }
+
+        if ($input === "\n" || $input === "\r") {
+            if ($this->npcMoveInProgress !== null) {
+                $this->finishNpcMove();
+
+                return true;
+            }
+
+            $under = $map->getNpcs()->indexAt($this->cursorX, $this->cursorY);
+
+            if ($under !== null) {
+                $this->selectNpc($under);
+                $this->setStatus(sprintf('Selected %s.', $this->describeSelectedNpc()));
+                $this->renderCanvasArea();
+
+                return true;
+            }
+
+            $this->createNpcAtCursor();
+
+            return true;
+        }
+
+        if ($input === "\033" && $this->npcMoveInProgress !== null) {
+            $this->npcMoveInProgress = null;
+            $this->setStatus('Move cancelled.');
+            $this->renderCanvasArea();
+
+            return true;
+        }
+
+        if ($input === 'm' || $input === 'M') {
+            $this->beginNpcMove();
+
+            return true;
+        }
+
+        if ($input === 'd' || $input === 'D') {
+            $this->duplicateSelectedNpc();
+
+            return true;
+        }
+
+        if (str_contains($input, "\033[3~") || $input === "\x7f") {
+            $this->deleteSelectedNpc();
+
+            return true;
+        }
+
+        // Cursor movement passes through; a typed glyph does not paint here.
+        if (mb_strlen($input) === 1 && ! ctype_cntrl($input)) {
+            $this->setStatus('NPC mode does not paint. % for Map mode, ^ for Event mode.', StatusLevel::WARN);
+            $this->renderFooter();
+
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Selects an NPC by its position in the map's collection.
+     *
+     * @param int|null $index The position, or null for none.
+     * @return void
+     */
+    private function selectNpc(?int $index): void
+    {
+        $this->selectedNpcIndex = $index;
+        $this->selectedInspectorFieldIndex = 0;
+        $this->refreshNpcInspector();
+    }
+
+    /**
+     * Rebuilds the NPC Inspector over the selected map's current NPCs.
+     *
+     * @return void
+     */
+    private function refreshNpcInspector(): void
+    {
+        $map = $this->getSelectedMap();
+        $this->npcInspector = $map instanceof ProjectMap ? new NpcInspector($map) : null;
+
+        if ($map instanceof ProjectMap && $this->selectedNpcIndex !== null && $map->getNpcs()->get($this->selectedNpcIndex) === null) {
+            $this->selectedNpcIndex = $map->getNpcs()->count() > 0 ? min($this->selectedNpcIndex, $map->getNpcs()->count() - 1) : null;
+        }
+    }
+
+    /**
+     * Describes the selected NPC for a status line.
+     *
+     * @return string The description.
+     */
+    private function describeSelectedNpc(): string
+    {
+        $npc = $this->selectedNpcIndex !== null ? $this->getSelectedMap()?->getNpcs()->get($this->selectedNpcIndex) : null;
+
+        if ($npc === null) {
+            return 'no NPC';
+        }
+
+        return sprintf('%s (%s) at %d,%d', $npc->getName(), $npc->getId() ?? 'no id', $npc->getX(), $npc->getY());
+    }
+
+    /**
+     * Creates a fixed NPC at the cursor, with a stable id derived once from
+     * its name, and opens it for editing.
+     *
+     * @return void
+     */
+    private function createNpcAtCursor(): void
+    {
+        $map = $this->getSelectedMap();
+
+        if (! $map instanceof ProjectMap) {
+            return;
+        }
+
+        $collection = $map->getNpcs();
+        $name = 'New NPC';
+        $id = $collection->uniqueIdFor($name);
+        $npc = ProjectNpc::createAt($id, $name, $this->cursorX, $this->cursorY);
+        $index = $collection->count();
+        $before = $collection;
+        $after = $collection->withAdded($npc);
+
+        $map->setNpcs($after);
+        $this->selectNpc($index);
+        $this->recordCommand(new GenericCommand(
+            'NPC create',
+            function () use ($map, $after, $index): void {
+                $map->setNpcs($after);
+                $this->selectNpc($index);
+            },
+            function () use ($map, $before): void {
+                $map->setNpcs($before);
+                $this->selectNpc(null);
+            },
+        ));
+        $this->setStatus(sprintf('Created %s. Its id is %s.', $name, $id), StatusLevel::SUCCESS);
+        $this->focusedPane = self::FOCUS_INSPECTOR;
+        $this->requestFullRender();
+    }
+
+    /**
+     * Picks the selected NPC up; the next Enter on the canvas sets it down.
+     *
+     * @return void
+     */
+    private function beginNpcMove(): void
+    {
+        if ($this->selectedNpcIndex === null) {
+            $this->setStatus('Select an NPC first (Enter on it).', StatusLevel::WARN);
+            $this->renderFooter();
+
+            return;
+        }
+
+        $this->npcMoveInProgress = ['mapIndex' => $this->selectedAssetIndex, 'npcIndex' => $this->selectedNpcIndex];
+        $this->setStatus(sprintf('Moving %s — move the cursor and press Enter, or Esc.', $this->describeSelectedNpc()));
+        $this->renderFooter();
+    }
+
+    /**
+     * Sets a picked-up NPC down at the cursor.
+     *
+     * @return void
+     */
+    private function finishNpcMove(): void
+    {
+        $pending = $this->npcMoveInProgress;
+        $this->npcMoveInProgress = null;
+        $map = $this->getSelectedMap();
+
+        if ($pending === null || ! $map instanceof ProjectMap || $pending['mapIndex'] !== $this->selectedAssetIndex) {
+            return;
+        }
+
+        $this->moveNpc($pending['npcIndex'], $this->cursorX, $this->cursorY);
+    }
+
+    /**
+     * Moves an NPC to a tile, recorded for undo.
+     *
+     * @param int $index The NPC's position.
+     * @param int $x The destination column.
+     * @param int $y The destination row.
+     * @return void
+     */
+    private function moveNpc(int $index, int $x, int $y): void
+    {
+        $map = $this->getSelectedMap();
+        $collection = $map?->getNpcs();
+        $npc = $collection?->get($index);
+
+        if (! $map instanceof ProjectMap || $collection === null || $npc === null) {
+            return;
+        }
+
+        if ($x < 0 || $y < 0 || $x >= $map->getWidth() || $y >= $map->getHeight()) {
+            $this->setStatus(sprintf('%d,%d is outside the map.', $x, $y), StatusLevel::WARN);
+            $this->renderFooter();
+
+            return;
+        }
+
+        if ($npc->getX() === $x && $npc->getY() === $y) {
+            $this->setStatus('Already there.');
+            $this->renderFooter();
+
+            return;
+        }
+
+        $occupant = $collection->indexAt($x, $y);
+
+        if ($occupant !== null && $occupant !== $index) {
+            $this->setStatus(sprintf('%s already stands at %d,%d.', $collection->get($occupant)?->getName() ?? 'An NPC', $x, $y), StatusLevel::WARN);
+            $this->renderFooter();
+
+            return;
+        }
+
+        $before = $collection;
+        $after = $collection->withReplaced($index, $npc->movedTo($x, $y));
+        $map->setNpcs($after);
+        $this->refreshNpcInspector();
+        $this->recordCommand(new GenericCommand(
+            'NPC move',
+            function () use ($map, $after, $index): void {
+                $map->setNpcs($after);
+                $this->selectNpc($index);
+            },
+            function () use ($map, $before, $index): void {
+                $map->setNpcs($before);
+                $this->selectNpc($index);
+            },
+        ));
+        $this->setStatus(sprintf('Moved %s to %d,%d.', $npc->getName(), $x, $y), StatusLevel::SUCCESS);
+        $this->requestFullRender();
+    }
+
+    /**
+     * Duplicates the selected NPC under a fresh unique id, one tile to the
+     * right when that tile is free.
+     *
+     * @return void
+     */
+    private function duplicateSelectedNpc(): void
+    {
+        $map = $this->getSelectedMap();
+        $collection = $map?->getNpcs();
+        $npc = $this->selectedNpcIndex !== null ? $collection?->get($this->selectedNpcIndex) : null;
+
+        if (! $map instanceof ProjectMap || $collection === null || $npc === null) {
+            $this->setStatus('Select an NPC first (Enter on it).', StatusLevel::WARN);
+            $this->renderFooter();
+
+            return;
+        }
+
+        $id = $collection->uniqueIdFor($npc->getName());
+        $copy = $npc->asCopyWithId($id);
+        $x = $npc->getX() + max(1, mb_strwidth($npc->getSprite()));
+
+        if ($x < $map->getWidth() && $collection->indexAt($x, $npc->getY()) === null) {
+            $copy = $copy->movedTo($x, $npc->getY());
+        }
+
+        $index = $collection->count();
+        $before = $collection;
+        $after = $collection->withAdded($copy);
+        $map->setNpcs($after);
+        $this->selectNpc($index);
+        $this->recordCommand(new GenericCommand(
+            'NPC duplicate',
+            function () use ($map, $after, $index): void {
+                $map->setNpcs($after);
+                $this->selectNpc($index);
+            },
+            function () use ($map, $before): void {
+                $map->setNpcs($before);
+                $this->selectNpc(null);
+            },
+        ));
+        $this->setStatus(sprintf('Duplicated as %s (id %s).', $copy->getName(), $id), StatusLevel::SUCCESS);
+        $this->requestFullRender();
+    }
+
+    /**
+     * Deletes the selected NPC, refusing while anything names its id.
+     *
+     * @return void
+     */
+    private function deleteSelectedNpc(): void
+    {
+        $map = $this->getSelectedMap();
+        $collection = $map?->getNpcs();
+        $index = $this->selectedNpcIndex;
+        $npc = $index !== null ? $collection?->get($index) : null;
+
+        if (! $map instanceof ProjectMap || $collection === null || $index === null || $npc === null || ! $this->workspace instanceof ProjectWorkspace) {
+            $this->setStatus('Select an NPC first (Enter on it).', StatusLevel::WARN);
+            $this->renderFooter();
+
+            return;
+        }
+
+        $references = $npc->getId() !== null
+            ? new NpcReferences($this->workspace)->describe($map, $npc->getId())
+            : [];
+
+        if ($references !== []) {
+            // Refusing beats a route or script that silently stops
+            // resolving. The list is what the author needs to go fix.
+            $this->setStatus(
+                sprintf('%s is named by %s — resolve those before deleting.', $npc->getName(), implode(', ', $references)),
+                StatusLevel::ERROR,
+                array_map(static fn(string $reference): string => '- ' . $reference, $references),
+            );
+            $this->renderFooter();
+
+            return;
+        }
+
+        $before = $collection;
+        $after = $collection->withRemoved($index);
+        $map->setNpcs($after);
+        $this->selectNpc(null);
+        $this->recordCommand(new GenericCommand(
+            'NPC delete',
+            function () use ($map, $after): void {
+                $map->setNpcs($after);
+                $this->selectNpc(null);
+            },
+            function () use ($map, $before, $index): void {
+                $map->setNpcs($before);
+                $this->selectNpc($index);
+            },
+        ));
+        $this->setStatus(sprintf('Deleted %s.', $npc->getName()), StatusLevel::SUCCESS);
+        $this->requestFullRender();
+    }
+
+    /**
      * Handles input while the Inspector pane is focused.
      *
      * @param string $input The raw input.
@@ -1472,6 +2226,12 @@ final class Editor
      */
     private function handleInspectorPaneInput(string $input, string $normalizedInput): void
     {
+        if ($this->isNpcInspectorHosting()) {
+            $this->handleNpcInspectorInput($input, $normalizedInput);
+
+            return;
+        }
+
         if ($input === "\n" || $input === "\r") {
             $this->activateInspectorField();
             return;
@@ -1582,6 +2342,11 @@ final class Editor
 
         if ($this->affinityEditor->isOpen()) {
             $this->handleAffinityEditorInput($input);
+            return;
+        }
+
+        if ($this->worldWriteEditor->isOpen()) {
+            $this->handleWorldWriteEditorInput($input);
             return;
         }
 
@@ -2299,9 +3064,21 @@ final class Editor
         $this->selectedInspectorFieldIndex = 0;
         $this->isInspectorEditing = false;
         $this->inspectorEditBuffer = '';
-        $this->statusMessage = $mode === self::MODE_EVENT
-            ? 'Event mode active.'
-            : 'Map mode active.';
+        $this->npcMoveInProgress = null;
+
+        if ($mode === self::MODE_NPC) {
+            // Land on the NPC under the cursor, or the first one, so the
+            // Inspector has something to show at once.
+            $this->selectedNpcIndex = $this->getSelectedMap()?->getNpcs()->indexAt($this->cursorX, $this->cursorY)
+                ?? ($this->getSelectedMap()?->getNpcs()->count() > 0 ? 0 : null);
+            $this->refreshNpcInspector();
+        }
+
+        $this->statusMessage = match ($mode) {
+            self::MODE_EVENT => 'Event mode active.',
+            self::MODE_NPC => 'NPC mode active. Enter selects or creates, M moves, D duplicates, Del removes.',
+            default => 'Map mode active.',
+        };
         $this->renderCanvasArea();
     }
 
@@ -3633,6 +4410,24 @@ final class Editor
         $lines[] = '  Enter              edit, or open the picker on a field';
         $lines[] = '                     that names another record';
         $lines[] = '';
+        $lines[] = 'NPC mode (Ctrl+O on the canvas)';
+        $lines[] = '  Enter              select the NPC under the cursor, or';
+        $lines[] = '                     create one there';
+        $lines[] = '  M                  pick up; Enter sets down, Esc cancels';
+        $lines[] = '  D                  duplicate under a fresh stable id';
+        $lines[] = '  Del                delete (refused while anything names';
+        $lines[] = '                     its id)';
+        $lines[] = '  Tab                edit it in the Inspector, with the';
+        $lines[] = '                     Database pane keys';
+        $lines[] = '';
+        $lines[] = 'World writes (Enter on an After Talking / Then Set field)';
+        $lines[] = '  a / d              add or remove a write';
+        $lines[] = '  t / T              cycle switch, event, variable, quest';
+        $lines[] = '  n                  choose or type what it names';
+        $lines[] = '  x                  toggle on/off, set/add, offer/grant';
+        $lines[] = '  v                  type a variable value';
+        $lines[] = '  Enter / Esc        keep or discard the list';
+        $lines[] = '';
         $lines[] = 'Command frames (event scripts)';
         $lines[] = '  Enter              open an option or branch arm';
         $lines[] = '  Esc                back out one frame';
@@ -3766,6 +4561,10 @@ final class Editor
             new PaletteItem('Tool: Event Mode', '^', function (): void {
                 $this->closeDatabaseIfOpen();
                 $this->setEditingMode(self::MODE_EVENT);
+            }),
+            new PaletteItem('Tool: NPC Mode', 'Ctrl+O', function (): void {
+                $this->focusedPane = self::FOCUS_CANVAS;
+                $this->setEditingMode(self::MODE_NPC);
             }),
             new PaletteItem('Tool: Character Map', '@', function (): void {
                 $this->closeDatabaseIfOpen();
@@ -6641,11 +7440,24 @@ final class Editor
         }
 
         if ($target === 'map-size') {
+            $newWidth = (string) ($field['field'] ?? '') === 'width' ? max(1, (int) $value) : $selectedMap->getWidth();
+            $newHeight = (string) ($field['field'] ?? '') === 'height' ? max(1, (int) $value) : $selectedMap->getHeight();
+            $stranded = $selectedMap->describeNpcsStrandedBy($newWidth, $newHeight);
+
+            if ($stranded !== []) {
+                // Refuse rather than clamp, delete, or truncate: the author
+                // moves, resizes or removes the NPC, then shrinks.
+                $this->setStatus(
+                    sprintf('Cannot shrink to %dx%d: %d NPC%s would be stranded (Ctrl+E lists them).', $newWidth, $newHeight, count($stranded), count($stranded) === 1 ? '' : 's'),
+                    StatusLevel::ERROR,
+                    array_map(static fn(string $line): string => '- ' . $line, $stranded),
+                );
+
+                return;
+            }
+
             $snapshotBefore = $selectedMap->captureGridSnapshot();
-            $selectedMap->resize(
-                (string) ($field['field'] ?? '') === 'width' ? max(1, (int) $value) : $selectedMap->getWidth(),
-                (string) ($field['field'] ?? '') === 'height' ? max(1, (int) $value) : $selectedMap->getHeight(),
-            );
+            $selectedMap->resize($newWidth, $newHeight);
             $snapshotAfter = $selectedMap->captureGridSnapshot();
             $this->recordCommand(new GenericCommand(
                 'Map resize',
@@ -7759,6 +8571,13 @@ final class Editor
      */
     private function getDatabaseSettingsFields(): array
     {
+        if ($this->isNpcInspectorHosting()) {
+            // The Inspector hosts the record pane in NPC mode: same fields,
+            // pickers, condition and write editors, and command frames as
+            // any Database category, over the map's own NPCs.
+            return $this->getNpcInspectorFields();
+        }
+
         if ($this->isActorsDatabaseSelected()) {
             return $this->getDatabaseActorSettingsFields();
         }
@@ -8238,6 +9057,12 @@ final class Editor
             return;
         }
 
+        if (($field['worldWrites'] ?? false) === true) {
+            $this->openWorldWriteEditor($field);
+
+            return;
+        }
+
         if (is_array($field['frame'] ?? null)) {
             $this->enterCommandFrame($field['frame']);
 
@@ -8394,6 +9219,235 @@ final class Editor
     }
 
     /**
+     * Opens the world-write editor on a field that holds a `sets` list.
+     *
+     * @param array<string, mixed> $field The settings-pane field descriptor.
+     * @return void
+     */
+    private function openWorldWriteEditor(array $field): void
+    {
+        $this->worldWriteEditor->open(
+            (string) ($field['field'] ?? ''),
+            (string) ($field['label'] ?? 'Writes'),
+            WorldWriteCodec::decodeAll((string) ($field['value'] ?? '')),
+        );
+        $this->statusMessage = 'Building writes.';
+        $this->renderDatabasePanes(['settings']);
+    }
+
+    /**
+     * Handles input while world writes are being built.
+     *
+     * @param string $input The raw input.
+     * @return void
+     */
+    private function handleWorldWriteEditorInput(string $input): void
+    {
+        if ($this->isWorldWriteNaming) {
+            $this->handleWorldWriteNameInput($input);
+
+            return;
+        }
+
+        if ($input === "\033" || $input === "\x1b") {
+            $this->worldWriteEditor->close();
+            $this->statusMessage = 'Writes unchanged.';
+            $this->renderDatabasePanes(['settings']);
+
+            return;
+        }
+
+        if ($input === "\n" || $input === "\r") {
+            $this->commitWorldWrites();
+
+            return;
+        }
+
+        match (true) {
+            str_contains($input, "\033[A") => $this->worldWriteEditor->move(-1),
+            str_contains($input, "\033[B") => $this->worldWriteEditor->move(1),
+            $input === 'a' => $this->worldWriteEditor->add(),
+            $input === 'd' => $this->worldWriteEditor->remove(),
+            $input === 't' => $this->worldWriteEditor->cycleType(1),
+            $input === 'T' => $this->worldWriteEditor->cycleType(-1),
+            $input === 'x', $input === 'X' => $this->worldWriteEditor->cycleExtra(1),
+            $input === 'n' => $this->beginWorldWriteName(),
+            $input === 'v' => $this->beginWorldWriteValue(),
+            default => null,
+        };
+
+        $this->renderDatabasePanes(['settings']);
+    }
+
+    /**
+     * Starts setting what the selected write names: a quest is picked, the
+     * rest are typed.
+     *
+     * @return void
+     */
+    private function beginWorldWriteName(): void
+    {
+        $reference = $this->worldWriteEditor->nameReference();
+        $set = $this->worldWriteEditor->selected();
+
+        if ($reference === null || $set === null || ! $this->workspace instanceof ProjectWorkspace) {
+            return;
+        }
+
+        if (! is_string($reference['category'])) {
+            $this->isWorldWriteNaming = true;
+            $this->worldWriteNameBuffer = strval($set['name'] ?? '');
+            $this->worldWriteNamingValue = false;
+            $this->statusMessage = sprintf('Naming the %s.', mb_strtolower($reference['label']));
+
+            return;
+        }
+
+        $values = new ReferenceCatalog($this->workspace, $this->getSelectedMap())->valuesFor($reference['category']);
+
+        if (! $this->referencePicker->open(self::WORLD_WRITE_NAME_FIELD, $reference['label'], $reference['category'], $values, strval($set['name'] ?? ''))) {
+            $this->setStatus(sprintf('This project defines no %s to choose from.', $reference['category']), StatusLevel::WARN);
+        }
+    }
+
+    /**
+     * Starts typing a variable write's value.
+     *
+     * @return void
+     */
+    private function beginWorldWriteValue(): void
+    {
+        $set = $this->worldWriteEditor->selected();
+
+        if ($set === null || strval($set['type'] ?? '') !== 'variable') {
+            return;
+        }
+
+        $this->isWorldWriteNaming = true;
+        $this->worldWriteNamingValue = true;
+        $this->worldWriteNameBuffer = strval($set['value'] ?? '0');
+        $this->statusMessage = 'Typing the value.';
+    }
+
+    /**
+     * Handles input while a write's name or value is being typed.
+     *
+     * @param string $input The raw input.
+     * @return void
+     */
+    private function handleWorldWriteNameInput(string $input): void
+    {
+        if ($input === "\033" || $input === "\x1b") {
+            $this->isWorldWriteNaming = false;
+            $this->worldWriteNameBuffer = '';
+            $this->statusMessage = 'Unchanged.';
+            $this->renderDatabasePanes(['settings']);
+
+            return;
+        }
+
+        if ($input === "\n" || $input === "\r") {
+            if ($this->worldWriteNamingValue) {
+                $this->worldWriteEditor->setValue(trim($this->worldWriteNameBuffer));
+            } else {
+                $this->worldWriteEditor->setName(trim($this->worldWriteNameBuffer));
+            }
+
+            $this->isWorldWriteNaming = false;
+            $this->worldWriteNameBuffer = '';
+            $this->statusMessage = 'Building writes.';
+            $this->renderDatabasePanes(['settings']);
+
+            return;
+        }
+
+        if ($input === "\x7f" || $input === "\x08") {
+            $this->worldWriteNameBuffer = mb_substr($this->worldWriteNameBuffer, 0, max(0, mb_strlen($this->worldWriteNameBuffer) - 1));
+            $this->renderDatabasePanes(['settings']);
+
+            return;
+        }
+
+        if (mb_strlen($input) === 1 && ! ctype_cntrl($input)) {
+            $this->worldWriteNameBuffer .= $input;
+            $this->renderDatabasePanes(['settings']);
+        }
+    }
+
+    /**
+     * Stores the writes as the line the record layer decodes.
+     *
+     * @return void
+     */
+    private function commitWorldWrites(): void
+    {
+        $fieldId = $this->worldWriteEditor->fieldId();
+        $label = $this->worldWriteEditor->label();
+        $encoded = $this->worldWriteEditor->encoded();
+        $this->worldWriteEditor->close();
+
+        $field = null;
+
+        foreach ($this->getDatabaseSettingsFields() as $candidate) {
+            if (is_array($candidate) && ($candidate['field'] ?? null) === $fieldId) {
+                $field = $candidate;
+            }
+        }
+
+        if (! is_array($field)) {
+            return;
+        }
+
+        try {
+            $this->applyDatabaseFieldValueRecorded($field, $encoded);
+            $this->setStatus(sprintf('%s updated.', $label), StatusLevel::SUCCESS);
+        } catch (Throwable $throwable) {
+            $this->setErrorStatus($throwable, sprintf('%s edit', $label));
+        }
+
+        $this->renderDatabasePanes(['list', 'settings', 'cue', 'frames', 'preview']);
+    }
+
+    /**
+     * Returns the rows shown while writes are being built.
+     *
+     * @return string[] The rows.
+     */
+    private function buildWorldWriteEditorRows(): array
+    {
+        if ($this->isWorldWriteNaming) {
+            $reference = $this->worldWriteEditor->nameReference();
+
+            return [
+                sprintf('%s: %s', $this->worldWriteNamingValue ? 'Value' : ($reference['label'] ?? 'Name'), $this->worldWriteNameBuffer),
+                '',
+                '  Enter to accept, Esc to leave it alone.',
+            ];
+        }
+
+        $rows = $this->worldWriteEditor->rows();
+        $lines = [sprintf('%s · %d', $this->worldWriteEditor->label(), count($rows)), ''];
+
+        if ($rows === []) {
+            $lines[] = '  None. Nothing changes when this completes.';
+            $lines[] = '';
+            $lines[] = '  a to add a write.';
+
+            return $lines;
+        }
+
+        $selectedIndex = $this->worldWriteEditor->selectedIndex();
+
+        foreach ($rows as $index => $row) {
+            $lines[] = sprintf('%s%s', $index === $selectedIndex ? '> ' : '  ', $row);
+        }
+
+        $visibleRows = max(1, $this->resolveDatabaseLayout($this->resolveLayout())['topHeight'] - 4);
+
+        return [...array_slice($lines, 0, 2), ...ScrollWindow::slice(array_slice($lines, 2), $selectedIndex, $visibleRows)];
+    }
+
+    /**
      * Opens the affinity editor on a field that holds an element map.
      *
      * @param array<string, mixed> $field The settings-pane field descriptor.
@@ -8405,7 +9459,7 @@ final class Editor
             return;
         }
 
-        $elements = new ReferenceCatalog($this->workspace)->valuesFor('elements');
+        $elements = new ReferenceCatalog($this->workspace, $this->getSelectedMap())->valuesFor('elements');
 
         if ($elements === []) {
             // No element enum, no rows to build: saying so beats an editor
@@ -8640,7 +9694,7 @@ final class Editor
             return;
         }
 
-        $values = new ReferenceCatalog($this->workspace)->valuesFor($reference['category']);
+        $values = new ReferenceCatalog($this->workspace, $this->getSelectedMap())->valuesFor($reference['category']);
 
         if (! $this->referencePicker->open(
             self::CONDITION_NAME_FIELD,
@@ -8788,7 +9842,7 @@ final class Editor
 
         $category = (string) ($field['reference'] ?? '');
         $label = (string) ($field['label'] ?? 'Reference');
-        $values = new ReferenceCatalog($this->workspace)->valuesFor($category);
+        $values = new ReferenceCatalog($this->workspace, $this->getSelectedMap())->valuesFor($category);
 
         if (($field['allowsNone'] ?? false) === true && $values !== []) {
             // An optional reference needs a way back to nothing, or setting
@@ -8884,6 +9938,17 @@ final class Editor
         $fieldId = $this->referencePicker->fieldId();
         $label = $this->referencePicker->label();
         $this->referencePicker->close();
+
+        if ($fieldId === self::WORLD_WRITE_NAME_FIELD) {
+            if ($selected !== null) {
+                $this->worldWriteEditor->setName($selected);
+            }
+
+            $this->statusMessage = 'Building writes.';
+            $this->renderDatabasePanes(['settings']);
+
+            return;
+        }
 
         if ($fieldId === self::AFFINITY_ELEMENT_FIELD) {
             // Opened from the affinity editor, which is still the thing
@@ -9032,6 +10097,12 @@ final class Editor
      */
     private function applyDatabaseFieldValueRecorded(array $field, string $rawValue): void
     {
+        if ($this->isNpcInspectorHosting()) {
+            $this->applyNpcFieldValueRecorded($field, $rawValue);
+
+            return;
+        }
+
         $fieldId = (string) ($field['field'] ?? '');
         $control = $this->getDatabaseFieldControl($field);
         // Option values keep their authored case (the actor class picker
@@ -9536,6 +10607,18 @@ final class Editor
 
         if (! $selectedMap instanceof ProjectMap) {
             return [];
+        }
+
+        if ($this->isNpcInspectorHosting()) {
+            if ($this->selectedNpcIndex === null) {
+                return [[
+                    'label' => 'NPCs · ' . $selectedMap->getNpcs()->count(),
+                    'value' => 'Enter on the canvas to select or create one.',
+                    'editable' => false,
+                ]];
+            }
+
+            return $this->getDatabaseSettingsFields();
         }
 
         $fields = [
@@ -11120,7 +12203,7 @@ final class Editor
 
         $entries = array_map(
             static fn(string $value): array => ['label' => $value, 'value' => $value, 'description' => ''],
-            new ReferenceCatalog($this->workspace)->valuesFor($category),
+            new ReferenceCatalog($this->workspace, $this->getSelectedMap())->valuesFor($category),
         );
 
         if ($entries === []) {
@@ -11465,6 +12548,14 @@ final class Editor
      */
     private function renderDatabasePanes(array $panes, ?array $layout = null, bool $includeRoot = false): void
     {
+        if ($this->isNpcInspectorHosting()) {
+            // The sub-editors ask for Database panes; in the Inspector the
+            // same request means the inspector and canvas.
+            $this->requestFullRender();
+
+            return;
+        }
+
         $this->markDatabasePanesDirty($panes, $includeRoot);
     }
 
@@ -11690,6 +12781,13 @@ final class Editor
                     'Enter:Edit/Open  Esc:Back  Shift+O:Add  Shift+X/Del:Remove',
                     'Enter:Open  Esc:Back  Shift+O/Del:Add/Del',
                     'Esc:Back  ?:Help',
+                ),
+                $this->worldWriteEditor->isOpen() => $this->fitHelp(
+                    $layout['settingsWidth'],
+                    'a:Add  d:Delete  t/T:Type  n:Name  x:Toggle  v:Value  Enter:Done  Esc:Cancel',
+                    'a/d:Add/Del  t:Type  n:Name  x:Toggle  Enter:Done',
+                    'a/d:Add/Del  t/n/x:Edit  ?:Help',
+                    '?:Help',
                 ),
                 $this->affinityEditor->isOpen() => $this->fitHelp(
                     $layout['settingsWidth'],
@@ -12128,6 +13226,10 @@ final class Editor
 
         if ($this->affinityEditor->isOpen()) {
             return $this->buildAffinityEditorRows();
+        }
+
+        if ($this->worldWriteEditor->isOpen()) {
+            return $this->buildWorldWriteEditorRows();
         }
 
         $lines = [];
@@ -13510,6 +14612,8 @@ final class Editor
                     $this->canvasOffsetX,
                     $this->canvasOffsetY,
                     $this->showEventOverlay,
+                    $this->editingMode === self::MODE_NPC,
+                    $this->selectedNpcIndex,
                 ) ?? [],
                 $contentWidth,
                 $layout['contentHeight'] - 2

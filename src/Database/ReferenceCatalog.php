@@ -8,6 +8,7 @@ use Ichiloto\Editor\ProjectActor;
 use Ichiloto\Editor\ProjectClass;
 use Ichiloto\Editor\ProjectQuest;
 use Ichiloto\Editor\ProjectSkill;
+use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
 
 /**
@@ -45,6 +46,7 @@ final class ReferenceCatalog
         'sfx',
         'enemy_sprites',
         'elements',
+        'map_npcs',
     ];
 
     /**
@@ -55,8 +57,15 @@ final class ReferenceCatalog
         'sfx' => 'SFX',
     ];
 
-    public function __construct(private readonly ProjectWorkspace $workspace)
-    {
+    /**
+     * @param ProjectWorkspace $workspace The project.
+     * @param ProjectMap|null $currentMap The map the author is working in,
+     *   for reference kinds that are map-local (an NPC id).
+     */
+    public function __construct(
+        private readonly ProjectWorkspace $workspace,
+        private readonly ?ProjectMap $currentMap = null,
+    ) {
     }
 
     /**
@@ -105,6 +114,10 @@ final class ReferenceCatalog
             // so the file stems are the values.
             'enemy_sprites' => $this->fileValues('assets/Graphics/Enemies'),
             'elements' => $this->elementValues(),
+            // NPC ids are map-local, so the choices are the current map's:
+            // read live from the collection, a just-created NPC is offered
+            // at once and a deleted one is gone.
+            'map_npcs' => $this->currentMap?->getNpcs()->ids() ?? [],
             'animations' => array_map(
                 static fn(object $animation): string => $animation->name ?? '',
                 $this->workspace->animationDatabase->getAnimations()

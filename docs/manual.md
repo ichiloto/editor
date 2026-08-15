@@ -175,12 +175,42 @@ The canvas previews the selected map and is where you paint.
 | --- | --- |
 | `%` | Switch to Map mode (paint tiles) |
 | `^` | Switch to Event mode (paint event markers) |
+| `Ctrl+O` | Toggle NPC mode (place and edit the map's NPCs) |
 | `@` | Open the character map |
 | `Arrows` | Move the cursor |
 | `Enter` | Apply the active tool |
 
 Typing any other printable glyph paints it at the cursor with the brush tool.
 Under a shape or select tool, typing a glyph loads it into the brush instead.
+
+### NPC Mode
+
+`Ctrl+O` enters NPC mode: the map's `npcs` collection is drawn over the tiles
+as an overlay — sprites at their authored anchor, wide glyphs occupying the
+two columns the game gives them — and nothing you do here paints a tile or an
+event marker. The selected NPC is shown in brackets. NPC mode is a control
+byte rather than a glyph so no paintable character is taken from you.
+
+| Key | Action |
+| --- | --- |
+| `Enter` | Select the NPC under the cursor, or create a new fixed NPC there |
+| `M` | Pick up the selected NPC; the next `Enter` sets it down at the cursor (`Esc` cancels) |
+| `D` | Duplicate the selected NPC under a fresh stable id |
+| `Del` | Delete the selected NPC — refused, with the list, while anything names its id |
+| `Tab` | Edit the selected NPC in the Inspector |
+
+Create, move, duplicate and delete each undo and redo as one step, and dirty
+state follows the map's persisted-state fingerprint like every other edit:
+undoing back to the last save is clean. A typed glyph in NPC mode is refused
+with a hint rather than painted under an NPC.
+
+A new NPC receives a stable `id` derived once from its name and unique on its
+map. The id is what `move_route` and script diagnostics name, and it is
+**immutable after creation** — renaming the NPC, moving it, or changing its
+sprite never touches it. Duplicating assigns a fresh id. Existing NPCs authored
+without an id load and edit normally, with a validation warning that scripted
+movement cannot target them; changing an id is an identity migration, which
+the editor does not yet offer.
 
 Mouse drag-painting works, with gap filling, and a whole drag coalesces into a
 single undo step.

@@ -224,6 +224,8 @@ final class ProjectMap
         int $offsetX = 0,
         int $offsetY = 0,
         bool $showEventOverlay = true,
+        bool $showNpcOverlay = false,
+        ?int $selectedNpcIndex = null,
     ): array
     {
         if ($width < 1 || $height < 1) {
@@ -234,6 +236,7 @@ final class ProjectMap
         $offsetX = max(0, $offsetX);
         $offsetY = max(0, $offsetY);
         $rowLimit = min($offsetY + $height, max(count($this->tileCells), count($this->eventCells)));
+        $npcCells = $showNpcOverlay ? $this->npcOverlayCells($selectedNpcIndex) : [];
 
         for ($row = $offsetY; $row < $rowLimit; $row++) {
             $tileSymbols = array_map(
@@ -244,6 +247,13 @@ final class ProjectMap
             $mergedSymbols = [];
 
             for ($column = $offsetX; $column < $offsetX + $width; $column++) {
+                if (isset($npcCells[$row][$column])) {
+                    // NPCs draw over everything, as they do in the game; the
+                    // overlay is derived from map data and never painted.
+                    $mergedSymbols[] = $npcCells[$row][$column];
+                    continue;
+                }
+
                 $eventSymbol = $eventSymbols[$column] ?? ' ';
                 $tileSymbol = $tileSymbols[$column] ?? ' ';
                 $mergedSymbols[] = trim($eventSymbol) !== '' ? $eventSymbol : $tileSymbol;
@@ -253,6 +263,46 @@ final class ProjectMap
         }
 
         return array_pad($lines, $height, '');
+    }
+
+    /**
+     * Returns the cells the NPC overlay occupies, row => column => symbol.
+     *
+     * The engine anchors a sprite at its tile and lets it overhang to the
+     * right (NpcManager::eraseNpc clears displayWidth cells), so a
+     * two-column emoji owns its anchor and the cell after it. The overhang
+     * cell holds an empty string, so the terminal draws the wide glyph in
+     * the space it needs rather than a symbol shoved half under it. The
+     * selected NPC is drawn with brackets around a one-column sprite, or as
+     * itself when wide, since brackets would misalign the row.
+     *
+     * @param int|null $selectedNpcIndex The NPC to mark selected.
+     * @return array<int, array<int, string>> The cells.
+     */
+    private function npcOverlayCells(?int $selectedNpcIndex): array
+    {
+        $cells = [];
+
+        foreach ($this->getNpcs()->all() as $index => $npc) {
+            $sprite = $npc->getSprite();
+            $columns = max(1, mb_strwidth($sprite));
+            $x = $npc->getX();
+            $y = $npc->getY();
+
+            if ($index === $selectedNpcIndex && $columns === 1) {
+                $sprite = '[' . $sprite . ']';
+                $x = max(0, $x - 1);
+                $columns = 3;
+            }
+
+            $cells[$y][$x] = $sprite;
+
+            for ($column = 1; $column < $columns; $column++) {
+                $cells[$y][$x + $column] = '';
+            }
+        }
+
+        return $cells;
     }
 
     /**
@@ -361,6 +411,63 @@ final class ProjectMap
         $this->eventCells = $snapshot['events'];
         $this->cachedWidth = null;
         $this->touchState();
+    }
+
+    /**
+     * Names the NPCs a resize to the given size would leave outside the map,
+     * or with a wander area outside it.
+     *
+     * The runtime does not clamp: an NPC anchored past the edge is drawn
+     * off-map and unreachable, and a wander area past the edge is a promise
+     * the engine cannot keep. Nothing here changes anything -- it is what a
+     * shrink has to be refused for until the author moves, resizes, or
+     * removes the NPC.
+     *
+     * @param int $width The proposed width.
+     * @param int $height The proposed height.
+     * @return string[] One line per stranded NPC, empty when the resize is safe.
+     */
+    public function describeNpcsStrandedBy(int $width, int $height): array
+    {
+        $stranded = [];
+
+        foreach ($this->getNpcs()->all() as $npc) {
+            $label = sprintf('%s (%s)', $npc->getName(), $npc->getId() ?? 'no id');
+
+            if ($npc->getX() >= $width || $npc->getY() >= $height) {
+                $stranded[] = sprintf('%s stands at %d,%d', $label, $npc->getX(), $npc->getY());
+            }
+
+            $area = $npc->getWanderArea();
+
+            if ($npc->wanders() && $area !== null
+                && ($area['x'] + $area['width'] > $width || $area['y'] + $area['height'] > $height)) {
+                $stranded[] = sprintf(
+                    '%s wanders %d,%d %dx%d',
+                    $label,
+                    $area['x'],
+                    $area['y'],
+                    $area['width'],
+                    $area['height'],
+                );
+            }
+        }
+
+        return $stranded;
+    }
+
+    /**
+     * Returns the map's event definitions as they currently stand.
+     *
+     * `$data` is the loaded payload; this is the live one, edits included.
+     *
+     * @return array<string, mixed> The events, keyed by marker.
+     */
+    public function getEventDefinitions(): array
+    {
+        $events = $this->editableData['events'] ?? [];
+
+        return is_array($events) ? $events : [];
     }
 
     /**

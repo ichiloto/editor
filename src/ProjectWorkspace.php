@@ -274,6 +274,8 @@ final readonly class ProjectWorkspace
         int $offsetX = 0,
         int $offsetY = 0,
         bool $showEventOverlay = true,
+        bool $showNpcOverlay = false,
+        ?int $selectedNpcIndex = null,
     ): array
     {
         $selectedMap = $this->getMapByIndex($selectedMapIndex);
@@ -287,7 +289,7 @@ final readonly class ProjectWorkspace
         }
 
         $previewHeight = max(0, $height - 2);
-        $previewLines = $selectedMap->renderPreview($width, $previewHeight, $offsetX, $offsetY, $showEventOverlay);
+        $previewLines = $selectedMap->renderPreview($width, $previewHeight, $offsetX, $offsetY, $showEventOverlay, $showNpcOverlay, $selectedNpcIndex);
 
         return [
             sprintf('Preview: %s', $selectedMap->mapId),
