@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Ichiloto\Editor;
 
 use Ichiloto\Editor\Field\NpcCollection;
+use Ichiloto\Editor\Field\ProjectNpc;
 use Ichiloto\Editor\History\TracksPersistedState;
 use Ichiloto\Editor\IO\AtomicFile;
 
@@ -226,6 +227,7 @@ final class ProjectMap
         bool $showEventOverlay = true,
         bool $showNpcOverlay = false,
         ?int $selectedNpcIndex = null,
+        ?string $selectedNpcSprite = null,
     ): array
     {
         if ($width < 1 || $height < 1) {
@@ -236,7 +238,7 @@ final class ProjectMap
         $offsetX = max(0, $offsetX);
         $offsetY = max(0, $offsetY);
         $rowLimit = min($offsetY + $height, max(count($this->tileCells), count($this->eventCells)));
-        $npcCells = $showNpcOverlay ? $this->npcOverlayCells($selectedNpcIndex) : [];
+        $npcCells = $showNpcOverlay ? $this->npcOverlayCells($selectedNpcIndex, $selectedNpcSprite) : [];
 
         for ($row = $offsetY; $row < $rowLimit; $row++) {
             $tileSymbols = array_map(
@@ -277,9 +279,12 @@ final class ProjectMap
      * itself when wide, since brackets would misalign the row.
      *
      * @param int|null $selectedNpcIndex The NPC to mark selected.
+     * @param string|null $selectedNpcSprite A glyph to draw for the selected
+     *   NPC in place of its base sprite -- a directional sprite being
+     *   previewed -- as authored; it is shown as the terminal would show it.
      * @return array<int, array<int, string>> The cells.
      */
-    private function npcOverlayCells(?int $selectedNpcIndex): array
+    private function npcOverlayCells(?int $selectedNpcIndex, ?string $selectedNpcSprite = null): array
     {
         $cells = [];
 
@@ -288,6 +293,11 @@ final class ProjectMap
             $columns = $npc->getSpriteWidth();
             $x = $npc->getX();
             $y = $npc->getY();
+
+            if ($index === $selectedNpcIndex && $selectedNpcSprite !== null && trim($selectedNpcSprite) !== '') {
+                $sprite = ProjectNpc::visibleGlyph($selectedNpcSprite);
+                $columns = max(1, mb_strwidth($sprite));
+            }
 
             if ($index === $selectedNpcIndex && $columns === 1) {
                 $sprite = '[' . $sprite . ']';

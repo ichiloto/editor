@@ -184,6 +184,12 @@ final class Editor
     private ?array $npcMoveInProgress = null;
     private ?NpcInspector $npcInspector = null;
     /**
+     * @var array{x: int, y: int}|null The tile a new NPC is being named for;
+     * the name typed here is what its stable id derives from, once.
+     */
+    private ?array $npcCreationInProgress = null;
+    private string $npcNameBuffer = '';
+    /**
      * The open-modal registry: one source of truth for input dispatch and
      * overlay rendering. The `is*Open` hooks below keep the historic boolean
      * reads/writes working against the stack.
@@ -410,6 +416,18 @@ final class Editor
      * condition rather than to set a field.
      */
     private const string CONDITION_NAME_FIELD = '__condition_name';
+
+    /**
+     * The picker field id used when the map's NPC list is opened to select
+     * one, rather than to fill a field.
+     */
+    private const string NPC_SELECT_FIELD = '__npc_select';
+
+    /**
+     * The Inspector row that assigns a stable id to an NPC authored without
+     * one; the only time an id is ever written after creation.
+     */
+    private const string NPC_ASSIGN_ID_FIELD = '__npc_assign_id';
     private bool $isConditionNaming = false;
     private string $conditionNameBuffer = '';
     /**
@@ -1566,6 +1584,14 @@ final class Editor
         }
 
         if ($input === "\n" || $input === "\r") {
+            $current = $this->getInspectorFields()[$this->databaseSelectedSettingIndex] ?? null;
+
+            if (is_array($current) && ($current['field'] ?? null) === self::NPC_ASSIGN_ID_FIELD) {
+                $this->assignIdToSelectedNpc();
+
+                return;
+            }
+
             $this->beginDatabaseEdit();
 
             return;
@@ -1735,7 +1761,11 @@ final class Editor
         $records = $this->npcInspector->records();
         $fields = $records->getFrameSettingsFields($this->selectedNpcIndex, $this->databaseCommandFramePath);
 
-        if ($fields === [] && $this->databaseCommandFramePath !== []) {
+        if (
+            $this->databaseCommandFramePath !== []
+            && $records->getFrameCommands($this->selectedNpcIndex, $this->databaseCommandFramePath) === null
+        ) {
+            // The frame no longer resolves; an empty one still does.
             $this->databaseCommandFramePath = [];
             $fields = $records->getFrameSettingsFields($this->selectedNpcIndex, []);
         }
@@ -1751,7 +1781,14 @@ final class Editor
         $notes = [];
 
         if ($npc !== null && $npc->getId() === null) {
-            $notes[] = ['label' => '  ! No stable id', 'value' => 'move_route cannot target it', 'editable' => false];
+            // Legacy entry: nothing can name an id it never had, so giving
+            // it one is the one identity write that is safe after creation.
+            $notes[] = [
+                'label' => '  ! No stable id',
+                'value' => 'move_route cannot target it; Enter assigns one from the name',
+                'editable' => true,
+                'field' => self::NPC_ASSIGN_ID_FIELD,
+            ];
         }
 
         if ($npc !== null && $npc->scriptShadowsDialogue()) {
@@ -1784,13 +1821,12 @@ final class Editor
                 foreach ($byId[$id] ?? [] as $field) {
                     // Wander bounds only matter while wandering; loaded
                     // values are kept, just not shown for a fixed NPC.
-                    if (str_starts_with($id, 'wanderArea.') && $npc !== null && ! $npc->wanders()) {
-                        continue;
+                    if (! (str_starts_with($id, 'wanderArea.') && $npc !== null && ! $npc->wanders())) {
+                        $rows[] = $field;
                     }
-
-                    $rows[] = $field;
-                    unset($byId[$id]);
                 }
+
+                unset($byId[$id]);
             }
 
             if ($rows !== []) {
@@ -1886,6 +1922,20 @@ final class Editor
             return false;
         }
 
+        if ($this->referencePicker->isOpen()) {
+            // The map's NPC list, opened from the canvas: the picker owns
+            // the keys until it closes.
+            $this->handleReferencePickerInput($input);
+
+            return true;
+        }
+
+        if ($this->npcCreationInProgress !== null) {
+            $this->handleNpcNameInput($input);
+
+            return true;
+        }
+
         if ($input === "\n" || $input === "\r") {
             if ($this->npcMoveInProgress !== null) {
                 $this->finishNpcMove();
@@ -1903,7 +1953,7 @@ final class Editor
                 return true;
             }
 
-            $this->createNpcAtCursor();
+            $this->beginNpcCreation();
 
             return true;
         }
@@ -1924,6 +1974,18 @@ final class Editor
 
         if ($input === 'd' || $input === 'D') {
             $this->duplicateSelectedNpc();
+
+            return true;
+        }
+
+        if ($input === 'l' || $input === 'L') {
+            $this->openNpcList();
+
+            return true;
+        }
+
+        if ($input === '[' || $input === ']') {
+            $this->selectAdjacentNpc($input === '[' ? -1 : 1);
 
             return true;
         }
@@ -1961,6 +2023,203 @@ final class Editor
     }
 
     /**
+     * Gives an NPC authored without a stable id one, derived from its name
+     * and unique on its map, so movement routes can target it.
+     *
+     * Only an id-less NPC is eligible: an existing id is immutable, since
+     * routes and diagnostics that name it would not follow a change.
+     *
+     * @return void
+     */
+    private function assignIdToSelectedNpc(): void
+    {
+        $map = $this->getSelectedMap();
+        $index = $this->selectedNpcIndex;
+        $npc = $index !== null ? $map?->getNpcs()->get($index) : null;
+
+        if (! $map instanceof ProjectMap || $index === null || $npc === null) {
+            return;
+        }
+
+        if ($npc->getId() !== null) {
+            $this->setStatus(sprintf('%s already has the stable id "%s"; ids do not change.', $npc->getName(), $npc->getId()), StatusLevel::WARN);
+            $this->renderFooter();
+
+            return;
+        }
+
+        $before = $map->getNpcs();
+        $id = $before->uniqueIdFor($npc->getName());
+        $map->setNpcs($before->withReplaced($index, $npc->asCopyWithId($id)));
+        $this->recordNpcCollectionChange($map, $index, $before, sprintf('Assign NPC id %s', $id));
+        $this->setStatus(sprintf('Assigned the stable id "%s" to %s.', $id, $npc->getName()), StatusLevel::SUCCESS);
+    }
+
+    /**
+     * Opens the map's NPCs as a list to select from.
+     *
+     * The canvas finds an NPC by walking to it; the list finds it by name
+     * or id, typed to narrow, and jumps the cursor there. It is the same
+     * picker every reference uses, over the map's own collection.
+     *
+     * @return void
+     */
+    private function openNpcList(): void
+    {
+        $map = $this->getSelectedMap();
+
+        if (! $map instanceof ProjectMap) {
+            return;
+        }
+
+        $labels = $this->npcListLabels($map);
+
+        if ($labels === []) {
+            $this->setStatus('This map has no NPCs yet. Enter on the canvas creates one.', StatusLevel::WARN);
+            $this->renderFooter();
+
+            return;
+        }
+
+        $current = $this->selectedNpcIndex !== null ? ($labels[$this->selectedNpcIndex] ?? '') : '';
+        $this->referencePicker->open(self::NPC_SELECT_FIELD, 'NPCs on this map', 'map_npcs', $labels, $current);
+        $this->requestFullRender();
+    }
+
+    /**
+     * Returns one label per NPC, in collection order: name and stable id,
+     * so two NPCs sharing a name still read apart.
+     *
+     * @param ProjectMap $map The map.
+     * @return array<int, string> The labels, indexed like the collection.
+     */
+    private function npcListLabels(ProjectMap $map): array
+    {
+        $labels = [];
+
+        foreach ($map->getNpcs()->all() as $index => $npc) {
+            $id = $npc->getId();
+            $labels[$index] = sprintf(
+                '%s  (%s)',
+                $npc->getName() === '' ? sprintf('NPC %d', $index + 1) : $npc->getName(),
+                $id === null || $id === '' ? 'no id' : $id,
+            );
+        }
+
+        return $labels;
+    }
+
+    /**
+     * Selects the NPC picked from the list and puts the cursor on it.
+     *
+     * @param string|null $label The picked label.
+     * @return void
+     */
+    private function selectNpcFromList(?string $label): void
+    {
+        $map = $this->getSelectedMap();
+
+        if (! $map instanceof ProjectMap || $label === null) {
+            $this->requestFullRender();
+
+            return;
+        }
+
+        $index = array_search($label, $this->npcListLabels($map), true);
+
+        if (! is_int($index)) {
+            $this->requestFullRender();
+
+            return;
+        }
+
+        $this->selectNpcAndJump($index);
+    }
+
+    /**
+     * Selects the previous or next NPC in collection order, wrapping.
+     *
+     * @param int $step -1 for previous, 1 for next.
+     * @return void
+     */
+    private function selectAdjacentNpc(int $step): void
+    {
+        $map = $this->getSelectedMap();
+
+        if (! $map instanceof ProjectMap) {
+            return;
+        }
+
+        $count = $map->getNpcs()->count();
+
+        if ($count === 0) {
+            $this->setStatus('This map has no NPCs yet. Enter on the canvas creates one.', StatusLevel::WARN);
+            $this->renderFooter();
+
+            return;
+        }
+
+        $index = $this->selectedNpcIndex === null
+            ? ($step > 0 ? 0 : $count - 1)
+            : (($this->selectedNpcIndex + $step + $count) % $count);
+
+        $this->selectNpcAndJump($index);
+    }
+
+    /**
+     * Selects an NPC and moves the canvas cursor onto its anchor tile.
+     *
+     * @param int $index The collection index.
+     * @return void
+     */
+    private function selectNpcAndJump(int $index): void
+    {
+        $map = $this->getSelectedMap();
+        $npc = $map?->getNpcs()->get($index);
+
+        if (! $map instanceof ProjectMap || $npc === null) {
+            return;
+        }
+
+        $this->selectNpc($index);
+        $this->cursorX = max(0, min($map->getWidth() - 1, $npc->getX()));
+        $this->cursorY = max(0, min($map->getHeight() - 1, $npc->getY()));
+        $this->setStatus(sprintf('Selected %s.', $this->describeSelectedNpc()));
+        $this->requestFullRender();
+    }
+
+    /**
+     * Returns the directional sprite to preview on the canvas, if the
+     * Inspector cursor rests on one.
+     *
+     * A `Facing …` glyph is only ever seen in the game once the NPC turns
+     * that way; resting on its row shows it in place, so the author sees
+     * what the turn will look like without leaving the editor.
+     *
+     * @return string|null The sprite as authored, or null for the base sprite.
+     */
+    private function previewedNpcSprite(): ?string
+    {
+        if (! $this->isNpcInspectorHosting() || $this->selectedNpcIndex === null || $this->focusedPane !== self::FOCUS_INSPECTOR) {
+            return null;
+        }
+
+        if ($this->databaseCommandFramePath !== [] || $this->referencePicker->isOpen()) {
+            return null;
+        }
+
+        $field = $this->getInspectorFields()[$this->databaseSelectedSettingIndex] ?? null;
+
+        if (! is_array($field) || ! str_starts_with((string) ($field['field'] ?? ''), 'sprites.')) {
+            return null;
+        }
+
+        $sprite = $this->isDatabaseEditing ? $this->databaseEditBuffer : (string) ($field['value'] ?? '');
+
+        return trim($sprite) === '' ? null : $sprite;
+    }
+
+    /**
      * Rebuilds the NPC Inspector over the selected map's current NPCs.
      *
      * @return void
@@ -1992,12 +2251,102 @@ final class Editor
     }
 
     /**
-     * Creates a fixed NPC at the cursor, with a stable id derived once from
-     * its name, and opens it for editing.
+     * Opens the name prompt for a new NPC at the cursor.
      *
      * @return void
      */
-    private function createNpcAtCursor(): void
+    private function beginNpcCreation(): void
+    {
+        $map = $this->getSelectedMap();
+
+        if (! $map instanceof ProjectMap) {
+            return;
+        }
+
+        // The name is asked for first because the stable id derives from
+        // it, once: an id minted from a placeholder would be "new-npc" for
+        // every NPC ever created, and ids do not change afterwards.
+        $this->npcCreationInProgress = ['x' => $this->cursorX, 'y' => $this->cursorY];
+        $this->npcNameBuffer = '';
+        $this->setStatus(sprintf('Name the new NPC at (%d, %d); Enter creates it, Esc cancels.', $this->cursorX, $this->cursorY));
+        $this->requestFullRender();
+    }
+
+    /**
+     * Takes the keys of the new-NPC name prompt.
+     *
+     * @param string $input The raw input.
+     * @return void
+     */
+    private function handleNpcNameInput(string $input): void
+    {
+        if ($input === "\033" || $input === "\x1b") {
+            $this->npcCreationInProgress = null;
+            $this->npcNameBuffer = '';
+            $this->setStatus('No NPC created.');
+            $this->requestFullRender();
+
+            return;
+        }
+
+        if ($input === "\n" || $input === "\r") {
+            $tile = $this->npcCreationInProgress;
+            $name = trim($this->npcNameBuffer);
+            $this->npcCreationInProgress = null;
+            $this->npcNameBuffer = '';
+
+            if ($tile !== null) {
+                $this->createNpcAt($tile['x'], $tile['y'], $name !== '' ? $name : 'New NPC');
+            }
+
+            return;
+        }
+
+        if ($input === "\x7f" || $input === "\x08") {
+            $this->npcNameBuffer = mb_substr($this->npcNameBuffer, 0, max(0, mb_strlen($this->npcNameBuffer) - 1));
+            $this->requestFullRender();
+
+            return;
+        }
+
+        if (mb_strlen($input) === 1 && ! ctype_cntrl($input)) {
+            $this->npcNameBuffer .= $input;
+            $this->requestFullRender();
+        }
+    }
+
+    /**
+     * Returns the rows of the new-NPC name prompt, drawn in the Inspector.
+     *
+     * @return string[] The rows.
+     */
+    private function buildNpcNamePromptRows(): array
+    {
+        $tile = $this->npcCreationInProgress ?? ['x' => 0, 'y' => 0];
+        $map = $this->getSelectedMap();
+        $preview = trim($this->npcNameBuffer) !== '' && $map instanceof ProjectMap
+            ? $map->getNpcs()->uniqueIdFor(trim($this->npcNameBuffer))
+            : '';
+
+        return [
+            sprintf('New NPC at (%d, %d)', $tile['x'], $tile['y']),
+            '',
+            sprintf('Name: %s', $this->npcNameBuffer),
+            $preview !== '' ? sprintf('Id:   %s', $preview) : 'Id:   (derived from the name, once)',
+            '',
+            '  Enter creates it, Esc cancels.',
+        ];
+    }
+
+    /**
+     * Creates a fixed NPC at a tile under a stable id derived from its name.
+     *
+     * @param int $x The anchor column.
+     * @param int $y The anchor row.
+     * @param string $name The display name.
+     * @return void
+     */
+    private function createNpcAt(int $x, int $y, string $name): void
     {
         $map = $this->getSelectedMap();
 
@@ -2006,9 +2355,8 @@ final class Editor
         }
 
         $collection = $map->getNpcs();
-        $name = 'New NPC';
         $id = $collection->uniqueIdFor($name);
-        $npc = ProjectNpc::createAt($id, $name, $this->cursorX, $this->cursorY);
+        $npc = ProjectNpc::createAt($id, $name, $x, $y);
         $index = $collection->count();
         $before = $collection;
         $after = $collection->withAdded($npc);
@@ -3078,6 +3426,8 @@ final class Editor
         $this->isInspectorEditing = false;
         $this->inspectorEditBuffer = '';
         $this->npcMoveInProgress = null;
+        $this->npcCreationInProgress = null;
+        $this->npcNameBuffer = '';
 
         if ($mode === self::MODE_NPC) {
             // Land on the NPC under the cursor, or the first one, so the
@@ -3089,7 +3439,7 @@ final class Editor
 
         $this->statusMessage = match ($mode) {
             self::MODE_EVENT => 'Event mode active.',
-            self::MODE_NPC => 'NPC mode active. Enter selects or creates, M moves, D duplicates, Del removes.',
+            self::MODE_NPC => 'NPC mode active. Enter selects or creates, M moves, D duplicates, L lists, Del removes.',
             default => 'Map mode active.',
         };
         $this->renderCanvasArea();
@@ -4428,6 +4778,9 @@ final class Editor
         $lines[] = '                     create one there';
         $lines[] = '  M                  pick up; Enter sets down, Esc cancels';
         $lines[] = '  D                  duplicate under a fresh stable id';
+        $lines[] = '  L                  list the map\'s NPCs; type to narrow,';
+        $lines[] = '                     Enter selects and jumps to it';
+        $lines[] = '  [ / ]              select the previous / next NPC';
         $lines[] = '  Del                delete (refused while anything names';
         $lines[] = '                     its id)';
         $lines[] = '  Tab                edit it in the Inspector, with the';
@@ -8620,9 +8973,13 @@ final class Editor
                     $this->databaseCommandFramePath,
                 );
 
-                if ($fields === [] && $this->databaseCommandFramePath !== []) {
+                if (
+                    $this->databaseCommandFramePath !== []
+                    && $recordDatabase->getFrameCommands($this->getSelectedRecordIndex(), $this->databaseCommandFramePath) === null
+                ) {
                     // The frame no longer resolves (an undo removed its
                     // command): fall back to the script rather than a void.
+                    // An empty frame still resolves, and stays open.
                     $this->databaseCommandFramePath = [];
 
                     return $recordDatabase->getFrameSettingsFields($this->getSelectedRecordIndex(), []);
@@ -9966,6 +10323,12 @@ final class Editor
         $fieldId = $this->referencePicker->fieldId();
         $label = $this->referencePicker->label();
         $this->referencePicker->close();
+
+        if ($fieldId === self::NPC_SELECT_FIELD) {
+            $this->selectNpcFromList($selected);
+
+            return;
+        }
 
         if ($fieldId === self::WORLD_WRITE_NAME_FIELD) {
             if ($selected !== null) {
@@ -13979,6 +14342,16 @@ final class Editor
             return ['No selection.'];
         }
 
+        if ($this->isNpcInspectorHosting() && $this->npcCreationInProgress !== null) {
+            return $this->buildNpcNamePromptRows();
+        }
+
+        if ($this->isNpcInspectorHosting() && $this->referencePicker->isOpen() && $this->referencePicker->fieldId() === self::NPC_SELECT_FIELD) {
+            // The map's NPC list, opened from the canvas, is drawn where a
+            // field's picker would be, whether or not one is selected yet.
+            return $this->buildReferencePickerRows();
+        }
+
         if ($this->isNpcInspectorHosting() && $this->selectedNpcIndex !== null) {
             // The hosted pane draws its own sub-editors and edit cursor,
             // exactly as the Database settings pane does.
@@ -14651,9 +15024,24 @@ final class Editor
 
         return new EditorWindow(
             title: $this->focusedPane === self::FOCUS_CANVAS ? 'Canvas [Focus]' : 'Canvas',
-            help: $this->isDestinationSpawnSelectionOpen
-                ? 'Enter:Select Spawn  Esc:Cancel'
-                : '%:Map  ^:Event  @:Chars',
+            help: match (true) {
+                $this->isDestinationSpawnSelectionOpen => 'Enter:Select Spawn  Esc:Cancel',
+                // Longest that fits wins; the overlay (?) has the full table.
+                $this->editingMode === self::MODE_NPC && $this->npcCreationInProgress !== null => 'Enter:Create  Esc:Cancel',
+                $this->editingMode === self::MODE_NPC => $this->fitHelp(
+                    $layout['centerWidth'],
+                    'Enter:Select/Create  M:Move  D:Dup  L:List  Del:Delete  F3:Exit',
+                    'Enter:Select  M:Move  D:Dup  L:List  F3:Exit',
+                    'Enter  M  D  L  Del  F3:Exit',
+                    'F3:Exit',
+                ),
+                default => $this->fitHelp(
+                    $layout['centerWidth'],
+                    '%:Map  ^:Event  F3:NPC  @:Chars',
+                    '%:Map ^:Event F3:NPC @:Chars',
+                    '%:Map  ^:Event  @:Chars',
+                ),
+            },
             position: ['x' => 2 + $layout['leftWidth'] + $layout['gutter'], 'y' => 5],
             width: $layout['centerWidth'],
             height: $layout['contentHeight'],
@@ -14668,6 +15056,7 @@ final class Editor
                     $this->showEventOverlay,
                     $this->editingMode === self::MODE_NPC,
                     $this->selectedNpcIndex,
+                    $this->previewedNpcSprite(),
                 ) ?? [],
                 $contentWidth,
                 $layout['contentHeight'] - 2

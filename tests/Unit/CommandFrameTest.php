@@ -303,3 +303,41 @@ it('removes an option from the root view and restores it on undo', function () {
         ->and($commands[1]['options'][0]['text'])->toBe('Read it')
         ->and($commands[1]['options'][0]['then'])->toHaveCount(2);
 });
+
+it('keeps an empty arm open so the first command can be added there', function () {
+    $root = makeTemporaryProject();
+    file_put_contents($root . '/assets/Events/bare.php', <<<'PHP2'
+    <?php
+
+    return [
+      ['type' => 'choice', 'prompt' => 'Well?', 'options' => [
+        ['text' => 'Nothing to say', 'then' => []],
+      ]],
+    ];
+    PHP2);
+
+    $editor = createEditorForTesting($root);
+    setEditorProperty($editor, 'workspace', ProjectWorkspace::fromProject($root));
+    callEditorMethod($editor, 'openDatabaseAtCategory', 'common_events');
+
+    $database = callEditorMethod($editor, 'getSelectedRecordDatabase');
+    $index = array_search('bare', $database->getEntryLabels(), true);
+    callEditorMethod($editor, 'setSelectedRecordIndex', $index);
+    setEditorProperty($editor, 'databaseFocus', 'database_settings');
+    setEditorProperty($editor, 'databaseCommandFramePath', [0, 'options', 0, 'then']);
+    setEditorProperty($editor, 'databaseSelectedSettingIndex', 0);
+
+    // The empty arm is a place to stand, not a reason to fall back out.
+    $fields = callEditorMethod($editor, 'getDatabaseSettingsFields');
+    expect(getEditorProperty($editor, 'databaseCommandFramePath'))->toBe([0, 'options', 0, 'then'])
+        ->and($fields[0]['field'] ?? null)->toBe(ProjectRecordDatabase::EMPTY_FRAME_FIELD);
+
+    callEditorMethod($editor, 'addDatabaseRecordSubItem');
+
+    expect($database->getFrameCommands($index, [0, 'options', 0, 'then']))->toHaveCount(1);
+
+    // A frame whose command is gone is still left, as before.
+    setEditorProperty($editor, 'databaseCommandFramePath', [7, 'then']);
+    callEditorMethod($editor, 'getDatabaseSettingsFields');
+    expect(getEditorProperty($editor, 'databaseCommandFramePath'))->toBe([]);
+});

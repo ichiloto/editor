@@ -187,16 +187,19 @@ Under a shape or select tool, typing a glyph loads it into the brush instead.
 
 `F3` enters NPC mode: the map's `npcs` collection is drawn over the tiles as
 an overlay — sprites at their authored anchor, wide glyphs occupying the two
-columns the game gives them — and nothing you do here paints a tile or an
-event marker. The selected NPC is shown in brackets. NPC mode is a function
-key rather than a glyph so no paintable character is taken from you (and not
-a control byte, since the terminal driver reserves the remaining ones).
+columns the game gives them, styled sprites as the plain glyph — and nothing
+you do here paints a tile or an event marker. The selected NPC is shown in
+brackets. NPC mode is a function key rather than a glyph so no paintable
+character is taken from you (and not a control byte, since the terminal driver
+reserves the remaining ones).
 
 | Key | Action |
 | --- | --- |
-| `Enter` | Select the NPC under the cursor, or create a new fixed NPC there |
+| `Enter` | Select the NPC under the cursor; on an empty tile, name and create a new fixed NPC there |
 | `M` | Pick up the selected NPC; the next `Enter` sets it down at the cursor (`Esc` cancels) |
-| `D` | Duplicate the selected NPC under a fresh stable id |
+| `D` | Duplicate the selected NPC under a fresh stable id, one column to the right when free |
+| `L` | List the map's NPCs by name and id; type to narrow, `Enter` selects one and jumps the cursor to it |
+| `[` / `]` | Select the previous / next NPC in the map's list |
 | `Del` | Delete the selected NPC — refused, with the list, while anything names its id |
 | `Tab` | Edit the selected NPC in the Inspector |
 
@@ -205,16 +208,75 @@ state follows the map's persisted-state fingerprint like every other edit:
 undoing back to the last save is clean. A typed glyph in NPC mode is refused
 with a hint rather than painted under an NPC.
 
-A new NPC receives a stable `id` derived once from its name and unique on its
-map. The id is what `move_route` and script diagnostics name, and it is
-**immutable after creation** — renaming the NPC, moving it, or changing its
-sprite never touches it. Duplicating assigns a fresh id. Existing NPCs authored
-without an id load and edit normally, with a validation warning that scripted
-movement cannot target them; changing an id is an identity migration, which
-the editor does not yet offer.
+#### Stable ids
 
-Mouse drag-painting works, with gap filling, and a whole drag coalesces into a
-single undo step.
+`Enter` on an empty tile asks for the NPC's name first, and derives its stable
+`id` from that name — `Gate Guard` becomes `gate-guard`, numbered if the map
+already has one — because the id is what `move_route` and script diagnostics
+name, and it is **immutable after creation**: renaming the NPC, moving it, or
+changing its sprite never touches it. Duplicating assigns a fresh id from the
+name. An NPC authored without an id loads and edits normally, shows a
+`! No stable id` row (`Enter` there assigns one from its name, the one time an
+id is ever written after creation, since nothing can yet name it), and
+validates with a warning that scripted movement cannot target it. Changing an
+existing id is an identity migration, which the editor does not offer.
+
+#### The NPC Inspector
+
+`Tab` from the canvas edits the selected NPC with the same pane every Database
+category uses — pickers, condition lines, world-write rows, command frames,
+`Shift+O` / `Shift+X` on lists — grouped as:
+
+| Group | Rows |
+| --- | --- |
+| Identity | `Id` (read-only), `Name` |
+| Placement | `X`, `Y` (the canvas moves it too) |
+| Appearance | `Sprite`, `Facing North/South/East/West` |
+| Movement | `Movement` (`fixed` / `wander`), and while wandering `Wander X/Y/Width/Height` |
+| Visibility | `Visible When` — a condition line |
+| Interaction | the dialogue variants and their lines, and `Scripts` (a command frame) |
+| Completion Writes | `After Talking` — world-write rows |
+
+Rows read as the game will read them: an unset `Movement` shows `fixed`, an
+unset `Sprite` shows `@`. Fields the game does not read are listed in a
+`Preserved fields` row and written back untouched.
+
+- **Movement.** `wander` roams one tile at a time; the wander bounds only
+  appear while wandering, and loaded bounds are kept (not shown) for a fixed
+  NPC. Omitting every bound leaves the game's unbounded wander. Patrol routes,
+  pathfinding and followers are not engine features, so the editor does not
+  offer them; scripted movement is a `move_route` command in an event script.
+- **Directional sprites.** Optional glyphs shown when the NPC turns; the base
+  sprite covers a heading you leave blank. Resting the Inspector cursor on a
+  `Facing …` row previews that glyph on the canvas in the NPC's place.
+- **Dialogue.** Pages are shown as variants: one variant with lines is written
+  back as plain pages; add a second variant, or give one a `When` condition, a
+  `Then Set`, or a `Script`, and the whole thing is written as conditional
+  variants. The game speaks the first variant whose conditions hold. Each
+  line's `Speaker` is picked by meaning: `(the NPC's name)` leaves it to the
+  game to title the box with the NPC's current name, `(No speaker)` shows an
+  untitled box, or an actor's name.
+- **Scripts.** `Scripts` opens a command frame with the same event commands as
+  a Common Event. A non-empty script **replaces** the dialogue at runtime; the
+  pane says so with a `! Script replaces dialogue` row rather than deleting
+  either. A variant's own `Script` runs after that variant's lines.
+- **Visibility and writes.** `Visible When` uses the condition line grammar
+  below; `After Talking` uses the world-write rows, applied by the game after
+  each finished conversation.
+
+Deleting is reference-safe: an NPC named by a `move_route` in a map event, in
+another NPC's script or dialogue variant, or in a Common Event this map
+triggers is refused, and the status lists exactly where. Shrinking the map
+from the Inspector's `Size` rows is refused while it would strand an NPC or a
+wander area, naming each one (`Ctrl+E` shows the list); move or resize them
+first. Growing a map never touches an NPC.
+
+Validation (`Ctrl+E` after a save, or `ichiloto validate`) checks every NPC
+field against what the game does with it — malformed shapes the game would
+drop, coordinates off the map, an NPC on an event tile it would make
+unreachable, wander areas that leave the map or that the NPC starts outside,
+a script shadowing dialogue, unknown fields — as errors where the authored
+content cannot happen and warnings where it can but probably not as meant.
 
 ### Canvas Tools
 
@@ -249,7 +311,8 @@ size instead.
 ## Inspector Panel
 
 The Inspector shows the fields of the current selection — the map's metadata in
-Map mode, the selected event's data in Event mode.
+Map mode, the selected event's data in Event mode, the selected NPC in NPC mode
+(see [NPC Mode](#npc-mode)).
 
 Controls:
 
@@ -479,14 +542,17 @@ command list on Enter. A `branch` shows `Then Commands` and `Else Commands`
 rows the same way. Inside a frame the pane shows only that list — the same
 rows, pickers, and Shift+O / Shift+X / Del as the top level, at any depth —
 and the pane title is the trail back out (`Commands › Choice 2 › Option 1`).
-Esc pops exactly one frame; at the top it closes the Database as before.
+Esc pops exactly one frame; at the top it closes the Database as before. An
+arm with no commands yet opens all the same, showing one `No commands yet`
+row; Shift+O there adds the first.
 
 Shift+O with the cursor on an option row adds an option to that choice;
 removing an option takes its whole arm with it, and undo puts both back.
 
 Current limits: there is no cutscene skipping, camera/focus or screen-fade
-command, field-animation command, parallel movement route, NPC patrol-route
-authoring, pathfinding, or complete NPC placement editor.
+command, field-animation command, or parallel movement route, and the engine
+has no NPC patrol routes or pathfinding to author (NPCs stand still, wander,
+or follow a `move_route`).
 
 ### Condition Lines
 
@@ -590,7 +656,8 @@ leaves every other actor file byte-for-byte untouched.
 Before a map save the editor runs a validation pass and warns — never blocks —
 on dangling destination references, event markers without definitions, and
 spawn points outside the map. The warnings appear in the status footer;
-`Ctrl+E` shows the full text.
+`Ctrl+E` shows the full text. The project-wide pass (`ichiloto validate`) also
+covers every NPC field, as described under [NPC Mode](#npc-mode).
 
 ### Backups
 

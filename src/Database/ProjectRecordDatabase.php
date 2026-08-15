@@ -1659,7 +1659,37 @@ final class ProjectRecordDatabase
             }
         }
 
+        if ($fields === []) {
+            // A frame that resolves but holds nothing yet is still a place
+            // to stand: one row says so, so the first command can be added
+            // here rather than the pane falling back to the root. A frame
+            // that no longer resolves returns null from getFrameCommands
+            // and is the caller's cue to leave.
+            return [self::emptyFrameRow($subList)];
+        }
+
         return $fields;
+    }
+
+    /**
+     * The one identifier a frame with no commands shows.
+     */
+    public const string EMPTY_FRAME_FIELD = 'frameEmpty';
+
+    /**
+     * Returns the placeholder row of an empty frame.
+     *
+     * @param RecordSubList $subList The list the frame holds.
+     * @return array<string, mixed> The descriptor.
+     */
+    private static function emptyFrameRow(RecordSubList $subList): array
+    {
+        return [
+            'label' => sprintf('No %ss yet', $subList->singular),
+            'value' => sprintf('Shift+O adds the first %s', $subList->singular),
+            'field' => self::EMPTY_FRAME_FIELD,
+            'editable' => false,
+        ];
     }
 
     /**

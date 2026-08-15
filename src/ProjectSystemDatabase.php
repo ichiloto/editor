@@ -59,10 +59,16 @@ final class ProjectSystemDatabase
     }
 
     /**
-     * Returns whether the system database has unsaved changes.
+     * Returns one top-level field as loaded and normalized.
      *
-     * @return bool
+     * @param string $field The field name.
+     * @return mixed The value, or null when the project does not set it.
      */
+    public function getField(string $field): mixed
+    {
+        return $this->data[$field] ?? null;
+    }
+
     /**
      * @inheritDoc
      */

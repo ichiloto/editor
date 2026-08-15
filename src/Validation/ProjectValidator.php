@@ -5,6 +5,7 @@ namespace Ichiloto\Editor\Validation;
 use Ichiloto\Editor\Database\PhpDataFile;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Database\ReferenceCatalog;
+use Ichiloto\Editor\Field\ProjectNpc;
 use Ichiloto\Editor\ProjectDirectoryContext;
 use Ichiloto\Editor\ProjectQuest;
 use Ichiloto\Editor\ProjectMap;
@@ -428,7 +429,7 @@ class ProjectValidator
         ...$this->checkEventMarkers($map),
         ...$this->checkDoors($map, $workspace->mapIds),
         ...$this->checkEncounters($map, $troops),
-        ...$this->checkNpcIdentities($map),
+        ...$this->checkNpcs($map, $workspace),
         ...$this->checkDuplicateKeys($map),
       ];
     }
@@ -607,6 +608,703 @@ class ProjectValidator
   }
 
   /**
+   * Checks a map's NPC block against what the runtime actually does with it.
+   *
+   * `NpcManager::configure()` skips an entry silently when it is not an
+   * array, has no name, or has no coordinates; ignores a wander area or
+   * directional map that is not an array; treats any movement but `wander`
+   * as fixed; clamps wander dimensions to 1; and throws on a duplicate id.
+   * `Player::interact()` talks to the NPC on the faced tile, and
+   * `MapManager::canMoveTo()` refuses a tile an NPC stands on. Every check
+   * here follows from one of those, with an error where the authored
+   * content cannot happen and a warning where it can but probably not as
+   * meant.
+   *
+   * @param ProjectMap $map The map.
+   * @param ProjectWorkspace $workspace The project, for spawns and collisions.
+   * @return Issue[] The issues found.
+   */
+  protected function checkNpcs(ProjectMap $map, ProjectWorkspace $workspace): array
+  {
+    if (! array_key_exists('npcs', $map->data) || $map->data['npcs'] === null) {
+      return [];
+    }
+
+    if (! is_array($map->data['npcs'])) {
+      return [Issue::error(
+        $map->mapId,
+        sprintf('The npcs block is %s, not a list of NPC entries.', get_debug_type($map->data['npcs'])),
+        'The game reads npcs as a list; every NPC on this map is dropped until it is one.'
+      )];
+    }
+
+    $issues = $this->checkNpcIdentities($map);
+    $width = $map->getWidth();
+    $height = $map->getHeight();
+    $anchors = [];
+
+    foreach ($map->data['npcs'] as $index => $entry) {
+      $ordinal = is_int($index) ? $index + 1 : strval($index);
+
+      if (! is_array($entry)) {
+        $issues[] = Issue::error(
+          $map->mapId,
+          sprintf('NPC entry %s is %s, not a structured entry.', $ordinal, get_debug_type($entry)),
+          'The game skips it. Write it as an array with at least name, x and y.'
+        );
+        continue;
+      }
+
+      $name = is_scalar($entry['name'] ?? null) ? trim(strval($entry['name'])) : '';
+      $where = sprintf('%s NPC %s', $map->mapId, $name !== '' ? $name : sprintf('entry %s', $ordinal));
+
+      if ($name === '') {
+        $issues[] = Issue::error(
+          $where,
+          isset($entry['name']) && ! is_scalar($entry['name'])
+            ? 'Its name is not text.'
+            : 'It has no name.',
+          'The game skips an NPC without a name. Give it one.'
+        );
+      }
+
+      $issues = [
+        ...$issues,
+        ...$this->checkNpcPlacement($entry, $where, $width, $height, $anchors, $name, $index),
+        ...$this->checkNpcSprite($entry, $where, $width),
+        ...$this->checkNpcMovement($entry, $where, $width, $height),
+        ...$this->checkNpcDirectionalSprites($entry, $where),
+        ...$this->checkNpcInteractionShapes($entry, $where),
+        ...$this->checkNpcUnknownFields($entry, $where),
+      ];
+    }
+
+    return [
+      ...$issues,
+      ...$this->checkNpcCollisions($map, $workspace, $anchors),
+    ];
+  }
+
+  /**
+   * Checks an NPC's coordinates and records its anchor for the collision
+   * pass.
+   *
+   * @param array<string, mixed> $entry The NPC entry.
+   * @param string $where Where it lives.
+   * @param int $width The map width.
+   * @param int $height The map height.
+   * @param array<int, array{x: int, y: int, name: string, where: string, wanders: bool, width: int}> $anchors Anchors seen so far, appended to.
+   * @param string $name The NPC's name.
+   * @param int|string $index The entry index.
+   * @return Issue[] The issues found.
+   */
+  protected function checkNpcPlacement(array $entry, string $where, int $width, int $height, array &$anchors, string $name, int|string $index): array
+  {
+    if (! isset($entry['x'], $entry['y'])) {
+      return [Issue::error(
+        $where,
+        'It has no coordinates.',
+        'The game skips an NPC without both x and y. Place it on a tile.'
+      )];
+    }
+
+    foreach (['x', 'y'] as $axis) {
+      $value = $entry[$axis];
+
+      if (! is_numeric($value)) {
+        return [Issue::error(
+          $where,
+          sprintf('Its %s is %s, not a number.', $axis, get_debug_type($value)),
+          'The game reads it as 0, which is almost never the tile you meant.'
+        )];
+      }
+
+      if (intval($value) != $value) {
+        return [Issue::error(
+          $where,
+          sprintf('Its %s is %s, not a whole tile.', $axis, strval($value)),
+          'Tiles are whole numbers; the game truncates the fraction.'
+        )];
+      }
+    }
+
+    $x = intval($entry['x']);
+    $y = intval($entry['y']);
+    $sprite = is_scalar($entry['sprite'] ?? null) ? strval($entry['sprite']) : '@';
+    $anchors[] = [
+      'x' => $x,
+      'y' => $y,
+      'name' => $name !== '' ? $name : sprintf('entry %s', is_int($index) ? $index + 1 : $index),
+      'where' => $where,
+      'wanders' => strval($entry['movement'] ?? 'fixed') === 'wander',
+      'width' => ProjectNpc::glyphWidth($sprite),
+    ];
+
+    if ($x < 0 || $y < 0 || $x >= $width || $y >= $height) {
+      return [Issue::error(
+        $where,
+        sprintf('It stands at (%d, %d), outside the %d x %d map.', $x, $y, $width, $height),
+        'The player can never reach it. Move it onto the map, or grow the map first.'
+      )];
+    }
+
+    return [];
+  }
+
+  /**
+   * Checks the base sprite: present as text, visible, and inside the map.
+   *
+   * @param array<string, mixed> $entry The NPC entry.
+   * @param string $where Where it lives.
+   * @param int $width The map width.
+   * @return Issue[] The issues found.
+   */
+  protected function checkNpcSprite(array $entry, string $where, int $width): array
+  {
+    if (! array_key_exists('sprite', $entry)) {
+      return [];
+    }
+
+    if (! is_scalar($entry['sprite'])) {
+      return [Issue::error(
+        $where,
+        sprintf('Its sprite is %s, not text.', get_debug_type($entry['sprite'])),
+        'Write the glyph as a string, with optional <fg=...> style tags.'
+      )];
+    }
+
+    $sprite = strval($entry['sprite']);
+
+    if (trim(ProjectNpc::strippedGlyph($sprite)) === '') {
+      return [Issue::warning(
+        $where,
+        'Its sprite draws nothing.',
+        'The NPC is invisible but still blocks its tile and can be spoken to. Give it a glyph.'
+      )];
+    }
+
+    $columns = ProjectNpc::glyphWidth($sprite);
+
+    if ($columns > 1 && is_numeric($entry['x'] ?? null) && intval($entry['x']) + $columns > $width) {
+      return [Issue::warning(
+        $where,
+        sprintf('Its %d-column sprite overhangs the right edge of the map.', $columns),
+        'The game anchors a wide glyph at its tile and lets it spill right; part of it is drawn off the map.'
+      )];
+    }
+
+    return [];
+  }
+
+  /**
+   * Checks the movement mode and the wander area against how the game
+   * wanders: only into tiles inside the area, never off the map.
+   *
+   * @param array<string, mixed> $entry The NPC entry.
+   * @param string $where Where it lives.
+   * @param int $width The map width.
+   * @param int $height The map height.
+   * @return Issue[] The issues found.
+   */
+  protected function checkNpcMovement(array $entry, string $where, int $width, int $height): array
+  {
+    $issues = [];
+    $movement = $entry['movement'] ?? null;
+
+    if ($movement !== null && ! is_string($movement)) {
+      $issues[] = Issue::error(
+        $where,
+        sprintf('Its movement is %s, not text.', get_debug_type($movement)),
+        'Use fixed or wander.'
+      );
+      $movement = null;
+    } elseif ($movement !== null && ! in_array($movement, ['fixed', 'wander'], true)) {
+      $issues[] = Issue::error(
+        $where,
+        sprintf('Its movement "%s" is not one the game supports.', $movement),
+        'The game knows fixed and wander, and treats anything else as fixed. Patrol routes are not supported.'
+      );
+    }
+
+    $wanders = $movement === 'wander';
+
+    if (! array_key_exists('wanderArea', $entry)) {
+      return $issues;
+    }
+
+    $area = $entry['wanderArea'];
+
+    if (! is_array($area)) {
+      $issues[] = Issue::warning(
+        $where,
+        sprintf('Its wander area is %s, not an area.', get_debug_type($area)),
+        'The game ignores it and wanders unbounded. Write x, y, width and height, or remove it.'
+      );
+
+      return $issues;
+    }
+
+    if (! $wanders) {
+      $issues[] = Issue::warning(
+        $where,
+        'It has a wander area but does not wander.',
+        'The area is ignored while movement is fixed. Set movement to wander, or remove the area.'
+      );
+    }
+
+    foreach (['x', 'y', 'width', 'height'] as $key) {
+      if (array_key_exists($key, $area) && ! is_numeric($area[$key])) {
+        $issues[] = Issue::error(
+          $where,
+          sprintf('Its wander area %s is %s, not a number.', $key, get_debug_type($area[$key])),
+          'The game reads it as 0 (or 1 for a size). Write a whole number.'
+        );
+
+        return $issues;
+      }
+    }
+
+    $areaX = intval($area['x'] ?? 0);
+    $areaY = intval($area['y'] ?? 0);
+    $areaWidth = intval($area['width'] ?? 1);
+    $areaHeight = intval($area['height'] ?? 1);
+
+    if ($areaWidth < 1 || $areaHeight < 1) {
+      $issues[] = Issue::warning(
+        $where,
+        sprintf('Its wander area is %d x %d.', $areaWidth, $areaHeight),
+        'The game clamps each side to at least 1 tile. Give it a positive size.'
+      );
+      $areaWidth = max(1, $areaWidth);
+      $areaHeight = max(1, $areaHeight);
+    }
+
+    if ($areaX < 0 || $areaY < 0 || $areaX + $areaWidth > $width || $areaY + $areaHeight > $height) {
+      $issues[] = Issue::warning(
+        $where,
+        sprintf(
+          'Its wander area (%d, %d) %d x %d extends beyond the %d x %d map.',
+          $areaX,
+          $areaY,
+          $areaWidth,
+          $areaHeight,
+          $width,
+          $height
+        ),
+        'The game never steps off the map, so the area it actually roams is smaller than authored.'
+      );
+    }
+
+    if ($wanders && is_numeric($entry['x'] ?? null) && is_numeric($entry['y'] ?? null)) {
+      $x = intval($entry['x']);
+      $y = intval($entry['y']);
+
+      if ($x < $areaX || $y < $areaY || $x >= $areaX + $areaWidth || $y >= $areaY + $areaHeight) {
+        $issues[] = Issue::warning(
+          $where,
+          sprintf('It starts at (%d, %d), outside its wander area (%d, %d) %d x %d.', $x, $y, $areaX, $areaY, $areaWidth, $areaHeight),
+          'The game only steps into tiles inside the area, so it stays put unless a neighbouring tile is inside it.'
+        );
+      }
+    }
+
+    return $issues;
+  }
+
+  /**
+   * Checks the optional directional sprite map.
+   *
+   * @param array<string, mixed> $entry The NPC entry.
+   * @param string $where Where it lives.
+   * @return Issue[] The issues found.
+   */
+  protected function checkNpcDirectionalSprites(array $entry, string $where): array
+  {
+    if (! array_key_exists('sprites', $entry)) {
+      return [];
+    }
+
+    $sprites = $entry['sprites'];
+
+    if (! is_array($sprites)) {
+      return [Issue::warning(
+        $where,
+        sprintf('Its directional sprites are %s, not a map of headings to glyphs.', get_debug_type($sprites)),
+        'The game ignores them and always draws the base sprite. Write north, south, east and west keys.'
+      )];
+    }
+
+    $issues = [];
+
+    foreach ($sprites as $heading => $glyph) {
+      if (! is_string($heading) || ! in_array(strtolower($heading), ['north', 'south', 'east', 'west'], true)) {
+        $issues[] = Issue::warning(
+          $where,
+          sprintf('Its directional sprite key "%s" is not a heading.', strval($heading)),
+          'The game reads north, south, east and west (either case) and ignores anything else.'
+        );
+        continue;
+      }
+
+      if (! is_scalar($glyph)) {
+        $issues[] = Issue::error(
+          $where,
+          sprintf('Its %s sprite is %s, not text.', strtolower($heading), get_debug_type($glyph)),
+          'Write the glyph as a string.'
+        );
+      }
+    }
+
+    return $issues;
+  }
+
+  /**
+   * Checks the shapes of dialogue, script, conditions and sets -- the
+   * runtime filters anything that is not an array out of each, so a wrong
+   * shape is content that silently never happens.
+   *
+   * @param array<string, mixed> $entry The NPC entry.
+   * @param string $where Where it lives.
+   * @return Issue[] The issues found.
+   */
+  protected function checkNpcInteractionShapes(array $entry, string $where): array
+  {
+    $issues = [];
+    $shapes = [
+      'dialogue' => 'The game drops it; the NPC has nothing to say.',
+      'script' => 'The game ignores it and falls back to the dialogue.',
+      'conditions' => 'The game drops it; the NPC is shown regardless.',
+      'sets' => 'The game drops it; nothing is written after the conversation.',
+    ];
+
+    foreach ($shapes as $key => $consequence) {
+      if (! array_key_exists($key, $entry)) {
+        continue;
+      }
+
+      $value = $entry[$key];
+
+      if (! is_array($value)) {
+        $issues[] = Issue::error(
+          $where,
+          sprintf('Its %s is %s, not a list.', $key, get_debug_type($value)),
+          $consequence
+        );
+        continue;
+      }
+
+      foreach ($value as $position => $item) {
+        if (! is_array($item)) {
+          $issues[] = Issue::error(
+            $where,
+            sprintf('%s entry %s is %s, not a structured entry.', ucfirst($key), is_int($position) ? $position + 1 : strval($position), get_debug_type($item)),
+            'The game filters it out silently. Write it as an array.'
+          );
+        }
+      }
+    }
+
+    $dialogue = is_array($entry['dialogue'] ?? null) ? $entry['dialogue'] : [];
+    $script = is_array($entry['script'] ?? null) ? array_filter($entry['script'], 'is_array') : [];
+
+    if ($script !== [] && array_filter($dialogue, 'is_array') !== []) {
+      $issues[] = Issue::warning(
+        $where,
+        'It has both a script and dialogue.',
+        'The game runs the script and never shows the dialogue. Remove one, or move the lines into the script.'
+      );
+    }
+
+    $isVariantList = false;
+
+    foreach ($dialogue as $page) {
+      if (is_array($page) && (isset($page['lines']) || isset($page['script']) || isset($page['conditions']))) {
+        $isVariantList = true;
+        break;
+      }
+    }
+
+    foreach ($dialogue as $position => $page) {
+      if (! is_array($page)) {
+        continue;
+      }
+
+      $ordinal = is_int($position) ? $position + 1 : strval($position);
+
+      if ($isVariantList) {
+        if (! isset($page['lines']) && ! isset($page['script']) && ! isset($page['conditions'])) {
+          $issues[] = Issue::error(
+            $where,
+            sprintf('Dialogue entry %s is a plain page inside a list of variants.', $ordinal),
+            'The game reads it as a variant with nothing to say. Move its text into a variant\'s lines.'
+          );
+          continue;
+        }
+
+        foreach (['lines', 'script', 'sets', 'conditions'] as $key) {
+          if (array_key_exists($key, $page) && ! is_array($page[$key])) {
+            $issues[] = Issue::error(
+              $where,
+              sprintf('Dialogue variant %s has %s that is %s, not a list.', $ordinal, $key, get_debug_type($page[$key])),
+              'The game drops it.'
+            );
+          }
+        }
+
+        foreach ((array) ($page['lines'] ?? []) as $lineIndex => $line) {
+          if (! is_array($line)) {
+            $issues[] = Issue::error(
+              $where,
+              sprintf('Dialogue variant %s line %s is not a page.', $ordinal, is_int($lineIndex) ? $lineIndex + 1 : strval($lineIndex)),
+              'The game filters it out. Write it as an array with text.'
+            );
+          } elseif (trim(strval(is_scalar($line['text'] ?? null) ? $line['text'] : '')) === '') {
+            $issues[] = Issue::warning(
+              $where,
+              sprintf('Dialogue variant %s line %s has no text.', $ordinal, is_int($lineIndex) ? $lineIndex + 1 : strval($lineIndex)),
+              'The game shows an empty box.'
+            );
+          }
+        }
+
+        $issues = [...$issues, ...$this->checkStateWrites((array) ($page['sets'] ?? []), $where)];
+        continue;
+      }
+
+      if (trim(strval(is_scalar($page['text'] ?? null) ? $page['text'] : '')) === '') {
+        $issues[] = Issue::warning(
+          $where,
+          sprintf('Dialogue page %s has no text.', $ordinal),
+          'The game shows an empty box.'
+        );
+      }
+    }
+
+    return [...$issues, ...$this->checkStateWrites(is_array($entry['sets'] ?? null) ? $entry['sets'] : [], $where)];
+  }
+
+  /**
+   * Reports fields the runtime does not read. They are preserved by the
+   * editor, so this is a warning, not a loss.
+   *
+   * @param array<string, mixed> $entry The NPC entry.
+   * @param string $where Where it lives.
+   * @return Issue[] The issue, if there is one.
+   */
+  protected function checkNpcUnknownFields(array $entry, string $where): array
+  {
+    $unknown = array_values(array_filter(
+      array_keys($entry),
+      static fn(string|int $key): bool => ! in_array($key, ProjectNpc::KNOWN_FIELDS, true)
+    ));
+
+    if ($unknown === []) {
+      return [];
+    }
+
+    return [Issue::warning(
+      $where,
+      sprintf('It carries the field%s %s, which the game does not read.', count($unknown) === 1 ? '' : 's', implode(', ', array_map(strval(...), $unknown))),
+      'The editor preserves them untouched. Remove them if they were meant to do something.'
+    )];
+  }
+
+  /**
+   * Checks where NPCs stand against each other, against event tiles, spawn
+   * tiles, and impassable tiles.
+   *
+   * The game refuses to move onto a tile an NPC stands on, so a fixed NPC
+   * on an event tile makes that event unreachable; a wanderer only blocks
+   * it while there. Two NPCs on one tile: `npcAt` finds the first, so the
+   * second can never be spoken to while both stand still.
+   *
+   * @param ProjectMap $map The map.
+   * @param ProjectWorkspace $workspace The project.
+   * @param array<int, array{x: int, y: int, name: string, where: string, wanders: bool, width: int}> $anchors The NPC anchors.
+   * @return Issue[] The issues found.
+   */
+  protected function checkNpcCollisions(ProjectMap $map, ProjectWorkspace $workspace, array $anchors): array
+  {
+    $issues = [];
+    $definitions = (array) ($map->data['events'] ?? []);
+    $spawns = $this->spawnTilesOn($map, $workspace);
+    $collisions = $this->collisionDictionary($workspace);
+
+    foreach ($anchors as $index => $anchor) {
+      foreach ($anchors as $otherIndex => $other) {
+        if ($otherIndex <= $index) {
+          continue;
+        }
+
+        if ($anchor['x'] === $other['x'] && $anchor['y'] === $other['y']) {
+          $issues[] = $anchor['wanders'] || $other['wanders']
+            ? Issue::warning(
+              $anchor['where'],
+              sprintf('It starts on the same tile (%d, %d) as NPC %s.', $anchor['x'], $anchor['y'], $other['name']),
+              'Only one can be spoken to until the wanderer moves off.'
+            )
+            : Issue::error(
+              $anchor['where'],
+              sprintf('It shares tile (%d, %d) with NPC %s.', $anchor['x'], $anchor['y'], $other['name']),
+              'The game finds the first NPC on a tile; the other can never be spoken to. Move one.'
+            );
+        } elseif (
+          $anchor['width'] > 1
+          && $anchor['y'] === $other['y']
+          && $other['x'] > $anchor['x']
+          && $other['x'] < $anchor['x'] + $anchor['width']
+        ) {
+          $issues[] = Issue::warning(
+            $anchor['where'],
+            sprintf('Its %d-column sprite covers the tile of NPC %s at (%d, %d).', $anchor['width'], $other['name'], $other['x'], $other['y']),
+            'The wide glyph is drawn over the neighbour. Leave a column between them.'
+          );
+        }
+      }
+
+      $marker = $map->getEventSymbol($anchor['x'], $anchor['y']);
+
+      if (trim($marker) !== '' && isset($definitions[$marker])) {
+        $class = is_array($definitions[$marker]) ? strval($definitions[$marker]['class'] ?? '') : '';
+        $classLabel = $class !== '' ? sprintf(' (%s)', basename(str_replace('\\', '/', $class))) : '';
+        $issues[] = $anchor['wanders']
+          ? Issue::warning(
+            $anchor['where'],
+            sprintf('It starts on event marker %s%s at (%d, %d).', $marker, $classLabel, $anchor['x'], $anchor['y']),
+            'The player cannot step onto that tile while the NPC stands there, so the event cannot fire until it wanders off.'
+          )
+          : Issue::error(
+            $anchor['where'],
+            sprintf('It stands on event marker %s%s at (%d, %d).', $marker, $classLabel, $anchor['x'], $anchor['y']),
+            'The player can never step onto that tile, so the event never fires. Move the NPC or the marker.'
+          );
+      }
+
+      foreach ($spawns as $spawn) {
+        if ($spawn['x'] === $anchor['x'] && $spawn['y'] === $anchor['y']) {
+          $issues[] = Issue::warning(
+            $anchor['where'],
+            sprintf('It stands on %s at (%d, %d).', $spawn['label'], $anchor['x'], $anchor['y']),
+            'The player arrives on top of it and cannot speak to it until stepping off. Move one of them.'
+          );
+        }
+      }
+
+      if ($collisions !== null) {
+        $tile = $map->getTileSymbol($anchor['x'], $anchor['y']);
+
+        if (($collisions[$tile] ?? null) === 'SOLID') {
+          $issues[] = Issue::warning(
+            $anchor['where'],
+            sprintf('It stands on the impassable tile "%s" at (%d, %d).', $tile, $anchor['x'], $anchor['y']),
+            'The player can still speak to it from a neighbouring tile; make sure one is reachable.'
+          );
+        }
+      }
+    }
+
+    return $issues;
+  }
+
+  /**
+   * Returns the tiles on a map where the player is placed: the game's
+   * starting position and every transfer that arrives here.
+   *
+   * @param ProjectMap $map The map.
+   * @param ProjectWorkspace $workspace The project.
+   * @return array<int, array{x: int, y: int, label: string}> The tiles.
+   */
+  protected function spawnTilesOn(ProjectMap $map, ProjectWorkspace $workspace): array
+  {
+    $spawns = [];
+    $positions = $workspace->systemDatabase->getField('startingPositions');
+    $start = is_array($positions) ? ($positions['player'] ?? null) : null;
+
+    if (
+      is_array($start)
+      && strval($start['destinationMap'] ?? '') === $map->mapId
+      && is_array($start['spawnPoint'] ?? null)
+      && is_numeric($start['spawnPoint']['x'] ?? null)
+      && is_numeric($start['spawnPoint']['y'] ?? null)
+    ) {
+      $spawns[] = [
+        'x' => intval($start['spawnPoint']['x']),
+        'y' => intval($start['spawnPoint']['y']),
+        'label' => "the player's starting tile",
+      ];
+    }
+
+    foreach ($workspace->maps as $source) {
+      foreach ((array) ($source->data['events'] ?? []) as $marker => $definition) {
+        if (! is_array($definition)) {
+          continue;
+        }
+
+        $data = (array) ($definition['data'] ?? []);
+        $spawnPoint = $data['spawnPoint'] ?? null;
+
+        if (
+          strval($data['destinationMap'] ?? '') !== $map->mapId
+          || ! is_array($spawnPoint)
+          || ! is_numeric($spawnPoint['x'] ?? null)
+          || ! is_numeric($spawnPoint['y'] ?? null)
+        ) {
+          continue;
+        }
+
+        $spawns[] = [
+          'x' => intval($spawnPoint['x']),
+          'y' => intval($spawnPoint['y']),
+          'label' => sprintf('the arrival tile of %s event %s', $source->mapId, strval($marker)),
+        ];
+      }
+    }
+
+    return $spawns;
+  }
+
+  /**
+   * Returns the project's collision dictionary as glyph => collision name,
+   * or null when the project has none this can read.
+   *
+   * The engine loads assets/Maps/collisions.php, a PHP file returning
+   * glyph => CollisionType. It is read the same way, and anything that goes
+   * wrong means "unknown" rather than an issue: the file is the engine's to
+   * refuse, and it says so on launch.
+   *
+   * @param ProjectWorkspace $workspace The project.
+   * @return array<string, string>|null The dictionary.
+   */
+  protected function collisionDictionary(ProjectWorkspace $workspace): ?array
+  {
+    $path = rtrim($workspace->projectRoot, '/') . '/assets/Maps/collisions.php';
+
+    if (! is_file($path)) {
+      return null;
+    }
+
+    try {
+      $dictionary = (static fn(): mixed => require $path)();
+    } catch (\Throwable) {
+      return null;
+    }
+
+    if (! is_array($dictionary)) {
+      return null;
+    }
+
+    $byGlyph = [];
+
+    foreach ($dictionary as $glyph => $type) {
+      if ((is_string($glyph) || is_int($glyph)) && $type instanceof \UnitEnum) {
+        $byGlyph[strval($glyph)] = $type->name;
+      }
+    }
+
+    return $byGlyph;
+  }
+
+  /**
    * Checks stable NPC identities used by authored movement routes.
    *
    * NPC ids remain optional for existing definitions, but every non-empty id
@@ -624,10 +1322,40 @@ class ProjectValidator
         continue;
       }
 
+      $where = sprintf(
+        '%s NPC %s',
+        $map->mapId,
+        is_scalar($npc['name'] ?? null) && trim(strval($npc['name'])) !== ''
+          ? trim(strval($npc['name']))
+          : sprintf('entry %s', is_int($index) ? $index + 1 : strval($index))
+      );
+
+      if (array_key_exists('id', $npc) && ! is_scalar($npc['id']) && $npc['id'] !== null) {
+        $issues[] = Issue::error(
+          $where,
+          sprintf('Its id is %s, not text.', get_debug_type($npc['id'])),
+          'A stable id is a short slug like gate-guard. Recreate it in the editor, which assigns one.'
+        );
+        continue;
+      }
+
       $id = trim(strval($npc['id'] ?? ''));
 
       if ($id === '') {
+        $issues[] = Issue::warning(
+          $where,
+          'It has no stable id, so a move_route cannot target it.',
+          'Select it in NPC mode and press Enter on the "No stable id" row to assign one from its name.'
+        );
         continue;
+      }
+
+      if ($id !== strval($npc['id'])) {
+        $issues[] = Issue::warning(
+          $where,
+          sprintf('Its id "%s" has surrounding whitespace.', strval($npc['id'])),
+          'The game trims it when matching; write it without the spaces so routes and diagnostics agree.'
+        );
       }
 
       if (isset($seen[$id])) {
@@ -1379,6 +2107,7 @@ class ProjectValidator
             $map->mapId,
             $npcIdsByMap,
           ),
+          ...$this->checkStateWrites((array) ($npc['sets'] ?? []), $where),
         ];
       }
     }
@@ -1643,6 +2372,7 @@ class ProjectValidator
         ...$issues,
         ...$this->checkConditions((array) ($variant['conditions'] ?? []), $where, $known),
         ...$this->checkCommands((array) ($variant['script'] ?? []), $where, $known),
+        ...$this->checkStateWrites((array) ($variant['sets'] ?? []), $where),
       ];
     }
 

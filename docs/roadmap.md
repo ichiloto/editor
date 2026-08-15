@@ -619,10 +619,12 @@ unsafe parallel routes, invalid timing/speed, invalid result variables and
 defeat policies, and commands outside the shared runtime vocabulary. Referenced
 Common Events are rechecked with their triggering map's NPC context.
 
-Explicitly deferred: full NPC creation/placement, nested choice/branch editor
-redesign, cutscene skipping/finalizers, camera/fade/field-animation commands,
-parallel and patrol routes, pathfinding, summon timeline editing, and event
-session save serialization.
+Explicitly deferred at the time: full NPC creation/placement (since shipped,
+see [Map NPC authoring](#map-npc-authoring--shipped-2026-08)), nested
+choice/branch editor redesign (since shipped as command frames), cutscene
+skipping/finalizers, camera/fade/field-animation commands, parallel and
+patrol routes, pathfinding, summon timeline editing, and event session save
+serialization.
 
 ## Production-hardening extension — progressive objectives and field cues ✅ *shipped 2026-08*
 
@@ -670,3 +672,41 @@ identical bytes, and clean saves are no-ops end to end: an untouched project
 saved wholesale is byte-for-byte unchanged (pinned by test against a
 disposable copy of the full game), and file-per-entry categories write only
 dirty, new, or deleted entries.
+
+## Map NPC authoring — shipped 2026-08
+
+Genuine map-local NPCs — the engine's `npcs` collection, not painted glyphs,
+event markers, or global actors — are first-class in the editor. A focused
+model (`ProjectNpc`, payload-verbatim, unknown fields preserved) and an
+immutable collection (`NpcCollection`, list positions kept, raw entries
+carried) sit behind one mutation path on the map (`ProjectMap::setNpcs()`), so
+the coordinator never reaches into `$mapData['npcs']`. NPC mode on the canvas
+(`F3` — a function key, so no paintable glyph is taken) draws NPCs as an
+overlay derived from map data, wide and styled glyphs measured as the engine
+measures them, and offers create (named first, so the stable id derives once
+from a real name), select under the cursor or from a map-local list, move,
+duplicate under a fresh id, and reference-safe delete, each one undo step on
+the map's persisted-state fingerprint.
+
+The Inspector hosts the same record pane every Database category uses over the
+map's own NPCs — pickers, condition lines, world-write rows, command frames —
+grouped Identity / Placement / Appearance / Movement / Visibility /
+Interaction / Completion Writes, with wander bounds shown only while wandering
+(loaded values kept), directional-sprite preview on the canvas, dialogue as
+variants folded to plain pages when that is what they are, a speaker picked by
+meaning (the NPC's name, no speaker, or an actor), an inline script frame with
+an honest "script replaces dialogue" notice, and a preserved-fields row.
+Stable ids are immutable after creation; a legacy id-less NPC can be given one
+once. Shrinking a map is refused while it would strand an NPC or a wander area,
+naming each. `ProjectValidator` checks every NPC field and relationship
+against actual runtime precedence — dropped shapes, off-map tiles, event tiles
+made unreachable, wander areas and start positions, shadowed dialogue,
+unknown fields — with errors only where the game cannot do what was authored.
+
+Along the way two general fixes: an empty command frame now stays open (the
+first command can be added to any arm), and a reference picker's "none" row
+reads as what the runtime means by it, with a distinct pickable row where the
+runtime gives `''` a meaning of its own.
+
+Not added, because the engine does not have them: patrol routes,
+pathfinding, followers, persisted dynamic positions, cross-map movement.

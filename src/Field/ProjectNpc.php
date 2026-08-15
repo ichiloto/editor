@@ -108,17 +108,59 @@ final class ProjectNpc
      */
     public function getVisibleSprite(): string
     {
-        $sprite = $this->getSprite();
+        return self::visibleGlyph($this->getSprite());
+    }
 
-        if (class_exists(\Ichiloto\Engine\IO\Console\TerminalText::class)) {
-            $stripped = implode('', \Ichiloto\Engine\IO\Console\TerminalText::visibleSymbols($sprite));
-
-            return $stripped === '' ? '@' : $stripped;
-        }
-
-        $stripped = (string) preg_replace('/<\/?[a-z][^>]*>/i', '', $sprite);
+    /**
+     * Returns a sprite as the terminal shows it: style tags stripped,
+     * measured the way the engine measures it, `@` when nothing is left.
+     *
+     * @param string $sprite The sprite as authored.
+     * @return string The visible glyph(s).
+     */
+    public static function visibleGlyph(string $sprite): string
+    {
+        $stripped = self::strippedGlyph($sprite);
 
         return $stripped === '' ? '@' : $stripped;
+    }
+
+    /**
+     * Returns a sprite with its style tags stripped, possibly empty.
+     *
+     * @param string $sprite The sprite as authored.
+     * @return string What the terminal would draw.
+     */
+    public static function strippedGlyph(string $sprite): string
+    {
+        if (class_exists(\Ichiloto\Engine\IO\Console\TerminalText::class)) {
+            // The engine renders <fg=...> tags to ANSI and strips the codes:
+            // what is left is exactly the cells the game draws.
+            return \Ichiloto\Engine\IO\Console\TerminalText::stripAnsi($sprite);
+        }
+
+        // Without the engine: the same formatter-tag and ANSI shapes the
+        // engine's TerminalText recognises (<fg=...>, </>, \e[...m).
+        $plain = (string) preg_replace('/<\/?[-\w=;#,?]*>/', '', $sprite);
+
+        return (string) preg_replace('/\x1B\[[0-9;?]*[ -\/]*[@-~]/', '', $plain);
+    }
+
+    /**
+     * Returns the columns a sprite occupies, at least 1 -- the engine's own
+     * measure when it is loaded, since that is what the game clears and
+     * redraws under a wide glyph.
+     *
+     * @param string $sprite The sprite as authored.
+     * @return int The width.
+     */
+    public static function glyphWidth(string $sprite): int
+    {
+        if (class_exists(\Ichiloto\Engine\IO\Console\TerminalText::class)) {
+            return max(1, \Ichiloto\Engine\IO\Console\TerminalText::displayWidth($sprite));
+        }
+
+        return max(1, mb_strwidth(self::visibleGlyph($sprite)));
     }
 
     /**
@@ -128,7 +170,7 @@ final class ProjectNpc
      */
     public function getSpriteWidth(): int
     {
-        return max(1, mb_strwidth($this->getVisibleSprite()));
+        return self::glyphWidth($this->getSprite());
     }
 
     public function getX(): int

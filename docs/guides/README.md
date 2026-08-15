@@ -8,7 +8,8 @@ reference, see [the manual](../manual.md).
 Read these in order the first time:
 
 1. [Make a New Map](make-a-new-map.md) — create a map, paint it, save it.
-2. [Add an NPC](add-an-npc.md) — place an interactive character with dialogue.
+2. [Add an NPC](add-an-npc.md) — place a character that talks, wanders, and
+   answers to the state of the world; or a stationary event character.
 3. [Wire a Quest](wire-a-quest.md) — author a quest and connect it to the world.
 4. [Author a Cutscene](author-a-cutscene.md) — build an event command list.
 5. [Write a Skit](write-a-skit.md) — add optional party banter.
@@ -16,6 +17,10 @@ Read these in order the first time:
 ## What The Editor Can Do Today
 
 - Create, paint, duplicate, and delete maps, with full undo.
+- Create, place, move, duplicate, and delete a map's NPCs, and author every
+  field the game reads: sprite and directional sprites, fixed or bounded
+  wander, visibility conditions, dialogue and conditional variants, inline
+  scripts, and completion writes.
 - Place and configure the five event types: Dialogue, Transfer Player, Shop,
   Sleep, and Chest.
 - Author actors, classes, skills, quests, animations, states, troops, skits,
@@ -27,14 +32,12 @@ Read these in order the first time:
 
 Current limits worth knowing before you plan a session:
 
-- **Wandering NPCs.** The `npcs` array in a map's `.data.php` file — the
-  characters that walk a patrol area — is authored by hand. The editor places
-  *event* characters, which are stationary and interactive.
+- **Patrol routes.** The engine has no patrol or pathfinding for NPCs: they
+  stand still, wander a rectangle, or follow a `move_route` in a script. The
+  editor authors exactly that and no more.
 - **Items, weapons, armors, enemies.** These files are PHP constructor calls,
   so the editor browses them and refuses to rewrite them. See the manual's
   [category table](../manual.md#editable-and-read-only-categories).
-- **Nested event arms.** A `choice` command's options and a `branch` command's
-  `then`/`else` round-trip safely but are edited by hand.
 
 ## Recommended Build Loop
 
