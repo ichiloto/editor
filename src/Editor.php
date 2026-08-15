@@ -601,6 +601,13 @@ final class Editor
      */
     private bool $isFooterDirty = false;
     /**
+     * @var bool|null The unsaved state the header was last painted with, so
+     * the one always-visible indicator follows the truth on the tick it
+     * changes -- after a save as much as after an edit -- without a full
+     * repaint.
+     */
+    private ?bool $paintedHeaderUnsaved = null;
+    /**
      * Whether the overlay pass (modal windows / live cursor) needs to run
      * on the next render pass.
      */
@@ -934,7 +941,7 @@ final class Editor
         $this->clampCursor();
         $this->clampCanvasOffsets();
         $this->clampInspectorSelection();
-        $this->setStatus(sprintf('Undid %s.', lcfirst($command->label)), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Undid %s.', self::asPhrase($command->label)), StatusLevel::SUCCESS);
         $this->requestFullRender();
     }
 
@@ -956,7 +963,7 @@ final class Editor
         $this->clampCursor();
         $this->clampCanvasOffsets();
         $this->clampInspectorSelection();
-        $this->setStatus(sprintf('Redid %s.', lcfirst($command->label)), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Redid %s.', self::asPhrase($command->label)), StatusLevel::SUCCESS);
         $this->requestFullRender();
     }
 
@@ -1024,6 +1031,18 @@ final class Editor
      *
      * @return void
      */
+    /**
+     * Lowercases a history label's first letter for use mid-sentence,
+     * leaving an acronym ("NPC move") as it is.
+     *
+     * @param string $label The label.
+     * @return string The phrase.
+     */
+    private static function asPhrase(string $label): string
+    {
+        return preg_match('/^[A-Z]{2,}/', $label) === 1 ? $label : lcfirst($label);
+    }
+
     private function requestFullRender(): void
     {
         $this->isFullRenderPending = true;
@@ -11494,6 +11513,10 @@ final class Editor
             }
         }
 
+        if ($this->workspace->hasUnsavedChanges() !== $this->paintedHeaderUnsaved) {
+            $this->drawHeader();
+        }
+
         if ($this->isFooterDirty) {
             $this->drawFooter();
         }
@@ -11545,7 +11568,7 @@ final class Editor
         }
 
         $this->clearScreen();
-        $this->createHeaderWindow()->render();
+        $this->drawHeader();
         $this->createAssetWindow()->render();
         $this->createCanvasWindow()->render();
         $this->createInspectorWindow()->render();
@@ -14998,6 +15021,17 @@ final class Editor
     }
 
     /**
+     * Paints the header and remembers the unsaved state it shows.
+     *
+     * @return void
+     */
+    private function drawHeader(): void
+    {
+        $this->paintedHeaderUnsaved = $this->workspace?->hasUnsavedChanges() === true;
+        $this->createHeaderWindow()->render();
+    }
+
+    /**
      * Creates the header window.
      *
      * @return EditorWindow
@@ -15183,7 +15217,7 @@ final class Editor
                         $selectedMap->mapId,
                         $selectedMap->isDirty() ? ' *' : '',
                         ucfirst($this->focusedPane),
-                        ucfirst($this->editingMode),
+                        $this->editingMode === self::MODE_NPC ? 'NPC' : ucfirst($this->editingMode),
                         $this->describeCanvasToolState(),
                     )
                     : 'No map is currently selected.',

@@ -180,3 +180,24 @@ it('still undoes a painted tile after routing through the binding table', functi
 
   expect($workspace->getMapByIndex(0)->getTileSymbol(1, 2))->toBe('#');
 });
+
+it('repaints the header the tick the unsaved truth changes, a save included', function () {
+  $root = makeTemporaryProject();
+  $editor = createEditorForTesting($root);
+  setEditorProperty($editor, 'workspace', ProjectWorkspace::fromProject($root));
+  setEditorProperty($editor, 'lastTerminalSize', ['width' => 120, 'height' => 40]);
+  setEditorProperty($editor, 'focusedPane', 'canvas');
+  flushShell($editor);
+
+  // An edit dirties the project: the header says so on the next flush.
+  callEditorMethod($editor, 'dispatchInput', 'x');
+  expect(flushShell($editor))->toContain('unsaved changes');
+
+  // A save cleans it: the header follows on the next flush, with no full
+  // repaint asked for, and then idles.
+  callEditorMethod($editor, 'saveSelectedMap');
+  $frame = flushShell($editor);
+  expect($frame)->toContain('Project: Sample Project')
+    ->and($frame)->not->toContain('unsaved changes');
+  expect(flushShell($editor))->not->toContain('Project:');
+});
