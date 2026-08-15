@@ -987,3 +987,80 @@ it('enters and leaves script frames from the hosted Inspector with Enter and Esc
     expect(getEditorProperty($editor, 'databaseCommandFramePath'))->toBe([])
         ->and(callEditorMethod($editor, 'getInspectorFields')[getEditorProperty($editor, 'databaseSelectedSettingIndex')]['field'] ?? null)->toBe('variant1Conditions');
 });
+
+it('cycles a command type and picks a route target inside a hosted script frame', function () {
+    [$root] = npcProject([
+        ['id' => 'gate-guard', 'name' => 'Gate Guard', 'sprite' => 'G', 'x' => 8, 'y' => 3],
+        ['id' => 'herald', 'name' => 'Herald', 'sprite' => 'H', 'x' => 2, 'y' => 1, 'script' => [['type' => 'text', 'name' => '', 'text' => 'x']]],
+    ]);
+    $editor = npcEditor($root);
+    $map = npcMap($editor);
+    callEditorMethod($editor, 'selectNpc', 1);
+    setEditorProperty($editor, 'focusedPane', 'inspector');
+    restNpcCursorOn($editor, 'commandListScript');
+    callEditorMethod($editor, 'dispatchInput', "\r");
+
+    // Right on the Type row steps through the shared command vocabulary.
+    expect(callEditorMethod($editor, 'getInspectorFields')[0]['field'] ?? null)->toBe('command0Type');
+    callEditorMethod($editor, 'dispatchInput', "\033[C");
+    expect($map->getNpcs()->get(1)?->getScript()[0]['type'] ?? null)->toBe('choice');
+
+    // Straight to move_route, then subject npc, then the target from the
+    // live map-local picker.
+    setNpcField($editor, 'command0Type', 'move_route');
+    setNpcField($editor, 'command0Subject', 'npc');
+    restNpcCursorOn($editor, 'command0NpcId');
+    callEditorMethod($editor, 'dispatchInput', "\r");
+    expect(getEditorProperty($editor, 'referencePicker')->isOpen())->toBeTrue()
+        ->and(getEditorProperty($editor, 'referencePicker')->matches())->toBe(['(None)', 'gate-guard', 'herald']);
+    foreach (mb_str_split('gate') as $character) {
+        callEditorMethod($editor, 'dispatchInput', $character);
+    }
+    callEditorMethod($editor, 'dispatchInput', "\r");
+
+    $command = $map->getNpcs()->get(1)?->getScript()[0] ?? [];
+    expect($command['type'] ?? null)->toBe('move_route')
+        ->and($command['subject'] ?? null)->toBe('npc')
+        ->and($command['npcId'] ?? null)->toBe('gate-guard');
+});
+
+it('adds, edits and removes route steps under a move_route inside a hosted script frame', function () {
+    [$root, $path] = npcProject([
+        ['id' => 'gate-guard', 'name' => 'Gate Guard', 'sprite' => 'G', 'x' => 8, 'y' => 3],
+        ['id' => 'herald', 'name' => 'Herald', 'sprite' => 'H', 'x' => 2, 'y' => 1, 'script' => [
+            ['type' => 'move_route', 'subject' => 'npc', 'npcId' => 'gate-guard'],
+        ]],
+    ]);
+    $editor = npcEditor($root);
+    $map = npcMap($editor);
+    callEditorMethod($editor, 'selectNpc', 1);
+    setEditorProperty($editor, 'focusedPane', 'inspector');
+    restNpcCursorOn($editor, 'commandListScript');
+    callEditorMethod($editor, 'dispatchInput', "\r");
+
+    // Shift+O on any row of the route adds its first step; the step rows
+    // then appear and edit like the root list's.
+    restNpcCursorOn($editor, 'command0Subject');
+    callEditorMethod($editor, 'dispatchInput', 'O');
+    $steps = $map->getNpcs()->get(1)?->getScript()[0]['steps'] ?? null;
+    expect($steps)->toBe([['direction' => 'down', 'count' => 1, 'faceOnly' => false]]);
+
+    setNpcField($editor, 'command0Step0Direction', 'left');
+    setNpcField($editor, 'command0Step0Count', '3');
+    expect($map->getNpcs()->get(1)?->getScript()[0]['steps'][0])->toBe(['direction' => 'left', 'count' => 3, 'faceOnly' => false]);
+
+    // A second step, then Shift+X on the first removes exactly that one;
+    // undo brings it back in place.
+    restNpcCursorOn($editor, 'command0Step0Count');
+    callEditorMethod($editor, 'dispatchInput', 'O');
+    expect($map->getNpcs()->get(1)?->getScript()[0]['steps'])->toHaveCount(2);
+    restNpcCursorOn($editor, 'command0Step0Direction');
+    callEditorMethod($editor, 'dispatchInput', 'X');
+    expect($map->getNpcs()->get(1)?->getScript()[0]['steps'])->toBe([['direction' => 'down', 'count' => 1, 'faceOnly' => false]]);
+    callEditorMethod($editor, 'performUndo');
+    expect($map->getNpcs()->get(1)?->getScript()[0]['steps'][0]['direction'])->toBe('left');
+
+    callEditorMethod($editor, 'saveSelectedMap');
+    expect(npcsOnDisk($path)[1]['script'][0]['steps'])->toHaveCount(2)
+        ->and(implode("\n", npcIssueLines($root, Severity::ERROR)))->not->toContain('route has no steps');
+});

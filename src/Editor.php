@@ -1654,7 +1654,14 @@ final class Editor
         $before = $map->getNpcs();
         $selectedId = (string) ($this->getDatabaseSettingsFields()[$this->databaseSelectedSettingIndex]['field'] ?? '');
 
-        if ($this->databaseCommandFramePath !== []) {
+        $nested = $this->databaseCommandFramePath !== []
+            ? $records->frameNestedContext($index, $this->databaseCommandFramePath, $selectedId)
+            : null;
+
+        if ($nested !== null) {
+            // A route step under a command in the frame.
+            $records->addFrameNestedItem($index, $this->databaseCommandFramePath, $nested['parentIndex']);
+        } elseif ($this->databaseCommandFramePath !== []) {
             $after = preg_match('/^command(\\d+)/', $selectedId, $m) === 1 ? intval($m[1]) : null;
             $records->addFrameCommand($index, $this->databaseCommandFramePath, $after);
         } elseif (preg_match('/^variant(\\d+)Line/', $selectedId, $m) === 1) {
@@ -1685,7 +1692,14 @@ final class Editor
         $before = $map->getNpcs();
         $selectedId = (string) ($this->getDatabaseSettingsFields()[$this->databaseSelectedSettingIndex]['field'] ?? '');
 
-        if ($this->databaseCommandFramePath !== []) {
+        $nested = $this->databaseCommandFramePath !== []
+            ? $records->frameNestedContext($index, $this->databaseCommandFramePath, $selectedId)
+            : null;
+
+        if ($nested !== null && $nested['nestedIndex'] !== null) {
+            // The step under the cursor; a command row removes the command.
+            $records->removeFrameNestedItem($index, $this->databaseCommandFramePath, $nested['parentIndex'], $nested['nestedIndex']);
+        } elseif ($this->databaseCommandFramePath !== []) {
             if (preg_match('/^command(\\d+)/', $selectedId, $m) === 1) {
                 $records->removeFrameCommand($index, $this->databaseCommandFramePath, intval($m[1]));
             }
@@ -8401,7 +8415,8 @@ final class Editor
         $field = $this->getDatabaseSettingsFields()[$this->databaseSelectedSettingIndex] ?? null;
         $fieldId = is_array($field) ? strval($field['field'] ?? '') : '';
 
-        return $database->nestedSubListContext($this->getSelectedRecordIndex(), $fieldId);
+        // Inside a frame the parent is one of the frame's commands.
+        return $database->frameNestedContext($this->getSelectedRecordIndex(), $this->databaseCommandFramePath, $fieldId);
     }
 
     /** Appends a structured nested item, such as a movement-route step. */
@@ -8415,21 +8430,20 @@ final class Editor
         }
 
         $recordIndex = $this->getSelectedRecordIndex();
+        $framePath = $this->databaseCommandFramePath;
         $parentIndex = $context['parentIndex'];
-        $nestedIndex = $database->addNestedSubItem($recordIndex, $parentIndex);
+        $nestedIndex = $database->addFrameNestedItem($recordIndex, $framePath, $parentIndex);
 
         if ($nestedIndex === null) {
             return;
         }
 
-        $entry = $database->getRecordByIndex($recordIndex)?->getSubList(
-            $database->schema->subList?->key ?? ''
-        )[$parentIndex][$context['list']->key][$nestedIndex] ?? [];
+        $entry = $context['list']->blank;
 
         $this->recordCommand(new GenericCommand(
             sprintf('%s add', ucfirst($context['list']->singular)),
-            static fn() => $database->insertNestedSubItem($recordIndex, $parentIndex, $nestedIndex, $entry),
-            static fn() => $database->removeNestedSubItem($recordIndex, $parentIndex, $nestedIndex),
+            static fn() => $database->addFrameNestedItem($recordIndex, $framePath, $parentIndex, $entry, $nestedIndex),
+            static fn() => $database->removeFrameNestedItem($recordIndex, $framePath, $parentIndex, $nestedIndex),
         ));
         $this->setStatus(
             sprintf('Added %s %d.', $context['list']->singular, $nestedIndex + 1),
@@ -8449,16 +8463,17 @@ final class Editor
         }
 
         $recordIndex = $this->getSelectedRecordIndex();
+        $framePath = $this->databaseCommandFramePath;
         $parentIndex = $context['parentIndex'];
         $nestedIndex = $context['nestedIndex']
-            ?? ($database->countNestedSubItems($recordIndex, $parentIndex) - 1);
+            ?? ($database->countFrameNestedItems($recordIndex, $framePath, $parentIndex) - 1);
 
         if ($nestedIndex < 0) {
             $this->setStatus(sprintf('No %s to remove.', $context['list']->singular), StatusLevel::WARN);
             return;
         }
 
-        $removed = $database->removeNestedSubItem($recordIndex, $parentIndex, $nestedIndex);
+        $removed = $database->removeFrameNestedItem($recordIndex, $framePath, $parentIndex, $nestedIndex);
 
         if ($removed === null) {
             return;
@@ -8466,8 +8481,8 @@ final class Editor
 
         $this->recordCommand(new GenericCommand(
             sprintf('%s remove', ucfirst($context['list']->singular)),
-            static fn() => $database->removeNestedSubItem($recordIndex, $parentIndex, $nestedIndex),
-            static fn() => $database->insertNestedSubItem($recordIndex, $parentIndex, $nestedIndex, $removed),
+            static fn() => $database->removeFrameNestedItem($recordIndex, $framePath, $parentIndex, $nestedIndex),
+            static fn() => $database->addFrameNestedItem($recordIndex, $framePath, $parentIndex, $removed, $nestedIndex),
         ));
         $this->databaseSelectedSettingIndex = min(
             $this->databaseSelectedSettingIndex,

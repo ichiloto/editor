@@ -544,7 +544,9 @@ rows, pickers, and Shift+O / Shift+X / Del as the top level, at any depth —
 and the pane title is the trail back out (`Commands › Choice 2 › Option 1`).
 Esc pops exactly one frame; at the top it closes the Database as before. An
 arm with no commands yet opens all the same, showing one `No commands yet`
-row; Shift+O there adds the first.
+row; Shift+O there adds the first. A `move_route` inside a frame owns its
+route steps exactly as one at the top level does: Shift+O on any of its rows
+adds a step, Shift+X on a step row removes that step.
 
 Shift+O with the cursor on an option row adds an option to that choice;
 removing an option takes its whole arm with it, and undo puts both back.

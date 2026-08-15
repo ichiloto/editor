@@ -1164,19 +1164,56 @@ final class ProjectRecordDatabase
     ): void {
         $entries = $record->getSubList($subList->key);
         $entry = $entries[$entryIndex] ?? null;
-        $nestedList = is_array($entry) ? $subList->nestedListFor($entry) : null;
+
+        if (! is_array($entry)) {
+            return;
+        }
+
+        $written = self::withNestedFieldWritten($subList, $entry, $nestedPrefixToken, $nestedIndex, $fieldToken, $rawValue);
+
+        if ($written !== null) {
+            $entries[$entryIndex] = $written;
+            $record->setSubList($subList->key, $entries);
+            $this->touchState();
+        }
+    }
+
+    /**
+     * Returns an entry with one field of one of its nested entries written,
+     * or null when the token names nothing writable.
+     *
+     * The one nested write, at any depth: the root list's entries and a
+     * frame's commands both own their nested lists this way.
+     *
+     * @param RecordSubList $subList The list the entry belongs to.
+     * @param array<string, mixed> $entry The entry.
+     * @param string $nestedPrefixToken The nested list's prefix as it appears in the field id.
+     * @param int $nestedIndex The nested entry.
+     * @param string $fieldToken The field token.
+     * @param string $rawValue The raw edited value.
+     * @return array<string, mixed>|null The rewritten entry.
+     */
+    private static function withNestedFieldWritten(
+        RecordSubList $subList,
+        array $entry,
+        string $nestedPrefixToken,
+        int $nestedIndex,
+        string $fieldToken,
+        string $rawValue,
+    ): ?array {
+        $nestedList = $subList->nestedListFor($entry);
 
         if (
             $nestedList === null
             || mb_strtolower($nestedPrefixToken) !== mb_strtolower(ucfirst($nestedList->prefix))
         ) {
-            return;
+            return null;
         }
 
         $nestedEntries = array_values((array) ($entry[$nestedList->key] ?? []));
 
         if (! is_array($nestedEntries[$nestedIndex] ?? null)) {
-            return;
+            return null;
         }
 
         foreach ($nestedList->fieldsFor($nestedEntries[$nestedIndex]) as $field) {
@@ -1189,12 +1226,177 @@ final class ProjectRecordDatabase
                 explode('.', $field->key),
                 self::coerce($field, $rawValue),
             );
-            $entries[$entryIndex][$nestedList->key] = $nestedEntries;
-            $record->setSubList($subList->key, $entries);
-            $this->touchState();
+            $entry[$nestedList->key] = $nestedEntries;
 
-            return;
+            return $entry;
         }
+
+        return null;
+    }
+
+    /**
+     * Resolves the nested list a settings row belongs to, inside a frame.
+     *
+     * At the root this is nestedSubListContext; inside a frame the parent
+     * is a command of that frame, and the field ids carry the frame list's
+     * prefix.
+     *
+     * @param int $recordIndex The record.
+     * @param array<int, int|string> $framePath The frame.
+     * @param string $fieldId The selected settings row.
+     * @return array{parentIndex: int, nestedIndex: int|null, list: RecordSubList}|null The context.
+     */
+    public function frameNestedContext(int $recordIndex, array $framePath, string $fieldId): ?array
+    {
+        if ($framePath === []) {
+            return $this->nestedSubListContext($recordIndex, $fieldId);
+        }
+
+        $commands = $this->getFrameCommands($recordIndex, $framePath);
+        $frameList = $this->frameSubList($framePath);
+
+        if ($commands === null || $frameList === null) {
+            return null;
+        }
+
+        if (preg_match('/^' . preg_quote($frameList->prefix, '/') . '(\d+)/', $fieldId, $parentMatch) !== 1) {
+            return null;
+        }
+
+        $parentIndex = intval($parentMatch[1]);
+        $parent = $commands[$parentIndex] ?? null;
+        $nestedList = is_array($parent) ? $frameList->nestedListFor($parent) : null;
+
+        if ($nestedList === null) {
+            return null;
+        }
+
+        $nestedIndex = null;
+        $pattern = '/^'
+            . preg_quote($frameList->prefix, '/')
+            . preg_quote((string) $parentIndex, '/')
+            . preg_quote(ucfirst($nestedList->prefix), '/')
+            . '(\d+)/';
+
+        if (preg_match($pattern, $fieldId, $nestedMatch) === 1) {
+            $nestedIndex = intval($nestedMatch[1]);
+        }
+
+        return ['parentIndex' => $parentIndex, 'nestedIndex' => $nestedIndex, 'list' => $nestedList];
+    }
+
+    /**
+     * Returns how many nested entries a frame command owns.
+     *
+     * @param int $recordIndex The record.
+     * @param array<int, int|string> $framePath The frame.
+     * @param int $parentIndex The command.
+     * @return int The count.
+     */
+    public function countFrameNestedItems(int $recordIndex, array $framePath, int $parentIndex): int
+    {
+        if ($framePath === []) {
+            return $this->countNestedSubItems($recordIndex, $parentIndex);
+        }
+
+        $commands = $this->getFrameCommands($recordIndex, $framePath) ?? [];
+        $frameList = $this->frameSubList($framePath);
+        $parent = $commands[$parentIndex] ?? null;
+        $nestedList = is_array($parent) && $frameList !== null ? $frameList->nestedListFor($parent) : null;
+
+        return $nestedList === null ? 0 : count(array_values((array) ($parent[$nestedList->key] ?? [])));
+    }
+
+    /**
+     * Appends (or inserts) a nested entry under a frame command.
+     *
+     * @param int $recordIndex The record.
+     * @param array<int, int|string> $framePath The frame.
+     * @param int $parentIndex The command.
+     * @param array<string, mixed>|null $entry The entry, or null for the list's blank.
+     * @param int|null $at Where to insert, or null for the end.
+     * @return int|null The nested index, or null when nothing was added.
+     */
+    public function addFrameNestedItem(int $recordIndex, array $framePath, int $parentIndex, ?array $entry = null, ?int $at = null): ?int
+    {
+        if ($framePath === []) {
+            if ($at === null) {
+                return $this->addNestedSubItem($recordIndex, $parentIndex, $entry);
+            }
+
+            $blank = $entry ?? $this->nestedListForParent($recordIndex, $parentIndex)['list']->blank ?? [];
+            $this->insertNestedSubItem($recordIndex, $parentIndex, $at, $blank);
+
+            return $at;
+        }
+
+        $record = $this->getRecordByIndex($recordIndex);
+        $commands = $this->getFrameCommands($recordIndex, $framePath);
+        $frameList = $this->frameSubList($framePath);
+        $rootList = $this->schema->subList;
+        $parent = $commands[$parentIndex] ?? null;
+        $nestedList = is_array($parent) && $frameList !== null ? $frameList->nestedListFor($parent) : null;
+
+        if (! $record instanceof ProjectRecord || $commands === null || $rootList === null || $nestedList === null || ! $this->isEditable()) {
+            return null;
+        }
+
+        $nestedEntries = array_values((array) ($parent[$nestedList->key] ?? []));
+        $position = $at === null ? count($nestedEntries) : max(0, min(count($nestedEntries), $at));
+        array_splice($nestedEntries, $position, 0, [$entry ?? $nestedList->blank]);
+        $commands[$parentIndex][$nestedList->key] = $nestedEntries;
+        $this->writeFrameCommands($record, $rootList, $framePath, $commands);
+
+        return $position;
+    }
+
+    /**
+     * Removes a nested entry from a frame command.
+     *
+     * @param int $recordIndex The record.
+     * @param array<int, int|string> $framePath The frame.
+     * @param int $parentIndex The command.
+     * @param int $nestedIndex The nested entry.
+     * @return array<string, mixed>|null The removed entry.
+     */
+    public function removeFrameNestedItem(int $recordIndex, array $framePath, int $parentIndex, int $nestedIndex): ?array
+    {
+        if ($framePath === []) {
+            return $this->removeNestedSubItem($recordIndex, $parentIndex, $nestedIndex);
+        }
+
+        $record = $this->getRecordByIndex($recordIndex);
+        $commands = $this->getFrameCommands($recordIndex, $framePath);
+        $frameList = $this->frameSubList($framePath);
+        $rootList = $this->schema->subList;
+        $parent = $commands[$parentIndex] ?? null;
+        $nestedList = is_array($parent) && $frameList !== null ? $frameList->nestedListFor($parent) : null;
+
+        if (! $record instanceof ProjectRecord || $commands === null || $rootList === null || $nestedList === null || ! $this->isEditable()) {
+            return null;
+        }
+
+        $nestedEntries = array_values((array) ($parent[$nestedList->key] ?? []));
+
+        if (! is_array($nestedEntries[$nestedIndex] ?? null)) {
+            return null;
+        }
+
+        [$removed] = array_splice($nestedEntries, $nestedIndex, 1);
+
+        if ($nestedEntries === []) {
+            // A command's blank carries no nested list, so removing the last
+            // entry leaves the command as it was created rather than with an
+            // empty list the runtime reads the same and the fingerprint does
+            // not.
+            unset($commands[$parentIndex][$nestedList->key]);
+        } else {
+            $commands[$parentIndex][$nestedList->key] = $nestedEntries;
+        }
+
+        $this->writeFrameCommands($record, $rootList, $framePath, $commands);
+
+        return $removed;
     }
 
     /**
@@ -1713,12 +1915,38 @@ final class ProjectRecordDatabase
             return;
         }
 
-        $prefix = preg_quote($subList->prefix, '/');
+        // Field ids inside a frame carry the frame's own list prefix (a
+        // command's, however the frame was reached), not the schema's
+        // sub-list prefix: an NPC's variants are "variantN…" at the root and
+        // its script's commands "commandN…" inside.
+        $frameList = $this->frameSubList($framePath) ?? $subList;
+        $prefix = preg_quote($frameList->prefix, '/');
 
         if (preg_match('/^' . $prefix . '(\\d+)Option(\\d+)Text$/', $fieldId, $matches) === 1) {
             // Option rows exist at every depth, the root included, and the
             // plain setField has never heard of them.
             $commands = self::withOptionText($commands, intval($matches[1]), intval($matches[2]), $rawValue);
+        } elseif (
+            $framePath !== []
+            && preg_match('/^' . $prefix . '(\\d+)([A-Za-z][A-Za-z0-9]*?)(\\d+)([A-Za-z][A-Za-z0-9]*)$/', $fieldId, $matches) === 1
+            && is_array($commands[intval($matches[1])] ?? null)
+        ) {
+            // A nested entry of a command inside the frame (a route step):
+            // the same write the root list gets, at this depth.
+            $written = self::withNestedFieldWritten(
+                $frameList,
+                $commands[intval($matches[1])],
+                $matches[2],
+                intval($matches[3]),
+                $matches[4],
+                $rawValue,
+            );
+
+            if ($written === null) {
+                return;
+            }
+
+            $commands[intval($matches[1])] = $written;
         } elseif ($framePath === []) {
             // The root list is what setField already edits, steps and all.
             $this->setField($recordIndex, $fieldId, $rawValue);

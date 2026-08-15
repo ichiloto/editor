@@ -341,3 +341,44 @@ it('keeps an empty arm open so the first command can be added there', function (
     callEditorMethod($editor, 'getDatabaseSettingsFields');
     expect(getEditorProperty($editor, 'databaseCommandFramePath'))->toBe([]);
 });
+
+it('authors route steps under a move_route inside a branch arm', function () {
+    $root = makeTemporaryProject();
+    file_put_contents($root . '/assets/Events/routed.php', <<<'PHP2'
+    <?php
+
+    return [
+      ['type' => 'branch', 'conditions' => [['type' => 'switch', 'name' => 'go']], 'then' => [
+        ['type' => 'move_route', 'subject' => 'player'],
+      ]],
+    ];
+    PHP2);
+
+    $editor = createEditorForTesting($root);
+    setEditorProperty($editor, 'workspace', ProjectWorkspace::fromProject($root));
+    callEditorMethod($editor, 'openDatabaseAtCategory', 'common_events');
+
+    $database = callEditorMethod($editor, 'getSelectedRecordDatabase');
+    $index = array_search('routed', $database->getEntryLabels(), true);
+    callEditorMethod($editor, 'setSelectedRecordIndex', $index);
+    setEditorProperty($editor, 'databaseFocus', 'database_settings');
+    setEditorProperty($editor, 'databaseCommandFramePath', [0, 'then']);
+
+    // Cursor on the route's Subject row: Shift+O adds a step, not a command.
+    foreach (callEditorMethod($editor, 'getDatabaseSettingsFields') as $i => $field) {
+        if (($field['field'] ?? null) === 'command0Subject') {
+            setEditorProperty($editor, 'databaseSelectedSettingIndex', $i);
+        }
+    }
+    callEditorMethod($editor, 'dispatchInput', 'O');
+
+    $arm = $database->getFrameCommands($index, [0, 'then']);
+    expect($arm)->toHaveCount(1)
+        ->and($arm[0]['steps'])->toBe([['direction' => 'down', 'count' => 1, 'faceOnly' => false]]);
+
+    // The step row edits inside the frame, and undo removes the step again.
+    $database->setFrameField($index, [0, 'then'], 'command0Step0Direction', 'up');
+    expect($database->getFrameCommands($index, [0, 'then'])[0]['steps'][0]['direction'])->toBe('up');
+    callEditorMethod($editor, 'performUndo');
+    expect($database->getFrameCommands($index, [0, 'then'])[0])->not->toHaveKey('steps');
+});
