@@ -61,8 +61,11 @@ final class ProjectNpc
             'x' => $x,
             'y' => $y,
             'movement' => 'fixed',
+            // No `name` on the page: the runtime titles it with the NPC's
+            // own name, so a rename carries through instead of leaving the
+            // creation-time name pinned on every line.
             'dialogue' => [
-                ['name' => $name, 'text' => 'Hello.'],
+                ['text' => 'Hello.'],
             ],
         ]);
     }
@@ -90,6 +93,42 @@ final class ProjectNpc
     public function getSprite(): string
     {
         return strval($this->payload['sprite'] ?? '@');
+    }
+
+    /**
+     * Returns the sprite as the terminal shows it: style tags stripped,
+     * measured the way the engine measures it.
+     *
+     * A sprite may be authored as `<fg=#ff87af>@</>`; the glyph on the map is
+     * `@`, one column wide. The engine's TerminalText is the authority when
+     * it is loaded (it always is inside an open project); a plain tag strip
+     * stands in otherwise.
+     *
+     * @return string The visible glyph(s).
+     */
+    public function getVisibleSprite(): string
+    {
+        $sprite = $this->getSprite();
+
+        if (class_exists(\Ichiloto\Engine\IO\Console\TerminalText::class)) {
+            $stripped = implode('', \Ichiloto\Engine\IO\Console\TerminalText::visibleSymbols($sprite));
+
+            return $stripped === '' ? '@' : $stripped;
+        }
+
+        $stripped = (string) preg_replace('/<\/?[a-z][^>]*>/i', '', $sprite);
+
+        return $stripped === '' ? '@' : $stripped;
+    }
+
+    /**
+     * Returns the columns the sprite occupies on the map.
+     *
+     * @return int The width, at least 1.
+     */
+    public function getSpriteWidth(): int
+    {
+        return max(1, mb_strwidth($this->getVisibleSprite()));
     }
 
     public function getX(): int

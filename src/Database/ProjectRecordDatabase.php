@@ -258,7 +258,7 @@ final class ProjectRecordDatabase
             // frame to open, like a branch arm, never a wall of rows here.
             $fields[] = [
                 'label' => ucfirst($commandList->singular) . 's',
-                'value' => sprintf('· %d', count($record->getSubList($listKey))),
+                'value' => sprintf('%d', count($record->getSubList($listKey))),
                 'field' => 'commandList' . ucfirst($listKey),
                 'frame' => [$listKey],
             ];
@@ -331,7 +331,7 @@ final class ProjectRecordDatabase
                 $fields[] = $textField;
                 $fields[] = [
                     'label' => $label . ' Commands',
-                    'value' => sprintf('· %d', $armCount),
+                    'value' => sprintf('%d', $armCount),
                     'field' => sprintf('%s%dOption%dThen', $subList->prefix, $entryIndex, $optionIndex),
                     'frame' => [...$basePath, $entryIndex, 'options', $optionIndex, 'then'],
                 ];
@@ -349,7 +349,7 @@ final class ProjectRecordDatabase
         foreach ($arms as $armKey => $armLabel) {
             $fields[] = [
                 'label' => sprintf('%s %d %s Commands', ucfirst($subList->singular), $entryIndex + 1, $armLabel),
-                'value' => sprintf('· %d', count((array) ($entry[$armKey] ?? []))),
+                'value' => sprintf('%d', count((array) ($entry[$armKey] ?? []))),
                 'field' => sprintf('%s%d%s', $subList->prefix, $entryIndex, ucfirst($armKey)),
                 'frame' => [...$basePath, $entryIndex, $armKey],
             ];
@@ -1281,6 +1281,11 @@ final class ProjectRecordDatabase
 
             if ($field->allowsNone) {
                 $descriptor['allowsNone'] = true;
+                $descriptor['noneLabel'] = $field->noneLabel();
+            }
+
+            if ($field->blankLabel !== null) {
+                $descriptor['blankLabel'] = $field->blankLabel;
             }
 
             return $descriptor;
@@ -1346,7 +1351,17 @@ final class ProjectRecordDatabase
             return $sets === [] && $field->removeWhenEmpty ? null : $sets;
         }
 
-        if ($field->reference !== null && $field->allowsNone && in_array(mb_strtolower($trimmed), ['', '(none)', 'none'], true)) {
+        if ($field->reference !== null && $field->blankLabel !== null && $trimmed === $field->blankLabel) {
+            // The picked "empty" row: stored as '', which the runtime reads
+            // as its own value rather than as unset.
+            return '';
+        }
+
+        if (
+            $field->reference !== null
+            && $field->allowsNone
+            && in_array(mb_strtolower($trimmed), ['', '(none)', 'none', mb_strtolower($field->noneLabel())], true)
+        ) {
             return null;
         }
 
@@ -1397,6 +1412,17 @@ final class ProjectRecordDatabase
      */
     private static function displayValue(RecordField $field, mixed $value): string
     {
+        // An absent key reads as what the runtime will do with it, and an
+        // empty string as what the runtime means by it, when the schema says
+        // so -- neither is left as a blank for the author to decode.
+        if ($value === null && $field->displayDefault !== null && $field->codec === RecordFieldCodec::NONE) {
+            return $field->displayDefault;
+        }
+
+        if ($value === '' && $field->blankLabel !== null) {
+            return $field->blankLabel;
+        }
+
         return match ($field->codec) {
             RecordFieldCodec::CONDITIONS => ConditionCodec::encodeAll(is_array($value) ? $value : []),
             RecordFieldCodec::AFFINITIES => ElementAffinityCodec::encodeAll(is_array($value) ? $value : []),

@@ -284,8 +284,8 @@ final class ProjectMap
         $cells = [];
 
         foreach ($this->getNpcs()->all() as $index => $npc) {
-            $sprite = $npc->getSprite();
-            $columns = max(1, mb_strwidth($sprite));
+            $sprite = $npc->getVisibleSprite();
+            $columns = $npc->getSpriteWidth();
             $x = $npc->getX();
             $y = $npc->getY();
 

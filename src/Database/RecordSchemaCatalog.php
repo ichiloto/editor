@@ -539,13 +539,13 @@ final class RecordSchemaCatalog
                 new RecordField('x', 'X', InputControlType::INTEGER),
                 new RecordField('y', 'Y', InputControlType::INTEGER),
                 // Appearance
-                new RecordField('sprite', 'Sprite'),
+                new RecordField('sprite', 'Sprite', displayDefault: '@'),
                 new RecordField('sprites.north', 'Facing North', removeWhenEmpty: true),
                 new RecordField('sprites.south', 'Facing South', removeWhenEmpty: true),
                 new RecordField('sprites.east', 'Facing East', removeWhenEmpty: true),
                 new RecordField('sprites.west', 'Facing West', removeWhenEmpty: true),
                 // Movement
-                new RecordField('movement', 'Movement', options: ProjectNpc::MOVEMENTS),
+                new RecordField('movement', 'Movement', options: ProjectNpc::MOVEMENTS, displayDefault: 'fixed'),
                 new RecordField('wanderArea.x', 'Wander X', InputControlType::INTEGER, removeWhenEmpty: true),
                 new RecordField('wanderArea.y', 'Wander Y', InputControlType::INTEGER, removeWhenEmpty: true),
                 new RecordField('wanderArea.width', 'Wander Width', InputControlType::INTEGER, removeWhenEmpty: true),
@@ -563,7 +563,7 @@ final class RecordSchemaCatalog
                 'x' => 0,
                 'y' => 0,
                 'movement' => 'fixed',
-                'dialogue' => [['name' => 'New NPC', 'text' => 'Hello.']],
+                'dialogue' => [['text' => 'Hello.']],
             ],
             subList: new RecordSubList(
                 key: 'dialogue',
@@ -573,17 +573,28 @@ final class RecordSchemaCatalog
                     new RecordField('conditions', 'When', removeWhenEmpty: true, codec: RecordFieldCodec::CONDITIONS),
                     new RecordField('sets', 'Then Set', removeWhenEmpty: true, codec: RecordFieldCodec::WORLD_WRITES),
                 ],
-                blank: ['lines' => [['name' => '', 'text' => 'Something to say.']]],
+                blank: ['lines' => [['text' => 'Something to say.']]],
                 nestedLists: [
                     '*' => new RecordSubList(
                         key: 'lines',
                         prefix: 'line',
                         singular: 'line',
                         fields: [
-                            RecordField::reference('name', 'Speaker', 'actors', allowsNone: true),
+                            // The runtime titles a page with its `name`, the
+                            // NPC's own when the key is absent, and no title
+                            // at all for ''. Both are choices, by meaning,
+                            // never a name retyped that goes stale on rename.
+                            RecordField::reference(
+                                'name',
+                                'Speaker',
+                                'actors',
+                                allowsNone: true,
+                                noneLabel: "(the NPC's name)",
+                                blankLabel: '(No speaker)',
+                            ),
                             new RecordField('text', 'Text'),
                         ],
-                        blank: ['name' => '', 'text' => 'Something to say.'],
+                        blank: ['text' => 'Something to say.'],
                     ),
                 ],
                 // A variant's own script, edited as a frame like a branch arm.

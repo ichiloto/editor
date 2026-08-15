@@ -27,6 +27,15 @@ final readonly class RecordField
      * @param string|null $reference The kind of resource this names, when it
      * names one. A reference is chosen from a picker rather than typed, so an
      * author never has to remember or spell another record's name.
+     * @param string|null $displayDefault What an absent key reads as in the
+     * pane -- the value the runtime falls back to (`fixed`, `@`, "the NPC's
+     * name") -- so an unset field is never a blank the author has to decode.
+     * For a reference that allows none, this is also the label of the
+     * picker's "none" row, since picking it leaves the key absent.
+     * @param string|null $blankLabel For a reference field, a pickable row
+     * that stores the empty string, when the runtime gives `''` a meaning of
+     * its own distinct from an absent key (a dialogue page with no speaker).
+     * The stored `''` reads back as this label.
      */
     public function __construct(
         public string $key,
@@ -40,6 +49,8 @@ final readonly class RecordField
         public ?string $reference = null,
         public ?string $enumClass = null,
         public bool $allowsNone = false,
+        public ?string $displayDefault = null,
+        public ?string $blankLabel = null,
     ) {
     }
 
@@ -49,11 +60,39 @@ final readonly class RecordField
      * @param string $key The payload key.
      * @param string $label The settings-pane label.
      * @param string $category The kind of resource it names.
+     * @param bool $allowsNone Whether the reference may be left unset.
+     * @param string|null $noneLabel What "unset" reads as, when it means
+     * something more specific than none.
+     * @param string|null $blankLabel A pickable row storing `''`, when the
+     * runtime distinguishes an empty value from an absent one.
      * @return self The field.
      */
-    public static function reference(string $key, string $label, string $category, bool $allowsNone = false): self
+    public static function reference(
+        string $key,
+        string $label,
+        string $category,
+        bool $allowsNone = false,
+        ?string $noneLabel = null,
+        ?string $blankLabel = null,
+    ): self {
+        return new self(
+            $key,
+            $label,
+            reference: $category,
+            allowsNone: $allowsNone,
+            displayDefault: $noneLabel,
+            blankLabel: $blankLabel,
+        );
+    }
+
+    /**
+     * Returns the label of the picker row that leaves the reference unset.
+     *
+     * @return string The label.
+     */
+    public function noneLabel(): string
     {
-        return new self($key, $label, reference: $category, allowsNone: $allowsNone);
+        return $this->displayDefault ?? '(None)';
     }
 
     /**
@@ -73,6 +112,10 @@ final readonly class RecordField
             $this->step,
             $this->codec,
             $this->reference,
+            $this->enumClass,
+            $this->allowsNone,
+            $this->displayDefault,
+            $this->blankLabel,
         );
     }
 

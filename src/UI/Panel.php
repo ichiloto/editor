@@ -95,15 +95,17 @@ abstract class Panel
      *
      * @param string $input The raw input token.
      * @param string $normalizedInput The lowercased input token.
-     * @return void
+     * @return bool True when this panel had focus and took the token.
      */
-    final public function handleInput(string $input, string $normalizedInput): void
+    final public function handleInput(string $input, string $normalizedInput): bool
     {
         if (! $this->hasFocus()) {
-            return;
+            return false;
         }
 
         ($this->inputHandler)($input, $normalizedInput);
+
+        return true;
     }
 
     /**

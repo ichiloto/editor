@@ -1114,12 +1114,19 @@ final class Editor
                 'Ctrl+W',
                 'Canvas: cycle brush width (1 / 2 / 3 / 5)',
             ),
+            // F3 rather than a control byte: every typeable Ctrl+letter is
+            // taken by the editor or reserved by the tty driver (Ctrl+O is
+            // the discard character on macOS and never reaches us), and a
+            // printable glyph must stay paintable. F-keys are the family
+            // F2 (Database) already established, in both encodings.
             KeyBinding::when(
-                $this->isCanvasShortcut("\x0f"),
+                fn(string $input): bool => in_array($input, ["\033OR", "\033[13~"], true)
+                    && $this->focusedPane === self::FOCUS_CANVAS
+                    && $this->getSelectedMap() instanceof ProjectMap,
                 fn() => $this->setEditingMode(
                     $this->editingMode === self::MODE_NPC ? self::MODE_MAP : self::MODE_NPC,
                 ),
-                'Ctrl+O',
+                'F3',
                 'Canvas: toggle NPC mode (place and edit the map\'s NPCs)',
             ),
             KeyBinding::when(
@@ -1168,8 +1175,14 @@ final class Editor
      */
     private function handleFocusedPaneInput(string $input, string $normalizedInput): void
     {
+        // One key, one pane: the pane focused when the key arrives. Offering
+        // every panel in turn let a handler that moved focus (creating an
+        // NPC lands in the Inspector) hand the same key to the next pane,
+        // which then began an edit nobody asked for.
         foreach ([$this->assetsPanel, $this->canvasPanel, $this->inspectorPanel] as $panel) {
-            $panel->handleInput($input, $normalizedInput);
+            if ($panel->handleInput($input, $normalizedInput)) {
+                return;
+            }
         }
     }
 
@@ -1553,45 +1566,43 @@ final class Editor
         }
 
         if ($input === "\n" || $input === "\r") {
-            $this->databaseSelectedSettingIndex = $this->selectedInspectorFieldIndex;
             $this->beginDatabaseEdit();
-            $this->selectedInspectorFieldIndex = $this->databaseSelectedSettingIndex;
 
             return;
         }
 
         if ($this->isShiftLetterShortcut($input, 'O')) {
-            $this->databaseSelectedSettingIndex = $this->selectedInspectorFieldIndex;
             $this->addDatabaseNpcSubItem();
-            $this->selectedInspectorFieldIndex = $this->databaseSelectedSettingIndex;
 
             return;
         }
 
         if ($this->isShiftLetterShortcut($input, 'X') || str_contains($input, "\033[3~")) {
-            $this->databaseSelectedSettingIndex = $this->selectedInspectorFieldIndex;
             $this->removeDatabaseNpcSubItem();
-            $this->selectedInspectorFieldIndex = $this->databaseSelectedSettingIndex;
 
             return;
         }
 
-        if (str_contains($input, "\033[A")) {
-            $this->selectedInspectorFieldIndex = max(0, $this->selectedInspectorFieldIndex - 1);
-            $this->requestFullRender();
+        if (str_contains($input, "\033[A") || str_contains($input, "\033[B")) {
+            // Skip group headings: they are labels, not rows to land on.
+            $fields = $this->getInspectorFields();
+            $step = str_contains($input, "\033[A") ? -1 : 1;
+            $index = $this->databaseSelectedSettingIndex;
 
-            return;
-        }
+            do {
+                $index += $step;
+            } while (isset($fields[$index]) && ($fields[$index]['editable'] ?? null) === false && ! isset($fields[$index]['frame']));
 
-        if (str_contains($input, "\033[B")) {
-            $this->selectedInspectorFieldIndex = min(max(0, count($this->getInspectorFields()) - 1), $this->selectedInspectorFieldIndex + 1);
+            if (isset($fields[$index])) {
+                $this->databaseSelectedSettingIndex = $index;
+            }
+
             $this->requestFullRender();
 
             return;
         }
 
         if (str_contains($input, "\033[D") || str_contains($input, "\033[C")) {
-            $this->databaseSelectedSettingIndex = $this->selectedInspectorFieldIndex;
             $this->adjustDatabaseOptionField(str_contains($input, "\033[D") ? -1 : 1);
 
             return;
@@ -1944,6 +1955,8 @@ final class Editor
     {
         $this->selectedNpcIndex = $index;
         $this->selectedInspectorFieldIndex = 0;
+        // Row 0 is the Identity heading; the Name is the first editable row.
+        $this->databaseSelectedSettingIndex = 2;
         $this->refreshNpcInspector();
     }
 
@@ -2136,7 +2149,7 @@ final class Editor
 
         $id = $collection->uniqueIdFor($npc->getName());
         $copy = $npc->asCopyWithId($id);
-        $x = $npc->getX() + max(1, mb_strwidth($npc->getSprite()));
+        $x = $npc->getX() + $npc->getSpriteWidth();
 
         if ($x < $map->getWidth() && $collection->indexAt($x, $npc->getY()) === null) {
             $copy = $copy->movedTo($x, $npc->getY());
@@ -4410,7 +4423,7 @@ final class Editor
         $lines[] = '  Enter              edit, or open the picker on a field';
         $lines[] = '                     that names another record';
         $lines[] = '';
-        $lines[] = 'NPC mode (Ctrl+O on the canvas)';
+        $lines[] = 'NPC mode (F3 on the canvas)';
         $lines[] = '  Enter              select the NPC under the cursor, or';
         $lines[] = '                     create one there';
         $lines[] = '  M                  pick up; Enter sets down, Esc cancels';
@@ -4562,7 +4575,7 @@ final class Editor
                 $this->closeDatabaseIfOpen();
                 $this->setEditingMode(self::MODE_EVENT);
             }),
-            new PaletteItem('Tool: NPC Mode', 'Ctrl+O', function (): void {
+            new PaletteItem('Tool: NPC Mode', 'F3', function (): void {
                 $this->focusedPane = self::FOCUS_CANVAS;
                 $this->setEditingMode(self::MODE_NPC);
             }),
@@ -9844,11 +9857,26 @@ final class Editor
         $label = (string) ($field['label'] ?? 'Reference');
         $values = new ReferenceCatalog($this->workspace, $this->getSelectedMap())->valuesFor($category);
 
-        if (($field['allowsNone'] ?? false) === true && $values !== []) {
+        $specials = [];
+
+        if (($field['allowsNone'] ?? false) === true) {
             // An optional reference needs a way back to nothing, or setting
-            // it once would be a dead end.
-            $values = ['(None)', ...$values];
+            // it once would be a dead end. The row reads as what "nothing"
+            // means to the runtime when the schema says so.
+            $specials[] = (string) ($field['noneLabel'] ?? '(None)');
         }
+
+        if (is_string($field['blankLabel'] ?? null)) {
+            // Where the runtime gives an empty value a meaning of its own (a
+            // page with no speaker), distinct from an absent one, that is a
+            // row to pick as well.
+            $specials[] = $field['blankLabel'];
+        }
+
+        // The special rows stand on their own: with nothing else to choose
+        // from, clearing a stale reference or picking "no speaker" is still
+        // a choice the author must be able to make.
+        $values = [...$specials, ...$values];
 
         $opened = $this->referencePicker->open(
             (string) ($field['field'] ?? ''),
@@ -9996,10 +10024,10 @@ final class Editor
         }
 
         try {
-            // The record layer reads '(None)' as clearing the reference.
+            // The record layer reads the none row as clearing the reference.
             $this->applyDatabaseFieldValueRecorded($field, $selected);
             $this->setStatus(
-                $selected === '(None)'
+                $selected === (string) ($field['noneLabel'] ?? '(None)')
                     ? sprintf('%s cleared.', $label)
                     : sprintf('%s set to %s.', $label, $selected),
                 StatusLevel::SUCCESS,
@@ -13233,26 +13261,40 @@ final class Editor
         }
 
         $lines = [];
+        $hosting = $this->isNpcInspectorHosting();
+        // The pane's own width and height, or the Inspector's when hosted.
+        $paneWidth = $hosting
+            ? $this->resolveLayout()['rightWidth']
+            : $this->resolveDatabaseLayout($this->resolveLayout())['settingsWidth'];
+        $paneRows = $hosting
+            ? max(1, $this->resolveLayout()['contentHeight'] - 2)
+            : max(1, $this->resolveDatabaseLayout($this->resolveLayout())['topHeight'] - 2);
+        $cursorShown = $hosting
+            ? $this->focusedPane === self::FOCUS_INSPECTOR
+            : $this->databaseFocus === self::DATABASE_FOCUS_SETTINGS;
 
         foreach ($fields as $index => $field) {
-            $prefix = $this->databaseFocus === self::DATABASE_FOCUS_SETTINGS && $index === $this->databaseSelectedSettingIndex ? '> ' : '  ';
+            $prefix = $cursorShown && $index === $this->databaseSelectedSettingIndex ? '> ' : '  ';
             $value = (string) ($field['value'] ?? '');
 
             if ($this->isDatabaseEditing && $index === $this->databaseSelectedSettingIndex) {
-                $availableValueWidth = max(1, $this->getWindowContentWidth($this->resolveDatabaseLayout($this->resolveLayout())["settingsWidth"]) - mb_strwidth(sprintf("%s%s: ", $prefix, $field["label"] ?? "Field")));
+                $availableValueWidth = max(1, $this->getWindowContentWidth($paneWidth) - mb_strwidth(sprintf("%s%s: ", $prefix, $field["label"] ?? "Field")));
                 $visibleStart = max(0, $this->databaseEditCursorIndex - $availableValueWidth + 1);
                 $value = mb_substr($this->databaseEditBuffer, $visibleStart, $availableValueWidth);
             }
 
-            $lines[] = sprintf('%s%s: %s', $prefix, $field['label'] ?? 'Field', $value);
+            $lines[] = $this->formatFieldLine(
+                $prefix,
+                (string) ($field['label'] ?? 'Field'),
+                $value,
+                $this->isInspectorFieldInteractive($field),
+            );
         }
 
         // Scroll the pane so the selected field stays visible; the edit
         // cursor row (min(selected, topHeight - 3)) already assumes this
         // window.
-        $visibleRows = max(1, $this->resolveDatabaseLayout($this->resolveLayout())['topHeight'] - 2);
-
-        return ScrollWindow::slice($lines, $this->databaseSelectedSettingIndex, $visibleRows);
+        return ScrollWindow::slice($lines, $this->databaseSelectedSettingIndex, $paneRows);
     }
 
     /**
@@ -13937,6 +13979,12 @@ final class Editor
             return ['No selection.'];
         }
 
+        if ($this->isNpcInspectorHosting() && $this->selectedNpcIndex !== null) {
+            // The hosted pane draws its own sub-editors and edit cursor,
+            // exactly as the Database settings pane does.
+            return $this->getDatabaseSettingsLines();
+        }
+
         $lines = [];
 
         foreach ($fields as $index => $field) {
@@ -13971,7 +14019,13 @@ final class Editor
     private function isInspectorFieldInteractive(array $field): bool
     {
         return $this->getInspectorFieldControl($field) instanceof InputControl
-            || ($field['editable'] ?? null) === true;
+            || ($field['editable'] ?? null) === true
+            || ! empty($field['options'])
+            || isset($field['reference'])
+            || ($field['conditions'] ?? false) === true
+            || ($field['worldWrites'] ?? false) === true
+            || ($field['affinities'] ?? false) === true
+            || isset($field['frame']);
     }
 
     /**

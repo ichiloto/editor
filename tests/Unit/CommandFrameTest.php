@@ -74,7 +74,7 @@ it('shows options and arms as rows to open, not read-only counts', function () {
     expect($byId['command1Option0Text']['value'] ?? null)->toBe('Read it')
         ->and($byId['command1Option0Text'])->toHaveKey('control')
         ->and($byId['command1Option0Then']['frame'] ?? null)->toBe([1, 'options', 0, 'then'])
-        ->and($byId['command1Option0Then']['value'] ?? null)->toBe('· 2')
+        ->and($byId['command1Option0Then']['value'] ?? null)->toBe('2')
         ->and($byId['command1Option1Then']['frame'] ?? null)->toBe([1, 'options', 1, 'then'])
         // The old placeholder is gone: nothing here is a count you cannot open.
         ->and($byId)->not->toHaveKey('command1Options');

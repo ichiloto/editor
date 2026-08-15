@@ -175,7 +175,7 @@ The canvas previews the selected map and is where you paint.
 | --- | --- |
 | `%` | Switch to Map mode (paint tiles) |
 | `^` | Switch to Event mode (paint event markers) |
-| `Ctrl+O` | Toggle NPC mode (place and edit the map's NPCs) |
+| `F3` | Toggle NPC mode (place and edit the map's NPCs) |
 | `@` | Open the character map |
 | `Arrows` | Move the cursor |
 | `Enter` | Apply the active tool |
@@ -185,11 +185,12 @@ Under a shape or select tool, typing a glyph loads it into the brush instead.
 
 ### NPC Mode
 
-`Ctrl+O` enters NPC mode: the map's `npcs` collection is drawn over the tiles
-as an overlay — sprites at their authored anchor, wide glyphs occupying the
-two columns the game gives them — and nothing you do here paints a tile or an
-event marker. The selected NPC is shown in brackets. NPC mode is a control
-byte rather than a glyph so no paintable character is taken from you.
+`F3` enters NPC mode: the map's `npcs` collection is drawn over the tiles as
+an overlay — sprites at their authored anchor, wide glyphs occupying the two
+columns the game gives them — and nothing you do here paints a tile or an
+event marker. The selected NPC is shown in brackets. NPC mode is a function
+key rather than a glyph so no paintable character is taken from you (and not
+a control byte, since the terminal driver reserves the remaining ones).
 
 | Key | Action |
 | --- | --- |
