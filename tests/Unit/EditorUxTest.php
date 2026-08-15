@@ -289,12 +289,23 @@ it('scrolls the inspector so a deep selection stays visible', function () {
   // Selection inside the window: the list starts at the first field.
   expect(callEditorMethod($editor, 'getInspectorLines')[0])->toContain('Name');
 
-  // One row past the last visible one, whatever the pane's height works out
-  // to, and the window slides by exactly that one row.
+  // Rows are spans, not lines: a Description long enough to wrap past the
+  // pane's height pushes the last field off the bottom, and selecting it
+  // slides the window just far enough that its first line is the pane's
+  // last row -- the amount read from the span map, never assumed to be
+  // one line per field.
+  callEditorMethod($editor, 'getSelectedMap')->setMapField('description', str_repeat('A long tale of the fixture map. ', 40));
+  $fields = callEditorMethod($editor, 'getInspectorFields');
   $visibleRows = callEditorMethod($editor, 'resolveLayout')['contentHeight'] - 2;
-  setEditorProperty($editor, 'selectedInspectorFieldIndex', $visibleRows);
+  $last = count($fields) - 1;
+  setEditorProperty($editor, 'selectedInspectorFieldIndex', $last);
+  $layout = callEditorMethod($editor, 'inspectorPaneLayout');
 
-  expect(callEditorMethod($editor, 'getInspectorLines')[0])->toContain('Region');
+  expect(count($layout->lines))->toBeGreaterThan($visibleRows)
+    ->and($layout->spans[2][1])->toBeGreaterThan(5)
+    ->and($layout->rowOfField($last))->toBe($visibleRows - 1)
+    ->and($layout->offset)->toBe($layout->spans[$last][0] - $visibleRows + 1)
+    ->and(callEditorMethod($editor, 'getInspectorLines')[0])->not->toContain('Name: Test Map');
 });
 
 it('scrolls the assets list so the selected map stays visible', function () {

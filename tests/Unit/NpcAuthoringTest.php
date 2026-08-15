@@ -1093,3 +1093,79 @@ it('types shortcut glyphs into hosted text fields and the name prompt instead of
     callEditorMethod($editor, 'dispatchInput', '?');
     expect(getEditorProperty($editor, 'modals')->has(\Ichiloto\Editor\UI\Modal::HELP))->toBeTrue();
 });
+
+// -- Readable rows ---------------------------------------------------------
+
+it('heads each dialogue variant and shortens its rows, without touching field ids', function () {
+    [$root] = npcProject([['id' => 'a', 'name' => 'Ann', 'sprite' => 'A', 'x' => 2, 'y' => 1, 'dialogue' => [
+        ['lines' => [['text' => 'Hi.']]],
+        ['conditions' => [['type' => 'switch', 'name' => 'gate_open']], 'lines' => [['text' => 'The gate is open.']]],
+    ]]]);
+    $editor = npcEditor($root);
+    callEditorMethod($editor, 'selectNpc', 0);
+
+    $rows = array_values(array_filter(
+        array_map(
+            static fn(array $f): array => ['label' => (string) ($f['label'] ?? ''), 'field' => $f['field'] ?? null, 'editable' => $f['editable'] ?? null],
+            callEditorMethod($editor, 'getInspectorFields'),
+        ),
+        static fn(array $r): bool => str_starts_with($r['label'], 'Dialogue variant') || str_starts_with((string) $r['field'], 'variant'),
+    ));
+
+    expect($rows[0])->toBe(['label' => 'Dialogue variant 1', 'field' => null, 'editable' => false])
+        ->and(callEditorMethod($editor, 'getInspectorFields')[array_search('Dialogue variant 1', array_column(callEditorMethod($editor, 'getInspectorFields'), 'label'), true)]['value'])->toBe('')
+        ->and(array_column(array_slice($rows, 1, 5), 'label'))->toBe(['When', 'Then Set', 'Script Commands', 'Line 1 Speaker', 'Line 1 Text'])
+        ->and(array_column(array_slice($rows, 1, 5), 'field'))->toBe(['variant0Conditions', 'variant0Sets', 'variant0Script', 'variant0Line0Name', 'variant0Line0Text'])
+        // The second variant's heading carries its condition line as its
+        // value: "Dialogue variant 2 · when switch:gate_open" on a wide pane,
+        // the "when …" wrapped under the heading on a narrow one.
+        ->and($rows[6]['label'])->toBe('Dialogue variant 2')
+        ->and($rows[6]['editable'])->toBeFalse()
+        ->and(preg_replace('/\s+/', ' ', implode(' ', callEditorMethod($editor, 'getDatabaseSettingsLines'))))->toContain('Dialogue variant 2 when switch:gate_open')
+        ->and(array_column(array_slice($rows, 7, 5), 'field'))->toBe(['variant1Conditions', 'variant1Sets', 'variant1Script', 'variant1Line0Name', 'variant1Line0Text']);
+});
+
+it('wraps a long dialogue line in the hosted Inspector, keeps the edited row single, and maps rows to fields', function () {
+    $long = str_repeat('Halt, traveller. The road beyond the gate is closed until the harvest festival. ', 2);
+    [$root] = npcProject([['id' => 'a', 'name' => 'Ann', 'sprite' => 'A', 'x' => 2, 'y' => 1, 'dialogue' => [['text' => $long]]]]);
+    $editor = npcEditor($root);
+    callEditorMethod($editor, 'selectNpc', 0);
+    setEditorProperty($editor, 'focusedPane', 'inspector');
+    restNpcCursorOn($editor, 'variant0Line0Text');
+
+    $width = callEditorMethod($editor, 'recordPaneMetrics')['width'];
+    $lines = callEditorMethod($editor, 'getDatabaseSettingsLines');
+    $textLines = array_values(array_filter($lines, static fn(string $l): bool => str_contains($l, 'Halt, traveller') || str_starts_with($l, str_repeat(' ', 8)) && trim($l) !== '' && ! str_contains($l, ':')));
+    $first = array_search(true, array_map(static fn(string $l): bool => str_starts_with($l, '> Line 1 Text: '), $lines), true);
+
+    expect(strlen($long))->toBeGreaterThanOrEqual(120)
+        ->and($first)->not->toBeFalse()
+        ->and(count($textLines))->toBeGreaterThanOrEqual(3);
+
+    foreach ($lines as $line) {
+        expect(mb_strwidth($line))->toBeLessThanOrEqual($width);
+    }
+
+    // Continuation lines sit under the value column of '> Line 1 Text: '.
+    expect($lines[$first + 1])->toStartWith(str_repeat(' ', mb_strwidth('> Line 1 Text: ')))
+        ->and(trim($lines[$first + 1]))->not->toBe('');
+
+    // The layout maps a continuation row back to its field, and puts the
+    // caret on the field's first line.
+    $layout = callEditorMethod($editor, 'recordPaneLayout');
+    $selected = getEditorProperty($editor, 'databaseSelectedSettingIndex');
+    expect($layout->fieldAtRow($layout->rowOfField($selected) + 1))->toBe($selected)
+        ->and($layout->spans[$selected][1])->toBeGreaterThanOrEqual(3);
+
+    // Editing: that row is one line again, showing the caret's window.
+    callEditorMethod($editor, 'dispatchInput', "\r");
+    expect(getEditorProperty($editor, 'isDatabaseEditing'))->toBeTrue();
+    $editing = callEditorMethod($editor, 'recordPaneLayout');
+    $editedLine = callEditorMethod($editor, 'getDatabaseSettingsLines')[$editing->rowOfField($selected)];
+    expect($editing->spans[$selected][1])->toBe(1)
+        ->and($editedLine)->toStartWith('> Line 1 Text: ')
+        ->and(mb_strwidth($editedLine))->toBeLessThanOrEqual($width)
+        // The caret sits at the end of the buffer, so the window shows its tail.
+        ->and($editedLine)->toEndWith(mb_substr($long, -10));
+    callEditorMethod($editor, 'dispatchInput', "\033");
+});

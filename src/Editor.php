@@ -61,6 +61,7 @@ use Ichiloto\Editor\UI\Modal;
 use Ichiloto\Editor\UI\ModalStack;
 use Ichiloto\Editor\UI\PaletteItem;
 use Ichiloto\Editor\UI\ScrollWindow;
+use Ichiloto\Editor\UI\SettingsPaneLayout;
 use Ichiloto\Editor\UI\TextFieldEditor;
 use Ichiloto\Editor\UI\TextFieldKeyResult;
 use Ichiloto\Editor\Validation\MapValidator;
@@ -1919,14 +1920,10 @@ final class Editor
             }
 
             if ($title === 'Interaction') {
-                // Everything left is dialogue: variants, their lines,
-                // and their frames.
-                foreach ($byId as $id => $rest) {
-                    if (str_starts_with($id, 'variant')) {
-                        $grouped = [...$grouped, ...$rest];
-                        unset($byId[$id]);
-                    }
-                }
+                // Everything left is dialogue: variants, their lines, and
+                // their frames, each variant under its own heading.
+                [$variantRows, $byId] = $this->groupNpcVariantRows($byId);
+                $grouped = [...$grouped, ...$variantRows];
             }
         }
 
@@ -1935,6 +1932,67 @@ final class Editor
         }
 
         return $grouped;
+    }
+
+    /**
+     * Turns the record pane's variant rows into headed groups: one
+     * `Dialogue variant N` heading per variant (with its condition line
+     * when it has one), then that variant's rows under short labels --
+     * `When`, `Then Set`, `Script Commands`, `Line 1 Speaker`, `Line 1
+     * Text` -- so the label no longer eats the pane before the value
+     * starts. Field ids are untouched; this is the grouped view's
+     * presentation of the record layer's own rows.
+     *
+     * @param array<string, array<int, array<string, mixed>>> $byId The remaining rows, keyed by field id.
+     * @return array{0: array<int, array<string, mixed>>, 1: array<string, array<int, array<string, mixed>>>} The headed rows, and what was left.
+     */
+    private function groupNpcVariantRows(array $byId): array
+    {
+        $singular = ucfirst(\Ichiloto\Editor\Database\RecordSchemaCatalog::mapNpcs()->subList?->singular ?? 'dialogue variant');
+        $variants = [];
+
+        foreach ($byId as $id => $rows) {
+            if (preg_match('/^variant(\d+)/', $id, $matches) !== 1) {
+                continue;
+            }
+
+            $variants[intval($matches[1])] = [...($variants[intval($matches[1])] ?? []), ...$rows];
+            unset($byId[$id]);
+        }
+
+        ksort($variants);
+        $headed = [];
+
+        foreach ($variants as $number => $rows) {
+            $prefix = sprintf('%s %d ', $singular, $number + 1);
+            $when = '';
+
+            foreach ($rows as $row) {
+                if (($row['field'] ?? null) === sprintf('variant%dConditions', $number)) {
+                    $when = trim((string) ($row['value'] ?? ''));
+                }
+            }
+
+            // The condition line rides as the heading's value, so it reads
+            // "Dialogue variant 2 · when …" and wraps rather than clips.
+            $headed[] = [
+                'label' => sprintf('%s %d', $singular, $number + 1),
+                'value' => $when === '' ? '' : 'when ' . $when,
+                'editable' => false,
+            ];
+
+            foreach ($rows as $row) {
+                $label = (string) ($row['label'] ?? '');
+
+                if (str_starts_with($label, $prefix)) {
+                    $row['label'] = substr($label, strlen($prefix));
+                }
+
+                $headed[] = $row;
+            }
+        }
+
+        return [$headed, $byId];
     }
 
     /**
@@ -9913,9 +9971,9 @@ final class Editor
         $lines = [sprintf('%s · %d', $this->worldWriteEditor->label(), count($rows)), ''];
 
         if ($rows === []) {
-            $lines[] = '  None. Nothing changes when this completes.';
+            $lines = [...$lines, ...SettingsPaneLayout::wrapProse('  None. Nothing changes when this completes.', $this->recordPaneMetrics()['width'])];
             $lines[] = '';
-            $lines[] = '  a to add a write.';
+            $lines = [...$lines, ...SettingsPaneLayout::wrapProse('  a to add a write.', $this->recordPaneMetrics()['width'])];
 
             return $lines;
         }
@@ -9926,7 +9984,8 @@ final class Editor
             $lines[] = sprintf('%s%s', $index === $selectedIndex ? '> ' : '  ', $row);
         }
 
-        $visibleRows = max(1, $this->resolveDatabaseLayout($this->resolveLayout())['topHeight'] - 4);
+        // Two header lines, then the rows in whatever height the pane has.
+        $visibleRows = max(1, $this->recordPaneMetrics()['rows'] - 2);
 
         return [...array_slice($lines, 0, 2), ...ScrollWindow::slice(array_slice($lines, 2), $selectedIndex, $visibleRows)];
     }
@@ -10071,9 +10130,9 @@ final class Editor
         $lines = [sprintf('%s · %d', $this->affinityEditor->label(), count($rows)), ''];
 
         if ($rows === []) {
-            $lines[] = '  None. This piece is neutral to every element.';
+            $lines = [...$lines, ...SettingsPaneLayout::wrapProse('  None. This piece is neutral to every element.', $this->recordPaneMetrics()['width'])];
             $lines[] = '';
-            $lines[] = '  a to add a ward.';
+            $lines = [...$lines, ...SettingsPaneLayout::wrapProse('  a to add a ward.', $this->recordPaneMetrics()['width'])];
 
             return $lines;
         }
@@ -10084,7 +10143,8 @@ final class Editor
             $lines[] = sprintf('%s%s', $index === $selectedIndex ? '> ' : '  ', $row);
         }
 
-        $visibleRows = max(1, $this->resolveDatabaseLayout($this->resolveLayout())['topHeight'] - 4);
+        // Two header lines, then the rows in whatever height the pane has.
+        $visibleRows = max(1, $this->recordPaneMetrics()['rows'] - 2);
 
         return [...array_slice($lines, 0, 2), ...ScrollWindow::slice(array_slice($lines, 2), $selectedIndex, $visibleRows)];
     }
@@ -10294,9 +10354,9 @@ final class Editor
         $lines = [sprintf('%s · %d', $this->conditionEditor->label(), count($rows)), ''];
 
         if ($rows === []) {
-            $lines[] = '  None. Every condition holds, so this always runs.';
+            $lines = [...$lines, ...SettingsPaneLayout::wrapProse('  None. Every condition holds, so this always runs.', $this->recordPaneMetrics()['width'])];
             $lines[] = '';
-            $lines[] = '  a to add one.';
+            $lines = [...$lines, ...SettingsPaneLayout::wrapProse('  a to add one.', $this->recordPaneMetrics()['width'])];
 
             return $lines;
         }
@@ -10307,7 +10367,8 @@ final class Editor
             $lines[] = sprintf('%s%s', $index === $selectedIndex ? '> ' : '  ', $row);
         }
 
-        $visibleRows = max(1, $this->resolveDatabaseLayout($this->resolveLayout())['topHeight'] - 4);
+        // Two header lines, then the rows in whatever height the pane has.
+        $visibleRows = max(1, $this->recordPaneMetrics()['rows'] - 2);
 
         return [...array_slice($lines, 0, 2), ...ScrollWindow::slice(array_slice($lines, 2), $selectedIndex, $visibleRows)];
     }
@@ -13161,12 +13222,54 @@ final class Editor
             $settingsContentWidth - 1,
             mb_strwidth($leftText . mb_substr($visibleValue, 0, $visibleCursorIndex))
         );
+        $row = $this->recordPaneLayout($fields)->rowOfField($this->databaseSelectedSettingIndex);
+
+        if ($row === null) {
+            Console::cursor()->hide();
+            return;
+        }
+
         $settingsLeft = $layout['innerX'] + $layout['categoryWidth'] + $layout['listWidth'] + ($layout['gutter'] * 2);
         $settingsTop = $layout['innerY'];
         Console::cursor()->show();
         Console::cursor()->moveTo(
             $settingsLeft + 1 + self::WINDOW_HORIZONTAL_PADDING + $cursorOffset,
-            $settingsTop + 1 + min($this->databaseSelectedSettingIndex, max(0, $layout['topHeight'] - 3)),
+            $settingsTop + 1 + $row,
+        );
+    }
+
+    /**
+     * Renders the live cursor for editing a hosted record field in the
+     * Inspector: the same caret as the Database settings pane, at the
+     * Inspector's own position, on the row the pane layout gives the field.
+     *
+     * @param array{width: int, height: int, leftWidth: int, rightWidth: int, gutter: int, centerWidth: int, contentHeight: int} $layout The active layout.
+     * @return void
+     */
+    private function renderHostedEditCursor(array $layout): void
+    {
+        $fields = $this->getDatabaseSettingsFields();
+        $field = $fields[$this->databaseSelectedSettingIndex] ?? null;
+        $row = $this->recordPaneLayout($fields)->rowOfField($this->databaseSelectedSettingIndex);
+
+        if (! is_array($field) || $row === null || $this->focusedPane !== self::FOCUS_INSPECTOR) {
+            Console::cursor()->hide();
+            return;
+        }
+
+        $leftText = sprintf('> %s: ', (string) ($field['label'] ?? 'Field'));
+        $contentWidth = $this->getWindowContentWidth($layout['rightWidth']);
+        $availableValueWidth = max(1, $contentWidth - mb_strwidth($leftText));
+        $visibleStart = max(0, $this->databaseEditCursorIndex - $availableValueWidth + 1);
+        $visibleValue = mb_substr($this->databaseEditBuffer, $visibleStart, $availableValueWidth);
+        $visibleCursorIndex = max(0, min($this->databaseEditCursorIndex - $visibleStart, mb_strlen($visibleValue)));
+        $cursorOffset = min($contentWidth - 1, mb_strwidth($leftText . mb_substr($visibleValue, 0, $visibleCursorIndex)));
+        $inspectorLeft = 2 + $layout['leftWidth'] + $layout['centerWidth'] + ($layout['gutter'] * 2);
+        $inspectorTop = 5;
+        Console::cursor()->show();
+        Console::cursor()->moveTo(
+            $inspectorLeft + 1 + self::WINDOW_HORIZONTAL_PADDING + $cursorOffset,
+            $inspectorTop + 1 + $row,
         );
     }
 
@@ -13742,41 +13845,76 @@ final class Editor
             return $this->buildWorldWriteEditorRows();
         }
 
-        $lines = [];
-        $hosting = $this->isNpcInspectorHosting();
-        // The pane's own width and height, or the Inspector's when hosted.
-        $paneWidth = $hosting
-            ? $this->resolveLayout()['rightWidth']
-            : $this->resolveDatabaseLayout($this->resolveLayout())['settingsWidth'];
-        $paneRows = $hosting
-            ? max(1, $this->resolveLayout()['contentHeight'] - 2)
-            : max(1, $this->resolveDatabaseLayout($this->resolveLayout())['topHeight'] - 2);
-        $cursorShown = $hosting
-            ? $this->focusedPane === self::FOCUS_INSPECTOR
-            : $this->databaseFocus === self::DATABASE_FOCUS_SETTINGS;
+        return $this->recordPaneLayout($fields)->visibleLines();
+    }
+
+    /**
+     * Returns the record pane's width, height and cursor visibility: the
+     * Database settings pane's own, or the Inspector's while it hosts the
+     * pane. Every row builder of the pane measures against these.
+     *
+     * @return array{width: int, rows: int, cursorShown: bool}
+     */
+    private function recordPaneMetrics(): array
+    {
+        $layout = $this->resolveLayout();
+
+        if ($this->isNpcInspectorHosting()) {
+            return [
+                'width' => $this->getWindowContentWidth($layout['rightWidth']),
+                'rows' => max(1, $layout['contentHeight'] - 2),
+                'cursorShown' => $this->focusedPane === self::FOCUS_INSPECTOR,
+            ];
+        }
+
+        $database = $this->resolveDatabaseLayout($layout);
+
+        return [
+            'width' => $this->getWindowContentWidth($database['settingsWidth']),
+            'rows' => max(1, $database['topHeight'] - 2),
+            'cursorShown' => $this->databaseFocus === self::DATABASE_FOCUS_SETTINGS,
+        ];
+    }
+
+    /**
+     * Lays out the record pane: each field as its wrapped lines, the field
+     * being edited as one horizontally scrolled line, scrolled so the
+     * selected field stays in view. The visible lines, the edit caret and
+     * anything else that turns a field into a row all read this one layout.
+     *
+     * @param array<int, array<string, mixed>>|null $fields The fields, or null to read them.
+     * @return SettingsPaneLayout The layout.
+     */
+    private function recordPaneLayout(?array $fields = null): SettingsPaneLayout
+    {
+        $fields ??= $this->getDatabaseSettingsFields();
+        $metrics = $this->recordPaneMetrics();
+        $rows = [];
 
         foreach ($fields as $index => $field) {
-            $prefix = $cursorShown && $index === $this->databaseSelectedSettingIndex ? '> ' : '  ';
+            $prefix = $metrics['cursorShown'] && $index === $this->databaseSelectedSettingIndex ? '> ' : '  ';
+            $label = (string) ($field['label'] ?? 'Field');
             $value = (string) ($field['value'] ?? '');
+            $editing = $this->isDatabaseEditing && $index === $this->databaseSelectedSettingIndex;
 
-            if ($this->isDatabaseEditing && $index === $this->databaseSelectedSettingIndex) {
-                $availableValueWidth = max(1, $this->getWindowContentWidth($paneWidth) - mb_strwidth(sprintf("%s%s: ", $prefix, $field["label"] ?? "Field")));
+            if ($editing) {
+                // The edited row keeps its single-line window around the
+                // caret, exactly as before, so the caret arithmetic holds.
+                $availableValueWidth = max(1, $metrics['width'] - mb_strwidth(sprintf('%s%s: ', $prefix, $label)));
                 $visibleStart = max(0, $this->databaseEditCursorIndex - $availableValueWidth + 1);
                 $value = mb_substr($this->databaseEditBuffer, $visibleStart, $availableValueWidth);
             }
 
-            $lines[] = $this->formatFieldLine(
-                $prefix,
-                (string) ($field['label'] ?? 'Field'),
-                $value,
-                $this->isInspectorFieldInteractive($field),
-            );
+            $rows[] = [
+                'prefix' => $prefix,
+                'label' => $label,
+                'value' => $value,
+                'editable' => $editing || $this->isInspectorFieldInteractive($field),
+                'singleLine' => $editing,
+            ];
         }
 
-        // Scroll the pane so the selected field stays visible; the edit
-        // cursor row (min(selected, topHeight - 3)) already assumes this
-        // window.
-        return ScrollWindow::slice($lines, $this->databaseSelectedSettingIndex, $paneRows);
+        return SettingsPaneLayout::layout($rows, $metrics['width'], $metrics['rows'], $this->databaseSelectedSettingIndex);
     }
 
     /**
@@ -13805,7 +13943,8 @@ final class Editor
             $lines[] = sprintf('%s%s', $index === $selectedIndex ? '> ' : '  ', $value);
         }
 
-        $visibleRows = max(1, $this->resolveDatabaseLayout($this->resolveLayout())['topHeight'] - 4);
+        // Two header lines, then the rows in whatever height the pane has.
+        $visibleRows = max(1, $this->recordPaneMetrics()['rows'] - 2);
 
         return [...array_slice($lines, 0, 2), ...ScrollWindow::slice(array_slice($lines, 2), $selectedIndex, $visibleRows)];
     }
@@ -14477,29 +14616,40 @@ final class Editor
             return $this->getDatabaseSettingsLines();
         }
 
-        $lines = [];
+        return $this->inspectorPaneLayout($fields)->visibleLines();
+    }
+
+    /**
+     * Lays out the Inspector's own fields (map metadata, event data): the
+     * same wrapped rows and span map as the record pane, with the
+     * Inspector's edit buffer on its single edited line.
+     *
+     * @param array<int, array<string, mixed>>|null $fields The fields, or null to read them.
+     * @return SettingsPaneLayout The layout.
+     */
+    private function inspectorPaneLayout(?array $fields = null): SettingsPaneLayout
+    {
+        $fields ??= $this->getInspectorFields();
+        $layout = $this->resolveLayout();
+        $rows = [];
 
         foreach ($fields as $index => $field) {
-            $prefix = $this->focusedPane === self::FOCUS_INSPECTOR && $index === $this->selectedInspectorFieldIndex ? '> ' : '  ';
-            $value = (string) ($field['value'] ?? '');
-
-            if ($this->isInspectorEditing && $index === $this->selectedInspectorFieldIndex) {
-                $value = $this->inspectorEditBuffer;
-            }
-
-            $lines[] = $this->formatFieldLine(
-                $prefix,
-                (string) ($field['label'] ?? 'Field'),
-                $value,
-                $this->isInspectorFieldInteractive($field),
-            );
+            $editing = $this->isInspectorEditing && $index === $this->selectedInspectorFieldIndex;
+            $rows[] = [
+                'prefix' => $this->focusedPane === self::FOCUS_INSPECTOR && $index === $this->selectedInspectorFieldIndex ? '> ' : '  ',
+                'label' => (string) ($field['label'] ?? 'Field'),
+                'value' => $editing ? $this->inspectorEditBuffer : (string) ($field['value'] ?? ''),
+                'editable' => $editing || $this->isInspectorFieldInteractive($field),
+                'singleLine' => $editing,
+            ];
         }
 
-        // Keep the selected field inside the pane (the shared dialog-scroll
-        // algorithm); the edit cursor row formula already assumes it.
-        $visibleRows = max(1, $this->resolveLayout()['contentHeight'] - 2);
-
-        return ScrollWindow::slice($lines, $this->selectedInspectorFieldIndex, $visibleRows);
+        return SettingsPaneLayout::layout(
+            $rows,
+            $this->getWindowContentWidth($layout['rightWidth']),
+            max(1, $layout['contentHeight'] - 2),
+            $this->selectedInspectorFieldIndex,
+        );
     }
 
     /**
@@ -14518,25 +14668,6 @@ final class Editor
             || ($field['worldWrites'] ?? false) === true
             || ($field['affinities'] ?? false) === true
             || isset($field['frame']);
-    }
-
-    /**
-     * Formats one settings/inspector row, styling visible-but-fixed rows
-     * distinctly from editable ones (they drop the `label: value` idiom).
-     *
-     * @param string $prefix The selection prefix.
-     * @param string $label The field label.
-     * @param string $value The display value.
-     * @param bool $isEditable Whether the row reacts to input.
-     * @return string
-     */
-    private function formatFieldLine(string $prefix, string $label, string $value, bool $isEditable): string
-    {
-        if (! $isEditable) {
-            return rtrim(sprintf('%s%s%s', $prefix, $label, $value === '' ? '' : ' · ' . $value));
-        }
-
-        return sprintf('%s%s: %s', $prefix, $label, $value);
     }
 
     /**
@@ -15023,6 +15154,11 @@ final class Editor
             return;
         }
 
+        if ($this->isDatabaseEditing && $this->isNpcInspectorHosting()) {
+            $this->renderHostedEditCursor($layout);
+            return;
+        }
+
         $this->renderCanvasCursor($layout);
     }
 
@@ -15057,9 +15193,15 @@ final class Editor
             $valueCursorOffset = $contentWidth - 1;
         }
 
+        $row = $this->inspectorPaneLayout($fields)->rowOfField($this->selectedInspectorFieldIndex);
+
+        if ($row === null) {
+            Console::cursor()->hide();
+            return;
+        }
+
         $inspectorLeft = 2 + $layout['leftWidth'] + $layout['centerWidth'] + ($layout['gutter'] * 2);
         $inspectorTop = 5;
-        $row = min($this->selectedInspectorFieldIndex, max(0, $layout['contentHeight'] - 3));
         Console::cursor()->show();
         Console::cursor()->moveTo(
             $inspectorLeft + 1 + self::WINDOW_HORIZONTAL_PADDING + $valueCursorOffset,

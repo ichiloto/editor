@@ -382,3 +382,36 @@ it('authors route steps under a move_route inside a branch arm', function () {
     callEditorMethod($editor, 'performUndo');
     expect($database->getFrameCommands($index, [0, 'then'])[0])->not->toHaveKey('steps');
 });
+
+it('wraps a long text command in the Database settings pane', function () {
+    $root = makeTemporaryProject();
+    $long = str_repeat('The dresser drawer sticks, then gives with a shriek of old wood. ', 3);
+    file_put_contents($root . '/assets/Events/long.php', "<?php\n\nreturn " . var_export([['type' => 'text', 'name' => '', 'text' => $long]], true) . ";\n");
+
+    $editor = createEditorForTesting($root);
+    setEditorProperty($editor, 'workspace', ProjectWorkspace::fromProject($root));
+    setEditorProperty($editor, 'lastTerminalSize', ['width' => 140, 'height' => 40]);
+    callEditorMethod($editor, 'openDatabaseAtCategory', 'common_events');
+    $database = callEditorMethod($editor, 'getSelectedRecordDatabase');
+    callEditorMethod($editor, 'setSelectedRecordIndex', array_search('long', $database->getEntryLabels(), true));
+    setEditorProperty($editor, 'databaseFocus', 'database_settings');
+
+    foreach (callEditorMethod($editor, 'getDatabaseSettingsFields') as $index => $field) {
+        if (($field['field'] ?? null) === 'command0Text') {
+            setEditorProperty($editor, 'databaseSelectedSettingIndex', $index);
+        }
+    }
+
+    $width = callEditorMethod($editor, 'recordPaneMetrics')['width'];
+    $layout = callEditorMethod($editor, 'recordPaneLayout');
+    $selected = getEditorProperty($editor, 'databaseSelectedSettingIndex');
+    $lines = callEditorMethod($editor, 'getDatabaseSettingsLines');
+
+    expect($layout->spans[$selected][1])->toBeGreaterThanOrEqual(3)
+        ->and($layout->rowOfField($selected))->not->toBeNull()
+        ->and($lines[$layout->rowOfField($selected)])->toStartWith('> Command 1 Text: The dresser');
+
+    foreach ($lines as $line) {
+        expect(mb_strwidth($line))->toBeLessThanOrEqual($width);
+    }
+});

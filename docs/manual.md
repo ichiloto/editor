@@ -55,12 +55,12 @@ is what the code draws rather than a sketch of it:
  │ Maps                         │ │ Preview: test-map          │ │   Name: Test Map               │
  │ > test-map                   │ │ Test Map |  | 12 x 5 | vie │ │   Region:                      │
  │                              │ │ ############               │ │   Description: A tiny fixture  │
- │                              │ │ #  ~~~     #               │ │   Size                         │
+ │                              │ │ #  ~~~     #               │ │                map.            │
+ │                              │ │ #          #               │ │   Size                         │
  │                              │ │ #          #               │ │     X: 12                      │
- │                              │ │ #          #               │ │     Y: 5                       │
- │                              │ │ ############               │ │   Events · 1                   │
+ │                              │ │ ############               │ │     Y: 5                       │
+ │                              │ │                            │ │   Events · 1                   │
  │                              │ │                            │ │   Triggers · 0                 │
- │                              │ │                            │ │                                │
  │                              │ │                            │ │                                │
  │                              │ │                            │ │                                │
  │                              │ │                            │ │                                │
@@ -234,12 +234,15 @@ category uses — pickers, condition lines, world-write rows, command frames,
 | Appearance | `Sprite`, `Facing North/South/East/West` |
 | Movement | `Movement` (`fixed` / `wander`), and while wandering `Wander X/Y/Width/Height` |
 | Visibility | `Visible When` — a condition line |
-| Interaction | `Script` (a command frame), then the dialogue variants and their lines |
+| Interaction | `Script` (a command frame), then one `Dialogue variant N` heading per variant with its rows `When`, `Then Set`, `Script Commands`, `Line 1 Speaker`, `Line 1 Text`, … |
 | Completion Writes | `After Talking` — world-write rows |
 
 Rows read as the game will read them: an unset `Movement` shows `fixed`, an
 unset `Sprite` shows `@`. Fields the game does not read are listed in a
-`Preserved fields` row and written back untouched.
+`Preserved fields` row and written back untouched. Each dialogue variant is a
+heading (`Dialogue variant 2 · when switch:gate_open` once it has a
+condition) with short row labels under it, and long lines wrap, so what a
+character says is read in the pane rather than in the edit buffer.
 
 - **Movement.** `wander` roams one tile at a time; the wander bounds only
   appear while wandering, and loaded bounds are kept (not shown) for a fixed
@@ -329,6 +332,11 @@ an enum cycles through its options.
 Rows shown as `Label · value` are visible but fixed — they display information
 the editor does not let you edit here. Rows shown as `Label: value` are
 editable.
+
+A value longer than the pane wraps onto continuation lines indented under the
+value column, so a long description or dialogue line reads in full; the row
+being edited stays on one line and scrolls sideways around the caret. The pane
+scrolls by rows, keeping the selected row's first line in view.
 
 The Destination row on an event is a reference: `Ctrl+G` follows it.
 

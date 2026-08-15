@@ -99,20 +99,25 @@ nor solid.
 
 ## Give It Something To Say
 
-Under `Interaction` the dialogue is shown as variants, each with lines:
+Under `Interaction` the dialogue is shown as variants: a `Dialogue variant 1`
+heading, then its rows — `When`, `Then Set`, `Script Commands`, and each line
+as `Line 1 Speaker` and `Line 1 Text`. Long lines wrap in the pane, so you
+read them where they are.
 
-- Move to a `Text` row and press `Enter` to change what is said; `Shift+O`
-  on a line adds a line after it; `Shift+X` removes one.
+- Move to a `Line 1 Text` row and press `Enter` to change what is said;
+  `Shift+O` on a line adds a line after it; `Shift+X` removes one.
 - Each line's `Speaker` is picked, not typed: `(the NPC's name)` lets the game
   title the box with the NPC's current name (so a rename carries through),
   `(No speaker)` shows an untitled box for narration, or choose an actor.
 
 One variant with lines is saved as plain dialogue pages. To make what is said
-depend on the world, `Shift+O` on a variant's `When` row adds a second variant;
-give it a condition line and its own lines. The game speaks the first variant
-whose conditions hold, top to bottom, so put the specific cases above the
-general one. A variant may also carry a `Then Set` (writes applied when that
-variant is spoken) and a `Script` (commands run after its lines).
+depend on the world, `Shift+O` on a variant's `When` row adds
+`Dialogue variant 2`; give its `When` a condition line and its lines their
+text — the heading then reads `Dialogue variant 2 · when …`. The game speaks
+the first variant whose conditions hold, top to bottom, so put the specific
+cases above the general one. A variant may also carry a `Then Set` (writes
+applied when that variant is spoken) and `Script Commands` (a frame of
+commands run after its lines).
 
 ## Run A Script Instead
 
