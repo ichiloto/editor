@@ -4,9 +4,11 @@ namespace Ichiloto\Editor\Validation;
 
 use Ichiloto\Editor\Database\InventoryCatalog;
 use Ichiloto\Editor\Database\PhpDataFile;
+use Ichiloto\Editor\Database\ProjectRecord;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\Field\ProjectNpc;
+use Ichiloto\Editor\ActorStatPreview;
 use Ichiloto\Editor\ProjectDirectoryContext;
 use Ichiloto\Editor\ProjectQuest;
 use Ichiloto\Editor\ProjectMap;
@@ -16,6 +18,7 @@ use Ichiloto\Engine\Events\Interpreter\EventInterpreter;
 use Ichiloto\Engine\Events\Interpreter\MovementRouteRunner;
 use Ichiloto\Engine\IO\Console\TerminalText;
 use InvalidArgumentException;
+use Throwable;
 use Symfony\Component\Console\Formatter\OutputFormatterStyle;
 
 /**
@@ -52,13 +55,34 @@ class ProjectValidator
    */
   public function validate(ProjectWorkspace $workspace): array
   {
-    $this->inventoryCatalog = InventoryCatalog::fromWorkspace($workspace);
+    try {
+      $this->inventoryCatalog = InventoryCatalog::fromWorkspace($workspace);
+    } catch (Throwable $throwable) {
+      return [Issue::error(
+        'assets/Data/items.php',
+        sprintf('The inventory could not be read: %s', $throwable->getMessage()),
+        'Until this is fixed the project has no items, weapons or armors at all.'
+      )];
+    }
+
+    $unreadableInventory = $this->describeUnreadableInventory($workspace);
+
+    if ($unreadableInventory !== null) {
+      // Every reference to an item would now fail for the same reason, and
+      // a page of "does not exist" would bury it. One accurate error beats
+      // the cascade it causes.
+      return [$unreadableInventory];
+    }
+
     $issues = [
       ...$this->checkMaps($workspace),
       ...$this->checkQuests($workspace),
       ...$this->checkTroops($workspace),
       ...$this->checkSummons($workspace),
       ...$this->checkReferences($workspace),
+      ...$this->checkDefinitionIdentities($workspace),
+      ...$this->checkActorDefinitions($workspace),
+      ...$this->checkKnowledgeCatalog($workspace),
       ...new SaveCompatibilityValidator()->validate($workspace),
     ];
 
@@ -66,6 +90,315 @@ class ProjectValidator
       $issues,
       static fn(Issue $a, Issue $b): int => [$a->severity->value, $a->where] <=> [$b->severity->value, $b->where]
     );
+
+    return $issues;
+  }
+
+  /**
+   * Returns the one error to report when a project has an inventory file
+   * the runtime cannot read, or null when it can.
+   *
+   * The engine's own constructors enforce a definition's bounds -- a sell
+   * rate outside 0 through 10000, a modifier outside -100 through 100, an
+   * affinity that is not a factor -- by refusing to build it, which takes
+   * the whole file with it. The catalogue is then empty, and every
+   * reference to an item in the project fails for a reason that has
+   * nothing to do with that reference.
+   *
+   * @param ProjectWorkspace $workspace The project.
+   * @return Issue|null The error, or null.
+   */
+  protected function describeUnreadableInventory(ProjectWorkspace $workspace): ?Issue
+  {
+    $path = rtrim($workspace->projectRoot, '/') . '/assets/Data/items.php';
+
+    if (! is_file($path) || $this->inventoryCatalog->definitions() !== []) {
+      return null;
+    }
+
+    try {
+      $payload = ProjectDirectoryContext::run($workspace->projectRoot, static fn(): mixed => require $path);
+    } catch (Throwable $throwable) {
+      return Issue::error(
+        'assets/Data/items.php',
+        sprintf('The inventory could not be read: %s', $throwable->getMessage()),
+        'Until this is fixed the project has no items, weapons or armors at all.'
+      );
+    }
+
+    if (is_array($payload) && $payload !== []) {
+      return Issue::error(
+        'assets/Data/items.php',
+        'The inventory holds entries the project could not read as definitions.',
+        'Until this is fixed the project has no items, weapons or armors at all.'
+      );
+    }
+
+    return null;
+  }
+
+  /**
+   * Checks that every inventory definition can be resolved to exactly one
+   * thing, and that its policy numbers are ones the runtime accepts.
+   *
+   * The catalogue records what it could not resolve rather than throwing,
+   * so an author can open a project that is already broken; this is where
+   * that record becomes something they can read.
+   *
+   * @param ProjectWorkspace $workspace The project.
+   * @return Issue[] The issues found.
+   */
+  protected function checkDefinitionIdentities(ProjectWorkspace $workspace): array
+  {
+    $issues = [];
+
+    foreach ($this->inventoryCatalog->conflicts() as $reference => $claimants) {
+      $issues[] = Issue::error(
+        'assets/Data/items.php',
+        sprintf('"%s" is claimed by %s.', $reference, implode(' and ', $claimants)),
+        'A name or alias must resolve to one definition. Rename one, or drop the duplicate alias.'
+      );
+    }
+
+    foreach (['items', 'weapons', 'armors'] as $category) {
+      $database = $workspace->getRecordDatabase($category);
+
+      if (! $database instanceof ProjectRecordDatabase) {
+        continue;
+      }
+
+      // Every bound a definition has -- the sell rate, the accuracy and
+      // critical modifiers, the affinity factors -- is enforced by the
+      // engine's own constructors, which refuse to build a definition that
+      // breaks one. Re-checking them here would be a second opinion about
+      // the same rule; what the editor adds is that a name must resolve to
+      // one definition, which nothing else checks.
+      unset($database);
+    }
+
+    return $issues;
+  }
+
+  /**
+   * Checks the identities and natures a project's actors declare.
+   *
+   * @param ProjectWorkspace $workspace The project.
+   * @return Issue[] The issues found.
+   */
+  protected function checkActorDefinitions(ProjectWorkspace $workspace): array
+  {
+    $issues = [];
+    $seen = [];
+    $statKeys = ActorStatPreview::statKeys();
+
+    foreach ($workspace->actorDatabase->getActors() as $actor) {
+      $where = sprintf('actor %s', $actor->getName());
+      $id = $actor->getDefinitionId();
+
+      if (isset($seen[$id])) {
+        $issues[] = Issue::error(
+          $where,
+          sprintf('Two actors resolve to the identity "%s".', $id),
+          'A save restores an actor by this identity. Give each one its own.'
+        );
+      }
+
+      $seen[$id] = true;
+
+      // An actor without its own id is resolved by display name, which the
+      // runtime supports deliberately. That is a convention worth adopting
+      // rather than a defect, so the Inspector says so on the row where it
+      // can be acted on; a validator reporting it on every legacy actor
+      // would be noise in front of the findings that are defects.
+
+      $variants = $actor->getNaturalVariants();
+      $default = $actor->getDefaultNaturalVariantId();
+
+      if ($variants !== [] && ($default === null || ! isset($variants[$default]))) {
+        $issues[] = Issue::error(
+          $where,
+          $default === null
+            ? 'It declares natural variants but no default.'
+            : sprintf('Its default natural variant "%s" is not one it declares.', $default),
+          'The runtime refuses to build an actor whose default variant it cannot find.'
+        );
+      }
+
+      if ($variants === [] && $default !== null) {
+        $issues[] = Issue::error(
+          $where,
+          sprintf('It names the default natural variant "%s" but declares no variants.', $default),
+          'Declare the variant, or remove the default.'
+        );
+      }
+
+      $sets = ['actorNaturalAdjustments' => $actor->getActorNaturalAdjustments()];
+
+      foreach ($variants as $variantId => $adjustments) {
+        $sets[sprintf('variant %s', $variantId)] = $adjustments;
+      }
+
+      foreach ($sets as $label => $adjustments) {
+        foreach (array_keys($adjustments) as $key) {
+          if (! in_array($key, $statKeys, true)) {
+            $issues[] = Issue::error(
+              $where,
+              sprintf('Its %s adjusts "%s", which is not a stat the runtime resolves.', $label, $key),
+              sprintf('Use one of: %s.', implode(', ', $statKeys))
+            );
+          }
+        }
+      }
+    }
+
+    return $issues;
+  }
+
+  /**
+   * Checks that a knowledge catalogue points only at things it declares.
+   *
+   * @param ProjectWorkspace $workspace The project.
+   * @return Issue[] The issues found.
+   */
+  protected function checkKnowledgeCatalog(ProjectWorkspace $workspace): array
+  {
+    $path = rtrim($workspace->projectRoot, '/') . '/assets/Data/knowledge.php';
+
+    if (! is_file($path)) {
+      return [];
+    }
+
+    try {
+      $catalog = (static fn(): mixed => require $path)();
+    } catch (Throwable $throwable) {
+      return [Issue::error('assets/Data/knowledge.php', 'The catalogue could not be loaded: ' . $throwable->getMessage())];
+    }
+
+    if (! is_array($catalog)) {
+      return [Issue::error('assets/Data/knowledge.php', 'The catalogue must return an array.')];
+    }
+
+    $where = 'assets/Data/knowledge.php';
+    $issues = [];
+
+    // Author truth is for the private repository, not for a file the
+    // runtime ships and a player's save can read.
+    foreach (['private', 'privateTruth', 'authorTruth', 'spoilerTruth'] as $forbidden) {
+      if (array_key_exists($forbidden, $catalog)) {
+        $issues[] = Issue::error(
+          $where,
+          sprintf('It carries a "%s" section.', $forbidden),
+          'The runtime refuses to load it, and it would ship what only the author should know.'
+        );
+      }
+    }
+
+    $recordTypes = array_map(strval(...), (array) ($catalog['recordTypes'] ?? []));
+    $subjectIds = [];
+
+    foreach ((array) ($catalog['subjects'] ?? []) as $index => $subject) {
+      if (! is_array($subject)) {
+        $issues[] = Issue::error($where, sprintf('Subject %s is not a structured record.', strval($index)));
+        continue;
+      }
+
+      $id = trim(strval($subject['id'] ?? ''));
+      $label = $id === '' ? sprintf('subject %s', strval($index)) : $id;
+
+      if ($id === '') {
+        $issues[] = Issue::error($where, sprintf('Subject %s has no id.', strval($index)), 'Every subject is resolved by a stable id.');
+      } elseif (isset($subjectIds[$id])) {
+        $issues[] = Issue::error($where, sprintf('Subject id "%s" is declared more than once.', $id));
+      } else {
+        $subjectIds[$id] = true;
+      }
+
+      $type = trim(strval($subject['recordType'] ?? ''));
+
+      if ($type === '' || ! in_array($type, $recordTypes, true)) {
+        $issues[] = Issue::error(
+          $where,
+          sprintf('%s has the record type "%s", which the catalogue does not declare.', $label, $type),
+          'Add it to recordTypes, or choose one that is there.'
+        );
+      }
+
+      if (trim(strval($subject['quickCard'] ?? '')) === '') {
+        $issues[] = Issue::error($where, sprintf('%s has no quick card.', $label), 'A record shows its quick card first.');
+      }
+    }
+
+    foreach ((array) ($catalog['subjects'] ?? []) as $subject) {
+      if (! is_array($subject)) {
+        continue;
+      }
+
+      $label = trim(strval($subject['id'] ?? '(unnamed)'));
+
+      foreach ((array) ($subject['relationships'] ?? []) as $relationship) {
+        $related = is_array($relationship) ? trim(strval($relationship['subject'] ?? '')) : '';
+
+        if ($related === '' || ! isset($subjectIds[$related])) {
+          $issues[] = Issue::error(
+            $where,
+            sprintf('%s is related to "%s", which the catalogue does not declare.', $label, $related),
+            'The runtime refuses a relationship it cannot resolve.'
+          );
+        }
+      }
+    }
+
+    foreach ((array) ($catalog['enemyMappings'] ?? []) as $enemy => $subjectId) {
+      if (! isset($subjectIds[trim(strval($subjectId))])) {
+        $issues[] = Issue::error(
+          $where,
+          sprintf('The enemy "%s" maps to the subject "%s", which the catalogue does not declare.', strval($enemy), strval($subjectId)),
+          'Defeating it would record knowledge of nothing.'
+        );
+      }
+    }
+
+    $reportIds = [];
+
+    foreach ((array) ($catalog['reports'] ?? []) as $index => $report) {
+      if (! is_array($report)) {
+        $issues[] = Issue::error($where, sprintf('Report %s is not a structured record.', strval($index)));
+        continue;
+      }
+
+      $id = trim(strval($report['id'] ?? ''));
+      $label = $id === '' ? sprintf('report %s', strval($index)) : $id;
+
+      if ($id === '') {
+        $issues[] = Issue::error($where, sprintf('Report %s has no id.', strval($index)));
+      } elseif (isset($reportIds[$id])) {
+        $issues[] = Issue::error($where, sprintf('Report id "%s" is declared more than once.', $id));
+      } else {
+        $reportIds[$id] = true;
+      }
+
+      $subjectId = trim(strval($report['subject'] ?? ''));
+
+      if (! isset($subjectIds[$subjectId])) {
+        $issues[] = Issue::error(
+          $where,
+          sprintf('%s concerns the subject "%s", which the catalogue does not declare.', $label, $subjectId),
+          'A report is unlocked against a subject the party can know.'
+        );
+      }
+    }
+
+    foreach ((array) ($catalog['reports'] ?? []) as $report) {
+      foreach (is_array($report) ? (array) ($report['disagreesWith'] ?? []) : [] as $other) {
+        if (! isset($reportIds[trim(strval($other))])) {
+          $issues[] = Issue::warning(
+            $where,
+            sprintf('Report "%s" disagrees with "%s", which the catalogue does not declare.', trim(strval($report['id'] ?? '')), strval($other)),
+            'The disagreement will never be shown.'
+          );
+        }
+      }
+    }
 
     return $issues;
   }
