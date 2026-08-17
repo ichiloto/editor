@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Validation;
 
+use Ichiloto\Editor\Database\InventoryCatalog;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
@@ -16,6 +17,11 @@ use Throwable;
 final class SaveCompatibilityValidator
 {
     private const string WHERE = 'assets/Data/save-compatibility.php';
+
+    /**
+     * @var InventoryCatalog|null The project's inventory identity, read once.
+     */
+    private ?InventoryCatalog $inventoryCatalog = null;
 
     /** @return Issue[] */
     public function validate(ProjectWorkspace $workspace): array
@@ -312,8 +318,10 @@ final class SaveCompatibilityValidator
                 static fn(object $actor): string => $actor->getName(),
                 $workspace->actorDatabase->getActors()
             ),
-            ContentReferenceCategory::ITEM => $this->recordLabels($workspace, ['items']),
-            ContentReferenceCategory::EQUIPMENT => $this->recordLabels($workspace, ['weapons', 'armors']),
+            // An alias target is a stable definition id, never a display
+            // label, so the catalogue of ids is what it has to be in.
+            ContentReferenceCategory::ITEM => $this->inventoryCatalog($workspace)->idsIn('items'),
+            ContentReferenceCategory::EQUIPMENT => $this->inventoryCatalog($workspace)->idsIn('weapons', 'armors'),
             ContentReferenceCategory::ABILITY, ContentReferenceCategory::SPELL => array_map(
                 static fn(object $skill): string => $skill->getName(),
                 $workspace->skillDatabase->getSkills()
@@ -326,6 +334,17 @@ final class SaveCompatibilityValidator
             ContentReferenceCategory::SUMMON => $this->summonIds($workspace),
             ContentReferenceCategory::STORY_EVENT => null,
         };
+    }
+
+    /**
+     * Returns the project's inventory catalogue, read once per validation.
+     *
+     * @param ProjectWorkspace $workspace The project.
+     * @return InventoryCatalog The catalogue.
+     */
+    private function inventoryCatalog(ProjectWorkspace $workspace): InventoryCatalog
+    {
+        return $this->inventoryCatalog ??= InventoryCatalog::fromWorkspace($workspace);
     }
 
     /** @param string[] $categories @return string[] */

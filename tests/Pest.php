@@ -4,8 +4,26 @@ declare(strict_types=1);
 
 use Ichiloto\Editor\Editor;
 
+/**
+ * Returns the engine source tree this suite resolves engine classes from.
+ *
+ * The workspace's live engine by default. `ICHILOTO_ENGINE_SRC` pins it to
+ * another checkout instead, which is how a gate runs against one accepted
+ * engine head while that same worktree is being changed by someone else.
+ */
+function engineSourceRoot(): string
+{
+    $pinned = getenv('ICHILOTO_ENGINE_SRC');
+
+    if (is_string($pinned) && $pinned !== '' && is_dir($pinned . '/src')) {
+        return rtrim($pinned, '/');
+    }
+
+    return dirname(__DIR__, 2) . '/engine';
+}
+
 // The editor package does not vendor the engine, so map Ichiloto\Engine\ to
-// the workspace's live dev engine directly. Only the namespace is mapped —
+// the engine source tree directly. Only the namespace is mapped --
 // requiring the engine's full vendor autoloader here would shadow this
 // suite's phpunit with the engine's own copy.
 spl_autoload_register(static function (string $class): void {
@@ -15,8 +33,8 @@ spl_autoload_register(static function (string $class): void {
         return;
     }
 
-    $path = dirname(__DIR__, 2)
-        . '/engine/src/'
+    $path = engineSourceRoot()
+        . '/src/'
         . str_replace('\\', '/', substr($class, strlen($prefix)))
         . '.php';
 
@@ -30,7 +48,7 @@ spl_autoload_register(static function (string $class): void {
 // (an Enemy loads its sprite through graphics()), so the mapping is
 // incomplete without them.
 foreach (['Constants.php', 'Helpers.php'] as $engineHelperFile) {
-    $engineHelperPath = dirname(__DIR__, 2) . '/engine/src/Util/' . $engineHelperFile;
+    $engineHelperPath = engineSourceRoot() . '/src/Util/' . $engineHelperFile;
 
     if (is_file($engineHelperPath)) {
         require_once $engineHelperPath;
@@ -41,7 +59,7 @@ foreach (['Constants.php', 'Helpers.php'] as $engineHelperFile) {
 // paths through Assegai\Util\Path). Registered after this suite's autoloader,
 // so the engine's map only fields what nothing here provides -- its phpunit
 // never shadows ours.
-$enginePsr4Path = dirname(__DIR__, 2) . '/engine/vendor/composer/autoload_psr4.php';
+$enginePsr4Path = engineSourceRoot() . '/vendor/composer/autoload_psr4.php';
 
 if (is_file($enginePsr4Path)) {
     /** @var array<string, string[]> $enginePsr4 */
