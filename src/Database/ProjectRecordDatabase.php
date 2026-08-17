@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Database;
 
+use Ichiloto\Editor\IO\AtomicFile;
+
 use BackedEnum;
 use Throwable;
 
@@ -50,10 +52,60 @@ final class ProjectRecordDatabase
         private mixed $rootPayload = null,
         private array $stagedDeletions = [],
         private ?\Closure $writeBack = null,
+        private ?string $projectRoot = null,
     ) {
         if (! $isDirty) {
             $this->captureBaseline();
         }
+
+        if ($schema->storage === RecordStorage::LIST_FILE) {
+            // What the source declares, so a save can patch only what an
+            // author actually changed.
+            $this->payloadPositions = self::payloadPositionsFor($schema, $file);
+            $this->captureAuthoredValues();
+        }
+    }
+
+    /**
+     * @var array<int, array<string, mixed>> Field values as loaded, by record.
+     */
+    private array $authoredValues = [];
+    /**
+     * @var array<int, int> Where each record sits in the file's top-level list.
+     */
+    private array $payloadPositions = [];
+
+    /**
+     * Returns the position each of this category's records occupies in the
+     * file's returned list. A file holds several categories -- items, weapons
+     * and armors share one -- so the third weapon may be the file's tenth
+     * entry.
+     *
+     * @param RecordSchema $schema The category schema.
+     * @param PhpDataFile|null $file The backing file.
+     * @return array<int, int> Payload positions by record index.
+     */
+    private static function payloadPositionsFor(RecordSchema $schema, ?PhpDataFile $file): array
+    {
+        if (! $file instanceof PhpDataFile || ! is_array($file->payload)) {
+            return [];
+        }
+
+        $positions = [];
+        $recordIndex = 0;
+
+        foreach (array_values($file->payload) as $position => $entry) {
+            if ($schema->recordFilter !== null && ! ($schema->recordFilter)($entry)) {
+                continue;
+            }
+
+            if (is_array($entry) || is_object($entry)) {
+                $positions[$recordIndex] = $position;
+                $recordIndex++;
+            }
+        }
+
+        return $positions;
     }
 
     /**
@@ -831,6 +883,7 @@ final class ProjectRecordDatabase
             $records,
             $file,
             readOnlyReason: self::resolveReadOnlyReason($schema, $file, $records),
+            projectRoot: $projectRoot,
         );
     }
 
@@ -1011,7 +1064,109 @@ final class ProjectRecordDatabase
             throw new RuntimeException('No backing file to save.');
         }
 
+        if ($this->savedInPlace()) {
+            return;
+        }
+
         $this->file->save($this->mergeIntoFilePayload());
+    }
+
+    /**
+     * Writes only the values that changed, straight into the authored PHP.
+     *
+     * A file whose entries are constructor calls with named arguments is the
+     * author's own PHP, not data that happens to live in a PHP file.
+     * Regenerating it reorders arguments, writes out defaults nobody wrote,
+     * and rewrites every record to change one. So each changed field is
+     * patched where it sits and everything else keeps its bytes.
+     *
+     * Returns false when this file is not that shape -- entries built some
+     * other way, or a record added or removed, which changes the list itself
+     * rather than a value in it -- and the ordinary writer takes over.
+     *
+     * @return bool True when the file was written in place.
+     */
+    private function savedInPlace(): bool
+    {
+        if ($this->authoredValues === [] || ! $this->file instanceof PhpDataFile) {
+            return false;
+        }
+
+        $document = PhpSourceDocument::parse((string) file_get_contents($this->file->path));
+        $payloadCount = is_array($this->file->payload) ? count($this->file->payload) : 0;
+
+        if ($document->entryCount() === 0 || $document->entryCount() !== $payloadCount) {
+            return false;
+        }
+
+        if (count($this->records) !== count($this->authoredValues)) {
+            // A record was added or removed: the list changed shape, which
+            // is the whole-file writer's job.
+            return false;
+        }
+
+        $patches = [];
+
+        foreach ($this->getRecords() as $index => $record) {
+            $position = $this->payloadPositions[$index] ?? null;
+
+            if ($position === null || ! isset($this->authoredValues[$index])) {
+                return false;
+            }
+
+            foreach ($this->authoredValues[$index] as $key => $authored) {
+                $current = $record->get($key);
+
+                if ($current === $authored) {
+                    continue;
+                }
+
+                if (! $document->isEditable($position)) {
+                    // The entry is not a named-argument call, so the value
+                    // cannot be placed without rewriting it.
+                    return false;
+                }
+
+                $patches[] = ['entry' => $position, 'path' => $key, 'value' => $current];
+            }
+        }
+
+        if ($patches === []) {
+            return true;
+        }
+
+        foreach ($patches as $patch) {
+            $document = $patch['value'] === null
+                ? $document->withoutArgument($patch['entry'], $patch['path'])
+                : $document->withArgument($patch['entry'], $patch['path'], PhpValueExporter::export($patch['value']));
+        }
+
+        AtomicFile::write($this->file->path, $document->source);
+        $this->file = PhpDataFile::load($this->file->path, $this->projectRoot);
+        $this->captureAuthoredValues();
+
+        return true;
+    }
+
+    /**
+     * Records what each record's fields hold as loaded, so a save can tell
+     * which ones an author actually changed.
+     *
+     * @return void
+     */
+    private function captureAuthoredValues(): void
+    {
+        $this->authoredValues = [];
+
+        foreach ($this->getRecords() as $index => $record) {
+            $values = [];
+
+            foreach ($this->schema->fields as $field) {
+                $values[$field->key] = $record->get($field->key);
+            }
+
+            $this->authoredValues[$index] = $values;
+        }
     }
 
     /**
