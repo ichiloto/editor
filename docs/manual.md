@@ -375,6 +375,36 @@ edited even after the selection has moved on.
 Current behavior: deleting an entry takes effect in memory immediately, and the
 file changes on the next save. Undo before saving costs nothing.
 
+### Actors
+
+An actor's Inspector opens with **Identity**: a `Definition Id`, which is
+what a save resolves the actor by. A project that declares none is resolved
+by display name, so the row says so, and renaming such an actor strands
+every save that named it.
+
+**Nature** is what this actor is, as distinct from the class it shares with
+others: an adjustment per canonical stat, applied on top of the class
+baseline. Adjustments keep their sign, because being slower than the
+baseline is a legitimate nature, and an adjustment of zero is removed rather
+than written. An actor may instead declare named *natural variants* — one
+set of adjustments per variant, with a `Default Variant` the game starts on.
+While variants exist the game reads the selected variant's adjustments and
+ignores the fixed ones, so the rows edit whichever set is in force;
+`Editing Variant` chooses which one the rows show, and is a view of the
+pane rather than a change to the project.
+
+**Resolved Stats** is what each stat actually comes to, computed by the
+game's own resolver rather than by the editor: the class baseline, this
+actor's nature, permanent growth the party has earned, what it is holding,
+and whatever a battle is doing to it, then capped. A row reads
+`33 · 10 natural, +12 nature, +6 growth, +5 battle · 966 to the cap`, and
+says `41 lost to the 999 cap` when the total runs past the cap — which is
+the case worth seeing, since further adjustments there do nothing. Player
+and enemy caps differ, and the preview never writes anything.
+
+Accuracy and Critical are deliberately absent from nature and from the
+preview: the game does not resolve them as layered stats.
+
 ### Editable And Read-Only Categories
 
 Whether a category can be written is *detected*, not assumed. On load the

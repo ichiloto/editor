@@ -211,6 +211,166 @@ final class ProjectActor
     }
 
     /**
+     * Returns the data with one adjustment written or removed.
+     *
+     * @param array<string, mixed> $data The actor data.
+     * @param string[] $segments The path.
+     * @param int $amount The adjustment; zero removes it.
+     * @return array<string, mixed> The rewritten data.
+     */
+    private static function withAdjustment(array $data, array $segments, int $amount): array
+    {
+        $key = array_shift($segments);
+
+        if ($key === null) {
+            return $data;
+        }
+
+        if ($segments === []) {
+            if ($amount === 0) {
+                unset($data[$key]);
+            } else {
+                $data[$key] = $amount;
+            }
+
+            return $data;
+        }
+
+        $child = is_array($data[$key] ?? null) ? $data[$key] : [];
+        $child = self::withAdjustment($child, $segments, $amount);
+
+        if ($child === []) {
+            unset($data[$key]);
+        } else {
+            $data[$key] = $child;
+        }
+
+        return $data;
+    }
+
+    /**
+     * Returns the durable definition id a save resolves this actor by.
+     *
+     * The engine falls back to the display name when a project has not
+     * declared one, which is why renaming an actor used to strand a save.
+     *
+     * @return string The id, or the name when none is declared.
+     */
+    public function getDefinitionId(): string
+    {
+        $id = trim(strval($this->getData()['id'] ?? ''));
+
+        return $id === '' ? $this->getName() : $id;
+    }
+
+    /**
+     * Returns whether the project declares a durable id of its own.
+     *
+     * @return bool True when it does.
+     */
+    public function hasDefinitionId(): bool
+    {
+        return trim(strval($this->getData()['id'] ?? '')) !== '';
+    }
+
+    /**
+     * Returns the fixed adjustments this actor's nature makes to the class
+     * baseline, by canonical stat key.
+     *
+     * @return array<string, int> The adjustments.
+     */
+    public function getActorNaturalAdjustments(): array
+    {
+        return self::readAdjustments($this->getData()['actorNaturalAdjustments'] ?? null);
+    }
+
+    /**
+     * Returns the named natural variants, each with its own adjustments.
+     *
+     * @return array<string, array<string, int>> Variant id => adjustments.
+     */
+    public function getNaturalVariants(): array
+    {
+        $variants = $this->getData()['naturalVariants'] ?? null;
+
+        if (! is_array($variants)) {
+            return [];
+        }
+
+        $read = [];
+
+        foreach ($variants as $variantId => $variant) {
+            if (! is_string($variantId) || trim($variantId) === '') {
+                continue;
+            }
+
+            $read[trim($variantId)] = self::readAdjustments(
+                is_array($variant) && isset($variant['adjustments']) ? $variant['adjustments'] : $variant,
+            );
+        }
+
+        return $read;
+    }
+
+    /**
+     * Returns the variant the engine starts this actor on.
+     *
+     * @return string|null The variant id, or null when there are no variants.
+     */
+    public function getDefaultNaturalVariantId(): ?string
+    {
+        $default = trim(strval($this->getData()['defaultNaturalVariantId'] ?? ''));
+
+        return $default === '' ? null : $default;
+    }
+
+    /**
+     * Returns the adjustments in force for a variant: the fixed ones when
+     * the actor has no variants, the named variant's own otherwise.
+     *
+     * @param string|null $variantId The variant, or null for the default.
+     * @return array<string, int> The adjustments.
+     */
+    public function getNaturalAdjustmentsFor(?string $variantId = null): array
+    {
+        $variants = $this->getNaturalVariants();
+
+        if ($variants === []) {
+            return $this->getActorNaturalAdjustments();
+        }
+
+        $variantId = $variantId === null || trim($variantId) === ''
+            ? (string) $this->getDefaultNaturalVariantId()
+            : trim($variantId);
+
+        return $variants[$variantId] ?? [];
+    }
+
+    /**
+     * Reads an adjustment map, keeping only whole numbers under canonical
+     * stat keys -- what the runtime itself accepts.
+     *
+     * @param mixed $adjustments The authored value.
+     * @return array<string, int> The adjustments.
+     */
+    private static function readAdjustments(mixed $adjustments): array
+    {
+        if (! is_array($adjustments)) {
+            return [];
+        }
+
+        $read = [];
+
+        foreach ($adjustments as $key => $value) {
+            if (is_string($key) && is_numeric($value)) {
+                $read[$key] = intval($value);
+            }
+        }
+
+        return $read;
+    }
+
+    /**
      * Returns the actor images payload.
      *
      * @return array<string, mixed>
@@ -292,6 +452,31 @@ final class ProjectActor
 
         if (in_array($field, ['name', 'description', 'level', 'currentExp'], true)) {
             $this->payload['data'][$field] = $value;
+            $this->touchState();
+            return;
+        }
+
+        if ($field === 'id' || $field === 'defaultNaturalVariantId') {
+            $identity = trim((string) $value);
+
+            if ($identity === '') {
+                unset($this->payload['data'][$field]);
+            } else {
+                $this->payload['data'][$field] = $identity;
+            }
+
+            $this->touchState();
+            return;
+        }
+
+        // actorNaturalAdjustments.<stat>, naturalVariants.<variant>.<stat>:
+        // an adjustment of zero is the absence of an adjustment, so it is
+        // removed rather than written, and a variant emptied of every
+        // adjustment stops being a variant.
+        if (str_starts_with($field, 'actorNaturalAdjustments.') || str_starts_with($field, 'naturalVariants.')) {
+            $segments = explode('.', $field);
+            $amount = intval($value);
+            $this->payload['data'] = self::withAdjustment($this->payload['data'], $segments, $amount);
             $this->touchState();
             return;
         }

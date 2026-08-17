@@ -123,6 +123,33 @@ function loadRecordDatabase(string $projectRoot, string $categoryKey): Ichiloto\
 }
 
 /**
+ * Hashes every file under a directory, keyed by relative path.
+ *
+ * Proving that an operation wrote nothing -- or wrote exactly one file --
+ * is something several suites need, so the matrix lives here.
+ *
+ * @param string $directory The directory.
+ * @return array<string, string> The SHA-256 matrix.
+ */
+function sourceHashTree(string $directory): array
+{
+    $hashes = [];
+    $iterator = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator($directory, FilesystemIterator::SKIP_DOTS),
+    );
+
+    foreach ($iterator as $file) {
+        if ($file->isFile()) {
+            $hashes[substr($file->getPathname(), strlen($directory) + 1)] = hash_file('sha256', $file->getPathname());
+        }
+    }
+
+    ksort($hashes);
+
+    return $hashes;
+}
+
+/**
  * Returns the absolute path of a test fixture.
  */
 function fixturePath(string $relativePath = ''): string

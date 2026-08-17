@@ -31,29 +31,6 @@ function projectWithAuthoredInventory(): ?array
 }
 
 /**
- * Hashes every file under a directory, keyed by relative path.
- *
- * @return array<string, string> The SHA-256 matrix.
- */
-function sourceHashTree(string $directory): array
-{
-    $hashes = [];
-    $iterator = new RecursiveIteratorIterator(
-        new RecursiveDirectoryIterator($directory, FilesystemIterator::SKIP_DOTS),
-    );
-
-    foreach ($iterator as $file) {
-        if ($file->isFile()) {
-            $hashes[substr($file->getPathname(), strlen($directory) + 1)] = hash_file('sha256', $file->getPathname());
-        }
-    }
-
-    ksort($hashes);
-
-    return $hashes;
-}
-
-/**
  * Opens one inventory category of a project.
  */
 function inventoryDatabase(string $root, string $category): ProjectRecordDatabase

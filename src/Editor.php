@@ -426,6 +426,17 @@ final class Editor
     private const string NPC_SELECT_FIELD = '__npc_select';
 
     /**
+     * The row that chooses which natural variant the actor rows edit. It is
+     * a view of the pane, not a value the project stores.
+     */
+    private const string ACTOR_VARIANT_FIELD = '__actor_variant';
+
+    /**
+     * @var array<string, string> Which variant each actor's rows are editing.
+     */
+    private array $actorVariantSelections = [];
+
+    /**
      * The Inspector row that assigns a stable id to an NPC authored without
      * one; the only time an id is ever written after creation.
      */
@@ -9233,6 +9244,125 @@ final class Editor
      *
      * @return array<int, array<string, mixed>>
      */
+    /**
+     * The rows that say which actor this is to a save.
+     *
+     * @param ProjectActor $actor The actor.
+     * @return array<int, array<string, mixed>> The rows.
+     */
+    private function actorIdentityFields(ProjectActor $actor): array
+    {
+        return [
+            ['label' => 'Identity', 'value' => '', 'editable' => false, 'field' => ''],
+            [
+                'label' => 'Definition Id',
+                'value' => $actor->hasDefinitionId() ? $actor->getDefinitionId() : '',
+                'control' => new InputControl(InputControlType::TEXT, $actor->hasDefinitionId() ? $actor->getDefinitionId() : ''),
+                'field' => 'id',
+                // A project that declares no id is resolved by name, which is
+                // what strands a save when the actor is renamed.
+                'displayDefault' => sprintf('%s (the name; declare an id so a rename keeps saves)', $actor->getName()),
+            ],
+        ];
+    }
+
+    /**
+     * The rows for an actor's own nature: the adjustments it makes to its
+     * class baseline, and the named variants of that nature.
+     *
+     * While an actor declares variants the runtime reads the selected
+     * variant's adjustments and ignores the fixed ones, so the rows edit
+     * whichever set is actually in force.
+     *
+     * @param ProjectActor $actor The actor.
+     * @return array<int, array<string, mixed>> The rows.
+     */
+    private function actorNatureFields(ProjectActor $actor): array
+    {
+        $variants = $actor->getNaturalVariants();
+        $selected = $this->selectedActorVariantId($actor);
+        $rows = [['label' => 'Nature', 'value' => '', 'editable' => false, 'field' => '']];
+
+        if ($variants !== []) {
+            $rows[] = [
+                'label' => 'Default Variant',
+                'value' => (string) $actor->getDefaultNaturalVariantId(),
+                'options' => array_keys($variants),
+                'field' => 'defaultNaturalVariantId',
+            ];
+            $rows[] = [
+                'label' => 'Editing Variant',
+                'value' => $selected ?? '',
+                'options' => array_keys($variants),
+                'field' => self::ACTOR_VARIANT_FIELD,
+            ];
+        }
+
+        $prefix = $variants === []
+            ? 'actorNaturalAdjustments'
+            : sprintf('naturalVariants.%s', $selected ?? '');
+        $adjustments = $actor->getNaturalAdjustmentsFor($selected);
+
+        foreach (ActorStatPreview::statKeys() as $key) {
+            $amount = $adjustments[$key] ?? 0;
+            $rows[] = [
+                'label' => '  ' . ucfirst(strtolower((string) preg_replace('/(?<!^)[A-Z]/', ' $0', $key))),
+                'value' => (string) $amount,
+                'control' => new InputControl(InputControlType::INTEGER, (string) $amount),
+                'field' => $prefix . '.' . $key,
+            ];
+        }
+
+        return $rows;
+    }
+
+    /**
+     * The read-only rows showing what each stat actually comes to.
+     *
+     * @param ProjectActor $actor The actor.
+     * @return array<int, array<string, mixed>> The rows.
+     */
+    private function actorStatPreviewFields(ProjectActor $actor): array
+    {
+        if (! ActorStatPreview::isAvailable()) {
+            return [];
+        }
+
+        $rows = [['label' => 'Resolved Stats', 'value' => '', 'editable' => false, 'field' => '']];
+
+        foreach (ActorStatPreview::resolve($actor, $this->selectedActorVariantId($actor)) as $row) {
+            $rows[] = [
+                'label' => '  ' . $row['stat'],
+                'value' => ActorStatPreview::describeRow($row),
+                'editable' => false,
+                'field' => '',
+            ];
+        }
+
+        return $rows;
+    }
+
+    /**
+     * Returns which natural variant the actor rows are editing.
+     *
+     * @param ProjectActor $actor The actor.
+     * @return string|null The variant id, or null when the actor has none.
+     */
+    private function selectedActorVariantId(ProjectActor $actor): ?string
+    {
+        $variants = $actor->getNaturalVariants();
+
+        if ($variants === []) {
+            return null;
+        }
+
+        $selected = $this->actorVariantSelections[$actor->getDefinitionId()] ?? null;
+
+        return $selected !== null && isset($variants[$selected])
+            ? $selected
+            : ($actor->getDefaultNaturalVariantId() ?? array_key_first($variants));
+    }
+
     private function getDatabaseActorSettingsFields(): array
     {
         $actor = $this->getSelectedActor();
@@ -9242,6 +9372,7 @@ final class Editor
         }
 
         return [
+            ...$this->actorIdentityFields($actor),
             [
                 'label' => 'Name',
                 'value' => $actor->getName(),
@@ -9295,6 +9426,8 @@ final class Editor
                 'control' => new InputControl(InputControlType::INTEGER, (string) $actor->getStat('currentAp')),
                 'field' => 'currentAp',
             ],
+            ...$this->actorNatureFields($actor),
+            ...$this->actorStatPreviewFields($actor),
         ];
     }
 
@@ -10754,6 +10887,30 @@ final class Editor
     }
 
     /**
+     * Returns an edited actor value as the field's own type.
+     *
+     * Most actor numbers are quantities that cannot go below zero, but an
+     * actor's nature is an adjustment: being slower than the class baseline
+     * is a legitimate thing to author, so those keep their sign.
+     *
+     * @param string $field The field identifier.
+     * @param string $rawValue The raw edited value.
+     * @return string|int The coerced value.
+     */
+    private function coerceActorFieldValue(string $field, string $rawValue): string|int
+    {
+        if (in_array($field, ['name', 'description', 'class', 'id', 'defaultNaturalVariantId'], true)) {
+            return trim($rawValue);
+        }
+
+        if (str_starts_with($field, 'actorNaturalAdjustments.') || str_starts_with($field, 'naturalVariants.')) {
+            return intval(trim($rawValue));
+        }
+
+        return max(0, intval($rawValue));
+    }
+
+    /**
      * Applies one database settings value.
      *
      * @param string $field The field identifier.
@@ -10766,11 +10923,23 @@ final class Editor
             return;
         }
 
+        if ($this->isActorsDatabaseSelected() && $field === self::ACTOR_VARIANT_FIELD) {
+            // Which variant the rows edit is a choice about the pane, not a
+            // value the project stores.
+            $actor = $this->getSelectedActor();
+
+            if ($actor instanceof ProjectActor) {
+                $this->actorVariantSelections[$actor->getDefinitionId()] = trim($rawValue);
+            }
+
+            return;
+        }
+
         if ($this->isActorsDatabaseSelected()) {
             $this->workspace->actorDatabase->setField(
                 $this->databaseSelectedActorIndex,
                 $field,
-                in_array($field, ['name', 'description', 'class'], true) ? trim($rawValue) : max(0, intval($rawValue)),
+                $this->coerceActorFieldValue($field, $rawValue),
             );
 
             return;
