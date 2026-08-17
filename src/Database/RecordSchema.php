@@ -32,6 +32,13 @@ final readonly class RecordSchema
      * @param bool $isAlwaysReadOnly Whether the category never writes, regardless of the file probe.
      * @param string $readOnlyNote An honest explanation shown when the category cannot be edited.
      */
+    /**
+     * @param string|null $fileListKey The key inside a keyed file that holds
+     * this category's list. A file holding several lists -- a knowledge
+     * catalogue's subjects, its reports, and the vocabularies they share --
+     * is edited one list at a time, and the keys this category does not own
+     * are written back exactly as they were read.
+     */
     public function __construct(
         public string $key,
         public string $entryNoun,
@@ -49,6 +56,7 @@ final readonly class RecordSchema
         public array $commandLists = [],
         public bool $isAlwaysReadOnly = false,
         public string $readOnlyNote = '',
+        public ?string $fileListKey = null,
     ) {
     }
 

@@ -429,6 +429,8 @@ status line says exactly why.
 | Common Events | `assets/Events/*.php` | Editable |
 | Quests | `assets/Data/quests.php` | Editable |
 | Skits | `assets/Data/Skits/*.php` | Editable |
+| Knowledge | `assets/Data/knowledge.php` | Editable |
+| Knowledge Reports | `assets/Data/knowledge.php` | Editable |
 | System | `assets/Data/system.php` | Editable |
 | Types | `assets/Data/Types/*.php` | Read-only — PHP enum declarations |
 | Terms | `config.php` (`vocab`, `messages`) | Editable when the config carries no inline comments |
@@ -478,6 +480,33 @@ Current limit: the category is read-only when `config.php` contains comments
 inside the returned array, because rewriting the file would drop them. Move
 such comments above the `return` statement and the category becomes editable —
 everything before `return` is preserved byte-for-byte on save.
+
+### Knowledge
+
+What the party can come to know, in `assets/Data/knowledge.php`. The file
+holds several lists and the vocabularies they share, so the editor opens it
+as two categories and writes back everything it did not edit exactly as it
+read it.
+
+**Knowledge** authors the subjects. A subject is anything the party can
+learn about: a creature, a person, a place, a practice. Nothing here needs
+an enemy — a subject the party never fights is an ordinary record — and
+defeat is not the only outcome a record can have. Each subject has a stable
+`Id`, a `Record Type` chosen from the kinds the project declares, a display
+name, a `Quick Card` for what is known at a glance and an optional
+`Deep Card` for what is known in full, optional `Family` and `Species`,
+comma-separated `Tags`, `Habitats` and `Observations`, a `Display Order`,
+and `Hidden Until Discovered` for a subject that should not be listed until
+something discovers it. `Relationships` is a sub-list: a type, and the
+related subject picked from the catalogue.
+
+**Knowledge Reports** authors claims about those subjects: a stable `Id`,
+the `Subject` it concerns, a title and summary, optional details, the
+reports it `Disagrees With`, and a display order. A story event unlocks,
+amends, withdraws or supersedes a report through the `knowledge` command.
+
+Runtime progress — what has actually been discovered, observed or unlocked
+— lives in a save, not here. This is the catalogue those records point at.
 
 ### Skits
 

@@ -31,6 +31,8 @@ final class DatabaseCatalog
             new DatabaseCategoryDefinition('common_events', 'Common Events', 'Author cutscene and event command lists.', true),
             new DatabaseCategoryDefinition('quests', 'Quests', 'Author quests, objectives, and rewards.', true),
             new DatabaseCategoryDefinition('skits', 'Skits', 'Write optional party banter scenes.', true),
+            new DatabaseCategoryDefinition('knowledge_subjects', 'Knowledge', 'Author what the party can come to know.', true),
+            new DatabaseCategoryDefinition('knowledge_reports', 'Knowledge Reports', 'Author claims about knowledge subjects.', true),
             new DatabaseCategoryDefinition('system', 'System', 'Configure system-wide project settings.', true),
             new DatabaseCategoryDefinition('types', 'Types', 'Manage element and weapon-type tables.', true),
             new DatabaseCategoryDefinition('terms', 'Terms', 'Customize UI labels and message terms.', true),

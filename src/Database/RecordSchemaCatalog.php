@@ -56,6 +56,8 @@ final class RecordSchemaCatalog
             self::armors(),
             self::enemies(),
             self::skits(),
+            self::knowledgeSubjects(),
+            self::knowledgeReports(),
             self::commonEvents(),
             self::terms(),
             self::types(),
@@ -264,6 +266,106 @@ final class RecordSchemaCatalog
                 parameterChanges: new ParameterChanges(defence: 1),
                 id: self::inventoryDefinitionId('equipment', $name),
             ),
+        );
+    }
+
+    /**
+     * Knowledge subjects — the `subjects` list of
+     * `assets/Data/knowledge.php`.
+     *
+     * The file holds several lists and the vocabularies they share, so this
+     * category edits one of them and writes the rest back exactly as it
+     * read them.
+     *
+     * A subject is anything the party can come to know: a creature, a
+     * person, a place, a practice. Nothing here requires an enemy -- a
+     * subject the party never fights is an ordinary record, and defeat is
+     * not the only outcome a record can have.
+     *
+     * @return RecordSchema
+     */
+    private static function knowledgeSubjects(): RecordSchema
+    {
+        return new RecordSchema(
+            key: 'knowledge_subjects',
+            entryNoun: 'knowledge subject',
+            storage: RecordStorage::LIST_FILE,
+            relativePath: 'assets/Data/knowledge.php',
+            fields: [
+                new RecordField('id', 'Id'),
+                // The project names its own kinds of record; the picker
+                // offers what it has declared.
+                RecordField::reference('recordType', 'Record Type', 'knowledge_record_types'),
+                new RecordField('displayName', 'Display Name'),
+                new RecordField('quickCard', 'Quick Card'),
+                new RecordField('deepCard', 'Deep Card', removeWhenEmpty: true),
+                new RecordField('family', 'Family', removeWhenEmpty: true),
+                new RecordField('species', 'Species', removeWhenEmpty: true),
+                new RecordField('tags', 'Tags', codec: RecordFieldCodec::CSV_LIST, removeWhenEmpty: true),
+                new RecordField('habitats', 'Habitats', codec: RecordFieldCodec::CSV_LIST, removeWhenEmpty: true),
+                new RecordField('observations', 'Observations', codec: RecordFieldCodec::CSV_LIST, removeWhenEmpty: true),
+                new RecordField('displayOrder', 'Display Order', InputControlType::INTEGER, step: 10),
+                // A subject the party has not met yet is authored, but not
+                // listed, until something discovers it.
+                RecordField::boolean('hidden', 'Hidden Until Discovered'),
+            ],
+            labelKey: 'displayName',
+            identityKey: 'id',
+            blank: [
+                'id' => 'subject.new-subject',
+                'recordType' => '',
+                'displayName' => 'New Subject',
+                'quickCard' => 'What is known about it at a glance.',
+                'displayOrder' => 0,
+            ],
+            subList: new RecordSubList(
+                key: 'relationships',
+                prefix: 'relationship',
+                singular: 'relationship',
+                fields: [
+                    new RecordField('type', 'Type'),
+                    RecordField::reference('subject', 'Related Subject', 'knowledge_subjects'),
+                ],
+                blank: ['type' => 'related', 'subject' => ''],
+            ),
+            fileListKey: 'subjects',
+        );
+    }
+
+    /**
+     * Knowledge reports — the `reports` list of `assets/Data/knowledge.php`.
+     *
+     * A report is a claim about a subject that the party can unlock, amend,
+     * withdraw or supersede, and one report may disagree with others.
+     *
+     * @return RecordSchema
+     */
+    private static function knowledgeReports(): RecordSchema
+    {
+        return new RecordSchema(
+            key: 'knowledge_reports',
+            entryNoun: 'knowledge report',
+            storage: RecordStorage::LIST_FILE,
+            relativePath: 'assets/Data/knowledge.php',
+            fields: [
+                new RecordField('id', 'Id'),
+                RecordField::reference('subject', 'Subject', 'knowledge_subjects'),
+                new RecordField('title', 'Title'),
+                new RecordField('summary', 'Summary'),
+                new RecordField('details', 'Details', removeWhenEmpty: true),
+                new RecordField('disagreesWith', 'Disagrees With', codec: RecordFieldCodec::CSV_LIST, removeWhenEmpty: true),
+                new RecordField('displayOrder', 'Display Order', InputControlType::INTEGER, step: 10),
+            ],
+            labelKey: 'title',
+            identityKey: 'id',
+            blank: [
+                'id' => 'report.new-report',
+                'subject' => '',
+                'title' => 'New Report',
+                'summary' => 'What it claims.',
+                'displayOrder' => 0,
+            ],
+            fileListKey: 'reports',
         );
     }
 

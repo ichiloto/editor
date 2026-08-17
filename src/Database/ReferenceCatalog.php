@@ -49,6 +49,7 @@ final class ReferenceCatalog
         'map_npcs',
         'knowledge_subjects',
         'knowledge_reports',
+        'knowledge_record_types',
     ];
 
     /**
@@ -122,6 +123,7 @@ final class ReferenceCatalog
             // so the file stems are the values.
             'enemy_sprites' => $this->fileValues('assets/Graphics/Enemies'),
             'elements' => $this->elementValues(),
+            'knowledge_record_types' => $this->knowledgeRecordTypes(),
             'knowledge_subjects' => $this->knowledgeIds('subjects'),
             'knowledge_reports' => $this->knowledgeIds('reports'),
             // NPC ids are map-local, so the choices are the current map's:
@@ -227,6 +229,21 @@ final class ReferenceCatalog
     }
 
     /**
+     * Returns the kinds of record the project's catalogue declares.
+     *
+     * @return string[] The record types.
+     */
+    private function knowledgeRecordTypes(): array
+    {
+        $catalog = $this->knowledgeCatalog();
+
+        return array_values(array_filter(
+            array_map(strval(...), (array) ($catalog['recordTypes'] ?? [])),
+            static fn(string $type): bool => trim($type) !== '',
+        ));
+    }
+
+    /**
      * Returns the stable ids the project's knowledge catalogue declares.
      *
      * The file is read for its ids alone, so a project whose catalogue is
@@ -236,6 +253,29 @@ final class ReferenceCatalog
      * @return string[] The ids, in authored order.
      */
     private function knowledgeIds(string $section): array
+    {
+        $ids = [];
+
+        foreach ((array) ($this->knowledgeCatalog()[$section] ?? []) as $entry) {
+            $id = is_array($entry) ? trim(strval($entry['id'] ?? '')) : '';
+
+            if ($id !== '') {
+                $ids[] = $id;
+            }
+        }
+
+        return array_values(array_unique($ids));
+    }
+
+    /**
+     * Returns the project's knowledge catalogue as authored.
+     *
+     * Read for its declarations alone, so a catalogue mid-edit still offers
+     * what it has rather than nothing.
+     *
+     * @return array<string, mixed> The catalogue.
+     */
+    private function knowledgeCatalog(): array
     {
         $path = rtrim($this->workspace->projectRoot, '/') . '/assets/Data/knowledge.php';
 
@@ -249,21 +289,7 @@ final class ReferenceCatalog
             return [];
         }
 
-        if (! is_array($catalog)) {
-            return [];
-        }
-
-        $ids = [];
-
-        foreach ((array) ($catalog[$section] ?? []) as $entry) {
-            $id = is_array($entry) ? trim(strval($entry['id'] ?? '')) : '';
-
-            if ($id !== '') {
-                $ids[] = $id;
-            }
-        }
-
-        return array_values(array_unique($ids));
+        return is_array($catalog) ? $catalog : [];
     }
 
     /**

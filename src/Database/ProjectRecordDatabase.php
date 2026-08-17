@@ -58,7 +58,7 @@ final class ProjectRecordDatabase
             $this->captureBaseline();
         }
 
-        if ($schema->storage === RecordStorage::LIST_FILE) {
+        if ($schema->storage === RecordStorage::LIST_FILE && $schema->fileListKey === null) {
             // What the source declares, so a save can patch only what an
             // author actually changed.
             $this->payloadPositions = self::payloadPositionsFor($schema, $file);
@@ -869,6 +869,12 @@ final class ProjectRecordDatabase
     {
         $file = PhpDataFile::load($path, $projectRoot);
         $payload = is_array($file->payload) ? $file->payload : [];
+
+        if ($schema->fileListKey !== null) {
+            // One list inside a file that holds several.
+            $payload = is_array($payload[$schema->fileListKey] ?? null) ? $payload[$schema->fileListKey] : [];
+        }
+
         $records = [];
 
         foreach (array_values($payload) as $entry) {
@@ -1226,6 +1232,19 @@ final class ProjectRecordDatabase
      */
     private function mergeIntoFilePayload(): array
     {
+        if ($this->schema->fileListKey !== null) {
+            // Everything the file holds, with only this category's list
+            // replaced: a catalogue's other lists and its shared
+            // vocabularies are not this category's to rewrite.
+            $whole = is_array($this->file?->payload) ? $this->file->payload : [];
+            $whole[$this->schema->fileListKey] = array_map(
+                static fn(ProjectRecord $record): array|object => $record->toArray(),
+                $this->getRecords(),
+            );
+
+            return $whole;
+        }
+
         $original = is_array($this->file?->payload) ? array_values($this->file->payload) : [];
         $records = $this->getRecords();
         $filter = $this->schema->recordFilter;
