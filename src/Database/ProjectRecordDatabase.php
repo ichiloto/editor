@@ -1087,6 +1087,17 @@ final class ProjectRecordDatabase
         }
 
         $this->file->save($this->mergeIntoFilePayload());
+
+        if ($this->schema->projection === null) {
+            // The in-place patcher compares against what the file was found
+            // holding, and the file has just stopped holding that. Left
+            // stale, a later save that puts a value back to what the file
+            // originally said would find nothing to patch and write nothing
+            // -- so an undone edit would stay on disk.
+            $this->file = PhpDataFile::load($this->file->path, $this->projectRoot);
+            $this->payloadPositions = self::payloadPositionsFor($this->schema, $this->file);
+            $this->captureAuthoredValues();
+        }
     }
 
     /**
