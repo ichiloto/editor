@@ -710,3 +710,90 @@ runtime gives `''` a meaning of its own.
 
 Not added, because the engine does not have them: patrol routes,
 pathfinding, followers, persisted dynamic positions, cross-map movement.
+
+## Foundation tooling — shipped 2026-08
+
+Everything the runtime reads about inventory, actors, knowledge, permanent
+growth and Optimize is now authored in the editor, and every rule enforced
+is the engine's own, run rather than restated.
+
+**One identity for an item.** The runtime resolves an item by stable id,
+display name, or declared alias, case-insensitively, and refuses to let two
+definitions answer to one reference. `InventoryCatalog` mirrors exactly that
+and is the single place any picker, validator, preview, shop, chest, loot
+table or quest reward asks what a reference means. It records a contested
+reference as contested rather than guessing, so a broken project still opens
+and the validator can name what claims what.
+
+**Authored PHP is edited, not regenerated.** A file whose entries are
+`new Item(...)` calls is the author's own code: regenerating it reorders
+arguments, writes defaults nobody wrote, and rewrites every record to change
+one. `PhpSourceDocument` finds the byte span of a named argument and patches
+it in place, so editing one price in the real game's `items.php` changes one
+line and leaves comments, fully-qualified class names, nested constructors
+and emoji exactly as authored. A file it cannot read by argument name is
+refused rather than rewritten, and the ordinary writer takes over.
+
+**An actor is more than its class.** A durable definition id (with the row
+saying what a save resolves without one), actor-natural adjustments that keep
+their sign and drop zeroes, and named natural variants with a default —
+where the rows edit whichever set the runtime has in force. Beside them, what
+each stat actually comes to, resolved by `StatResolver` and
+`EntityStatCapPolicy`: natural, nature, growth, gear, battle, then the cap,
+with what the cap threw away. Accuracy and Critical are absent by design;
+the runtime does not resolve them as layers.
+
+**A catalogue in a file that holds several.** `RecordProjection` is the seam
+for a data file shaped for the runtime rather than for an editor. A category
+declares how its records are read out of the whole payload and folded back
+in, and everything it does not own is written back exactly as it was read.
+Knowledge subjects and reports are one list each inside one catalogue; the
+Optimize policy is nested maps keyed by role and by slot. Two smaller seams
+came with it: a schema may decide a record's fields from the record, and may
+name an entry from its parts.
+
+**Permanent growth, up to the boundary.** The reusable definitions a grant is
+made from are project data and are authored as a category, validated by being
+built through `PermanentStatModifier` and granted into a real
+`PermanentGrowthLedger`. The growth a party has *earned* is save state and
+stays there. This engine version grants growth through runtime API only —
+there is no event command for it — so authoring the grant itself is deferred
+rather than invented, and the Inspector's assumed-growth row is a preview
+fixture that writes nothing.
+
+**Optimize says whose policy it is.** Base, role, slot and role-plus-slot
+weight vectors, elemental outcome and special-property weights composed from
+picked parts, and exclusions picked from the vocabulary their kind implies.
+The preview runs the engine's own `DeclaredEquipmentOptimizationPolicy` and
+shows the component map it returns; a project that has declared nothing is
+told, in those words, that it is being scored by a compatibility fallback.
+
+**Diagnostics for the quiet faults.** Contested inventory names, two actors
+resolving to one identity, a default variant nobody declared, an adjustment
+outside the runtime's stat vocabulary, a catalogue pointing at what it does
+not declare, an author-truth section that would ship, a policy naming a role,
+slot, element, property or item this project does not have. Where the engine
+itself refuses something, its own words are reported rather than a second
+opinion; where a project's items file cannot be read at all, that is said
+once instead of as a page of missing references.
+
+**The battle report knows what it cannot say.** Console prints the party as
+fought — loadout by stable id and display name, permanent modifiers with
+provenance, every stat with its cap, cap loss and headroom — all read from
+`Character::resolveStats()`. Guard, misses, criticals and elemental outcomes
+are typed per hit on `CombatHitResult` but are not aggregated across a run,
+so one seeded attack is shown from the simulator's own preview seam and the
+missing aggregates are named rather than inferred. Every line is cut to the
+terminal it is printed to.
+
+Along the way, one defect the regression matrix caught: the in-place
+patcher's baseline was never refreshed when the whole-file writer ran, so
+undoing an edit and saving wrote nothing and the edit stayed on disk. The
+matrix now holds every category to one bargain — looking changes nothing,
+saving one thing touches one file, an undone edit returns exact bytes — so a
+category added later is held to it without anyone remembering to add it.
+
+Not added, because the engine does not have them: a save-file ledger editor,
+a project command that grants permanent growth, project-authored worn
+equipment, and run-level rates for misses, criticals, Guard or elemental
+outcomes.
