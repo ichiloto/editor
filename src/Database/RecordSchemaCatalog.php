@@ -4,8 +4,15 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Database;
 
+use Ichiloto\Editor\ActorStatPreview;
+use Ichiloto\Editor\Database\Projections\KeyedListProjection;
+use Ichiloto\Editor\Database\Projections\OptimizationExclusionProjection;
+use Ichiloto\Editor\Database\Projections\OptimizationOutcomeProjection;
+use Ichiloto\Editor\Database\Projections\OptimizationWeightProjection;
+use Ichiloto\Editor\EquipmentOptimizationPolicy;
 use Ichiloto\Editor\Field\ProjectNpc;
 use Ichiloto\Editor\Inspector\InputControlType;
+use Ichiloto\Editor\PermanentGrowthCatalog;
 use Ichiloto\Engine\Events\Interpreter\EventInterpreter;
 use Ichiloto\Engine\Entities\Enemies\Enemy;
 use Ichiloto\Engine\Entities\Enumerations\ItemUserType;
@@ -58,6 +65,10 @@ final class RecordSchemaCatalog
             self::skits(),
             self::knowledgeSubjects(),
             self::knowledgeReports(),
+            self::permanentGrowth(),
+            self::optimizeWeights(),
+            self::optimizeOutcomes(),
+            self::optimizeExclusions(),
             self::commonEvents(),
             self::terms(),
             self::types(),
@@ -328,7 +339,7 @@ final class RecordSchemaCatalog
                 ],
                 blank: ['type' => 'related', 'subject' => ''],
             ),
-            fileListKey: 'subjects',
+            projection: new KeyedListProjection('subjects'),
         );
     }
 
@@ -365,7 +376,202 @@ final class RecordSchemaCatalog
                 'summary' => 'What it claims.',
                 'displayOrder' => 0,
             ],
-            fileListKey: 'reports',
+            projection: new KeyedListProjection('reports'),
+        );
+    }
+
+    /**
+     * Permanent growth — `assets/Data/permanent-growth.php`.
+     *
+     * The reusable definitions a permanent stat increase is granted from. The
+     * increases a party has actually *earned* live in a save's
+     * `PermanentGrowthLedger`, and are not authored here: at this engine head
+     * only runtime API grants growth, so a project defines what a grant would
+     * be and the game decides when one happens.
+     *
+     * @return RecordSchema
+     */
+    private static function permanentGrowth(): RecordSchema
+    {
+        return new RecordSchema(
+            key: 'permanent_growth',
+            entryNoun: 'permanent growth definition',
+            storage: RecordStorage::LIST_FILE,
+            relativePath: PermanentGrowthCatalog::RELATIVE_PATH,
+            fields: [
+                new RecordField('id', 'Id'),
+                // A project's own name for it, kept in the metadata the
+                // engine reserves for exactly that: the runtime compares
+                // definitions by their contract, so a label is never part of
+                // what makes two grants the same.
+                new RecordField('metadata.label', 'Label', removeWhenEmpty: true),
+                new RecordField(
+                    'stat',
+                    'Stat',
+                    options: ActorStatPreview::statKeys(),
+                ),
+                // Growth can be a loss. The runtime stores a signed integer
+                // and adds it, so a curse is the same contract as a blessing.
+                new RecordField('amount', 'Amount', InputControlType::INTEGER),
+                // Provenance is deliberately generic in the runtime: it does
+                // not know what kinds of thing a project grants growth from,
+                // and neither does the editor.
+                new RecordField('sourceType', 'Source Type', displayDefault: 'what kind of thing granted it'),
+                new RecordField('sourceId', 'Source Id', displayDefault: 'which one of them'),
+                new RecordField('metadata.note', 'Note', removeWhenEmpty: true),
+            ],
+            labelKey: 'metadata.label',
+            identityKey: 'id',
+            blank: [
+                'id' => 'growth.new-growth',
+                'stat' => 'maxHp',
+                'amount' => 1,
+                'sourceType' => 'event',
+                'sourceId' => '',
+                'metadata' => ['label' => 'New Permanent Growth'],
+            ],
+        );
+    }
+
+    /**
+     * Optimize weights — the four weight scopes of the policy file.
+     *
+     * @return RecordSchema
+     */
+    private static function optimizeWeights(): RecordSchema
+    {
+        $weights = array_map(
+            static fn(string $key): RecordField => new RecordField(
+                'weights.' . $key,
+                '  ' . $key,
+                InputControlType::INTEGER,
+                removeWhenEmpty: true,
+                displayDefault: 'not weighed',
+            ),
+            EquipmentOptimizationPolicy::weightKeys(),
+        );
+        $scope = new RecordField('scope', 'Scope', options: OptimizationWeightProjection::SCOPES);
+        $role = RecordField::reference('role', 'Role', 'classes');
+        $slot = new RecordField('slot', 'Slot', options: EquipmentOptimizationPolicy::slotKeys());
+
+        return new RecordSchema(
+            key: 'optimize_weights',
+            entryNoun: 'weight vector',
+            storage: RecordStorage::LIST_FILE,
+            relativePath: EquipmentOptimizationPolicy::RELATIVE_PATH,
+            fields: [$scope, $role, $slot, ...$weights],
+            identityKey: null,
+            blank: ['scope' => 'base', 'weights' => []],
+            projection: new OptimizationWeightProjection(),
+            // A vector narrowed to a role does not ask which slot, and the
+            // base vector asks neither.
+            fieldsFor: static fn(array $row): array => match (strval($row['scope'] ?? 'base')) {
+                'role' => [$scope, $role, ...$weights],
+                'slot' => [$scope, $slot, ...$weights],
+                'role+slot' => [$scope, $role, $slot, ...$weights],
+                default => [$scope, ...$weights],
+            },
+            labelFor: static function (array $row): string {
+                $narrowed = array_values(array_filter([
+                    trim(strval($row['role'] ?? '')),
+                    trim(strval($row['slot'] ?? '')),
+                ], static fn(string $part): bool => $part !== ''));
+
+                return match (strval($row['scope'] ?? 'base')) {
+                    'role', 'slot', 'role+slot' => implode(' · ', $narrowed) ?: 'Unnarrowed',
+                    default => 'Every role and slot',
+                };
+            },
+        );
+    }
+
+    /**
+     * Optimize outcomes — what an element or a special property is worth.
+     *
+     * @return RecordSchema
+     */
+    private static function optimizeOutcomes(): RecordSchema
+    {
+        $kind = new RecordField('kind', 'Kind', options: OptimizationOutcomeProjection::KINDS);
+        $element = RecordField::reference('element', 'Element', 'elements_or_any');
+        $outcome = new RecordField('outcome', 'Outcome', options: EquipmentOptimizationPolicy::OUTCOMES);
+        $property = RecordField::reference('property', 'Special Property', 'equipment_special_properties');
+        $weight = new RecordField('weight', 'Weight', InputControlType::INTEGER);
+        // A name the runtime's own lookups can never compose is shown rather
+        // than dropped: the file belongs to the project.
+        $name = new RecordField('name', 'Authored Name', isReadOnly: true);
+
+        return new RecordSchema(
+            key: 'optimize_outcomes',
+            entryNoun: 'outcome weight',
+            storage: RecordStorage::LIST_FILE,
+            relativePath: EquipmentOptimizationPolicy::RELATIVE_PATH,
+            fields: [$kind, $element, $outcome, $property, $weight],
+            identityKey: null,
+            // A new weight starts at the wildcard, which composes a name the
+            // runtime really looks up whatever elements the project has, so
+            // an author who has not chosen yet still has a record to keep.
+            blank: [
+                'kind' => 'defence',
+                'element' => EquipmentOptimizationPolicy::ANY_ELEMENT,
+                'outcome' => 'resist',
+                'weight' => 0,
+            ],
+            projection: new OptimizationOutcomeProjection(),
+            fieldsFor: static fn(array $row): array => match (strval($row['kind'] ?? 'other')) {
+                'offence' => [$kind, $element, $weight],
+                'defence' => [$kind, $element, $outcome, $weight],
+                'special' => [$kind, $property, $weight],
+                default => [$kind, $name, $weight],
+            },
+            labelFor: static function (array $row): string {
+                $element = trim(strval($row['element'] ?? ''));
+                $element = $element === EquipmentOptimizationPolicy::ANY_ELEMENT ? 'any element' : $element;
+
+                return match (strval($row['kind'] ?? 'other')) {
+                    'offence' => sprintf('Dealing %s', $element ?: '?'),
+                    'defence' => sprintf('%s to %s', ucfirst(trim(strval($row['outcome'] ?? '?'))), $element ?: '?'),
+                    'special' => trim(strval($row['property'] ?? '')) ?: '(no property)',
+                    default => trim(strval($row['name'] ?? '')) ?: '(unnamed)',
+                };
+            },
+        );
+    }
+
+    /**
+     * Optimize exclusions — what automatic selection may not take.
+     *
+     * @return RecordSchema
+     */
+    private static function optimizeExclusions(): RecordSchema
+    {
+        $kind = new RecordField('kind', 'Kind', options: array_keys(OptimizationExclusionProjection::KEYS));
+        $references = [
+            'definition' => RecordField::reference('value', 'Item', 'inventory'),
+            'availability' => RecordField::reference('value', 'Availability', 'equipment_availabilities'),
+            'acquisition' => RecordField::reference('value', 'Acquisition Policy', 'equipment_acquisition_policies'),
+        ];
+
+        return new RecordSchema(
+            key: 'optimize_exclusions',
+            entryNoun: 'exclusion',
+            storage: RecordStorage::LIST_FILE,
+            relativePath: EquipmentOptimizationPolicy::RELATIVE_PATH,
+            fields: [$kind, ...array_values($references)],
+            identityKey: null,
+            blank: ['kind' => 'definition', 'value' => ''],
+            projection: new OptimizationExclusionProjection(),
+            // One exclusion excludes one thing, and what it is picked from
+            // depends on which kind of thing that is.
+            fieldsFor: static fn(array $row): array => [
+                $kind,
+                $references[strval($row['kind'] ?? '')] ?? $references['definition'],
+            ],
+            labelFor: static fn(array $row): string => sprintf(
+                '%s · %s',
+                trim(strval($row['value'] ?? '')) ?: '(nothing)',
+                strval($row['kind'] ?? ''),
+            ),
         );
     }
 

@@ -402,8 +402,21 @@ says `41 lost to the 999 cap` when the total runs past the cap — which is
 the case worth seeing, since further adjustments there do nothing. Player
 and enemy caps differ, and the preview never writes anything.
 
+`Assumed Growth` chooses which permanent growth the preview pretends the
+party has already earned — none of it, all of it, or one definition. Earned
+growth belongs to a save file rather than to a project, so this is a fixture
+for looking at: choosing one changes what the rows read and writes nothing.
+
+**Optimize Preview** shows what the game's Optimize command would pick for
+this actor, best first, scored by the game's own policy rather than by the
+editor. `Policy` names which policy is doing the scoring. `Slot` chooses the
+kind of slot being filled. Each candidate reads as its score followed by the
+components that made it — `18 · attack +12, speed -20` — and a candidate the
+project excludes from automatic selection says so instead of scoring zero.
+
 Accuracy and Critical are deliberately absent from nature and from the
-preview: the game does not resolve them as layered stats.
+resolved-stat preview: the game does not resolve them as layered stats. They
+*are* weighable by Optimize, because a piece of equipment carries them.
 
 ### Editable And Read-Only Categories
 
@@ -431,6 +444,10 @@ status line says exactly why.
 | Skits | `assets/Data/Skits/*.php` | Editable |
 | Knowledge | `assets/Data/knowledge.php` | Editable |
 | Knowledge Reports | `assets/Data/knowledge.php` | Editable |
+| Permanent Growth | `assets/Data/permanent-growth.php` | Editable |
+| Optimize Weights | `assets/Data/equipment-optimization.php` | Editable |
+| Optimize Outcomes | `assets/Data/equipment-optimization.php` | Editable |
+| Optimize Exclusions | `assets/Data/equipment-optimization.php` | Editable |
 | System | `assets/Data/system.php` | Editable |
 | Types | `assets/Data/Types/*.php` | Read-only — PHP enum declarations |
 | Terms | `config.php` (`vocab`, `messages`) | Editable when the config carries no inline comments |
@@ -507,6 +524,85 @@ amends, withdraws or supersedes a report through the `knowledge` command.
 
 Runtime progress — what has actually been discovered, observed or unlocked
 — lives in a save, not here. This is the catalogue those records point at.
+
+### Permanent Growth
+
+Stat increases the party can earn and keep, in
+`assets/Data/permanent-growth.php`. A definition has a stable `Id` (what the
+game grants and what a save records), an optional `Label` for recognising it
+here, the `Stat` it moves, a signed `Amount`, and its provenance: a
+`Source Type` for what kind of thing granted it and a `Source Id` for which
+one. Both are deliberately open — the game imposes no vocabulary of sources,
+because it does not know what a project grants growth from. A `Note` may be
+added, and any other project-owned metadata authored by hand is carried
+through untouched.
+
+Growth can be a loss: an amount of `-3` is as valid as `+25`, and a curse is
+the same contract as a blessing.
+
+Two definitions may share an id only if they are otherwise identical, which
+the game treats as one grant already made. Two that disagree over one id is
+an error the game raises the moment the second one is granted, so validation
+raises it here first.
+
+**What is not authored here.** The growth a party has actually *earned* is
+save state, in the game's permanent-growth ledger, and the editor does not
+edit save files. **This engine version grants growth through runtime API
+only — there is no event-script command for it** — so a project defines what
+a grant would be and the game decides when one happens. Authoring the grant
+itself is deferred until the engine offers a project command for it; the
+Actors Inspector's `Assumed Growth` row is a preview fixture, not a grant.
+
+### Optimize
+
+What the game's Optimize command values, in
+`assets/Data/equipment-optimization.php`. One file, opened as three
+categories, each writing back everything it did not edit exactly as it read
+it. A project that declares no policy does not get "no policy": it gets the
+engine's legacy equal-weight sum, which is a compatibility fallback and says
+nothing about what the project wants. The Actors Inspector says which of the
+two is scoring.
+
+**Optimize Weights** authors what each stat is worth, as one record per
+weight vector. `Scope` chooses how far the vector reaches, and the game
+applies them in this order, each replacing the last:
+
+| Scope | Applies to | Asks for |
+| --- | --- | --- |
+| base | every character and every slot | the weights |
+| role | characters of one class | `Role` |
+| slot | one kind of slot | `Slot` |
+| role+slot | one class filling one kind of slot | `Role` and `Slot` |
+
+A vector weighs the nine canonical stats plus `accuracy` and `critical`,
+which equipment carries even though neither is a resolved stat layer. A
+weight of zero is removed rather than written.
+
+**Optimize Outcomes** authors what an element or a special property is
+worth. The game looks these up by composed name, so the parts are picked and
+the name is composed for you:
+
+| Kind | Means | Composes |
+| --- | --- | --- |
+| offence | dealing this element | `offence:<element>` |
+| defence | this outcome against this element | `defence:<element>:<outcome>` |
+| special | carrying this kind of special property | the property's own type |
+
+`Element` may be a specific element or `*`, which matches whichever element
+an outcome happened to be. An outcome is one of `weak`, `resist`, `null`,
+`absorb` or `neutral` — what the game derives from an affinity multiplier. A
+name that matches neither shape is shown as authored and kept, and
+validation says the game will never look it up.
+
+**Optimize Exclusions** authors what automatic selection may not take. Each
+exclusion picks one thing, from the vocabulary its `Kind` implies: an item
+by definition id, an `availability`, or an `acquisition policy`. The last two
+are the words the project's own equipment uses; the editor offers what the
+project has said rather than a vocabulary of its own.
+
+Validation checks the part the game cannot: whether a weight, an outcome or
+an exclusion names something this project actually has. One that does not is
+never looked up, and reads exactly like a policy that is working.
 
 ### Skits
 

@@ -437,6 +437,38 @@ final class Editor
     private array $actorVariantSelections = [];
 
     /**
+     * The row that chooses which permanent growth the preview assumes the
+     * party has earned. Earned growth lives in a save, not in a project, so
+     * this is a fixture for looking at and nothing the editor writes.
+     */
+    private const string ACTOR_GROWTH_FIELD = '__actor_growth';
+
+    /**
+     * The row that chooses which kind of slot the Optimize preview fills.
+     */
+    private const string ACTOR_OPTIMIZE_SLOT_FIELD = '__actor_optimize_slot';
+
+    /**
+     * What the growth row reads when the preview assumes nothing was earned.
+     */
+    private const string NO_ASSUMED_GROWTH = '(none earned yet)';
+
+    /**
+     * What the growth row reads when the preview assumes all of it was.
+     */
+    private const string ALL_ASSUMED_GROWTH = '(everything defined)';
+
+    /**
+     * @var array<string, string> Which growth each actor's preview assumes.
+     */
+    private array $actorGrowthSelections = [];
+
+    /**
+     * @var array<string, string> Which slot each actor's Optimize preview fills.
+     */
+    private array $actorOptimizeSlots = [];
+
+    /**
      * The Inspector row that assigns a stable id to an NPC authored without
      * one; the only time an id is ever written after creation.
      */
@@ -9328,12 +9360,122 @@ final class Editor
             return [];
         }
 
-        $rows = [['label' => 'Resolved Stats', 'value' => '', 'editable' => false, 'field' => '']];
+        $catalog = PermanentGrowthCatalog::fromProject($this->workspace->projectRoot);
+        $assumed = $this->assumedGrowthFor($actor);
+        $rows = [
+            ['label' => 'Resolved Stats', 'value' => '', 'editable' => false, 'field' => ''],
+            [
+                // Earned growth is save state. What a preview can do is
+                // assume some of it, say that it is assuming, and write
+                // nothing.
+                'label' => '  Assumed Growth',
+                'value' => $assumed,
+                'options' => [
+                    self::NO_ASSUMED_GROWTH,
+                    self::ALL_ASSUMED_GROWTH,
+                    ...$catalog->ids(),
+                ],
+                'field' => self::ACTOR_GROWTH_FIELD,
+                'displayDefault' => 'assumed for this preview only; the party earns growth in play',
+            ],
+        ];
 
-        foreach (ActorStatPreview::resolve($actor, $this->selectedActorVariantId($actor)) as $row) {
+        $permanent = match ($assumed) {
+            self::NO_ASSUMED_GROWTH => [],
+            self::ALL_ASSUMED_GROWTH => $catalog->totalsFor(),
+            default => $catalog->totalsFor([$assumed]),
+        };
+
+        foreach (ActorStatPreview::resolve($actor, $this->selectedActorVariantId($actor), $permanent) as $row) {
             $rows[] = [
                 'label' => '  ' . $row['stat'],
                 'value' => ActorStatPreview::describeRow($row),
+                'editable' => false,
+                'field' => '',
+            ];
+        }
+
+        return [...$rows, ...$this->actorOptimizeFields($actor)];
+    }
+
+    /**
+     * Returns which permanent growth this actor's preview assumes.
+     *
+     * @param ProjectActor $actor The actor.
+     * @return string The selection.
+     */
+    private function assumedGrowthFor(ProjectActor $actor): string
+    {
+        return $this->actorGrowthSelections[$actor->getDefinitionId()] ?? self::NO_ASSUMED_GROWTH;
+    }
+
+    /**
+     * Returns which slot this actor's Optimize preview fills.
+     *
+     * @param ProjectActor $actor The actor.
+     * @return string The semantic slot.
+     */
+    private function optimizeSlotFor(ProjectActor $actor): string
+    {
+        $slots = EquipmentOptimizationPolicy::slotKeys();
+        $selected = $this->actorOptimizeSlots[$actor->getDefinitionId()] ?? '';
+
+        return in_array($selected, $slots, true) ? $selected : ($slots[0] ?? 'weapon');
+    }
+
+    /**
+     * The read-only rows showing what Optimize would choose, and why.
+     *
+     * @param ProjectActor $actor The actor.
+     * @return array<int, array<string, mixed>> The rows.
+     */
+    private function actorOptimizeFields(ProjectActor $actor): array
+    {
+        if (! $this->workspace instanceof ProjectWorkspace || ! EquipmentOptimizationPolicy::isAvailable()) {
+            return [];
+        }
+
+        $root = $this->workspace->projectRoot;
+        $slot = $this->optimizeSlotFor($actor);
+        $rows = [
+            ['label' => 'Optimize Preview', 'value' => '', 'editable' => false, 'field' => ''],
+            [
+                // Which policy is scoring is the first thing to know: a
+                // project that has declared none is not being scored by its
+                // own rules at all.
+                'label' => '  Policy',
+                'value' => EquipmentOptimizationPolicy::describeSource($root),
+                'editable' => false,
+                'field' => '',
+            ],
+            [
+                'label' => '  Slot',
+                'value' => $slot,
+                'options' => EquipmentOptimizationPolicy::slotKeys(),
+                'field' => self::ACTOR_OPTIMIZE_SLOT_FIELD,
+            ],
+        ];
+        $ranked = EquipmentOptimizationPolicy::rank($this->workspace, $actor, $slot);
+
+        if ($ranked === []) {
+            $rows[] = [
+                'label' => '  (nothing)',
+                'value' => 'no equipment this project has fits that slot',
+                'editable' => false,
+                'field' => '',
+            ];
+
+            return $rows;
+        }
+
+        foreach ($ranked as $position => $candidate) {
+            $rows[] = [
+                'label' => sprintf('  %d. %s', $position + 1, $candidate['name']),
+                'value' => sprintf(
+                    '%d · %s',
+                    $candidate['value'],
+                    EquipmentOptimizationPolicy::describeRow($candidate),
+                ),
                 'editable' => false,
                 'field' => '',
             ];
@@ -10920,6 +11062,20 @@ final class Editor
     private function applyDatabaseFieldValue(string $field, string $rawValue): void
     {
         if (! $this->workspace instanceof ProjectWorkspace) {
+            return;
+        }
+
+        if ($this->isActorsDatabaseSelected() && in_array($field, [self::ACTOR_GROWTH_FIELD, self::ACTOR_OPTIMIZE_SLOT_FIELD], true)) {
+            // Both are assumptions the preview makes, not values the project
+            // stores: neither marks anything dirty and neither is written.
+            $actor = $this->getSelectedActor();
+
+            if ($actor instanceof ProjectActor && $field === self::ACTOR_GROWTH_FIELD) {
+                $this->actorGrowthSelections[$actor->getDefinitionId()] = trim($rawValue);
+            } elseif ($actor instanceof ProjectActor) {
+                $this->actorOptimizeSlots[$actor->getDefinitionId()] = trim($rawValue);
+            }
+
             return;
         }
 

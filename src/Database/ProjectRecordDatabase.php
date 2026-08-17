@@ -58,7 +58,7 @@ final class ProjectRecordDatabase
             $this->captureBaseline();
         }
 
-        if ($schema->storage === RecordStorage::LIST_FILE && $schema->fileListKey === null) {
+        if ($schema->storage === RecordStorage::LIST_FILE && $schema->projection === null) {
             // What the source declares, so a save can patch only what an
             // author actually changed.
             $this->payloadPositions = self::payloadPositionsFor($schema, $file);
@@ -186,6 +186,13 @@ final class ProjectRecordDatabase
     public function getEntryLabels(): array
     {
         return array_map(function (ProjectRecord $record): string {
+            if ($this->schema->labelFor !== null) {
+                // A record whose name is made of its parts -- the scope a
+                // weight vector applies at, what an exclusion excludes --
+                // rather than stored under a key of its own.
+                return strval(($this->schema->labelFor)((array) $record->toArray()));
+            }
+
             $label = $record->getDisplayValue($this->schema->labelKey);
 
             if ($label === '' && $this->schema->identityKey !== null) {
@@ -301,7 +308,7 @@ final class ProjectRecordDatabase
         $isEditable = $this->isEditable() && $record->isEditable();
         $fields = [];
 
-        foreach ($this->schema->fields as $field) {
+        foreach ($this->schema->fieldsFor($record->toArray()) as $field) {
             $fields[] = self::describeField($field, self::displayValue($field, $record->get($field->key)), $field->key, $isEditable);
         }
 
@@ -489,7 +496,7 @@ final class ProjectRecordDatabase
             return;
         }
 
-        foreach ($this->schema->fields as $field) {
+        foreach ($this->schema->fieldsFor($record->toArray()) as $field) {
             if ($field->key !== $fieldId || $field->isReadOnly) {
                 continue;
             }
@@ -870,9 +877,10 @@ final class ProjectRecordDatabase
         $file = PhpDataFile::load($path, $projectRoot);
         $payload = is_array($file->payload) ? $file->payload : [];
 
-        if ($schema->fileListKey !== null) {
-            // One list inside a file that holds several.
-            $payload = is_array($payload[$schema->fileListKey] ?? null) ? $payload[$schema->fileListKey] : [];
+        if ($schema->projection !== null) {
+            // A file shaped for the runtime rather than for an editor: the
+            // projection knows which of it is this category's.
+            $payload = $schema->projection->read($payload);
         }
 
         $records = [];
@@ -1212,7 +1220,7 @@ final class ProjectRecordDatabase
         foreach ($this->getRecords() as $index => $record) {
             $values = [];
 
-            foreach ($this->schema->fields as $field) {
+            foreach ($this->schema->fieldsFor($record->toArray()) as $field) {
                 $values[$field->key] = $record->get($field->key);
             }
 
@@ -1228,21 +1236,25 @@ final class ProjectRecordDatabase
      * would delete the rest of the file, so the original payload is walked and
      * this category's entries are substituted where they sat.
      *
-     * @return array<int, mixed> The payload to write.
+     * A category with a projection returns the file's own keyed payload; one
+     * without returns the list the file is.
+     *
+     * @return array<array-key, mixed> The payload to write.
      */
     private function mergeIntoFilePayload(): array
     {
-        if ($this->schema->fileListKey !== null) {
-            // Everything the file holds, with only this category's list
-            // replaced: a catalogue's other lists and its shared
-            // vocabularies are not this category's to rewrite.
-            $whole = is_array($this->file?->payload) ? $this->file->payload : [];
-            $whole[$this->schema->fileListKey] = array_map(
-                static fn(ProjectRecord $record): array|object => $record->toArray(),
-                $this->getRecords(),
+        if ($this->schema->projection !== null) {
+            // Everything the file holds, with only this category's records
+            // folded back in: a catalogue's other lists, a policy's other
+            // maps, and the vocabularies they share are not this category's
+            // to rewrite.
+            return $this->schema->projection->write(
+                is_array($this->file?->payload) ? $this->file->payload : [],
+                array_map(
+                    static fn(ProjectRecord $record): array => (array) $record->toArray(),
+                    $this->getRecords(),
+                ),
             );
-
-            return $whole;
         }
 
         $original = is_array($this->file?->payload) ? array_values($this->file->payload) : [];

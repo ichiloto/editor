@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Database;
 
+use Ichiloto\Editor\PermanentGrowthCatalog;
 use Ichiloto\Editor\ProjectActor;
 use Ichiloto\Editor\ProjectClass;
 use Ichiloto\Editor\ProjectQuest;
@@ -50,6 +51,11 @@ final class ReferenceCatalog
         'knowledge_subjects',
         'knowledge_reports',
         'knowledge_record_types',
+        'elements_or_any',
+        'equipment_availabilities',
+        'equipment_acquisition_policies',
+        'equipment_special_properties',
+        'permanent_growth',
     ];
 
     /**
@@ -123,6 +129,14 @@ final class ReferenceCatalog
             // so the file stems are the values.
             'enemy_sprites' => $this->fileValues('assets/Graphics/Enemies'),
             'elements' => $this->elementValues(),
+            // An Optimize weight may apply to one element or to whichever
+            // element an outcome happened to be, which the runtime spells
+            // with a wildcard rather than a name.
+            'elements_or_any' => ['*', ...$this->elementValues()],
+            'equipment_availabilities' => $this->equipmentVocabulary('availability'),
+            'equipment_acquisition_policies' => $this->equipmentVocabulary('acquisitionPolicy'),
+            'equipment_special_properties' => $this->equipmentVocabulary('specialProperty'),
+            'permanent_growth' => PermanentGrowthCatalog::fromProject($this->workspace->projectRoot)->ids(),
             'knowledge_record_types' => $this->knowledgeRecordTypes(),
             'knowledge_subjects' => $this->knowledgeIds('subjects'),
             'knowledge_reports' => $this->knowledgeIds('reports'),
@@ -151,6 +165,21 @@ final class ReferenceCatalog
      */
     public function labelsFor(string $category): array
     {
+        if ($category === 'elements_or_any') {
+            return ['*' => '* (whichever element it was)'];
+        }
+
+        if ($category === 'permanent_growth') {
+            $catalog = PermanentGrowthCatalog::fromProject($this->workspace->projectRoot);
+            $labels = [];
+
+            foreach ($catalog->ids() as $id) {
+                $labels[$id] = $catalog->describe($id);
+            }
+
+            return $labels;
+        }
+
         if (! in_array($category, ['inventory', 'items', 'weapons', 'armors'], true)) {
             return [];
         }
@@ -226,6 +255,48 @@ final class ReferenceCatalog
         sort($names);
 
         return $names;
+    }
+
+    /**
+     * Returns the vocabulary the project's own equipment uses for a field.
+     *
+     * An availability, an acquisition policy and a special property are all
+     * project words -- the runtime imposes no list of them -- so what a
+     * picker can offer is what the project has already said somewhere. A
+     * special property is a shape rather than a string, and it is the `type`
+     * inside it that Optimize weighs.
+     *
+     * @param string $field The equipment field.
+     * @return string[] The distinct values, sorted.
+     */
+    private function equipmentVocabulary(string $field): array
+    {
+        $values = [];
+
+        foreach (InventoryCatalog::CATEGORIES as $category) {
+            $database = $this->workspace->getRecordDatabase($category);
+
+            if (! $database instanceof ProjectRecordDatabase) {
+                continue;
+            }
+
+            foreach ($database->getRecords() as $record) {
+                $value = $record->get($field);
+
+                if ($field === 'specialProperty') {
+                    $value = is_array($value) ? ($value['type'] ?? null) : null;
+                }
+
+                if (is_scalar($value) && trim(strval($value)) !== '') {
+                    $values[] = trim(strval($value));
+                }
+            }
+        }
+
+        $values = array_values(array_unique($values));
+        sort($values);
+
+        return $values;
     }
 
     /**

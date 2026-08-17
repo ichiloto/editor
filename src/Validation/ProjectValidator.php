@@ -9,6 +9,8 @@ use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\Field\ProjectNpc;
 use Ichiloto\Editor\ActorStatPreview;
+use Ichiloto\Editor\EquipmentOptimizationPolicy;
+use Ichiloto\Editor\PermanentGrowthCatalog;
 use Ichiloto\Editor\ProjectDirectoryContext;
 use Ichiloto\Editor\ProjectQuest;
 use Ichiloto\Editor\ProjectMap;
@@ -83,6 +85,8 @@ class ProjectValidator
       ...$this->checkDefinitionIdentities($workspace),
       ...$this->checkActorDefinitions($workspace),
       ...$this->checkKnowledgeCatalog($workspace),
+      ...$this->checkPermanentGrowth($workspace),
+      ...$this->checkOptimizationPolicy($workspace),
       ...new SaveCompatibilityValidator()->validate($workspace),
     ];
 
@@ -260,6 +264,312 @@ class ProjectValidator
    * @param ProjectWorkspace $workspace The project.
    * @return Issue[] The issues found.
    */
+  /**
+   * Checks the permanent growth a project defines.
+   *
+   * Every rule is the engine's own, run rather than restated: a definition
+   * is built through `PermanentStatModifier` and granted into a real
+   * `PermanentGrowthLedger`, so an empty identity, a stat the runtime does
+   * not have, an amount that is not an integer, missing provenance, and an
+   * id two definitions disagree over all fail here exactly where they would
+   * fail in the game, and are reported in the engine's words.
+   *
+   * @param ProjectWorkspace $workspace The project.
+   * @return Issue[] What is wrong with it.
+   */
+  protected function checkPermanentGrowth(ProjectWorkspace $workspace): array
+  {
+    $where = PermanentGrowthCatalog::RELATIVE_PATH;
+    $path = rtrim($workspace->projectRoot, '/') . '/' . $where;
+
+    if (! is_file($path)) {
+      return [];
+    }
+
+    try {
+      $payload = (static fn(): mixed => require $path)();
+    } catch (Throwable $throwable) {
+      return [Issue::error($where, 'The definitions could not be loaded: ' . $throwable->getMessage())];
+    }
+
+    if (! is_array($payload)) {
+      return [Issue::error($where, 'The file must return a list of definitions.')];
+    }
+
+    $issues = [];
+
+    foreach (array_values($payload) as $index => $entry) {
+      if (is_array($entry) && ! is_array($entry['metadata'] ?? [])) {
+        $issues[] = Issue::error(
+          $where,
+          sprintf('Definition %d carries metadata that is not a set of keys and values.', $index),
+          'Project-owned metadata rides along with a grant; anything else the runtime will not carry.'
+        );
+      }
+    }
+
+    $catalog = PermanentGrowthCatalog::fromPayload($payload);
+
+    foreach ($catalog->faults() as $fault) {
+      $issues[] = Issue::error(
+        $where,
+        sprintf(
+          '%s: %s',
+          $fault['id'] === '' ? sprintf('Definition %d', $fault['index']) : $fault['id'],
+          $fault['message']
+        ),
+        'The runtime raises this itself the moment the grant is made.'
+      );
+    }
+
+    foreach ($catalog->repeats() as $id) {
+      $issues[] = Issue::warning(
+        $where,
+        sprintf('"%s" is defined more than once with identical content.', $id),
+        'The runtime grants it once and treats the repeat as already done, so the second definition does nothing.'
+      );
+    }
+
+    return $issues;
+  }
+
+  /**
+   * Checks the Optimize policy a project declares.
+   *
+   * The scoring rules are the engine's, so the policy is handed to the
+   * engine's own constructor and whatever it refuses is reported in its own
+   * words. What is checked here instead is the part the engine cannot know:
+   * whether a weight, an exclusion or an outcome names something this
+   * project actually has, because one that does not is silently never looked
+   * up and reads exactly like a policy that is working.
+   *
+   * @param ProjectWorkspace $workspace The project.
+   * @return Issue[] What is wrong with it.
+   */
+  protected function checkOptimizationPolicy(ProjectWorkspace $workspace): array
+  {
+    $where = EquipmentOptimizationPolicy::RELATIVE_PATH;
+    $path = rtrim($workspace->projectRoot, '/') . '/' . $where;
+
+    if (! is_file($path)) {
+      return [];
+    }
+
+    try {
+      $policy = (static fn(): mixed => require $path)();
+    } catch (Throwable $throwable) {
+      return [Issue::error($where, 'The policy could not be loaded: ' . $throwable->getMessage())];
+    }
+
+    if (! is_array($policy)) {
+      return [Issue::error($where, 'The file must return the policy as an array.')];
+    }
+
+    $issues = [];
+
+    foreach (array_keys($policy) as $key) {
+      if (! in_array(strval($key), EquipmentOptimizationPolicy::KEYS, true)) {
+        $issues[] = Issue::warning(
+          $where,
+          sprintf('"%s" is not part of the policy the runtime reads.', strval($key)),
+          'Nothing reads it, so whatever it says has no effect on what Optimize chooses.'
+        );
+      }
+    }
+
+    if (EquipmentOptimizationPolicy::isAvailable() && EquipmentOptimizationPolicy::enginePolicyFor($workspace->projectRoot) === null) {
+      // The engine refuses a weight key it does not have and a weight that
+      // is not an integer, by throwing rather than by ignoring them.
+      $issues[] = Issue::error(
+        $where,
+        $this->describePolicyRefusal($workspace->projectRoot),
+        'Until this is fixed the game falls back to the legacy equal-weight policy.'
+      );
+    }
+
+    $references = new ReferenceCatalog($workspace);
+    $roles = array_map(mb_strtolower(...), $references->valuesFor('classes'));
+    $slots = EquipmentOptimizationPolicy::slotKeys();
+
+    foreach (['roleStatWeights' => $roles, 'slotStatWeights' => $slots] as $key => $known) {
+      foreach (array_keys(is_array($policy[$key] ?? null) ? $policy[$key] : []) as $scope) {
+        if (! in_array(mb_strtolower(strval($scope)), $known, true)) {
+          $issues[] = Issue::warning(
+            $where,
+            sprintf('%s narrows to "%s", which this project does not have.', $key, strval($scope)),
+            'No character or slot ever matches it, so those weights are never applied.'
+          );
+        }
+      }
+    }
+
+    foreach (is_array($policy['roleSlotStatWeights'] ?? null) ? $policy['roleSlotStatWeights'] : [] as $role => $scoped) {
+      if (! in_array(mb_strtolower(strval($role)), $roles, true)) {
+        $issues[] = Issue::warning(
+          $where,
+          sprintf('roleSlotStatWeights narrows to the role "%s", which this project does not have.', strval($role)),
+          'No character ever matches it, so those weights are never applied.'
+        );
+      }
+
+      foreach (array_keys(is_array($scoped) ? $scoped : []) as $slot) {
+        if (! in_array(mb_strtolower(strval($slot)), $slots, true)) {
+          $issues[] = Issue::warning(
+            $where,
+            sprintf('roleSlotStatWeights narrows to the slot "%s", which is not a kind of slot.', strval($slot)),
+            'No slot ever matches it, so those weights are never applied.'
+          );
+        }
+      }
+    }
+
+    $elements = array_map(mb_strtolower(...), $references->valuesFor('elements'));
+
+    foreach (array_keys(is_array($policy['elementOutcomeWeights'] ?? null) ? $policy['elementOutcomeWeights'] : []) as $name) {
+      $complaint = $this->describeOutcomeName(strval($name), $elements);
+
+      if ($complaint !== null) {
+        $issues[] = Issue::warning($where, $complaint, 'The runtime never composes that name, so the weight is never looked up.');
+      }
+    }
+
+    $properties = array_map(mb_strtolower(...), $references->valuesFor('equipment_special_properties'));
+
+    foreach (array_keys(is_array($policy['specialPropertyWeights'] ?? null) ? $policy['specialPropertyWeights'] : []) as $property) {
+      if (! in_array(mb_strtolower(strval($property)), $properties, true)) {
+        $issues[] = Issue::warning(
+          $where,
+          sprintf('No equipment carries the special property "%s".', strval($property)),
+          'Nothing scores it, so the weight has no effect on what Optimize chooses.'
+        );
+      }
+    }
+
+    return [...$issues, ...$this->checkOptimizationExclusions($workspace, $policy, $references)];
+  }
+
+  /**
+   * Checks that each exclusion names something automatic selection could
+   * otherwise have taken.
+   *
+   * @param ProjectWorkspace $workspace The project.
+   * @param array<string, mixed> $policy The authored policy.
+   * @param ReferenceCatalog $references What the project has.
+   * @return Issue[] What is wrong with it.
+   */
+  protected function checkOptimizationExclusions(
+    ProjectWorkspace $workspace,
+    array $policy,
+    ReferenceCatalog $references
+  ): array
+  {
+    $where = EquipmentOptimizationPolicy::RELATIVE_PATH;
+    $vocabularies = [
+      'excludedDefinitionIds' => ['an item', $references->valuesFor('inventory')],
+      'excludedAvailabilities' => ['an availability', $references->valuesFor('equipment_availabilities')],
+      'excludedAcquisitionPolicies' => ['an acquisition policy', $references->valuesFor('equipment_acquisition_policies')],
+    ];
+    $issues = [];
+
+    foreach ($vocabularies as $key => [$noun, $known]) {
+      $known = array_map(mb_strtolower(...), $known);
+
+      foreach (is_array($policy[$key] ?? null) ? $policy[$key] : [] as $value) {
+        $value = is_scalar($value) ? trim(strval($value)) : '';
+
+        if ($value === '') {
+          $issues[] = Issue::warning(
+            $where,
+            sprintf('%s holds an exclusion that names nothing.', $key),
+            'It excludes nothing; finish naming it or remove it.'
+          );
+
+          continue;
+        }
+
+        if (! in_array(mb_strtolower($value), $known, true)) {
+          $issues[] = Issue::warning(
+            $where,
+            sprintf('"%s" is excluded, but this project has no such %s.', $value, $noun),
+            'Nothing matches it, so the exclusion has no effect.'
+          );
+        }
+      }
+    }
+
+    return $issues;
+  }
+
+  /**
+   * Returns why the engine refused to build the declared policy, in its own
+   * words.
+   *
+   * @param string $projectRoot The project root.
+   * @return string The message.
+   */
+  protected function describePolicyRefusal(string $projectRoot): string
+  {
+    $declared = EquipmentOptimizationPolicy::declaredIn($projectRoot) ?? [];
+
+    try {
+      new \Ichiloto\Engine\Entities\EquipmentOptimization\DeclaredEquipmentOptimizationPolicy(
+        statWeights: is_array($declared['statWeights'] ?? null) ? $declared['statWeights'] : [],
+        roleStatWeights: is_array($declared['roleStatWeights'] ?? null) ? $declared['roleStatWeights'] : [],
+        slotStatWeights: is_array($declared['slotStatWeights'] ?? null) ? $declared['slotStatWeights'] : [],
+        roleSlotStatWeights: is_array($declared['roleSlotStatWeights'] ?? null) ? $declared['roleSlotStatWeights'] : [],
+        elementOutcomeWeights: is_array($declared['elementOutcomeWeights'] ?? null) ? $declared['elementOutcomeWeights'] : [],
+        specialPropertyWeights: is_array($declared['specialPropertyWeights'] ?? null) ? $declared['specialPropertyWeights'] : [],
+      );
+    } catch (Throwable $throwable) {
+      return sprintf('The runtime refuses this policy: %s', $throwable->getMessage());
+    }
+
+    return 'The runtime refuses this policy.';
+  }
+
+  /**
+   * Returns why a composed outcome name will never be looked up, or null
+   * when it will be.
+   *
+   * @param string $name The authored name.
+   * @param string[] $elements The project's elements, lowercased.
+   * @return string|null The complaint.
+   */
+  protected function describeOutcomeName(string $name, array $elements): ?string
+  {
+    $parts = explode(':', mb_strtolower($name));
+    $element = $parts[1] ?? '';
+    $namesAnElement = $element === EquipmentOptimizationPolicy::ANY_ELEMENT
+      || $elements === []
+      || in_array($element, $elements, true);
+
+    if (count($parts) === 2 && $parts[0] === 'offence') {
+      return $namesAnElement
+        ? null
+        : sprintf('"%s" weighs dealing "%s", which this project does not have as an element.', $name, $element);
+    }
+
+    if (count($parts) === 3 && $parts[0] === 'defence') {
+      if (! in_array($parts[2], EquipmentOptimizationPolicy::OUTCOMES, true)) {
+        return sprintf(
+          '"%s" weighs the outcome "%s", which is not one an affinity comes to (%s).',
+          $name,
+          $parts[2],
+          implode(', ', EquipmentOptimizationPolicy::OUTCOMES)
+        );
+      }
+
+      return $namesAnElement
+        ? null
+        : sprintf('"%s" weighs "%s", which this project does not have as an element.', $name, $element);
+    }
+
+    return sprintf(
+      '"%s" is not a name the runtime composes (offence:<element> or defence:<element>:<outcome>).',
+      $name
+    );
+  }
+
   protected function checkKnowledgeCatalog(ProjectWorkspace $workspace): array
   {
     $path = rtrim($workspace->projectRoot, '/') . '/assets/Data/knowledge.php';

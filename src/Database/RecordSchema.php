@@ -33,11 +33,17 @@ final readonly class RecordSchema
      * @param string $readOnlyNote An honest explanation shown when the category cannot be edited.
      */
     /**
-     * @param string|null $fileListKey The key inside a keyed file that holds
-     * this category's list. A file holding several lists -- a knowledge
-     * catalogue's subjects, its reports, and the vocabularies they share --
-     * is edited one list at a time, and the keys this category does not own
-     * are written back exactly as they were read.
+     * @param RecordProjection|null $projection How this category's records are
+     * read out of, and folded back into, a file that is not simply a list of
+     * them -- one list inside a catalogue that holds several, or the nested
+     * maps of an optimization policy. Whatever the file holds that this
+     * category does not own is written back exactly as it was read.
+     * @param Closure(array<string, mixed>): RecordField[]|null $fieldsFor The
+     * fields one record offers, when they depend on what the record is. An
+     * exclusion naming an item and an exclusion naming an availability are
+     * both exclusions, but they are not picked from the same list.
+     * @param Closure(array<string, mixed>): string|null $labelFor The entry
+     * label, when a record's name is made of its parts rather than stored.
      */
     public function __construct(
         public string $key,
@@ -56,8 +62,28 @@ final readonly class RecordSchema
         public array $commandLists = [],
         public bool $isAlwaysReadOnly = false,
         public string $readOnlyNote = '',
-        public ?string $fileListKey = null,
+        public ?RecordProjection $projection = null,
+        public ?Closure $fieldsFor = null,
+        public ?Closure $labelFor = null,
     ) {
+    }
+
+    /**
+     * Returns the fields one record offers.
+     *
+     * @param array<string, mixed>|object $payload The record payload.
+     * @return RecordField[] The fields.
+     */
+    public function fieldsFor(array|object $payload): array
+    {
+        if ($this->fieldsFor === null) {
+            return $this->fields;
+        }
+
+        /** @var RecordField[] $fields */
+        $fields = ($this->fieldsFor)(is_array($payload) ? $payload : (array) $payload);
+
+        return $fields;
     }
 
     /**
