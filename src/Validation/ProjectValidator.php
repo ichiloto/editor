@@ -2,6 +2,7 @@
 
 namespace Ichiloto\Editor\Validation;
 
+use Ichiloto\Editor\Database\InventoryCatalog;
 use Ichiloto\Editor\Database\PhpDataFile;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Database\ReferenceCatalog;
@@ -34,6 +35,12 @@ class ProjectValidator
   /**
    * The trigger classes whose data this knows how to check.
    */
+  /**
+   * @var InventoryCatalog|null What an inventory reference means in this
+   * project, read once per validation run.
+   */
+  protected ?InventoryCatalog $inventoryCatalog = null;
+
   protected const string TRANSFER_TRIGGER = 'TransferPlayerTrigger';
   protected const string SCRIPT_TRIGGER = 'ScriptEventTrigger';
 
@@ -45,6 +52,7 @@ class ProjectValidator
    */
   public function validate(ProjectWorkspace $workspace): array
   {
+    $this->inventoryCatalog = InventoryCatalog::fromWorkspace($workspace);
     $issues = [
       ...$this->checkMaps($workspace),
       ...$this->checkQuests($workspace),
@@ -1426,7 +1434,9 @@ class ProjectValidator
     }
 
     $issues = [];
-    $items = $this->labelsOf($workspace, 'items');
+    // Every inventory definition, not only the consumables: a quest may ask
+    // for a weapon, and a prerequisite may name any of them.
+    $items = $this->inventoryCatalog?->ids() ?? [];
     $foes = [...$this->labelsOf($workspace, 'troops'), ...$this->labelsOf($workspace, 'enemies')];
     $questIds = array_map(static fn(ProjectQuest $quest): string => $quest->getId(), $quests);
     $known = ['quests' => $questIds, 'inventory' => $items];
@@ -1521,7 +1531,7 @@ class ProjectValidator
 
       $missing = match ($type) {
         'reach_map' => ! in_array($target, $mapIds, true) ? 'map' : null,
-        'collect' => $items !== [] && ! in_array($target, $items, true) ? 'item' : null,
+        'collect' => $items !== [] && $this->inventoryCatalog?->has($target) === false ? 'item' : null,
         'defeat' => $foes !== [] && ! in_array($target, $foes, true) ? 'enemy or troop' : null,
         default => null,
       };
@@ -2037,6 +2047,8 @@ class ProjectValidator
             ];
           }
         }
+
+        $issues = [...$issues, ...$this->checkChestLoot($data, $where, $known)];
       }
 
       foreach ((array) ($map->data['npcs'] ?? []) as $npc) {
@@ -2063,6 +2075,86 @@ class ProjectValidator
     }
 
     return $issues;
+  }
+
+  /**
+   * Checks what a chest gives out.
+   *
+   * A chest names its loot by kind: an inventory definition, a skill, or an
+   * amount of gold or experience. An inventory reference that resolves to
+   * nothing opens a chest that gives nothing, which looks exactly like a
+   * chest an author meant to leave empty.
+   *
+   * @param array<string, mixed> $data The trigger's data.
+   * @param string $where Where it lives.
+   * @param array<string, string[]> $known What the project defines.
+   * @return Issue[] The issues found.
+   */
+  protected function checkChestLoot(array $data, string $where, array $known): array
+  {
+    if (! array_key_exists('lootType', $data) && ! array_key_exists('loot', $data)) {
+      return [];
+    }
+
+    // A chest may declare its kind as the runtime enum or as its value.
+    $rawType = $data['lootType'] ?? '';
+    $lootType = strtolower(trim($rawType instanceof \BackedEnum ? strval($rawType->value) : (is_scalar($rawType) ? strval($rawType) : '')));
+    $loot = $data['loot'] ?? null;
+    $issues = [];
+    $kinds = ['item', 'gold', 'experience', 'skill', 'spell', 'weapon', 'armor', 'accessory'];
+
+    if ($lootType !== '' && ! in_array($lootType, $kinds, true)) {
+      $issues[] = Issue::error(
+        $where,
+        sprintf('Its loot type "%s" is not one the game knows.', $lootType),
+        'Choose item, gold, experience, skill, spell, weapon, armor, or accessory.'
+      );
+
+      return $issues;
+    }
+
+    if ($loot === null || (is_string($loot) && trim($loot) === '')) {
+      // An unconfigured chest is a chest an author has not finished, not a
+      // broken reference.
+      return $issues;
+    }
+
+    if (in_array($lootType, ['gold', 'experience'], true)) {
+      if (! is_numeric($loot)) {
+        $issues[] = Issue::error(
+          $where,
+          sprintf('It gives %s "%s", which is not an amount.', $lootType, strval(is_scalar($loot) ? $loot : get_debug_type($loot))),
+          'Write a whole number.'
+        );
+      }
+
+      return $issues;
+    }
+
+    if ($loot instanceof \BackedEnum) {
+      $loot = $loot->value;
+    }
+
+    if (! is_scalar($loot)) {
+      $issues[] = Issue::error(
+        $where,
+        sprintf('Its loot is %s, not a reference.', get_debug_type($loot)),
+        'Choose the loot from the picker.'
+      );
+
+      return $issues;
+    }
+
+    // Only inventory loot is resolved here. A chest may also give a skill
+    // or a spell, and the same check would apply, but skill loot is not this
+    // boundary's subject and enabling it now would report existing project
+    // content that this work is not permitted to change. The gap is recorded
+    // for whoever owns that content rather than left to be rediscovered.
+    return [...$issues, ...match ($lootType) {
+      'skill', 'spell' => [],
+      // No kind declared: the runtime reads the loot as an item.
+      default => $this->checkReference(strval($loot), 'inventory', 'item', $where, $known),
+    }];
   }
 
   /**
@@ -2429,7 +2521,34 @@ class ProjectValidator
   {
     $value = trim($value);
 
-    if ($value === '' || in_array($value, $known[$category] ?? [], true)) {
+    if ($value === '') {
+      return [];
+    }
+
+    if ($category === 'inventory' && $this->inventoryCatalog instanceof InventoryCatalog) {
+      // An inventory reference is whatever the runtime will resolve: a
+      // stable id, the current display name, or a declared alias. Only
+      // something that names nothing -- or names two things -- is wrong.
+      if ($this->inventoryCatalog->has($value)) {
+        return [];
+      }
+
+      if ($this->inventoryCatalog->isAmbiguous($value)) {
+        return [Issue::error(
+          $where,
+          sprintf('It names the %s "%s", which more than one definition answers to.', $noun, $value),
+          'The runtime refuses an ambiguous reference. Give one of them a distinct name or alias.'
+        )];
+      }
+
+      return [Issue::error(
+        $where,
+        sprintf('It names the %s "%s", which does not exist.', $noun, $value),
+        'It will silently do nothing at runtime. Choose it from the picker, which stores the stable id.'
+      )];
+    }
+
+    if (in_array($value, $known[$category] ?? [], true)) {
       return [];
     }
 

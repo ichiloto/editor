@@ -16,6 +16,7 @@ use Ichiloto\Editor\Canvas\Clipboard;
 use Ichiloto\Editor\Canvas\ToolGeometry;
 use Ichiloto\Editor\Database\DatabaseCatalog;
 use Ichiloto\Editor\Database\DatabaseCategoryDefinition;
+use Ichiloto\Editor\Database\InventoryCatalog;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Database\ConditionCodec;
 use Ichiloto\Editor\Database\QuestReferences;
@@ -6884,7 +6885,7 @@ final class Editor
 
         $marker = $this->lootDialogMarker;
         $path = $this->lootDialogPath;
-        $newValue = $selectedEntry['name'];
+        $newValue = (string) ($selectedEntry['value'] ?? $selectedEntry['name']);
         $oldValue = $selectedMap->getEventField($marker, $path);
         $selectedMap->setEventField($marker, $path, $newValue);
         $this->recordCommand(new GenericCommand(
@@ -9845,9 +9846,10 @@ final class Editor
             return;
         }
 
-        $values = new ReferenceCatalog($this->workspace, $this->getSelectedMap())->valuesFor($reference['category']);
+        $catalog = new ReferenceCatalog($this->workspace, $this->getSelectedMap());
+        $values = $catalog->valuesFor($reference['category']);
 
-        if (! $this->referencePicker->open(self::WORLD_WRITE_NAME_FIELD, $reference['label'], $reference['category'], $values, strval($set['name'] ?? ''))) {
+        if (! $this->referencePicker->open(self::WORLD_WRITE_NAME_FIELD, $reference['label'], $reference['category'], $values, strval($set['name'] ?? ''), $catalog->labelsFor($reference['category']))) {
             $this->setStatus(sprintf('This project defines no %s to choose from.', $reference['category']), StatusLevel::WARN);
         }
     }
@@ -10238,7 +10240,8 @@ final class Editor
             return;
         }
 
-        $values = new ReferenceCatalog($this->workspace, $this->getSelectedMap())->valuesFor($reference['category']);
+        $catalog = new ReferenceCatalog($this->workspace, $this->getSelectedMap());
+        $values = $catalog->valuesFor($reference['category']);
 
         if (! $this->referencePicker->open(
             self::CONDITION_NAME_FIELD,
@@ -10246,6 +10249,7 @@ final class Editor
             $reference['category'],
             $values,
             strval($condition['name'] ?? ''),
+            $catalog->labelsFor($reference['category']),
         )) {
             $this->setStatus(
                 sprintf('This project defines no %s to choose from.', str_replace('_', ' ', $reference['category'])),
@@ -10387,7 +10391,9 @@ final class Editor
 
         $category = (string) ($field['reference'] ?? '');
         $label = (string) ($field['label'] ?? 'Reference');
-        $values = new ReferenceCatalog($this->workspace, $this->getSelectedMap())->valuesFor($category);
+        $catalog = new ReferenceCatalog($this->workspace, $this->getSelectedMap());
+        $values = $catalog->valuesFor($category);
+        $labels = $catalog->labelsFor($category);
 
         $specials = [];
 
@@ -10416,6 +10422,7 @@ final class Editor
             $category,
             $values,
             (string) ($field['value'] ?? ''),
+            $labels,
         );
 
         if (! $opened) {
@@ -12398,8 +12405,13 @@ final class Editor
                 continue;
             }
 
+            // What a chest stores is the stable definition id, the identity
+            // the runtime resolves; the name is what the author reads.
+            $identity = InventoryCatalog::definitionId($item->id ?? null, (string) $item->name);
+
             $entries[] = [
                 'name' => (string) $item->name,
+                'value' => $identity ?? (string) $item->name,
                 'description' => (string) ($item->description ?? ''),
                 'icon' => trim((string) ($item->icon ?? '')),
                 'type' => $this->getLootTypeLabel($lootType),
@@ -12512,8 +12524,24 @@ final class Editor
 
     private function resolveLootSelectionIndex(string $currentLoot): int
     {
+        $current = mb_strtolower(trim($currentLoot));
+
+        if ($current === '') {
+            return 0;
+        }
+
+        // The stored value may be an id, a display name, or a declared
+        // alias, so it is resolved before it is looked for. A value that
+        // resolves to nothing leaves the cursor at the top, which is the
+        // honest answer for a reference nothing answers to.
+        $resolved = $this->workspace instanceof ProjectWorkspace
+            ? InventoryCatalog::fromWorkspace($this->workspace)->definitionIdFor($currentLoot)
+            : null;
+
         foreach ($this->lootDialogEntries as $index => $entry) {
-            if ($entry['name'] === $currentLoot) {
+            $value = mb_strtolower(trim((string) ($entry['value'] ?? $entry['name'])));
+
+            if ($value === $current || mb_strtolower(trim($entry['name'])) === $current || ($resolved !== null && $value === $resolved)) {
                 return $index;
             }
         }
@@ -12771,9 +12799,15 @@ final class Editor
             return;
         }
 
+        $referenceCatalog = new ReferenceCatalog($this->workspace, $this->getSelectedMap());
+        $referenceLabels = $referenceCatalog->labelsFor($category);
         $entries = array_map(
-            static fn(string $value): array => ['label' => $value, 'value' => $value, 'description' => ''],
-            new ReferenceCatalog($this->workspace, $this->getSelectedMap())->valuesFor($category),
+            static fn(string $value): array => [
+                'label' => $referenceLabels[$value] ?? $value,
+                'value' => $value,
+                'description' => '',
+            ],
+            $referenceCatalog->valuesFor($category),
         );
 
         if ($entries === []) {
@@ -13722,7 +13756,10 @@ final class Editor
     private static function questObjectiveReference(string $type): ?string
     {
         return match (QuestObjectiveType::tryFrom($type)) {
-            QuestObjectiveType::COLLECT => 'items',
+            // Collecting is not limited to consumables: a quest may ask for
+            // a weapon or a piece of armor, and the runtime resolves all
+            // three from one catalogue.
+            QuestObjectiveType::COLLECT => 'inventory',
             QuestObjectiveType::DEFEAT => 'enemies',
             QuestObjectiveType::REACH_MAP => 'maps',
             QuestObjectiveType::TALK_TO => 'actors',
@@ -13940,7 +13977,7 @@ final class Editor
         }
 
         foreach ($matches as $index => $value) {
-            $lines[] = sprintf('%s%s', $index === $selectedIndex ? '> ' : '  ', $value);
+            $lines[] = sprintf('%s%s', $index === $selectedIndex ? '> ' : '  ', $this->referencePicker->labelFor($value));
         }
 
         // Two header lines, then the rows in whatever height the pane has.

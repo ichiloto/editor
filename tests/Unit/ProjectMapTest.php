@@ -140,7 +140,7 @@ it('restores a captured grid snapshot', function () {
 it('round-trips nested event fields', function () {
   $map = fixtureMap();
 
-  expect($map->getEventField('E', ['data', 'loot']))->toBe('Potion')
+  expect($map->getEventField('E', ['data', 'loot']))->toBe('S-Potion')
     ->and($map->getEventField('E', ['data', 'missing']))->toBeNull();
 
   $map->setEventField('E', ['data', 'loot'], 'Elixir');

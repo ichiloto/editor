@@ -588,7 +588,9 @@ final class ProjectQuest
             $type = strtolower($parts[0] ?? '');
             $name = $parts[1] ?? '';
 
-            if ($name === '' || ! in_array($type, ['quest', 'switch', 'event', 'variable', 'item'], true)) {
+            // key_item is one of the runtime's own world-condition types; a
+            // prerequisite that named one used to be dropped on decode.
+            if ($name === '' || ! in_array($type, ['quest', 'switch', 'event', 'variable', 'item', 'key_item'], true)) {
                 continue;
             }
 

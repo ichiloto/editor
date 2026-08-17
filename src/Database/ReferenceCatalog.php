@@ -62,6 +62,11 @@ final class ReferenceCatalog
      * @param ProjectMap|null $currentMap The map the author is working in,
      *   for reference kinds that are map-local (an NPC id).
      */
+    /**
+     * @var InventoryCatalog|null The project's inventory identity, read once.
+     */
+    private ?InventoryCatalog $inventoryCatalog = null;
+
     public function __construct(
         private readonly ProjectWorkspace $workspace,
         private readonly ?ProjectMap $currentMap = null,
@@ -102,12 +107,13 @@ final class ReferenceCatalog
             // A shop's stock is whatever the engine's ItemStore holds, and
             // that is everything in items.php: items, weapons and armors
             // alike. Offering only the items would refuse a sword a shop is
-            // entitled to sell.
-            'inventory' => array_values(array_unique([
-                ...$this->recordValues('items'),
-                ...$this->recordValues('weapons'),
-                ...$this->recordValues('armors'),
-            ])),
+            // entitled to sell. What is offered -- and stored -- is the
+            // stable definition id, which is the identity the runtime
+            // resolves and the one thing a rename does not change.
+            'inventory' => $this->inventoryCatalog()->ids(),
+            'items' => $this->inventoryCatalog()->idsIn('items'),
+            'weapons' => $this->inventoryCatalog()->idsIn('weapons'),
+            'armors' => $this->inventoryCatalog()->idsIn('armors'),
             'bgm', 'sfx' => $this->audioValues($category),
             // The engine loads an enemy's image as
             // Graphics/Enemies/<value>.txt, appending the extension itself,
@@ -124,6 +130,42 @@ final class ReferenceCatalog
             ),
             default => $this->recordValues($category),
         };
+    }
+
+    /**
+     * Returns how each value of a reference kind should be shown, when the
+     * value stored is not what an author recognises.
+     *
+     * An inventory reference stores `item.s-potion` and reads as
+     * `S-Potion (item.s-potion)`: the name to recognise it by, and the
+     * identity that will actually be written.
+     *
+     * @param string $category The kind of reference.
+     * @return array<string, string> Labels keyed by stored value.
+     */
+    public function labelsFor(string $category): array
+    {
+        if (! in_array($category, ['inventory', 'items', 'weapons', 'armors'], true)) {
+            return [];
+        }
+
+        $labels = [];
+
+        foreach ($this->inventoryCatalog()->definitions() as $id => $definition) {
+            $labels[$id] = $this->inventoryCatalog()->describe($id);
+        }
+
+        return $labels;
+    }
+
+    /**
+     * Returns the project's inventory identity, read once.
+     *
+     * @return InventoryCatalog The catalogue.
+     */
+    private function inventoryCatalog(): InventoryCatalog
+    {
+        return $this->inventoryCatalog ??= InventoryCatalog::fromWorkspace($this->workspace);
     }
 
     /**

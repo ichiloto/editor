@@ -13,7 +13,12 @@ it('offers what the project defines for a kind of reference', function () {
     $workspace = ProjectWorkspace::fromProject(fixturePath('sample-project'));
     $catalog = new ReferenceCatalog($workspace);
 
-    expect($catalog->valuesFor('items'))->toContain('S-Potion')
+    // An inventory reference is offered -- and stored -- as the stable
+    // definition id, and shown as the name an author recognises. The
+    // fixture authors no ids, so the engine's legacy id is what identity
+    // it has.
+    expect($catalog->valuesFor('items'))->toContain('legacy.s-potion')
+        ->and($catalog->labelsFor('items')['legacy.s-potion'] ?? null)->toBe('S-Potion (legacy.s-potion)')
         ->and($catalog->valuesFor('troops'))->toContain('Bat x 2')
         ->and($catalog->valuesFor('maps'))->toBe($workspace->mapIds);
 });

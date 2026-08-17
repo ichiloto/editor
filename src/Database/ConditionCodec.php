@@ -69,6 +69,7 @@ final class ConditionCodec
 
                 break;
             case 'item':
+            case 'key_item':
                 if (intval($condition['quantity'] ?? 1) > 1) {
                     $parts[] = strval(intval($condition['quantity']));
                 }
@@ -147,6 +148,7 @@ final class ConditionCodec
 
                 break;
             case 'item':
+            case 'key_item':
                 if (intval($parts[2] ?? 1) > 1) {
                     $condition['quantity'] = intval($parts[2]);
                 }

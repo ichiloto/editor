@@ -45,7 +45,9 @@ function questTargetFieldFor(string $type): array
 it('picks an item for something to collect', function () {
     $field = questTargetFieldFor('collect');
 
-    expect($field['reference'] ?? null)->toBe('items')
+    // Collecting is not limited to consumables: one catalogue holds the
+    // items, weapons and armors a quest may ask for.
+    expect($field['reference'] ?? null)->toBe('inventory')
         // A reference has no text control, so it cannot be typed into.
         ->and($field)->not->toHaveKey('control');
 });

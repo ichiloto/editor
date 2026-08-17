@@ -101,6 +101,18 @@ function issueLines(string $root, ?Severity $severity = null): array
 }
 
 /**
+ * Writes a map's data file.
+ *
+ * @param string $path The data file path.
+ * @param array<string, mixed> $data The map data.
+ * @return void
+ */
+function writeMapData(string $path, array $data): void
+{
+    file_put_contents($path, "<?php\n\nreturn " . var_export($data, true) . ";\n");
+}
+
+/**
  * Writes a save-compatibility manifest.
  *
  * @param array<string, mixed> $manifest The manifest.
@@ -287,3 +299,124 @@ it('validates the real project clean, and its equipment aliases resolve to defin
         expect($catalog->definitionIdFor($target))->toBe($target);
     }
 })->group('engine');
+
+// -- Every consumer, one contract -----------------------------------------
+
+it('offers inventory references as stable ids labelled with their names', function () {
+    $root = makeTemporaryProject('ichiloto-inventory-');
+    writeInventorySource($root, [
+        itemExpression(['id' => "'item.s-potion'", 'name' => "'S-Potion'", 'description' => "''", 'icon' => "'🧪'", 'price' => '50']),
+    ]);
+
+    $catalog = new \Ichiloto\Editor\Database\ReferenceCatalog(ProjectWorkspace::fromProject($root));
+
+    expect($catalog->valuesFor('inventory'))->toBe(['item.s-potion'])
+        ->and($catalog->valuesFor('items'))->toBe(['item.s-potion'])
+        ->and($catalog->labelsFor('inventory'))->toBe(['item.s-potion' => 'S-Potion (item.s-potion)'])
+        // Only inventory kinds carry labels; a map id is its own label.
+        ->and($catalog->labelsFor('maps'))->toBe([]);
+});
+
+it('puts the picker cursor on the definition a field already holds, however it is spelled', function () {
+    $picker = new \Ichiloto\Editor\Database\ReferencePicker();
+    $values = ['item.s-potion', 'item.antidote'];
+    $labels = ['item.s-potion' => 'S-Potion (item.s-potion)', 'item.antidote' => 'Antidote (item.antidote)'];
+
+    // The stored id.
+    $picker->open('f', 'Item', 'inventory', $values, 'item.antidote', $labels);
+    expect($picker->selected())->toBe('item.antidote');
+
+    // A different case, and the label an author reads.
+    $picker->open('f', 'Item', 'inventory', $values, 'ITEM.ANTIDOTE', $labels);
+    expect($picker->selected())->toBe('item.antidote');
+    $picker->open('f', 'Item', 'inventory', $values, 'Antidote (item.antidote)', $labels);
+    expect($picker->selected())->toBe('item.antidote');
+
+    // Rows read as the names; typing narrows on either name or id.
+    $picker->open('f', 'Item', 'inventory', $values, '', $labels);
+    expect($picker->rows())->toBe(['S-Potion (item.s-potion)', 'Antidote (item.antidote)']);
+    $picker->type('anti');
+    expect($picker->matches())->toBe(['item.antidote']);
+    $picker->backspace();
+    $picker->backspace();
+    $picker->backspace();
+    $picker->backspace();
+    $picker->type('i');
+    $picker->type('t');
+    $picker->type('e');
+    $picker->type('m');
+    $picker->type('.');
+    $picker->type('s');
+    expect($picker->matches())->toBe(['item.s-potion']);
+});
+
+it('accepts an id, a name or an alias wherever content names an item, and refuses the rest', function () {
+    $root = makeTemporaryProject('ichiloto-inventory-');
+    writeInventorySource($root, [
+        itemExpression(['id' => "'item.s-potion'", 'name' => "'S-Potion'", 'description' => "''", 'icon' => "'🧪'", 'price' => '50', 'aliases' => "['Potion']"]),
+        itemExpression(['id' => "'item.twin'", 'name' => "'First Twin'", 'description' => "''", 'icon' => "'a'", 'price' => '1', 'aliases' => "['Shared']"]),
+        itemExpression(['id' => "'item.twin-two'", 'name' => "'Second Twin'", 'description' => "''", 'icon' => "'b'", 'price' => '1', 'aliases' => "['shared']"]),
+    ]);
+
+    $mapPath = $root . '/assets/Maps/test-map/test-map.data.php';
+    $map = require $mapPath;
+    // A shop stocking one of each spelling, a chest, and a give_item.
+    $map['events']['S'] = [
+        'class' => 'Ichiloto\Engine\Events\Triggers\ShopEventTrigger',
+        'data' => ['items' => [
+            ['item' => 'item.s-potion'],
+            ['item' => 'S-Potion'],
+            ['item' => 'Potion'],
+            ['item' => 'Shared'],
+            ['item' => 'item.absent'],
+        ]],
+    ];
+    $map['events']['E']['data'] = ['lootType' => 'item', 'loot' => 'Potion'];
+    writeMapData($mapPath, $map);
+    file_put_contents($root . '/assets/Events/grant.php', "<?php\n\nreturn " . var_export([
+        ['type' => 'give_item', 'item' => 'item.s-potion', 'quantity' => 1],
+        ['type' => 'give_item', 'item' => 'Shared', 'quantity' => 1],
+    ], true) . ";\n");
+
+    $lines = implode("\n", issueLines($root));
+
+    // Every legal spelling passes, including the chest's alias.
+    expect($lines)->not->toContain('"item.s-potion"')
+        ->and($lines)->not->toContain('"S-Potion"')
+        ->and($lines)->not->toContain('"Potion"')
+        // What names nothing, and what names two things, both fail -- and the
+        // ambiguous one says so rather than reporting it as missing.
+        ->and($lines)->toContain('It names the item "item.absent", which does not exist.')
+        ->and($lines)->toContain('It names the item "Shared", which more than one definition answers to.');
+});
+
+it('validates what a chest gives out', function () {
+    $root = makeTemporaryProject('ichiloto-inventory-');
+    writeInventorySource($root, [
+        itemExpression(['id' => "'item.s-potion'", 'name' => "'S-Potion'", 'description' => "''", 'icon' => "'🧪'", 'price' => '50']),
+    ]);
+    $mapPath = $root . '/assets/Maps/test-map/test-map.data.php';
+    $map = require $mapPath;
+    $map['events']['E']['data'] = ['lootType' => 'item', 'loot' => 'item.absent'];
+    $map['events']['G'] = ['class' => 'Ichiloto\Engine\Events\Triggers\ChestEventTrigger', 'data' => ['lootType' => 'gold', 'loot' => 'lots']];
+    $map['events']['H'] = ['class' => 'Ichiloto\Engine\Events\Triggers\ChestEventTrigger', 'data' => ['lootType' => 'treasure', 'loot' => 'x']];
+    $map['events']['I'] = ['class' => 'Ichiloto\Engine\Events\Triggers\ChestEventTrigger', 'data' => ['lootType' => 'item', 'loot' => null]];
+    writeMapData($mapPath, $map);
+
+    $lines = implode("\n", issueLines($root));
+
+    expect($lines)->toContain('It names the item "item.absent", which does not exist.')
+        ->and($lines)->toContain('It gives gold "lots", which is not an amount.')
+        ->and($lines)->toContain('Its loot type "treasure" is not one the game knows.')
+        // An unconfigured chest is unfinished authoring, not a broken
+        // reference.
+        ->and($lines)->not->toContain('event I');
+});
+
+it('keeps a key item\'s quantity through the condition line, both ways', function () {
+    $condition = ['type' => 'key_item', 'name' => 'Rusty Key', 'quantity' => 3];
+    $line = \Ichiloto\Editor\Database\ConditionCodec::encodeAll([$condition]);
+
+    expect($line)->toBe('key_item:Rusty Key:3')
+        ->and(\Ichiloto\Editor\Database\ConditionCodec::decodeAll($line))->toBe([$condition]);
+});

@@ -20,6 +20,12 @@ final class ReferencePicker
      */
     private array $values = [];
     /**
+     * @var array<string, string> How to show a value, when what is stored and
+     * what an author recognises are not the same string. An inventory
+     * reference stores a stable id and reads as its display name.
+     */
+    private array $labels = [];
+    /**
      * @var string What the author has typed to narrow the list.
      */
     private string $filter = '';
@@ -40,9 +46,10 @@ final class ReferencePicker
      * @param string $category The kind of reference.
      * @param string[] $values What it may be set to.
      * @param string $current What it is set to now, which is where the cursor starts.
+     * @param array<string, string> $labels How to show a value, keyed by the value stored.
      * @return bool True when there was something to choose from.
      */
-    public function open(string $fieldId, string $label, string $category, array $values, string $current = ''): bool
+    public function open(string $fieldId, string $label, string $category, array $values, string $current = '', array $labels = []): bool
     {
         $values = array_values(array_unique(array_filter(
             array_map(strval(...), $values),
@@ -58,8 +65,28 @@ final class ReferencePicker
         $this->label = $label;
         $this->category = $category;
         $this->values = $values;
+        $this->labels = $labels;
         $this->filter = '';
-        $this->selectedIndex = max(0, array_search($current, $values, true) ?: 0);
+        // The cursor starts on what the field holds. A stored value may be
+        // spelled differently from the one on offer -- a display name where
+        // an id is listed, or another case -- so an exact match is tried
+        // first and then a case-insensitive one, and only a value that is
+        // genuinely not on offer leaves the cursor at the top.
+        $exact = array_search($current, $values, true);
+
+        if (! is_int($exact)) {
+            $normalized = mb_strtolower(trim($current));
+            $exact = false;
+
+            foreach ($values as $index => $value) {
+                if (mb_strtolower(trim($value)) === $normalized || mb_strtolower(trim($this->labels[$value] ?? '')) === $normalized) {
+                    $exact = $index;
+                    break;
+                }
+            }
+        }
+
+        $this->selectedIndex = is_int($exact) ? $exact : 0;
 
         return true;
     }
@@ -118,8 +145,32 @@ final class ReferencePicker
 
         return array_values(array_filter(
             $this->values,
+            // Typing narrows on either what is shown or what is stored, so
+            // an author can search by name and still store the id.
             fn(string $value): bool => mb_stripos($value, $this->filter) !== false
+                || mb_stripos($this->labels[$value] ?? '', $this->filter) !== false
         ));
+    }
+
+    /**
+     * Returns how a value should be shown.
+     *
+     * @param string $value The value.
+     * @return string The label.
+     */
+    public function labelFor(string $value): string
+    {
+        return $this->labels[$value] ?? $value;
+    }
+
+    /**
+     * Returns the rows to draw: what each match looks like, in order.
+     *
+     * @return string[] The rows.
+     */
+    public function rows(): array
+    {
+        return array_map($this->labelFor(...), $this->matches());
     }
 
     /**

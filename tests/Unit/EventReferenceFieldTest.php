@@ -68,9 +68,11 @@ it('offers a shop every kind of thing an item store holds', function () {
     $stock = $catalog->valuesFor('inventory');
 
     // The engine's ItemStore loads all of items.php, so a shop may sell a
-    // sword as readily as a potion.
-    expect($stock)->toContain('S-Potion')
-        ->and($stock)->toContain('Wooden Sword');
+    // sword as readily as a potion. Stock is stored by stable id and read
+    // by display name.
+    expect($stock)->toContain('legacy.s-potion')
+        ->and($stock)->toContain('legacy.wooden-sword')
+        ->and($catalog->labelsFor('inventory')['legacy.wooden-sword'] ?? null)->toBe('Wooden Sword (legacy.wooden-sword)');
 });
 
 it('offers the tracks the project actually has', function () {

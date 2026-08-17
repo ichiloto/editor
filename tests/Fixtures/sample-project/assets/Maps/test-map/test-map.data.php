@@ -10,7 +10,7 @@ return [
       'class' => 'Ichiloto\Engine\Events\Triggers\ChestEventTrigger',
       'data' => [
         'lootType' => 'item',
-        'loot' => 'Potion',
+        'loot' => 'S-Potion',
       ],
     ],
   ],
