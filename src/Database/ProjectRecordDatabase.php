@@ -527,7 +527,11 @@ final class ProjectRecordDatabase
             $projectRoot = $this->resolveProjectRoot();
 
             try {
-                $name = $this->makeUniqueIdentity('New ' . ucwords($this->schema->entryNoun));
+                // The display name is what an author reads, so it is made
+                // distinct from the other records' names; the stable id is
+                // what everything else resolves, so it is made distinct
+                // across the whole file rather than this category alone.
+                $name = $this->makeUniqueName('New ' . ucwords($this->schema->entryNoun));
                 $payload = $projectRoot === null
                     ? ($this->schema->makeBlank)($name, '')
                     : ProjectDirectoryContext::run(
@@ -1127,7 +1131,14 @@ final class ProjectRecordDatabase
                     return false;
                 }
 
-                $patches[] = ['entry' => $position, 'path' => $key, 'value' => $current];
+                $patches[] = [
+                    'entry' => $position,
+                    // A value inside something the source does not declare at
+                    // all is written as the whole thing: authoring the first
+                    // special property writes specialProperty, not a leaf
+                    // inside an argument that is not there.
+                    ...$this->shallowestWritablePath($document, $position, $key, $record, $current),
+                ];
             }
         }
 
@@ -1146,6 +1157,40 @@ final class ProjectRecordDatabase
         $this->captureAuthoredValues();
 
         return true;
+    }
+
+    /**
+     * Returns the path and value to patch: the field itself when the source
+     * declares its holder, otherwise the outermost part of the path the
+     * source can be given whole.
+     *
+     * @param PhpSourceDocument $document The parsed file.
+     * @param int $position The entry position.
+     * @param string $key The field key, possibly dotted.
+     * @param ProjectRecord $record The record.
+     * @param mixed $value The field's current value.
+     * @return array{path: string, value: mixed} The patch.
+     */
+    private function shallowestWritablePath(
+        PhpSourceDocument $document,
+        int $position,
+        string $key,
+        ProjectRecord $record,
+        mixed $value,
+    ): array {
+        if (! str_contains($key, '.')) {
+            return ['path' => $key, 'value' => $value];
+        }
+
+        $segments = explode('.', $key);
+        array_pop($segments);
+        $parent = implode('.', $segments);
+
+        if ($document->argumentSource($position, $parent) !== null) {
+            return ['path' => $key, 'value' => $value];
+        }
+
+        return ['path' => $parent, 'value' => $record->get($parent)];
     }
 
     /**
@@ -2587,6 +2632,29 @@ final class ProjectRecordDatabase
         }
 
         return null;
+    }
+
+    /**
+     * Returns a display name no other record in this category uses.
+     *
+     * @param string $preferred The preferred name.
+     * @return string The name.
+     */
+    private function makeUniqueName(string $preferred): string
+    {
+        $existing = array_map(
+            static fn(ProjectRecord $record): string => $record->getDisplayValue('name'),
+            $this->getRecords(),
+        );
+        $candidate = $preferred;
+        $suffix = 2;
+
+        while (in_array($candidate, $existing, true)) {
+            $candidate = $preferred . ' ' . $suffix;
+            $suffix++;
+        }
+
+        return $candidate;
     }
 
     private function makeUniqueIdentity(string $preferred): string

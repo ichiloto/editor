@@ -77,14 +77,18 @@ it('creates a weapon and an item the same way', function () {
     expect($weapon)->toBeInstanceOf(Weapon::class);
 });
 
-it('numbers a second new armor instead of colliding', function () {
+it('numbers a second new armor instead of colliding, in name and in identity', function () {
     $database = objectCategoryOn(makeTemporaryProject(), 'armors');
 
     $first = $database->addRecord();
     $second = $database->addRecord();
 
+    // The name is what an author reads; the id is what saves, aliases and
+    // every reference resolve, so both have to be distinct.
     expect($database->getRecords()[$first]->getDisplayValue('name'))->toBe('New Armor')
-        ->and($database->getRecords()[$second]->getDisplayValue('name'))->toBe('New Armor-2');
+        ->and($database->getRecords()[$second]->getDisplayValue('name'))->toBe('New Armor 2')
+        ->and($database->getRecords()[$first]->get('id'))->toBe('equipment.new-armor')
+        ->and($database->getRecords()[$second]->get('id'))->toBe('equipment.new-armor-2');
 });
 
 it('offers the equipment slots rather than a spelling test', function () {

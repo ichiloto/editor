@@ -291,6 +291,14 @@ final class ProjectRecord
             return new ($object::class)(...$arguments);
         }
 
+        if ($nested === null) {
+            // The argument is absent and holds a structured value: the first
+            // authored key creates it, rather than the edit being refused.
+            $arguments[$head] = self::withArrayValue([], explode('.', $rest), $value);
+
+            return new ($object::class)(...$arguments);
+        }
+
         if (! is_array($nested)) {
             return null;
         }

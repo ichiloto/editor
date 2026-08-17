@@ -164,8 +164,15 @@ final class PhpSourceDocument
             );
         }
 
+        $this->pendingLiteral = $literal;
+
         return self::parse($this->insertedArgument($entryIndex, $path, $literal));
     }
+
+    /**
+     * @var string The literal an insertion is writing, while it is writing it.
+     */
+    private string $pendingLiteral = '';
 
     /**
      * Returns a document with one argument removed, or this document when the
@@ -327,14 +334,22 @@ final class PhpSourceDocument
         $name = array_shift($segments);
 
         if ($segments !== []) {
-            // The nested constructor has to exist before a value inside it
-            // can be written; the caller authors the whole nested value.
-            throw new RuntimeException(sprintf(
-                'Cannot add "%s": %s does not declare %s.',
-                $path,
-                $this->describeEntry($entryIndex),
-                $name,
-            ));
+            // A value inside a nested constructor the entry already declares
+            // is written into that call. Only a nested constructor that is
+            // not there at all is refused, because inventing one would be
+            // authoring a value the source never had.
+            $parent = $this->resolveArgument($entryIndex, $name);
+
+            if ($parent === null) {
+                throw new RuntimeException(sprintf(
+                    'Cannot add "%s": %s does not declare %s.',
+                    $path,
+                    $this->describeEntry($entryIndex),
+                    $name,
+                ));
+            }
+
+            return $this->insertedNestedArgument($path, $parent, $segments);
         }
 
         if (! $this->isEditable($entryIndex)) {
@@ -368,6 +383,60 @@ final class PhpSourceDocument
             . ($needsComma ? ',' : '')
             . "\n" . $indent . sprintf('%s: %s,', $name, $literal) . "\n"
             . $this->closingIndent($entry)
+            . $after;
+    }
+
+    /**
+     * Returns the source with an argument written into a nested call.
+     *
+     * @param string $path The whole dotted path, for diagnostics.
+     * @param array{start: int, end: int} $parent The nested call's value span.
+     * @param string[] $segments The remaining path inside it.
+     * @return string The rewritten source.
+     */
+    private function insertedNestedArgument(string $path, array $parent, array $segments): string
+    {
+        $name = array_shift($segments);
+
+        if ($segments !== []) {
+            // Two levels of nesting is not something the authored files do,
+            // and guessing at it would be worse than saying so.
+            throw new RuntimeException(sprintf('Cannot add "%s": only one level of nesting is written.', $path));
+        }
+
+        $call = self::parseCall($this->source, $parent['start'], $parent['end']);
+
+        if ($call === null) {
+            throw new RuntimeException(sprintf('Cannot add "%s": its holder is not a constructor call.', $path));
+        }
+
+        $close = $call['close'];
+        $before = substr($this->source, 0, $close);
+        $after = substr($this->source, $close);
+        $trimmed = rtrim($before);
+        $isMultiline = str_contains(substr($this->source, $call['open'], $close - $call['open']), "\n");
+        $literal = sprintf('%s: %s', $name, $this->pendingLiteral);
+
+        if (! $isMultiline) {
+            $needsComma = ! str_ends_with($trimmed, '(');
+
+            return $trimmed . ($needsComma ? ', ' : '') . $literal . $after;
+        }
+
+        $indent = '';
+        $lineStart = strrpos($before, "\n");
+
+        if ($lineStart !== false) {
+            $line = substr($before, $lineStart + 1);
+            $indent = trim($line) === '' ? $line . '  ' : '  ';
+        }
+
+        $needsComma = ! str_ends_with($trimmed, ',') && ! str_ends_with($trimmed, '(');
+
+        return $trimmed
+            . ($needsComma ? ',' : '')
+            . "\n" . $indent . $literal . ','
+            . "\n" . substr($before, $lineStart === false ? 0 : $lineStart + 1)
             . $after;
     }
 
@@ -757,7 +826,7 @@ final class PhpSourceDocument
      * @param string $source The whole source.
      * @param int $start The value's first byte.
      * @param int $end The byte past the value.
-     * @return array{arguments: array<string, array{start: int, end: int, nameStart: int}>}|null The call.
+     * @return array{arguments: array<string, array{start: int, end: int, nameStart: int}>, open: int, close: int}|null The call.
      */
     private static function parseCall(string $source, int $start, int $end): ?array
     {
@@ -794,7 +863,11 @@ final class PhpSourceDocument
             ];
         }
 
-        return ['arguments' => $shifted];
+        return [
+            'arguments' => $shifted,
+            'open' => $tokens[$open]['offset'] + $offset,
+            'close' => $tokens[$close]['offset'] + $offset,
+        ];
     }
 
     /**

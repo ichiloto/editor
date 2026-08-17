@@ -8,7 +8,9 @@ use Ichiloto\Editor\Field\ProjectNpc;
 use Ichiloto\Editor\Inspector\InputControlType;
 use Ichiloto\Engine\Events\Interpreter\EventInterpreter;
 use Ichiloto\Engine\Entities\Enemies\Enemy;
+use Ichiloto\Engine\Entities\Enumerations\ItemUserType;
 use Ichiloto\Engine\Entities\Inventory\Accessory;
+use Ichiloto\Engine\Entities\Inventory\EquipmentSlotType;
 use Ichiloto\Engine\Entities\Inventory\Armor;
 use Ichiloto\Engine\Entities\Inventory\Items\Item;
 use Ichiloto\Engine\Entities\Inventory\Weapons\Weapon;
@@ -172,11 +174,22 @@ final class RecordSchemaCatalog
             entryNoun: 'item',
             storage: RecordStorage::LIST_FILE,
             relativePath: 'assets/Data/items.php',
-            fields: self::inventoryFields(),
+            fields: [
+                ...self::inventoryFields(),
+                // Only a plain item carries a stack limit: the engine's
+                // Equipment constructor does not take one.
+                new RecordField('maxQuantity', 'Max Quantity', InputControlType::INTEGER),
+            ],
             labelKey: 'name',
-            identityKey: 'name',
+            identityKey: 'id',
             recordFilter: static fn(mixed $entry): bool => $entry instanceof Item,
-            makeBlank: static fn(string $name): object => new Item($name, 'What it does.', '✨', 0),
+            makeBlank: static fn(string $name): object => new Item(
+                $name,
+                'What it does.',
+                '✨',
+                0,
+                id: self::inventoryDefinitionId('item', $name),
+            ),
         );
     }
 
@@ -192,28 +205,17 @@ final class RecordSchemaCatalog
             entryNoun: 'weapon',
             storage: RecordStorage::LIST_FILE,
             relativePath: 'assets/Data/items.php',
-            fields: [
-                ...self::inventoryFields(),
+            fields: self::equipmentFields([
                 new RecordField(
                     'equipmentType',
                     'Equipment Type',
                     options: array_map(static fn(WeaponType $type): string => $type->value, WeaponType::cases()),
                     enumClass: WeaponType::class,
                 ),
-                new RecordField('parameterChanges.attack', 'Attack', InputControlType::INTEGER),
-                new RecordField('parameterChanges.magicAttack', 'Magic Attack', InputControlType::INTEGER),
-                new RecordField('parameterChanges.speed', 'Speed', InputControlType::INTEGER),
-                new RecordField(
-                    'element',
-                    'Attack Element',
-                    reference: 'elements',
-                    // A weapon may be plain, so this reference clears.
-                    allowsNone: true,
-                ),
-                new RecordField('elementAffinities', 'Elemental Wards', codec: RecordFieldCodec::AFFINITIES),
-            ],
+                ...self::parameterChangeFields(),
+            ]),
             labelKey: 'name',
-            identityKey: 'name',
+            identityKey: 'id',
             recordFilter: static fn(mixed $entry): bool => $entry instanceof Weapon,
             makeBlank: static fn(string $name): object => new Weapon(
                 $name,
@@ -222,6 +224,7 @@ final class RecordSchemaCatalog
                 0,
                 equipmentType: WeaponType::SWORD,
                 parameterChanges: new ParameterChanges(attack: 1),
+                id: self::inventoryDefinitionId('equipment', $name),
             ),
         );
     }
@@ -239,21 +242,17 @@ final class RecordSchemaCatalog
             entryNoun: 'armor',
             storage: RecordStorage::LIST_FILE,
             relativePath: 'assets/Data/items.php',
-            fields: [
-                ...self::inventoryFields(),
+            fields: self::equipmentFields([
                 new RecordField(
                     'equipmentType',
                     'Equipment Type',
                     options: array_map(static fn(ArmorType $type): string => $type->value, ArmorType::cases()),
                     enumClass: ArmorType::class,
                 ),
-                new RecordField('parameterChanges.defence', 'Defence', InputControlType::INTEGER),
-                new RecordField('parameterChanges.magicDefence', 'Magic Defence', InputControlType::INTEGER),
-                new RecordField('parameterChanges.evasion', 'Evasion', InputControlType::INTEGER),
-                new RecordField('elementAffinities', 'Elemental Wards', codec: RecordFieldCodec::AFFINITIES),
-            ],
+                ...self::parameterChangeFields(),
+            ]),
             labelKey: 'name',
-            identityKey: 'name',
+            identityKey: 'id',
             recordFilter: static fn(mixed $entry): bool => $entry instanceof Armor || $entry instanceof Accessory,
             makeBlank: static fn(string $name): object => new Armor(
                 $name,
@@ -262,6 +261,7 @@ final class RecordSchemaCatalog
                 0,
                 equipmentType: ArmorType::GENERAL_ARMOR,
                 parameterChanges: new ParameterChanges(defence: 1),
+                id: self::inventoryDefinitionId('equipment', $name),
             ),
         );
     }
@@ -503,11 +503,115 @@ final class RecordSchemaCatalog
     private static function inventoryFields(): array
     {
         return [
+            // Identity. The id is what a save, an alias and every reference
+            // resolve to, so it is shown and never edited after creation:
+            // nothing that names it would follow a rename.
+            new RecordField('id', 'Id', isReadOnly: true),
             new RecordField('name', 'Name'),
             new RecordField('description', 'Description'),
             new RecordField('icon', 'Icon'),
+            // Compatibility references an older save may still name.
+            new RecordField('aliases', 'Aliases', codec: RecordFieldCodec::CSV_LIST, removeWhenEmpty: true),
+            // Policy
+            new RecordField(
+                'userType',
+                'Who May Use It',
+                options: array_map(static fn(ItemUserType $type): string => $type->value, ItemUserType::cases()),
+                enumClass: ItemUserType::class,
+            ),
+            RecordField::boolean('isKeyItem', 'Key Item'),
+            RecordField::boolean('consumable', 'Consumable'),
+            // Trade
             new RecordField('price', 'Price', InputControlType::INTEGER),
+            RecordField::boolean('sellable', 'Sellable', removeWhenEmpty: false),
+            new RecordField('sellRateBasisPoints', 'Sell Rate (basis points)', InputControlType::INTEGER, step: 500),
+            // Stock
             new RecordField('quantity', 'Quantity', InputControlType::INTEGER),
+            // Project-owned vocabularies: the engine reads these as plain
+            // strings a project gives meaning to, so they are typed rather
+            // than chosen from a list this code would have to invent.
+            new RecordField('availability', 'Availability', displayDefault: 'ordinary'),
+            new RecordField('acquisitionPolicy', 'Acquisition Policy', removeWhenEmpty: true),
+        ];
+    }
+
+    /**
+     * Returns the stable id a new inventory definition is created under.
+     *
+     * A definition's id is its identity for saves, aliases and every
+     * reference, so a new one gets an explicit id derived from its name
+     * rather than falling back to the engine's legacy slug, which two
+     * records created in the same session would share.
+     *
+     * @param string $prefix The namespace the kind of definition uses.
+     * @param string $name The display name.
+     * @return string The id.
+     */
+    private static function inventoryDefinitionId(string $prefix, string $name): string
+    {
+        $slug = trim((string) preg_replace('/[^a-z0-9]+/', '-', strtolower(trim($name))), '-');
+
+        return sprintf('%s.%s', $prefix, $slug === '' ? 'definition' : $slug);
+    }
+
+    /**
+     * Every canonical parameter a piece of equipment may change.
+     *
+     * The engine's `ParameterChanges` is one shape for weapons and armor
+     * alike, so both author all of it: a shield that grants attack and a
+     * sword that grants defence are both things a project may want.
+     *
+     * @return RecordField[]
+     */
+    private static function parameterChangeFields(): array
+    {
+        return [
+            new RecordField('parameterChanges.attack', 'Attack', InputControlType::INTEGER),
+            new RecordField('parameterChanges.defence', 'Defence', InputControlType::INTEGER),
+            new RecordField('parameterChanges.magicAttack', 'Magic Attack', InputControlType::INTEGER),
+            new RecordField('parameterChanges.magicDefence', 'Magic Defence', InputControlType::INTEGER),
+            new RecordField('parameterChanges.speed', 'Speed', InputControlType::INTEGER),
+            new RecordField('parameterChanges.grace', 'Grace', InputControlType::INTEGER),
+            new RecordField('parameterChanges.evasion', 'Evasion', InputControlType::INTEGER),
+            new RecordField('parameterChanges.totalHp', 'Max HP', InputControlType::INTEGER),
+            new RecordField('parameterChanges.totalMp', 'Max MP', InputControlType::INTEGER),
+        ];
+    }
+
+    /**
+     * The fields every piece of equipment adds to the base inventory ones.
+     *
+     * `semanticSlot` is what the runtime equips by; the PHP class alone is not
+     * enough, which is why a shield has to say so. Form, size and material
+     * are project-owned words the engine only stores.
+     *
+     * @param RecordField[] $typeAndStats The type row and the stat rows this kind of equipment has.
+     * @return RecordField[]
+     */
+    private static function equipmentFields(array $typeAndStats): array
+    {
+        return [
+            ...self::inventoryFields(),
+            // Slot and kind
+            new RecordField(
+                'semanticSlot',
+                'Slot',
+                options: array_map(static fn(EquipmentSlotType $slot): string => $slot->value, EquipmentSlotType::cases()),
+                enumClass: EquipmentSlotType::class,
+            ),
+            ...$typeAndStats,
+            // Shape
+            new RecordField('form', 'Form', removeWhenEmpty: true),
+            new RecordField('size', 'Size', removeWhenEmpty: true),
+            new RecordField('material', 'Material', removeWhenEmpty: true),
+            // Elements
+            new RecordField('element', 'Attack Element', reference: 'elements', allowsNone: true),
+            new RecordField('elementAffinities', 'Elemental Wards', codec: RecordFieldCodec::AFFINITIES),
+            // Bounded modifiers: the runtime accepts -100 through 100.
+            new RecordField('accuracyModifier', 'Accuracy Modifier', InputControlType::INTEGER, step: 5),
+            new RecordField('criticalModifier', 'Critical Modifier', InputControlType::INTEGER, step: 5),
+            // A typed property a project defines and the runtime passes on.
+            new RecordField('specialProperty.type', 'Special Property', removeWhenEmpty: true),
         ];
     }
 
