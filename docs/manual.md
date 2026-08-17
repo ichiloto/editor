@@ -494,12 +494,34 @@ Supported command types, matching the engine's interpreter:
 | `play_sound` | Sound |
 | `play_music` | Music |
 | `accept_quest` | Quest Id |
+| `knowledge` | Operation, Subject, Report, Replacement Report, Observation, Outcome, Source, Confidence |
 | `move_player` | X, Y |
 | `move_route` | Subject, NPC Id, Wait, Seconds Per Step, Speed, Steps |
 | `transfer` | Map Id, X, Y |
 | `start_battle` | Troop, Result Variable, Defeat Policy, Escape Policy |
 | `recover_party` | None |
 | `branch` | Conditions, Then (fixed), Else (fixed) |
+
+A `knowledge` command records what the party has learned. `Operation` is
+chosen from the vocabulary the runtime itself defines, and each operation
+reads only the fields it needs, so the others are left empty and are not
+written:
+
+| Operation | Records | Needs |
+| --- | --- | --- |
+| `discover` | that a subject is now known at all | Subject |
+| `observe` | one authored observation of a subject | Subject, Observation |
+| `unlock_report` | that a report is readable | Subject, Report |
+| `amend_report` | a revision of a report already unlocked | Subject, Report |
+| `record_outcome` | an outcome the subject reached | Subject, Outcome |
+| `withdraw_report` | that a report no longer stands | Subject, Report |
+| `supersede_report` | that one report replaces another | Subject, Report, Replacement Report |
+
+`Subject`, `Report` and `Replacement Report` are picked from the project's
+own knowledge catalogue. `Source` says what taught the party (`story.event`
+when left empty) and `Confidence` is a fraction from `0` through `1`,
+defaulting to certainty. Authored card and report text lives in the
+project's knowledge records; a save keeps only what was learned.
 
 `Shift+O` appends a command, `Shift+X` removes the last one.
 

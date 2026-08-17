@@ -47,6 +47,8 @@ final class ReferenceCatalog
         'enemy_sprites',
         'elements',
         'map_npcs',
+        'knowledge_subjects',
+        'knowledge_reports',
     ];
 
     /**
@@ -120,6 +122,8 @@ final class ReferenceCatalog
             // so the file stems are the values.
             'enemy_sprites' => $this->fileValues('assets/Graphics/Enemies'),
             'elements' => $this->elementValues(),
+            'knowledge_subjects' => $this->knowledgeIds('subjects'),
+            'knowledge_reports' => $this->knowledgeIds('reports'),
             // NPC ids are map-local, so the choices are the current map's:
             // read live from the collection, a just-created NPC is offered
             // at once and a deleted one is gone.
@@ -220,6 +224,46 @@ final class ReferenceCatalog
         sort($names);
 
         return $names;
+    }
+
+    /**
+     * Returns the stable ids the project's knowledge catalogue declares.
+     *
+     * The file is read for its ids alone, so a project whose catalogue is
+     * mid-edit still offers what it has rather than nothing.
+     *
+     * @param string $section Either subjects or reports.
+     * @return string[] The ids, in authored order.
+     */
+    private function knowledgeIds(string $section): array
+    {
+        $path = rtrim($this->workspace->projectRoot, '/') . '/assets/Data/knowledge.php';
+
+        if (! is_file($path)) {
+            return [];
+        }
+
+        try {
+            $catalog = (static fn(): mixed => require $path)();
+        } catch (\Throwable) {
+            return [];
+        }
+
+        if (! is_array($catalog)) {
+            return [];
+        }
+
+        $ids = [];
+
+        foreach ((array) ($catalog[$section] ?? []) as $entry) {
+            $id = is_array($entry) ? trim(strval($entry['id'] ?? '')) : '';
+
+            if ($id !== '') {
+                $ids[] = $id;
+            }
+        }
+
+        return array_values(array_unique($ids));
     }
 
     /**

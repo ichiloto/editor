@@ -9,6 +9,7 @@ use Ichiloto\Editor\Inspector\InputControlType;
 use Ichiloto\Engine\Events\Interpreter\EventInterpreter;
 use Ichiloto\Engine\Entities\Enemies\Enemy;
 use Ichiloto\Engine\Entities\Enumerations\ItemUserType;
+use Ichiloto\Engine\Progress\Knowledge\KnowledgeProgressService;
 use Ichiloto\Engine\Entities\Inventory\Accessory;
 use Ichiloto\Engine\Entities\Inventory\EquipmentSlotType;
 use Ichiloto\Engine\Entities\Inventory\Armor;
@@ -809,6 +810,23 @@ final class RecordSchemaCatalog
             'move_player' => [
                 new RecordField('x', 'X', InputControlType::INTEGER),
                 new RecordField('y', 'Y', InputControlType::INTEGER),
+            ],
+            // The runtime owns which knowledge operations exist, and each one
+            // reads its own fields. Everything optional drops out when empty,
+            // so a discover command does not carry an unused observation.
+            'knowledge' => [
+                new RecordField(
+                    'operation',
+                    'Operation',
+                    options: KnowledgeProgressService::OPERATIONS,
+                ),
+                RecordField::reference('subject', 'Subject', 'knowledge_subjects'),
+                RecordField::reference('report', 'Report', 'knowledge_reports', allowsNone: true),
+                RecordField::reference('replacement', 'Replacement Report', 'knowledge_reports', allowsNone: true),
+                new RecordField('observation', 'Observation', removeWhenEmpty: true),
+                new RecordField('outcome', 'Outcome', removeWhenEmpty: true),
+                new RecordField('source', 'Source', removeWhenEmpty: true, displayDefault: 'story.event'),
+                new RecordField('confidence', 'Confidence', InputControlType::FLOAT, removeWhenEmpty: true, displayDefault: '1.0'),
             ],
             'move_route' => [
                 new RecordField('subject', 'Subject', options: ['player', 'npc']),
