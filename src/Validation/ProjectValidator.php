@@ -132,7 +132,9 @@ class ProjectValidator
   {
     $path = rtrim($workspace->projectRoot, '/') . '/assets/Data/items.php';
 
-    if (! is_file($path) || $this->inventoryCatalog->definitions() !== []) {
+    // Whether the file loaded at all, which a catalogue whose every
+    // definition is contested still did.
+    if (! is_file($path) || $this->inventoryCatalog->allDefinitions() !== []) {
       return null;
     }
 

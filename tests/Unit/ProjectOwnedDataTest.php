@@ -76,6 +76,60 @@ it('reads typed pairs off a line and writes them back typed', function () {
         ->toBe('percent=10, enabled=true');
 });
 
+it('round-trips every legal scalar a project might write', function (mixed $value) {
+    // The naive grammar destroyed these: a comma split one value into two
+    // keys, an equals sign was read as a second assignment, surrounding
+    // spaces were trimmed away, and the string "true" came back a boolean.
+    $original = ['parameter' => $value];
+    $line = ParameterMapCodec::encode($original);
+
+    expect(ParameterMapCodec::decode($line))->toBe(
+        $original,
+        sprintf('%s did not survive "%s".', var_export($value, true), $line),
+    );
+})->with([
+    'Blood, Oath',
+    'a=b',
+    '  spaced  ',
+    'true',
+    'false',
+    '',
+    '007',
+    '日本語 ☠',
+    'say "hi"',
+    'back\\slash',
+    'plain',
+    42,
+    -7,
+    0.5,
+    -0.25,
+    true,
+    false,
+]);
+
+it('refuses a line it cannot read, rather than repairing it', function (string $line, string $complaint) {
+    expect(static fn() => ParameterMapCodec::decode($line))
+        ->toThrow(\Ichiloto\Editor\Database\ParameterMapSyntaxError::class, $complaint);
+})->with([
+    ['percent', 'has no value'],
+    ['=10', 'has no name'],
+    ['percent=1, percent=2', 'named twice'],
+    ['label="unclosed', 'never closed'],
+    ['label="ok" trailing', 'Unexpected'],
+]);
+
+it('leaves the record untouched when the line is refused', function () {
+    [$root, $path] = projectOwnedProject();
+    $weapons = ProjectRecordDatabase::fromProject($root, RecordSchemaCatalog::forKey('weapons'));
+    $before = $weapons->getRecordByIndex(0)?->get('specialProperty');
+
+    expect(static fn() => $weapons->setField(0, 'specialProperty.parameters', 'percent=1, percent=2'))
+        ->toThrow(\Ichiloto\Editor\Database\ParameterMapSyntaxError::class);
+
+    expect($weapons->getRecordByIndex(0)?->get('specialProperty'))->toBe($before)
+        ->and($weapons->isDirty())->toBeFalse();
+})->group('engine');
+
 it('keeps what the line cannot carry', function () {
     expect(ParameterMapCodec::merge(
         ['percent' => 10, 'tiers' => ['minor', 'major']],

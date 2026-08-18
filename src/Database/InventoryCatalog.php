@@ -267,7 +267,8 @@ final class InventoryCatalog
      */
     public function ids(): array
     {
-        return array_keys($this->definitions);
+        // Only what a reference can actually resolve to.
+        return array_keys($this->definitions());
     }
 
     /**
@@ -281,7 +282,7 @@ final class InventoryCatalog
         return array_values(array_map(
             static fn(array $definition): string => $definition['id'],
             array_filter(
-                $this->definitions,
+                $this->definitions(),
                 static fn(array $definition): bool => in_array($definition['category'], $categories, true),
             ),
         ));
@@ -294,7 +295,42 @@ final class InventoryCatalog
      */
     public function definitions(): array
     {
+        return array_diff_key($this->definitions, $this->contestedIds());
+    }
+
+    /**
+     * Returns every definition the project declares, contested ones
+     * included, for a diagnostic that has to name them.
+     *
+     * @return array<string, array{id: string, name: string, category: string, aliases: string[]}> The definitions.
+     */
+    public function allDefinitions(): array
+    {
         return $this->definitions;
+    }
+
+    /**
+     * Returns the ids no reference may resolve to, because more than one
+     * definition claims them.
+     *
+     * The runtime's store refuses a catalogue like this outright. Leaving a
+     * contested id in a picker offers an author a reference the same
+     * catalogue will not resolve, and leaving it in the compatibility
+     * targets lets a save alias point at one.
+     *
+     * @return array<string, true> The contested ids.
+     */
+    private function contestedIds(): array
+    {
+        $contested = [];
+
+        foreach ($this->definitions as $id => $definition) {
+            if (isset($this->conflicts[self::normalize($id)])) {
+                $contested[$id] = true;
+            }
+        }
+
+        return $contested;
     }
 
     /**

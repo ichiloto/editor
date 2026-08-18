@@ -17,6 +17,9 @@ use Ichiloto\Editor\Canvas\ToolGeometry;
 use Ichiloto\Editor\Database\DatabaseCatalog;
 use Ichiloto\Editor\Database\DatabaseCategoryDefinition;
 use Ichiloto\Editor\Database\InventoryCatalog;
+use Ichiloto\Editor\Database\ParameterMapCodec;
+use Ichiloto\Editor\Database\ParameterMapSyntaxError;
+use Ichiloto\Editor\Database\RecordFieldCodec;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Database\SharedFileTransaction;
 use Ichiloto\Editor\Database\ConditionCodec;
@@ -9483,6 +9486,48 @@ final class Editor
     }
 
     /**
+     * Reports a field value the editor will not guess at, leaving the record
+     * untouched.
+     *
+     * A project-owned parameter line has an explicit grammar, and repairing
+     * a malformed one silently is how an author loses a value without being
+     * told. The status line says what is wrong with it instead.
+     *
+     * @param string $field The field being edited.
+     * @param string $rawValue The value typed.
+     * @return bool True when the value was rejected.
+     */
+    private function isDatabaseFieldRejected(string $field, string $rawValue): bool
+    {
+        if (! $this->workspace instanceof ProjectWorkspace) {
+            return false;
+        }
+
+        $database = $this->getSelectedRecordDatabase();
+        $schema = $database?->schema;
+
+        if ($schema === null) {
+            return false;
+        }
+
+        foreach ($schema->fields as $declared) {
+            if ($declared->key !== $field || $declared->codec !== RecordFieldCodec::KEY_VALUES) {
+                continue;
+            }
+
+            try {
+                ParameterMapCodec::decode($rawValue);
+            } catch (ParameterMapSyntaxError $error) {
+                $this->setStatus($error->getMessage(), StatusLevel::ERROR);
+
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * Returns which permanent growth this actor's preview assumes.
      *
      * @param ProjectActor $actor The actor.
@@ -11172,6 +11217,10 @@ final class Editor
                 $this->actorVariantSelections[$actor->getDefinitionId()] = trim($rawValue);
             }
 
+            return;
+        }
+
+        if ($this->isDatabaseFieldRejected($field, $rawValue)) {
             return;
         }
 

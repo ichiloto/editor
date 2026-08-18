@@ -525,11 +525,13 @@ final class ProjectRecordDatabase
             }
 
             if ($field->codec === RecordFieldCodec::KEY_VALUES) {
-                // Whatever the line could not carry is still the author's.
+                // Decoded before anything is written, so a line this cannot
+                // read leaves the record exactly as it was.
+                $authored = ParameterMapCodec::decode($rawValue);
                 $existing = $record->get($field->key);
                 $merged = ParameterMapCodec::merge(
                     is_array($existing) ? $existing : [],
-                    ParameterMapCodec::decode($rawValue),
+                    $authored,
                 );
                 $record->set($field->key, $merged === [] && $field->removeWhenEmpty ? null : $merged);
                 $this->touchState();

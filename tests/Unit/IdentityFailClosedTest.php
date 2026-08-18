@@ -67,6 +67,43 @@ it('resolves nothing belonging to either claimant of a contested id', function (
         ->and($catalog->definitionIdFor('Old Untouched'))->toBe('item.untouched');
 })->group('engine');
 
+it('offers nothing contested to a picker or a compatibility target', function () {
+    $root = contestedInventoryProject();
+    $workspace = ProjectWorkspace::fromProject($root);
+    $catalog = InventoryCatalog::fromWorkspace($workspace);
+    $references = new \Ichiloto\Editor\Database\ReferenceCatalog($workspace);
+
+    // Selecting a contested id would author a reference this same catalogue
+    // refuses to resolve, so it is not offered.
+    expect($catalog->ids())->not->toContain('thing.contested')
+        ->and($catalog->idsIn('items'))->not->toContain('thing.contested')
+        ->and($catalog->idsIn('weapons'))->not->toContain('thing.contested')
+        ->and(array_keys($catalog->definitions()))->not->toContain('thing.contested')
+        ->and($references->valuesFor('inventory'))->not->toContain('thing.contested')
+        ->and($references->valuesFor('items'))->not->toContain('thing.contested')
+        ->and($references->valuesFor('weapons'))->not->toContain('thing.contested')
+        ->and(array_keys($references->labelsFor('inventory')))->not->toContain('thing.contested')
+        // The one definition with no part in the conflict is still offered.
+        ->and($references->valuesFor('inventory'))->toContain('item.untouched')
+        // And every claimant is still there for a diagnostic to name.
+        ->and(array_keys($catalog->allDefinitions()))->toContain('thing.contested');
+})->group('engine');
+
+it('refuses a save alias that targets a contested id', function () {
+    $root = contestedInventoryProject();
+    file_put_contents($root . '/assets/Data/save-compatibility.php', sprintf(
+        "<?php\n\nreturn [\n  'contentVersion' => 0,\n  'migrations' => [],\n  'tombstones' => [],\n  'aliases' => ['items' => [['from' => 'Old Thing', 'to' => %s]]],\n];\n",
+        var_export('thing.contested', true),
+    ));
+
+    $messages = implode("\n", array_map(
+        static fn(object $issue): string => $issue->message,
+        new \Ichiloto\Editor\Validation\ProjectValidator()->validate(ProjectWorkspace::fromProject($root)),
+    ));
+
+    expect($messages)->toContain('Alias target "thing.contested" is not defined in the current items catalog.');
+})->group('engine');
+
 it('names every claimant of a contested id, across categories', function () {
     $root = contestedInventoryProject();
     $issues = new \Ichiloto\Editor\Validation\ProjectValidator()
