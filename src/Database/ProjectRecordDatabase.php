@@ -76,6 +76,19 @@ final class ProjectRecordDatabase
     private array $payloadPositions = [];
 
     /**
+     * @var bool Whether a record was added or removed since the file was
+     * read. While that is pending, the mapping from records to authored
+     * entries is the editor's to keep, not the file's to redefine.
+     */
+    private bool $structuralChange = false;
+
+    /**
+     * @var \SplObjectStorage<ProjectRecord, int>|null Where a removed record
+     * used to sit in the file, so restoring it restores its source too.
+     */
+    private ?\SplObjectStorage $removedPositions = null;
+
+    /**
      * Returns the position each of this category's records occupies in the
      * file's returned list. A file holds several categories -- items, weapons
      * and armors share one -- so the third weapon may be the file's tenth
@@ -586,6 +599,10 @@ final class ProjectRecordDatabase
         }
 
         $this->records[] = new ProjectRecord($payload, true, $sourcePath, $recordId, $file);
+        // A record with no position in the file is a record the file does not
+        // have yet, which is what tells the source writer to insert it.
+        $this->payloadPositions[] = null;
+        $this->structuralChange = true;
         $this->touchState();
 
         return count($this->records) - 1;
@@ -610,6 +627,21 @@ final class ProjectRecordDatabase
             return null;
         }
 
+        $positions = array_values($this->payloadPositions);
+        $position = $positions[$index] ?? null;
+        array_splice($positions, $index, 1);
+        $this->payloadPositions = $positions;
+
+        if ($position !== null) {
+            // Remembered against the record itself, so undoing the delete
+            // puts the entry back where its source still is rather than
+            // appending a rebuilt copy at the end.
+            $this->removedPositions ??= new \SplObjectStorage();
+            $this->removedPositions[$record] = $position;
+        }
+
+        $this->structuralChange = true;
+
         array_splice($records, $index, 1);
         $this->records = $records;
         $this->touchState();
@@ -632,6 +664,19 @@ final class ProjectRecordDatabase
     {
         $records = array_values($this->records);
         $index = max(0, min(count($records), $index));
+        $positions = array_values($this->payloadPositions);
+        $restored = $this->removedPositions?->offsetExists($record) === true
+            ? $this->removedPositions[$record]
+            : null;
+        array_splice($positions, $index, 0, [$restored]);
+        $this->payloadPositions = $positions;
+
+        if ($restored !== null) {
+            $this->removedPositions?->offsetUnset($record);
+        }
+
+        $this->structuralChange = true;
+
         array_splice($records, $index, 0, [$record]);
         $this->records = $records;
         $this->touchState();
@@ -1098,7 +1143,21 @@ final class ProjectRecordDatabase
             return;
         }
 
+        if ($this->structuralChange && $this->isConstructorAuthored()) {
+            // Adding or removing a record here would go through the writer
+            // that rebuilds the returned expression, and rebuilding an
+            // author's constructor calls is exactly what the surgical writer
+            // exists to prevent. Refusing with a reason beats silently
+            // reformatting the file.
+            throw new RuntimeException(sprintf(
+                'Refusing to add or remove a %s in %s: its entries are constructor calls this editor cannot rewrite safely. Edit the file directly.',
+                $this->schema->entryNoun,
+                basename($this->path),
+            ));
+        }
+
         $this->file->save($this->mergeIntoFilePayload());
+        $this->structuralChange = false;
         $this->rereadBackingFile();
 
         if ($this->schema->projection === null) {
@@ -1129,7 +1188,9 @@ final class ProjectRecordDatabase
 
         $this->file = PhpDataFile::load($this->file->path, $this->projectRoot);
 
-        if ($this->schema->projection === null) {
+        if ($this->schema->projection === null && ! $this->structuralChange) {
+            // A record added or removed here is not in the file yet, so the
+            // file cannot be asked which entry each record came from.
             $this->payloadPositions = self::payloadPositionsFor($this->schema, $this->file);
         }
     }
@@ -1224,7 +1285,13 @@ final class ProjectRecordDatabase
      */
     private function savedInPlace(): bool
     {
-        if ($this->authoredValues === [] || ! $this->file instanceof PhpDataFile) {
+        if (! $this->file instanceof PhpDataFile || ! is_file($this->file->path)) {
+            return false;
+        }
+
+        if ($this->schema->projection !== null) {
+            // A projected category owns part of a keyed file, not a list of
+            // authored entries, so there is nothing to patch by position.
             return false;
         }
 
@@ -1235,22 +1302,25 @@ final class ProjectRecordDatabase
             return false;
         }
 
-        if (count($this->records) !== count($this->authoredValues)) {
-            // A record was added or removed: the list changed shape, which
-            // is the whole-file writer's job.
-            return false;
-        }
-
         $patches = [];
+        $additions = [];
 
         foreach ($this->getRecords() as $index => $record) {
             $position = $this->payloadPositions[$index] ?? null;
 
-            if ($position === null || ! isset($this->authoredValues[$index])) {
+            if ($position === null) {
+                // A record the file does not hold yet: written as a new
+                // entry rather than by rebuilding the list around it.
+                $additions[] = $record;
+
+                continue;
+            }
+
+            if (! isset($this->authoredValues[$position])) {
                 return false;
             }
 
-            foreach ($this->authoredValues[$index] as $key => $authored) {
+            foreach ($this->authoredValues[$position] as $key => $authored) {
                 $current = $record->get($key);
 
                 if ($current === $authored) {
@@ -1274,21 +1344,114 @@ final class ProjectRecordDatabase
             }
         }
 
-        if ($patches === []) {
+        // Entries the file still holds that no record claims any more.
+        $claimed = array_values(array_filter(
+            $this->payloadPositions,
+            static fn(?int $position): bool => $position !== null,
+        ));
+        $removals = array_values(array_diff(array_keys($this->authoredValues), $claimed));
+        rsort($removals);
+
+        foreach ($additions as $record) {
+            if ($this->newEntrySource($record) === null) {
+                // Nothing to write it as. Refusing is the whole point: the
+                // alternative is regenerating every other entry to add one.
+                return false;
+            }
+        }
+
+        if ($patches === [] && $removals === [] && $additions === []) {
             return true;
         }
 
+        // Values first, while every position still means what it meant when
+        // the document was parsed; then removals from the back, so each one
+        // leaves the positions before it alone; then the new entries.
         foreach ($patches as $patch) {
             $document = $patch['value'] === null
                 ? $document->withoutArgument($patch['entry'], $patch['path'])
                 : $document->withArgument($patch['entry'], $patch['path'], PhpValueExporter::export($patch['value']));
         }
 
+        foreach ($removals as $position) {
+            $document = $document->withoutEntry($position);
+        }
+
+        foreach ($additions as $record) {
+            $entry = $this->newEntrySource($record);
+
+            if ($entry === null) {
+                return false;
+            }
+
+            $document = $document->withNewEntry($entry['class'], $entry['arguments']);
+        }
+
         AtomicFile::write($this->file->path, $document->source);
+        $this->structuralChange = false;
         $this->file = PhpDataFile::load($this->file->path, $this->projectRoot);
+        $this->payloadPositions = self::payloadPositionsFor($this->schema, $this->file);
         $this->captureAuthoredValues();
 
         return true;
+    }
+
+    /**
+     * Returns whether the backing file builds its entries with constructor
+     * calls the author wrote.
+     *
+     * @return bool True when it does.
+     */
+    private function isConstructorAuthored(): bool
+    {
+        if (! $this->file instanceof PhpDataFile || ! is_file($this->file->path)) {
+            return false;
+        }
+
+        $classes = array_filter(
+            PhpSourceDocument::parse((string) file_get_contents($this->file->path))->entryClasses(),
+            static fn(string $class): bool => trim($class) !== '',
+        );
+
+        return $classes !== [];
+    }
+
+    /**
+     * Returns the source a new record should be written as, or null when it
+     * cannot be written as one.
+     *
+     * Only the new entry is rendered. Every entry already in the file keeps
+     * its own bytes, which is the difference between inserting a record and
+     * rebuilding the list to hold it.
+     *
+     * @param ProjectRecord $record The new record.
+     * @return array{class: string, arguments: array<string, string>}|null The entry source.
+     */
+    private function newEntrySource(ProjectRecord $record): ?array
+    {
+        $payload = $record->toArray();
+
+        if (! is_object($payload)) {
+            return null;
+        }
+
+        $arguments = PhpValueExporter::constructorArguments($payload);
+
+        if ($arguments === null) {
+            return null;
+        }
+
+        $literals = [];
+
+        foreach ($arguments as $name => $value) {
+            if (! PhpValueExporter::isExportable($value)) {
+                return null;
+            }
+
+            $literals[$name] = PhpValueExporter::export($value, 2);
+        }
+
+        return ['class' => '\\' . $payload::class, 'arguments' => $literals];
     }
 
     /**
@@ -1336,13 +1499,23 @@ final class ProjectRecordDatabase
         $this->authoredValues = [];
 
         foreach ($this->getRecords() as $index => $record) {
+            // Keyed by where the entry sits in the file, not by where the
+            // record sits in the list: removing one shifts every record
+            // after it, and what an entry was authored holding does not
+            // move with them.
+            $position = $this->payloadPositions[$index] ?? null;
+
+            if ($position === null) {
+                continue;
+            }
+
             $values = [];
 
             foreach ($this->schema->fieldsFor($record->toArray()) as $field) {
                 $values[$field->key] = $record->get($field->key);
             }
 
-            $this->authoredValues[$index] = $values;
+            $this->authoredValues[$position] = $values;
         }
     }
 
