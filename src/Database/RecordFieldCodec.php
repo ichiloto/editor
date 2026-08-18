@@ -27,4 +27,10 @@ enum RecordFieldCodec: string
 
     /** A list of world-state writes, in the engine's `sets` vocabulary. */
     case WORLD_WRITES = 'world_writes';
+
+    /**
+     * A map of project-owned parameters, shown as `name=value` pairs. What
+     * the line cannot carry is preserved rather than shown.
+     */
+    case KEY_VALUES = 'key_values';
 }

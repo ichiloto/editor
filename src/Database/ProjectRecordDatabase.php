@@ -520,6 +520,19 @@ final class ProjectRecordDatabase
                 continue;
             }
 
+            if ($field->codec === RecordFieldCodec::KEY_VALUES) {
+                // Whatever the line could not carry is still the author's.
+                $existing = $record->get($field->key);
+                $merged = ParameterMapCodec::merge(
+                    is_array($existing) ? $existing : [],
+                    ParameterMapCodec::decode($rawValue),
+                );
+                $record->set($field->key, $merged === [] && $field->removeWhenEmpty ? null : $merged);
+                $this->touchState();
+
+                return;
+            }
+
             $record->set($field->key, self::coerce($field, $rawValue));
             $this->touchState();
 
@@ -1481,7 +1494,14 @@ final class ProjectRecordDatabase
         array_pop($segments);
         $parent = implode('.', $segments);
 
-        if ($document->argumentSource($position, $parent) !== null) {
+        $parentSource = $document->argumentSource($position, $parent);
+
+        // A leaf can be written on its own only when the source declares its
+        // holder *and* holds it as a constructor call, which is the only
+        // shape a named argument can be placed inside. A holder written as
+        // an array literal -- a special property, a parameter map -- is
+        // rewritten whole, which is still only that argument.
+        if ($parentSource !== null && str_starts_with(ltrim($parentSource), 'new ')) {
             return ['path' => $key, 'value' => $value];
         }
 
@@ -2154,6 +2174,7 @@ final class ProjectRecordDatabase
             RecordFieldCodec::AFFINITIES => ElementAffinityCodec::encodeAll(is_array($value) ? $value : []),
             RecordFieldCodec::WORLD_WRITES => WorldWriteCodec::encodeAll(is_array($value) ? $value : []),
             RecordFieldCodec::CSV_LIST => implode(', ', array_map(strval(...), is_array($value) ? $value : [])),
+            RecordFieldCodec::KEY_VALUES => ParameterMapCodec::encode(is_array($value) ? $value : []),
             RecordFieldCodec::NONE => ProjectRecord::stringify($value),
         };
     }

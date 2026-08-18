@@ -100,6 +100,7 @@ class ProjectValidator
       ...$this->checkDefinitionIdentities($workspace),
       ...$this->checkActorDefinitions($workspace),
       ...$this->checkKnowledgeCatalog($workspace),
+      ...$this->checkSpecialProperties($workspace),
       ...$this->checkPermanentGrowth($workspace),
       ...$this->checkOptimizationPolicy($workspace),
       ...new SaveCompatibilityValidator()->validate($workspace),
@@ -280,6 +281,66 @@ class ProjectValidator
    * @return Issue[] The issues found.
    */
   /**
+   * Checks the special properties a project's equipment declares.
+   *
+   * The runtime carries a special property as a shape it does not interpret,
+   * and Optimize weighs it by the `type` inside it. A property with no type
+   * is therefore weighed by nothing and read by nothing, and one that is not
+   * a set of keys and values is not the shape at all.
+   *
+   * @param ProjectWorkspace $workspace The project.
+   * @return Issue[] What is wrong with them.
+   */
+  protected function checkSpecialProperties(ProjectWorkspace $workspace): array
+  {
+    $issues = [];
+
+    foreach (InventoryCatalog::CATEGORIES as $category) {
+      $database = $workspace->getRecordDatabase($category);
+
+      if (! $database instanceof ProjectRecordDatabase) {
+        continue;
+      }
+
+      foreach ($database->getRecords() as $record) {
+        $property = $record->get('specialProperty');
+
+        if ($property === null) {
+          continue;
+        }
+
+        $name = trim(strval($record->get('name') ?? '')) ?: 'an unnamed definition';
+
+        if (! is_array($property)) {
+          $issues[] = Issue::error(
+            'assets/Data/items.php',
+            sprintf('The special property on %s is not a set of keys and values.', $name)
+          );
+
+          continue;
+        }
+
+        if (trim(strval($property['type'] ?? '')) === '') {
+          $issues[] = Issue::error(
+            'assets/Data/items.php',
+            sprintf('The special property on %s names no type.', $name),
+            'Optimize weighs a special property by its type; one without is weighed by nothing.'
+          );
+        }
+
+        if (array_key_exists('parameters', $property) && ! is_array($property['parameters'])) {
+          $issues[] = Issue::error(
+            'assets/Data/items.php',
+            sprintf('The special property parameters on %s are not a set of keys and values.', $name)
+          );
+        }
+      }
+    }
+
+    return $issues;
+  }
+
+  /**
    * Checks the permanent growth a project defines.
    *
    * Every rule is the engine's own, run rather than restated: a definition
@@ -320,6 +381,17 @@ class ProjectValidator
           sprintf('Definition %d carries metadata that is not a set of keys and values.', $index),
           'Project-owned metadata rides along with a grant; anything else the runtime will not carry.'
         );
+      }
+    }
+
+    foreach (array_values($payload) as $index => $entry) {
+      foreach (is_array($entry) && is_array($entry['metadata'] ?? null) ? $entry['metadata'] : [] as $key => $value) {
+        if (! is_string($key) || trim($key) === '') {
+          $issues[] = Issue::error(
+            $where,
+            sprintf('Definition %d has metadata under a key that is not a name.', $index)
+          );
+        }
       }
     }
 

@@ -493,6 +493,16 @@ final class RecordSchemaCatalog
                 new RecordField('sourceType', 'Source Type', displayDefault: 'what kind of thing granted it'),
                 new RecordField('sourceId', 'Source Id', displayDefault: 'which one of them'),
                 new RecordField('metadata.note', 'Note', removeWhenEmpty: true),
+                // The runtime carries whatever metadata a project puts on a
+                // grant, so label and note are conveniences over a surface
+                // that can hold the rest of it.
+                new RecordField(
+                    'metadata',
+                    'Metadata',
+                    codec: RecordFieldCodec::KEY_VALUES,
+                    removeWhenEmpty: true,
+                    displayDefault: 'name=value, name=value',
+                ),
             ],
             labelKey: 'metadata.label',
             identityKey: 'id',
@@ -995,6 +1005,16 @@ final class RecordSchemaCatalog
             new RecordField('criticalModifier', 'Critical Modifier', InputControlType::INTEGER, step: 5),
             // A typed property a project defines and the runtime passes on.
             new RecordField('specialProperty.type', 'Special Property', removeWhenEmpty: true),
+            // What the property is worth is the project's own vocabulary,
+            // so the parameters are authored as typed pairs rather than
+            // being left unauthorable or given a schema of the editor's.
+            new RecordField(
+                'specialProperty.parameters',
+                'Property Parameters',
+                codec: RecordFieldCodec::KEY_VALUES,
+                removeWhenEmpty: true,
+                displayDefault: 'name=value, name=value',
+            ),
         ];
     }
 
