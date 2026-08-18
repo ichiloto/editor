@@ -845,6 +845,62 @@ actually occupies rather than in characters; and every seeded preview
 starting from the same target state, with the party and troop left as they
 were found.
 
+## Foundation tooling correction, round three — shipped 2026-08
+
+Four remaining correctness problems, each reproduced before it was changed,
+and one found beside them.
+
+**Every entry is addressed by what it says, not where it sits.** Which entry
+of its category a record came from was a sound address only until the first
+save moved things: delete the middle of A, B, C, save, undo, save again, and
+the restored B was appended after C in the file while it stayed between A
+and C in the list — editing B then patched C. Every entry now has a durable
+identity, an item's stable id or a troop's name, looked up in a fresh reading
+of the file at the moment of writing; a record put back after a saved
+removal is written ahead of the neighbour that follows it; and where
+identity cannot prove the address — two entries declaring one id, an entry
+declaring none, a write that would leave two declaring one — nothing is
+written and the reason names the id. The regenerating fallback for lists
+that are data folds every dirty category into that same one reading and
+writes once, by the same identity where the list allows it. Found beside
+it: removing an entry of an array-literal list was attempted as source
+surgery on a placeholder, which cut one byte and left `troops.php` unable
+to parse; a placeholder is never cut by span.
+
+**The parameter grammar round-trips the whole scalar contract.** `1.0` came
+back the integer `1`, `1.0E+20` came back a string, a quoted key lost its
+spaces, and `\q` lost its backslash. Floats are written the way PHP spells
+them for a round trip and read back as floats; `INF`, `-INF` and `NAN` are
+the three bare words for the floats digits cannot spell; a quoted name is
+the string between its quotes; and exactly two escapes exist, any other
+refused with the escape named. Every refusal leaves the record, its dirt
+and its source as they were.
+
+**Every claimant of a contested id is kept, with its category.** The
+catalogue kept one definition per id and later claimants only as names.
+Every definition that claims an id is now an `InventoryClaimant` — id, name,
+category, aliases, and its entry in the source — and the validator reports a
+contested id once, naming each claimant with all of that. Contested ids
+remain absent from every resolvable and selectable surface.
+
+**The whole battle report is a reading, not a rehearsal.** The preview
+helper alone snapshotted state, shallowly, after the simulation had already
+run on the loaded party. `ParticipantSnapshot` records everything a party or
+troop reaches — every stored property of every reachable object, arrays
+holding the very same objects, membership and order — and the report
+restores it before each troop is simulated, before each attacker previews,
+and once more in `finally`. The suite runs the complete report in-process
+and compares 218 reachable objects before and after, with a fire blade at
+the critical ceiling swung at a bat weak to fire so the same simulation
+without the boundary changes both feedback flags, then injects a preview
+failure and an output failure and proves the participants restored.
+
+**Fixtures are bounded and removed.** Test projects reach a pinned game
+through `ICHILOTO_GAME_SRC`, the soundtrack through a link rather than a
+copy, every throwaway directory is removed after every test whether it
+passed or failed, links are never followed on removal, and a console test
+throws on failure rather than exiting past its cleanup.
+
 ## Foundation tooling correction, round two — shipped 2026-08
 
 Four contract failures, each reproduced before it was changed.

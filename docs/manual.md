@@ -438,10 +438,10 @@ status line says exactly why.
 | Actors | `assets/Data/Actors/*.php` | Editable |
 | Classes | `assets/Data/classes.php` | Editable |
 | Skills | `assets/Data/skills.php` | Editable |
-| Items | `assets/Data/items.php` | Read-only — authored as `new Item(...)` calls |
-| Weapons | `assets/Data/items.php` | Read-only — authored as `new Weapon(...)` calls |
-| Armors | `assets/Data/items.php` | Read-only — authored as `new Armor(...)` calls |
-| Enemies | `assets/Data/enemies.php` | Read-only — authored as `new Enemy(...)` calls |
+| Items | `assets/Data/items.php` | Editable — authored as `new Item(...)` calls, edited entry by entry |
+| Weapons | `assets/Data/items.php` | Editable — authored as `new Weapon(...)` calls, edited entry by entry |
+| Armors | `assets/Data/items.php` | Editable — authored as `new Armor(...)` calls, edited entry by entry |
+| Enemies | `assets/Data/enemies.php` | Editable — authored as `new Enemy(...)` calls, edited entry by entry |
 | Troops | `assets/Data/troops.php` | Editable |
 | States | `assets/Data/states.php` | Editable |
 | Animations | `assets/Data/animations.php` | Editable |
@@ -461,17 +461,74 @@ status line says exactly why.
 | Types | `assets/Data/Types/*.php` | Read-only — PHP enum declarations |
 | Terms | `config.php` (`vocab`, `messages`) | Editable when the config carries no inline comments |
 
-Why the read-only ones are read-only: those files are not data, they are PHP
-code that *builds* data. `enemies.php` assigns skills to local variables and
-shares them between enemies; `items.php` constructs effect objects inline.
-Regenerating such a file from the values the editor loaded would mean inventing
-source, and anything the editor did not understand would be silently lost. The
-editor would rather show you the values and refuse to write.
+Why a category can still turn out read-only: a file the editor cannot
+evaluate, a value it could not write back out, or a comment sitting inside
+the returned data are each a reason, and the status line names it. You can
+still browse everything: an enemy shows its level, every stat, its sprite,
+its battle rewards, and its element affinities.
 
-You can still browse everything: an enemy shows its level, every stat, its
-sprite, its battle rewards, and its element affinities. Making one of these
-categories editable is a matter of re-authoring its file as a plain array —
-the editor picks that up automatically, with no change to the editor.
+### How A File Of Constructor Calls Is Written
+
+`items.php` and `enemies.php` are not data, they are PHP code that *builds*
+data: `new Item(...)` and `new Enemy(...)` calls with named arguments,
+imports, comments, and enum expressions the author chose. Regenerating such
+a file from loaded values would reorder arguments, spell out defaults nobody
+wrote, and rewrite every entry to change one. So the editor does not
+regenerate it. It edits the author's own source, entry by entry:
+
+- **A changed value** is patched where its argument sits. Every other byte of
+  the file — the other arguments, the other entries, the comments between
+  them — is the same afterwards.
+- **A new entry** is written as a constructor call in the file's own
+  indentation, after the last entry.
+- **A deleted entry** is cut whole, with its separator.
+- **A deleted entry put back** by undo goes back exactly where it was when
+  the file has not been saved in between, and, when it has, is written back
+  ahead of the entry that follows it in the list — so the file reads in the
+  order the editor does.
+
+Every entry is found by the identity it declares — an item's stable id, an
+enemy's name — looked up in a fresh reading of the file at the moment of
+writing, never by where it happened to sit when it was loaded. That is what
+lets three categories share one file: Items, Weapons and Armors are three
+views of `items.php`, and saving one of them, or all of them with `Ctrl+A`,
+reads the file once, composes every dirty category's changes against that
+one reading, and writes it once.
+
+Where identity cannot prove the address, nothing is written and the status
+line says why: two entries in the file declaring one id, an entry declaring
+none, or a save that would leave two entries declaring one id. Give each
+entry a distinct id, reload, and save again.
+
+Files that are data — Troops, States, Permanent Growth — are regenerated as
+data, keeping everything from `<?php` to the top-level `return` byte for
+byte, and a file several categories share is folded from all of them into
+one payload before its one write.
+
+### Project-Owned Parameters
+
+A weapon or armor's **Special Property** parameters and a Permanent Growth
+definition's **Metadata** are the project's own vocabulary: the game carries
+them without reading them. Both are edited as one line of `name=value`
+pairs, and the line reads back exactly what was written:
+
+- Pairs are separated by commas; spaces around names, values and commas
+  mean nothing.
+- Bare, `true` and `false` are booleans, `INF`, `-INF` and `NAN` are the
+  floats digits cannot spell, digits are an integer, digits with a fraction
+  or an exponent are a float — `1.0` stays `1.0` and `1.0E+20` stays exact —
+  and anything else is the string it spells. A leading zero makes an
+  identifier such as `007`, not a number.
+- Anything that would read back as something else is quoted: the string
+  `"true"`, the string `"1.0"`, an empty string `""`, a value with a comma,
+  an equals sign or a space at either end, and a name with any of those.
+  Inside quotes exactly two escapes exist, `\"` for a quote and `\\` for a
+  backslash; any other backslash is refused rather than silently dropped.
+- Nested lists and maps do not fit on the line. They are not shown, and they
+  are not touched.
+- A line the editor cannot read — a name without a value, a value with a
+  stray quote, an unknown escape — is refused with the reason on the status
+  line, and the record is left exactly as it was.
 
 ### States
 
@@ -890,6 +947,12 @@ on dangling destination references, event markers without definitions, and
 spawn points outside the map. The warnings appear in the status footer;
 `Ctrl+E` shows the full text. The project-wide pass (`ichiloto validate`) also
 covers every NPC field, as described under [NPC Mode](#npc-mode).
+
+An inventory id two definitions claim is reported once, naming every
+claimant with the category it was authored in, the aliases it brought, and
+its entry in `items.php` — the game refuses the whole catalogue until one
+of them is renamed, and until then nothing under any claimant is offered by
+a picker, resolved by a reference, or accepted as a save alias target.
 
 ### Backups
 

@@ -35,9 +35,12 @@ Current limits worth knowing before you plan a session:
 - **Patrol routes.** The engine has no patrol or pathfinding for NPCs: they
   stand still, wander a rectangle, or follow a `move_route` in a script. The
   editor authors exactly that and no more.
-- **Items, weapons, armors, enemies.** These files are PHP constructor calls,
-  so the editor browses them and refuses to rewrite them. See the manual's
-  [category table](../manual.md#editable-and-read-only-categories).
+- **Items, weapons, armors, enemies.** These files are PHP constructor calls.
+  The editor edits them entry by entry rather than regenerating them, and
+  refuses, with the reason, an edit it cannot express in the author's own
+  source. See the manual's
+  [category table](../manual.md#editable-and-read-only-categories) and
+  [how such a file is written](../manual.md#how-a-file-of-constructor-calls-is-written).
 
 ## Recommended Build Loop
 
