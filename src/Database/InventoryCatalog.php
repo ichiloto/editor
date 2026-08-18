@@ -63,6 +63,7 @@ final class InventoryCatalog
         $definitions = [];
         $references = [];
         $conflicts = [];
+        $contested = [];
 
         foreach (self::CATEGORIES as $category) {
             $database = $workspace->getRecordDatabase($category);
@@ -80,23 +81,24 @@ final class InventoryCatalog
                 }
 
                 if (isset($definitions[$id])) {
-                    // Two definitions under one id: both are recorded so the
-                    // validator can name them, and the id resolves to
-                    // neither.
+                    // Two definitions under one id. The runtime's store
+                    // refuses the whole catalogue over this, so nothing
+                    // belonging to either claimant may resolve until it is
+                    // fixed: not the id, and not the names and aliases each
+                    // of them brought with it. Both are recorded so the
+                    // validator can name every claimant.
                     $conflicts[$id] = array_values(array_unique([
                         ...($conflicts[$id] ?? [$definitions[$id]['name']]),
                         $name,
                     ]));
+                    $contested[$id] = [
+                        ...($contested[$id] ?? [$definitions[$id]]),
+                        ['id' => $id, 'name' => $name, 'category' => $category, 'aliases' => self::declaredAliases($record)],
+                    ];
                     continue;
                 }
 
-                $aliases = array_values(array_filter(
-                    array_map(
-                        static fn(mixed $alias): string => trim(strval(is_scalar($alias) ? $alias : '')),
-                        is_array($record->get('aliases')) ? (array) $record->get('aliases') : [],
-                    ),
-                    static fn(string $alias): bool => $alias !== '',
-                ));
+                $aliases = self::declaredAliases($record);
 
                 $definitions[$id] = [
                     'id' => $id,
@@ -139,6 +141,27 @@ final class InventoryCatalog
             }
         }
 
+        // Everything a contested definition brought with it is contested
+        // too. The first one retained kept its display name and aliases
+        // resolving, which let a reference quietly mean one of two
+        // definitions the runtime will not load at all.
+        foreach ($contested as $claimants) {
+            foreach ($claimants as $claimant) {
+                foreach ([$claimant['name'], ...$claimant['aliases']] as $reference) {
+                    $normalized = self::normalize($reference);
+
+                    if ($normalized === '') {
+                        continue;
+                    }
+
+                    $conflicts[$normalized] = array_values(array_unique([
+                        ...($conflicts[$normalized] ?? []),
+                        ...array_map(static fn(array $each): string => $each['name'], $claimants),
+                    ]));
+                }
+            }
+        }
+
         // A reference two definitions claim resolves to nothing at all: an
         // editor that guessed would author the wrong item.
         foreach (array_keys($conflicts) as $normalized) {
@@ -146,6 +169,23 @@ final class InventoryCatalog
         }
 
         return new self($definitions, $references, $conflicts);
+    }
+
+    /**
+     * Returns the aliases a definition declares.
+     *
+     * @param ProjectRecord $record The definition.
+     * @return string[] The aliases.
+     */
+    private static function declaredAliases(ProjectRecord $record): array
+    {
+        return array_values(array_filter(
+            array_map(
+                static fn(mixed $alias): string => trim(strval(is_scalar($alias) ? $alias : '')),
+                is_array($record->get('aliases')) ? (array) $record->get('aliases') : [],
+            ),
+            static fn(string $alias): bool => $alias !== '',
+        ));
     }
 
     /**

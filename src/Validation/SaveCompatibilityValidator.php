@@ -314,8 +314,12 @@ final class SaveCompatibilityValidator
                 static fn(object $quest): string => $quest->getId(),
                 $workspace->questDatabase->getQuests()
             ),
+            // The durable identity a save reconstructs an actor by, which
+            // is the definition id where one is declared and the display
+            // name only where none is. A legacy display name is a legitimate
+            // alias *source*; it is not a current canonical target.
             ContentReferenceCategory::ACTOR => array_map(
-                static fn(object $actor): string => $actor->getName(),
+                static fn(object $actor): string => $actor->getDefinitionId(),
                 $workspace->actorDatabase->getActors()
             ),
             // An alias target is a stable definition id, never a display
