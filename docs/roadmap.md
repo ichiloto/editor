@@ -797,3 +797,50 @@ Not added, because the engine does not have them: a save-file ledger editor,
 a project command that grants permanent growth, project-authored worn
 equipment, and run-level rates for misses, criticals, Guard or elemental
 outcomes.
+
+## Foundation tooling correction — shipped 2026-08
+
+Source review found one release-blocking data-loss path, one place the
+editor disagreed with the runtime, and several places the released contract
+was only half-authorable. Each was corrected at its root.
+
+**Several categories, one file.** A knowledge catalogue's subjects and
+reports, and an optimization policy's weights, outcomes and exclusions, each
+held the payload snapshot taken when *it* loaded and each wrote the whole
+file. Saving one reverted whatever a sibling had saved since. A save now
+folds into the file as it is at that moment, entry positions are recomputed
+with it, and Save All groups categories by the file they write so a shared
+file is written once with every dirty part folded in. Nothing is written
+until every projection has been folded, and no baseline advances until the
+write succeeds.
+
+**An actor's nature is composed, not replaced.** The runtime adds the
+selected variant on top of the fixed adjustments; the editor was reading the
+variant instead of them. It now asks `ActorDefinition` directly, and both
+layers are shown and editable with what they come to together beside them.
+
+**The whole catalogue is authorable.** Record types and enemy mappings are
+categories of their own, disagreements are picked rather than spelled, and
+the knowledge command asks for exactly what its operation reads — with the
+operation vocabulary still the runtime's and a test holding the two in step.
+
+**Structural edits keep the author's source.** Adding or removing a record
+went through the writer that rebuilds the whole returned expression. Entries
+are now inserted and removed in the source itself; only a new entry is
+rendered, and a structural edit that cannot be made safely is refused by
+name rather than regenerating the file.
+
+**What belongs to the project is authorable by the project.** A special
+property's parameters and a permanent grant's metadata are edited as typed
+pairs, and whatever the line cannot carry is preserved untouched.
+
+**Identity fails closed.** A duplicate stable id now contests everything
+both claimants brought with them, because the runtime's store refuses that
+catalogue outright. Actor alias targets validate against the definition id a
+save reconstructs by.
+
+**The battle report counts, measures and restores.** Raw wins, defeats and
+unfinished runs beside their shares; width measured in the columns a glyph
+actually occupies rather than in characters; and every seeded preview
+starting from the same target state, with the party and troop left as they
+were found.
