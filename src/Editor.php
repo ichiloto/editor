@@ -9351,15 +9351,50 @@ final class Editor
             ];
         }
 
-        $prefix = $variants === []
-            ? 'actorNaturalAdjustments'
-            : sprintf('naturalVariants.%s', $selected ?? '');
-        $adjustments = $actor->getNaturalAdjustmentsFor($selected);
+        // Both layers are real: the runtime adds the selected variant on top
+        // of the fixed adjustments rather than replacing them, so both are
+        // shown and both are editable.
+        $inForce = $actor->getNaturalAdjustmentsFor($selected);
+        $fixed = $actor->getActorNaturalAdjustments();
+        $rows = [...$rows, ...$this->actorAdjustmentRows(
+            $variants === [] ? 'Adjustments' : 'Fixed, always applied',
+            'actorNaturalAdjustments',
+            $fixed,
+        )];
+
+        if ($variants !== [] && $selected !== null) {
+            $rows = [...$rows, ...$this->actorAdjustmentRows(
+                sprintf('Variant %s, added on top', $selected),
+                sprintf('naturalVariants.%s', $selected),
+                $variants[$selected] ?? [],
+            )];
+            $rows[] = [
+                'label' => '  In force',
+                'value' => $this->describeAdjustments($inForce),
+                'editable' => false,
+                'field' => '',
+            ];
+        }
+
+        return $rows;
+    }
+
+    /**
+     * The rows for one layer of an actor's nature.
+     *
+     * @param string $heading What the layer is.
+     * @param string $prefix The payload path the rows write to.
+     * @param array<string, int> $adjustments The layer's adjustments.
+     * @return array<int, array<string, mixed>> The rows.
+     */
+    private function actorAdjustmentRows(string $heading, string $prefix, array $adjustments): array
+    {
+        $rows = [['label' => '  ' . $heading, 'value' => '', 'editable' => false, 'field' => '']];
 
         foreach (ActorStatPreview::statKeys() as $key) {
             $amount = $adjustments[$key] ?? 0;
             $rows[] = [
-                'label' => '  ' . ucfirst(strtolower((string) preg_replace('/(?<!^)[A-Z]/', ' $0', $key))),
+                'label' => '    ' . ucfirst(strtolower((string) preg_replace('/(?<!^)[A-Z]/', ' $0', $key))),
                 'value' => (string) $amount,
                 'control' => new InputControl(InputControlType::INTEGER, (string) $amount),
                 'field' => $prefix . '.' . $key,
@@ -9367,6 +9402,25 @@ final class Editor
         }
 
         return $rows;
+    }
+
+    /**
+     * Describes what an actor's nature comes to once composed.
+     *
+     * @param array<string, int> $adjustments The composed adjustments.
+     * @return string The description.
+     */
+    private function describeAdjustments(array $adjustments): string
+    {
+        $parts = [];
+
+        foreach ($adjustments as $key => $amount) {
+            if ($amount !== 0) {
+                $parts[] = sprintf('%+d %s', $amount, $key);
+            }
+        }
+
+        return $parts === [] ? 'nothing adjusted' : implode(', ', $parts);
     }
 
     /**

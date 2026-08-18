@@ -105,14 +105,16 @@ it('authors named variants, and reads the one in force rather than the fixed set
 
     expect(array_keys($actor->getNaturalVariants()))->toBe(['awakened', 'dormant'])
         ->and($actor->getDefaultNaturalVariantId())->toBe('awakened')
-        // While variants exist the runtime reads the selected variant's
-        // adjustments, so that is what the editor reports as in force.
-        ->and($actor->getNaturalAdjustmentsFor(null))->toBe(['attack' => 12, 'speed' => 3])
-        ->and($actor->getNaturalAdjustmentsFor('dormant'))->toBe(['attack' => 1])
+        // The runtime composes: the fixed adjustments always apply and the
+        // selected variant is added on top, summing where both name one
+        // stat. Fixed attack 4 plus awakened attack 12 is 16, not 12.
+        ->and($actor->getNaturalAdjustmentsFor(null))->toBe(['attack' => 16, 'speed' => 3])
+        ->and($actor->getNaturalAdjustmentsFor('dormant'))->toBe(['attack' => 5])
         // The fixed set is preserved, not overwritten by the variants.
         ->and($actor->getActorNaturalAdjustments())->toBe(['attack' => 4])
-        // A variant nobody declared contributes nothing rather than guessing.
-        ->and($actor->getNaturalAdjustmentsFor('missing'))->toBe([]);
+        // A variant nobody declared contributes nothing of its own, which
+        // leaves the fixed layer standing rather than nothing at all.
+        ->and($actor->getNaturalAdjustmentsFor('missing'))->toBe(['attack' => 4]);
 
     // Emptying a variant of every adjustment stops it being a variant.
     $database->setField(0, 'naturalVariants.dormant.attack', 0);

@@ -325,25 +325,90 @@ final class ProjectActor
     }
 
     /**
-     * Returns the adjustments in force for a variant: the fixed ones when
-     * the actor has no variants, the named variant's own otherwise.
+     * Returns the actor-natural adjustments in force for a variant.
+     *
+     * The runtime composes rather than replaces: an actor's fixed
+     * adjustments always apply, and the selected variant is added on top of
+     * them, summing where both name the same stat. That is
+     * `ActorDefinition::naturalAdjustmentsFor()`, and it is asked directly
+     * whenever the engine is reachable so this can never become a second
+     * opinion about what an actor naturally is. A definition the engine
+     * refuses to build -- an unknown stat key, a default variant that is not
+     * declared -- is composed here the same way instead, so a broken project
+     * still opens and the validator is what reports the fault.
      *
      * @param string|null $variantId The variant, or null for the default.
      * @return array<string, int> The adjustments.
      */
     public function getNaturalAdjustmentsFor(?string $variantId = null): array
     {
+        $variantId = $this->resolveNaturalVariantId($variantId);
+        $definition = $this->engineDefinition();
+
+        if ($definition !== null) {
+            /** @var array<string, int> $adjustments */
+            $adjustments = $definition->naturalAdjustmentsFor($variantId);
+
+            return $adjustments;
+        }
+
+        $adjustments = $this->getActorNaturalAdjustments();
+
+        foreach ($variantId === null ? [] : ($this->getNaturalVariants()[$variantId] ?? []) as $stat => $amount) {
+            $adjustments[$stat] = ($adjustments[$stat] ?? 0) + $amount;
+        }
+
+        return $adjustments;
+    }
+
+    /**
+     * Returns which variant is in force: the one asked for when the actor
+     * declares it, otherwise the default, and none at all when the actor
+     * declares no variants.
+     *
+     * @param string|null $variantId The variant asked for.
+     * @return string|null The variant in force.
+     */
+    public function resolveNaturalVariantId(?string $variantId = null): ?string
+    {
         $variants = $this->getNaturalVariants();
 
         if ($variants === []) {
-            return $this->getActorNaturalAdjustments();
+            return null;
         }
 
-        $variantId = $variantId === null || trim($variantId) === ''
-            ? (string) $this->getDefaultNaturalVariantId()
-            : trim($variantId);
+        $variantId = $variantId === null ? '' : trim($variantId);
 
-        return $variants[$variantId] ?? [];
+        // A variant asked for by name is answered by name, declared or not.
+        // The runtime contributes nothing for one it does not know rather
+        // than quietly substituting another, and neither does this.
+        if ($variantId !== '') {
+            return $variantId;
+        }
+
+        return $this->getDefaultNaturalVariantId();
+    }
+
+    /**
+     * Returns this actor as the engine's own definition, or null when the
+     * engine cannot be reached or refuses to build one.
+     *
+     * @return \Ichiloto\Engine\Entities\Actors\ActorDefinition|null The definition.
+     */
+    private function engineDefinition(): ?object
+    {
+        if (! class_exists(\Ichiloto\Engine\Entities\Actors\ActorDefinition::class)) {
+            return null;
+        }
+
+        try {
+            return \Ichiloto\Engine\Entities\Actors\ActorDefinition::fromArray(
+                ['data' => $this->getData()],
+                'this actor',
+            );
+        } catch (\Throwable) {
+            return null;
+        }
     }
 
     /**

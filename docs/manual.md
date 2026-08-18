@@ -386,12 +386,19 @@ every save that named it.
 others: an adjustment per canonical stat, applied on top of the class
 baseline. Adjustments keep their sign, because being slower than the
 baseline is a legitimate nature, and an adjustment of zero is removed rather
-than written. An actor may instead declare named *natural variants* — one
-set of adjustments per variant, with a `Default Variant` the game starts on.
-While variants exist the game reads the selected variant's adjustments and
-ignores the fixed ones, so the rows edit whichever set is in force;
-`Editing Variant` chooses which one the rows show, and is a view of the
-pane rather than a change to the project.
+than written.
+
+An actor may also declare named *natural variants* — one set of adjustments
+per variant, with a `Default Variant` the game starts on. The game
+**composes** the two: the fixed adjustments always apply, and the selected
+variant is added on top, summing where both name the same stat. So a fixed
+`attack 4` under a variant's `attack 12` is `16`, and a variant may also
+take away what the fixed layer gave. Both layers are therefore shown and
+both are editable — `Fixed, always applied` and `Variant <id>, added on top`
+— with an `In force` row showing what they come to together.
+`Editing Variant` chooses which variant the rows show, and is a view of the
+pane rather than a change to the project. A variant the actor does not
+declare contributes nothing, which leaves the fixed layer standing.
 
 **Resolved Stats** is what each stat actually comes to, computed by the
 game's own resolver rather than by the editor: the class baseline, this
