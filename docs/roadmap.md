@@ -844,3 +844,35 @@ unfinished runs beside their shares; width measured in the columns a glyph
 actually occupies rather than in characters; and every seeded preview
 starting from the same target state, with the party and troop left as they
 were found.
+
+## Foundation tooling correction, round two — shipped 2026-08
+
+Four contract failures, each reproduced before it was changed.
+
+**One transaction per file, not per category.** Items, weapons and armors
+own subsets of one list, and each remembered which *absolute* entry of the
+whole file its records came from. Removing an item shifted every later
+position a sibling still held, so saving items then weapons destroyed a
+weapon nobody had touched. A record now remembers which entry of its own
+category it came from; where that lands is resolved from the file at the
+moment of writing, against the snapshot every sibling is composed against.
+Every category backed by a file belongs to that file's group, and saving one
+category and saving all of them are one path.
+
+**A contested identity disappears from everything selectable.** A duplicate
+stable id already resolved to nothing, but the first claimant stayed in the
+definitions table, so pickers still offered it and save aliases still
+accepted it. Contested definitions are now absent from every resolvable and
+selectable surface while remaining available to diagnostics.
+
+**A parameter line no longer guesses.** The `name=value` grammar destroyed
+legal values: a comma split a string into two keys, spaces were trimmed, and
+the string `true` came back a boolean. Values are quoted when they would not
+read back as themselves, quotes and backslashes are escaped, and a line that
+cannot be parsed is refused with a reason instead of repaired.
+
+**The report measures with the engine's own ruler.** The width model the
+console carried has gone; `TerminalText` owns that contract and draws the
+game's own screens with it. Preview isolation records and restores the whole
+stored state of every battler rather than health alone, skipping properties
+that are computed on every read.
