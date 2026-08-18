@@ -4,8 +4,13 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Database;
 
+use Closure;
+
 use Ichiloto\Editor\ActorStatPreview;
 use Ichiloto\Editor\Database\Projections\KeyedListProjection;
+use Ichiloto\Editor\Database\Projections\KnowledgeEnemyMappingProjection;
+use Ichiloto\Editor\Database\Projections\KnowledgeRecordTypeProjection;
+use Ichiloto\Editor\Database\Projections\KnowledgeReportProjection;
 use Ichiloto\Editor\Database\Projections\OptimizationExclusionProjection;
 use Ichiloto\Editor\Database\Projections\OptimizationOutcomeProjection;
 use Ichiloto\Editor\Database\Projections\OptimizationWeightProjection;
@@ -65,6 +70,8 @@ final class RecordSchemaCatalog
             self::skits(),
             self::knowledgeSubjects(),
             self::knowledgeReports(),
+            self::knowledgeRecordTypes(),
+            self::knowledgeEnemyMappings(),
             self::permanentGrowth(),
             self::optimizeWeights(),
             self::optimizeOutcomes(),
@@ -364,7 +371,6 @@ final class RecordSchemaCatalog
                 new RecordField('title', 'Title'),
                 new RecordField('summary', 'Summary'),
                 new RecordField('details', 'Details', removeWhenEmpty: true),
-                new RecordField('disagreesWith', 'Disagrees With', codec: RecordFieldCodec::CSV_LIST, removeWhenEmpty: true),
                 new RecordField('displayOrder', 'Display Order', InputControlType::INTEGER, step: 10),
             ],
             labelKey: 'title',
@@ -376,7 +382,75 @@ final class RecordSchemaCatalog
                 'summary' => 'What it claims.',
                 'displayOrder' => 0,
             ],
-            projection: new KeyedListProjection('reports'),
+            // A disagreement names another report, so it is picked from the
+            // ones the project has rather than spelled into a list.
+            subList: new RecordSubList(
+                key: 'disagreesWith',
+                prefix: 'disagreement',
+                singular: 'disagreement',
+                fields: [
+                    RecordField::reference('report', 'Disagrees With', 'knowledge_reports'),
+                ],
+                blank: ['report' => ''],
+            ),
+            projection: new KnowledgeReportProjection(),
+        );
+    }
+
+    /**
+     * Knowledge record types — the `recordTypes` list of the catalogue.
+     *
+     * The kinds of record a project declares, and the only kinds a subject
+     * can be.
+     *
+     * @return RecordSchema
+     */
+    private static function knowledgeRecordTypes(): RecordSchema
+    {
+        return new RecordSchema(
+            key: 'knowledge_record_types',
+            entryNoun: 'record type',
+            storage: RecordStorage::LIST_FILE,
+            relativePath: 'assets/Data/knowledge.php',
+            fields: [new RecordField('type', 'Record Type')],
+            labelKey: 'type',
+            identityKey: 'type',
+            blank: ['type' => 'new-record-type'],
+            projection: new KnowledgeRecordTypeProjection(),
+        );
+    }
+
+    /**
+     * Knowledge enemy mappings — the `enemyMappings` map of the catalogue.
+     *
+     * Which subject an enemy is a record of, for the subjects that are
+     * fought. Both sides are picked.
+     *
+     * @return RecordSchema
+     */
+    private static function knowledgeEnemyMappings(): RecordSchema
+    {
+        return new RecordSchema(
+            key: 'knowledge_enemy_mappings',
+            entryNoun: 'enemy mapping',
+            storage: RecordStorage::LIST_FILE,
+            relativePath: 'assets/Data/knowledge.php',
+            fields: [
+                RecordField::reference('enemy', 'Enemy', 'enemies'),
+                RecordField::reference('subject', 'Knowledge Subject', 'knowledge_subjects'),
+            ],
+            identityKey: null,
+            // The runtime refuses a mapping whose subject is not a stable
+            // id, so a new one starts as a placeholder pair the catalogue
+            // still loads and validation immediately asks to be filled in,
+            // rather than as blanks that could not be written at all.
+            blank: ['enemy' => 'New Enemy', 'subject' => 'subject.unassigned'],
+            projection: new KnowledgeEnemyMappingProjection(),
+            labelFor: static fn(array $row): string => sprintf(
+                '%s · %s',
+                trim(strval($row['enemy'] ?? '')) ?: '(no enemy)',
+                trim(strval($row['subject'] ?? '')) ?: '(no subject)',
+            ),
         );
     }
 
@@ -1066,7 +1140,7 @@ final class RecordSchemaCatalog
      * read-only counts: flattening a tree into one settings pane would be
      * unreadable, and silently dropping it on save would be worse.
      *
-     * @return array<string, RecordField[]>
+     * @return array<string, RecordField[]|Closure(array<string, mixed>): RecordField[]>
      */
     private static function eventCommandVariants(): array
     {
@@ -1122,19 +1196,15 @@ final class RecordSchemaCatalog
             // The runtime owns which knowledge operations exist, and each one
             // reads its own fields. Everything optional drops out when empty,
             // so a discover command does not carry an unused observation.
-            'knowledge' => [
+            // The operation chooses the shape: each one asks for exactly
+            // what the runtime reads for it, and for nothing else.
+            'knowledge' => static fn(array $entry): array => [
                 new RecordField(
                     'operation',
                     'Operation',
-                    options: KnowledgeProgressService::OPERATIONS,
+                    options: KnowledgeCommandShape::operations(),
                 ),
-                RecordField::reference('subject', 'Subject', 'knowledge_subjects'),
-                RecordField::reference('report', 'Report', 'knowledge_reports', allowsNone: true),
-                RecordField::reference('replacement', 'Replacement Report', 'knowledge_reports', allowsNone: true),
-                new RecordField('observation', 'Observation', removeWhenEmpty: true),
-                new RecordField('outcome', 'Outcome', removeWhenEmpty: true),
-                new RecordField('source', 'Source', removeWhenEmpty: true, displayDefault: 'story.event'),
-                new RecordField('confidence', 'Confidence', InputControlType::FLOAT, removeWhenEmpty: true, displayDefault: '1.0'),
+                ...KnowledgeCommandShape::fieldsFor(strval($entry['operation'] ?? '')),
             ],
             'move_route' => [
                 new RecordField('subject', 'Subject', options: ['player', 'npc']),

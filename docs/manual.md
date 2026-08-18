@@ -451,6 +451,8 @@ status line says exactly why.
 | Skits | `assets/Data/Skits/*.php` | Editable |
 | Knowledge | `assets/Data/knowledge.php` | Editable |
 | Knowledge Reports | `assets/Data/knowledge.php` | Editable |
+| Knowledge Types | `assets/Data/knowledge.php` | Editable |
+| Knowledge Enemies | `assets/Data/knowledge.php` | Editable |
 | Permanent Growth | `assets/Data/permanent-growth.php` | Editable |
 | Optimize Weights | `assets/Data/equipment-optimization.php` | Editable |
 | Optimize Outcomes | `assets/Data/equipment-optimization.php` | Editable |
@@ -525,9 +527,45 @@ something discovers it. `Relationships` is a sub-list: a type, and the
 related subject picked from the catalogue.
 
 **Knowledge Reports** authors claims about those subjects: a stable `Id`,
-the `Subject` it concerns, a title and summary, optional details, the
-reports it `Disagrees With`, and a display order. A story event unlocks,
-amends, withdraws or supersedes a report through the `knowledge` command.
+the `Subject` it concerns, a title and summary, optional details, a display
+order, and the reports it disagrees with — each one a sub-list row picked
+from the project's reports rather than spelled, because a disagreement
+spelled by hand is a disagreement with nothing. The file keeps the flat list
+of ids the game reads.
+
+**Knowledge Types** authors `recordTypes`: the kinds of record a subject can
+be. A subject's `Record Type` is picked from what this declares, so this is
+where a new kind comes from.
+
+**Knowledge Enemies** authors `enemyMappings`: which subject an enemy is a
+record of. Both sides are picked — the enemy from the project's enemies, the
+subject from its knowledge subjects. Knowledge does not require an enemy;
+this is only for the subjects that are fought. A mapping missing either side
+is kept out of the file, because the game refuses the whole catalogue over a
+subject id it cannot read.
+
+All four categories share one file, and saving any of them writes back
+everything the others own exactly as it was.
+
+A story event unlocks, amends, withdraws or supersedes a report through the
+`knowledge` command. The command asks for exactly what its operation reads
+and nothing else:
+
+| Operation | Asks for |
+| --- | --- |
+| `discover` | subject, source |
+| `observe` | subject, observation, source, confidence |
+| `unlock_report` | subject, report, source, confidence |
+| `amend_report` | subject, report, source, confidence |
+| `record_outcome` | subject, outcome |
+| `withdraw_report` | subject, report, source |
+| `supersede_report` | subject, report, replacement, source |
+
+The operations themselves come from the game's own list, and validation
+checks what the game checks: that the operation exists, that required fields
+are filled, that confidence sits between 0 and 1, that a report belongs to
+the subject it is named with, that an observation is one the subject
+authors, and that a report is not superseded by itself.
 
 Runtime progress — what has actually been discovered, observed or unlocked
 — lives in a save, not here. This is the catalogue those records point at.

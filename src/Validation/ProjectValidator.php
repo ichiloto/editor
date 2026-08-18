@@ -3,6 +3,7 @@
 namespace Ichiloto\Editor\Validation;
 
 use Ichiloto\Editor\Database\InventoryCatalog;
+use Ichiloto\Editor\Database\KnowledgeCommandShape;
 use Ichiloto\Editor\Database\PhpDataFile;
 use Ichiloto\Editor\Database\ProjectRecord;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
@@ -46,6 +47,17 @@ class ProjectValidator
    */
   protected ?InventoryCatalog $inventoryCatalog = null;
 
+  /**
+   * @var array<string, mixed>|null The project's knowledge catalogue, read
+   * once per validation run so every command check shares one reading.
+   */
+  protected ?array $knowledgeCatalogData = null;
+
+  /**
+   * @var string|null The project root, for the catalogue a command names.
+   */
+  protected ?string $projectRootForKnowledge = null;
+
   protected const string TRANSFER_TRIGGER = 'TransferPlayerTrigger';
   protected const string SCRIPT_TRIGGER = 'ScriptEventTrigger';
 
@@ -57,6 +69,9 @@ class ProjectValidator
    */
   public function validate(ProjectWorkspace $workspace): array
   {
+    $this->projectRootForKnowledge = $workspace->projectRoot;
+    $this->knowledgeCatalogData = null;
+
     try {
       $this->inventoryCatalog = InventoryCatalog::fromWorkspace($workspace);
     } catch (Throwable $throwable) {
@@ -710,7 +725,317 @@ class ProjectValidator
       }
     }
 
+    return [...$issues, ...$this->checkKnowledgeIdentities($catalog, $where)];
+  }
+
+  /**
+   * Checks one knowledge command against what the runtime does with it.
+   *
+   * `KnowledgeProgressService::apply()` reads a different set of the command
+   * for each operation and raises on what it cannot use: an unknown
+   * operation, an id that is not stable, a confidence outside zero to one, a
+   * report that is not the subject's, an observation the subject does not
+   * author, or a report superseded by itself. Each of those is a crash in
+   * play, so each is reported here instead.
+   *
+   * @param array<string, mixed> $command The authored command.
+   * @param string $where The file being checked.
+   * @return Issue[] What is wrong with it.
+   */
+  protected function checkKnowledgeCommand(array $command, string $where): array
+  {
+    $operation = trim(strval($command['operation'] ?? ''));
+
+    if (! in_array($operation, KnowledgeCommandShape::operations(), true)) {
+      return [Issue::error(
+        $where,
+        sprintf('Its knowledge operation "%s" is not one the runtime performs.', $operation !== '' ? $operation : '(empty)'),
+        sprintf('The runtime performs: %s.', implode(', ', KnowledgeCommandShape::operations()))
+      )];
+    }
+
+    $issues = [];
+    $catalog = $this->knowledgeCatalogData();
+    $fields = KnowledgeCommandShape::fieldNamesFor($operation);
+    $subjectId = trim(strval($command['subject'] ?? ''));
+
+    foreach ($fields as $field) {
+      // Source and confidence both have runtime defaults, so an absent one
+      // is authored, not missing.
+      if (in_array($field, ['source', 'confidence'], true)) {
+        continue;
+      }
+
+      if (trim(strval($command[$field] ?? '')) === '') {
+        $issues[] = Issue::error(
+          $where,
+          sprintf('Its knowledge %s command names no %s.', $operation, $field),
+          sprintf('%s reads %s.', $operation, implode(', ', $fields))
+        );
+      }
+    }
+
+    if (isset($command['confidence']) && in_array('confidence', $fields, true)) {
+      $confidence = $command['confidence'];
+
+      if (! is_numeric($confidence) || floatval($confidence) < 0.0 || floatval($confidence) > 1.0) {
+        $issues[] = Issue::error(
+          $where,
+          sprintf('Its knowledge confidence "%s" is not between 0 and 1.', strval(is_scalar($confidence) ? $confidence : '')),
+          'The runtime raises on anything else.'
+        );
+      }
+    }
+
+    if ($catalog === []) {
+      // Nothing to check references against; the catalogue's own checks
+      // report why it could not be read.
+      return $issues;
+    }
+
+    $subjects = $this->knowledgeIdsIn($catalog, 'subjects');
+    $reports = $this->knowledgeReportSubjects($catalog);
+
+    if ($subjectId !== '' && ! isset($subjects[$subjectId])) {
+      $issues[] = Issue::error(
+        $where,
+        sprintf('Its knowledge command names the subject "%s", which the catalogue does not declare.', $subjectId)
+      );
+    }
+
+    foreach (['report', 'replacement'] as $field) {
+      $reportId = in_array($field, $fields, true) ? trim(strval($command[$field] ?? '')) : '';
+
+      if ($reportId === '') {
+        continue;
+      }
+
+      if (! array_key_exists($reportId, $reports)) {
+        $issues[] = Issue::error(
+          $where,
+          sprintf('Its knowledge command names the report "%s", which the catalogue does not declare.', $reportId)
+        );
+
+        continue;
+      }
+
+      if ($subjectId !== '' && $reports[$reportId] !== $subjectId) {
+        $issues[] = Issue::error(
+          $where,
+          sprintf('The report "%s" belongs to "%s", not to "%s".', $reportId, $reports[$reportId], $subjectId),
+          'The runtime refuses a report that is not the subject\'s.'
+        );
+      }
+    }
+
+    if ($operation === 'supersede_report'
+      && trim(strval($command['report'] ?? '')) !== ''
+      && trim(strval($command['report'] ?? '')) === trim(strval($command['replacement'] ?? ''))) {
+      $issues[] = Issue::error(
+        $where,
+        'Its knowledge command supersedes a report with itself.',
+        'The runtime requires a different report.'
+      );
+    }
+
+    if ($operation === 'observe' && $subjectId !== '') {
+      $observation = trim(strval($command['observation'] ?? ''));
+      $authored = $subjects[$subjectId] ?? [];
+
+      if ($observation !== '' && $authored !== [] && ! in_array($observation, $authored, true)) {
+        $issues[] = Issue::error(
+          $where,
+          sprintf('The observation "%s" is not authored for "%s".', $observation, $subjectId),
+          'The runtime refuses an observation the subject does not declare.'
+        );
+      }
+    }
+
     return $issues;
+  }
+
+  /**
+   * Returns the project's knowledge catalogue, read once per validation run.
+   *
+   * @return array<string, mixed> The catalogue.
+   */
+  protected function knowledgeCatalogData(): array
+  {
+    if ($this->knowledgeCatalogData !== null) {
+      return $this->knowledgeCatalogData;
+    }
+
+    $path = rtrim($this->projectRootForKnowledge ?? '', '/') . '/assets/Data/knowledge.php';
+
+    if ($this->projectRootForKnowledge === null || ! is_file($path)) {
+      return $this->knowledgeCatalogData = [];
+    }
+
+    try {
+      $catalog = (static fn(): mixed => require $path)();
+    } catch (Throwable) {
+      return $this->knowledgeCatalogData = [];
+    }
+
+    return $this->knowledgeCatalogData = is_array($catalog) ? $catalog : [];
+  }
+
+  /**
+   * Returns a catalogue section's ids, each with the observations it
+   * authors.
+   *
+   * @param array<string, mixed> $catalog The catalogue.
+   * @param string $section The section.
+   * @return array<string, string[]> Observations by id.
+   */
+  protected function knowledgeIdsIn(array $catalog, string $section): array
+  {
+    $ids = [];
+
+    foreach ((array) ($catalog[$section] ?? []) as $entry) {
+      if (! is_array($entry)) {
+        continue;
+      }
+
+      $id = trim(strval($entry['id'] ?? ''));
+
+      if ($id !== '') {
+        $ids[$id] = array_values(array_filter(array_map(
+          static fn(mixed $observation): string => is_scalar($observation) ? trim(strval($observation)) : '',
+          is_array($entry['observations'] ?? null) ? $entry['observations'] : [],
+        ), static fn(string $observation): bool => $observation !== ''));
+      }
+    }
+
+    return $ids;
+  }
+
+  /**
+   * Returns which subject each report concerns.
+   *
+   * @param array<string, mixed> $catalog The catalogue.
+   * @return array<string, string> Subject id by report id.
+   */
+  protected function knowledgeReportSubjects(array $catalog): array
+  {
+    $reports = [];
+
+    foreach ((array) ($catalog['reports'] ?? []) as $entry) {
+      $id = is_array($entry) ? trim(strval($entry['id'] ?? '')) : '';
+
+      if ($id !== '') {
+        $reports[$id] = trim(strval($entry['subject'] ?? ''));
+      }
+    }
+
+    return $reports;
+  }
+
+  /**
+   * Checks the identities and vocabularies a knowledge catalogue declares.
+   *
+   * The runtime holds every knowledge id to one shape through
+   * `KnowledgeIdentity::require()`, and refuses the whole catalogue when one
+   * does not match -- so an id that is merely unusual here is a project that
+   * will not load there.
+   *
+   * @param array<string, mixed> $catalog The catalogue.
+   * @param string $where The file being checked.
+   * @return Issue[] What is wrong with it.
+   */
+  protected function checkKnowledgeIdentities(array $catalog, string $where): array
+  {
+    $issues = [];
+    $recordTypes = [];
+
+    foreach ((array) ($catalog['recordTypes'] ?? []) as $index => $type) {
+      $type = is_scalar($type) ? trim(strval($type)) : '';
+
+      if ($type === '') {
+        $issues[] = Issue::error($where, sprintf('Record type %s is empty.', strval($index)));
+
+        continue;
+      }
+
+      if (isset($recordTypes[$type])) {
+        $issues[] = Issue::warning(
+          $where,
+          sprintf('Record type "%s" is declared more than once.', $type),
+          'The runtime keeps one of them; the repeat does nothing.'
+        );
+      }
+
+      $recordTypes[$type] = true;
+    }
+
+    foreach ([
+      'subjects' => 'subject id',
+      'reports' => 'report id',
+    ] as $section => $label) {
+      foreach ((array) ($catalog[$section] ?? []) as $entry) {
+        $id = is_array($entry) ? trim(strval($entry['id'] ?? '')) : '';
+        $complaint = $this->describeKnowledgeIdentity($id, $label);
+
+        if ($complaint !== null) {
+          $issues[] = Issue::error($where, $complaint, 'The runtime refuses the whole catalogue over one.');
+        }
+
+        foreach (is_array($entry) && is_array($entry['observations'] ?? null) ? $entry['observations'] : [] as $observation) {
+          $complaint = $this->describeKnowledgeIdentity(
+            is_scalar($observation) ? trim(strval($observation)) : '',
+            sprintf('observation id on %s', $id === '' ? 'a subject' : $id),
+          );
+
+          if ($complaint !== null) {
+            $issues[] = Issue::error($where, $complaint);
+          }
+        }
+      }
+    }
+
+    foreach ((array) ($catalog['enemyMappings'] ?? []) as $enemy => $subjectId) {
+      if (trim(strval($enemy)) === '') {
+        $issues[] = Issue::error($where, 'An enemy mapping names no enemy.', 'It can never match a battler.');
+      }
+
+      $complaint = $this->describeKnowledgeIdentity(
+        is_scalar($subjectId) ? trim(strval($subjectId)) : '',
+        sprintf('mapped subject id for "%s"', strval($enemy)),
+      );
+
+      if ($complaint !== null) {
+        $issues[] = Issue::error($where, $complaint, 'The runtime refuses the whole catalogue over one.');
+      }
+    }
+
+    return $issues;
+  }
+
+  /**
+   * Returns why a knowledge id is not one the runtime accepts, or null when
+   * it is.
+   *
+   * @param string $id The authored id.
+   * @param string $label What the id is for.
+   * @return string|null The complaint.
+   */
+  protected function describeKnowledgeIdentity(string $id, string $label): ?string
+  {
+    if ($id === '') {
+      return sprintf('A %s is missing.', $label);
+    }
+
+    // The runtime's own shape: lowercase segments of letters and numbers,
+    // joined by a dot, an underscore or a hyphen.
+    if (preg_match('/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/', $id) !== 1) {
+      return sprintf(
+        'The %s "%s" is not a stable id: lowercase letters and numbers, joined by dots, underscores or hyphens.',
+        $label,
+        $id,
+      );
+    }
+
+    return null;
   }
 
   /**
@@ -2386,6 +2711,10 @@ class ProjectValidator
           sprintf('It uses the unknown event command type "%s".', $type !== '' ? $type : '(empty)'),
           'Choose a command supported by the runtime EventInterpreter.'
         );
+      }
+
+      if ($type === 'knowledge') {
+        $issues = [...$issues, ...$this->checkKnowledgeCommand($command, $where)];
       }
 
       $named = match ($type) {

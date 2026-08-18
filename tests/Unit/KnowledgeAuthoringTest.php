@@ -164,7 +164,9 @@ it('authors a report against a subject', function () {
     $reports->setField($index, 'subject', 'creature.sewer-rat');
     $reports->setField($index, 'title', 'What they eat');
     $reports->setField($index, 'summary', 'Everything, given time.');
-    $reports->setField($index, 'disagreesWith', 'report.rat-nesting');
+    // A disagreement is picked from the project's reports, not spelled.
+    $reports->addSubItem($index);
+    $reports->setField($index, 'disagreement0Report', 'report.rat-nesting');
     $reports->save();
 
     $after = require $path;

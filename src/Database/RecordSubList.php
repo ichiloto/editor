@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Database;
 
+use Closure;
+
 /**
  * A repeating list nested inside a record — quest objectives, skit beats,
  * troop members, event-script commands.
@@ -20,7 +22,9 @@ final readonly class RecordSubList
      * @param string $singular The noun used in status messages (e.g. `beat`).
      * @param RecordField[] $fields The per-entry fields.
      * @param array<string, mixed> $blank The payload of a freshly appended entry.
-     * @param array<string, RecordField[]> $variants Per-`type` field overrides, keyed by type value.
+     * @param array<string, RecordField[]|Closure(array<string, mixed>): RecordField[]> $variants
+     *   Per-`type` field overrides, keyed by type value. A closure is asked
+     *   for the fields when a variant's own shape depends on the entry.
      * @param string|null $variantKey The entry key selecting a variant (e.g. `type`).
      * @param array<string, RecordSubList> $nestedLists Per-variant nested
      * lists. Event movement routes use this to edit structured `steps`
@@ -58,8 +62,18 @@ final readonly class RecordSubList
         }
 
         $variant = strval($entry[$this->variantKey] ?? '');
+        $fields = $this->variants[$variant] ?? [];
 
-        return [...$this->fields, ...($this->variants[$variant] ?? [])];
+        if ($fields instanceof Closure) {
+            // A variant whose own shape depends on the entry: a knowledge
+            // command asks for a report only when its operation is about
+            // one, so an author is never shown a field the runtime will not
+            // read for what they picked.
+            /** @var RecordField[] $fields */
+            $fields = $fields($entry);
+        }
+
+        return [...$this->fields, ...$fields];
     }
 
     /**

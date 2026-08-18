@@ -33,6 +33,8 @@ final class DatabaseCatalog
             new DatabaseCategoryDefinition('skits', 'Skits', 'Write optional party banter scenes.', true),
             new DatabaseCategoryDefinition('knowledge_subjects', 'Knowledge', 'Author what the party can come to know.', true),
             new DatabaseCategoryDefinition('knowledge_reports', 'Knowledge Reports', 'Author claims about knowledge subjects.', true),
+            new DatabaseCategoryDefinition('knowledge_record_types', 'Knowledge Types', 'Declare the kinds of record a subject can be.', true),
+            new DatabaseCategoryDefinition('knowledge_enemy_mappings', 'Knowledge Enemies', 'Say which subject an enemy is a record of.', true),
             new DatabaseCategoryDefinition('permanent_growth', 'Permanent Growth', 'Define stat increases the party can earn and keep.', true),
             new DatabaseCategoryDefinition('optimize_weights', 'Optimize Weights', 'Weight what Optimize values, by role and by slot.', true),
             new DatabaseCategoryDefinition('optimize_outcomes', 'Optimize Outcomes', 'Weight elemental outcomes and special properties.', true),

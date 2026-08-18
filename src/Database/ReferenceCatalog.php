@@ -51,6 +51,7 @@ final class ReferenceCatalog
         'knowledge_subjects',
         'knowledge_reports',
         'knowledge_record_types',
+        'knowledge_observations',
         'elements_or_any',
         'equipment_availabilities',
         'equipment_acquisition_policies',
@@ -138,6 +139,7 @@ final class ReferenceCatalog
             'equipment_special_properties' => $this->equipmentVocabulary('specialProperty'),
             'permanent_growth' => PermanentGrowthCatalog::fromProject($this->workspace->projectRoot)->ids(),
             'knowledge_record_types' => $this->knowledgeRecordTypes(),
+            'knowledge_observations' => $this->knowledgeObservations(),
             'knowledge_subjects' => $this->knowledgeIds('subjects'),
             'knowledge_reports' => $this->knowledgeIds('reports'),
             // NPC ids are map-local, so the choices are the current map's:
@@ -312,6 +314,33 @@ final class ReferenceCatalog
             array_map(strval(...), (array) ($catalog['recordTypes'] ?? [])),
             static fn(string $type): bool => trim($type) !== '',
         ));
+    }
+
+    /**
+     * Returns every observation the project's subjects author.
+     *
+     * The runtime refuses an observation a subject does not author, so what
+     * is offered is what some subject has declared. The list spans subjects
+     * because a command names its subject separately; validation is what
+     * checks the pair.
+     *
+     * @return string[] The observation ids, in authored order.
+     */
+    private function knowledgeObservations(): array
+    {
+        $observations = [];
+
+        foreach ((array) ($this->knowledgeCatalog()['subjects'] ?? []) as $subject) {
+            foreach (is_array($subject) && is_array($subject['observations'] ?? null) ? $subject['observations'] : [] as $observation) {
+                $observation = is_scalar($observation) ? trim(strval($observation)) : '';
+
+                if ($observation !== '') {
+                    $observations[] = $observation;
+                }
+            }
+        }
+
+        return array_values(array_unique($observations));
     }
 
     /**
