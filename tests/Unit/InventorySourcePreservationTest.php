@@ -17,9 +17,9 @@ use Ichiloto\Editor\Database\RecordSchemaCatalog;
  */
 function projectWithAuthoredInventory(): ?array
 {
-    $game = dirname(__DIR__, 3) . '/examples/last-legend';
+    $game = gameSourceRoot();
 
-    if (! is_file($game . '/assets/Data/items.php')) {
+    if ($game === null) {
         return null;
     }
 

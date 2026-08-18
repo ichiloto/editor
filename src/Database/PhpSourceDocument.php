@@ -131,6 +131,24 @@ final class PhpSourceDocument
     }
 
     /**
+     * Determines whether an entry is a constructor call whose whole span this
+     * document knows -- the shape it can remove, or place another entry
+     * before, without touching a byte around it.
+     *
+     * An entry read as something else (an array literal, a bare expression)
+     * only holds a place so that entry and payload indexes agree; its span is
+     * not known, and a structural edit at that position must not be
+     * attempted.
+     *
+     * @param int $entryIndex The entry.
+     * @return bool True when it is a constructor call.
+     */
+    public function isConstructorEntry(int $entryIndex): bool
+    {
+        return isset($this->entries[$entryIndex]) && $this->entries[$entryIndex]['class'] !== '';
+    }
+
+    /**
      * Returns the source of one argument's value exactly as authored, or null
      * when the entry does not declare it.
      *
@@ -226,11 +244,17 @@ final class PhpSourceDocument
      * argument per line, so a record the editor creates reads like the ones
      * an author wrote by hand.
      *
+     * When `$before` names an entry, the new one is placed immediately ahead
+     * of it -- on its own lines, at the same indentation -- so a record put
+     * back between two neighbours sits between them in the file as well as
+     * in the list. Otherwise it is appended after the last entry.
+     *
      * @param string $class The class to construct, spelled as it should appear.
      * @param array<string, string> $arguments The named arguments, values already valid PHP.
+     * @param int|null $before The entry to place the new one ahead of; null appends.
      * @return self The rewritten document.
      */
-    public function withNewEntry(string $class, array $arguments): self
+    public function withNewEntry(string $class, array $arguments, ?int $before = null): self
     {
         if ($this->arrayClose === null) {
             throw new RuntimeException('This file does not return an array to add an entry to.');
@@ -246,11 +270,36 @@ final class PhpSourceDocument
 
         $lines[] = $indent . '),';
         $block = implode("\n", $lines) . "\n";
-        $before = substr($this->source, 0, $this->arrayClose);
+
+        if ($before !== null) {
+            if (! $this->isConstructorEntry($before)) {
+                throw new RuntimeException(sprintf(
+                    'Cannot place an entry before %s: it is not a constructor call this editor can position against.',
+                    $this->describeEntry($before),
+                ));
+            }
+
+            $start = $this->entries[$before]['start'];
+            $lineBreak = strrpos(substr($this->source, 0, $start), "\n");
+            $lineStart = $lineBreak === false ? 0 : $lineBreak + 1;
+
+            if (trim(substr($this->source, $lineStart, $start - $lineStart)) === '') {
+                // The neighbour begins its line: the new entry takes the
+                // lines above it, and the neighbour keeps its own indentation.
+                return self::parse(substr($this->source, 0, $lineStart) . $block . substr($this->source, $lineStart));
+            }
+
+            // The neighbour shares a line with something before it. The new
+            // entry still goes ahead of it, and the neighbour continues on a
+            // fresh line at the entries' indentation.
+            return self::parse(substr($this->source, 0, $start) . ltrim($block) . $indent . substr($this->source, $start));
+        }
+
+        $beforeClose = substr($this->source, 0, $this->arrayClose);
         $after = substr($this->source, $this->arrayClose);
-        $trimmed = rtrim($before);
+        $trimmed = rtrim($beforeClose);
         $needsComma = ! str_ends_with($trimmed, ',') && ! str_ends_with($trimmed, '[');
-        $closingIndent = substr($before, strrpos($before, "\n") === false ? 0 : strrpos($before, "\n") + 1);
+        $closingIndent = substr($beforeClose, strrpos($beforeClose, "\n") === false ? 0 : strrpos($beforeClose, "\n") + 1);
 
         return self::parse(
             $trimmed . ($needsComma ? ',' : '') . "\n" . $block . (trim($closingIndent) === '' ? $closingIndent : '') . $after,
@@ -267,6 +316,16 @@ final class PhpSourceDocument
     {
         if (! isset($this->entries[$entryIndex])) {
             return $this;
+        }
+
+        if (! $this->isConstructorEntry($entryIndex)) {
+            // A placeholder's span is one token, not the entry: cutting it
+            // would leave the entry behind minus its first byte, which is a
+            // file that no longer parses.
+            throw new RuntimeException(sprintf(
+                'Cannot remove %s: it is not a constructor call this editor can cut by span.',
+                $this->describeEntry($entryIndex),
+            ));
         }
 
         $entry = $this->entries[$entryIndex];
@@ -490,6 +549,25 @@ final class PhpSourceDocument
         }
 
         return ['start' => $span['nameStart'] ?? $span['start'], 'end' => $span['end']];
+    }
+
+    /**
+     * Returns the bytes of one entry exactly as authored -- from its first
+     * token to its closing parenthesis -- or null for an entry whose span is
+     * not known.
+     *
+     * @param int $entryIndex The entry.
+     * @return string|null The entry's source.
+     */
+    public function entrySource(int $entryIndex): ?string
+    {
+        if (! $this->isConstructorEntry($entryIndex)) {
+            return null;
+        }
+
+        $entry = $this->entries[$entryIndex];
+
+        return substr($this->source, $entry['start'], $entry['close'] - $entry['start'] + 1);
     }
 
     /**

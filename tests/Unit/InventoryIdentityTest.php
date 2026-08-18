@@ -49,9 +49,9 @@ function itemExpression(array $arguments): string
  */
 function readOnlyGameProject(): ?string
 {
-    $root = dirname(__DIR__, 3) . '/examples/last-legend';
+    $root = gameSourceRoot();
 
-    if (! is_file($root . '/assets/Data/items.php')) {
+    if ($root === null) {
         return null;
     }
 

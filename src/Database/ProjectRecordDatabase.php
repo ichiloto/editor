@@ -54,75 +54,131 @@ final class ProjectRecordDatabase
         private ?\Closure $writeBack = null,
         private ?string $projectRoot = null,
     ) {
-        if (! $isDirty) {
-            $this->captureBaseline();
+        if ($schema->storage === RecordStorage::LIST_FILE && $schema->projection === null) {
+            // What the file declares for each record -- the identity it is
+            // addressed by and the values it was authored with -- so a save
+            // can patch only what an author actually changed, and can find
+            // the entry to patch however the file has moved around it since.
+            // Captured before the baseline, which is taken over the payload
+            // these identities fold the records into.
+            $this->captureAuthoredValues();
         }
 
-        if ($schema->storage === RecordStorage::LIST_FILE && $schema->projection === null) {
-            // What the source declares, so a save can patch only what an
-            // author actually changed.
-            // Which entry of *this category* each record came from. The
-            // position that ordinal occupies in the whole file is resolved
-            // from the file itself at the moment of writing, because a
-            // sibling category sharing the file moves it.
-            $this->payloadPositions = array_keys(array_values($this->records));
-            $this->captureAuthoredValues();
+        if (! $isDirty) {
+            $this->captureBaseline();
         }
     }
 
     /**
-     * @var array<int, array<string, mixed>> Field values as loaded, by record.
+     * @var array<int, array{record: ProjectRecord, identity: string|null, values: array<string, mixed>}>
+     *   What the file held for each record when it was last read or adopted,
+     *   by the record's object id: the durable identity the record's entry
+     *   declares (an item's stable id, a troop's name) and the field values
+     *   it was authored with. A record absent from here is one the file has
+     *   never held under this category's watch: it is written as a new
+     *   entry. Removing a record leaves it here -- the record itself is kept
+     *   alongside, so its id stays its own -- and putting it back before the
+     *   file is written finds its entry exactly where it was. Adopting a
+     *   written file rebuilds this from the records the category then holds.
      */
-    private array $authoredValues = [];
-    /**
-     * @var array<int, int> Where each record sits in the file's top-level list.
-     */
-    private array $payloadPositions = [];
+    private array $authored = [];
 
     /**
-     * @var bool Whether a record was added or removed since the file was
-     * read. While that is pending, the mapping from records to authored
-     * entries is the editor's to keep, not the file's to redefine.
-     */
-    private bool $structuralChange = false;
-
-    /**
-     * @var \SplObjectStorage<ProjectRecord, int>|null Where a removed record
-     * used to sit in the file, so restoring it restores its source too.
-     */
-    private ?\SplObjectStorage $removedPositions = null;
-
-    /**
-     * Returns the position each of this category's records occupies in the
-     * file's returned list. A file holds several categories -- items, weapons
-     * and armors share one -- so the third weapon may be the file's tenth
-     * entry.
+     * Returns what the file declared for a record, or null when the file has
+     * never held it.
      *
-     * @param RecordSchema $schema The category schema.
-     * @param PhpDataFile|null $file The backing file.
-     * @return array<int, int> Payload positions by record index.
+     * @param ProjectRecord $record The record.
+     * @return array{identity: string|null, values: array<string, mixed>}|null The declaration.
      */
-    private static function payloadPositionsFor(RecordSchema $schema, ?PhpDataFile $file): array
+    private function authoredFor(ProjectRecord $record): ?array
     {
-        if (! $file instanceof PhpDataFile || ! is_array($file->payload)) {
-            return [];
+        $authored = $this->authored[spl_object_id($record)] ?? null;
+
+        if ($authored === null || $authored['record'] !== $record) {
+            return null;
         }
 
+        return ['identity' => $authored['identity'], 'values' => $authored['values']];
+    }
+
+    /**
+     * Returns the durable identity an entry declares, or null when it
+     * declares none.
+     *
+     * The identity is whatever the schema names as the record's id -- read
+     * the same way from an authored array, from an engine object the file
+     * constructed, and from the record the editor holds -- so the record
+     * and its entry in a fresh read of the file are recognised as one thing
+     * by what they say, not by where they sit.
+     *
+     * @param mixed $entry The entry payload.
+     * @param string|null $key The schema's identity key.
+     * @return string|null The identity.
+     */
+    private static function identityOf(mixed $entry, ?string $key): ?string
+    {
+        if ($key === null) {
+            return null;
+        }
+
+        $value = new ProjectRecord(is_array($entry) || is_object($entry) ? $entry : [], true)->get($key);
+
+        if ($value instanceof BackedEnum) {
+            $value = $value->value;
+        }
+
+        if (! is_scalar($value)) {
+            return null;
+        }
+
+        $identity = strval($value);
+
+        return $identity === '' ? null : $identity;
+    }
+
+    /**
+     * Returns the position of every entry of this category in a file's
+     * returned list, keyed by the identity each declares.
+     *
+     * A file holds several categories -- items, weapons and armors share
+     * one -- so the third weapon may be the file's tenth entry, and an entry
+     * of another category never appears here. An identity two entries
+     * declare maps to both positions; an entry declaring none is listed
+     * under `absent`, because it can be found but never told apart.
+     *
+     * @param PhpDataFile $file The file, read fresh.
+     * @return array{positions: array<string, int[]>, absent: int[]} The map.
+     */
+    private function sourcePositionsIn(PhpDataFile $file): array
+    {
         $positions = [];
-        $recordIndex = 0;
+        $absent = [];
+
+        if (! is_array($file->payload)) {
+            return ['positions' => [], 'absent' => []];
+        }
 
         foreach (array_values($file->payload) as $position => $entry) {
-            if ($schema->recordFilter !== null && ! ($schema->recordFilter)($entry)) {
+            if ($this->schema->recordFilter !== null && ! ($this->schema->recordFilter)($entry)) {
                 continue;
             }
 
-            if (is_array($entry) || is_object($entry)) {
-                $positions[$recordIndex] = $position;
-                $recordIndex++;
+            if (! is_array($entry) && ! is_object($entry)) {
+                continue;
             }
+
+            $identity = self::identityOf($entry, $this->schema->identityKey);
+
+            if ($identity === null) {
+                $absent[] = $position;
+
+                continue;
+            }
+
+            $positions[$identity][] = $position;
         }
 
-        return $positions;
+        return ['positions' => $positions, 'absent' => $absent];
     }
 
     /**
@@ -617,11 +673,9 @@ final class ProjectRecordDatabase
             }
         }
 
+        // A record the file has never held: it has no authored identity or
+        // values here, which is what tells the source writer to insert it.
         $this->records[] = new ProjectRecord($payload, true, $sourcePath, $recordId, $file);
-        // A record with no position in the file is a record the file does not
-        // have yet, which is what tells the source writer to insert it.
-        $this->payloadPositions[] = null;
-        $this->structuralChange = true;
         $this->touchState();
 
         return count($this->records) - 1;
@@ -646,21 +700,9 @@ final class ProjectRecordDatabase
             return null;
         }
 
-        $positions = array_values($this->payloadPositions);
-        $position = $positions[$index] ?? null;
-        array_splice($positions, $index, 1);
-        $this->payloadPositions = $positions;
-
-        if ($position !== null) {
-            // Remembered against the record itself, so undoing the delete
-            // puts the entry back where its source still is rather than
-            // appending a rebuilt copy at the end.
-            $this->removedPositions ??= new \SplObjectStorage();
-            $this->removedPositions[$record] = $position;
-        }
-
-        $this->structuralChange = true;
-
+        // What the file holds for the record stays known: undoing the delete
+        // before a save finds the entry exactly where it was, and a save
+        // finds the entry to remove by the identity it declares.
         array_splice($records, $index, 1);
         $this->records = $records;
         $this->touchState();
@@ -683,19 +725,11 @@ final class ProjectRecordDatabase
     {
         $records = array_values($this->records);
         $index = max(0, min(count($records), $index));
-        $positions = array_values($this->payloadPositions);
-        $restored = $this->removedPositions?->offsetExists($record) === true
-            ? $this->removedPositions[$record]
-            : null;
-        array_splice($positions, $index, 0, [$restored]);
-        $this->payloadPositions = $positions;
 
-        if ($restored !== null) {
-            $this->removedPositions?->offsetUnset($record);
-        }
-
-        $this->structuralChange = true;
-
+        // A record the file still holds is recognised again by its identity
+        // and needs nothing written; one the file has since let go of is
+        // written back as a new entry, placed ahead of the neighbour that
+        // follows it here.
         array_splice($records, $index, 0, [$record]);
         $this->records = $records;
         $this->touchState();
@@ -1150,60 +1184,8 @@ final class ProjectRecordDatabase
     }
 
     /**
-     * Writes a single-file list category.
-     *
-     * @return void
-     */
-    private function saveListFile(): void
-    {
-        if (! $this->file instanceof PhpDataFile) {
-            throw new RuntimeException('No backing file to save.');
-        }
-
-        // What the file holds now, which is not always what it held when
-        // this category loaded: several categories share one file, and a
-        // sibling may have saved since. Folding into the stale snapshot is
-        // how one category silently reverts another's saved work.
-        $this->rereadBackingFile();
-
-        if ($this->savedInPlace()) {
-            return;
-        }
-
-        if ($this->structuralChange && $this->isConstructorAuthored()) {
-            // Adding or removing a record here would go through the writer
-            // that rebuilds the returned expression, and rebuilding an
-            // author's constructor calls is exactly what the surgical writer
-            // exists to prevent. Refusing with a reason beats silently
-            // reformatting the file.
-            throw new RuntimeException(sprintf(
-                'Refusing to add or remove a %s in %s: its entries are constructor calls this editor cannot rewrite safely. Edit the file directly.',
-                $this->schema->entryNoun,
-                basename($this->path),
-            ));
-        }
-
-        $this->file->save($this->mergeIntoFilePayload());
-        $this->structuralChange = false;
-        $this->rereadBackingFile();
-
-        if ($this->schema->projection === null) {
-            // The in-place patcher compares against what the file was found
-            // holding, and the file has just stopped holding that. Left
-            // stale, a later save that puts a value back to what the file
-            // originally said would find nothing to patch and write nothing
-            // -- so an undone edit would stay on disk.
-            $this->captureAuthoredValues();
-        }
-    }
-
-    /**
-     * Re-reads the backing file so this category folds into what is actually
-     * there.
-     *
-     * Entry positions are recomputed with it: a sibling category that added
-     * or removed an entry moved this category's entries along the list, and
-     * the in-place patcher writes by position.
+     * Re-reads the backing file so this category composes against what is
+     * actually there, not what it held when this category loaded.
      *
      * @return void
      */
@@ -1258,39 +1240,206 @@ final class ProjectRecordDatabase
      * Folds this category's records into a payload without writing.
      *
      * This is how several categories combine into one write: each is asked
-     * for its own part, in turn, against the payload the last one produced.
+     * for its own part, in turn, against the payload the last one produced,
+     * and the result is written once. A projected category folds its list
+     * or map back into the file's keyed payload. A category over the entries
+     * of a returned list finds each of its entries by the identity it
+     * declares: a record the list holds takes its entry's place, an entry
+     * this category held and no longer does is left out, a record the list
+     * has no entry for yet goes ahead of the next record of this category it
+     * does hold -- or after the last entry -- and an entry this category
+     * never loaded is kept where it is. Whatever belongs to another category
+     * keeps its place. Only when the identities cannot tell the entries
+     * apart does the category fall back to taking its entries' places in
+     * order.
      *
-     * @param array<string, mixed> $whole The payload so far.
-     * @return array<string, mixed> The payload with this category folded in.
+     * @param array<array-key, mixed> $whole The payload so far.
+     * @return array<array-key, mixed> The payload with this category folded in.
      */
     public function foldInto(array $whole): array
     {
-        if ($this->schema->projection === null) {
-            return $whole;
+        if ($this->schema->projection !== null) {
+            return $this->schema->projection->write($whole, array_map(
+                static fn(ProjectRecord $record): array => (array) $record->toArray(),
+                $this->getRecords(),
+            ));
         }
 
-        return $this->schema->projection->write($whole, array_map(
-            static fn(ProjectRecord $record): array => (array) $record->toArray(),
-            $this->getRecords(),
-        ));
+        $records = $this->getRecords();
+        $entries = array_values($whole);
+        $filter = $this->schema->recordFilter;
+        $identityKey = $this->schema->identityKey;
+        $mine = static fn(mixed $entry): bool => (is_array($entry) || is_object($entry))
+            && ($filter === null || $filter($entry));
+
+        // Which record each of the list's identities belongs to, and which
+        // of the list's places each of them holds -- when both are one each.
+        $recordByIdentity = [];
+        $identityAtPosition = [];
+        $addressable = $identityKey !== null;
+
+        if ($addressable) {
+            foreach ($records as $index => $record) {
+                $authored = $this->authoredFor($record);
+
+                if ($authored === null || $authored['identity'] === null) {
+                    continue;
+                }
+
+                if (isset($recordByIdentity[$authored['identity']])) {
+                    $addressable = false;
+
+                    break;
+                }
+
+                $recordByIdentity[$authored['identity']] = $index;
+            }
+        }
+
+        if ($addressable) {
+            foreach ($entries as $position => $entry) {
+                if (! $mine($entry)) {
+                    continue;
+                }
+
+                $identity = self::identityOf($entry, $identityKey);
+
+                if ($identity === null || in_array($identity, $identityAtPosition, true)) {
+                    $addressable = false;
+
+                    break;
+                }
+
+                $identityAtPosition[$position] = $identity;
+            }
+        }
+
+        if (! $addressable) {
+            return $this->foldIntoByPlace($entries, $records, $mine);
+        }
+
+        $positionOfRecord = [];
+
+        foreach ($identityAtPosition as $position => $identity) {
+            if (isset($recordByIdentity[$identity])) {
+                $positionOfRecord[$recordByIdentity[$identity]] = $position;
+            }
+        }
+
+        // Records the list has no entry for: ahead of the next record of this
+        // category the list does hold, or after everything.
+        $ahead = [];
+        $appended = [];
+
+        foreach ($records as $index => $record) {
+            if (isset($positionOfRecord[$index])) {
+                continue;
+            }
+
+            $anchor = null;
+
+            for ($next = $index + 1, $count = count($records); $next < $count; $next++) {
+                if (isset($positionOfRecord[$next])) {
+                    $anchor = $positionOfRecord[$next];
+
+                    break;
+                }
+            }
+
+            if ($anchor === null) {
+                $appended[] = $index;
+            } else {
+                $ahead[$anchor][] = $index;
+            }
+        }
+
+        $known = $this->authoredIdentities();
+        $payload = [];
+
+        foreach ($entries as $position => $entry) {
+            foreach ($ahead[$position] ?? [] as $index) {
+                $payload[] = $records[$index]->toArray();
+            }
+
+            if (! isset($identityAtPosition[$position])) {
+                // Another category's entry. It keeps its place untouched.
+                $payload[] = $entry;
+
+                continue;
+            }
+
+            $identity = $identityAtPosition[$position];
+
+            if (isset($recordByIdentity[$identity])) {
+                $payload[] = $records[$recordByIdentity[$identity]]->toArray();
+            } elseif (! isset($known[$identity])) {
+                // Never loaded by this category: not this category's to drop.
+                $payload[] = $entry;
+            }
+            // Held by this category once and no longer: left out.
+        }
+
+        foreach ($appended as $index) {
+            $payload[] = $records[$index]->toArray();
+        }
+
+        return $payload;
+    }
+
+    /**
+     * Folds this category's records into a list by place: each record takes
+     * the place of one of this category's entries, in order, and the rest go
+     * after the last entry.
+     *
+     * The fallback for a list whose entries declare no identity, or declare
+     * one twice: the category's records replace the category's entries as
+     * a whole, so no record can land on the wrong entry.
+     *
+     * @param array<int, mixed> $entries The list, in order.
+     * @param ProjectRecord[] $records This category's records.
+     * @param \Closure(mixed): bool $mine Whether an entry is this category's.
+     * @return array<int, mixed> The list with this category's records in it.
+     */
+    private function foldIntoByPlace(array $entries, array $records, \Closure $mine): array
+    {
+        $payload = [];
+        $position = 0;
+
+        foreach ($entries as $entry) {
+            if (! $mine($entry)) {
+                // Another category's entry. It keeps its place untouched.
+                $payload[] = $entry;
+
+                continue;
+            }
+
+            if (isset($records[$position])) {
+                $payload[] = $records[$position]->toArray();
+                $position++;
+            }
+        }
+
+        // Records the list has no place for yet go after the ones it had.
+        for ($count = count($records); $position < $count; $position++) {
+            $payload[] = $records[$position]->toArray();
+        }
+
+        return $payload;
     }
 
     /**
      * Accepts a write another party made to this category's backing file.
      *
      * Called only after that write succeeded, so a refused write advances no
-     * baseline and cleans no category.
+     * baseline and cleans no category. The file now holds exactly what the
+     * records say, so what the file declares for each record is captured
+     * again from the records themselves.
      *
      * @return void
      */
     public function adoptSavedFile(): void
     {
         $this->rereadBackingFile();
-        // Every record now sits where the file says it does, in this
-        // category's own order.
-        $this->payloadPositions = array_keys(array_values($this->records));
-        $this->structuralChange = false;
-        $this->removedPositions = null;
         $this->captureAuthoredValues();
 
         foreach ($this->records as $record) {
@@ -1308,10 +1457,22 @@ final class ProjectRecordDatabase
      * with every category's wants composed first, so this says what it wants
      * and the transaction decides where that lands.
      *
+     * Every entry is found by the durable identity it declares, looked up in
+     * the snapshot every sibling is being composed against: a record the
+     * file still holds is patched where its entry now sits, an entry this
+     * category held and no longer does is removed by that identity, and a
+     * record the file does not hold is inserted ahead of the neighbour that
+     * follows it in this category, or after the last entry when nothing
+     * does. Where that identity cannot prove the address -- an entry that
+     * declares none, two that declare one, a write that would leave two
+     * declaring one -- nothing is guessed: the plan is refused with the
+     * reason.
+     *
      * @param PhpSourceDocument $document The file's source, parsed once.
      * @param PhpDataFile $file The file's payload, read once.
-     * @return array{patches: array<int, array<string, mixed>>, removals: int[], additions: array<int, array{class: string, arguments: array<string, string>}>}|null
+     * @return array{patches: array<int, array<string, mixed>>, removals: int[], insertions: array<int, array{before: int|null, class: string, arguments: array<string, string>}>}|null
      *   The plan, or null when this category cannot be written surgically.
+     * @throws SourceIdentityConflict When an entry cannot be addressed with certainty.
      */
     public function sourcePlan(PhpSourceDocument $document, PhpDataFile $file): ?array
     {
@@ -1325,219 +1486,367 @@ final class ProjectRecordDatabase
             return null;
         }
 
-        // Ordinal within this category to position in the whole file, read
-        // from the snapshot every sibling is being composed against.
-        $absolute = self::payloadPositionsFor($this->schema, $file);
-        $patches = [];
-        $additions = [];
+        if (array_filter($document->entryClasses(), static fn(string $class): bool => trim($class) !== '') === []) {
+            // Not a list of constructor calls at all: a file that is data,
+            // written by regenerating its returned expression.
+            return null;
+        }
+
+        $noun = $this->schema->entryNoun;
+        $identityKey = $this->schema->identityKey;
+        $filename = basename($this->path);
+
+        if ($identityKey === null) {
+            throw new SourceIdentityConflict(sprintf(
+                'Refusing to write %s: %s entries declare no identity to be addressed by. Edit the file directly.',
+                $filename,
+                $noun,
+            ));
+        }
+
+        $source = $this->sourcePositionsIn($file);
+
+        if ($source['absent'] !== []) {
+            throw new SourceIdentityConflict(sprintf(
+                'Refusing to write %s: %s has no %s, so the %ss cannot be told apart. Give every entry a %s and reload.',
+                $filename,
+                $document->describeEntry($source['absent'][0]),
+                $identityKey,
+                $noun,
+                $identityKey,
+            ));
+        }
+
+        // Records the file holds, grouped by the identity they were loaded
+        // under; the file may hold that identity once, more than once, or --
+        // after a saved removal was undone -- not at all.
+        $held = [];
         $claimed = [];
 
         foreach ($this->getRecords() as $index => $record) {
-            $ordinal = $this->payloadPositions[$index] ?? null;
+            $authored = $this->authoredFor($record);
 
-            if ($ordinal === null) {
-                $entry = $this->newEntrySource($record);
-
-                if ($entry === null) {
-                    return null;
-                }
-
-                $additions[] = $entry;
-
+            if ($authored === null || $authored['identity'] === null) {
                 continue;
             }
 
-            $position = $absolute[$ordinal] ?? null;
+            $held[$authored['identity']][] = $index;
+        }
 
-            if ($position === null || ! isset($this->authoredValues[$ordinal])) {
-                return null;
+        // What the file will hold for this category once written is what
+        // the records say, so no identity may be written twice: two entries
+        // declaring one identity could never be told apart again. Two
+        // records that merely mirror entries the file already holds twice
+        // are left exactly as they are, below, rather than written.
+        $current = [];
+
+        foreach ($this->getRecords() as $index => $record) {
+            $identity = self::identityOf($record->toArray(), $identityKey);
+
+            if ($identity === null) {
+                throw new SourceIdentityConflict(sprintf(
+                    'Refusing to write %s: %s %d has no %s. Give it one before saving.',
+                    $filename,
+                    $noun,
+                    $index + 1,
+                    $identityKey,
+                ));
             }
 
-            $claimed[$ordinal] = true;
+            $current[$identity][] = $index;
+        }
 
-            foreach ($this->authoredValues[$ordinal] as $key => $authored) {
-                if ($record->get($key) === $authored) {
-                    continue;
-                }
-
-                if (! $document->isEditable($position)) {
-                    return null;
-                }
-
-                $patches[] = [
-                    'entry' => $position,
-                    ...$this->shallowestWritablePath($document, $position, $key, $record, $record->get($key)),
-                ];
+        foreach ($current as $identity => $indexes) {
+            if (count($indexes) === 1) {
+                continue;
             }
-        }
 
-        $removals = [];
+            $mirrored = $held[$identity] ?? [];
 
-        foreach (array_keys($this->authoredValues) as $ordinal) {
-            if (! isset($claimed[$ordinal]) && isset($absolute[$ordinal])) {
-                $removals[] = $absolute[$ordinal];
+            if ($indexes !== $mirrored) {
+                throw new SourceIdentityConflict(sprintf(
+                    'Refusing to write %s: two %ss would share the %s %s. Make each one distinct before saving.',
+                    $filename,
+                    $noun,
+                    $identityKey,
+                    var_export($identity, true),
+                ));
             }
-        }
-
-        return ['patches' => $patches, 'removals' => $removals, 'additions' => $additions];
-    }
-
-    /**
-     * Returns whether this category would write its file by rebuilding the
-     * returned expression rather than by editing the author's source.
-     *
-     * @return bool True when it would.
-     */
-    public function ownsFileKey(): bool
-    {
-        return $this->schema->projection !== null;
-    }
-
-    /**
-     * Returns whether this category would write its file by rebuilding the
-     * returned expression rather than by editing the author's source.
-     *
-     * @return bool True when it would.
-     */
-    public function wouldRegenerate(): bool
-    {
-        return $this->structuralChange && $this->isConstructorAuthored();
-    }
-
-    /**
-     * Returns the whole payload this category would write, for a file no
-     * category can edit surgically.
-     *
-     * @return array<array-key, mixed> The payload.
-     */
-    public function wholeFilePayload(): array
-    {
-        return $this->mergeIntoFilePayload();
-    }
-
-    /**
-     * Writes only the values that changed, straight into the authored PHP.
-     *
-     * A file whose entries are constructor calls with named arguments is the
-     * author's own PHP, not data that happens to live in a PHP file.
-     * Regenerating it reorders arguments, writes out defaults nobody wrote,
-     * and rewrites every record to change one. So each changed field is
-     * patched where it sits and everything else keeps its bytes.
-     *
-     * Returns false when this file is not that shape -- entries built some
-     * other way, or a record added or removed, which changes the list itself
-     * rather than a value in it -- and the ordinary writer takes over.
-     *
-     * @return bool True when the file was written in place.
-     */
-    private function savedInPlace(): bool
-    {
-        if (! $this->file instanceof PhpDataFile || ! is_file($this->file->path)) {
-            return false;
-        }
-
-        if ($this->schema->projection !== null) {
-            // A projected category owns part of a keyed file, not a list of
-            // authored entries, so there is nothing to patch by position.
-            return false;
-        }
-
-        $document = PhpSourceDocument::parse((string) file_get_contents($this->file->path));
-        $payloadCount = is_array($this->file->payload) ? count($this->file->payload) : 0;
-
-        if ($document->entryCount() === 0 || $document->entryCount() !== $payloadCount) {
-            return false;
         }
 
         $patches = [];
-        $additions = [];
+        $positionOf = [];
 
-        foreach ($this->getRecords() as $index => $record) {
-            $position = $this->payloadPositions[$index] ?? null;
+        foreach ($held as $identity => $indexes) {
+            $positions = $source['positions'][$identity] ?? [];
 
-            if ($position === null) {
-                // A record the file does not hold yet: written as a new
-                // entry rather than by rebuilding the list around it.
-                $additions[] = $record;
+            if ($positions === []) {
+                // The file has let go of it since -- a removal that was
+                // saved and then undone. It is written back as a new entry.
+                continue;
+            }
+
+            if (count($positions) !== 1 || count($indexes) !== 1) {
+                // Either side holds this identity more than once, so no
+                // record can be matched to one entry. Nothing may change
+                // among them, and every one must still be there.
+                foreach ($indexes as $index) {
+                    if ($this->changedFields($this->getRecords()[$index]) !== []) {
+                        throw new SourceIdentityConflict(sprintf(
+                            'Refusing to write %s: %d entries share the %s %s, so the edited %s cannot be found among them. Make each one distinct in the file and reload.',
+                            $filename,
+                            max(count($positions), count($indexes)),
+                            $identityKey,
+                            var_export($identity, true),
+                            $noun,
+                        ));
+                    }
+                }
+
+                if (count($positions) !== count($indexes)) {
+                    throw new SourceIdentityConflict(sprintf(
+                        'Refusing to write %s: %d entries share the %s %s, so the %s to remove cannot be found among them. Make each one distinct in the file and reload.',
+                        $filename,
+                        count($positions),
+                        $identityKey,
+                        var_export($identity, true),
+                        $noun,
+                    ));
+                }
+
+                foreach ($positions as $position) {
+                    $claimed[$position] = true;
+                }
 
                 continue;
             }
 
-            if (! isset($this->authoredValues[$position])) {
-                return false;
-            }
+            $index = $indexes[0];
+            $position = $positions[0];
+            $record = $this->getRecords()[$index];
+            $claimed[$position] = true;
+            $positionOf[$index] = $position;
 
-            foreach ($this->authoredValues[$position] as $key => $authored) {
-                $current = $record->get($key);
-
-                if ($current === $authored) {
-                    continue;
-                }
-
+            foreach ($this->changedFields($record) as $key => $value) {
                 if (! $document->isEditable($position)) {
-                    // The entry is not a named-argument call, so the value
-                    // cannot be placed without rewriting it.
-                    return false;
+                    return null;
                 }
 
                 $patches[] = [
                     'entry' => $position,
-                    // A value inside something the source does not declare at
-                    // all is written as the whole thing: authoring the first
-                    // special property writes specialProperty, not a leaf
-                    // inside an argument that is not there.
-                    ...$this->shallowestWritablePath($document, $position, $key, $record, $current),
+                    ...$this->shallowestWritablePath($document, $position, $key, $record, $value),
                 ];
             }
         }
 
-        // Entries the file still holds that no record claims any more.
-        $claimed = array_values(array_filter(
-            $this->payloadPositions,
-            static fn(?int $position): bool => $position !== null,
-        ));
-        $removals = array_values(array_diff(array_keys($this->authoredValues), $claimed));
-        rsort($removals);
+        // Entries the file holds under an identity this category held and
+        // no longer does. An entry this category never held stays: it is
+        // not this category's to remove, and a record about to be written
+        // under its identity is a collision, not a replacement.
+        $removals = [];
+        $known = $this->authoredIdentities();
 
-        foreach ($additions as $record) {
-            if ($this->newEntrySource($record) === null) {
-                // Nothing to write it as. Refusing is the whole point: the
-                // alternative is regenerating every other entry to add one.
-                return false;
+        foreach ($source['positions'] as $identity => $positions) {
+            if (isset($held[$identity])) {
+                continue;
+            }
+
+            if (! isset($known[$identity])) {
+                if (isset($current[$identity])) {
+                    throw new SourceIdentityConflict(sprintf(
+                        'Refusing to write %s: it already holds a %s with the %s %s that this category did not load. Reload before saving.',
+                        $filename,
+                        $noun,
+                        $identityKey,
+                        var_export($identity, true),
+                    ));
+                }
+
+                continue;
+            }
+
+            foreach ($positions as $position) {
+                if (! $document->isConstructorEntry($position)) {
+                    return null;
+                }
+
+                $removals[] = $position;
             }
         }
 
-        if ($patches === [] && $removals === [] && $additions === []) {
-            return true;
-        }
+        // Records the file does not hold, each placed ahead of the next
+        // record of this category the file does hold, so the list on disk
+        // reads in the order the list in the editor does.
+        $insertions = [];
+        $records = $this->getRecords();
 
-        // Values first, while every position still means what it meant when
-        // the document was parsed; then removals from the back, so each one
-        // leaves the positions before it alone; then the new entries.
-        foreach ($patches as $patch) {
-            $document = $patch['value'] === null
-                ? $document->withoutArgument($patch['entry'], $patch['path'])
-                : $document->withArgument($patch['entry'], $patch['path'], PhpValueExporter::export($patch['value']));
-        }
+        foreach ($records as $index => $record) {
+            if (isset($positionOf[$index]) || $this->heldAmbiguously($record, $held)) {
+                continue;
+            }
 
-        foreach ($removals as $position) {
-            $document = $document->withoutEntry($position);
-        }
-
-        foreach ($additions as $record) {
             $entry = $this->newEntrySource($record);
 
             if ($entry === null) {
-                return false;
+                return null;
             }
 
-            $document = $document->withNewEntry($entry['class'], $entry['arguments']);
+            $before = null;
+
+            for ($next = $index + 1, $count = count($records); $next < $count; $next++) {
+                if (isset($positionOf[$next])) {
+                    $before = $positionOf[$next];
+
+                    break;
+                }
+            }
+
+            if ($before !== null && ! $document->isConstructorEntry($before)) {
+                return null;
+            }
+
+            $insertions[] = ['before' => $before, ...$entry];
         }
 
-        AtomicFile::write($this->file->path, $document->source);
-        $this->adoptSavedFile();
+        return ['patches' => $patches, 'removals' => $removals, 'insertions' => $insertions];
+    }
 
-        return true;
+    /**
+     * Returns whether a record is one of several the file holds under one
+     * identity -- kept in place, neither patched nor rewritten.
+     *
+     * @param ProjectRecord $record The record.
+     * @param array<string, int[]> $held Record indexes by authored identity.
+     * @return bool True when it is.
+     */
+    private function heldAmbiguously(ProjectRecord $record, array $held): bool
+    {
+        $authored = $this->authoredFor($record);
+
+        if ($authored === null || $authored['identity'] === null) {
+            return false;
+        }
+
+        return count($held[$authored['identity']] ?? []) > 1;
+    }
+
+    /**
+     * Returns the fields whose value no longer matches what the file
+     * declared for a record, keyed by field.
+     *
+     * @param ProjectRecord $record The record.
+     * @return array<string, mixed> The changed values.
+     */
+    private function changedFields(ProjectRecord $record): array
+    {
+        $authored = $this->authoredFor($record);
+
+        if ($authored === null) {
+            return [];
+        }
+
+        $changed = [];
+
+        foreach ($authored['values'] as $key => $value) {
+            if ($record->get($key) !== $value) {
+                $changed[$key] = $record->get($key);
+            }
+        }
+
+        return $changed;
+    }
+
+    /**
+     * Returns every identity this category has known the file to hold: those
+     * of the records it holds, and of the records it held and removed.
+     *
+     * @return array<string, true> The identities.
+     */
+    private function authoredIdentities(): array
+    {
+        $identities = [];
+
+        foreach ($this->authored as $authored) {
+            if ($authored['identity'] !== null) {
+                $identities[$authored['identity']] = true;
+            }
+        }
+
+        return $identities;
+    }
+
+    /**
+     * Returns whether this category has added or removed a record, or holds
+     * one the file has since let go of -- the changes that alter the list
+     * itself rather than a value in it.
+     *
+     * @param PhpDataFile $file The file, read fresh.
+     * @return bool True when it has.
+     */
+    public function hasStructuralChange(PhpDataFile $file): bool
+    {
+        if ($this->schema->storage !== RecordStorage::LIST_FILE || $this->schema->projection !== null) {
+            return false;
+        }
+
+        $source = $this->sourcePositionsIn($file);
+        $held = [];
+
+        foreach ($this->getRecords() as $record) {
+            $authored = $this->authoredFor($record);
+
+            if ($authored === null) {
+                // Never held by the file.
+                return true;
+            }
+
+            if ($authored['identity'] === null) {
+                // Held, under no identity it could be looked for by.
+                continue;
+            }
+
+            if (! isset($source['positions'][$authored['identity']])) {
+                // Held once, let go of since.
+                return true;
+            }
+
+            $held[$authored['identity']] = true;
+        }
+
+        foreach (array_keys($this->authoredIdentities()) as $identity) {
+            if (! isset($held[$identity]) && isset($source['positions'][$identity])) {
+                // Held by the file, no longer by this category.
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Returns why this category must not be written by rebuilding the file's
+     * returned expression, or null when it may be.
+     *
+     * A file whose entries are constructor calls the author wrote is edited
+     * entry by entry. When the list itself has changed and that edit could
+     * not be expressed in the source, regenerating every entry to add or
+     * remove one is exactly what the surgical writer exists to prevent, so
+     * the write is refused with the reason instead.
+     *
+     * @param PhpDataFile $file The file, read fresh.
+     * @return string|null The refusal.
+     */
+    public function regenerationRefusal(PhpDataFile $file): ?string
+    {
+        if (! $this->isConstructorAuthored() || ! $this->hasStructuralChange($file)) {
+            return null;
+        }
+
+        return sprintf(
+            'Refusing to add or remove a %s in %s: its entries are constructor calls this editor cannot rewrite safely. Edit the file directly.',
+            $this->schema->entryNoun,
+            basename($this->path),
+        );
     }
 
     /**
@@ -1640,91 +1949,49 @@ final class ProjectRecordDatabase
     }
 
     /**
-     * Records what each record's fields hold as loaded, so a save can tell
-     * which ones an author actually changed.
+     * Records what the file declares for each record -- the identity its
+     * entry is addressed by and the values it was authored with -- so a save
+     * can tell which fields an author actually changed and find the entry
+     * to change them in.
+     *
+     * Called when the file is read and again when a written file is
+     * adopted, when the records are exactly what the file holds.
      *
      * @return void
      */
     private function captureAuthoredValues(): void
     {
-        $this->authoredValues = [];
+        $this->authored = [];
 
-        foreach ($this->getRecords() as $index => $record) {
-            // Keyed by where the entry sits in the file, not by where the
-            // record sits in the list: removing one shifts every record
-            // after it, and what an entry was authored holding does not
-            // move with them.
-            $position = $this->payloadPositions[$index] ?? null;
-
-            if ($position === null) {
-                continue;
-            }
-
+        foreach ($this->getRecords() as $record) {
             $values = [];
 
             foreach ($this->schema->fieldsFor($record->toArray()) as $field) {
                 $values[$field->key] = $record->get($field->key);
             }
 
-            $this->authoredValues[$position] = $values;
+            $this->authored[spl_object_id($record)] = [
+                'record' => $record,
+                'identity' => self::identityOf($record->toArray(), $this->schema->identityKey),
+                'values' => $values,
+            ];
         }
     }
 
     /**
-     * Rebuilds the whole file around this category's records.
+     * Rebuilds the whole file around this category's records, against the
+     * payload this category last read.
      *
-     * Items, weapons, armors, and accessories share `items.php`, and a
-     * category only holds the entries its filter accepts. Writing just those
-     * would delete the rest of the file, so the original payload is walked and
-     * this category's entries are substituted where they sat.
+     * This is what the category's dirty fingerprint is taken over: the exact
+     * bytes a regenerating save of this category alone would write. A save
+     * that shares the file with siblings folds into a fresh read instead;
+     * see `foldInto()`.
      *
-     * A category with a projection returns the file's own keyed payload; one
-     * without returns the list the file is.
-     *
-     * @return array<array-key, mixed> The payload to write.
+     * @return array<array-key, mixed> The payload.
      */
     private function mergeIntoFilePayload(): array
     {
-        if ($this->schema->projection !== null) {
-            // Everything the file holds, with only this category's records
-            // folded back in: a catalogue's other lists, a policy's other
-            // maps, and the vocabularies they share are not this category's
-            // to rewrite.
-            return $this->schema->projection->write(
-                is_array($this->file?->payload) ? $this->file->payload : [],
-                array_map(
-                    static fn(ProjectRecord $record): array => (array) $record->toArray(),
-                    $this->getRecords(),
-                ),
-            );
-        }
-
-        $original = is_array($this->file?->payload) ? array_values($this->file->payload) : [];
-        $records = $this->getRecords();
-        $filter = $this->schema->recordFilter;
-        $payload = [];
-        $position = 0;
-
-        foreach ($original as $entry) {
-            if ($filter !== null && ! $filter($entry)) {
-                // Another category's entry. It keeps its place untouched.
-                $payload[] = $entry;
-
-                continue;
-            }
-
-            if (isset($records[$position])) {
-                $payload[] = $records[$position]->toArray();
-                $position++;
-            }
-        }
-
-        // Records added since the file was read go after the ones it had.
-        for ($count = count($records); $position < $count; $position++) {
-            $payload[] = $records[$position]->toArray();
-        }
-
-        return $payload;
+        return $this->foldInto(is_array($this->file?->payload) ? $this->file->payload : []);
     }
 
     /**

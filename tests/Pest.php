@@ -85,6 +85,45 @@ if (is_file($enginePsr4Path)) {
 }
 
 /**
+ * Returns the Last Legend project the suites read authored files from, or
+ * null when none is reachable.
+ *
+ * The sibling checkout by default. `ICHILOTO_GAME_SRC` pins it to another
+ * copy instead -- a read-only export of one accepted game head -- so a gate
+ * runs against that head while the checkout itself is on someone else's
+ * branch. Nothing here ever writes to it: a test copies the one file it
+ * needs into a throwaway project.
+ */
+function gameSourceRoot(): ?string
+{
+    $pinned = getenv('ICHILOTO_GAME_SRC');
+
+    if (is_string($pinned) && $pinned !== '' && is_file($pinned . '/assets/Data/items.php')) {
+        return rtrim($pinned, '/');
+    }
+
+    $sibling = dirname(__DIR__, 2) . '/examples/last-legend';
+
+    return is_file($sibling . '/assets/Data/items.php') ? $sibling : null;
+}
+
+/**
+ * Removes every throwaway project a test made, whether it passed or not.
+ *
+ * A test that builds a project and then fails would otherwise leave it in
+ * the temporary directory for good; over a full run those add up to
+ * hundreds of copies. Cleaning here, after every test, is what keeps the
+ * suite's footprint the size of one fixture rather than the size of the run.
+ */
+if (new ReflectionProperty(Pest\TestSuite::class, 'instance')->getValue() instanceof Pest\TestSuite) {
+    // Only under the Pest runner. A script that loads this file for its
+    // autoloader alone -- a reproduction, a probe -- has no suite to hook.
+    uses()->afterEach(function (): void {
+        cleanUpTemporaryProjects();
+    })->in(__DIR__ . '/Unit');
+}
+
+/**
  * Builds an unbooted editor over a throwaway copy of the fixture project, so
  * a test may exercise the real save paths.
  */
@@ -168,8 +207,38 @@ function makeTemporaryProject(string $prefix = 'ichiloto-editor-'): string
     $root = sys_get_temp_dir() . '/' . uniqid($prefix, true);
     mkdir($root, 0777, true);
     copyDirectoryRecursively(fixturePath('sample-project'), $root);
+    rememberTemporaryProject($root);
 
     return $root;
+}
+
+/**
+ * Registers a throwaway directory for removal when the running test ends.
+ *
+ * Every project `makeTemporaryProject()` builds is registered; a test that
+ * lays out its own directory registers it the same way, so its cleanup does
+ * not depend on the test reaching its last line.
+ *
+ * @param string $root The directory to remove after the test.
+ * @return string The same directory, for chaining.
+ */
+function rememberTemporaryProject(string $root): string
+{
+    $GLOBALS['ichilotoTemporaryProjects'][$root] = $root;
+
+    return $root;
+}
+
+/**
+ * Removes every registered throwaway directory.
+ */
+function cleanUpTemporaryProjects(): void
+{
+    foreach ($GLOBALS['ichilotoTemporaryProjects'] ?? [] as $root) {
+        removeDirectoryRecursively($root);
+    }
+
+    $GLOBALS['ichilotoTemporaryProjects'] = [];
 }
 
 /**
@@ -200,8 +269,17 @@ function copyDirectoryRecursively(string $source, string $destination): void
  */
 function removeDirectoryRecursively(string $directory): void
 {
-    if (! is_dir($directory)) {
+    if (! is_dir($directory) || is_link($directory)) {
         return;
+    }
+
+    // Only ever a directory made under the temporary directory: a path
+    // outside it is a mistake, not a fixture, whatever asked.
+    $temporary = realpath(sys_get_temp_dir()) ?: sys_get_temp_dir();
+    $resolved = realpath($directory) ?: $directory;
+
+    if (! str_starts_with($resolved, rtrim($temporary, '/') . '/')) {
+        throw new RuntimeException(sprintf('Refusing to remove %s: it is not a temporary fixture.', $directory));
     }
 
     foreach (scandir($directory) ?: [] as $entry) {
@@ -210,7 +288,16 @@ function removeDirectoryRecursively(string $directory): void
         }
 
         $path = $directory . '/' . $entry;
-        is_dir($path) ? removeDirectoryRecursively($path) : @unlink($path);
+
+        if (is_link($path) || ! is_dir($path)) {
+            // A link is removed as a link: what it points at -- a shared
+            // vendor tree, an engine -- is not the fixture's to remove.
+            @unlink($path);
+
+            continue;
+        }
+
+        removeDirectoryRecursively($path);
     }
 
     @rmdir($directory);

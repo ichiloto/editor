@@ -56,8 +56,19 @@ final class SharedFileTransaction
     /**
      * Writes one file for every dirty category that shares it.
      *
+     * The file is read once. If every dirty category can say what it wants
+     * as edits to the author's own source, those edits are composed against
+     * that one reading and written in one replacement. Otherwise every dirty
+     * category folds its records into that one reading's payload, in turn,
+     * and the result is written in one replacement -- unless a category's
+     * entries are constructor calls whose list has changed, which is
+     * refused with the reason rather than regenerated. Either way there is
+     * one payload, one write, and no baseline moves until it has succeeded.
+     *
      * @param array<array-key, object> $databases The categories sharing one file.
      * @return bool True when the file was written.
+     * @throws SourceIdentityConflict When an entry cannot be addressed with certainty.
+     * @throws RuntimeException When the write is refused or fails.
      */
     public static function commit(array $databases): bool
     {
@@ -85,31 +96,24 @@ final class SharedFileTransaction
             return true;
         }
 
-        if (self::wouldRegenerateAuthoredSource($dirty)) {
-            throw new RuntimeException(sprintf(
-                'Refusing to add or remove records in %s: its entries are constructor calls this editor cannot rewrite safely. Edit the file directly.',
-                basename($path),
-            ));
+        foreach ($dirty as $database) {
+            $refusal = $database->regenerationRefusal($file);
+
+            if ($refusal !== null) {
+                throw new RuntimeException($refusal);
+            }
         }
 
+        // One authoritative payload: the file as it is now, with every dirty
+        // category's part folded in, in turn, and written once. No category
+        // describes the whole file from its own older reading of it.
         $payload = is_array($file->payload) ? $file->payload : [];
 
         foreach ($dirty as $database) {
             $payload = $database->foldInto($payload);
         }
 
-        // A file no category owns a key of is rebuilt from the one category
-        // that can describe the whole of it; several such categories would
-        // each describe a different whole, so they are written in turn.
-        if (self::projectedOnly($dirty)) {
-            $file->save($payload);
-        } else {
-            foreach ($dirty as $database) {
-                $file->save($database->wholeFilePayload());
-                $file = PhpDataFile::load($path, $first->projectRoot());
-            }
-        }
-
+        $file->save($payload);
         self::adopt($dirty);
 
         return true;
@@ -132,7 +136,7 @@ final class SharedFileTransaction
         $document = PhpSourceDocument::parse((string) file_get_contents($file->path));
         $patches = [];
         $removals = [];
-        $additions = [];
+        $insertions = [];
 
         foreach ($dirty as $database) {
             $plan = $database->sourcePlan($document, $file);
@@ -143,74 +147,60 @@ final class SharedFileTransaction
 
             $patches = [...$patches, ...$plan['patches']];
             $removals = [...$removals, ...$plan['removals']];
-            $additions = [...$additions, ...$plan['additions']];
+            $insertions = [...$insertions, ...$plan['insertions']];
         }
 
-        if ($patches === [] && $removals === [] && $additions === []) {
+        if ($patches === [] && $removals === [] && $insertions === []) {
             // Nothing to write, but the categories are still adopted so a
             // save that found no work leaves them clean.
             return true;
         }
 
         // Values first, while every position still means what the snapshot
-        // said; then removals from the back, so one removal cannot move the
-        // entry another was about to remove; then the new entries.
+        // said. Then the list changes, from the back of the file forward, so
+        // that removing an entry or placing one ahead of another moves only
+        // the positions already dealt with. Entries with nothing to go ahead
+        // of are appended last.
         foreach ($patches as $patch) {
             $document = $patch['value'] === null
                 ? $document->withoutArgument($patch['entry'], $patch['path'])
                 : $document->withArgument($patch['entry'], $patch['path'], PhpValueExporter::export($patch['value']));
         }
 
-        $removals = array_values(array_unique($removals));
-        rsort($removals);
+        $anchored = [];
+        $appended = [];
 
-        foreach ($removals as $position) {
-            $document = $document->withoutEntry($position);
+        foreach ($insertions as $insertion) {
+            if ($insertion['before'] === null) {
+                $appended[] = $insertion;
+            } else {
+                $anchored[$insertion['before']][] = $insertion;
+            }
         }
 
-        foreach ($additions as $entry) {
-            $document = $document->withNewEntry($entry['class'], $entry['arguments']);
+        $removals = array_values(array_unique($removals));
+        $positions = array_values(array_unique([...$removals, ...array_keys($anchored)]));
+        rsort($positions);
+
+        foreach ($positions as $position) {
+            if (in_array($position, $removals, true)) {
+                $document = $document->withoutEntry($position);
+            }
+
+            // Placed in the order the category lists them: each goes ahead of
+            // the neighbour, after the ones already placed ahead of it.
+            foreach (array_reverse($anchored[$position] ?? []) as $insertion) {
+                $document = $document->withNewEntry($insertion['class'], $insertion['arguments'], $position);
+            }
+        }
+
+        foreach ($appended as $insertion) {
+            $document = $document->withNewEntry($insertion['class'], $insertion['arguments']);
         }
 
         AtomicFile::write($file->path, $document->source);
 
         return true;
-    }
-
-    /**
-     * Returns whether every dirty category owns a key of the file rather
-     * than a subset of its entries.
-     *
-     * @param ProjectRecordDatabase[] $dirty The dirty categories.
-     * @return bool True when they all do.
-     */
-    private static function projectedOnly(array $dirty): bool
-    {
-        foreach ($dirty as $database) {
-            if (! $database->ownsFileKey()) {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    /**
-     * Returns whether writing this group the ordinary way would rebuild an
-     * author's constructor calls.
-     *
-     * @param ProjectRecordDatabase[] $dirty The dirty categories.
-     * @return bool True when it would.
-     */
-    private static function wouldRegenerateAuthoredSource(array $dirty): bool
-    {
-        foreach ($dirty as $database) {
-            if ($database->wouldRegenerate()) {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     /**

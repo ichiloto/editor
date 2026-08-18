@@ -896,9 +896,9 @@ it('validates NPCs the editor created, not only hand-written ones', function () 
 // -- Engine ----------------------------------------------------------------
 
 it('loads an editor-written map through the engine\'s own NPC configuration', function () {
-    $game = dirname(__DIR__, 3) . '/examples/last-legend';
+    $game = gameSourceRoot();
 
-    if (! is_file($game . '/vendor/autoload.php')) {
+    if ($game === null || ! is_file($game . '/vendor/autoload.php')) {
         $this->markTestSkipped('The engine is not reachable from this checkout.');
     }
 

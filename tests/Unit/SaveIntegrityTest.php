@@ -17,13 +17,13 @@ use Ichiloto\Editor\ProjectWorkspace;
  */
 function disposableGameCopy(): ?string
 {
-    $game = dirname(__DIR__, 3) . '/examples/last-legend';
+    $game = gameSourceRoot();
 
-    if (! is_dir($game . '/assets/Data/Actors')) {
+    if ($game === null || ! is_dir($game . '/assets/Data/Actors')) {
         return null;
     }
 
-    $root = sys_get_temp_dir() . '/' . uniqid('save-integrity-', true);
+    $root = rememberTemporaryProject(sys_get_temp_dir() . '/' . uniqid('save-integrity-', true));
     mkdir($root, 0o777, true);
 
     // The game's map files construct classes from the project's own
@@ -47,13 +47,32 @@ function disposableGameCopy(): ?string
         });
     }
 
-    foreach (['assets', 'config.php', 'ichiloto.json', 'input.php', 'composer.json'] as $entry) {
-        $source = $game . '/' . $entry;
+    // Everything a save could write is copied; the audio, which nothing
+    // writes and which weighs more than the rest of the game together, is
+    // reached through a link so the copy stays the size of the authored
+    // data rather than the size of the soundtrack.
+    mkdir($root . '/assets', 0o777, true);
 
-        if (is_dir($source)) {
-            copyDirectoryRecursively($source, $root . '/' . $entry);
-        } elseif (is_file($source)) {
-            copy($source, $root . '/' . $entry);
+    foreach (scandir($game . '/assets') ?: [] as $entry) {
+        if ($entry === '.' || $entry === '..') {
+            continue;
+        }
+
+        $source = $game . '/assets/' . $entry;
+
+        if ($entry === 'Audio') {
+            symlink($source, $root . '/assets/' . $entry);
+        } elseif (is_dir($source)) {
+            mkdir($root . '/assets/' . $entry, 0o777, true);
+            copyDirectoryRecursively($source, $root . '/assets/' . $entry);
+        } else {
+            copy($source, $root . '/assets/' . $entry);
+        }
+    }
+
+    foreach (['config.php', 'ichiloto.json', 'input.php', 'composer.json'] as $entry) {
+        if (is_file($game . '/' . $entry)) {
+            copy($game . '/' . $entry, $root . '/' . $entry);
         }
     }
 
@@ -69,8 +88,11 @@ function disposableGameCopy(): ?string
 function hashTree(string $directory): array
 {
     $hashes = [];
+    // Links are followed, so a tree reached through one -- the audio -- is
+    // hashed file by file like everything else, and the pin over the whole
+    // project keeps its full reach.
     $iterator = new RecursiveIteratorIterator(
-        new RecursiveDirectoryIterator($directory, FilesystemIterator::SKIP_DOTS),
+        new RecursiveDirectoryIterator($directory, FilesystemIterator::SKIP_DOTS | FilesystemIterator::FOLLOW_SYMLINKS),
     );
 
     foreach ($iterator as $file) {
