@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Database;
 
+use Ichiloto\Editor\IO\AtomicFile;
+use RuntimeException;
+
 /**
  * One write for one file, however many categories are editing it.
  *
@@ -71,20 +74,155 @@ final class SharedFileTransaction
         }
 
         $first = $dirty[0];
-        $file = PhpDataFile::load($first->backingFilePath(), $first->projectRoot());
+        $path = $first->backingFilePath();
+        $file = PhpDataFile::load($path, $first->projectRoot());
+
+        // One snapshot of the source, and every category's wants resolved
+        // against it before a byte is written.
+        if (self::commitToSource($dirty, $file)) {
+            self::adopt($dirty);
+
+            return true;
+        }
+
+        if (self::wouldRegenerateAuthoredSource($dirty)) {
+            throw new RuntimeException(sprintf(
+                'Refusing to add or remove records in %s: its entries are constructor calls this editor cannot rewrite safely. Edit the file directly.',
+                basename($path),
+            ));
+        }
+
         $payload = is_array($file->payload) ? $file->payload : [];
 
         foreach ($dirty as $database) {
             $payload = $database->foldInto($payload);
         }
 
-        // Throws rather than half-writing; nothing below runs if it does.
-        $file->save($payload);
+        // A file no category owns a key of is rebuilt from the one category
+        // that can describe the whole of it; several such categories would
+        // each describe a different whole, so they are written in turn.
+        if (self::projectedOnly($dirty)) {
+            $file->save($payload);
+        } else {
+            foreach ($dirty as $database) {
+                $file->save($database->wholeFilePayload());
+                $file = PhpDataFile::load($path, $first->projectRoot());
+            }
+        }
+
+        self::adopt($dirty);
+
+        return true;
+    }
+
+    /**
+     * Writes the file by editing the author's own source, when every dirty
+     * category can say what it wants in those terms.
+     *
+     * @param ProjectRecordDatabase[] $dirty The dirty categories.
+     * @param PhpDataFile $file The file, read once.
+     * @return bool True when the file was written this way.
+     */
+    private static function commitToSource(array $dirty, PhpDataFile $file): bool
+    {
+        if (! is_file($file->path)) {
+            return false;
+        }
+
+        $document = PhpSourceDocument::parse((string) file_get_contents($file->path));
+        $patches = [];
+        $removals = [];
+        $additions = [];
 
         foreach ($dirty as $database) {
-            $database->adoptSavedFile();
+            $plan = $database->sourcePlan($document, $file);
+
+            if ($plan === null) {
+                return false;
+            }
+
+            $patches = [...$patches, ...$plan['patches']];
+            $removals = [...$removals, ...$plan['removals']];
+            $additions = [...$additions, ...$plan['additions']];
+        }
+
+        if ($patches === [] && $removals === [] && $additions === []) {
+            // Nothing to write, but the categories are still adopted so a
+            // save that found no work leaves them clean.
+            return true;
+        }
+
+        // Values first, while every position still means what the snapshot
+        // said; then removals from the back, so one removal cannot move the
+        // entry another was about to remove; then the new entries.
+        foreach ($patches as $patch) {
+            $document = $patch['value'] === null
+                ? $document->withoutArgument($patch['entry'], $patch['path'])
+                : $document->withArgument($patch['entry'], $patch['path'], PhpValueExporter::export($patch['value']));
+        }
+
+        $removals = array_values(array_unique($removals));
+        rsort($removals);
+
+        foreach ($removals as $position) {
+            $document = $document->withoutEntry($position);
+        }
+
+        foreach ($additions as $entry) {
+            $document = $document->withNewEntry($entry['class'], $entry['arguments']);
+        }
+
+        AtomicFile::write($file->path, $document->source);
+
+        return true;
+    }
+
+    /**
+     * Returns whether every dirty category owns a key of the file rather
+     * than a subset of its entries.
+     *
+     * @param ProjectRecordDatabase[] $dirty The dirty categories.
+     * @return bool True when they all do.
+     */
+    private static function projectedOnly(array $dirty): bool
+    {
+        foreach ($dirty as $database) {
+            if (! $database->ownsFileKey()) {
+                return false;
+            }
         }
 
         return true;
+    }
+
+    /**
+     * Returns whether writing this group the ordinary way would rebuild an
+     * author's constructor calls.
+     *
+     * @param ProjectRecordDatabase[] $dirty The dirty categories.
+     * @return bool True when it would.
+     */
+    private static function wouldRegenerateAuthoredSource(array $dirty): bool
+    {
+        foreach ($dirty as $database) {
+            if ($database->wouldRegenerate()) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Tells every category the file it shares now holds what it holds.
+     *
+     * @param ProjectRecordDatabase[] $dirty The categories written for.
+     * @return void
+     */
+    private static function adopt(array $dirty): void
+    {
+        foreach ($dirty as $database) {
+            $database->adoptSavedFile();
+        }
     }
 }

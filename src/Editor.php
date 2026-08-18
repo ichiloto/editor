@@ -6094,14 +6094,23 @@ final class Editor
             $label = implode(', ', array_keys($dirty));
 
             try {
+                $backed = [];
+
                 foreach ($dirty as $database) {
-                    $this->backupBeforeSave(...$this->getDatabaseBackupPaths($database));
+                    foreach ($this->getDatabaseBackupPaths($database) as $backupPath) {
+                        // One file, one backup, however many categories of
+                        // it are being written.
+                        $backed[$backupPath] = $backupPath;
+                    }
                 }
+
+                $this->backupBeforeSave(...array_values($backed));
 
                 $shared = reset($dirty);
 
                 if ($shared instanceof ProjectRecordDatabase && $shared->sharesBackingFile()) {
-                    // One write for the file, with every dirty part folded in.
+                    // One write for the file, with every dirty category's
+                    // edits composed against one snapshot of it first.
                     SharedFileTransaction::commit(array_values($dirty));
                 } else {
                     foreach ($dirty as $database) {

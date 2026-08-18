@@ -61,7 +61,11 @@ final class ProjectRecordDatabase
         if ($schema->storage === RecordStorage::LIST_FILE && $schema->projection === null) {
             // What the source declares, so a save can patch only what an
             // author actually changed.
-            $this->payloadPositions = self::payloadPositionsFor($schema, $file);
+            // Which entry of *this category* each record came from. The
+            // position that ordinal occupies in the whole file is resolved
+            // from the file itself at the moment of writing, because a
+            // sibling category sharing the file moves it.
+            $this->payloadPositions = array_keys(array_values($this->records));
             $this->captureAuthoredValues();
         }
     }
@@ -912,14 +916,22 @@ final class ProjectRecordDatabase
             return;
         }
 
+        if ($this->schema->storage === RecordStorage::LIST_FILE) {
+            // The transaction adopts the written file and cleans every
+            // category it wrote for, this one included.
+            SharedFileTransaction::commit([$this]);
+
+            return;
+        }
+
         match ($this->schema->storage) {
-            RecordStorage::LIST_FILE => $this->saveListFile(),
             RecordStorage::DIRECTORY => $this->saveDirectory(),
             RecordStorage::CONFIG_SUBTREE => $this->saveConfigSubtree(),
             RecordStorage::FILE_LISTING => null,
             RecordStorage::MAP_OWNED => $this->writeBack !== null
                 ? ($this->writeBack)(array_map(static fn(ProjectRecord $record): array|object => $record->toArray(), $this->getRecords()))
                 : null,
+            RecordStorage::LIST_FILE => null,
         };
 
         foreach ($this->records as $record) {
@@ -1200,12 +1212,6 @@ final class ProjectRecordDatabase
         }
 
         $this->file = PhpDataFile::load($this->file->path, $this->projectRoot);
-
-        if ($this->schema->projection === null && ! $this->structuralChange) {
-            // A record added or removed here is not in the file yet, so the
-            // file cannot be asked which entry each record came from.
-            $this->payloadPositions = self::payloadPositionsFor($this->schema, $this->file);
-        }
     }
 
     /**
@@ -1216,7 +1222,12 @@ final class ProjectRecordDatabase
      */
     public function sharesBackingFile(): bool
     {
-        return $this->schema->storage === RecordStorage::LIST_FILE && $this->schema->projection !== null;
+        // Every category backed by one file belongs to that file's group,
+        // whether it owns a key of it (a projection) or a subset of its
+        // entries (a record filter). Items, weapons and armors are three
+        // categories over one list, and a save that forgets that is a save
+        // that can delete the wrong entry.
+        return $this->schema->storage === RecordStorage::LIST_FILE;
     }
 
     /**
@@ -1273,12 +1284,133 @@ final class ProjectRecordDatabase
     public function adoptSavedFile(): void
     {
         $this->rereadBackingFile();
+        // Every record now sits where the file says it does, in this
+        // category's own order.
+        $this->payloadPositions = array_keys(array_values($this->records));
+        $this->structuralChange = false;
+        $this->removedPositions = null;
+        $this->captureAuthoredValues();
 
         foreach ($this->records as $record) {
             $record->markClean();
         }
 
         $this->captureBaseline();
+    }
+
+    /**
+     * Returns the source changes this category wants made, addressed by
+     * position in one shared snapshot of the file.
+     *
+     * Nothing is written here. A file several categories own is changed once,
+     * with every category's wants composed first, so this says what it wants
+     * and the transaction decides where that lands.
+     *
+     * @param PhpSourceDocument $document The file's source, parsed once.
+     * @param PhpDataFile $file The file's payload, read once.
+     * @return array{patches: array<int, array<string, mixed>>, removals: int[], additions: array<int, array{class: string, arguments: array<string, string>}>}|null
+     *   The plan, or null when this category cannot be written surgically.
+     */
+    public function sourcePlan(PhpSourceDocument $document, PhpDataFile $file): ?array
+    {
+        if ($this->schema->storage !== RecordStorage::LIST_FILE || $this->schema->projection !== null) {
+            return null;
+        }
+
+        $payloadCount = is_array($file->payload) ? count($file->payload) : 0;
+
+        if ($document->entryCount() === 0 || $document->entryCount() !== $payloadCount) {
+            return null;
+        }
+
+        // Ordinal within this category to position in the whole file, read
+        // from the snapshot every sibling is being composed against.
+        $absolute = self::payloadPositionsFor($this->schema, $file);
+        $patches = [];
+        $additions = [];
+        $claimed = [];
+
+        foreach ($this->getRecords() as $index => $record) {
+            $ordinal = $this->payloadPositions[$index] ?? null;
+
+            if ($ordinal === null) {
+                $entry = $this->newEntrySource($record);
+
+                if ($entry === null) {
+                    return null;
+                }
+
+                $additions[] = $entry;
+
+                continue;
+            }
+
+            $position = $absolute[$ordinal] ?? null;
+
+            if ($position === null || ! isset($this->authoredValues[$ordinal])) {
+                return null;
+            }
+
+            $claimed[$ordinal] = true;
+
+            foreach ($this->authoredValues[$ordinal] as $key => $authored) {
+                if ($record->get($key) === $authored) {
+                    continue;
+                }
+
+                if (! $document->isEditable($position)) {
+                    return null;
+                }
+
+                $patches[] = [
+                    'entry' => $position,
+                    ...$this->shallowestWritablePath($document, $position, $key, $record, $record->get($key)),
+                ];
+            }
+        }
+
+        $removals = [];
+
+        foreach (array_keys($this->authoredValues) as $ordinal) {
+            if (! isset($claimed[$ordinal]) && isset($absolute[$ordinal])) {
+                $removals[] = $absolute[$ordinal];
+            }
+        }
+
+        return ['patches' => $patches, 'removals' => $removals, 'additions' => $additions];
+    }
+
+    /**
+     * Returns whether this category would write its file by rebuilding the
+     * returned expression rather than by editing the author's source.
+     *
+     * @return bool True when it would.
+     */
+    public function ownsFileKey(): bool
+    {
+        return $this->schema->projection !== null;
+    }
+
+    /**
+     * Returns whether this category would write its file by rebuilding the
+     * returned expression rather than by editing the author's source.
+     *
+     * @return bool True when it would.
+     */
+    public function wouldRegenerate(): bool
+    {
+        return $this->structuralChange && $this->isConstructorAuthored();
+    }
+
+    /**
+     * Returns the whole payload this category would write, for a file no
+     * category can edit surgically.
+     *
+     * @return array<array-key, mixed> The payload.
+     */
+    public function wholeFilePayload(): array
+    {
+        return $this->mergeIntoFilePayload();
     }
 
     /**
@@ -1401,10 +1533,7 @@ final class ProjectRecordDatabase
         }
 
         AtomicFile::write($this->file->path, $document->source);
-        $this->structuralChange = false;
-        $this->file = PhpDataFile::load($this->file->path, $this->projectRoot);
-        $this->payloadPositions = self::payloadPositionsFor($this->schema, $this->file);
-        $this->captureAuthoredValues();
+        $this->adoptSavedFile();
 
         return true;
     }
