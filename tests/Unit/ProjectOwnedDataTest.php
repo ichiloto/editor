@@ -283,3 +283,274 @@ it('reports metadata under a key that is not a name', function () {
     expect(implode("\n", array_map(static fn($issue): string => $issue->message, $issues)))
         ->toContain('has metadata under a key that is not a name');
 });
+
+// -- Round 3: the full scalar contract, strictly ---------------------------
+
+/**
+ * Compares two parameter maps strictly, treating NAN as equal to NAN and
+ * telling -0.0 from 0.0 -- which `===` cannot.
+ */
+function sameParameters(array $expected, array $actual): bool
+{
+    if (array_keys($expected) !== array_keys($actual)) {
+        return false;
+    }
+
+    foreach ($expected as $key => $value) {
+        $other = $actual[$key];
+
+        if (is_float($value) && is_nan($value)) {
+            if (! is_float($other) || ! is_nan($other)) {
+                return false;
+            }
+
+            continue;
+        }
+
+        if (is_float($value) && $value === 0.0) {
+            // Same sign of zero, not just the same magnitude.
+            if (! is_float($other) || $other !== 0.0 || (fdiv(1, $value) !== fdiv(1, $other))) {
+                return false;
+            }
+
+            continue;
+        }
+
+        if ($value !== $other) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+it('round-trips every scalar type exactly, including the ones that used to change type', function (string $label, mixed $value) {
+    // The float 1.0 came back the integer 1; 1.0E+20 came back the string
+    // "1.0E+20"; -0.0 came back 0; a quoted key lost its spaces.
+    $original = ['parameter' => $value];
+    $line = ParameterMapCodec::encode($original);
+    $decoded = ParameterMapCodec::decode($line);
+
+    expect(sameParameters($original, $decoded))->toBeTrue(sprintf(
+        '%s did not survive "%s": got %s.',
+        $label,
+        $line,
+        var_export($decoded['parameter'] ?? null, true),
+    ));
+
+    // And it is the same type, not merely the same spelling.
+    expect(gettype($decoded['parameter']))->toBe(gettype($value), $label);
+})->with([
+    ['integral float', 1.0],
+    ['negative zero', -0.0],
+    ['positive zero float', 0.0],
+    ['decimal float', 0.5],
+    ['negative decimal float', -0.25],
+    ['large exponent float', 1.0E+20],
+    ['small exponent float', 5.0E-7],
+    ['huge float', 1.7976931348623157E+308],
+    ['tiny float', 5.0E-324],
+    ['float with every digit', 0.1 + 0.2],
+    ['fifteen zeros as a float', 1.0E+15],
+    ['positive infinity', INF],
+    ['negative infinity', -INF],
+    ['not a number', NAN],
+    ['string that spells an exponent', '1e5'],
+    ['string that spells a float', '1.0'],
+    ['string that spells a big float', '1.0E+20'],
+    ['string that spells negative zero', '-0.0'],
+    ['string that spells infinity', 'INF'],
+    ['string that spells NAN', 'NAN'],
+    ['string that spells minus infinity', '-INF'],
+    ['string true', 'true'],
+    ['string false', 'false'],
+    ['boolean true', true],
+    ['boolean false', false],
+    ['integer', 42],
+    ['negative integer', -7],
+    ['zero', 0],
+    ['leading-zero identifier', '007'],
+    ['negative-zero-looking identifier', '-0'],
+    ['empty string', ''],
+    ['single space', ' '],
+    ['padded string', '  spaced  '],
+    ['comma in value', 'Blood, Oath'],
+    ['equals in value', 'a=b'],
+    ['quotes in value', 'say "hi"'],
+    ['backslash in value', 'back\\slash'],
+    ['backslash before quote', 'x\\"y'],
+    ['trailing backslash', 'ends\\'],
+    ['only escapes', '\\"\\'],
+    ['unicode', '日本語 ☠'],
+    ['pictographs', '👨‍👩‍👧‍👦 🗡️'],
+    ['combining marks', 'e\u{0301}a\u{0308}'],
+]);
+
+it('round-trips keys with the same care as values', function (string $key) {
+    $original = [$key => 'v'];
+    $line = ParameterMapCodec::encode($original);
+
+    expect(ParameterMapCodec::decode($line))->toBe($original, sprintf('Key %s did not survive "%s".', var_export($key, true), $line));
+})->with([
+    ' spaced key ',
+    'lead ',
+    ' trail',
+    'with, comma',
+    'with=equals',
+    'with "quotes"',
+    'with\\backslash',
+    '日本語',
+    'true',
+    '1.0',
+    'plain',
+]);
+
+it('round-trips a whole map of mixed keys and values in one line', function () {
+    $original = [
+        'label' => 'Blood, Oath',
+        ' padded ' => 1.0,
+        'rate' => -0.0,
+        'big' => 1.0E+20,
+        'flag' => 'true',
+        'on' => true,
+        'id' => '007',
+        'note' => 'say "hi" \\ bye',
+        'never' => -INF,
+    ];
+    $line = ParameterMapCodec::encode($original);
+
+    expect(sameParameters($original, ParameterMapCodec::decode($line)))->toBeTrue($line);
+});
+
+it('refuses an escape it does not define rather than dropping the backslash', function (string $line, string $complaint) {
+    expect(static fn() => ParameterMapCodec::decode($line))
+        ->toThrow(\Ichiloto\Editor\Database\ParameterMapSyntaxError::class, $complaint);
+})->with([
+    ['label="\\q"', 'Unknown escape \\q'],
+    ['label="\\n"', 'Unknown escape \\n'],
+    ['label="a\\ b"', 'Unknown escape \\ '],
+    ['label="\\', 'stray backslash'],
+    ['label=a\\b', 'Unexpected backslash'],
+    ['label=a"b', 'Unexpected quote'],
+    ['label=a=b', 'Unexpected equals sign'],
+    ['la"bel=1', 'Unexpected quote'],
+    ['la\\bel=1', 'Unexpected backslash'],
+]);
+
+it('reads the two escapes it defines, and only those', function () {
+    expect(ParameterMapCodec::decode('a="q\\"q", b="s\\\\s", c="both\\\\\\""'))
+        ->toBe(['a' => 'q"q', 'b' => 's\\s', 'c' => 'both\\"']);
+});
+
+it('leaves the record, its dirt and its source untouched when a line is refused, on both surfaces', function () {
+    // Special-property parameters, on a weapon.
+    [$root, $path] = projectOwnedProject();
+    $sourceBefore = (string) file_get_contents($path);
+    $weapons = ProjectRecordDatabase::fromProject($root, RecordSchemaCatalog::forKey('weapons'));
+    $before = $weapons->getRecordByIndex(0)?->get('specialProperty');
+
+    foreach (['percent="\\q"', 'percent=1, percent=2', 'label="open', 'percent=a=b', '=1'] as $malformed) {
+        expect(static fn() => $weapons->setField(0, 'specialProperty.parameters', $malformed))
+            ->toThrow(\Ichiloto\Editor\Database\ParameterMapSyntaxError::class);
+    }
+
+    expect($weapons->getRecordByIndex(0)?->get('specialProperty'))->toBe($before)
+        ->and($weapons->isDirty())->toBeFalse()
+        ->and((string) file_get_contents($path))->toBe($sourceBefore);
+
+    // Permanent-growth metadata, on a grant.
+    $growthRoot = makeTemporaryProject('ichiloto-owned-');
+    $growthPath = $growthRoot . '/assets/Data/permanent-growth.php';
+    file_put_contents($growthPath, <<<'PHP_SOURCE'
+    <?php
+
+    return [
+      [
+        'id' => 'growth.spring',
+        'stat' => 'maxHp',
+        'amount' => 25,
+        'sourceType' => 'landmark',
+        'sourceId' => 'spring',
+        'metadata' => ['label' => 'The Spring', 'weight' => 1.0, 'tags' => ['a'], 'nested' => ['deep' => ['x' => 1]]],
+      ],
+    ];
+    PHP_SOURCE);
+    $growthSource = (string) file_get_contents($growthPath);
+    $growth = ProjectRecordDatabase::fromProject($growthRoot, RecordSchemaCatalog::forKey('permanent_growth'));
+    $metadataBefore = $growth->getRecordByIndex(0)?->get('metadata');
+
+    expect(static fn() => $growth->setField(0, 'metadata', 'label="\\z"'))
+        ->toThrow(\Ichiloto\Editor\Database\ParameterMapSyntaxError::class);
+
+    expect($growth->getRecordByIndex(0)?->get('metadata'))->toBe($metadataBefore)
+        ->and($growth->isDirty())->toBeFalse()
+        ->and((string) file_get_contents($growthPath))->toBe($growthSource);
+})->group('engine');
+
+it('keeps floats floats and hidden shapes intact through both surfaces', function () {
+    // Special-property parameters: a weight of 1.0 stays a float on disk,
+    // and the nested list nobody could put on the line stays exactly.
+    [$root, $path] = projectOwnedProject();
+    $weapons = ProjectRecordDatabase::fromProject($root, RecordSchemaCatalog::forKey('weapons'));
+    $weapons->setField(0, 'specialProperty.parameters', 'percent=10, capPerHit=40, appliesTo=physical, weight=1.0, big=1.0E+20, tag="1e5", " odd key "=-0.0');
+    $weapons->save();
+
+    $parameters = (static fn(): mixed => require $path)()[0]->specialProperty['parameters'];
+
+    expect($parameters['weight'])->toBe(1.0)
+        ->and($parameters['big'])->toBe(1.0E+20)
+        ->and($parameters['tag'])->toBe('1e5')
+        ->and($parameters[' odd key '])->toBe(-0.0)
+        ->and(fdiv(1, $parameters[' odd key ']))->toBe(-INF)
+        ->and($parameters['tiers'])->toBe(['minor', 'major']);
+
+    // Reopened, the line shows exactly what was written, so a second save
+    // is a no-op.
+    $reopened = ProjectRecordDatabase::fromProject($root, RecordSchemaCatalog::forKey('weapons'));
+    $shown = null;
+
+    foreach ($reopened->getSettingsFields(0) as $field) {
+        if (($field['field'] ?? null) === 'specialProperty.parameters') {
+            $shown = $field['value'];
+        }
+    }
+
+    expect($shown)->toBe('percent=10, capPerHit=40, appliesTo=physical, weight=1.0, big=1.0E+20, tag="1e5", " odd key "=-0.0');
+
+    $bytes = (string) file_get_contents($path);
+    $reopened->setField(0, 'specialProperty.parameters', (string) $shown);
+    expect($reopened->isDirty())->toBeFalse();
+    $reopened->save();
+    expect((string) file_get_contents($path))->toBe($bytes);
+
+    // Permanent-growth metadata: same grammar, nested maps and lists kept.
+    $growthRoot = makeTemporaryProject('ichiloto-owned-');
+    $growthPath = $growthRoot . '/assets/Data/permanent-growth.php';
+    file_put_contents($growthPath, <<<'PHP_SOURCE'
+    <?php
+
+    return [
+      [
+        'id' => 'growth.spring',
+        'stat' => 'maxHp',
+        'amount' => 25,
+        'sourceType' => 'landmark',
+        'sourceId' => 'spring',
+        'metadata' => ['label' => 'The Spring', 'tags' => ['a', 'b'], 'nested' => ['deep' => ['x' => 1]]],
+      ],
+    ];
+    PHP_SOURCE);
+    $growth = ProjectRecordDatabase::fromProject($growthRoot, RecordSchemaCatalog::forKey('permanent_growth'));
+    $growth->setField(0, 'metadata', 'label="Spring, of Vigour", ratio=0.5, whole=2.0, flag="false", on=false');
+    $growth->save();
+
+    $metadata = (static fn(): mixed => require $growthPath)()[0]['metadata'];
+
+    expect($metadata['label'])->toBe('Spring, of Vigour')
+        ->and($metadata['ratio'])->toBe(0.5)
+        ->and($metadata['whole'])->toBe(2.0)
+        ->and($metadata['flag'])->toBe('false')
+        ->and($metadata['on'])->toBeFalse()
+        ->and($metadata['tags'])->toBe(['a', 'b'])
+        ->and($metadata['nested'])->toBe(['deep' => ['x' => 1]]);
+})->group('engine');

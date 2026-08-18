@@ -11,14 +11,35 @@ namespace Ichiloto\Editor\Database;
  * `array<string, mixed>` to the runtime: what goes in them is the project's
  * business. Editing them as `name=value` text is the natural surface, and
  * the naive version of it silently destroys legal values -- `Blood, Oath`
- * becomes two keys, `  spaced  ` loses its spaces, and the string `true`
- * comes back a boolean.
+ * becomes two keys, `  spaced  ` loses its spaces, the string `true` comes
+ * back a boolean, and the float `1.0` comes back the integer `1`.
  *
- * So the grammar is explicit. A value is written bare only when it reads
- * back as itself; anything else is quoted, and inside quotes a quote and a
- * backslash are escaped. A quoted value is always a string, which is what
- * distinguishes the string `true` from the boolean, and `"007"` from a
- * number that happens to start with a zero.
+ * So the grammar is explicit, and this is the whole of it.
+ *
+ * A line is parameters separated by commas; a parameter is a name, `=`, and
+ * a value. Spaces around names, values and commas mean nothing. A name or a
+ * value is written bare or quoted.
+ *
+ * Bare, a token means what it says: `true` and `false` are booleans; `INF`,
+ * `-INF` and `NAN` are the floats that cannot be written as digits; digits
+ * with an optional sign are an integer, unless they start with a zero they
+ * do not need, which makes them an identifier such as `007`; digits with a
+ * fraction, an exponent, or both are a float, `1.0` and `1.0E+20` and
+ * `-0.0` included; anything else is the string it spells. A bare token may
+ * not contain a comma, an equals sign, a quote or a backslash.
+ *
+ * Quoted, a token is always the string between the quotes, with exactly two
+ * escapes inside it: `\"` for a quote and `\\` for a backslash. Any other
+ * backslash is a mistake and is refused, never quietly dropped. Leading and
+ * trailing spaces inside quotes are part of the string, for a name as much
+ * as for a value.
+ *
+ * Writing, a name or a value is left bare only when reading it bare gives
+ * back exactly what was written -- same characters, same type. Everything
+ * else is quoted: the string `true`, the string `1.0`, an empty string, a
+ * name with a space at either end. Floats are spelled the way PHP itself
+ * spells them for a round trip, so `1.0` stays a float and `1.0E+20` stays
+ * finite and exact.
  *
  * What the line cannot carry -- a nested list, a map -- is not shown and not
  * touched. What it cannot parse is refused with a reason rather than
@@ -69,10 +90,13 @@ final class ParameterMapCodec
                 break;
             }
 
-            [$name, $offset] = self::readToken($line, $offset, $length, '=');
-            $name = trim($name);
+            [$name, $offset, $nameWasQuoted] = self::readName($line, $offset, $length);
 
-            if ($name === '') {
+            if (! $nameWasQuoted) {
+                $name = trim($name, ' ');
+            }
+
+            if ($name === '' && ! $nameWasQuoted) {
                 throw new ParameterMapSyntaxError('A parameter has no name.');
             }
 
@@ -87,8 +111,8 @@ final class ParameterMapCodec
             }
 
             $offset = self::skipSpace($line, $offset + 1, $length);
-            [$value, $offset, $wasQuoted] = self::readValue($line, $offset, $length);
-            $parameters[$name] = $wasQuoted ? $value : self::typed(rtrim($value));
+            [$value, $offset, $valueWasQuoted] = self::readValue($line, $offset, $length, $name);
+            $parameters[$name] = $valueWasQuoted ? $value : self::typed(rtrim($value, ' '));
             $offset = self::skipSpace($line, $offset, $length);
 
             if ($offset < $length) {
@@ -133,13 +157,9 @@ final class ParameterMapCodec
      */
     private static function quoteName(string $name): string
     {
-        return $name === trim($name)
-            && ! str_contains($name, ',')
-            && ! str_contains($name, '=')
-            && ! str_contains($name, '"')
-            && $name !== ''
-                ? $name
-                : self::quoted($name);
+        return $name !== '' && $name === trim($name, ' ') && ! self::hasReservedCharacter($name)
+            ? $name
+            : self::quoted($name);
     }
 
     /**
@@ -151,22 +171,37 @@ final class ParameterMapCodec
             return $value ? 'true' : 'false';
         }
 
-        if (is_int($value) || is_float($value)) {
+        if (is_int($value)) {
             return strval($value);
         }
 
-        // A string that would read back as something other than itself --
-        // a boolean, a number, or a second parameter -- is quoted.
-        return $value === ''
-            || $value !== trim($value)
-            || in_array($value, ['true', 'false'], true)
-            || self::typed($value) !== $value
-            || str_contains($value, ',')
-            || str_contains($value, '=')
-            || str_contains($value, '"')
-            || str_contains($value, '\\')
-                ? self::quoted($value)
-                : $value;
+        if (is_float($value)) {
+            // PHP's own round-trip spelling: `1.0` keeps its point, a large or
+            // small value keeps its exponent, and every digit that tells one
+            // float from the next is written.
+            return var_export($value, true);
+        }
+
+        // A string is written bare only when reading it bare gives back the
+        // same string: not a reserved word, not a number's spelling, not
+        // empty, not padded, and none of the characters the grammar uses.
+        return $value !== ''
+            && $value === trim($value, ' ')
+            && ! self::hasReservedCharacter($value)
+            && self::typed($value) === $value
+                ? $value
+                : self::quoted($value);
+    }
+
+    /**
+     * Returns whether a token holds a character the grammar itself uses.
+     */
+    private static function hasReservedCharacter(string $token): bool
+    {
+        return str_contains($token, ',')
+            || str_contains($token, '=')
+            || str_contains($token, '"')
+            || str_contains($token, '\\');
     }
 
     /**
@@ -178,25 +213,68 @@ final class ParameterMapCodec
     }
 
     /**
-     * Reads up to a delimiter, honouring quotes.
+     * Reads a parameter's name: a quoted string, or a bare token up to the
+     * equals sign.
      *
-     * @return array{0: string, 1: int} The token and the new offset.
+     * @return array{0: string, 1: int, 2: bool} The name, the new offset, and whether it was quoted.
      */
-    private static function readToken(string $line, int $offset, int $length, string $delimiter): array
+    private static function readName(string $line, int $offset, int $length): array
     {
         if (mb_substr($line, $offset, 1) === '"') {
-            [$value, $offset] = self::readQuoted($line, $offset, $length);
+            [$name, $offset] = self::readQuoted($line, $offset, $length);
 
-            return [$value, $offset];
+            return [$name, $offset, true];
         }
 
+        [$name, $offset] = self::readBare($line, $offset, $length, ['=', ','], 'name');
+
+        return [$name, $offset, false];
+    }
+
+    /**
+     * Reads a parameter's value: a quoted string, or a bare token up to the
+     * next comma.
+     *
+     * @return array{0: string, 1: int, 2: bool} The value, the new offset, and whether it was quoted.
+     */
+    private static function readValue(string $line, int $offset, int $length, string $name): array
+    {
+        if ($offset < $length && mb_substr($line, $offset, 1) === '"') {
+            [$value, $offset] = self::readQuoted($line, $offset, $length);
+
+            return [$value, $offset, true];
+        }
+
+        [$value, $offset] = self::readBare($line, $offset, $length, [','], sprintf('value of "%s"', $name));
+
+        return [$value, $offset, false];
+    }
+
+    /**
+     * Reads a bare token up to one of the delimiters, refusing the
+     * characters a bare token may not hold.
+     *
+     * @param string[] $delimiters The characters that end the token.
+     * @return array{0: string, 1: int} The token and the new offset.
+     */
+    private static function readBare(string $line, int $offset, int $length, array $delimiters, string $what): array
+    {
         $token = '';
 
         while ($offset < $length) {
             $character = mb_substr($line, $offset, 1);
 
-            if ($character === $delimiter || $character === ',') {
+            if (in_array($character, $delimiters, true)) {
                 break;
+            }
+
+            if ($character === '"' || $character === '\\' || $character === '=') {
+                throw new ParameterMapSyntaxError(sprintf(
+                    'Unexpected %s in the %s. Quote a %s that contains a quote, a backslash or an equals sign.',
+                    $character === '"' ? 'quote' : ($character === '\\' ? 'backslash' : 'equals sign'),
+                    $what,
+                    str_starts_with($what, 'value') ? 'value' : 'name',
+                ));
             }
 
             $token .= $character;
@@ -207,25 +285,8 @@ final class ParameterMapCodec
     }
 
     /**
-     * Reads one value, saying whether it was quoted.
-     *
-     * @return array{0: string, 1: int, 2: bool} The value, the offset, and whether it was quoted.
-     */
-    private static function readValue(string $line, int $offset, int $length): array
-    {
-        if ($offset < $length && mb_substr($line, $offset, 1) === '"') {
-            [$value, $offset] = self::readQuoted($line, $offset, $length);
-
-            return [$value, $offset, true];
-        }
-
-        [$value, $offset] = self::readToken($line, $offset, $length, "\0");
-
-        return [$value, $offset, false];
-    }
-
-    /**
-     * Reads a quoted string, unescaping as it goes.
+     * Reads a quoted string, unescaping exactly the two escapes the grammar
+     * has.
      *
      * @return array{0: string, 1: int} The string and the new offset.
      */
@@ -242,6 +303,13 @@ final class ParameterMapCodec
 
                 if ($next === '') {
                     throw new ParameterMapSyntaxError('A quoted value ends with a stray backslash.');
+                }
+
+                if ($next !== '"' && $next !== '\\') {
+                    throw new ParameterMapSyntaxError(sprintf(
+                        'Unknown escape \\%s in a quoted value. Only \\" and \\\\ are escapes; write a backslash as \\\\.',
+                        $next,
+                    ));
                 }
 
                 $value .= $next;
@@ -274,7 +342,7 @@ final class ParameterMapCodec
     }
 
     /**
-     * Returns the value an unquoted token means.
+     * Returns the value a bare token means.
      *
      * @return scalar The typed value.
      */
@@ -283,9 +351,12 @@ final class ParameterMapCodec
         return match (true) {
             $value === 'true' => true,
             $value === 'false' => false,
+            $value === 'INF' => INF,
+            $value === '-INF' => -INF,
+            $value === 'NAN' => NAN,
             // A leading zero is an identifier, not a quantity.
             preg_match('/^-?(0|[1-9][0-9]*)$/', $value) === 1 => intval($value),
-            preg_match('/^-?(0|[1-9][0-9]*)\.[0-9]+$/', $value) === 1 => floatval($value),
+            preg_match('/^-?(0|[1-9][0-9]*)(\.[0-9]+([eE][+-]?[0-9]+)?|[eE][+-]?[0-9]+)$/', $value) === 1 => floatval($value),
             default => $value,
         };
     }
