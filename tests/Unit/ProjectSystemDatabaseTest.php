@@ -6,7 +6,7 @@ use Ichiloto\Editor\ProjectSystemDatabase;
 
 function scratchSystemProject(): string
 {
-    $root = sys_get_temp_dir() . '/ichiloto-system-' . uniqid();
+    $root = rememberTemporaryProject(sys_get_temp_dir() . '/ichiloto-system-' . uniqid());
     mkdir($root . '/assets/Data', 0777, true);
 
     return $root;

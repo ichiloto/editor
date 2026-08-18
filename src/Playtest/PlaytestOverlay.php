@@ -61,34 +61,44 @@ final class PlaytestOverlay
             throw new RuntimeException("Unable to create the playtest overlay at {$root}.");
         }
 
-        // Everything at the project root is a symlink, except `assets` (which
-        // needs one file replaced) and `.data` (which must be isolated).
-        self::mirrorDirectory($projectRoot, $root, ['assets', '.data']);
+        try {
+            // Everything at the project root is a symlink, except `assets`
+            // (which needs one file replaced) and `.data` (which must be
+            // isolated).
+            self::mirrorDirectory($projectRoot, $root, ['assets', '.data']);
 
-        $assetsSource = $projectRoot . DIRECTORY_SEPARATOR . 'assets';
-        $assetsTarget = $root . DIRECTORY_SEPARATOR . 'assets';
+            $assetsSource = $projectRoot . DIRECTORY_SEPARATOR . 'assets';
+            $assetsTarget = $root . DIRECTORY_SEPARATOR . 'assets';
 
-        if (! is_dir($assetsSource)) {
-            throw new RuntimeException("The project has no assets directory at {$assetsSource}.");
+            if (! is_dir($assetsSource)) {
+                throw new RuntimeException("The project has no assets directory at {$assetsSource}.");
+            }
+
+            mkdir($assetsTarget, 0777, true);
+            self::mirrorDirectory($assetsSource, $assetsTarget, ['Data']);
+
+            $dataSource = $assetsSource . DIRECTORY_SEPARATOR . 'Data';
+            $dataTarget = $assetsTarget . DIRECTORY_SEPARATOR . 'Data';
+            mkdir($dataTarget, 0777, true);
+            self::mirrorDirectory($dataSource, $dataTarget, ['system.php']);
+
+            mkdir($root . DIRECTORY_SEPARATOR . '.data', 0777, true);
+
+            self::writeSystemOverride(
+                $dataSource . DIRECTORY_SEPARATOR . 'system.php',
+                $dataTarget . DIRECTORY_SEPARATOR . 'system.php',
+                $mapId,
+                $spawnX,
+                $spawnY,
+            );
+        } catch (\Throwable $throwable) {
+            // An overlay that could not be finished is not left behind: what
+            // was mirrored so far is links and two generated entries, removed
+            // without ever following a link into the author's project.
+            self::removeTree($root);
+
+            throw $throwable;
         }
-
-        mkdir($assetsTarget, 0777, true);
-        self::mirrorDirectory($assetsSource, $assetsTarget, ['Data']);
-
-        $dataSource = $assetsSource . DIRECTORY_SEPARATOR . 'Data';
-        $dataTarget = $assetsTarget . DIRECTORY_SEPARATOR . 'Data';
-        mkdir($dataTarget, 0777, true);
-        self::mirrorDirectory($dataSource, $dataTarget, ['system.php']);
-
-        mkdir($root . DIRECTORY_SEPARATOR . '.data', 0777, true);
-
-        self::writeSystemOverride(
-            $dataSource . DIRECTORY_SEPARATOR . 'system.php',
-            $dataTarget . DIRECTORY_SEPARATOR . 'system.php',
-            $mapId,
-            $spawnX,
-            $spawnY,
-        );
 
         return new self($root, $mapId, $spawnX, $spawnY);
     }

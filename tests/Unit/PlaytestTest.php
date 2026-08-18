@@ -159,7 +159,7 @@ it('prefers the console the project itself installed', function (): void {
 });
 
 it('finds a console installed globally, on PATH', function (): void {
-    $binDirectory = sys_get_temp_dir() . '/' . uniqid('ichiloto-bin-', true);
+    $binDirectory = rememberTemporaryProject(sys_get_temp_dir() . '/' . uniqid('ichiloto-bin-', true));
     mkdir($binDirectory, 0o777, true);
     touch($binDirectory . '/ichiloto');
 
