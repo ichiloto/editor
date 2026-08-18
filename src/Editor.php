@@ -18,6 +18,7 @@ use Ichiloto\Editor\Database\DatabaseCatalog;
 use Ichiloto\Editor\Database\DatabaseCategoryDefinition;
 use Ichiloto\Editor\Database\InventoryCatalog;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
+use Ichiloto\Editor\Database\SharedFileTransaction;
 use Ichiloto\Editor\Database\ConditionCodec;
 use Ichiloto\Editor\Database\QuestReferences;
 use Ichiloto\Editor\Database\AffinityEditor;
@@ -6080,15 +6081,35 @@ final class Editor
             }
         }
 
-        foreach ($this->getSaveableDatabases() as $label => $database) {
-            if (! $database->isDirty()) {
+        // Categories sharing one file are saved together, so the file is
+        // written once with every dirty part folded in rather than once per
+        // category, each rewriting what the last just wrote.
+        foreach (SharedFileTransaction::groupByPath($this->getSaveableDatabases()) as $group) {
+            $dirty = array_filter($group, static fn(object $database): bool => $database->isDirty());
+
+            if ($dirty === []) {
                 continue;
             }
 
+            $label = implode(', ', array_keys($dirty));
+
             try {
-                $this->backupBeforeSave(...$this->getDatabaseBackupPaths($database));
-                $database->save();
-                $savedDatabases++;
+                foreach ($dirty as $database) {
+                    $this->backupBeforeSave(...$this->getDatabaseBackupPaths($database));
+                }
+
+                $shared = reset($dirty);
+
+                if ($shared instanceof ProjectRecordDatabase && $shared->sharesBackingFile()) {
+                    // One write for the file, with every dirty part folded in.
+                    SharedFileTransaction::commit(array_values($dirty));
+                } else {
+                    foreach ($dirty as $database) {
+                        $database->save();
+                    }
+                }
+
+                $savedDatabases += count($dirty);
             } catch (Throwable $throwable) {
                 Debug::error(sprintf('Save all (%s): %s', $label, $throwable->getMessage()));
                 $failures[] = sprintf('%s: %s', $label, $throwable->getMessage());

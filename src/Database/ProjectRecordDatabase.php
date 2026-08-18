@@ -252,8 +252,14 @@ final class ProjectRecordDatabase
 
         return match ($this->schema->storage) {
             // The exact form each save would persist, so dirty means the
-            // save would change something and nothing else.
-            RecordStorage::LIST_FILE => PhpValueExporter::export($this->mergeIntoFilePayload()),
+            // save would change something and nothing else. A category that
+            // owns one part of a shared file fingerprints only its own part:
+            // a sibling saving its own list is not a change to this one.
+            RecordStorage::LIST_FILE => PhpValueExporter::export(
+                $this->schema->projection !== null
+                    ? array_map(static fn(ProjectRecord $record): array => (array) $record->toArray(), $this->getRecords())
+                    : $this->mergeIntoFilePayload()
+            ),
             RecordStorage::DIRECTORY => implode("\0", array_map(
                 static fn(ProjectRecord $record): string => $record->recordId . '=' . PhpValueExporter::export($record->toArray()),
                 $this->records,
@@ -1082,11 +1088,18 @@ final class ProjectRecordDatabase
             throw new RuntimeException('No backing file to save.');
         }
 
+        // What the file holds now, which is not always what it held when
+        // this category loaded: several categories share one file, and a
+        // sibling may have saved since. Folding into the stale snapshot is
+        // how one category silently reverts another's saved work.
+        $this->rereadBackingFile();
+
         if ($this->savedInPlace()) {
             return;
         }
 
         $this->file->save($this->mergeIntoFilePayload());
+        $this->rereadBackingFile();
 
         if ($this->schema->projection === null) {
             // The in-place patcher compares against what the file was found
@@ -1094,10 +1107,104 @@ final class ProjectRecordDatabase
             // stale, a later save that puts a value back to what the file
             // originally said would find nothing to patch and write nothing
             // -- so an undone edit would stay on disk.
-            $this->file = PhpDataFile::load($this->file->path, $this->projectRoot);
-            $this->payloadPositions = self::payloadPositionsFor($this->schema, $this->file);
             $this->captureAuthoredValues();
         }
+    }
+
+    /**
+     * Re-reads the backing file so this category folds into what is actually
+     * there.
+     *
+     * Entry positions are recomputed with it: a sibling category that added
+     * or removed an entry moved this category's entries along the list, and
+     * the in-place patcher writes by position.
+     *
+     * @return void
+     */
+    private function rereadBackingFile(): void
+    {
+        if (! $this->file instanceof PhpDataFile || ! is_file($this->file->path)) {
+            return;
+        }
+
+        $this->file = PhpDataFile::load($this->file->path, $this->projectRoot);
+
+        if ($this->schema->projection === null) {
+            $this->payloadPositions = self::payloadPositionsFor($this->schema, $this->file);
+        }
+    }
+
+    /**
+     * Returns whether this category owns one part of a file others also
+     * write.
+     *
+     * @return bool True when it does.
+     */
+    public function sharesBackingFile(): bool
+    {
+        return $this->schema->storage === RecordStorage::LIST_FILE && $this->schema->projection !== null;
+    }
+
+    /**
+     * Returns the file this category writes through, resolved so two
+     * categories naming one file agree that it is one file.
+     *
+     * @return string The canonical path.
+     */
+    public function backingFilePath(): string
+    {
+        return realpath($this->path) ?: $this->path;
+    }
+
+    /**
+     * Returns the project this category belongs to, for a caller that has to
+     * read the backing file the same way this category does.
+     *
+     * @return string|null The project root.
+     */
+    public function projectRoot(): ?string
+    {
+        return $this->projectRoot;
+    }
+
+    /**
+     * Folds this category's records into a payload without writing.
+     *
+     * This is how several categories combine into one write: each is asked
+     * for its own part, in turn, against the payload the last one produced.
+     *
+     * @param array<string, mixed> $whole The payload so far.
+     * @return array<string, mixed> The payload with this category folded in.
+     */
+    public function foldInto(array $whole): array
+    {
+        if ($this->schema->projection === null) {
+            return $whole;
+        }
+
+        return $this->schema->projection->write($whole, array_map(
+            static fn(ProjectRecord $record): array => (array) $record->toArray(),
+            $this->getRecords(),
+        ));
+    }
+
+    /**
+     * Accepts a write another party made to this category's backing file.
+     *
+     * Called only after that write succeeded, so a refused write advances no
+     * baseline and cleans no category.
+     *
+     * @return void
+     */
+    public function adoptSavedFile(): void
+    {
+        $this->rereadBackingFile();
+
+        foreach ($this->records as $record) {
+            $record->markClean();
+        }
+
+        $this->captureBaseline();
     }
 
     /**
