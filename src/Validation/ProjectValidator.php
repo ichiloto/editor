@@ -3,6 +3,7 @@
 namespace Ichiloto\Editor\Validation;
 
 use Ichiloto\Editor\Database\InventoryCatalog;
+use Ichiloto\Editor\Database\InventoryClaimant;
 use Ichiloto\Editor\Database\KnowledgeCommandShape;
 use Ichiloto\Editor\Database\PhpDataFile;
 use Ichiloto\Editor\Database\ProjectRecord;
@@ -134,7 +135,7 @@ class ProjectValidator
 
     // Whether the file loaded at all, which a catalogue whose every
     // definition is contested still did.
-    if (! is_file($path) || $this->inventoryCatalog->allDefinitions() !== []) {
+    if (! is_file($path) || $this->inventoryCatalog->claimants() !== []) {
       return null;
     }
 
@@ -173,8 +174,34 @@ class ProjectValidator
   protected function checkDefinitionIdentities(ProjectWorkspace $workspace): array
   {
     $issues = [];
+    $contested = $this->inventoryCatalog->contestedClaimants();
+
+    // An id more than one definition claims: every claimant is named, with
+    // the category it was authored in, the aliases it brought, and where it
+    // sits in the source, because two definitions under one id are told
+    // apart by nothing else.
+    foreach ($contested as $id => $claimants) {
+      $issues[] = Issue::error(
+        'assets/Data/items.php',
+        sprintf(
+          'The id "%s" is claimed by %d definitions: %s.',
+          $id,
+          count($claimants),
+          implode(' and ', array_map(
+            static fn(InventoryClaimant $claimant): string => $claimant->describe(),
+            $claimants,
+          )),
+        ),
+        'A stable id must belong to one definition. The runtime refuses the whole catalogue until it does; nothing under any claimant resolves in the editor.'
+      );
+    }
 
     foreach ($this->inventoryCatalog->conflicts() as $reference => $claimants) {
+      if (isset($contested[$reference])) {
+        // Reported above, claimant by claimant.
+        continue;
+      }
+
       $issues[] = Issue::error(
         'assets/Data/items.php',
         sprintf('"%s" is claimed by %s.', $reference, implode(' and ', $claimants)),

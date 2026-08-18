@@ -86,7 +86,10 @@ it('offers nothing contested to a picker or a compatibility target', function ()
         // The one definition with no part in the conflict is still offered.
         ->and($references->valuesFor('inventory'))->toContain('item.untouched')
         // And every claimant is still there for a diagnostic to name.
-        ->and(array_keys($catalog->allDefinitions()))->toContain('thing.contested');
+        // Both claimants are still known -- as claimants, with the category
+        // each was authored in -- so a diagnostic can name them.
+        ->and(array_map(static fn($claimant): string => $claimant->category, $catalog->claimantsOf('thing.contested')))
+            ->toBe(['items', 'weapons']);
 })->group('engine');
 
 it('refuses a save alias that targets a contested id', function () {
@@ -174,3 +177,137 @@ it('validates an actor alias against the identity a save reconstructs by', funct
         ->and($compatibility('Kaelion the Elder'))
         ->toContain('Alias target "Kaelion the Elder" is not defined in the current actors catalog.');
 });
+
+// -- Round 3: every claimant, every category --------------------------------
+
+/**
+ * Writes an inventory where the named categories all claim one id.
+ *
+ * @param string[] $categories Which of items, weapons and armors claim it.
+ * @return string The project root.
+ */
+function multiClaimantProject(array $categories): string
+{
+    $root = makeTemporaryProject('ichiloto-identity-');
+    $entries = [
+        "new Item(id: 'item.plain', name: 'Plain', description: 'x', icon: 'i', price: 1, aliases: ['Old Plain']),",
+    ];
+    $sources = [
+        'items' => "new Item(id: 'gear.shared', name: 'Shared Item', description: 'x', icon: 'i', price: 1, aliases: ['Old Item Alias']),",
+        'weapons' => "new Weapon(id: 'gear.shared', name: 'Shared Weapon', description: 'x', icon: '/', price: 1, equipmentType: WeaponType::SWORD, aliases: ['Old Weapon Alias']),",
+        'armors' => "new Armor(id: 'gear.shared', name: 'Shared Armor', semanticSlot: EquipmentSlotType::BODY, description: 'x', icon: '[', price: 1, aliases: ['Old Armor Alias']),",
+    ];
+
+    foreach ($categories as $category) {
+        $entries[] = $sources[$category];
+    }
+
+    file_put_contents($root . '/assets/Data/items.php', sprintf(<<<'PHP'
+    <?php
+
+    use Ichiloto\Engine\Entities\Enumerations\WeaponType;
+    use Ichiloto\Engine\Entities\Inventory\Armor;
+    use Ichiloto\Engine\Entities\Inventory\EquipmentSlotType;
+    use Ichiloto\Engine\Entities\Inventory\Items\Item;
+    use Ichiloto\Engine\Entities\Inventory\Weapons\Weapon;
+
+    return [
+      %s
+    ];
+    PHP, implode("\n  ", $entries)));
+
+    return $root;
+}
+
+it('retains every claimant of a contested id with its category, aliases and source, and resolves none of them', function (array $categories) {
+    $root = multiClaimantProject($categories);
+    $workspace = ProjectWorkspace::fromProject($root);
+    $catalog = InventoryCatalog::fromWorkspace($workspace);
+    $claimants = $catalog->claimantsOf('gear.shared');
+
+    // Every claimant is kept, in catalogue order, and each says which
+    // category it was authored in, what aliases it brought, and where it
+    // sits in the file.
+    expect(array_map(static fn($claimant): string => $claimant->category, $claimants))->toBe($categories)
+        ->and(array_map(static fn($claimant): string => $claimant->id, $claimants))
+            ->toBe(array_fill(0, count($categories), 'gear.shared'));
+
+    foreach ($claimants as $position => $claimant) {
+        $noun = ucfirst(rtrim($claimant->category, 's'));
+
+        expect($claimant->name)->toBe('Shared ' . $noun)
+            ->and($claimant->aliases)->toBe(['Old ' . $noun . ' Alias'])
+            ->and($claimant->source)->toBe(sprintf('assets/Data/items.php entry %d', $position + 2));
+    }
+
+    // Nothing of any claimant resolves or is offered.
+    $references = new \Ichiloto\Editor\Database\ReferenceCatalog($workspace);
+
+    foreach ($claimants as $claimant) {
+        foreach (['gear.shared', $claimant->name, ...$claimant->aliases] as $reference) {
+            expect($catalog->definitionIdFor($reference))->toBeNull($reference)
+                ->and($catalog->isAmbiguous($reference))->toBeTrue($reference);
+        }
+    }
+
+    expect($catalog->ids())->not->toContain('gear.shared')
+        ->and($catalog->idsIn(...$categories))->not->toContain('gear.shared')
+        ->and(array_keys($catalog->definitions()))->toBe(['item.plain'])
+        ->and(array_keys($catalog->contestedClaimants()))->toBe(['gear.shared'])
+        ->and(count($catalog->claimants()['gear.shared']))->toBe(count($categories))
+        ->and($references->valuesFor('inventory'))->not->toContain('gear.shared')
+        ->and(array_keys($references->labelsFor('inventory')))->not->toContain('gear.shared');
+
+    foreach ($categories as $category) {
+        expect($references->valuesFor($category))->not->toContain('gear.shared');
+        expect(implode(' ', $references->labelsFor($category)))->not->toContain('Shared');
+    }
+
+    // The unrelated definition still resolves normally.
+    expect($catalog->definitionIdFor('Old Plain'))->toBe('item.plain');
+})->with([
+    'item and weapon' => [['items', 'weapons']],
+    'item and armor' => [['items', 'armors']],
+    'weapon and armor' => [['weapons', 'armors']],
+    'item, weapon and armor' => [['items', 'weapons', 'armors']],
+])->group('engine');
+
+it('names every claimant and its category in one diagnostic, and refuses the id as an alias target', function (array $categories) {
+    $root = multiClaimantProject($categories);
+    file_put_contents($root . '/assets/Data/save-compatibility.php', <<<'PHP'
+    <?php
+
+    return [
+      'contentVersion' => 0,
+      'migrations' => [],
+      'tombstones' => [],
+      'aliases' => ['items' => [['from' => 'Old Shared', 'to' => 'gear.shared']]],
+    ];
+    PHP);
+
+    $issues = new \Ichiloto\Editor\Validation\ProjectValidator()->validate(ProjectWorkspace::fromProject($root));
+    $errors = array_values(array_map(
+        static fn($issue): string => $issue->message,
+        array_filter($issues, static fn($issue): bool => $issue->severity === Severity::ERROR),
+    ));
+    $structured = array_values(array_filter($errors, static fn(string $message): bool => str_starts_with($message, 'The id "gear.shared" is claimed by')));
+
+    expect($structured)->toHaveCount(1);
+    $message = $structured[0];
+
+    expect($message)->toContain(sprintf('is claimed by %d definitions', count($categories)));
+
+    foreach ($categories as $position => $category) {
+        $noun = rtrim($category, 's');
+
+        expect($message)->toContain(sprintf('Shared %s (%s; aliases: Old %s Alias; assets/Data/items.php entry %d)', ucfirst($noun), $noun, ucfirst($noun), $position + 2));
+    }
+
+    expect(implode("\n", $errors))
+        ->toContain('Alias target "gear.shared" is not defined in the current items catalog.');
+})->with([
+    'item and weapon' => [['items', 'weapons']],
+    'item and armor' => [['items', 'armors']],
+    'weapon and armor' => [['weapons', 'armors']],
+    'item, weapon and armor' => [['items', 'weapons', 'armors']],
+])->group('engine');

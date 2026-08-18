@@ -41,12 +41,12 @@ final class InventoryCatalog
     public const array CATEGORIES = ['items', 'weapons', 'armors'];
 
     /**
-     * @param array<string, array{id: string, name: string, category: string, aliases: string[]}> $definitions By stable id.
+     * @param array<string, InventoryClaimant[]> $claimants Every definition claiming each stable id, by id.
      * @param array<string, string> $references Normalised reference => stable id.
-     * @param array<string, string[]> $conflicts Normalised reference => the ids that claim it.
+     * @param array<string, string[]> $conflicts Normalised reference => what claims it.
      */
     private function __construct(
-        private readonly array $definitions,
+        private readonly array $claimants,
         private readonly array $references,
         private readonly array $conflicts,
     ) {
@@ -60,10 +60,9 @@ final class InventoryCatalog
      */
     public static function fromWorkspace(ProjectWorkspace $workspace): self
     {
-        $definitions = [];
+        $claimants = [];
         $references = [];
         $conflicts = [];
-        $contested = [];
 
         foreach (self::CATEGORIES as $category) {
             $database = $workspace->getRecordDatabase($category);
@@ -72,7 +71,7 @@ final class InventoryCatalog
                 continue;
             }
 
-            foreach ($database->getRecords() as $record) {
+            foreach ($database->getRecords() as $index => $record) {
                 $name = trim(strval($record->get('name') ?? ''));
                 $id = self::definitionId($record->get('id'), $name);
 
@@ -80,33 +79,35 @@ final class InventoryCatalog
                     continue;
                 }
 
-                if (isset($definitions[$id])) {
-                    // Two definitions under one id. The runtime's store
-                    // refuses the whole catalogue over this, so nothing
-                    // belonging to either claimant may resolve until it is
-                    // fixed: not the id, and not the names and aliases each
-                    // of them brought with it. Both are recorded so the
-                    // validator can name every claimant.
-                    $conflicts[$id] = array_values(array_unique([
-                        ...($conflicts[$id] ?? [$definitions[$id]['name']]),
-                        $name,
-                    ]));
-                    $contested[$id] = [
-                        ...($contested[$id] ?? [$definitions[$id]]),
-                        ['id' => $id, 'name' => $name, 'category' => $category, 'aliases' => self::declaredAliases($record)],
-                    ];
-                    continue;
-                }
-
-                $aliases = self::declaredAliases($record);
-
-                $definitions[$id] = [
-                    'id' => $id,
-                    'name' => $name,
-                    'category' => $category,
-                    'aliases' => $aliases,
-                ];
+                // Every definition that claims an id is kept, with what
+                // tells it from the others. One claimant is a definition;
+                // more than one is a conflict the runtime's store refuses the
+                // whole catalogue over, so nothing belonging to any of them
+                // may resolve until it is fixed -- not the id, and not the
+                // names and aliases each of them brought with it.
+                $claimants[$id][] = new InventoryClaimant(
+                    $id,
+                    $name,
+                    $category,
+                    self::declaredAliases($record),
+                    $database->sourceContextOf($index),
+                );
             }
+        }
+
+        $definitions = [];
+
+        foreach ($claimants as $id => $claims) {
+            if (count($claims) === 1) {
+                $definitions[$id] = $claims[0]->toDefinition();
+
+                continue;
+            }
+
+            $conflicts[$id] = array_values(array_unique(array_map(
+                static fn(InventoryClaimant $claimant): string => $claimant->name,
+                $claims,
+            )));
         }
 
         // The id itself always resolves; then the display name and declared
@@ -142,12 +143,20 @@ final class InventoryCatalog
         }
 
         // Everything a contested definition brought with it is contested
-        // too. The first one retained kept its display name and aliases
-        // resolving, which let a reference quietly mean one of two
-        // definitions the runtime will not load at all.
-        foreach ($contested as $claimants) {
-            foreach ($claimants as $claimant) {
-                foreach ([$claimant['name'], ...$claimant['aliases']] as $reference) {
+        // too: a reference that quietly meant one of two definitions the
+        // runtime will not load at all must resolve to nothing.
+        foreach ($claimants as $id => $claims) {
+            if (count($claims) === 1) {
+                continue;
+            }
+
+            $names = array_values(array_unique(array_map(
+                static fn(InventoryClaimant $claimant): string => $claimant->name,
+                $claims,
+            )));
+
+            foreach ($claims as $claimant) {
+                foreach ([$claimant->name, ...$claimant->aliases] as $reference) {
                     $normalized = self::normalize($reference);
 
                     if ($normalized === '') {
@@ -156,7 +165,7 @@ final class InventoryCatalog
 
                     $conflicts[$normalized] = array_values(array_unique([
                         ...($conflicts[$normalized] ?? []),
-                        ...array_map(static fn(array $each): string => $each['name'], $claimants),
+                        ...$names,
                     ]));
                 }
             }
@@ -168,7 +177,7 @@ final class InventoryCatalog
             unset($references[$normalized]);
         }
 
-        return new self($definitions, $references, $conflicts);
+        return new self($claimants, $references, $conflicts);
     }
 
     /**
@@ -246,7 +255,7 @@ final class InventoryCatalog
     {
         $id = $this->definitionIdFor($reference);
 
-        return $id === null ? null : $this->definitions[$id]['name'];
+        return $id === null ? null : $this->definitions()[$id]['name'];
     }
 
     /**
@@ -289,48 +298,69 @@ final class InventoryCatalog
     }
 
     /**
-     * Returns every definition, keyed by stable id.
+     * Returns every resolvable definition, keyed by stable id.
+     *
+     * An id more than one definition claims is not here: the runtime's
+     * store refuses a catalogue like that outright, and leaving the id in a
+     * picker would offer an author a reference the same catalogue will not
+     * resolve, while leaving it in the compatibility targets would let a
+     * save alias point at one. Its claimants are in `contestedClaimants()`.
      *
      * @return array<string, array{id: string, name: string, category: string, aliases: string[]}> The definitions.
      */
     public function definitions(): array
     {
-        return array_diff_key($this->definitions, $this->contestedIds());
-    }
+        $definitions = [];
 
-    /**
-     * Returns every definition the project declares, contested ones
-     * included, for a diagnostic that has to name them.
-     *
-     * @return array<string, array{id: string, name: string, category: string, aliases: string[]}> The definitions.
-     */
-    public function allDefinitions(): array
-    {
-        return $this->definitions;
-    }
-
-    /**
-     * Returns the ids no reference may resolve to, because more than one
-     * definition claims them.
-     *
-     * The runtime's store refuses a catalogue like this outright. Leaving a
-     * contested id in a picker offers an author a reference the same
-     * catalogue will not resolve, and leaving it in the compatibility
-     * targets lets a save alias point at one.
-     *
-     * @return array<string, true> The contested ids.
-     */
-    private function contestedIds(): array
-    {
-        $contested = [];
-
-        foreach ($this->definitions as $id => $definition) {
-            if (isset($this->conflicts[self::normalize($id)])) {
-                $contested[$id] = true;
+        foreach ($this->claimants as $id => $claims) {
+            if (count($claims) === 1) {
+                $definitions[$id] = $claims[0]->toDefinition();
             }
         }
 
-        return $contested;
+        return $definitions;
+    }
+
+    /**
+     * Returns every definition that claims each stable id the project
+     * declares -- one for an id that resolves, every one for an id that is
+     * contested -- with the name, category, aliases and source of each.
+     *
+     * This is the diagnostic surface. Nothing here is resolvable or
+     * selectable by being here.
+     *
+     * @return array<string, InventoryClaimant[]> The claimants, by stable id.
+     */
+    public function claimants(): array
+    {
+        return $this->claimants;
+    }
+
+    /**
+     * Returns the definitions claiming one stable id: one when it resolves,
+     * every claimant when it is contested, none when the project does not
+     * declare it.
+     *
+     * @param string $id The stable id.
+     * @return InventoryClaimant[] The claimants.
+     */
+    public function claimantsOf(string $id): array
+    {
+        return $this->claimants[self::normalize($id)] ?? [];
+    }
+
+    /**
+     * Returns the ids more than one definition claims, each with every
+     * definition that claims it.
+     *
+     * @return array<string, InventoryClaimant[]> The contested ids and their claimants.
+     */
+    public function contestedClaimants(): array
+    {
+        return array_filter(
+            $this->claimants,
+            static fn(array $claims): bool => count($claims) > 1,
+        );
     }
 
     /**
@@ -359,7 +389,7 @@ final class InventoryCatalog
             return trim($reference);
         }
 
-        $name = $this->definitions[$id]['name'];
+        $name = $this->definitions()[$id]['name'];
 
         return $name === '' || self::normalize($name) === self::normalize($id)
             ? $id

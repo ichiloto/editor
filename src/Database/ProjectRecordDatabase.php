@@ -137,6 +137,43 @@ final class ProjectRecordDatabase
     }
 
     /**
+     * Describes where a record sits in its source, for a diagnostic that has
+     * to tell two records with one identity apart.
+     *
+     * Only for a category over one file, and only while the records still
+     * stand in the order the file was read in -- after a record is added or
+     * removed the file's places no longer line up with the list, and a
+     * guess would point at the wrong entry, so nothing is said.
+     *
+     * @param int $index The record index.
+     * @return string|null The source context, or null when it cannot be told.
+     */
+    public function sourceContextOf(int $index): ?string
+    {
+        if ($this->schema->storage !== RecordStorage::LIST_FILE || ! $this->file instanceof PhpDataFile || ! is_array($this->file->payload)) {
+            return null;
+        }
+
+        $positions = [];
+
+        foreach (array_values($this->file->payload) as $position => $entry) {
+            if ($this->schema->recordFilter !== null && ! ($this->schema->recordFilter)($entry)) {
+                continue;
+            }
+
+            if (is_array($entry) || is_object($entry)) {
+                $positions[] = $position;
+            }
+        }
+
+        if (count($positions) !== count($this->records) || ! isset($positions[$index])) {
+            return null;
+        }
+
+        return sprintf('%s entry %d', $this->schema->relativePath, $positions[$index] + 1);
+    }
+
+    /**
      * Returns the position of every entry of this category in a file's
      * returned list, keyed by the identity each declares.
      *
