@@ -8,10 +8,11 @@ use Ichiloto\Editor\Cutscenes\Source\ArraySourceWriter;
 use Ichiloto\Editor\Cutscenes\Source\PhpArraySourceDocument;
 use Ichiloto\Editor\Cutscenes\Source\SourcePreservationRefusal;
 use Ichiloto\Editor\Cutscenes\Source\SourceUnreadable;
+use Ichiloto\Editor\Cutscenes\Storage\PairedFileTransaction;
+use Ichiloto\Editor\Cutscenes\Storage\PairedFileTransactionFailure;
 use Ichiloto\Editor\Database\PhpValueExporter;
 use Ichiloto\Editor\History\TracksPersistedState;
 use Ichiloto\Editor\ProjectDirectoryContext;
-use Ichiloto\Engine\Cutscenes\Cinematics\CinematicCommandSchema;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicDefinition;
 use Ichiloto\Engine\Cutscenes\Summons\SummonCompiledCutscene;
 use RuntimeException;
@@ -71,16 +72,10 @@ final class CutsceneAsset
     private array $loadedPartner;
 
     /**
-     * @var array<string, string> Which file each top-level payload key came
-     * from ('data' or 'partner'), for keys the files were read holding.
+     * How this pair's two files merge into one record and split back into
+     * two, and whether it can make that round trip without loss.
      */
-    private array $keyOwners = [];
-
-    /**
-     * @var bool Whether a cinematic script was authored as `['commands' => ...]`
-     * rather than a bare command list.
-     */
-    private bool $scriptIsMap = false;
+    private CutscenePairShape $shape;
 
     private ?PhpArraySourceDocument $dataDocument = null;
     private ?PhpArraySourceDocument $partnerDocument = null;
@@ -169,8 +164,19 @@ final class CutsceneAsset
             $reasons[] = sprintf('the folder is "%s" but the data file declares id "%s"', $asset->id, $declared);
         }
 
-        $asset->readOnlyReason = $reasons === [] ? null : implode('; ', $reasons);
         $asset->adoptArrays($data, $partner);
+
+        // The pair is offered as writable only when the editor can prove it
+        // reads both files into one record and writes that record back as
+        // the same two files. A shape it would normalise is shown and left
+        // alone: an edit to any asset must never reshape this one.
+        $irreversible = $asset->shape->refusalFor($data, $partner);
+
+        if ($irreversible !== null) {
+            $reasons[] = $irreversible;
+        }
+
+        $asset->readOnlyReason = $reasons === [] ? null : implode('; ', $reasons);
         $asset->captureBaseline();
 
         return $asset;
@@ -190,8 +196,9 @@ final class CutsceneAsset
     {
         $asset = new self($type, $id, rtrim($root, '/') . '/' . $id, $projectRoot);
         $asset->isNew = true;
-        [$data, $partner] = $asset->split($payload);
-        $asset->keyOwners = [];
+        $asset->shape = CutscenePairShape::forNewAsset($type);
+        [$data, $partner] = $asset->shape->split($payload);
+        $asset->shape = CutscenePairShape::of($type, $data, $partner);
         $asset->data = $data;
         $asset->partner = $partner;
         $asset->loadedData = [];
@@ -299,13 +306,7 @@ final class CutsceneAsset
      */
     public function commands(): array
     {
-        if ($this->type !== CutsceneType::CINEMATIC) {
-            return [];
-        }
-
-        $commands = array_is_list($this->partner) ? $this->partner : ($this->partner[self::COMMANDS_KEY] ?? []);
-
-        return is_array($commands) ? array_values($commands) : [];
+        return $this->shape->commandsOf($this->partner);
     }
 
     /**
@@ -317,26 +318,7 @@ final class CutsceneAsset
      */
     public function payload(): array
     {
-        $payload = $this->data;
-
-        if ($this->type === CutsceneType::CINEMATIC) {
-            $payload[self::COMMANDS_KEY] = $this->commands();
-
-            if (! array_is_list($this->partner)) {
-                foreach ($this->partner as $key => $value) {
-                    if ($key !== self::COMMANDS_KEY && ! array_key_exists($key, $payload)) {
-                        $payload[$key] = $value;
-                    }
-                }
-            }
-        } else {
-            foreach ($this->partner as $key => $value) {
-                if (! array_key_exists($key, $payload)) {
-                    $payload[$key] = $value;
-                }
-            }
-        }
-
+        $payload = $this->shape->merge($this->data, $this->partner);
         $payload[self::ORIGIN_KEY] = $this->id;
 
         return $payload;
@@ -353,7 +335,14 @@ final class CutsceneAsset
      */
     public function apply(array $payload): void
     {
-        [$data, $partner] = $this->split($payload);
+        if ($this->readOnlyReason !== null) {
+            // A pair the editor cannot reverse exactly is never rewritten,
+            // and the record write-back passes every asset through here --
+            // including the ones an author was not editing.
+            return;
+        }
+
+        [$data, $partner] = $this->shape->split($payload);
 
         if ($data === $this->data && $partner === $this->partner) {
             return;
@@ -362,53 +351,6 @@ final class CutsceneAsset
         $this->data = $data;
         $this->partner = $partner;
         $this->touchState();
-    }
-
-    /**
-     * Splits a payload into the two files' arrays.
-     *
-     * @param array<string, mixed> $payload
-     * @return array{0: array<string, mixed>, 1: array<int|string, mixed>}
-     */
-    private function split(array $payload): array
-    {
-        unset($payload[self::ORIGIN_KEY]);
-        $data = [];
-        $partner = [];
-
-        if ($this->type === CutsceneType::CINEMATIC) {
-            $commands = $payload[self::COMMANDS_KEY] ?? [];
-            unset($payload[self::COMMANDS_KEY]);
-            $commands = is_array($commands) ? array_values($commands) : [];
-
-            foreach ($payload as $key => $value) {
-                if (($this->keyOwners[$key] ?? 'data') === 'partner') {
-                    $partner[$key] = $value;
-                } else {
-                    $data[$key] = $value;
-                }
-            }
-
-            if ($this->scriptIsMap || $partner !== []) {
-                $partner = [self::COMMANDS_KEY => $commands, ...$partner];
-            } else {
-                $partner = $commands;
-            }
-
-            return [$data, $partner];
-        }
-
-        foreach ($payload as $key => $value) {
-            $owner = $this->keyOwners[$key] ?? (in_array($key, CinematicCommandSchema::SUMMON_TIMELINE_FIELDS, true) ? 'partner' : 'data');
-
-            if ($owner === 'partner') {
-                $partner[$key] = $value;
-            } else {
-                $data[$key] = $value;
-            }
-        }
-
-        return [$data, $partner];
     }
 
     /**
@@ -423,34 +365,25 @@ final class CutsceneAsset
         $this->loadedPartner = $partner;
         $this->data = $data;
         $this->partner = $partner;
-        $this->keyOwners = [];
-        $this->scriptIsMap = $this->type === CutsceneType::CINEMATIC && ! array_is_list($partner) && $partner !== [];
-
-        foreach (array_keys($data) as $key) {
-            $this->keyOwners[$key] = 'data';
-        }
-
-        if ($this->type === CutsceneType::SUMMON || $this->scriptIsMap) {
-            foreach (array_keys($partner) as $key) {
-                if (! isset($this->keyOwners[$key])) {
-                    $this->keyOwners[$key] = 'partner';
-                }
-            }
-        }
+        $this->shape = CutscenePairShape::of($this->type, $data, $partner);
     }
 
     /**
      * Writes both files as one logical transaction.
      *
      * The data source and the partner source are each rewritten only where
-     * their arrays changed. Both proposed sources are evaluated in the
-     * project, hydrated through the engine, and only then written next to
-     * the originals and swapped into place -- the data file first, and if the
-     * partner cannot follow, the data file is put back. A deleted asset's
-     * folder is removed instead. Nothing advances until the write succeeds.
+     * their arrays changed. Both proposed sources are staged beside the
+     * originals, evaluated in the project and hydrated through the engine,
+     * and only then installed by `PairedFileTransaction` -- which takes the
+     * backup once and, if either file cannot be installed, puts back every
+     * file it had already touched. A deleted asset's pair is removed through
+     * the same boundary. Nothing here advances until the whole operation
+     * succeeds, so the pair on disk is always the complete old one or the
+     * complete new one.
      *
      * @param callable(string ...$paths): void|null $backup Called with the paths about to be overwritten, before they are.
      * @return bool True when anything was written.
+     * @throws PairedFileTransactionFailure When the pair could not be installed.
      */
     public function save(?callable $backup = null): bool
     {
@@ -480,85 +413,60 @@ final class CutsceneAsset
             return false;
         }
 
-        // 2. Evaluate both proposed sources where the game would.
-        $folderExisted = is_dir($this->folder);
+        $transaction = new PairedFileTransaction($this->folder);
 
-        if (! $folderExisted && ! mkdir($this->folder, 0o777, true) && ! is_dir($this->folder)) {
-            throw new RuntimeException(sprintf('Unable to create %s.', $this->folder));
+        if ($writeData) {
+            $transaction->write($this->dataPath(), $dataSource);
         }
 
-        $dataTemp = $this->dataPath() . '.tmp-' . getmypid();
-        $partnerTemp = $this->partnerPath() . '.tmp-' . getmypid();
+        if ($writePartner) {
+            $transaction->write($this->partnerPath(), $partnerSource);
+        }
+
+        // 2. Stage both, then read back the exact bytes that will be
+        //    installed -- evaluated where the game would evaluate them.
+        $staged = $transaction->stage();
 
         try {
-            if (file_put_contents($dataTemp, $dataSource) === false || file_put_contents($partnerTemp, $partnerSource) === false) {
-                throw new RuntimeException(sprintf('Unable to write a temporary file next to %s.', $this->folder));
-            }
-
-            $evaluatedData = $this->evaluate($dataTemp);
-            $evaluatedPartner = $this->evaluate($partnerTemp);
-
-            if (! is_array($evaluatedData) || $evaluatedData !== $this->data) {
-                throw new RuntimeException(sprintf('The rewritten %s would not read back as the edited data; nothing was written.', basename($this->dataPath())));
-            }
-
-            if (! is_array($evaluatedPartner) || $evaluatedPartner !== $this->partner) {
-                throw new RuntimeException(sprintf('The rewritten %s would not read back as the edited %s; nothing was written.', basename($this->partnerPath()), $this->type->partnerNoun()));
-            }
+            $evaluatedData = $this->evaluateSide($staged[$this->dataPath()] ?? $this->dataPath(), $this->data, basename($this->dataPath()), 'data');
+            $evaluatedPartner = $this->evaluateSide($staged[$this->partnerPath()] ?? $this->partnerPath(), $this->partner, basename($this->partnerPath()), $this->type->partnerNoun());
 
             // 3. Hydrate and compile through the engine.
             $this->hydrate($evaluatedData, $evaluatedPartner);
-
-            // 4. Back up what is about to be overwritten.
-            if ($backup !== null) {
-                $overwritten = array_values(array_filter(
-                    [$writeData ? $this->dataPath() : null, $writePartner ? $this->partnerPath() : null],
-                    static fn(?string $path): bool => $path !== null && is_file($path),
-                ));
-
-                if ($overwritten !== []) {
-                    $backup(...$overwritten);
-                }
-            }
-
-            // 5. Swap both into place.
-            $previousData = is_file($this->dataPath()) ? (string) file_get_contents($this->dataPath()) : null;
-
-            if ($writeData && ! rename($dataTemp, $this->dataPath())) {
-                throw new RuntimeException(sprintf('Unable to replace %s.', $this->dataPath()));
-            }
-
-            if ($writePartner && ! rename($partnerTemp, $this->partnerPath())) {
-                if ($writeData && $previousData !== null) {
-                    file_put_contents($this->dataPath(), $previousData);
-                }
-
-                throw new RuntimeException(sprintf('Unable to replace %s.', $this->partnerPath()));
-            }
         } catch (Throwable $throwable) {
-            foreach ([$dataTemp, $partnerTemp] as $temporary) {
-                if (is_file($temporary)) {
-                    unlink($temporary);
-                }
-            }
-
-            if (! $folderExisted && is_dir($this->folder) && array_diff(scandir($this->folder) ?: [], ['.', '..']) === []) {
-                rmdir($this->folder);
-            }
+            // Nothing has been installed: drop the staged copies and leave
+            // both files exactly as they were.
+            $transaction->rollBack();
 
             throw $throwable;
-        } finally {
-            foreach ([$dataTemp, $partnerTemp] as $temporary) {
-                if (is_file($temporary)) {
-                    unlink($temporary);
-                }
-            }
         }
+
+        // 4. Back up once, then install the pair or restore it.
+        $transaction->commit($backup);
 
         $this->adoptWritten($dataSource, $partnerSource);
         $this->isNew = false;
 
         return true;
+    }
+
+    /**
+     * Evaluates one side of the pair as the game would read it after this
+     * save, and proves it is the array the editor holds.
+     *
+     * @param string $path The staged copy when the file is being written, the file itself when it is not.
+     * @param array<array-key, mixed> $expected What the editor holds for that side.
+     * @return array<array-key, mixed> The evaluated array.
+     */
+    private function evaluateSide(string $path, array $expected, string $name, string $noun): array
+    {
+        $evaluated = $this->evaluate($path);
+
+        if (! is_array($evaluated) || $evaluated !== $expected) {
+            throw new RuntimeException(sprintf('%s would not read back as the edited %s; nothing was written.', $name, $noun));
+        }
+
+        return $evaluated;
     }
 
     /**
@@ -610,9 +518,14 @@ final class CutsceneAsset
     }
 
     /**
-     * Removes the asset's folder from disk.
+     * Removes the asset's pair from disk, as one transaction.
+     *
+     * Both files go or neither does: a deletion that cannot remove the
+     * second file puts the first back, so a refused deletion leaves the
+     * complete original pair.
      *
      * @param callable(string ...$paths): void|null $backup
+     * @throws PairedFileTransactionFailure When the pair could not be removed.
      */
     private function delete(?callable $backup): bool
     {
@@ -623,26 +536,15 @@ final class CutsceneAsset
             return false;
         }
 
-        $paths = array_values(array_filter($this->paths(), 'is_file'));
+        $transaction = new PairedFileTransaction($this->folder);
 
-        if ($backup !== null && $paths !== []) {
-            $backup(...$paths);
-        }
-
-        foreach ($paths as $path) {
-            if (! unlink($path)) {
-                throw new RuntimeException(sprintf('Unable to remove %s.', $path));
-            }
+        foreach ($this->paths() as $path) {
+            $transaction->remove($path);
         }
 
         // Only the two files are the asset's; anything else in the folder is
         // left for its author, and the folder goes only when empty.
-        $remaining = array_diff(scandir($this->folder) ?: [], ['.', '..']);
-
-        if ($remaining === []) {
-            @rmdir($this->folder);
-        }
-
+        $transaction->commit($backup);
         $this->captureBaseline();
 
         return true;
@@ -678,20 +580,7 @@ final class CutsceneAsset
         $this->partnerDocument = PhpArraySourceDocument::parse($partnerSource);
         $this->loadedData = $this->data;
         $this->loadedPartner = $this->partner;
-        $this->keyOwners = [];
-
-        foreach (array_keys($this->data) as $key) {
-            $this->keyOwners[$key] = 'data';
-        }
-
-        if ($this->type === CutsceneType::SUMMON || $this->scriptIsMap) {
-            foreach (array_keys($this->partner) as $key) {
-                if (! isset($this->keyOwners[$key])) {
-                    $this->keyOwners[$key] = 'partner';
-                }
-            }
-        }
-
+        $this->shape = CutscenePairShape::of($this->type, $this->data, $this->partner);
         $this->captureBaseline();
     }
 
