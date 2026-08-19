@@ -44,6 +44,8 @@ trait CutscenePreviewPane
     private array $cutscenePreviewComparison = [];
     private string $cutscenePreviewComparisonSummary = '';
     private int $cutscenePreviewScroll = 0;
+    /** The row under the cursor in the duration overview. */
+    private int $cutsceneOverviewCursor = 0;
     /** The asset payload the running preview was built from. */
     private string $cinematicPreviewFingerprint = '';
 
@@ -65,6 +67,14 @@ trait CutscenePreviewPane
     private function moveCutscenePreview(int $deltaX, int $deltaY): void
     {
         if ($this->cinematicPreview !== null && $this->cutscenePreviewView === 'stage' && $deltaY !== 0 && $this->cinematicPreview->moveChoice($deltaY)) {
+            $this->renderDatabasePanes(['preview']);
+
+            return;
+        }
+
+        if ($this->cutscenePreviewView === 'overview' && $deltaY !== 0) {
+            $rows = $this->cutsceneOverviewRows();
+            $this->cutsceneOverviewCursor = max(0, min(max(0, count($rows) - 1), $this->cutsceneOverviewCursor + $deltaY));
             $this->renderDatabasePanes(['preview']);
 
             return;
@@ -139,6 +149,17 @@ trait CutscenePreviewPane
 
         if ($lower === 'v') {
             $this->setCutscenePreviewView('overview');
+
+            return true;
+        }
+
+        if (($input === "\n" || $input === "\r") && $this->cutscenePreviewView === 'overview') {
+            $rows = $this->cutsceneOverviewRows();
+            $row = $rows[$this->cutsceneOverviewCursor] ?? null;
+
+            if ($row !== null && $this->jumpToCutsceneOutlineKey($row['key'])) {
+                $this->setStatus(sprintf('Opened %s.', $row['label']));
+            }
 
             return true;
         }
@@ -543,6 +564,37 @@ trait CutscenePreviewPane
             return true;
         }
 
+        $isHome = str_contains($input, "\033[H") || str_contains($input, "\033[1~") || str_contains($input, "\033OH");
+        $isEnd = str_contains($input, "\033[F") || str_contains($input, "\033[4~") || str_contains($input, "\033OF");
+
+        if ($input === '+' || $input === '-' || $lower === 'o' || $isHome || $isEnd) {
+            if ($preview === null) {
+                $this->startSummonPreview(play: false);
+                $preview = $this->summonPreview;
+            }
+
+            if ($preview === null) {
+                return true;
+            }
+
+            if ($input === '+' || $input === '-') {
+                $speed = $preview->changeSpeed($input === '+' ? 1 : -1);
+                $this->setStatus(sprintf('Speed %gx.', $speed));
+            } elseif ($lower === 'o') {
+                $this->setStatus($preview->toggleLoop() ? 'Looping.' : 'Playing once.');
+            } elseif ($isHome) {
+                $preview->seek(0);
+                $this->setStatus('Frame 0.');
+            } else {
+                $preview->seek($preview->totalFrames() - 1);
+                $this->setStatus(sprintf('Frame %d.', $preview->totalFrames() - 1));
+            }
+
+            $this->renderDatabasePanes(['preview', 'tree']);
+
+            return true;
+        }
+
         if ($input === '.' || $input === ',' || $input === '>' || $input === '<' || $lower === 'r' || $lower === 'l' || $lower === 'x') {
             if ($preview === null) {
                 $this->startSummonPreview(play: false);
@@ -878,9 +930,9 @@ trait CutscenePreviewPane
         $help = $asset?->type === CutsceneType::SUMMON
             ? $this->fitHelp(
                 $layout['previewWidth'],
-                'Space:Play/Pause  .:Step  ,:Back  <>:Keyframes  R:Restart  L:Timeline  X:Close',
-                'Space:Play  . ,:Step  <>:Keyframes  R:Restart',
-                'Space:Play  . ,:Step',
+                'Space:Play/Pause  . ,:Step  < >:Keyframes  Home/End  +/-:Speed  O:Loop  R:Restart  L:Timeline  X:Close',
+                'Space:Play  . ,:Step  < >:Keyframes  +/-:Speed  O:Loop  R:Restart',
+                'Space:Play  . ,:Step  +/-:Speed',
             )
             : $this->fitHelp(
                 $layout['previewWidth'],
@@ -1144,7 +1196,32 @@ trait CutscenePreviewPane
     }
 
     /**
-     * The duration overview: every lane and block with its authored time.
+     * The overview rows of the selected cinematic: commands, then finalizer.
+     *
+     * @return array<int, array{depth: int, key: string, label: string, seconds: float, marks: string[], kind: string}>
+     */
+    private function cutsceneOverviewRows(): array
+    {
+        $asset = $this->selectedCutscene();
+
+        if ($asset === null || $asset->type !== CutsceneType::CINEMATIC) {
+            return [];
+        }
+
+        $payload = $asset->payload();
+        $commands = is_array($payload[CutsceneAsset::COMMANDS_KEY] ?? null) ? $payload[CutsceneAsset::COMMANDS_KEY] : [];
+        $finalizer = is_array($payload['finalizer'] ?? null) ? $payload['finalizer'] : [];
+
+        return [
+            ...CutsceneLaneOverview::of($commands)->rows,
+            ...CutsceneLaneOverview::of($finalizer, 'finalizer')->rows,
+        ];
+    }
+
+    /**
+     * The duration overview: every lane and block with its authored time,
+     * the commands the running preview is on, and a cursor that opens a
+     * row in the tree.
      *
      * @return string[]
      */
@@ -1153,27 +1230,53 @@ trait CutscenePreviewPane
         $payload = $asset->payload();
         $commands = is_array($payload[CutsceneAsset::COMMANDS_KEY] ?? null) ? $payload[CutsceneAsset::COMMANDS_KEY] : [];
         $overview = CutsceneLaneOverview::of($commands);
-        $lines = [sprintf('  Authored duration ≈ %s (Engine defaults where unset; dialogue, choices, battles and common events wait on play).', CutsceneLaneOverview::describe($overview->totalSeconds, $overview->totalMarks))];
-        $timeWidth = 14;
-        $labelWidth = max(10, $contentWidth - $timeWidth - 4);
+        $finalizer = is_array($payload['finalizer'] ?? null) ? $payload['finalizer'] : [];
+        $finalizerOverview = CutsceneLaneOverview::of($finalizer, 'finalizer');
+        $preview = $this->cinematicPreview;
+        $activeKeys = $preview !== null && ! $preview->isFinished() ? $preview->activeKeys() : [];
+        $lines = [sprintf(
+            '  Commands ≈ %s · Finalizer ≈ %s (Engine defaults where unset; +input, +battle and +? wait on play). Enter opens a row in the tree.',
+            CutsceneLaneOverview::describe($overview->totalSeconds, $overview->totalMarks),
+            CutsceneLaneOverview::describe($finalizerOverview->totalSeconds, $finalizerOverview->totalMarks),
+        )];
+        $timeWidth = 16;
+        $labelWidth = max(10, $contentWidth - $timeWidth - 6);
+        $rows = [...$overview->rows, ...$finalizerOverview->rows];
+        $this->cutsceneOverviewCursor = max(0, min(max(0, count($rows) - 1), $this->cutsceneOverviewCursor));
 
-        foreach ($overview->rows as $row) {
+        foreach ($rows as $position => $row) {
             $label = str_repeat('  ', $row['depth']) . $row['label'];
+            $cursor = $position === $this->cutsceneOverviewCursor && $this->cutsceneFocus === CutscenesScreen::PANE_PREVIEW ? '>' : ' ';
+            $mark = in_array($row['key'], $activeKeys, true) ? '▶' : ' ';
             $lines[] = sprintf(
-                '  %s  %s',
+                '%s%s %s  %s',
+                $cursor,
+                $mark,
                 $this->padToWidth(mb_strimwidth($label, 0, $labelWidth, '…'), $labelWidth),
                 CutsceneLaneOverview::describe($row['seconds'], $row['marks']),
             );
         }
 
-        $finalizer = is_array($payload['finalizer'] ?? null) ? $payload['finalizer'] : [];
+        // Keep the cursor on screen.
+        $visible = max(1, $this->cutscenePreviewRowsVisible());
 
-        if ($finalizer !== []) {
-            $finalizerOverview = CutsceneLaneOverview::of($finalizer, 'finalizer');
-            $lines[] = sprintf('  Finalizer ≈ %s', CutsceneLaneOverview::describe($finalizerOverview->totalSeconds, $finalizerOverview->totalMarks));
+        if ($this->cutsceneOverviewCursor + 1 >= $this->cutscenePreviewScroll + $visible) {
+            $this->cutscenePreviewScroll = $this->cutsceneOverviewCursor + 2 - $visible;
+        } elseif ($this->cutsceneOverviewCursor + 1 < $this->cutscenePreviewScroll) {
+            $this->cutscenePreviewScroll = max(0, $this->cutsceneOverviewCursor);
         }
 
         return $lines;
+    }
+
+    /**
+     * How many preview rows fit right now.
+     */
+    private function cutscenePreviewRowsVisible(): int
+    {
+        $layout = $this->resolveCutscenesLayout(['width' => $this->lastTerminalSize['width'] ?? 120, 'height' => $this->lastTerminalSize['height'] ?? 40]);
+
+        return max(1, $layout['previewHeight'] - 2);
     }
 
     /**
@@ -1240,6 +1343,7 @@ trait CutscenePreviewPane
 
         if ($infoWidth > 0) {
             $info[] = sprintf(' %s · frame %d/%d · %.1fs', $preview->isPlaying() ? 'playing' : ($preview->isCompleted() ? 'completed' : 'paused'), $preview->currentFrame(), $preview->totalFrames(), $preview->elapsed());
+            $info[] = sprintf(' %gx speed · %s', $preview->speed(), $preview->isLooping() ? 'looping' : 'once');
             $info[] = ' Cues here: ' . (implode(', ', array_map(static fn(array $cue): string => strval($cue['id'] ?? '?'), $preview->cuesAt())) ?: '—');
             $info[] = ' Fired:';
 

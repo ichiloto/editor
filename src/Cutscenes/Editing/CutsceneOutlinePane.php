@@ -405,6 +405,46 @@ trait CutsceneOutlinePane
     }
 
     /**
+     * Moves a keyframe's or cue's frame by one: a timing nudge from the
+     * timeline rows, undoable like any field edit. Returns false when the
+     * row is not a keyframe or cue, so the key can fold instead.
+     */
+    private function nudgeCutsceneTreeFrame(int $delta): bool
+    {
+        $row = $this->visibleCutsceneTreeRows()[$this->cutsceneTreeCursor] ?? null;
+
+        if ($row === null || ! in_array($row['kind'], ['keyframe', 'cue'], true)) {
+            return false;
+        }
+
+        $entry = $this->locateCutsceneTreeEntry();
+
+        if ($entry === null) {
+            return true;
+        }
+
+        $path = [...$entry['listPath'], $entry['index'], 'frame'];
+        $current = CutsceneOutline::valueAt($entry['payload'], $path);
+        $next = max(0, intval($current) + $delta);
+
+        if ($next === intval($current)) {
+            $this->setStatus('Already at frame 0.', StatusLevel::INFO);
+
+            return true;
+        }
+
+        if ($this->mutateCutscenePayload(
+            'Nudge frame',
+            static fn(array $payload): array => CutsceneOutline::withValueAt($payload, $path, $next),
+        )) {
+            $this->setStatus(sprintf('Frame %d.', $next), StatusLevel::SUCCESS);
+            $this->renderCutscenesArea();
+        }
+
+        return true;
+    }
+
+    /**
      * Rewrites the last index of an outline key.
      */
     private function replaceKeyIndex(string $key, int $index): string

@@ -22,6 +22,8 @@ final class SummonPreviewSession
     private SummonPlaybackSession $session;
     private bool $playing = false;
     private float $elapsed = 0.0;
+    private bool $loop = false;
+    private ?float $speed = null;
     /** @var array<int, array{frame: int, id: string, type: string}> */
     private array $cueLog = [];
 
@@ -29,6 +31,70 @@ final class SummonPreviewSession
     {
         $this->session = new SummonPlaybackSession($cutscene, loop: false);
         $this->session->pause();
+    }
+
+    /**
+     * Whether playback wraps at the last frame.
+     */
+    public function isLooping(): bool
+    {
+        return $this->loop;
+    }
+
+    public function toggleLoop(): bool
+    {
+        $this->loop = ! $this->loop;
+        $this->rebuildSession();
+
+        return $this->loop;
+    }
+
+    /**
+     * The playback speed multiplier the Engine session runs at.
+     */
+    public function speed(): float
+    {
+        return $this->session->effectiveSpeed;
+    }
+
+    /**
+     * Steps the speed through 0.25×, 0.5×, 1×, 2× and 4×.
+     */
+    public function changeSpeed(int $direction): float
+    {
+        $steps = [0.25, 0.5, 1.0, 2.0, 4.0];
+        $current = $this->speed();
+        $position = 2;
+
+        foreach ($steps as $index => $step) {
+            if (abs($step - $current) < 0.001) {
+                $position = $index;
+            }
+        }
+
+        $position = max(0, min(count($steps) - 1, $position + $direction));
+        $this->speed = $steps[$position];
+        $this->rebuildSession();
+
+        return $this->speed;
+    }
+
+    /**
+     * Re-creates the Engine session with the current loop and speed at the
+     * same playhead; the session's own constructor owns both settings.
+     */
+    private function rebuildSession(): void
+    {
+        $frame = $this->session->currentFrame;
+        $wasPlaying = $this->isPlaying();
+        $this->session = new SummonPlaybackSession($this->cutscene, loop: $this->loop, speed: $this->speed);
+        $this->session->seek($frame);
+
+        if ($wasPlaying) {
+            $this->session->resume();
+        } else {
+            $this->session->pause();
+        }
     }
 
     public function play(): void

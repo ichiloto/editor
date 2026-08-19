@@ -518,6 +518,10 @@ trait CutscenesWorkspace
             return;
         }
 
+        if ($this->cutsceneFocus === CutscenesScreen::PANE_TREE && ($input === '-' || $input === '+') && $this->nudgeCutsceneTreeFrame($input === '+' ? 1 : -1)) {
+            return;
+        }
+
         if ($this->cutsceneFocus === CutscenesScreen::PANE_TREE && ($input === ' ' || $input === '-' || $input === '+')) {
             $this->toggleCutsceneTreeRow();
 
@@ -901,6 +905,22 @@ trait CutscenesWorkspace
             }
 
             $grouped[] = $heading($title);
+
+            if ($title === 'Skip') {
+                // Skip is a second ending, not a cancel: the Engine cancels
+                // every lane and then runs the finalizer to the same final
+                // state, and refuses the skip unless the policy is authored
+                // and every reachable path is safe to abandon.
+                $policy = strtolower(trim(strval($asset->data()['skip']['policy'] ?? 'forbidden')));
+                $grouped[] = [
+                    'label' => '  ' . ($policy === 'authored'
+                        ? 'Skip cancels the lanes, then runs the finalizer to the final state.'
+                        : 'Skip is forbidden; set the policy to authored and write a finalizer to allow it.'),
+                    'value' => '',
+                    'editable' => false,
+                ];
+            }
+
             $grouped = [...$grouped, ...$rows];
         }
 

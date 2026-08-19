@@ -460,9 +460,16 @@ it('hosts the Engine preview on its pane: plays, steps, marks the running comman
     expect(array_column($comparison, 'label'))->toContain('checkpoints')
         ->and(renderEditorPlainFrame($editor, 160, 50))->toContain('watched → skipped');
 
-    // V shows the duration overview; L cycles views back to the stage.
+    // V shows the duration overview; Down and Enter open a row in the tree; L cycles views back to the stage.
     pressKeys($editor, 'v');
-    expect(renderEditorPlainFrame($editor, 160, 50))->toContain('Authored duration');
+    expect(renderEditorPlainFrame($editor, 160, 50))->toContain('Commands ≈');
+    pressKeys($editor, "\033[B", "\033[B");
+    expect(getEditorProperty($editor, 'cutsceneOverviewCursor'))->toBe(2);
+    pressKeys($editor, "\n");
+    expect(getEditorProperty($editor, 'cutsceneFocus'))->toBe(CutscenesScreen::PANE_TREE)
+        ->and(callEditorMethod($editor, 'visibleCutsceneTreeRows')[getEditorProperty($editor, 'cutsceneTreeCursor')]['key'])->toBe('commands.2');
+    setEditorProperty($editor, 'cutsceneFocus', CutscenesScreen::PANE_PREVIEW);
+    setEditorProperty($editor, 'databaseCommandFramePath', []);
     pressKeys($editor, 'l');
     expect(getEditorProperty($editor, 'cutscenePreviewView'))->toBe('compare');
     pressKeys($editor, 'l');
@@ -550,6 +557,18 @@ it('plays a summon through the Engine playback session: frames, keyframe boundar
 
     expect($preview->isCompleted())->toBeTrue()
         ->and(array_column($preview->cueLog(), 'id'))->toBe(['flare']);
+
+    // Speed steps through the Engine session's multiplier; O loops; Home/End seek.
+    pressKeys($editor, '+');
+    expect($preview->speed())->toBe(2.0);
+    pressKeys($editor, '-', '-');
+    expect($preview->speed())->toBe(0.5);
+    pressKeys($editor, 'o');
+    expect($preview->isLooping())->toBeTrue();
+    pressKeys($editor, "\033[H");
+    expect($preview->currentFrame())->toBe(0);
+    pressKeys($editor, "\033[F");
+    expect($preview->currentFrame())->toBe(23);
 
     // L flips to the timeline view; X closes the session.
     pressKeys($editor, 'l');
@@ -639,6 +658,18 @@ it('reorders and duplicates summon tracks, keyframes and cues from the timeline 
     setEditorProperty($editor, 'cutsceneTreeCursor', array_search('cues.0', $keys, true));
     pressKeys($editor, 'D');
     expect(array_column($asset->payload()['cues'], 'id'))->toBe(['flare', 'flare-2']);
+
+    // '+' and '-' on a keyframe row nudge its frame; on a cue row too.
+    $keys = array_column(callEditorMethod($editor, 'visibleCutsceneTreeRows'), 'key');
+    setEditorProperty($editor, 'cutsceneTreeCursor', array_search('tracks.1.keyframes.0', $keys, true));
+    pressKeys($editor, '+', '+', '-');
+    expect($asset->payload()['tracks'][1]['keyframes'][0]['frame'])->toBe(1);
+    $keys = array_column(callEditorMethod($editor, 'visibleCutsceneTreeRows'), 'key');
+    setEditorProperty($editor, 'cutsceneTreeCursor', array_search('cues.1', $keys, true));
+    pressKeys($editor, '-');
+    expect($asset->payload()['cues'][1]['frame'])->toBe(11);
+    pressKeys($editor, "\x1a");
+    expect($asset->payload()['cues'][1]['frame'])->toBe(12);
 
     // Saved through the source-preserving writer, the nowdoc art survives.
     $asset->compiledSummon();
