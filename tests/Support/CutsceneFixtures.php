@@ -452,3 +452,16 @@ function authoredHashTree(string $root, array $excludePrefixes = []): array
 
     return $hashes;
 }
+
+/**
+ * Evaluates a PHP array literal written in a test expectation.
+ *
+ * @return array<string, mixed>
+ */
+function require_pair_data(string $literal): array
+{
+    /** @var array<string, mixed> $value */
+    $value = eval('return ' . $literal . ';');
+
+    return $value;
+}
