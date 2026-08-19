@@ -499,3 +499,61 @@ it('hosts the Engine preview on its pane: plays, steps, marks the running comman
     expect(getEditorProperty($editor, 'modals')->has(Modal::CUTSCENES))->toBeFalse()
         ->and(getEditorProperty($editor, 'cinematicPreview'))->toBeNull();
 });
+
+it('plays a summon through the Engine playback session: frames, keyframe boundaries, cues and the ruler', function () {
+    $root = cutsceneProject();
+    $editor = cutscenesEditor($root, 150, 45);
+    callEditorMethod($editor, 'switchCutsceneType', CutsceneType::SUMMON);
+    setEditorProperty($editor, 'cutsceneFocus', CutscenesScreen::PANE_PREVIEW);
+
+    // Space compiles the summon as it stands and starts the Engine session.
+    pressKeys($editor, ' ');
+    $preview = getEditorProperty($editor, 'summonPreview');
+    expect($preview)->toBeInstanceOf(\Ichiloto\Editor\Cutscenes\Preview\SummonPreviewSession::class)
+        ->and($preview->isPlaying())->toBeTrue()
+        ->and($preview->totalFrames())->toBe(24)
+        ->and($preview->fps())->toBe(12);
+
+    // Space pauses; '.' and ',' step; '>' and '<' jump keyframe boundaries.
+    pressKeys($editor, ' ');
+    expect($preview->isPlaying())->toBeFalse();
+    pressKeys($editor, '.', '.', '.');
+    expect($preview->currentFrame())->toBe(3);
+    pressKeys($editor, ',');
+    expect($preview->currentFrame())->toBe(2);
+    pressKeys($editor, '>');
+    expect($preview->currentFrame())->toBe(12);
+    pressKeys($editor, '<');
+    expect($preview->currentFrame())->toBe(2);
+
+    // The frame at 12 draws the wisp at its second keyframe and names the cue.
+    $preview->seek(12);
+    $frame = implode("\n", $preview->frame(40, 10));
+    expect($frame)->toContain('( )')
+        ->and($frame)->toContain('LANTERN WISP')
+        ->and(array_column($preview->cuesAt(), 'id'))->toBe(['flare']);
+
+    // The tree marks the active keyframes and the cue on this frame.
+    $screen = renderEditorPlainFrame($editor, 150, 45);
+    expect($screen)->toContain('▶')
+        ->and($screen)->toContain('f12/24')
+        ->and($screen)->toContain('cues');
+
+    // Playing through the idle tick crosses the cue exactly once.
+    pressKeys($editor, 'r');
+    pressKeys($editor, ' ');
+
+    for ($tick = 0; $tick < 60 && ! $preview->isCompleted(); $tick++) {
+        setEditorProperty($editor, 'cutscenePreviewLastTickAt', microtime(true) - 0.2);
+        callEditorMethod($editor, 'tickCutscenePreview');
+    }
+
+    expect($preview->isCompleted())->toBeTrue()
+        ->and(array_column($preview->cueLog(), 'id'))->toBe(['flare']);
+
+    // L flips to the timeline view; X closes the session.
+    pressKeys($editor, 'l');
+    expect(renderEditorPlainFrame($editor, 150, 45))->toContain('f12–23');
+    pressKeys($editor, 'x');
+    expect(getEditorProperty($editor, 'summonPreview'))->toBeNull();
+});

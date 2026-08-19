@@ -37,6 +37,7 @@ use Ichiloto\Editor\Database\WorldWriteEditor;
 use Ichiloto\Editor\Database\WorldWriteCodec;
 use Ichiloto\Editor\Database\ElementAffinityCodec;
 use Ichiloto\Editor\Database\ReferenceCatalog;
+use Ichiloto\Editor\Database\SummonAssignmentDiagnostics;
 use Ichiloto\Editor\Database\RecordSubList;
 use Ichiloto\Editor\Database\ReferencePicker;
 use Ichiloto\Editor\Debug\Debug;
@@ -9736,6 +9737,7 @@ final class Editor
                 'options' => $this->getActorClassOptions(),
                 'field' => 'class',
             ],
+            ...$this->actorSummonFields($actor),
             [
                 'label' => 'Level',
                 'value' => (string) $actor->getLevel(),
@@ -9769,6 +9771,57 @@ final class Editor
             ...$this->actorNatureFields($actor),
             ...$this->actorStatPreviewFields($actor),
         ];
+    }
+
+    /**
+     * Returns the actor's starting summon assignments: a multi-pick over the
+     * project's summons, and one verdict row per assignment judged by the
+     * same rules the validator applies (existence, wielder eligibility,
+     * story locks, duplicates, exclusive tenancy across the cast).
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private function actorSummonFields(ProjectActor $actor): array
+    {
+        $assignments = $actor->getSummons();
+        $list = is_array($assignments) ? array_values(array_filter(array_map(static fn(mixed $id): string => is_string($id) ? trim($id) : '', $assignments), static fn(string $id): bool => $id !== '')) : [];
+        $rows = [
+            [
+                'label' => 'Summons',
+                'value' => implode(', ', $list),
+                'reference' => 'summons',
+                'multi' => true,
+                'noneLabel' => '(None)',
+                'field' => 'summons',
+            ],
+        ];
+        $diagnostics = SummonAssignmentDiagnostics::fromLibrary($this->workspace?->cutscenes);
+        $holders = [];
+
+        foreach ($this->workspace?->actorDatabase->getActors() ?? [] as $other) {
+            if ($other === $actor) {
+                continue;
+            }
+
+            foreach ((array) $other->getSummons() as $id) {
+                if (is_string($id) && trim($id) !== '') {
+                    $holders[strtolower(trim($id))][] = $other->getName();
+                }
+            }
+        }
+
+        foreach ($diagnostics->forActor($actor->getName(), $actor->getClassName(), $assignments) as $row) {
+            $verdict = SummonAssignmentDiagnostics::describe($row);
+            $id = strtolower($row['id']);
+
+            if ($row['problems'] === [] && $diagnostics->isExclusive($id) && isset($holders[$id])) {
+                $verdict = sprintf('✗ %s: exclusive, also held by %s.', $row['id'], implode(', ', $holders[$id]));
+            }
+
+            $rows[] = ['label' => '  ' . $verdict, 'value' => '', 'editable' => false, 'field' => ''];
+        }
+
+        return $rows;
     }
 
     /**
@@ -11292,7 +11345,7 @@ final class Editor
      */
     private function coerceActorFieldValue(string $field, string $rawValue): string|int
     {
-        if (in_array($field, ['name', 'description', 'class', 'id', 'defaultNaturalVariantId'], true)) {
+        if (in_array($field, ['name', 'description', 'class', 'id', 'defaultNaturalVariantId', 'summons'], true)) {
             return trim($rawValue);
         }
 

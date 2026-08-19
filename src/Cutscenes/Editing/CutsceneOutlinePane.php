@@ -183,6 +183,11 @@ trait CutsceneOutlinePane
         $preview = $this->cinematicPreview;
         $activeKeys = $preview !== null && ! $preview->isFinished() ? $preview->activeKeys() : [];
         $failedKey = $preview?->failure()['key'] ?? null;
+        $selected = $this->selectedCutscene();
+
+        if ($selected?->type === CutsceneType::SUMMON) {
+            $activeKeys = $this->activeSummonKeyframeKeys($selected);
+        }
 
         foreach ($rows as $position => $row) {
             $marker = $row['foldable'] ? (isset($this->cutsceneTreeCollapsed[$row['key']]) ? '▸ ' : '▾ ') : '  ';

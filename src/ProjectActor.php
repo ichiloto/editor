@@ -515,6 +515,31 @@ final class ProjectActor
             return;
         }
 
+        if ($field === 'summons') {
+            // A list of stable summon ids, each at most once, in the order
+            // chosen; an empty list removes the key so the actor reads as
+            // it did before summons existed.
+            $ids = is_array($value) ? $value : explode(',', (string) $value);
+            $clean = [];
+
+            foreach ($ids as $id) {
+                $id = trim((string) $id);
+
+                if ($id !== '' && ! in_array($id, $clean, true)) {
+                    $clean[] = $id;
+                }
+            }
+
+            if ($clean === []) {
+                unset($this->payload['data']['summons']);
+            } else {
+                $this->payload['data']['summons'] = $clean;
+            }
+
+            $this->touchState();
+            return;
+        }
+
         if (in_array($field, ['name', 'description', 'level', 'currentExp'], true)) {
             $this->payload['data'][$field] = $value;
             $this->touchState();

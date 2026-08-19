@@ -9,6 +9,7 @@ use Ichiloto\Editor\Database\PhpDataFile;
 use Ichiloto\Editor\Database\ProjectRecord;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Database\ReferenceCatalog;
+use Ichiloto\Editor\Database\SummonAssignmentDiagnostics;
 use Ichiloto\Editor\Field\ProjectNpc;
 use Ichiloto\Editor\ActorStatPreview;
 use Ichiloto\Editor\EquipmentOptimizationPolicy;
@@ -1392,100 +1393,40 @@ class ProjectValidator
    */
   protected function checkActorSummonAssignments(ProjectWorkspace $workspace, array $definitions): array
   {
+    $diagnostics = new SummonAssignmentDiagnostics($definitions);
     $issues = [];
     $holders = [];
 
     foreach ($workspace->actorDatabase->getActors() as $actor) {
-      $assignments = $actor->getSummons();
       $where = 'actor ' . $actor->getName();
+      $reported = [];
 
-      if (! is_array($assignments) || ! array_is_list($assignments)) {
-        $issues[] = Issue::error($where, 'Its summon assignments are malformed.', 'Use a list of summon ids.');
-        continue;
-      }
+      foreach ($diagnostics->forActor($actor->getName(), $actor->getClassName(), $actor->getSummons()) as $row) {
+        foreach ($row['problems'] as $problem) {
+          // One assignment list reports duplicates once, as before.
+          if (str_starts_with($problem['message'], 'Its summon assignments contain duplicate ids') && isset($reported['duplicates'])) {
+            continue;
+          }
 
-      $normalizedAssignments = array_map(
-        static fn(mixed $assignment): string => is_string($assignment) ? strtolower(trim($assignment)) : '',
-        $assignments,
-      );
+          if (str_starts_with($problem['message'], 'Its summon assignments contain duplicate ids')) {
+            $reported['duplicates'] = true;
+          }
 
-      if (count($normalizedAssignments) !== count(array_unique($normalizedAssignments))) {
-        $issues[] = Issue::error(
-          $where,
-          'Its summon assignments contain duplicate ids.',
-          'List each starting summon at most once.',
-        );
-      }
-
-      foreach ($assignments as $assignment) {
-        $summonId = is_string($assignment) ? trim($assignment) : '';
-        $normalizedSummonId = strtolower($summonId);
-
-        if ($summonId === '' || ! isset($definitions[$normalizedSummonId])) {
-          $issues[] = Issue::error(
-            $where,
-            sprintf('It references missing summon "%s".', $summonId !== '' ? $summonId : '(malformed)'),
-            'Use an authored summon id.',
-          );
-          continue;
+          $issues[] = Issue::error($where, $problem['message'], $problem['hint']);
         }
 
-        $definition = $definitions[$normalizedSummonId];
-        $wielders = is_array($definition['wielders'] ?? null) ? $definition['wielders'] : null;
-        $modeValue = $wielders['mode'] ?? 'all';
-        $mode = is_string($modeValue) ? strtolower(trim($modeValue)) : '';
-        $eligible = match ($mode) {
-          'characters' => in_array($actor->getName(), (array) ($wielders['characters'] ?? []), true),
-          'roles' => in_array($actor->getClassName(), (array) ($wielders['roles'] ?? []), true),
-          'all' => true,
-          default => false,
-        };
-
-        if ($wielders !== null && ! $eligible) {
-          $issues[] = Issue::error(
-            $where,
-            sprintf('It is not eligible to hold summon "%s".', $summonId),
-            'Change the actor assignment or the generic wielder policy.',
-          );
+        if ($row['id'] !== '' && isset($definitions[strtolower($row['id'])])) {
+          $holders[strtolower($row['id'])][] = $actor->getName();
         }
-
-        $conditions = is_array($definition['availability']['conditions'] ?? null)
-          ? $definition['availability']['conditions']
-          : [];
-        $hasStoryLock = array_filter(
-          $conditions,
-          static fn(mixed $condition): bool => is_array($condition) && ($condition['type'] ?? null) === 'event',
-        ) !== [];
-
-        if ($hasStoryLock) {
-          $issues[] = Issue::error(
-            $where,
-            sprintf('It starts with story-locked summon "%s".', $summonId),
-            'Remove the starting assignment; preserve legal assignments only in saves after unlock.',
-          );
-        }
-
-        $holders[$normalizedSummonId][] = $actor->getName();
       }
     }
 
-    foreach ($holders as $summonId => $actorNames) {
-      $wielders = $definitions[$summonId]['wielders'] ?? null;
-
-      $tenancy = is_array($wielders) && is_string($wielders['tenancy'] ?? null)
-        ? strtolower(trim($wielders['tenancy']))
-        : 'shared';
-
-      if (is_array($wielders)
-        && $tenancy === 'exclusive'
-        && count($actorNames) > 1
-      ) {
-        $issues[] = Issue::error(
-          'summon ' . $summonId,
-          sprintf('Exclusive starting ownership is duplicated across %s.', implode(', ', $actorNames)),
-          'An exclusive summon may have at most one starting holder.',
-        );
-      }
+    foreach ($diagnostics->exclusiveConflicts($holders) as $summonId => $actorNames) {
+      $issues[] = Issue::error(
+        'summon ' . $summonId,
+        sprintf('Exclusive starting ownership is duplicated across %s.', implode(', ', $actorNames)),
+        'An exclusive summon may have at most one starting holder.',
+      );
     }
 
     return $issues;

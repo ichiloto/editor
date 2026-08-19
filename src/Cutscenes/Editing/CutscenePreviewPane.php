@@ -9,6 +9,7 @@ use Ichiloto\Editor\Cutscenes\CutsceneLaneOverview;
 use Ichiloto\Editor\Cutscenes\CutsceneType;
 use Ichiloto\Editor\Cutscenes\Preview\CinematicPreviewSession;
 use Ichiloto\Editor\Cutscenes\Preview\PreviewSnapshot;
+use Ichiloto\Editor\Cutscenes\Preview\SummonPreviewSession;
 use Ichiloto\Editor\EditorWindow;
 use Ichiloto\Editor\Playtest\PlaytestLauncher;
 use Ichiloto\Editor\Playtest\PlaytestOverlay;
@@ -35,6 +36,7 @@ use Throwable;
 trait CutscenePreviewPane
 {
     private ?CinematicPreviewSession $cinematicPreview = null;
+    private ?SummonPreviewSession $summonPreview = null;
     /** One of: stage, lanes, log, compare, overview. */
     private string $cutscenePreviewView = 'stage';
     private float $cutscenePreviewLastTickAt = 0.0;
@@ -52,6 +54,7 @@ trait CutscenePreviewPane
     private function isCutscenePreviewExpanded(): bool
     {
         return $this->cinematicPreview !== null
+            || $this->summonPreview !== null
             || $this->cutsceneFocus === CutscenesScreen::PANE_PREVIEW
             || $this->cutscenePreviewView !== 'stage';
     }
@@ -79,6 +82,10 @@ trait CutscenePreviewPane
      */
     private function handleCutscenePreviewInput(string $input): bool
     {
+        if ($this->selectedCutscene()?->type === CutsceneType::SUMMON) {
+            return $this->handleSummonPreviewInput($input);
+        }
+
         $preview = $this->cinematicPreview;
         $lower = strtolower($input);
 
@@ -171,7 +178,7 @@ trait CutscenePreviewPane
         }
 
         if ($asset->type !== CutsceneType::CINEMATIC) {
-            $this->setStatus('Summon preview lives on the Timeline pane (Space plays).', StatusLevel::INFO);
+            $this->startSummonPreview(play: $play);
 
             return;
         }
@@ -469,9 +476,14 @@ trait CutscenePreviewPane
      */
     private function tickCutscenePreview(): void
     {
+        if (! $this->isCutscenesOpen) {
+            return;
+        }
+
+        $this->tickSummonPreview();
         $preview = $this->cinematicPreview;
 
-        if ($preview === null || ! $this->isCutscenesOpen || ! $preview->isPlaying()) {
+        if ($preview === null || ! $preview->isPlaying()) {
             return;
         }
 
@@ -501,6 +513,180 @@ trait CutscenePreviewPane
     {
         $this->cinematicPreview?->dispose();
         $this->cinematicPreview = null;
+        $this->summonPreview = null;
+    }
+
+    // -- Summons -------------------------------------------------------------
+
+    /**
+     * Handles the preview keys while a summon is selected.
+     */
+    private function handleSummonPreviewInput(string $input): bool
+    {
+        $preview = $this->summonPreview;
+        $lower = strtolower($input);
+
+        if ($input === ' ' || $input === "\n" || $input === "\r") {
+            if ($preview === null) {
+                $this->startSummonPreview(play: true);
+            } elseif ($preview->isPlaying()) {
+                $preview->pause();
+                $this->setStatus(sprintf('Paused at frame %d.', $preview->currentFrame()));
+            } else {
+                $preview->play();
+                $this->cutscenePreviewLastTickAt = microtime(true);
+                $this->setStatus('Playing.');
+            }
+
+            $this->renderDatabasePanes(['preview', 'tree']);
+
+            return true;
+        }
+
+        if ($input === '.' || $input === ',' || $input === '>' || $input === '<' || $lower === 'r' || $lower === 'l' || $lower === 'x') {
+            if ($preview === null) {
+                $this->startSummonPreview(play: false);
+                $preview = $this->summonPreview;
+            }
+
+            if ($preview === null) {
+                return true;
+            }
+
+            match (true) {
+                $input === '.' => $preview->stepForward(),
+                $input === ',' => $preview->stepBackward(),
+                $input === '>' => $preview->seekBoundary(1),
+                $input === '<' => $preview->seekBoundary(-1),
+                $lower === 'r' => $preview->restart(),
+                $lower === 'l' => $this->cutscenePreviewView = $this->cutscenePreviewView === 'timeline' ? 'stage' : 'timeline',
+                default => $this->summonPreview = null,
+            };
+
+            if ($lower === 'x') {
+                $this->setStatus('Summon preview closed.');
+            } elseif ($lower === 'l') {
+                $this->setStatus(sprintf('Preview view: %s.', $this->cutscenePreviewView));
+            } else {
+                $this->setStatus(sprintf('Frame %d of %d.', $preview->currentFrame(), $preview->totalFrames()));
+            }
+
+            $this->renderDatabasePanes(['preview', 'tree']);
+
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Compiles the selected summon as it stands and opens the Engine
+     * playback session over it.
+     */
+    private function startSummonPreview(bool $play): void
+    {
+        $asset = $this->selectedCutscene();
+
+        if (! $asset instanceof CutsceneAsset || $asset->type !== CutsceneType::SUMMON) {
+            return;
+        }
+
+        try {
+            $compiled = $asset->compiledSummon();
+        } catch (Throwable $throwable) {
+            $this->summonPreview = null;
+            $this->setErrorStatus($throwable, 'Summon preview');
+            $this->renderDatabasePanes(['preview']);
+
+            return;
+        }
+
+        $this->summonPreview = new SummonPreviewSession($compiled);
+        $this->cinematicPreviewFingerprint = $this->cutscenePayloadFingerprint($asset);
+        $this->cutscenePreviewLastTickAt = microtime(true);
+        $this->cutscenePreviewScroll = 0;
+
+        if ($play) {
+            $this->summonPreview->play();
+        }
+
+        $this->setStatus(sprintf(
+            'Previewing %s: %d frames at %d fps (%s).',
+            $asset->id,
+            $this->summonPreview->totalFrames(),
+            $this->summonPreview->fps(),
+            $play ? 'playing' : 'paused',
+        ), StatusLevel::SUCCESS);
+        $this->renderDatabasePanes(['preview', 'tree']);
+    }
+
+    private function tickSummonPreview(): void
+    {
+        $preview = $this->summonPreview;
+
+        if ($preview === null || ! $preview->isPlaying()) {
+            return;
+        }
+
+        $now = microtime(true);
+        $elapsed = $this->cutscenePreviewLastTickAt > 0.0 ? $now - $this->cutscenePreviewLastTickAt : 0.0;
+
+        if ($elapsed < $preview->secondsPerFrame() / 2) {
+            return;
+        }
+
+        $this->cutscenePreviewLastTickAt = $now;
+        $preview->tick(min(0.5, $elapsed));
+        $this->renderDatabasePanes(['preview', 'tree']);
+
+        if ($preview->isCompleted()) {
+            $this->setStatus(sprintf('Summon preview finished: %d frames, %d cue%s fired.', $preview->totalFrames(), count($preview->cueLog()), count($preview->cueLog()) === 1 ? '' : 's'), StatusLevel::SUCCESS);
+        }
+    }
+
+    /**
+     * The keyframe rows active at the playhead, by outline key.
+     *
+     * @return string[]
+     */
+    private function activeSummonKeyframeKeys(CutsceneAsset $asset): array
+    {
+        $preview = $this->summonPreview;
+
+        if ($preview === null) {
+            return [];
+        }
+
+        $frame = $preview->currentFrame();
+        $keys = [];
+        $payload = $asset->payload();
+
+        foreach (array_values(is_array($payload['tracks'] ?? null) ? $payload['tracks'] : []) as $trackIndex => $track) {
+            if (! is_array($track)) {
+                continue;
+            }
+
+            foreach (array_values(is_array($track['keyframes'] ?? null) ? $track['keyframes'] : []) as $keyframeIndex => $keyframe) {
+                if (! is_array($keyframe)) {
+                    continue;
+                }
+
+                $start = intval($keyframe['frame'] ?? 0);
+                $end = $start + max(1, intval($keyframe['duration'] ?? 1)) - 1;
+
+                if ($frame >= $start && $frame <= $end) {
+                    $keys[] = sprintf('tracks.%d.keyframes.%d', $trackIndex, $keyframeIndex);
+                }
+            }
+        }
+
+        foreach (array_values(is_array($payload['cues'] ?? null) ? $payload['cues'] : []) as $cueIndex => $cue) {
+            if (is_array($cue) && intval($cue['frame'] ?? -1) === $frame) {
+                $keys[] = 'cues.' . $cueIndex;
+            }
+        }
+
+        return $keys;
     }
 
     /**
@@ -682,12 +868,20 @@ trait CutscenePreviewPane
         if ($preview !== null) {
             $stale = $asset !== null && $this->cutscenePayloadFingerprint($asset) !== $this->cinematicPreviewFingerprint;
             $title = sprintf('Preview · %s · %.1fs%s', $preview->status(), $preview->elapsed(), $stale ? ' · edited since start (R restarts)' : '');
+        } elseif ($this->summonPreview !== null) {
+            $stale = $asset !== null && $this->cutscenePayloadFingerprint($asset) !== $this->cinematicPreviewFingerprint;
+            $title = sprintf('Preview · frame %d/%d%s', $this->summonPreview->currentFrame(), $this->summonPreview->totalFrames(), $stale ? ' · edited since start (R restarts)' : '');
         } elseif ($this->cutscenePreviewView !== 'stage') {
             $title = 'Preview · ' . $this->cutscenePreviewView;
         }
 
         $help = $asset?->type === CutsceneType::SUMMON
-            ? ''
+            ? $this->fitHelp(
+                $layout['previewWidth'],
+                'Space:Play/Pause  .:Step  ,:Back  <>:Keyframes  R:Restart  L:Timeline  X:Close',
+                'Space:Play  . ,:Step  <>:Keyframes  R:Restart',
+                'Space:Play  . ,:Step',
+            )
             : $this->fitHelp(
                 $layout['previewWidth'],
                 'Space:Play/Pause  .:Step  K:Skip  R:Restart  X:Stop  J:Jump  C:Compare  V:Overview  L:View  Ctrl+T:Playtest',
@@ -1004,14 +1198,86 @@ trait CutscenePreviewPane
     }
 
     /**
-     * Placeholder until the summon preview lands on this pane.
+     * The summon view: the Engine's playhead over the compiled timeline, a
+     * ruler with the keyframe bars and cues, the frame as the battle field
+     * would compose it, and the cues the playhead crossed.
      *
      * @return string[]
      */
     private function summonPreviewLines(CutsceneAsset $asset, int $contentWidth, int $contentHeight): array
     {
-        unset($contentWidth, $contentHeight);
+        $preview = $this->summonPreview;
 
-        return $this->describeCutsceneStanding($asset);
+        if ($preview === null) {
+            return [
+                ...$this->describeCutsceneStanding($asset),
+                '',
+                '  Space: play through the Engine session  ·  . , : step  ·  < > : keyframe boundaries  ·  R: restart  ·  L: timeline/stage',
+            ];
+        }
+
+        if ($this->cutscenePreviewView === 'timeline') {
+            $lines = $preview->rulerLines($contentWidth - 2);
+            $lines = array_map(static fn(string $line): string => '  ' . $line, $lines);
+            $lines[] = '';
+
+            foreach ($preview->activeSegments() as $segment) {
+                $draw = (array) (((array) ($segment['drawCommands'] ?? []))[0] ?? []);
+                $content = strval($draw['content'] ?? '');
+                $first = trim((string) (preg_split('/\r?\n/', trim($content, "\r\n")) ?: [''])[0]);
+                $lines[] = sprintf('  %s  f%d–%d  %s', strval($draw['trackId'] ?? $segment['layer'] ?? 'track'), intval($segment['startFrame'] ?? 0), intval($segment['endFrame'] ?? 0), $first !== '' ? $first : ('[' . strtoupper(strval($draw['assetId'] ?? '')) . ']'));
+            }
+
+            return $lines;
+        }
+
+        $infoWidth = $contentWidth >= 80 ? 32 : 0;
+        $stageWidth = max(20, $contentWidth - ($infoWidth > 0 ? $infoWidth + 1 : 0));
+        $rulerLines = $preview->rulerLines($stageWidth);
+        $stageHeight = max(4, $contentHeight - count($rulerLines) - 1);
+        $frame = $preview->frame($stageWidth, $stageHeight);
+        $info = [];
+
+        if ($infoWidth > 0) {
+            $info[] = sprintf(' %s · frame %d/%d · %.1fs', $preview->isPlaying() ? 'playing' : ($preview->isCompleted() ? 'completed' : 'paused'), $preview->currentFrame(), $preview->totalFrames(), $preview->elapsed());
+            $info[] = ' Cues here: ' . (implode(', ', array_map(static fn(array $cue): string => strval($cue['id'] ?? '?'), $preview->cuesAt())) ?: '—');
+            $info[] = ' Fired:';
+
+            foreach (array_slice($preview->cueLog(), -6) as $entry) {
+                $info[] = sprintf('   f%d %s (%s)', $entry['frame'], $entry['id'], $entry['type']);
+            }
+
+            if ($preview->cueLog() === []) {
+                $info[] = '   (none yet)';
+            }
+
+            $info[] = ' Drawn now:';
+
+            foreach ($preview->activeSegments() as $segment) {
+                $draw = (array) (((array) ($segment['drawCommands'] ?? []))[0] ?? []);
+                $info[] = sprintf('   %s%s', strval($draw['trackId'] ?? '?'), ($draw['visible'] ?? true) === false ? ' (hidden)' : '');
+            }
+        }
+
+        $lines = [];
+
+        foreach ($rulerLines as $rulerLine) {
+            $lines[] = $this->padToWidth(mb_strimwidth($rulerLine, 0, $stageWidth, ''), $stageWidth);
+        }
+
+        $rows = max($stageHeight, count($info) - count($rulerLines));
+
+        for ($row = 0; $row < $rows; $row++) {
+            $line = $this->padToWidth(mb_strimwidth($frame[$row] ?? '', 0, $stageWidth, ''), $stageWidth);
+            $lines[] = $line;
+        }
+
+        foreach ($lines as $index => $line) {
+            if ($infoWidth > 0) {
+                $lines[$index] = $line . '│' . ($info[$index] ?? '');
+            }
+        }
+
+        return $lines;
     }
 }
