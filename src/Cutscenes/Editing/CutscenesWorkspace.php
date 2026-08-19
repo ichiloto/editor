@@ -1845,10 +1845,25 @@ trait CutscenesWorkspace
      */
     private function flushCutscenesScreen(): void
     {
-        if ($this->isCutscenesOpen) {
-            $this->cutscenesScreen->flush();
+        if (! $this->isCutscenesOpen) {
+            return;
         }
+
+        // When the preview grows or shrinks, the panes above it change
+        // height; the root must be repainted or their old rows would stay
+        // on screen beneath the new borders.
+        $expanded = $this->isCutscenePreviewExpanded();
+
+        if ($expanded !== $this->cutscenePreviewWasExpanded) {
+            $this->cutscenePreviewWasExpanded = $expanded;
+            $this->cutscenesScreen->markAllDirty(includeRoot: true);
+        }
+
+        $this->cutscenesScreen->flush();
     }
+
+    /** The preview's expansion as last painted. */
+    private bool $cutscenePreviewWasExpanded = false;
 
     private function resolveCutscenePaneColor(string $pane): Color
     {

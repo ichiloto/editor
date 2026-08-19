@@ -12256,7 +12256,7 @@ final class Editor
         }
 
         if ($this->isCutscenesOpen) {
-            $this->cutscenesScreen->flush();
+            $this->flushCutscenesScreen();
 
             if ($this->areOverlaysDirty) {
                 $this->drawOverlays();
