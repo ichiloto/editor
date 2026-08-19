@@ -26,9 +26,10 @@ parameters:
         - src/Cutscenes/Preview/PreviewPlayer.php
         - src/Cutscenes/Preview/PreviewPresentation.php
         - src/Cutscenes/Preview/PreviewSceneManager.php
+        - src/Cutscenes/Preview/SilentAudioBackend.php
     reportUnmatchedIgnoredErrors: false
     ignoreErrors:
         - '#Ichiloto\\Engine#'
         - '#Ichiloto\\Editor\\(Animation|AnimationCue|AnimationPlayer)#'
         # The excluded preview hosts inherit their members from the engine.
-        - '#Ichiloto\\Editor\\Cutscenes\\Preview\\Preview(GameScene|Camera|Player|SceneManager|MapManager|Presentation|Game|SaveManager|AudioManager)#'
+        - '#Ichiloto\\Editor\\Cutscenes\\Preview\\Preview(GameScene|Camera|Player|SceneManager|MapManager|Presentation|Game|SaveManager|AudioManager)|Cutscenes\\\\Preview\\\\SilentAudioBackend#'

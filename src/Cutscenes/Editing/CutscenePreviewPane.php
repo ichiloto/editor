@@ -1064,6 +1064,13 @@ trait CutscenePreviewPane
 
         $checkpoints = $preview->checkpoints();
         $lines[] = ' Checkpoints: ' . ($checkpoints === [] ? '—' : implode(', ', $checkpoints));
+        $audio = $preview->audioState();
+        $lines[] = sprintf(
+            ' Music: %s%s',
+            $audio['track'] === null ? 'silent' : basename($audio['track']),
+            $audio['restored'] ? ' (field track restored)' : '',
+        );
+        $lines[] = ' Field input: ' . $preview->fieldInputOwner();
         $refusal = $preview->skipRefusalReason();
         $lines[] = ' Skip: ' . ($refusal === null ? 'authored finalizer (K)' : $refusal);
         $recent = array_slice($preview->log(), -3);

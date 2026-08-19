@@ -29,7 +29,13 @@ final class PreviewGame extends Game
 }
 
 /**
- * An audio manager whose cinematic music sessions run without a backend.
+ * An audio manager that keeps the engine's own record of what is playing,
+ * and plays nothing.
+ *
+ * The backend is silent but present: without one the engine declines every
+ * music request and keeps no track, and the audio state a cinematic leaves
+ * behind -- which a watched run and a skipped run must agree on -- could
+ * not be observed at all.
  */
 final class PreviewAudioManager extends AudioManager
 {
@@ -40,6 +46,6 @@ final class PreviewAudioManager extends AudioManager
 
     protected function createBackends(): array
     {
-        return [];
+        return [new SilentAudioBackend()];
     }
 }

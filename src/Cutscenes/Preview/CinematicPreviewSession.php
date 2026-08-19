@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Cutscenes\Preview;
 
 use Ichiloto\Editor\ProjectDirectoryContext;
+use Ichiloto\Engine\Audio\BackgroundMusicState;
 use Ichiloto\Engine\Battle\BattleResult;
 use Ichiloto\Engine\Core\Vector2;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicDefinition;
@@ -65,6 +66,8 @@ final class CinematicPreviewSession
     private array $lastActiveLanes = [];
     private ?string $failedKey = null;
     private bool $outcomeAnnounced = false;
+    /** What was playing before the cinematic started, as the engine held it. */
+    private ?BackgroundMusicState $musicBefore = null;
 
     /**
      * @param array{mapId?: string|null, x?: int, y?: int, width?: int, height?: int, autoAdvance?: bool, battleOutcome?: string} $options
@@ -133,6 +136,16 @@ final class CinematicPreviewSession
             }
 
             $camera->attach($player);
+            $audio = $this->scene->getGame()->audioManager;
+            $startingMusic = is_array($this->options['startingMusic'] ?? null) ? $this->options['startingMusic'] : null;
+
+            if ($startingMusic !== null && trim(strval($startingMusic['track'] ?? '')) !== '') {
+                // What the field was playing when the cinematic began, so a
+                // finalizer that restores the previous track has one.
+                $audio->playBackgroundMusic(trim(strval($startingMusic['track'])), (bool) ($startingMusic['loop'] ?? true));
+            }
+
+            $this->musicBefore = $audio->captureBackgroundMusicState();
 
             try {
                 $this->session = $this->scene->cinematicController?->start($this->definition);
@@ -428,6 +441,66 @@ final class CinematicPreviewSession
     }
 
     /**
+     * Who owns ordinary field input at this moment.
+     *
+     * While a session is unstable the field neither moves the player nor
+     * opens an action; the cinematic (or the story script) has the field.
+     */
+    public function fieldInputOwner(): string
+    {
+        if (! $this->scene->hasUnstableEventSession()) {
+            return 'player';
+        }
+
+        return $this->scene->cinematicController?->active() !== null ? 'cinematic' : 'event script';
+    }
+
+    /**
+     * The music the Engine is playing now, and how it compares with what was
+     * playing when the cinematic began.
+     *
+     * @return array{track: string|null, loops: bool|null, restored: bool, before: string|null}
+     */
+    public function audioState(): array
+    {
+        $audio = $this->scene->getGame()->audioManager;
+        $track = $audio->currentBackgroundMusic;
+
+        return [
+            'track' => $this->describeTrack($track),
+            'loops' => $track === null ? null : $audio->currentBackgroundMusicLoops,
+            'restored' => $track !== null && $this->musicBefore?->track !== null && $track === $this->musicBefore->track,
+            'before' => $this->describeTrack($this->musicBefore?->track),
+        ];
+    }
+
+    /**
+     * Names a resolved audio path the way an author would recognise it.
+     */
+    private function describeTrack(?string $path): ?string
+    {
+        if ($path === null) {
+            return null;
+        }
+
+        // The engine resolves an audio path against the canonical working
+        // directory, which on macOS is the /private spelling of the same
+        // folder the editor was given. Both spellings name this project.
+        $canonical = realpath($this->projectRoot);
+        $roots = array_unique(array_filter([$this->projectRoot, $canonical === false ? null : $canonical]));
+
+        foreach ($roots as $root) {
+            $prefix = rtrim((string) $root, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
+
+            if (str_starts_with($path, $prefix)) {
+                return substr($path, strlen($prefix));
+            }
+        }
+
+        return $path;
+    }
+
+    /**
      * The checkpoints recorded so far.
      *
      * @return string[]
@@ -533,6 +606,16 @@ final class CinematicPreviewSession
         // The Engine refuses numbered saves and quicksaves while a session
         // owns the field; after completion the field is stable again.
         $values['save available'] = ! $this->scene->hasUnstableEventSession();
+        // Who the field's ordinary input belongs to right now: the same
+        // question `FieldState` asks before it moves the player or opens an
+        // action, answered from the Engine rather than inferred from saving.
+        $values['field input'] = $this->fieldInputOwner();
+        $audio = $this->scene->getGame()->audioManager;
+        $values['music track'] = $this->describeTrack($audio->currentBackgroundMusic);
+        $values['music loops'] = $audio->currentBackgroundMusic === null ? null : $audio->currentBackgroundMusicLoops;
+        $values['music restored'] = $audio->currentBackgroundMusic !== null
+            && $this->musicBefore?->track !== null
+            && $audio->currentBackgroundMusic === $this->musicBefore->track;
         $values['transfers'] = count($this->scene->transfers);
         $values['battles'] = count($this->scene->previewSceneManager->battles);
         $values['checkpoints'] = $this->checkpoints();
@@ -586,6 +669,8 @@ final class CinematicPreviewSession
 
             $this->presentation->update();
             $this->interpreter->update($seconds);
+            // The engine's own audio upkeep, as a game frame runs it.
+            $this->scene->getGame()->audioManager->update();
             $this->elapsed += $seconds;
             $this->rememberActiveKeys();
             $this->recordTerminalOutcome();
@@ -914,6 +999,9 @@ final class CinematicPreviewSession
             'accessibility' => ['reducedMotion' => false],
             'save' => ['autosave' => false],
             'ui' => ['hud' => ['location' => false]],
+            // The engine records what a cinematic asked for either way; with
+            // music off it never starts a player process for it.
+            'audio' => ['music' => false, 'sfx' => false],
         ]));
         ConfigStore::put(PlaySettings::class, new PreviewConfig([
             'screen' => ['width' => $width, 'height' => $height],
