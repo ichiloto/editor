@@ -236,6 +236,171 @@ final class CutsceneOutline
     }
 
     /**
+     * Resolves an outline row key to the list in the payload that holds the
+     * row's entry and the entry's index in it.
+     *
+     * Keys spell the tree as the outline walks it, which leaves two steps
+     * implicit: a keyed parallel lane holds its commands under `commands`,
+     * and a choice option holds its commands under `then`.
+     *
+     * @param array<string, mixed> $payload
+     * @return array{listPath: array<int, int|string>, index: int}|null
+     */
+    public static function locate(array $payload, string $key): ?array
+    {
+        $segments = explode('.', $key);
+        $path = [];
+        $value = $payload;
+        $lastName = null;
+        $count = count($segments);
+
+        foreach ($segments as $position => $segment) {
+            if (! is_numeric($segment)) {
+                if (! is_array($value) || ! array_key_exists($segment, $value)) {
+                    return null;
+                }
+
+                $path[] = $segment;
+                $value = $value[$segment];
+                $lastName = $segment;
+
+                continue;
+            }
+
+            $index = (int) $segment;
+
+            if (is_array($value) && ! array_is_list($value)) {
+                $implicit = match ($lastName) {
+                    'lanes' => 'commands',
+                    'options' => 'then',
+                    default => null,
+                };
+
+                if ($implicit === null || ! is_array($value[$implicit] ?? null)) {
+                    return null;
+                }
+
+                $path[] = $implicit;
+                $value = $value[$implicit];
+            }
+
+            if (! is_array($value) || ! array_is_list($value)) {
+                return null;
+            }
+
+            if ($position === $count - 1) {
+                return ['listPath' => $path, 'index' => $index];
+            }
+
+            if (! array_key_exists($index, $value)) {
+                return null;
+            }
+
+            $path[] = $index;
+            $value = $value[$index];
+        }
+
+        return null;
+    }
+
+    /**
+     * Reads a value at a payload path.
+     *
+     * @param array<string, mixed> $payload
+     * @param array<int, int|string> $path
+     */
+    public static function valueAt(array $payload, array $path): mixed
+    {
+        $value = $payload;
+
+        foreach ($path as $segment) {
+            if (! is_array($value) || ! array_key_exists($segment, $value)) {
+                return null;
+            }
+
+            $value = $value[$segment];
+        }
+
+        return $value;
+    }
+
+    /**
+     * Writes a value at a payload path, creating the way there.
+     *
+     * @param array<string, mixed> $payload
+     * @param array<int, int|string> $path
+     * @return array<string, mixed>
+     */
+    public static function withValueAt(array $payload, array $path, mixed $value): array
+    {
+        if ($path === []) {
+            return is_array($value) ? $value : $payload;
+        }
+
+        $target = &$payload;
+
+        foreach ($path as $segment) {
+            if (! is_array($target)) {
+                $target = [];
+            }
+
+            if (! array_key_exists($segment, $target) || ! is_array($target[$segment])) {
+                $target[$segment] = [];
+            }
+
+            $target = &$target[$segment];
+        }
+
+        $target = $value;
+
+        return $payload;
+    }
+
+    /**
+     * The child list a block command would receive a nested command into:
+     * a sequence's commands, a parallel block's last lane, a branch's then
+     * arm, a choice's first option.
+     *
+     * @param array<string, mixed> $command
+     * @param array<int, int|string> $commandPath
+     * @return array<int, int|string>|null
+     */
+    public static function nestingTarget(array $command, array $commandPath): ?array
+    {
+        $type = strval($command['type'] ?? '');
+
+        switch ($type) {
+            case 'sequence':
+                return [...$commandPath, 'commands'];
+            case 'branch':
+                return [...$commandPath, 'then'];
+            case 'parallel':
+                $lanes = self::listOf($command['lanes'] ?? null);
+
+                if ($lanes === []) {
+                    return null;
+                }
+
+                $last = count($lanes) - 1;
+                $lane = $lanes[$last];
+
+                return is_array($lane) && ! array_is_list($lane)
+                    ? [...$commandPath, 'lanes', $last, 'commands']
+                    : [...$commandPath, 'lanes', $last];
+            case 'choice':
+                $options = self::listOf($command['options'] ?? null);
+
+                if ($options === [] || ! is_array($options[0])) {
+                    return array_key_exists('cancel', $command) ? [...$commandPath, 'cancel'] : null;
+                }
+
+                return [...$commandPath, 'options', 0, 'then'];
+        }
+
+        return null;
+    }
+
+    /**
      * @return array<int, mixed>
      */
     private static function listOf(mixed $value): array

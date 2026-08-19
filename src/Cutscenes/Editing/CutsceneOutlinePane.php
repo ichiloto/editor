@@ -146,6 +146,352 @@ trait CutsceneOutlinePane
         }
     }
 
+    // -- Tree operations -----------------------------------------------------
+
+    /**
+     * The row under the cursor when it names an entry a tree operation can
+     * move: a command, a track, a keyframe or a cue.
+     *
+     * @return array{row: array<string, mixed>, listPath: array<int, int|string>, index: int, payload: array<string, mixed>}|null
+     */
+    private function locateCutsceneTreeEntry(): ?array
+    {
+        $asset = $this->selectedCutscene();
+        $row = $this->visibleCutsceneTreeRows()[$this->cutsceneTreeCursor] ?? null;
+
+        if ($asset === null || $row === null || ! in_array($row['kind'], ['command', 'track', 'keyframe', 'cue'], true)) {
+            $this->setStatus('Select a command, track, keyframe or cue row first.', StatusLevel::INFO);
+
+            return null;
+        }
+
+        $payload = $asset->payload();
+        $location = CutsceneOutline::locate($payload, $row['key']);
+
+        if ($location === null) {
+            return null;
+        }
+
+        return ['row' => $row, 'listPath' => $location['listPath'], 'index' => $location['index'], 'payload' => $payload];
+    }
+
+    /**
+     * Moves the selected entry one place up or down within its list.
+     */
+    private function reorderCutsceneTreeRow(int $delta): void
+    {
+        $entry = $this->locateCutsceneTreeEntry();
+
+        if ($entry === null) {
+            return;
+        }
+
+        $list = CutsceneOutline::valueAt($entry['payload'], $entry['listPath']);
+        $list = is_array($list) ? array_values($list) : [];
+        $from = $entry['index'];
+        $to = $from + $delta;
+
+        if (! array_key_exists($from, $list) || $to < 0 || $to >= count($list)) {
+            $this->setStatus($delta < 0 ? 'Already first.' : 'Already last.', StatusLevel::INFO);
+
+            return;
+        }
+
+        $moved = $list[$from];
+        array_splice($list, $from, 1);
+        array_splice($list, $to, 0, [$moved]);
+        $targetKey = $this->replaceKeyIndex($entry['row']['key'], $to);
+
+        if ($this->mutateCutscenePayload(
+            $delta < 0 ? 'Move up' : 'Move down',
+            static fn(array $payload): array => CutsceneOutline::withValueAt($payload, $entry['listPath'], $list),
+        )) {
+            $this->setStatus(sprintf('Moved %s.', $delta < 0 ? 'up' : 'down'), StatusLevel::SUCCESS);
+            $this->focusCutsceneTreeKey($targetKey);
+        }
+    }
+
+    /**
+     * Inserts a copy of the selected entry right after it.
+     */
+    private function duplicateCutsceneTreeRow(): void
+    {
+        $entry = $this->locateCutsceneTreeEntry();
+
+        if ($entry === null) {
+            return;
+        }
+
+        $list = CutsceneOutline::valueAt($entry['payload'], $entry['listPath']);
+        $list = is_array($list) ? array_values($list) : [];
+        $index = $entry['index'];
+
+        if (! array_key_exists($index, $list)) {
+            return;
+        }
+
+        $copy = $list[$index];
+
+        // Identities must stay unique: a track, a cue or a lane carries an id.
+        if (is_array($copy) && is_string($copy['id'] ?? null) && in_array($entry['row']['kind'], ['track', 'cue'], true)) {
+            $copy['id'] = $this->freeOutlineId($list, $copy['id']);
+        }
+
+        array_splice($list, $index + 1, 0, [$copy]);
+        $targetKey = $this->replaceKeyIndex($entry['row']['key'], $index + 1);
+
+        if ($this->mutateCutscenePayload(
+            'Duplicate ' . $entry['row']['kind'],
+            static fn(array $payload): array => CutsceneOutline::withValueAt($payload, $entry['listPath'], $list),
+        )) {
+            $this->setStatus(sprintf('Duplicated the %s.', $entry['row']['kind']), StatusLevel::SUCCESS);
+            $this->focusCutsceneTreeKey($targetKey);
+        }
+    }
+
+    /**
+     * Removes the selected entry, undoably.
+     */
+    private function removeCutsceneTreeRow(): void
+    {
+        $entry = $this->locateCutsceneTreeEntry();
+
+        if ($entry === null) {
+            return;
+        }
+
+        $list = CutsceneOutline::valueAt($entry['payload'], $entry['listPath']);
+        $list = is_array($list) ? array_values($list) : [];
+        $index = $entry['index'];
+
+        if (! array_key_exists($index, $list)) {
+            return;
+        }
+
+        array_splice($list, $index, 1);
+        $kind = $entry['row']['kind'];
+
+        if ($this->mutateCutscenePayload(
+            'Remove ' . $kind,
+            static fn(array $payload): array => CutsceneOutline::withValueAt($payload, $entry['listPath'], $list),
+        )) {
+            $this->setStatus(sprintf('Removed the %s (Ctrl+Z restores it).', $kind), StatusLevel::SUCCESS);
+            $this->cutsceneTreeCursor = max(0, min($this->cutsceneTreeCursor, count($this->visibleCutsceneTreeRows()) - 1));
+            $this->renderCutscenesArea();
+        }
+    }
+
+    /**
+     * Moves the selected command into the block just above it.
+     */
+    private function nestCutsceneTreeRow(): void
+    {
+        $entry = $this->locateCutsceneTreeEntry();
+
+        if ($entry === null || $entry['row']['kind'] !== 'command') {
+            if ($entry !== null) {
+                $this->setStatus('Only commands nest.', StatusLevel::INFO);
+            }
+
+            return;
+        }
+
+        $list = CutsceneOutline::valueAt($entry['payload'], $entry['listPath']);
+        $list = is_array($list) ? array_values($list) : [];
+        $index = $entry['index'];
+        $previous = $list[$index - 1] ?? null;
+
+        if ($index === 0 || ! is_array($previous)) {
+            $this->setStatus('Nothing above to nest into.', StatusLevel::INFO);
+
+            return;
+        }
+
+        $previousPath = [...$entry['listPath'], $index - 1];
+        $target = CutsceneOutline::nestingTarget($previous, $previousPath);
+
+        if ($target === null) {
+            $this->setStatus(sprintf('%s is not a block; only sequence, parallel, branch and choice take nested commands.', strval($previous['type'] ?? 'That')), StatusLevel::INFO);
+
+            return;
+        }
+
+        $moved = $list[$index];
+        $targetKey = null;
+
+        if ($this->mutateCutscenePayload('Nest command', static function (array $payload) use ($entry, $index, $target, $moved, &$targetKey): array {
+            $list = CutsceneOutline::valueAt($payload, $entry['listPath']);
+            $list = is_array($list) ? array_values($list) : [];
+            array_splice($list, $index, 1);
+            $payload = CutsceneOutline::withValueAt($payload, $entry['listPath'], $list);
+            $targetList = CutsceneOutline::valueAt($payload, $target);
+            $targetList = is_array($targetList) ? array_values($targetList) : [];
+            $targetList[] = $moved;
+            $targetKey = count($targetList) - 1;
+
+            return CutsceneOutline::withValueAt($payload, $target, $targetList);
+        })) {
+            $this->setStatus(sprintf('Nested into the %s above.', strval($previous['type'] ?? 'block')), StatusLevel::SUCCESS);
+            $this->focusCutsceneTreeKey($this->keyForPath([...$target, (int) $targetKey]));
+        }
+    }
+
+    /**
+     * Moves the selected command out of its block, to just after it.
+     */
+    private function unnestCutsceneTreeRow(): void
+    {
+        $entry = $this->locateCutsceneTreeEntry();
+
+        if ($entry === null || $entry['row']['kind'] !== 'command') {
+            if ($entry !== null) {
+                $this->setStatus('Only commands un-nest.', StatusLevel::INFO);
+            }
+
+            return;
+        }
+
+        // Walk up the list path to the command that owns this block.
+        $listPath = $entry['listPath'];
+        $ownerIndex = null;
+        $ownerList = null;
+
+        for ($cut = count($listPath) - 1; $cut >= 1; $cut--) {
+            $segment = $listPath[$cut];
+
+            if (! is_int($segment)) {
+                continue;
+            }
+
+            $prefix = array_slice($listPath, 0, $cut);
+            $candidate = CutsceneOutline::valueAt($entry['payload'], $prefix);
+            $owner = is_array($candidate) && array_is_list($candidate) ? ($candidate[$segment] ?? null) : null;
+
+            if (is_array($owner) && ! array_is_list($owner) && array_key_exists('type', $owner)) {
+                $ownerIndex = $segment;
+                $ownerList = $prefix;
+                break;
+            }
+        }
+
+        if ($ownerList === null || $ownerIndex === null) {
+            $this->setStatus('Already at the top level.', StatusLevel::INFO);
+
+            return;
+        }
+
+        $moved = (CutsceneOutline::valueAt($entry['payload'], $entry['listPath']) ?? [])[$entry['index']] ?? null;
+
+        if (! is_array($moved)) {
+            return;
+        }
+
+        $index = $entry['index'];
+
+        if ($this->mutateCutscenePayload('Un-nest command', static function (array $payload) use ($entry, $index, $ownerList, $ownerIndex, $moved): array {
+            $list = CutsceneOutline::valueAt($payload, $entry['listPath']);
+            $list = is_array($list) ? array_values($list) : [];
+            array_splice($list, $index, 1);
+            $payload = CutsceneOutline::withValueAt($payload, $entry['listPath'], $list);
+            $parent = CutsceneOutline::valueAt($payload, $ownerList);
+            $parent = is_array($parent) ? array_values($parent) : [];
+            array_splice($parent, $ownerIndex + 1, 0, [$moved]);
+
+            return CutsceneOutline::withValueAt($payload, $ownerList, $parent);
+        })) {
+            $this->setStatus('Moved out of its block.', StatusLevel::SUCCESS);
+            $this->focusCutsceneTreeKey($this->keyForPath([...$ownerList, $ownerIndex + 1]));
+        }
+    }
+
+    /**
+     * Rewrites the last index of an outline key.
+     */
+    private function replaceKeyIndex(string $key, int $index): string
+    {
+        $segments = explode('.', $key);
+        $segments[count($segments) - 1] = (string) $index;
+
+        return implode('.', $segments);
+    }
+
+    /**
+     * The outline key of a payload path: the path without the implicit
+     * `commands` of a keyed lane and `then` of a choice option.
+     *
+     * @param array<int, int|string> $path
+     */
+    private function keyForPath(array $path): string
+    {
+        $segments = [];
+        $count = count($path);
+
+        foreach ($path as $position => $segment) {
+            if ($segment === 'commands' && $position >= 2 && $path[$position - 2] === 'lanes') {
+                continue;
+            }
+
+            if ($segment === 'then' && $position >= 2 && $path[$position - 2] === 'options') {
+                continue;
+            }
+
+            $segments[] = (string) $segment;
+        }
+
+        unset($count);
+
+        return implode('.', $segments);
+    }
+
+    /**
+     * Puts the tree cursor on a key after a move, unfolding its ancestors.
+     */
+    private function focusCutsceneTreeKey(string $key): void
+    {
+        foreach ($this->cutsceneTreeCollapsed as $collapsed => $_) {
+            if (str_starts_with($key, $collapsed . '.')) {
+                unset($this->cutsceneTreeCollapsed[$collapsed]);
+            }
+        }
+
+        foreach ($this->visibleCutsceneTreeRows() as $position => $row) {
+            if ($row['key'] === $key) {
+                $this->cutsceneTreeCursor = $position;
+                break;
+            }
+        }
+
+        $this->renderCutscenesArea();
+    }
+
+    /**
+     * A copy's id: the original's with a numeric suffix no sibling uses.
+     *
+     * @param array<int, mixed> $list
+     */
+    private function freeOutlineId(array $list, string $id): string
+    {
+        $taken = [];
+
+        foreach ($list as $sibling) {
+            if (is_array($sibling) && is_string($sibling['id'] ?? null)) {
+                $taken[] = $sibling['id'];
+            }
+        }
+
+        $base = preg_replace('/-\d+$/', '', $id) ?? $id;
+
+        for ($suffix = 2; $suffix < 1000; $suffix++) {
+            $candidate = $base . '-' . $suffix;
+
+            if (! in_array($candidate, $taken, true)) {
+                return $candidate;
+            }
+        }
+
+        return $id . '-copy';
+    }
+
     /**
      * Keeps the outline cursor on the command the record pane is editing,
      * when the pane moved to a command.
@@ -213,7 +559,7 @@ trait CutsceneOutlinePane
 
         return new EditorWindow(
             title: $title,
-            help: $this->fitHelp($layout['treeWidth'], 'Enter:Open  Space:Fold  Up/Down:Move', 'Enter:Open  Space:Fold', 'Enter:Open'),
+            help: $this->fitHelp($layout['treeWidth'], 'Enter:Open  Space:Fold  [ ]:Reorder  < >:Un-nest/Nest  Shift+D:Dup  Del:Remove', 'Enter:Open  Space:Fold  [ ]:Reorder  < >:Nest  Del', 'Enter:Open  Space:Fold  [ ]', 'Enter:Open'),
             position: ['x' => $layout['treeX'], 'y' => $layout['treeY']],
             width: $layout['treeWidth'],
             height: $layout['treeHeight'],

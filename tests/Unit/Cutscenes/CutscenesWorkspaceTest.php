@@ -557,3 +557,93 @@ it('plays a summon through the Engine playback session: frames, keyframe boundar
     pressKeys($editor, 'x');
     expect(getEditorProperty($editor, 'summonPreview'))->toBeNull();
 });
+
+it('reorders, nests, un-nests, duplicates and removes commands from the tree, each undoable', function () {
+    $root = cutsceneProject();
+    $editor = cutscenesEditor($root, 160, 50);
+    setEditorProperty($editor, 'cutsceneFocus', CutscenesScreen::PANE_TREE);
+    $asset = libraryOf($editor)->find(CutsceneType::CINEMATIC, 'harbour-lanterns');
+    $types = static fn(array $list): array => array_map(static fn(array $command): string => strval($command['type']), array_values($list));
+    $rowKeyAtCursor = static fn() => callEditorMethod($editor, 'visibleCutsceneTreeRows')[getEditorProperty($editor, 'cutsceneTreeCursor')]['key'];
+
+    // Row 1 is the transition (row 0 is the Commands heading). ']' moves it below the camera command.
+    setEditorProperty($editor, 'cutsceneTreeCursor', 1);
+    pressKeys($editor, ']');
+    expect($types($asset->payload()['commands']))->toBe(['camera', 'transition', 'parallel', 'checkpoint', 'title_card'])
+        ->and($rowKeyAtCursor())->toBe('commands.1')
+        ->and($asset->isDirty())->toBeTrue();
+
+    // '[' brings it back; the history undoes and redoes it.
+    pressKeys($editor, '[');
+    expect($types($asset->payload()['commands']))->toBe(['transition', 'camera', 'parallel', 'checkpoint', 'title_card']);
+    pressKeys($editor, "\x1a");
+    expect($types($asset->payload()['commands']))->toBe(['camera', 'transition', 'parallel', 'checkpoint', 'title_card']);
+    pressKeys($editor, "\x19");
+    expect($types($asset->payload()['commands']))->toBe(['transition', 'camera', 'parallel', 'checkpoint', 'title_card']);
+
+    // '>' on the checkpoint nests it into the parallel block's last lane; '<' brings it out again.
+    foreach (callEditorMethod($editor, 'visibleCutsceneTreeRows') as $position => $row) {
+        if ($row['key'] === 'commands.3') {
+            setEditorProperty($editor, 'cutsceneTreeCursor', $position);
+        }
+    }
+
+    pressKeys($editor, '>');
+    $commands = $asset->payload()['commands'];
+    expect($types($commands))->toBe(['transition', 'camera', 'parallel', 'title_card'])
+        ->and($types($commands[2]['lanes'][2]['commands']))->toBe(['narration', 'checkpoint'])
+        ->and($rowKeyAtCursor())->toBe('commands.2.lanes.2.1');
+    pressKeys($editor, '<');
+    $commands = $asset->payload()['commands'];
+    expect($types($commands))->toBe(['transition', 'camera', 'parallel', 'checkpoint', 'title_card'])
+        ->and($types($commands[2]['lanes'][2]['commands']))->toBe(['narration'])
+        ->and($rowKeyAtCursor())->toBe('commands.3');
+
+    // Shift+D duplicates the checkpoint after itself; Del removes the copy; undo restores it.
+    pressKeys($editor, 'D');
+    expect($types($asset->payload()['commands']))->toBe(['transition', 'camera', 'parallel', 'checkpoint', 'checkpoint', 'title_card'])
+        ->and($rowKeyAtCursor())->toBe('commands.4');
+    pressKeys($editor, "\033[3~");
+    expect($types($asset->payload()['commands']))->toBe(['transition', 'camera', 'parallel', 'checkpoint', 'title_card']);
+    pressKeys($editor, "\x1a");
+    expect($types($asset->payload()['commands']))->toBe(['transition', 'camera', 'parallel', 'checkpoint', 'checkpoint', 'title_card']);
+
+    // The Engine still reads the result, and the rewrite keeps the rest of the source.
+    $asset->cinematicDefinition();
+    $asset->save();
+    $script = file_get_contents($root . '/assets/Cutscenes/Cinematics/harbour-lanterns/harbour-lanterns.script.php');
+    expect(substr_count($script, "'type' => 'checkpoint'"))->toBe(2)
+        ->and($script)->toContain("'text' => \"The lanterns were lit one by one.\\nNobody spoke.\"");
+});
+
+it('reorders and duplicates summon tracks, keyframes and cues from the timeline rows', function () {
+    $root = cutsceneProject();
+    $editor = cutscenesEditor($root, 160, 50);
+    callEditorMethod($editor, 'switchCutsceneType', CutsceneType::SUMMON);
+    setEditorProperty($editor, 'cutsceneFocus', CutscenesScreen::PANE_TREE);
+    $asset = libraryOf($editor)->find(CutsceneType::SUMMON, 'lantern-wisp');
+    $rows = callEditorMethod($editor, 'visibleCutsceneTreeRows');
+    $keys = array_column($rows, 'key');
+
+    // The second track moves above the first.
+    setEditorProperty($editor, 'cutsceneTreeCursor', array_search('tracks.1', $keys, true));
+    pressKeys($editor, '[');
+    expect(array_column($asset->payload()['tracks'], 'id'))->toBe(['name', 'wisp']);
+
+    // A keyframe duplicates after itself within its track; a cue copy gets a fresh id.
+    $keys = array_column(callEditorMethod($editor, 'visibleCutsceneTreeRows'), 'key');
+    setEditorProperty($editor, 'cutsceneTreeCursor', array_search('tracks.1.keyframes.0', $keys, true));
+    pressKeys($editor, 'D');
+    expect(count($asset->payload()['tracks'][1]['keyframes']))->toBe(3);
+    $keys = array_column(callEditorMethod($editor, 'visibleCutsceneTreeRows'), 'key');
+    setEditorProperty($editor, 'cutsceneTreeCursor', array_search('cues.0', $keys, true));
+    pressKeys($editor, 'D');
+    expect(array_column($asset->payload()['cues'], 'id'))->toBe(['flare', 'flare-2']);
+
+    // Saved through the source-preserving writer, the nowdoc art survives.
+    $asset->compiledSummon();
+    $asset->save();
+    $timeline = file_get_contents($root . '/assets/Cutscenes/Summons/lantern-wisp/lantern-wisp.timeline.php');
+    expect($timeline)->toContain("\$wisp = <<<'ART'")
+        ->and($timeline)->toContain("'id' => 'flare-2'");
+});

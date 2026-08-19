@@ -524,6 +524,34 @@ trait CutscenesWorkspace
             return;
         }
 
+        if ($this->cutsceneFocus === CutscenesScreen::PANE_TREE && ($input === '[' || $input === ']')) {
+            $this->reorderCutsceneTreeRow($input === '[' ? -1 : 1);
+
+            return;
+        }
+
+        if ($this->cutsceneFocus === CutscenesScreen::PANE_TREE && ($input === '>' || $input === '<')) {
+            if ($input === '>') {
+                $this->nestCutsceneTreeRow();
+            } else {
+                $this->unnestCutsceneTreeRow();
+            }
+
+            return;
+        }
+
+        if ($this->cutsceneFocus === CutscenesScreen::PANE_TREE && $this->isShiftLetterShortcut($input, 'D')) {
+            $this->duplicateCutsceneTreeRow();
+
+            return;
+        }
+
+        if ($this->cutsceneFocus === CutscenesScreen::PANE_TREE && str_contains($input, "\033[3~")) {
+            $this->removeCutsceneTreeRow();
+
+            return;
+        }
+
         if (str_contains($input, "\033[A")) {
             $this->moveCutsceneSelection(0, -1);
 
@@ -938,6 +966,64 @@ trait CutscenesWorkspace
             $records->save();
         } catch (Throwable $throwable) {
             $library->refreshRecords($type);
+            $this->setErrorStatus($throwable, $label);
+            $this->renderCutscenesArea();
+
+            return false;
+        }
+
+        $library->refreshRecords($type);
+        $after = $this->snapshotCutscene($asset);
+
+        if ($after === $before) {
+            return false;
+        }
+
+        $this->recordCommand(new GenericCommand(
+            $label,
+            fn() => $this->restoreCutsceneSnapshot($type, $id, $after),
+            fn() => $this->restoreCutsceneSnapshot($type, $id, $before),
+        ));
+
+        return true;
+    }
+
+    /**
+     * Runs one change against the selected asset's payload as a whole, for
+     * the tree operations that move entries between lists, and records it
+     * for undo and redo like any other edit.
+     *
+     * @param callable(array<string, mixed>): (array<string, mixed>|null) $change Returns the new payload, or null for no change.
+     */
+    private function mutateCutscenePayload(string $label, callable $change): bool
+    {
+        $library = $this->cutsceneLibrary();
+        $asset = $this->selectedCutscene();
+
+        if ($library === null || $asset === null) {
+            return false;
+        }
+
+        if (! $asset->isEditable()) {
+            $this->setStatus(sprintf('%s is read-only: %s.', ucfirst($asset->type->noun()), $asset->readOnlyReason()), StatusLevel::WARN);
+            $this->renderCutscenesArea();
+
+            return false;
+        }
+
+        $type = $asset->type;
+        $id = $asset->id;
+        $before = $this->snapshotCutscene($asset);
+
+        try {
+            $payload = $change($asset->payload());
+
+            if ($payload === null) {
+                return false;
+            }
+
+            $asset->apply($payload);
+        } catch (Throwable $throwable) {
             $this->setErrorStatus($throwable, $label);
             $this->renderCutscenesArea();
 
