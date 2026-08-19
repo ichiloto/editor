@@ -11,8 +11,14 @@ Read these in order the first time:
 2. [Add an NPC](add-an-npc.md) — place a character that talks, wanders, and
    answers to the state of the world; or a stationary event character.
 3. [Wire a Quest](wire-a-quest.md) — author a quest and connect it to the world.
-4. [Author a Cutscene](author-a-cutscene.md) — build an event command list.
+4. [Author a Cutscene](author-a-cutscene.md) — build a Common Event: a
+   reusable event command list.
 5. [Write a Skit](write-a-skit.md) — add optional party banter.
+6. [Author a Cinematic Cutscene](author-a-cinematic-cutscene.md) — stage a
+   story sequence: cast, camera, parallel lanes, skip and finalizer, played
+   through the engine from the editor.
+7. [Author a Summon Cutscene](author-a-summon-cutscene.md) — a frame-driven
+   battle presentation: tracks, keyframes, cues, and the actor assignment.
 
 ## What The Editor Can Do Today
 
@@ -21,8 +27,10 @@ Read these in order the first time:
   field the game reads: sprite and directional sprites, fixed or bounded
   wander, visibility conditions, dialogue and conditional variants, inline
   scripts, and completion writes.
-- Place and configure the five event types: Dialogue, Transfer Player, Shop,
-  Sleep, and Chest.
+- Place and configure the event types: Dialogue, Transfer Player, Shop,
+  Sleep, Chest, Story Script, and Cinematic.
+- Author cinematic and summon cutscenes on the Cutscenes screen (`F4`), and
+  preview both through the engine itself without writing a file.
 - Author actors, classes, skills, quests, animations, states, troops, skits,
   event scripts, terms, and system settings.
 - Browse items, weapons, armors, and enemies.

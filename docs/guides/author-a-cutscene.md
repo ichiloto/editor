@@ -3,6 +3,13 @@
 This guide covers building an event command list — the scripts the engine runs
 for cutscenes, notes, and scripted moments.
 
+> This guide is about **Common Events**: reusable command lists that maps and
+> cinematics call by id. A staged story sequence with a cast, a detached
+> camera, parallel lanes and a skip — a *cinematic* — has its own screen and
+> its own guide: [Author a Cinematic Cutscene](author-a-cinematic-cutscene.md).
+> A battle summon's frame-driven presentation is a *summon cutscene*:
+> [Author a Summon Cutscene](author-a-summon-cutscene.md).
+
 ## What An Event Script Is
 
 One file per script under `assets/Events`, returning an ordered list of command

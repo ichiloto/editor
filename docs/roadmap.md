@@ -711,6 +711,65 @@ runtime gives `''` a meaning of its own.
 Not added, because the engine does not have them: patrol routes,
 pathfinding, followers, persisted dynamic positions, cross-map movement.
 
+## Cutscene authoring — shipped 2026-08
+
+Cinematic story cutscenes and summon presentations are authored on their own
+screen (`F4`), previewed through the engine itself, validated, and saved
+without rewriting a byte the author did not change.
+
+**A cutscene is a pair, and the pair is one asset.** `CutsceneAsset` reads
+`<id>.data.php` with `<id>.script.php` or `<id>.timeline.php`, knows which
+keys belong to which file, is dirty by content, and saves atomically:
+proposed sources, evaluation, engine hydration (a summon is also compiled),
+temporary files, backups, then the swap. `CutsceneLibrary` discovers both
+forms with findings (orphans, misnamed pairs, an id that disagrees with its
+folder, two folders differing only by case), hands each type to
+`ProjectRecordDatabase::overOwnedList()` and writes edits back by origin.
+
+**Source preservation, at the token level.** `PhpArraySourceDocument` maps a
+returned-array file to byte spans — prelude variables, nowdocs and heredocs
+included — and `ArraySourceWriter` turns an array diff into the fewest
+edits: moves keep their bytes, a single-reference nowdoc is edited in place,
+a shared one is retargeted to a new variable, multi-line text is written as a
+nowdoc, and an expression it cannot express is refused by path rather than
+flattened. Every rewrite is evaluated and compared before it is written.
+
+**The tree is the truth; the rest are projections.** The command tree is
+edited through the record pane's frames (the same frames Common Events use,
+with lanes, arms and options as nested frames) and moved through the Command
+Tree pane — reorder, nest, un-nest, insert, duplicate, remove, each
+undoable. The duration overview (`V`) estimates from authored seconds with
+the engine's defaults and marks what waits on play; it never schedules.
+
+**Preview is the engine, hosted.** `CinematicPreviewSession` builds an
+isolated `GameScene` (a camera drawing into a buffer, a map manager loading
+the author's tiles, collision and NPCs, a scene without a terminal, a
+presentation that waits for the author) and hands the asset to the engine's
+`CinematicController` and `EventInterpreter`. The editor adds a clock it can
+pause or step, read-only views of lanes, checkpoints, failures (mapped back
+to outline rows through the engine's own command paths) and final state, a
+watched-versus-skipped comparison, and a playtest overlay whose start map
+carries an automatic `CinematicEventTrigger`. `SummonPreviewSession` does
+the same over `SummonPlaybackSession`: the playhead, frame clock, active
+segments and cue schedule are the engine's; the editor draws the frame by
+the battle field's rules and logs the cues it crossed.
+
+**Validation says what the engine says.** `CutsceneValidation` in
+`ProjectValidator` reports pairing and identity findings, the engine's
+hydration and compilation verdicts with their paths, the references only
+play time would catch (start and transfer maps, music, animations, common
+events, declared checkpoints, cast and staged actors, NPC ids on the map the
+cinematic is on), the `CinematicEventTrigger` contract on map events, and
+actor summon assignments through `SummonAssignmentDiagnostics`, which the
+actor pane's verdict rows share.
+
+**Known limits, said plainly.** The staging canvas is the engine's frame at
+the playhead, not a map-canvas overlay with route and camera targets; a
+battle inside a preview resolves as a victory on the next step; a saved
+asset's id is its folder and is not renamed in place (duplicate and delete);
+the duration overview is an estimate. None of these required an engine
+change, and none was simulated in the editor.
+
 ## Foundation tooling — shipped 2026-08
 
 Everything the runtime reads about inventory, actors, knowledge, permanent

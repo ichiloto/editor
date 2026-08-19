@@ -122,6 +122,8 @@ it('ships the task guides the manual links to', function (): void {
         'wire-a-quest.md',
         'author-a-cutscene.md',
         'write-a-skit.md',
+        'author-a-cinematic-cutscene.md',
+        'author-a-summon-cutscene.md',
     ] as $guide) {
         expect(is_file(docsPath('guides/' . $guide)))->toBeTrue("missing guide: {$guide}");
     }

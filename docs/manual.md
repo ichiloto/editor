@@ -113,13 +113,14 @@ steals a glyph you might want to paint on a map.
 | `Ctrl+P` | Open the command palette |
 | `Ctrl+D` | Open or close the Database screen |
 | `F2` | Open or close the Database screen (same as `Ctrl+D`) |
+| `F4` | Open or close the Cutscenes screen (Cinematic and Summon) |
 | `Ctrl+S` | Save the selected map |
-| `Ctrl+A` | Save every dirty map and database |
+| `Ctrl+A` | Save every dirty map, database and cutscene |
 | `Ctrl+Z` | Undo the last mutation |
 | `Ctrl+Y` | Redo |
 | `Ctrl+G` | Go to definition |
 | `Ctrl+B` | Back to the previous location |
-| `Ctrl+T` | Playtest the selected map from the cursor |
+| `Ctrl+T` | Playtest the selected map from the cursor (in the Cutscenes screen: the selected cinematic) |
 | `Ctrl+R` | Reload the workspace (guards unsaved changes) |
 | `Ctrl+E` | Open the status detail overlay |
 | `Ctrl+Q` | Quit (guards unsaved changes) |
@@ -838,10 +839,12 @@ adds a step, Shift+X on a step row removes that step.
 Shift+O with the cursor on an option row adds an option to that choice;
 removing an option takes its whole arm with it, and undo puts both back.
 
-Current limits: there is no cutscene skipping, camera/focus or screen-fade
-command, field-animation command, or parallel movement route, and the engine
-has no NPC patrol routes or pathfinding to author (NPCs stand still, wander,
-or follow a `move_route`).
+Skipping, camera operations, screen transitions, title cards and narration,
+field animations, staged actors, parallel lanes and checkpoints belong to
+*cinematics*, which have their own screen: see [Cutscenes Screen](#cutscenes-screen).
+A Common Event stays a reusable command list, and may be called from a
+cinematic with `common_event`. The engine has no NPC patrol routes or
+pathfinding to author (NPCs stand still, wander, or follow a `move_route`).
 
 ### Condition Lines
 
@@ -863,6 +866,291 @@ quest:breakfast-duty:active; !switch:door_open:false; item:S-Potion:3
 | `variable` | `variable:<name>:<op>:<value>` |
 
 Unparseable entries are dropped rather than written back as garbage.
+
+## Cutscenes Screen
+
+`F4` opens the Cutscenes screen over the main shell, the way `Ctrl+D` opens
+the Database; `F4` or `Esc` closes it, `Ctrl+D` from inside goes straight
+across to the Database, and `Ctrl+P` offers `Cutscenes: Cinematic` and
+`Cutscenes: Summon`. Five panes: **Types** (Cinematic or Summon), the asset
+**list**, the **record pane** (the asset's fields, grouped), the **Command
+Tree** (for a summon, the **Timeline**) and the **Preview**. `Tab` and
+`Shift+Tab` cycle the panes; `/` filters the list; `Shift+A` creates,
+`Shift+D` duplicates, `Delete` removes (with the places that reference the
+asset named first); `Ctrl+S` saves the selected asset, `Ctrl+A` saves every
+dirty map, database and cutscene; `Ctrl+Z` / `Ctrl+Y` undo and redo every
+mutation, pinned to the asset it happened on.
+
+Four things look alike and are not. Keep them apart:
+
+| Asset | What it is | Where |
+| --- | --- | --- |
+| Common Event | a reusable command list, called by id from maps and cinematics | Database › Common Events |
+| Cinematic Cutscene | a staged story sequence: cast, camera, parallel lanes, skip, finalizer | Cutscenes › Cinematic |
+| Summon Cutscene | a frame-driven battle presentation: tracks, keyframes, cues | Cutscenes › Summon |
+| Skit | an optional conversation overlay | Database › Skits |
+| Animation | a reusable visual asset a command plays | Database › Animations |
+
+### Files, identity and preservation
+
+A cutscene is one folder holding a pair of files, named after the folder:
+
+```text
+assets/Cutscenes/Cinematics/<id>/<id>.data.php
+assets/Cutscenes/Cinematics/<id>/<id>.script.php
+assets/Cutscenes/Summons/<id>/<id>.data.php
+assets/Cutscenes/Summons/<id>/<id>.timeline.php
+```
+
+The stable id *is* the folder name; the display name is a field. A new
+asset's id is yours to choose until its first save makes the folder; after
+that it is read-only (duplicate under the new id and delete the old one to
+migrate). The list shows `*` for unsaved work and a folder the engine cannot
+read as read-only, with the reason in the record pane; an orphaned file, a
+misnamed pair, an id that disagrees with its folder, or two folders that
+differ only in case are reported by validation and in the list.
+
+Saving rewrites only what changed, in place: headers, comments, local
+variables, heredocs and nowdocs, shared ASCII blocks, unknown keys,
+backslashes, trailing spaces and wide glyphs all survive, a data-only edit
+leaves the script or timeline file byte-identical, a no-op save writes
+nothing, and multi-line text is written as a nowdoc. A value shared through
+one source variable is edited in place when only the selected entry uses it,
+and otherwise retargeted to a new variable so nothing else changes. A save is
+one transaction over the pair: both sources are built, evaluated, hydrated
+through the engine (and, for a summon, compiled), written to temporary
+files, backed up, and then swapped in; if any step fails neither file
+changes.
+
+### Cinematics
+
+The record pane groups the engine's cinematic definition: **Identity** (id,
+name, description, version), **Staging** (start map, initial presentation,
+reduced-motion policy), **Script** (the command list, opened as a frame),
+**Skip** (policy, checkpoints, the finalizer as a frame), **Metadata**
+(authoring) and **Cast**. Cast rows are `player`, `party_actor`, `npc` (a
+stable map-local id on the start map) or `staged_actor` with every engine
+field: id, sprite or asset, x and y, facing, visible, collision and
+directional sprites. `Shift+O` on a cast row adds a member; `Delete` removes
+one.
+
+#### The command tree
+
+The script is a nested tree. Open `Commands` (or `Finalizer`) from its row,
+or press `Enter` on any row of the Command Tree, and the record pane shows
+that list as a frame: each command contributes a `Command N Type` row plus
+the rows its type uses, nested blocks appear as rows that open their own
+frames, and the pane title is the trail back out (`Commands › Parallel 3 ›
+Lane 2`). `Esc` pops exactly one frame.
+
+| Type | Fields |
+| --- | --- |
+| `sequence` | Commands (a frame) |
+| `parallel` | Lanes, each a stable id with its own Commands frame; the block completes when every lane has |
+| `branch` | Conditions, Then, Else (frames) |
+| `choice` | Prompt, Title, Options (each with a Commands frame), Cancel (frame) |
+| `common_event` | Common Event (picker) |
+| `checkpoint` | Checkpoint name (from the cinematic's declared checkpoints) |
+| `camera` | Operation (`detach`, `attach`, `reset`, `focus`, `pan`, `route`, `track`, `shake`, `restore`), Target (kind, id or x/y), Seconds, Magnitude; a `route` owns Points |
+| `stage_actor` | the staged-actor fields |
+| `show_actor`, `hide_actor`, `remove_actor` | Actor (from the cast) |
+| `field_animation` | Animation, Target (kind, id or x/y), Seconds Per Frame |
+| `title_card`, `narration` | Title, Text (multiline), Seconds |
+| `transition` | Style (`fade`, `wipe`, `none`), Direction (`in`, `out`), Seconds |
+| `clear_presentation` | none |
+| `cinematic_music` | Track, Loop, Fade In, Fade Out, On Completion (`continue`, `stop`, `restore_previous`) |
+| `move_route` | Subject (`player`, `npc`, `staged_actor`), NPC Id or Staged Actor, Seconds Per Step or Speed, Wait, Steps |
+
+Every other type from the Common Events table is available too, with the
+same rows. `Shift+O` adds: on a route, lane or point row, another step, lane
+or point; on a command that has none of those yet, its first; otherwise the
+next command. `Shift+X` removes the last entry, `Delete` the selected one.
+
+The Command Tree is a projection of the same tree. Its rows fold (`Space`,
+`-`, `+`), open a frame (`Enter`), and move the command under the cursor:
+`[` / `]` reorder within its list, `>` nests it into the block just above
+(a sequence's commands, a parallel block's last lane, a branch's then arm,
+a choice's first option), `<` moves it back out after that block, `Shift+O`
+inserts a new command after it, `Shift+D` duplicates it, `Delete` removes
+it. Every one of these is undoable, and a running preview marks the
+commands its lanes are on with `▶` and a failure with `✗`.
+
+#### Lanes and the duration overview
+
+`V` on the Preview pane shows the duration overview: every command, lane and
+block with the time it is authored to take, using the engine's own defaults
+where a field is unset (a wait of 0.5s, a route step of 0.15s, a narration
+of 2.5s, a transition of 0.24s). A parallel block is as long as its longest
+lane; a branch or choice as its longest arm. Dialogue, choices, battles and
+common events cannot be timed from the asset and are marked `+input`,
+`+battle` and `+?` instead of guessed. `Up` / `Down` move over the rows and
+`Enter` opens the row's command in the tree; a running preview marks the
+rows it is on.
+
+#### Staging and preview
+
+The Preview pane plays the cinematic **through the engine itself**. Nothing
+is simulated: the editor builds an isolated scene (a fresh game state, an
+empty party, the start map's tiles, collision and NPCs read from your
+project, a camera that draws into the pane) and hands the asset, as it
+stands in memory and unsaved, to the engine's cinematic controller and
+event interpreter. The frame you see is what the engine draws: the map,
+NPCs, the player, staged actors, title cards, narration, transitions.
+
+| Key (Preview focused) | Action |
+| --- | --- |
+| `Space` | Start the preview playing; pause or resume it |
+| `.` | Step one tick (0.1s of cinematic time) |
+| `K` | Skip, at a legal point, through the authored finalizer |
+| `R` | Restart from the beginning |
+| `X` | Stop (the engine runs its failure cleanup) or close a finished preview |
+| `J` | Jump the tree and record pane to the command that failed |
+| `C` | Compare a watched run with a skipped one |
+| `V` | The duration overview |
+| `L` | Cycle the views: stage, lanes, log, overview, comparison |
+| `Enter` | Continue waiting dialogue; confirm a choice (`Up` / `Down` choose) |
+| `Ctrl+T` | Playtest the saved cinematic in the real game |
+
+The stage shows, beside the frame, the session's lanes and what each is
+doing, the checkpoints recorded, whether a skip would be accepted and why
+not, and the log of launches, transfers, battles and failures. Dialogue
+waits for you as it would for the player; a battle resolves as a victory
+on the next step (the pane says so); a transfer loads the destination map.
+The preview starts from the map event that triggers the cinematic when one
+exists, otherwise from the start map at its first open tile. It writes
+nothing: not your saves, not your files.
+
+`Ctrl+T` plays the saved cinematic in the real game through the playtest
+overlay: the start map is copied into the throwaway root with one extra
+event, an automatic single-use `CinematicEventTrigger` on the spawn tile,
+so the game launches the real asset through its real trigger the moment
+the playtest begins. Your map files are not modified.
+
+#### Skip and the finalizer
+
+Skip is a second ending, not a cancel. When the policy is `authored` and a
+finalizer is written, the engine cancels every lane and pending operation,
+clears temporary presentation, and runs the finalizer once through the same
+interpreter, so a skipped run and a watched run reach the same final map,
+player position, camera mode, cast cleanup, completion event and state
+writes. The engine accepts `authored` only when every reachable path is safe
+to abandon (no `start_battle`, `give_item`, `give_gold`, `accept_quest`,
+`recover_party`, `knowledge` or `common_event` on the way), and the
+finalizer uses its restricted vocabulary: `set_switch`, `set_variable`,
+`record_event`, `move_player`, `transfer`, `camera` (`attach` or `reset`),
+`remove_actor`, `clear_presentation` and `cinematic_music`, each with its
+explicit shape. The Skip group of the record pane says which road the
+current policy takes; `C` on the Preview pane runs the cinematic twice —
+watched to the end and skipped at once — and lists every observable
+difference between the two final states, so an unfinished finalizer shows
+up as a row rather than a surprise.
+
+#### Map triggers
+
+A map event of type **Cinematic** (`CinematicEventTrigger`) launches a
+cinematic by stable id: `cinematicId` is picked from the project's
+cinematics, `mode` is `auto` (on arrival) or `action` (the field action),
+and `reusable` says whether it fires again. Conditions, sets, the blocked
+message and the cue work as for any event. Validation checks the trigger
+against the engine's contract.
+
+### Summons
+
+The record pane groups the engine's summon definition: **Identity** (id,
+name, description, move name, version, linked summon id, linked action
+picked from the project's skills, tags), **Lore** (lore, element,
+strengths, weaknesses, free-form attributes, authoring metadata),
+**Availability** (conditions through the shared condition editor; an
+omitted policy is open and is written as nothing), **Wielders** (mode
+`all`, `roles` or `characters`, with roles picked from classes and
+characters from actors; tenancy `shared` or `exclusive`), **Playback**
+(default speed, allow skip, loop preview, transitions in and out, effect
+timing by `end`, `cue` or `frame`, target presentation) and **Timeline**
+(format version, FPS, length in frames, editor metadata, and the Tracks
+and Cues frames). `allowSkip` is authored data; whether a battle honours it
+is the engine's business, and this manual claims nothing more.
+
+#### Tracks, keyframes and cues
+
+Open `Tracks` and each track is a row (`Id`, `Type`: `glyph`, `text`,
+`flash`, `shake`) followed by its keyframes: frame, duration, position,
+content, asset id, color, visible, z-index, blend mode, easing and a
+free-form payload. `Content` opens the **multiline editor** (`Enter` on the
+row), which keeps every space, backslash, blank line, tab and wide glyph
+exactly as typed or pasted; `Ctrl+S` there commits, `Esc` cancels. Open
+`Cues` for the cue rows: id, frame, type and payload. `Shift+O` adds a
+track, a keyframe under the cursor's track, or a cue; `Shift+X` and
+`Delete` remove. The Timeline pane lists tracks, keyframes and cues as
+rows: `[` / `]` reorder, `Shift+D` duplicates (a copied track or cue gets a
+free id), `Shift+O` inserts after, `Delete` removes, and `+` / `-` on a
+keyframe or cue row nudge its frame by one.
+
+#### Summon preview
+
+`Space` on the Preview pane compiles the summon as it stands, unsaved,
+through the engine's compiler and plays it through the engine's
+non-blocking playback session: the playhead, frame clock, active segments
+and cue schedule are the engine's. The pane draws each frame as the battle
+field would (position, content lines, an `[ASSET]` placeholder for an asset
+reference, visibility), with a ruler across the timeline, the keyframe bars
+per track, `◆` for cues and `▼` at the playhead; beside it, the frame
+counter, the cues on this frame, the cues the playhead has crossed (the cue
+log — audio cannot be hosted here, so a cue is reported, never claimed
+audible), and what is drawn now.
+
+| Key (Preview focused, summon) | Action |
+| --- | --- |
+| `Space` | Play or pause |
+| `.` / `,` | Step forward or back one frame |
+| `<` / `>` | Jump to the previous or next keyframe or cue boundary |
+| `Home` / `End` | Seek to the first or last frame |
+| `+` / `-` | Speed: 0.25×, 0.5×, 1×, 2×, 4× |
+| `O` | Loop or play once |
+| `R` | Restart |
+| `L` | Timeline view (ruler and active segments) or stage view |
+| `X` | Close the preview |
+
+Stepping and seeking are inspection: the engine repositions the playhead
+without pretending the frame was traversed, so cues fire only when playback
+crosses them. Reduced-motion settings never alter authored data.
+
+#### Actor summon assignments
+
+An actor's starting summons are a `Summons` row in the Actors category: a
+multi-pick over the project's summons where each pick toggles a member in
+or out, undoable and dirty-tracked, written as a list of stable ids (and
+removed entirely when emptied). Under it, one verdict row per assignment,
+judged by the same rules the validator applies: the summon must exist, the
+actor must be eligible under its wielder policy (by character, by role, or
+open to all), a story-locked summon cannot be a starting assignment, each
+id appears once, and an exclusive summon has at most one starting holder
+across the cast.
+
+### Validation
+
+`ichiloto validate` and the editor's validation cover both forms: missing or
+malformed files, pairs and identities; what the engine refuses when it
+hydrates a cinematic (structure, nested shapes, cast, skip policy,
+finalizer vocabulary and skip safety) or compiles a summon (FPS, length,
+tracks, keyframes, cues, effect timing), reported with the engine's own
+message and path; and the references the engine only meets at play time:
+start maps, transfer maps, music tracks, animations, common events,
+declared checkpoints, cast and staged actors, NPC ids on the map the
+cinematic is on, and the cinematic map triggers. Unknown forward-compatible
+fields are preserved and are not errors.
+
+### Limitations
+
+- The staging canvas is the engine's own frame: staged actors, NPCs, the
+  player and the camera viewport are seen where the engine puts them at
+  the playhead, and positions are edited in the cast and command rows.
+  Route points, camera targets and transfer targets are not drawn as
+  overlays on the map canvas.
+- A battle inside a previewed cinematic is resolved as a victory on the next
+  step, and the pane says so; the real battle is a playtest away.
+- A saved asset's id cannot be renamed in place; duplicate and delete.
+- The duration overview is an estimate from authored seconds; the engine's
+  clock during preview is the truth.
 
 ## Overlays
 

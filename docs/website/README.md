@@ -10,13 +10,14 @@ Target: `website/src/Docs/Content/<path>`, mirroring the tree below.
 | --- | --- |
 | `guide/tooling-loop/editing-in-the-editor.md` | `src/Docs/Content/guide/tooling-loop/editing-in-the-editor.md` |
 | `guide/tooling-loop/the-database.md` | `src/Docs/Content/guide/tooling-loop/the-database.md` |
+| `guide/tooling-loop/cutscenes.md` | `src/Docs/Content/guide/tooling-loop/cutscenes.md` |
 
 Conventions copied from the existing site content:
 
 - YAML front matter with `title`, `description`, `category`, `tags`, `order`,
   `readTime`, and optional `heroImage` / `heroImageAlt` / `heroImageCaption`.
 - `order` sequences a page within its category. The Tooling Loop category
-  currently uses 50 (index) and 51; these drafts take 52 and 53.
+  currently uses 50 (index) and 51; these drafts take 52, 53 and 54.
 - Body starts immediately after the front matter, with no repeated H1 — the
   layout renders `title` as the page heading.
 - Absolute `/images/...` paths for screenshots. The drafts reference existing
