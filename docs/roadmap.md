@@ -711,6 +711,44 @@ runtime gives `''` a meaning of its own.
 Not added, because the engine does not have them: patrol routes,
 pathfinding, followers, persisted dynamic positions, cross-map movement.
 
+## Cutscene authoring integrity correction — shipped 2026-08
+
+Three narrow contracts from the authoring gate's first review, corrected
+without changing its architecture.
+
+**A pair is installed or it is not.** `PairedFileTransaction` is the one
+boundary save, first save, overwrite and delete go through. It records what
+each file held (bytes and modification time), stages each proposed file
+beside its destination and reads it back so the engine evaluates exactly
+what will be installed, backs the pair up once before anything destructive,
+and installs. Any failure puts back every file it touched, at the same
+modification time, and removes a folder it created; a restoration that
+itself fails is reported as such, with the files named, rather than as
+"nothing changed". The half-pair the review found -- a new asset's data file
+left behind when its script could not follow -- cannot happen through any of
+the four paths.
+
+**A merged record must be reversible before it is editable.**
+`CutscenePairShape` owns the merge, the split and the proof: an asset is
+writable only when splitting its merged record returns the two arrays that
+were read. A shape the editor would normalise opens read-only with the
+precise reason -- commands keyed by name, a `commands` value that is not a
+list, a bare map of settings with no `commands` list, a key authored in both
+files -- and `apply()` refuses for it, so the record write-back that passes
+every asset through on any save can no longer reshape one nobody was
+editing. Unknown but exactly representable keys stay editable.
+
+**Equivalence includes what you hear and who holds the controller.**
+`PreviewSnapshot` records the track the engine is playing, whether it loops,
+whether it is the field's own track restored, and who owns ordinary field
+input -- all observed from the engine's `AudioManager` and
+`hasUnstableEventSession()`, with no completion policy reproduced. The
+preview gives the engine a silent-but-present audio backend so it keeps its
+own record of what a cinematic asked for. One nuance is disclosed rather
+than papered over: the engine finishes an authored fade-out from its audio
+update, which advances by the game clock, so a preview reports the state the
+engine has reached.
+
 ## Cutscene authoring — shipped 2026-08
 
 Cinematic story cutscenes and summon presentations are authored on their own

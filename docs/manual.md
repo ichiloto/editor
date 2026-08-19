@@ -910,17 +910,39 @@ read as read-only, with the reason in the record pane; an orphaned file, a
 misnamed pair, an id that disagrees with its folder, or two folders that
 differ only in case are reported by validation and in the list.
 
+The editor holds a pair as one record: the data file's keys plus the
+script's commands or the timeline's keys. It offers that record for editing
+only when it can prove the merge is exactly reversible -- that splitting it
+returns the two arrays that were read, key for key. A pair it would have to
+normalise is shown read-only with the precise reason, and never rewritten:
+commands keyed by name that the tree would renumber, a `commands` value that
+is not a list, a script that is a bare map of settings with no `commands`
+list, or a top-level key authored in both files, where the merged record
+could hold only one of the two values. Unknown keys and commands it can hold
+exactly are not a reason to refuse; they stay editable and survive the save.
+This matters beyond the one asset: saving any cutscene writes every record
+of that type back through the same path, so a pair the editor could not
+reproduce must be left alone rather than reshaped because something else was
+edited.
+
 Saving rewrites only what changed, in place: headers, comments, local
 variables, heredocs and nowdocs, shared ASCII blocks, unknown keys,
 backslashes, trailing spaces and wide glyphs all survive, a data-only edit
 leaves the script or timeline file byte-identical, a no-op save writes
 nothing, and multi-line text is written as a nowdoc. A value shared through
 one source variable is edited in place when only the selected entry uses it,
-and otherwise retargeted to a new variable so nothing else changes. A save is
-one transaction over the pair: both sources are built, evaluated, hydrated
-through the engine (and, for a summon, compiled), written to temporary
-files, backed up, and then swapped in; if any step fails neither file
-changes.
+and otherwise retargeted to a new variable so nothing else changes.
+
+A save is one transaction over the pair, and so is a first save, an
+overwrite and a deletion. Each proposed file is staged beside its
+destination and read back, so what the engine evaluates and hydrates is the
+exact bytes that will be installed; the backup is taken once for the pair,
+before anything destructive; then both files are installed. If either cannot
+be, every file already touched is put back -- the same bytes, at the same
+modification time -- and a folder the save created is removed, so a refused
+save leaves the complete old pair or, for a new asset, nothing at all. In
+the rare case where putting a file back also fails, the editor says so and
+names the file rather than reporting that nothing changed.
 
 ### Cinematics
 
@@ -1012,8 +1034,10 @@ NPCs, the player, staged actors, title cards, narration, transitions.
 | `Ctrl+T` | Playtest the saved cinematic in the real game |
 
 The stage shows, beside the frame, the session's lanes and what each is
-doing, the checkpoints recorded, whether a skip would be accepted and why
-not, and the log of launches, transfers, battles and failures. Dialogue
+doing, the checkpoints recorded, the music the engine is playing (and
+whether it is the field's own track, restored), who owns field input,
+whether a skip would be accepted and why not, and the log of launches,
+transfers, battles and failures. Dialogue
 waits for you as it would for the player; a battle resolves as a victory
 on the next step (the pane says so); a transfer loads the destination map.
 The preview starts from the map event that triggers the cinematic when one
@@ -1043,7 +1067,12 @@ explicit shape. The Skip group of the record pane says which road the
 current policy takes; `C` on the Preview pane runs the cinematic twice —
 watched to the end and skipped at once — and lists every observable
 difference between the two final states, so an unfinished finalizer shows
-up as a row rather than a surprise.
+up as a row rather than a surprise. What it compares: the final map, the
+player's position and facing, the camera, the staged cast, switches,
+variables, story events, checkpoints, the music (the track playing, whether
+it loops, and whether it is the one the field was playing before the
+cinematic began), who owns ordinary field input, and whether saving is
+available again.
 
 #### Map triggers
 
@@ -1151,6 +1180,13 @@ fields are preserved and are not errors.
 - A saved asset's id cannot be renamed in place; duplicate and delete.
 - The duration overview is an estimate from authored seconds; the engine's
   clock during preview is the truth.
+- An authored music **fade-out** finishes on the game's own clock: the
+  engine completes it from its audio update, which advances by the game
+  frame, and a preview owns its own clock instead. The preview reports the
+  music state the engine has actually reached, so a cinematic that fades its
+  music out at the end shows that track still playing. Completion behaviour
+  stated without a fade — which is what the finalizer vocabulary requires —
+  settles at once and compares exactly.
 
 ## Overlays
 

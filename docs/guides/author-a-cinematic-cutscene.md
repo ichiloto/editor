@@ -123,8 +123,10 @@ player, the kites moving, the narration box, the title card.
 - If a command fails, the run stops with the engine's message; `J` jumps the
   tree and the record pane to the command that failed, marked `✗`.
 - `C` runs the cinematic twice, watched to the end and skipped at once, and
-  lists every difference between the two final states. An empty list is the
-  goal; a row is a finalizer you have not finished.
+  lists every difference between the two final states — the map, the player,
+  the camera, the cast, the world state, the music left playing, and who owns
+  field input. An empty list is the goal; a row is a finalizer you have not
+  finished.
 - `V` is the duration overview: every lane and block with the time it is
   authored to take, `+input` where it waits for the player.
 
