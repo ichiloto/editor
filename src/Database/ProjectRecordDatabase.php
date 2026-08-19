@@ -2971,17 +2971,31 @@ final class ProjectRecordDatabase
     {
         $subList = $this->schema->subList;
         $record = $this->getRecordByIndex($recordIndex);
-        $commands = $this->getFrameCommands($recordIndex, $framePath);
 
-        if ($subList === null || ! $record instanceof ProjectRecord || $commands === null || ! $this->isEditable()) {
+        if (! $record instanceof ProjectRecord || ! $this->isEditable()) {
             return;
         }
+
+        if ($framePath === [] && $subList === null) {
+            // A record with command lists but no sub-list of its own -- a
+            // summon's tracks and cues -- edits its root fields plainly.
+            $this->setField($recordIndex, $fieldId, $rawValue);
+
+            return;
+        }
+
+        $commands = $this->getFrameCommands($recordIndex, $framePath);
 
         // Field ids inside a frame carry the frame's own list prefix (a
         // command's, however the frame was reached), not the schema's
         // sub-list prefix: an NPC's variants are "variantN…" at the root and
         // its script's commands "commandN…" inside.
         $frameList = $this->frameSubList($framePath) ?? $subList;
+
+        if ($frameList === null || $commands === null) {
+            return;
+        }
+
         $prefix = preg_quote($frameList->prefix, '/');
 
         if (preg_match('/^' . $prefix . '(\\d+)Option(\\d+)Text$/', $fieldId, $matches) === 1) {
@@ -3022,7 +3036,7 @@ final class ProjectRecordDatabase
                 return;
             }
 
-            $written = $this->writeEntryFieldToken($this->frameSubList($framePath) ?? $subList, $entry, $matches[2], $rawValue);
+            $written = $this->writeEntryFieldToken($frameList, $entry, $matches[2], $rawValue);
 
             if ($written === null) {
                 return;
@@ -3033,7 +3047,7 @@ final class ProjectRecordDatabase
             return;
         }
 
-        $this->writeFrameCommands($record, $subList, $framePath, $commands);
+        $this->writeFrameCommands($record, $subList ?? $frameList, $framePath, $commands);
     }
 
     /**

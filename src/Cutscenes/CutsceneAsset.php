@@ -534,17 +534,23 @@ final class CutsceneAsset
                 throw new RuntimeException(sprintf('Unable to replace %s.', $this->partnerPath()));
             }
         } catch (Throwable $throwable) {
-            @unlink($dataTemp);
-            @unlink($partnerTemp);
+            foreach ([$dataTemp, $partnerTemp] as $temporary) {
+                if (is_file($temporary)) {
+                    unlink($temporary);
+                }
+            }
 
-            if (! $folderExisted) {
-                @rmdir($this->folder);
+            if (! $folderExisted && is_dir($this->folder) && array_diff(scandir($this->folder) ?: [], ['.', '..']) === []) {
+                rmdir($this->folder);
             }
 
             throw $throwable;
         } finally {
-            @unlink($dataTemp);
-            @unlink($partnerTemp);
+            foreach ([$dataTemp, $partnerTemp] as $temporary) {
+                if (is_file($temporary)) {
+                    unlink($temporary);
+                }
+            }
         }
 
         $this->adoptWritten($dataSource, $partnerSource);

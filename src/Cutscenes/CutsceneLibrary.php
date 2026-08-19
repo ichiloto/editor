@@ -370,6 +370,20 @@ final class CutsceneLibrary
     }
 
     /**
+     * Adds a created asset to its type's list, as a new dirty asset, and
+     * rebuilds the records over it.
+     */
+    public function adopt(CutsceneAsset $asset): void
+    {
+        if ($this->find($asset->type, $asset->id) !== null) {
+            throw new RuntimeException(sprintf('A %s "%s" already exists.', $asset->type->noun(), $asset->id));
+        }
+
+        $this->assets[$asset->type->value][] = $asset;
+        $this->refreshRecords($asset->type);
+    }
+
+    /**
      * Duplicates an asset under a new id, as a new dirty asset.
      */
     public function duplicate(CutsceneType $type, string $id, string $newId): CutsceneAsset

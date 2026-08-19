@@ -14,6 +14,9 @@ use Ichiloto\Editor\Backup\BackupWriter;
 use Ichiloto\Editor\Canvas\CanvasTool;
 use Ichiloto\Editor\Canvas\Clipboard;
 use Ichiloto\Editor\Canvas\ToolGeometry;
+use Ichiloto\Editor\Cutscenes\CutsceneType;
+use Ichiloto\Editor\Cutscenes\Editing\CutsceneOutlinePane;
+use Ichiloto\Editor\Cutscenes\Editing\CutscenesWorkspace;
 use Ichiloto\Editor\Database\DatabaseCatalog;
 use Ichiloto\Editor\Database\DatabaseCategoryDefinition;
 use Ichiloto\Editor\Database\InventoryCatalog;
@@ -96,6 +99,9 @@ use Throwable;
  */
 final class Editor
 {
+    use CutscenesWorkspace;
+    use CutsceneOutlinePane;
+
     /**
      * The per-frame time budget (~60fps). The loop sleeps only the remainder
      * of the budget after real work, so input latency stays at one frame.
@@ -737,6 +743,7 @@ final class Editor
             $this->renderDatabaseEditCursor(...),
             fn(): bool => $this->isDatabaseEditing,
         );
+        $this->bootCutscenesWorkspace();
         $this->inputRouter = $this->buildInputRouter();
 
         set_exception_handler(function (Throwable $e) {
@@ -1141,6 +1148,7 @@ final class Editor
         $router->bindModal(Modal::COMMAND_PALETTE, $this->handleCommandPaletteInput(...));
         $router->bindModal(Modal::HELP, $this->handleHelpInput(...));
         $router->bindModal(Modal::DATABASE, $this->handleDatabaseInput(...));
+        $router->bindModal(Modal::CUTSCENES, $this->handleCutscenesInput(...));
         $router->bindModal(Modal::DESTINATION_SPAWN_CONFIRMATION, $this->handleDestinationSpawnConfirmationInput(...));
         $router->bindModal(Modal::DESTINATION_SPAWN_SELECTION, $this->handleDestinationSpawnSelectionInput(...));
         $router->bindModal(Modal::DESTINATION_DIALOG, $this->handleDestinationDialogInput(...));
@@ -1152,6 +1160,7 @@ final class Editor
 
         $router->onStatusDetailShortcut($this->openStatusDetailOverlay(...));
         $router->onDatabaseShortcut($this->openDatabaseWindow(...));
+        $router->onCutscenesShortcut($this->openCutscenesWorkspace(...));
         $router->setMouseInterceptor($this->handleMouseInput(...));
         $router->bindTextEditing(
             $this->isCapturingTypedText(...),
@@ -1873,7 +1882,7 @@ final class Editor
      */
     private function isNpcInspectorHosting(): bool
     {
-        return ! $this->isDatabaseOpen && $this->editingMode === self::MODE_NPC;
+        return ! $this->isDatabaseOpen && ! $this->isCutscenesOpen && $this->editingMode === self::MODE_NPC;
     }
 
     /**
@@ -2948,6 +2957,13 @@ final class Editor
         if ($input === "\033" || $this->inputRouter->isDatabaseKey($input)) {
             // Esc pops exactly one level; Ctrl+D / F2 toggles the screen.
             $this->closeDatabaseWindow();
+            return;
+        }
+
+        if ($this->inputRouter->isCutscenesKey($input)) {
+            // Straight across to the Cutscenes workspace, never both at once.
+            $this->closeDatabaseWindow();
+            $this->openCutscenesWorkspace();
             return;
         }
 
@@ -5162,6 +5178,14 @@ final class Editor
             );
         }
 
+        foreach (CutsceneType::cases() as $type) {
+            $items[] = new PaletteItem(
+                sprintf('Cutscenes: %s', $type->label()),
+                InputRouter::KEY_CUTSCENES_LABEL,
+                fn() => $this->openCutscenesAt($type),
+            );
+        }
+
         $selectedMap = $this->getSelectedMap();
 
         if ($selectedMap instanceof ProjectMap) {
@@ -5568,6 +5592,15 @@ final class Editor
 
         if (! is_array($pending) || ! $this->workspace instanceof ProjectWorkspace) {
             $this->closeDatabaseEntryDeleteConfirmation('Delete cancelled.');
+            return;
+        }
+
+        if (isset($pending['cutscene'])) {
+            // A cutscene asset: marked for deletion and recorded against the
+            // asset; its folder goes on save.
+            $this->closeDatabaseEntryDeleteConfirmation('');
+            $this->deleteSelectedCutscene();
+
             return;
         }
 
@@ -6128,12 +6161,23 @@ final class Editor
             }
         }
 
+        // Cutscenes: each dirty asset as its own paired transaction.
+        $cutscenes = $this->saveAllCutscenes();
+        $savedCutscenes = count($cutscenes['saved']);
+
+        foreach ($cutscenes['failed'] as $asset => $reason) {
+            Debug::error(sprintf('Save all (%s): %s', $asset, $reason));
+            $failures[] = sprintf('%s: %s', $asset, $reason);
+        }
+
         $summary = sprintf(
-            'Saved %d map%s and %d database%s.',
+            'Saved %d map%s, %d database%s and %d cutscene%s.',
             $savedMaps,
             $savedMaps === 1 ? '' : 's',
             $savedDatabases,
             $savedDatabases === 1 ? '' : 's',
+            $savedCutscenes,
+            $savedCutscenes === 1 ? '' : 's',
         );
         $detailLines = [];
 
@@ -8103,6 +8147,13 @@ final class Editor
      */
     private function getSelectedDatabaseCategoryDefinition(): DatabaseCategoryDefinition
     {
+        if ($this->isCutscenesOpen) {
+            // The Cutscenes screen hosts the record pane over its own
+            // categories, keyed by type, so no Database predicate matches
+            // and every per-category selection stays its own.
+            return $this->cutsceneCategoryDefinition();
+        }
+
         return DatabaseCatalog::at($this->databaseCategoryIndex);
     }
 
@@ -8173,6 +8224,10 @@ final class Editor
      */
     private function getSelectedRecordDatabase(): ?ProjectRecordDatabase
     {
+        if ($this->isCutscenesOpen) {
+            return $this->cutsceneRecords();
+        }
+
         return $this->workspace?->getRecordDatabase($this->getSelectedDatabaseCategoryDefinition()->key);
     }
 
@@ -8484,20 +8539,27 @@ final class Editor
 
         $database = $this->activeRecordDatabase();
 
-        // A record-level list is [key]; an option arm ends
-        // [i, 'options', j, 'then']; a branch or variant arm [i, arm].
-        $chunk = count($path) === 1 && is_string($path[0])
+        // A record-level list is [key]; a list member's arm ends
+        // [i, listKey, j, armKey] -- an option's `then`, a lane's
+        // `commands`; a branch, sequence or variant arm ends [i, arm].
+        $count = count($path);
+        $chunk = $count === 1 && is_string($path[0])
             ? 1
-            : ((($path[count($path) - 3] ?? null) === 'options') ? 4 : 2);
-        $enclosingCommand = $chunk === 1 ? null : intval($path[count($path) - $chunk]);
-        $this->databaseCommandFramePath = array_slice($path, 0, count($path) - $chunk);
+            : ((is_string($path[$count - 3] ?? null) && is_int($path[$count - 2] ?? null) && is_string($path[$count - 1] ?? null) && is_int($path[$count - 4] ?? null)) ? 4 : 2);
+        $enclosingCommand = $chunk === 1 ? null : intval($path[$count - $chunk]);
+        $this->databaseCommandFramePath = array_slice($path, 0, $count - $chunk);
         $this->databaseSelectedSettingIndex = 0;
 
         // Land back on the row the frame belonged to: the record's own list
         // row, or the command (or sub-list entry) that holds the arm.
+        $enclosingList = $this->databaseCommandFramePath !== [] && is_string($this->databaseCommandFramePath[0])
+            ? ($database?->schema->commandLists[$this->databaseCommandFramePath[0]] ?? null)
+            : null;
         $landing = $chunk === 1
             ? 'commandList' . ucfirst(strval($path[0]))
-            : (($this->databaseCommandFramePath === [] ? ($database?->schema->subList?->prefix ?? 'command') : 'command') . $enclosingCommand);
+            : (($this->databaseCommandFramePath === []
+                ? ($database?->schema->subList?->prefix ?? 'command')
+                : ($enclosingList?->prefix ?? 'command')) . $enclosingCommand);
 
         foreach ($this->getDatabaseSettingsFields() as $index => $field) {
             if (str_starts_with((string) ($field['field'] ?? ''), $landing)) {
@@ -9186,6 +9248,10 @@ final class Editor
      */
     private function getDatabaseSettingsFields(): array
     {
+        if ($this->isCutscenesOpen) {
+            return $this->getCutsceneSettingsFields();
+        }
+
         if ($this->isNpcInspectorHosting()) {
             // The Inspector hosts the record pane in NPC mode: same fields,
             // pickers, condition and write editors, and command frames as
@@ -10022,6 +10088,13 @@ final class Editor
             return;
         }
 
+        if ($control->type === InputControlType::MULTILINE) {
+            // Text with line breaks is edited in its own editor, exactly.
+            $this->openMultilineEditor($field);
+
+            return;
+        }
+
         $this->isDatabaseEditing = true;
         $this->databaseEditBuffer = $control->rawValue;
         $this->databaseEditCursorIndex = mb_strlen($this->databaseEditBuffer);
@@ -10250,7 +10323,7 @@ final class Editor
             return;
         }
 
-        $catalog = new ReferenceCatalog($this->workspace, $this->getSelectedMap());
+        $catalog = $this->referenceCatalog();
         $values = $catalog->valuesFor($reference['category']);
 
         if (! $this->referencePicker->open(self::WORLD_WRITE_NAME_FIELD, $reference['label'], $reference['category'], $values, strval($set['name'] ?? ''), $catalog->labelsFor($reference['category']))) {
@@ -10408,7 +10481,7 @@ final class Editor
             return;
         }
 
-        $elements = new ReferenceCatalog($this->workspace, $this->getSelectedMap())->valuesFor('elements');
+        $elements = $this->referenceCatalog()->valuesFor('elements');
 
         if ($elements === []) {
             // No element enum, no rows to build: saying so beats an editor
@@ -10644,7 +10717,7 @@ final class Editor
             return;
         }
 
-        $catalog = new ReferenceCatalog($this->workspace, $this->getSelectedMap());
+        $catalog = $this->referenceCatalog();
         $values = $catalog->valuesFor($reference['category']);
 
         if (! $this->referencePicker->open(
@@ -10787,6 +10860,25 @@ final class Editor
      * @param array<string, mixed> $field The settings-pane field descriptor.
      * @return bool True when the picker opened.
      */
+    /**
+     * Returns the catalogue pickers choose from, reading the map the author
+     * is working in -- the selected map, or the cinematic's start map while
+     * the Cutscenes screen hosts the pane -- and the cinematic itself, for
+     * its cast, checkpoints and subjects.
+     */
+    private function referenceCatalog(): ReferenceCatalog
+    {
+        if (! $this->workspace instanceof ProjectWorkspace) {
+            throw new RuntimeException('The editor workspace is not loaded.');
+        }
+
+        if ($this->isCutscenesOpen) {
+            return new ReferenceCatalog($this->workspace, $this->cutsceneReferenceMap(), $this->selectedCutscene());
+        }
+
+        return new ReferenceCatalog($this->workspace, $this->getSelectedMap());
+    }
+
     private function openReferencePicker(array $field): bool
     {
         if (! $this->workspace instanceof ProjectWorkspace) {
@@ -10795,7 +10887,7 @@ final class Editor
 
         $category = (string) ($field['reference'] ?? '');
         $label = (string) ($field['label'] ?? 'Reference');
-        $catalog = new ReferenceCatalog($this->workspace, $this->getSelectedMap());
+        $catalog = $this->referenceCatalog();
         $values = $catalog->valuesFor($category);
         $labels = $catalog->labelsFor($category);
 
@@ -10973,6 +11065,27 @@ final class Editor
         }
 
         try {
+            if (($field['multi'] ?? false) === true) {
+                // A list picked a member at a time: the pick toggles it.
+                $members = array_values(array_filter(array_map(trim(...), explode(',', (string) ($field['value'] ?? ''))), static fn(string $member): bool => $member !== ''));
+                $position = array_search($selected, $members, true);
+
+                if ($position === false) {
+                    $members[] = $selected;
+                } else {
+                    array_splice($members, $position, 1);
+                }
+
+                $this->applyDatabaseFieldValueRecorded($field, implode(', ', $members));
+                $this->setStatus(
+                    $position === false ? sprintf('%s: added %s.', $label, $selected) : sprintf('%s: removed %s.', $label, $selected),
+                    StatusLevel::SUCCESS,
+                );
+                $this->renderDatabasePanes(['list', 'settings', 'cue', 'frames', 'preview']);
+
+                return;
+            }
+
             // The record layer reads the none row as clearing the reference.
             $this->applyDatabaseFieldValueRecorded($field, $selected);
             $this->setStatus(
@@ -11074,6 +11187,12 @@ final class Editor
      */
     private function applyDatabaseFieldValueRecorded(array $field, string $rawValue): void
     {
+        if ($this->isCutscenesOpen) {
+            $this->applyCutsceneFieldValueRecorded($field, $rawValue);
+
+            return;
+        }
+
         if ($this->isNpcInspectorHosting()) {
             $this->applyNpcFieldValueRecorded($field, $rawValue);
 
@@ -12080,6 +12199,17 @@ final class Editor
             return;
         }
 
+        if ($this->isCutscenesOpen) {
+            $this->cutscenesScreen->flush();
+
+            if ($this->areOverlaysDirty) {
+                $this->drawOverlays();
+            }
+
+            $this->clearDirtyRenderState();
+            return;
+        }
+
         foreach ([$this->assetsPanel, $this->canvasPanel, $this->inspectorPanel] as $panel) {
             if ($panel->isDirty()) {
                 $panel->render();
@@ -12136,6 +12266,14 @@ final class Editor
         if ($this->isDatabaseOpen) {
             $this->clearScreen();
             $this->drawDatabaseArea(includeRoot: true);
+            $this->renderModalOverlays($this->resolveLayout());
+            return;
+        }
+
+        if ($this->isCutscenesOpen) {
+            $this->clearScreen();
+            $this->cutscenesScreen->drawAll(includeRoot: true);
+            $this->cutscenesScreen->clearDirty();
             $this->renderModalOverlays($this->resolveLayout());
             return;
         }
@@ -13257,7 +13395,7 @@ final class Editor
             return;
         }
 
-        $referenceCatalog = new ReferenceCatalog($this->workspace, $this->getSelectedMap());
+        $referenceCatalog = $this->referenceCatalog();
         $referenceLabels = $referenceCatalog->labelsFor($category);
         $entries = array_map(
             static fn(string $value): array => [
@@ -13610,6 +13748,17 @@ final class Editor
      */
     private function renderDatabasePanes(array $panes, ?array $layout = null, bool $includeRoot = false): void
     {
+        if ($this->isCutscenesOpen) {
+            // The sub-editors ask for Database panes; in the Cutscenes screen
+            // the same request means its own panes of the same names.
+            $this->cutscenesScreen->markDirty(
+                array_values(array_intersect($panes, \Ichiloto\Editor\UI\CutscenesScreen::PANES)) ?: [\Ichiloto\Editor\UI\CutscenesScreen::PANE_SETTINGS],
+                $includeRoot,
+            );
+
+            return;
+        }
+
         if ($this->isNpcInspectorHosting()) {
             // The sub-editors ask for Database panes; in the Inspector the
             // same request means the inspector and canvas.
@@ -14353,6 +14502,10 @@ final class Editor
     private function recordPaneMetrics(): array
     {
         $layout = $this->resolveLayout();
+
+        if ($this->isCutscenesOpen) {
+            return $this->cutsceneRecordPaneMetrics();
+        }
 
         if ($this->isNpcInspectorHosting()) {
             return [
@@ -15599,6 +15752,12 @@ final class Editor
 
         if ($this->isDatabaseOpen) {
             $this->renderDatabaseOverlay($layout);
+            return;
+        }
+
+        if ($this->isCutscenesOpen) {
+            $this->cutscenesScreen->drawAll($this->resolveCutscenesLayout($layout), true);
+            $this->cutscenesScreen->clearDirty();
             return;
         }
 

@@ -47,6 +47,7 @@ enum Modal: string
      * modals and the global Ctrl+E shortcut).
      */
     case DATABASE = 'database';
+    case CUTSCENES = 'cutscenes';
     /**
      * The spawn-point confirmation at the end of the destination round trip.
      */

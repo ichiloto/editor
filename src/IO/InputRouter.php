@@ -53,6 +53,12 @@ final class InputRouter
      * The human-readable label for the Database shortcut.
      */
     public const string KEY_DATABASE_LABEL = 'Ctrl+D / F2';
+    /**
+     * The F4 sequences that open the Cutscenes workspace, in both common
+     * terminal encodings.
+     */
+    private const array KEY_CUTSCENES_F4_SEQUENCES = ["\033OS", "\033[14~"];
+    public const string KEY_CUTSCENES_LABEL = 'F4';
 
     /**
      * @var array<string, Closure(string, string): void> Handlers keyed by Modal value.
@@ -70,6 +76,7 @@ final class InputRouter
      * Opens the Database screen (Ctrl+D / F2).
      */
     private ?Closure $databaseShortcut = null;
+    private ?Closure $cutscenesShortcut = null;
     /**
      * Attempts mouse-event handling; returns whether the input was consumed.
      */
@@ -126,6 +133,14 @@ final class InputRouter
     public function onDatabaseShortcut(callable $action): void
     {
         $this->databaseShortcut = $action(...);
+    }
+
+    /**
+     * Registers the action that opens the Cutscenes workspace.
+     */
+    public function onCutscenesShortcut(callable $action): void
+    {
+        $this->cutscenesShortcut = $action(...);
     }
 
     /**
@@ -203,8 +218,8 @@ final class InputRouter
             return;
         }
 
-        // 3. The Database screen consumes everything while open.
-        if ($active === Modal::DATABASE) {
+        // 3. The Database and Cutscenes screens consume everything while open.
+        if ($active === Modal::DATABASE || $active === Modal::CUTSCENES) {
             $this->dispatchModal($active, $input, $normalized);
             return;
         }
@@ -213,6 +228,12 @@ final class InputRouter
         //    already open beneath a higher modal such as help).
         if ($this->databaseShortcut !== null && ! $this->modals->has(Modal::DATABASE) && $this->isDatabaseKey($input)) {
             ($this->databaseShortcut)();
+            return;
+        }
+
+        // 4b. The Cutscenes workspace opens the same way, from F4.
+        if ($this->cutscenesShortcut !== null && ! $this->modals->has(Modal::CUTSCENES) && $this->isCutscenesKey($input)) {
+            ($this->cutscenesShortcut)();
             return;
         }
 
@@ -282,12 +303,30 @@ final class InputRouter
      *
      * @return array<int, array{key: string, description: string}>
      */
+    /**
+     * Returns whether an input token is the Cutscenes workspace key.
+     */
+    public function isCutscenesKey(string $input): bool
+    {
+        foreach (self::KEY_CUTSCENES_F4_SEQUENCES as $sequence) {
+            if (str_contains($input, $sequence)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     public function describeBindings(): array
     {
         $entries = [];
 
         if ($this->databaseShortcut !== null) {
             $entries[] = ['key' => self::KEY_DATABASE_LABEL, 'description' => 'Open the Database screen'];
+        }
+
+        if ($this->cutscenesShortcut !== null) {
+            $entries[] = ['key' => self::KEY_CUTSCENES_LABEL, 'description' => 'Open the Cutscenes workspace (Cinematic and Summon)'];
         }
 
         if ($this->statusDetailShortcut !== null) {
