@@ -212,6 +212,44 @@ trait CutsceneOutlinePane
     }
 
     /**
+     * Inserts a new entry after the selected row: a wait command, a blank
+     * track, keyframe or cue, as the row's list takes.
+     */
+    private function insertCutsceneTreeRow(): void
+    {
+        $entry = $this->locateCutsceneTreeEntry();
+
+        if ($entry === null) {
+            return;
+        }
+
+        $blank = match ($entry['row']['kind']) {
+            'track' => ['type' => 'glyph', 'id' => 'track', 'keyframes' => []],
+            'keyframe' => ['frame' => 0, 'duration' => 1, 'content' => '', 'position' => [0, 0]],
+            'cue' => ['id' => 'cue', 'frame' => 0, 'type' => 'applyEffect'],
+            default => ['type' => 'wait', 'seconds' => 0.5],
+        };
+        $list = CutsceneOutline::valueAt($entry['payload'], $entry['listPath']);
+        $list = is_array($list) ? array_values($list) : [];
+        $index = $entry['index'];
+
+        if (in_array($entry['row']['kind'], ['track', 'cue'], true)) {
+            $blank['id'] = $this->freeOutlineId($list, $blank['id']);
+        }
+
+        array_splice($list, $index + 1, 0, [$blank]);
+        $targetKey = $this->replaceKeyIndex($entry['row']['key'], $index + 1);
+
+        if ($this->mutateCutscenePayload(
+            'Add ' . $entry['row']['kind'],
+            static fn(array $payload): array => CutsceneOutline::withValueAt($payload, $entry['listPath'], $list),
+        )) {
+            $this->setStatus(sprintf('Added a %s after the selected one.', $entry['row']['kind']), StatusLevel::SUCCESS);
+            $this->focusCutsceneTreeKey($targetKey);
+        }
+    }
+
+    /**
      * Inserts a copy of the selected entry right after it.
      */
     private function duplicateCutsceneTreeRow(): void
@@ -599,7 +637,7 @@ trait CutsceneOutlinePane
 
         return new EditorWindow(
             title: $title,
-            help: $this->fitHelp($layout['treeWidth'], 'Enter:Open  Space:Fold  [ ]:Reorder  < >:Un-nest/Nest  Shift+D:Dup  Del:Remove', 'Enter:Open  Space:Fold  [ ]:Reorder  < >:Nest  Del', 'Enter:Open  Space:Fold  [ ]', 'Enter:Open'),
+            help: $this->fitHelp($layout['treeWidth'], 'Enter:Open  Space:Fold  [ ]:Reorder  < >:Un-nest/Nest  Shift+O:Add  Shift+D:Dup  Del:Remove', 'Enter:Open  Space:Fold  [ ]:Reorder  < >:Nest  Del', 'Enter:Open  Space:Fold  [ ]', 'Enter:Open'),
             position: ['x' => $layout['treeX'], 'y' => $layout['treeY']],
             width: $layout['treeWidth'],
             height: $layout['treeHeight'],

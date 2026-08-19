@@ -26,7 +26,7 @@ final readonly class RecordSubList
      *   Per-`type` field overrides, keyed by type value. A closure is asked
      *   for the fields when a variant's own shape depends on the entry.
      * @param string|null $variantKey The entry key selecting a variant (e.g. `type`).
-     * @param array<string, RecordSubList> $nestedLists Per-variant nested
+     * @param array<string, RecordSubList|\Closure> $nestedLists Per-variant nested
      * lists. Event movement routes use this to edit structured `steps`
      * without flattening them into free text.
      * @param array<string, string> $commandArms Event-command lists every
@@ -117,6 +117,17 @@ final readonly class RecordSubList
             return null;
         }
 
-        return $this->nestedLists[strval($entry[$this->variantKey] ?? '')] ?? null;
+        $nested = $this->nestedLists[strval($entry[$this->variantKey] ?? '')] ?? null;
+
+        // A list some shapes of a variant carry and others do not -- a
+        // camera route's points, but not a camera detach's -- is a closure
+        // over the entry.
+        if ($nested instanceof \Closure) {
+            $resolved = $nested($entry);
+
+            return $resolved instanceof self ? $resolved : null;
+        }
+
+        return $nested;
     }
 }

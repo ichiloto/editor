@@ -488,6 +488,12 @@ trait CutscenesWorkspace
             return;
         }
 
+        if ($this->cutsceneFocus === CutscenesScreen::PANE_TREE && $this->isShiftLetterShortcut($input, 'O')) {
+            $this->insertCutsceneTreeRow();
+
+            return;
+        }
+
         if ($this->isShiftLetterShortcut($input, 'O')) {
             $this->addCutsceneSubItem();
 
@@ -830,6 +836,18 @@ trait CutscenesWorkspace
             return $fields;
         }
 
+        if ($asset->isNew()) {
+            // Until the first save makes the folder, the id is the author's
+            // to choose; afterwards it is the folder and stays read-only.
+            foreach ($fields as $position => $field) {
+                if (($field['field'] ?? null) === 'id') {
+                    $fields[$position]['editable'] = true;
+                    $fields[$position]['control'] = new \Ichiloto\Editor\Inspector\InputControl(\Ichiloto\Editor\Inspector\InputControlType::TEXT, $asset->id);
+                    $fields[$position]['hint'] = 'free to choose until the first save';
+                }
+            }
+        }
+
         return $this->groupCutsceneFields($asset, $fields);
     }
 
@@ -1117,6 +1135,12 @@ trait CutscenesWorkspace
             return;
         }
 
+        if ($fieldId === 'id' && $this->databaseCommandFramePath === []) {
+            $this->renameNewCutscene(trim($rawValue));
+
+            return;
+        }
+
         $framePath = $this->databaseCommandFramePath;
         $this->mutateSelectedCutscene(
             sprintf('%s edit', $field['label'] ?? 'Cutscene field'),
@@ -1124,6 +1148,48 @@ trait CutscenesWorkspace
                 $records->setFrameField($index, $framePath, $fieldId, $rawValue);
             },
         );
+    }
+
+    /**
+     * Gives the selected never-saved asset a new id, undoably.
+     */
+    private function renameNewCutscene(string $newId): void
+    {
+        $library = $this->cutsceneLibrary();
+        $asset = $this->selectedCutscene();
+
+        if ($library === null || $asset === null || $newId === '' || $newId === $asset->id) {
+            return;
+        }
+
+        $type = $asset->type;
+        $oldId = $asset->id;
+
+        try {
+            $library->renameNew($type, $oldId, $newId);
+        } catch (Throwable $throwable) {
+            $this->setErrorStatus($throwable, 'Rename');
+            $this->renderCutscenesArea();
+
+            return;
+        }
+
+        $this->selectCutsceneById($newId);
+        $this->recordCommand(new GenericCommand(
+            'Rename ' . $type->noun(),
+            function () use ($library, $type, $oldId, $newId): void {
+                $library->renameNew($type, $oldId, $newId);
+                $this->selectCutsceneById($newId);
+                $this->renderCutscenesArea();
+            },
+            function () use ($library, $type, $oldId, $newId): void {
+                $library->renameNew($type, $newId, $oldId);
+                $this->selectCutsceneById($oldId);
+                $this->renderCutscenesArea();
+            },
+        ));
+        $this->setStatus(sprintf('Renamed to "%s"; the folder takes this name on save.', $newId), StatusLevel::SUCCESS);
+        $this->renderCutscenesArea(includeRoot: true);
     }
 
     /**
@@ -1149,10 +1215,20 @@ trait CutscenesWorkspace
                 $nested = $records->frameNestedContext($index, $framePath, $selectedId);
 
                 if ($nested !== null) {
-                    $added = $records->addFrameNestedItem($index, $framePath, $nested['parentIndex']);
-                    $added = $added === null ? null : ['nested', $nested['parentIndex'], $added];
+                    // On one of the nested rows (a step, a lane, a point), or
+                    // on the command's own rows while it has none yet, the
+                    // add is a nested entry; on a command that already has
+                    // its nested entries, the add is the next command, so a
+                    // block is never the end of the road.
+                    $parent = $records->getFrameCommands($index, $framePath)[$nested['parentIndex']] ?? null;
+                    $existing = is_array($parent) && is_array($parent[$nested['list']->key] ?? null) ? count($parent[$nested['list']->key]) : 0;
 
-                    return;
+                    if ($nested['nestedIndex'] !== null || $existing === 0) {
+                        $added = $records->addFrameNestedItem($index, $framePath, $nested['parentIndex']);
+                        $added = $added === null ? null : ['nested', $nested['parentIndex'], $added];
+
+                        return;
+                    }
                 }
 
                 $subList = $records->schema->commandLists[strval($framePath[0])] ?? null;

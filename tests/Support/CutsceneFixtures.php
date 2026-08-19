@@ -265,3 +265,96 @@ function libraryOf(Editor $editor): CutsceneLibrary
 
     return $workspace->cutscenes;
 }
+
+/**
+ * Returns the settings field descriptor with an id.
+ */
+function cutsceneField(Editor $editor, string $fieldId): array
+{
+    foreach (callEditorMethod($editor, 'getDatabaseSettingsFields') as $field) {
+        if (($field['field'] ?? null) === $fieldId) {
+            return $field;
+        }
+    }
+
+    throw new RuntimeException("No field {$fieldId} on the pane: " . implode(', ', cutsceneFieldIds($editor)));
+}
+
+/**
+ * Lists the settings field ids on the pane.
+ *
+ * @return string[]
+ */
+function cutsceneFieldIds(Editor $editor): array
+{
+    return array_values(array_filter(array_map(static fn(array $f): string => (string) ($f['field'] ?? ''), callEditorMethod($editor, 'getDatabaseSettingsFields')), static fn(string $id): bool => $id !== ''));
+}
+
+/**
+ * Sets a settings field through the same recorded path the inline editor,
+ * option cycling and pickers commit through.
+ */
+function setCutsceneField(Editor $editor, string $fieldId, string $value): void
+{
+    selectCutsceneField($editor, $fieldId);
+    callEditorMethod($editor, 'applyDatabaseFieldValueRecorded', cutsceneField($editor, $fieldId), $value);
+}
+
+/**
+ * Opens the frame a row names (Enter on it).
+ */
+function openCutsceneFrame(Editor $editor, string $fieldId): void
+{
+    selectCutsceneField($editor, $fieldId);
+    pressKeys($editor, "\n");
+}
+
+/**
+ * Adds an entry after the row (Shift+O on it) and returns the new list of
+ * field ids.
+ *
+ * @return string[]
+ */
+function addCutsceneAfter(Editor $editor, string $fieldId): array
+{
+    selectCutsceneField($editor, $fieldId);
+    pressKeys($editor, 'O');
+
+    return cutsceneFieldIds($editor);
+}
+
+/**
+ * Two original maps for the opening fixture: a wide night plain with a
+ * walled edge, and the dawn field it transfers to.
+ */
+function writeOpeningMaps(string $root): void
+{
+    $write = static function (string $id, array $tiles, array $data) use ($root): void {
+        $folder = $root . '/assets/Maps/' . $id;
+        mkdir($folder, 0o777, true);
+        $width = strlen($tiles[0]);
+        $events = array_fill(0, count($tiles), str_repeat(' ', $width));
+        $leaf = basename($id);
+        file_put_contents($folder . '/' . $leaf . '.map.php', "<?php\n\nreturn <<<'ICHILOTO_MAP'\n" . implode("\n", $tiles) . "\nICHILOTO_MAP;\n");
+        file_put_contents($folder . '/' . $leaf . '.event.php', "<?php\n\nreturn <<<'ICHILOTO_EVENT_MAP'\n" . implode("\n", $events) . "\nICHILOTO_EVENT_MAP;\n");
+        file_put_contents($folder . '/' . $leaf . '.data.php', "<?php\n\nreturn " . var_export($data, true) . ";\n");
+    };
+
+    $night = ['#' . str_repeat('#', 58) . '#'];
+
+    for ($row = 1; $row < 17; $row++) {
+        $night[] = '#' . str_repeat(' ', 58) . '#';
+    }
+
+    $night[] = str_repeat('#', 60);
+    $write('skyfield-night', $night, ['name' => 'Skyfield at Night', 'region' => 'Plain', 'description' => 'A wide plain under stars.', 'triggers' => [], 'events' => [], 'npcs' => [['id' => 'watcher', 'name' => 'Watcher', 'sprite' => 'W', 'x' => 30, 'y' => 14]]]);
+
+    $dawn = [str_repeat('#', 40)];
+
+    for ($row = 1; $row < 11; $row++) {
+        $dawn[] = '#' . str_repeat(' ', 38) . '#';
+    }
+
+    $dawn[] = str_repeat('#', 40);
+    $write('skyfield-dawn', $dawn, ['name' => 'Skyfield at Dawn', 'region' => 'Plain', 'description' => 'The same plain, lit.', 'triggers' => [], 'events' => [], 'npcs' => []]);
+}

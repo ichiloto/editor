@@ -3442,10 +3442,56 @@ final class ProjectRecordDatabase
                 continue;
             }
 
-            return self::writeNested($entry, explode('.', $field->key), self::coerce($field, $rawValue));
+            $written = self::writeNested($entry, explode('.', $field->key), self::coerce($field, $rawValue));
+
+            if ($field->key === $subList->variantKey && $written !== null) {
+                $written = self::withoutStaleVariantFields($subList, $entry, $written);
+            }
+
+            return $written;
         }
 
         return null;
+    }
+
+    /**
+     * Drops the fields the old variant owned that the new one does not,
+     * when an entry changes variant: a wait turned into a transfer keeps
+     * nothing of its seconds, and a finalizer command turned from a switch
+     * write into a player move carries no name or value for the Engine's
+     * strict shapes to refuse. Unknown keys -- neither variant's -- stay.
+     *
+     * @param array<string, mixed> $before The entry before the change.
+     * @param array<string, mixed> $after The entry with the new variant.
+     * @return array<string, mixed>
+     */
+    private static function withoutStaleVariantFields(RecordSubList $subList, array $before, array $after): array
+    {
+        $roots = static function (array $fields): array {
+            $keys = [];
+
+            foreach ($fields as $field) {
+                $keys[] = explode('.', $field->key)[0];
+            }
+
+            return $keys;
+        };
+        $oldRoots = $roots($subList->fieldsFor($before));
+        $newRoots = $roots($subList->fieldsFor($after));
+        $oldNested = $subList->nestedListFor($before);
+        $newNested = $subList->nestedListFor($after);
+
+        foreach ($oldRoots as $root) {
+            if ($root !== $subList->variantKey && ! in_array($root, $newRoots, true)) {
+                unset($after[$root]);
+            }
+        }
+
+        if ($oldNested !== null && ($newNested === null || $newNested->key !== $oldNested->key)) {
+            unset($after[$oldNested->key]);
+        }
+
+        return $after;
     }
 
     /**

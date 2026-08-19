@@ -384,6 +384,50 @@ final class CutsceneLibrary
     }
 
     /**
+     * Gives a never-saved asset its identity: the folder does not exist yet,
+     * so the id is free to choose until the first save fixes it.
+     */
+    public function renameNew(CutsceneType $type, string $id, string $newId): CutsceneAsset
+    {
+        $source = $this->find($type, $id);
+
+        if ($source === null) {
+            throw new RuntimeException(sprintf('No %s "%s" to rename.', $type->noun(), $id));
+        }
+
+        if (! $source->isNew()) {
+            throw new RuntimeException(sprintf('%s "%s" is saved; its id is its folder. Duplicate it under the new id and delete this one.', ucfirst($type->noun()), $id));
+        }
+
+        if ($newId === $id) {
+            return $source;
+        }
+
+        if ($this->find($type, $newId) !== null || is_dir($this->rootFor($type) . '/' . $newId)) {
+            throw new RuntimeException(sprintf('A %s "%s" already exists.', $type->noun(), $newId));
+        }
+
+        if (preg_match('/^[a-z0-9][a-z0-9._-]*$/', $newId) !== 1) {
+            throw new RuntimeException(sprintf('"%s" is not a stable id (lowercase letters, digits, ".", "_" and "-").', $newId));
+        }
+
+        $payload = $source->payload();
+        $payload['id'] = $newId;
+        unset($payload[CutsceneAsset::ORIGIN_KEY]);
+        $renamed = CutsceneAsset::create($type, $newId, $this->rootFor($type), $payload, $this->projectRoot);
+
+        foreach ($this->assets[$type->value] as $position => $asset) {
+            if ($asset === $source) {
+                $this->assets[$type->value][$position] = $renamed;
+            }
+        }
+
+        $this->refreshRecords($type);
+
+        return $renamed;
+    }
+
+    /**
      * Duplicates an asset under a new id, as a new dirty asset.
      */
     public function duplicate(CutsceneType $type, string $id, string $newId): CutsceneAsset

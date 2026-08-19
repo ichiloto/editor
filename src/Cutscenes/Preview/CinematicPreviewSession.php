@@ -350,6 +350,14 @@ final class CinematicPreviewSession
         return $this->playing ? self::STATUS_RUNNING : self::STATUS_PAUSED;
     }
 
+    /**
+     * Whether the Engine still has a session owning the field.
+     */
+    public function hasActiveSession(): bool
+    {
+        return $this->scene->hasUnstableEventSession();
+    }
+
     public function isFinished(): bool
     {
         return in_array($this->status(), [self::STATUS_COMPLETED, self::STATUS_FAILED, self::STATUS_STOPPED, self::STATUS_REFUSED], true);
@@ -522,6 +530,9 @@ final class CinematicPreviewSession
 
         ksort($staged);
         $values['staged actors'] = $staged;
+        // The Engine refuses numbered saves and quicksaves while a session
+        // owns the field; after completion the field is stable again.
+        $values['save available'] = ! $this->scene->hasUnstableEventSession();
         $values['transfers'] = count($this->scene->transfers);
         $values['battles'] = count($this->scene->previewSceneManager->battles);
         $values['checkpoints'] = $this->checkpoints();

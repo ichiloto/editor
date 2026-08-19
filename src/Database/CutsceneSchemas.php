@@ -238,7 +238,7 @@ final class CutsceneSchemas
             nestedLists: [
                 'move_route' => RecordSchemaCatalog::routeStepList(),
                 'parallel' => self::laneList(),
-                'camera' => self::cameraPointList(),
+                'camera' => static fn(array $entry): ?RecordSubList => strtolower(strval($entry['operation'] ?? '')) === 'route' ? self::cameraPointList() : null,
             ],
             variantArms: [
                 'sequence' => ['commands' => 'Sequence'],
