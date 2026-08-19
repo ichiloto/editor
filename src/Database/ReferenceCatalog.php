@@ -10,6 +10,8 @@ use Ichiloto\Editor\ProjectClass;
 use Ichiloto\Editor\ProjectQuest;
 use Ichiloto\Editor\ProjectSkill;
 use Ichiloto\Editor\ProjectMap;
+use Ichiloto\Editor\Cutscenes\CutsceneAsset;
+use Ichiloto\Editor\Cutscenes\CutsceneType;
 use Ichiloto\Editor\ProjectWorkspace;
 
 /**
@@ -57,6 +59,12 @@ final class ReferenceCatalog
         'equipment_acquisition_policies',
         'equipment_special_properties',
         'permanent_growth',
+        'cinematics',
+        'summons',
+        'cinematic_cast',
+        'cinematic_subjects',
+        'cinematic_checkpoints',
+        'event_markers',
     ];
 
     /**
@@ -80,6 +88,7 @@ final class ReferenceCatalog
     public function __construct(
         private readonly ProjectWorkspace $workspace,
         private readonly ?ProjectMap $currentMap = null,
+        private readonly ?CutsceneAsset $currentCutscene = null,
     ) {
     }
 
@@ -150,8 +159,126 @@ final class ReferenceCatalog
                 static fn(object $animation): string => $animation->name ?? '',
                 $this->workspace->animationDatabase->getAnimations()
             ),
+            // Cutscenes are folders, so the stable id is the folder name.
+            'cinematics' => $this->workspace->cutscenes?->ids(CutsceneType::CINEMATIC) ?? [],
+            'summons' => $this->workspace->cutscenes?->ids(CutsceneType::SUMMON) ?? [],
+            // Cutscene-local kinds read the cinematic the author is in: the
+            // cast it declares, the checkpoints it names, and everything a
+            // subject reference may point at on its map.
+            'cinematic_cast' => $this->castIds(['staged_actor']),
+            'cinematic_subjects' => $this->subjectIds(),
+            'cinematic_checkpoints' => $this->checkpointIds(),
+            'event_markers' => $this->currentMap?->getEventMarkers() ?? [],
             default => $this->recordValues($category),
         };
+    }
+
+    /**
+     * Returns the ids of the current cinematic's cast members of the given
+     * kinds, staged actors declared in the data file and actors staged by a
+     * `stage_actor` command alike.
+     *
+     * @param string[] $kinds The cast kinds to list.
+     * @return string[]
+     */
+    private function castIds(array $kinds): array
+    {
+        if ($this->currentCutscene === null || $this->currentCutscene->type !== CutsceneType::CINEMATIC) {
+            return [];
+        }
+
+        $ids = [];
+
+        foreach ((array) ($this->currentCutscene->data()['cast'] ?? []) as $entry) {
+            if (! is_array($entry)) {
+                continue;
+            }
+
+            $kind = strtolower(strval($entry['kind'] ?? 'staged_actor'));
+            $id = trim(strval($entry['id'] ?? ''));
+
+            if ($id !== '' && in_array($kind, $kinds, true)) {
+                $ids[$id] = $id;
+            }
+        }
+
+        if (in_array('staged_actor', $kinds, true)) {
+            self::collectStagedActorIds($this->currentCutscene->commands(), $ids);
+        }
+
+        return array_values($ids);
+    }
+
+    /**
+     * Walks a command tree for `stage_actor` commands, so an actor staged
+     * mid-scene is offered to the commands after it.
+     *
+     * @param array<int, mixed> $commands
+     * @param array<string, string> $ids
+     */
+    private static function collectStagedActorIds(array $commands, array &$ids): void
+    {
+        foreach ($commands as $command) {
+            if (! is_array($command)) {
+                continue;
+            }
+
+            if (($command['type'] ?? '') === 'stage_actor') {
+                $actor = is_array($command['actor'] ?? null) ? $command['actor'] : $command;
+                $id = trim(strval($actor['id'] ?? ''));
+
+                if ($id !== '') {
+                    $ids[$id] = $id;
+                }
+            }
+
+            foreach (['commands', 'then', 'else', 'cancel'] as $arm) {
+                if (is_array($command[$arm] ?? null)) {
+                    self::collectStagedActorIds($command[$arm], $ids);
+                }
+            }
+
+            foreach (['lanes', 'options'] as $list) {
+                foreach ((array) ($command[$list] ?? []) as $member) {
+                    if (is_array($member)) {
+                        self::collectStagedActorIds(array_values((array) ($member['commands'] ?? $member['then'] ?? (array_is_list($member) ? $member : []))), $ids);
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Returns everything a subject id may name in the current cinematic:
+     * staged actors, map NPCs, party actors and the map's event markers.
+     *
+     * @return string[]
+     */
+    private function subjectIds(): array
+    {
+        return array_values(array_unique([
+            ...$this->castIds(['staged_actor', 'npc', 'party_actor', 'player']),
+            ...($this->currentMap?->getNpcs()->ids() ?? []),
+            ...$this->valuesFor('actors'),
+            ...($this->currentMap?->getEventMarkers() ?? []),
+        ]));
+    }
+
+    /**
+     * Returns the checkpoints the current cinematic declares.
+     *
+     * @return string[]
+     */
+    private function checkpointIds(): array
+    {
+        if ($this->currentCutscene === null) {
+            return [];
+        }
+
+        return array_values(array_filter(array_map(
+            static fn(mixed $checkpoint): string => is_scalar($checkpoint) ? trim(strval($checkpoint)) : '',
+            (array) ($this->currentCutscene->data()['checkpoints'] ?? []),
+        ), static fn(string $checkpoint): bool => $checkpoint !== ''));
     }
 
     /**

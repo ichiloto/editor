@@ -33,4 +33,15 @@ enum RecordFieldCodec: string
      * the line cannot carry is preserved rather than shown.
      */
     case KEY_VALUES = 'key_values';
+
+    /**
+     * A list of strings that are the rows of one block -- a staged actor's
+     * sprite -- stored as the list, shown and edited as lines.
+     */
+    case LINES = 'lines';
+
+    /**
+     * A point stored as `[x, y]`, shown as `x, y`.
+     */
+    case POINT = 'point';
 }

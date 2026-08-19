@@ -32,6 +32,9 @@ final readonly class RecordSubList
      * @param array<string, string> $commandArms Event-command lists every
      * entry may carry, key => label. A dialogue variant's `script` is
      * opened as a frame this way, exactly like a branch arm.
+     * @param array<string, array<string, string>> $variantArms Command lists
+     * only some variants carry, variant => (key => label): a cinematic
+     * `sequence` owns its `commands`, a `choice` its `cancel` arm.
      */
     public function __construct(
         public string $key,
@@ -43,7 +46,30 @@ final readonly class RecordSubList
         public ?string $variantKey = null,
         public array $nestedLists = [],
         public array $commandArms = [],
+        public array $variantArms = [],
     ) {
+    }
+
+    /**
+     * Returns the command arms one entry carries: the arms every entry has,
+     * and those its variant adds.
+     *
+     * @param array<string, mixed> $entry The entry payload.
+     * @return array<string, string> Arm key => label.
+     */
+    public function armsFor(array $entry): array
+    {
+        $arms = $this->commandArms;
+
+        if ($this->variantKey !== null) {
+            $variant = strval($entry[$this->variantKey] ?? '');
+
+            foreach ($this->variantArms[$variant] ?? [] as $key => $label) {
+                $arms[$key] = $label;
+            }
+        }
+
+        return $arms;
     }
 
     /**

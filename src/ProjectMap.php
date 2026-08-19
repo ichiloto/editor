@@ -481,6 +481,17 @@ final class ProjectMap
     }
 
     /**
+     * Returns the markers of the map's events, which a cinematic subject
+     * reference may name.
+     *
+     * @return string[] The markers, in map order.
+     */
+    public function getEventMarkers(): array
+    {
+        return array_values(array_map(strval(...), array_keys($this->getEventDefinitions())));
+    }
+
+    /**
      * Returns the map's NPCs.
      *
      * @return NpcCollection The collection, read fresh from the map data.

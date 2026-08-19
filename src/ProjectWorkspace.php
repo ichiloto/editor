@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Ichiloto\Editor;
 
 use FilesystemIterator;
+use Ichiloto\Editor\Cutscenes\CutsceneLibrary;
 use Ichiloto\Editor\Database\EngineDataBootstrap;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Database\RecordSchema;
@@ -21,6 +22,7 @@ final readonly class ProjectWorkspace
     /**
      * @param ProjectMap[] $maps
      * @param array<string, ProjectRecordDatabase> $recordDatabases Schema-driven categories, keyed by category key.
+     * @param CutsceneLibrary|null $cutscenes The project's cinematics and summons.
      */
     public function __construct(
         public string                   $projectRoot,
@@ -36,6 +38,7 @@ final readonly class ProjectWorkspace
         public ProjectSystemDatabase    $systemDatabase,
         public ProjectQuestDatabase     $questDatabase,
         public array                    $recordDatabases = [],
+        public ?CutsceneLibrary         $cutscenes = null,
     ) {
     }
 
@@ -120,6 +123,7 @@ final readonly class ProjectWorkspace
                 static fn(RecordSchema $schema): ProjectRecordDatabase => ProjectRecordDatabase::fromProject($projectRoot, $schema),
                 RecordSchemaCatalog::all(),
             ),
+            cutscenes: CutsceneLibrary::fromProject($projectRoot),
         );
     }
 
@@ -219,7 +223,8 @@ final readonly class ProjectWorkspace
             || $this->skillDatabase->isDirty()
             || $this->animationDatabase->isDirty()
             || $this->systemDatabase->isDirty()
-            || $this->questDatabase->isDirty();
+            || $this->questDatabase->isDirty()
+            || ($this->cutscenes?->hasUnsavedChanges() ?? false);
     }
 
     /**
@@ -253,6 +258,7 @@ final readonly class ProjectWorkspace
             systemDatabase: $this->systemDatabase,
             questDatabase: $this->questDatabase,
             recordDatabases: $this->recordDatabases,
+            cutscenes: $this->cutscenes,
         );
     }
 

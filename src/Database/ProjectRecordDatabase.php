@@ -517,9 +517,11 @@ final class ProjectRecordDatabase
 
         $arms = $variant === 'branch' ? ['then' => 'Then', 'else' => 'Else'] : [];
 
-        foreach ($subList->commandArms as $armKey => $armLabel) {
-            // Arms every entry of this list may carry: a dialogue variant's
-            // own script, edited in a frame like a branch arm.
+        foreach ($subList->armsFor($entry) as $armKey => $armLabel) {
+            // Arms every entry of this list may carry -- a dialogue variant's
+            // own script -- and arms its variant adds -- a sequence's
+            // commands, a choice's cancel arm -- edited in frames like a
+            // branch arm.
             $arms[$armKey] = $armLabel;
         }
 
@@ -564,6 +566,24 @@ final class ProjectRecordDatabase
                         $field->label,
                     ),
                 );
+            }
+
+            foreach ($nestedList->armsFor($nestedEntry) as $armKey => $armLabel) {
+                // A nested entry owning commands -- a parallel block's lane --
+                // opens them as a frame, like an option's arm.
+                $fields[] = [
+                    'label' => sprintf(
+                        '%s %d %s %d %s Commands',
+                        ucfirst($subList->singular),
+                        $entryIndex + 1,
+                        ucfirst($nestedList->singular),
+                        $nestedIndex + 1,
+                        $armLabel,
+                    ),
+                    'value' => sprintf('%d', count((array) ($nestedEntry[$armKey] ?? []))),
+                    'field' => self::nestedSubFieldId($subList->prefix, $entryIndex, $nestedList->prefix, $nestedIndex, ucfirst($armKey)),
+                    'frame' => [...$basePath, $entryIndex, $nestedList->key, $nestedIndex, $armKey],
+                ];
             }
         }
 
@@ -2469,6 +2489,21 @@ final class ProjectRecordDatabase
                 $descriptor['blankLabel'] = $field->blankLabel;
             }
 
+            if ($field->codec === RecordFieldCodec::CSV_LIST) {
+                // A list picked from a catalogue: each pick toggles one
+                // member in or out, so the picker is used several times.
+                $descriptor['multi'] = true;
+            }
+
+            return $descriptor;
+        }
+
+        if ($field->type === InputControlType::MULTILINE) {
+            // Shown as its first line with a count of the rest; edited in
+            // the multiline editor, which holds the exact text.
+            $descriptor['control'] = new InputControl(InputControlType::MULTILINE, $value, $field->step);
+            $descriptor['value'] = self::summarizeLines($value);
+
             return $descriptor;
         }
 
@@ -2510,9 +2545,51 @@ final class ProjectRecordDatabase
      * @param string $rawValue The raw edited value.
      * @return mixed
      */
+    /**
+     * Returns a multi-line value as one settings line: its first line and
+     * how many more it holds.
+     */
+    public static function summarizeLines(string $value): string
+    {
+        if (! str_contains($value, "\n")) {
+            return $value;
+        }
+
+        $lines = explode("\n", $value);
+        $first = array_shift($lines);
+
+        return sprintf('%s ⏎ %d more line%s', $first, count($lines), count($lines) === 1 ? '' : 's');
+    }
+
     private static function coerce(RecordField $field, string $rawValue): mixed
     {
+        if ($field->type === InputControlType::MULTILINE || $field->codec === RecordFieldCodec::LINES) {
+            // Exact text: every space, backslash and blank line is the
+            // author's. Only a wholly empty block is nothing.
+            $text = str_replace("\r\n", "\n", $rawValue);
+
+            if ($text === '' && $field->removeWhenEmpty) {
+                return null;
+            }
+
+            return $field->codec === RecordFieldCodec::LINES ? explode("\n", $text) : $text;
+        }
+
         $trimmed = trim($rawValue);
+
+        if ($field->codec === RecordFieldCodec::POINT) {
+            if ($trimmed === '' && $field->removeWhenEmpty) {
+                return null;
+            }
+
+            $parts = array_map(trim(...), explode(',', $trimmed));
+
+            if (count($parts) !== 2 || ! is_numeric($parts[0]) || ! is_numeric($parts[1])) {
+                throw new \InvalidArgumentException(sprintf('%s must be two numbers, x and y, separated by a comma.', $field->label));
+            }
+
+            return [intval($parts[0]), intval($parts[1])];
+        }
 
         if ($field->codec === RecordFieldCodec::CONDITIONS) {
             $conditions = ConditionCodec::decodeAll($trimmed);
@@ -2610,6 +2687,13 @@ final class ProjectRecordDatabase
             RecordFieldCodec::WORLD_WRITES => WorldWriteCodec::encodeAll(is_array($value) ? $value : []),
             RecordFieldCodec::CSV_LIST => implode(', ', array_map(strval(...), is_array($value) ? $value : [])),
             RecordFieldCodec::KEY_VALUES => ParameterMapCodec::encode(is_array($value) ? $value : []),
+            // A sprite authored as one string is one row; as a list, its rows.
+            RecordFieldCodec::LINES => is_array($value)
+                ? implode("\n", array_map(strval(...), $value))
+                : ProjectRecord::stringify($value),
+            RecordFieldCodec::POINT => is_array($value)
+                ? implode(', ', array_map(strval(...), array_values($value)))
+                : ProjectRecord::stringify($value),
             RecordFieldCodec::NONE => ProjectRecord::stringify($value),
         };
     }
@@ -3170,12 +3254,24 @@ final class ProjectRecordDatabase
         while ($position < count($framePath)) {
             $entryNumber = intval($framePath[$position]) + 1;
 
-            if (($framePath[$position + 1] ?? null) === 'options') {
-                $parts[] = sprintf('Choice %d › Option %d', $entryNumber, intval($framePath[$position + 2]) + 1);
+            if (self::isNestedArmPath($framePath, $position)) {
+                $listKey = strval($framePath[$position + 1]);
+                [$owner, $member] = match ($listKey) {
+                    'options' => ['Choice', 'Option'],
+                    'lanes' => ['Parallel', 'Lane'],
+                    default => [ucfirst($listKey), 'Entry'],
+                };
+                $parts[] = sprintf('%s %d › %s %d', $owner, $entryNumber, $member, intval($framePath[$position + 2]) + 1);
                 $position += 4;
             } else {
-                $noun = $position === 0 && $firstLevelSingular !== null ? $firstLevelSingular : 'Branch';
-                $parts[] = sprintf('%s %d › %s', $noun, $entryNumber, ucfirst(strval($framePath[$position + 1] ?? '')));
+                $arm = strval($framePath[$position + 1] ?? '');
+                $noun = match (true) {
+                    $position === 0 && $firstLevelSingular !== null => $firstLevelSingular,
+                    $arm === 'commands' => 'Sequence',
+                    $arm === 'cancel' => 'Choice',
+                    default => 'Branch',
+                };
+                $parts[] = sprintf('%s %d › %s', $noun, $entryNumber, ucfirst($arm));
                 $position += 2;
             }
         }
@@ -3202,14 +3298,16 @@ final class ProjectRecordDatabase
                 return null;
             }
 
-            if (($framePath[$position + 1] ?? null) === 'options') {
-                $option = ((array) ($entry['options'] ?? []))[intval($framePath[$position + 2] ?? -1)] ?? null;
+            if (self::isNestedArmPath($framePath, $position)) {
+                // A list inside the entry, one of its members, and that
+                // member's arm: an option's `then`, a lane's `commands`.
+                $member = ((array) ($entry[$framePath[$position + 1]] ?? []))[intval($framePath[$position + 2])] ?? null;
 
-                if (! is_array($option) || ($framePath[$position + 3] ?? null) !== 'then') {
+                if (! is_array($member)) {
                     return null;
                 }
 
-                $list = array_values((array) ($option['then'] ?? []));
+                $list = array_values((array) ($member[$framePath[$position + 3]] ?? []));
                 $position += 4;
                 continue;
             }
@@ -3225,6 +3323,21 @@ final class ProjectRecordDatabase
         }
 
         return $list;
+    }
+
+    /**
+     * Returns whether a frame path, at a position, descends through a list
+     * member's arm -- `[i, 'options', k, 'then']` or `[i, 'lanes', k,
+     * 'commands']` -- rather than through the entry's own arm.
+     *
+     * @param array<int, int|string> $framePath The path.
+     * @param int $position The index of the entry step.
+     */
+    private static function isNestedArmPath(array $framePath, int $position): bool
+    {
+        return is_string($framePath[$position + 1] ?? null)
+            && is_int($framePath[$position + 2] ?? null)
+            && is_string($framePath[$position + 3] ?? null);
     }
 
     /**
@@ -3248,20 +3361,22 @@ final class ProjectRecordDatabase
             return $list;
         }
 
-        if (($framePath[1] ?? null) === 'options') {
-            $optionIndex = intval($framePath[2] ?? -1);
-            $options = array_values((array) ($list[$entryIndex]['options'] ?? []));
+        if (self::isNestedArmPath($framePath, 0)) {
+            $listKey = strval($framePath[1]);
+            $memberIndex = intval($framePath[2]);
+            $armKey = strval($framePath[3]);
+            $members = array_values((array) ($list[$entryIndex][$listKey] ?? []));
 
-            if (! is_array($options[$optionIndex] ?? null)) {
+            if (! is_array($members[$memberIndex] ?? null)) {
                 return $list;
             }
 
-            $options[$optionIndex]['then'] = self::withFrameList(
-                (array) ($options[$optionIndex]['then'] ?? []),
+            $members[$memberIndex][$armKey] = self::withFrameList(
+                (array) ($members[$memberIndex][$armKey] ?? []),
                 array_slice($framePath, 4),
                 $frameList,
             );
-            $list[$entryIndex]['options'] = $options;
+            $list[$entryIndex][$listKey] = $members;
 
             return $list;
         }

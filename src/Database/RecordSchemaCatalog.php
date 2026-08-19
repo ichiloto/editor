@@ -1137,20 +1137,47 @@ final class RecordSchemaCatalog
             variants: self::eventCommandVariants(),
             variantKey: 'type',
             nestedLists: [
-                'move_route' => new RecordSubList(
-                    key: 'steps',
-                    prefix: 'step',
-                    singular: 'route step',
-                    fields: [
-                        new RecordField('direction', 'Direction', options: ['up', 'down', 'left', 'right']),
-                        new RecordField('count', 'Count', InputControlType::INTEGER),
-                        RecordField::boolean('faceOnly', 'Face Only'),
-                        new RecordField('seconds', 'Seconds', InputControlType::FLOAT, removeWhenEmpty: true),
-                    ],
-                    blank: ['direction' => 'down', 'count' => 1, 'faceOnly' => false],
-                ),
+                'move_route' => self::routeStepList(),
             ],
         );
+    }
+
+    /**
+     * Returns the steps of a movement route: the one nested list every
+     * route-bearing command edits the same way.
+     */
+    public static function routeStepList(): RecordSubList
+    {
+        return new RecordSubList(
+            key: 'steps',
+            prefix: 'step',
+            singular: 'route step',
+            fields: [
+                new RecordField('direction', 'Direction', options: ['up', 'down', 'left', 'right']),
+                new RecordField('count', 'Count', InputControlType::INTEGER),
+                RecordField::boolean('faceOnly', 'Face Only'),
+                new RecordField('seconds', 'Seconds', InputControlType::FLOAT, removeWhenEmpty: true),
+            ],
+            blank: ['direction' => 'down', 'count' => 1, 'faceOnly' => false],
+        );
+    }
+
+    /**
+     * Returns the cinematic category the Cutscenes workspace edits. Not a
+     * Database category: it is not listed by all().
+     */
+    public static function cinematics(): RecordSchema
+    {
+        return CutsceneSchemas::cinematics();
+    }
+
+    /**
+     * Returns the summon category the Cutscenes workspace edits. Not a
+     * Database category: it is not listed by all().
+     */
+    public static function summons(): RecordSchema
+    {
+        return CutsceneSchemas::summons();
     }
 
     /**
@@ -1162,7 +1189,7 @@ final class RecordSchemaCatalog
      *
      * @return array<string, RecordField[]|Closure(array<string, mixed>): RecordField[]>
      */
-    private static function eventCommandVariants(): array
+    public static function eventCommandVariants(): array
     {
         return [
             'text' => [
