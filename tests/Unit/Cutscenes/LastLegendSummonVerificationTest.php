@@ -65,6 +65,37 @@ it('opens, compiles and previews every Last Legend summon read-only, leaving eve
     fwrite(STDERR, "\nLast Legend summons (read-only): " . json_encode($report) . "\n");
 });
 
+it('merges and splits every committed Last Legend pair exactly, and a no-op save writes nothing', function () {
+    $root = disposableLastLegend();
+
+    if ($root === null) {
+        $this->markTestSkipped('No Last Legend checkout is pinned (ICHILOTO_GAME_SRC).');
+    }
+
+    $before = authoredHashTree($root);
+    $library = \Ichiloto\Editor\Cutscenes\CutsceneLibrary::fromProject($root);
+    $pairs = 0;
+
+    foreach (CutsceneType::cases() as $type) {
+        foreach ($library->assets($type) as $asset) {
+            $pairs++;
+            // Editable means the editor proved it can read this pair into one
+            // record and write that record back as the same two files.
+            expect($asset->isEditable())->toBeTrue($asset->id . ' is editable')
+                ->and($asset->readOnlyReason())->toBeNull();
+
+            // Applying its own payload changes nothing, and neither does
+            // saving: a pair nobody edited is a pair nobody rewrites.
+            $asset->apply($asset->payload());
+            expect($asset->isDirty())->toBeFalse($asset->id . ' stays clean through a round trip')
+                ->and($asset->save())->toBeFalse($asset->id . ' writes nothing when clean');
+        }
+    }
+
+    expect($pairs)->toBeGreaterThanOrEqual(4)
+        ->and(authoredHashTree($root))->toBe($before);
+});
+
 it('authors a new summon in a disposable Last Legend copy end to end, with unrelated hashes unchanged', function () {
     $root = disposableLastLegend();
 
