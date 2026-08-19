@@ -378,7 +378,41 @@ function renderGoldenFrame(int $width, int $height): string
  */
 function renderPlainFrame(int $width, int $height): string
 {
-    $frame = renderGoldenFrame($width, $height);
+    return plainTextOfFrame(renderGoldenFrame($width, $height), $width, $height);
+}
+
+/**
+ * Renders one editor's full screen the way a terminal would draw it.
+ *
+ * @param Editor $editor The editor, in whatever state a test put it.
+ * @param int $width The terminal width.
+ * @param int $height The terminal height.
+ * @return string The frame as it appears on screen.
+ */
+function renderEditorPlainFrame(Editor $editor, int $width, int $height): string
+{
+    setEditorProperty($editor, 'lastTerminalSize', ['width' => $width, 'height' => $height]);
+    ob_start();
+
+    try {
+        callEditorMethod($editor, 'renderFullScreen');
+    } finally {
+        $frame = (string) ob_get_clean();
+    }
+
+    return plainTextOfFrame($frame, $width, $height);
+}
+
+/**
+ * Replays a frame's cursor moves and text into a plain grid.
+ *
+ * @param string $frame The escape-coded frame.
+ * @param int $width The terminal width.
+ * @param int $height The terminal height.
+ * @return string The frame as it appears on screen.
+ */
+function plainTextOfFrame(string $frame, int $width, int $height): string
+{
     $screen = array_fill(0, $height, array_fill(0, $width, ' '));
     $row = 0;
     $column = 0;
@@ -415,3 +449,5 @@ function renderPlainFrame(int $width, int $height): string
 
     return implode("\n", $lines);
 }
+
+require_once __DIR__ . '/Support/CutsceneFixtures.php';

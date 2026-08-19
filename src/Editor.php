@@ -16,6 +16,7 @@ use Ichiloto\Editor\Canvas\Clipboard;
 use Ichiloto\Editor\Canvas\ToolGeometry;
 use Ichiloto\Editor\Cutscenes\CutsceneType;
 use Ichiloto\Editor\Cutscenes\Editing\CutsceneOutlinePane;
+use Ichiloto\Editor\Cutscenes\Editing\CutscenePreviewPane;
 use Ichiloto\Editor\Cutscenes\Editing\CutscenesWorkspace;
 use Ichiloto\Editor\Database\DatabaseCatalog;
 use Ichiloto\Editor\Database\DatabaseCategoryDefinition;
@@ -101,6 +102,7 @@ final class Editor
 {
     use CutscenesWorkspace;
     use CutsceneOutlinePane;
+    use CutscenePreviewPane;
 
     /**
      * The per-frame time budget (~60fps). The loop sleeps only the remainder
@@ -905,6 +907,7 @@ final class Editor
     {
         $this->syncTerminalSizeIfNeeded();
         $this->tickDatabaseAnimationPreview();
+        $this->tickCutscenePreview();
         $this->tickStatusExpiry();
     }
 

@@ -160,6 +160,8 @@ trait CutscenesWorkspace
         $this->multilineEditor->close();
         $this->referencePicker->close();
         $this->cutsceneFilter->clear();
+        $this->disposeCinematicPreview();
+        $this->cutscenePreviewView = 'stage';
         $this->statusMessage = 'Cutscenes closed.';
         $this->requestFullRender();
     }
@@ -188,6 +190,8 @@ trait CutscenesWorkspace
         }
 
         $this->leaveCutsceneEditingState();
+        $this->disposeCinematicPreview();
+        $this->cutscenePreviewView = 'stage';
         $this->cutsceneType = $type;
         $this->cutsceneFilter->clear();
         $this->databaseSelectedSettingIndex = 0;
@@ -432,6 +436,12 @@ trait CutscenesWorkspace
             return;
         }
 
+        if ($input === "\x14") {
+            $this->playtestSelectedCinematic();
+
+            return;
+        }
+
         if ($input === "\x01") {
             $this->saveAllAssets();
 
@@ -453,6 +463,10 @@ trait CutscenesWorkspace
         if ($this->isShiftArrow($input, 'down') || $this->isShiftArrow($input, 'right')) {
             $this->cycleCutsceneFocus(1);
 
+            return;
+        }
+
+        if ($this->cutsceneFocus === CutscenesScreen::PANE_PREVIEW && $this->handleCutscenePreviewInput($input)) {
             return;
         }
 
@@ -629,6 +643,8 @@ trait CutscenesWorkspace
         }
 
         $this->leaveCutsceneEditingState();
+        $this->disposeCinematicPreview();
+        $this->cutscenePreviewView = 'stage';
         $this->setSelectedRecordIndex($visible[$next]);
         $this->databaseSelectedSettingIndex = 0;
         $this->cutsceneTreeCursor = 0;
@@ -1576,7 +1592,9 @@ trait CutscenesWorkspace
         $listHeight = max(3, $innerHeight - $typesHeight - $gutter);
         $paneX = $rightX + $listWidth + $gutter;
         $paneWidth = max(20, $rightWidth - $listWidth - $gutter);
-        $previewHeight = max(6, min(12, intdiv($innerHeight, 3)));
+        $previewHeight = $this->isCutscenePreviewExpanded()
+            ? max(10, intdiv($innerHeight, 2))
+            : max(6, min(12, intdiv($innerHeight, 3)));
         $topHeight = max(6, $innerHeight - $previewHeight - $gutter);
         $stacked = $paneWidth < 80;
 

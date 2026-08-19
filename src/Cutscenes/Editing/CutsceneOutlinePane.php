@@ -172,20 +172,6 @@ trait CutsceneOutlinePane
     }
 
     /**
-     * Moves inside the preview pane: scrolls its lines.
-     */
-    private function moveCutscenePreview(int $deltaX, int $deltaY): void
-    {
-        $this->cutscenePreviewScroll = max(0, $this->cutscenePreviewScroll + $deltaY + $deltaX);
-        $this->renderDatabasePanes(['preview']);
-    }
-
-    /**
-     * The preview pane's scroll offset.
-     */
-    private int $cutscenePreviewScroll = 0;
-
-    /**
      * @param array<string, int> $layout
      */
     private function createCutsceneTreeWindow(array $layout): EditorWindow
@@ -194,10 +180,21 @@ trait CutsceneOutlinePane
         $lines = [];
         $contentWidth = $this->getWindowContentWidth($layout['treeWidth']);
 
+        $preview = $this->cinematicPreview;
+        $activeKeys = $preview !== null && ! $preview->isFinished() ? $preview->activeKeys() : [];
+        $failedKey = $preview?->failure()['key'] ?? null;
+
         foreach ($rows as $position => $row) {
             $marker = $row['foldable'] ? (isset($this->cutsceneTreeCollapsed[$row['key']]) ? '▸ ' : '▾ ') : '  ';
             $prefix = $position === $this->cutsceneTreeCursor && $this->cutsceneFocus === CutscenesScreen::PANE_TREE ? '> ' : '  ';
-            $lines[] = $prefix . str_repeat('  ', $row['depth']) . $marker . $row['text'];
+            // The running preview marks the commands its lanes are on (▶)
+            // and the one it failed at (✗); the tree itself is untouched.
+            $state = match (true) {
+                $failedKey !== null && $row['key'] === $failedKey => ' ✗',
+                in_array($row['key'], $activeKeys, true) => ' ▶',
+                default => '',
+            };
+            $lines[] = $prefix . str_repeat('  ', $row['depth']) . $marker . $row['text'] . $state;
         }
 
         if ($lines === []) {
@@ -218,65 +215,5 @@ trait CutsceneOutlinePane
             foregroundColor: $this->resolveCutscenePaneColor(CutscenesScreen::PANE_TREE),
             content: $this->fitLines(array_slice($lines, $scroll), $contentWidth, $contentHeight),
         );
-    }
-
-    /**
-     * @param array<string, int> $layout
-     */
-    private function createCutscenePreviewWindow(array $layout): EditorWindow
-    {
-        return new EditorWindow(
-            title: 'Preview',
-            help: '',
-            position: ['x' => $layout['previewX'], 'y' => $layout['previewY']],
-            width: $layout['previewWidth'],
-            height: $layout['previewHeight'],
-            foregroundColor: $this->resolveCutscenePaneColor(CutscenesScreen::PANE_PREVIEW),
-            content: $this->fitLines(
-                array_slice($this->cutscenePreviewLines($layout), $this->cutscenePreviewScroll),
-                $this->getWindowContentWidth($layout['previewWidth']),
-                max(1, $layout['previewHeight'] - 2),
-            ),
-        );
-    }
-
-    /**
-     * Returns the preview pane's lines. Replaced by the running preview
-     * when one is playing.
-     *
-     * @param array<string, int> $layout
-     * @return string[]
-     */
-    private function cutscenePreviewLines(array $layout): array
-    {
-        unset($layout);
-        $asset = $this->selectedCutscene();
-
-        if ($asset === null) {
-            return ['  Select a cutscene to preview it.'];
-        }
-
-        return $this->describeCutsceneStanding($asset);
-    }
-
-    /**
-     * Returns what the engine makes of the asset as it stands: hydrated, or
-     * refused with the engine's reason.
-     *
-     * @return string[]
-     */
-    private function describeCutsceneStanding(\Ichiloto\Editor\Cutscenes\CutsceneAsset $asset): array
-    {
-        try {
-            $asset->hydrate();
-            $standing = sprintf('  ✓ The engine reads this %s as it stands.', $asset->type->noun());
-        } catch (\Throwable $throwable) {
-            $standing = '  ✗ ' . $throwable->getMessage();
-        }
-
-        return [
-            sprintf('  %s · %s%s', $asset->name(), $asset->id, $asset->isDirty() ? ' *' : ''),
-            $standing,
-        ];
     }
 }

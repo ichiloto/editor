@@ -12,6 +12,8 @@ use Ichiloto\Editor\Database\PhpValueExporter;
 use Ichiloto\Editor\History\TracksPersistedState;
 use Ichiloto\Editor\ProjectDirectoryContext;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicCommandSchema;
+use Ichiloto\Engine\Cutscenes\Cinematics\CinematicDefinition;
+use Ichiloto\Engine\Cutscenes\Summons\SummonCompiledCutscene;
 use RuntimeException;
 use Throwable;
 
@@ -577,6 +579,34 @@ final class CutsceneAsset
         }
 
         CutsceneHydration::compileSummon($data, $partner, $this->projectRoot);
+    }
+
+    /**
+     * Hydrates the cinematic as it stands in memory, unsaved edits included.
+     *
+     * @throws RuntimeException When the Engine refuses it, or for a summon.
+     */
+    public function cinematicDefinition(): CinematicDefinition
+    {
+        if ($this->type !== CutsceneType::CINEMATIC) {
+            throw new RuntimeException(sprintf('%s is a summon, not a cinematic.', $this->id));
+        }
+
+        return CutsceneHydration::cinematic($this->data, $this->partner, $this->projectRoot);
+    }
+
+    /**
+     * Compiles the summon as it stands in memory, unsaved edits included.
+     *
+     * @throws RuntimeException When the Engine refuses it, or for a cinematic.
+     */
+    public function compiledSummon(): SummonCompiledCutscene
+    {
+        if ($this->type !== CutsceneType::SUMMON) {
+            throw new RuntimeException(sprintf('%s is a cinematic, not a summon.', $this->id));
+        }
+
+        return CutsceneHydration::compileSummon($this->data, $this->partner, $this->projectRoot);
     }
 
     /**

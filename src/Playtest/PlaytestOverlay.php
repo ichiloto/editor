@@ -104,6 +104,155 @@ final class PlaytestOverlay
     }
 
     /**
+     * Builds an overlay whose starting map launches a cinematic on arrival.
+     *
+     * The map is copied into the overlay (its tiles stay a link) with one
+     * extra event: an automatic, single-use `CinematicEventTrigger` on the
+     * spawn tile naming the cinematic. The game then plays the real asset
+     * through its real trigger the moment the playtest begins, and the
+     * author's map files are never written.
+     *
+     * @param string $projectRoot The real project root.
+     * @param string $mapId The map to start on.
+     * @param int $spawnX The spawn column.
+     * @param int $spawnY The spawn row.
+     * @param string $cinematicId The cinematic to launch.
+     */
+    public static function createForCinematic(string $projectRoot, string $mapId, int $spawnX, int $spawnY, string $cinematicId): self
+    {
+        $overlay = self::create($projectRoot, $mapId, $spawnX, $spawnY);
+
+        try {
+            $overlay->installCinematicLaunch(rtrim($projectRoot, DIRECTORY_SEPARATOR), $cinematicId);
+        } catch (\Throwable $throwable) {
+            $overlay->destroy();
+
+            throw $throwable;
+        }
+
+        return $overlay;
+    }
+
+    /**
+     * Replaces the overlay's start map with a copy carrying the launch trigger.
+     */
+    private function installCinematicLaunch(string $projectRoot, string $cinematicId): void
+    {
+        $mapsSource = $projectRoot . '/assets/Maps';
+        $mapsTarget = $this->root . '/assets/Maps';
+        $segments = explode('/', trim(str_replace('\\', '/', $this->mapId), '/'));
+        $leaf = $segments[array_key_last($segments)];
+        $mapSourceDirectory = $mapsSource . '/' . implode('/', $segments);
+
+        foreach (['data', 'map', 'event'] as $part) {
+            if (! is_file($mapSourceDirectory . '/' . $leaf . '.' . $part . '.php')) {
+                throw new RuntimeException(sprintf('Map %s has no %s file to playtest from.', $this->mapId, $part));
+            }
+        }
+
+        // assets/Maps was one link; rebuild it as real directories down to
+        // the start map, linking every sibling on the way.
+        if (is_link($mapsTarget)) {
+            unlink($mapsTarget);
+        }
+
+        mkdir($mapsTarget, 0777, true);
+        $currentSource = $mapsSource;
+        $currentTarget = $mapsTarget;
+
+        foreach ($segments as $depth => $segment) {
+            $isLast = $depth === count($segments) - 1;
+            self::mirrorDirectory($currentSource, $currentTarget, [$segment]);
+            $currentSource .= '/' . $segment;
+            $currentTarget .= '/' . $segment;
+            mkdir($currentTarget, 0777, true);
+
+            if (! $isLast) {
+                continue;
+            }
+
+            self::mirrorDirectory($currentSource, $currentTarget, [$leaf . '.data.php', $leaf . '.event.php']);
+            self::writeCinematicLaunchFiles($currentSource, $currentTarget, $leaf, $cinematicId);
+        }
+    }
+
+    /**
+     * Writes the start map's data and event-layer files with the launch
+     * trigger on the spawn tile.
+     */
+    private function writeCinematicLaunchFiles(string $sourceDirectory, string $targetDirectory, string $leaf, string $cinematicId): void
+    {
+        $data = require $sourceDirectory . '/' . $leaf . '.data.php';
+        $eventText = require $sourceDirectory . '/' . $leaf . '.event.php';
+
+        if (! is_array($data) || ! is_string($eventText)) {
+            throw new RuntimeException(sprintf('Map %s could not be read for the playtest.', $this->mapId));
+        }
+
+        if (! PhpValueExporter::isExportable($data)) {
+            throw new RuntimeException(sprintf('Map %s holds PHP objects, so a launch trigger cannot be written into a copy.', $this->mapId));
+        }
+
+        $events = is_array($data['events'] ?? null) ? $data['events'] : [];
+        $lines = preg_split('/\r\n|\n|\r/', rtrim($eventText, "\r\n")) ?: [];
+        $marker = self::freeEventMarker($events, $lines);
+
+        if ($marker === null) {
+            throw new RuntimeException(sprintf('Map %s has no free event marker for the launch trigger.', $this->mapId));
+        }
+
+        $row = $lines[$this->spawnY] ?? null;
+
+        if ($row === null) {
+            throw new RuntimeException(sprintf('Spawn row %d is outside map %s.', $this->spawnY, $this->mapId));
+        }
+
+        $symbols = preg_split('//u', $row, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+
+        if (! isset($symbols[$this->spawnX])) {
+            throw new RuntimeException(sprintf('Spawn column %d is outside map %s.', $this->spawnX, $this->mapId));
+        }
+
+        $symbols[$this->spawnX] = $marker;
+        $lines[$this->spawnY] = implode('', $symbols);
+        $events[$marker] = [
+            'class' => 'Ichiloto\\Engine\\Events\\Triggers\\CinematicEventTrigger',
+            'data' => ['cinematicId' => $cinematicId, 'mode' => 'auto', 'reusable' => false],
+        ];
+        $data['events'] = $events;
+
+        PhpDataFile::writeTransactionally(
+            $targetDirectory . '/' . $leaf . '.data.php',
+            "<?php\n\n// Generated by the Ichiloto editor for a cinematic playtest.\n// The author's map was not modified.\nreturn "
+            . PhpValueExporter::export($data)
+            . ";\n",
+        );
+        PhpDataFile::writeTransactionally(
+            $targetDirectory . '/' . $leaf . '.event.php',
+            "<?php\n\n// Generated by the Ichiloto editor for a cinematic playtest.\nreturn <<<'ICHILOTO_EVENT_MAP'\n" . implode("\n", $lines) . "\nICHILOTO_EVENT_MAP;\n",
+        );
+    }
+
+    /**
+     * Picks a one-column marker the map does not use yet.
+     *
+     * @param array<string, mixed> $events
+     * @param string[] $lines
+     */
+    private static function freeEventMarker(array $events, array $lines): ?string
+    {
+        $layer = implode('', $lines);
+
+        foreach (str_split('@!$%&*+=?^{}|~<>ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789') as $candidate) {
+            if (! array_key_exists($candidate, $events) && ! str_contains($layer, $candidate)) {
+                return $candidate;
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * Removes the overlay directory.
      *
      * Only symlinks and the two generated entries live here, so unlinking is

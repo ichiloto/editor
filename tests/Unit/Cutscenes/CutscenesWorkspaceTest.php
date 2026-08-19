@@ -17,186 +17,6 @@ use Ichiloto\Editor\UI\Modal;
  * into paired files without touching a byte it did not change.
  */
 
-/**
- * An original cinematic: two lantern boats crossing a harbour at dusk, with
- * a parallel block, a staged cast, a checkpoint and a finalizer.
- */
-function harbourCinematicData(): string
-{
-    return <<<'PHP_SOURCE'
-<?php
-
-// Harbour Lanterns: an original test cinematic.
-return [
-  'id' => 'harbour-lanterns',
-  'name' => 'Harbour Lanterns',
-  'description' => 'Two lantern boats cross the harbour at dusk.',
-  'version' => 1,
-  'authoring' => ['purpose' => 'editor-test'],
-  'startMap' => 'test-map',
-  'presentation' => ['initial' => 'hidden'],
-  'cast' => [
-    ['kind' => 'staged_actor', 'id' => 'boat-east', 'sprite' => ['~^~'], 'x' => 1, 'y' => 2],
-    ['kind' => 'staged_actor', 'id' => 'boat-west', 'sprite' => ['~^~'], 'x' => 1, 'y' => 4],
-  ],
-  'skip' => ['policy' => 'authored'],
-  'checkpoints' => ['boats-crossed'],
-  'finalizer' => [
-    ['type' => 'camera', 'operation' => 'attach'],
-    ['type' => 'remove_actor', 'actorId' => 'boat-east'],
-    ['type' => 'remove_actor', 'actorId' => 'boat-west'],
-    ['type' => 'clear_presentation'],
-    ['type' => 'set_switch', 'name' => 'harbour_lanterns_seen', 'value' => true],
-  ],
-];
-PHP_SOURCE;
-}
-
-function harbourCinematicScript(): string
-{
-    return <<<'PHP_SOURCE'
-<?php
-
-return [
-  ['type' => 'transition', 'style' => 'fade', 'direction' => 'in', 'seconds' => 0.2],
-  ['type' => 'camera', 'operation' => 'detach'],
-  [
-    'type' => 'parallel',
-    'lanes' => [
-      ['id' => 'east', 'commands' => [['type' => 'move_route', 'subject' => 'staged_actor', 'actorId' => 'boat-east', 'secondsPerStep' => 0.1, 'steps' => [['direction' => 'right', 'count' => 4]]]]],
-      ['id' => 'west', 'commands' => [['type' => 'move_route', 'subject' => 'staged_actor', 'actorId' => 'boat-west', 'secondsPerStep' => 0.1, 'steps' => [['direction' => 'right', 'count' => 4]]]]],
-      ['id' => 'words', 'commands' => [['type' => 'narration', 'title' => 'Dusk', 'text' => "The lanterns were lit one by one.\nNobody spoke.", 'seconds' => 0.4]]],
-    ],
-  ],
-  ['type' => 'checkpoint', 'name' => 'boats-crossed'],
-  ['type' => 'title_card', 'title' => 'HARBOUR LANTERNS', 'seconds' => 0.2],
-];
-PHP_SOURCE;
-}
-
-/**
- * An original summon: a small lantern spirit, two tracks, one cue.
- */
-function lanternSummonData(): string
-{
-    return <<<'PHP_SOURCE'
-<?php
-
-return [
-  'id' => 'lantern-wisp',
-  'name' => 'Lantern Wisp',
-  'description' => 'A small light that burns the dark away.',
-  'moveName' => 'Wisp Flare',
-  'linkedActionId' => 'Fireball',
-  'playback' => ['defaultSpeed' => 1.0],
-  'effectTiming' => ['mode' => 'cue', 'cueId' => 'flare'],
-];
-PHP_SOURCE;
-}
-
-function lanternSummonTimeline(): string
-{
-    return <<<'PHP_SOURCE'
-<?php
-
-$wisp = <<<'ART'
- .
-( )
- '
-ART;
-
-return [
-  'formatVersion' => 1,
-  'fps' => 12,
-  'lengthFrames' => 24,
-  'tracks' => [
-    // The wisp itself.
-    ['type' => 'glyph', 'id' => 'wisp', 'keyframes' => [
-      ['frame' => 0, 'duration' => 12, 'content' => $wisp, 'position' => [10, 5], 'color' => 'yellow'],
-      ['frame' => 12, 'duration' => 12, 'content' => $wisp, 'position' => [12, 4], 'color' => 'white'],
-    ]],
-    ['type' => 'text', 'id' => 'name', 'keyframes' => [
-      ['frame' => 2, 'duration' => 20, 'content' => 'LANTERN WISP', 'position' => [4, 1]],
-    ]],
-  ],
-  'cues' => [
-    ['id' => 'flare', 'frame' => 12, 'type' => 'applyEffect'],
-  ],
-];
-PHP_SOURCE;
-}
-
-/**
- * A throwaway project holding the cinematic and the summon.
- */
-function cutsceneProject(): string
-{
-    $root = makeTemporaryProject('ichiloto-cutscenes-');
-    $cinematic = $root . '/assets/Cutscenes/Cinematics/harbour-lanterns';
-    $summon = $root . '/assets/Cutscenes/Summons/lantern-wisp';
-    mkdir($cinematic, 0o777, true);
-    mkdir($summon, 0o777, true);
-    file_put_contents($cinematic . '/harbour-lanterns.data.php', harbourCinematicData());
-    file_put_contents($cinematic . '/harbour-lanterns.script.php', harbourCinematicScript());
-    file_put_contents($summon . '/lantern-wisp.data.php', lanternSummonData());
-    file_put_contents($summon . '/lantern-wisp.timeline.php', lanternSummonTimeline());
-
-    return $root;
-}
-
-/**
- * An editor over the project, with the Cutscenes screen open.
- */
-function cutscenesEditor(string $root, int $width = 140, int $height = 44): Editor
-{
-    $editor = createEditorForTesting($root);
-    setEditorProperty($editor, 'workspace', ProjectWorkspace::fromProject($root));
-    setEditorProperty($editor, 'lastTerminalSize', ['width' => $width, 'height' => $height]);
-    setEditorProperty($editor, 'isRunning', true);
-    callEditorMethod($editor, 'dispatchInput', "\033OS");
-
-    return $editor;
-}
-
-function pressKeys(Editor $editor, string ...$inputs): void
-{
-    foreach ($inputs as $input) {
-        callEditorMethod($editor, 'dispatchInput', $input);
-    }
-}
-
-function typeText(Editor $editor, string $text): void
-{
-    foreach (preg_split('//u', $text, -1, PREG_SPLIT_NO_EMPTY) ?: [] as $glyph) {
-        callEditorMethod($editor, 'dispatchInput', $glyph);
-    }
-}
-
-/**
- * Puts the settings cursor on the row whose field id matches.
- */
-function selectCutsceneField(Editor $editor, string $fieldId): void
-{
-    foreach (callEditorMethod($editor, 'getDatabaseSettingsFields') as $index => $field) {
-        if (($field['field'] ?? null) === $fieldId) {
-            setEditorProperty($editor, 'databaseSelectedSettingIndex', $index);
-            setEditorProperty($editor, 'cutsceneFocus', CutscenesScreen::PANE_SETTINGS);
-
-            return;
-        }
-    }
-
-    throw new RuntimeException("No field {$fieldId} on the pane: " . implode(', ', array_map(static fn($f) => (string) ($f['field'] ?? '?'), callEditorMethod($editor, 'getDatabaseSettingsFields'))));
-}
-
-function libraryOf(Editor $editor): CutsceneLibrary
-{
-    /** @var ProjectWorkspace $workspace */
-    $workspace = getEditorProperty($editor, 'workspace');
-
-    return $workspace->cutscenes;
-}
-
 it('opens with F4 as its own modal, toggles closed, and never stacks on the Database', function () {
     $root = cutsceneProject();
     $editor = cutscenesEditor($root);
@@ -591,4 +411,91 @@ it('reports discovery findings for orphaned and misnamed pairs and keeps editing
         ->and($summonIssues)->toContain('the folder is "mismatch" but the data file declares id "someone-else"')
         ->and($library->find(CutsceneType::SUMMON, 'mismatch')?->isEditable())->toBeFalse()
         ->and($library->ids(CutsceneType::SUMMON))->toBe(['lantern-wisp', 'mismatch']);
+});
+
+it('hosts the Engine preview on its pane: plays, steps, marks the running commands, jumps to a failure and compares skips', function () {
+    $root = cutsceneProject();
+    $editor = cutscenesEditor($root, 160, 50);
+    setEditorProperty($editor, 'cutsceneFocus', CutscenesScreen::PANE_PREVIEW);
+
+    // Space starts the Engine preview, playing.
+    pressKeys($editor, ' ');
+    $preview = getEditorProperty($editor, 'cinematicPreview');
+    expect($preview)->toBeInstanceOf(\Ichiloto\Editor\Cutscenes\Preview\CinematicPreviewSession::class)
+        ->and($preview->isPlaying())->toBeTrue()
+        ->and(getEditorProperty($editor, 'statusMessage'))->toContain('Previewing harbour-lanterns');
+
+    // Space pauses; '.' steps one tick; the tree marks the running command.
+    pressKeys($editor, ' ');
+    expect($preview->isPlaying())->toBeFalse();
+    pressKeys($editor, '.', '.', '.', '.');
+    expect($preview->elapsed())->toBeGreaterThan(0.3);
+    $frame = renderEditorPlainFrame($editor, 160, 50);
+    expect($frame)->toContain('▶');
+
+    // The idle tick advances a playing preview by wall-clock time.
+    pressKeys($editor, ' ');
+    setEditorProperty($editor, 'cutscenePreviewLastTickAt', microtime(true) - 0.5);
+    callEditorMethod($editor, 'tickCutscenePreview');
+    expect($preview->elapsed())->toBeGreaterThan(0.8);
+
+    // K skips through the authored finalizer; the run completes.
+    getEditorProperty($editor, 'toasts')->clear();
+    pressKeys($editor, 'k');
+    expect(getEditorProperty($editor, 'statusMessage'))->toContain('Skip accepted');
+    setEditorProperty($editor, 'cutscenePreviewLastTickAt', microtime(true) - 0.5);
+
+    for ($tick = 0; $tick < 40 && ! $preview->isFinished(); $tick++) {
+        setEditorProperty($editor, 'cutscenePreviewLastTickAt', microtime(true) - 0.3);
+        callEditorMethod($editor, 'tickCutscenePreview');
+    }
+
+    expect($preview->status())->toBe(\Ichiloto\Editor\Cutscenes\Preview\CinematicPreviewSession::STATUS_COMPLETED)
+        ->and(renderEditorPlainFrame($editor, 160, 50))->toContain('completed');
+
+    // C compares a watched run with a skipped one; the difference is the checkpoint.
+    pressKeys($editor, 'c');
+    expect(getEditorProperty($editor, 'cutscenePreviewView'))->toBe('compare');
+    $comparison = getEditorProperty($editor, 'cutscenePreviewComparison');
+    expect(array_column($comparison, 'label'))->toContain('checkpoints')
+        ->and(renderEditorPlainFrame($editor, 160, 50))->toContain('watched → skipped');
+
+    // V shows the duration overview; L cycles views back to the stage.
+    pressKeys($editor, 'v');
+    expect(renderEditorPlainFrame($editor, 160, 50))->toContain('Authored duration');
+    pressKeys($editor, 'l');
+    expect(getEditorProperty($editor, 'cutscenePreviewView'))->toBe('compare');
+    pressKeys($editor, 'l');
+    expect(getEditorProperty($editor, 'cutscenePreviewView'))->toBe('stage');
+
+    // A failing command: the preview fails, J jumps the tree and record pane to it.
+    $asset = libraryOf($editor)->find(CutsceneType::CINEMATIC, 'harbour-lanterns');
+    $payload = $asset->payload();
+    $payload['commands'][2]['lanes'][0]['commands'][0]['actorId'] = 'nobody';
+    $asset->apply($payload);
+    pressKeys($editor, 'r');
+    $preview = getEditorProperty($editor, 'cinematicPreview');
+
+    for ($tick = 0; $tick < 40 && ! $preview->isFinished(); $tick++) {
+        setEditorProperty($editor, 'cutscenePreviewLastTickAt', microtime(true) - 0.3);
+        callEditorMethod($editor, 'tickCutscenePreview');
+    }
+
+    expect($preview->status())->toBe(\Ichiloto\Editor\Cutscenes\Preview\CinematicPreviewSession::STATUS_FAILED)
+        ->and($preview->failure()['key'])->toBe('commands.2.lanes.0.0');
+    pressKeys($editor, 'j');
+    expect(getEditorProperty($editor, 'cutsceneFocus'))->toBe(CutscenesScreen::PANE_TREE)
+        ->and(getEditorProperty($editor, 'databaseCommandFramePath'))->toBe(['commands', 2, 'lanes', 0, 'commands'])
+        ->and(renderEditorPlainFrame($editor, 160, 50))->toContain('✗');
+
+    // X closes a finished preview; closing the screen disposes it either way.
+    setEditorProperty($editor, 'cutsceneFocus', CutscenesScreen::PANE_PREVIEW);
+    pressKeys($editor, 'x');
+    expect(getEditorProperty($editor, 'cinematicPreview'))->toBeNull();
+    pressKeys($editor, ' ');
+    expect(getEditorProperty($editor, 'cinematicPreview'))->not->toBeNull();
+    // F4 closes the screen outright (Esc would pop the open frame first).
+    pressKeys($editor, "\033OS");
+    expect(getEditorProperty($editor, 'modals')->has(Modal::CUTSCENES))->toBeFalse()
+        ->and(getEditorProperty($editor, 'cinematicPreview'))->toBeNull();
 });
