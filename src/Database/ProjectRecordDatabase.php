@@ -2330,7 +2330,9 @@ final class ProjectRecordDatabase
         $record = $this->getRecordByIndex($recordIndex);
         $commands = $this->getFrameCommands($recordIndex, $framePath);
         $frameList = $this->frameSubList($framePath);
-        $rootList = $this->schema->subList;
+        // Without a root sub-list (a summon's tracks), the frame's list
+        // is the one the write goes through.
+        $rootList = $this->schema->subList ?? $frameList;
         $parent = $commands[$parentIndex] ?? null;
         $nestedList = is_array($parent) && $frameList !== null ? $frameList->nestedListFor($parent) : null;
 
@@ -2365,7 +2367,7 @@ final class ProjectRecordDatabase
         $record = $this->getRecordByIndex($recordIndex);
         $commands = $this->getFrameCommands($recordIndex, $framePath);
         $frameList = $this->frameSubList($framePath);
-        $rootList = $this->schema->subList;
+        $rootList = $this->schema->subList ?? $frameList;
         $parent = $commands[$parentIndex] ?? null;
         $nestedList = is_array($parent) && $frameList !== null ? $frameList->nestedListFor($parent) : null;
 
@@ -3063,15 +3065,17 @@ final class ProjectRecordDatabase
         $subList = $this->schema->subList;
         $record = $this->getRecordByIndex($recordIndex);
         $commands = $this->getFrameCommands($recordIndex, $framePath);
+        // A record whose lists are all frames (a summon's tracks and cues)
+        // has no root sub-list; the frame's own list is the one to write.
+        $frameList = $this->frameSubList($framePath) ?? $subList;
 
-        if ($subList === null || ! $record instanceof ProjectRecord || $commands === null || ! $this->isEditable()) {
+        if ($frameList === null || ! $record instanceof ProjectRecord || $commands === null || ! $this->isEditable()) {
             return null;
         }
 
         $position = $afterIndex === null ? count($commands) : min(count($commands), $afterIndex + 1);
-        $frameList = $this->frameSubList($framePath) ?? $subList;
         array_splice($commands, $position, 0, [$frameList->blank]);
-        $this->writeFrameCommands($record, $subList, $framePath, $commands);
+        $this->writeFrameCommands($record, $subList ?? $frameList, $framePath, $commands);
 
         return $position;
     }
@@ -3090,13 +3094,14 @@ final class ProjectRecordDatabase
         $subList = $this->schema->subList;
         $record = $this->getRecordByIndex($recordIndex);
         $commands = $this->getFrameCommands($recordIndex, $framePath);
+        $frameList = $this->frameSubList($framePath) ?? $subList;
 
-        if ($subList === null || ! $record instanceof ProjectRecord || $commands === null) {
+        if ($frameList === null || ! $record instanceof ProjectRecord || $commands === null) {
             return;
         }
 
         array_splice($commands, min($commandIndex, count($commands)), 0, [$command]);
-        $this->writeFrameCommands($record, $subList, $framePath, $commands);
+        $this->writeFrameCommands($record, $subList ?? $frameList, $framePath, $commands);
     }
 
     /**
@@ -3112,13 +3117,14 @@ final class ProjectRecordDatabase
         $subList = $this->schema->subList;
         $record = $this->getRecordByIndex($recordIndex);
         $commands = $this->getFrameCommands($recordIndex, $framePath);
+        $frameList = $this->frameSubList($framePath) ?? $subList;
 
-        if ($subList === null || ! $record instanceof ProjectRecord || $commands === null || ! isset($commands[$commandIndex])) {
+        if ($frameList === null || ! $record instanceof ProjectRecord || $commands === null || ! isset($commands[$commandIndex])) {
             return null;
         }
 
         [$removed] = array_splice($commands, $commandIndex, 1);
-        $this->writeFrameCommands($record, $subList, $framePath, $commands);
+        $this->writeFrameCommands($record, $subList ?? $frameList, $framePath, $commands);
 
         return is_array($removed) ? $removed : null;
     }

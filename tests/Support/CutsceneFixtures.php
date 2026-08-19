@@ -358,3 +358,97 @@ function writeOpeningMaps(string $root): void
     $dawn[] = str_repeat('#', 40);
     $write('skyfield-dawn', $dawn, ['name' => 'Skyfield at Dawn', 'region' => 'Plain', 'description' => 'The same plain, lit.', 'triggers' => [], 'events' => [], 'npcs' => []]);
 }
+
+/**
+ * A disposable copy of the Last Legend project, for production verification
+ * that never touches the real checkout: authored assets are copied, the
+ * audio (which nothing writes) is linked, and the project's own classes are
+ * autoloaded the way the console does when it opens a project.
+ *
+ * @return string|null The copy's root, or null when no Last Legend is pinned.
+ */
+function disposableLastLegend(string $prefix = 'last-legend-cutscenes-'): ?string
+{
+    $game = gameSourceRoot();
+
+    if ($game === null || ! is_dir($game . '/assets/Cutscenes/Summons')) {
+        return null;
+    }
+
+    $root = rememberTemporaryProject(sys_get_temp_dir() . '/' . uniqid($prefix, true));
+    mkdir($root . '/assets', 0o777, true);
+
+    foreach (scandir($game . '/assets') ?: [] as $entry) {
+        if ($entry === '.' || $entry === '..') {
+            continue;
+        }
+
+        $source = $game . '/assets/' . $entry;
+
+        if ($entry === 'Audio') {
+            symlink($source, $root . '/assets/' . $entry);
+        } elseif (is_dir($source)) {
+            mkdir($root . '/assets/' . $entry, 0o777, true);
+            copyDirectoryRecursively($source, $root . '/assets/' . $entry);
+        } else {
+            copy($source, $root . '/assets/' . $entry);
+        }
+    }
+
+    foreach (['config.php', 'ichiloto.json', 'input.php', 'composer.json'] as $entry) {
+        if (is_file($game . '/' . $entry)) {
+            copy($game . '/' . $entry, $root . '/' . $entry);
+        }
+    }
+
+    static $autoloaderRegistered = false;
+
+    if (! $autoloaderRegistered) {
+        $autoloaderRegistered = true;
+        spl_autoload_register(static function (string $class) use ($game): void {
+            $prefix = 'Ichiloto\\FinalQuest\\';
+
+            if (! str_starts_with($class, $prefix)) {
+                return;
+            }
+
+            // The classes are identical in every copy; the pinned checkout's
+            // are read, never written.
+            $path = $game . '/assets/' . str_replace('\\', '/', substr($class, strlen($prefix))) . '.php';
+
+            if (is_file($path)) {
+                require $path;
+            }
+        });
+    }
+
+    return $root;
+}
+
+/**
+ * The sha256 of every authored file under a project, excluding the linked
+ * audio and any paths whose relative name starts with an excluded prefix.
+ *
+ * @param string[] $excludePrefixes
+ * @return array<string, string>
+ */
+function authoredHashTree(string $root, array $excludePrefixes = []): array
+{
+    $hashes = [];
+
+    foreach (sourceHashTree($root . '/assets') as $relative => $hash) {
+        if (str_starts_with($relative, 'Audio/')) {
+            continue;
+        }
+
+        foreach ($excludePrefixes as $prefix) {
+            if (str_starts_with($relative, $prefix)) {
+                continue 2;
+            }
+        }
+
+        $hashes[$relative] = $hash;
+    }
+
+    return $hashes;
+}
