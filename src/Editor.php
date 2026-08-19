@@ -13367,6 +13367,7 @@ final class Editor
 
         return match (true) {
             $path === ['data', 'scriptId'] => ['category' => 'common_events', 'title' => 'Event Script'],
+            $path === ['data', 'cinematicId'] => ['category' => 'cinematics', 'title' => 'Cinematic'],
             $leaf === 'bgm' => ['category' => 'bgm', 'title' => 'Music'],
             $leaf === 'sfx' => ['category' => 'sfx', 'title' => 'Sound Effect'],
             // A shop's stock is data.items.N.item. The leaf alone would also

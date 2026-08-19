@@ -39,6 +39,8 @@ use Symfony\Component\Console\Formatter\OutputFormatterStyle;
  */
 class ProjectValidator
 {
+  use CutsceneValidation;
+
   /**
    * The trigger classes whose data this knows how to check.
    */
@@ -97,6 +99,7 @@ class ProjectValidator
       ...$this->checkQuests($workspace),
       ...$this->checkTroops($workspace),
       ...$this->checkSummons($workspace),
+      ...$this->checkCutscenes($workspace),
       ...$this->checkReferences($workspace),
       ...$this->checkDefinitionIdentities($workspace),
       ...$this->checkActorDefinitions($workspace),
@@ -2668,6 +2671,7 @@ class ProjectValidator
       'bgm' => $catalog->valuesFor('bgm'),
       'sfx' => $catalog->valuesFor('sfx'),
       'common_events' => $catalog->valuesFor('common_events'),
+      'cinematics' => $catalog->valuesFor('cinematics'),
     ];
 
     return [
@@ -3096,6 +3100,10 @@ class ProjectValidator
           ...$this->checkReference(strval($data['bgm'] ?? ''), 'bgm', 'track', $where, $known),
           ...$this->checkReference(strval($data['sfx'] ?? ''), 'sfx', 'sound', $where, $known),
         ];
+
+        if (str_contains($class, 'CinematicEventTrigger')) {
+          $issues = [...$issues, ...$this->checkCinematicTrigger($definition, $where, $known)];
+        }
 
         if (str_contains($class, self::SCRIPT_TRIGGER)) {
           $issues = [

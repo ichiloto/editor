@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Events;
 
 use Ichiloto\Engine\Events\Triggers\ChestEventTrigger;
+use Ichiloto\Engine\Events\Triggers\CinematicEventTrigger;
 use Ichiloto\Engine\Events\Triggers\DialogueEventTrigger;
 use Ichiloto\Engine\Events\Triggers\ShopEventTrigger;
 use Ichiloto\Engine\Events\Triggers\ScriptEventTrigger;
@@ -38,6 +39,22 @@ final class EventTypeCatalog
                 defaultData: [
                     'scriptId' => '',
                     'mode' => 'action',
+                    'reusable' => false,
+                ],
+                defaultDefinitionFields: [
+                    'conditions' => [],
+                    'sets' => [],
+                    'whenBlocked' => '',
+                    'cue' => ['symbol' => '', 'color' => 'bright-yellow'],
+                ],
+            ),
+            new EventTypeDefinition(
+                label: 'Cinematic',
+                className: CinematicEventTrigger::class,
+                description: 'Launches a first-class Cinematic by stable id, automatically on arrival or as the field action.',
+                defaultData: [
+                    'cinematicId' => '',
+                    'mode' => 'auto',
                     'reusable' => false,
                 ],
                 defaultDefinitionFields: [

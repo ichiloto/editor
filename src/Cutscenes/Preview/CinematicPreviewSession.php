@@ -683,6 +683,7 @@ final class CinematicPreviewSession
     {
         $pending = $lane->pendingCommand;
         $frames = $lane->frames();
+        /** @var array<string, mixed>|null $current */
         $current = null;
 
         if ($frames !== []) {
@@ -691,7 +692,8 @@ final class CinematicPreviewSession
             $current = is_array($candidate) ? $candidate : null;
         }
 
-        $command = $pending ?? $current;
+        /** @var array<string, mixed>|null $command */
+        $command = is_array($pending) ? $pending : $current;
         $lanes[] = [
             'path' => (string) $lane->path,
             'depth' => $depth,

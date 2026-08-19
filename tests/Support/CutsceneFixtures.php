@@ -136,8 +136,44 @@ function cutsceneProject(): string
     file_put_contents($summon . '/lantern-wisp.data.php', lanternSummonData());
     file_put_contents($summon . '/lantern-wisp.timeline.php', lanternSummonTimeline());
     writeHarbourMap($root);
+    writeFireballSkill($root);
 
     return $root;
+}
+
+/**
+ * The one battle action the lantern summon links to.
+ */
+function writeFireballSkill(string $root): void
+{
+    file_put_contents($root . '/assets/Data/skills.php', <<<'PHP_SOURCE'
+<?php
+
+use Ichiloto\Engine\Entities\Effects\SkillEffects\HPDamageSkillEffect;
+use Ichiloto\Engine\Entities\Enumerations\ItemScopeNumber;
+use Ichiloto\Engine\Entities\Enumerations\ItemScopeSide;
+use Ichiloto\Engine\Entities\Enumerations\ItemScopeStatus;
+use Ichiloto\Engine\Entities\Enumerations\Occasion;
+use Ichiloto\Engine\Entities\ItemScope;
+use Ichiloto\Engine\Entities\Skills\MagicSkill;
+use Ichiloto\Engine\Entities\Skills\SkillInvocation;
+
+return [
+  new MagicSkill(
+    'Fireball',
+    'A burst of flame.',
+    'FIR',
+    4,
+    0,
+    new ItemScope(ItemScopeSide::ENEMY, ItemScopeNumber::ONE, ItemScopeStatus::ALIVE),
+    Occasion::BATTLE_SCREEN,
+    new SkillInvocation('$1 casts Fireball!', 0, 0, 1, 10),
+    [
+      new HPDamageSkillEffect('$user->stats->magicAttack * 3', NULL, 0.2, false),
+    ],
+  ),
+];
+PHP_SOURCE);
 }
 
 /**
