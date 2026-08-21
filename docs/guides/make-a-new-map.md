@@ -66,6 +66,26 @@ Each completed tool action is one undo step. A filled rectangle undoes in one
 For glyphs the keyboard reserves, press `@` to open the character map, pick one,
 and press `Enter`.
 
+## Music And Random Encounters
+
+Both live in the Inspector, under the map's identity rows.
+
+Select `Background Music`, press `Enter`, and pick a track from the ones the
+project has in `assets/Audio/BGM` — or `(None)` for silence, which removes
+the key rather than writing an empty track. There is no audition in the
+editor yet; `Ctrl+T` plays the real thing.
+
+For fights, put the cursor on the `Troops` row and press `Shift+O`: the first
+row enables encounters, and each row is a troop picked from the project's own
+list with a whole-number weight (a troop's chance is its weight over the
+sum). `Rate` is the *average* steps between fights — the engine rolls each
+gap between half and one-and-a-half times it — and `Tiles` chooses whether
+only danger tiles (`;`) count, or every step (`any`, danger tiles counting
+double). Both show the engine default in parentheses until you set one, and
+neither is written to the file by just looking. `Del` removes the row the
+cursor is in; removing the last row turns encounters off and removes the
+block entirely.
+
 ## Save
 
 Press `Ctrl+S`.

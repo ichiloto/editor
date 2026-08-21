@@ -711,6 +711,37 @@ runtime gives `''` a meaning of its own.
 Not added, because the engine does not have them: patrol routes,
 pathfinding, followers, persisted dynamic positions, cross-map movement.
 
+## Map runtime metadata authoring — shipped 2026-08
+
+The Map Inspector's metadata rows stopped at name, region, description and
+size while the engine already read two more things from the same file: the
+map's background music and its random encounters. Both are now first-class
+Inspector sections, so no supported map field requires manual PHP.
+
+**Audio.** `Background Music` is the `bgm` reference picker — the project's
+own `assets/Audio/BGM` listing — with an explicit `(None)` that removes the
+key rather than writing an empty track, a missing track kept visible as
+`name · not in assets/Audio/BGM` instead of jumping to a valid one, and the
+ordinary history/dirty/save behaviour. Audition stays out of the editor;
+the playtest plays the real thing.
+
+**Encounters.** A dedicated model (`MapEncounters`) holds the engine's
+`encounters` block exactly as authored and knows what
+`EncounterManager::configure()` will make of it: the block's summary, the
+default rate (15) and tile mode (`encounter`) shown as defaults and never
+written by browsing, ordered troop rows edited through the Inspector's own
+list idiom (`Shift+O`/`Del`), troop pickers over the `troops` reference
+catalogue, whole-number weights, and the duplicate rule — two rows for one
+troop would collapse into one PHP key, so the edit is refused with the row
+named. Unknown keys inside the block are preserved and keep the block alive
+when the last troop is removed; a shape the model cannot hold exactly is
+read-only with the shape named. Validation grew the same vocabulary
+(non-numeric/clamped/fractional rates, unknown tile modes, fractional
+weights, and source-level duplicate troop keys via a shared per-block
+duplicate-key walker), and `ProjectMap` gained nested data accessors
+(`getMapDataField`/`setMapDataField`) so a null write removes a key instead
+of leaving an empty one.
+
 ## Cutscene authoring integrity correction — shipped 2026-08
 
 Three narrow contracts from the authoring gate's first review, corrected

@@ -61,10 +61,10 @@ is what the code draws rather than a sketch of it:
  │                              │ │ ############               │ │     Y: 5                       │
  │                              │ │                            │ │   Events · 1                   │
  │                              │ │                            │ │   Triggers · 0                 │
- │                              │ │                            │ │                                │
- │                              │ │                            │ │                                │
- │                              │ │                            │ │                                │
- │                              │ │                            │ │                                │
+ │                              │ │                            │ │   Audio                        │
+ │                              │ │                            │ │     Background Music: (None)   │
+ │                              │ │                            │ │   Encounters · off             │
+ │                              │ │                            │ │     Troops · 0                 │
  └─/:Filter  Del:Delete─────────┘ └─%:Map  ^:Event  @:Chars────┘ └─Enter:Edit─────────────────────┘
  ┌─Status─────────────────────────────────────────────────────────────────────────────────────────┐
  │ Selected map: test-map | Focus: Assets | Mode: Map | Tool: Brush 1                             │
@@ -340,6 +340,47 @@ being edited stays on one line and scrolls sideways around the caret. The pane
 scrolls by rows, keeping the selected row's first line in view.
 
 The Destination row on an event is a reference: `Ctrl+G` follows it.
+
+### Map audio and encounters
+
+In Map mode the Inspector carries the map's runtime metadata beneath its
+identity rows.
+
+**Audio.** `Background Music` is a picker over the project's own tracks
+(`assets/Audio/BGM`, shown by file name): Enter opens it, `(None)` clears
+the authored track by removing the `bgm` key — the editor never writes a
+misleading empty one. A track the project no longer has stays visible as
+`name · not in assets/Audio/BGM` rather than silently jumping to a valid
+one, and validation names it. There is no in-editor audition in this gate;
+the playtest plays the real thing.
+
+**Encounters.** The `Encounters` heading summarises the map's random
+encounters (`off`, or `2 troops, every ~22 steps, danger tiles`), and the
+rows beneath it edit the engine's own `encounters` block:
+
+- `Troops` is the Inspector's usual list: `Shift+O` adds a row (naming a
+  troop the table does not already use), `Del`/`Shift+X` removes the row the
+  cursor is in, and removing the last row disables encounters and removes
+  the empty block. Each row is a `Troop` picker over the project's troops
+  and a positive whole-number `Weight` — the chance of a fight being that
+  troop is its weight over the sum. Two rows can never name the same troop:
+  PHP would keep the last weight and discard the other without a word, so
+  the editor refuses the edit and says which row already has it.
+- `Rate` is the **average** number of steps between fights, not an exact
+  interval — the engine rolls each gap between half and one-and-a-half
+  times this value. Until you set one it shows `(engine default: 15)`, and
+  merely opening or browsing the map never writes that default into the
+  file.
+- `Tiles` chooses which steps count: `encounter` (only danger tiles — the
+  `;` glyphs) or `any` (every step, with danger tiles counting double).
+  Its default, `encounter`, is likewise shown in parentheses and never
+  written by browsing.
+
+A key inside the block the editor does not own — a field a later engine will
+read — is preserved untouched, and keeps the block alive even when the last
+troop is removed. A block shaped in a way the editor cannot hold exactly
+(troops keyed by number, a weight that is an array) is shown read-only with
+the shape named, and no edit anywhere rewrites it.
 
 In Event mode, painting or selecting a marker with no definition opens the
 Event Type picker. **Story Script** creates the engine's
