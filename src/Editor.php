@@ -31,6 +31,7 @@ use Ichiloto\Editor\Database\QuestReferences;
 use Ichiloto\Editor\Database\AffinityEditor;
 use Ichiloto\Editor\Database\ConditionEditor;
 use Ichiloto\Editor\Field\NpcInspector;
+use Ichiloto\Editor\Field\MapEncounters;
 use Ichiloto\Editor\Field\NpcReferences;
 use Ichiloto\Editor\Field\ProjectNpc;
 use Ichiloto\Editor\Database\WorldWriteEditor;
@@ -366,6 +367,13 @@ final class Editor
     }
     private ?string $eventOptionDialogMarker = null;
     /**
+     * The inspector field an open option dialog writes back to, when the
+     * pick belongs to the map rather than to an event marker.
+     *
+     * @var array<string, mixed>|null
+     */
+    private ?array $optionDialogField = null;
+    /**
      * @var string[]|null
      */
     private ?array $eventOptionDialogPath = null;
@@ -455,6 +463,10 @@ final class Editor
      * this is a fixture for looking at and nothing the editor writes.
      */
     private const string ACTOR_GROWTH_FIELD = '__actor_growth';
+    /**
+     * The picker row that clears a map's background music.
+     */
+    private const string MAP_BGM_NONE = '(None)';
 
     /**
      * The row that chooses which kind of slot the Optimize preview fills.
@@ -819,6 +831,7 @@ final class Editor
         $this->isEventOptionDialogOpen = false;
         $this->eventOptionDialogMarker = null;
         $this->eventOptionDialogPath = null;
+        $this->optionDialogField = null;
         $this->eventOptionDialogTitle = 'Options';
         $this->eventOptionDialogEntries = [];
         $this->selectedPaintSymbol = ' ';
@@ -7099,6 +7112,22 @@ final class Editor
         $selectedMap = $this->getSelectedMap();
         $selectedEntry = $this->eventOptionDialogEntries[$this->selectedEventOptionIndex] ?? null;
 
+        if (is_array($this->optionDialogField) && is_array($selectedEntry)) {
+            $field = $this->optionDialogField;
+            $title = $this->eventOptionDialogTitle;
+
+            try {
+                $this->applyInspectorFieldValue($field, (string) $selectedEntry['value']);
+                $this->closeEventOptionDialog(sprintf('Set %s to %s.', mb_strtolower($title), $selectedEntry['label']));
+            } catch (Throwable $throwable) {
+                $this->closeEventOptionDialog('');
+                $this->setErrorStatus($throwable, sprintf('%s selection', $title));
+                $this->renderSelectionDependentArea();
+            }
+
+            return;
+        }
+
         if (! $selectedMap instanceof ProjectMap || ! is_array($selectedEntry) || ! is_string($this->eventOptionDialogMarker) || $this->eventOptionDialogMarker === '' || ! is_array($this->eventOptionDialogPath)) {
             $this->closeEventOptionDialog('Unable to set option.');
             return;
@@ -7117,16 +7146,21 @@ final class Editor
         $this->closeEventOptionDialog(sprintf('Set %s to %s.', mb_strtolower($this->eventOptionDialogTitle), $selectedEntry['label']));
     }
 
-    private function closeEventOptionDialog(string $statusMessage): void
+    private function closeEventOptionDialog(string $statusMessage = ''): void
     {
         $this->isEventOptionDialogOpen = false;
         $this->eventOptionDialogMarker = null;
         $this->eventOptionDialogPath = null;
+        $this->optionDialogField = null;
         $this->eventOptionDialogTitle = 'Options';
         $this->eventOptionDialogEntries = [];
         $this->selectedEventOptionIndex = 0;
         $this->dialogFilter->clear();
-        $this->statusMessage = $statusMessage;
+
+        if ($statusMessage !== '') {
+            $this->statusMessage = $statusMessage;
+        }
+
         $this->renderSelectionDependentArea();
     }
     /**
@@ -7731,6 +7765,19 @@ final class Editor
             return;
         }
 
+        if ($this->openInspectorReferenceDialog($field)) {
+            return;
+        }
+
+        $options = $this->resolveInspectorFieldOptions($field);
+
+        if (is_array($options) && ! $this->getInspectorFieldControl($field) instanceof InputControl) {
+            // An enum row with nothing to type: Enter moves it on, the same
+            // way Left and Right do.
+            $this->adjustInspectorOptionField(1);
+            return;
+        }
+
         $lootType = $this->resolveLootFieldType($field);
 
         if ($this->isLootField($field) && $lootType instanceof LootType) {
@@ -8065,6 +8112,24 @@ final class Editor
                 static fn() => $selectedMap->setMapField($fieldName, $value),
                 static fn() => $selectedMap->setMapField($fieldName, $oldValue),
             ));
+            return;
+        }
+
+        if ($target === 'map-data') {
+            $path = array_values((array) ($field['path'] ?? []));
+
+            if ($path === []) {
+                return;
+            }
+
+            $this->applyMapDataValue($selectedMap, $path, $value === '' ? null : $value, (string) ($field['label'] ?? 'Field'));
+
+            return;
+        }
+
+        if ($target === 'map-encounters') {
+            $this->applyMapEncounterValue($selectedMap, $field, $value);
+
             return;
         }
 
@@ -11803,6 +11868,121 @@ final class Editor
     }
 
     /**
+     * Builds the map's runtime metadata rows: the music it plays and the
+     * random encounters it offers.
+     *
+     * Both are read from what the map actually holds. An absent rate or tile
+     * mode is shown as the engine's default in parentheses and is not
+     * written until an author sets one, so opening a map never puts a
+     * default into a file.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private function mapRuntimeFields(ProjectMap $map): array
+    {
+        $bgm = $map->getMapDataField(['bgm']);
+        $bgm = is_string($bgm) ? $bgm : '';
+        $known = $this->referenceCatalog()->valuesFor('bgm');
+        $missing = $bgm !== '' && ! in_array($bgm, $known, true);
+        $fields = [
+            [
+                'label' => 'Audio',
+                'value' => '',
+                'editable' => false,
+            ],
+            [
+                // A track is chosen from what the project has, never spelled.
+                // A track the project no longer has stays visible and says
+                // so, rather than being quietly swapped for a valid one.
+                'label' => '  Background Music',
+                'value' => match (true) {
+                    $bgm === '' => self::MAP_BGM_NONE,
+                    $missing => $bgm . ' · not in assets/Audio/BGM',
+                    default => $bgm,
+                },
+                'reference' => 'bgm',
+                'target' => 'map-data',
+                'path' => ['bgm'],
+                'field' => 'bgm',
+            ],
+        ];
+
+        $encounters = MapEncounters::fromMap($map);
+        $fields[] = [
+            'label' => 'Encounters',
+            'value' => $encounters->summary(),
+            'editable' => false,
+        ];
+
+        if (! $encounters->isSupported()) {
+            $fields[] = [
+                'label' => '  ! Read-only',
+                'value' => (string) $encounters->unsupportedReason(),
+                'editable' => false,
+            ];
+
+            return $fields;
+        }
+
+        $rows = $encounters->rows();
+        $fields[] = [
+            // The Inspector's own list heading, so Shift+O and Del mean here
+            // what they mean on every other list in the pane.
+            'label' => sprintf('  Troops · %d', count($rows)),
+            'value' => '',
+            'editable' => false,
+            'target' => 'map-encounters',
+            'encounterList' => ['index' => max(0, count($rows) - 1)],
+        ];
+
+        foreach ($rows as $index => $row) {
+            $weight = $row['weight'];
+            $fields[] = [
+                'label' => '    Troop',
+                'value' => $row['name'],
+                'reference' => 'troops',
+                'target' => 'map-encounters',
+                'field' => 'troop',
+                'index' => $index,
+                'encounterList' => ['index' => $index],
+            ];
+            $usable = is_numeric($weight) && (int) $weight >= 1;
+            $fields[] = [
+                'label' => '    Weight',
+                'value' => (is_scalar($weight) ? (string) $weight : '') . ($usable ? '' : ' · the engine drops a troop it cannot weigh'),
+                'control' => new InputControl(InputControlType::INTEGER, $usable ? (string) (int) $weight : '1'),
+                'target' => 'map-encounters',
+                'field' => 'weight',
+                'index' => $index,
+                'encounterList' => ['index' => $index],
+            ];
+        }
+
+        if ($rows === []) {
+            return $fields;
+        }
+
+        $rate = $encounters->authoredRate();
+        $fields[] = [
+            'label' => '  Rate',
+            'value' => $rate === null ? sprintf('(engine default: %d)', MapEncounters::DEFAULT_RATE) : (string) $rate,
+            'control' => new InputControl(InputControlType::INTEGER, (string) ($rate ?? MapEncounters::DEFAULT_RATE)),
+            'target' => 'map-encounters',
+            'field' => 'rate',
+        ];
+        $tiles = $encounters->authoredTiles();
+        $fields[] = [
+            'label' => '  Tiles',
+            'value' => $tiles === null ? sprintf('(engine default: %s)', MapEncounters::DEFAULT_TILES) : $tiles,
+            'options' => MapEncounters::TILE_MODES,
+            'target' => 'map-encounters',
+            'field' => 'tiles',
+        ];
+
+        return $fields;
+    }
+
+    /**
      * Builds the inspector field list for the current selection.
      *
      * @return array<int, array<string, mixed>>
@@ -11878,6 +12058,7 @@ final class Editor
                 'value' => (string) $selectedMap->getTriggerCount(),
                 'editable' => false,
             ],
+            ...$this->mapRuntimeFields($selectedMap),
         ];
 
         if ($this->editingMode !== self::MODE_EVENT) {
@@ -13240,6 +13421,191 @@ final class Editor
 
 
     /**
+     * The encounter row the inspector cursor is on, if any.
+     *
+     * @return array{map: ProjectMap, encounters: MapEncounters, index: int}|null
+     */
+    private function selectedMapEncounterRow(): ?array
+    {
+        $map = $this->getSelectedMap();
+        $field = $this->getInspectorFields()[$this->selectedInspectorFieldIndex] ?? null;
+
+        if (! $map instanceof ProjectMap || ! is_array($field) || ($field['target'] ?? null) !== 'map-encounters') {
+            return null;
+        }
+
+        $list = $field['encounterList'] ?? null;
+
+        if (! is_array($list)) {
+            return null;
+        }
+
+        return ['map' => $map, 'encounters' => MapEncounters::fromMap($map), 'index' => (int) $list['index']];
+    }
+
+    /**
+     * Adds a troop row to the map's encounter table, enabling encounters
+     * when it is the first one.
+     *
+     * The new row names a troop the table does not already use, because a
+     * blank row would be a troop the engine reads as unnamed and a duplicate
+     * would collapse into one key.
+     *
+     * @return bool Whether the cursor was on the encounter list.
+     */
+    private function addMapEncounterTroop(): bool
+    {
+        $context = $this->selectedMapEncounterRow();
+
+        if ($context === null) {
+            return false;
+        }
+
+        $encounters = $context['encounters'];
+
+        if (! $encounters->isSupported()) {
+            $this->setStatus(sprintf('Encounters are read-only here: %s.', $encounters->unsupportedReason()), StatusLevel::WARN);
+            $this->renderInspectorArea();
+
+            return true;
+        }
+
+        $available = array_values(array_diff($this->referenceCatalog()->valuesFor('troops'), $encounters->troopNames()));
+
+        if ($available === []) {
+            $this->setStatus(
+                $this->referenceCatalog()->valuesFor('troops') === []
+                    ? 'This project defines no troops to encounter.'
+                    : 'Every troop this project defines is already in this table.',
+                StatusLevel::WARN,
+            );
+            $this->renderInspectorArea();
+
+            return true;
+        }
+
+        try {
+            $block = $encounters->withTroopAdded($available[0], $context['index']);
+        } catch (Throwable $throwable) {
+            $this->setErrorStatus($throwable, 'Encounter troop');
+            $this->renderInspectorArea();
+
+            return true;
+        }
+
+        $this->applyMapDataValue($context['map'], [MapEncounters::KEY], $block, 'Encounter troop add');
+        $this->setStatus(sprintf('Added %s to the encounter table.', $available[0]), StatusLevel::SUCCESS);
+        $this->clampInspectorSelection();
+        $this->renderSelectionDependentArea();
+
+        return true;
+    }
+
+    /**
+     * Removes the troop row the cursor is on. Removing the last one disables
+     * encounters and takes the empty block with it.
+     *
+     * @return bool Whether the cursor was on the encounter list.
+     */
+    private function removeMapEncounterTroop(): bool
+    {
+        $context = $this->selectedMapEncounterRow();
+
+        if ($context === null) {
+            return false;
+        }
+
+        $encounters = $context['encounters'];
+
+        if (! $encounters->isSupported()) {
+            $this->setStatus(sprintf('Encounters are read-only here: %s.', $encounters->unsupportedReason()), StatusLevel::WARN);
+            $this->renderInspectorArea();
+
+            return true;
+        }
+
+        $rows = $encounters->rows();
+
+        if (! array_key_exists($context['index'], $rows)) {
+            $this->setStatus('No encounter troop to remove.', StatusLevel::WARN);
+            $this->renderInspectorArea();
+
+            return true;
+        }
+
+        $removed = $rows[$context['index']]['name'];
+        $block = $encounters->withTroopRemovedAt($context['index']);
+        $this->applyMapDataValue($context['map'], [MapEncounters::KEY], $block, 'Encounter troop remove');
+        $this->setStatus(
+            $block === null
+                ? sprintf('Removed %s; this map no longer has random encounters.', $removed)
+                : sprintf('Removed %s from the encounter table.', $removed),
+            StatusLevel::SUCCESS,
+        );
+        $this->clampInspectorSelection();
+        $this->renderSelectionDependentArea();
+
+        return true;
+    }
+
+    /**
+     * Writes one nested map-data value, recording it for undo.
+     *
+     * @param array<int, string> $path The nested data path.
+     */
+    private function applyMapDataValue(ProjectMap $map, array $path, mixed $value, string $label): void
+    {
+        $hadValue = $map->hasMapDataField($path);
+        $oldValue = $map->getMapDataField($path);
+        $map->setMapDataField($path, $value);
+
+        if ($map->getMapDataField($path) === $oldValue && $map->hasMapDataField($path) === $hadValue) {
+            return;
+        }
+
+        $this->recordCommand(new GenericCommand(
+            sprintf('%s edit', $label),
+            static fn() => $map->setMapDataField($path, $value),
+            static fn() => $map->setMapDataField($path, $hadValue ? $oldValue : null),
+        ));
+    }
+
+    /**
+     * Writes one encounter field through the encounters model, which owns
+     * the block's shape, its defaults and its duplicate rule.
+     *
+     * @param array<string, mixed> $field The inspector field descriptor.
+     */
+    private function applyMapEncounterValue(ProjectMap $map, array $field, mixed $value): void
+    {
+        $encounters = MapEncounters::fromMap($map);
+
+        if (! $encounters->isSupported()) {
+            $this->setStatus(
+                sprintf('Encounters are read-only here: %s.', $encounters->unsupportedReason()),
+                StatusLevel::WARN,
+            );
+
+            return;
+        }
+
+        $index = (int) ($field['index'] ?? 0);
+        $block = match ((string) ($field['field'] ?? '')) {
+            'rate' => $encounters->withRate((int) $value),
+            'tiles' => $encounters->withTiles((string) $value),
+            'weight' => $encounters->withWeightAt($index, (int) $value),
+            'troop' => $encounters->withTroopAt($index, (string) $value),
+            default => null,
+        };
+
+        if ($block === null && ! $encounters->isDeclared()) {
+            return;
+        }
+
+        $this->applyMapDataValue($map, [MapEncounters::KEY], $block, 'Encounters');
+    }
+
+    /**
      * Returns the list the inspector cursor is inside, if any.
      *
      * @return array{path: array<int, string>, index: int}|null The list.
@@ -13269,6 +13635,10 @@ final class Editor
      */
     private function addInspectorListItem(): void
     {
+        if ($this->addMapEncounterTroop()) {
+            return;
+        }
+
         $selectedMap = $this->getSelectedMap();
         $list = $this->selectedInspectorList();
         $marker = $this->selectedEventMarkerForList();
@@ -13297,6 +13667,10 @@ final class Editor
      */
     private function removeInspectorListItem(): void
     {
+        if ($this->removeMapEncounterTroop()) {
+            return;
+        }
+
         $selectedMap = $this->getSelectedMap();
         $list = $this->selectedInspectorList();
         $marker = $this->selectedEventMarkerForList();
@@ -13477,6 +13851,71 @@ final class Editor
         }
 
         $this->openEventOptionDialog($marker, $path, $title, $entries, $currentValue);
+    }
+
+    /**
+     * Opens the picker for an inspector field that names a project resource
+     * outside an event: a map's music, a map encounter's troop.
+     *
+     * @param array<string, mixed> $field The inspector field descriptor.
+     * @return bool Whether a picker was opened.
+     */
+    private function openInspectorReferenceDialog(array $field): bool
+    {
+        $category = (string) ($field['reference'] ?? '');
+        $target = (string) ($field['target'] ?? '');
+
+        if ($category === '' || ! in_array($target, ['map-data', 'map-encounters'], true)) {
+            return false;
+        }
+
+        if (! $this->workspace instanceof ProjectWorkspace) {
+            return false;
+        }
+
+        $title = trim((string) ($field['label'] ?? 'Reference'));
+        $catalog = $this->referenceCatalog();
+        $labels = $catalog->labelsFor($category);
+        $entries = array_map(
+            static fn(string $value): array => [
+                'label' => $labels[$value] ?? $value,
+                'value' => $value,
+                'description' => '',
+            ],
+            $catalog->valuesFor($category),
+        );
+
+        if ($category === 'bgm') {
+            // Silence is a choice a map can make, and the only way back from
+            // a track once one is set.
+            array_unshift($entries, [
+                'label' => self::MAP_BGM_NONE,
+                'value' => '',
+                'description' => 'The map plays whatever was already playing.',
+            ]);
+        }
+
+        if ($entries === [] || ($category === 'bgm' && count($entries) === 1)) {
+            $this->setStatus(
+                sprintf('This project has no %s to choose from.', mb_strtolower($title)),
+                StatusLevel::WARN,
+            );
+            $this->renderFooter();
+
+            return true;
+        }
+
+        $this->optionDialogField = $field;
+        $this->eventOptionDialogMarker = null;
+        $this->eventOptionDialogPath = null;
+        $this->eventOptionDialogTitle = $title;
+        $this->eventOptionDialogEntries = $entries;
+        $this->selectedEventOptionIndex = $this->resolveEventOptionSelectionIndex((string) ($field['value'] ?? ''));
+        $this->isEventOptionDialogOpen = true;
+        $this->statusMessage = sprintf('Choose %s.', mb_strtolower($title));
+        $this->renderSelectionDependentArea();
+
+        return true;
     }
 
     private function isChestTypeField(array $field): bool
