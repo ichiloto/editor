@@ -3,12 +3,14 @@
     "description": "A simple TUI editor for the ichiloto game engine.",
     "type": "library",
     "require": {
+        "php": "^8.4.1",
+        "ichiloto/engine": "^0.5",
         "symfony/console": "^8.0",
         "atatusoft-ltd/termutil": "^1.1",
         "ext-mbstring": "*"
     },
     "require-dev": {
-        "pestphp/pest": "^4.4",
+        "pestphp/pest": "^5.1",
         "phpstan/phpstan": "^2.1"
     },
     "license": "MIT",
@@ -32,6 +34,7 @@
         }
     },
     "scripts": {
-        "analyse": "phpstan analyse --memory-limit=1G"
+        "analyse": "phpstan analyse --memory-limit=1G",
+        "test": "pest"
     }
 }

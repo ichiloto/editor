@@ -5,106 +5,15 @@ declare(strict_types=1);
 use Ichiloto\Editor\Editor;
 
 /**
- * Returns the engine source tree this suite resolves engine classes from.
- *
- * The workspace's live engine by default. `ICHILOTO_ENGINE_SRC` pins it to
- * another checkout instead, which is how a gate runs against one accepted
- * engine head while that same worktree is being changed by someone else.
- */
-function engineSourceRoot(): string
-{
-    $pinned = getenv('ICHILOTO_ENGINE_SRC');
-
-    if (is_string($pinned) && $pinned !== '' && is_dir($pinned . '/src')) {
-        return rtrim($pinned, '/');
-    }
-
-    return dirname(__DIR__, 2) . '/engine';
-}
-
-// The editor package does not vendor the engine, so map Ichiloto\Engine\ to
-// the engine source tree directly. Only the namespace is mapped --
-// requiring the engine's full vendor autoloader here would shadow this
-// suite's phpunit with the engine's own copy.
-spl_autoload_register(static function (string $class): void {
-    $prefix = 'Ichiloto\\Engine\\';
-
-    if (! str_starts_with($class, $prefix)) {
-        return;
-    }
-
-    $path = engineSourceRoot()
-        . '/src/'
-        . str_replace('\\', '/', substr($class, strlen($prefix)))
-        . '.php';
-
-    if (is_file($path)) {
-        require $path;
-    }
-});
-
-// The engine also autoloads its function helpers via composer "files";
-// authored data constructs engine objects whose constructors call them
-// (an Enemy loads its sprite through graphics()), so the mapping is
-// incomplete without them.
-foreach (['Constants.php', 'Helpers.php'] as $engineHelperFile) {
-    $engineHelperPath = engineSourceRoot() . '/src/Util/' . $engineHelperFile;
-
-    if (is_file($engineHelperPath)) {
-        require_once $engineHelperPath;
-    }
-}
-
-// The helpers lean on the engine's own vendor packages (graphics() resolves
-// paths through Assegai\Util\Path). Registered after this suite's autoloader,
-// so the engine's map only fields what nothing here provides -- its phpunit
-// never shadows ours.
-$enginePsr4Path = engineSourceRoot() . '/vendor/composer/autoload_psr4.php';
-
-if (is_file($enginePsr4Path)) {
-    /** @var array<string, string[]> $enginePsr4 */
-    $enginePsr4 = require $enginePsr4Path;
-
-    spl_autoload_register(static function (string $class) use ($enginePsr4): void {
-        foreach ($enginePsr4 as $prefix => $directories) {
-            if (! str_starts_with($class, $prefix)) {
-                continue;
-            }
-
-            foreach ($directories as $directory) {
-                $path = $directory . '/' . str_replace('\\', '/', substr($class, strlen($prefix))) . '.php';
-
-                if (is_file($path)) {
-                    require $path;
-
-                    return;
-                }
-            }
-        }
-    });
-}
-
-/**
- * Returns the Last Legend project the suites read authored files from, or
- * null when none is reachable.
- *
- * The sibling checkout by default. `ICHILOTO_GAME_SRC` pins it to another
- * copy instead -- a read-only export of one accepted game head -- so a gate
- * runs against that head while the checkout itself is on someone else's
- * branch. Nothing here ever writes to it: a test copies the one file it
- * needs into a throwaway project.
+ * Returns the game project used by optional production-verification tests.
  */
 function gameSourceRoot(): ?string
 {
     $pinned = getenv('ICHILOTO_GAME_SRC');
 
-    if (is_string($pinned) && $pinned !== '' && is_file($pinned . '/assets/Data/items.php')) {
-        return rtrim($pinned, '/');
-    }
-
-    $sibling = dirname(__DIR__, 2) . '/examples/last-legend';
-
-    return is_file($sibling . '/assets/Data/items.php') ? $sibling : null;
+    return is_string($pinned) && $pinned !== '' && is_file($pinned . '/assets/Data/items.php')
+        ? rtrim($pinned, '/')
+        : null;
 }
 
 /**

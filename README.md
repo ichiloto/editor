@@ -74,10 +74,10 @@ Press `?` anywhere for every shortcut the current context offers, and `Ctrl+P` f
 
 ## Stack
 
-- PHP `^8.4`
+- PHP `^8.4.1`
 - Symfony Console
 - `atatusoft-ltd/termutil` for terminal control
-- `ichiloto/engine` resolved from the workspace for previews, hydration and validation — the editor consumes the engine's contracts and never reimplements its runtime
+- `ichiloto/engine` for previews, hydration and validation
 
 ## Architecture
 
@@ -91,15 +91,6 @@ Press `?` anywhere for every shortcut the current context offers, and `Ctrl+P` f
 
 ## Local Development
 
-Sibling checkouts are the expected source layout:
-
-```text
-ichiloto/
-  engine/
-  editor/
-  console/
-```
-
 Install and verify from the `editor` repo:
 
 ```bash
@@ -108,11 +99,9 @@ composer install
 composer analyse
 ```
 
-Notes:
-
-- The test suite maps `Ichiloto\Engine\` to the sibling `../engine/src` directly; `ICHILOTO_ENGINE_SRC=/path/to/engine` pins it to another checkout instead, which is how a gate runs against one accepted engine head while the sibling moves.
-- Production-verification tests walk a real game project when one is reachable; `ICHILOTO_GAME_SRC=/path/to/game` pins that too, and those tests skip cleanly when no game is available.
-- `docs/manual.md` is covered by `tests/Unit/ManualCoverageTest.php` — teach the editor a key, document it, or the suite says so.
+Set `ICHILOTO_GAME_SRC=/path/to/game` to include a game project in the
+production-verification tests. `docs/manual.md` is covered by
+`tests/Unit/ManualCoverageTest.php`; registered keybindings must be documented.
 
 ## Project Links
 
