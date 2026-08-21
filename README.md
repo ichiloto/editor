@@ -74,7 +74,7 @@ Press `?` anywhere for every shortcut the current context offers, and `Ctrl+P` f
 
 ## Stack
 
-- PHP `^8.4`
+- PHP `^8.4.1`
 - Symfony Console
 - `atatusoft-ltd/termutil` for terminal control
 - `ichiloto/engine` for previews, hydration and validation

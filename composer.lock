@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "a7d49923d504e20b77435a9fe44fc5ff",
+    "content-hash": "992db93ca76233f28842351d8e27223b",
     "packages": [
         {
             "name": "amasiye/figlet",
@@ -4809,7 +4809,7 @@
     "prefer-stable": false,
     "prefer-lowest": false,
     "platform": {
-        "php": "^8.4",
+        "php": "^8.4.1",
         "ext-mbstring": "*"
     },
     "platform-dev": {},

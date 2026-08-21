@@ -27,6 +27,6 @@ validating, and playtesting Engine 0.5 projects.
 
 ### Requirements
 
-- PHP 8.4 or newer within the PHP 8 release line.
+- PHP 8.4.1 or newer within the PHP 8 release line.
 - `ichiloto/engine` 0.5.
 - Pest 5.1 for the development test suite.
