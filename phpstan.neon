@@ -1,0 +1,35 @@
+# Static analysis for the editor.
+#
+# The editor reads engine projects without depending on the engine: engine
+# types are referenced behind class_exists guards, and a few are aliased into
+# this namespace at runtime. Neither is visible to static analysis, so those
+# names are ignored here rather than pretended into existence.
+parameters:
+    # Level 3 is free here and catches more than names that do not resolve:
+    # an undefined property (`$category->title` for `label`) is a level 2
+    # rule, and this codebase was already clean of them.
+    level: 3
+    paths:
+        - src
+    # The cinematic preview hosts the Engine's own runtime inside the editor
+    # through a handful of subclasses (a camera that draws into a buffer, a
+    # map manager that loads tiles only, a scene with no terminal). A class
+    # that extends an engine type cannot be analysed without the engine, and
+    # "extends unknown class" cannot be ignored by message, so those hosts
+    # are excluded by path; the session driving them is analysed as usual.
+    excludePaths:
+        - src/Cutscenes/Preview/PreviewCamera.php
+        - src/Cutscenes/Preview/PreviewConfig.php
+        - src/Cutscenes/Preview/PreviewGame.php
+        - src/Cutscenes/Preview/PreviewGameScene.php
+        - src/Cutscenes/Preview/PreviewMapManager.php
+        - src/Cutscenes/Preview/PreviewPlayer.php
+        - src/Cutscenes/Preview/PreviewPresentation.php
+        - src/Cutscenes/Preview/PreviewSceneManager.php
+        - src/Cutscenes/Preview/SilentAudioBackend.php
+    reportUnmatchedIgnoredErrors: false
+    ignoreErrors:
+        - '#Ichiloto\\Engine#'
+        - '#Ichiloto\\Editor\\(Animation|AnimationCue|AnimationPlayer)#'
+        # The excluded preview hosts inherit their members from the engine.
+        - '#Ichiloto\\Editor\\Cutscenes\\Preview\\Preview(GameScene|Camera|Player|SceneManager|MapManager|Presentation|Game|SaveManager|AudioManager)|Cutscenes\\\\Preview\\\\SilentAudioBackend#'

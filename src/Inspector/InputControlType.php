@@ -11,5 +11,9 @@ enum InputControlType: string
 {
     case TEXT = 'text';
     case INTEGER = 'integer';
+    case FLOAT = 'float';
+    case BOOLEAN = 'boolean';
     case FILE_PATH = 'file_path';
+    /** Text with line breaks, edited in the multiline editor rather than on one line. */
+    case MULTILINE = 'multiline';
 }

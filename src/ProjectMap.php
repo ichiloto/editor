@@ -4,6 +4,11 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor;
 
+use Ichiloto\Editor\Field\NpcCollection;
+use Ichiloto\Editor\Field\ProjectNpc;
+use Ichiloto\Editor\History\TracksPersistedState;
+use Ichiloto\Editor\IO\AtomicFile;
+
 use RuntimeException;
 
 /**
@@ -11,6 +16,8 @@ use RuntimeException;
  */
 final class ProjectMap
 {
+    use TracksPersistedState;
+
     /**
      * @var array<int, array<int, array{symbol: string, prefix: string, suffix: string}>>
      */
@@ -23,7 +30,11 @@ final class ProjectMap
      * @var array<string, mixed>
      */
     private array $editableData;
-    private bool $isDirty = false;
+
+    /**
+     * Memoized widest-row width; invalidated when the grid dimensions change.
+     */
+    private ?int $cachedWidth = null;
 
     /**
      * @param string[] $tileLines
@@ -82,7 +93,19 @@ final class ProjectMap
             data: $data,
             tileLines: self::splitMapText($mapText),
             eventLines: self::splitMapText($eventText),
-        );
+        )->withLoadedBaseline();
+    }
+
+    /**
+     * Adopts the just-loaded content as the saved baseline.
+     *
+     * @return self This map.
+     */
+    private function withLoadedBaseline(): self
+    {
+        $this->captureBaseline();
+
+        return $this;
     }
 
     /**
@@ -132,13 +155,17 @@ final class ProjectMap
      */
     public function getWidth(): int
     {
+        if ($this->cachedWidth !== null) {
+            return $this->cachedWidth;
+        }
+
         $width = 0;
 
         foreach ($this->tileCells as $row) {
             $width = max($width, count($row));
         }
 
-        return $width;
+        return $this->cachedWidth = $width;
     }
 
     /**
@@ -146,10 +173,7 @@ final class ProjectMap
      *
      * @return bool
      */
-    public function isDirty(): bool
-    {
-        return $this->isDirty;
-    }
+
 
     /**
      * Returns the number of declared event definitions.
@@ -201,6 +225,9 @@ final class ProjectMap
         int $offsetX = 0,
         int $offsetY = 0,
         bool $showEventOverlay = true,
+        bool $showNpcOverlay = false,
+        ?int $selectedNpcIndex = null,
+        ?string $selectedNpcSprite = null,
     ): array
     {
         if ($width < 1 || $height < 1) {
@@ -211,6 +238,7 @@ final class ProjectMap
         $offsetX = max(0, $offsetX);
         $offsetY = max(0, $offsetY);
         $rowLimit = min($offsetY + $height, max(count($this->tileCells), count($this->eventCells)));
+        $npcCells = $showNpcOverlay ? $this->npcOverlayCells($selectedNpcIndex, $selectedNpcSprite) : [];
 
         for ($row = $offsetY; $row < $rowLimit; $row++) {
             $tileSymbols = array_map(
@@ -221,6 +249,13 @@ final class ProjectMap
             $mergedSymbols = [];
 
             for ($column = $offsetX; $column < $offsetX + $width; $column++) {
+                if (isset($npcCells[$row][$column])) {
+                    // NPCs draw over everything, as they do in the game; the
+                    // overlay is derived from map data and never painted.
+                    $mergedSymbols[] = $npcCells[$row][$column];
+                    continue;
+                }
+
                 $eventSymbol = $eventSymbols[$column] ?? ' ';
                 $tileSymbol = $tileSymbols[$column] ?? ' ';
                 $mergedSymbols[] = trim($eventSymbol) !== '' ? $eventSymbol : $tileSymbol;
@@ -230,6 +265,54 @@ final class ProjectMap
         }
 
         return array_pad($lines, $height, '');
+    }
+
+    /**
+     * Returns the cells the NPC overlay occupies, row => column => symbol.
+     *
+     * The engine anchors a sprite at its tile and lets it overhang to the
+     * right (NpcManager::eraseNpc clears displayWidth cells), so a
+     * two-column emoji owns its anchor and the cell after it. The overhang
+     * cell holds an empty string, so the terminal draws the wide glyph in
+     * the space it needs rather than a symbol shoved half under it. The
+     * selected NPC is drawn with brackets around a one-column sprite, or as
+     * itself when wide, since brackets would misalign the row.
+     *
+     * @param int|null $selectedNpcIndex The NPC to mark selected.
+     * @param string|null $selectedNpcSprite A glyph to draw for the selected
+     *   NPC in place of its base sprite -- a directional sprite being
+     *   previewed -- as authored; it is shown as the terminal would show it.
+     * @return array<int, array<int, string>> The cells.
+     */
+    private function npcOverlayCells(?int $selectedNpcIndex, ?string $selectedNpcSprite = null): array
+    {
+        $cells = [];
+
+        foreach ($this->getNpcs()->all() as $index => $npc) {
+            $sprite = $npc->getVisibleSprite();
+            $columns = $npc->getSpriteWidth();
+            $x = $npc->getX();
+            $y = $npc->getY();
+
+            if ($index === $selectedNpcIndex && $selectedNpcSprite !== null && trim($selectedNpcSprite) !== '') {
+                $sprite = ProjectNpc::visibleGlyph($selectedNpcSprite);
+                $columns = max(1, mb_strwidth($sprite));
+            }
+
+            if ($index === $selectedNpcIndex && $columns === 1) {
+                $sprite = '[' . $sprite . ']';
+                $x = max(0, $x - 1);
+                $columns = 3;
+            }
+
+            $cells[$y][$x] = $sprite;
+
+            for ($column = 1; $column < $columns; $column++) {
+                $cells[$y][$x + $column] = '';
+            }
+        }
+
+        return $cells;
     }
 
     /**
@@ -271,7 +354,7 @@ final class ProjectMap
         }
 
         $this->tileCells[$y][$x]['symbol'] = self::normalizeSymbol($symbol);
-        $this->isDirty = true;
+        $this->touchState();
     }
 
     /**
@@ -289,7 +372,289 @@ final class ProjectMap
         }
 
         $this->eventCells[$y][$x] = self::normalizeSymbol($symbol);
-        $this->isDirty = true;
+        $this->touchState();
+    }
+
+    /**
+     * Returns every distinct event marker painted on the grid.
+     *
+     * @return string[]
+     */
+    public function getPlacedEventMarkers(): array
+    {
+        $markers = [];
+
+        foreach ($this->eventCells as $row) {
+            foreach ($row as $symbol) {
+                if (trim($symbol) !== '') {
+                    $markers[$symbol] = $symbol;
+                }
+            }
+        }
+
+        return array_values($markers);
+    }
+
+    /**
+     * Captures the editable grid state for undoable whole-grid mutations
+     * (resize, event bounds rewrites).
+     *
+     * @return array{tiles: array<int, array<int, array{symbol: string, prefix: string, suffix: string}>>, events: array<int, array<int, string>>}
+     */
+    public function captureGridSnapshot(): array
+    {
+        return [
+            'tiles' => $this->tileCells,
+            'events' => $this->eventCells,
+        ];
+    }
+
+    /**
+     * Restores a previously captured grid snapshot.
+     *
+     * @param array{tiles: array<int, array<int, array{symbol: string, prefix: string, suffix: string}>>, events: array<int, array<int, string>>} $snapshot The captured state.
+     * @return void
+     */
+    public function restoreGridSnapshot(array $snapshot): void
+    {
+        $this->tileCells = $snapshot['tiles'];
+        $this->eventCells = $snapshot['events'];
+        $this->cachedWidth = null;
+        $this->touchState();
+    }
+
+    /**
+     * Names the NPCs a resize to the given size would leave outside the map,
+     * or with a wander area outside it.
+     *
+     * The runtime does not clamp: an NPC anchored past the edge is drawn
+     * off-map and unreachable, and a wander area past the edge is a promise
+     * the engine cannot keep. Nothing here changes anything -- it is what a
+     * shrink has to be refused for until the author moves, resizes, or
+     * removes the NPC.
+     *
+     * @param int $width The proposed width.
+     * @param int $height The proposed height.
+     * @return string[] One line per stranded NPC, empty when the resize is safe.
+     */
+    public function describeNpcsStrandedBy(int $width, int $height): array
+    {
+        $stranded = [];
+
+        foreach ($this->getNpcs()->all() as $npc) {
+            $label = sprintf('%s (%s)', $npc->getName(), $npc->getId() ?? 'no id');
+
+            if ($npc->getX() >= $width || $npc->getY() >= $height) {
+                $stranded[] = sprintf('%s stands at %d,%d', $label, $npc->getX(), $npc->getY());
+            }
+
+            $area = $npc->getWanderArea();
+
+            if ($npc->wanders() && $area !== null
+                && ($area['x'] + $area['width'] > $width || $area['y'] + $area['height'] > $height)) {
+                $stranded[] = sprintf(
+                    '%s wanders %d,%d %dx%d',
+                    $label,
+                    $area['x'],
+                    $area['y'],
+                    $area['width'],
+                    $area['height'],
+                );
+            }
+        }
+
+        return $stranded;
+    }
+
+    /**
+     * Returns the map's event definitions as they currently stand.
+     *
+     * `$data` is the loaded payload; this is the live one, edits included.
+     *
+     * @return array<string, mixed> The events, keyed by marker.
+     */
+    public function getEventDefinitions(): array
+    {
+        $events = $this->editableData['events'] ?? [];
+
+        return is_array($events) ? $events : [];
+    }
+
+    /**
+     * Returns the markers of the map's events, which a cinematic subject
+     * reference may name.
+     *
+     * @return string[] The markers, in map order.
+     */
+    public function getEventMarkers(): array
+    {
+        return array_values(array_map(strval(...), array_keys($this->getEventDefinitions())));
+    }
+
+    /**
+     * Returns the map's NPCs.
+     *
+     * @return NpcCollection The collection, read fresh from the map data.
+     */
+    public function getNpcs(): NpcCollection
+    {
+        return NpcCollection::fromMapData($this->editableData['npcs'] ?? null);
+    }
+
+    /**
+     * Stores a rewritten NPC collection.
+     *
+     * The one mutation path for `npcs`: the coordinator never reaches into
+     * the array. An unchanged collection is a no-op, so undoing to the saved
+     * list is clean by content, not by accident.
+     *
+     * @param NpcCollection $npcs The collection to store.
+     * @return void
+     */
+    public function setNpcs(NpcCollection $npcs): void
+    {
+        $entries = $npcs->toMapData();
+
+        if (($this->editableData['npcs'] ?? null) === $entries) {
+            return;
+        }
+
+        if ($entries === [] && ! array_key_exists('npcs', $this->editableData)) {
+            return;
+        }
+
+        $this->editableData['npcs'] = $entries;
+        $this->touchState();
+    }
+
+    /**
+     * Returns a top-level map metadata field value.
+     *
+     * @param string $field The field to read.
+     * @return mixed
+     */
+    public function getMapField(string $field): mixed
+    {
+        return $this->editableData[$field] ?? null;
+    }
+
+    /**
+     * Reads a nested value from the map's own data, unsaved edits included.
+     *
+     * @param array<int, string> $path The nested data path.
+     * @return mixed The value, or null when the path names nothing.
+     */
+    public function getMapDataField(array $path): mixed
+    {
+        $reference = $this->editableData;
+
+        foreach ($path as $segment) {
+            if (! is_array($reference) || ! array_key_exists($segment, $reference)) {
+                return null;
+            }
+
+            $reference = $reference[$segment];
+        }
+
+        return $reference;
+    }
+
+    /**
+     * Writes a nested value into the map's own data.
+     *
+     * A null value removes the key rather than writing an empty one: a map
+     * with no background music says nothing about music, and a misleading
+     * empty track would be read as one. Nothing is touched, and nothing is
+     * dirtied, when the value is already what it should be.
+     *
+     * @param array<int, string> $path The nested data path.
+     * @param mixed $value The value, or null to remove the key.
+     * @return void
+     */
+    public function setMapDataField(array $path, mixed $value): void
+    {
+        if ($path === []) {
+            return;
+        }
+
+        $exists = $this->hasMapDataField($path);
+
+        if ($value === null ? ! $exists : ($exists && $this->getMapDataField($path) === $value)) {
+            // Already exactly this, or already absent: neither a write nor a
+            // history entry, so browsing a map can never dirty it.
+            return;
+        }
+
+        $reference = &$this->editableData;
+        $last = array_key_last($path);
+
+        foreach ($path as $position => $segment) {
+            if ($position === $last) {
+                if ($value === null) {
+                    unset($reference[$segment]);
+                } else {
+                    $reference[$segment] = $value;
+                }
+
+                break;
+            }
+
+            if (! isset($reference[$segment]) || ! is_array($reference[$segment])) {
+                if ($value === null) {
+                    // Nothing to remove down a path that does not exist.
+                    return;
+                }
+
+                $reference[$segment] = [];
+            }
+
+            $reference = &$reference[$segment];
+        }
+
+        unset($reference);
+        $this->touchState();
+    }
+
+    /**
+     * Whether the map's data holds this exact path.
+     *
+     * @param array<int, string> $path The nested data path.
+     */
+    public function hasMapDataField(array $path): bool
+    {
+        $reference = $this->editableData;
+
+        foreach ($path as $segment) {
+            if (! is_array($reference) || ! array_key_exists($segment, $reference)) {
+                return false;
+            }
+
+            $reference = $reference[$segment];
+        }
+
+        return true;
+    }
+
+    /**
+     * Reads a nested event field value (the undo counterpart of setEventField).
+     *
+     * @param string $marker The event marker.
+     * @param string[] $path The nested data path.
+     * @return mixed
+     */
+    public function getEventField(string $marker, array $path): mixed
+    {
+        $reference = $this->editableData['events'][$marker] ?? null;
+
+        foreach ($path as $segment) {
+            if (! is_array($reference) || ! array_key_exists($segment, $reference)) {
+                return null;
+            }
+
+            $reference = $reference[$segment];
+        }
+
+        return $reference;
     }
 
     /**
@@ -363,6 +728,33 @@ final class ProjectMap
     }
 
     /**
+     * Reports whether every cell inside an event marker's bounds contains
+     * that marker. The runtime represents one marker as one rectangular
+     * trigger area and rejects sparse, cross-shaped, or disconnected areas.
+     */
+    public function isEventMarkerSolidRectangle(string $marker): bool
+    {
+        $bounds = $this->getEventBounds($marker);
+
+        if ($bounds === null) {
+            return false;
+        }
+
+        $maxX = $bounds['x'] + $bounds['width'];
+        $maxY = $bounds['y'] + $bounds['height'];
+
+        for ($y = $bounds['y']; $y < $maxY; $y++) {
+            for ($x = $bounds['x']; $x < $maxX; $x++) {
+                if ($this->getEventSymbol($x, $y) !== $marker) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    /**
      * Updates a top-level map metadata field.
      *
      * @param string $field The field to update.
@@ -371,8 +763,14 @@ final class ProjectMap
      */
     public function setMapField(string $field, mixed $value): void
     {
+        if (($this->editableData[$field] ?? null) === $value) {
+            // Setting a field to what it already is neither dirties nor
+            // deserves a history entry at the call site.
+            return;
+        }
+
         $this->editableData[$field] = $value;
-        $this->isDirty = true;
+        $this->touchState();
     }
 
     /**
@@ -386,6 +784,10 @@ final class ProjectMap
     {
         $width = max(1, $width);
         $height = max(1, $height);
+
+        if ($width === $this->getWidth() && $height === $this->getHeight()) {
+            return;
+        }
 
         foreach ($this->tileCells as $rowIndex => $row) {
             $this->tileCells[$rowIndex] = array_slice($row, 0, $width);
@@ -414,7 +816,8 @@ final class ProjectMap
             $this->eventCells[] = array_fill(0, $width, ' ');
         }
 
-        $this->isDirty = true;
+        $this->cachedWidth = null;
+        $this->touchState();
     }
 
     /**
@@ -440,7 +843,7 @@ final class ProjectMap
         foreach ($path as $index => $segment) {
             if ($index === array_key_last($path)) {
                 $reference[$segment] = $value;
-                $this->isDirty = true;
+                $this->touchState();
                 return;
             }
 
@@ -466,7 +869,24 @@ final class ProjectMap
         }
 
         $this->editableData['events'][$marker] = $definition;
-        $this->isDirty = true;
+        $this->touchState();
+    }
+
+    /**
+     * Removes the definition for the given event marker (the undo counterpart
+     * of a first-time setEventDefinition).
+     *
+     * @param string $marker The event marker.
+     * @return void
+     */
+    public function removeEventDefinition(string $marker): void
+    {
+        if (! isset($this->editableData['events'][$marker])) {
+            return;
+        }
+
+        unset($this->editableData['events'][$marker]);
+        $this->touchState();
     }
 
     /**
@@ -500,7 +920,29 @@ final class ProjectMap
             }
         }
 
-        $this->isDirty = true;
+        $this->touchState();
+    }
+
+    /**
+     * Returns where the next save() will write, so callers can detect and
+     * confirm a folder move before any file is touched.
+     *
+     * @return array{mapId: string, directory: string, dataPath: string, mapPath: string, eventPath: string}
+     */
+    public function getSaveTarget(): array
+    {
+        return $this->resolveSaveTarget();
+    }
+
+    /**
+     * Returns whether saving would move the map folder (the rename flow that
+     * deletes the current directory).
+     *
+     * @return bool
+     */
+    public function willMoveOnSave(): bool
+    {
+        return $this->resolveSaveTarget()['directory'] !== $this->directory;
     }
 
     /**
@@ -510,29 +952,31 @@ final class ProjectMap
      */
     public function save(): string
     {
+
         $target = $this->resolveSaveTarget();
-        $dataPayload = "<?php\n\nreturn " . self::exportPhpValue($this->editableData) . ";\n";
-        $mapPayload = "<?php\n\nreturn <<<'ICHILOTO_MAP'\n"
-            . implode(PHP_EOL, array_map($this->buildStyledLine(...), $this->tileCells))
-            . "\nICHILOTO_MAP;\n";
-        $eventPayload = "<?php\n\nreturn <<<'ICHILOTO_EVENT_MAP'\n"
-            . implode(PHP_EOL, array_map($this->buildPlainLine(...), $this->eventCells))
-            . "\nICHILOTO_EVENT_MAP;\n";
+
+        if (! $this->isDirty() && is_dir($this->directory)) {
+            // Nothing diverges from the last save: writing would only
+            // canonicalize hand-authored formatting and churn mtimes.
+            return $target['mapId'];
+        }
+
+        $payloads = $this->buildSavePayloads();
 
         if (! is_dir($target['directory']) && ! mkdir($target['directory'], 0777, true) && ! is_dir($target['directory'])) {
             throw new RuntimeException("Unable to create {$target['directory']}.");
         }
 
-        self::writeFileTransactionally($target['dataPath'], $dataPayload);
-        self::writeFileTransactionally($target['mapPath'], $mapPayload);
-        self::writeFileTransactionally($target['eventPath'], $eventPayload);
+        AtomicFile::write($target['dataPath'], $payloads['data']);
+        AtomicFile::write($target['mapPath'], $payloads['map']);
+        AtomicFile::write($target['eventPath'], $payloads['event']);
 
         if ($target['directory'] !== $this->directory) {
             self::deleteDirectoryRecursively($this->directory);
             self::deleteEmptyParentDirectories(dirname($this->directory), $this->getMapsRoot());
         }
 
-        $this->isDirty = false;
+        $this->captureBaseline();
 
         return $target['mapId'];
     }
@@ -790,6 +1234,12 @@ final class ProjectMap
      */
     private static function writeFileTransactionally(string $path, string $contents): void
     {
+        if (is_file($path) && (string) file_get_contents($path) === $contents) {
+            // Saving an unchanged asset rewrites nothing: no churn for git,
+            // no mtime bump for build tools, no backup for the writer.
+            return;
+        }
+
         $temporaryPath = $path . '.tmp';
 
         if (file_put_contents($temporaryPath, $contents) === false) {
@@ -803,20 +1253,138 @@ final class ProjectMap
     }
 
     /**
+     * Builds the exact contents of the three files a save writes.
+     *
+     * @return array{data: string, map: string, event: string} The payloads.
+     */
+    private function buildSavePayloads(): array
+    {
+        return [
+            'data' => "<?php\n\nreturn " . self::exportPhpValue($this->editableData) . ";\n",
+            'map' => "<?php\n\nreturn <<<'ICHILOTO_MAP'\n"
+                . implode(PHP_EOL, array_map($this->buildStyledLine(...), $this->tileCells))
+                . "\nICHILOTO_MAP;\n",
+            'event' => "<?php\n\nreturn <<<'ICHILOTO_EVENT_MAP'\n"
+                . implode(PHP_EOL, array_map($this->buildPlainLine(...), $this->eventCells))
+                . "\nICHILOTO_EVENT_MAP;\n",
+        ];
+    }
+
+    /**
+     * @inheritDoc
+     */
+    protected function buildPersistedPayload(): string
+    {
+        $payloads = $this->buildSavePayloads();
+
+        // The id is part of what a save persists: a moved map differs from
+        // its old self even when every cell matches.
+        return $this->mapId . "\0" . $payloads['data'] . $payloads['map'] . $payloads['event'];
+    }
+
+    /**
+     * Moves this map to a new stable path — the one explicit way a map's
+     * identity changes.
+     *
+     * Ordinary saves never relocate anything. This writes the map at the new
+     * path first, deletes the old directory only after every file landed,
+     * and rolls the new copy back if that deletion fails — the map is never
+     * left half-moved. References are NOT migrated: doors, quests, saves and
+     * event identities that name the old id keep naming it, which is the
+     * caller's warning to give.
+     *
+     * @param string $newRelativeId The new project-relative map id.
+     * @return self The relocated map, freshly loaded from its new path; the
+     *   caller replaces this instance with it.
+     */
+    public function moveTo(string $newRelativeId): self
+    {
+        $newRelativeId = trim(str_replace('\\', '/', $newRelativeId), '/ ');
+
+        if ($newRelativeId === '') {
+            throw new RuntimeException('A map path cannot be empty.');
+        }
+
+        if ($newRelativeId === $this->mapId) {
+            return $this;
+        }
+
+        $mapsRoot = $this->getMapsRoot();
+        $directory = $mapsRoot . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $newRelativeId);
+
+        if (is_dir($directory)) {
+            throw new RuntimeException("Map path {$newRelativeId} already exists.");
+        }
+
+        if (! mkdir($directory, 0777, true) && ! is_dir($directory)) {
+            throw new RuntimeException("Unable to create {$directory}.");
+        }
+
+        $previousDirectory = $this->directory;
+        $previousMapId = $this->mapId;
+        $baseName = basename($directory);
+        $payloads = $this->buildSavePayloads();
+
+        try {
+            self::writeFileTransactionally($directory . DIRECTORY_SEPARATOR . $baseName . '.data.php', $payloads['data']);
+            self::writeFileTransactionally($directory . DIRECTORY_SEPARATOR . $baseName . '.map.php', $payloads['map']);
+            self::writeFileTransactionally($directory . DIRECTORY_SEPARATOR . $baseName . '.event.php', $payloads['event']);
+            self::deleteDirectoryRecursively($previousDirectory);
+        } catch (\Throwable $throwable) {
+            // Fail closed: the old directory is still the map, so the new
+            // copy goes rather than leaving two claims to one identity.
+            if (is_dir($directory) && is_dir($previousDirectory)) {
+                self::deleteDirectoryRecursively($directory);
+            }
+
+            throw new RuntimeException(sprintf(
+                'The move to %s failed and was rolled back (%s). The map is still %s.',
+                $newRelativeId,
+                $throwable->getMessage(),
+                $previousMapId,
+            ), previous: $throwable);
+        }
+
+        return self::fromDirectory($mapsRoot, $directory);
+    }
+
+    /**
      * Resolves the save target directory, filenames, and map id from the current metadata.
      *
      * @return array{mapId: string, directory: string, dataPath: string, mapPath: string, eventPath: string}
      */
     private function resolveSaveTarget(): array
     {
+        // A map that exists on disk keeps its path: the relative path is the
+        // map's stable identity -- doors transfer to it, quests reach for it,
+        // saves record it. Deriving the path from the display name and region
+        // made every map whose metadata did not slug-match its location a
+        // permanent rename target: bsa/licensing-facility/administration can
+        // never equal region/name, so saving wanted to relocate it and Save
+        // All skipped it as a pending move. Name and region are display
+        // metadata; where a map lives only changes by an explicit move.
+        if (is_dir($this->directory)) {
+            $baseName = basename($this->directory);
+
+            return [
+                'mapId' => $this->mapId,
+                'directory' => $this->directory,
+                'dataPath' => $this->directory . DIRECTORY_SEPARATOR . $baseName . '.data.php',
+                'mapPath' => $this->directory . DIRECTORY_SEPARATOR . $baseName . '.map.php',
+                'eventPath' => $this->directory . DIRECTORY_SEPARATOR . $baseName . '.event.php',
+            ];
+        }
+
         $mapsRoot = $this->getMapsRoot();
         $baseName = self::slugify($this->getDisplayName(), basename($this->directory));
-        $region = self::slugify($this->getRegion());
+        // An empty region must stay empty — falling back to the default slug
+        // would silently relocate region-less maps into a "new-map" folder.
+        $region = self::slugify($this->getRegion(), '');
         $relativePath = $region !== '' ? $region . DIRECTORY_SEPARATOR . $baseName : $baseName;
         $directory = $mapsRoot . DIRECTORY_SEPARATOR . $relativePath;
         $mapId = str_replace(DIRECTORY_SEPARATOR, '/', $relativePath);
 
-        if ($directory !== $this->directory && is_dir($directory)) {
+        if (is_dir($directory)) {
             throw new RuntimeException("Map path {$mapId} already exists.");
         }
 

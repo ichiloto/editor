@@ -4,10 +4,8 @@
     "type": "library",
     "require": {
         "symfony/console": "^8.0",
-        "league/climate": "^3.10",
-        "laravel/prompts": "^0.3.14",
-        "php-tui/php-tui": "^0.2.1",
-        "atatusoft-ltd/termutil": "^1.1"
+        "atatusoft-ltd/termutil": "^1.1",
+        "ext-mbstring": "*"
     },
     "require-dev": {
         "pestphp/pest": "^4.4",
@@ -17,7 +15,10 @@
     "autoload": {
         "psr-4": {
             "Ichiloto\\Editor\\": "src/"
-        }
+        },
+        "files": [
+            "src/Util/Helpers.php"
+        ]
     },
     "authors": [
         {
@@ -29,5 +30,8 @@
         "allow-plugins": {
             "pestphp/pest-plugin": true
         }
+    },
+    "scripts": {
+        "analyse": "phpstan analyse --memory-limit=1G"
     }
 }

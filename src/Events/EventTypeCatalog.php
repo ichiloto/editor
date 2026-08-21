@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Events;
 
 use Ichiloto\Engine\Events\Triggers\ChestEventTrigger;
+use Ichiloto\Engine\Events\Triggers\CinematicEventTrigger;
 use Ichiloto\Engine\Events\Triggers\DialogueEventTrigger;
 use Ichiloto\Engine\Events\Triggers\ShopEventTrigger;
+use Ichiloto\Engine\Events\Triggers\ScriptEventTrigger;
 use Ichiloto\Engine\Events\Triggers\SleepEventTrigger;
 use Ichiloto\Engine\Events\Triggers\TransferPlayerTrigger;
 
@@ -31,6 +33,38 @@ final class EventTypeCatalog
 
         self::$definitions = [
             new EventTypeDefinition(
+                label: 'Story Script',
+                className: ScriptEventTrigger::class,
+                description: 'Runs a resumable event script by stable script id.',
+                defaultData: [
+                    'scriptId' => '',
+                    'mode' => 'action',
+                    'reusable' => false,
+                ],
+                defaultDefinitionFields: [
+                    'conditions' => [],
+                    'sets' => [],
+                    'whenBlocked' => '',
+                    'cue' => ['symbol' => '', 'color' => 'bright-yellow'],
+                ],
+            ),
+            new EventTypeDefinition(
+                label: 'Cinematic',
+                className: CinematicEventTrigger::class,
+                description: 'Launches a first-class Cinematic by stable id, automatically on arrival or as the field action.',
+                defaultData: [
+                    'cinematicId' => '',
+                    'mode' => 'auto',
+                    'reusable' => false,
+                ],
+                defaultDefinitionFields: [
+                    'conditions' => [],
+                    'sets' => [],
+                    'whenBlocked' => '',
+                    'cue' => ['symbol' => '', 'color' => 'bright-yellow'],
+                ],
+            ),
+            new EventTypeDefinition(
                 label: 'Dialogue',
                 className: DialogueEventTrigger::class,
                 description: 'Displays dialogue when the player interacts with the event.',
@@ -42,6 +76,7 @@ final class EventTypeCatalog
                         ],
                     ],
                 ],
+                defaultDefinitionFields: ['cue' => ['symbol' => '', 'color' => 'bright-yellow']],
             ),
             new EventTypeDefinition(
                 label: 'Transfer Player',
@@ -57,6 +92,7 @@ final class EventTypeCatalog
                         '🧍',
                     ],
                 ],
+                defaultDefinitionFields: ['cue' => ['symbol' => '', 'color' => 'bright-yellow']],
             ),
             new EventTypeDefinition(
                 label: 'Shop',
@@ -68,6 +104,7 @@ final class EventTypeCatalog
                     'buyRate' => 1.0,
                     'sellRate' => 0.5,
                 ],
+                defaultDefinitionFields: ['cue' => ['symbol' => '', 'color' => 'bright-yellow']],
             ),
             new EventTypeDefinition(
                 label: 'Sleep',
@@ -87,6 +124,7 @@ final class EventTypeCatalog
                     ],
                     'cost' => 0,
                 ],
+                defaultDefinitionFields: ['cue' => ['symbol' => '', 'color' => 'bright-yellow']],
             ),
             new EventTypeDefinition(
                 label: 'Chest',
@@ -99,6 +137,7 @@ final class EventTypeCatalog
                     'chestType' => 'common',
                     'lootType' => 'item',
                 ],
+                defaultDefinitionFields: ['cue' => ['symbol' => '', 'color' => 'bright-yellow']],
             ),
         ];
 

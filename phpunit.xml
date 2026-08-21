@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"
+         bootstrap="vendor/autoload.php"
+         colors="true">
+  <testsuites>
+    <testsuite name="Unit">
+      <directory>tests/Unit</directory>
+    </testsuite>
+  </testsuites>
+  <php>
+    <!-- The production-verification tests walk a full Last Legend export
+         (every map, cutscene and actor); the CLI default of 128M no longer
+         holds the whole suite. -->
+    <ini name="memory_limit" value="512M"/>
+  </php>
+</phpunit>

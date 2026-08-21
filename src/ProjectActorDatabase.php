@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor;
 
+use Throwable;
+
 use RuntimeException;
 
 /**
@@ -14,10 +16,18 @@ final class ProjectActorDatabase
     /**
      * @param ProjectActor[] $actors
      */
+    /**
+     * @var array<string, string> Asset paths staged for deletion on the next save.
+     */
+    private array $pendingDeletions = [];
+
+    /**
+     * @param ProjectActor[] $actors
+     */
     public function __construct(
         public readonly string $directory,
         private array $actors = [],
-        private bool $isDirty = false,
+
     ) {
     }
 
@@ -69,7 +79,10 @@ final class ProjectActorDatabase
      */
     public function isDirty(): bool
     {
-        if ($this->isDirty) {
+        // Derived, never remembered: staged deletions are structure waiting
+        // to persist, and each actor answers for its own content. There is
+        // no flag to forget to clear.
+        if ($this->pendingDeletions !== []) {
             return true;
         }
 
@@ -104,9 +117,65 @@ final class ProjectActorDatabase
         $id = $this->getNextAvailableId($name);
         $path = $this->directory . DIRECTORY_SEPARATOR . $id . '.php';
         $this->actors[] = ProjectActor::createBlank($path, $id, self::humanizeId($id));
-        $this->isDirty = true;
 
         return count($this->actors) - 1;
+    }
+
+    /**
+     * Removes the actor at the given index from the in-memory database.
+     *
+     * The asset file is not touched here: the removal is staged and applied
+     * on the next save, so an undo before saving costs nothing and an undo
+     * after saving simply re-creates the file on the following save. This is
+     * what makes entry deletion undoable at all.
+     *
+     * @param int $index The actor index.
+     * @return ProjectActor|null The removed actor, or null when the index is unknown.
+     */
+    public function removeActor(int $index): ?ProjectActor
+    {
+        $actors = array_values($this->actors);
+        $actor = $actors[$index] ?? null;
+
+        if (! $actor instanceof ProjectActor) {
+            return null;
+        }
+
+        array_splice($actors, $index, 1);
+        $this->actors = $actors;
+
+        if (is_file($actor->path)) {
+            $this->pendingDeletions[$actor->path] = $actor->path;
+        }
+
+
+        return $actor;
+    }
+
+    /**
+     * Re-inserts a previously removed actor (the undo of removeActor()).
+     *
+     * @param int $index The index to restore the actor at.
+     * @param ProjectActor $actor The actor to restore.
+     * @return void
+     */
+    public function insertActor(int $index, ProjectActor $actor): void
+    {
+        $actors = array_values($this->actors);
+        $index = max(0, min(count($actors), $index));
+        array_splice($actors, $index, 0, [$actor]);
+        $this->actors = $actors;
+        unset($this->pendingDeletions[$actor->path]);
+    }
+
+    /**
+     * Returns the asset paths staged for deletion on the next save.
+     *
+     * @return string[]
+     */
+    public function getPendingDeletions(): array
+    {
+        return array_values($this->pendingDeletions);
     }
 
     /**
@@ -126,7 +195,6 @@ final class ProjectActorDatabase
         }
 
         $actor->setField($field, $value);
-        $this->isDirty = true;
     }
 
     /**
@@ -140,11 +208,40 @@ final class ProjectActorDatabase
             throw new RuntimeException("Unable to create {$this->directory}.");
         }
 
-        foreach ($this->actors as $actor) {
-            $actor->save();
+        // Staged deletions run first so re-creating an entry with a removed
+        // entry's id in the same session still lands on disk.
+        foreach ($this->pendingDeletions as $path) {
+            if (is_file($path) && ! @unlink($path)) {
+                throw new RuntimeException("Unable to remove {$path}.");
+            }
         }
 
-        $this->isDirty = false;
+        $this->pendingDeletions = [];
+
+        $firstFailure = null;
+
+        foreach ($this->actors as $actor) {
+            if (! $actor->isDirty()) {
+                // A clean actor's file is already exactly this content:
+                // writing it would only churn formatting and mtimes.
+                continue;
+            }
+
+            try {
+                $actor->save();
+            } catch (Throwable $throwable) {
+                // One failing actor must not block the rest, and it stays
+                // dirty because its baseline only advances on success.
+                $firstFailure ??= $throwable;
+            }
+        }
+
+        if ($firstFailure !== null) {
+            throw new RuntimeException(
+                sprintf('Some actors could not be saved: %s', $firstFailure->getMessage()),
+                previous: $firstFailure,
+            );
+        }
     }
 
     /**
