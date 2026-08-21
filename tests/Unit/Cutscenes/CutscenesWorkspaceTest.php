@@ -82,6 +82,28 @@ it('lists both types, switches between them, and filters the list', function () 
         ->and(getEditorProperty($editor, 'modals')->active())->toBe(Modal::CUTSCENES);
 });
 
+it("chooses a summon's effect cue from its own timeline", function () {
+    $editor = cutscenesEditor(cutsceneProject());
+    callEditorMethod($editor, 'switchCutsceneType', CutsceneType::SUMMON);
+    selectCutsceneField($editor, 'effectTiming.cueId');
+    $field = cutsceneField($editor, 'effectTiming.cueId');
+
+    expect($field['reference'] ?? null)->toBe('summon_cues')
+        ->and($field)->not->toHaveKey('control');
+
+    pressKeys($editor, "\n");
+    $picker = getEditorProperty($editor, 'referencePicker');
+    expect($picker->matches())->toBe(['(none)', 'flare'])
+        ->and($picker->selected())->toBe('flare');
+
+    pressKeys($editor, "\033[A", "\n");
+    $asset = libraryOf($editor)->find(CutsceneType::SUMMON, 'lantern-wisp');
+    expect($asset->payload()['effectTiming'])->not->toHaveKey('cueId');
+
+    callEditorMethod($editor, 'performUndo');
+    expect($asset->payload()['effectTiming']['cueId'])->toBe('flare');
+});
+
 it('shows the cinematic grouped on the record pane, with its script and finalizer as frames and its cast as rows', function () {
     $root = cutsceneProject();
     $editor = cutscenesEditor($root);

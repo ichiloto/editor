@@ -101,6 +101,25 @@ it('mirrors the project path under the backup root', function () {
     }
 });
 
+it('keeps every backup when the same file is written twice in one second', function () {
+    $root = makeTemporaryProject();
+
+    try {
+        enableProjectBackups($root);
+        $writer = new BackupWriter(BackupSettings::fromProject($root), $root);
+        $source = $root . '/ichiloto.json';
+        $result = $writer->backup($source, $source);
+
+        expect($result['written'])->toBe(2)
+            ->and($result['failed'])->toBe([])
+            ->and($writer->writtenPaths)->toHaveCount(2)
+            ->and(array_unique($writer->writtenPaths))->toHaveCount(2)
+            ->and(array_filter($writer->writtenPaths, is_file(...)))->toHaveCount(2);
+    } finally {
+        removeDirectoryRecursively($root);
+    }
+});
+
 it('skips a file that does not exist yet', function () {
     $root = makeTemporaryProject();
 

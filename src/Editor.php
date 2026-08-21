@@ -9420,7 +9420,9 @@ final class Editor
             [
                 'label' => 'Frame Sound',
                 'value' => $cue?->soundEffect ?? '',
-                'control' => new InputControl(InputControlType::TEXT, $cue?->soundEffect ?? ''),
+                'reference' => 'sfx',
+                'allowsNone' => true,
+                'noneLabel' => '(No sound)',
                 'field' => 'frameSound',
             ],
             [
@@ -11308,6 +11310,10 @@ final class Editor
      */
     private function applyDatabaseFieldValueRecorded(array $field, string $rawValue): void
     {
+        if (($field['allowsNone'] ?? false) === true && $rawValue === (string) ($field['noneLabel'] ?? '(None)')) {
+            $rawValue = '';
+        }
+
         if ($this->isCutscenesOpen) {
             $this->applyCutsceneFieldValueRecorded($field, $rawValue);
 

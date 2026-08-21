@@ -7,6 +7,7 @@ use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\Database\ReferencePicker;
 use Ichiloto\Editor\Database\RecordField;
 use Ichiloto\Editor\Database\RecordSchemaCatalog;
+use Ichiloto\Editor\Cutscenes\CutsceneType;
 use Ichiloto\Editor\ProjectWorkspace;
 
 it('offers what the project defines for a kind of reference', function () {
@@ -38,6 +39,15 @@ it('offers nothing for a kind of reference it does not know', function () {
     expect($catalog->valuesFor('dragons'))->toBe([])
         ->and(ReferenceCatalog::knows('dragons'))->toBeFalse()
         ->and(ReferenceCatalog::knows('enemies'))->toBeTrue();
+});
+
+it("offers the current summon's stable timeline cue ids", function () {
+    $workspace = ProjectWorkspace::fromProject(cutsceneProject());
+    $summon = $workspace->cutscenes?->find(CutsceneType::SUMMON, 'lantern-wisp');
+    $catalog = new ReferenceCatalog($workspace, currentCutscene: $summon);
+
+    expect(ReferenceCatalog::knows('summon_cues'))->toBeTrue()
+        ->and($catalog->valuesFor('summon_cues'))->toBe(['flare']);
 });
 
 it('opens on what the field is already set to', function () {
@@ -134,4 +144,39 @@ it('offers a picker instead of a text cursor for a reference field', function ()
         ->and($memberField['reference'] ?? null)->toBe('enemies')
         // No control means the settings pane cannot start typing into it.
         ->and($memberField)->not->toHaveKey('control');
+});
+
+it('chooses and clears animation frame sounds from project SFX', function () {
+    $root = makeTemporaryProject();
+    mkdir($root . '/assets/Audio/SFX', 0o777, true);
+    touch($root . '/assets/Audio/SFX/chime.wav');
+    $editor = createEditorForTesting($root);
+    setEditorProperty($editor, 'workspace', ProjectWorkspace::fromProject($root));
+    setEditorProperty($editor, 'lastTerminalSize', ['width' => 120, 'height' => 40]);
+    setEditorProperty($editor, 'isRunning', true);
+    openDatabaseCategory($editor, 'animations');
+
+    $fields = callEditorMethod($editor, 'getDatabaseSettingsFields');
+    $index = array_search('frameSound', array_column($fields, 'field'), true);
+    expect($index)->toBeInt();
+    $field = $fields[$index];
+    expect($field['reference'] ?? null)->toBe('sfx')
+        ->and($field['allowsNone'] ?? false)->toBeTrue()
+        ->and($field)->not->toHaveKey('control');
+
+    setEditorProperty($editor, 'databaseSelectedSettingIndex', $index);
+    setEditorProperty($editor, 'databaseFocus', 'database_settings');
+    callEditorMethod($editor, 'dispatchInput', "\n");
+    $picker = getEditorProperty($editor, 'referencePicker');
+    expect($picker->matches())->toBe(['(No sound)', 'chime']);
+
+    callEditorMethod($editor, 'dispatchInput', "\033[B");
+    callEditorMethod($editor, 'dispatchInput', "\n");
+    $animation = getEditorProperty($editor, 'workspace')->animationDatabase->getAnimations()[0];
+    expect($animation->getCue(1)?->soundEffect)->toBe('chime');
+
+    callEditorMethod($editor, 'dispatchInput', "\n");
+    callEditorMethod($editor, 'dispatchInput', "\033[A");
+    callEditorMethod($editor, 'dispatchInput', "\n");
+    expect($animation->getCue(1))->toBeNull();
 });

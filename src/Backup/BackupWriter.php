@@ -70,15 +70,20 @@ final class BackupWriter
                 continue;
             }
 
-            $destination = $this->resolveDestination($path, $timestamp);
-            $directory = dirname($destination);
+            $directory = dirname($this->resolveDestination($path, $timestamp));
 
             if (! is_dir($directory) && ! mkdir($directory, 0777, true) && ! is_dir($directory)) {
                 $result['failed'][] = $path;
                 continue;
             }
 
-            if (! @copy($path, $destination)) {
+            $destination = $this->reserveDestination($path, $timestamp);
+
+            if ($destination === null || ! @copy($path, $destination)) {
+                if ($destination !== null) {
+                    @unlink($destination);
+                }
+
                 $result['failed'][] = $path;
                 continue;
             }
@@ -107,6 +112,34 @@ final class BackupWriter
     }
 
     /**
+     * Atomically reserves a destination, adding a stable collision suffix
+     * when another backup already owns the same second.
+     */
+    private function reserveDestination(string $path, string $timestamp): ?string
+    {
+        for ($collision = 0; ; $collision++) {
+            $stamp = $timestamp . ($collision === 0 ? '' : sprintf('-%06d', $collision));
+            $destination = $this->resolveDestination($path, $stamp);
+
+            if (is_file($destination)) {
+                continue;
+            }
+
+            $reservation = @fopen($destination, 'x');
+
+            if (is_resource($reservation)) {
+                fclose($reservation);
+
+                return $destination;
+            }
+
+            if (! is_file($destination)) {
+                return null;
+            }
+        }
+    }
+
+    /**
      * Returns the source path relative to the project root, falling back to
      * the file name for anything outside it.
      *
@@ -132,7 +165,7 @@ final class BackupWriter
      */
     private function prune(string $destination): void
     {
-        $stem = preg_replace('/\.\d{8}-\d{6}\.bak$/', '', $destination);
+        $stem = preg_replace('/\.\d{8}-\d{6}(?:-\d+)?\.bak$/', '', $destination);
 
         if (! is_string($stem) || $stem === '') {
             return;

@@ -64,6 +64,7 @@ final class ReferenceCatalog
         'cinematic_cast',
         'cinematic_subjects',
         'cinematic_checkpoints',
+        'summon_cues',
         'event_markers',
     ];
 
@@ -168,6 +169,7 @@ final class ReferenceCatalog
             'cinematic_cast' => $this->castIds(['staged_actor']),
             'cinematic_subjects' => $this->subjectIds(),
             'cinematic_checkpoints' => $this->checkpointIds(),
+            'summon_cues' => $this->summonCueIds(),
             'event_markers' => $this->currentMap?->getEventMarkers() ?? [],
             default => $this->recordValues($category),
         };
@@ -279,6 +281,30 @@ final class ReferenceCatalog
             static fn(mixed $checkpoint): string => is_scalar($checkpoint) ? trim(strval($checkpoint)) : '',
             (array) ($this->currentCutscene->data()['checkpoints'] ?? []),
         ), static fn(string $checkpoint): bool => $checkpoint !== ''));
+    }
+
+    /**
+     * Returns the stable cue ids declared by the current summon's timeline.
+     *
+     * @return string[]
+     */
+    private function summonCueIds(): array
+    {
+        if ($this->currentCutscene?->type !== CutsceneType::SUMMON) {
+            return [];
+        }
+
+        $ids = [];
+
+        foreach ((array) ($this->currentCutscene->payload()[CutsceneSchemas::CUES_KEY] ?? []) as $cue) {
+            $id = is_array($cue) ? trim(strval($cue['id'] ?? '')) : '';
+
+            if ($id !== '') {
+                $ids[$id] = $id;
+            }
+        }
+
+        return array_values($ids);
     }
 
     /**
