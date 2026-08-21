@@ -10,6 +10,7 @@ use Ichiloto\Editor\Database\ProjectRecord;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\Database\SummonAssignmentDiagnostics;
+use Ichiloto\Editor\Field\MapEncounters;
 use Ichiloto\Editor\Field\ProjectNpc;
 use Ichiloto\Editor\ActorStatPreview;
 use Ichiloto\Editor\EquipmentOptimizationPolicy;
@@ -1567,19 +1568,36 @@ class ProjectValidator
   /**
    * Checks that a map's encounters can actually happen.
    *
+   * `EncounterManager::configure()` reads the block loosely: it drops a
+   * troop whose weight is not a positive number, treats any `tiles` value
+   * but `any` as danger tiles only, clamps `rate` to at least one step, and
+   * falls back to fifteen steps when there is no rate at all. Each check
+   * here follows one of those, with an error where the authored intent
+   * cannot happen and a warning where it happens differently than written.
+   *
    * @param ProjectMap $map The map.
    * @param string[] $troops The troop names the project defines.
    * @return Issue[] The issues found.
    */
   protected function checkEncounters(ProjectMap $map, array $troops): array
   {
-    $encounters = $map->data['encounters'] ?? null;
+    $authored = $map->data['encounters'] ?? null;
 
-    if ($encounters === null) {
+    if ($authored === null) {
       return [];
     }
 
-    if (! is_array($encounters) || $encounters === []) {
+    $encounters = MapEncounters::of($authored);
+
+    if (! $encounters->isSupported()) {
+      return [Issue::error(
+        $map->mapId,
+        sprintf('The encounters block cannot be read: %s.', $encounters->unsupportedReason()),
+        "Expected ['troops' => ['Troop Name' => weight, ...], 'rate' => steps, 'tiles' => 'encounter'|'any']."
+      )];
+    }
+
+    if (! is_array($authored) || $authored === []) {
       return [Issue::warning(
         $map->mapId,
         'The map declares encounters but the list is empty.',
@@ -1587,9 +1605,9 @@ class ProjectValidator
       )];
     }
 
-    $declared = (array) ($encounters['troops'] ?? []);
+    $rows = $encounters->rows();
 
-    if ($declared === []) {
+    if ($rows === []) {
       return [Issue::error(
         $map->mapId,
         'The map declares encounters but names no troops the engine can read.',
@@ -1599,8 +1617,11 @@ class ProjectValidator
 
     $issues = [];
 
-    foreach ($declared as $troop => $weight) {
-      if ($troops !== [] && ! in_array(strval($troop), $troops, true)) {
+    foreach ($rows as $row) {
+      $troop = $row['name'];
+      $weight = $row['weight'];
+
+      if ($troops !== [] && ! in_array($troop, $troops, true)) {
         $issues[] = Issue::error(
           $map->mapId,
           sprintf('Encounters name the troop "%s", which the project does not define.', $troop),
@@ -1614,14 +1635,107 @@ class ProjectValidator
           sprintf('The troop "%s" has a weight of %s, so it can never be picked.', $troop, var_export($weight, true)),
           'Weights are whole numbers of 1 or more.'
         );
+
+        continue;
+      }
+
+      if (floatval($weight) !== floatval(intval($weight))) {
+        $issues[] = Issue::warning(
+          $map->mapId,
+          sprintf('The troop "%s" has a weight of %s, which the engine reads as %d.', $troop, var_export($weight, true), intval($weight)),
+          'Weights are whole numbers; write the one you mean.'
+        );
       }
     }
 
-    if (intval($encounters['rate'] ?? 0) < 1) {
-      $issues[] = Issue::warning(
+    return [...$issues, ...$this->checkEncounterRate($map, $encounters), ...$this->checkEncounterTiles($map, $encounters), ...$this->checkEncounterTroopDuplicates($map)];
+  }
+
+  /**
+   * Checks the average number of steps between fights.
+   *
+   * @return Issue[] The issues found.
+   */
+  protected function checkEncounterRate(ProjectMap $map, MapEncounters $encounters): array
+  {
+    $rate = $encounters->rawRate();
+
+    if ($rate === null) {
+      return [Issue::warning(
         $map->mapId,
-        'Encounters have no rate, so the engine uses its default of 15 steps.',
+        sprintf('Encounters have no rate, so the engine uses its default of %d steps.', MapEncounters::DEFAULT_RATE),
         "Set 'rate' to the average number of steps between fights."
+      )];
+    }
+
+    if (! is_numeric($rate)) {
+      return [Issue::error(
+        $map->mapId,
+        sprintf('The encounter rate is %s, which is not a number of steps.', var_export($rate, true)),
+        "Set 'rate' to a whole number of steps; the engine reads anything else as its default of " . MapEncounters::DEFAULT_RATE . '.'
+      )];
+    }
+
+    if (intval($rate) < 1) {
+      return [Issue::error(
+        $map->mapId,
+        sprintf('The encounter rate is %s, which the engine clamps to one step.', var_export($rate, true)),
+        'A fight would start on almost every step. Set the average number of steps between fights.'
+      )];
+    }
+
+    if (floatval($rate) !== floatval(intval($rate))) {
+      return [Issue::warning(
+        $map->mapId,
+        sprintf('The encounter rate is %s, which the engine reads as %d steps.', var_export($rate, true), intval($rate)),
+        'Rates are whole numbers of steps; write the one you mean.'
+      )];
+    }
+
+    return [];
+  }
+
+  /**
+   * Checks which tiles count towards the next fight.
+   *
+   * @return Issue[] The issues found.
+   */
+  protected function checkEncounterTiles(ProjectMap $map, MapEncounters $encounters): array
+  {
+    $tiles = $map->data['encounters']['tiles'] ?? null;
+
+    if ($tiles === null) {
+      return [];
+    }
+
+    if (in_array($tiles, MapEncounters::TILE_MODES, true)) {
+      return [];
+    }
+
+    return [Issue::error(
+      $map->mapId,
+      sprintf('Encounters count %s tiles, which the engine does not recognise.', var_export($tiles, true)),
+      sprintf('Use %s. Anything else counts danger tiles only.', implode(' or ', array_map(static fn(string $mode): string => "'" . $mode . "'", MapEncounters::TILE_MODES)))
+    )];
+  }
+
+  /**
+   * Checks the encounter table's source for a troop written twice.
+   *
+   * Two rows for the same troop collapse into one PHP key when the file is
+   * read, so the evaluated data cannot show it; only the source can.
+   *
+   * @return Issue[] The issues found.
+   */
+  protected function checkEncounterTroopDuplicates(ProjectMap $map): array
+  {
+    $issues = [];
+
+    foreach ($this->duplicateKeysAt($map, ['encounters', 'troops']) as $troop => $lines) {
+      $issues[] = Issue::error(
+        $map->mapId,
+        sprintf('The troop "%s" is listed %d times in the encounter table (lines %s).', $troop, count($lines), implode(', ', $lines)),
+        'PHP keeps the last weight and discards the rest without a word.'
       );
     }
 
@@ -2357,6 +2471,34 @@ class ProjectValidator
    */
   protected function checkDuplicateKeys(ProjectMap $map): array
   {
+    $issues = [];
+
+    foreach ($this->duplicateKeysAt($map, []) as $key => $lines) {
+      $issues[] = Issue::error(
+        $map->mapId,
+        sprintf('"%s" is declared %d times (lines %s).', $key, count($lines), implode(', ', $lines)),
+        'PHP keeps the last one and discards the rest without a word.'
+      );
+    }
+
+    return $issues;
+  }
+
+  /**
+   * Returns the keys written more than once inside one block of a map's
+   * data source, with the lines they were written on.
+   *
+   * The evaluated file cannot show this: PHP keeps the last value for a
+   * repeated key and discards the others while parsing, so the source is
+   * the only place a second `'Bat x 2' => 3` still exists. Short array
+   * syntax only, which is what the editor writes and what every project map
+   * uses.
+   *
+   * @param array<int, string> $path The block to look inside; [] is the top level.
+   * @return array<string, int[]> Duplicate keys to their line numbers.
+   */
+  protected function duplicateKeysAt(ProjectMap $map, array $path): array
+  {
     if (! is_file($map->dataPath)) {
       return [];
     }
@@ -2367,47 +2509,61 @@ class ProjectValidator
       return [];
     }
 
-    $issues = [];
-    $depth = 0;
-    $topLevel = [];
     $tokens = token_get_all($source);
+    $depth = 0;
+    $keyOfArray = [];
+    $pendingKey = null;
+    $occurrences = [];
 
     foreach ($tokens as $index => $token) {
       if (! is_array($token)) {
-        $depth += match ($token) {
-          '[' => 1,
-          ']' => -1,
-          default => 0,
-        };
+        if ($token === '[') {
+          $depth++;
+          // The key this array was written against, so a nested block knows
+          // its own name.
+          $keyOfArray[$depth] = $pendingKey;
+          $pendingKey = null;
+
+          continue;
+        }
+
+        if ($token === ']') {
+          unset($keyOfArray[$depth]);
+          $depth = max(0, $depth - 1);
+          $pendingKey = null;
+
+          continue;
+        }
+
+        if ($token === ',') {
+          $pendingKey = null;
+        }
 
         continue;
       }
 
-      if ($token[0] === T_ARRAY) {
+      if ($token[0] !== T_CONSTANT_ENCAPSED_STRING || ! $this->isFollowedByArrow($tokens, $index)) {
         continue;
       }
 
-      // Only the outermost array of the returned map data is checked: the
-      // repeated keys that bite are the top-level blocks. A string is a key
-      // only when an arrow follows it; otherwise it is a value that happens to
-      // read like one.
-      if ($depth === 1 && $token[0] === T_CONSTANT_ENCAPSED_STRING && $this->isFollowedByArrow($tokens, $index)) {
-        $key = trim($token[1], "'\"");
-        $topLevel[$key][] = $token[2];
+      $key = trim($token[1], "'\"");
+
+      // The path of the block this key sits in: every array above it except
+      // the outermost one, which is the returned data itself.
+      $here = [];
+
+      for ($level = 2; $level <= $depth; $level++) {
+        $here[] = $keyOfArray[$level] ?? '';
       }
+
+      if ($here === $path) {
+        $occurrences[$key][] = $token[2];
+      }
+
+      $pendingKey = $key;
     }
 
-    foreach ($topLevel as $key => $lines) {
-      if (count($lines) > 1) {
-        $issues[] = Issue::error(
-          $map->mapId,
-          sprintf('"%s" is declared %d times (lines %s).', $key, count($lines), implode(', ', $lines)),
-          'PHP keeps the last one and discards the rest without a word.'
-        );
-      }
-    }
-
-    return $issues;
+    return array_filter($occurrences, static fn(array $lines): bool => count($lines) > 1);
   }
 
   /**
