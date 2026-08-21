@@ -25,12 +25,9 @@ final class PlaytestLauncher
     /**
      * Locates the console entry point.
      *
-     * Where it lives depends on how the tooling was installed, not on how
-     * this repository happens to be laid out: a project that requires the
-     * console has it in its own vendor directory, a global install puts it on
-     * PATH, and this package may itself be installed under someone else's
-     * vendor tree. All of those are looked for before the side-by-side
-     * checkout the packages are developed in.
+     * A project may install the console in its own vendor directory, a global
+     * install puts it on PATH, and this package may itself be installed under
+     * another Composer vendor tree.
      *
      * @param string|null $override An explicit path (`ICHILOTO_CONSOLE_BIN`).
      * @param string|null $projectRoot The project being edited, if known.
@@ -73,9 +70,6 @@ final class PlaytestLauncher
             ...self::vendorBinariesAbove(),
             // Installed globally.
             self::binaryOnPath(),
-            // The packages checked out side by side, which is how they are
-            // developed rather than how they are installed.
-            dirname(__DIR__, 3) . '/console/bin/ichiloto',
         ])));
     }
 

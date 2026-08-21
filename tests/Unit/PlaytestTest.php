@@ -184,36 +184,28 @@ it('finds a console installed globally, on PATH', function (): void {
     }
 });
 
-it('looks where the tooling is installed before where it is developed', function (): void {
+it('discovers consoles from installed package locations', function (): void {
     $candidates = new ReflectionMethod(PlaytestLauncher::class, 'candidates')
         ->invoke(null, null, '/srv/my-game');
 
-    $projectVendor = array_search('/srv/my-game/vendor/bin/ichiloto', $candidates, true);
-    $sideBySide = array_search(dirname(__DIR__, 3) . '/console/bin/ichiloto', $candidates, true);
-
-    // The packages sitting side by side is how they are developed, not how
-    // anyone installs them, so it is the last thing tried rather than the
-    // first.
-    expect($projectVendor)->toBe(0)
-        ->and($sideBySide)->toBe(count($candidates) - 1);
+    expect($candidates)->toContain('/srv/my-game/vendor/bin/ichiloto')
+        ->and($candidates)->not->toContain(dirname(__DIR__, 3) . '/console/bin/ichiloto');
 });
 
 it('says where it looked when there is no console to find', function (): void {
+    $emptyBinDirectory = rememberTemporaryProject(sys_get_temp_dir() . '/' . uniqid('ichiloto-empty-bin-', true));
+    mkdir($emptyBinDirectory, 0o777, true);
+    $previousPath = (string) getenv('PATH');
+    putenv('PATH=' . $emptyBinDirectory);
     $message = '';
 
     try {
-        // A path nothing can resolve, so the message is what the author gets.
         PlaytestLauncher::discover(projectRoot: '/nowhere');
     } catch (RuntimeException $exception) {
         $message = $exception->getMessage();
-    }
-
-    if ($message === '') {
-        // This machine has the packages checked out side by side, so
-        // discovery succeeded — which is itself the fallback working.
-        expect(PlaytestLauncher::discover(projectRoot: '/nowhere'))->toBeInstanceOf(PlaytestLauncher::class);
-
-        return;
+    } finally {
+        putenv('PATH=' . $previousPath);
+        @rmdir($emptyBinDirectory);
     }
 
     expect($message)->toContain('ICHILOTO_CONSOLE_BIN')

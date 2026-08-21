@@ -69,7 +69,7 @@ final class PreviewCamera extends Camera
         $visibleHeight = $this->getVisibleWorldHeight();
 
         for ($row = 0; $row < $visibleHeight; $row++) {
-            $worldRow = $this->worldSpace[$this->position->y + $row] ?? null;
+            $worldRow = $this->worldSpace[(int) $this->position->y + $row] ?? null;
 
             if ($worldRow === null) {
                 continue;
