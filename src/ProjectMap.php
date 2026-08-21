@@ -539,6 +539,103 @@ final class ProjectMap
     }
 
     /**
+     * Reads a nested value from the map's own data, unsaved edits included.
+     *
+     * @param array<int, string> $path The nested data path.
+     * @return mixed The value, or null when the path names nothing.
+     */
+    public function getMapDataField(array $path): mixed
+    {
+        $reference = $this->editableData;
+
+        foreach ($path as $segment) {
+            if (! is_array($reference) || ! array_key_exists($segment, $reference)) {
+                return null;
+            }
+
+            $reference = $reference[$segment];
+        }
+
+        return $reference;
+    }
+
+    /**
+     * Writes a nested value into the map's own data.
+     *
+     * A null value removes the key rather than writing an empty one: a map
+     * with no background music says nothing about music, and a misleading
+     * empty track would be read as one. Nothing is touched, and nothing is
+     * dirtied, when the value is already what it should be.
+     *
+     * @param array<int, string> $path The nested data path.
+     * @param mixed $value The value, or null to remove the key.
+     * @return void
+     */
+    public function setMapDataField(array $path, mixed $value): void
+    {
+        if ($path === []) {
+            return;
+        }
+
+        $exists = $this->hasMapDataField($path);
+
+        if ($value === null ? ! $exists : ($exists && $this->getMapDataField($path) === $value)) {
+            // Already exactly this, or already absent: neither a write nor a
+            // history entry, so browsing a map can never dirty it.
+            return;
+        }
+
+        $reference = &$this->editableData;
+        $last = array_key_last($path);
+
+        foreach ($path as $position => $segment) {
+            if ($position === $last) {
+                if ($value === null) {
+                    unset($reference[$segment]);
+                } else {
+                    $reference[$segment] = $value;
+                }
+
+                break;
+            }
+
+            if (! isset($reference[$segment]) || ! is_array($reference[$segment])) {
+                if ($value === null) {
+                    // Nothing to remove down a path that does not exist.
+                    return;
+                }
+
+                $reference[$segment] = [];
+            }
+
+            $reference = &$reference[$segment];
+        }
+
+        unset($reference);
+        $this->touchState();
+    }
+
+    /**
+     * Whether the map's data holds this exact path.
+     *
+     * @param array<int, string> $path The nested data path.
+     */
+    public function hasMapDataField(array $path): bool
+    {
+        $reference = $this->editableData;
+
+        foreach ($path as $segment) {
+            if (! is_array($reference) || ! array_key_exists($segment, $reference)) {
+                return false;
+            }
+
+            $reference = $reference[$segment];
+        }
+
+        return true;
+    }
+
+    /**
      * Reads a nested event field value (the undo counterpart of setEventField).
      *
      * @param string $marker The event marker.
