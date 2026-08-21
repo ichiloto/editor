@@ -32,13 +32,20 @@ final class AtomicFile
             return false;
         }
 
-        $temporaryPath = $path . '.tmp';
-
-        if (file_put_contents($temporaryPath, $contents) === false) {
+        // A folder that will not take the write is a refusal, not a PHP
+        // diagnostic: asking first keeps the failure to the one exception
+        // below, with the path named.
+        if (! is_writable(dirname($path)) || (is_file($path) && ! is_writable($path))) {
             throw new RuntimeException("Unable to write temporary file for {$path}.");
         }
 
-        if (! rename($temporaryPath, $path)) {
+        $temporaryPath = $path . '.tmp';
+
+        if (@file_put_contents($temporaryPath, $contents) === false) {
+            throw new RuntimeException("Unable to write temporary file for {$path}.");
+        }
+
+        if (! @rename($temporaryPath, $path)) {
             @unlink($temporaryPath);
             throw new RuntimeException("Unable to replace {$path}.");
         }

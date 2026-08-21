@@ -301,10 +301,15 @@ it('scrolls the inspector so a deep selection stays visible', function () {
   setEditorProperty($editor, 'selectedInspectorFieldIndex', $last);
   $layout = callEditorMethod($editor, 'inspectorPaneLayout');
 
+  // The whole selected span lands at the bottom of the pane, however many
+  // lines it takes: a field that wraps is shown entire, not clipped so that
+  // its first line can sit on the last row.
+  $selectedHeight = $layout->spans[$last][1];
+
   expect(count($layout->lines))->toBeGreaterThan($visibleRows)
     ->and($layout->spans[2][1])->toBeGreaterThan(5)
-    ->and($layout->rowOfField($last))->toBe($visibleRows - 1)
-    ->and($layout->offset)->toBe($layout->spans[$last][0] - $visibleRows + 1)
+    ->and($layout->rowOfField($last) + $selectedHeight - 1)->toBe($visibleRows - 1)
+    ->and($layout->offset)->toBe($layout->spans[$last][0] + $selectedHeight - $visibleRows)
     ->and(callEditorMethod($editor, 'getInspectorLines')[0])->not->toContain('Name: Test Map');
 });
 
