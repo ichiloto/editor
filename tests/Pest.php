@@ -362,3 +362,5 @@ function plainTextOfFrame(string $frame, int $width, int $height): string
 require_once __DIR__ . '/Support/CutsceneFixtures.php';
 
 require_once __DIR__ . '/Support/ValidationFixtures.php';
+
+require_once __DIR__ . '/Support/FileSetFixtures.php';
