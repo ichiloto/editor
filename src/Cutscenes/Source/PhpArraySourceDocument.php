@@ -451,6 +451,65 @@ final class PhpArraySourceDocument
     }
 
     /**
+     * Renders one entry as the line (or lines) it would occupy in an array,
+     * at that array's own entry indentation.
+     */
+    public function renderEntryLine(SourceNode $array, int|string|null $key, string $literal): string
+    {
+        $indent = $this->entryIndent($array);
+        $keyText = $key === null ? '' : var_export($key, true) . ' => ';
+
+        return $indent . $keyText . self::reindent($literal, $indent) . ",\n";
+    }
+
+    /**
+     * Plans appending ready lines at the end of an array, composably.
+     *
+     * Unlike a tail replacement, these edits touch nothing an unrelated
+     * edit may also touch: the lines are a pure insertion at the start of
+     * the closing bracket's line -- after every entry, every removal span
+     * and any trailing comment -- and the comma the previous last entry may
+     * need is its own one-character insertion. Several appends into one
+     * array are therefore one combined edit, and appends compose with
+     * removals of any entry, the last included.
+     *
+     * @param SourceNode $array The array node.
+     * @param string $lines The rendered entry lines, each ending in a newline.
+     * @param SourceEntry|null $lastSurviving The entry that will precede the
+     *   appended lines, when one survives whatever else this rewrite does.
+     * @return array<int, array{0: int, 1: int, 2: string}> One or two edits.
+     */
+    public function appendEntriesEdit(SourceNode $array, string $lines, ?SourceEntry $lastSurviving): array
+    {
+        if ($array->bodyStart === null || $array->bodyEnd === null) {
+            throw new RuntimeException('Only an array node takes appended entries.');
+        }
+
+        if ($array->entries === []) {
+            $inner = substr($this->source, $array->bodyStart, $array->bodyEnd - $array->bodyStart);
+
+            if (trim($inner) === '') {
+                // `[]` becomes a multi-line array holding the entries,
+                // closing at the array's own indentation.
+                $closing = $this->lineIndentBefore($array->start) ?? '';
+
+                return [[$array->bodyStart, $array->bodyEnd, "\n" . $lines . $closing]];
+            }
+        }
+
+        $edits = [];
+
+        if ($lastSurviving !== null && $lastSurviving->separatorEnd === $lastSurviving->end) {
+            // It had no comma because it was last; it needs one now.
+            $edits[] = [$lastSurviving->end, $lastSurviving->end, ','];
+        }
+
+        $edits[] = [$this->lineStartOf($array->bodyEnd), $this->lineStartOf($array->bodyEnd), $lines];
+
+        return $edits;
+    }
+
+    /**
      * Plans removing an entry with its lines and heading.
      *
      * @param array<int, int|string> $path The entry's path.

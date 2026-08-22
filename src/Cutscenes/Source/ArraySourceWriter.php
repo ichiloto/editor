@@ -30,6 +30,22 @@ use Ichiloto\Editor\Database\PhpValueExporter;
  */
 final class ArraySourceWriter
 {
+    /**
+     * Entries queued for the end of an array, per parent node: several
+     * appends into one array become one composable edit at flush time.
+     *
+     * @var array<int, array{node: SourceNode, lines: string[], inline: string[]}>
+     */
+    private array $appends = [];
+
+    /**
+     * Entry indexes this rewrite removes (or moves away), per parent node,
+     * so an append knows which entry will actually precede it.
+     *
+     * @var array<int, array<int, true>>
+     */
+    private array $removedEntries = [];
+
     /** @var array<int, array{0: int, 1: int, 2: string}> */
     private array $edits = [];
 
@@ -59,6 +75,7 @@ final class ArraySourceWriter
 
         $writer = new self($document);
         $writer->diff($document->root(), $old, $new, []);
+        $writer->flushAppends();
 
         return $document->withEdits($writer->edits);
     }
@@ -155,17 +172,13 @@ final class ArraySourceWriter
                 continue;
             }
 
-            $this->edits[] = $this->document->insertEntryEdit(
-                $path,
-                count($node->entries),
-                $key,
-                $this->literalFor($value, [...$path, $key]),
-            );
+            $this->queueAppend($node, $key, $this->literalFor($value, [...$path, $key]));
         }
 
-        foreach ($node->entries as $entry) {
+        foreach ($node->entries as $index => $entry) {
             if ($entry->key !== null && ! array_key_exists($entry->key, $new)) {
                 $this->edits[] = $this->document->removeEntryEdit([...$path, $entry->key]);
+                $this->removedEntries[spl_object_id($node)][$index] = true;
             }
         }
     }
@@ -235,7 +248,29 @@ final class ArraySourceWriter
             }
         }
 
-        // 3. Equal but elsewhere: one entry, moved.
+        // 3. Same unique name: one entry, edited. The explicit identity rule
+        //    for entries with no stable id -- a legacy map NPC -- and only
+        //    where the name settles it: a name carried by two entries on
+        //    either side settles nothing and falls through to rank pairing.
+        foreach ($new as $j => $item) {
+            if (isset($matchedNew[$j]) || ($name = self::uniqueNameOf($item, $new, $matchedNew)) === null) {
+                continue;
+            }
+
+            foreach ($old as $i => $entry) {
+                if (! isset($matchedOld[$i])
+                    && self::identityOf($entry) === null
+                    && self::uniqueNameOf($entry, $old, $matchedOld) === $name
+                ) {
+                    $matchedOld[$i] = $j;
+                    $matchedNew[$j] = $i;
+
+                    break;
+                }
+            }
+        }
+
+        // 4. Equal but elsewhere: one entry, moved.
         foreach ($new as $j => $item) {
             if (isset($matchedNew[$j])) {
                 continue;
@@ -251,7 +286,7 @@ final class ArraySourceWriter
             }
         }
 
-        // 4. Between consecutive anchors, what is left pairs up by rank: an
+        // 5. Between consecutive anchors, what is left pairs up by rank: an
         //    edited keyframe is a patched keyframe, not a new one.
         $bounds = [...$anchors, [$oldCount, $newCount]];
         $previousOld = -1;
@@ -286,7 +321,7 @@ final class ArraySourceWriter
             $previousNew = $anchorNew;
         }
 
-        // 5. Which matched entries stay in place: the longest run of them
+        // 6. Which matched entries stay in place: the longest run of them
         //    whose old order agrees with their new order. The rest move.
         ksort($matchedNew);
         $sequence = array_values($matchedNew);
@@ -305,7 +340,7 @@ final class ArraySourceWriter
             }
         }
 
-        // 6. Emit. Patches for kept entries; removals for entries that are
+        // 7. Emit. Patches for kept entries; removals for entries that are
         //    gone; then, in new order, insertions and moves ahead of the
         //    next kept entry, or after everything.
         foreach ($kept as $j => $i) {
@@ -315,6 +350,7 @@ final class ArraySourceWriter
         foreach ($old as $i => $entry) {
             if (! isset($matchedOld[$i])) {
                 $this->edits[] = $this->document->removeEntryEdit([...$path, $i]);
+                $this->removedEntries[spl_object_id($node)][$i] = true;
             }
         }
 
@@ -341,6 +377,12 @@ final class ArraySourceWriter
                 continue;
             }
 
+            if ($position >= count($node->entries)) {
+                $this->queueAppend($node, null, $this->literalFor($item, [...$path, $j], self::prefersInline($node)));
+
+                continue;
+            }
+
             $this->edits[] = $this->document->insertEntryEdit(
                 $path,
                 $position,
@@ -348,6 +390,73 @@ final class ArraySourceWriter
                 $this->literalFor($item, [...$path, $j], self::prefersInline($node)),
             );
         }
+    }
+
+    /**
+     * Queues an entry for the end of an array. Appends flush together, one
+     * composable edit per parent, so they never collide with each other or
+     * with a removal of the entry that used to be last.
+     */
+    private function queueAppend(SourceNode $node, int|string|null $key, string $literal): void
+    {
+        $id = spl_object_id($node);
+        $this->appends[$id] ??= ['node' => $node, 'lines' => [], 'inline' => []];
+
+        // An array whose entries share their lines takes its appends the
+        // same way, joined after the last entry.
+        $last = $node->entries === [] ? null : $node->entries[count($node->entries) - 1];
+
+        if ($last !== null && $this->document->lineIndentBefore($last->start) === null) {
+            $keyText = $key === null ? '' : var_export($key, true) . ' => ';
+            $this->appends[$id]['inline'][] = $keyText . $literal;
+
+            return;
+        }
+
+        $this->appends[$id]['lines'][] = $this->document->renderEntryLine($node, $key, $literal);
+    }
+
+    /**
+     * Emits one edit per parent with queued appends.
+     */
+    private function flushAppends(): void
+    {
+        foreach ($this->appends as $id => $append) {
+            $node = $append['node'];
+            $removed = $this->removedEntries[$id] ?? [];
+            $lastSurviving = null;
+
+            foreach ($node->entries as $index => $entry) {
+                if (! isset($removed[$index])) {
+                    $lastSurviving = $entry;
+                }
+            }
+
+            if ($append['inline'] !== []) {
+                // After the last entry this rewrite keeps; right at the body
+                // start when it keeps none. The comma belongs to whichever
+                // entry the appended items now follow.
+                if ($lastSurviving !== null) {
+                    $anchor = $lastSurviving->separatorEnd;
+                    $prefix = $lastSurviving->separatorEnd === $lastSurviving->end ? ', ' : ' ';
+                } else {
+                    $anchor = (int) $node->bodyStart;
+                    $prefix = '';
+                }
+
+                $this->edits[] = [$anchor, $anchor, $prefix . implode(', ', $append['inline'])];
+            }
+
+            if ($append['lines'] === []) {
+                continue;
+            }
+
+            foreach ($this->document->appendEntriesEdit($node, implode('', $append['lines']), $lastSurviving) as $edit) {
+                $this->edits[] = $edit;
+            }
+        }
+
+        $this->appends = [];
     }
 
     /**
@@ -418,6 +527,16 @@ final class ArraySourceWriter
         }
 
         $this->edits[] = [$start, $end, ''];
+        $this->removedEntries[spl_object_id($list)][$from] = true;
+
+        if ($position >= count($list->entries)) {
+            $id = spl_object_id($list);
+            $this->appends[$id] ??= ['node' => $list, 'lines' => [], 'inline' => []];
+            $this->appends[$id]['lines'][] = $block;
+
+            return;
+        }
+
         $this->edits[] = $this->placementEdit($list, $position, $block);
     }
 
@@ -489,6 +608,41 @@ final class ArraySourceWriter
         }
 
         return $kept;
+    }
+
+    /**
+     * Returns an entry's name when it can serve as its identity: declared,
+     * scalar, non-empty, with no stable id beside it, and carried by no
+     * other unmatched entry of the same list.
+     *
+     * @param array<int, mixed> $list The list the entry belongs to.
+     * @param array<int, int> $matched The list's already-matched indexes.
+     */
+    private static function uniqueNameOf(mixed $entry, array $list, array $matched): ?string
+    {
+        if (! is_array($entry) || self::identityOf($entry) !== null || ! is_scalar($entry['name'] ?? null)) {
+            return null;
+        }
+
+        $name = strval($entry['name']);
+
+        if ($name === '') {
+            return null;
+        }
+
+        $holders = 0;
+
+        foreach ($list as $index => $sibling) {
+            if (isset($matched[$index]) || ! is_array($sibling)) {
+                continue;
+            }
+
+            if (self::identityOf($sibling) === null && strval($sibling['name'] ?? '') === $name) {
+                $holders++;
+            }
+        }
+
+        return $holders === 1 ? $name : null;
     }
 
     /**
