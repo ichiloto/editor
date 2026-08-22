@@ -1453,6 +1453,7 @@ class ProjectValidator
         ...$this->checkEncounters($map, $troops),
         ...$this->checkNpcs($map, $workspace),
         ...$this->checkDuplicateKeys($map),
+        ...$this->checkMapSource($map),
       ];
     }
 
@@ -2479,6 +2480,67 @@ class ProjectValidator
         sprintf('"%s" is declared %d times (lines %s).', $key, count($lines), implode(', ', $lines)),
         'PHP keeps the last one and discards the rest without a word.'
       );
+    }
+
+    foreach ($this->duplicateKeysAt($map, ['events']) as $marker => $lines) {
+      $issues[] = Issue::error(
+        $map->mapId,
+        sprintf('The event marker "%s" is defined %d times (lines %s).', $marker, count($lines), implode(', ', $lines)),
+        'PHP keeps the last definition and discards the rest without a word.'
+      );
+    }
+
+    return $issues;
+  }
+
+  /**
+   * Checks what the editor's source model makes of the map's data file.
+   *
+   * A data file whose source cannot be held for in-place rewriting keeps
+   * every byte -- the editor refuses data edits on that map rather than
+   * regenerate the file -- so the author should hear it here, not first at
+   * a refused edit. Two id-less NPCs sharing one name are reported for the
+   * same reason: a structural edit identifies a legacy NPC by its name, and
+   * a name two rows carry identifies nothing.
+   *
+   * @param ProjectMap $map The map.
+   * @return Issue[] The issues found.
+   */
+  protected function checkMapSource(ProjectMap $map): array
+  {
+    $issues = [];
+    $issue = $map->dataSourceIssue();
+
+    if ($issue !== null) {
+      $issues[] = Issue::error(
+        $map->mapId,
+        sprintf('%s cannot be preserved for editing: %s.', basename($map->dataPath), $issue),
+        'The editor refuses data edits on this map rather than rewrite the file; repair it by hand.'
+      );
+    }
+
+    $names = [];
+
+    foreach ((array) ($map->data['npcs'] ?? []) as $npc) {
+      if (! is_array($npc) || trim(strval($npc['id'] ?? '')) !== '') {
+        continue;
+      }
+
+      $name = trim(strval($npc['name'] ?? ''));
+
+      if ($name !== '') {
+        $names[$name] = ($names[$name] ?? 0) + 1;
+      }
+    }
+
+    foreach ($names as $name => $count) {
+      if ($count > 1) {
+        $issues[] = Issue::warning(
+          $map->mapId,
+          sprintf('%d NPCs named "%s" have no stable id.', $count, $name),
+          'A structural edit identifies a legacy NPC by its unique name; give each an id.'
+        );
+      }
     }
 
     return $issues;

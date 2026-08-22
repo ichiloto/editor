@@ -6125,8 +6125,7 @@ final class Editor
             }
 
             try {
-                $this->backupBeforeSave(...$this->getMapBackupPaths($map));
-                $map->save();
+                $map->save($this->backupBeforeSave(...));
                 $savedMaps++;
             } catch (Throwable $throwable) {
                 Debug::error(sprintf('Save all (%s): %s', $map->mapId, $throwable->getMessage()));
@@ -6251,16 +6250,6 @@ final class Editor
         );
     }
 
-    /**
-     * Returns the files a map save overwrites.
-     *
-     * @param ProjectMap $map The map about to be saved.
-     * @return string[]
-     */
-    private function getMapBackupPaths(ProjectMap $map): array
-    {
-        return [$map->dataPath, $map->mapPath, $map->eventPath];
-    }
 
     /**
      * Returns the files a database save overwrites.
@@ -6487,8 +6476,10 @@ final class Editor
 
         try {
             $previousMapId = $selectedMap->mapId;
-            $this->backupBeforeSave(...$this->getMapBackupPaths($selectedMap));
-            $savedMapId = $selectedMap->save();
+            // The save backs up, once, exactly the files it is about to
+            // replace -- so a clean map or an untouched member never
+            // produces a backup copy.
+            $savedMapId = $selectedMap->save($this->backupBeforeSave(...));
 
             if ($savedMapId !== $previousMapId) {
                 // The folder moved: swap in a freshly parsed map instance and
