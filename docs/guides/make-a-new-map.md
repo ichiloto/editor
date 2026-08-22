@@ -94,8 +94,13 @@ The editor validates first and warns — never blocks — about dangling
 destination references, event markers with no definition, and spawn points
 outside the map. Press `Ctrl+E` to read a truncated warning in full.
 
-All three files are written together, through a temporary file and a rename, so
-an interrupted save cannot leave a half-written map.
+All three files are written together, as one transaction: only the files whose
+content changed are touched, each is staged and verified first, and if any of
+them cannot be installed the others are put back exactly — an interrupted or
+refused save can never leave new data over old tiles, or a half-written map.
+A hand-written `.data.php` is edited in place, not regenerated: your comments,
+imports and expressions survive every save, and an edit the editor cannot make
+without destroying an authored expression is refused by name instead.
 
 ## Try It
 

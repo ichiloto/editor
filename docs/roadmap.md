@@ -711,6 +711,35 @@ runtime gives `''` a meaning of its own.
 Not added, because the engine does not have them: patrol routes,
 pathfinding, followers, persisted dynamic positions, cross-map movement.
 
+## Map save integrity and source preservation — shipped 2026-08
+
+The two defects named by source review, fixed at the root. `ProjectMap` now
+holds its data file as an authored source document (the same token-level
+seam Cutscenes ships, `PhpArraySourceDocument` + `ArraySourceWriter`) and
+every data mutation funnels through one gate that dry-runs the rewrite
+before applying: a change lands as the smallest source edit — comments,
+`use` imports, enum and `require` expressions, prelude variables, quoting,
+key order and unknown fields keep their exact bytes — and a change the
+source cannot take reversibly (a value written as an expression) is refused
+with the map, file and path named, before anything moves. Structural edits
+insert and remove entry lines by durable identity: event marker, NPC `id`,
+unique name for legacy NPCs (writer rule, validation warns on ambiguity).
+Variable-referenced values stay repointable; only a wholly unparseable data
+source makes a map's data read-only, and validation reports it.
+
+Saving became one transaction across the triplet through the promoted
+`FileSetTransaction` (`src/Storage/`, generalised from the accepted
+paired-file boundary to N files and folders): only changed members are
+written — a data edit no longer rewrites `.map.php`, which also protects
+tile files an author builds with a helper class — each staged member is
+evaluated from the project root and must equal the in-memory map, backups
+cover exactly the members being replaced, and any failure restores every
+touched file to its bytes and mtime with the checkpoint unmoved. The
+explicit move carries authored bytes and additionally proves they evaluate
+at the destination, refusing a depth-relative `require` whole. The writer
+itself gained composable appends (several new keys or entries in one save
+used to collide) and the unique-name identity rule.
+
 ## Map runtime metadata authoring — shipped 2026-08
 
 The Map Inspector's metadata rows stopped at name, region, description and

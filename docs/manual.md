@@ -1275,6 +1275,48 @@ cannot truncate your work. When a save regenerates a data file, everything from
 docblocks, `use` imports, blank lines, and the explanatory comment above a
 cutscene all survive.
 
+### Map saves are surgical, and one transaction
+
+A map's `.data.php` is authored PHP the editor did not write, and the editor
+never regenerates it. An edit is rewritten into the file as the smallest
+change that expresses it: change the description and one line changes;
+everything else — comments and blank lines, `namespace` and `use`
+declarations, enum and class-constant expressions, `require` expressions and
+the prelude variables they feed, string quoting, key order, trailing commas,
+unknown and future keys — keeps its exact bytes. An entry added or removed
+(an NPC, an event definition) is inserted or cut as its own lines; the rest
+of the file is untouched. Structural edits find their entry by durable
+identity, never by position: an event by its marker, an NPC by its stable
+`id`, and a legacy NPC without one by its name while that name is unique on
+the map (validation warns when it is not).
+
+What the editor cannot rewrite reversibly it refuses, precisely: a value
+written as an expression — `'script' => require …` in place — cannot take an
+edit without destroying the expression, so that one edit is refused with the
+map, file and path named, and nothing changes. The refusal is that narrow: a
+value written as a *variable reference* can be repointed (the entry gets the
+literal; the shared variable stays for its other users), an opaque sibling
+never blocks an edit beside it, and browsing, previewing and validation
+always work. Only a data file whose whole source cannot be parsed for
+preservation makes the map's *data* read-only — the grids stay editable, and
+validation names the file.
+
+The three files save as one transaction. Only the members whose content
+actually changed are written at all — a metadata edit touches `.data.php`
+alone; a tile stroke touches `.map.php` alone, byte and mtime, and a tile
+file an author generates with a helper class is never rewritten by a data
+edit. Each written member is staged beside its destination, the staged data
+file is evaluated from the project root and must read back as exactly the
+map being saved, backups are taken once per member being replaced (and only
+those members — a clean save backs up nothing), and then the set installs.
+If any member cannot be installed, every file already touched is restored to
+its exact bytes and modification time, no temporary survives, and the map
+stays dirty with its checkpoint unmoved — a refused save leaves the complete
+old triplet, never new data over old tiles. The explicit move carries the
+same guarantee, plus one more: the authored bytes must still evaluate at the
+destination, so a `require` written against the old folder depth refuses the
+move whole rather than installing a map the game cannot load.
+
 ### Stable map identities
 
 A map's project-relative path is its stable identity — doors transfer to it,
