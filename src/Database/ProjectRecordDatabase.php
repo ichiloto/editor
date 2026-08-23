@@ -797,6 +797,84 @@ final class ProjectRecordDatabase
     }
 
     /**
+     * Moves a record to another position in its list.
+     *
+     * Declaration order is part of some categories' meaning — battle-entry
+     * rules break priority ties by it — so reordering is a real edit, not a
+     * view preference.
+     *
+     * @param int $from The record's current index.
+     * @param int $to The index to occupy.
+     * @return bool True when the order changed.
+     */
+    public function moveRecord(int $from, int $to): bool
+    {
+        if (! $this->isEditable()
+            || $this->schema->storage === RecordStorage::CONFIG_SUBTREE
+            || $this->schema->storage === RecordStorage::FILE_LISTING) {
+            return false;
+        }
+
+        $records = array_values($this->records);
+
+        if ($from === $to || ! isset($records[$from]) || $to < 0 || $to >= count($records)) {
+            return false;
+        }
+
+        [$record] = array_splice($records, $from, 1);
+        array_splice($records, $to, 0, [$record]);
+        $this->records = $records;
+        $this->touchState();
+
+        return true;
+    }
+
+    /**
+     * Duplicates a record below itself, with a fresh unique identity.
+     *
+     * Only list-file categories duplicate: a per-file or object-backed
+     * record's copy would need its own source decisions, which nothing
+     * requires yet.
+     *
+     * @param int $index The record to copy.
+     * @return int|null The copy's index, or null when nothing was copied.
+     */
+    public function duplicateRecord(int $index): ?int
+    {
+        if (! $this->isEditable() || $this->schema->storage !== RecordStorage::LIST_FILE) {
+            return null;
+        }
+
+        $records = array_values($this->records);
+        $source = $records[$index] ?? null;
+        $payload = $source?->toArray();
+
+        if (! $source instanceof ProjectRecord || ! is_array($payload)) {
+            return null;
+        }
+        $identityKey = $this->schema->identityKey;
+        $recordId = '';
+
+        if ($identityKey !== null && array_key_exists($identityKey, $payload)) {
+            $payload[$identityKey] = $this->makeUniqueIdentity(strval($payload[$identityKey]));
+            $recordId = strval($payload[$identityKey]);
+        }
+
+        if ($this->schema->recordFilter !== null && ! ($this->schema->recordFilter)($payload)) {
+            return null;
+        }
+
+        // A record the file has never held: no authored identity or values,
+        // which is what tells the source writer to insert it.
+        $copy = new ProjectRecord($payload, true, null, $recordId);
+        array_splice($records, $index + 1, 0, [$copy]);
+        $this->records = $records;
+        $this->touchState();
+
+        return $index + 1;
+    }
+
+    /**
      * Appends a sub-list entry (an objective, beat, member, or command).
      *
      * @param int $index The record index.
@@ -2520,6 +2598,20 @@ final class ProjectRecordDatabase
         if ($field->codec === RecordFieldCodec::WORLD_WRITES) {
             $descriptor['worldWrites'] = true;
 
+            if ($field->writeTypes !== null) {
+                // A surface the runtime restricts (a transactional boundary
+                // rejects quest acceptance) offers only what it may author.
+                $descriptor['writeTypes'] = $field->writeTypes;
+            }
+
+            return $descriptor;
+        }
+
+        if ($field->codec === RecordFieldCodec::ACTOR_PREDICATES) {
+            // A predicate list is built a part at a time in its own editor:
+            // the actor picked by durable identity, the presence cycled.
+            $descriptor['actorPredicates'] = true;
+
             return $descriptor;
         }
 
@@ -2611,6 +2703,12 @@ final class ProjectRecordDatabase
             return $sets === [] && $field->removeWhenEmpty ? null : $sets;
         }
 
+        if ($field->codec === RecordFieldCodec::ACTOR_PREDICATES) {
+            $predicates = BattleEntryPredicateCodec::decodeAll($trimmed);
+
+            return $predicates === [] && $field->removeWhenEmpty ? null : $predicates;
+        }
+
         if ($field->reference !== null && $field->blankLabel !== null && $trimmed === $field->blankLabel) {
             // The picked "empty" row: stored as '', which the runtime reads
             // as its own value rather than as unset.
@@ -2687,6 +2785,7 @@ final class ProjectRecordDatabase
             RecordFieldCodec::CONDITIONS => ConditionCodec::encodeAll(is_array($value) ? $value : []),
             RecordFieldCodec::AFFINITIES => ElementAffinityCodec::encodeAll(is_array($value) ? $value : []),
             RecordFieldCodec::WORLD_WRITES => WorldWriteCodec::encodeAll(is_array($value) ? $value : []),
+            RecordFieldCodec::ACTOR_PREDICATES => BattleEntryPredicateCodec::encodeAll(is_array($value) ? $value : []),
             RecordFieldCodec::CSV_LIST => implode(', ', array_map(strval(...), is_array($value) ? $value : [])),
             RecordFieldCodec::KEY_VALUES => ParameterMapCodec::encode(is_array($value) ? $value : []),
             // A sprite authored as one string is one row; as a list, its rows.

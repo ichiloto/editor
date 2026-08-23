@@ -75,6 +75,17 @@ final class ProjectRecord
      */
     protected function buildPersistedPayload(): string
     {
+        if (! PhpValueExporter::isExportable($this->payload)) {
+            // An unexportable record is read-only, so its fingerprint only
+            // has to be stable, never written; an exporter refusal must not
+            // take the whole category down with it.
+            try {
+                return serialize($this->payload);
+            } catch (Throwable) {
+                return sprintf('unexportable:%s', get_debug_type($this->payload));
+            }
+        }
+
         return PhpValueExporter::export($this->payload);
     }
 

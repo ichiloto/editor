@@ -24,6 +24,7 @@ use Ichiloto\Editor\Database\InventoryCatalog;
 use Ichiloto\Editor\Database\ParameterMapCodec;
 use Ichiloto\Editor\Database\ParameterMapSyntaxError;
 use Ichiloto\Editor\Database\RecordFieldCodec;
+use Ichiloto\Editor\Database\ProjectRecord;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Database\SharedFileTransaction;
 use Ichiloto\Editor\Database\ConditionCodec;
@@ -36,6 +37,8 @@ use Ichiloto\Editor\Field\NpcReferences;
 use Ichiloto\Editor\Field\ProjectNpc;
 use Ichiloto\Editor\Database\WorldWriteEditor;
 use Ichiloto\Editor\Database\WorldWriteCodec;
+use Ichiloto\Editor\Database\BattleEntryPredicateCodec;
+use Ichiloto\Editor\Database\BattleEntryPredicateEditor;
 use Ichiloto\Editor\Database\ElementAffinityCodec;
 use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\Database\SummonAssignmentDiagnostics;
@@ -134,6 +137,7 @@ final class Editor
     private const string DATABASE_CATEGORY_ANIMATIONS = 'animations';
     private const string DATABASE_CATEGORY_SYSTEM = 'system';
     private const string DATABASE_CATEGORY_QUESTS = 'quests';
+    private const string DATABASE_CATEGORY_BATTLE_ENTRY_RULES = 'battle_entry_rules';
     private const string DATABASE_FOCUS_CATEGORIES = 'database_categories';
     private const string DATABASE_FOCUS_LIST = 'database_list';
     private const string DATABASE_FOCUS_SETTINGS = 'database_settings';
@@ -420,7 +424,9 @@ final class Editor
     private readonly ConditionEditor $conditionEditor;
     private readonly AffinityEditor $affinityEditor;
     private readonly WorldWriteEditor $worldWriteEditor;
+    private readonly BattleEntryPredicateEditor $battleEntryPredicateEditor;
     private const string WORLD_WRITE_NAME_FIELD = '__world_write_name';
+    private const string BATTLE_PREDICATE_ACTOR_FIELD = '__battle_predicate_actor';
     private bool $isWorldWriteNaming = false;
     private string $worldWriteNameBuffer = '';
     private bool $worldWriteNamingValue = false;
@@ -713,6 +719,7 @@ final class Editor
         $this->conditionEditor = new ConditionEditor();
         $this->affinityEditor = new AffinityEditor();
         $this->worldWriteEditor = new WorldWriteEditor();
+        $this->battleEntryPredicateEditor = new BattleEntryPredicateEditor();
         $this->modals = new ModalStack();
         $this->assetsPanel = new AssetsPanel(
             self::FOCUS_ASSETS,
@@ -1474,6 +1481,7 @@ final class Editor
             $this->isDatabaseEditing
             || $this->conditionEditor->isOpen()
             || $this->worldWriteEditor->isOpen()
+            || $this->battleEntryPredicateEditor->isOpen()
             || $this->affinityEditor->isOpen()
         );
     }
@@ -1704,6 +1712,12 @@ final class Editor
 
         if ($this->worldWriteEditor->isOpen()) {
             $this->handleWorldWriteEditorInput($input);
+
+            return;
+        }
+
+        if ($this->battleEntryPredicateEditor->isOpen()) {
+            $this->handleBattleEntryPredicateEditorInput($input);
 
             return;
         }
@@ -2923,6 +2937,11 @@ final class Editor
             return;
         }
 
+        if ($this->battleEntryPredicateEditor->isOpen()) {
+            $this->handleBattleEntryPredicateEditorInput($input);
+            return;
+        }
+
         if ($this->isDatabaseEditing) {
             $this->handleDatabaseEditingInput($input);
             return;
@@ -3026,6 +3045,16 @@ final class Editor
 
         if ($this->databaseFocus === self::DATABASE_FOCUS_LIST && $this->isShiftLetterShortcut($input, 'A')) {
             $this->createDatabaseEntry();
+            return;
+        }
+
+        if ($this->databaseFocus === self::DATABASE_FOCUS_LIST && $this->isShiftLetterShortcut($input, 'D')) {
+            $this->duplicateDatabaseRecord();
+            return;
+        }
+
+        if ($this->databaseFocus === self::DATABASE_FOCUS_LIST && ($input === '[' || $input === ']')) {
+            $this->moveDatabaseRecord($input === '[' ? -1 : 1);
             return;
         }
 
@@ -8268,6 +8297,16 @@ final class Editor
     }
 
     /**
+     * Returns whether the Battle Entry rules database is active.
+     *
+     * @return bool
+     */
+    private function isBattleEntryRulesDatabaseSelected(): bool
+    {
+        return $this->getSelectedDatabaseCategoryDefinition()->key === self::DATABASE_CATEGORY_BATTLE_ENTRY_RULES;
+    }
+
+    /**
      * Returns whether a schema-driven (Phase 6) category is active.
      *
      * @return bool
@@ -8384,6 +8423,97 @@ final class Editor
         $this->setStatus(sprintf('Created a new %s.', $database->schema->entryNoun), StatusLevel::SUCCESS);
         $this->renderDatabaseArea();
         $this->beginDatabaseEdit();
+    }
+
+    /**
+     * Duplicates the selected record below itself, undoably.
+     *
+     * @return void
+     */
+    private function duplicateDatabaseRecord(): void
+    {
+        $database = $this->getSelectedRecordDatabase();
+
+        if (! $database instanceof ProjectRecordDatabase) {
+            return;
+        }
+
+        if (! $database->isEditable()) {
+            $this->setStatus($this->describeRecordReadOnly($database), StatusLevel::WARN);
+            $this->renderDatabaseArea();
+            return;
+        }
+
+        $index = $this->getSelectedRecordIndex();
+        $copyIndex = $database->duplicateRecord($index);
+
+        if ($copyIndex === null) {
+            $this->setStatus(
+                sprintf('This %s cannot be duplicated.', $database->schema->entryNoun),
+                StatusLevel::WARN,
+            );
+            $this->renderDatabaseArea();
+            return;
+        }
+
+        $copy = $database->getRecordByIndex($copyIndex);
+
+        if ($copy instanceof ProjectRecord) {
+            $this->recordCommand(new GenericCommand(
+                sprintf('%s duplicate', ucfirst($database->schema->entryNoun)),
+                static fn() => $database->insertRecord($copyIndex, $copy),
+                static fn() => $database->removeRecord($copyIndex),
+            ));
+        }
+
+        $this->setSelectedRecordIndex($copyIndex);
+        $this->setStatus(sprintf('Duplicated the %s.', $database->schema->entryNoun), StatusLevel::SUCCESS);
+        $this->renderDatabaseArea();
+    }
+
+    /**
+     * Moves the selected record up or down its list, undoably.
+     *
+     * Declaration order is part of some categories' meaning — battle-entry
+     * rules break priority ties by it — so the move is a recorded edit.
+     *
+     * @param int $step The direction to move.
+     * @return void
+     */
+    private function moveDatabaseRecord(int $step): void
+    {
+        $database = $this->getSelectedRecordDatabase();
+
+        if (! $database instanceof ProjectRecordDatabase) {
+            return;
+        }
+
+        if (! $database->isEditable()) {
+            $this->setStatus($this->describeRecordReadOnly($database), StatusLevel::WARN);
+            $this->renderDatabaseArea();
+            return;
+        }
+
+        $from = $this->getSelectedRecordIndex();
+        $to = $from + $step;
+
+        if (! $database->moveRecord($from, $to)) {
+            return;
+        }
+
+        $this->recordCommand(new GenericCommand(
+            sprintf('%s move', ucfirst($database->schema->entryNoun)),
+            static fn() => $database->moveRecord($from, $to),
+            static fn() => $database->moveRecord($to, $from),
+        ));
+
+        $this->setSelectedRecordIndex($to);
+        $this->setStatus(sprintf(
+            'Moved the %s %s.',
+            $database->schema->entryNoun,
+            $step < 0 ? 'up' : 'down',
+        ), StatusLevel::SUCCESS);
+        $this->renderDatabaseArea();
     }
 
     /**
@@ -10190,6 +10320,12 @@ final class Editor
             return;
         }
 
+        if (($field['actorPredicates'] ?? false) === true) {
+            $this->openBattleEntryPredicateEditor($field);
+
+            return;
+        }
+
         if (is_array($field['frame'] ?? null)) {
             $this->enterCommandFrame($field['frame']);
 
@@ -10360,10 +10496,12 @@ final class Editor
      */
     private function openWorldWriteEditor(array $field): void
     {
+        $writeTypes = $field['writeTypes'] ?? null;
         $this->worldWriteEditor->open(
             (string) ($field['field'] ?? ''),
             (string) ($field['label'] ?? 'Writes'),
             WorldWriteCodec::decodeAll((string) ($field['value'] ?? '')),
+            is_array($writeTypes) ? $writeTypes : null,
         );
         $this->statusMessage = 'Building writes.';
         $this->renderDatabasePanes(['settings']);
@@ -10572,6 +10710,149 @@ final class Editor
         }
 
         $selectedIndex = $this->worldWriteEditor->selectedIndex();
+
+        foreach ($rows as $index => $row) {
+            $lines[] = sprintf('%s%s', $index === $selectedIndex ? '> ' : '  ', $row);
+        }
+
+        // Two header lines, then the rows in whatever height the pane has.
+        $visibleRows = max(1, $this->recordPaneMetrics()['rows'] - 2);
+
+        return [...array_slice($lines, 0, 2), ...ScrollWindow::slice(array_slice($lines, 2), $selectedIndex, $visibleRows)];
+    }
+
+    /**
+     * Opens the predicate editor on a field that holds battle-entry actor
+     * predicates.
+     *
+     * @param array<string, mixed> $field The settings-pane field descriptor.
+     * @return void
+     */
+    private function openBattleEntryPredicateEditor(array $field): void
+    {
+        $this->battleEntryPredicateEditor->open(
+            (string) ($field['field'] ?? ''),
+            (string) ($field['label'] ?? 'Actor Predicates'),
+            BattleEntryPredicateCodec::decodeAll((string) ($field['value'] ?? '')),
+        );
+        $this->statusMessage = 'Building actor predicates.';
+        $this->renderDatabasePanes(['settings']);
+    }
+
+    /**
+     * Handles input while actor predicates are being built.
+     *
+     * @param string $input The raw input.
+     * @return void
+     */
+    private function handleBattleEntryPredicateEditorInput(string $input): void
+    {
+        if ($input === "\033" || $input === "\x1b") {
+            $this->battleEntryPredicateEditor->close();
+            $this->statusMessage = 'Actor predicates unchanged.';
+            $this->renderDatabasePanes(['settings']);
+
+            return;
+        }
+
+        if ($input === "\n" || $input === "\r") {
+            $this->commitBattleEntryPredicates();
+
+            return;
+        }
+
+        match (true) {
+            str_contains($input, "\033[A") => $this->battleEntryPredicateEditor->move(-1),
+            str_contains($input, "\033[B") => $this->battleEntryPredicateEditor->move(1),
+            $input === 'a' => $this->battleEntryPredicateEditor->add(),
+            $input === 'd' => $this->battleEntryPredicateEditor->remove(),
+            $input === 'x' => $this->battleEntryPredicateEditor->cyclePresence(1),
+            $input === 'X' => $this->battleEntryPredicateEditor->cyclePresence(-1),
+            $input === 'n' => $this->beginBattleEntryPredicateActor(),
+            default => null,
+        };
+
+        $this->renderDatabasePanes(['settings']);
+    }
+
+    /**
+     * Starts picking the selected predicate's actor: a durable identity is
+     * chosen, never typed.
+     *
+     * @return void
+     */
+    private function beginBattleEntryPredicateActor(): void
+    {
+        $predicate = $this->battleEntryPredicateEditor->selected();
+
+        if ($predicate === null || ! $this->workspace instanceof ProjectWorkspace) {
+            return;
+        }
+
+        $catalog = $this->referenceCatalog();
+        $values = $catalog->valuesFor('actor_ids');
+
+        if (! $this->referencePicker->open(self::BATTLE_PREDICATE_ACTOR_FIELD, 'Actor', 'actor_ids', $values, strval($predicate['actor'] ?? ''), $catalog->labelsFor('actor_ids'))) {
+            $this->setStatus('This project defines no actors to choose from.', StatusLevel::WARN);
+        }
+    }
+
+    /**
+     * Stores the predicate list being built back onto its field.
+     *
+     * @return void
+     */
+    private function commitBattleEntryPredicates(): void
+    {
+        $fieldId = $this->battleEntryPredicateEditor->fieldId();
+        $label = $this->battleEntryPredicateEditor->label();
+        $encoded = $this->battleEntryPredicateEditor->encoded();
+        $this->battleEntryPredicateEditor->close();
+
+        $field = null;
+
+        foreach ($this->getDatabaseSettingsFields() as $candidate) {
+            if (is_array($candidate) && ($candidate['field'] ?? null) === $fieldId) {
+                $field = $candidate;
+            }
+        }
+
+        if (! is_array($field)) {
+            return;
+        }
+
+        try {
+            $this->applyDatabaseFieldValueRecorded($field, $encoded);
+            $this->setStatus(sprintf('%s updated.', $label), StatusLevel::SUCCESS);
+        } catch (Throwable $throwable) {
+            $this->setErrorStatus($throwable, sprintf('%s edit', $label));
+        }
+
+        $this->renderDatabasePanes(['list', 'settings', 'cue', 'frames', 'preview']);
+    }
+
+    /**
+     * Returns the rows shown while actor predicates are being built.
+     *
+     * @return string[] The rows.
+     */
+    private function buildBattleEntryPredicateEditorRows(): array
+    {
+        $labels = $this->workspace instanceof ProjectWorkspace
+            ? $this->referenceCatalog()->labelsFor('actor_ids')
+            : [];
+        $rows = $this->battleEntryPredicateEditor->rows($labels);
+        $lines = [sprintf('%s · %d', $this->battleEntryPredicateEditor->label(), count($rows)), ''];
+
+        if ($rows === []) {
+            $lines = [...$lines, ...SettingsPaneLayout::wrapProse('  None. The rule matches no one and never runs.', $this->recordPaneMetrics()['width'])];
+            $lines[] = '';
+            $lines = [...$lines, ...SettingsPaneLayout::wrapProse('  a to add a predicate.', $this->recordPaneMetrics()['width'])];
+
+            return $lines;
+        }
+
+        $selectedIndex = $this->battleEntryPredicateEditor->selectedIndex();
 
         foreach ($rows as $index => $row) {
             $lines[] = sprintf('%s%s', $index === $selectedIndex ? '> ' : '  ', $row);
@@ -11128,6 +11409,19 @@ final class Editor
             }
 
             $this->statusMessage = 'Building writes.';
+            $this->renderDatabasePanes(['settings']);
+
+            return;
+        }
+
+        if ($fieldId === self::BATTLE_PREDICATE_ACTOR_FIELD) {
+            // Opened from the predicate editor, which is still the thing
+            // being edited; the field itself is written when that closes.
+            if ($selected !== null) {
+                $this->battleEntryPredicateEditor->setActor($selected);
+            }
+
+            $this->statusMessage = 'Building actor predicates.';
             $this->renderDatabasePanes(['settings']);
 
             return;
@@ -14582,6 +14876,7 @@ final class Editor
             help: $supportsEntries
                 ? $this->fitHelp(
                     $layout['listWidth'],
+                    'Shift+A:New  Shift+D:Copy  [/]:Move  /:Filter  Del:Delete',
                     'Shift+A:New  /:Filter  Del:Delete',
                     'Shift+A:New  /:Filter  Del',
                     'Shift+A:New  /:Filter',
@@ -14637,6 +14932,13 @@ final class Editor
                     'a/d:Add/Del  t/n/x:Edit  ?:Help',
                     '?:Help',
                 ),
+                $this->battleEntryPredicateEditor->isOpen() => $this->fitHelp(
+                    $layout['settingsWidth'],
+                    'a:Add  d:Delete  n:Actor  x/X:Presence  Enter:Done  Esc:Cancel',
+                    'a/d:Add/Del  n:Actor  x:Presence  Enter:Done',
+                    'a/d:Add/Del  n/x:Edit  ?:Help',
+                    '?:Help',
+                ),
                 $this->affinityEditor->isOpen() => $this->fitHelp(
                     $layout['settingsWidth'],
                     'a:Add  d:Delete  n:Element  x/X:Effect  Enter:Done  Esc:Cancel',
@@ -14684,7 +14986,7 @@ final class Editor
     private function createDatabaseCueWindow(array $layout): EditorWindow
     {
         return new EditorWindow(
-            title: $this->isActorsDatabaseSelected() ? "Collections" : ($this->isClassesDatabaseSelected() ? "Experience Curve" : ($this->isSkillsDatabaseSelected() ? "Effects" : ($this->isQuestsDatabaseSelected() ? "Objectives" : ($this->isSystemDatabaseSelected() ? "Battle Settings" : "SE and Flash Timing")))),
+            title: $this->isActorsDatabaseSelected() ? "Collections" : ($this->isClassesDatabaseSelected() ? "Experience Curve" : ($this->isSkillsDatabaseSelected() ? "Effects" : ($this->isQuestsDatabaseSelected() ? "Objectives" : ($this->isSystemDatabaseSelected() ? "Battle Settings" : ($this->isBattleEntryRulesDatabaseSelected() ? "Execution Order" : "SE and Flash Timing"))))),
             help: $this->isQuestsDatabaseSelected()
                 ? $this->fitHelp($layout['cueWidth'], 'Shift+O:Add  Shift+X:Del', 'Shift+O/X:Add/Del', '?:Help')
                 : '',
@@ -15081,6 +15383,10 @@ final class Editor
             return $this->buildWorldWriteEditorRows();
         }
 
+        if ($this->battleEntryPredicateEditor->isOpen()) {
+            return $this->buildBattleEntryPredicateEditorRows();
+        }
+
         return $this->recordPaneLayout($fields)->visibleLines();
     }
 
@@ -15214,6 +15520,10 @@ final class Editor
 
         if ($this->isSystemDatabaseSelected()) {
             return $this->getDatabaseSystemCueLines();
+        }
+
+        if ($this->isBattleEntryRulesDatabaseSelected()) {
+            return $this->getDatabaseBattleEntryCueLines();
         }
 
         $animation = $this->getSelectedAnimation();
@@ -15366,6 +15676,64 @@ final class Editor
         return $skill->getEffectSummaryLines();
     }
 
+
+    /**
+     * Returns the execution-order lines for the battle-entry rules cue.
+     *
+     * The runtime runs matching rules in priority then declaration order;
+     * this presents that deterministic order beside the settings pane, with
+     * the selected rule marked.
+     *
+     * @return string[]
+     */
+    private function getDatabaseBattleEntryCueLines(): array
+    {
+        if (! $this->workspace instanceof ProjectWorkspace) {
+            return ['No project loaded.'];
+        }
+
+        $database = $this->workspace->getRecordDatabase(self::DATABASE_CATEGORY_BATTLE_ENTRY_RULES);
+
+        if (! $database instanceof ProjectRecordDatabase) {
+            return ['No rules loaded.'];
+        }
+
+        $rules = [];
+
+        foreach ($database->getRecords() as $index => $record) {
+            $priority = $record->get('priority');
+            $rules[] = [
+                'index' => $index,
+                'priority' => is_int($priority) ? $priority : 0,
+                'id' => trim(strval($record->get('id') ?? '')) ?: '(no id)',
+            ];
+        }
+
+        if ($rules === []) {
+            return ['No rules yet.', '', 'Battles begin unchanged.'];
+        }
+
+        usort(
+            $rules,
+            static fn(array $left, array $right): int =>
+                [$left['priority'], $left['index']] <=> [$right['priority'], $right['index']],
+        );
+
+        $selectedIndex = $this->getSelectedRecordIndex();
+        $lines = ['Runs in this order:'];
+
+        foreach ($rules as $position => $rule) {
+            $lines[] = sprintf(
+                '%s%2d. %s%s',
+                $rule['index'] === $selectedIndex ? '> ' : '  ',
+                $position + 1,
+                $rule['id'],
+                $rule['priority'] !== 0 ? sprintf('  (p %d)', $rule['priority']) : '',
+            );
+        }
+
+        return $lines;
+    }
 
     /**
      * Returns the frame list lines.

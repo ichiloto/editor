@@ -711,6 +711,37 @@ runtime gives `''` a meaning of its own.
 Not added, because the engine does not have them: patrol routes,
 pathfinding, followers, persisted dynamic positions, cross-map movement.
 
+## Battle entry rules authoring — shipped 2026-08
+
+One schema-driven Database category for `assets/Data/battle-entry-rules.php`,
+the file the engine's accepted `BattleEntryRuleCatalog` hydrates. Rules
+author a stable id, optional priority and `ordinary`/`boss` classification
+(both defaulting silently, never written by browsing), required actor
+predicates picked from durable actor identities with `active`/`reserve`/
+`any` presence, shared world conditions, typed `stat_stage` effects over the
+engine's exact stage-capable vocabulary with signed deltas stored untouched,
+and world writes restricted to the reversible transactional three — quest
+acceptance is unofferable here and diagnosed when found in source. Troops
+gained the accepted contract's optional classification picker.
+
+Because rule order is data (declaration order breaks priority ties), record
+lists learned two operations every list-file category now shares: `[`/`]`
+reorder and `Shift+D` duplicate, both undoable. The Execution Order cue
+presents the exact priority-then-declaration order the runtime will use.
+
+The committed engine dependency (0.5.0) predates the contract, so validation
+runs a bounded structural mirror — same shapes, same diagnostic wording,
+stat and condition vocabularies imported from the vendored engine classes
+that are byte-identical to the accepted head — and an actor resolver that
+reproduces the engine store's id/name/file-stem resolution, ambiguity and
+duplicate refusals. A parity suite proves every diagnostic branch against
+the accepted engine head in a subprocess (gated by `ICHILOTO_ENGINE_SRC`),
+and proves an editor-authored project hydrates there in the cue's exact
+order. Along the way the record fingerprint stopped exporting unexportable
+payloads, so a data file holding an object the exporter cannot rebuild
+(a `DateTimeImmutable`, say) now loads read-only instead of taking the
+whole category down.
+
 ## Map save integrity and source preservation — shipped 2026-08
 
 The two defects named by source review, fixed at the root. `ProjectMap` now

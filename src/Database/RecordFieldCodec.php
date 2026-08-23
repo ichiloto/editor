@@ -29,6 +29,12 @@ enum RecordFieldCodec: string
     case WORLD_WRITES = 'world_writes';
 
     /**
+     * A list of battle-entry actor predicates, shown as `actor:presence; …`
+     * and built in a dedicated editor with the actor picker.
+     */
+    case ACTOR_PREDICATES = 'actor_predicates';
+
+    /**
      * A map of project-owned parameters, shown as `name=value` pairs. What
      * the line cannot carry is preserved rather than shown.
      */

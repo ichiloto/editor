@@ -29,6 +29,7 @@ use Ichiloto\Engine\Entities\Inventory\Items\Item;
 use Ichiloto\Engine\Entities\Inventory\Weapons\Weapon;
 use Ichiloto\Engine\Entities\Enumerations\ArmorType;
 use Ichiloto\Engine\Entities\Enumerations\WeaponType;
+use Ichiloto\Engine\Entities\Character;
 use Ichiloto\Engine\Entities\ParameterChanges;
 use Ichiloto\Engine\Entities\Stats;
 use Ichiloto\Engine\Battle\BattleRewards;
@@ -63,6 +64,7 @@ final class RecordSchemaCatalog
         $schemas = [
             self::states(),
             self::troops(),
+            self::battleEntryRules(),
             self::items(),
             self::weapons(),
             self::armors(),
@@ -157,6 +159,16 @@ final class RecordSchemaCatalog
                     options: ['allowed', 'forbidden'],
                     removeWhenEmpty: true,
                 ),
+                // The engine's battle-entry rules match a troop's explicit
+                // classification; omission remains ordinary, so browsing
+                // never forces the key into older data.
+                new RecordField(
+                    'classification',
+                    'Classification',
+                    options: ['ordinary', 'boss'],
+                    removeWhenEmpty: true,
+                    displayDefault: 'ordinary',
+                ),
             ],
             labelKey: 'name',
             identityKey: 'name',
@@ -176,6 +188,85 @@ final class RecordSchemaCatalog
                     new RecordField('position.1', 'Y', InputControlType::INTEGER),
                 ],
                 blank: ['enemy' => 'Regular Bat', 'position' => [15, 7]],
+            ),
+        );
+    }
+
+    /**
+     * Battle-entry rules — `assets/Data/battle-entry-rules.php`, the file the
+     * engine's `BattleEntryRuleCatalog` hydrates. Fully editable.
+     *
+     * The file returns a `rules` list. Each ordered rule carries a required
+     * unique stable id, an optional integer priority (the runtime defaults
+     * to 0), an optional `ordinary`/`boss` classification (the runtime
+     * defaults to ordinary), required non-empty actor predicates, optional
+     * shared world conditions, required non-empty typed effects, and
+     * optional durable writes the runtime restricts to its reversible
+     * transactional vocabulary. Rules run in priority then declaration
+     * order; this surface authors the schema and never applies it.
+     *
+     * @return RecordSchema
+     */
+    private static function battleEntryRules(): RecordSchema
+    {
+        return new RecordSchema(
+            key: 'battle_entry_rules',
+            entryNoun: 'battle entry rule',
+            storage: RecordStorage::LIST_FILE,
+            relativePath: 'assets/Data/battle-entry-rules.php',
+            fields: [
+                new RecordField('id', 'Id'),
+                new RecordField(
+                    'priority',
+                    'Priority',
+                    InputControlType::INTEGER,
+                    removeWhenEmpty: true,
+                    displayDefault: '0',
+                ),
+                new RecordField(
+                    'classification',
+                    'Classification',
+                    options: ['ordinary', 'boss'],
+                    removeWhenEmpty: true,
+                    displayDefault: 'ordinary',
+                ),
+                // Required and non-empty at runtime: the key never drops, so
+                // an emptied list stays visible and fails validation instead
+                // of vanishing.
+                new RecordField('actors', 'Actor Predicates', codec: RecordFieldCodec::ACTOR_PREDICATES),
+                new RecordField('conditions', 'Conditions', removeWhenEmpty: true, codec: RecordFieldCodec::CONDITIONS),
+                new RecordField(
+                    'writes',
+                    'World Writes',
+                    removeWhenEmpty: true,
+                    codec: RecordFieldCodec::WORLD_WRITES,
+                    writeTypes: ['switch', 'event', 'variable'],
+                ),
+            ],
+            labelKey: 'id',
+            identityKey: 'id',
+            blank: [
+                'id' => 'new-rule',
+                // Both required lists start visibly incomplete: validation
+                // names them until the author fills them in, which beats a
+                // half-authored placeholder that reads as finished.
+                'actors' => [],
+                'effects' => [
+                    ['type' => 'stat_stage', 'actor' => '', 'stat' => 'attack', 'delta' => 1],
+                ],
+            ],
+            projection: new KeyedListProjection('rules'),
+            subList: new RecordSubList(
+                key: 'effects',
+                prefix: 'effect',
+                singular: 'effect',
+                fields: [
+                    new RecordField('type', 'Type', options: ['stat_stage']),
+                    RecordField::reference('actor', 'Actor', 'actor_ids'),
+                    new RecordField('stat', 'Stat', options: Character::buffableStats()),
+                    new RecordField('delta', 'Delta', InputControlType::INTEGER),
+                ],
+                blank: ['type' => 'stat_stage', 'actor' => '', 'stat' => 'attack', 'delta' => 1],
             ),
         );
     }

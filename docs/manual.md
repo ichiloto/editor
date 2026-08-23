@@ -485,6 +485,7 @@ status line says exactly why.
 | Armors | `assets/Data/items.php` | Editable — authored as `new Armor(...)` calls, edited entry by entry |
 | Enemies | `assets/Data/enemies.php` | Editable — authored as `new Enemy(...)` calls, edited entry by entry |
 | Troops | `assets/Data/troops.php` | Editable |
+| Battle Entry | `assets/Data/battle-entry-rules.php` | Editable |
 | States | `assets/Data/states.php` | Editable |
 | Animations | `assets/Data/animations.php` | Editable |
 | Tilesets | — | Read-only — the engine has no tileset system |
@@ -594,6 +595,60 @@ resolved by its authored continuation.
 
 `Shift+O` appends a member, `Shift+X` removes the last one. The `Enemy` value
 must match a name in the Enemies category.
+
+A troop may also declare a `Classification` — `ordinary` or `boss` — which
+battle-entry rules match against. An omitted classification is the engine's
+`ordinary` default; the picker shows that without writing the key into older
+data.
+
+### Battle Entry
+
+Rules the engine applies as a battle begins, in
+`assets/Data/battle-entry-rules.php`. Each rule grants temporary stat stages
+to specific actors before the first action, and may commit durable world
+writes when it succeeds. The editor authors the file; the engine alone
+decides eligibility, applies effects, and rolls back — nothing here
+duplicates that runtime.
+
+Each rule has:
+
+- a required unique stable `Id`;
+- an optional integer `Priority` — the runtime defaults it to `0`, lower
+  runs first, and the pane shows that default without writing the key;
+- an optional `Classification` (`ordinary` or `boss`) matched against the
+  troop's own, defaulting to `ordinary` the same silent way;
+- `Actor Predicates`, a required non-empty list built in its own editor:
+  `a`/`d` add and remove a row, `n` picks the actor from the project's
+  durable actor identities (never typed, never a display label), and
+  `x`/`X` cycle the presence through `active`, `reserve`, and `any` — the
+  entry roster the actor must occupy when the battle begins;
+- optional `Conditions`, the same shared world-condition editor every other
+  surface uses;
+- required non-empty effects, flattened into the pane as `Effect 1 Type`,
+  `Effect 1 Actor`, `Effect 1 Stat`, `Effect 1 Delta`, and so on —
+  `Shift+O`/`Shift+X` append and remove. The one effect type is
+  `stat_stage`; the stat picker offers exactly the engine's stage-capable
+  seven (`attack`, `defence`, `magicAttack`, `magicDefence`, `speed`,
+  `grace`, `evasion`), and the signed delta is stored exactly, never
+  clamped or applied by the editor;
+- optional `World Writes` through the shared write editor, restricted here
+  to the engine's reversible transactional vocabulary: `switch`, `event`,
+  and `variable`. Quest acceptance cannot be authored in this category —
+  its confirmation flow cannot be rolled back — and one already in the
+  source is preserved untouched but reported by validation.
+
+Rules run in priority then declaration order, so the order of the list is
+part of the data: `[` and `]` move the selected rule, `Shift+D` duplicates
+it under a fresh id, and both are undoable like any other edit. The
+Execution Order pane beside the settings shows the exact order the runtime
+will use, with the selected rule marked.
+
+Validation checks the whole file with the engine's own diagnostic wording —
+file, rule id, field, offending value — including duplicate ids, empty
+required lists, unknown or contested actor identities (a reference two
+definitions claim fails loudly rather than resolving to either), stats that
+are canonical but not stage-capable, and quest writes. A missing file means
+no rules and no finding, exactly as the runtime treats it.
 
 ### Terms
 

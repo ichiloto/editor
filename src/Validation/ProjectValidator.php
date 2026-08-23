@@ -2,6 +2,8 @@
 
 namespace Ichiloto\Editor\Validation;
 
+use Ichiloto\Editor\Database\BattleEntryActorResolver;
+use Ichiloto\Editor\Database\BattleEntryRuleContract;
 use Ichiloto\Editor\Database\InventoryCatalog;
 use Ichiloto\Editor\Database\InventoryClaimant;
 use Ichiloto\Editor\Database\KnowledgeCommandShape;
@@ -100,6 +102,7 @@ class ProjectValidator
       ...$this->checkMaps($workspace),
       ...$this->checkQuests($workspace),
       ...$this->checkTroops($workspace),
+      ...$this->checkBattleEntryRules($workspace),
       ...$this->checkSummons($workspace),
       ...$this->checkCutscenes($workspace),
       ...$this->checkReferences($workspace),
@@ -1175,6 +1178,106 @@ class ProjectValidator
           'Use allowed or forbidden, or omit the field to use the allowed default.',
         );
       }
+    }
+
+    foreach ($database->getRecords() as $record) {
+      $name = trim(strval($record->get('name') ?? '')) ?: '(unnamed)';
+      $problem = BattleEntryRuleContract::classificationProblem(
+        $record->get('classification'),
+        sprintf('Data/troops.php troop "%s"', $name),
+      );
+
+      if ($problem !== null) {
+        // The engine refuses to load the troop at all, so the message is
+        // the one the runtime would give.
+        $issues[] = Issue::error(
+          'troop ' . $name,
+          $problem,
+          'Use ordinary or boss, or omit the field to keep the ordinary default.',
+        );
+      }
+    }
+
+    return $issues;
+  }
+
+  /**
+   * Checks authored battle-entry rules against the engine's hydration
+   * contract, with the engine's own diagnostic wording.
+   *
+   * A missing file means no rules and no finding, exactly as the runtime
+   * treats it. Actor identities resolve the way the engine's store resolves
+   * them; a duplicate or ambiguous identity is reported rather than
+   * silently substituted, and the rules are then checked shape-only, since
+   * the runtime would never reach them.
+   *
+   * @param ProjectWorkspace $workspace The project.
+   * @return Issue[] The issues.
+   */
+  protected function checkBattleEntryRules(ProjectWorkspace $workspace): array
+  {
+    $database = $workspace->getRecordDatabase('battle_entry_rules');
+
+    if (! $database instanceof ProjectRecordDatabase) {
+      return [];
+    }
+
+    $records = $database->getRecords();
+    $where = 'assets/Data/battle-entry-rules.php';
+
+    if ($records === []) {
+      // No authored rules. A missing file means silence, exactly as the
+      // runtime treats it — but a present file whose shape hid every rule
+      // from the projection still fails the engine's own shape check.
+      $path = $workspace->projectRoot . DIRECTORY_SEPARATOR
+        . str_replace('/', DIRECTORY_SEPARATOR, $where);
+
+      if (! is_file($path)) {
+        return [];
+      }
+
+      $file = PhpDataFile::load($path, $workspace->projectRoot);
+
+      if ($file->payload === null && $file->readOnlyReason !== null) {
+        return [Issue::error(
+          $where,
+          sprintf('The file could not be evaluated: %s.', $file->readOnlyReason),
+          'Battle startup fails closed until the file loads.',
+        )];
+      }
+
+      return array_map(
+        static fn(string $problem): Issue => Issue::error(
+          $where,
+          $problem,
+          'Battle startup fails closed until this rule is corrected.',
+        ),
+        BattleEntryRuleContract::problems($file->payload, $where),
+      );
+    }
+
+    $issues = [];
+    $resolver = BattleEntryActorResolver::fromActors($workspace->actorDatabase->getActors());
+
+    foreach ($resolver->problems() as $problem) {
+      $issues[] = Issue::error(
+        $where,
+        $problem,
+        'Battle-entry rules resolve actors by durable identity; give each actor one unambiguous id.',
+      );
+    }
+
+    $data = ['rules' => array_map(
+      static fn(ProjectRecord $record): array => $record->toArray(),
+      $records,
+    )];
+
+    foreach (BattleEntryRuleContract::problems($data, $where, $resolver->problems() === [] ? $resolver : null) as $problem) {
+      $issues[] = Issue::error(
+        $where,
+        $problem,
+        'Battle startup fails closed until this rule is corrected.',
+      );
     }
 
     return $issues;
