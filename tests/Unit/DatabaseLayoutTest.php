@@ -69,19 +69,41 @@ it('stops widening the settings pane once it is wide enough', function () {
     expect(databaseLayoutFor(400)['settingsWidth'])->toBeLessThanOrEqual(96);
 });
 
-it('gives the System Notes pane room for its sentences on a wide terminal', function () {
-    // The Notes pane holds prose up to 40 columns wide. At 230 columns it
-    // used to inherit the 10-column width meant for animation frame numbers,
-    // clipping every sentence to six characters beside a mostly empty
-    // preview.
-    $layout = databaseLayoutFor(230, category: 'system');
+it('sizes the System Notes pane to its own sentences on a wide terminal', function () {
+    // The Notes pane holds prose. At 230 columns it used to inherit the
+    // 10-column width meant for animation frame numbers, clipping every
+    // sentence to six characters beside a mostly empty preview. The width
+    // is derived from the lines themselves, so this holds however the
+    // sentences are reworded.
+    $root = makeTemporaryProject();
+    $editor = createEditorForTesting($root);
+    setEditorProperty($editor, 'workspace', Ichiloto\Editor\ProjectWorkspace::fromProject($root));
+    setEditorProperty($editor, 'databaseCategoryIndex', Ichiloto\Editor\Database\DatabaseCatalog::indexOf('system'));
 
-    expect($layout['framesWidth'])->toBeGreaterThanOrEqual(44)
+    $widestSentence = max(array_map(mb_strwidth(...), callEditorMethod($editor, 'getDatabaseFrameLines')));
+    $layout = callEditorMethod($editor, 'resolveDatabaseLayout', ['width' => 230, 'height' => 39]);
+
+    expect($widestSentence)->toBeGreaterThanOrEqual(30)
+        ->and($layout['framesWidth'])->toBe($widestSentence + 4)
         ->and($layout['previewWidth'])->toBeGreaterThanOrEqual(24);
 });
 
+it('keeps a content-fitted pane compact when its lines are short', function () {
+    // A record category's frame list is a placeholder dash: fitting content
+    // means hugging it, not ballooning to the maximum.
+    expect(databaseLayoutFor(230, category: 'items')['framesWidth'])->toBe(10);
+});
+
+it('keeps the tuned entry-list panes steady on a wide terminal', function () {
+    // These frame lists scroll a per-entry selection, so their widths stay
+    // tuned instead of reflowing with whichever entry is selected.
+    expect(databaseLayoutFor(230, category: 'skills')['framesWidth'])->toBe(34)
+        ->and(databaseLayoutFor(230, category: 'classes')['framesWidth'])->toBe(24)
+        ->and(databaseLayoutFor(230, category: 'actors')['framesWidth'])->toBe(18);
+});
+
 it('fills the bottom row exactly, for any category at any width', function () {
-    foreach ([null, 'system', 'skills', 'quests', 'classes', 'actors'] as $category) {
+    foreach ([null, 'system', 'skills', 'quests', 'classes', 'actors', 'items', 'animations'] as $category) {
         foreach ([230, 180, 140, 120, 100, 90, 80, 70] as $columns) {
             $layout = databaseLayoutFor($columns, category: $category);
             $used = $layout['framesWidth'] + $layout['previewWidth'] + $layout['gutter'];
@@ -94,4 +116,53 @@ it('fills the bottom row exactly, for any category at any width', function () {
                 ->and($layout['previewWidth'])->toBeGreaterThan(0);
         }
     }
+});
+
+it('wraps prose that a narrow pane cannot fit, losing no words', function () {
+    $editor = createEditorForTesting(makeTemporaryProject());
+    $wrapped = callEditorMethod(
+        $editor,
+        'wrapLines',
+        ['Switch Battle Engine to active_time', '', 'ok'],
+        17,
+    );
+
+    // Every word survives, in order; the blank line and the line that
+    // already fits pass through untouched.
+    expect(implode(' ', array_filter(array_slice($wrapped, 0, count($wrapped) - 2), static fn(string $line): bool => $line !== '')))
+        ->toBe('Switch Battle Engine to active_time')
+        ->and(array_slice($wrapped, -2))->toBe(['', 'ok']);
+
+    foreach ($wrapped as $line) {
+        expect(mb_strwidth($line))->toBeLessThanOrEqual(17);
+    }
+});
+
+it('splits a word wider than the pane instead of dropping it', function () {
+    $editor = createEditorForTesting(makeTemporaryProject());
+    $wrapped = callEditorMethod($editor, 'wrapLines', ['incontrovertibly so'], 8);
+
+    expect(implode('', array_map(static fn(string $line): string => str_replace(' ', '', $line), $wrapped)))
+        ->toBe('incontrovertiblyso');
+
+    foreach ($wrapped as $line) {
+        expect(mb_strwidth($line))->toBeLessThanOrEqual(8);
+    }
+});
+
+it('shows whole wrapped words in the System Notes pane at a small terminal', function () {
+    $root = makeTemporaryProject();
+    $editor = createEditorForTesting($root);
+    setEditorProperty($editor, 'workspace', Ichiloto\Editor\ProjectWorkspace::fromProject($root));
+    setEditorProperty($editor, 'isRunning', true);
+    openDatabaseCategory($editor, 'system');
+    setEditorProperty($editor, 'lastTerminalSize', ['width' => 100, 'height' => 30]);
+
+    $frame = renderEditorPlainFrame($editor, 100, 30);
+
+    // The pane is too narrow for its sentences at 100 columns, so they wrap:
+    // they used to render as clipped shards ("Tradit"), and a clipped pane
+    // would never show the sentence's tail words whole.
+    expect($frame)->toContain('turn-based')
+        ->and($frame)->toContain('battles.');
 });

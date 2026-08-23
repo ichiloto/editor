@@ -12694,6 +12694,60 @@ final class Editor
     }
 
     /**
+     * Word-wraps lines to the given display width, keeping blank lines.
+     *
+     * Words longer than the width are split rather than dropped, so no text
+     * silently vanishes on a narrow terminal.
+     *
+     * @param string[] $lines The lines to wrap.
+     * @param int $availableWidth The display width to wrap at.
+     * @return string[]
+     */
+    private function wrapLines(array $lines, int $availableWidth): array
+    {
+        $availableWidth = max(1, $availableWidth);
+        $wrapped = [];
+
+        foreach ($lines as $line) {
+            if (mb_strwidth($line) <= $availableWidth) {
+                $wrapped[] = $line;
+
+                continue;
+            }
+
+            $current = '';
+
+            foreach (explode(' ', $line) as $word) {
+                while (mb_strwidth($word) > $availableWidth) {
+                    if ($current !== '') {
+                        $wrapped[] = $current;
+                        $current = '';
+                    }
+
+                    $head = mb_strimwidth($word, 0, $availableWidth, '');
+                    $wrapped[] = $head;
+                    $word = mb_substr($word, mb_strlen($head));
+                }
+
+                $candidate = $current === '' ? $word : $current . ' ' . $word;
+
+                if (mb_strwidth($candidate) > $availableWidth) {
+                    $wrapped[] = $current;
+                    $current = $word;
+                } else {
+                    $current = $candidate;
+                }
+            }
+
+            if ($current !== '') {
+                $wrapped[] = $current;
+            }
+        }
+
+        return $wrapped;
+    }
+
+    /**
      * Resolves the usable content width inside a padded editor window.
      *
      * @param int $windowWidth The full window width including borders.
@@ -14084,6 +14138,29 @@ final class Editor
     }
 
     /**
+     * Returns whether the frame list pane sizes itself to its lines and
+     * wraps the ones that still do not fit.
+     *
+     * Categories whose frame list scrolls a per-entry selection keep a
+     * steady tuned width instead, so the row does not reflow as the cursor
+     * moves. Every other category's frame list fits the lines it is about
+     * to show: a pane holding prose is born readable rather than inheriting
+     * a width meant for frame numbers, and stays readable when its
+     * sentences change.
+     *
+     * @return bool
+     */
+    private function framesPaneFitsContent(): bool
+    {
+        return ! (
+            $this->isActorsDatabaseSelected()
+            || $this->isClassesDatabaseSelected()
+            || $this->isSkillsDatabaseSelected()
+            || $this->isQuestsDatabaseSelected()
+        );
+    }
+
+    /**
      * Resolves the Database overlay layout.
      *
      * @param array{width: int, height: int, leftWidth: int, rightWidth: int, gutter: int, centerWidth: int, contentHeight: int} $layout The base editor layout.
@@ -14096,6 +14173,12 @@ final class Editor
     private const int DATABASE_SETTINGS_MAXIMUM_WIDTH = 96;
     private const int DATABASE_CUE_MINIMUM_WIDTH = 22;
     private const int DATABASE_CUE_MAXIMUM_WIDTH = 48;
+
+    /**
+     * What a content-fitted frame list may take of the Database's right side.
+     */
+    private const int DATABASE_FRAMES_MINIMUM_WIDTH = 10;
+    private const int DATABASE_FRAMES_MAXIMUM_WIDTH = 48;
 
     private function resolveDatabaseLayout(array $layout): array
     {
@@ -14132,9 +14215,29 @@ final class Editor
         $topHeight = $this->isClassesDatabaseSelected()
             ? 17
             : ($this->isSkillsDatabaseSelected() || $this->isQuestsDatabaseSelected() ? 18 : ($this->isActorsDatabaseSelected() ? 12 : 10));
-        $framesWidth = $this->isClassesDatabaseSelected()
-            ? 24
-            : ($this->isSkillsDatabaseSelected() || $this->isQuestsDatabaseSelected() ? 30 : ($this->isActorsDatabaseSelected() ? 18 : 10));
+        if ($this->framesPaneFitsContent()) {
+            $widestFrameLine = 0;
+
+            foreach ($this->getDatabaseFrameLines() as $frameLine) {
+                $widestFrameLine = max($widestFrameLine, mb_strwidth($frameLine));
+            }
+
+            $framesWidth = max(
+                self::DATABASE_FRAMES_MINIMUM_WIDTH,
+                min(
+                    self::DATABASE_FRAMES_MAXIMUM_WIDTH,
+                    $rightWidth - 24 - $gutter,
+                    $widestFrameLine + 2 + (self::WINDOW_HORIZONTAL_PADDING * 2)
+                )
+            );
+        } elseif ($this->isClassesDatabaseSelected()) {
+            $framesWidth = 24;
+        } elseif ($this->isSkillsDatabaseSelected() || $this->isQuestsDatabaseSelected()) {
+            $framesWidth = max(30, min($rightWidth - 24 - $gutter, 34));
+        } else {
+            $framesWidth = 18;
+        }
+
         $previewWidth = max(20, $rightWidth - $framesWidth - $gutter);
         $previewHeight = max(8, $innerHeight - $topHeight - $gutter);
         // The settings pane holds label-and-value lines that truncate, and the
@@ -14154,19 +14257,6 @@ final class Editor
         if ($settingsWidth + $cueWidth + $gutter > $rightWidth) {
             $cueWidth = max(1, intdiv($rightWidth - $gutter, 3));
             $settingsWidth = max(1, $rightWidth - $cueWidth - $gutter);
-        }
-
-        if ($this->isSkillsDatabaseSelected() || $this->isQuestsDatabaseSelected()) {
-            $framesWidth = max(30, min($rightWidth - 24 - $gutter, 34));
-            $previewWidth = max(24, $rightWidth - $framesWidth - $gutter);
-        }
-
-        // The System category retitles the frame list "Notes" and fills it
-        // with full sentences up to 40 columns wide, not frame numbers: give
-        // it its reading width before the preview takes the rest.
-        if ($this->isSystemDatabaseSelected()) {
-            $framesWidth = max(24, min($rightWidth - 24 - $gutter, 44));
-            $previewWidth = max(24, $rightWidth - $framesWidth - $gutter);
         }
 
         // Narrow enough that the frame list and preview cannot both have
@@ -14626,7 +14716,9 @@ final class Editor
             height: $layout["previewHeight"],
             foregroundColor: $this->resolveDatabasePaneColor(self::DATABASE_FOCUS_FRAMES),
             content: $this->fitLines(
-                $this->getDatabaseFrameLines(),
+                $this->framesPaneFitsContent()
+                    ? $this->wrapLines($this->getDatabaseFrameLines(), $this->getWindowContentWidth($layout["framesWidth"]))
+                    : $this->getDatabaseFrameLines(),
                 $this->getWindowContentWidth($layout["framesWidth"]),
                 $layout["previewHeight"] - 2
             ),
