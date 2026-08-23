@@ -206,14 +206,28 @@ final class FileSetTransaction
         }
 
         if ($backup !== null) {
-            // Once, before any destructive work, for the whole pair.
+            // Once, before any destructive work, for the whole set. The
+            // accepted backup policy normally absorbs its own failures; a
+            // callback that throws anyway must not leave the transaction's
+            // staging behind -- nothing has been installed, so everything
+            // this transaction made is taken back before the throw goes on.
             $doomed = array_values(array_filter(
                 $this->paths(),
                 fn(string $path): bool => ($this->original[$path]['contents'] ?? null) !== null,
             ));
 
             if ($doomed !== []) {
-                $backup(...$doomed);
+                try {
+                    $backup(...$doomed);
+                } catch (Throwable $backupFailure) {
+                    $this->isFinished = true;
+                    $this->discard();
+
+                    throw new FileSetTransactionFailure(
+                        sprintf('The backup step failed (%s)', rtrim($backupFailure->getMessage(), '.')),
+                        previous: $backupFailure,
+                    );
+                }
             }
         }
 
@@ -292,10 +306,12 @@ final class FileSetTransaction
                 continue;
             }
 
-            if ($original['modifiedAt'] !== null) {
+            if ($original['modifiedAt'] !== null && ! $this->files->setModifiedAt($path, $original['modifiedAt'])) {
                 // Put back means put back: the same bytes at the same time,
-                // so nothing downstream reads the restoration as an edit.
-                $this->files->setModifiedAt($path, $original['modifiedAt']);
+                // so nothing downstream reads the restoration as an edit. A
+                // file whose time could not be restored is not the file that
+                // was there, and saying the rollback succeeded would hide it.
+                $unrestored[] = $path;
             }
         }
 

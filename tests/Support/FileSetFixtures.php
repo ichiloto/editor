@@ -81,6 +81,6 @@ final class FailingFileSetOperations implements FileSetOperations
 
     public function setModifiedAt(string $path, int $timestamp): bool
     {
-        return $this->inner->setModifiedAt($path, $timestamp);
+        return $this->fails('setModifiedAt', $path) ? false : $this->inner->setModifiedAt($path, $timestamp);
     }
 }
