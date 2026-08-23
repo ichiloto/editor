@@ -60,4 +60,14 @@ final readonly class KnowledgeRecordTypeProjection implements RecordProjection
 
         return $whole;
     }
+
+    /**
+     * @inheritDoc
+     *
+     * Types are written as the ordered list they were given.
+     */
+    public function ordersRecords(): bool
+    {
+        return true;
+    }
 }

@@ -148,4 +148,14 @@ final readonly class OptimizationOutcomeProjection implements RecordProjection
     {
         return is_array($whole[$key] ?? null) ? $whole[$key] : [];
     }
+
+    /**
+     * @inheritDoc
+     *
+     * Rows regroup into outcome and property maps; their order is not stored.
+     */
+    public function ordersRecords(): bool
+    {
+        return false;
+    }
 }

@@ -75,4 +75,14 @@ final readonly class KnowledgeReportProjection implements RecordProjection
 
         return $whole;
     }
+
+    /**
+     * @inheritDoc
+     *
+     * Reports are written as the ordered list they were given.
+     */
+    public function ordersRecords(): bool
+    {
+        return true;
+    }
 }

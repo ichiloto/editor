@@ -278,6 +278,23 @@ it('authors a disposable project the accepted engine hydrates in the same order'
                 'second-declared-of-ties',
                 'third-by-priority',
             ]);
+
+        // A reorder is a real edit: moving the tied pair, saving, and
+        // hydrating again swaps their execution order at the runtime too.
+        $database = loadRecordDatabase($root, 'battle_entry_rules');
+        $tied = array_search('first-declared-of-ties', $database->getEntryLabels(), true);
+
+        expect($database->moveRecord((int) $tied, (int) $tied + 1))->toBeTrue();
+
+        $database->save();
+        $engine = hydrateThroughAcceptedEngine($engineRoot, battleEntryRulesPath($root));
+
+        expect($engine['ok'] ?? false)->toBeTrue()
+            ->and($engine['order'] ?? null)->toBe([
+                'second-declared-of-ties',
+                'first-declared-of-ties',
+                'third-by-priority',
+            ]);
     } finally {
         removeDirectoryRecursively($root);
     }

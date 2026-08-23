@@ -711,6 +711,24 @@ runtime gives `''` a meaning of its own.
 Not added, because the engine does not have them: patrol routes,
 pathfinding, followers, persisted dynamic positions, cross-map movement.
 
+## Battle entry authoring order correction — shipped 2026-08
+
+Source review caught the reorder operation promising more than the save
+paths keep. A pure move changes no field, so the surgical source plan for
+plain and constructor-authored list files emits nothing, the save adopts
+the category as clean, and the reopened project reverts — and a directory
+category has no order document at all. The storage model now answers the
+question explicitly: `RecordProjection::ordersRecords()` declares whether a
+projection's fold stores row order (the keyed-list and knowledge
+projections do; the optimization projections regroup into keyed shapes and
+do not), and `supportsDurableReorder()` permits `[`/`]` only where a
+reorder provably survives save and reopen. Everywhere else the move is
+refused up front with the reason in the status line — no order change, no
+dirty state, no history entry, no byte, no modification time — and the
+help overlay describes the record keys only as the selected category
+actually supports them. Regressions cover the durable path through save,
+reopen, undo/redo and accepted-engine hydration, and every refusing shape.
+
 ## Battle entry rules authoring — shipped 2026-08
 
 One schema-driven Database category for `assets/Data/battle-entry-rules.php`,

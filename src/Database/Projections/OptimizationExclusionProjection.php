@@ -77,4 +77,14 @@ final readonly class OptimizationExclusionProjection implements RecordProjection
 
         return $whole;
     }
+
+    /**
+     * @inheritDoc
+     *
+     * Rows regroup into per-kind lists; their order across kinds is not stored.
+     */
+    public function ordersRecords(): bool
+    {
+        return false;
+    }
 }

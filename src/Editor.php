@@ -5014,6 +5014,16 @@ final class Editor
         $lines[] = '';
         $lines[] = 'Database';
         $lines[] = '  Shift+A / Del      add or remove an entry';
+
+        if ($this->getSelectedRecordDatabase()?->duplicateRecordSupported() === true) {
+            $lines[] = '  Shift+D            duplicate the entry under a';
+            $lines[] = '                     fresh stable id';
+        }
+
+        if ($this->getSelectedRecordDatabase()?->supportsDurableReorder() === true) {
+            $lines[] = '  [ / ]              move the entry up or down; this';
+            $lines[] = '                     category stores its order';
+        }
         $lines[] = '  Shift+O / Shift+X  add or remove an objective, beat,';
         $lines[] = '                     troop member or script command';
         $lines[] = '  Del                the same, on the settings field';
@@ -8490,6 +8500,14 @@ final class Editor
 
         if (! $database->isEditable()) {
             $this->setStatus($this->describeRecordReadOnly($database), StatusLevel::WARN);
+            $this->renderDatabaseArea();
+            return;
+        }
+
+        if (! $database->supportsDurableReorder()) {
+            // Refusing beats a reorder the file cannot keep: nothing moves,
+            // nothing dirties, and the author learns why.
+            $this->setStatus((string) $database->reorderRefusalReason(), StatusLevel::WARN);
             $this->renderDatabaseArea();
             return;
         }
@@ -14876,7 +14894,6 @@ final class Editor
             help: $supportsEntries
                 ? $this->fitHelp(
                     $layout['listWidth'],
-                    'Shift+A:New  Shift+D:Copy  [/]:Move  /:Filter  Del:Delete',
                     'Shift+A:New  /:Filter  Del:Delete',
                     'Shift+A:New  /:Filter  Del',
                     'Shift+A:New  /:Filter',

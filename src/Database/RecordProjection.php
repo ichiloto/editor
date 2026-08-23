@@ -38,4 +38,17 @@ interface RecordProjection
      * @return array<string, mixed> The payload to write.
      */
     public function write(array $whole, array $rows): array;
+
+    /**
+     * Returns whether `write()` stores the records' own order, so that a
+     * reordered list survives saving and reopening.
+     *
+     * A projection that emits the rows as a list in the order it was given
+     * answers true. One that regroups them into keyed or bucketed shapes
+     * answers false, and the editor then refuses to reorder its records
+     * rather than pretend an order the file cannot keep.
+     *
+     * @return bool True when record order is durably authorable.
+     */
+    public function ordersRecords(): bool;
 }

@@ -797,11 +797,62 @@ final class ProjectRecordDatabase
     }
 
     /**
+     * Returns whether this category's record order survives saving and
+     * reopening, so a reorder is a real edit rather than a display trick.
+     *
+     * Only a projection that stores its rows in order gives that guarantee:
+     * its save folds the records back in record order. A plain or
+     * constructor-authored list file is written surgically, addressed by
+     * durable identity — a pure move changes no field, so the source plan
+     * emits nothing and the file keeps its authored order. A directory
+     * category has no order document at all, and config subtrees, file
+     * listings and map-owned records never persist a list order of their
+     * own. Pretending otherwise let a save report clean while the reopened
+     * project reverted, which is the lie this answer exists to prevent.
+     *
+     * @return bool True when reordering is durably authorable.
+     */
+    public function supportsDurableReorder(): bool
+    {
+        return $this->isEditable()
+            && $this->schema->storage === RecordStorage::LIST_FILE
+            && $this->schema->projection?->ordersRecords() === true;
+    }
+
+    /**
+     * Returns why a reorder is refused here, for the status line.
+     *
+     * @return string|null The reason, or null when reordering is supported.
+     */
+    public function reorderRefusalReason(): ?string
+    {
+        if ($this->supportsDurableReorder()) {
+            return null;
+        }
+
+        if (! $this->isEditable()) {
+            return $this->readOnlyReason;
+        }
+
+        return match ($this->schema->storage) {
+            RecordStorage::DIRECTORY => sprintf(
+                'Each %s is its own file; the list shows them in file order, which a move cannot change.',
+                $this->schema->entryNoun,
+            ),
+            RecordStorage::LIST_FILE => $this->schema->projection !== null
+                ? sprintf('%s entries are stored by key, not by order; a move would not survive reopening.', ucfirst($this->schema->entryNoun))
+                : 'This file keeps its authored entry order; the editor writes entries in place and a move would not survive reopening.',
+            default => sprintf('%s entries do not store a list order of their own.', ucfirst($this->schema->entryNoun)),
+        };
+    }
+
+    /**
      * Moves a record to another position in its list.
      *
      * Declaration order is part of some categories' meaning — battle-entry
      * rules break priority ties by it — so reordering is a real edit, not a
-     * view preference.
+     * view preference, and it is only permitted where the save path stores
+     * record order (see supportsDurableReorder()).
      *
      * @param int $from The record's current index.
      * @param int $to The index to occupy.
@@ -809,9 +860,7 @@ final class ProjectRecordDatabase
      */
     public function moveRecord(int $from, int $to): bool
     {
-        if (! $this->isEditable()
-            || $this->schema->storage === RecordStorage::CONFIG_SUBTREE
-            || $this->schema->storage === RecordStorage::FILE_LISTING) {
+        if (! $this->supportsDurableReorder()) {
             return false;
         }
 
@@ -827,6 +876,21 @@ final class ProjectRecordDatabase
         $this->touchState();
 
         return true;
+    }
+
+    /**
+     * Returns whether this category can duplicate a record at all, for the
+     * help overlay. Only editable list files of array records can: a
+     * per-file or object-backed record's copy would need its own source
+     * decisions, which nothing requires yet.
+     *
+     * @return bool True when Shift+D can do something here.
+     */
+    public function duplicateRecordSupported(): bool
+    {
+        return $this->isEditable()
+            && $this->schema->storage === RecordStorage::LIST_FILE
+            && ! $this->isConstructorAuthored();
     }
 
     /**

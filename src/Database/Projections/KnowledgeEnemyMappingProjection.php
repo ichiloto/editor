@@ -68,4 +68,14 @@ final readonly class KnowledgeEnemyMappingProjection implements RecordProjection
 
         return $whole;
     }
+
+    /**
+     * @inheritDoc
+     *
+     * The mapping is written in row order, which the map keeps.
+     */
+    public function ordersRecords(): bool
+    {
+        return true;
+    }
 }

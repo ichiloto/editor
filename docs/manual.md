@@ -650,6 +650,14 @@ it under a fresh id, and both are undoable like any other edit. The
 Execution Order pane beside the settings shows the exact order the runtime
 will use, with the selected rule marked.
 
+Reordering with `[` and `]` is offered only where a category's file
+actually stores its list order — here, and in the knowledge categories,
+whose saves write the list back in record order. A plain or
+constructor-authored data file keeps its authored entry order (the editor
+writes those entries in place), and a per-file category has no list order
+to store, so the move is refused with the reason in the status line rather
+than pretending an order the next reload would lose.
+
 Validation checks the whole file with the engine's own diagnostic wording —
 file, rule id, field, offending value — including duplicate ids, empty
 required lists, unknown or contested actor identities (a reference two

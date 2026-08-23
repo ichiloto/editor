@@ -134,4 +134,14 @@ final readonly class OptimizationWeightProjection implements RecordProjection
     {
         return is_array($whole[$key] ?? null) ? $whole[$key] : [];
     }
+
+    /**
+     * @inheritDoc
+     *
+     * Rows regroup into base, role and slot maps; their order is not stored.
+     */
+    public function ordersRecords(): bool
+    {
+        return false;
+    }
 }

@@ -44,4 +44,14 @@ final readonly class KeyedListProjection implements RecordProjection
 
         return $whole;
     }
+
+    /**
+     * @inheritDoc
+     *
+     * The list is written exactly as given, so record order is the file's.
+     */
+    public function ordersRecords(): bool
+    {
+        return true;
+    }
 }
