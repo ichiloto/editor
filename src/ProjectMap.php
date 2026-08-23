@@ -1281,12 +1281,8 @@ final class ProjectMap
      * @param int $height The map height.
      * @return void
      */
-    public static function createBlank(string $directory, string $baseName, string $displayName, int $width = 48, int $height = 18): void
+    public static function createBlank(string $directory, string $baseName, string $displayName, int $width = 48, int $height = 18, ?FileSetOperations $files = null): void
     {
-        if (! is_dir($directory) && ! mkdir($directory, 0777, true) && ! is_dir($directory)) {
-            throw new RuntimeException("Unable to create {$directory}.");
-        }
-
         $blankTileLine = str_repeat(' ', $width);
         $blankEventLine = str_repeat(' ', $width);
         $tileText = implode(PHP_EOL, array_fill(0, $height, $blankTileLine));
@@ -1299,18 +1295,24 @@ final class ProjectMap
             'events' => [],
         ];
 
-        self::writeFileTransactionally(
+        // The triplet is born the way it lives: as one transaction. A member
+        // that cannot be installed takes the others -- and the folder this
+        // operation created -- back with it, so a refused creation leaves no
+        // partial map.
+        $transaction = new FileSetTransaction($directory, $files ?? new FilesystemFileSetOperations());
+        $transaction->write(
             $directory . DIRECTORY_SEPARATOR . $baseName . '.data.php',
             "<?php\n\nreturn " . self::exportPhpValue($data) . ";\n",
         );
-        self::writeFileTransactionally(
+        $transaction->write(
             $directory . DIRECTORY_SEPARATOR . $baseName . '.map.php',
             "<?php\n\nreturn <<<'ICHILOTO_MAP'\n{$tileText}\nICHILOTO_MAP;\n",
         );
-        self::writeFileTransactionally(
+        $transaction->write(
             $directory . DIRECTORY_SEPARATOR . $baseName . '.event.php',
             "<?php\n\nreturn <<<'ICHILOTO_EVENT_MAP'\n{$eventText}\nICHILOTO_EVENT_MAP;\n",
         );
+        $transaction->commit();
     }
 
     /**
@@ -1321,43 +1323,80 @@ final class ProjectMap
      * @param string $displayName The duplicated display name.
      * @return void
      */
-    public function duplicateTo(string $directory, string $baseName, string $displayName): void
+    public function duplicateTo(string $directory, string $baseName, string $displayName, ?FileSetOperations $files = null): void
     {
-        if (! is_dir($directory) && ! mkdir($directory, 0777, true) && ! is_dir($directory)) {
-            throw new RuntimeException("Unable to create {$directory}.");
+        // The copy keeps everything the original authored -- comments,
+        // expressions, formatting -- with only the display name rewritten.
+        // A source the editor cannot rewrite reversibly refuses the
+        // duplication outright: an author copying a map must never get a
+        // flattened one, and finding out at the copy is better than
+        // finding out in a diff.
+        if ($this->dataDocument === null) {
+            throw new MapSourceRefusal(sprintf(
+                '%s: %s cannot be duplicated: %s. Repair the file by hand, then duplicate.',
+                $this->mapId,
+                basename($this->dataPath),
+                $this->dataSourceIssue ?? 'its source cannot be preserved',
+            ));
         }
 
         $duplicatedData = $this->editableData;
         $duplicatedData['name'] = $displayName;
 
-        // The copy keeps everything the original authored -- comments,
-        // expressions, formatting -- with only the display name rewritten;
-        // a data source the editor cannot rewrite falls back to canonical
-        // export, since a duplicate must at least be a valid map.
         try {
-            $dataSource = $this->dataDocument !== null
-                ? ArraySourceWriter::rewrite($this->dataDocument, $this->loadedData, $duplicatedData)->source
-                : "<?php\n\nreturn " . self::exportPhpValue($duplicatedData) . ";\n";
-        } catch (SourcePreservationRefusal) {
-            $dataSource = "<?php\n\nreturn " . self::exportPhpValue($duplicatedData) . ";\n";
+            $dataSource = ArraySourceWriter::rewrite($this->dataDocument, $this->loadedData, $duplicatedData)->source;
+        } catch (SourcePreservationRefusal $refusal) {
+            throw new MapSourceRefusal(sprintf(
+                '%s: %s — %s Nothing was duplicated.',
+                $this->mapId,
+                basename($this->dataPath),
+                rtrim($refusal->getMessage(), '.') . '.',
+            ), previous: $refusal);
         }
 
-        self::writeFileTransactionally(
-            $directory . DIRECTORY_SEPARATOR . $baseName . '.data.php',
-            $dataSource,
-        );
-        self::writeFileTransactionally(
+        $transaction = new FileSetTransaction($directory, $files ?? new FilesystemFileSetOperations());
+        $duplicatedDataPath = $directory . DIRECTORY_SEPARATOR . $baseName . '.data.php';
+        $transaction->write($duplicatedDataPath, $dataSource);
+        $transaction->write(
             $directory . DIRECTORY_SEPARATOR . $baseName . '.map.php',
             $this->buildMapPayload() === $this->baselineMapPayload && is_file($this->mapPath)
                 ? (string) file_get_contents($this->mapPath)
                 : $this->buildMapPayload(),
         );
-        self::writeFileTransactionally(
+        $transaction->write(
             $directory . DIRECTORY_SEPARATOR . $baseName . '.event.php',
             $this->buildEventPayload() === $this->baselineEventPayload && is_file($this->eventPath)
                 ? (string) file_get_contents($this->eventPath)
                 : $this->buildEventPayload(),
         );
+
+        // The staged copy must evaluate to exactly the duplicate's content
+        // where it will live, before anything is installed.
+        $staged = $transaction->stage();
+
+        try {
+            $evaluated = $this->evaluateFile($staged[$duplicatedDataPath] ?? $duplicatedDataPath);
+        } catch (\Throwable $evaluationFailure) {
+            $transaction->rollBack();
+
+            throw new RuntimeException(sprintf(
+                '%s could not be evaluated at %s (%s); nothing was duplicated.',
+                $baseName . '.data.php',
+                basename($directory),
+                $evaluationFailure->getMessage(),
+            ), previous: $evaluationFailure);
+        }
+
+        if (! is_array($evaluated) || $evaluated !== $duplicatedData) {
+            $transaction->rollBack();
+
+            throw new RuntimeException(sprintf(
+                '%s would not read back as the duplicated map; nothing was duplicated.',
+                $baseName . '.data.php',
+            ));
+        }
+
+        $transaction->commit();
     }
 
     /**
@@ -1529,33 +1568,6 @@ final class ProjectMap
     private function buildPlainLine(array $cells): string
     {
         return implode('', $cells);
-    }
-
-    /**
-     * Writes a file using a temp-file swap.
-     *
-     * @param string $path The destination file path.
-     * @param string $contents The file contents.
-     * @return void
-     */
-    private static function writeFileTransactionally(string $path, string $contents): void
-    {
-        if (is_file($path) && (string) file_get_contents($path) === $contents) {
-            // Saving an unchanged asset rewrites nothing: no churn for git,
-            // no mtime bump for build tools, no backup for the writer.
-            return;
-        }
-
-        $temporaryPath = $path . '.tmp';
-
-        if (file_put_contents($temporaryPath, $contents) === false) {
-            throw new RuntimeException("Unable to write temporary file for {$path}.");
-        }
-
-        if (! rename($temporaryPath, $path)) {
-            @unlink($temporaryPath);
-            throw new RuntimeException("Unable to replace {$path}.");
-        }
     }
 
     /**
