@@ -1317,6 +1317,17 @@ same guarantee, plus one more: the authored bytes must still evaluate at the
 destination, so a `require` written against the old folder depth refuses the
 move whole rather than installing a map the game cannot load.
 
+Creating, duplicating and deleting a map are the same kind of transaction.
+A new map's triplet installs complete or not at all — a failure leaves no
+file and no folder. A duplicate carries the original's authored bytes with
+only its display name rewritten, is proven to evaluate before anything is
+installed, and is **refused** — before any file or folder exists — when the
+source cannot be rewritten reversibly; duplicating never flattens a file the
+editor promised to preserve. Deleting a map removes only its own three
+files: anything else you keep in that folder (notes, sketches, references)
+survives, the folder itself goes only once it is empty, and a failed
+deletion puts every removed member back at its exact bytes and time.
+
 ### Stable map identities
 
 A map's project-relative path is its stable identity — doors transfer to it,

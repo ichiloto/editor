@@ -345,3 +345,78 @@ it('writes one file of the pair without touching the other, or its modification 
         ->and(file_get_contents($scriptPath))->toContain("'type' => 'wait'")
         ->and(glob($folder . '/*.tmp-*'))->toBe([]);
 });
+
+it('reports a rollback as failed when a restored file\'s modification time cannot be put back', function () {
+    [$folder, $dataPath, $partnerPath] = transactionFolder();
+    // The partner cannot be replaced, forcing a rollback of the data file --
+    // whose bytes go back, but whose original modification time cannot.
+    $files = new FailingFileSetOperations(failures: ['move' => [$partnerPath], 'setModifiedAt' => [$dataPath]]);
+    $transaction = new FileSetTransaction($folder, $files);
+    $transaction->write($dataPath, "<?php\n\nreturn ['id' => 'asset', 'name' => 'Edited'];\n");
+    $transaction->write($partnerPath, "<?php\n\nreturn [];\n");
+    $transaction->stage();
+
+    $failure = null;
+
+    try {
+        $transaction->commit();
+    } catch (FileSetTransactionFailure $thrown) {
+        $failure = $thrown;
+    }
+
+    expect($failure)->not->toBeNull()
+        ->and($failure->wasRolledBack)->toBeFalse('a file at the wrong time is not the file that was there')
+        ->and($failure->unrestoredPaths)->toBe([$dataPath])
+        ->and($failure->getMessage())->toContain('asset.data.php')
+        ->and($failure->getMessage())->not->toContain('nothing was changed');
+});
+
+it('leaves destinations untouched and takes back all staging when a backup callback throws', function () {
+    [$folder, $dataPath, $partnerPath] = transactionFolder();
+    $before = folderState($folder);
+    $transaction = new FileSetTransaction($folder);
+    $transaction->write($dataPath, "<?php\n\nreturn ['id' => 'asset', 'name' => 'Edited'];\n");
+    $transaction->write($partnerPath, "<?php\n\nreturn [['type' => 'wait']];\n");
+    $transaction->stage();
+
+    $failure = null;
+
+    try {
+        $transaction->commit(static function (string ...$paths): void {
+            throw new RuntimeException('the backup disk is full');
+        });
+    } catch (FileSetTransactionFailure $thrown) {
+        $failure = $thrown;
+    }
+
+    expect($failure)->not->toBeNull()
+        ->and($failure->wasRolledBack)->toBeTrue('nothing was installed, so nothing needed restoring')
+        ->and($failure->getMessage())->toContain('backup step failed')
+        ->and($failure->getMessage())->toContain('the backup disk is full')
+        ->and(folderState($folder))->toBe($before, 'both destinations are exactly what they were')
+        ->and(count(array_diff(scandir($folder) ?: [], ['.', '..'])))->toBe(2, 'no staged temporary survives');
+});
+
+it('takes back a folder it created when the backup callback throws on a moving set', function () {
+    [$folder, $dataPath, $partnerPath] = transactionFolder();
+    $destination = dirname($folder) . '/moved-asset';
+    $transaction = new FileSetTransaction($destination);
+    $transaction->write($destination . '/moved-asset.data.php', "<?php\n\nreturn ['id' => 'moved'];\n");
+    $transaction->remove($dataPath);
+    $transaction->remove($partnerPath);
+    $transaction->stage();
+
+    expect(is_dir($destination))->toBeTrue('staging created the destination folder');
+
+    try {
+        $transaction->commit(static function (): void {
+            throw new RuntimeException('no backups today');
+        });
+    } catch (FileSetTransactionFailure) {
+        // Expected.
+    }
+
+    expect(is_dir($destination))->toBeFalse('the folder this transaction created is gone')
+        ->and(is_file($dataPath))->toBeTrue()
+        ->and(is_file($partnerPath))->toBeTrue();
+});

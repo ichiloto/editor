@@ -364,3 +364,5 @@ require_once __DIR__ . '/Support/CutsceneFixtures.php';
 require_once __DIR__ . '/Support/ValidationFixtures.php';
 
 require_once __DIR__ . '/Support/FileSetFixtures.php';
+
+require_once __DIR__ . '/Support/MapFixtures.php';
