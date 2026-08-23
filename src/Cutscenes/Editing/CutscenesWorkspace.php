@@ -6,6 +6,7 @@ namespace Ichiloto\Editor\Cutscenes\Editing;
 
 use Atatusoft\Termutil\IO\Console\Console;
 use Atatusoft\Termutil\IO\Enumerations\Color;
+use Ichiloto\Editor\ListNavigation;
 use Ichiloto\Editor\Cutscenes\CutsceneAsset;
 use Ichiloto\Editor\Cutscenes\CutsceneLibrary;
 use Ichiloto\Editor\Cutscenes\CutsceneType;
@@ -634,7 +635,7 @@ trait CutscenesWorkspace
                     $index = array_search($this->cutsceneType, $types, true);
                     $index = is_int($index) ? $index : 0;
                     $step = $deltaY !== 0 ? $deltaY : $deltaX;
-                    $this->switchCutsceneType($types[max(0, min(count($types) - 1, $index + ($step > 0 ? 1 : -1)))]);
+                    $this->switchCutsceneType($types[ListNavigation::step($index, $step > 0 ? 1 : -1, count($types))]);
                 }
 
                 return;
@@ -674,7 +675,7 @@ trait CutscenesWorkspace
 
         $position = array_search($this->getSelectedRecordIndex(), $visible, true);
         $position = is_int($position) ? $position : 0;
-        $next = max(0, min(count($visible) - 1, $position + $step));
+        $next = ListNavigation::step($position, $step, count($visible));
 
         if ($visible[$next] === $this->getSelectedRecordIndex()) {
             return;

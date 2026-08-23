@@ -3216,7 +3216,7 @@ final class Editor
     private function moveDatabaseCategorySelection(int $step): void
     {
         $categories = DatabaseCatalog::all();
-        $nextIndex = max(0, min(count($categories) - 1, $this->databaseCategoryIndex + $step));
+        $nextIndex = ListNavigation::step($this->databaseCategoryIndex, $step, count($categories));
 
         if ($nextIndex === $this->databaseCategoryIndex) {
             return;
@@ -3415,7 +3415,7 @@ final class Editor
             return;
         }
 
-        $nextIndex = max(0, min(count($fields) - 1, $this->databaseSelectedSettingIndex + $step));
+        $nextIndex = ListNavigation::step($this->databaseSelectedSettingIndex, $step, count($fields));
 
         if ($nextIndex === $this->databaseSelectedSettingIndex) {
             return;
@@ -3439,7 +3439,7 @@ final class Editor
             return;
         }
 
-        $nextIndex = max(1, min($animation->maxFrames, $this->databaseSelectedFrameIndex + $step));
+        $nextIndex = ListNavigation::step($this->databaseSelectedFrameIndex - 1, $step, $animation->maxFrames) + 1;
 
         if ($nextIndex === $this->databaseSelectedFrameIndex) {
             return;
@@ -3580,7 +3580,7 @@ final class Editor
 
         $position = array_search($this->selectedAssetIndex, $visible, true);
         $position = is_int($position) ? $position : 0;
-        $this->selectAsset($visible[max(0, min(count($visible) - 1, $position + $step))]);
+        $this->selectAsset($visible[ListNavigation::step($position, $step, count($visible))]);
     }
 
     /**
@@ -5413,7 +5413,7 @@ final class Editor
         $position = array_search($currentIndex, $visible, true);
         $position = is_int($position) ? $position : 0;
 
-        return $visible[max(0, min(count($visible) - 1, $position + $step))];
+        return $visible[ListNavigation::step($position, $step, count($visible))];
     }
 
     /**
@@ -6848,7 +6848,7 @@ final class Editor
         $position = array_search($currentIndex, $visible, true);
         $position = is_int($position) ? $position : 0;
 
-        return $visible[max(0, min(count($visible) - 1, $position + $step))];
+        return $visible[ListNavigation::step($position, $step, count($visible))];
     }
 
     /**
@@ -7674,7 +7674,7 @@ final class Editor
             return;
         }
 
-        $this->selectedInspectorFieldIndex = max(0, min(count($fields) - 1, $this->selectedInspectorFieldIndex + $step));
+        $this->selectedInspectorFieldIndex = ListNavigation::step($this->selectedInspectorFieldIndex, $step, count($fields));
         $this->renderInspectorArea();
     }
 
@@ -7853,7 +7853,7 @@ final class Editor
             }
 
             $optionIndex = is_int($optionIndex) ? $optionIndex : 0;
-            $optionIndex = max(0, min(count($options) - 1, $optionIndex + $step));
+            $optionIndex = ListNavigation::step($optionIndex, $step, count($options));
             $newValue = (string) $options[$optionIndex];
 
             if ($newValue === $currentValue) {
@@ -11928,7 +11928,7 @@ final class Editor
         $normalizedOptions = array_map(static fn(mixed $option): string => mb_strtolower((string) $option), $options);
         $optionIndex = array_search($currentValue, $normalizedOptions, true);
         $optionIndex = is_int($optionIndex) ? $optionIndex : 0;
-        $optionIndex = max(0, min(count($options) - 1, $optionIndex + $step));
+        $optionIndex = ListNavigation::step($optionIndex, $step, count($options));
         $this->applyDatabaseFieldValueRecorded($field, (string) $options[$optionIndex]);
         $this->renderDatabasePanes(['list', 'settings', 'cue', 'frames', 'preview']);
     }

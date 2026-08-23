@@ -65,7 +65,7 @@ it('excludes labels missing a query symbol', function () {
   expect(CommandPalette::filter($items, 'xyz'))->toBe([]);
 });
 
-it('resets the selection when the query changes and clamps movement', function () {
+it('resets the selection when the query changes and wraps movement at the edges', function () {
   $palette = new CommandPalette();
   $palette->open(paletteItems(['Alpha', 'Beta', 'Gamma']));
   $palette->moveSelection(1);
@@ -73,7 +73,12 @@ it('resets the selection when the query changes and clamps movement', function (
 
   expect($palette->selectedIndex)->toBe(2);
 
+  // Down on the last row selects the first; Up on the first, the last.
   $palette->moveSelection(1);
+
+  expect($palette->selectedIndex)->toBe(0);
+
+  $palette->moveSelection(-1);
 
   expect($palette->selectedIndex)->toBe(2);
 
@@ -84,7 +89,14 @@ it('resets the selection when the query changes and clamps movement', function (
   $palette->backspace();
   $palette->moveSelection(-5);
 
-  expect($palette->selectedIndex)->toBe(0);
+  expect($palette->selectedIndex)->toBe(2);
+
+  // An overshoot from the middle lands on the edge rather than leaping
+  // invisibly past it.
+  $palette->moveSelection(-1);
+  $palette->moveSelection(5);
+
+  expect($palette->selectedIndex)->toBe(2);
 });
 
 it('returns the selected filtered item', function () {

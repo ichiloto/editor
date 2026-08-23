@@ -102,6 +102,13 @@ in the project's selection color (see [Theming](#theming)).
 `Tab / Shift+Tab` and `Shift+Arrows` cycle the same ring, so use whichever you
 prefer. Arrow keys always act inside the focused panel.
 
+Every selection list wraps: `Down` on the last row selects the first, and
+`Up` on the first row selects the last. This holds for the asset list, the
+Database categories, entries, settings rows and animation frames, dialog and
+picker lists, the command palette, option-value cycling, and the Cutscenes
+lists. Map cursors, scrolling panes and text editing keep ordinary bounds —
+wrapping is for choosing from a list, not for walking a canvas.
+
 ## Global Shortcuts
 
 These work from any panel. They are control bytes on purpose: no shortcut
