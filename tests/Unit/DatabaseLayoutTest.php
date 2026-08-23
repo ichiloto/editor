@@ -7,12 +7,19 @@ declare(strict_types=1);
  *
  * @param int $columns The terminal width.
  * @param int $rows The terminal height.
+ * @param string|null $category The category key to select, or null for the default.
  * @return array<string, int> The layout.
  */
-function databaseLayoutFor(int $columns, int $rows = 39): array
+function databaseLayoutFor(int $columns, int $rows = 39, ?string $category = null): array
 {
+    $editor = createEditorForTesting(makeTemporaryProject());
+
+    if ($category !== null) {
+        setEditorProperty($editor, 'databaseCategoryIndex', Ichiloto\Editor\Database\DatabaseCatalog::indexOf($category));
+    }
+
     return callEditorMethod(
-        createEditorForTesting(makeTemporaryProject()),
+        $editor,
         'resolveDatabaseLayout',
         ['width' => $columns, 'height' => $rows],
     );
@@ -60,4 +67,31 @@ it('stops widening the settings pane once it is wide enough', function () {
     // A 400-column terminal should not put 350 of them into one column of
     // label-and-value lines.
     expect(databaseLayoutFor(400)['settingsWidth'])->toBeLessThanOrEqual(96);
+});
+
+it('gives the System Notes pane room for its sentences on a wide terminal', function () {
+    // The Notes pane holds prose up to 40 columns wide. At 230 columns it
+    // used to inherit the 10-column width meant for animation frame numbers,
+    // clipping every sentence to six characters beside a mostly empty
+    // preview.
+    $layout = databaseLayoutFor(230, category: 'system');
+
+    expect($layout['framesWidth'])->toBeGreaterThanOrEqual(44)
+        ->and($layout['previewWidth'])->toBeGreaterThanOrEqual(24);
+});
+
+it('fills the bottom row exactly, for any category at any width', function () {
+    foreach ([null, 'system', 'skills', 'quests', 'classes', 'actors'] as $category) {
+        foreach ([230, 180, 140, 120, 100, 90, 80, 70] as $columns) {
+            $layout = databaseLayoutFor($columns, category: $category);
+            $used = $layout['framesWidth'] + $layout['previewWidth'] + $layout['gutter'];
+            $label = ($category ?? 'default') . " at {$columns} columns";
+
+            // The Skills row used to claim 55 of a 46-column right side,
+            // drawing its preview through the Database frame.
+            expect($used)->toBeLessThanOrEqual($layout['rightWidth'], "{$label} overflows")
+                ->and($layout['framesWidth'])->toBeGreaterThan(0)
+                ->and($layout['previewWidth'])->toBeGreaterThan(0);
+        }
+    }
 });

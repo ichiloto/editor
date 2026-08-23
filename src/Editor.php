@@ -14159,11 +14159,22 @@ final class Editor
         if ($this->isSkillsDatabaseSelected() || $this->isQuestsDatabaseSelected()) {
             $framesWidth = max(30, min($rightWidth - 24 - $gutter, 34));
             $previewWidth = max(24, $rightWidth - $framesWidth - $gutter);
+        }
 
-            if ($previewWidth < 24) {
-                $previewWidth = 24;
-                $framesWidth = max(24, $rightWidth - $previewWidth - $gutter);
-            }
+        // The System category retitles the frame list "Notes" and fills it
+        // with full sentences up to 40 columns wide, not frame numbers: give
+        // it its reading width before the preview takes the rest.
+        if ($this->isSystemDatabaseSelected()) {
+            $framesWidth = max(24, min($rightWidth - 24 - $gutter, 44));
+            $previewWidth = max(24, $rightWidth - $framesWidth - $gutter);
+        }
+
+        // Narrow enough that the frame list and preview cannot both have
+        // their minimum: share out what there is rather than draw past the
+        // edge.
+        if ($framesWidth + $previewWidth + $gutter > $rightWidth) {
+            $framesWidth = max(1, intdiv($rightWidth - $gutter, 2));
+            $previewWidth = max(1, $rightWidth - $framesWidth - $gutter);
         }
 
         return [
@@ -14650,10 +14661,6 @@ final class Editor
     /**
      * Returns the list lines for the active Database category.
      *
-        if ($this->isSkillsDatabaseSelected()) {
-            return $this->getDatabaseSkillCueLines();
-        }
-
      * @return string[]
      */
     private function getDatabaseListLines(): array
