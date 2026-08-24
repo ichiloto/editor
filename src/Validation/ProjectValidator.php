@@ -3334,6 +3334,7 @@ class ProjectValidator
       $issues = [
         ...$issues,
         ...$this->checkReference(strval($map->data['bgm'] ?? ''), 'bgm', 'track', $map->mapId, $known),
+        ...$this->checkBgmVariants($map, $known),
       ];
 
       foreach ((array) ($map->data['events'] ?? []) as $marker => $definition) {
@@ -3433,6 +3434,121 @@ class ProjectValidator
    * @param array<string, string[]> $known What the project defines.
    * @return Issue[] The issues found.
    */
+  /**
+   * Checks a map's conditional music the way the engine reads it: an
+   * ordered list whose first matching variant selects the track.
+   *
+   * The engine silently skips a variant it cannot read - no track, or
+   * conditions that are not a list - so every silently-skipped shape is a
+   * finding here. An empty conditions list is an unconditional match, which
+   * is why one placed before later variants makes them unreachable.
+   *
+   * @param array<string, string[]> $known The known reference values.
+   * @return Issue[] The issues.
+   */
+  protected function checkBgmVariants(ProjectMap $map, array $known): array
+  {
+    if (! array_key_exists('bgmVariants', $map->data)) {
+      return [];
+    }
+
+    $variants = $map->data['bgmVariants'];
+    $where = $map->mapId;
+
+    if (! is_array($variants) || ! array_is_list($variants)) {
+      return [Issue::error(
+        $where,
+        sprintf(
+          'Its bgmVariants block is %s, not an ordered list.',
+          is_array($variants) ? 'a keyed array' : get_debug_type($variants)
+        ),
+        'The engine reads an ordered list of variants; the first whose conditions hold selects the track.'
+      )];
+    }
+
+    $issues = [];
+    $unconditionalAt = null;
+    $shadowed = [];
+
+    foreach (array_values($variants) as $index => $variant) {
+      $label = sprintf('%s bgmVariants variant %d', $where, $index + 1);
+
+      if (! is_array($variant)) {
+        $issues[] = Issue::error(
+          $label,
+          sprintf('It is %s, not an array.', get_debug_type($variant)),
+          'The engine skips it silently; author a track and optional conditions.'
+        );
+
+        continue;
+      }
+
+      $track = $variant['track'] ?? null;
+      $playable = false;
+
+      if (! is_string($track)) {
+        $issues[] = Issue::error(
+          $label,
+          $track === null
+            ? 'It has no track.'
+            : sprintf('Its track is %s, not a track name.', get_debug_type($track)),
+          'The engine skips a variant without a track; pick one in the Inspector.'
+        );
+      } elseif (trim($track) === '') {
+        $issues[] = Issue::error(
+          $label,
+          'Its track is empty.',
+          'The engine skips a variant without a track; pick one in the Inspector.'
+        );
+      } else {
+        $playable = true;
+        $issues = [
+          ...$issues,
+          ...$this->checkReference(trim($track), 'bgm', 'track', $label, $known),
+        ];
+      }
+
+      $conditions = $variant['conditions'] ?? [];
+
+      if (! is_array($conditions)) {
+        $issues[] = Issue::error(
+          $label,
+          sprintf('Its conditions are %s, not a list.', get_debug_type($conditions)),
+          'The engine skips the variant; use a list of shared world conditions, or none for an unconditional match.'
+        );
+
+        continue;
+      }
+
+      $issues = [...$issues, ...$this->checkConditions($conditions, $label, $known)];
+
+      if ($unconditionalAt !== null) {
+        $shadowed[] = $index + 1;
+
+        continue;
+      }
+
+      if ($playable && $conditions === []) {
+        $unconditionalAt = $index + 1;
+      }
+    }
+
+    if ($unconditionalAt !== null && $shadowed !== []) {
+      $issues[] = Issue::warning(
+        $where,
+        sprintf(
+          'bgmVariants variant %d always matches, so variant%s %s can never play.',
+          $unconditionalAt,
+          count($shadowed) === 1 ? '' : 's',
+          implode(', ', $shadowed)
+        ),
+        'The first matching variant wins. Move the unconditional variant last, or give it conditions.'
+      );
+    }
+
+    return $issues;
+  }
+
   protected function checkChestLoot(array $data, string $where, array $known): array
   {
     if (! array_key_exists('lootType', $data) && ! array_key_exists('loot', $data)) {

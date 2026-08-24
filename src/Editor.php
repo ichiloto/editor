@@ -32,6 +32,7 @@ use Ichiloto\Editor\Database\QuestReferences;
 use Ichiloto\Editor\Database\AffinityEditor;
 use Ichiloto\Editor\Database\ConditionEditor;
 use Ichiloto\Editor\Field\NpcInspector;
+use Ichiloto\Editor\Field\MapBgmVariants;
 use Ichiloto\Editor\Field\MapEncounters;
 use Ichiloto\Editor\Field\NpcReferences;
 use Ichiloto\Editor\Field\ProjectNpc;
@@ -377,6 +378,14 @@ final class Editor
      * @var array<string, mixed>|null
      */
     private ?array $optionDialogField = null;
+
+    /**
+     * The map inspector field whose variant conditions the shared Condition
+     * editor is building, or null when it is not hosting one.
+     *
+     * @var array<string, mixed>|null
+     */
+    private ?array $mapConditionField = null;
     /**
      * @var string[]|null
      */
@@ -1474,6 +1483,11 @@ final class Editor
         }
 
         if ($this->editingMode === self::MODE_NPC && $this->referencePicker->isOpen()) {
+            return true;
+        }
+
+        if ($this->mapConditionField !== null
+            && ($this->conditionEditor->isOpen() || $this->referencePicker->isOpen())) {
             return true;
         }
 
@@ -2819,6 +2833,22 @@ final class Editor
             return;
         }
 
+        if ($this->mapConditionField !== null && ($this->conditionEditor->isOpen() || $this->referencePicker->isOpen())) {
+            // The Inspector hosts the shared Condition editor for a music
+            // variant, exactly as the NPC pane hosts it for visibility.
+            $this->referencePicker->isOpen()
+                ? $this->handleReferencePickerInput($input)
+                : $this->handleConditionEditorInput($input);
+
+            if (! $this->conditionEditor->isOpen() && ! $this->referencePicker->isOpen()) {
+                $this->mapConditionField = null;
+            }
+
+            $this->renderInspectorArea();
+
+            return;
+        }
+
         if ($input === "\n" || $input === "\r") {
             $this->activateInspectorField();
             return;
@@ -2853,6 +2883,13 @@ final class Editor
 
         if (str_contains($input, "\033[C")) {
             $this->adjustInspectorOptionField(1);
+            return;
+        }
+
+        if ($input === '[' || $input === ']') {
+            // Declaration order is runtime behavior for music variants, so
+            // the list reorders where its rows live.
+            $this->moveMapBgmVariant($input === '[' ? -1 : 1);
         }
     }
 
@@ -7795,6 +7832,12 @@ final class Editor
             return;
         }
 
+        if (($field['mapConditions'] ?? false) === true) {
+            $this->openMapVariantConditionEditor($field);
+
+            return;
+        }
+
         if ($this->openInspectorReferenceDialog($field)) {
             return;
         }
@@ -8159,6 +8202,12 @@ final class Editor
 
         if ($target === 'map-encounters') {
             $this->applyMapEncounterValue($selectedMap, $field, $value);
+
+            return;
+        }
+
+        if ($target === 'map-bgm-variants') {
+            $this->applyMapBgmVariantValue($selectedMap, $field, $value);
 
             return;
         }
@@ -11199,6 +11248,24 @@ final class Editor
      */
     private function commitConditions(): void
     {
+        if ($this->mapConditionField !== null) {
+            $field = $this->mapConditionField;
+            $this->mapConditionField = null;
+            $label = $this->conditionEditor->label();
+            $encoded = $this->conditionEditor->encoded();
+            $this->conditionEditor->close();
+            $selectedMap = $this->getSelectedMap();
+
+            if ($selectedMap instanceof ProjectMap) {
+                $this->applyMapBgmVariantValue($selectedMap, $field, ConditionCodec::decodeAll($encoded));
+                $this->setStatus(sprintf('%s updated.', $label), StatusLevel::SUCCESS);
+            }
+
+            $this->renderSelectionDependentArea();
+
+            return;
+        }
+
         $fieldId = $this->conditionEditor->fieldId();
         $label = $this->conditionEditor->label();
         $encoded = $this->conditionEditor->encoded();
@@ -12216,6 +12283,8 @@ final class Editor
             ],
         ];
 
+        $fields = [...$fields, ...$this->mapBgmVariantFields($map, $known)];
+
         $encounters = MapEncounters::fromMap($map);
         $fields[] = [
             'label' => 'Encounters',
@@ -12289,6 +12358,272 @@ final class Editor
         ];
 
         return $fields;
+    }
+
+    /**
+     * Builds the ordered Music Variants rows: the map's conditional music,
+     * evaluated by the engine in declaration order, first match wins.
+     *
+     * @param string[] $known The project's BGM tracks.
+     * @return array<int, array<string, mixed>>
+     */
+    private function mapBgmVariantFields(ProjectMap $map, array $known): array
+    {
+        $variants = MapBgmVariants::fromMap($map);
+        $fields = [
+            [
+                'label' => '  Music Variants',
+                'value' => $variants->summary(),
+                'editable' => false,
+                'target' => 'map-bgm-variants',
+                'bgmVariantList' => ['index' => max(0, $variants->count() - 1)],
+            ],
+        ];
+
+        if (! $variants->isSupported()) {
+            $fields[] = [
+                'label' => '  ! Read-only',
+                'value' => (string) $variants->unsupportedReason(),
+                'editable' => false,
+            ];
+
+            return $fields;
+        }
+
+        foreach ($variants->rows() as $index => $row) {
+            $track = $variants->trackAt($index);
+            $raw = $variants->rawTrackAt($index);
+            $fields[] = [
+                'label' => sprintf('    Variant %d Track', $index + 1),
+                'value' => match (true) {
+                    $track === null && $raw !== null => var_export($raw, true) . ' · not a track name',
+                    $track === null || $track === '' => '(no track yet)',
+                    ! in_array($track, $known, true) => $track . ' · not in assets/Audio/BGM',
+                    default => $track,
+                },
+                'reference' => 'bgm',
+                'target' => 'map-bgm-variants',
+                'field' => 'track',
+                'index' => $index,
+                'bgmVariantList' => ['index' => $index],
+            ];
+
+            $issue = $variants->conditionsIssueAt($index);
+            $conditions = $variants->conditionsAt($index);
+            $fields[] = [
+                'label' => sprintf('    Variant %d When', $index + 1),
+                'value' => $issue !== null
+                    ? '! ' . $issue
+                    : ($conditions === [] ? '(always · shadows later variants)' : ConditionCodec::encodeAll($conditions)),
+                'target' => 'map-bgm-variants',
+                'field' => 'conditions',
+                'index' => $index,
+                'bgmVariantList' => ['index' => $index],
+                'editable' => $issue === null,
+                'mapConditions' => $issue === null,
+            ];
+        }
+
+        return $fields;
+    }
+
+    /**
+     * Writes one variant field through the variants model, which owns the
+     * list's shape and preserves every key it does not edit.
+     *
+     * @param array<string, mixed> $field The inspector field descriptor.
+     */
+    private function applyMapBgmVariantValue(ProjectMap $map, array $field, mixed $value): void
+    {
+        $variants = MapBgmVariants::fromMap($map);
+
+        if (! $variants->isSupported()) {
+            $this->setStatus(
+                sprintf('Music variants are read-only here: %s.', $variants->unsupportedReason()),
+                StatusLevel::WARN,
+            );
+
+            return;
+        }
+
+        $index = (int) ($field['index'] ?? 0);
+        $block = match ((string) ($field['field'] ?? '')) {
+            'track' => $variants->withTrackAt($index, (string) $value),
+            'conditions' => is_array($value) ? $variants->withConditionsAt($index, $value) : null,
+            default => null,
+        };
+
+        if ($block === null) {
+            return;
+        }
+
+        $this->applyMapDataValue($map, [MapBgmVariants::KEY], $block, sprintf('Music variant %d', $index + 1));
+    }
+
+    /**
+     * Returns the variant row the inspector cursor is inside, or null.
+     *
+     * @return array{map: ProjectMap, variants: MapBgmVariants, index: int}|null
+     */
+    private function selectedMapBgmVariantRow(): ?array
+    {
+        $selectedMap = $this->getSelectedMap();
+        $fields = $this->getInspectorFields();
+        $field = $fields[$this->selectedInspectorFieldIndex] ?? null;
+
+        if (! $selectedMap instanceof ProjectMap
+            || ! is_array($field)
+            || ! is_array($field['bgmVariantList'] ?? null)) {
+            return null;
+        }
+
+        return [
+            'map' => $selectedMap,
+            'variants' => MapBgmVariants::fromMap($selectedMap),
+            'index' => (int) ($field['bgmVariantList']['index'] ?? 0),
+        ];
+    }
+
+    /**
+     * Appends a visibly incomplete music variant, when the cursor is on the
+     * variants list.
+     *
+     * @return bool True when the key meant this list.
+     */
+    private function addMapBgmVariant(): bool
+    {
+        $context = $this->selectedMapBgmVariantRow();
+
+        if ($context === null) {
+            return false;
+        }
+
+        $variants = $context['variants'];
+
+        if (! $variants->isSupported()) {
+            $this->setStatus(sprintf('Music variants are read-only here: %s.', $variants->unsupportedReason()), StatusLevel::WARN);
+            $this->renderInspectorArea();
+
+            return true;
+        }
+
+        $this->applyMapDataValue($context['map'], [MapBgmVariants::KEY], $variants->withVariantAdded(), 'Music variant add');
+        $this->setStatus(sprintf('Added variant %d. Pick its track; it stays inactive until one is chosen.', $variants->count() + 1), StatusLevel::SUCCESS);
+        $this->clampInspectorSelection();
+        $this->renderSelectionDependentArea();
+
+        return true;
+    }
+
+    /**
+     * Removes the music variant the cursor is inside; removing the last one
+     * takes the bgmVariants key with it.
+     *
+     * @return bool True when the key meant this list.
+     */
+    private function removeMapBgmVariant(): bool
+    {
+        $context = $this->selectedMapBgmVariantRow();
+
+        if ($context === null) {
+            return false;
+        }
+
+        $variants = $context['variants'];
+
+        if (! $variants->isSupported()) {
+            $this->setStatus(sprintf('Music variants are read-only here: %s.', $variants->unsupportedReason()), StatusLevel::WARN);
+            $this->renderInspectorArea();
+
+            return true;
+        }
+
+        if ($variants->count() === 0) {
+            $this->setStatus('There is no music variant here to remove.', StatusLevel::WARN);
+            $this->renderInspectorArea();
+
+            return true;
+        }
+
+        $this->applyMapDataValue($context['map'], [MapBgmVariants::KEY], $variants->withVariantRemovedAt($context['index']), 'Music variant remove');
+        $this->setStatus(sprintf('Removed variant %d.', $context['index'] + 1), StatusLevel::SUCCESS);
+        $this->clampInspectorSelection();
+        $this->renderSelectionDependentArea();
+
+        return true;
+    }
+
+    /**
+     * Moves the music variant the cursor is inside up or down, because
+     * declaration order is runtime behavior: the first match wins.
+     */
+    private function moveMapBgmVariant(int $step): void
+    {
+        $context = $this->selectedMapBgmVariantRow();
+
+        if ($context === null) {
+            return;
+        }
+
+        $variants = $context['variants'];
+
+        if (! $variants->isSupported()) {
+            $this->setStatus(sprintf('Music variants are read-only here: %s.', $variants->unsupportedReason()), StatusLevel::WARN);
+            $this->renderInspectorArea();
+
+            return;
+        }
+
+        $from = $context['index'];
+        $block = $variants->withVariantMovedTo($from, $from + $step);
+
+        if ($block === null) {
+            return;
+        }
+
+        $this->applyMapDataValue($context['map'], [MapBgmVariants::KEY], $block, 'Music variant move');
+
+        // The cursor follows the variant it was on.
+        $fields = $this->getInspectorFields();
+
+        foreach ($fields as $fieldIndex => $field) {
+            if (($field['target'] ?? null) === 'map-bgm-variants'
+                && ($field['field'] ?? null) === 'track'
+                && ($field['index'] ?? null) === $from + $step) {
+                $this->selectedInspectorFieldIndex = $fieldIndex;
+                break;
+            }
+        }
+
+        $this->setStatus(sprintf('Moved variant %s. The first matching variant wins.', $step < 0 ? 'up' : 'down'), StatusLevel::SUCCESS);
+        $this->renderSelectionDependentArea();
+    }
+
+    /**
+     * Opens the shared Condition editor on a music variant's conditions,
+     * hosted in the Inspector pane.
+     *
+     * @param array<string, mixed> $field The inspector field descriptor.
+     */
+    private function openMapVariantConditionEditor(array $field): void
+    {
+        $selectedMap = $this->getSelectedMap();
+
+        if (! $selectedMap instanceof ProjectMap) {
+            return;
+        }
+
+        $variants = MapBgmVariants::fromMap($selectedMap);
+        $index = (int) ($field['index'] ?? 0);
+
+        $this->mapConditionField = $field;
+        $this->conditionEditor->open(
+            (string) ($field['field'] ?? 'conditions'),
+            sprintf('Variant %d Conditions', $index + 1),
+            $variants->conditionsAt($index),
+        );
+        $this->statusMessage = 'Building conditions. An empty list always matches.';
+        $this->renderInspectorArea();
     }
 
     /**
@@ -14002,6 +14337,10 @@ final class Editor
             return;
         }
 
+        if ($this->addMapBgmVariant()) {
+            return;
+        }
+
         $selectedMap = $this->getSelectedMap();
         $list = $this->selectedInspectorList();
         $marker = $this->selectedEventMarkerForList();
@@ -14031,6 +14370,10 @@ final class Editor
     private function removeInspectorListItem(): void
     {
         if ($this->removeMapEncounterTroop()) {
+            return;
+        }
+
+        if ($this->removeMapBgmVariant()) {
             return;
         }
 
@@ -14228,7 +14571,7 @@ final class Editor
         $category = (string) ($field['reference'] ?? '');
         $target = (string) ($field['target'] ?? '');
 
-        if ($category === '' || ! in_array($target, ['map-data', 'map-encounters'], true)) {
+        if ($category === '' || ! in_array($target, ['map-data', 'map-encounters', 'map-bgm-variants'], true)) {
             return false;
         }
 
@@ -14248,9 +14591,11 @@ final class Editor
             $catalog->valuesFor($category),
         );
 
-        if ($category === 'bgm') {
+        if ($category === 'bgm' && $target === 'map-data') {
             // Silence is a choice a map can make, and the only way back from
-            // a track once one is set.
+            // a track once one is set. A variant is different: an empty
+            // track is a skipped variant, not silence, so the variant picker
+            // offers only real tracks and removal un-authors the variant.
             array_unshift($entries, [
                 'label' => self::MAP_BGM_NONE,
                 'value' => '',
@@ -14258,7 +14603,7 @@ final class Editor
             ]);
         }
 
-        if ($entries === [] || ($category === 'bgm' && count($entries) === 1)) {
+        if ($entries === [] || ($category === 'bgm' && count($entries) === 1 && $target === 'map-data')) {
             $this->setStatus(
                 sprintf('This project has no %s to choose from.', mb_strtolower($title)),
                 StatusLevel::WARN,
@@ -15422,7 +15767,7 @@ final class Editor
             return $this->cutsceneRecordPaneMetrics();
         }
 
-        if ($this->isNpcInspectorHosting()) {
+        if ($this->isNpcInspectorHosting() || $this->mapConditionField !== null) {
             return [
                 'width' => $this->getWindowContentWidth($layout['rightWidth']),
                 'rows' => max(1, $layout['contentHeight'] - 2),
@@ -16223,6 +16568,16 @@ final class Editor
 
         if ($fields === []) {
             return ['No selection.'];
+        }
+
+        if ($this->mapConditionField !== null) {
+            if ($this->referencePicker->isOpen()) {
+                return $this->buildReferencePickerRows();
+            }
+
+            if ($this->conditionEditor->isOpen()) {
+                return $this->buildConditionEditorRows();
+            }
         }
 
         if ($this->isNpcInspectorHosting() && $this->npcCreationInProgress !== null) {

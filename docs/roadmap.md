@@ -711,6 +711,30 @@ runtime gives `''` a meaning of its own.
 Not added, because the engine does not have them: patrol routes,
 pathfinding, followers, persisted dynamic positions, cross-map movement.
 
+## Conditional map music authoring — shipped 2026-08
+
+The Map Inspector authors the engine's ordered `bgmVariants` beside the
+static `Background Music`: story-dependent tracks selected by the first
+variant whose shared world conditions hold, falling back to the static
+track, keeping the current music when neither resolves. Variants are the
+Inspector's usual list — `Shift+O` adds a visibly incomplete variant (no
+track is ever inserted silently), the track is the existing BGM picker, the
+conditions open the shared Condition editor hosted in the Inspector pane,
+`[`/`]` reorder because declaration order is runtime behavior, and removing
+the last variant removes the key. Every edit is undoable and writes through
+the accepted map source machinery, so authored bytes, comments and unknown
+variant keys survive edits around them, and the production Last Legend maps
+already carrying variants round-trip byte-exactly.
+
+Validation reports every shape the engine silently skips — missing, empty
+or unknown tracks, malformed variants and conditions — and warns, precisely
+and deterministically, when an unconditional variant makes later variants
+unreachable. A subprocess parity suite proves the resolution semantics
+against the accepted engine head with real evaluation for every condition
+kind (a real item catalogue included), first-match ordering, shadowing,
+fallback, and the editor-authored file driving the engine in the authored
+order before and after a reorder.
+
 ## Battle entry authoring order correction — shipped 2026-08
 
 Source review caught the reorder operation promising more than the save

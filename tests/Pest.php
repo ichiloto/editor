@@ -368,3 +368,5 @@ require_once __DIR__ . '/Support/FileSetFixtures.php';
 require_once __DIR__ . '/Support/MapFixtures.php';
 
 require_once __DIR__ . '/Support/BattleEntryFixtures.php';
+
+require_once __DIR__ . '/Support/MapMetadataFixtures.php';

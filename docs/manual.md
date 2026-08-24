@@ -63,8 +63,8 @@ is what the code draws rather than a sketch of it:
  │                              │ │                            │ │   Triggers · 0                 │
  │                              │ │                            │ │   Audio                        │
  │                              │ │                            │ │     Background Music: (None)   │
+ │                              │ │                            │ │     Music Variants · None      │
  │                              │ │                            │ │   Encounters · off             │
- │                              │ │                            │ │     Troops · 0                 │
  └─/:Filter  Del:Delete─────────┘ └─%:Map  ^:Event  @:Chars────┘ └─Enter:Edit─────────────────────┘
  ┌─Status─────────────────────────────────────────────────────────────────────────────────────────┐
  │ Selected map: test-map | Focus: Assets | Mode: Map | Tool: Brush 1                             │
@@ -360,6 +360,42 @@ misleading empty one. A track the project no longer has stays visible as
 `name · not in assets/Audio/BGM` rather than silently jumping to a valid
 one, and validation names it. There is no in-editor audition in this gate;
 the playtest plays the real thing.
+
+**Music Variants.** Beneath the static track, `Music Variants` authors the
+engine's ordered `bgmVariants` list: story-dependent tracks the map plays
+instead of its default. The engine evaluates the variants in declaration
+order and **the first whose conditions all hold selects the track**; when
+none matches, the static `Background Music` plays, and when neither
+resolves to a track the current music simply continues. An empty conditions
+list is an unconditional match — that is what the engine evaluates — so an
+unconditional variant belongs last, and validation warns when one shadows
+later variants.
+
+- `Shift+O` on the heading or any variant row appends a variant, which is
+  born visibly incomplete: `(no track yet)`. The engine skips a variant
+  without a track, and validation names it, so nothing plausible is ever
+  inserted silently.
+- Each variant's `Track` is the same picker over the project's own tracks.
+  A variant offers no `(None)` row — an empty track is a skipped variant,
+  not silence — so removing the variant is how it is un-authored.
+- Each variant's `When` opens the same shared Condition editor every other
+  surface uses (`a`/`d` add and remove, `t` cycles the type, `n` names or
+  picks, `!` negates, Enter keeps, Esc leaves it alone), hosted right in
+  the Inspector pane.
+- `[` and `]` move the variant the cursor is in, because declaration order
+  is runtime behavior; `Del`/`Shift+X` removes it, and removing the last
+  variant removes the `bgmVariants` key with it. Every one of these is
+  undoable, saves with the map, and reopens in the authored order.
+
+Keys inside a variant the editor does not own ride every edit untouched. A
+list the editor cannot hold as rows — a keyed block, a variant that is not
+an array — is shown read-only with the shape named, and a variant whose
+conditions carry something the shared editor cannot (an unknown key, an
+unrecognised type) keeps an editable track while its conditions say why
+they are not. Validation reports every shape the engine would silently
+skip: a missing, empty, or unknown track, malformed conditions, and the
+unreachable-variant warning above. The editor authors and validates the
+structure; the engine alone evaluates conditions and plays anything.
 
 **Encounters.** The `Encounters` heading summarises the map's random
 encounters (`off`, or `2 troops, every ~22 steps, danger tiles`), and the
