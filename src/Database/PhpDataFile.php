@@ -72,6 +72,101 @@ final class PhpDataFile
     }
 
     /**
+     * Evaluates a file in a fresh PHP process.
+     *
+     * Validation may need to re-read a file that the current Editor process
+     * already loaded. Authored headers can declare named functions or classes,
+     * so requiring the file twice in one process can terminate PHP with a
+     * redeclaration error. The isolated process also keeps those declarations
+     * out of the long-lived Editor runtime.
+     */
+    public static function evaluateIsolated(string $path, ?string $workingDirectory = null): mixed
+    {
+        $autoload = null;
+
+        foreach (get_included_files() as $includedFile) {
+            if (basename($includedFile) === 'autoload.php' && basename(dirname($includedFile)) === 'vendor') {
+                $autoload = $includedFile;
+                break;
+            }
+        }
+
+        $localAutoload = dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . 'vendor' . DIRECTORY_SEPARATOR . 'autoload.php';
+
+        if ($autoload === null && is_file($localAutoload)) {
+            $autoload = $localAutoload;
+        }
+
+        $runner = <<<'PHP'
+        <?php
+
+        $path = $argv[1];
+        $workingDirectory = $argv[2];
+        $autoload = $argv[3];
+
+        if ($autoload !== '') {
+            require $autoload;
+        }
+
+        if ($workingDirectory !== '' && is_dir($workingDirectory)) {
+            chdir($workingDirectory);
+        }
+
+        set_error_handler(static function (int $severity, string $message, string $file, int $line): never {
+            throw new ErrorException($message, 0, $severity, $file, $line);
+        });
+        ob_start();
+
+        try {
+            $payload = require $path;
+            $encoded = base64_encode(serialize(['payload' => $payload]));
+            ob_end_clean();
+            echo $encoded;
+        } catch (Throwable $throwable) {
+            ob_end_clean();
+            fwrite(STDERR, $throwable->getMessage());
+            exit(1);
+        } finally {
+            restore_error_handler();
+        }
+        PHP;
+        $pipes = [];
+        $process = proc_open(
+            [PHP_BINARY, '-r', substr($runner, strlen("<?php\n")), $path, $workingDirectory ?? '', $autoload ?? ''],
+            [
+                0 => ['pipe', 'r'],
+                1 => ['pipe', 'w'],
+                2 => ['pipe', 'w'],
+            ],
+            $pipes,
+        );
+
+        if (! is_resource($process)) {
+            throw new RuntimeException(sprintf('Unable to evaluate %s in an isolated PHP process.', basename($path)));
+        }
+
+        fclose($pipes[0]);
+        $output = stream_get_contents($pipes[1]);
+        fclose($pipes[1]);
+        $error = stream_get_contents($pipes[2]);
+        fclose($pipes[2]);
+        $exitCode = proc_close($process);
+
+        if ($exitCode !== 0) {
+            throw new RuntimeException(trim($error) ?: sprintf('%s could not be evaluated.', basename($path)));
+        }
+
+        $serialized = base64_decode(trim($output), true);
+        $result = $serialized === false ? false : @unserialize($serialized, ['allowed_classes' => false]);
+
+        if (! is_array($result) || ! array_key_exists('payload', $result)) {
+            throw new RuntimeException(sprintf('%s returned an unreadable isolated result.', basename($path)));
+        }
+
+        return $result['payload'];
+    }
+
+    /**
      * Loads and probes a data file.
      *
      * A missing file is not an error — the database starts empty and the file

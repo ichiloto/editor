@@ -61,6 +61,39 @@ final readonly class KnowledgeRecordTypeProjection implements RecordProjection
         return $whole;
     }
 
+    /** @inheritDoc */
+    public function preservationIssue(mixed $whole): ?string
+    {
+        if (! is_array($whole)) {
+            return sprintf('returns %s, not an array', get_debug_type($whole));
+        }
+
+        if (! array_key_exists('recordTypes', $whole)) {
+            return null;
+        }
+
+        $types = $whole['recordTypes'];
+
+        if (! is_array($types) || ! array_is_list($types)) {
+            return sprintf(
+                'field "recordTypes" is %s, not an ordered list',
+                is_array($types) ? 'a keyed array' : get_debug_type($types),
+            );
+        }
+
+        foreach ($types as $index => $type) {
+            if (! is_scalar($type)) {
+                return sprintf(
+                    'field "recordTypes" entry %d is %s, which the editor cannot preserve',
+                    $index + 1,
+                    get_debug_type($type),
+                );
+            }
+        }
+
+        return null;
+    }
+
     /**
      * @inheritDoc
      *

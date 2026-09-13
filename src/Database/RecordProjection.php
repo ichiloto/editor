@@ -40,6 +40,12 @@ interface RecordProjection
     public function write(array $whole, array $rows): array;
 
     /**
+     * Explains why reading and then writing this projection would lose or
+     * reshape authored data, or null when the payload is safe to project.
+     */
+    public function preservationIssue(mixed $whole): ?string;
+
+    /**
      * Returns whether `write()` stores the records' own order, so that a
      * reordered list survives saving and reopening.
      *

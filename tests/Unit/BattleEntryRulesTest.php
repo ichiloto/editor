@@ -511,6 +511,36 @@ it('validates a malformed rule payload changed externally after the workspace lo
     }
 });
 
+it('revalidates a rule file with named declarations in an isolated process', function (): void {
+    $root = makeTemporaryProject();
+
+    try {
+        writeBattleEntryRules($root, <<<'PHP'
+        <?php
+
+        function editorBattleEntryRuleFixture(): array
+        {
+          return [
+            'id' => 'declared',
+            'actors' => [['actor' => 'Kaelion', 'presence' => 'any']],
+            'effects' => [['type' => 'stat_stage', 'actor' => 'Kaelion', 'stat' => 'speed', 'delta' => 1]],
+          ];
+        }
+
+        return ['rules' => [editorBattleEntryRuleFixture()]];
+        PHP);
+
+        $workspace = ProjectWorkspace::fromProject($root);
+
+        expect(array_values(array_filter(
+            new ProjectValidator()->validate($workspace),
+            static fn(Issue $issue): bool => $issue->where === 'assets/Data/battle-entry-rules.php',
+        )))->toBe([]);
+    } finally {
+        removeDirectoryRecursively($root);
+    }
+});
+
 it('validates a troop classification with the runtime wording', function (): void {
     $root = makeTemporaryProject();
 

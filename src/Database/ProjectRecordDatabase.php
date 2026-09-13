@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Database;
 
-use Ichiloto\Editor\Database\Projections\KeyedListProjection;
 use Ichiloto\Editor\IO\AtomicFile;
 
 use BackedEnum;
@@ -340,9 +339,11 @@ final class ProjectRecordDatabase
      */
     public function projectionPreservationIssue(mixed $payload): ?string
     {
-        return $this->schema->projection instanceof KeyedListProjection
-            ? $this->schema->projection->preservationIssue($payload)
-            : null;
+        $projection = $this->schema->projection;
+
+        return $projection === null
+            ? null
+            : self::projectionPreservationIssueFor($projection, $payload);
     }
 
     /**
@@ -1354,8 +1355,8 @@ final class ProjectRecordDatabase
             return $file->readOnlyReason;
         }
 
-        if ($schema->projection instanceof KeyedListProjection && $file->exists) {
-            $projectionIssue = $schema->projection->preservationIssue($file->payload);
+        if ($schema->projection !== null && $file->exists) {
+            $projectionIssue = self::projectionPreservationIssueFor($schema->projection, $file->payload);
 
             if ($projectionIssue !== null) {
                 return sprintf('%s %s', basename($file->path), $projectionIssue);
@@ -1368,6 +1369,31 @@ final class ProjectRecordDatabase
             if ($reason !== null) {
                 return $reason;
             }
+        }
+
+        return null;
+    }
+
+    /**
+     * Checks both projection-specific malformed shapes and the exact
+     * read/write round trip. The latter is the final guard against a new
+     * projection silently coercing or dropping an authored value that its
+     * structural checks did not anticipate.
+     */
+    private static function projectionPreservationIssueFor(RecordProjection $projection, mixed $payload): ?string
+    {
+        $issue = $projection->preservationIssue($payload);
+
+        if ($issue !== null) {
+            return $issue;
+        }
+
+        if (! is_array($payload)) {
+            return sprintf('returns %s, not an array', get_debug_type($payload));
+        }
+
+        if ($projection->write($payload, $projection->read($payload)) !== $payload) {
+            return 'contains values or structure that the editor cannot preserve exactly';
         }
 
         return null;

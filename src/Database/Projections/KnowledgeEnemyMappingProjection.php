@@ -69,6 +69,36 @@ final readonly class KnowledgeEnemyMappingProjection implements RecordProjection
         return $whole;
     }
 
+    /** @inheritDoc */
+    public function preservationIssue(mixed $whole): ?string
+    {
+        if (! is_array($whole)) {
+            return sprintf('returns %s, not an array', get_debug_type($whole));
+        }
+
+        if (! array_key_exists('enemyMappings', $whole)) {
+            return null;
+        }
+
+        $mappings = $whole['enemyMappings'];
+
+        if (! is_array($mappings)) {
+            return sprintf('field "enemyMappings" is %s, not a map', get_debug_type($mappings));
+        }
+
+        foreach ($mappings as $enemy => $subject) {
+            if (! is_scalar($subject)) {
+                return sprintf(
+                    'field "enemyMappings" entry "%s" is %s, which the editor cannot preserve',
+                    strval($enemy),
+                    get_debug_type($subject),
+                );
+            }
+        }
+
+        return null;
+    }
+
     /**
      * @inheritDoc
      *

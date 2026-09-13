@@ -1223,19 +1223,25 @@ class ProjectValidator
     }
 
     $where = 'assets/Data/battle-entry-rules.php';
-    $file = PhpDataFile::load($database->backingFilePath(), $workspace->projectRoot);
+    $path = $database->backingFilePath();
+    $fileExists = is_file($path);
+    $freshPayload = null;
 
-    if ($file->payload === null && $file->readOnlyReason !== null) {
-      return [Issue::error(
-        $where,
-        sprintf('The file could not be evaluated: %s.', $file->readOnlyReason),
-        'Battle startup fails closed until the file loads.',
-      )];
+    if ($fileExists) {
+      try {
+        $freshPayload = PhpDataFile::evaluateIsolated($path, $workspace->projectRoot);
+      } catch (Throwable $throwable) {
+        return [Issue::error(
+          $where,
+          sprintf('The file could not be evaluated: %s.', $throwable->getMessage()),
+          'Battle startup fails closed until the file loads.',
+        )];
+      }
     }
 
     $records = $database->getRecords();
 
-    if (! $file->exists && $records === []) {
+    if (! $fileExists && $records === []) {
       return [];
     }
 
@@ -1255,13 +1261,13 @@ class ProjectValidator
     // an external edit made the current file lossy, validate that raw payload
     // instead of trusting stale records loaded before the edit.
     $validateCurrentRecords = $database->isDirty()
-      && (! $file->exists || $database->projectionPreservationIssue($file->payload) === null);
+      && (! $fileExists || $database->projectionPreservationIssue($freshPayload) === null);
     $data = $validateCurrentRecords
       ? ['rules' => array_map(
         static fn(ProjectRecord $record): array => $record->toArray(),
         $records,
       )]
-      : $file->payload;
+      : $freshPayload;
 
     foreach (BattleEntryRuleContract::problems($data, $where, $resolver->problems() === [] ? $resolver : null) as $problem) {
       $issues[] = Issue::error(
