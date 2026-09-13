@@ -1222,38 +1222,21 @@ class ProjectValidator
       return [];
     }
 
-    $records = $database->getRecords();
     $where = 'assets/Data/battle-entry-rules.php';
+    $file = PhpDataFile::load($database->backingFilePath(), $workspace->projectRoot);
 
-    if ($records === []) {
-      // No authored rules. A missing file means silence, exactly as the
-      // runtime treats it — but a present file whose shape hid every rule
-      // from the projection still fails the engine's own shape check.
-      $path = $workspace->projectRoot . DIRECTORY_SEPARATOR
-        . str_replace('/', DIRECTORY_SEPARATOR, $where);
+    if ($file->payload === null && $file->readOnlyReason !== null) {
+      return [Issue::error(
+        $where,
+        sprintf('The file could not be evaluated: %s.', $file->readOnlyReason),
+        'Battle startup fails closed until the file loads.',
+      )];
+    }
 
-      if (! is_file($path)) {
-        return [];
-      }
+    $records = $database->getRecords();
 
-      $file = PhpDataFile::load($path, $workspace->projectRoot);
-
-      if ($file->payload === null && $file->readOnlyReason !== null) {
-        return [Issue::error(
-          $where,
-          sprintf('The file could not be evaluated: %s.', $file->readOnlyReason),
-          'Battle startup fails closed until the file loads.',
-        )];
-      }
-
-      return array_map(
-        static fn(string $problem): Issue => Issue::error(
-          $where,
-          $problem,
-          'Battle startup fails closed until this rule is corrected.',
-        ),
-        BattleEntryRuleContract::problems($file->payload, $where),
-      );
+    if (! $file->exists && $records === []) {
+      return [];
     }
 
     $issues = [];
@@ -1267,10 +1250,16 @@ class ProjectValidator
       );
     }
 
-    $data = ['rules' => array_map(
-      static fn(ProjectRecord $record): array => $record->toArray(),
-      $records,
-    )];
+    // An editable projection represents the current in-memory rules, including
+    // unsaved work. A read-only projection is necessarily lossy (for example,
+    // a scalar mixed into the rules list), so validate the raw payload instead
+    // of silently dropping the entry the editor cannot represent.
+    $data = $database->isEditable()
+      ? ['rules' => array_map(
+        static fn(ProjectRecord $record): array => $record->toArray(),
+        $records,
+      )]
+      : $file->payload;
 
     foreach (BattleEntryRuleContract::problems($data, $where, $resolver->problems() === [] ? $resolver : null) as $problem) {
       $issues[] = Issue::error(
@@ -3510,10 +3499,13 @@ class ProjectValidator
 
       $conditions = $variant['conditions'] ?? [];
 
-      if (! is_array($conditions)) {
+      if (! is_array($conditions) || ! array_is_list($conditions)) {
         $issues[] = Issue::error(
           $label,
-          sprintf('Its conditions are %s, not a list.', get_debug_type($conditions)),
+          sprintf(
+            'Its conditions are %s, not a list.',
+            is_array($conditions) ? 'a keyed array' : get_debug_type($conditions)
+          ),
           'The engine skips the variant; use a list of shared world conditions, or none for an unconditional match.'
         );
 

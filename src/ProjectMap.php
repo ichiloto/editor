@@ -1117,7 +1117,11 @@ final class ProjectMap
         $target = $this->resolveSaveTarget();
         $moving = $target['directory'] !== $this->directory;
 
-        if (! $this->isDirty() && ! $moving && is_dir($this->directory)) {
+        $tripletExists = is_file($this->dataPath)
+            && is_file($this->mapPath)
+            && is_file($this->eventPath);
+
+        if (! $this->isDirty() && ! $moving && is_dir($this->directory) && $tripletExists) {
             // Nothing diverges from the last save: writing would only
             // canonicalize hand-authored formatting and churn mtimes.
             return $target['mapId'];
@@ -1129,10 +1133,12 @@ final class ProjectMap
         // against the grids as of the last save, never against the bytes on
         // disk, so a file an author keeps in another form -- a tile map
         // built by a helper class -- is rewritten only when its grid is.
-        // A data file the parser cannot hold never reaches the writer: its
-        // edits were refused, so its bytes are its own and stay put.
+        // A data file the parser cannot hold never reaches the writer unless
+        // the on-disk member disappeared: its edits were refused, so its
+        // cached source bytes are its own and are restored unchanged.
         $dataSource = $this->dataDocument === null ? (string) $this->unparsedDataSource : $this->proposedDataSource();
-        $writeData = $this->dataDocument !== null && $dataSource !== $this->dataDocument->source;
+        $writeData = ! is_file($this->dataPath)
+            || ($this->dataDocument !== null && $dataSource !== $this->dataDocument->source);
         $mapPayload = $this->buildMapPayload();
         $writeMap = $mapPayload !== $this->baselineMapPayload || ! is_file($this->mapPath);
         $eventPayload = $this->buildEventPayload();
@@ -1659,18 +1665,20 @@ final class ProjectMap
             // a regeneration of the whole array), and untouched grids keep
             // their bytes exactly.
             $movedDataPath = $directory . DIRECTORY_SEPARATOR . $baseName . '.data.php';
+            $movedMapPath = $directory . DIRECTORY_SEPARATOR . $baseName . '.map.php';
+            $movedEventPath = $directory . DIRECTORY_SEPARATOR . $baseName . '.event.php';
             $transaction->write(
                 $movedDataPath,
                 $this->dataDocument === null ? (string) $this->unparsedDataSource : $this->proposedDataSource(),
             );
             $transaction->write(
-                $directory . DIRECTORY_SEPARATOR . $baseName . '.map.php',
+                $movedMapPath,
                 $this->buildMapPayload() === $this->baselineMapPayload && is_file($this->mapPath)
                     ? (string) file_get_contents($this->mapPath)
                     : $this->buildMapPayload(),
             );
             $transaction->write(
-                $directory . DIRECTORY_SEPARATOR . $baseName . '.event.php',
+                $movedEventPath,
                 $this->buildEventPayload() === $this->baselineEventPayload && is_file($this->eventPath)
                     ? (string) file_get_contents($this->eventPath)
                     : $this->buildEventPayload(),
@@ -1706,6 +1714,36 @@ final class ProjectMap
                     basename($movedDataPath),
                     $newRelativeId,
                 ));
+            }
+
+            $expectedGrids = [
+                $movedMapPath => array_map($this->buildStyledLine(...), $this->tileCells),
+                $movedEventPath => array_map($this->buildPlainLine(...), $this->eventCells),
+            ];
+
+            foreach ($expectedGrids as $path => $expectedLines) {
+                try {
+                    $evaluatedGrid = $this->evaluateFile($staged[$path] ?? $path);
+                } catch (\Throwable $evaluationFailure) {
+                    $transaction->rollBack();
+
+                    throw new RuntimeException(sprintf(
+                        '%s does not evaluate at %s (%s) — an expression written against the old folder depth, such as a relative require, must be adjusted in the file first.',
+                        basename($path),
+                        $newRelativeId,
+                        $evaluationFailure->getMessage(),
+                    ), previous: $evaluationFailure);
+                }
+
+                if (! is_string($evaluatedGrid) || self::splitMapText($evaluatedGrid) !== $expectedLines) {
+                    $transaction->rollBack();
+
+                    throw new RuntimeException(sprintf(
+                        '%s would not read back as this map at %s.',
+                        basename($path),
+                        $newRelativeId,
+                    ));
+                }
             }
 
             $transaction->commit();

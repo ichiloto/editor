@@ -429,6 +429,40 @@ it('fails empty required predicate and effect lists', function (): void {
     }
 });
 
+it('validates and preserves malformed entries that the record projection cannot represent', function (): void {
+    $root = makeTemporaryProject();
+
+    try {
+        writeBattleEntryRules($root, <<<'PHP'
+        <?php
+
+        return [
+          'rules' => [
+            [
+              'id' => 'valid',
+              'actors' => [['actor' => 'Kaelion', 'presence' => 'any']],
+              'effects' => [['type' => 'stat_stage', 'actor' => 'Kaelion', 'stat' => 'speed', 'delta' => 1]],
+            ],
+            'not-a-rule',
+          ],
+        ];
+        PHP);
+
+        $source = (string) file_get_contents(battleEntryRulesPath($root));
+        $database = loadRecordDatabase($root, 'battle_entry_rules');
+
+        expect($database->isEditable())->toBeFalse()
+            ->and($database->getReadOnlyReason())->toContain('field "rules" entry 2 is string')
+            ->and(battleEntryProblemMessages($root))->toBe([
+                'assets/Data/battle-entry-rules.php rule at position 1 must be an array.',
+            ])
+            ->and(fn() => $database->save())->toThrow(RuntimeException::class, 'read-only')
+            ->and((string) file_get_contents(battleEntryRulesPath($root)))->toBe($source);
+    } finally {
+        removeDirectoryRecursively($root);
+    }
+});
+
 it('validates a troop classification with the runtime wording', function (): void {
     $root = makeTemporaryProject();
 

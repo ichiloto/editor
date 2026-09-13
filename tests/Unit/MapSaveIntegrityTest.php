@@ -116,6 +116,24 @@ it('restores earlier members when the middle or first member fails too', functio
         ->and($map->isDirty())->toBeTrue();
 })->with(['data', 'map', 'event']);
 
+it('restores a missing opaque data member while saving another member', function () {
+    $root = authoredMapProject();
+    $dataPath = $root . '/assets/Maps/test-map/test-map.data.php';
+    $source = "<?php\n\nreturn array_merge(['name' => 'Test Map'], ['region' => '', 'description' => '', 'triggers' => [], 'events' => []]);\n";
+    file_put_contents($dataPath, $source);
+    $map = authoredMap($root);
+
+    expect($map->dataSourceIssue())->not->toBeNull();
+
+    unlink($dataPath);
+    $map->setTileSymbol(1, 1, '~');
+    $map->save();
+
+    expect((string) file_get_contents($dataPath))->toBe($source)
+        ->and(ProjectMap::fromDirectory($root . '/assets/Maps', $map->directory)->getEditableData())
+        ->toBe($map->getEditableData());
+});
+
 // -- No-op and isolation ------------------------------------------------------
 
 it('writes nothing, backs up nothing and stages nothing for a clean map, or one undone back to its checkpoint', function () {
@@ -514,6 +532,35 @@ it('moves a map only through the explicit move, carrying its authored source byt
         ->and($movedData)->toContain('[MovementHeading::NORTH->value]')
         ->and($movedData)->toContain("'station'     => ['x' => 3, 'y' => 1],");
 });
+
+it('refuses a move when a staged grid member no longer evaluates at its destination', function (string $member) {
+    $root = authoredMapProject();
+    $map = authoredMap($root);
+    $portableData = str_replace(
+        "\$watchScript = require dirname(__DIR__, 2) . '/Events/harbour-watch.php';\n\n",
+        '',
+        (string) file_get_contents($map->dataPath),
+    );
+    $portableData = str_replace("'script' => \$watchScript,", "'script' => [],", $portableData);
+    $portableData = str_replace("'script' => require dirname(__DIR__, 2) . '/Events/harbour-watch.php',", "'script' => [],", $portableData);
+    file_put_contents($map->dataPath, $portableData);
+
+    $map = authoredMap($root);
+    $sourcePath = $member === 'map' ? $map->mapPath : $map->eventPath;
+    $sharedPath = $root . '/assets/Maps/shared-' . $member . '.php';
+    file_put_contents($sharedPath, "<?php\n\nreturn " . var_export(require $sourcePath, true) . ";\n");
+    file_put_contents(
+        $sourcePath,
+        "<?php\n\nreturn require dirname(__DIR__) . '/shared-{$member}.php';\n",
+    );
+    $map = authoredMap($root);
+    $before = tripletState($map);
+
+    expect(fn() => $map->moveTo('district/harbour'))
+        ->toThrow(RuntimeException::class, "harbour.{$member}.php does not evaluate at district/harbour");
+    expect(is_dir($root . '/assets/Maps/district'))->toBeFalse()
+        ->and(tripletState($map))->toBe($before);
+})->with(['map', 'event']);
 
 // -- Editor-level flows -------------------------------------------------------
 

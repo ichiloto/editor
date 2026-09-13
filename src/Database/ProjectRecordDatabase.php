@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Database;
 
+use Ichiloto\Editor\Database\Projections\KeyedListProjection;
 use Ichiloto\Editor\IO\AtomicFile;
 
 use BackedEnum;
@@ -1340,6 +1341,14 @@ final class ProjectRecordDatabase
 
         if ($file->readOnlyReason !== null) {
             return $file->readOnlyReason;
+        }
+
+        if ($schema->projection instanceof KeyedListProjection && $file->exists) {
+            $projectionIssue = $schema->projection->preservationIssue($file->payload);
+
+            if ($projectionIssue !== null) {
+                return sprintf('%s %s', basename($file->path), $projectionIssue);
+            }
         }
 
         foreach ($records as $record) {
