@@ -24,11 +24,12 @@ use Throwable;
  *     proposed file beside its destination, and reads each back, so the
  *     caller can evaluate and hydrate the exact bytes that will be
  *     installed;
- *  3. `commit()` takes the backup once, then installs every target;
+ *  3. `commit()` takes the backup once, installs every target, and may
+ *     validate that installed state before accepting it;
  *  4. any failure restores every file already touched, and says so.
  *
  * A restoration that itself fails is reported as such rather than swallowed:
- * `FileSetTransactionFailure::$wasRolledBack` is false and the files left
+ * `FileSetTransactionFailure::$wasRolledBack` is false and the paths left
  * in an unknown state are named. Nothing the transaction created survives a
  * refusal -- no temporary file, and no folder it made.
  *
@@ -52,7 +53,7 @@ final class FileSetTransaction
     private array $staged = [];
 
     /**
-     * @var array<string, array{contents: string|null, modifiedAt: int|null}> Each target's state before the transaction.
+     * @var array<string, array{contents: string|null, metadata: array{mode: int, owner: int, group: int, modifiedAt: int, accessedAt: int}|null}> Each target's state before the transaction.
      */
     private array $original = [];
 
@@ -60,6 +61,12 @@ final class FileSetTransaction
      * @var string[] Folders this transaction created, deepest last.
      */
     private array $createdFolders = [];
+
+    /**
+     * @var list<resource> Locks for every source/destination directory and
+     *   their shared boundary, held through validation and rollback.
+     */
+    private array $reservationHandles = [];
 
     private bool $isStaged = false;
     private bool $isFinished = false;
@@ -70,10 +77,14 @@ final class FileSetTransaction
      *   other folders too -- a map moving between directories -- and any
      *   missing one is created at staging and taken back on failure.
      * @param FileSetOperations $files The filesystem to act on.
+     * @param bool $reserveFolder Whether staging must exclusively create the
+     *   asset folder. A move uses this to refuse a destination another writer
+     *   created after its initial collision check.
      */
     public function __construct(
         private readonly string $folder,
         private readonly FileSetOperations $files = new FilesystemFileSetOperations(),
+        private readonly bool $reserveFolder = false,
     ) {
     }
 
@@ -125,6 +136,38 @@ final class FileSetTransaction
             return $this->staged;
         }
 
+        $this->acquireReservations();
+
+        try {
+            return $this->stageReserved();
+        } catch (Throwable $throwable) {
+            $this->discard();
+
+            throw $throwable;
+        }
+    }
+
+    /**
+     * Stages the declared files while the complete path set is reserved.
+     *
+     * @return array<string, string>
+     */
+    private function stageReserved(): array
+    {
+        if ($this->reserveFolder && $this->files->isDirectory($this->folder)) {
+            throw new FileSetTransactionFailure(sprintf('%s already exists', $this->folder));
+        }
+
+        // Freeze the missing-directory plan before reading source files. If
+        // the reserved folder appears before this scan reaches it, it will
+        // not be in the plan and the transaction refuses it below. If it
+        // appears afterwards, exclusive makeDirectory() loses cleanly.
+        $foldersToCreate = $this->foldersToCreate();
+
+        if ($this->reserveFolder && ! in_array($this->folder, $foldersToCreate, true)) {
+            throw new FileSetTransactionFailure(sprintf('%s already exists', $this->folder));
+        }
+
         foreach ($this->targets as $target) {
             $path = $target['path'];
 
@@ -133,7 +176,14 @@ final class FileSetTransaction
             }
 
             if ($this->files->isFile($path)) {
+                // Capture metadata before reading: even a read can update the
+                // access time on filesystems that track it.
+                $metadata = $this->files->metadata($path);
                 $contents = $this->files->read($path);
+
+                if ($metadata === null) {
+                    throw new FileSetTransactionFailure(sprintf('%s metadata could not be read, so it could not be put back if the write failed', basename($path)));
+                }
 
                 if ($contents === null) {
                     // Unreadable now is unrestorable later: refuse before
@@ -141,15 +191,15 @@ final class FileSetTransaction
                     throw new FileSetTransactionFailure(sprintf('%s could not be read, so it could not be put back if the write failed', basename($path)));
                 }
 
-                $this->original[$path] = ['contents' => $contents, 'modifiedAt' => $this->files->modifiedAt($path)];
+                $this->original[$path] = ['contents' => $contents, 'metadata' => $metadata];
 
                 continue;
             }
 
-            $this->original[$path] = ['contents' => null, 'modifiedAt' => null];
+            $this->original[$path] = ['contents' => null, 'metadata' => null];
         }
 
-        foreach ($this->foldersToCreate() as $missing) {
+        foreach ($foldersToCreate as $missing) {
             if (! $this->files->makeDirectory($missing)) {
                 $this->discard();
 
@@ -193,9 +243,18 @@ final class FileSetTransaction
      * Installs every target, after backing up once what is about to go.
      *
      * @param callable(string ...$paths): void|null $backup Receives the existing files about to be replaced or removed.
+     * @param callable(): void|null $validate Proves the fully installed state
+     *   before it is accepted. A thrown exception rolls every target back.
+     * @param callable(): list<string>|null $afterRollback Restores related
+     *   filesystem state after the files have been put back. Any returned
+     *   paths are reported as unrestored rather than hidden.
      * @throws FileSetTransactionFailure When any target cannot be installed.
      */
-    public function commit(?callable $backup = null): void
+    public function commit(
+        ?callable $backup = null,
+        ?callable $validate = null,
+        ?callable $afterRollback = null,
+    ): void
     {
         if ($this->isFinished) {
             return;
@@ -238,7 +297,11 @@ final class FileSetTransaction
 
             if ($target['intent'] === self::INTENT_WRITE) {
                 if (! $this->files->move($this->staged[$path], $path)) {
-                    $this->undo($installed, sprintf('Unable to replace %s', basename($path)));
+                    $this->undo(
+                        $installed,
+                        sprintf('Unable to replace %s', basename($path)),
+                        afterRollback: $afterRollback,
+                    );
                 }
 
                 unset($this->staged[$path]);
@@ -253,15 +316,33 @@ final class FileSetTransaction
             }
 
             if (! $this->files->remove($path)) {
-                $this->undo($installed, sprintf('Unable to remove %s', basename($path)));
+                $this->undo(
+                    $installed,
+                    sprintf('Unable to remove %s', basename($path)),
+                    afterRollback: $afterRollback,
+                );
             }
 
             $installed[] = $target;
         }
 
+        if ($validate !== null) {
+            try {
+                $validate();
+            } catch (Throwable $validationFailure) {
+                $this->undo(
+                    $installed,
+                    sprintf('The installed files failed validation (%s)', rtrim($validationFailure->getMessage(), '.')),
+                    $validationFailure,
+                    $afterRollback,
+                );
+            }
+        }
+
         $this->isFinished = true;
         $this->discardTemporaries();
         $this->removeFolderIfEmptied();
+        $this->releaseReservations();
     }
 
     /**
@@ -283,7 +364,12 @@ final class FileSetTransaction
      * @param array<int, array{path: string, intent: string, contents: string|null}> $installed
      * @throws FileSetTransactionFailure Always.
      */
-    private function undo(array $installed, string $reason): never
+    private function undo(
+        array $installed,
+        string $reason,
+        ?Throwable $previous = null,
+        ?callable $afterRollback = null,
+    ): never
     {
         $unrestored = [];
 
@@ -293,9 +379,34 @@ final class FileSetTransaction
 
             if ($original['contents'] === null) {
                 // It was not there before this transaction.
-                if ($this->files->isFile($path) && ! $this->files->remove($path)) {
+                if (! $this->files->isFile($path)) {
+                    if ($this->files->isDirectory($path)) {
+                        $unrestored[] = $path;
+                    }
+
+                    continue;
+                }
+
+                if ($target['intent'] !== self::INTENT_WRITE
+                    || $this->files->read($path) !== $target['contents']
+                    || ! $this->files->remove($path)
+                ) {
                     $unrestored[] = $path;
                 }
+
+                continue;
+            }
+
+            // A write target must still contain this transaction's proposed
+            // bytes, and a removed target must still be absent. Otherwise a
+            // competing writer owns the current entry and rollback must not
+            // overwrite it merely to recreate the earlier snapshot.
+            $stillOwned = $target['intent'] === self::INTENT_WRITE
+                ? $this->files->isFile($path) && $this->files->read($path) === $target['contents']
+                : ! $this->files->isFile($path) && ! $this->files->isDirectory($path);
+
+            if (! $stillOwned) {
+                $unrestored[] = $path;
 
                 continue;
             }
@@ -306,12 +417,19 @@ final class FileSetTransaction
                 continue;
             }
 
-            if ($original['modifiedAt'] !== null && ! $this->files->setModifiedAt($path, $original['modifiedAt'])) {
-                // Put back means put back: the same bytes at the same time,
-                // so nothing downstream reads the restoration as an edit. A
-                // file whose time could not be restored is not the file that
-                // was there, and saying the rollback succeeded would hide it.
+            if ($original['metadata'] === null || ! $this->files->restoreMetadata($path, $original['metadata'])) {
+                // Put back means the same bytes, permissions, ownership and
+                // timestamps. Anything less must not be called a successful
+                // rollback.
                 $unrestored[] = $path;
+            }
+        }
+
+        if ($afterRollback !== null) {
+            foreach ($afterRollback() as $path) {
+                if (! in_array($path, $unrestored, true)) {
+                    $unrestored[] = $path;
+                }
             }
         }
 
@@ -322,7 +440,9 @@ final class FileSetTransaction
             $this->removeFolderIfCreated();
         }
 
-        throw new FileSetTransactionFailure($reason, $unrestored === [], $unrestored);
+        $this->releaseReservations();
+
+        throw new FileSetTransactionFailure($reason, $unrestored === [], $unrestored, $previous);
     }
 
     /**
@@ -332,6 +452,110 @@ final class FileSetTransaction
     {
         $this->discardTemporaries();
         $this->removeFolderIfCreated();
+        $this->releaseReservations();
+    }
+
+    /**
+     * Reserves every directory whose entries this transaction can change.
+     *
+     * Lock files live in the system temporary directory, outside authored
+     * runtime paths. A move also locks the common source/destination parent,
+     * so another move cannot claim a just-removed source while validation is
+     * still deciding whether the first move commits. Acquisition is sorted
+     * and nonblocking: nested writers refuse promptly instead of deadlocking.
+     */
+    private function acquireReservations(): void
+    {
+        if ($this->reservationHandles !== []) {
+            return;
+        }
+
+        $directories = array_values(array_unique(array_map(
+            static fn(array $target): string => rtrim(dirname($target['path']), DIRECTORY_SEPARATOR),
+            $this->targets,
+        )));
+
+        if ($directories === []) {
+            return;
+        }
+
+        $reservedDirectories = $directories;
+        $common = $directories[0];
+
+        foreach (array_slice($directories, 1) as $directory) {
+            while ($common !== DIRECTORY_SEPARATOR
+                && $directory !== $common
+                && ! str_starts_with($directory, $common . DIRECTORY_SEPARATOR)
+            ) {
+                $common = dirname($common);
+            }
+        }
+
+        $reservedDirectories[] = $common;
+        $reservedDirectories = array_values(array_unique($reservedDirectories));
+        sort($reservedDirectories, SORT_STRING);
+        // getmyuid() reports the entry-script owner and POSIX is optional.
+        // A core-PHP temporary file is owned by the effective account, giving
+        // every process for that account the same identity regardless of its
+        // entry point or enabled extensions.
+        $userNamespace = self::effectiveUserNamespace();
+        $lockRoot = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'ichiloto-editor-file-set-locks-' . $userNamespace;
+
+        if (! is_dir($lockRoot) && ! @mkdir($lockRoot, 0o700, true) && ! is_dir($lockRoot)) {
+            throw new FileSetTransactionFailure('Unable to create the file transaction lock directory');
+        }
+
+        foreach ($reservedDirectories as $directory) {
+            $lockPath = $lockRoot . DIRECTORY_SEPARATOR . hash('sha256', str_replace('\\', '/', $directory)) . '.lock';
+            $handle = @fopen($lockPath, 'c+');
+
+            if ($handle === false || ! @flock($handle, LOCK_EX | LOCK_NB)) {
+                if (is_resource($handle)) {
+                    fclose($handle);
+                }
+
+                $this->releaseReservations();
+
+                throw new FileSetTransactionFailure(sprintf('Another file transaction is using %s', $directory));
+            }
+
+            $this->reservationHandles[] = $handle;
+        }
+    }
+
+    /**
+     * Returns the effective filesystem identity without relying on the owner
+     * of the PHP entry point or the optional POSIX extension.
+     */
+    private static function effectiveUserNamespace(): string
+    {
+        $probe = @tmpfile();
+
+        if (! is_resource($probe)) {
+            throw new FileSetTransactionFailure('Unable to establish the file transaction owner');
+        }
+
+        try {
+            $metadata = @fstat($probe);
+        } finally {
+            fclose($probe);
+        }
+
+        if (! is_array($metadata) || ! isset($metadata['uid'])) {
+            throw new FileSetTransactionFailure('Unable to establish the file transaction owner');
+        }
+
+        return (string) ((int) $metadata['uid']);
+    }
+
+    private function releaseReservations(): void
+    {
+        foreach (array_reverse($this->reservationHandles) as $handle) {
+            @flock($handle, LOCK_UN);
+            fclose($handle);
+        }
+
+        $this->reservationHandles = [];
     }
 
     private function discardTemporaries(): void

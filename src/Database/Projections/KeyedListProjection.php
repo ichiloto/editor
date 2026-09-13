@@ -46,6 +46,43 @@ final readonly class KeyedListProjection implements RecordProjection
     }
 
     /**
+     * Explains why rewriting this projection would change authored shape.
+     */
+    public function preservationIssue(mixed $whole): ?string
+    {
+        if (! is_array($whole)) {
+            return sprintf('returns %s, not an array', get_debug_type($whole));
+        }
+
+        if (! array_key_exists($this->key, $whole)) {
+            return null;
+        }
+
+        $list = $whole[$this->key];
+
+        if (! is_array($list) || ! array_is_list($list)) {
+            return sprintf(
+                'field "%s" is %s, not an ordered list',
+                $this->key,
+                is_array($list) ? 'a keyed array' : get_debug_type($list),
+            );
+        }
+
+        foreach ($list as $index => $entry) {
+            if (! is_array($entry)) {
+                return sprintf(
+                    'field "%s" entry %d is %s, which the editor cannot preserve',
+                    $this->key,
+                    $index + 1,
+                    get_debug_type($entry),
+                );
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * @inheritDoc
      *
      * The list is written exactly as given, so record order is the file's.

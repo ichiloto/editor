@@ -334,6 +334,19 @@ final class ProjectRecordDatabase
     }
 
     /**
+     * Explains why this category's projection cannot preserve a freshly
+     * loaded payload, or null when it can.
+     */
+    public function projectionPreservationIssue(mixed $payload): ?string
+    {
+        $projection = $this->schema->projection;
+
+        return $projection === null
+            ? null
+            : self::projectionPreservationIssueFor($projection, $payload);
+    }
+
+    /**
      * @inheritDoc
      */
     protected function dependencyVersion(): string
@@ -1342,6 +1355,14 @@ final class ProjectRecordDatabase
             return $file->readOnlyReason;
         }
 
+        if ($schema->projection !== null && $file->exists) {
+            $projectionIssue = self::projectionPreservationIssueFor($schema->projection, $file->payload);
+
+            if ($projectionIssue !== null) {
+                return sprintf('%s %s', basename($file->path), $projectionIssue);
+            }
+        }
+
         foreach ($records as $record) {
             $reason = $record->getReadOnlyReason();
 
@@ -1351,6 +1372,59 @@ final class ProjectRecordDatabase
         }
 
         return null;
+    }
+
+    /**
+     * Checks both projection-specific malformed shapes and the exact
+     * read/write round trip. The latter is the final guard against a new
+     * projection silently coercing or dropping an authored value that its
+     * structural checks did not anticipate.
+     */
+    private static function projectionPreservationIssueFor(RecordProjection $projection, mixed $payload): ?string
+    {
+        $issue = $projection->preservationIssue($payload);
+
+        if ($issue !== null) {
+            return $issue;
+        }
+
+        if (! is_array($payload)) {
+            return sprintf('returns %s, not an array', get_debug_type($payload));
+        }
+
+        $roundTrip = $projection->write($payload, $projection->read($payload));
+
+        if (self::withoutEmptyFields($roundTrip) !== self::withoutEmptyFields($payload)) {
+            return 'contains values or structure that the editor cannot preserve exactly';
+        }
+
+        return null;
+    }
+
+    /**
+     * Removes empty named fields before comparing a projection round trip.
+     * An omitted optional category and that category written as an empty
+     * array carry the same runtime data; list entries themselves remain
+     * significant and are never removed here.
+     *
+     * @param array<mixed> $payload The value to normalize for comparison.
+     * @return array<mixed> The comparison value.
+     */
+    private static function withoutEmptyFields(array $payload): array
+    {
+        $normalized = [];
+
+        foreach ($payload as $key => $value) {
+            $value = is_array($value) ? self::withoutEmptyFields($value) : $value;
+
+            if (is_string($key) && $value === []) {
+                continue;
+            }
+
+            $normalized[$key] = $value;
+        }
+
+        return $normalized;
     }
 
     /**

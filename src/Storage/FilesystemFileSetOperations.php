@@ -82,7 +82,11 @@ final class FilesystemFileSetOperations implements FileSetOperations
 
     public function makeDirectory(string $path): bool
     {
-        return is_dir($path) || (@mkdir($path, 0o777, true) || is_dir($path));
+        if (file_exists($path)) {
+            return false;
+        }
+
+        return @mkdir($path, 0o777);
     }
 
     public function removeDirectory(string $path): bool
@@ -97,15 +101,57 @@ final class FilesystemFileSetOperations implements FileSetOperations
         return $entries === false ? [] : array_values(array_diff($entries, ['.', '..']));
     }
 
-    public function modifiedAt(string $path): ?int
+    public function metadata(string $path): ?array
     {
-        $modified = @filemtime($path);
+        $metadata = @stat($path);
 
-        return $modified === false ? null : $modified;
+        if (! is_array($metadata) || ! is_file($path)) {
+            return null;
+        }
+
+        return [
+            'mode' => ((int) $metadata['mode']) & 0o7777,
+            'owner' => (int) $metadata['uid'],
+            'group' => (int) $metadata['gid'],
+            'modifiedAt' => (int) $metadata['mtime'],
+            'accessedAt' => (int) $metadata['atime'],
+        ];
     }
 
-    public function setModifiedAt(string $path, int $timestamp): bool
+    public function restoreMetadata(string $path, array $metadata): bool
     {
-        return @touch($path, $timestamp);
+        $restored = is_file($path);
+
+        if ($restored && PHP_OS_FAMILY !== 'Windows') {
+            $current = @stat($path);
+
+            if (! is_array($current)) {
+                $restored = false;
+            } else {
+                if ((int) $current['uid'] !== $metadata['owner']) {
+                    $restored = @chown($path, $metadata['owner']);
+                }
+
+                if ((int) $current['gid'] !== $metadata['group']) {
+                    $restored = @chgrp($path, $metadata['group']) && $restored;
+                }
+            }
+        }
+
+        if ($restored) {
+            $restored = @chmod($path, $metadata['mode'])
+                && @touch($path, $metadata['modifiedAt'], $metadata['accessedAt']);
+        }
+
+        clearstatcache(true, $path);
+        $actual = @stat($path);
+
+        return $restored
+            && is_array($actual)
+            && (((int) $actual['mode']) & 0o7777) === $metadata['mode']
+            && (int) $actual['mtime'] === $metadata['modifiedAt']
+            && (int) $actual['atime'] === $metadata['accessedAt']
+            && (PHP_OS_FAMILY === 'Windows'
+                || ((int) $actual['uid'] === $metadata['owner'] && (int) $actual['gid'] === $metadata['group']));
     }
 }

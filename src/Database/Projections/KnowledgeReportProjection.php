@@ -76,6 +76,63 @@ final readonly class KnowledgeReportProjection implements RecordProjection
         return $whole;
     }
 
+    /** @inheritDoc */
+    public function preservationIssue(mixed $whole): ?string
+    {
+        if (! is_array($whole)) {
+            return sprintf('returns %s, not an array', get_debug_type($whole));
+        }
+
+        if (! array_key_exists('reports', $whole)) {
+            return null;
+        }
+
+        $reports = $whole['reports'];
+
+        if (! is_array($reports) || ! array_is_list($reports)) {
+            return sprintf(
+                'field "reports" is %s, not an ordered list',
+                is_array($reports) ? 'a keyed array' : get_debug_type($reports),
+            );
+        }
+
+        foreach ($reports as $index => $report) {
+            if (! is_array($report)) {
+                return sprintf(
+                    'field "reports" entry %d is %s, which the editor cannot preserve',
+                    $index + 1,
+                    get_debug_type($report),
+                );
+            }
+
+            if (! array_key_exists('disagreesWith', $report)) {
+                continue;
+            }
+
+            $disagreements = $report['disagreesWith'];
+
+            if (! is_array($disagreements) || ! array_is_list($disagreements)) {
+                return sprintf(
+                    'field "reports" entry %d field "disagreesWith" is %s, not an ordered list',
+                    $index + 1,
+                    is_array($disagreements) ? 'a keyed array' : get_debug_type($disagreements),
+                );
+            }
+
+            foreach ($disagreements as $disagreement) {
+                if (! is_scalar($disagreement)) {
+                    return sprintf(
+                        'field "reports" entry %d has a %s disagreement the editor cannot preserve',
+                        $index + 1,
+                        get_debug_type($disagreement),
+                    );
+                }
+            }
+        }
+
+        return null;
+    }
+
     /**
      * @inheritDoc
      *

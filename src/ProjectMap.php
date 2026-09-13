@@ -8,10 +8,13 @@ use Ichiloto\Editor\Cutscenes\Source\ArraySourceWriter;
 use Ichiloto\Editor\Cutscenes\Source\PhpArraySourceDocument;
 use Ichiloto\Editor\Cutscenes\Source\SourcePreservationRefusal;
 use Ichiloto\Editor\Cutscenes\Source\SourceUnreadable;
+use Ichiloto\Editor\Database\IsolatedPhpEvaluationFailure;
+use Ichiloto\Editor\Database\PhpDataFile;
 use Ichiloto\Editor\Field\NpcCollection;
 use Ichiloto\Editor\Field\ProjectNpc;
 use Ichiloto\Editor\History\TracksPersistedState;
 use Ichiloto\Editor\Storage\FileSetOperations;
+use Ichiloto\Editor\Storage\FileSetTransactionFailure;
 use Ichiloto\Editor\Storage\FilesystemFileSetOperations;
 use Ichiloto\Editor\Storage\FileSetTransaction;
 use RuntimeException;
@@ -1117,7 +1120,11 @@ final class ProjectMap
         $target = $this->resolveSaveTarget();
         $moving = $target['directory'] !== $this->directory;
 
-        if (! $this->isDirty() && ! $moving && is_dir($this->directory)) {
+        $tripletExists = is_file($this->dataPath)
+            && is_file($this->mapPath)
+            && is_file($this->eventPath);
+
+        if (! $this->isDirty() && ! $moving && is_dir($this->directory) && $tripletExists) {
             // Nothing diverges from the last save: writing would only
             // canonicalize hand-authored formatting and churn mtimes.
             return $target['mapId'];
@@ -1129,10 +1136,12 @@ final class ProjectMap
         // against the grids as of the last save, never against the bytes on
         // disk, so a file an author keeps in another form -- a tile map
         // built by a helper class -- is rewritten only when its grid is.
-        // A data file the parser cannot hold never reaches the writer: its
-        // edits were refused, so its bytes are its own and stay put.
+        // A data file the parser cannot hold never reaches the writer unless
+        // the on-disk member disappeared: its edits were refused, so its
+        // cached source bytes are its own and are restored unchanged.
         $dataSource = $this->dataDocument === null ? (string) $this->unparsedDataSource : $this->proposedDataSource();
-        $writeData = $this->dataDocument !== null && $dataSource !== $this->dataDocument->source;
+        $writeData = ! is_file($this->dataPath)
+            || ($this->dataDocument !== null && $dataSource !== $this->dataDocument->source);
         $mapPayload = $this->buildMapPayload();
         $writeMap = $mapPayload !== $this->baselineMapPayload || ! is_file($this->mapPath);
         $eventPayload = $this->buildEventPayload();
@@ -1178,7 +1187,8 @@ final class ProjectMap
 
         if ($writeData || $moving) {
             try {
-                $evaluated = $this->evaluateFile($staged[$target['dataPath']] ?? $target['dataPath']);
+                $evaluatedFingerprint = null;
+                $evaluated = $this->evaluateFile($staged[$target['dataPath']] ?? $target['dataPath'], $evaluatedFingerprint);
             } catch (\Throwable $throwable) {
                 $transaction->rollBack();
 
@@ -1190,7 +1200,7 @@ final class ProjectMap
                 ), previous: $throwable);
             }
 
-            if (! is_array($evaluated) || $evaluated !== $this->editableData) {
+            if (! is_array($evaluated) || $evaluatedFingerprint !== PhpDataFile::valueFingerprint($this->editableData)) {
                 $transaction->rollBack();
 
                 throw new RuntimeException(sprintf(
@@ -1247,28 +1257,39 @@ final class ProjectMap
 
     /**
      * Evaluates a PHP file as the game would: from the project root, so a
-     * `require` written relative to the working directory resolves.
+     * `require` written relative to the working directory resolves. A fresh
+     * process is required because staged authored files can repeat named
+     * declarations already loaded by this Editor process.
      */
-    private function evaluateFile(string $path): mixed
+    private function evaluateFile(string $path, ?string &$fingerprint = null): mixed
     {
-        $projectRoot = dirname($this->getMapsRoot(), 2);
-        $operation = static function () use ($path): mixed {
-            // A failing require raises a warning before its error; the
-            // error is what callers report, so the warning is only noise.
-            set_error_handler(static fn(): bool => true);
+        $fingerprints = [];
+        $payloads = $this->evaluateFiles([$path], $fingerprints);
+        $fingerprint = $fingerprints[0] ?? null;
 
-            try {
-                return require $path;
-            } finally {
-                restore_error_handler();
-            }
-        };
-
-        if (is_dir($projectRoot)) {
-            return ProjectDirectoryContext::run($projectRoot, static fn(): mixed => $operation());
+        if (! array_key_exists(0, $payloads)) {
+            throw new RuntimeException(sprintf('%s returned no isolated result.', basename($path)));
         }
 
-        return $operation();
+        return $payloads[0];
+    }
+
+    /**
+     * Evaluates one runtime load unit in order and outside the Editor process.
+     *
+     * @param list<string> $paths The authored members in runtime load order.
+     * @param-out list<string>|null $fingerprints Serialized-value fingerprints.
+     * @return list<mixed> Their returned values.
+     */
+    private function evaluateFiles(array $paths, ?array &$fingerprints = null): array
+    {
+        $projectRoot = dirname($this->getMapsRoot(), 2);
+
+        return PhpDataFile::evaluateIsolatedFiles(
+            $paths,
+            is_dir($projectRoot) ? $projectRoot : null,
+            $fingerprints,
+        );
     }
 
     /**
@@ -1375,7 +1396,8 @@ final class ProjectMap
         $staged = $transaction->stage();
 
         try {
-            $evaluated = $this->evaluateFile($staged[$duplicatedDataPath] ?? $duplicatedDataPath);
+            $evaluatedFingerprint = null;
+            $evaluated = $this->evaluateFile($staged[$duplicatedDataPath] ?? $duplicatedDataPath, $evaluatedFingerprint);
         } catch (\Throwable $evaluationFailure) {
             $transaction->rollBack();
 
@@ -1387,7 +1409,7 @@ final class ProjectMap
             ), previous: $evaluationFailure);
         }
 
-        if (! is_array($evaluated) || $evaluated !== $duplicatedData) {
+        if (! is_array($evaluated) || $evaluatedFingerprint !== PhpDataFile::valueFingerprint($duplicatedData)) {
             $transaction->rollBack();
 
             throw new RuntimeException(sprintf(
@@ -1653,24 +1675,26 @@ final class ProjectMap
         $baseName = basename($directory);
 
         try {
-            $transaction = new FileSetTransaction($directory);
+            $transaction = new FileSetTransaction($directory, reserveFolder: true);
             // A move carries the map's content as authored: the data file
             // is the preserved source (unsaved edits rewritten into it, not
             // a regeneration of the whole array), and untouched grids keep
             // their bytes exactly.
             $movedDataPath = $directory . DIRECTORY_SEPARATOR . $baseName . '.data.php';
+            $movedMapPath = $directory . DIRECTORY_SEPARATOR . $baseName . '.map.php';
+            $movedEventPath = $directory . DIRECTORY_SEPARATOR . $baseName . '.event.php';
             $transaction->write(
                 $movedDataPath,
                 $this->dataDocument === null ? (string) $this->unparsedDataSource : $this->proposedDataSource(),
             );
             $transaction->write(
-                $directory . DIRECTORY_SEPARATOR . $baseName . '.map.php',
+                $movedMapPath,
                 $this->buildMapPayload() === $this->baselineMapPayload && is_file($this->mapPath)
                     ? (string) file_get_contents($this->mapPath)
                     : $this->buildMapPayload(),
             );
             $transaction->write(
-                $directory . DIRECTORY_SEPARATOR . $baseName . '.event.php',
+                $movedEventPath,
                 $this->buildEventPayload() === $this->baselineEventPayload && is_file($this->eventPath)
                     ? (string) file_get_contents($this->eventPath)
                     : $this->buildEventPayload(),
@@ -1679,47 +1703,127 @@ final class ProjectMap
             $transaction->remove($this->mapPath);
             $transaction->remove($this->eventPath);
 
-            // Preserved bytes must still evaluate where they land: a
-            // require written against the old folder depth would install a
-            // map the game cannot load, so the staged copy is proved at the
-            // destination first.
-            $staged = $transaction->stage();
+            $destinationPaths = [$movedDataPath, $movedMapPath, $movedEventPath];
+            $expectedGrids = [
+                $movedMapPath => array_map($this->buildStyledLine(...), $this->tileCells),
+                $movedEventPath => array_map($this->buildPlainLine(...), $this->eventCells),
+            ];
+            $sourceDirectoryMetadata = self::captureDirectoryMetadata($previousDirectory);
+            $removedSourceDirectories = [];
+            $directoryRestorationFailures = [];
 
-            try {
-                $evaluated = $this->evaluateFile($staged[$movedDataPath] ?? $movedDataPath);
-            } catch (\Throwable $evaluationFailure) {
-                $transaction->rollBack();
+            // Validation runs only after the destination triplet has its
+            // exact runtime names and every source member is gone. That is
+            // the state the game will load: no preview copies, temporary
+            // neighbours, or old member can make an invalid move look valid.
+            $transaction->commit(validate: function () use (
+                $destinationPaths,
+                $movedDataPath,
+                $movedMapPath,
+                $movedEventPath,
+                $expectedGrids,
+                $newRelativeId,
+                $previousDirectory,
+                $mapsRoot,
+                $sourceDirectoryMetadata,
+                &$removedSourceDirectories,
+                &$directoryRestorationFailures,
+            ): void {
+                $removedSourceDirectories = self::removeEmptyDirectoryChain(
+                    $previousDirectory,
+                    $mapsRoot,
+                    $sourceDirectoryMetadata,
+                );
 
-                throw new RuntimeException(sprintf(
-                    '%s does not evaluate at %s (%s) — an expression written against the old folder depth, such as a relative require, must be adjusted in the file first.',
-                    basename($movedDataPath),
-                    $newRelativeId,
-                    $evaluationFailure->getMessage(),
-                ), previous: $evaluationFailure);
-            }
+                try {
+                    try {
+                        $evaluatedFingerprints = [];
+                        [$evaluated, $evaluatedMap, $evaluatedEvent] = $this->evaluateFiles($destinationPaths, $evaluatedFingerprints);
+                    } catch (\Throwable $evaluationFailure) {
+                        $failedPath = $movedDataPath;
 
-            if (! is_array($evaluated) || $evaluated !== $this->editableData) {
-                $transaction->rollBack();
+                        if ($evaluationFailure instanceof IsolatedPhpEvaluationFailure) {
+                            $failedIndex = array_search($evaluationFailure->path, $destinationPaths, true);
 
-                throw new RuntimeException(sprintf(
-                    '%s would not read back as this map at %s.',
-                    basename($movedDataPath),
-                    $newRelativeId,
-                ));
-            }
+                            if (is_int($failedIndex)) {
+                                $failedPath = $destinationPaths[$failedIndex];
+                            }
+                        }
 
-            $transaction->commit();
+                        throw new RuntimeException(sprintf(
+                            '%s does not evaluate at %s (%s) — an expression written against the old folder depth, such as a relative require, must be adjusted in the file first.',
+                            basename($failedPath),
+                            $newRelativeId,
+                            $evaluationFailure->getMessage(),
+                        ), previous: $evaluationFailure);
+                    }
 
-            if (is_dir($previousDirectory) && array_diff(scandir($previousDirectory) ?: [], ['.', '..']) === []) {
-                @rmdir($previousDirectory);
-            }
+                    if (! is_array($evaluated)
+                        || ($evaluatedFingerprints[0] ?? null) !== PhpDataFile::valueFingerprint($this->editableData)
+                    ) {
+                        throw new RuntimeException(sprintf(
+                            '%s would not read back as this map at %s.',
+                            basename($movedDataPath),
+                            $newRelativeId,
+                        ));
+                    }
 
-            self::deleteEmptyParentDirectories(dirname($previousDirectory), $mapsRoot);
+                    $evaluatedGrids = [
+                        $movedMapPath => $evaluatedMap,
+                        $movedEventPath => $evaluatedEvent,
+                    ];
+
+                    foreach ($expectedGrids as $path => $expectedLines) {
+                        $evaluatedGrid = $evaluatedGrids[$path];
+
+                        if (! is_string($evaluatedGrid) || self::splitMapText($evaluatedGrid) !== $expectedLines) {
+                            throw new RuntimeException(sprintf(
+                                '%s would not read back as this map at %s.',
+                                basename($path),
+                                $newRelativeId,
+                            ));
+                        }
+                    }
+                } catch (\Throwable $validationFailure) {
+                    // The file rollback needs the old directories in place.
+                    // Recreate only directories this validation removed; the
+                    // transaction then restores each original source member.
+                    $directoryRestorationFailures = self::recreateDirectories($removedSourceDirectories);
+
+                    throw $validationFailure;
+                }
+            }, afterRollback: static function () use (
+                $sourceDirectoryMetadata,
+                &$removedSourceDirectories,
+                &$directoryRestorationFailures,
+            ): array {
+                $directoriesToRestore = $removedSourceDirectories;
+
+                if (! in_array(
+                    $sourceDirectoryMetadata['path'],
+                    array_column($directoriesToRestore, 'path'),
+                    true,
+                )) {
+                    array_unshift($directoriesToRestore, $sourceDirectoryMetadata);
+                }
+
+                return array_values(array_unique([
+                    ...$directoryRestorationFailures,
+                    ...self::restoreDirectoryMetadata(
+                        $directoriesToRestore,
+                        $directoryRestorationFailures,
+                        array_column($removedSourceDirectories, 'path'),
+                    ),
+                ]));
+            });
         } catch (\Throwable $throwable) {
-            // Fail closed: the old directory is still the map, so the new
-            // copy goes rather than leaving two claims to one identity.
-            if (is_dir($directory) && is_dir($previousDirectory)) {
-                self::deleteDirectoryRecursively($directory);
+            if ($throwable instanceof FileSetTransactionFailure && ! $throwable->wasRolledBack) {
+                throw new RuntimeException(sprintf(
+                    'The move to %s failed and could not be fully rolled back (%s). Restore the named files before editing %s further.',
+                    $newRelativeId,
+                    $throwable->getMessage(),
+                    $previousMapId,
+                ), previous: $throwable);
             }
 
             throw new RuntimeException(sprintf(
@@ -1730,7 +1834,17 @@ final class ProjectMap
             ), previous: $throwable);
         }
 
-        return self::fromDirectory($mapsRoot, $directory);
+        return new self(
+            mapId: $newRelativeId,
+            directory: $directory,
+            dataPath: $movedDataPath,
+            mapPath: $movedMapPath,
+            eventPath: $movedEventPath,
+            data: $this->editableData,
+            tileLines: $expectedGrids[$movedMapPath],
+            eventLines: $expectedGrids[$movedEventPath],
+            dataSource: (string) file_get_contents($movedDataPath),
+        )->withLoadedBaseline();
     }
 
     /**
@@ -1795,40 +1909,6 @@ final class ProjectMap
     }
 
     /**
-     * Deletes a directory tree.
-     *
-     * @param string $directory The directory to remove.
-     * @return void
-     */
-    private static function deleteDirectoryRecursively(string $directory): void
-    {
-        $iterator = new \RecursiveIteratorIterator(
-            new \RecursiveDirectoryIterator($directory, \FilesystemIterator::SKIP_DOTS),
-            \RecursiveIteratorIterator::CHILD_FIRST
-        );
-
-        foreach ($iterator as $item) {
-            $path = $item->getPathname();
-
-            if ($item->isDir()) {
-                if (! @rmdir($path)) {
-                    throw new RuntimeException("Failed to remove directory {$path}.");
-                }
-
-                continue;
-            }
-
-            if (! @unlink($path)) {
-                throw new RuntimeException("Failed to remove file {$path}.");
-            }
-        }
-
-        if (! @rmdir($directory)) {
-            throw new RuntimeException("Failed to remove directory {$directory}.");
-        }
-    }
-
-    /**
      * Removes empty parent directories up to, but not including, the maps root.
      *
      * @param string $directory The starting directory.
@@ -1851,6 +1931,196 @@ final class ProjectMap
 
             $directory = dirname($directory);
         }
+    }
+
+    /**
+     * Removes the empty source directory and its empty parents for a move.
+     *
+     * The returned leaf-first list carries the directory metadata needed to
+     * recreate exactly those directories before a refused installed-state
+     * validation is rolled back. The whole candidate chain is inspected
+     * before its leaf is removed, so removing a child cannot change the
+     * parent timestamp before it is captured.
+     *
+     * @param array{path: string, mode: int, owner: int, group: int, modifiedAt: int, accessedAt: int, device: int, inode: int} $sourceDirectoryMetadata Metadata captured before source members are removed.
+     * @return list<array{path: string, mode: int, owner: int, group: int, modifiedAt: int, accessedAt: int, device: int, inode: int}> The removed directories, leaf first.
+     */
+    private static function removeEmptyDirectoryChain(
+        string $directory,
+        string $mapsRoot,
+        array $sourceDirectoryMetadata,
+    ): array {
+        $candidates = [];
+        $mapsRoot = rtrim($mapsRoot, DIRECTORY_SEPARATOR);
+        $directory = rtrim($directory, DIRECTORY_SEPARATOR);
+        $child = null;
+
+        while ($directory !== '' && $directory !== $mapsRoot && str_starts_with($directory, $mapsRoot . DIRECTORY_SEPARATOR)) {
+            $metadata = $directory === $sourceDirectoryMetadata['path']
+                ? $sourceDirectoryMetadata
+                : self::captureDirectoryMetadata($directory);
+            $entries = is_dir($directory) ? scandir($directory) : false;
+
+            if (! is_array($entries)) {
+                break;
+            }
+
+            $entries = array_values(array_diff($entries, ['.', '..']));
+            $expectedEntries = $child === null ? [] : [basename($child)];
+
+            if ($entries !== $expectedEntries) {
+                break;
+            }
+
+            $candidates[] = $metadata;
+            $child = $directory;
+            $directory = dirname($directory);
+        }
+
+        $removed = [];
+
+        foreach ($candidates as $candidate) {
+            if (! @rmdir($candidate['path'])) {
+                break;
+            }
+
+            $removed[] = $candidate;
+        }
+
+        return $removed;
+    }
+
+    /**
+     * Captures the filesystem metadata needed for an exact directory
+     * rollback before any member or child is removed.
+     *
+     * @return array{path: string, mode: int, owner: int, group: int, modifiedAt: int, accessedAt: int, device: int, inode: int}
+     */
+    private static function captureDirectoryMetadata(string $directory): array
+    {
+        $metadata = @stat($directory);
+
+        if (! is_array($metadata)) {
+            throw new RuntimeException(sprintf('Unable to capture the directory metadata for %s.', $directory));
+        }
+
+        return [
+            'path' => $directory,
+            'mode' => ((int) $metadata['mode']) & 0o7777,
+            'owner' => (int) $metadata['uid'],
+            'group' => (int) $metadata['gid'],
+            'modifiedAt' => (int) $metadata['mtime'],
+            'accessedAt' => (int) $metadata['atime'],
+            'device' => (int) $metadata['dev'],
+            'inode' => (int) $metadata['ino'],
+        ];
+    }
+
+    /**
+     * Recreates a removed directory chain, parents first, for file rollback.
+     *
+     * Directories are deliberately private while files are restored. Their
+     * authored metadata is applied only after file rollback, because those
+     * writes change directory timestamps.
+     *
+     * @param list<array{path: string, mode: int, owner: int, group: int, modifiedAt: int, accessedAt: int, device: int, inode: int}> $directories Leaf-first removed directories.
+     * @return list<string> Paths that could not be recreated.
+     */
+    private static function recreateDirectories(array $directories): array
+    {
+        $failed = [];
+        $blocked = false;
+
+        foreach (array_reverse($directories) as $metadata) {
+            $directory = $metadata['path'];
+
+            if ($blocked || is_dir($directory) || ! @mkdir($directory, 0o700)) {
+                $failed[] = $directory;
+                $blocked = true;
+            }
+        }
+
+        return $failed;
+    }
+
+    /**
+     * Restores and verifies the metadata of directories recreated for a
+     * refused move. Leaf-first order makes each parent's final timestamp the
+     * one it had before its children were removed and restored.
+     *
+     * @param list<array{path: string, mode: int, owner: int, group: int, modifiedAt: int, accessedAt: int, device: int, inode: int}> $directories Leaf-first directories.
+     * @param list<string> $excluded Paths now owned by someone else, which
+     *   must be reported without changing their metadata.
+     * @param list<string> $recreated Paths recreated by this transaction;
+     *   retained paths must still be the original directory object.
+     * @return list<string> Paths whose metadata could not be restored exactly.
+     */
+    private static function restoreDirectoryMetadata(
+        array $directories,
+        array $excluded = [],
+        array $recreated = [],
+    ): array
+    {
+        $failed = [];
+
+        foreach ($directories as $metadata) {
+            $directory = $metadata['path'];
+
+            if (in_array($directory, $excluded, true)) {
+                $failed[] = $directory;
+
+                continue;
+            }
+
+            $current = @stat($directory);
+
+            if (! is_array($current)) {
+                $failed[] = $directory;
+
+                continue;
+            }
+
+            if (! in_array($directory, $recreated, true)
+                && ((int) $current['dev'] !== $metadata['device'] || (int) $current['ino'] !== $metadata['inode'])
+            ) {
+                $failed[] = $directory;
+
+                continue;
+            }
+
+            $restored = true;
+
+            if (PHP_OS_FAMILY !== 'Windows') {
+                if ((int) $current['uid'] !== $metadata['owner']) {
+                    $restored = @chown($directory, $metadata['owner']);
+                }
+
+                if ((int) $current['gid'] !== $metadata['group']) {
+                    $restored = @chgrp($directory, $metadata['group']) && $restored;
+                }
+            }
+
+            if ($restored) {
+                $restored = @chmod($directory, $metadata['mode'])
+                    && @touch($directory, $metadata['modifiedAt'], $metadata['accessedAt']);
+            }
+
+            clearstatcache(true, $directory);
+            $actual = @stat($directory);
+            $restored = $restored
+                && is_array($actual)
+                && (((int) $actual['mode']) & 0o7777) === $metadata['mode']
+                && (int) $actual['mtime'] === $metadata['modifiedAt']
+                && (int) $actual['atime'] === $metadata['accessedAt']
+                && (PHP_OS_FAMILY === 'Windows'
+                    || ((int) $actual['uid'] === $metadata['owner'] && (int) $actual['gid'] === $metadata['group']));
+
+            if (! $restored) {
+                $failed[] = $directory;
+            }
+        }
+
+        return $failed;
     }
 
     /**

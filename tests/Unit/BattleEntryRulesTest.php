@@ -429,6 +429,185 @@ it('fails empty required predicate and effect lists', function (): void {
     }
 });
 
+it('validates and preserves malformed entries that the record projection cannot represent', function (): void {
+    $root = makeTemporaryProject();
+
+    try {
+        writeBattleEntryRules($root, <<<'PHP'
+        <?php
+
+        return [
+          'rules' => [
+            [
+              'id' => 'valid',
+              'actors' => [['actor' => 'Kaelion', 'presence' => 'any']],
+              'effects' => [['type' => 'stat_stage', 'actor' => 'Kaelion', 'stat' => 'speed', 'delta' => 1]],
+            ],
+            'not-a-rule',
+          ],
+        ];
+        PHP);
+
+        $source = (string) file_get_contents(battleEntryRulesPath($root));
+        $database = loadRecordDatabase($root, 'battle_entry_rules');
+
+        expect($database->isEditable())->toBeFalse()
+            ->and($database->getReadOnlyReason())->toContain('field "rules" entry 2 is string')
+            ->and(battleEntryProblemMessages($root))->toBe([
+                'assets/Data/battle-entry-rules.php rule at position 1 must be an array.',
+            ])
+            ->and(fn() => $database->save())->toThrow(RuntimeException::class, 'read-only')
+            ->and((string) file_get_contents(battleEntryRulesPath($root)))->toBe($source);
+    } finally {
+        removeDirectoryRecursively($root);
+    }
+});
+
+it('validates a malformed rule payload changed externally after the workspace loaded', function (): void {
+    $root = makeTemporaryProject();
+
+    try {
+        writeBattleEntryRules($root, <<<'PHP'
+        <?php
+
+        return [
+          'rules' => [[
+            'id' => 'valid',
+            'actors' => [['actor' => 'Kaelion', 'presence' => 'any']],
+            'effects' => [['type' => 'stat_stage', 'actor' => 'Kaelion', 'stat' => 'speed', 'delta' => 1]],
+          ]],
+        ];
+        PHP);
+        $workspace = ProjectWorkspace::fromProject($root);
+
+        writeBattleEntryRules($root, <<<'PHP'
+        <?php
+
+        return [
+          'rules' => [
+            [
+              'id' => 'valid',
+              'actors' => [['actor' => 'Kaelion', 'presence' => 'any']],
+              'effects' => [['type' => 'stat_stage', 'actor' => 'Kaelion', 'stat' => 'speed', 'delta' => 1]],
+            ],
+            'externally-broken',
+          ],
+        ];
+        PHP);
+
+        $messages = array_map(
+            static fn(Issue $issue): string => $issue->message,
+            array_values(array_filter(
+                new ProjectValidator()->validate($workspace),
+                static fn(Issue $issue): bool => $issue->where === 'assets/Data/battle-entry-rules.php',
+            )),
+        );
+
+        expect($messages)->toBe([
+            'assets/Data/battle-entry-rules.php rule at position 1 must be an array.',
+        ]);
+    } finally {
+        removeDirectoryRecursively($root);
+    }
+});
+
+it('revalidates a rule file with named declarations in an isolated process', function (): void {
+    $root = makeTemporaryProject();
+
+    try {
+        writeBattleEntryRules($root, <<<'PHP'
+        <?php
+
+        function editorBattleEntryRuleFixture(): array
+        {
+          return [
+            'id' => 'declared',
+            'actors' => [['actor' => 'Kaelion', 'presence' => 'any']],
+            'effects' => [['type' => 'stat_stage', 'actor' => 'Kaelion', 'stat' => 'speed', 'delta' => 1]],
+          ];
+        }
+
+        return ['rules' => [editorBattleEntryRuleFixture()]];
+        PHP);
+
+        $workspace = ProjectWorkspace::fromProject($root);
+
+        expect(array_values(array_filter(
+            new ProjectValidator()->validate($workspace),
+            static fn(Issue $issue): bool => $issue->where === 'assets/Data/battle-entry-rules.php',
+        )))->toBe([]);
+    } finally {
+        removeDirectoryRecursively($root);
+    }
+});
+
+it('keeps normal PHP semantics for a suppressed optional rule include', function (): void {
+    $root = makeTemporaryProject();
+
+    try {
+        writeBattleEntryRules($root, <<<'PHP'
+        <?php
+
+        return [
+          'rules' => [[
+            'id' => 'fallback',
+            'actors' => [['actor' => 'Kaelion', 'presence' => 'any']],
+            'effects' => [['type' => 'stat_stage', 'actor' => 'Kaelion', 'stat' => 'speed', 'delta' => 1]],
+          ]],
+        ];
+        PHP);
+        $workspace = ProjectWorkspace::fromProject($root);
+
+        writeBattleEntryRules($root, <<<'PHP'
+        <?php
+
+        @include __DIR__ . '/optional-battle-entry-overrides.php';
+
+        return [
+          'rules' => [[
+            'id' => 'fallback',
+            'actors' => [['actor' => 'Kaelion', 'presence' => 'any']],
+            'effects' => [['type' => 'stat_stage', 'actor' => 'Kaelion', 'stat' => 'speed', 'delta' => 1]],
+          ]],
+        ];
+        PHP);
+
+        expect(array_values(array_filter(
+            new ProjectValidator()->validate($workspace),
+            static fn(Issue $issue): bool => $issue->where === 'assets/Data/battle-entry-rules.php',
+        )))->toBe([]);
+    } finally {
+        removeDirectoryRecursively($root);
+    }
+});
+
+it('treats a rule file deleted after workspace load as no rules', function (): void {
+    $root = makeTemporaryProject();
+
+    try {
+        writeBattleEntryRules($root, <<<'PHP'
+        <?php
+
+        return [
+          'rules' => [[
+            'id' => 'loaded-before-delete',
+            'actors' => [['actor' => 'Kaelion', 'presence' => 'any']],
+            'effects' => [['type' => 'stat_stage', 'actor' => 'Kaelion', 'stat' => 'speed', 'delta' => 1]],
+          ]],
+        ];
+        PHP);
+        $workspace = ProjectWorkspace::fromProject($root);
+        unlink(battleEntryRulesPath($root));
+
+        expect(array_values(array_filter(
+            new ProjectValidator()->validate($workspace),
+            static fn(Issue $issue): bool => $issue->where === 'assets/Data/battle-entry-rules.php',
+        )))->toBe([]);
+    } finally {
+        removeDirectoryRecursively($root);
+    }
+});
+
 it('validates a troop classification with the runtime wording', function (): void {
     $root = makeTemporaryProject();
 
