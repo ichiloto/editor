@@ -620,6 +620,51 @@ it('validates a move after the obsolete source directory has left the runtime vi
         ->and(ProjectMap::fromDirectory($root . '/assets/Maps', $moved->directory)->getWidth())->toBe($map->getWidth());
 });
 
+it('holds the old map identity through validation so a nested move cannot claim it', function () {
+    $root = authoredMapProject();
+    ProjectMap::createBlank($root . '/assets/Maps/other', 'other', 'Other B');
+    $map = authoredMap($root);
+    $portableData = str_replace(
+        "\$watchScript = require dirname(__DIR__, 2) . '/Events/harbour-watch.php';\n\n",
+        '',
+        (string) file_get_contents($map->dataPath),
+    );
+    $portableData = str_replace("'script' => \$watchScript,", "'script' => [],", $portableData);
+    $portableData = str_replace("'script' => require dirname(__DIR__, 2) . '/Events/harbour-watch.php',", "'script' => [],", $portableData);
+    file_put_contents($map->dataPath, $portableData);
+
+    $mapText = require $map->mapPath;
+    $mapsRoot = $root . '/assets/Maps';
+    file_put_contents(
+        $map->mapPath,
+        "<?php\n\nif (basename(__DIR__) === 'new') {\n"
+            . "    try {\n"
+            . '        $other = \\Ichiloto\\Editor\\ProjectMap::fromDirectory('
+            . var_export($mapsRoot, true)
+            . ', '
+            . var_export($mapsRoot . '/other', true)
+            . ");\n"
+            . "        \$other->moveTo('test-map');\n"
+            . "    } catch (\\RuntimeException) {\n"
+            . "        // The outer move owns test-map until validation ends.\n"
+            . "    }\n\n"
+            . "    throw new \\RuntimeException('force the outer rollback');\n"
+            . "}\n\nreturn "
+            . var_export($mapText, true)
+            . ";\n",
+    );
+    $map = authoredMap($root);
+    $other = ProjectMap::fromDirectory($mapsRoot, $mapsRoot . '/other');
+    $mapBefore = tripletState($map);
+    $otherBefore = tripletState($other);
+
+    expect(fn() => $map->moveTo('new'))->toThrow(RuntimeException::class, 'force the outer rollback');
+    expect(tripletState($map))->toBe($mapBefore, 'the outer map was restored exactly')
+        ->and(tripletState($other))->toBe($otherBefore, 'the nested map never moved')
+        ->and(is_dir($mapsRoot . '/other'))->toBeTrue()
+        ->and(is_dir($mapsRoot . '/new'))->toBeFalse();
+});
+
 it('moves a map whose authored grid declares a named function', function (string $member) {
     $root = authoredMapProject();
     $dataPath = $root . '/assets/Maps/test-map/test-map.data.php';
@@ -705,6 +750,32 @@ it('evaluates staged map members under their final basenames', function () {
 
     expect($moved->mapId)->toBe('district/harbour')
         ->and(basename($moved->mapPath))->toBe('harbour.map.php');
+});
+
+it('moves preserved map data containing an object without reconstructing it in the editor process', function () {
+    $root = authoredMapProject();
+    $dataPath = $root . '/assets/Maps/test-map/test-map.data.php';
+    $portableData = str_replace(
+        "\$watchScript = require dirname(__DIR__, 2) . '/Events/harbour-watch.php';\n\n",
+        '',
+        (string) file_get_contents($dataPath),
+    );
+    $portableData = str_replace("'script' => \$watchScript,", "'script' => [],", $portableData);
+    $portableData = str_replace("'script' => require dirname(__DIR__, 2) . '/Events/harbour-watch.php',", "'script' => [],", $portableData);
+    $portableData = str_replace(
+        "  'triggers' => [],\n",
+        "  'opaque' => (object) ['label' => 'preserved'],\n  'triggers' => [],\n",
+        $portableData,
+    );
+    file_put_contents($dataPath, $portableData);
+
+    $map = authoredMap($root);
+    $moved = $map->moveTo('district/harbour');
+    $reloaded = ProjectMap::fromDirectory($root . '/assets/Maps', $moved->directory);
+
+    expect($moved->mapId)->toBe('district/harbour')
+        ->and($reloaded->getEditableData()['opaque'])->toBeInstanceOf(stdClass::class)
+        ->and($reloaded->getEditableData()['opaque']->label)->toBe('preserved');
 });
 
 // -- Editor-level flows -------------------------------------------------------

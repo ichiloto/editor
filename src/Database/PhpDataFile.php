@@ -98,27 +98,46 @@ final class PhpDataFile
      *
      * @param list<string> $paths The source files in runtime load order.
      * @param string|null $workingDirectory The project root to evaluate under.
+     * @param-out list<string>|null $fingerprints Stable serialized-value
+     *   fingerprints for comparisons that must preserve object identity by
+     *   class and state without constructing child-process objects here.
      * @return list<mixed> Each file's returned payload, in the same order.
      */
     public static function evaluateIsolatedFiles(
         array $paths,
         ?string $workingDirectory = null,
+        ?array &$fingerprints = null,
     ): array
     {
         if ($paths === []) {
+            $fingerprints = [];
+
             return [];
         }
 
-        return self::evaluateIsolatedPaths($paths, $workingDirectory);
+        return self::evaluateIsolatedPaths($paths, $workingDirectory, $fingerprints);
+    }
+
+    /**
+     * A stable comparison value that includes an object's class and state.
+     *
+     * Isolated payloads are decoded with object construction disabled. The
+     * fingerprint lets callers compare the real parent value with the child
+     * value without invoking __wakeup() or __unserialize() in this process.
+     */
+    public static function valueFingerprint(mixed $value): string
+    {
+        return hash('sha256', serialize($value));
     }
 
     /**
      * Runs one ordered set of paths in a fresh PHP process.
      *
      * @param list<string> $paths The paths to require in order.
+     * @param-out list<string>|null $fingerprints
      * @return list<mixed> Their returned values.
      */
-    private static function evaluateIsolatedPaths(array $paths, ?string $workingDirectory): array
+    private static function evaluateIsolatedPaths(array $paths, ?string $workingDirectory, ?array &$fingerprints): array
     {
 
         $autoload = null;
@@ -141,7 +160,8 @@ final class PhpDataFile
 
         $workingDirectory = $argv[1];
         $autoload = $argv[2];
-        $paths = array_slice($argv, 3);
+        $resultMarker = $argv[3];
+        $paths = array_slice($argv, 4);
 
         if ($autoload !== '') {
             require $autoload;
@@ -153,28 +173,38 @@ final class PhpDataFile
 
         ob_start();
 
+        $resultExitCode = 0;
+
         try {
             $payloads = [];
+            $fingerprints = [];
 
             foreach ($paths as $path) {
-                $payloads[] = require $path;
+                $payload = require $path;
+                $payloads[] = $payload;
+                $fingerprints[] = hash('sha256', serialize($payload));
             }
 
-            $encoded = base64_encode(serialize(['payloads' => $payloads]));
-            ob_end_clean();
-            echo $encoded;
+            $serializedResult = serialize([
+                'payloads' => $payloads,
+                'fingerprints' => $fingerprints,
+            ]);
         } catch (Throwable $throwable) {
-            ob_end_clean();
-            $failure = base64_encode(serialize([
+            $resultExitCode = 1;
+            $serializedResult = serialize([
                 'path' => $path ?? '',
                 'reason' => $throwable->getMessage(),
-            ]));
-            fwrite(STDERR, "\nICHILOTO_EVAL_FAILURE:" . $failure);
-            exit(1);
+            ]);
         }
+
+        ob_end_clean();
+        $encodedResult = base64_encode($serializedResult);
+        fwrite(STDOUT, $resultMarker . strlen($encodedResult) . ':' . $encodedResult);
+        exit($resultExitCode);
         PHP;
         $pipes = [];
-        $arguments = [PHP_BINARY, '-r', substr($runner, strlen("<?php\n")), $workingDirectory ?? '', $autoload ?? '', ...$paths];
+        $resultMarker = 'ICHILOTO_EVAL_RESULT:' . bin2hex(random_bytes(16)) . ':';
+        $arguments = [PHP_BINARY, '-r', substr($runner, strlen("<?php\n")), $workingDirectory ?? '', $autoload ?? '', $resultMarker, ...$paths];
         $process = proc_open(
             $arguments,
             [
@@ -207,34 +237,72 @@ final class PhpDataFile
         }
 
         $exitCode = proc_close($process);
+        $encodedResult = self::extractFramedResult($output, $resultMarker);
+        $serializedResult = $encodedResult === null ? false : base64_decode($encodedResult, true);
+        $result = $serializedResult === false
+            ? false
+            : @unserialize($serializedResult, ['allowed_classes' => false]);
 
         if ($exitCode !== 0) {
-            $marker = 'ICHILOTO_EVAL_FAILURE:';
-            $markerPosition = strrpos($error, $marker);
-
-            if ($markerPosition !== false) {
-                $encodedFailure = trim(substr($error, $markerPosition + strlen($marker)));
-                $serializedFailure = base64_decode($encodedFailure, true);
-                $failure = $serializedFailure === false
-                    ? false
-                    : @unserialize($serializedFailure, ['allowed_classes' => false]);
-
-                if (is_array($failure) && is_string($failure['path'] ?? null) && is_string($failure['reason'] ?? null)) {
-                    throw new IsolatedPhpEvaluationFailure($failure['path'], $failure['reason']);
-                }
+            if (is_array($result) && is_string($result['path'] ?? null) && is_string($result['reason'] ?? null)) {
+                throw new IsolatedPhpEvaluationFailure($result['path'], $result['reason']);
             }
 
             throw new RuntimeException(trim($error) ?: 'Authored PHP could not be evaluated.');
         }
 
-        $serialized = base64_decode(trim($output), true);
-        $result = $serialized === false ? false : @unserialize($serialized, ['allowed_classes' => false]);
-
-        if (! is_array($result) || ! is_array($result['payloads'] ?? null)) {
+        if (! is_array($result)
+            || ! is_array($result['payloads'] ?? null)
+            || ! is_array($result['fingerprints'] ?? null)
+            || count($result['payloads']) !== count($result['fingerprints'])
+        ) {
             throw new RuntimeException('Authored PHP returned an unreadable isolated result.');
         }
 
+        $decodedFingerprints = [];
+
+        foreach ($result['fingerprints'] as $fingerprint) {
+            if (! is_string($fingerprint)) {
+                throw new RuntimeException('Authored PHP returned an unreadable isolated result.');
+            }
+
+            $decodedFingerprints[] = $fingerprint;
+        }
+
+        $fingerprints = $decodedFingerprints;
+
         return array_values($result['payloads']);
+    }
+
+    /**
+     * Extracts a length-prefixed result from stdout that may also contain
+     * authored direct writes before or after the frame.
+     */
+    private static function extractFramedResult(string $output, string $marker): ?string
+    {
+        $markerPosition = strrpos($output, $marker);
+
+        if ($markerPosition === false) {
+            return null;
+        }
+
+        $lengthStart = $markerPosition + strlen($marker);
+        $lengthEnd = strpos($output, ':', $lengthStart);
+
+        if ($lengthEnd === false) {
+            return null;
+        }
+
+        $lengthText = substr($output, $lengthStart, $lengthEnd - $lengthStart);
+
+        if ($lengthText === '' || ! ctype_digit($lengthText)) {
+            return null;
+        }
+
+        $length = (int) $lengthText;
+        $encoded = substr($output, $lengthEnd + 1, $length);
+
+        return strlen($encoded) === $length ? $encoded : null;
     }
 
     /**

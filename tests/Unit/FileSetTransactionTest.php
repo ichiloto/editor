@@ -332,6 +332,33 @@ it('reports a failed source restoration after installed-state validation', funct
         ->and($failure->getMessage())->not->toContain('nothing was changed');
 });
 
+it('never overwrites an entry a competing writer creates before rollback', function () {
+    [$sourceFolder, $dataPath, $partnerPath] = transactionFolder();
+    $destination = dirname($sourceFolder) . '/moved-asset';
+    $transaction = new FileSetTransaction($destination, reserveFolder: true);
+    $transaction->write($destination . '/moved-asset.data.php', "<?php\n\nreturn ['id' => 'moved'];\n");
+    $transaction->write($destination . '/moved-asset.script.php', "<?php\n\nreturn [];\n");
+    $transaction->remove($dataPath);
+    $transaction->remove($partnerPath);
+
+    $failure = null;
+
+    try {
+        $transaction->commit(validate: static function () use ($dataPath): void {
+            file_put_contents($dataPath, 'the competing writer owns this');
+
+            throw new RuntimeException('validation refused the move');
+        });
+    } catch (FileSetTransactionFailure $thrown) {
+        $failure = $thrown;
+    }
+
+    expect($failure)->not->toBeNull()
+        ->and($failure->wasRolledBack)->toBeFalse()
+        ->and($failure->unrestoredPaths)->toContain($dataPath)
+        ->and(file_get_contents($dataPath))->toBe('the competing writer owns this');
+});
+
 // -- The asset's own save and delete, over the real filesystem ---------------
 
 it('leaves no half pair on disk when a new cutscene cannot install its script', function () {

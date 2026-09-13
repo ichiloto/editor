@@ -1187,7 +1187,8 @@ final class ProjectMap
 
         if ($writeData || $moving) {
             try {
-                $evaluated = $this->evaluateFile($staged[$target['dataPath']] ?? $target['dataPath']);
+                $evaluatedFingerprint = null;
+                $evaluated = $this->evaluateFile($staged[$target['dataPath']] ?? $target['dataPath'], $evaluatedFingerprint);
             } catch (\Throwable $throwable) {
                 $transaction->rollBack();
 
@@ -1199,7 +1200,7 @@ final class ProjectMap
                 ), previous: $throwable);
             }
 
-            if (! is_array($evaluated) || $evaluated !== $this->editableData) {
+            if (! is_array($evaluated) || $evaluatedFingerprint !== PhpDataFile::valueFingerprint($this->editableData)) {
                 $transaction->rollBack();
 
                 throw new RuntimeException(sprintf(
@@ -1260,9 +1261,11 @@ final class ProjectMap
      * process is required because staged authored files can repeat named
      * declarations already loaded by this Editor process.
      */
-    private function evaluateFile(string $path): mixed
+    private function evaluateFile(string $path, ?string &$fingerprint = null): mixed
     {
-        $payloads = $this->evaluateFiles([$path]);
+        $fingerprints = [];
+        $payloads = $this->evaluateFiles([$path], $fingerprints);
+        $fingerprint = $fingerprints[0] ?? null;
 
         if (! array_key_exists(0, $payloads)) {
             throw new RuntimeException(sprintf('%s returned no isolated result.', basename($path)));
@@ -1275,15 +1278,17 @@ final class ProjectMap
      * Evaluates one runtime load unit in order and outside the Editor process.
      *
      * @param list<string> $paths The authored members in runtime load order.
+     * @param-out list<string>|null $fingerprints Serialized-value fingerprints.
      * @return list<mixed> Their returned values.
      */
-    private function evaluateFiles(array $paths): array
+    private function evaluateFiles(array $paths, ?array &$fingerprints = null): array
     {
         $projectRoot = dirname($this->getMapsRoot(), 2);
 
         return PhpDataFile::evaluateIsolatedFiles(
             $paths,
             is_dir($projectRoot) ? $projectRoot : null,
+            $fingerprints,
         );
     }
 
@@ -1391,7 +1396,8 @@ final class ProjectMap
         $staged = $transaction->stage();
 
         try {
-            $evaluated = $this->evaluateFile($staged[$duplicatedDataPath] ?? $duplicatedDataPath);
+            $evaluatedFingerprint = null;
+            $evaluated = $this->evaluateFile($staged[$duplicatedDataPath] ?? $duplicatedDataPath, $evaluatedFingerprint);
         } catch (\Throwable $evaluationFailure) {
             $transaction->rollBack();
 
@@ -1403,7 +1409,7 @@ final class ProjectMap
             ), previous: $evaluationFailure);
         }
 
-        if (! is_array($evaluated) || $evaluated !== $duplicatedData) {
+        if (! is_array($evaluated) || $evaluatedFingerprint !== PhpDataFile::valueFingerprint($duplicatedData)) {
             $transaction->rollBack();
 
             throw new RuntimeException(sprintf(
@@ -1721,7 +1727,8 @@ final class ProjectMap
 
                 try {
                     try {
-                        [$evaluated, $evaluatedMap, $evaluatedEvent] = $this->evaluateFiles($destinationPaths);
+                        $evaluatedFingerprints = [];
+                        [$evaluated, $evaluatedMap, $evaluatedEvent] = $this->evaluateFiles($destinationPaths, $evaluatedFingerprints);
                     } catch (\Throwable $evaluationFailure) {
                         $failedPath = $movedDataPath;
 
@@ -1741,7 +1748,9 @@ final class ProjectMap
                         ), previous: $evaluationFailure);
                     }
 
-                    if (! is_array($evaluated) || $evaluated !== $this->editableData) {
+                    if (! is_array($evaluated)
+                        || ($evaluatedFingerprints[0] ?? null) !== PhpDataFile::valueFingerprint($this->editableData)
+                    ) {
                         throw new RuntimeException(sprintf(
                             '%s would not read back as this map at %s.',
                             basename($movedDataPath),

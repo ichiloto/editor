@@ -62,6 +62,12 @@ final class FileSetTransaction
      */
     private array $createdFolders = [];
 
+    /**
+     * @var list<resource> Locks for every source/destination directory and
+     *   their shared boundary, held through validation and rollback.
+     */
+    private array $reservationHandles = [];
+
     private bool $isStaged = false;
     private bool $isFinished = false;
     private int $temporaryCounter = 0;
@@ -130,6 +136,24 @@ final class FileSetTransaction
             return $this->staged;
         }
 
+        $this->acquireReservations();
+
+        try {
+            return $this->stageReserved();
+        } catch (Throwable $throwable) {
+            $this->discard();
+
+            throw $throwable;
+        }
+    }
+
+    /**
+     * Stages the declared files while the complete path set is reserved.
+     *
+     * @return array<string, string>
+     */
+    private function stageReserved(): array
+    {
         if ($this->reserveFolder && $this->files->isDirectory($this->folder)) {
             throw new FileSetTransactionFailure(sprintf('%s already exists', $this->folder));
         }
@@ -295,6 +319,7 @@ final class FileSetTransaction
         $this->isFinished = true;
         $this->discardTemporaries();
         $this->removeFolderIfEmptied();
+        $this->releaseReservations();
     }
 
     /**
@@ -326,9 +351,34 @@ final class FileSetTransaction
 
             if ($original['contents'] === null) {
                 // It was not there before this transaction.
-                if ($this->files->isFile($path) && ! $this->files->remove($path)) {
+                if (! $this->files->isFile($path)) {
+                    if ($this->files->isDirectory($path)) {
+                        $unrestored[] = $path;
+                    }
+
+                    continue;
+                }
+
+                if ($target['intent'] !== self::INTENT_WRITE
+                    || $this->files->read($path) !== $target['contents']
+                    || ! $this->files->remove($path)
+                ) {
                     $unrestored[] = $path;
                 }
+
+                continue;
+            }
+
+            // A write target must still contain this transaction's proposed
+            // bytes, and a removed target must still be absent. Otherwise a
+            // competing writer owns the current entry and rollback must not
+            // overwrite it merely to recreate the earlier snapshot.
+            $stillOwned = $target['intent'] === self::INTENT_WRITE
+                ? $this->files->isFile($path) && $this->files->read($path) === $target['contents']
+                : ! $this->files->isFile($path) && ! $this->files->isDirectory($path);
+
+            if (! $stillOwned) {
+                $unrestored[] = $path;
 
                 continue;
             }
@@ -355,6 +405,8 @@ final class FileSetTransaction
             $this->removeFolderIfCreated();
         }
 
+        $this->releaseReservations();
+
         throw new FileSetTransactionFailure($reason, $unrestored === [], $unrestored, $previous);
     }
 
@@ -365,6 +417,80 @@ final class FileSetTransaction
     {
         $this->discardTemporaries();
         $this->removeFolderIfCreated();
+        $this->releaseReservations();
+    }
+
+    /**
+     * Reserves every directory whose entries this transaction can change.
+     *
+     * Lock files live in the system temporary directory, outside authored
+     * runtime paths. A move also locks the common source/destination parent,
+     * so another move cannot claim a just-removed source while validation is
+     * still deciding whether the first move commits. Acquisition is sorted
+     * and nonblocking: nested writers refuse promptly instead of deadlocking.
+     */
+    private function acquireReservations(): void
+    {
+        if ($this->reservationHandles !== []) {
+            return;
+        }
+
+        $directories = array_values(array_unique(array_map(
+            static fn(array $target): string => rtrim(dirname($target['path']), DIRECTORY_SEPARATOR),
+            $this->targets,
+        )));
+
+        if ($directories === []) {
+            return;
+        }
+
+        $reservedDirectories = $directories;
+        $common = $directories[0];
+
+        foreach (array_slice($directories, 1) as $directory) {
+            while ($common !== DIRECTORY_SEPARATOR
+                && $directory !== $common
+                && ! str_starts_with($directory, $common . DIRECTORY_SEPARATOR)
+            ) {
+                $common = dirname($common);
+            }
+        }
+
+        $reservedDirectories[] = $common;
+        $reservedDirectories = array_values(array_unique($reservedDirectories));
+        sort($reservedDirectories, SORT_STRING);
+        $lockRoot = sys_get_temp_dir() . DIRECTORY_SEPARATOR . sprintf('ichiloto-editor-file-set-locks-%d', getmyuid());
+
+        if (! is_dir($lockRoot) && ! @mkdir($lockRoot, 0o700, true) && ! is_dir($lockRoot)) {
+            throw new FileSetTransactionFailure('Unable to create the file transaction lock directory');
+        }
+
+        foreach ($reservedDirectories as $directory) {
+            $lockPath = $lockRoot . DIRECTORY_SEPARATOR . hash('sha256', str_replace('\\', '/', $directory)) . '.lock';
+            $handle = @fopen($lockPath, 'c+');
+
+            if ($handle === false || ! @flock($handle, LOCK_EX | LOCK_NB)) {
+                if (is_resource($handle)) {
+                    fclose($handle);
+                }
+
+                $this->releaseReservations();
+
+                throw new FileSetTransactionFailure(sprintf('Another file transaction is using %s', $directory));
+            }
+
+            $this->reservationHandles[] = $handle;
+        }
+    }
+
+    private function releaseReservations(): void
+    {
+        foreach (array_reverse($this->reservationHandles) as $handle) {
+            @flock($handle, LOCK_UN);
+            fclose($handle);
+        }
+
+        $this->reservationHandles = [];
     }
 
     private function discardTemporaries(): void

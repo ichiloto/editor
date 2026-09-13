@@ -60,6 +60,24 @@ it('drains large isolated diagnostics without blocking the returned payload', fu
     }
 });
 
+it('separates direct authored stdout from the isolated result frame', function (): void {
+    $root = makeTemporaryProject();
+    $path = $root . '/assets/Data/stdout-diagnostics.php';
+    file_put_contents($path, <<<'PHP'
+    <?php
+
+    fwrite(STDOUT, 'authored diagnostic before result');
+
+    return ['ok' => true];
+    PHP);
+
+    try {
+        expect(PhpDataFile::evaluateIsolated($path, $root))->toBe(['ok' => true]);
+    } finally {
+        removeDirectoryRecursively($root);
+    }
+});
+
 it('refuses to rewrite a file whose data carries comments', function (): void {
     $root = makeTemporaryProject();
     $path = $root . '/assets/Data/states.php';
