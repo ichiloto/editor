@@ -335,6 +335,17 @@ final class ProjectRecordDatabase
     }
 
     /**
+     * Explains why this category's projection cannot preserve a freshly
+     * loaded payload, or null when it can.
+     */
+    public function projectionPreservationIssue(mixed $payload): ?string
+    {
+        return $this->schema->projection instanceof KeyedListProjection
+            ? $this->schema->projection->preservationIssue($payload)
+            : null;
+    }
+
+    /**
      * @inheritDoc
      */
     protected function dependencyVersion(): string

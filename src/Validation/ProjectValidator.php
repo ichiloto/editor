@@ -1250,11 +1250,13 @@ class ProjectValidator
       );
     }
 
-    // An editable projection represents the current in-memory rules, including
-    // unsaved work. A read-only projection is necessarily lossy (for example,
-    // a scalar mixed into the rules list), so validate the raw payload instead
-    // of silently dropping the entry the editor cannot represent.
-    $data = $database->isEditable()
+    // Dirty records represent actual unsaved Editor work, but only while the
+    // freshly re-read file still has a shape the projection can preserve. If
+    // an external edit made the current file lossy, validate that raw payload
+    // instead of trusting stale records loaded before the edit.
+    $validateCurrentRecords = $database->isDirty()
+      && (! $file->exists || $database->projectionPreservationIssue($file->payload) === null);
+    $data = $validateCurrentRecords
       ? ['rules' => array_map(
         static fn(ProjectRecord $record): array => $record->toArray(),
         $records,

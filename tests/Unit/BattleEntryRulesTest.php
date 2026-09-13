@@ -463,6 +463,54 @@ it('validates and preserves malformed entries that the record projection cannot 
     }
 });
 
+it('validates a malformed rule payload changed externally after the workspace loaded', function (): void {
+    $root = makeTemporaryProject();
+
+    try {
+        writeBattleEntryRules($root, <<<'PHP'
+        <?php
+
+        return [
+          'rules' => [[
+            'id' => 'valid',
+            'actors' => [['actor' => 'Kaelion', 'presence' => 'any']],
+            'effects' => [['type' => 'stat_stage', 'actor' => 'Kaelion', 'stat' => 'speed', 'delta' => 1]],
+          ]],
+        ];
+        PHP);
+        $workspace = ProjectWorkspace::fromProject($root);
+
+        writeBattleEntryRules($root, <<<'PHP'
+        <?php
+
+        return [
+          'rules' => [
+            [
+              'id' => 'valid',
+              'actors' => [['actor' => 'Kaelion', 'presence' => 'any']],
+              'effects' => [['type' => 'stat_stage', 'actor' => 'Kaelion', 'stat' => 'speed', 'delta' => 1]],
+            ],
+            'externally-broken',
+          ],
+        ];
+        PHP);
+
+        $messages = array_map(
+            static fn(Issue $issue): string => $issue->message,
+            array_values(array_filter(
+                new ProjectValidator()->validate($workspace),
+                static fn(Issue $issue): bool => $issue->where === 'assets/Data/battle-entry-rules.php',
+            )),
+        );
+
+        expect($messages)->toBe([
+            'assets/Data/battle-entry-rules.php rule at position 1 must be an array.',
+        ]);
+    } finally {
+        removeDirectoryRecursively($root);
+    }
+});
+
 it('validates a troop classification with the runtime wording', function (): void {
     $root = makeTemporaryProject();
 
