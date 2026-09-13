@@ -541,6 +541,46 @@ it('revalidates a rule file with named declarations in an isolated process', fun
     }
 });
 
+it('keeps normal PHP semantics for a suppressed optional rule include', function (): void {
+    $root = makeTemporaryProject();
+
+    try {
+        writeBattleEntryRules($root, <<<'PHP'
+        <?php
+
+        return [
+          'rules' => [[
+            'id' => 'fallback',
+            'actors' => [['actor' => 'Kaelion', 'presence' => 'any']],
+            'effects' => [['type' => 'stat_stage', 'actor' => 'Kaelion', 'stat' => 'speed', 'delta' => 1]],
+          ]],
+        ];
+        PHP);
+        $workspace = ProjectWorkspace::fromProject($root);
+
+        writeBattleEntryRules($root, <<<'PHP'
+        <?php
+
+        @include __DIR__ . '/optional-battle-entry-overrides.php';
+
+        return [
+          'rules' => [[
+            'id' => 'fallback',
+            'actors' => [['actor' => 'Kaelion', 'presence' => 'any']],
+            'effects' => [['type' => 'stat_stage', 'actor' => 'Kaelion', 'stat' => 'speed', 'delta' => 1]],
+          ]],
+        ];
+        PHP);
+
+        expect(array_values(array_filter(
+            new ProjectValidator()->validate($workspace),
+            static fn(Issue $issue): bool => $issue->where === 'assets/Data/battle-entry-rules.php',
+        )))->toBe([]);
+    } finally {
+        removeDirectoryRecursively($root);
+    }
+});
+
 it('treats a rule file deleted after workspace load as no rules', function (): void {
     $root = makeTemporaryProject();
 

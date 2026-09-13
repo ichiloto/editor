@@ -82,6 +82,30 @@ final class PhpDataFile
      */
     public static function evaluateIsolated(string $path, ?string $workingDirectory = null): mixed
     {
+        $payloads = self::evaluateIsolatedFiles([$path], $workingDirectory);
+
+        if (! array_key_exists(0, $payloads)) {
+            throw new RuntimeException(sprintf('%s returned no isolated result.', basename($path)));
+        }
+
+        return $payloads[0];
+    }
+
+    /**
+     * Evaluates authored PHP files in one fresh process and in the supplied
+     * order. Files in one runtime load unit can therefore share declarations
+     * and variables without polluting the long-lived Editor process.
+     *
+     * @param list<string> $paths The files in runtime load order.
+     * @param string|null $workingDirectory The project root to evaluate under.
+     * @return list<mixed> Each file's returned payload, in the same order.
+     */
+    public static function evaluateIsolatedFiles(array $paths, ?string $workingDirectory = null): array
+    {
+        if ($paths === []) {
+            return [];
+        }
+
         $autoload = null;
 
         foreach (get_included_files() as $includedFile) {
@@ -100,9 +124,9 @@ final class PhpDataFile
         $runner = <<<'PHP'
         <?php
 
-        $path = $argv[1];
-        $workingDirectory = $argv[2];
-        $autoload = $argv[3];
+        $workingDirectory = $argv[1];
+        $autoload = $argv[2];
+        $paths = array_slice($argv, 3);
 
         if ($autoload !== '') {
             require $autoload;
@@ -112,27 +136,32 @@ final class PhpDataFile
             chdir($workingDirectory);
         }
 
-        set_error_handler(static function (int $severity, string $message, string $file, int $line): never {
-            throw new ErrorException($message, 0, $severity, $file, $line);
-        });
         ob_start();
 
         try {
-            $payload = require $path;
-            $encoded = base64_encode(serialize(['payload' => $payload]));
+            $payloads = [];
+
+            foreach ($paths as $path) {
+                $payloads[] = require $path;
+            }
+
+            $encoded = base64_encode(serialize(['payloads' => $payloads]));
             ob_end_clean();
             echo $encoded;
         } catch (Throwable $throwable) {
             ob_end_clean();
-            fwrite(STDERR, $throwable->getMessage());
+            $failure = base64_encode(serialize([
+                'path' => $path ?? '',
+                'reason' => $throwable->getMessage(),
+            ]));
+            fwrite(STDERR, "\nICHILOTO_EVAL_FAILURE:" . $failure);
             exit(1);
-        } finally {
-            restore_error_handler();
         }
         PHP;
         $pipes = [];
+        $arguments = [PHP_BINARY, '-r', substr($runner, strlen("<?php\n")), $workingDirectory ?? '', $autoload ?? '', ...$paths];
         $process = proc_open(
-            [PHP_BINARY, '-r', substr($runner, strlen("<?php\n")), $path, $workingDirectory ?? '', $autoload ?? ''],
+            $arguments,
             [
                 0 => ['pipe', 'r'],
                 1 => ['pipe', 'w'],
@@ -142,7 +171,7 @@ final class PhpDataFile
         );
 
         if (! is_resource($process)) {
-            throw new RuntimeException(sprintf('Unable to evaluate %s in an isolated PHP process.', basename($path)));
+            throw new RuntimeException('Unable to evaluate authored PHP in an isolated process.');
         }
 
         fclose($pipes[0]);
@@ -153,17 +182,32 @@ final class PhpDataFile
         $exitCode = proc_close($process);
 
         if ($exitCode !== 0) {
-            throw new RuntimeException(trim($error) ?: sprintf('%s could not be evaluated.', basename($path)));
+            $marker = 'ICHILOTO_EVAL_FAILURE:';
+            $markerPosition = strrpos($error, $marker);
+
+            if ($markerPosition !== false) {
+                $encodedFailure = trim(substr($error, $markerPosition + strlen($marker)));
+                $serializedFailure = base64_decode($encodedFailure, true);
+                $failure = $serializedFailure === false
+                    ? false
+                    : @unserialize($serializedFailure, ['allowed_classes' => false]);
+
+                if (is_array($failure) && is_string($failure['path'] ?? null) && is_string($failure['reason'] ?? null)) {
+                    throw new IsolatedPhpEvaluationFailure($failure['path'], $failure['reason']);
+                }
+            }
+
+            throw new RuntimeException(trim($error) ?: 'Authored PHP could not be evaluated.');
         }
 
         $serialized = base64_decode(trim($output), true);
         $result = $serialized === false ? false : @unserialize($serialized, ['allowed_classes' => false]);
 
-        if (! is_array($result) || ! array_key_exists('payload', $result)) {
-            throw new RuntimeException(sprintf('%s returned an unreadable isolated result.', basename($path)));
+        if (! is_array($result) || ! is_array($result['payloads'] ?? null)) {
+            throw new RuntimeException('Authored PHP returned an unreadable isolated result.');
         }
 
-        return $result['payload'];
+        return array_values($result['payloads']);
     }
 
     /**

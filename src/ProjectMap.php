@@ -8,6 +8,7 @@ use Ichiloto\Editor\Cutscenes\Source\ArraySourceWriter;
 use Ichiloto\Editor\Cutscenes\Source\PhpArraySourceDocument;
 use Ichiloto\Editor\Cutscenes\Source\SourcePreservationRefusal;
 use Ichiloto\Editor\Cutscenes\Source\SourceUnreadable;
+use Ichiloto\Editor\Database\IsolatedPhpEvaluationFailure;
 use Ichiloto\Editor\Database\PhpDataFile;
 use Ichiloto\Editor\Field\NpcCollection;
 use Ichiloto\Editor\Field\ProjectNpc;
@@ -1260,9 +1261,26 @@ final class ProjectMap
      */
     private function evaluateFile(string $path): mixed
     {
+        $payloads = $this->evaluateFiles([$path]);
+
+        if (! array_key_exists(0, $payloads)) {
+            throw new RuntimeException(sprintf('%s returned no isolated result.', basename($path)));
+        }
+
+        return $payloads[0];
+    }
+
+    /**
+     * Evaluates one runtime load unit in order and outside the Editor process.
+     *
+     * @param list<string> $paths The authored members in runtime load order.
+     * @return list<mixed> Their returned values.
+     */
+    private function evaluateFiles(array $paths): array
+    {
         $projectRoot = dirname($this->getMapsRoot(), 2);
 
-        return PhpDataFile::evaluateIsolated($path, is_dir($projectRoot) ? $projectRoot : null);
+        return PhpDataFile::evaluateIsolatedFiles($paths, is_dir($projectRoot) ? $projectRoot : null);
     }
 
     /**
@@ -1680,15 +1698,29 @@ final class ProjectMap
             // map the game cannot load, so the staged copy is proved at the
             // destination first.
             $staged = $transaction->stage();
+            $destinationPaths = [$movedDataPath, $movedMapPath, $movedEventPath];
+            $stagedPaths = array_map(
+                static fn(string $path): string => $staged[$path] ?? $path,
+                $destinationPaths,
+            );
 
             try {
-                $evaluated = $this->evaluateFile($staged[$movedDataPath] ?? $movedDataPath);
+                [$evaluated, $evaluatedMap, $evaluatedEvent] = $this->evaluateFiles($stagedPaths);
             } catch (\Throwable $evaluationFailure) {
                 $transaction->rollBack();
+                $failedPath = $movedDataPath;
+
+                if ($evaluationFailure instanceof IsolatedPhpEvaluationFailure) {
+                    $failedIndex = array_search($evaluationFailure->path, $stagedPaths, true);
+
+                    if (is_int($failedIndex)) {
+                        $failedPath = $destinationPaths[$failedIndex];
+                    }
+                }
 
                 throw new RuntimeException(sprintf(
                     '%s does not evaluate at %s (%s) — an expression written against the old folder depth, such as a relative require, must be adjusted in the file first.',
-                    basename($movedDataPath),
+                    basename($failedPath),
                     $newRelativeId,
                     $evaluationFailure->getMessage(),
                 ), previous: $evaluationFailure);
@@ -1708,20 +1740,13 @@ final class ProjectMap
                 $movedMapPath => array_map($this->buildStyledLine(...), $this->tileCells),
                 $movedEventPath => array_map($this->buildPlainLine(...), $this->eventCells),
             ];
+            $evaluatedGrids = [
+                $movedMapPath => $evaluatedMap,
+                $movedEventPath => $evaluatedEvent,
+            ];
 
             foreach ($expectedGrids as $path => $expectedLines) {
-                try {
-                    $evaluatedGrid = $this->evaluateFile($staged[$path] ?? $path);
-                } catch (\Throwable $evaluationFailure) {
-                    $transaction->rollBack();
-
-                    throw new RuntimeException(sprintf(
-                        '%s does not evaluate at %s (%s) — an expression written against the old folder depth, such as a relative require, must be adjusted in the file first.',
-                        basename($path),
-                        $newRelativeId,
-                        $evaluationFailure->getMessage(),
-                    ), previous: $evaluationFailure);
-                }
+                $evaluatedGrid = $evaluatedGrids[$path];
 
                 if (! is_string($evaluatedGrid) || self::splitMapText($evaluatedGrid) !== $expectedLines) {
                     $transaction->rollBack();
