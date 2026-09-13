@@ -562,7 +562,7 @@ it('refuses a move when a staged grid member no longer evaluates at its destinat
         ->and(tripletState($map))->toBe($before);
 })->with(['map', 'event']);
 
-it('refuses and rolls back a move that only validates while an old source member exists', function () {
+it('restores source file and directory metadata when installed move validation fails', function (bool $retainSourceDirectory) {
     $root = authoredMapProject();
     $map = authoredMap($root);
     $portableData = str_replace(
@@ -582,25 +582,46 @@ it('refuses and rolls back a move that only validates while an old source member
             . ";\n",
     );
     $map = authoredMap($root);
+
+    if ($retainSourceDirectory) {
+        file_put_contents($map->directory . '/notes.txt', 'author notes');
+    }
+
     chmod($map->directory, 0o710);
     touch($map->directory, time() - 3600, time() - 7200);
+    $fileModifiedAt = time() - 5400;
+    $fileAccessedAt = time() - 9000;
+    chmod($map->dataPath, 0o610);
+    touch($map->dataPath, $fileModifiedAt, $fileAccessedAt);
     clearstatcache(true, $map->directory);
     $directoryBefore = stat($map->directory);
     $before = tripletState($map);
+    touch($map->dataPath, $fileModifiedAt, $fileAccessedAt);
+    clearstatcache(true, $map->dataPath);
+    $fileBefore = stat($map->dataPath);
 
     expect(fn() => $map->moveTo('district/harbour'))
         ->toThrow(RuntimeException::class, 'harbour.map.php does not evaluate at district/harbour');
     clearstatcache(true, $map->directory);
     $directoryAfter = stat($map->directory);
+    $fileAfter = stat($map->dataPath);
     expect(is_dir($root . '/assets/Maps/district'))->toBeFalse()
         ->and(tripletState($map))->toBe($before, 'the source triplet was restored byte-for-byte and at the same times')
+        ->and(is_file($map->directory . '/notes.txt'))->toBe($retainSourceDirectory)
         ->and(is_array($directoryBefore))->toBeTrue()
         ->and(is_array($directoryAfter))->toBeTrue()
         ->and(((int) $directoryAfter['mode']) & 0o7777)->toBe(((int) $directoryBefore['mode']) & 0o7777)
         ->and((int) $directoryAfter['uid'])->toBe((int) $directoryBefore['uid'])
         ->and((int) $directoryAfter['gid'])->toBe((int) $directoryBefore['gid'])
-        ->and((int) $directoryAfter['mtime'])->toBe((int) $directoryBefore['mtime']);
-});
+        ->and((int) $directoryAfter['mtime'])->toBe((int) $directoryBefore['mtime'])
+        ->and(is_array($fileBefore))->toBeTrue()
+        ->and(is_array($fileAfter))->toBeTrue()
+        ->and(((int) $fileAfter['mode']) & 0o7777)->toBe(((int) $fileBefore['mode']) & 0o7777)
+        ->and((int) $fileAfter['uid'])->toBe((int) $fileBefore['uid'])
+        ->and((int) $fileAfter['gid'])->toBe((int) $fileBefore['gid'])
+        ->and((int) $fileAfter['mtime'])->toBe((int) $fileBefore['mtime'])
+        ->and((int) $fileAfter['atime'])->toBe((int) $fileBefore['atime']);
+})->with([false, true]);
 
 it('validates a move after the obsolete source directory has left the runtime view', function () {
     $root = authoredMapProject();

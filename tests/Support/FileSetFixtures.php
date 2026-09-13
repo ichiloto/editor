@@ -83,13 +83,13 @@ final class FailingFileSetOperations implements FileSetOperations
         return $this->inner->listDirectory($path);
     }
 
-    public function modifiedAt(string $path): ?int
+    public function metadata(string $path): ?array
     {
-        return $this->inner->modifiedAt($path);
+        return $this->fails('metadata', $path) ? null : $this->inner->metadata($path);
     }
 
-    public function setModifiedAt(string $path, int $timestamp): bool
+    public function restoreMetadata(string $path, array $metadata): bool
     {
-        return $this->fails('setModifiedAt', $path) ? false : $this->inner->setModifiedAt($path, $timestamp);
+        return $this->fails('restoreMetadata', $path) ? false : $this->inner->restoreMetadata($path, $metadata);
     }
 }

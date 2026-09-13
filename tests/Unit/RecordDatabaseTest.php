@@ -98,6 +98,31 @@ it('keeps authored local variables out of the isolated runner protocol', functio
     }
 });
 
+it('keeps authored globals out of the isolated runner protocol', function (): void {
+    $root = makeTemporaryProject();
+    $path = $root . '/assets/Data/runner-globals.php';
+    file_put_contents($path, <<<'PHP'
+    <?php
+
+    global $payloads, $fingerprints, $resultMarker, $serializedResult, $resultExitCode;
+
+    $payloads = 'authored global state';
+    $fingerprints = ['authored'];
+    $resultMarker = 'authored marker';
+    $serializedResult = 'authored result';
+    $resultExitCode = 99;
+    $GLOBALS['paths'] = [];
+
+    return ['ok' => true];
+    PHP);
+
+    try {
+        expect(PhpDataFile::evaluateIsolated($path, $root))->toBe(['ok' => true]);
+    } finally {
+        removeDirectoryRecursively($root);
+    }
+});
+
 it('refuses to rewrite a file whose data carries comments', function (): void {
     $root = makeTemporaryProject();
     $path = $root . '/assets/Data/states.php';

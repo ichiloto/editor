@@ -53,7 +53,7 @@ final class FileSetTransaction
     private array $staged = [];
 
     /**
-     * @var array<string, array{contents: string|null, modifiedAt: int|null}> Each target's state before the transaction.
+     * @var array<string, array{contents: string|null, metadata: array{mode: int, owner: int, group: int, modifiedAt: int, accessedAt: int}|null}> Each target's state before the transaction.
      */
     private array $original = [];
 
@@ -176,7 +176,14 @@ final class FileSetTransaction
             }
 
             if ($this->files->isFile($path)) {
+                // Capture metadata before reading: even a read can update the
+                // access time on filesystems that track it.
+                $metadata = $this->files->metadata($path);
                 $contents = $this->files->read($path);
+
+                if ($metadata === null) {
+                    throw new FileSetTransactionFailure(sprintf('%s metadata could not be read, so it could not be put back if the write failed', basename($path)));
+                }
 
                 if ($contents === null) {
                     // Unreadable now is unrestorable later: refuse before
@@ -184,12 +191,12 @@ final class FileSetTransaction
                     throw new FileSetTransactionFailure(sprintf('%s could not be read, so it could not be put back if the write failed', basename($path)));
                 }
 
-                $this->original[$path] = ['contents' => $contents, 'modifiedAt' => $this->files->modifiedAt($path)];
+                $this->original[$path] = ['contents' => $contents, 'metadata' => $metadata];
 
                 continue;
             }
 
-            $this->original[$path] = ['contents' => null, 'modifiedAt' => null];
+            $this->original[$path] = ['contents' => null, 'metadata' => null];
         }
 
         foreach ($foldersToCreate as $missing) {
@@ -410,11 +417,10 @@ final class FileSetTransaction
                 continue;
             }
 
-            if ($original['modifiedAt'] !== null && ! $this->files->setModifiedAt($path, $original['modifiedAt'])) {
-                // Put back means put back: the same bytes at the same time,
-                // so nothing downstream reads the restoration as an edit. A
-                // file whose time could not be restored is not the file that
-                // was there, and saying the rollback succeeded would hide it.
+            if ($original['metadata'] === null || ! $this->files->restoreMetadata($path, $original['metadata'])) {
+                // Put back means the same bytes, permissions, ownership and
+                // timestamps. Anything less must not be called a successful
+                // rollback.
                 $unrestored[] = $path;
             }
         }
@@ -488,12 +494,11 @@ final class FileSetTransaction
         $reservedDirectories[] = $common;
         $reservedDirectories = array_values(array_unique($reservedDirectories));
         sort($reservedDirectories, SORT_STRING);
-        // getmyuid() reports the owner of the entry script, not the process.
-        // The effective user keeps two processes run by the same account in
-        // one namespace even when their PHP entry points have different
-        // owners (a common Linux package-install layout). On platforms
-        // without POSIX, the system temp directory is already user-scoped.
-        $userNamespace = function_exists('posix_geteuid') ? (string) posix_geteuid() : 'current-user';
+        // getmyuid() reports the entry-script owner and POSIX is optional.
+        // A core-PHP temporary file is owned by the effective account, giving
+        // every process for that account the same identity regardless of its
+        // entry point or enabled extensions.
+        $userNamespace = self::effectiveUserNamespace();
         $lockRoot = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'ichiloto-editor-file-set-locks-' . $userNamespace;
 
         if (! is_dir($lockRoot) && ! @mkdir($lockRoot, 0o700, true) && ! is_dir($lockRoot)) {
@@ -516,6 +521,31 @@ final class FileSetTransaction
 
             $this->reservationHandles[] = $handle;
         }
+    }
+
+    /**
+     * Returns the effective filesystem identity without relying on the owner
+     * of the PHP entry point or the optional POSIX extension.
+     */
+    private static function effectiveUserNamespace(): string
+    {
+        $probe = @tmpfile();
+
+        if (! is_resource($probe)) {
+            throw new FileSetTransactionFailure('Unable to establish the file transaction owner');
+        }
+
+        try {
+            $metadata = @fstat($probe);
+        } finally {
+            fclose($probe);
+        }
+
+        if (! is_array($metadata) || ! isset($metadata['uid'])) {
+            throw new FileSetTransactionFailure('Unable to establish the file transaction owner');
+        }
+
+        return (string) ((int) $metadata['uid']);
     }
 
     private function releaseReservations(): void

@@ -1793,14 +1793,26 @@ final class ProjectMap
                     throw $validationFailure;
                 }
             }, afterRollback: static function () use (
+                $sourceDirectoryMetadata,
                 &$removedSourceDirectories,
                 &$directoryRestorationFailures,
             ): array {
+                $directoriesToRestore = $removedSourceDirectories;
+
+                if (! in_array(
+                    $sourceDirectoryMetadata['path'],
+                    array_column($directoriesToRestore, 'path'),
+                    true,
+                )) {
+                    array_unshift($directoriesToRestore, $sourceDirectoryMetadata);
+                }
+
                 return array_values(array_unique([
                     ...$directoryRestorationFailures,
                     ...self::restoreDirectoryMetadata(
-                        $removedSourceDirectories,
+                        $directoriesToRestore,
                         $directoryRestorationFailures,
+                        array_column($removedSourceDirectories, 'path'),
                     ),
                 ]));
             });
@@ -1930,8 +1942,8 @@ final class ProjectMap
      * before its leaf is removed, so removing a child cannot change the
      * parent timestamp before it is captured.
      *
-     * @param array{path: string, mode: int, owner: int, group: int, modifiedAt: int, accessedAt: int} $sourceDirectoryMetadata Metadata captured before source members are removed.
-     * @return list<array{path: string, mode: int, owner: int, group: int, modifiedAt: int, accessedAt: int}> The removed directories, leaf first.
+     * @param array{path: string, mode: int, owner: int, group: int, modifiedAt: int, accessedAt: int, device: int, inode: int} $sourceDirectoryMetadata Metadata captured before source members are removed.
+     * @return list<array{path: string, mode: int, owner: int, group: int, modifiedAt: int, accessedAt: int, device: int, inode: int}> The removed directories, leaf first.
      */
     private static function removeEmptyDirectoryChain(
         string $directory,
@@ -1982,7 +1994,7 @@ final class ProjectMap
      * Captures the filesystem metadata needed for an exact directory
      * rollback before any member or child is removed.
      *
-     * @return array{path: string, mode: int, owner: int, group: int, modifiedAt: int, accessedAt: int}
+     * @return array{path: string, mode: int, owner: int, group: int, modifiedAt: int, accessedAt: int, device: int, inode: int}
      */
     private static function captureDirectoryMetadata(string $directory): array
     {
@@ -1999,6 +2011,8 @@ final class ProjectMap
             'group' => (int) $metadata['gid'],
             'modifiedAt' => (int) $metadata['mtime'],
             'accessedAt' => (int) $metadata['atime'],
+            'device' => (int) $metadata['dev'],
+            'inode' => (int) $metadata['ino'],
         ];
     }
 
@@ -2009,7 +2023,7 @@ final class ProjectMap
      * authored metadata is applied only after file rollback, because those
      * writes change directory timestamps.
      *
-     * @param list<array{path: string, mode: int, owner: int, group: int, modifiedAt: int, accessedAt: int}> $directories Leaf-first removed directories.
+     * @param list<array{path: string, mode: int, owner: int, group: int, modifiedAt: int, accessedAt: int, device: int, inode: int}> $directories Leaf-first removed directories.
      * @return list<string> Paths that could not be recreated.
      */
     private static function recreateDirectories(array $directories): array
@@ -2034,12 +2048,18 @@ final class ProjectMap
      * refused move. Leaf-first order makes each parent's final timestamp the
      * one it had before its children were removed and restored.
      *
-     * @param list<array{path: string, mode: int, owner: int, group: int, modifiedAt: int, accessedAt: int}> $directories Leaf-first removed directories.
+     * @param list<array{path: string, mode: int, owner: int, group: int, modifiedAt: int, accessedAt: int, device: int, inode: int}> $directories Leaf-first directories.
      * @param list<string> $excluded Paths now owned by someone else, which
      *   must be reported without changing their metadata.
+     * @param list<string> $recreated Paths recreated by this transaction;
+     *   retained paths must still be the original directory object.
      * @return list<string> Paths whose metadata could not be restored exactly.
      */
-    private static function restoreDirectoryMetadata(array $directories, array $excluded = []): array
+    private static function restoreDirectoryMetadata(
+        array $directories,
+        array $excluded = [],
+        array $recreated = [],
+    ): array
     {
         $failed = [];
 
@@ -2052,21 +2072,31 @@ final class ProjectMap
                 continue;
             }
 
-            $restored = is_dir($directory);
+            $current = @stat($directory);
 
-            if ($restored && PHP_OS_FAMILY !== 'Windows') {
-                $current = @stat($directory);
+            if (! is_array($current)) {
+                $failed[] = $directory;
 
-                if (! is_array($current)) {
-                    $restored = false;
-                } else {
-                    if ((int) $current['uid'] !== $metadata['owner']) {
-                        $restored = @chown($directory, $metadata['owner']);
-                    }
+                continue;
+            }
 
-                    if ((int) $current['gid'] !== $metadata['group']) {
-                        $restored = @chgrp($directory, $metadata['group']) && $restored;
-                    }
+            if (! in_array($directory, $recreated, true)
+                && ((int) $current['dev'] !== $metadata['device'] || (int) $current['ino'] !== $metadata['inode'])
+            ) {
+                $failed[] = $directory;
+
+                continue;
+            }
+
+            $restored = true;
+
+            if (PHP_OS_FAMILY !== 'Windows') {
+                if ((int) $current['uid'] !== $metadata['owner']) {
+                    $restored = @chown($directory, $metadata['owner']);
+                }
+
+                if ((int) $current['gid'] !== $metadata['group']) {
+                    $restored = @chgrp($directory, $metadata['group']) && $restored;
                 }
             }
 
@@ -2081,6 +2111,7 @@ final class ProjectMap
                 && is_array($actual)
                 && (((int) $actual['mode']) & 0o7777) === $metadata['mode']
                 && (int) $actual['mtime'] === $metadata['modifiedAt']
+                && (int) $actual['atime'] === $metadata['accessedAt']
                 && (PHP_OS_FAMILY === 'Windows'
                     || ((int) $actual['uid'] === $metadata['owner'] && (int) $actual['gid'] === $metadata['group']));
 

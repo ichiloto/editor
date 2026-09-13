@@ -158,10 +158,11 @@ final class PhpDataFile
         $runner = <<<'PHP'
         <?php
 
-        $workingDirectory = $argv[1];
-        $autoload = $argv[2];
-        $resultMarker = $argv[3];
-        $paths = array_slice($argv, 4);
+        (static function (array $arguments): never {
+        $workingDirectory = $arguments[1];
+        $autoload = $arguments[2];
+        $resultMarker = $arguments[3];
+        $paths = array_slice($arguments, 4);
 
         if ($autoload !== '') {
             require $autoload;
@@ -237,6 +238,7 @@ final class PhpDataFile
         $encodedResult = base64_encode($serializedResult);
         fwrite(STDOUT, $resultMarker . strlen($encodedResult) . ':' . $encodedResult);
         exit($resultExitCode);
+        })($argv);
         PHP;
         $authoredRequires = implode("\n", array_map(
             static fn(string $path): string => '                    require ' . var_export($path, true) . ',',

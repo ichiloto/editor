@@ -481,11 +481,11 @@ it('writes one file of the pair without touching the other, or its modification 
         ->and(glob($folder . '/*.tmp-*'))->toBe([]);
 });
 
-it('reports a rollback as failed when a restored file\'s modification time cannot be put back', function () {
+it('reports a rollback as failed when a restored file\'s metadata cannot be put back', function () {
     [$folder, $dataPath, $partnerPath] = transactionFolder();
     // The partner cannot be replaced, forcing a rollback of the data file --
-    // whose bytes go back, but whose original modification time cannot.
-    $files = new FailingFileSetOperations(failures: ['move' => [$partnerPath], 'setModifiedAt' => [$dataPath]]);
+    // whose bytes go back, but whose original metadata cannot.
+    $files = new FailingFileSetOperations(failures: ['move' => [$partnerPath], 'restoreMetadata' => [$dataPath]]);
     $transaction = new FileSetTransaction($folder, $files);
     $transaction->write($dataPath, "<?php\n\nreturn ['id' => 'asset', 'name' => 'Edited'];\n");
     $transaction->write($partnerPath, "<?php\n\nreturn [];\n");
@@ -500,7 +500,7 @@ it('reports a rollback as failed when a restored file\'s modification time canno
     }
 
     expect($failure)->not->toBeNull()
-        ->and($failure->wasRolledBack)->toBeFalse('a file at the wrong time is not the file that was there')
+        ->and($failure->wasRolledBack)->toBeFalse('a file with different metadata is not the file that was there')
         ->and($failure->unrestoredPaths)->toBe([$dataPath])
         ->and($failure->getMessage())->toContain('asset.data.php')
         ->and($failure->getMessage())->not->toContain('nothing was changed');
@@ -554,4 +554,62 @@ it('takes back a folder it created when the backup callback throws on a moving s
     expect(is_dir($destination))->toBeFalse('the folder this transaction created is gone')
         ->and(is_file($dataPath))->toBeTrue()
         ->and(is_file($partnerPath))->toBeTrue();
+});
+
+it('shares reservations with a same-user process that has no POSIX functions', function () {
+    [$folder, $dataPath] = transactionFolder();
+    $transaction = new FileSetTransaction($folder);
+    $transaction->write($dataPath, "<?php\n\nreturn ['id' => 'parent'];\n");
+    $transaction->stage();
+    $probe = <<<'PHP'
+    require $argv[1];
+
+    if (function_exists('posix_geteuid')) {
+        fwrite(STDERR, 'POSIX was not disabled');
+        exit(2);
+    }
+
+    $transaction = new \Ichiloto\Editor\Storage\FileSetTransaction($argv[2]);
+    $transaction->write($argv[3], 'child');
+
+    try {
+        $transaction->stage();
+        $transaction->rollBack();
+        fwrite(STDOUT, 'acquired');
+        exit(3);
+    } catch (\Ichiloto\Editor\Storage\FileSetTransactionFailure $failure) {
+        fwrite(STDOUT, str_contains($failure->getMessage(), 'Another file transaction') ? 'reserved' : $failure->getMessage());
+    }
+    PHP;
+    $process = proc_open(
+        [
+            PHP_BINARY,
+            '-d',
+            'disable_functions=posix_geteuid',
+            '-r',
+            $probe,
+            dirname(__DIR__, 2) . '/vendor/autoload.php',
+            $folder,
+            $dataPath,
+        ],
+        [
+            0 => ['pipe', 'r'],
+            1 => ['pipe', 'w'],
+            2 => ['pipe', 'w'],
+        ],
+        $pipes,
+    );
+
+    expect(is_resource($process))->toBeTrue();
+    fclose($pipes[0]);
+    $output = stream_get_contents($pipes[1]);
+    $error = stream_get_contents($pipes[2]);
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+    $exitCode = proc_close($process);
+    $transaction->rollBack();
+
+    expect($exitCode)->toBe(0)
+        ->and($output)->toBe('reserved')
+        ->and($error)->toBe('');
 });
