@@ -98,97 +98,18 @@ final class PhpDataFile
      *
      * @param list<string> $paths The source files in runtime load order.
      * @param string|null $workingDirectory The project root to evaluate under.
-     * @param list<string>|null $runtimePaths Optional final paths whose
-     *   basenames and sibling layout must be reproduced during evaluation.
      * @return list<mixed> Each file's returned payload, in the same order.
      */
     public static function evaluateIsolatedFiles(
         array $paths,
         ?string $workingDirectory = null,
-        ?array $runtimePaths = null,
     ): array
     {
         if ($paths === []) {
             return [];
         }
 
-        if ($runtimePaths === null) {
-            return self::evaluateIsolatedPaths($paths, $workingDirectory);
-        }
-
-        $evaluationPaths = self::stageRuntimeNamedCopies($paths, $runtimePaths);
-
-        try {
-            return self::evaluateIsolatedPaths($evaluationPaths, $workingDirectory);
-        } catch (IsolatedPhpEvaluationFailure $failure) {
-            $failedIndex = array_search($failure->path, $evaluationPaths, true);
-
-            if (is_int($failedIndex)) {
-                throw new IsolatedPhpEvaluationFailure($runtimePaths[$failedIndex], $failure->reason);
-            }
-
-            throw $failure;
-        } finally {
-            foreach ($evaluationPaths as $evaluationPath) {
-                @unlink($evaluationPath);
-            }
-        }
-    }
-
-    /**
-     * Copies a load unit under its exact, still-unoccupied runtime paths.
-     * This is used only while a transaction owns a newly created destination
-     * directory, and the caller removes every preview copy before commit.
-     *
-     * @param list<string> $paths The staged source paths.
-     * @param list<string> $runtimePaths The final runtime paths.
-     * @return list<string> The temporary runtime-named evaluation paths.
-     */
-    private static function stageRuntimeNamedCopies(array $paths, array $runtimePaths): array
-    {
-        if (count($paths) !== count($runtimePaths) || $runtimePaths === []) {
-            throw new RuntimeException('Runtime evaluation paths must match the authored files.');
-        }
-
-        $runtimeDirectory = dirname($runtimePaths[0]);
-
-        if (! is_dir($runtimeDirectory)) {
-            throw new RuntimeException('The runtime evaluation directory does not exist.');
-        }
-
-        $evaluationPaths = [];
-
-        try {
-            foreach ($paths as $index => $path) {
-                $runtimePath = $runtimePaths[$index];
-
-                if (dirname($runtimePath) !== $runtimeDirectory) {
-                    throw new RuntimeException('Runtime evaluation files must share one directory.');
-                }
-
-                if (file_exists($runtimePath)) {
-                    throw new RuntimeException(sprintf('%s already exists and cannot be used as a validation preview.', basename($runtimePath)));
-                }
-
-                $evaluationPath = $runtimePath;
-                $contents = @file_get_contents($path);
-                $written = $contents === false ? false : @file_put_contents($evaluationPath, $contents);
-
-                if ($contents === false || $written !== strlen($contents)) {
-                    throw new RuntimeException(sprintf('Unable to stage %s under its runtime filename.', basename($runtimePath)));
-                }
-
-                $evaluationPaths[] = $evaluationPath;
-            }
-        } catch (Throwable $throwable) {
-            foreach ($evaluationPaths as $evaluationPath) {
-                @unlink($evaluationPath);
-            }
-
-            throw $throwable;
-        }
-
-        return $evaluationPaths;
+        return self::evaluateIsolatedPaths($paths, $workingDirectory);
     }
 
     /**

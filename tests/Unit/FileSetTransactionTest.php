@@ -224,6 +224,114 @@ it('drops staged copies without installing them when the caller rolls back', fun
         ->and(count(array_diff(scandir($folder) ?: [], ['.', '..'])))->toBe(2);
 });
 
+it('refuses a reserved folder another writer created and preserves that writer\'s files', function () {
+    [$folder, $dataPath, $partnerPath] = transactionFolder(withPair: false);
+    $transaction = new FileSetTransaction($folder, reserveFolder: true);
+    $transaction->write($dataPath, "<?php\n\nreturn ['id' => 'asset'];\n");
+    $transaction->write($partnerPath, "<?php\n\nreturn [];\n");
+
+    // The destination was free when the move began, but another writer won
+    // it before staging. It is not this transaction's folder to empty.
+    mkdir($folder, 0o777, true);
+    file_put_contents($folder . '/other-writer.txt', 'theirs');
+
+    expect(fn() => $transaction->stage())->toThrow(FileSetTransactionFailure::class, 'already exists')
+        ->and(file_get_contents($folder . '/other-writer.txt'))->toBe('theirs')
+        ->and(is_file($dataPath))->toBeFalse()
+        ->and(is_file($partnerPath))->toBeFalse();
+});
+
+it('loses an atomic folder-creation race without claiming or deleting the winner', function () {
+    [$folder, $dataPath, $partnerPath] = transactionFolder(withPair: false);
+    mkdir(dirname($folder), 0o777, true);
+    $files = new FailingFileSetOperations(before: [
+        'makeDirectory' => static function (string $path): void {
+            mkdir($path, 0o777);
+            file_put_contents($path . '/other-writer.txt', 'theirs');
+        },
+    ]);
+    $transaction = new FileSetTransaction($folder, $files, reserveFolder: true);
+    $transaction->write($dataPath, "<?php\n\nreturn ['id' => 'asset'];\n");
+    $transaction->write($partnerPath, "<?php\n\nreturn [];\n");
+
+    expect(fn() => $transaction->stage())->toThrow(FileSetTransactionFailure::class, 'Unable to create')
+        ->and(file_get_contents($folder . '/other-writer.txt'))->toBe('theirs')
+        ->and(is_file($dataPath))->toBeFalse()
+        ->and(is_file($partnerPath))->toBeFalse();
+});
+
+it('validates the installed state and restores every path when validation refuses it', function () {
+    [$sourceFolder, $dataPath, $partnerPath] = transactionFolder();
+    $before = folderState($sourceFolder);
+    $destination = dirname($sourceFolder) . '/moved-asset';
+    $movedData = $destination . '/moved-asset.data.php';
+    $movedPartner = $destination . '/moved-asset.script.php';
+    $observed = [];
+    $transaction = new FileSetTransaction($destination, reserveFolder: true);
+    $transaction->write($movedData, "<?php\n\nreturn ['id' => 'moved'];\n");
+    $transaction->write($movedPartner, "<?php\n\nreturn [];\n");
+    $transaction->remove($dataPath);
+    $transaction->remove($partnerPath);
+
+    $failure = null;
+
+    try {
+        $transaction->commit(validate: static function () use (
+            &$observed,
+            $movedData,
+            $movedPartner,
+            $dataPath,
+            $partnerPath,
+        ): void {
+            $observed = [
+                is_file($movedData),
+                is_file($movedPartner),
+                is_file($dataPath),
+                is_file($partnerPath),
+                glob(dirname($movedData) . '/*.tmp-*'),
+            ];
+
+            throw new RuntimeException('the final files cannot be loaded');
+        });
+    } catch (FileSetTransactionFailure $thrown) {
+        $failure = $thrown;
+    }
+
+    expect($observed)->toBe([true, true, false, false, []], 'validation sees exactly the installed members')
+        ->and($failure)->not->toBeNull()
+        ->and($failure->wasRolledBack)->toBeTrue()
+        ->and($failure->getPrevious())->toBeInstanceOf(RuntimeException::class)
+        ->and(folderState($sourceFolder))->toBe($before, 'the complete source pair was restored exactly')
+        ->and(is_dir($destination))->toBeFalse('the refused destination was taken back');
+});
+
+it('reports a failed source restoration after installed-state validation', function () {
+    [$sourceFolder, $dataPath, $partnerPath] = transactionFolder();
+    $destination = dirname($sourceFolder) . '/moved-asset';
+    $files = new FailingFileSetOperations(failures: ['write' => [$dataPath]]);
+    $transaction = new FileSetTransaction($destination, $files, reserveFolder: true);
+    $transaction->write($destination . '/moved-asset.data.php', "<?php\n\nreturn ['id' => 'moved'];\n");
+    $transaction->write($destination . '/moved-asset.script.php', "<?php\n\nreturn [];\n");
+    $transaction->remove($dataPath);
+    $transaction->remove($partnerPath);
+
+    $failure = null;
+
+    try {
+        $transaction->commit(validate: static function (): void {
+            throw new RuntimeException('invalid after installation');
+        });
+    } catch (FileSetTransactionFailure $thrown) {
+        $failure = $thrown;
+    }
+
+    expect($failure)->not->toBeNull()
+        ->and($failure->wasRolledBack)->toBeFalse()
+        ->and($failure->unrestoredPaths)->toBe([$dataPath])
+        ->and($failure->getMessage())->toContain('asset.data.php')
+        ->and($failure->getMessage())->not->toContain('nothing was changed');
+});
+
 // -- The asset's own save and delete, over the real filesystem ---------------
 
 it('leaves no half pair on disk when a new cutscene cannot install its script', function () {

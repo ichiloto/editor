@@ -52,7 +52,11 @@ interface FileSetOperations
     public function remove(string $path): bool;
 
     /**
-     * Creates a directory and every missing parent.
+     * Creates one absent directory.
+     *
+     * Returning false when the directory already exists lets a transaction
+     * distinguish a directory it owns from one another writer created.
+     * Parents are created separately, in order, by the transaction.
      */
     public function makeDirectory(string $path): bool;
 

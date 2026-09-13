@@ -15,16 +15,25 @@ final class FailingFileSetOperations implements FileSetOperations
 
     /**
      * @param array<string, array<int, string>> $failures Paths to fail, by verb.
+     * @param array<string, callable(string): void> $before One-shot actions
+     *   immediately before a named operation, used to reproduce races.
      */
     public function __construct(
         private readonly FileSetOperations $inner = new FilesystemFileSetOperations(),
         private array $failures = [],
+        private array $before = [],
     ) {
     }
 
     private function fails(string $verb, string $path): bool
     {
         $this->calls[] = $verb . ' ' . basename($path);
+
+        if (isset($this->before[$verb])) {
+            $action = $this->before[$verb];
+            unset($this->before[$verb]);
+            $action($path);
+        }
 
         return in_array($path, $this->failures[$verb] ?? [], true);
     }

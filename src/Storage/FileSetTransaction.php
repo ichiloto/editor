@@ -24,7 +24,8 @@ use Throwable;
  *     proposed file beside its destination, and reads each back, so the
  *     caller can evaluate and hydrate the exact bytes that will be
  *     installed;
- *  3. `commit()` takes the backup once, then installs every target;
+ *  3. `commit()` takes the backup once, installs every target, and may
+ *     validate that installed state before accepting it;
  *  4. any failure restores every file already touched, and says so.
  *
  * A restoration that itself fails is reported as such rather than swallowed:
@@ -70,10 +71,14 @@ final class FileSetTransaction
      *   other folders too -- a map moving between directories -- and any
      *   missing one is created at staging and taken back on failure.
      * @param FileSetOperations $files The filesystem to act on.
+     * @param bool $reserveFolder Whether staging must exclusively create the
+     *   asset folder. A move uses this to refuse a destination another writer
+     *   created after its initial collision check.
      */
     public function __construct(
         private readonly string $folder,
         private readonly FileSetOperations $files = new FilesystemFileSetOperations(),
+        private readonly bool $reserveFolder = false,
     ) {
     }
 
@@ -125,6 +130,20 @@ final class FileSetTransaction
             return $this->staged;
         }
 
+        if ($this->reserveFolder && $this->files->isDirectory($this->folder)) {
+            throw new FileSetTransactionFailure(sprintf('%s already exists', $this->folder));
+        }
+
+        // Freeze the missing-directory plan before reading source files. If
+        // the reserved folder appears before this scan reaches it, it will
+        // not be in the plan and the transaction refuses it below. If it
+        // appears afterwards, exclusive makeDirectory() loses cleanly.
+        $foldersToCreate = $this->foldersToCreate();
+
+        if ($this->reserveFolder && ! in_array($this->folder, $foldersToCreate, true)) {
+            throw new FileSetTransactionFailure(sprintf('%s already exists', $this->folder));
+        }
+
         foreach ($this->targets as $target) {
             $path = $target['path'];
 
@@ -149,7 +168,7 @@ final class FileSetTransaction
             $this->original[$path] = ['contents' => null, 'modifiedAt' => null];
         }
 
-        foreach ($this->foldersToCreate() as $missing) {
+        foreach ($foldersToCreate as $missing) {
             if (! $this->files->makeDirectory($missing)) {
                 $this->discard();
 
@@ -193,9 +212,11 @@ final class FileSetTransaction
      * Installs every target, after backing up once what is about to go.
      *
      * @param callable(string ...$paths): void|null $backup Receives the existing files about to be replaced or removed.
+     * @param callable(): void|null $validate Proves the fully installed state
+     *   before it is accepted. A thrown exception rolls every target back.
      * @throws FileSetTransactionFailure When any target cannot be installed.
      */
-    public function commit(?callable $backup = null): void
+    public function commit(?callable $backup = null, ?callable $validate = null): void
     {
         if ($this->isFinished) {
             return;
@@ -259,6 +280,18 @@ final class FileSetTransaction
             $installed[] = $target;
         }
 
+        if ($validate !== null) {
+            try {
+                $validate();
+            } catch (Throwable $validationFailure) {
+                $this->undo(
+                    $installed,
+                    sprintf('The installed files failed validation (%s)', rtrim($validationFailure->getMessage(), '.')),
+                    $validationFailure,
+                );
+            }
+        }
+
         $this->isFinished = true;
         $this->discardTemporaries();
         $this->removeFolderIfEmptied();
@@ -283,7 +316,7 @@ final class FileSetTransaction
      * @param array<int, array{path: string, intent: string, contents: string|null}> $installed
      * @throws FileSetTransactionFailure Always.
      */
-    private function undo(array $installed, string $reason): never
+    private function undo(array $installed, string $reason, ?Throwable $previous = null): never
     {
         $unrestored = [];
 
@@ -322,7 +355,7 @@ final class FileSetTransaction
             $this->removeFolderIfCreated();
         }
 
-        throw new FileSetTransactionFailure($reason, $unrestored === [], $unrestored);
+        throw new FileSetTransactionFailure($reason, $unrestored === [], $unrestored, $previous);
     }
 
     /**

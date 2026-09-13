@@ -82,7 +82,11 @@ final class FilesystemFileSetOperations implements FileSetOperations
 
     public function makeDirectory(string $path): bool
     {
-        return is_dir($path) || (@mkdir($path, 0o777, true) || is_dir($path));
+        if (file_exists($path)) {
+            return false;
+        }
+
+        return @mkdir($path, 0o777);
     }
 
     public function removeDirectory(string $path): bool
