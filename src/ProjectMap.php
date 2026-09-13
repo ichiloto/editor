@@ -8,6 +8,7 @@ use Ichiloto\Editor\Cutscenes\Source\ArraySourceWriter;
 use Ichiloto\Editor\Cutscenes\Source\PhpArraySourceDocument;
 use Ichiloto\Editor\Cutscenes\Source\SourcePreservationRefusal;
 use Ichiloto\Editor\Cutscenes\Source\SourceUnreadable;
+use Ichiloto\Editor\Database\PhpDataFile;
 use Ichiloto\Editor\Field\NpcCollection;
 use Ichiloto\Editor\Field\ProjectNpc;
 use Ichiloto\Editor\History\TracksPersistedState;
@@ -1253,28 +1254,15 @@ final class ProjectMap
 
     /**
      * Evaluates a PHP file as the game would: from the project root, so a
-     * `require` written relative to the working directory resolves.
+     * `require` written relative to the working directory resolves. A fresh
+     * process is required because staged authored files can repeat named
+     * declarations already loaded by this Editor process.
      */
     private function evaluateFile(string $path): mixed
     {
         $projectRoot = dirname($this->getMapsRoot(), 2);
-        $operation = static function () use ($path): mixed {
-            // A failing require raises a warning before its error; the
-            // error is what callers report, so the warning is only noise.
-            set_error_handler(static fn(): bool => true);
 
-            try {
-                return require $path;
-            } finally {
-                restore_error_handler();
-            }
-        };
-
-        if (is_dir($projectRoot)) {
-            return ProjectDirectoryContext::run($projectRoot, static fn(): mixed => $operation());
-        }
-
-        return $operation();
+        return PhpDataFile::evaluateIsolated($path, is_dir($projectRoot) ? $projectRoot : null);
     }
 
     /**
@@ -1768,7 +1756,17 @@ final class ProjectMap
             ), previous: $throwable);
         }
 
-        return self::fromDirectory($mapsRoot, $directory);
+        return new self(
+            mapId: $newRelativeId,
+            directory: $directory,
+            dataPath: $movedDataPath,
+            mapPath: $movedMapPath,
+            eventPath: $movedEventPath,
+            data: $this->editableData,
+            tileLines: $expectedGrids[$movedMapPath],
+            eventLines: $expectedGrids[$movedEventPath],
+            dataSource: (string) file_get_contents($movedDataPath),
+        )->withLoadedBaseline();
     }
 
     /**

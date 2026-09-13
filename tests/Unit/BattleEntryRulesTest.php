@@ -541,6 +541,33 @@ it('revalidates a rule file with named declarations in an isolated process', fun
     }
 });
 
+it('treats a rule file deleted after workspace load as no rules', function (): void {
+    $root = makeTemporaryProject();
+
+    try {
+        writeBattleEntryRules($root, <<<'PHP'
+        <?php
+
+        return [
+          'rules' => [[
+            'id' => 'loaded-before-delete',
+            'actors' => [['actor' => 'Kaelion', 'presence' => 'any']],
+            'effects' => [['type' => 'stat_stage', 'actor' => 'Kaelion', 'stat' => 'speed', 'delta' => 1]],
+          ]],
+        ];
+        PHP);
+        $workspace = ProjectWorkspace::fromProject($root);
+        unlink(battleEntryRulesPath($root));
+
+        expect(array_values(array_filter(
+            new ProjectValidator()->validate($workspace),
+            static fn(Issue $issue): bool => $issue->where === 'assets/Data/battle-entry-rules.php',
+        )))->toBe([]);
+    } finally {
+        removeDirectoryRecursively($root);
+    }
+});
+
 it('validates a troop classification with the runtime wording', function (): void {
     $root = makeTemporaryProject();
 

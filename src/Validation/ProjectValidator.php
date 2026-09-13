@@ -1239,11 +1239,11 @@ class ProjectValidator
       }
     }
 
-    $records = $database->getRecords();
-
-    if (! $fileExists && $records === []) {
+    if (! $fileExists && ! $database->isDirty()) {
       return [];
     }
+
+    $records = $database->getRecords();
 
     $issues = [];
     $resolver = BattleEntryActorResolver::fromActors($workspace->actorDatabase->getActors());

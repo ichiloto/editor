@@ -1392,11 +1392,39 @@ final class ProjectRecordDatabase
             return sprintf('returns %s, not an array', get_debug_type($payload));
         }
 
-        if ($projection->write($payload, $projection->read($payload)) !== $payload) {
+        $roundTrip = $projection->write($payload, $projection->read($payload));
+
+        if (self::withoutEmptyFields($roundTrip) !== self::withoutEmptyFields($payload)) {
             return 'contains values or structure that the editor cannot preserve exactly';
         }
 
         return null;
+    }
+
+    /**
+     * Removes empty named fields before comparing a projection round trip.
+     * An omitted optional category and that category written as an empty
+     * array carry the same runtime data; list entries themselves remain
+     * significant and are never removed here.
+     *
+     * @param array<mixed> $payload The value to normalize for comparison.
+     * @return array<mixed> The comparison value.
+     */
+    private static function withoutEmptyFields(array $payload): array
+    {
+        $normalized = [];
+
+        foreach ($payload as $key => $value) {
+            $value = is_array($value) ? self::withoutEmptyFields($value) : $value;
+
+            if (is_string($key) && $value === []) {
+                continue;
+            }
+
+            $normalized[$key] = $value;
+        }
+
+        return $normalized;
     }
 
     /**

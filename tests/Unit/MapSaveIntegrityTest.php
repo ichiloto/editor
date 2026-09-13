@@ -562,6 +562,37 @@ it('refuses a move when a staged grid member no longer evaluates at its destinat
         ->and(tripletState($map))->toBe($before);
 })->with(['map', 'event']);
 
+it('moves a map whose authored grid declares a named function', function (string $member) {
+    $root = authoredMapProject();
+    $dataPath = $root . '/assets/Maps/test-map/test-map.data.php';
+    $portableData = str_replace(
+        "\$watchScript = require dirname(__DIR__, 2) . '/Events/harbour-watch.php';\n\n",
+        '',
+        (string) file_get_contents($dataPath),
+    );
+    $portableData = str_replace("'script' => \$watchScript,", "'script' => [],", $portableData);
+    $portableData = str_replace("'script' => require dirname(__DIR__, 2) . '/Events/harbour-watch.php',", "'script' => [],", $portableData);
+    file_put_contents($dataPath, $portableData);
+
+    $sourcePath = $root . "/assets/Maps/test-map/test-map.{$member}.php";
+    $function = $member === 'map' ? 'editorNamedMapGridFixture' : 'editorNamedEventGridFixture';
+    $source = str_replace(
+        'return <<<',
+        "function {$function}(): string\n{\n    return <<<",
+        (string) file_get_contents($sourcePath),
+    );
+    file_put_contents($sourcePath, rtrim($source) . "\n}\n\nreturn {$function}();\n");
+
+    $map = authoredMap($root);
+    $moved = $map->moveTo('district/harbour');
+
+    expect($moved->mapId)->toBe('district/harbour')
+        ->and(is_dir($root . '/assets/Maps/test-map'))->toBeFalse()
+        ->and((string) file_get_contents(
+            $member === 'map' ? $moved->mapPath : $moved->eventPath,
+        ))->toContain("function {$function}(): string");
+})->with(['map', 'event']);
+
 // -- Editor-level flows -------------------------------------------------------
 
 it('saves each dirty map once through Save All and leaves clean maps untouched', function () {
