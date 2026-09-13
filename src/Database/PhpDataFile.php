@@ -96,15 +96,110 @@ final class PhpDataFile
      * order. Files in one runtime load unit can therefore share declarations
      * and variables without polluting the long-lived Editor process.
      *
-     * @param list<string> $paths The files in runtime load order.
+     * @param list<string> $paths The source files in runtime load order.
      * @param string|null $workingDirectory The project root to evaluate under.
+     * @param list<string>|null $runtimePaths Optional final paths whose
+     *   basenames and sibling layout must be reproduced during evaluation.
      * @return list<mixed> Each file's returned payload, in the same order.
      */
-    public static function evaluateIsolatedFiles(array $paths, ?string $workingDirectory = null): array
+    public static function evaluateIsolatedFiles(
+        array $paths,
+        ?string $workingDirectory = null,
+        ?array $runtimePaths = null,
+    ): array
     {
         if ($paths === []) {
             return [];
         }
+
+        if ($runtimePaths === null) {
+            return self::evaluateIsolatedPaths($paths, $workingDirectory);
+        }
+
+        [$evaluationPaths, $validationDirectory] = self::stageRuntimeNamedCopies($paths, $runtimePaths);
+
+        try {
+            return self::evaluateIsolatedPaths($evaluationPaths, $workingDirectory);
+        } catch (IsolatedPhpEvaluationFailure $failure) {
+            $failedIndex = array_search($failure->path, $evaluationPaths, true);
+
+            if (is_int($failedIndex)) {
+                throw new IsolatedPhpEvaluationFailure($runtimePaths[$failedIndex], $failure->reason);
+            }
+
+            throw $failure;
+        } finally {
+            foreach ($evaluationPaths as $evaluationPath) {
+                @unlink($evaluationPath);
+            }
+
+            @rmdir($validationDirectory);
+        }
+    }
+
+    /**
+     * Copies a load unit into an isolated sibling directory while retaining
+     * the final member basenames and directory depth.
+     *
+     * @param list<string> $paths The staged source paths.
+     * @param list<string> $runtimePaths The final runtime paths.
+     * @return array{0: list<string>, 1: string} Evaluation paths and their directory.
+     */
+    private static function stageRuntimeNamedCopies(array $paths, array $runtimePaths): array
+    {
+        if (count($paths) !== count($runtimePaths) || $runtimePaths === []) {
+            throw new RuntimeException('Runtime evaluation paths must match the authored files.');
+        }
+
+        $runtimeDirectory = dirname($runtimePaths[0]);
+        $validationDirectory = dirname($runtimeDirectory) . DIRECTORY_SEPARATOR
+            . '.ichiloto-evaluation-' . bin2hex(random_bytes(8));
+
+        if (! @mkdir($validationDirectory, 0o700)) {
+            throw new RuntimeException('Unable to create an isolated authored-PHP evaluation directory.');
+        }
+
+        $evaluationPaths = [];
+
+        try {
+            foreach ($paths as $index => $path) {
+                $runtimePath = $runtimePaths[$index];
+
+                if (dirname($runtimePath) !== $runtimeDirectory) {
+                    throw new RuntimeException('Runtime evaluation files must share one directory.');
+                }
+
+                $evaluationPath = $validationDirectory . DIRECTORY_SEPARATOR . basename($runtimePath);
+                $contents = @file_get_contents($path);
+                $written = $contents === false ? false : @file_put_contents($evaluationPath, $contents);
+
+                if ($contents === false || $written !== strlen($contents)) {
+                    throw new RuntimeException(sprintf('Unable to stage %s under its runtime filename.', basename($runtimePath)));
+                }
+
+                $evaluationPaths[] = $evaluationPath;
+            }
+        } catch (Throwable $throwable) {
+            foreach ($evaluationPaths as $evaluationPath) {
+                @unlink($evaluationPath);
+            }
+
+            @rmdir($validationDirectory);
+
+            throw $throwable;
+        }
+
+        return [$evaluationPaths, $validationDirectory];
+    }
+
+    /**
+     * Runs one ordered set of paths in a fresh PHP process.
+     *
+     * @param list<string> $paths The paths to require in order.
+     * @return list<mixed> Their returned values.
+     */
+    private static function evaluateIsolatedPaths(array $paths, ?string $workingDirectory): array
+    {
 
         $autoload = null;
 
@@ -175,10 +270,22 @@ final class PhpDataFile
         }
 
         fclose($pipes[0]);
-        $output = stream_get_contents($pipes[1]);
-        fclose($pipes[1]);
-        $error = stream_get_contents($pipes[2]);
-        fclose($pipes[2]);
+
+        try {
+            [$output, $error] = self::readProcessPipes($pipes);
+        } catch (Throwable $readFailure) {
+            foreach ([1, 2] as $descriptor) {
+                if (is_resource($pipes[$descriptor])) {
+                    fclose($pipes[$descriptor]);
+                }
+            }
+
+            proc_terminate($process);
+            proc_close($process);
+
+            throw $readFailure;
+        }
+
         $exitCode = proc_close($process);
 
         if ($exitCode !== 0) {
@@ -208,6 +315,59 @@ final class PhpDataFile
         }
 
         return array_values($result['payloads']);
+    }
+
+    /**
+     * Drains stdout and stderr together so neither child pipe can fill while
+     * the parent is blocked waiting for the other one.
+     *
+     * @param array<int, resource> $pipes The process pipes.
+     * @return array{0: string, 1: string} Standard output and error.
+     */
+    private static function readProcessPipes(array $pipes): array
+    {
+        $streams = [1 => $pipes[1], 2 => $pipes[2]];
+        $output = '';
+        $error = '';
+
+        foreach ($streams as $stream) {
+            stream_set_blocking($stream, false);
+        }
+
+        while ($streams !== []) {
+            $ready = array_values($streams);
+            $write = [];
+            $except = [];
+
+            if (stream_select($ready, $write, $except, null) === false) {
+                throw new RuntimeException('Unable to read isolated PHP evaluation output.');
+            }
+
+            foreach ($streams as $descriptor => $stream) {
+                if (! in_array($stream, $ready, true)) {
+                    continue;
+                }
+
+                $chunk = stream_get_contents($stream);
+
+                if ($chunk === false) {
+                    throw new RuntimeException('Unable to read isolated PHP evaluation output.');
+                }
+
+                if ($descriptor === 1) {
+                    $output .= $chunk;
+                } else {
+                    $error .= $chunk;
+                }
+
+                if (feof($stream)) {
+                    fclose($stream);
+                    unset($streams[$descriptor]);
+                }
+            }
+        }
+
+        return [$output, $error];
     }
 
     /**

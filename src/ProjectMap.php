@@ -1274,13 +1274,19 @@ final class ProjectMap
      * Evaluates one runtime load unit in order and outside the Editor process.
      *
      * @param list<string> $paths The authored members in runtime load order.
+     * @param list<string>|null $runtimePaths Their final paths, when staged
+     *   sources must be evaluated under the names the runtime will see.
      * @return list<mixed> Their returned values.
      */
-    private function evaluateFiles(array $paths): array
+    private function evaluateFiles(array $paths, ?array $runtimePaths = null): array
     {
         $projectRoot = dirname($this->getMapsRoot(), 2);
 
-        return PhpDataFile::evaluateIsolatedFiles($paths, is_dir($projectRoot) ? $projectRoot : null);
+        return PhpDataFile::evaluateIsolatedFiles(
+            $paths,
+            is_dir($projectRoot) ? $projectRoot : null,
+            $runtimePaths,
+        );
     }
 
     /**
@@ -1705,13 +1711,13 @@ final class ProjectMap
             );
 
             try {
-                [$evaluated, $evaluatedMap, $evaluatedEvent] = $this->evaluateFiles($stagedPaths);
+                [$evaluated, $evaluatedMap, $evaluatedEvent] = $this->evaluateFiles($stagedPaths, $destinationPaths);
             } catch (\Throwable $evaluationFailure) {
                 $transaction->rollBack();
                 $failedPath = $movedDataPath;
 
                 if ($evaluationFailure instanceof IsolatedPhpEvaluationFailure) {
-                    $failedIndex = array_search($evaluationFailure->path, $stagedPaths, true);
+                    $failedIndex = array_search($evaluationFailure->path, $destinationPaths, true);
 
                     if (is_int($failedIndex)) {
                         $failedPath = $destinationPaths[$failedIndex];

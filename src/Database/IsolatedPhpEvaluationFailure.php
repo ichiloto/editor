@@ -13,7 +13,7 @@ final class IsolatedPhpEvaluationFailure extends RuntimeException
 {
     public function __construct(
         public readonly string $path,
-        string $reason,
+        public readonly string $reason,
     ) {
         parent::__construct(sprintf('%s: %s', basename($path), $reason));
     }

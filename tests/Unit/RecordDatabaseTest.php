@@ -42,6 +42,24 @@ it('keeps a data file header verbatim and regenerates only the returned value', 
     removeDirectoryRecursively($root);
 });
 
+it('drains large isolated diagnostics without blocking the returned payload', function (): void {
+    $root = makeTemporaryProject();
+    $path = $root . '/assets/Data/large-diagnostics.php';
+    file_put_contents($path, <<<'PHP'
+    <?php
+
+    fwrite(STDERR, str_repeat('diagnostic', 131072));
+
+    return ['ok' => true];
+    PHP);
+
+    try {
+        expect(PhpDataFile::evaluateIsolated($path, $root))->toBe(['ok' => true]);
+    } finally {
+        removeDirectoryRecursively($root);
+    }
+});
+
 it('refuses to rewrite a file whose data carries comments', function (): void {
     $root = makeTemporaryProject();
     $path = $root . '/assets/Data/states.php';

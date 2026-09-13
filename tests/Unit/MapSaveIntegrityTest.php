@@ -621,6 +621,33 @@ it('evaluates a moved triplet in runtime order when members share declarations',
         ->and((string) file_get_contents($moved->mapPath))->toContain('editorSharedMapGridFixture()');
 });
 
+it('evaluates staged map members under their final basenames', function () {
+    $root = authoredMapProject();
+    $dataPath = $root . '/assets/Maps/test-map/test-map.data.php';
+    $mapPath = $root . '/assets/Maps/test-map/test-map.map.php';
+    $mapText = require $mapPath;
+    $portableData = str_replace(
+        "\$watchScript = require dirname(__DIR__, 2) . '/Events/harbour-watch.php';\n\n",
+        '',
+        (string) file_get_contents($dataPath),
+    );
+    $portableData = str_replace("'script' => \$watchScript,", "'script' => [],", $portableData);
+    $portableData = str_replace("'script' => require dirname(__DIR__, 2) . '/Events/harbour-watch.php',", "'script' => [],", $portableData);
+    file_put_contents($dataPath, $portableData);
+    file_put_contents(
+        $mapPath,
+        "<?php\n\nrequire __DIR__ . '/' . str_replace('.map.php', '.event.php', basename(__FILE__));\n\n"
+            . "return str_ends_with(basename(__FILE__), '.map.php') ? "
+            . var_export($mapText, true) . " : '';\n",
+    );
+
+    $map = authoredMap($root);
+    $moved = $map->moveTo('district/harbour');
+
+    expect($moved->mapId)->toBe('district/harbour')
+        ->and(basename($moved->mapPath))->toBe('harbour.map.php');
+});
+
 // -- Editor-level flows -------------------------------------------------------
 
 it('saves each dirty map once through Save All and leaves clean maps untouched', function () {
