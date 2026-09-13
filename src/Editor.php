@@ -14861,9 +14861,10 @@ final class Editor
             18,
             $innerWidth - $minimumListWidth - $minimumRightWidth - ($gutter * 2)
         );
-        $categoryWidth = min($maximumCategoryWidth, $categoryContentWidth + 4)
-                |> (fn($x) => min(24, $x))
-                |> (fn($x) => max(18, $x));
+        $categoryWidth = max(
+            18,
+            min(24, $maximumCategoryWidth, $categoryContentWidth + 4),
+        );
         $listWidth = max(
             $minimumListWidth,
             min(24, $innerWidth - $categoryWidth - $minimumRightWidth - ($gutter * 2))
