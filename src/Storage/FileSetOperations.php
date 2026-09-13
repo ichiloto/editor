@@ -52,7 +52,11 @@ interface FileSetOperations
     public function remove(string $path): bool;
 
     /**
-     * Creates a directory and every missing parent.
+     * Creates one absent directory.
+     *
+     * Returning false when the directory already exists lets a transaction
+     * distinguish a directory it owns from one another writer created.
+     * Parents are created separately, in order, by the transaction.
      */
     public function makeDirectory(string $path): bool;
 
@@ -69,13 +73,16 @@ interface FileSetOperations
     public function listDirectory(string $path): array;
 
     /**
-     * Returns a file's modification time, or null when it has none.
+     * Captures the metadata needed to restore a regular file exactly.
+     *
+     * @return array{mode: int, owner: int, group: int, modifiedAt: int, accessedAt: int}|null
      */
-    public function modifiedAt(string $path): ?int;
+    public function metadata(string $path): ?array;
 
     /**
-     * Restores a file's modification time, so a file put back after a
-     * refused write is the file that was there in every respect.
+     * Restores and verifies a regular file's captured metadata.
+     *
+     * @param array{mode: int, owner: int, group: int, modifiedAt: int, accessedAt: int} $metadata
      */
-    public function setModifiedAt(string $path, int $timestamp): bool;
+    public function restoreMetadata(string $path, array $metadata): bool;
 }

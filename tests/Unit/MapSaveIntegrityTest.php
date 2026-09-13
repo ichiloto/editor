@@ -116,6 +116,24 @@ it('restores earlier members when the middle or first member fails too', functio
         ->and($map->isDirty())->toBeTrue();
 })->with(['data', 'map', 'event']);
 
+it('restores a missing opaque data member while saving another member', function () {
+    $root = authoredMapProject();
+    $dataPath = $root . '/assets/Maps/test-map/test-map.data.php';
+    $source = "<?php\n\nreturn array_merge(['name' => 'Test Map'], ['region' => '', 'description' => '', 'triggers' => [], 'events' => []]);\n";
+    file_put_contents($dataPath, $source);
+    $map = authoredMap($root);
+
+    expect($map->dataSourceIssue())->not->toBeNull();
+
+    unlink($dataPath);
+    $map->setTileSymbol(1, 1, '~');
+    $map->save();
+
+    expect((string) file_get_contents($dataPath))->toBe($source)
+        ->and(ProjectMap::fromDirectory($root . '/assets/Maps', $map->directory)->getEditableData())
+        ->toBe($map->getEditableData());
+});
+
 // -- No-op and isolation ------------------------------------------------------
 
 it('writes nothing, backs up nothing and stages nothing for a clean map, or one undone back to its checkpoint', function () {
@@ -513,6 +531,314 @@ it('moves a map only through the explicit move, carrying its authored source byt
     expect($movedData)->toContain('// The harbour district, hand-annotated.')
         ->and($movedData)->toContain('[MovementHeading::NORTH->value]')
         ->and($movedData)->toContain("'station'     => ['x' => 3, 'y' => 1],");
+});
+
+it('refuses a move when a staged grid member no longer evaluates at its destination', function (string $member) {
+    $root = authoredMapProject();
+    $map = authoredMap($root);
+    $portableData = str_replace(
+        "\$watchScript = require dirname(__DIR__, 2) . '/Events/harbour-watch.php';\n\n",
+        '',
+        (string) file_get_contents($map->dataPath),
+    );
+    $portableData = str_replace("'script' => \$watchScript,", "'script' => [],", $portableData);
+    $portableData = str_replace("'script' => require dirname(__DIR__, 2) . '/Events/harbour-watch.php',", "'script' => [],", $portableData);
+    file_put_contents($map->dataPath, $portableData);
+
+    $map = authoredMap($root);
+    $sourcePath = $member === 'map' ? $map->mapPath : $map->eventPath;
+    $sharedPath = $root . '/assets/Maps/shared-' . $member . '.php';
+    file_put_contents($sharedPath, "<?php\n\nreturn " . var_export(require $sourcePath, true) . ";\n");
+    file_put_contents(
+        $sourcePath,
+        "<?php\n\nreturn require dirname(__DIR__) . '/shared-{$member}.php';\n",
+    );
+    $map = authoredMap($root);
+    $before = tripletState($map);
+
+    expect(fn() => $map->moveTo('district/harbour'))
+        ->toThrow(RuntimeException::class, "harbour.{$member}.php does not evaluate at district/harbour");
+    expect(is_dir($root . '/assets/Maps/district'))->toBeFalse()
+        ->and(tripletState($map))->toBe($before);
+})->with(['map', 'event']);
+
+it('restores source file and directory metadata when installed move validation fails', function (bool $retainSourceDirectory) {
+    $root = authoredMapProject();
+    $map = authoredMap($root);
+    $portableData = str_replace(
+        "\$watchScript = require dirname(__DIR__, 2) . '/Events/harbour-watch.php';\n\n",
+        '',
+        (string) file_get_contents($map->dataPath),
+    );
+    $portableData = str_replace("'script' => \$watchScript,", "'script' => [],", $portableData);
+    $portableData = str_replace("'script' => require dirname(__DIR__, 2) . '/Events/harbour-watch.php',", "'script' => [],", $portableData);
+    file_put_contents($map->dataPath, $portableData);
+
+    $mapText = require $map->mapPath;
+    file_put_contents(
+        $map->mapPath,
+        "<?php\n\nrequire " . var_export($map->eventPath, true) . ";\n\nreturn "
+            . var_export($mapText, true)
+            . ";\n",
+    );
+    $map = authoredMap($root);
+
+    if ($retainSourceDirectory) {
+        file_put_contents($map->directory . '/notes.txt', 'author notes');
+    }
+
+    chmod($map->directory, 0o710);
+    touch($map->directory, time() - 3600, time() - 7200);
+    $fileModifiedAt = time() - 5400;
+    $fileAccessedAt = time() - 9000;
+    chmod($map->dataPath, 0o610);
+    touch($map->dataPath, $fileModifiedAt, $fileAccessedAt);
+    clearstatcache(true, $map->directory);
+    $directoryBefore = stat($map->directory);
+    $before = tripletState($map);
+    touch($map->dataPath, $fileModifiedAt, $fileAccessedAt);
+    clearstatcache(true, $map->dataPath);
+    $fileBefore = stat($map->dataPath);
+
+    expect(fn() => $map->moveTo('district/harbour'))
+        ->toThrow(RuntimeException::class, 'harbour.map.php does not evaluate at district/harbour');
+    clearstatcache(true, $map->directory);
+    $directoryAfter = stat($map->directory);
+    $fileAfter = stat($map->dataPath);
+    expect(is_dir($root . '/assets/Maps/district'))->toBeFalse()
+        ->and(tripletState($map))->toBe($before, 'the source triplet was restored byte-for-byte and at the same times')
+        ->and(is_file($map->directory . '/notes.txt'))->toBe($retainSourceDirectory)
+        ->and(is_array($directoryBefore))->toBeTrue()
+        ->and(is_array($directoryAfter))->toBeTrue()
+        ->and(((int) $directoryAfter['mode']) & 0o7777)->toBe(((int) $directoryBefore['mode']) & 0o7777)
+        ->and((int) $directoryAfter['uid'])->toBe((int) $directoryBefore['uid'])
+        ->and((int) $directoryAfter['gid'])->toBe((int) $directoryBefore['gid'])
+        ->and((int) $directoryAfter['mtime'])->toBe((int) $directoryBefore['mtime'])
+        ->and(is_array($fileBefore))->toBeTrue()
+        ->and(is_array($fileAfter))->toBeTrue()
+        ->and(((int) $fileAfter['mode']) & 0o7777)->toBe(((int) $fileBefore['mode']) & 0o7777)
+        ->and((int) $fileAfter['uid'])->toBe((int) $fileBefore['uid'])
+        ->and((int) $fileAfter['gid'])->toBe((int) $fileBefore['gid'])
+        ->and((int) $fileAfter['mtime'])->toBe((int) $fileBefore['mtime'])
+        ->and((int) $fileAfter['atime'])->toBe((int) $fileBefore['atime']);
+})->with([false, true]);
+
+it('validates a move after the obsolete source directory has left the runtime view', function () {
+    $root = authoredMapProject();
+    $map = authoredMap($root);
+    $portableData = str_replace(
+        "\$watchScript = require dirname(__DIR__, 2) . '/Events/harbour-watch.php';\n\n",
+        '',
+        (string) file_get_contents($map->dataPath),
+    );
+    $portableData = str_replace("'script' => \$watchScript,", "'script' => [],", $portableData);
+    $portableData = str_replace("'script' => require dirname(__DIR__, 2) . '/Events/harbour-watch.php',", "'script' => [],", $portableData);
+    file_put_contents($map->dataPath, $portableData);
+
+    $mapText = require $map->mapPath;
+    $sourceDirectory = $map->directory;
+    file_put_contents(
+        $map->mapPath,
+        "<?php\n\nreturn basename(__DIR__) === 'test-map' || ! is_dir("
+            . var_export($sourceDirectory, true)
+            . ') ? '
+            . var_export($mapText, true)
+            . " : '';\n",
+    );
+    $map = authoredMap($root);
+    $moved = $map->moveTo('district/harbour');
+
+    expect($moved->mapId)->toBe('district/harbour')
+        ->and(is_dir($sourceDirectory))->toBeFalse()
+        ->and(ProjectMap::fromDirectory($root . '/assets/Maps', $moved->directory)->getWidth())->toBe($map->getWidth());
+});
+
+it('holds the old map identity through validation so a nested move cannot claim it', function () {
+    $root = authoredMapProject();
+    ProjectMap::createBlank($root . '/assets/Maps/other', 'other', 'Other B');
+    $map = authoredMap($root);
+    $portableData = str_replace(
+        "\$watchScript = require dirname(__DIR__, 2) . '/Events/harbour-watch.php';\n\n",
+        '',
+        (string) file_get_contents($map->dataPath),
+    );
+    $portableData = str_replace("'script' => \$watchScript,", "'script' => [],", $portableData);
+    $portableData = str_replace("'script' => require dirname(__DIR__, 2) . '/Events/harbour-watch.php',", "'script' => [],", $portableData);
+    file_put_contents($map->dataPath, $portableData);
+
+    $mapText = require $map->mapPath;
+    $mapsRoot = $root . '/assets/Maps';
+    file_put_contents(
+        $map->mapPath,
+        "<?php\n\nif (basename(__DIR__) === 'new') {\n"
+            . "    try {\n"
+            . '        $other = \\Ichiloto\\Editor\\ProjectMap::fromDirectory('
+            . var_export($mapsRoot, true)
+            . ', '
+            . var_export($mapsRoot . '/other', true)
+            . ");\n"
+            . "        \$other->moveTo('test-map');\n"
+            . "    } catch (\\RuntimeException) {\n"
+            . "        // The outer move owns test-map until validation ends.\n"
+            . "    }\n\n"
+            . "    throw new \\RuntimeException('force the outer rollback');\n"
+            . "}\n\nreturn "
+            . var_export($mapText, true)
+            . ";\n",
+    );
+    $map = authoredMap($root);
+    $other = ProjectMap::fromDirectory($mapsRoot, $mapsRoot . '/other');
+    $mapBefore = tripletState($map);
+    $otherBefore = tripletState($other);
+
+    expect(fn() => $map->moveTo('new'))->toThrow(RuntimeException::class, 'force the outer rollback');
+    expect(tripletState($map))->toBe($mapBefore, 'the outer map was restored exactly')
+        ->and(tripletState($other))->toBe($otherBefore, 'the nested map never moved')
+        ->and(is_dir($mapsRoot . '/other'))->toBeTrue()
+        ->and(is_dir($mapsRoot . '/new'))->toBeFalse();
+});
+
+it('moves a map whose authored grid declares a named function', function (string $member) {
+    $root = authoredMapProject();
+    $dataPath = $root . '/assets/Maps/test-map/test-map.data.php';
+    $portableData = str_replace(
+        "\$watchScript = require dirname(__DIR__, 2) . '/Events/harbour-watch.php';\n\n",
+        '',
+        (string) file_get_contents($dataPath),
+    );
+    $portableData = str_replace("'script' => \$watchScript,", "'script' => [],", $portableData);
+    $portableData = str_replace("'script' => require dirname(__DIR__, 2) . '/Events/harbour-watch.php',", "'script' => [],", $portableData);
+    file_put_contents($dataPath, $portableData);
+
+    $sourcePath = $root . "/assets/Maps/test-map/test-map.{$member}.php";
+    $function = $member === 'map' ? 'editorNamedMapGridFixture' : 'editorNamedEventGridFixture';
+    $source = str_replace(
+        'return <<<',
+        "function {$function}(): string\n{\n    return <<<",
+        (string) file_get_contents($sourcePath),
+    );
+    file_put_contents($sourcePath, rtrim($source) . "\n}\n\nreturn {$function}();\n");
+
+    $map = authoredMap($root);
+    $moved = $map->moveTo('district/harbour');
+
+    expect($moved->mapId)->toBe('district/harbour')
+        ->and(is_dir($root . '/assets/Maps/test-map'))->toBeFalse()
+        ->and((string) file_get_contents(
+            $member === 'map' ? $moved->mapPath : $moved->eventPath,
+        ))->toContain("function {$function}(): string");
+})->with(['map', 'event']);
+
+it('evaluates a moved triplet in runtime order when members share declarations', function () {
+    $root = authoredMapProject();
+    $dataPath = $root . '/assets/Maps/test-map/test-map.data.php';
+    $mapPath = $root . '/assets/Maps/test-map/test-map.map.php';
+    $mapText = require $mapPath;
+    $portableData = str_replace(
+        "\$watchScript = require dirname(__DIR__, 2) . '/Events/harbour-watch.php';\n\n",
+        '',
+        (string) file_get_contents($dataPath),
+    );
+    $portableData = str_replace("'script' => \$watchScript,", "'script' => [],", $portableData);
+    $portableData = str_replace("'script' => require dirname(__DIR__, 2) . '/Events/harbour-watch.php',", "'script' => [],", $portableData);
+    $portableData = str_replace(
+        "return [\n",
+        "function editorSharedMapGridFixture(): string\n{\n    return " . var_export($mapText, true) . ";\n}\n\nreturn [\n",
+        $portableData,
+    );
+    file_put_contents($dataPath, $portableData);
+    file_put_contents($mapPath, "<?php\n\nreturn editorSharedMapGridFixture();\n");
+
+    $map = authoredMap($root);
+    $moved = $map->moveTo('district/harbour');
+
+    expect($moved->mapId)->toBe('district/harbour')
+        ->and($moved->getWidth())->toBe($map->getWidth())
+        ->and((string) file_get_contents($moved->mapPath))->toContain('editorSharedMapGridFixture()');
+});
+
+it('evaluates staged map members under their final basenames', function () {
+    $root = authoredMapProject();
+    $dataPath = $root . '/assets/Maps/test-map/test-map.data.php';
+    $mapPath = $root . '/assets/Maps/test-map/test-map.map.php';
+    $mapText = require $mapPath;
+    $portableData = str_replace(
+        "\$watchScript = require dirname(__DIR__, 2) . '/Events/harbour-watch.php';\n\n",
+        '',
+        (string) file_get_contents($dataPath),
+    );
+    $portableData = str_replace("'script' => \$watchScript,", "'script' => [],", $portableData);
+    $portableData = str_replace("'script' => require dirname(__DIR__, 2) . '/Events/harbour-watch.php',", "'script' => [],", $portableData);
+    file_put_contents($dataPath, $portableData);
+    file_put_contents(
+        $mapPath,
+        "<?php\n\nrequire __DIR__ . '/' . str_replace('.map.php', '.event.php', basename(__FILE__));\n\n"
+            . "return str_ends_with(basename(__FILE__), '.map.php')"
+            . " && in_array(basename(__DIR__), ['test-map', 'harbour'], true) ? "
+            . var_export($mapText, true) . " : '';\n",
+    );
+
+    $map = authoredMap($root);
+    $moved = $map->moveTo('district/harbour');
+
+    expect($moved->mapId)->toBe('district/harbour')
+        ->and(basename($moved->mapPath))->toBe('harbour.map.php');
+});
+
+it('moves preserved map data containing an object without reconstructing it in the editor process', function () {
+    $root = authoredMapProject();
+    $dataPath = $root . '/assets/Maps/test-map/test-map.data.php';
+    $portableData = str_replace(
+        "\$watchScript = require dirname(__DIR__, 2) . '/Events/harbour-watch.php';\n\n",
+        '',
+        (string) file_get_contents($dataPath),
+    );
+    $portableData = str_replace("'script' => \$watchScript,", "'script' => [],", $portableData);
+    $portableData = str_replace("'script' => require dirname(__DIR__, 2) . '/Events/harbour-watch.php',", "'script' => [],", $portableData);
+    $portableData = str_replace(
+        "  'triggers' => [],\n",
+        "  'opaque' => (object) ['label' => 'preserved'],\n  'triggers' => [],\n",
+        $portableData,
+    );
+    file_put_contents($dataPath, $portableData);
+
+    $map = authoredMap($root);
+    $moved = $map->moveTo('district/harbour');
+    $reloaded = ProjectMap::fromDirectory($root . '/assets/Maps', $moved->directory);
+
+    expect($moved->mapId)->toBe('district/harbour')
+        ->and($reloaded->getEditableData()['opaque'])->toBeInstanceOf(stdClass::class)
+        ->and($reloaded->getEditableData()['opaque']->label)->toBe('preserved');
+});
+
+it('fingerprints the final shared object state after the complete map load unit', function () {
+    $root = authoredMapProject();
+    $dataPath = $root . '/assets/Maps/test-map/test-map.data.php';
+    $mapPath = $root . '/assets/Maps/test-map/test-map.map.php';
+    $portableData = str_replace(
+        "\$watchScript = require dirname(__DIR__, 2) . '/Events/harbour-watch.php';\n\n",
+        "\$shared = (object) ['label' => 'before-grid'];\n\n",
+        (string) file_get_contents($dataPath),
+    );
+    $portableData = str_replace("'script' => \$watchScript,", "'script' => [],", $portableData);
+    $portableData = str_replace("'script' => require dirname(__DIR__, 2) . '/Events/harbour-watch.php',", "'script' => [],", $portableData);
+    $portableData = str_replace(
+        "  'triggers' => [],\n",
+        "  'opaque' => \$shared,\n  'triggers' => [],\n",
+        $portableData,
+    );
+    file_put_contents($dataPath, $portableData);
+    $mapText = require $mapPath;
+    file_put_contents(
+        $mapPath,
+        "<?php\n\n\$shared->label = 'after-grid';\n\nreturn " . var_export($mapText, true) . ";\n",
+    );
+
+    $map = authoredMap($root);
+    $moved = $map->moveTo('district/harbour');
+
+    expect($moved->getEditableData()['opaque']->label)->toBe('after-grid')
+        ->and(ProjectMap::fromDirectory($root . '/assets/Maps', $moved->directory)->getEditableData()['opaque']->label)->toBe('after-grid');
 });
 
 // -- Editor-level flows -------------------------------------------------------

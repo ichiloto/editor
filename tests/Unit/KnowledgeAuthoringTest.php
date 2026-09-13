@@ -234,3 +234,43 @@ it('writes nothing when a catalogue is only browsed', function () {
 
     expect(sourceHashTree($root))->toBe($before);
 });
+
+it('refuses a projected category that would drop malformed authored entries', function () {
+    $root = makeTemporaryProject('ichiloto-knowledge-');
+    $path = $root . '/assets/Data/knowledge.php';
+    file_put_contents($path, <<<'PHP'
+    <?php
+
+    return [
+      'reports' => [
+        ['id' => 'report.rat', 'subject' => 'creature.rat', 'title' => 'Rats', 'summary' => 'They are about.'],
+        'not-a-report',
+      ],
+    ];
+    PHP);
+    $source = (string) file_get_contents($path);
+    $reports = knowledgeDatabase($root, 'knowledge_reports');
+
+    expect($reports->isEditable())->toBeFalse()
+        ->and($reports->getReadOnlyReason())->toContain('field "reports" entry 2 is string')
+        ->and(fn() => $reports->save())->toThrow(RuntimeException::class, 'read-only')
+        ->and((string) file_get_contents($path))->toBe($source);
+});
+
+it('allows the first record in a projected category omitted from a shared file', function () {
+    $root = makeTemporaryProject('ichiloto-knowledge-');
+    $path = $root . '/assets/Data/knowledge.php';
+    file_put_contents($path, "<?php\n\nreturn ['subjects' => []];\n");
+    $reports = knowledgeDatabase($root, 'knowledge_reports');
+
+    expect($reports->isEditable())->toBeTrue();
+
+    $index = $reports->addRecord();
+    $reports->setField($index, 'id', 'report.first');
+    $reports->setField($index, 'subject', 'creature.first');
+    $reports->setField($index, 'title', 'First report');
+    $reports->setField($index, 'summary', 'The first authored report.');
+    $reports->save();
+
+    expect((require $path)['reports'][0]['id'] ?? null)->toBe('report.first');
+});

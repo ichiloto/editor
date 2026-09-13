@@ -204,6 +204,7 @@ it('reports every shape the engine would silently skip', function () {
         'nonsense',
         ['track' => 42, 'conditions' => []],
         ['track' => 'harbour-theme', 'conditions' => 'sunny'],
+        ['track' => 'harbour-theme', 'conditions' => [1 => ['type' => 'event', 'name' => 'alarm']]],
         ['track' => 'harbour-theme', 'conditions' => [['type' => 'weather', 'name' => 'rain']]],
         ['conditions' => []],
       ],
@@ -215,6 +216,7 @@ it('reports every shape the engine would silently skip', function () {
     expect($messages)->toContain('It is string, not an array.')
         ->and($messages)->toContain('Its track is int, not a track name.')
         ->and($messages)->toContain('Its conditions are string, not a list.')
+        ->and($messages)->toContain('Its conditions are a keyed array, not a list.')
         ->and($messages)->toContain('It uses the unknown condition type "weather".')
         ->and($messages)->toContain('It has no track.');
 
@@ -451,6 +453,9 @@ it('reads what the engine will make of a list without changing it', function () 
 
     expect(MapBgmVariants::of('nonsense')->isSupported())->toBeFalse()
         ->and(MapBgmVariants::of(['x' => []])->unsupportedReason())->toBe('the bgmVariants block is a keyed array, not an ordered list')
+        ->and(MapBgmVariants::of([
+            ['track' => 'a', 'conditions' => [1 => ['type' => 'event', 'name' => 'seen']]],
+        ])->conditionsIssueAt(0))->toBe('the conditions are a keyed array, not a list')
         ->and(MapBgmVariants::of([['track' => 'a'], 'plain'])->unsupportedReason())->toBe('variant 2 is string, not an array');
 });
 

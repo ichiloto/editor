@@ -1222,39 +1222,28 @@ class ProjectValidator
       return [];
     }
 
-    $records = $database->getRecords();
     $where = 'assets/Data/battle-entry-rules.php';
+    $path = $database->backingFilePath();
+    $fileExists = is_file($path);
+    $freshPayload = null;
 
-    if ($records === []) {
-      // No authored rules. A missing file means silence, exactly as the
-      // runtime treats it — but a present file whose shape hid every rule
-      // from the projection still fails the engine's own shape check.
-      $path = $workspace->projectRoot . DIRECTORY_SEPARATOR
-        . str_replace('/', DIRECTORY_SEPARATOR, $where);
-
-      if (! is_file($path)) {
-        return [];
-      }
-
-      $file = PhpDataFile::load($path, $workspace->projectRoot);
-
-      if ($file->payload === null && $file->readOnlyReason !== null) {
+    if ($fileExists) {
+      try {
+        $freshPayload = PhpDataFile::evaluateIsolated($path, $workspace->projectRoot);
+      } catch (Throwable $throwable) {
         return [Issue::error(
           $where,
-          sprintf('The file could not be evaluated: %s.', $file->readOnlyReason),
+          sprintf('The file could not be evaluated: %s.', $throwable->getMessage()),
           'Battle startup fails closed until the file loads.',
         )];
       }
-
-      return array_map(
-        static fn(string $problem): Issue => Issue::error(
-          $where,
-          $problem,
-          'Battle startup fails closed until this rule is corrected.',
-        ),
-        BattleEntryRuleContract::problems($file->payload, $where),
-      );
     }
+
+    if (! $fileExists && ! $database->isDirty()) {
+      return [];
+    }
+
+    $records = $database->getRecords();
 
     $issues = [];
     $resolver = BattleEntryActorResolver::fromActors($workspace->actorDatabase->getActors());
@@ -1267,10 +1256,18 @@ class ProjectValidator
       );
     }
 
-    $data = ['rules' => array_map(
-      static fn(ProjectRecord $record): array => $record->toArray(),
-      $records,
-    )];
+    // Dirty records represent actual unsaved Editor work, but only while the
+    // freshly re-read file still has a shape the projection can preserve. If
+    // an external edit made the current file lossy, validate that raw payload
+    // instead of trusting stale records loaded before the edit.
+    $validateCurrentRecords = $database->isDirty()
+      && (! $fileExists || $database->projectionPreservationIssue($freshPayload) === null);
+    $data = $validateCurrentRecords
+      ? ['rules' => array_map(
+        static fn(ProjectRecord $record): array => $record->toArray(),
+        $records,
+      )]
+      : $freshPayload;
 
     foreach (BattleEntryRuleContract::problems($data, $where, $resolver->problems() === [] ? $resolver : null) as $problem) {
       $issues[] = Issue::error(
@@ -3510,10 +3507,13 @@ class ProjectValidator
 
       $conditions = $variant['conditions'] ?? [];
 
-      if (! is_array($conditions)) {
+      if (! is_array($conditions) || ! array_is_list($conditions)) {
         $issues[] = Issue::error(
           $label,
-          sprintf('Its conditions are %s, not a list.', get_debug_type($conditions)),
+          sprintf(
+            'Its conditions are %s, not a list.',
+            is_array($conditions) ? 'a keyed array' : get_debug_type($conditions)
+          ),
           'The engine skips the variant; use a list of shared world conditions, or none for an unconditional match.'
         );
 

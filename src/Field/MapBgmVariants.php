@@ -152,7 +152,7 @@ final class MapBgmVariants
     {
         $conditions = $this->rows[$index]['conditions'] ?? [];
 
-        return is_array($conditions) ? array_values($conditions) : [];
+        return is_array($conditions) && array_is_list($conditions) ? $conditions : [];
     }
 
     /**
@@ -181,11 +181,14 @@ final class MapBgmVariants
     {
         $conditions = $this->rows[$index]['conditions'] ?? [];
 
-        if (! is_array($conditions)) {
-            return sprintf('the conditions are %s, not a list', get_debug_type($conditions));
+        if (! is_array($conditions) || ! array_is_list($conditions)) {
+            return sprintf(
+                'the conditions are %s, not a list',
+                is_array($conditions) ? 'a keyed array' : get_debug_type($conditions),
+            );
         }
 
-        foreach (array_values($conditions) as $conditionIndex => $condition) {
+        foreach ($conditions as $conditionIndex => $condition) {
             if (! is_array($condition)) {
                 return sprintf('condition %d is %s, not an array', $conditionIndex + 1, get_debug_type($condition));
             }
