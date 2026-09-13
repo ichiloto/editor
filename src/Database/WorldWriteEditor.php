@@ -41,20 +41,32 @@ final class WorldWriteEditor
     private int $selectedIndex = 0;
 
     /**
+     * @var string[] The write types this surface may author.
+     */
+    private array $types = WorldWriteCodec::TYPES;
+
+    /**
      * Opens the editor on a field's writes.
      *
      * @param string $fieldId The field being edited.
      * @param string $label What to call it.
      * @param array<int, mixed> $sets The writes as stored.
+     * @param string[]|null $types The write types this surface may author,
+     * when the runtime restricts it (a transactional boundary rejects quest
+     * acceptance). Null offers the writer's full vocabulary. A write already
+     * in the source keeps its type until the author changes it, so nothing
+     * is silently rewritten; validation diagnoses it instead.
      * @return void
      */
-    public function open(string $fieldId, string $label, array $sets): void
+    public function open(string $fieldId, string $label, array $sets, ?array $types = null): void
     {
         $this->isOpen = true;
         $this->fieldId = $fieldId;
         $this->label = $label;
         $this->sets = array_values(array_filter($sets, is_array(...)));
         $this->selectedIndex = 0;
+        $types = array_values(array_intersect($types ?? WorldWriteCodec::TYPES, WorldWriteCodec::TYPES));
+        $this->types = $types === [] ? WorldWriteCodec::TYPES : $types;
     }
 
     public function close(): void
@@ -64,6 +76,7 @@ final class WorldWriteEditor
         $this->label = '';
         $this->sets = [];
         $this->selectedIndex = 0;
+        $this->types = WorldWriteCodec::TYPES;
     }
 
     public function isOpen(): bool
@@ -145,6 +158,10 @@ final class WorldWriteEditor
 
     /**
      * Cycles the write's type, rebuilding extras as the type's own defaults.
+     *
+     * A type outside this surface's vocabulary (a quest write already in the
+     * source) cycles onto the first offered type: the author is never
+     * offered what the runtime would reject here.
      */
     public function cycleType(int $step): void
     {
@@ -154,9 +171,9 @@ final class WorldWriteEditor
             return;
         }
 
-        $types = WorldWriteCodec::TYPES;
+        $types = $this->types;
         $index = array_search(strval($set['type'] ?? ''), $types, true);
-        $index = is_int($index) ? $index : 0;
+        $index = is_int($index) ? $index : -$step;
         $type = $types[(($index + $step) % count($types) + count($types)) % count($types)];
         $rebuilt = ['type' => $type, 'name' => strval($set['name'] ?? '')];
 

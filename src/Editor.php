@@ -24,6 +24,7 @@ use Ichiloto\Editor\Database\InventoryCatalog;
 use Ichiloto\Editor\Database\ParameterMapCodec;
 use Ichiloto\Editor\Database\ParameterMapSyntaxError;
 use Ichiloto\Editor\Database\RecordFieldCodec;
+use Ichiloto\Editor\Database\ProjectRecord;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Database\SharedFileTransaction;
 use Ichiloto\Editor\Database\ConditionCodec;
@@ -31,11 +32,14 @@ use Ichiloto\Editor\Database\QuestReferences;
 use Ichiloto\Editor\Database\AffinityEditor;
 use Ichiloto\Editor\Database\ConditionEditor;
 use Ichiloto\Editor\Field\NpcInspector;
+use Ichiloto\Editor\Field\MapBgmVariants;
 use Ichiloto\Editor\Field\MapEncounters;
 use Ichiloto\Editor\Field\NpcReferences;
 use Ichiloto\Editor\Field\ProjectNpc;
 use Ichiloto\Editor\Database\WorldWriteEditor;
 use Ichiloto\Editor\Database\WorldWriteCodec;
+use Ichiloto\Editor\Database\BattleEntryPredicateCodec;
+use Ichiloto\Editor\Database\BattleEntryPredicateEditor;
 use Ichiloto\Editor\Database\ElementAffinityCodec;
 use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\Database\SummonAssignmentDiagnostics;
@@ -134,6 +138,7 @@ final class Editor
     private const string DATABASE_CATEGORY_ANIMATIONS = 'animations';
     private const string DATABASE_CATEGORY_SYSTEM = 'system';
     private const string DATABASE_CATEGORY_QUESTS = 'quests';
+    private const string DATABASE_CATEGORY_BATTLE_ENTRY_RULES = 'battle_entry_rules';
     private const string DATABASE_FOCUS_CATEGORIES = 'database_categories';
     private const string DATABASE_FOCUS_LIST = 'database_list';
     private const string DATABASE_FOCUS_SETTINGS = 'database_settings';
@@ -373,6 +378,14 @@ final class Editor
      * @var array<string, mixed>|null
      */
     private ?array $optionDialogField = null;
+
+    /**
+     * The map inspector field whose variant conditions the shared Condition
+     * editor is building, or null when it is not hosting one.
+     *
+     * @var array<string, mixed>|null
+     */
+    private ?array $mapConditionField = null;
     /**
      * @var string[]|null
      */
@@ -420,7 +433,9 @@ final class Editor
     private readonly ConditionEditor $conditionEditor;
     private readonly AffinityEditor $affinityEditor;
     private readonly WorldWriteEditor $worldWriteEditor;
+    private readonly BattleEntryPredicateEditor $battleEntryPredicateEditor;
     private const string WORLD_WRITE_NAME_FIELD = '__world_write_name';
+    private const string BATTLE_PREDICATE_ACTOR_FIELD = '__battle_predicate_actor';
     private bool $isWorldWriteNaming = false;
     private string $worldWriteNameBuffer = '';
     private bool $worldWriteNamingValue = false;
@@ -713,6 +728,7 @@ final class Editor
         $this->conditionEditor = new ConditionEditor();
         $this->affinityEditor = new AffinityEditor();
         $this->worldWriteEditor = new WorldWriteEditor();
+        $this->battleEntryPredicateEditor = new BattleEntryPredicateEditor();
         $this->modals = new ModalStack();
         $this->assetsPanel = new AssetsPanel(
             self::FOCUS_ASSETS,
@@ -1470,10 +1486,16 @@ final class Editor
             return true;
         }
 
+        if ($this->mapConditionField !== null
+            && ($this->conditionEditor->isOpen() || $this->referencePicker->isOpen())) {
+            return true;
+        }
+
         return $this->isNpcInspectorHosting() && (
             $this->isDatabaseEditing
             || $this->conditionEditor->isOpen()
             || $this->worldWriteEditor->isOpen()
+            || $this->battleEntryPredicateEditor->isOpen()
             || $this->affinityEditor->isOpen()
         );
     }
@@ -1704,6 +1726,12 @@ final class Editor
 
         if ($this->worldWriteEditor->isOpen()) {
             $this->handleWorldWriteEditorInput($input);
+
+            return;
+        }
+
+        if ($this->battleEntryPredicateEditor->isOpen()) {
+            $this->handleBattleEntryPredicateEditorInput($input);
 
             return;
         }
@@ -2805,6 +2833,22 @@ final class Editor
             return;
         }
 
+        if ($this->mapConditionField !== null && ($this->conditionEditor->isOpen() || $this->referencePicker->isOpen())) {
+            // The Inspector hosts the shared Condition editor for a music
+            // variant, exactly as the NPC pane hosts it for visibility.
+            $this->referencePicker->isOpen()
+                ? $this->handleReferencePickerInput($input)
+                : $this->handleConditionEditorInput($input);
+
+            if (! $this->conditionEditor->isOpen() && ! $this->referencePicker->isOpen()) {
+                $this->mapConditionField = null;
+            }
+
+            $this->renderInspectorArea();
+
+            return;
+        }
+
         if ($input === "\n" || $input === "\r") {
             $this->activateInspectorField();
             return;
@@ -2839,6 +2883,13 @@ final class Editor
 
         if (str_contains($input, "\033[C")) {
             $this->adjustInspectorOptionField(1);
+            return;
+        }
+
+        if ($input === '[' || $input === ']') {
+            // Declaration order is runtime behavior for music variants, so
+            // the list reorders where its rows live.
+            $this->moveMapBgmVariant($input === '[' ? -1 : 1);
         }
     }
 
@@ -2920,6 +2971,11 @@ final class Editor
 
         if ($this->worldWriteEditor->isOpen()) {
             $this->handleWorldWriteEditorInput($input);
+            return;
+        }
+
+        if ($this->battleEntryPredicateEditor->isOpen()) {
+            $this->handleBattleEntryPredicateEditorInput($input);
             return;
         }
 
@@ -3026,6 +3082,16 @@ final class Editor
 
         if ($this->databaseFocus === self::DATABASE_FOCUS_LIST && $this->isShiftLetterShortcut($input, 'A')) {
             $this->createDatabaseEntry();
+            return;
+        }
+
+        if ($this->databaseFocus === self::DATABASE_FOCUS_LIST && $this->isShiftLetterShortcut($input, 'D')) {
+            $this->duplicateDatabaseRecord();
+            return;
+        }
+
+        if ($this->databaseFocus === self::DATABASE_FOCUS_LIST && ($input === '[' || $input === ']')) {
+            $this->moveDatabaseRecord($input === '[' ? -1 : 1);
             return;
         }
 
@@ -3187,7 +3253,7 @@ final class Editor
     private function moveDatabaseCategorySelection(int $step): void
     {
         $categories = DatabaseCatalog::all();
-        $nextIndex = max(0, min(count($categories) - 1, $this->databaseCategoryIndex + $step));
+        $nextIndex = ListNavigation::step($this->databaseCategoryIndex, $step, count($categories));
 
         if ($nextIndex === $this->databaseCategoryIndex) {
             return;
@@ -3386,7 +3452,7 @@ final class Editor
             return;
         }
 
-        $nextIndex = max(0, min(count($fields) - 1, $this->databaseSelectedSettingIndex + $step));
+        $nextIndex = ListNavigation::step($this->databaseSelectedSettingIndex, $step, count($fields));
 
         if ($nextIndex === $this->databaseSelectedSettingIndex) {
             return;
@@ -3410,7 +3476,7 @@ final class Editor
             return;
         }
 
-        $nextIndex = max(1, min($animation->maxFrames, $this->databaseSelectedFrameIndex + $step));
+        $nextIndex = ListNavigation::step($this->databaseSelectedFrameIndex - 1, $step, $animation->maxFrames) + 1;
 
         if ($nextIndex === $this->databaseSelectedFrameIndex) {
             return;
@@ -3551,7 +3617,7 @@ final class Editor
 
         $position = array_search($this->selectedAssetIndex, $visible, true);
         $position = is_int($position) ? $position : 0;
-        $this->selectAsset($visible[max(0, min(count($visible) - 1, $position + $step))]);
+        $this->selectAsset($visible[ListNavigation::step($position, $step, count($visible))]);
     }
 
     /**
@@ -4985,6 +5051,16 @@ final class Editor
         $lines[] = '';
         $lines[] = 'Database';
         $lines[] = '  Shift+A / Del      add or remove an entry';
+
+        if ($this->getSelectedRecordDatabase()?->duplicateRecordSupported() === true) {
+            $lines[] = '  Shift+D            duplicate the entry under a';
+            $lines[] = '                     fresh stable id';
+        }
+
+        if ($this->getSelectedRecordDatabase()?->supportsDurableReorder() === true) {
+            $lines[] = '  [ / ]              move the entry up or down; this';
+            $lines[] = '                     category stores its order';
+        }
         $lines[] = '  Shift+O / Shift+X  add or remove an objective, beat,';
         $lines[] = '                     troop member or script command';
         $lines[] = '  Del                the same, on the settings field';
@@ -5384,7 +5460,7 @@ final class Editor
         $position = array_search($currentIndex, $visible, true);
         $position = is_int($position) ? $position : 0;
 
-        return $visible[max(0, min(count($visible) - 1, $position + $step))];
+        return $visible[ListNavigation::step($position, $step, count($visible))];
     }
 
     /**
@@ -6125,8 +6201,7 @@ final class Editor
             }
 
             try {
-                $this->backupBeforeSave(...$this->getMapBackupPaths($map));
-                $map->save();
+                $map->save($this->backupBeforeSave(...));
                 $savedMaps++;
             } catch (Throwable $throwable) {
                 Debug::error(sprintf('Save all (%s): %s', $map->mapId, $throwable->getMessage()));
@@ -6251,16 +6326,6 @@ final class Editor
         );
     }
 
-    /**
-     * Returns the files a map save overwrites.
-     *
-     * @param ProjectMap $map The map about to be saved.
-     * @return string[]
-     */
-    private function getMapBackupPaths(ProjectMap $map): array
-    {
-        return [$map->dataPath, $map->mapPath, $map->eventPath];
-    }
 
     /**
      * Returns the files a database save overwrites.
@@ -6487,8 +6552,10 @@ final class Editor
 
         try {
             $previousMapId = $selectedMap->mapId;
-            $this->backupBeforeSave(...$this->getMapBackupPaths($selectedMap));
-            $savedMapId = $selectedMap->save();
+            // The save backs up, once, exactly the files it is about to
+            // replace -- so a clean map or an untouched member never
+            // produces a backup copy.
+            $savedMapId = $selectedMap->save($this->backupBeforeSave(...));
 
             if ($savedMapId !== $previousMapId) {
                 // The folder moved: swap in a freshly parsed map instance and
@@ -6828,7 +6895,7 @@ final class Editor
         $position = array_search($currentIndex, $visible, true);
         $position = is_int($position) ? $position : 0;
 
-        return $visible[max(0, min(count($visible) - 1, $position + $step))];
+        return $visible[ListNavigation::step($position, $step, count($visible))];
     }
 
     /**
@@ -7654,7 +7721,7 @@ final class Editor
             return;
         }
 
-        $this->selectedInspectorFieldIndex = max(0, min(count($fields) - 1, $this->selectedInspectorFieldIndex + $step));
+        $this->selectedInspectorFieldIndex = ListNavigation::step($this->selectedInspectorFieldIndex, $step, count($fields));
         $this->renderInspectorArea();
     }
 
@@ -7765,6 +7832,12 @@ final class Editor
             return;
         }
 
+        if (($field['mapConditions'] ?? false) === true) {
+            $this->openMapVariantConditionEditor($field);
+
+            return;
+        }
+
         if ($this->openInspectorReferenceDialog($field)) {
             return;
         }
@@ -7833,7 +7906,7 @@ final class Editor
             }
 
             $optionIndex = is_int($optionIndex) ? $optionIndex : 0;
-            $optionIndex = max(0, min(count($options) - 1, $optionIndex + $step));
+            $optionIndex = ListNavigation::step($optionIndex, $step, count($options));
             $newValue = (string) $options[$optionIndex];
 
             if ($newValue === $currentValue) {
@@ -8133,6 +8206,12 @@ final class Editor
             return;
         }
 
+        if ($target === 'map-bgm-variants') {
+            $this->applyMapBgmVariantValue($selectedMap, $field, $value);
+
+            return;
+        }
+
         if ($target === 'map-size') {
             $newWidth = (string) ($field['field'] ?? '') === 'width' ? max(1, (int) $value) : $selectedMap->getWidth();
             $newHeight = (string) ($field['field'] ?? '') === 'height' ? max(1, (int) $value) : $selectedMap->getHeight();
@@ -8277,6 +8356,16 @@ final class Editor
     }
 
     /**
+     * Returns whether the Battle Entry rules database is active.
+     *
+     * @return bool
+     */
+    private function isBattleEntryRulesDatabaseSelected(): bool
+    {
+        return $this->getSelectedDatabaseCategoryDefinition()->key === self::DATABASE_CATEGORY_BATTLE_ENTRY_RULES;
+    }
+
+    /**
      * Returns whether a schema-driven (Phase 6) category is active.
      *
      * @return bool
@@ -8393,6 +8482,105 @@ final class Editor
         $this->setStatus(sprintf('Created a new %s.', $database->schema->entryNoun), StatusLevel::SUCCESS);
         $this->renderDatabaseArea();
         $this->beginDatabaseEdit();
+    }
+
+    /**
+     * Duplicates the selected record below itself, undoably.
+     *
+     * @return void
+     */
+    private function duplicateDatabaseRecord(): void
+    {
+        $database = $this->getSelectedRecordDatabase();
+
+        if (! $database instanceof ProjectRecordDatabase) {
+            return;
+        }
+
+        if (! $database->isEditable()) {
+            $this->setStatus($this->describeRecordReadOnly($database), StatusLevel::WARN);
+            $this->renderDatabaseArea();
+            return;
+        }
+
+        $index = $this->getSelectedRecordIndex();
+        $copyIndex = $database->duplicateRecord($index);
+
+        if ($copyIndex === null) {
+            $this->setStatus(
+                sprintf('This %s cannot be duplicated.', $database->schema->entryNoun),
+                StatusLevel::WARN,
+            );
+            $this->renderDatabaseArea();
+            return;
+        }
+
+        $copy = $database->getRecordByIndex($copyIndex);
+
+        if ($copy instanceof ProjectRecord) {
+            $this->recordCommand(new GenericCommand(
+                sprintf('%s duplicate', ucfirst($database->schema->entryNoun)),
+                static fn() => $database->insertRecord($copyIndex, $copy),
+                static fn() => $database->removeRecord($copyIndex),
+            ));
+        }
+
+        $this->setSelectedRecordIndex($copyIndex);
+        $this->setStatus(sprintf('Duplicated the %s.', $database->schema->entryNoun), StatusLevel::SUCCESS);
+        $this->renderDatabaseArea();
+    }
+
+    /**
+     * Moves the selected record up or down its list, undoably.
+     *
+     * Declaration order is part of some categories' meaning — battle-entry
+     * rules break priority ties by it — so the move is a recorded edit.
+     *
+     * @param int $step The direction to move.
+     * @return void
+     */
+    private function moveDatabaseRecord(int $step): void
+    {
+        $database = $this->getSelectedRecordDatabase();
+
+        if (! $database instanceof ProjectRecordDatabase) {
+            return;
+        }
+
+        if (! $database->isEditable()) {
+            $this->setStatus($this->describeRecordReadOnly($database), StatusLevel::WARN);
+            $this->renderDatabaseArea();
+            return;
+        }
+
+        if (! $database->supportsDurableReorder()) {
+            // Refusing beats a reorder the file cannot keep: nothing moves,
+            // nothing dirties, and the author learns why.
+            $this->setStatus((string) $database->reorderRefusalReason(), StatusLevel::WARN);
+            $this->renderDatabaseArea();
+            return;
+        }
+
+        $from = $this->getSelectedRecordIndex();
+        $to = $from + $step;
+
+        if (! $database->moveRecord($from, $to)) {
+            return;
+        }
+
+        $this->recordCommand(new GenericCommand(
+            sprintf('%s move', ucfirst($database->schema->entryNoun)),
+            static fn() => $database->moveRecord($from, $to),
+            static fn() => $database->moveRecord($to, $from),
+        ));
+
+        $this->setSelectedRecordIndex($to);
+        $this->setStatus(sprintf(
+            'Moved the %s %s.',
+            $database->schema->entryNoun,
+            $step < 0 ? 'up' : 'down',
+        ), StatusLevel::SUCCESS);
+        $this->renderDatabaseArea();
     }
 
     /**
@@ -10199,6 +10387,12 @@ final class Editor
             return;
         }
 
+        if (($field['actorPredicates'] ?? false) === true) {
+            $this->openBattleEntryPredicateEditor($field);
+
+            return;
+        }
+
         if (is_array($field['frame'] ?? null)) {
             $this->enterCommandFrame($field['frame']);
 
@@ -10369,10 +10563,12 @@ final class Editor
      */
     private function openWorldWriteEditor(array $field): void
     {
+        $writeTypes = $field['writeTypes'] ?? null;
         $this->worldWriteEditor->open(
             (string) ($field['field'] ?? ''),
             (string) ($field['label'] ?? 'Writes'),
             WorldWriteCodec::decodeAll((string) ($field['value'] ?? '')),
+            is_array($writeTypes) ? $writeTypes : null,
         );
         $this->statusMessage = 'Building writes.';
         $this->renderDatabasePanes(['settings']);
@@ -10581,6 +10777,149 @@ final class Editor
         }
 
         $selectedIndex = $this->worldWriteEditor->selectedIndex();
+
+        foreach ($rows as $index => $row) {
+            $lines[] = sprintf('%s%s', $index === $selectedIndex ? '> ' : '  ', $row);
+        }
+
+        // Two header lines, then the rows in whatever height the pane has.
+        $visibleRows = max(1, $this->recordPaneMetrics()['rows'] - 2);
+
+        return [...array_slice($lines, 0, 2), ...ScrollWindow::slice(array_slice($lines, 2), $selectedIndex, $visibleRows)];
+    }
+
+    /**
+     * Opens the predicate editor on a field that holds battle-entry actor
+     * predicates.
+     *
+     * @param array<string, mixed> $field The settings-pane field descriptor.
+     * @return void
+     */
+    private function openBattleEntryPredicateEditor(array $field): void
+    {
+        $this->battleEntryPredicateEditor->open(
+            (string) ($field['field'] ?? ''),
+            (string) ($field['label'] ?? 'Actor Predicates'),
+            BattleEntryPredicateCodec::decodeAll((string) ($field['value'] ?? '')),
+        );
+        $this->statusMessage = 'Building actor predicates.';
+        $this->renderDatabasePanes(['settings']);
+    }
+
+    /**
+     * Handles input while actor predicates are being built.
+     *
+     * @param string $input The raw input.
+     * @return void
+     */
+    private function handleBattleEntryPredicateEditorInput(string $input): void
+    {
+        if ($input === "\033" || $input === "\x1b") {
+            $this->battleEntryPredicateEditor->close();
+            $this->statusMessage = 'Actor predicates unchanged.';
+            $this->renderDatabasePanes(['settings']);
+
+            return;
+        }
+
+        if ($input === "\n" || $input === "\r") {
+            $this->commitBattleEntryPredicates();
+
+            return;
+        }
+
+        match (true) {
+            str_contains($input, "\033[A") => $this->battleEntryPredicateEditor->move(-1),
+            str_contains($input, "\033[B") => $this->battleEntryPredicateEditor->move(1),
+            $input === 'a' => $this->battleEntryPredicateEditor->add(),
+            $input === 'd' => $this->battleEntryPredicateEditor->remove(),
+            $input === 'x' => $this->battleEntryPredicateEditor->cyclePresence(1),
+            $input === 'X' => $this->battleEntryPredicateEditor->cyclePresence(-1),
+            $input === 'n' => $this->beginBattleEntryPredicateActor(),
+            default => null,
+        };
+
+        $this->renderDatabasePanes(['settings']);
+    }
+
+    /**
+     * Starts picking the selected predicate's actor: a durable identity is
+     * chosen, never typed.
+     *
+     * @return void
+     */
+    private function beginBattleEntryPredicateActor(): void
+    {
+        $predicate = $this->battleEntryPredicateEditor->selected();
+
+        if ($predicate === null || ! $this->workspace instanceof ProjectWorkspace) {
+            return;
+        }
+
+        $catalog = $this->referenceCatalog();
+        $values = $catalog->valuesFor('actor_ids');
+
+        if (! $this->referencePicker->open(self::BATTLE_PREDICATE_ACTOR_FIELD, 'Actor', 'actor_ids', $values, strval($predicate['actor'] ?? ''), $catalog->labelsFor('actor_ids'))) {
+            $this->setStatus('This project defines no actors to choose from.', StatusLevel::WARN);
+        }
+    }
+
+    /**
+     * Stores the predicate list being built back onto its field.
+     *
+     * @return void
+     */
+    private function commitBattleEntryPredicates(): void
+    {
+        $fieldId = $this->battleEntryPredicateEditor->fieldId();
+        $label = $this->battleEntryPredicateEditor->label();
+        $encoded = $this->battleEntryPredicateEditor->encoded();
+        $this->battleEntryPredicateEditor->close();
+
+        $field = null;
+
+        foreach ($this->getDatabaseSettingsFields() as $candidate) {
+            if (is_array($candidate) && ($candidate['field'] ?? null) === $fieldId) {
+                $field = $candidate;
+            }
+        }
+
+        if (! is_array($field)) {
+            return;
+        }
+
+        try {
+            $this->applyDatabaseFieldValueRecorded($field, $encoded);
+            $this->setStatus(sprintf('%s updated.', $label), StatusLevel::SUCCESS);
+        } catch (Throwable $throwable) {
+            $this->setErrorStatus($throwable, sprintf('%s edit', $label));
+        }
+
+        $this->renderDatabasePanes(['list', 'settings', 'cue', 'frames', 'preview']);
+    }
+
+    /**
+     * Returns the rows shown while actor predicates are being built.
+     *
+     * @return string[] The rows.
+     */
+    private function buildBattleEntryPredicateEditorRows(): array
+    {
+        $labels = $this->workspace instanceof ProjectWorkspace
+            ? $this->referenceCatalog()->labelsFor('actor_ids')
+            : [];
+        $rows = $this->battleEntryPredicateEditor->rows($labels);
+        $lines = [sprintf('%s · %d', $this->battleEntryPredicateEditor->label(), count($rows)), ''];
+
+        if ($rows === []) {
+            $lines = [...$lines, ...SettingsPaneLayout::wrapProse('  None. The rule matches no one and never runs.', $this->recordPaneMetrics()['width'])];
+            $lines[] = '';
+            $lines = [...$lines, ...SettingsPaneLayout::wrapProse('  a to add a predicate.', $this->recordPaneMetrics()['width'])];
+
+            return $lines;
+        }
+
+        $selectedIndex = $this->battleEntryPredicateEditor->selectedIndex();
 
         foreach ($rows as $index => $row) {
             $lines[] = sprintf('%s%s', $index === $selectedIndex ? '> ' : '  ', $row);
@@ -10909,6 +11248,24 @@ final class Editor
      */
     private function commitConditions(): void
     {
+        if ($this->mapConditionField !== null) {
+            $field = $this->mapConditionField;
+            $this->mapConditionField = null;
+            $label = $this->conditionEditor->label();
+            $encoded = $this->conditionEditor->encoded();
+            $this->conditionEditor->close();
+            $selectedMap = $this->getSelectedMap();
+
+            if ($selectedMap instanceof ProjectMap) {
+                $this->applyMapBgmVariantValue($selectedMap, $field, ConditionCodec::decodeAll($encoded));
+                $this->setStatus(sprintf('%s updated.', $label), StatusLevel::SUCCESS);
+            }
+
+            $this->renderSelectionDependentArea();
+
+            return;
+        }
+
         $fieldId = $this->conditionEditor->fieldId();
         $label = $this->conditionEditor->label();
         $encoded = $this->conditionEditor->encoded();
@@ -11137,6 +11494,19 @@ final class Editor
             }
 
             $this->statusMessage = 'Building writes.';
+            $this->renderDatabasePanes(['settings']);
+
+            return;
+        }
+
+        if ($fieldId === self::BATTLE_PREDICATE_ACTOR_FIELD) {
+            // Opened from the predicate editor, which is still the thing
+            // being edited; the field itself is written when that closes.
+            if ($selected !== null) {
+                $this->battleEntryPredicateEditor->setActor($selected);
+            }
+
+            $this->statusMessage = 'Building actor predicates.';
             $this->renderDatabasePanes(['settings']);
 
             return;
@@ -11643,7 +12013,7 @@ final class Editor
         $normalizedOptions = array_map(static fn(mixed $option): string => mb_strtolower((string) $option), $options);
         $optionIndex = array_search($currentValue, $normalizedOptions, true);
         $optionIndex = is_int($optionIndex) ? $optionIndex : 0;
-        $optionIndex = max(0, min(count($options) - 1, $optionIndex + $step));
+        $optionIndex = ListNavigation::step($optionIndex, $step, count($options));
         $this->applyDatabaseFieldValueRecorded($field, (string) $options[$optionIndex]);
         $this->renderDatabasePanes(['list', 'settings', 'cue', 'frames', 'preview']);
     }
@@ -11913,6 +12283,8 @@ final class Editor
             ],
         ];
 
+        $fields = [...$fields, ...$this->mapBgmVariantFields($map, $known)];
+
         $encounters = MapEncounters::fromMap($map);
         $fields[] = [
             'label' => 'Encounters',
@@ -11986,6 +12358,272 @@ final class Editor
         ];
 
         return $fields;
+    }
+
+    /**
+     * Builds the ordered Music Variants rows: the map's conditional music,
+     * evaluated by the engine in declaration order, first match wins.
+     *
+     * @param string[] $known The project's BGM tracks.
+     * @return array<int, array<string, mixed>>
+     */
+    private function mapBgmVariantFields(ProjectMap $map, array $known): array
+    {
+        $variants = MapBgmVariants::fromMap($map);
+        $fields = [
+            [
+                'label' => '  Music Variants',
+                'value' => $variants->summary(),
+                'editable' => false,
+                'target' => 'map-bgm-variants',
+                'bgmVariantList' => ['index' => max(0, $variants->count() - 1)],
+            ],
+        ];
+
+        if (! $variants->isSupported()) {
+            $fields[] = [
+                'label' => '  ! Read-only',
+                'value' => (string) $variants->unsupportedReason(),
+                'editable' => false,
+            ];
+
+            return $fields;
+        }
+
+        foreach ($variants->rows() as $index => $row) {
+            $track = $variants->trackAt($index);
+            $raw = $variants->rawTrackAt($index);
+            $fields[] = [
+                'label' => sprintf('    Variant %d Track', $index + 1),
+                'value' => match (true) {
+                    $track === null && $raw !== null => var_export($raw, true) . ' · not a track name',
+                    $track === null || $track === '' => '(no track yet)',
+                    ! in_array($track, $known, true) => $track . ' · not in assets/Audio/BGM',
+                    default => $track,
+                },
+                'reference' => 'bgm',
+                'target' => 'map-bgm-variants',
+                'field' => 'track',
+                'index' => $index,
+                'bgmVariantList' => ['index' => $index],
+            ];
+
+            $issue = $variants->conditionsIssueAt($index);
+            $conditions = $variants->conditionsAt($index);
+            $fields[] = [
+                'label' => sprintf('    Variant %d When', $index + 1),
+                'value' => $issue !== null
+                    ? '! ' . $issue
+                    : ($conditions === [] ? '(always · shadows later variants)' : ConditionCodec::encodeAll($conditions)),
+                'target' => 'map-bgm-variants',
+                'field' => 'conditions',
+                'index' => $index,
+                'bgmVariantList' => ['index' => $index],
+                'editable' => $issue === null,
+                'mapConditions' => $issue === null,
+            ];
+        }
+
+        return $fields;
+    }
+
+    /**
+     * Writes one variant field through the variants model, which owns the
+     * list's shape and preserves every key it does not edit.
+     *
+     * @param array<string, mixed> $field The inspector field descriptor.
+     */
+    private function applyMapBgmVariantValue(ProjectMap $map, array $field, mixed $value): void
+    {
+        $variants = MapBgmVariants::fromMap($map);
+
+        if (! $variants->isSupported()) {
+            $this->setStatus(
+                sprintf('Music variants are read-only here: %s.', $variants->unsupportedReason()),
+                StatusLevel::WARN,
+            );
+
+            return;
+        }
+
+        $index = (int) ($field['index'] ?? 0);
+        $block = match ((string) ($field['field'] ?? '')) {
+            'track' => $variants->withTrackAt($index, (string) $value),
+            'conditions' => is_array($value) ? $variants->withConditionsAt($index, $value) : null,
+            default => null,
+        };
+
+        if ($block === null) {
+            return;
+        }
+
+        $this->applyMapDataValue($map, [MapBgmVariants::KEY], $block, sprintf('Music variant %d', $index + 1));
+    }
+
+    /**
+     * Returns the variant row the inspector cursor is inside, or null.
+     *
+     * @return array{map: ProjectMap, variants: MapBgmVariants, index: int}|null
+     */
+    private function selectedMapBgmVariantRow(): ?array
+    {
+        $selectedMap = $this->getSelectedMap();
+        $fields = $this->getInspectorFields();
+        $field = $fields[$this->selectedInspectorFieldIndex] ?? null;
+
+        if (! $selectedMap instanceof ProjectMap
+            || ! is_array($field)
+            || ! is_array($field['bgmVariantList'] ?? null)) {
+            return null;
+        }
+
+        return [
+            'map' => $selectedMap,
+            'variants' => MapBgmVariants::fromMap($selectedMap),
+            'index' => (int) ($field['bgmVariantList']['index'] ?? 0),
+        ];
+    }
+
+    /**
+     * Appends a visibly incomplete music variant, when the cursor is on the
+     * variants list.
+     *
+     * @return bool True when the key meant this list.
+     */
+    private function addMapBgmVariant(): bool
+    {
+        $context = $this->selectedMapBgmVariantRow();
+
+        if ($context === null) {
+            return false;
+        }
+
+        $variants = $context['variants'];
+
+        if (! $variants->isSupported()) {
+            $this->setStatus(sprintf('Music variants are read-only here: %s.', $variants->unsupportedReason()), StatusLevel::WARN);
+            $this->renderInspectorArea();
+
+            return true;
+        }
+
+        $this->applyMapDataValue($context['map'], [MapBgmVariants::KEY], $variants->withVariantAdded(), 'Music variant add');
+        $this->setStatus(sprintf('Added variant %d. Pick its track; it stays inactive until one is chosen.', $variants->count() + 1), StatusLevel::SUCCESS);
+        $this->clampInspectorSelection();
+        $this->renderSelectionDependentArea();
+
+        return true;
+    }
+
+    /**
+     * Removes the music variant the cursor is inside; removing the last one
+     * takes the bgmVariants key with it.
+     *
+     * @return bool True when the key meant this list.
+     */
+    private function removeMapBgmVariant(): bool
+    {
+        $context = $this->selectedMapBgmVariantRow();
+
+        if ($context === null) {
+            return false;
+        }
+
+        $variants = $context['variants'];
+
+        if (! $variants->isSupported()) {
+            $this->setStatus(sprintf('Music variants are read-only here: %s.', $variants->unsupportedReason()), StatusLevel::WARN);
+            $this->renderInspectorArea();
+
+            return true;
+        }
+
+        if ($variants->count() === 0) {
+            $this->setStatus('There is no music variant here to remove.', StatusLevel::WARN);
+            $this->renderInspectorArea();
+
+            return true;
+        }
+
+        $this->applyMapDataValue($context['map'], [MapBgmVariants::KEY], $variants->withVariantRemovedAt($context['index']), 'Music variant remove');
+        $this->setStatus(sprintf('Removed variant %d.', $context['index'] + 1), StatusLevel::SUCCESS);
+        $this->clampInspectorSelection();
+        $this->renderSelectionDependentArea();
+
+        return true;
+    }
+
+    /**
+     * Moves the music variant the cursor is inside up or down, because
+     * declaration order is runtime behavior: the first match wins.
+     */
+    private function moveMapBgmVariant(int $step): void
+    {
+        $context = $this->selectedMapBgmVariantRow();
+
+        if ($context === null) {
+            return;
+        }
+
+        $variants = $context['variants'];
+
+        if (! $variants->isSupported()) {
+            $this->setStatus(sprintf('Music variants are read-only here: %s.', $variants->unsupportedReason()), StatusLevel::WARN);
+            $this->renderInspectorArea();
+
+            return;
+        }
+
+        $from = $context['index'];
+        $block = $variants->withVariantMovedTo($from, $from + $step);
+
+        if ($block === null) {
+            return;
+        }
+
+        $this->applyMapDataValue($context['map'], [MapBgmVariants::KEY], $block, 'Music variant move');
+
+        // The cursor follows the variant it was on.
+        $fields = $this->getInspectorFields();
+
+        foreach ($fields as $fieldIndex => $field) {
+            if (($field['target'] ?? null) === 'map-bgm-variants'
+                && ($field['field'] ?? null) === 'track'
+                && ($field['index'] ?? null) === $from + $step) {
+                $this->selectedInspectorFieldIndex = $fieldIndex;
+                break;
+            }
+        }
+
+        $this->setStatus(sprintf('Moved variant %s. The first matching variant wins.', $step < 0 ? 'up' : 'down'), StatusLevel::SUCCESS);
+        $this->renderSelectionDependentArea();
+    }
+
+    /**
+     * Opens the shared Condition editor on a music variant's conditions,
+     * hosted in the Inspector pane.
+     *
+     * @param array<string, mixed> $field The inspector field descriptor.
+     */
+    private function openMapVariantConditionEditor(array $field): void
+    {
+        $selectedMap = $this->getSelectedMap();
+
+        if (! $selectedMap instanceof ProjectMap) {
+            return;
+        }
+
+        $variants = MapBgmVariants::fromMap($selectedMap);
+        $index = (int) ($field['index'] ?? 0);
+
+        $this->mapConditionField = $field;
+        $this->conditionEditor->open(
+            (string) ($field['field'] ?? 'conditions'),
+            sprintf('Variant %d Conditions', $index + 1),
+            $variants->conditionsAt($index),
+        );
+        $this->statusMessage = 'Building conditions. An empty list always matches.';
+        $this->renderInspectorArea();
     }
 
     /**
@@ -12700,6 +13338,60 @@ final class Editor
         );
 
         return array_pad($lines, $availableLines, '');
+    }
+
+    /**
+     * Word-wraps lines to the given display width, keeping blank lines.
+     *
+     * Words longer than the width are split rather than dropped, so no text
+     * silently vanishes on a narrow terminal.
+     *
+     * @param string[] $lines The lines to wrap.
+     * @param int $availableWidth The display width to wrap at.
+     * @return string[]
+     */
+    private function wrapLines(array $lines, int $availableWidth): array
+    {
+        $availableWidth = max(1, $availableWidth);
+        $wrapped = [];
+
+        foreach ($lines as $line) {
+            if (mb_strwidth($line) <= $availableWidth) {
+                $wrapped[] = $line;
+
+                continue;
+            }
+
+            $current = '';
+
+            foreach (explode(' ', $line) as $word) {
+                while (mb_strwidth($word) > $availableWidth) {
+                    if ($current !== '') {
+                        $wrapped[] = $current;
+                        $current = '';
+                    }
+
+                    $head = mb_strimwidth($word, 0, $availableWidth, '');
+                    $wrapped[] = $head;
+                    $word = mb_substr($word, mb_strlen($head));
+                }
+
+                $candidate = $current === '' ? $word : $current . ' ' . $word;
+
+                if (mb_strwidth($candidate) > $availableWidth) {
+                    $wrapped[] = $current;
+                    $current = $word;
+                } else {
+                    $current = $candidate;
+                }
+            }
+
+            if ($current !== '') {
+                $wrapped[] = $current;
+            }
+        }
+
+        return $wrapped;
     }
 
     /**
@@ -13645,6 +14337,10 @@ final class Editor
             return;
         }
 
+        if ($this->addMapBgmVariant()) {
+            return;
+        }
+
         $selectedMap = $this->getSelectedMap();
         $list = $this->selectedInspectorList();
         $marker = $this->selectedEventMarkerForList();
@@ -13674,6 +14370,10 @@ final class Editor
     private function removeInspectorListItem(): void
     {
         if ($this->removeMapEncounterTroop()) {
+            return;
+        }
+
+        if ($this->removeMapBgmVariant()) {
             return;
         }
 
@@ -13871,7 +14571,7 @@ final class Editor
         $category = (string) ($field['reference'] ?? '');
         $target = (string) ($field['target'] ?? '');
 
-        if ($category === '' || ! in_array($target, ['map-data', 'map-encounters'], true)) {
+        if ($category === '' || ! in_array($target, ['map-data', 'map-encounters', 'map-bgm-variants'], true)) {
             return false;
         }
 
@@ -13891,9 +14591,11 @@ final class Editor
             $catalog->valuesFor($category),
         );
 
-        if ($category === 'bgm') {
+        if ($category === 'bgm' && $target === 'map-data') {
             // Silence is a choice a map can make, and the only way back from
-            // a track once one is set.
+            // a track once one is set. A variant is different: an empty
+            // track is a skipped variant, not silence, so the variant picker
+            // offers only real tracks and removal un-authors the variant.
             array_unshift($entries, [
                 'label' => self::MAP_BGM_NONE,
                 'value' => '',
@@ -13901,7 +14603,7 @@ final class Editor
             ]);
         }
 
-        if ($entries === [] || ($category === 'bgm' && count($entries) === 1)) {
+        if ($entries === [] || ($category === 'bgm' && count($entries) === 1 && $target === 'map-data')) {
             $this->setStatus(
                 sprintf('This project has no %s to choose from.', mb_strtolower($title)),
                 StatusLevel::WARN,
@@ -14093,6 +14795,29 @@ final class Editor
     }
 
     /**
+     * Returns whether the frame list pane sizes itself to its lines and
+     * wraps the ones that still do not fit.
+     *
+     * Categories whose frame list scrolls a per-entry selection keep a
+     * steady tuned width instead, so the row does not reflow as the cursor
+     * moves. Every other category's frame list fits the lines it is about
+     * to show: a pane holding prose is born readable rather than inheriting
+     * a width meant for frame numbers, and stays readable when its
+     * sentences change.
+     *
+     * @return bool
+     */
+    private function framesPaneFitsContent(): bool
+    {
+        return ! (
+            $this->isActorsDatabaseSelected()
+            || $this->isClassesDatabaseSelected()
+            || $this->isSkillsDatabaseSelected()
+            || $this->isQuestsDatabaseSelected()
+        );
+    }
+
+    /**
      * Resolves the Database overlay layout.
      *
      * @param array{width: int, height: int, leftWidth: int, rightWidth: int, gutter: int, centerWidth: int, contentHeight: int} $layout The base editor layout.
@@ -14105,6 +14830,12 @@ final class Editor
     private const int DATABASE_SETTINGS_MAXIMUM_WIDTH = 96;
     private const int DATABASE_CUE_MINIMUM_WIDTH = 22;
     private const int DATABASE_CUE_MAXIMUM_WIDTH = 48;
+
+    /**
+     * What a content-fitted frame list may take of the Database's right side.
+     */
+    private const int DATABASE_FRAMES_MINIMUM_WIDTH = 10;
+    private const int DATABASE_FRAMES_MAXIMUM_WIDTH = 48;
 
     private function resolveDatabaseLayout(array $layout): array
     {
@@ -14130,9 +14861,10 @@ final class Editor
             18,
             $innerWidth - $minimumListWidth - $minimumRightWidth - ($gutter * 2)
         );
-        $categoryWidth = min($maximumCategoryWidth, $categoryContentWidth + 4)
-                |> (fn($x) => min(24, $x))
-                |> (fn($x) => max(18, $x));
+        $categoryWidth = max(
+            18,
+            min(24, $maximumCategoryWidth, $categoryContentWidth + 4),
+        );
         $listWidth = max(
             $minimumListWidth,
             min(24, $innerWidth - $categoryWidth - $minimumRightWidth - ($gutter * 2))
@@ -14141,9 +14873,29 @@ final class Editor
         $topHeight = $this->isClassesDatabaseSelected()
             ? 17
             : ($this->isSkillsDatabaseSelected() || $this->isQuestsDatabaseSelected() ? 18 : ($this->isActorsDatabaseSelected() ? 12 : 10));
-        $framesWidth = $this->isClassesDatabaseSelected()
-            ? 24
-            : ($this->isSkillsDatabaseSelected() || $this->isQuestsDatabaseSelected() ? 30 : ($this->isActorsDatabaseSelected() ? 18 : 10));
+        if ($this->framesPaneFitsContent()) {
+            $widestFrameLine = 0;
+
+            foreach ($this->getDatabaseFrameLines() as $frameLine) {
+                $widestFrameLine = max($widestFrameLine, mb_strwidth($frameLine));
+            }
+
+            $framesWidth = max(
+                self::DATABASE_FRAMES_MINIMUM_WIDTH,
+                min(
+                    self::DATABASE_FRAMES_MAXIMUM_WIDTH,
+                    $rightWidth - 24 - $gutter,
+                    $widestFrameLine + 2 + (self::WINDOW_HORIZONTAL_PADDING * 2)
+                )
+            );
+        } elseif ($this->isClassesDatabaseSelected()) {
+            $framesWidth = 24;
+        } elseif ($this->isSkillsDatabaseSelected() || $this->isQuestsDatabaseSelected()) {
+            $framesWidth = max(30, min($rightWidth - 24 - $gutter, 34));
+        } else {
+            $framesWidth = 18;
+        }
+
         $previewWidth = max(20, $rightWidth - $framesWidth - $gutter);
         $previewHeight = max(8, $innerHeight - $topHeight - $gutter);
         // The settings pane holds label-and-value lines that truncate, and the
@@ -14165,14 +14917,12 @@ final class Editor
             $settingsWidth = max(1, $rightWidth - $cueWidth - $gutter);
         }
 
-        if ($this->isSkillsDatabaseSelected() || $this->isQuestsDatabaseSelected()) {
-            $framesWidth = max(30, min($rightWidth - 24 - $gutter, 34));
-            $previewWidth = max(24, $rightWidth - $framesWidth - $gutter);
-
-            if ($previewWidth < 24) {
-                $previewWidth = 24;
-                $framesWidth = max(24, $rightWidth - $previewWidth - $gutter);
-            }
+        // Narrow enough that the frame list and preview cannot both have
+        // their minimum: share out what there is rather than draw past the
+        // edge.
+        if ($framesWidth + $previewWidth + $gutter > $rightWidth) {
+            $framesWidth = max(1, intdiv($rightWidth - $gutter, 2));
+            $previewWidth = max(1, $rightWidth - $framesWidth - $gutter);
         }
 
         return [
@@ -14545,6 +15295,13 @@ final class Editor
                     'a/d:Add/Del  t/n/x:Edit  ?:Help',
                     '?:Help',
                 ),
+                $this->battleEntryPredicateEditor->isOpen() => $this->fitHelp(
+                    $layout['settingsWidth'],
+                    'a:Add  d:Delete  n:Actor  x/X:Presence  Enter:Done  Esc:Cancel',
+                    'a/d:Add/Del  n:Actor  x:Presence  Enter:Done',
+                    'a/d:Add/Del  n/x:Edit  ?:Help',
+                    '?:Help',
+                ),
                 $this->affinityEditor->isOpen() => $this->fitHelp(
                     $layout['settingsWidth'],
                     'a:Add  d:Delete  n:Element  x/X:Effect  Enter:Done  Esc:Cancel',
@@ -14592,7 +15349,7 @@ final class Editor
     private function createDatabaseCueWindow(array $layout): EditorWindow
     {
         return new EditorWindow(
-            title: $this->isActorsDatabaseSelected() ? "Collections" : ($this->isClassesDatabaseSelected() ? "Experience Curve" : ($this->isSkillsDatabaseSelected() ? "Effects" : ($this->isQuestsDatabaseSelected() ? "Objectives" : ($this->isSystemDatabaseSelected() ? "Battle Settings" : "SE and Flash Timing")))),
+            title: $this->isActorsDatabaseSelected() ? "Collections" : ($this->isClassesDatabaseSelected() ? "Experience Curve" : ($this->isSkillsDatabaseSelected() ? "Effects" : ($this->isQuestsDatabaseSelected() ? "Objectives" : ($this->isSystemDatabaseSelected() ? "Battle Settings" : ($this->isBattleEntryRulesDatabaseSelected() ? "Execution Order" : "SE and Flash Timing"))))),
             help: $this->isQuestsDatabaseSelected()
                 ? $this->fitHelp($layout['cueWidth'], 'Shift+O:Add  Shift+X:Del', 'Shift+O/X:Add/Del', '?:Help')
                 : '',
@@ -14624,7 +15381,9 @@ final class Editor
             height: $layout["previewHeight"],
             foregroundColor: $this->resolveDatabasePaneColor(self::DATABASE_FOCUS_FRAMES),
             content: $this->fitLines(
-                $this->getDatabaseFrameLines(),
+                $this->framesPaneFitsContent()
+                    ? $this->wrapLines($this->getDatabaseFrameLines(), $this->getWindowContentWidth($layout["framesWidth"]))
+                    : $this->getDatabaseFrameLines(),
                 $this->getWindowContentWidth($layout["framesWidth"]),
                 $layout["previewHeight"] - 2
             ),
@@ -14659,10 +15418,6 @@ final class Editor
     /**
      * Returns the list lines for the active Database category.
      *
-        if ($this->isSkillsDatabaseSelected()) {
-            return $this->getDatabaseSkillCueLines();
-        }
-
      * @return string[]
      */
     private function getDatabaseListLines(): array
@@ -14991,6 +15746,10 @@ final class Editor
             return $this->buildWorldWriteEditorRows();
         }
 
+        if ($this->battleEntryPredicateEditor->isOpen()) {
+            return $this->buildBattleEntryPredicateEditorRows();
+        }
+
         return $this->recordPaneLayout($fields)->visibleLines();
     }
 
@@ -15009,7 +15768,7 @@ final class Editor
             return $this->cutsceneRecordPaneMetrics();
         }
 
-        if ($this->isNpcInspectorHosting()) {
+        if ($this->isNpcInspectorHosting() || $this->mapConditionField !== null) {
             return [
                 'width' => $this->getWindowContentWidth($layout['rightWidth']),
                 'rows' => max(1, $layout['contentHeight'] - 2),
@@ -15124,6 +15883,10 @@ final class Editor
 
         if ($this->isSystemDatabaseSelected()) {
             return $this->getDatabaseSystemCueLines();
+        }
+
+        if ($this->isBattleEntryRulesDatabaseSelected()) {
+            return $this->getDatabaseBattleEntryCueLines();
         }
 
         $animation = $this->getSelectedAnimation();
@@ -15276,6 +16039,64 @@ final class Editor
         return $skill->getEffectSummaryLines();
     }
 
+
+    /**
+     * Returns the execution-order lines for the battle-entry rules cue.
+     *
+     * The runtime runs matching rules in priority then declaration order;
+     * this presents that deterministic order beside the settings pane, with
+     * the selected rule marked.
+     *
+     * @return string[]
+     */
+    private function getDatabaseBattleEntryCueLines(): array
+    {
+        if (! $this->workspace instanceof ProjectWorkspace) {
+            return ['No project loaded.'];
+        }
+
+        $database = $this->workspace->getRecordDatabase(self::DATABASE_CATEGORY_BATTLE_ENTRY_RULES);
+
+        if (! $database instanceof ProjectRecordDatabase) {
+            return ['No rules loaded.'];
+        }
+
+        $rules = [];
+
+        foreach ($database->getRecords() as $index => $record) {
+            $priority = $record->get('priority');
+            $rules[] = [
+                'index' => $index,
+                'priority' => is_int($priority) ? $priority : 0,
+                'id' => trim(strval($record->get('id') ?? '')) ?: '(no id)',
+            ];
+        }
+
+        if ($rules === []) {
+            return ['No rules yet.', '', 'Battles begin unchanged.'];
+        }
+
+        usort(
+            $rules,
+            static fn(array $left, array $right): int =>
+                [$left['priority'], $left['index']] <=> [$right['priority'], $right['index']],
+        );
+
+        $selectedIndex = $this->getSelectedRecordIndex();
+        $lines = ['Runs in this order:'];
+
+        foreach ($rules as $position => $rule) {
+            $lines[] = sprintf(
+                '%s%2d. %s%s',
+                $rule['index'] === $selectedIndex ? '> ' : '  ',
+                $position + 1,
+                $rule['id'],
+                $rule['priority'] !== 0 ? sprintf('  (p %d)', $rule['priority']) : '',
+            );
+        }
+
+        return $lines;
+    }
 
     /**
      * Returns the frame list lines.
@@ -15748,6 +16569,16 @@ final class Editor
 
         if ($fields === []) {
             return ['No selection.'];
+        }
+
+        if ($this->mapConditionField !== null) {
+            if ($this->referencePicker->isOpen()) {
+                return $this->buildReferencePickerRows();
+            }
+
+            if ($this->conditionEditor->isOpen()) {
+                return $this->buildConditionEditorRows();
+            }
         }
 
         if ($this->isNpcInspectorHosting() && $this->npcCreationInProgress !== null) {

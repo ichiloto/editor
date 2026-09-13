@@ -94,6 +94,39 @@ final readonly class OptimizationOutcomeProjection implements RecordProjection
         return $whole;
     }
 
+    /** @inheritDoc */
+    public function preservationIssue(mixed $whole): ?string
+    {
+        if (! is_array($whole)) {
+            return sprintf('returns %s, not an array', get_debug_type($whole));
+        }
+
+        foreach (['elementOutcomeWeights', 'specialPropertyWeights'] as $key) {
+            if (! array_key_exists($key, $whole)) {
+                continue;
+            }
+
+            $weights = $whole[$key];
+
+            if (! is_array($weights)) {
+                return sprintf('field "%s" is %s, not a weight map', $key, get_debug_type($weights));
+            }
+
+            foreach ($weights as $name => $weight) {
+                if (! is_numeric($weight)) {
+                    return sprintf(
+                        'field "%s" entry "%s" has a %s weight the editor cannot preserve',
+                        $key,
+                        strval($name),
+                        get_debug_type($weight),
+                    );
+                }
+            }
+        }
+
+        return null;
+    }
+
     /**
      * Splits a composed lookup name into the parts an author picks.
      *
@@ -147,5 +180,15 @@ final readonly class OptimizationOutcomeProjection implements RecordProjection
     private static function mapOf(array $whole, string $key): array
     {
         return is_array($whole[$key] ?? null) ? $whole[$key] : [];
+    }
+
+    /**
+     * @inheritDoc
+     *
+     * Rows regroup into outcome and property maps; their order is not stored.
+     */
+    public function ordersRecords(): bool
+    {
+        return false;
     }
 }

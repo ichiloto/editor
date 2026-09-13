@@ -104,6 +104,98 @@ final readonly class OptimizationWeightProjection implements RecordProjection
         return $whole;
     }
 
+    /** @inheritDoc */
+    public function preservationIssue(mixed $whole): ?string
+    {
+        if (! is_array($whole)) {
+            return sprintf('returns %s, not an array', get_debug_type($whole));
+        }
+
+        if (array_key_exists('statWeights', $whole)) {
+            $issue = self::weightMapIssue($whole['statWeights'], 'statWeights');
+
+            if ($issue !== null) {
+                return $issue;
+            }
+        }
+
+        foreach (['roleStatWeights', 'slotStatWeights'] as $key) {
+            if (! array_key_exists($key, $whole)) {
+                continue;
+            }
+
+            $groups = $whole[$key];
+
+            if (! is_array($groups)) {
+                return sprintf('field "%s" is %s, not a map', $key, get_debug_type($groups));
+            }
+
+            foreach ($groups as $name => $weights) {
+                $issue = self::weightMapIssue($weights, sprintf('%s.%s', $key, strval($name)));
+
+                if ($issue !== null) {
+                    return $issue;
+                }
+            }
+        }
+
+        if (! array_key_exists('roleSlotStatWeights', $whole)) {
+            return null;
+        }
+
+        $roles = $whole['roleSlotStatWeights'];
+
+        if (! is_array($roles)) {
+            return sprintf('field "roleSlotStatWeights" is %s, not a map', get_debug_type($roles));
+        }
+
+        foreach ($roles as $role => $slots) {
+            if (! is_array($slots)) {
+                return sprintf(
+                    'field "roleSlotStatWeights.%s" is %s, not a map',
+                    strval($role),
+                    get_debug_type($slots),
+                );
+            }
+
+            foreach ($slots as $slot => $weights) {
+                $issue = self::weightMapIssue(
+                    $weights,
+                    sprintf('roleSlotStatWeights.%s.%s', strval($role), strval($slot)),
+                );
+
+                if ($issue !== null) {
+                    return $issue;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Checks one authored stat-to-weight map before projection.
+     */
+    private static function weightMapIssue(mixed $weights, string $path): ?string
+    {
+        if (! is_array($weights)) {
+            return sprintf('field "%s" is %s, not a weight map', $path, get_debug_type($weights));
+        }
+
+        foreach ($weights as $stat => $weight) {
+            if (! is_numeric($weight)) {
+                return sprintf(
+                    'field "%s.%s" is %s, not a numeric weight',
+                    $path,
+                    strval($stat),
+                    get_debug_type($weight),
+                );
+            }
+        }
+
+        return null;
+    }
+
     /**
      * Reads one vector, keeping only the integers a weight can be.
      *
@@ -133,5 +225,15 @@ final readonly class OptimizationWeightProjection implements RecordProjection
     private static function mapOf(array $whole, string $key): array
     {
         return is_array($whole[$key] ?? null) ? $whole[$key] : [];
+    }
+
+    /**
+     * @inheritDoc
+     *
+     * Rows regroup into base, role and slot maps; their order is not stored.
+     */
+    public function ordersRecords(): bool
+    {
+        return false;
     }
 }

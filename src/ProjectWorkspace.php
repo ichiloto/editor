@@ -10,6 +10,9 @@ use Ichiloto\Editor\Database\EngineDataBootstrap;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Database\RecordSchema;
 use Ichiloto\Editor\Database\RecordSchemaCatalog;
+use Ichiloto\Editor\Storage\FileSetOperations;
+use Ichiloto\Editor\Storage\FileSetTransaction;
+use Ichiloto\Editor\Storage\FilesystemFileSetOperations;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
 use RuntimeException;
@@ -330,12 +333,12 @@ final readonly class ProjectWorkspace
      * @param string|null $baseName The preferred base name.
      * @return string The created map id.
      */
-    public function createMap(?string $baseName = null): string
+    public function createMap(?string $baseName = null, ?FileSetOperations $files = null): string
     {
         $mapsRoot = $this->getMapsRoot();
         $baseName = $this->getNextAvailableBaseName($baseName ?? 'new-map');
         $directory = $mapsRoot . DIRECTORY_SEPARATOR . $baseName;
-        ProjectMap::createBlank($directory, $baseName, self::humanizeBaseName($baseName));
+        ProjectMap::createBlank($directory, $baseName, self::humanizeBaseName($baseName), files: $files);
 
         return $baseName;
     }
@@ -346,7 +349,7 @@ final readonly class ProjectWorkspace
      * @param int $selectedMapIndex The selected map index.
      * @return string|null The duplicated map id.
      */
-    public function duplicateMap(int $selectedMapIndex): ?string
+    public function duplicateMap(int $selectedMapIndex, ?FileSetOperations $files = null): ?string
     {
         $selectedMap = $this->getMapByIndex($selectedMapIndex);
 
@@ -358,7 +361,7 @@ final readonly class ProjectWorkspace
         $originalBaseName = basename($selectedMap->directory);
         $baseName = $this->getNextAvailableSiblingBaseName($parentDirectory, $originalBaseName . '-copy');
         $directory = $parentDirectory . DIRECTORY_SEPARATOR . $baseName;
-        $selectedMap->duplicateTo($directory, $baseName, self::humanizeBaseName($baseName));
+        $selectedMap->duplicateTo($directory, $baseName, self::humanizeBaseName($baseName), $files);
 
         $mapsRoot = $this->getMapsRoot();
         $relativeDirectory = substr($directory, strlen($mapsRoot) + 1);
@@ -372,7 +375,7 @@ final readonly class ProjectWorkspace
      * @param int $selectedMapIndex The selected map index.
      * @return string|null The deleted map id.
      */
-    public function deleteMap(int $selectedMapIndex): ?string
+    public function deleteMap(int $selectedMapIndex, ?FileSetOperations $files = null): ?string
     {
         $selectedMap = $this->getMapByIndex($selectedMapIndex);
 
@@ -380,30 +383,16 @@ final readonly class ProjectWorkspace
             return null;
         }
 
-        $iterator = new RecursiveIteratorIterator(
-            new RecursiveDirectoryIterator($selectedMap->directory, FilesystemIterator::SKIP_DOTS),
-            RecursiveIteratorIterator::CHILD_FIRST
-        );
-
-        foreach ($iterator as $item) {
-            $path = $item->getPathname();
-
-            if ($item->isDir()) {
-                if (! @rmdir($path)) {
-                    throw new RuntimeException("Failed to remove directory {$path}.");
-                }
-
-                continue;
-            }
-
-            if (! @unlink($path)) {
-                throw new RuntimeException("Failed to remove file {$path}.");
-            }
-        }
-
-        if (! @rmdir($selectedMap->directory)) {
-            throw new RuntimeException("Failed to remove directory {$selectedMap->directory}.");
-        }
+        // Only the split triplet is the map's; deleting a map must not take
+        // an author's own notes or assets in the same folder with it. The
+        // three members go as one transaction -- a failure on any of them
+        // puts the removed ones back, bytes and modification times -- and
+        // the folder goes only once it is empty.
+        $transaction = new FileSetTransaction($selectedMap->directory, $files ?? new FilesystemFileSetOperations());
+        $transaction->remove($selectedMap->dataPath);
+        $transaction->remove($selectedMap->mapPath);
+        $transaction->remove($selectedMap->eventPath);
+        $transaction->commit();
 
         return $selectedMap->mapId;
     }

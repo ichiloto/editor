@@ -4,11 +4,19 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor;
 
+use Ichiloto\Editor\Cutscenes\Source\ArraySourceWriter;
+use Ichiloto\Editor\Cutscenes\Source\PhpArraySourceDocument;
+use Ichiloto\Editor\Cutscenes\Source\SourcePreservationRefusal;
+use Ichiloto\Editor\Cutscenes\Source\SourceUnreadable;
+use Ichiloto\Editor\Database\IsolatedPhpEvaluationFailure;
+use Ichiloto\Editor\Database\PhpDataFile;
 use Ichiloto\Editor\Field\NpcCollection;
 use Ichiloto\Editor\Field\ProjectNpc;
 use Ichiloto\Editor\History\TracksPersistedState;
-use Ichiloto\Editor\IO\AtomicFile;
-
+use Ichiloto\Editor\Storage\FileSetOperations;
+use Ichiloto\Editor\Storage\FileSetTransactionFailure;
+use Ichiloto\Editor\Storage\FilesystemFileSetOperations;
+use Ichiloto\Editor\Storage\FileSetTransaction;
 use RuntimeException;
 
 /**
@@ -37,6 +45,43 @@ final class ProjectMap
     private ?int $cachedWidth = null;
 
     /**
+     * The data file's authored source, when the editor can rewrite it in
+     * place. Null when the source cannot be parsed for preservation, in
+     * which case `$dataSourceIssue` says why and data edits are refused.
+     */
+    private ?PhpArraySourceDocument $dataDocument = null;
+
+    /**
+     * Why the data file cannot be preserved, or null when it can.
+     */
+    private ?string $dataSourceIssue = null;
+
+    /**
+     * The data file's raw bytes when its source cannot be parsed for
+     * preservation, so a grid-only save still knows the data member is
+     * untouched and a reload adopts the same bytes.
+     */
+    private ?string $unparsedDataSource = null;
+
+    /**
+     * @var array<string, mixed> The data array the document corresponds to:
+     * what the file held at load, or at the last successful save.
+     */
+    private array $loadedData;
+
+    /**
+     * The tile payload as of the last load or save, so a save can tell a
+     * changed grid from an untouched one without comparing against a file
+     * an author may have written in another form entirely.
+     */
+    private string $baselineMapPayload;
+
+    /**
+     * The event-layer payload as of the last load or save.
+     */
+    private string $baselineEventPayload;
+
+    /**
      * @param string[] $tileLines
      * @param string[] $eventLines
      * @param array<string, mixed> $data
@@ -50,10 +95,35 @@ final class ProjectMap
         public readonly array $data,
         public readonly array $tileLines,
         public readonly array $eventLines,
+        ?string $dataSource = null,
     ) {
         $this->editableData = $data;
         $this->tileCells = self::parseStyledLines($tileLines);
         $this->eventCells = self::parsePlainLines($eventLines);
+        $this->loadedData = $data;
+        $this->adoptDataSource($dataSource ?? "<?php\n\nreturn " . self::exportPhpValue($data) . ";\n");
+        $this->baselineMapPayload = $this->buildMapPayload();
+        $this->baselineEventPayload = $this->buildEventPayload();
+    }
+
+    /**
+     * Adopts a data-file source as the one edits are rewritten into.
+     *
+     * A source the parser cannot hold is not a loading error: the map stays
+     * browsable and its grids stay editable, but every data edit is refused
+     * with the reason until the file is repaired by hand.
+     */
+    private function adoptDataSource(string $source): void
+    {
+        try {
+            $this->dataDocument = PhpArraySourceDocument::parse($source);
+            $this->dataSourceIssue = null;
+            $this->unparsedDataSource = null;
+        } catch (SourceUnreadable $unreadable) {
+            $this->dataDocument = null;
+            $this->dataSourceIssue = rtrim($unreadable->getMessage(), '.');
+            $this->unparsedDataSource = $source;
+        }
     }
 
     /**
@@ -93,6 +163,7 @@ final class ProjectMap
             data: $data,
             tileLines: self::splitMapText($mapText),
             eventLines: self::splitMapText($eventText),
+            dataSource: (string) file_get_contents($dataPath),
         )->withLoadedBaseline();
     }
 
@@ -523,8 +594,9 @@ final class ProjectMap
             return;
         }
 
-        $this->editableData['npcs'] = $entries;
-        $this->touchState();
+        $next = $this->editableData;
+        $next['npcs'] = $entries;
+        $this->writeData($next);
     }
 
     /**
@@ -536,6 +608,98 @@ final class ProjectMap
     public function getMapField(string $field): mixed
     {
         return $this->editableData[$field] ?? null;
+    }
+
+    /**
+     * Applies a new data array, refusing it when the authored source cannot
+     * take the change reversibly.
+     *
+     * Every data mutation funnels through here. The rewrite is computed
+     * against the authored bytes before anything is applied, so a change
+     * the source cannot hold -- a value written as an expression, an array
+     * behind an unreadable key -- is refused with the map, the file and the
+     * path named, and the record, history and dirty state are exactly what
+     * they were.
+     *
+     * @param array<string, mixed> $next The data array as it should now be.
+     */
+    private function writeData(array $next): void
+    {
+        if ($next === $this->editableData) {
+            // Setting data to what it already is neither dirties nor
+            // deserves a history entry at the call site.
+            return;
+        }
+
+        $this->assertDataPreservable($next);
+        $this->editableData = $next;
+        $this->touchState();
+    }
+
+    /**
+     * Proves the authored data source can be rewritten into this array.
+     *
+     * @param array<string, mixed> $next
+     * @throws MapSourceRefusal When it cannot.
+     */
+    private function assertDataPreservable(array $next): void
+    {
+        if ($this->dataDocument === null) {
+            throw new MapSourceRefusal(sprintf(
+                '%s: %s cannot be edited: %s. The file keeps its authored form; repair it by hand, then reload.',
+                $this->mapId,
+                basename($this->dataPath),
+                $this->dataSourceIssue ?? 'its source cannot be preserved',
+            ));
+        }
+
+        try {
+            ArraySourceWriter::rewrite($this->dataDocument, $this->loadedData, $next);
+        } catch (SourcePreservationRefusal $refusal) {
+            throw new MapSourceRefusal(sprintf(
+                '%s: %s — %s Everything else in the file is untouched.',
+                $this->mapId,
+                basename($this->dataPath),
+                rtrim($refusal->getMessage(), '.') . '.',
+            ), previous: $refusal);
+        }
+    }
+
+    /**
+     * The data-file source this map's current content should be saved as.
+     *
+     * @throws MapSourceRefusal When the source cannot take the changes.
+     */
+    private function proposedDataSource(): string
+    {
+        if ($this->dataDocument === null) {
+            if ($this->editableData === $this->loadedData) {
+                throw new RuntimeException(sprintf('%s has no preservable data source to rewrite.', $this->mapId));
+            }
+
+            $this->assertDataPreservable($this->editableData);
+        }
+
+        try {
+            return ArraySourceWriter::rewrite($this->dataDocument, $this->loadedData, $this->editableData)->source;
+        } catch (SourcePreservationRefusal $refusal) {
+            throw new MapSourceRefusal(sprintf(
+                '%s: %s — %s',
+                $this->mapId,
+                basename($this->dataPath),
+                rtrim($refusal->getMessage(), '.') . '.',
+            ), previous: $refusal);
+        }
+    }
+
+    /**
+     * Why the data file cannot be preserved by the editor, or null when its
+     * authored source round-trips. Validation reports this so the refusals
+     * an author meets in the Inspector are visible outside it too.
+     */
+    public function dataSourceIssue(): ?string
+    {
+        return $this->dataSourceIssue;
     }
 
     /**
@@ -585,7 +749,8 @@ final class ProjectMap
             return;
         }
 
-        $reference = &$this->editableData;
+        $next = $this->editableData;
+        $reference = &$next;
         $last = array_key_last($path);
 
         foreach ($path as $position => $segment) {
@@ -612,7 +777,7 @@ final class ProjectMap
         }
 
         unset($reference);
-        $this->touchState();
+        $this->writeData($next);
     }
 
     /**
@@ -763,14 +928,9 @@ final class ProjectMap
      */
     public function setMapField(string $field, mixed $value): void
     {
-        if (($this->editableData[$field] ?? null) === $value) {
-            // Setting a field to what it already is neither dirties nor
-            // deserves a history entry at the call site.
-            return;
-        }
-
-        $this->editableData[$field] = $value;
-        $this->touchState();
+        $next = $this->editableData;
+        $next[$field] = $value;
+        $this->writeData($next);
     }
 
     /**
@@ -838,12 +998,14 @@ final class ProjectMap
             return;
         }
 
-        $reference = &$this->editableData['events'][$marker];
+        $next = $this->editableData;
+        $reference = &$next['events'][$marker];
 
         foreach ($path as $index => $segment) {
             if ($index === array_key_last($path)) {
                 $reference[$segment] = $value;
-                $this->touchState();
+                unset($reference);
+                $this->writeData($next);
                 return;
             }
 
@@ -864,12 +1026,14 @@ final class ProjectMap
      */
     public function setEventDefinition(string $marker, array $definition): void
     {
-        if (! isset($this->editableData['events']) || ! is_array($this->editableData['events'])) {
-            $this->editableData['events'] = [];
+        $next = $this->editableData;
+
+        if (! isset($next['events']) || ! is_array($next['events'])) {
+            $next['events'] = [];
         }
 
-        $this->editableData['events'][$marker] = $definition;
-        $this->touchState();
+        $next['events'][$marker] = $definition;
+        $this->writeData($next);
     }
 
     /**
@@ -885,8 +1049,9 @@ final class ProjectMap
             return;
         }
 
-        unset($this->editableData['events'][$marker]);
-        $this->touchState();
+        $next = $this->editableData;
+        unset($next['events'][$marker]);
+        $this->writeData($next);
     }
 
     /**
@@ -950,35 +1115,181 @@ final class ProjectMap
      *
      * @return string The saved map id.
      */
-    public function save(): string
+    public function save(?callable $backup = null, ?FileSetOperations $files = null): string
     {
-
         $target = $this->resolveSaveTarget();
+        $moving = $target['directory'] !== $this->directory;
 
-        if (! $this->isDirty() && is_dir($this->directory)) {
+        $tripletExists = is_file($this->dataPath)
+            && is_file($this->mapPath)
+            && is_file($this->eventPath);
+
+        if (! $this->isDirty() && ! $moving && is_dir($this->directory) && $tripletExists) {
             // Nothing diverges from the last save: writing would only
             // canonicalize hand-authored formatting and churn mtimes.
             return $target['mapId'];
         }
 
-        $payloads = $this->buildSavePayloads();
+        $this->assertGridsAgree();
 
-        if (! is_dir($target['directory']) && ! mkdir($target['directory'], 0777, true) && ! is_dir($target['directory'])) {
-            throw new RuntimeException("Unable to create {$target['directory']}.");
+        // Which members actually changed. The tile and event files compare
+        // against the grids as of the last save, never against the bytes on
+        // disk, so a file an author keeps in another form -- a tile map
+        // built by a helper class -- is rewritten only when its grid is.
+        // A data file the parser cannot hold never reaches the writer unless
+        // the on-disk member disappeared: its edits were refused, so its
+        // cached source bytes are its own and are restored unchanged.
+        $dataSource = $this->dataDocument === null ? (string) $this->unparsedDataSource : $this->proposedDataSource();
+        $writeData = ! is_file($this->dataPath)
+            || ($this->dataDocument !== null && $dataSource !== $this->dataDocument->source);
+        $mapPayload = $this->buildMapPayload();
+        $writeMap = $mapPayload !== $this->baselineMapPayload || ! is_file($this->mapPath);
+        $eventPayload = $this->buildEventPayload();
+        $writeEvent = $eventPayload !== $this->baselineEventPayload || ! is_file($this->eventPath);
+
+        if (! $moving && ! $writeData && ! $writeMap && ! $writeEvent) {
+            // Dirty by fingerprint but identical in content: a same-value
+            // round trip. Clean without writing.
+            $this->adoptWritten($dataSource, $mapPayload, $eventPayload);
+
+            return $target['mapId'];
         }
 
-        AtomicFile::write($target['dataPath'], $payloads['data']);
-        AtomicFile::write($target['mapPath'], $payloads['map']);
-        AtomicFile::write($target['eventPath'], $payloads['event']);
+        $transaction = new FileSetTransaction($target['directory'], $files ?? new FilesystemFileSetOperations());
 
-        if ($target['directory'] !== $this->directory) {
-            self::deleteDirectoryRecursively($this->directory);
+        if ($moving) {
+            // A move installs the complete triplet at the new path and takes
+            // the old one away, as one operation.
+            $transaction->write($target['dataPath'], $dataSource);
+            $transaction->write($target['mapPath'], $mapPayload);
+            $transaction->write($target['eventPath'], $eventPayload);
+            $transaction->remove($this->dataPath);
+            $transaction->remove($this->mapPath);
+            $transaction->remove($this->eventPath);
+        } else {
+            if ($writeData) {
+                $transaction->write($target['dataPath'], $dataSource);
+            }
+
+            if ($writeMap) {
+                $transaction->write($target['mapPath'], $mapPayload);
+            }
+
+            if ($writeEvent) {
+                $transaction->write($target['eventPath'], $eventPayload);
+            }
+        }
+
+        // Stage everything beside its destination, then prove the staged
+        // data file evaluates to exactly the map being saved -- run where
+        // the game would run it, so relative requires resolve.
+        $staged = $transaction->stage();
+
+        if ($writeData || $moving) {
+            try {
+                $evaluatedFingerprint = null;
+                $evaluated = $this->evaluateFile($staged[$target['dataPath']] ?? $target['dataPath'], $evaluatedFingerprint);
+            } catch (\Throwable $throwable) {
+                $transaction->rollBack();
+
+                throw new RuntimeException(sprintf(
+                    '%s: the rewritten %s could not be evaluated (%s); nothing was written.',
+                    $this->mapId,
+                    basename($target['dataPath']),
+                    $throwable->getMessage(),
+                ), previous: $throwable);
+            }
+
+            if (! is_array($evaluated) || $evaluatedFingerprint !== PhpDataFile::valueFingerprint($this->editableData)) {
+                $transaction->rollBack();
+
+                throw new RuntimeException(sprintf(
+                    '%s: the rewritten %s would not read back as the edited map; nothing was written.',
+                    $this->mapId,
+                    basename($target['dataPath']),
+                ));
+            }
+        }
+
+        $transaction->commit($backup);
+
+        if ($moving) {
+            // The transaction removed the triplet; the folder follows only
+            // when nothing else of the author's lives in it.
+            if (is_dir($this->directory) && array_diff(scandir($this->directory) ?: [], ['.', '..']) === []) {
+                @rmdir($this->directory);
+            }
+
             self::deleteEmptyParentDirectories(dirname($this->directory), $this->getMapsRoot());
         }
 
-        $this->captureBaseline();
+        $this->adoptWritten($dataSource, $mapPayload, $eventPayload);
 
         return $target['mapId'];
+    }
+
+    /**
+     * Adopts what a save (or a proven no-op) established as the new baseline.
+     */
+    private function adoptWritten(string $dataSource, string $mapPayload, string $eventPayload): void
+    {
+        $this->adoptDataSource($dataSource);
+        $this->loadedData = $this->editableData;
+        $this->baselineMapPayload = $mapPayload;
+        $this->baselineEventPayload = $eventPayload;
+        $this->captureBaseline();
+    }
+
+    /**
+     * Refuses a save whose two grids no longer describe the same map.
+     */
+    private function assertGridsAgree(): void
+    {
+        if (count($this->eventCells) !== count($this->tileCells)) {
+            throw new RuntimeException(sprintf(
+                '%s: the event layer is %d rows but the map is %d; nothing was written.',
+                $this->mapId,
+                count($this->eventCells),
+                count($this->tileCells),
+            ));
+        }
+    }
+
+    /**
+     * Evaluates a PHP file as the game would: from the project root, so a
+     * `require` written relative to the working directory resolves. A fresh
+     * process is required because staged authored files can repeat named
+     * declarations already loaded by this Editor process.
+     */
+    private function evaluateFile(string $path, ?string &$fingerprint = null): mixed
+    {
+        $fingerprints = [];
+        $payloads = $this->evaluateFiles([$path], $fingerprints);
+        $fingerprint = $fingerprints[0] ?? null;
+
+        if (! array_key_exists(0, $payloads)) {
+            throw new RuntimeException(sprintf('%s returned no isolated result.', basename($path)));
+        }
+
+        return $payloads[0];
+    }
+
+    /**
+     * Evaluates one runtime load unit in order and outside the Editor process.
+     *
+     * @param list<string> $paths The authored members in runtime load order.
+     * @param-out list<string>|null $fingerprints Serialized-value fingerprints.
+     * @return list<mixed> Their returned values.
+     */
+    private function evaluateFiles(array $paths, ?array &$fingerprints = null): array
+    {
+        $projectRoot = dirname($this->getMapsRoot(), 2);
+
+        return PhpDataFile::evaluateIsolatedFiles(
+            $paths,
+            is_dir($projectRoot) ? $projectRoot : null,
+            $fingerprints,
+        );
     }
 
     /**
@@ -991,12 +1302,8 @@ final class ProjectMap
      * @param int $height The map height.
      * @return void
      */
-    public static function createBlank(string $directory, string $baseName, string $displayName, int $width = 48, int $height = 18): void
+    public static function createBlank(string $directory, string $baseName, string $displayName, int $width = 48, int $height = 18, ?FileSetOperations $files = null): void
     {
-        if (! is_dir($directory) && ! mkdir($directory, 0777, true) && ! is_dir($directory)) {
-            throw new RuntimeException("Unable to create {$directory}.");
-        }
-
         $blankTileLine = str_repeat(' ', $width);
         $blankEventLine = str_repeat(' ', $width);
         $tileText = implode(PHP_EOL, array_fill(0, $height, $blankTileLine));
@@ -1009,18 +1316,24 @@ final class ProjectMap
             'events' => [],
         ];
 
-        self::writeFileTransactionally(
+        // The triplet is born the way it lives: as one transaction. A member
+        // that cannot be installed takes the others -- and the folder this
+        // operation created -- back with it, so a refused creation leaves no
+        // partial map.
+        $transaction = new FileSetTransaction($directory, $files ?? new FilesystemFileSetOperations());
+        $transaction->write(
             $directory . DIRECTORY_SEPARATOR . $baseName . '.data.php',
             "<?php\n\nreturn " . self::exportPhpValue($data) . ";\n",
         );
-        self::writeFileTransactionally(
+        $transaction->write(
             $directory . DIRECTORY_SEPARATOR . $baseName . '.map.php',
             "<?php\n\nreturn <<<'ICHILOTO_MAP'\n{$tileText}\nICHILOTO_MAP;\n",
         );
-        self::writeFileTransactionally(
+        $transaction->write(
             $directory . DIRECTORY_SEPARATOR . $baseName . '.event.php',
             "<?php\n\nreturn <<<'ICHILOTO_EVENT_MAP'\n{$eventText}\nICHILOTO_EVENT_MAP;\n",
         );
+        $transaction->commit();
     }
 
     /**
@@ -1031,27 +1344,81 @@ final class ProjectMap
      * @param string $displayName The duplicated display name.
      * @return void
      */
-    public function duplicateTo(string $directory, string $baseName, string $displayName): void
+    public function duplicateTo(string $directory, string $baseName, string $displayName, ?FileSetOperations $files = null): void
     {
-        if (! is_dir($directory) && ! mkdir($directory, 0777, true) && ! is_dir($directory)) {
-            throw new RuntimeException("Unable to create {$directory}.");
+        // The copy keeps everything the original authored -- comments,
+        // expressions, formatting -- with only the display name rewritten.
+        // A source the editor cannot rewrite reversibly refuses the
+        // duplication outright: an author copying a map must never get a
+        // flattened one, and finding out at the copy is better than
+        // finding out in a diff.
+        if ($this->dataDocument === null) {
+            throw new MapSourceRefusal(sprintf(
+                '%s: %s cannot be duplicated: %s. Repair the file by hand, then duplicate.',
+                $this->mapId,
+                basename($this->dataPath),
+                $this->dataSourceIssue ?? 'its source cannot be preserved',
+            ));
         }
 
         $duplicatedData = $this->editableData;
         $duplicatedData['name'] = $displayName;
 
-        self::writeFileTransactionally(
-            $directory . DIRECTORY_SEPARATOR . $baseName . '.data.php',
-            "<?php\n\nreturn " . self::exportPhpValue($duplicatedData) . ";\n",
-        );
-        self::writeFileTransactionally(
+        try {
+            $dataSource = ArraySourceWriter::rewrite($this->dataDocument, $this->loadedData, $duplicatedData)->source;
+        } catch (SourcePreservationRefusal $refusal) {
+            throw new MapSourceRefusal(sprintf(
+                '%s: %s — %s Nothing was duplicated.',
+                $this->mapId,
+                basename($this->dataPath),
+                rtrim($refusal->getMessage(), '.') . '.',
+            ), previous: $refusal);
+        }
+
+        $transaction = new FileSetTransaction($directory, $files ?? new FilesystemFileSetOperations());
+        $duplicatedDataPath = $directory . DIRECTORY_SEPARATOR . $baseName . '.data.php';
+        $transaction->write($duplicatedDataPath, $dataSource);
+        $transaction->write(
             $directory . DIRECTORY_SEPARATOR . $baseName . '.map.php',
-            "<?php\n\nreturn <<<'ICHILOTO_MAP'\n" . implode(PHP_EOL, array_map($this->buildStyledLine(...), $this->tileCells)) . "\nICHILOTO_MAP;\n",
+            $this->buildMapPayload() === $this->baselineMapPayload && is_file($this->mapPath)
+                ? (string) file_get_contents($this->mapPath)
+                : $this->buildMapPayload(),
         );
-        self::writeFileTransactionally(
+        $transaction->write(
             $directory . DIRECTORY_SEPARATOR . $baseName . '.event.php',
-            "<?php\n\nreturn <<<'ICHILOTO_EVENT_MAP'\n" . implode(PHP_EOL, array_map($this->buildPlainLine(...), $this->eventCells)) . "\nICHILOTO_EVENT_MAP;\n",
+            $this->buildEventPayload() === $this->baselineEventPayload && is_file($this->eventPath)
+                ? (string) file_get_contents($this->eventPath)
+                : $this->buildEventPayload(),
         );
+
+        // The staged copy must evaluate to exactly the duplicate's content
+        // where it will live, before anything is installed.
+        $staged = $transaction->stage();
+
+        try {
+            $evaluatedFingerprint = null;
+            $evaluated = $this->evaluateFile($staged[$duplicatedDataPath] ?? $duplicatedDataPath, $evaluatedFingerprint);
+        } catch (\Throwable $evaluationFailure) {
+            $transaction->rollBack();
+
+            throw new RuntimeException(sprintf(
+                '%s could not be evaluated at %s (%s); nothing was duplicated.',
+                $baseName . '.data.php',
+                basename($directory),
+                $evaluationFailure->getMessage(),
+            ), previous: $evaluationFailure);
+        }
+
+        if (! is_array($evaluated) || $evaluatedFingerprint !== PhpDataFile::valueFingerprint($duplicatedData)) {
+            $transaction->rollBack();
+
+            throw new RuntimeException(sprintf(
+                '%s would not read back as the duplicated map; nothing was duplicated.',
+                $baseName . '.data.php',
+            ));
+        }
+
+        $transaction->commit();
     }
 
     /**
@@ -1226,48 +1593,34 @@ final class ProjectMap
     }
 
     /**
-     * Writes a file using a temp-file swap.
-     *
-     * @param string $path The destination file path.
-     * @param string $contents The file contents.
-     * @return void
+     * The content fingerprint compares canonical exports, deliberately not
+     * the source writer's output: what makes a map dirty is its content,
+     * and a map whose authored source cannot even be parsed must still
+     * fingerprint cleanly so its grids stay saveable.
      */
-    private static function writeFileTransactionally(string $path, string $contents): void
+
+    /**
+     * The tile file the current grid should be saved as.
+     *
+     * The tile and event files are the editor's own format -- a heredoc
+     * grid -- so a *changed* grid is written canonically; an untouched grid
+     * is never written at all, whatever form its author kept it in.
+     */
+    private function buildMapPayload(): string
     {
-        if (is_file($path) && (string) file_get_contents($path) === $contents) {
-            // Saving an unchanged asset rewrites nothing: no churn for git,
-            // no mtime bump for build tools, no backup for the writer.
-            return;
-        }
-
-        $temporaryPath = $path . '.tmp';
-
-        if (file_put_contents($temporaryPath, $contents) === false) {
-            throw new RuntimeException("Unable to write temporary file for {$path}.");
-        }
-
-        if (! rename($temporaryPath, $path)) {
-            @unlink($temporaryPath);
-            throw new RuntimeException("Unable to replace {$path}.");
-        }
+        return "<?php\n\nreturn <<<'ICHILOTO_MAP'\n"
+            . implode(PHP_EOL, array_map($this->buildStyledLine(...), $this->tileCells))
+            . "\nICHILOTO_MAP;\n";
     }
 
     /**
-     * Builds the exact contents of the three files a save writes.
-     *
-     * @return array{data: string, map: string, event: string} The payloads.
+     * The event-layer file the current grid should be saved as.
      */
-    private function buildSavePayloads(): array
+    private function buildEventPayload(): string
     {
-        return [
-            'data' => "<?php\n\nreturn " . self::exportPhpValue($this->editableData) . ";\n",
-            'map' => "<?php\n\nreturn <<<'ICHILOTO_MAP'\n"
-                . implode(PHP_EOL, array_map($this->buildStyledLine(...), $this->tileCells))
-                . "\nICHILOTO_MAP;\n",
-            'event' => "<?php\n\nreturn <<<'ICHILOTO_EVENT_MAP'\n"
-                . implode(PHP_EOL, array_map($this->buildPlainLine(...), $this->eventCells))
-                . "\nICHILOTO_EVENT_MAP;\n",
-        ];
+        return "<?php\n\nreturn <<<'ICHILOTO_EVENT_MAP'\n"
+            . implode(PHP_EOL, array_map($this->buildPlainLine(...), $this->eventCells))
+            . "\nICHILOTO_EVENT_MAP;\n";
     }
 
     /**
@@ -1275,11 +1628,12 @@ final class ProjectMap
      */
     protected function buildPersistedPayload(): string
     {
-        $payloads = $this->buildSavePayloads();
-
         // The id is part of what a save persists: a moved map differs from
         // its old self even when every cell matches.
-        return $this->mapId . "\0" . $payloads['data'] . $payloads['map'] . $payloads['event'];
+        return $this->mapId
+            . "\0" . self::exportPhpValue($this->editableData)
+            . "\0" . $this->buildMapPayload()
+            . $this->buildEventPayload();
     }
 
     /**
@@ -1316,25 +1670,160 @@ final class ProjectMap
             throw new RuntimeException("Map path {$newRelativeId} already exists.");
         }
 
-        if (! mkdir($directory, 0777, true) && ! is_dir($directory)) {
-            throw new RuntimeException("Unable to create {$directory}.");
-        }
-
         $previousDirectory = $this->directory;
         $previousMapId = $this->mapId;
         $baseName = basename($directory);
-        $payloads = $this->buildSavePayloads();
 
         try {
-            self::writeFileTransactionally($directory . DIRECTORY_SEPARATOR . $baseName . '.data.php', $payloads['data']);
-            self::writeFileTransactionally($directory . DIRECTORY_SEPARATOR . $baseName . '.map.php', $payloads['map']);
-            self::writeFileTransactionally($directory . DIRECTORY_SEPARATOR . $baseName . '.event.php', $payloads['event']);
-            self::deleteDirectoryRecursively($previousDirectory);
+            $transaction = new FileSetTransaction($directory, reserveFolder: true);
+            // A move carries the map's content as authored: the data file
+            // is the preserved source (unsaved edits rewritten into it, not
+            // a regeneration of the whole array), and untouched grids keep
+            // their bytes exactly.
+            $movedDataPath = $directory . DIRECTORY_SEPARATOR . $baseName . '.data.php';
+            $movedMapPath = $directory . DIRECTORY_SEPARATOR . $baseName . '.map.php';
+            $movedEventPath = $directory . DIRECTORY_SEPARATOR . $baseName . '.event.php';
+            $transaction->write(
+                $movedDataPath,
+                $this->dataDocument === null ? (string) $this->unparsedDataSource : $this->proposedDataSource(),
+            );
+            $transaction->write(
+                $movedMapPath,
+                $this->buildMapPayload() === $this->baselineMapPayload && is_file($this->mapPath)
+                    ? (string) file_get_contents($this->mapPath)
+                    : $this->buildMapPayload(),
+            );
+            $transaction->write(
+                $movedEventPath,
+                $this->buildEventPayload() === $this->baselineEventPayload && is_file($this->eventPath)
+                    ? (string) file_get_contents($this->eventPath)
+                    : $this->buildEventPayload(),
+            );
+            $transaction->remove($this->dataPath);
+            $transaction->remove($this->mapPath);
+            $transaction->remove($this->eventPath);
+
+            $destinationPaths = [$movedDataPath, $movedMapPath, $movedEventPath];
+            $expectedGrids = [
+                $movedMapPath => array_map($this->buildStyledLine(...), $this->tileCells),
+                $movedEventPath => array_map($this->buildPlainLine(...), $this->eventCells),
+            ];
+            $sourceDirectoryMetadata = self::captureDirectoryMetadata($previousDirectory);
+            $removedSourceDirectories = [];
+            $directoryRestorationFailures = [];
+
+            // Validation runs only after the destination triplet has its
+            // exact runtime names and every source member is gone. That is
+            // the state the game will load: no preview copies, temporary
+            // neighbours, or old member can make an invalid move look valid.
+            $transaction->commit(validate: function () use (
+                $destinationPaths,
+                $movedDataPath,
+                $movedMapPath,
+                $movedEventPath,
+                $expectedGrids,
+                $newRelativeId,
+                $previousDirectory,
+                $mapsRoot,
+                $sourceDirectoryMetadata,
+                &$removedSourceDirectories,
+                &$directoryRestorationFailures,
+            ): void {
+                $removedSourceDirectories = self::removeEmptyDirectoryChain(
+                    $previousDirectory,
+                    $mapsRoot,
+                    $sourceDirectoryMetadata,
+                );
+
+                try {
+                    try {
+                        $evaluatedFingerprints = [];
+                        [$evaluated, $evaluatedMap, $evaluatedEvent] = $this->evaluateFiles($destinationPaths, $evaluatedFingerprints);
+                    } catch (\Throwable $evaluationFailure) {
+                        $failedPath = $movedDataPath;
+
+                        if ($evaluationFailure instanceof IsolatedPhpEvaluationFailure) {
+                            $failedIndex = array_search($evaluationFailure->path, $destinationPaths, true);
+
+                            if (is_int($failedIndex)) {
+                                $failedPath = $destinationPaths[$failedIndex];
+                            }
+                        }
+
+                        throw new RuntimeException(sprintf(
+                            '%s does not evaluate at %s (%s) — an expression written against the old folder depth, such as a relative require, must be adjusted in the file first.',
+                            basename($failedPath),
+                            $newRelativeId,
+                            $evaluationFailure->getMessage(),
+                        ), previous: $evaluationFailure);
+                    }
+
+                    if (! is_array($evaluated)
+                        || ($evaluatedFingerprints[0] ?? null) !== PhpDataFile::valueFingerprint($this->editableData)
+                    ) {
+                        throw new RuntimeException(sprintf(
+                            '%s would not read back as this map at %s.',
+                            basename($movedDataPath),
+                            $newRelativeId,
+                        ));
+                    }
+
+                    $evaluatedGrids = [
+                        $movedMapPath => $evaluatedMap,
+                        $movedEventPath => $evaluatedEvent,
+                    ];
+
+                    foreach ($expectedGrids as $path => $expectedLines) {
+                        $evaluatedGrid = $evaluatedGrids[$path];
+
+                        if (! is_string($evaluatedGrid) || self::splitMapText($evaluatedGrid) !== $expectedLines) {
+                            throw new RuntimeException(sprintf(
+                                '%s would not read back as this map at %s.',
+                                basename($path),
+                                $newRelativeId,
+                            ));
+                        }
+                    }
+                } catch (\Throwable $validationFailure) {
+                    // The file rollback needs the old directories in place.
+                    // Recreate only directories this validation removed; the
+                    // transaction then restores each original source member.
+                    $directoryRestorationFailures = self::recreateDirectories($removedSourceDirectories);
+
+                    throw $validationFailure;
+                }
+            }, afterRollback: static function () use (
+                $sourceDirectoryMetadata,
+                &$removedSourceDirectories,
+                &$directoryRestorationFailures,
+            ): array {
+                $directoriesToRestore = $removedSourceDirectories;
+
+                if (! in_array(
+                    $sourceDirectoryMetadata['path'],
+                    array_column($directoriesToRestore, 'path'),
+                    true,
+                )) {
+                    array_unshift($directoriesToRestore, $sourceDirectoryMetadata);
+                }
+
+                return array_values(array_unique([
+                    ...$directoryRestorationFailures,
+                    ...self::restoreDirectoryMetadata(
+                        $directoriesToRestore,
+                        $directoryRestorationFailures,
+                        array_column($removedSourceDirectories, 'path'),
+                    ),
+                ]));
+            });
         } catch (\Throwable $throwable) {
-            // Fail closed: the old directory is still the map, so the new
-            // copy goes rather than leaving two claims to one identity.
-            if (is_dir($directory) && is_dir($previousDirectory)) {
-                self::deleteDirectoryRecursively($directory);
+            if ($throwable instanceof FileSetTransactionFailure && ! $throwable->wasRolledBack) {
+                throw new RuntimeException(sprintf(
+                    'The move to %s failed and could not be fully rolled back (%s). Restore the named files before editing %s further.',
+                    $newRelativeId,
+                    $throwable->getMessage(),
+                    $previousMapId,
+                ), previous: $throwable);
             }
 
             throw new RuntimeException(sprintf(
@@ -1345,7 +1834,17 @@ final class ProjectMap
             ), previous: $throwable);
         }
 
-        return self::fromDirectory($mapsRoot, $directory);
+        return new self(
+            mapId: $newRelativeId,
+            directory: $directory,
+            dataPath: $movedDataPath,
+            mapPath: $movedMapPath,
+            eventPath: $movedEventPath,
+            data: $this->editableData,
+            tileLines: $expectedGrids[$movedMapPath],
+            eventLines: $expectedGrids[$movedEventPath],
+            dataSource: (string) file_get_contents($movedDataPath),
+        )->withLoadedBaseline();
     }
 
     /**
@@ -1410,40 +1909,6 @@ final class ProjectMap
     }
 
     /**
-     * Deletes a directory tree.
-     *
-     * @param string $directory The directory to remove.
-     * @return void
-     */
-    private static function deleteDirectoryRecursively(string $directory): void
-    {
-        $iterator = new \RecursiveIteratorIterator(
-            new \RecursiveDirectoryIterator($directory, \FilesystemIterator::SKIP_DOTS),
-            \RecursiveIteratorIterator::CHILD_FIRST
-        );
-
-        foreach ($iterator as $item) {
-            $path = $item->getPathname();
-
-            if ($item->isDir()) {
-                if (! @rmdir($path)) {
-                    throw new RuntimeException("Failed to remove directory {$path}.");
-                }
-
-                continue;
-            }
-
-            if (! @unlink($path)) {
-                throw new RuntimeException("Failed to remove file {$path}.");
-            }
-        }
-
-        if (! @rmdir($directory)) {
-            throw new RuntimeException("Failed to remove directory {$directory}.");
-        }
-    }
-
-    /**
      * Removes empty parent directories up to, but not including, the maps root.
      *
      * @param string $directory The starting directory.
@@ -1466,6 +1931,196 @@ final class ProjectMap
 
             $directory = dirname($directory);
         }
+    }
+
+    /**
+     * Removes the empty source directory and its empty parents for a move.
+     *
+     * The returned leaf-first list carries the directory metadata needed to
+     * recreate exactly those directories before a refused installed-state
+     * validation is rolled back. The whole candidate chain is inspected
+     * before its leaf is removed, so removing a child cannot change the
+     * parent timestamp before it is captured.
+     *
+     * @param array{path: string, mode: int, owner: int, group: int, modifiedAt: int, accessedAt: int, device: int, inode: int} $sourceDirectoryMetadata Metadata captured before source members are removed.
+     * @return list<array{path: string, mode: int, owner: int, group: int, modifiedAt: int, accessedAt: int, device: int, inode: int}> The removed directories, leaf first.
+     */
+    private static function removeEmptyDirectoryChain(
+        string $directory,
+        string $mapsRoot,
+        array $sourceDirectoryMetadata,
+    ): array {
+        $candidates = [];
+        $mapsRoot = rtrim($mapsRoot, DIRECTORY_SEPARATOR);
+        $directory = rtrim($directory, DIRECTORY_SEPARATOR);
+        $child = null;
+
+        while ($directory !== '' && $directory !== $mapsRoot && str_starts_with($directory, $mapsRoot . DIRECTORY_SEPARATOR)) {
+            $metadata = $directory === $sourceDirectoryMetadata['path']
+                ? $sourceDirectoryMetadata
+                : self::captureDirectoryMetadata($directory);
+            $entries = is_dir($directory) ? scandir($directory) : false;
+
+            if (! is_array($entries)) {
+                break;
+            }
+
+            $entries = array_values(array_diff($entries, ['.', '..']));
+            $expectedEntries = $child === null ? [] : [basename($child)];
+
+            if ($entries !== $expectedEntries) {
+                break;
+            }
+
+            $candidates[] = $metadata;
+            $child = $directory;
+            $directory = dirname($directory);
+        }
+
+        $removed = [];
+
+        foreach ($candidates as $candidate) {
+            if (! @rmdir($candidate['path'])) {
+                break;
+            }
+
+            $removed[] = $candidate;
+        }
+
+        return $removed;
+    }
+
+    /**
+     * Captures the filesystem metadata needed for an exact directory
+     * rollback before any member or child is removed.
+     *
+     * @return array{path: string, mode: int, owner: int, group: int, modifiedAt: int, accessedAt: int, device: int, inode: int}
+     */
+    private static function captureDirectoryMetadata(string $directory): array
+    {
+        $metadata = @stat($directory);
+
+        if (! is_array($metadata)) {
+            throw new RuntimeException(sprintf('Unable to capture the directory metadata for %s.', $directory));
+        }
+
+        return [
+            'path' => $directory,
+            'mode' => ((int) $metadata['mode']) & 0o7777,
+            'owner' => (int) $metadata['uid'],
+            'group' => (int) $metadata['gid'],
+            'modifiedAt' => (int) $metadata['mtime'],
+            'accessedAt' => (int) $metadata['atime'],
+            'device' => (int) $metadata['dev'],
+            'inode' => (int) $metadata['ino'],
+        ];
+    }
+
+    /**
+     * Recreates a removed directory chain, parents first, for file rollback.
+     *
+     * Directories are deliberately private while files are restored. Their
+     * authored metadata is applied only after file rollback, because those
+     * writes change directory timestamps.
+     *
+     * @param list<array{path: string, mode: int, owner: int, group: int, modifiedAt: int, accessedAt: int, device: int, inode: int}> $directories Leaf-first removed directories.
+     * @return list<string> Paths that could not be recreated.
+     */
+    private static function recreateDirectories(array $directories): array
+    {
+        $failed = [];
+        $blocked = false;
+
+        foreach (array_reverse($directories) as $metadata) {
+            $directory = $metadata['path'];
+
+            if ($blocked || is_dir($directory) || ! @mkdir($directory, 0o700)) {
+                $failed[] = $directory;
+                $blocked = true;
+            }
+        }
+
+        return $failed;
+    }
+
+    /**
+     * Restores and verifies the metadata of directories recreated for a
+     * refused move. Leaf-first order makes each parent's final timestamp the
+     * one it had before its children were removed and restored.
+     *
+     * @param list<array{path: string, mode: int, owner: int, group: int, modifiedAt: int, accessedAt: int, device: int, inode: int}> $directories Leaf-first directories.
+     * @param list<string> $excluded Paths now owned by someone else, which
+     *   must be reported without changing their metadata.
+     * @param list<string> $recreated Paths recreated by this transaction;
+     *   retained paths must still be the original directory object.
+     * @return list<string> Paths whose metadata could not be restored exactly.
+     */
+    private static function restoreDirectoryMetadata(
+        array $directories,
+        array $excluded = [],
+        array $recreated = [],
+    ): array
+    {
+        $failed = [];
+
+        foreach ($directories as $metadata) {
+            $directory = $metadata['path'];
+
+            if (in_array($directory, $excluded, true)) {
+                $failed[] = $directory;
+
+                continue;
+            }
+
+            $current = @stat($directory);
+
+            if (! is_array($current)) {
+                $failed[] = $directory;
+
+                continue;
+            }
+
+            if (! in_array($directory, $recreated, true)
+                && ((int) $current['dev'] !== $metadata['device'] || (int) $current['ino'] !== $metadata['inode'])
+            ) {
+                $failed[] = $directory;
+
+                continue;
+            }
+
+            $restored = true;
+
+            if (PHP_OS_FAMILY !== 'Windows') {
+                if ((int) $current['uid'] !== $metadata['owner']) {
+                    $restored = @chown($directory, $metadata['owner']);
+                }
+
+                if ((int) $current['gid'] !== $metadata['group']) {
+                    $restored = @chgrp($directory, $metadata['group']) && $restored;
+                }
+            }
+
+            if ($restored) {
+                $restored = @chmod($directory, $metadata['mode'])
+                    && @touch($directory, $metadata['modifiedAt'], $metadata['accessedAt']);
+            }
+
+            clearstatcache(true, $directory);
+            $actual = @stat($directory);
+            $restored = $restored
+                && is_array($actual)
+                && (((int) $actual['mode']) & 0o7777) === $metadata['mode']
+                && (int) $actual['mtime'] === $metadata['modifiedAt']
+                && (int) $actual['atime'] === $metadata['accessedAt']
+                && (PHP_OS_FAMILY === 'Windows'
+                    || ((int) $actual['uid'] === $metadata['owner'] && (int) $actual['gid'] === $metadata['group']));
+
+            if (! $restored) {
+                $failed[] = $directory;
+            }
+        }
+
+        return $failed;
     }
 
     /**

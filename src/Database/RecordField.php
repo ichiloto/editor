@@ -36,6 +36,10 @@ final readonly class RecordField
      * that stores the empty string, when the runtime gives `''` a meaning of
      * its own distinct from an absent key (a dialogue page with no speaker).
      * The stored `''` reads back as this label.
+     * @param string[]|null $writeTypes For a world-write field, the write
+     * types this surface may author, when the runtime restricts it to fewer
+     * than the writer's full vocabulary (a transactional boundary rejects
+     * quest acceptance). Null offers everything the writer applies.
      */
     public function __construct(
         public string $key,
@@ -51,6 +55,7 @@ final readonly class RecordField
         public bool $allowsNone = false,
         public ?string $displayDefault = null,
         public ?string $blankLabel = null,
+        public ?array $writeTypes = null,
     ) {
     }
 
@@ -116,6 +121,7 @@ final readonly class RecordField
             $this->allowsNone,
             $this->displayDefault,
             $this->blankLabel,
+            $this->writeTypes,
         );
     }
 

@@ -131,6 +131,20 @@ it('reads all four weight scopes as vectors and writes them back nested', functi
         ->and($after['elementOutcomeWeights'])->toBe(['defence:*:absorb' => 40]);
 });
 
+it('refuses projected weights that would be coerced while saving', function () {
+    $root = makeTemporaryProject('ichiloto-optimize-');
+    $path = writeOptimizePolicy($root, <<<'PHP'
+      'statWeights' => ['attack' => '3'],
+    PHP);
+    $source = (string) file_get_contents($path);
+    $weights = optimizeDatabase($root, 'optimize_weights');
+
+    expect($weights->isEditable())->toBeFalse()
+        ->and($weights->getReadOnlyReason())->toContain('cannot preserve exactly')
+        ->and(fn() => $weights->save())->toThrow(RuntimeException::class, 'read-only')
+        ->and((string) file_get_contents($path))->toBe($source);
+});
+
 it('asks a vector only for the parts its scope narrows by', function () {
     $root = makeTemporaryProject('ichiloto-optimize-');
     writeOptimizePolicy($root, <<<'PHP'

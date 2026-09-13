@@ -8,8 +8,8 @@ use Ichiloto\Editor\Cutscenes\Source\ArraySourceWriter;
 use Ichiloto\Editor\Cutscenes\Source\PhpArraySourceDocument;
 use Ichiloto\Editor\Cutscenes\Source\SourcePreservationRefusal;
 use Ichiloto\Editor\Cutscenes\Source\SourceUnreadable;
-use Ichiloto\Editor\Cutscenes\Storage\PairedFileTransaction;
-use Ichiloto\Editor\Cutscenes\Storage\PairedFileTransactionFailure;
+use Ichiloto\Editor\Storage\FileSetTransaction;
+use Ichiloto\Editor\Storage\FileSetTransactionFailure;
 use Ichiloto\Editor\Database\PhpValueExporter;
 use Ichiloto\Editor\History\TracksPersistedState;
 use Ichiloto\Editor\ProjectDirectoryContext;
@@ -374,7 +374,7 @@ final class CutsceneAsset
      * The data source and the partner source are each rewritten only where
      * their arrays changed. Both proposed sources are staged beside the
      * originals, evaluated in the project and hydrated through the engine,
-     * and only then installed by `PairedFileTransaction` -- which takes the
+     * and only then installed by `FileSetTransaction` -- which takes the
      * backup once and, if either file cannot be installed, puts back every
      * file it had already touched. A deleted asset's pair is removed through
      * the same boundary. Nothing here advances until the whole operation
@@ -383,7 +383,7 @@ final class CutsceneAsset
      *
      * @param callable(string ...$paths): void|null $backup Called with the paths about to be overwritten, before they are.
      * @return bool True when anything was written.
-     * @throws PairedFileTransactionFailure When the pair could not be installed.
+     * @throws FileSetTransactionFailure When the pair could not be installed.
      */
     public function save(?callable $backup = null): bool
     {
@@ -413,7 +413,7 @@ final class CutsceneAsset
             return false;
         }
 
-        $transaction = new PairedFileTransaction($this->folder);
+        $transaction = new FileSetTransaction($this->folder);
 
         if ($writeData) {
             $transaction->write($this->dataPath(), $dataSource);
@@ -525,7 +525,7 @@ final class CutsceneAsset
      * complete original pair.
      *
      * @param callable(string ...$paths): void|null $backup
-     * @throws PairedFileTransactionFailure When the pair could not be removed.
+     * @throws FileSetTransactionFailure When the pair could not be removed.
      */
     private function delete(?callable $backup): bool
     {
@@ -536,7 +536,7 @@ final class CutsceneAsset
             return false;
         }
 
-        $transaction = new PairedFileTransaction($this->folder);
+        $transaction = new FileSetTransaction($this->folder);
 
         foreach ($this->paths() as $path) {
             $transaction->remove($path);

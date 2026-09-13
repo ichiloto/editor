@@ -77,4 +77,51 @@ final readonly class OptimizationExclusionProjection implements RecordProjection
 
         return $whole;
     }
+
+    /** @inheritDoc */
+    public function preservationIssue(mixed $whole): ?string
+    {
+        if (! is_array($whole)) {
+            return sprintf('returns %s, not an array', get_debug_type($whole));
+        }
+
+        foreach (self::KEYS as $key) {
+            if (! array_key_exists($key, $whole)) {
+                continue;
+            }
+
+            $values = $whole[$key];
+
+            if (! is_array($values) || ! array_is_list($values)) {
+                return sprintf(
+                    'field "%s" is %s, not an ordered list',
+                    $key,
+                    is_array($values) ? 'a keyed array' : get_debug_type($values),
+                );
+            }
+
+            foreach ($values as $index => $value) {
+                if (! is_scalar($value)) {
+                    return sprintf(
+                        'field "%s" entry %d is %s, which the editor cannot preserve',
+                        $key,
+                        $index + 1,
+                        get_debug_type($value),
+                    );
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @inheritDoc
+     *
+     * Rows regroup into per-kind lists; their order across kinds is not stored.
+     */
+    public function ordersRecords(): bool
+    {
+        return false;
+    }
 }

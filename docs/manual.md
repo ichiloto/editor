@@ -63,8 +63,8 @@ is what the code draws rather than a sketch of it:
  │                              │ │                            │ │   Triggers · 0                 │
  │                              │ │                            │ │   Audio                        │
  │                              │ │                            │ │     Background Music: (None)   │
+ │                              │ │                            │ │     Music Variants · None      │
  │                              │ │                            │ │   Encounters · off             │
- │                              │ │                            │ │     Troops · 0                 │
  └─/:Filter  Del:Delete─────────┘ └─%:Map  ^:Event  @:Chars────┘ └─Enter:Edit─────────────────────┘
  ┌─Status─────────────────────────────────────────────────────────────────────────────────────────┐
  │ Selected map: test-map | Focus: Assets | Mode: Map | Tool: Brush 1                             │
@@ -101,6 +101,13 @@ in the project's selection color (see [Theming](#theming)).
 
 `Tab / Shift+Tab` and `Shift+Arrows` cycle the same ring, so use whichever you
 prefer. Arrow keys always act inside the focused panel.
+
+Every selection list wraps: `Down` on the last row selects the first, and
+`Up` on the first row selects the last. This holds for the asset list, the
+Database categories, entries, settings rows and animation frames, dialog and
+picker lists, the command palette, option-value cycling, and the Cutscenes
+lists. Map cursors, scrolling panes and text editing keep ordinary bounds —
+wrapping is for choosing from a list, not for walking a canvas.
 
 ## Global Shortcuts
 
@@ -354,6 +361,42 @@ misleading empty one. A track the project no longer has stays visible as
 one, and validation names it. There is no in-editor audition in this gate;
 the playtest plays the real thing.
 
+**Music Variants.** Beneath the static track, `Music Variants` authors the
+engine's ordered `bgmVariants` list: story-dependent tracks the map plays
+instead of its default. The engine evaluates the variants in declaration
+order and **the first whose conditions all hold selects the track**; when
+none matches, the static `Background Music` plays, and when neither
+resolves to a track the current music simply continues. An empty conditions
+list is an unconditional match — that is what the engine evaluates — so an
+unconditional variant belongs last, and validation warns when one shadows
+later variants.
+
+- `Shift+O` on the heading or any variant row appends a variant, which is
+  born visibly incomplete: `(no track yet)`. The engine skips a variant
+  without a track, and validation names it, so nothing plausible is ever
+  inserted silently.
+- Each variant's `Track` is the same picker over the project's own tracks.
+  A variant offers no `(None)` row — an empty track is a skipped variant,
+  not silence — so removing the variant is how it is un-authored.
+- Each variant's `When` opens the same shared Condition editor every other
+  surface uses (`a`/`d` add and remove, `t` cycles the type, `n` names or
+  picks, `!` negates, Enter keeps, Esc leaves it alone), hosted right in
+  the Inspector pane.
+- `[` and `]` move the variant the cursor is in, because declaration order
+  is runtime behavior; `Del`/`Shift+X` removes it, and removing the last
+  variant removes the `bgmVariants` key with it. Every one of these is
+  undoable, saves with the map, and reopens in the authored order.
+
+Keys inside a variant the editor does not own ride every edit untouched. A
+list the editor cannot hold as rows — a keyed block, a variant that is not
+an array — is shown read-only with the shape named, and a variant whose
+conditions carry something the shared editor cannot (an unknown key, an
+unrecognised type) keeps an editable track while its conditions say why
+they are not. Validation reports every shape the engine would silently
+skip: a missing, empty, or unknown track, malformed conditions, and the
+unreachable-variant warning above. The editor authors and validates the
+structure; the engine alone evaluates conditions and plays anything.
+
 **Encounters.** The `Encounters` heading summarises the map's random
 encounters (`off`, or `2 troops, every ~22 steps, danger tiles`), and the
 rows beneath it edit the engine's own `encounters` block:
@@ -485,6 +528,7 @@ status line says exactly why.
 | Armors | `assets/Data/items.php` | Editable — authored as `new Armor(...)` calls, edited entry by entry |
 | Enemies | `assets/Data/enemies.php` | Editable — authored as `new Enemy(...)` calls, edited entry by entry |
 | Troops | `assets/Data/troops.php` | Editable |
+| Battle Entry | `assets/Data/battle-entry-rules.php` | Editable |
 | States | `assets/Data/states.php` | Editable |
 | Animations | `assets/Data/animations.php` | Editable |
 | Tilesets | — | Read-only — the engine has no tileset system |
@@ -594,6 +638,68 @@ resolved by its authored continuation.
 
 `Shift+O` appends a member, `Shift+X` removes the last one. The `Enemy` value
 must match a name in the Enemies category.
+
+A troop may also declare a `Classification` — `ordinary` or `boss` — which
+battle-entry rules match against. An omitted classification is the engine's
+`ordinary` default; the picker shows that without writing the key into older
+data.
+
+### Battle Entry
+
+Rules the engine applies as a battle begins, in
+`assets/Data/battle-entry-rules.php`. Each rule grants temporary stat stages
+to specific actors before the first action, and may commit durable world
+writes when it succeeds. The editor authors the file; the engine alone
+decides eligibility, applies effects, and rolls back — nothing here
+duplicates that runtime.
+
+Each rule has:
+
+- a required unique stable `Id`;
+- an optional integer `Priority` — the runtime defaults it to `0`, lower
+  runs first, and the pane shows that default without writing the key;
+- an optional `Classification` (`ordinary` or `boss`) matched against the
+  troop's own, defaulting to `ordinary` the same silent way;
+- `Actor Predicates`, a required non-empty list built in its own editor:
+  `a`/`d` add and remove a row, `n` picks the actor from the project's
+  durable actor identities (never typed, never a display label), and
+  `x`/`X` cycle the presence through `active`, `reserve`, and `any` — the
+  entry roster the actor must occupy when the battle begins;
+- optional `Conditions`, the same shared world-condition editor every other
+  surface uses;
+- required non-empty effects, flattened into the pane as `Effect 1 Type`,
+  `Effect 1 Actor`, `Effect 1 Stat`, `Effect 1 Delta`, and so on —
+  `Shift+O`/`Shift+X` append and remove. The one effect type is
+  `stat_stage`; the stat picker offers exactly the engine's stage-capable
+  seven (`attack`, `defence`, `magicAttack`, `magicDefence`, `speed`,
+  `grace`, `evasion`), and the signed delta is stored exactly, never
+  clamped or applied by the editor;
+- optional `World Writes` through the shared write editor, restricted here
+  to the engine's reversible transactional vocabulary: `switch`, `event`,
+  and `variable`. Quest acceptance cannot be authored in this category —
+  its confirmation flow cannot be rolled back — and one already in the
+  source is preserved untouched but reported by validation.
+
+Rules run in priority then declaration order, so the order of the list is
+part of the data: `[` and `]` move the selected rule, `Shift+D` duplicates
+it under a fresh id, and both are undoable like any other edit. The
+Execution Order pane beside the settings shows the exact order the runtime
+will use, with the selected rule marked.
+
+Reordering with `[` and `]` is offered only where a category's file
+actually stores its list order — here, and in the knowledge categories,
+whose saves write the list back in record order. A plain or
+constructor-authored data file keeps its authored entry order (the editor
+writes those entries in place), and a per-file category has no list order
+to store, so the move is refused with the reason in the status line rather
+than pretending an order the next reload would lose.
+
+Validation checks the whole file with the engine's own diagnostic wording —
+file, rule id, field, offending value — including duplicate ids, empty
+required lists, unknown or contested actor identities (a reference two
+definitions claim fails loudly rather than resolving to either), stats that
+are canonical but not stage-capable, and quest writes. A missing file means
+no rules and no finding, exactly as the runtime treats it.
 
 ### Terms
 
@@ -1274,6 +1380,59 @@ cannot truncate your work. When a save regenerates a data file, everything from
 `<?php` up to the top-level `return` is preserved byte-for-byte: file
 docblocks, `use` imports, blank lines, and the explanatory comment above a
 cutscene all survive.
+
+### Map saves are surgical, and one transaction
+
+A map's `.data.php` is authored PHP the editor did not write, and the editor
+never regenerates it. An edit is rewritten into the file as the smallest
+change that expresses it: change the description and one line changes;
+everything else — comments and blank lines, `namespace` and `use`
+declarations, enum and class-constant expressions, `require` expressions and
+the prelude variables they feed, string quoting, key order, trailing commas,
+unknown and future keys — keeps its exact bytes. An entry added or removed
+(an NPC, an event definition) is inserted or cut as its own lines; the rest
+of the file is untouched. Structural edits find their entry by durable
+identity, never by position: an event by its marker, an NPC by its stable
+`id`, and a legacy NPC without one by its name while that name is unique on
+the map (validation warns when it is not).
+
+What the editor cannot rewrite reversibly it refuses, precisely: a value
+written as an expression — `'script' => require …` in place — cannot take an
+edit without destroying the expression, so that one edit is refused with the
+map, file and path named, and nothing changes. The refusal is that narrow: a
+value written as a *variable reference* can be repointed (the entry gets the
+literal; the shared variable stays for its other users), an opaque sibling
+never blocks an edit beside it, and browsing, previewing and validation
+always work. Only a data file whose whole source cannot be parsed for
+preservation makes the map's *data* read-only — the grids stay editable, and
+validation names the file.
+
+The three files save as one transaction. Only the members whose content
+actually changed are written at all — a metadata edit touches `.data.php`
+alone; a tile stroke touches `.map.php` alone, byte and mtime, and a tile
+file an author generates with a helper class is never rewritten by a data
+edit. Each written member is staged beside its destination, the staged data
+file is evaluated from the project root and must read back as exactly the
+map being saved, backups are taken once per member being replaced (and only
+those members — a clean save backs up nothing), and then the set installs.
+If any member cannot be installed, every file already touched is restored to
+its exact bytes and modification time, no temporary survives, and the map
+stays dirty with its checkpoint unmoved — a refused save leaves the complete
+old triplet, never new data over old tiles. The explicit move carries the
+same guarantee, plus one more: the authored bytes must still evaluate at the
+destination, so a `require` written against the old folder depth refuses the
+move whole rather than installing a map the game cannot load.
+
+Creating, duplicating and deleting a map are the same kind of transaction.
+A new map's triplet installs complete or not at all — a failure leaves no
+file and no folder. A duplicate carries the original's authored bytes with
+only its display name rewritten, is proven to evaluate before anything is
+installed, and is **refused** — before any file or folder exists — when the
+source cannot be rewritten reversibly; duplicating never flattens a file the
+editor promised to preserve. Deleting a map removes only its own three
+files: anything else you keep in that folder (notes, sketches, references)
+survives, the folder itself goes only once it is empty, and a failed
+deletion puts every removed member back at its exact bytes and time.
 
 ### Stable map identities
 

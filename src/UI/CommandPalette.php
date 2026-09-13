@@ -93,7 +93,7 @@ final class CommandPalette
             return;
         }
 
-        $this->selectedIndex = max(0, min($count - 1, $this->selectedIndex + $step));
+        $this->selectedIndex = \Ichiloto\Editor\ListNavigation::step($this->selectedIndex, $step, $count);
     }
 
     /**

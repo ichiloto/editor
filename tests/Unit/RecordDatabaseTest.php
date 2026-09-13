@@ -42,6 +42,87 @@ it('keeps a data file header verbatim and regenerates only the returned value', 
     removeDirectoryRecursively($root);
 });
 
+it('drains large isolated diagnostics without blocking the returned payload', function (): void {
+    $root = makeTemporaryProject();
+    $path = $root . '/assets/Data/large-diagnostics.php';
+    file_put_contents($path, <<<'PHP'
+    <?php
+
+    fwrite(STDERR, str_repeat('diagnostic', 131072));
+
+    return ['ok' => true];
+    PHP);
+
+    try {
+        expect(PhpDataFile::evaluateIsolated($path, $root))->toBe(['ok' => true]);
+    } finally {
+        removeDirectoryRecursively($root);
+    }
+});
+
+it('separates direct authored stdout from the isolated result frame', function (): void {
+    $root = makeTemporaryProject();
+    $path = $root . '/assets/Data/stdout-diagnostics.php';
+    file_put_contents($path, <<<'PHP'
+    <?php
+
+    fwrite(STDOUT, 'authored diagnostic before result');
+
+    return ['ok' => true];
+    PHP);
+
+    try {
+        expect(PhpDataFile::evaluateIsolated($path, $root))->toBe(['ok' => true]);
+    } finally {
+        removeDirectoryRecursively($root);
+    }
+});
+
+it('keeps authored local variables out of the isolated runner protocol', function (): void {
+    $root = makeTemporaryProject();
+    $path = $root . '/assets/Data/runner-locals.php';
+    file_put_contents($path, <<<'PHP'
+    <?php
+
+    $payloads = 'authored helper state';
+    $fingerprints = ['not', 'protocol', 'state'];
+    $resultMarker = 'authored marker';
+
+    return ['ok' => true];
+    PHP);
+
+    try {
+        expect(PhpDataFile::evaluateIsolated($path, $root))->toBe(['ok' => true]);
+    } finally {
+        removeDirectoryRecursively($root);
+    }
+});
+
+it('keeps authored globals out of the isolated runner protocol', function (): void {
+    $root = makeTemporaryProject();
+    $path = $root . '/assets/Data/runner-globals.php';
+    file_put_contents($path, <<<'PHP'
+    <?php
+
+    global $payloads, $fingerprints, $resultMarker, $serializedResult, $resultExitCode;
+
+    $payloads = 'authored global state';
+    $fingerprints = ['authored'];
+    $resultMarker = 'authored marker';
+    $serializedResult = 'authored result';
+    $resultExitCode = 99;
+    $GLOBALS['paths'] = [];
+
+    return ['ok' => true];
+    PHP);
+
+    try {
+        expect(PhpDataFile::evaluateIsolated($path, $root))->toBe(['ok' => true]);
+    } finally {
+        removeDirectoryRecursively($root);
+    }
+});
+
 it('refuses to rewrite a file whose data carries comments', function (): void {
     $root = makeTemporaryProject();
     $path = $root . '/assets/Data/states.php';

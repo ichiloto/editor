@@ -180,7 +180,10 @@ it("backs up a map's three files on save only when enabled", function () {
 
         $backups = glob($root . '/' . BackupSettings::DEFAULT_DIRECTORY . '/assets/Maps/test-map/*.bak') ?: [];
 
-        expect($backups)->toHaveCount(3);
+        // A tile edit replaces only the tile file, so only the tile file is
+        // backed up: a member the save does not touch has nothing to lose.
+        expect($backups)->toHaveCount(1)
+            ->and(basename($backups[0]))->toStartWith('test-map.map.php.');
     } finally {
         removeDirectoryRecursively($root);
     }

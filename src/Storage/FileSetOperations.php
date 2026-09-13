@@ -2,14 +2,14 @@
 
 declare(strict_types=1);
 
-namespace Ichiloto\Editor\Cutscenes\Storage;
+namespace Ichiloto\Editor\Storage;
 
 /**
  * The filesystem a paired-file transaction acts on.
  *
  * The transaction owns the ordering, the rollback and the reporting; this
  * port owns the individual operations. Production uses
- * `FilesystemPairedFileOperations`; a test proves a rollback branch by
+ * `FilesystemFileSetOperations`; a test proves a rollback branch by
  * failing one operation without contriving a filesystem that fails only
  * where it is wanted.
  *
@@ -17,9 +17,9 @@ namespace Ichiloto\Editor\Cutscenes\Storage;
  * the transaction can decide what a failure means at each step -- refusing
  * the work, or reporting that a restoration could not complete.
  *
- * @package Ichiloto\Editor\Cutscenes\Storage
+ * @package Ichiloto\Editor\Storage
  */
-interface PairedFileOperations
+interface FileSetOperations
 {
     /**
      * Whether a regular file exists at the path.
@@ -52,7 +52,11 @@ interface PairedFileOperations
     public function remove(string $path): bool;
 
     /**
-     * Creates a directory and every missing parent.
+     * Creates one absent directory.
+     *
+     * Returning false when the directory already exists lets a transaction
+     * distinguish a directory it owns from one another writer created.
+     * Parents are created separately, in order, by the transaction.
      */
     public function makeDirectory(string $path): bool;
 
@@ -69,13 +73,16 @@ interface PairedFileOperations
     public function listDirectory(string $path): array;
 
     /**
-     * Returns a file's modification time, or null when it has none.
+     * Captures the metadata needed to restore a regular file exactly.
+     *
+     * @return array{mode: int, owner: int, group: int, modifiedAt: int, accessedAt: int}|null
      */
-    public function modifiedAt(string $path): ?int;
+    public function metadata(string $path): ?array;
 
     /**
-     * Restores a file's modification time, so a file put back after a
-     * refused write is the file that was there in every respect.
+     * Restores and verifies a regular file's captured metadata.
+     *
+     * @param array{mode: int, owner: int, group: int, modifiedAt: int, accessedAt: int} $metadata
      */
-    public function setModifiedAt(string $path, int $timestamp): bool;
+    public function restoreMetadata(string $path, array $metadata): bool;
 }

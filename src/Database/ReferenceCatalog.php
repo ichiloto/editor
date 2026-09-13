@@ -31,6 +31,7 @@ final class ReferenceCatalog
      */
     public const array CATEGORIES = [
         'actors',
+        'actor_ids',
         'classes',
         'skills',
         'quests',
@@ -109,6 +110,12 @@ final class ReferenceCatalog
         return match ($category) {
             'actors' => array_map(
                 static fn(ProjectActor $actor): string => $actor->getName(),
+                $this->workspace->actorDatabase->getActors()
+            ),
+            // Surfaces the runtime resolves by durable identity store the
+            // definition id, which is the one thing a rename never changes.
+            'actor_ids' => array_map(
+                static fn(ProjectActor $actor): string => $actor->getDefinitionId(),
                 $this->workspace->actorDatabase->getActors()
             ),
             'classes' => array_map(
@@ -322,6 +329,21 @@ final class ReferenceCatalog
     {
         if ($category === 'elements_or_any') {
             return ['*' => '* (whichever element it was)'];
+        }
+
+        if ($category === 'actor_ids') {
+            $labels = [];
+
+            foreach ($this->workspace->actorDatabase->getActors() as $actor) {
+                $id = $actor->getDefinitionId();
+                $name = $actor->getName();
+
+                if ($name !== '' && $name !== $id) {
+                    $labels[$id] = sprintf('%s (%s)', $name, $id);
+                }
+            }
+
+            return $labels;
         }
 
         if ($category === 'permanent_growth') {

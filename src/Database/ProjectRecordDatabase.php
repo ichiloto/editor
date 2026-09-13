@@ -334,6 +334,19 @@ final class ProjectRecordDatabase
     }
 
     /**
+     * Explains why this category's projection cannot preserve a freshly
+     * loaded payload, or null when it can.
+     */
+    public function projectionPreservationIssue(mixed $payload): ?string
+    {
+        $projection = $this->schema->projection;
+
+        return $projection === null
+            ? null
+            : self::projectionPreservationIssueFor($projection, $payload);
+    }
+
+    /**
      * @inheritDoc
      */
     protected function dependencyVersion(): string
@@ -797,6 +810,148 @@ final class ProjectRecordDatabase
     }
 
     /**
+     * Returns whether this category's record order survives saving and
+     * reopening, so a reorder is a real edit rather than a display trick.
+     *
+     * Only a projection that stores its rows in order gives that guarantee:
+     * its save folds the records back in record order. A plain or
+     * constructor-authored list file is written surgically, addressed by
+     * durable identity — a pure move changes no field, so the source plan
+     * emits nothing and the file keeps its authored order. A directory
+     * category has no order document at all, and config subtrees, file
+     * listings and map-owned records never persist a list order of their
+     * own. Pretending otherwise let a save report clean while the reopened
+     * project reverted, which is the lie this answer exists to prevent.
+     *
+     * @return bool True when reordering is durably authorable.
+     */
+    public function supportsDurableReorder(): bool
+    {
+        return $this->isEditable()
+            && $this->schema->storage === RecordStorage::LIST_FILE
+            && $this->schema->projection?->ordersRecords() === true;
+    }
+
+    /**
+     * Returns why a reorder is refused here, for the status line.
+     *
+     * @return string|null The reason, or null when reordering is supported.
+     */
+    public function reorderRefusalReason(): ?string
+    {
+        if ($this->supportsDurableReorder()) {
+            return null;
+        }
+
+        if (! $this->isEditable()) {
+            return $this->readOnlyReason;
+        }
+
+        return match ($this->schema->storage) {
+            RecordStorage::DIRECTORY => sprintf(
+                'Each %s is its own file; the list shows them in file order, which a move cannot change.',
+                $this->schema->entryNoun,
+            ),
+            RecordStorage::LIST_FILE => $this->schema->projection !== null
+                ? sprintf('%s entries are stored by key, not by order; a move would not survive reopening.', ucfirst($this->schema->entryNoun))
+                : 'This file keeps its authored entry order; the editor writes entries in place and a move would not survive reopening.',
+            default => sprintf('%s entries do not store a list order of their own.', ucfirst($this->schema->entryNoun)),
+        };
+    }
+
+    /**
+     * Moves a record to another position in its list.
+     *
+     * Declaration order is part of some categories' meaning — battle-entry
+     * rules break priority ties by it — so reordering is a real edit, not a
+     * view preference, and it is only permitted where the save path stores
+     * record order (see supportsDurableReorder()).
+     *
+     * @param int $from The record's current index.
+     * @param int $to The index to occupy.
+     * @return bool True when the order changed.
+     */
+    public function moveRecord(int $from, int $to): bool
+    {
+        if (! $this->supportsDurableReorder()) {
+            return false;
+        }
+
+        $records = array_values($this->records);
+
+        if ($from === $to || ! isset($records[$from]) || $to < 0 || $to >= count($records)) {
+            return false;
+        }
+
+        [$record] = array_splice($records, $from, 1);
+        array_splice($records, $to, 0, [$record]);
+        $this->records = $records;
+        $this->touchState();
+
+        return true;
+    }
+
+    /**
+     * Returns whether this category can duplicate a record at all, for the
+     * help overlay. Only editable list files of array records can: a
+     * per-file or object-backed record's copy would need its own source
+     * decisions, which nothing requires yet.
+     *
+     * @return bool True when Shift+D can do something here.
+     */
+    public function duplicateRecordSupported(): bool
+    {
+        return $this->isEditable()
+            && $this->schema->storage === RecordStorage::LIST_FILE
+            && ! $this->isConstructorAuthored();
+    }
+
+    /**
+     * Duplicates a record below itself, with a fresh unique identity.
+     *
+     * Only list-file categories duplicate: a per-file or object-backed
+     * record's copy would need its own source decisions, which nothing
+     * requires yet.
+     *
+     * @param int $index The record to copy.
+     * @return int|null The copy's index, or null when nothing was copied.
+     */
+    public function duplicateRecord(int $index): ?int
+    {
+        if (! $this->isEditable() || $this->schema->storage !== RecordStorage::LIST_FILE) {
+            return null;
+        }
+
+        $records = array_values($this->records);
+        $source = $records[$index] ?? null;
+        $payload = $source?->toArray();
+
+        if (! $source instanceof ProjectRecord || ! is_array($payload)) {
+            return null;
+        }
+        $identityKey = $this->schema->identityKey;
+        $recordId = '';
+
+        if ($identityKey !== null && array_key_exists($identityKey, $payload)) {
+            $payload[$identityKey] = $this->makeUniqueIdentity(strval($payload[$identityKey]));
+            $recordId = strval($payload[$identityKey]);
+        }
+
+        if ($this->schema->recordFilter !== null && ! ($this->schema->recordFilter)($payload)) {
+            return null;
+        }
+
+        // A record the file has never held: no authored identity or values,
+        // which is what tells the source writer to insert it.
+        $copy = new ProjectRecord($payload, true, null, $recordId);
+        array_splice($records, $index + 1, 0, [$copy]);
+        $this->records = $records;
+        $this->touchState();
+
+        return $index + 1;
+    }
+
+    /**
      * Appends a sub-list entry (an objective, beat, member, or command).
      *
      * @param int $index The record index.
@@ -1200,6 +1355,14 @@ final class ProjectRecordDatabase
             return $file->readOnlyReason;
         }
 
+        if ($schema->projection !== null && $file->exists) {
+            $projectionIssue = self::projectionPreservationIssueFor($schema->projection, $file->payload);
+
+            if ($projectionIssue !== null) {
+                return sprintf('%s %s', basename($file->path), $projectionIssue);
+            }
+        }
+
         foreach ($records as $record) {
             $reason = $record->getReadOnlyReason();
 
@@ -1209,6 +1372,59 @@ final class ProjectRecordDatabase
         }
 
         return null;
+    }
+
+    /**
+     * Checks both projection-specific malformed shapes and the exact
+     * read/write round trip. The latter is the final guard against a new
+     * projection silently coercing or dropping an authored value that its
+     * structural checks did not anticipate.
+     */
+    private static function projectionPreservationIssueFor(RecordProjection $projection, mixed $payload): ?string
+    {
+        $issue = $projection->preservationIssue($payload);
+
+        if ($issue !== null) {
+            return $issue;
+        }
+
+        if (! is_array($payload)) {
+            return sprintf('returns %s, not an array', get_debug_type($payload));
+        }
+
+        $roundTrip = $projection->write($payload, $projection->read($payload));
+
+        if (self::withoutEmptyFields($roundTrip) !== self::withoutEmptyFields($payload)) {
+            return 'contains values or structure that the editor cannot preserve exactly';
+        }
+
+        return null;
+    }
+
+    /**
+     * Removes empty named fields before comparing a projection round trip.
+     * An omitted optional category and that category written as an empty
+     * array carry the same runtime data; list entries themselves remain
+     * significant and are never removed here.
+     *
+     * @param array<mixed> $payload The value to normalize for comparison.
+     * @return array<mixed> The comparison value.
+     */
+    private static function withoutEmptyFields(array $payload): array
+    {
+        $normalized = [];
+
+        foreach ($payload as $key => $value) {
+            $value = is_array($value) ? self::withoutEmptyFields($value) : $value;
+
+            if (is_string($key) && $value === []) {
+                continue;
+            }
+
+            $normalized[$key] = $value;
+        }
+
+        return $normalized;
     }
 
     /**
@@ -2520,6 +2736,20 @@ final class ProjectRecordDatabase
         if ($field->codec === RecordFieldCodec::WORLD_WRITES) {
             $descriptor['worldWrites'] = true;
 
+            if ($field->writeTypes !== null) {
+                // A surface the runtime restricts (a transactional boundary
+                // rejects quest acceptance) offers only what it may author.
+                $descriptor['writeTypes'] = $field->writeTypes;
+            }
+
+            return $descriptor;
+        }
+
+        if ($field->codec === RecordFieldCodec::ACTOR_PREDICATES) {
+            // A predicate list is built a part at a time in its own editor:
+            // the actor picked by durable identity, the presence cycled.
+            $descriptor['actorPredicates'] = true;
+
             return $descriptor;
         }
 
@@ -2611,6 +2841,12 @@ final class ProjectRecordDatabase
             return $sets === [] && $field->removeWhenEmpty ? null : $sets;
         }
 
+        if ($field->codec === RecordFieldCodec::ACTOR_PREDICATES) {
+            $predicates = BattleEntryPredicateCodec::decodeAll($trimmed);
+
+            return $predicates === [] && $field->removeWhenEmpty ? null : $predicates;
+        }
+
         if ($field->reference !== null && $field->blankLabel !== null && $trimmed === $field->blankLabel) {
             // The picked "empty" row: stored as '', which the runtime reads
             // as its own value rather than as unset.
@@ -2687,6 +2923,7 @@ final class ProjectRecordDatabase
             RecordFieldCodec::CONDITIONS => ConditionCodec::encodeAll(is_array($value) ? $value : []),
             RecordFieldCodec::AFFINITIES => ElementAffinityCodec::encodeAll(is_array($value) ? $value : []),
             RecordFieldCodec::WORLD_WRITES => WorldWriteCodec::encodeAll(is_array($value) ? $value : []),
+            RecordFieldCodec::ACTOR_PREDICATES => BattleEntryPredicateCodec::encodeAll(is_array($value) ? $value : []),
             RecordFieldCodec::CSV_LIST => implode(', ', array_map(strval(...), is_array($value) ? $value : [])),
             RecordFieldCodec::KEY_VALUES => ParameterMapCodec::encode(is_array($value) ? $value : []),
             // A sprite authored as one string is one row; as a list, its rows.

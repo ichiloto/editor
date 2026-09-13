@@ -711,6 +711,108 @@ runtime gives `''` a meaning of its own.
 Not added, because the engine does not have them: patrol routes,
 pathfinding, followers, persisted dynamic positions, cross-map movement.
 
+## Conditional map music authoring — shipped 2026-08
+
+The Map Inspector authors the engine's ordered `bgmVariants` beside the
+static `Background Music`: story-dependent tracks selected by the first
+variant whose shared world conditions hold, falling back to the static
+track, keeping the current music when neither resolves. Variants are the
+Inspector's usual list — `Shift+O` adds a visibly incomplete variant (no
+track is ever inserted silently), the track is the existing BGM picker, the
+conditions open the shared Condition editor hosted in the Inspector pane,
+`[`/`]` reorder because declaration order is runtime behavior, and removing
+the last variant removes the key. Every edit is undoable and writes through
+the accepted map source machinery, so authored bytes, comments and unknown
+variant keys survive edits around them, and the production Last Legend maps
+already carrying variants round-trip byte-exactly.
+
+Validation reports every shape the engine silently skips — missing, empty
+or unknown tracks, malformed variants and conditions — and warns, precisely
+and deterministically, when an unconditional variant makes later variants
+unreachable. A subprocess parity suite proves the resolution semantics
+against the accepted engine head with real evaluation for every condition
+kind (a real item catalogue included), first-match ordering, shadowing,
+fallback, and the editor-authored file driving the engine in the authored
+order before and after a reorder.
+
+## Battle entry authoring order correction — shipped 2026-08
+
+Source review caught the reorder operation promising more than the save
+paths keep. A pure move changes no field, so the surgical source plan for
+plain and constructor-authored list files emits nothing, the save adopts
+the category as clean, and the reopened project reverts — and a directory
+category has no order document at all. The storage model now answers the
+question explicitly: `RecordProjection::ordersRecords()` declares whether a
+projection's fold stores row order (the keyed-list and knowledge
+projections do; the optimization projections regroup into keyed shapes and
+do not), and `supportsDurableReorder()` permits `[`/`]` only where a
+reorder provably survives save and reopen. Everywhere else the move is
+refused up front with the reason in the status line — no order change, no
+dirty state, no history entry, no byte, no modification time — and the
+help overlay describes the record keys only as the selected category
+actually supports them. Regressions cover the durable path through save,
+reopen, undo/redo and accepted-engine hydration, and every refusing shape.
+
+## Battle entry rules authoring — shipped 2026-08
+
+One schema-driven Database category for `assets/Data/battle-entry-rules.php`,
+the file the engine's accepted `BattleEntryRuleCatalog` hydrates. Rules
+author a stable id, optional priority and `ordinary`/`boss` classification
+(both defaulting silently, never written by browsing), required actor
+predicates picked from durable actor identities with `active`/`reserve`/
+`any` presence, shared world conditions, typed `stat_stage` effects over the
+engine's exact stage-capable vocabulary with signed deltas stored untouched,
+and world writes restricted to the reversible transactional three — quest
+acceptance is unofferable here and diagnosed when found in source. Troops
+gained the accepted contract's optional classification picker.
+
+Because rule order is data (declaration order breaks priority ties), record
+lists learned two operations every list-file category now shares: `[`/`]`
+reorder and `Shift+D` duplicate, both undoable. The Execution Order cue
+presents the exact priority-then-declaration order the runtime will use.
+
+The committed engine dependency (0.5.0) predates the contract, so validation
+runs a bounded structural mirror — same shapes, same diagnostic wording,
+stat and condition vocabularies imported from the vendored engine classes
+that are byte-identical to the accepted head — and an actor resolver that
+reproduces the engine store's id/name/file-stem resolution, ambiguity and
+duplicate refusals. A parity suite proves every diagnostic branch against
+the accepted engine head in a subprocess (gated by `ICHILOTO_ENGINE_SRC`),
+and proves an editor-authored project hydrates there in the cue's exact
+order. Along the way the record fingerprint stopped exporting unexportable
+payloads, so a data file holding an object the exporter cannot rebuild
+(a `DateTimeImmutable`, say) now loads read-only instead of taking the
+whole category down.
+
+## Map save integrity and source preservation — shipped 2026-08
+
+The two defects named by source review, fixed at the root. `ProjectMap` now
+holds its data file as an authored source document (the same token-level
+seam Cutscenes ships, `PhpArraySourceDocument` + `ArraySourceWriter`) and
+every data mutation funnels through one gate that dry-runs the rewrite
+before applying: a change lands as the smallest source edit — comments,
+`use` imports, enum and `require` expressions, prelude variables, quoting,
+key order and unknown fields keep their exact bytes — and a change the
+source cannot take reversibly (a value written as an expression) is refused
+with the map, file and path named, before anything moves. Structural edits
+insert and remove entry lines by durable identity: event marker, NPC `id`,
+unique name for legacy NPCs (writer rule, validation warns on ambiguity).
+Variable-referenced values stay repointable; only a wholly unparseable data
+source makes a map's data read-only, and validation reports it.
+
+Saving became one transaction across the triplet through the promoted
+`FileSetTransaction` (`src/Storage/`, generalised from the accepted
+paired-file boundary to N files and folders): only changed members are
+written — a data edit no longer rewrites `.map.php`, which also protects
+tile files an author builds with a helper class — each staged member is
+evaluated from the project root and must equal the in-memory map, backups
+cover exactly the members being replaced, and any failure restores every
+touched file to its bytes and mtime with the checkpoint unmoved. The
+explicit move carries authored bytes and additionally proves they evaluate
+at the destination, refusing a depth-relative `require` whole. The writer
+itself gained composable appends (several new keys or entries in one save
+used to collide) and the unique-name identity rule.
+
 ## Map runtime metadata authoring — shipped 2026-08
 
 The Map Inspector's metadata rows stopped at name, region, description and

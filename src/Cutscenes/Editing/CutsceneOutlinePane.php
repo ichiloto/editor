@@ -7,6 +7,7 @@ namespace Ichiloto\Editor\Cutscenes\Editing;
 use Atatusoft\Termutil\IO\Enumerations\Color;
 use Ichiloto\Editor\Cutscenes\CutsceneOutline;
 use Ichiloto\Editor\Cutscenes\CutsceneType;
+use Ichiloto\Editor\ListNavigation;
 use Ichiloto\Editor\EditorWindow;
 use Ichiloto\Editor\Status\StatusLevel;
 use Ichiloto\Editor\UI\CutscenesScreen;
@@ -58,7 +59,7 @@ trait CutsceneOutlinePane
             return;
         }
 
-        $next = max(0, min(count($rows) - 1, $this->cutsceneTreeCursor + $step));
+        $next = ListNavigation::step($this->cutsceneTreeCursor, $step, count($rows));
 
         if ($next === $this->cutsceneTreeCursor) {
             return;

@@ -5,10 +5,10 @@ declare(strict_types=1);
 use Ichiloto\Editor\Cutscenes\CutsceneAsset;
 use Ichiloto\Editor\Cutscenes\CutsceneLibrary;
 use Ichiloto\Editor\Cutscenes\CutsceneType;
-use Ichiloto\Editor\Cutscenes\Storage\FilesystemPairedFileOperations;
-use Ichiloto\Editor\Cutscenes\Storage\PairedFileOperations;
-use Ichiloto\Editor\Cutscenes\Storage\PairedFileTransaction;
-use Ichiloto\Editor\Cutscenes\Storage\PairedFileTransactionFailure;
+use Ichiloto\Editor\Storage\FilesystemFileSetOperations;
+use Ichiloto\Editor\Storage\FileSetOperations;
+use Ichiloto\Editor\Storage\FileSetTransaction;
+use Ichiloto\Editor\Storage\FileSetTransactionFailure;
 
 /**
  * A cutscene pair is one asset: the data file and its script or timeline are
@@ -16,86 +16,6 @@ use Ichiloto\Editor\Cutscenes\Storage\PairedFileTransactionFailure;
  * refused save or deletion must leave the complete old pair, or -- for an
  * asset that never existed -- no pair at all.
  */
-
-/**
- * The real filesystem, with named operations made to fail on chosen paths.
- */
-final class FailingPairedFileOperations implements PairedFileOperations
-{
-    /** @var array<int, string> Every operation performed, as "verb path". */
-    public array $calls = [];
-
-    /**
-     * @param array<string, array<int, string>> $failures Paths to fail, by verb.
-     */
-    public function __construct(
-        private readonly PairedFileOperations $inner = new FilesystemPairedFileOperations(),
-        private array $failures = [],
-    ) {
-    }
-
-    private function fails(string $verb, string $path): bool
-    {
-        $this->calls[] = $verb . ' ' . basename($path);
-
-        return in_array($path, $this->failures[$verb] ?? [], true);
-    }
-
-    public function isFile(string $path): bool
-    {
-        return $this->inner->isFile($path);
-    }
-
-    public function isDirectory(string $path): bool
-    {
-        return $this->inner->isDirectory($path);
-    }
-
-    public function read(string $path): ?string
-    {
-        return $this->fails('read', $path) ? null : $this->inner->read($path);
-    }
-
-    public function write(string $path, string $contents): bool
-    {
-        return $this->fails('write', $path) ? false : $this->inner->write($path, $contents);
-    }
-
-    public function move(string $from, string $to): bool
-    {
-        return $this->fails('move', $to) ? false : $this->inner->move($from, $to);
-    }
-
-    public function remove(string $path): bool
-    {
-        return $this->fails('remove', $path) ? false : $this->inner->remove($path);
-    }
-
-    public function makeDirectory(string $path): bool
-    {
-        return $this->fails('makeDirectory', $path) ? false : $this->inner->makeDirectory($path);
-    }
-
-    public function removeDirectory(string $path): bool
-    {
-        return $this->fails('removeDirectory', $path) ? false : $this->inner->removeDirectory($path);
-    }
-
-    public function listDirectory(string $path): array
-    {
-        return $this->inner->listDirectory($path);
-    }
-
-    public function modifiedAt(string $path): ?int
-    {
-        return $this->inner->modifiedAt($path);
-    }
-
-    public function setModifiedAt(string $path, int $timestamp): bool
-    {
-        return $this->inner->setModifiedAt($path, $timestamp);
-    }
-}
 
 /**
  * A folder with a pair in it, for the transaction's own tests.
@@ -141,8 +61,8 @@ function folderState(string $folder): array
 
 it('installs a new pair only when both files land, and leaves no folder when the second cannot', function () {
     [$folder, $dataPath, $partnerPath] = transactionFolder(withPair: false);
-    $files = new FailingPairedFileOperations(failures: ['move' => [$partnerPath]]);
-    $transaction = new PairedFileTransaction($folder, $files);
+    $files = new FailingFileSetOperations(failures: ['move' => [$partnerPath]]);
+    $transaction = new FileSetTransaction($folder, $files);
     $transaction->write($dataPath, "<?php\n\nreturn ['id' => 'asset'];\n");
     $transaction->write($partnerPath, "<?php\n\nreturn [];\n");
     $transaction->stage();
@@ -154,7 +74,7 @@ it('installs a new pair only when both files land, and leaves no folder when the
 
     try {
         $transaction->commit();
-    } catch (PairedFileTransactionFailure $thrown) {
+    } catch (FileSetTransactionFailure $thrown) {
         $failure = $thrown;
     }
 
@@ -172,13 +92,13 @@ it('installs a new pair only when both files land, and leaves no folder when the
 it('restores both existing files, bytes and modification times, when the second cannot be replaced', function () {
     [$folder, $dataPath, $partnerPath] = transactionFolder();
     $before = folderState($folder);
-    $files = new FailingPairedFileOperations(failures: ['move' => [$partnerPath]]);
-    $transaction = new PairedFileTransaction($folder, $files);
+    $files = new FailingFileSetOperations(failures: ['move' => [$partnerPath]]);
+    $transaction = new FileSetTransaction($folder, $files);
     $transaction->write($dataPath, "<?php\n\nreturn ['id' => 'asset', 'name' => 'Edited'];\n");
     $transaction->write($partnerPath, "<?php\n\nreturn [['type' => 'wait']];\n");
     $transaction->stage();
 
-    expect(fn() => $transaction->commit())->toThrow(PairedFileTransactionFailure::class);
+    expect(fn() => $transaction->commit())->toThrow(FileSetTransactionFailure::class);
     expect(folderState($folder))->toBe($before, 'both files are exactly what they were, at the time they were');
 });
 
@@ -187,8 +107,8 @@ it('says so when a restoration itself fails, and never claims the rollback succe
     // The data file is replaced, the partner cannot be, and putting the data
     // file back fails too: the one case where the pair is left in a state
     // nobody chose, which the failure must name rather than hide.
-    $files = new FailingPairedFileOperations(failures: ['move' => [$partnerPath], 'write' => [$dataPath]]);
-    $transaction = new PairedFileTransaction($folder, $files);
+    $files = new FailingFileSetOperations(failures: ['move' => [$partnerPath], 'write' => [$dataPath]]);
+    $transaction = new FileSetTransaction($folder, $files);
     $transaction->write($dataPath, "<?php\n\nreturn ['id' => 'asset', 'name' => 'Edited'];\n");
     $transaction->write($partnerPath, "<?php\n\nreturn [];\n");
     $transaction->stage();
@@ -197,7 +117,7 @@ it('says so when a restoration itself fails, and never claims the rollback succe
 
     try {
         $transaction->commit();
-    } catch (PairedFileTransactionFailure $thrown) {
+    } catch (FileSetTransactionFailure $thrown) {
         $failure = $thrown;
     }
 
@@ -212,8 +132,8 @@ it('says so when a restoration itself fails, and never claims the rollback succe
 it('keeps the complete pair when a paired deletion cannot remove the second file', function () {
     [$folder, $dataPath, $partnerPath] = transactionFolder();
     $before = folderState($folder);
-    $files = new FailingPairedFileOperations(failures: ['remove' => [$partnerPath]]);
-    $transaction = new PairedFileTransaction($folder, $files);
+    $files = new FailingFileSetOperations(failures: ['remove' => [$partnerPath]]);
+    $transaction = new FileSetTransaction($folder, $files);
     $transaction->remove($dataPath);
     $transaction->remove($partnerPath);
 
@@ -221,7 +141,7 @@ it('keeps the complete pair when a paired deletion cannot remove the second file
 
     try {
         $transaction->commit();
-    } catch (PairedFileTransactionFailure $thrown) {
+    } catch (FileSetTransactionFailure $thrown) {
         $failure = $thrown;
     }
 
@@ -235,7 +155,7 @@ it('backs the pair up once, before any destructive work, and leaves no staged fi
     [$folder, $dataPath, $partnerPath] = transactionFolder();
     $backups = [];
     $contentsAtBackup = [];
-    $transaction = new PairedFileTransaction($folder);
+    $transaction = new FileSetTransaction($folder);
     $transaction->write($dataPath, "<?php\n\nreturn ['id' => 'asset', 'name' => 'Edited'];\n");
     $transaction->write($partnerPath, "<?php\n\nreturn [['type' => 'wait']];\n");
     $transaction->stage();
@@ -260,7 +180,7 @@ it('backs the pair up once, before any destructive work, and leaves no staged fi
 
 it('removes the folder when a deletion empties it, and leaves an author\'s own files alone', function () {
     [$folder, $dataPath, $partnerPath] = transactionFolder();
-    $transaction = new PairedFileTransaction($folder);
+    $transaction = new FileSetTransaction($folder);
     $transaction->remove($dataPath);
     $transaction->remove($partnerPath);
     $transaction->commit();
@@ -269,7 +189,7 @@ it('removes the folder when a deletion empties it, and leaves an author\'s own f
 
     [$otherFolder, $otherData, $otherPartner] = transactionFolder();
     file_put_contents($otherFolder . '/notes.md', 'mine');
-    $second = new PairedFileTransaction($otherFolder);
+    $second = new FileSetTransaction($otherFolder);
     $second->remove($otherData);
     $second->remove($otherPartner);
     $second->commit();
@@ -281,12 +201,12 @@ it('removes the folder when a deletion empties it, and leaves an author\'s own f
 it('refuses before touching anything when an existing file cannot be read back', function () {
     [$folder, $dataPath, $partnerPath] = transactionFolder();
     $before = folderState($folder);
-    $files = new FailingPairedFileOperations(failures: ['read' => [$dataPath]]);
-    $transaction = new PairedFileTransaction($folder, $files);
+    $files = new FailingFileSetOperations(failures: ['read' => [$dataPath]]);
+    $transaction = new FileSetTransaction($folder, $files);
     $transaction->write($dataPath, "<?php\n\nreturn ['id' => 'asset', 'name' => 'Edited'];\n");
     $transaction->write($partnerPath, "<?php\n\nreturn [];\n");
 
-    expect(fn() => $transaction->stage())->toThrow(PairedFileTransactionFailure::class, 'could not be read')
+    expect(fn() => $transaction->stage())->toThrow(FileSetTransactionFailure::class, 'could not be read')
         ->and(folderState($folder))->toBe($before)
         ->and(count(array_diff(scandir($folder) ?: [], ['.', '..'])))->toBe(2, 'nothing was staged');
 });
@@ -294,7 +214,7 @@ it('refuses before touching anything when an existing file cannot be read back',
 it('drops staged copies without installing them when the caller rolls back', function () {
     [$folder, $dataPath, $partnerPath] = transactionFolder();
     $before = folderState($folder);
-    $transaction = new PairedFileTransaction($folder);
+    $transaction = new FileSetTransaction($folder);
     $transaction->write($dataPath, "<?php\n\nreturn ['id' => 'asset', 'name' => 'Edited'];\n");
     $transaction->write($partnerPath, "<?php\n\nreturn [];\n");
     $transaction->stage();
@@ -302,6 +222,141 @@ it('drops staged copies without installing them when the caller rolls back', fun
 
     expect(folderState($folder))->toBe($before)
         ->and(count(array_diff(scandir($folder) ?: [], ['.', '..'])))->toBe(2);
+});
+
+it('refuses a reserved folder another writer created and preserves that writer\'s files', function () {
+    [$folder, $dataPath, $partnerPath] = transactionFolder(withPair: false);
+    $transaction = new FileSetTransaction($folder, reserveFolder: true);
+    $transaction->write($dataPath, "<?php\n\nreturn ['id' => 'asset'];\n");
+    $transaction->write($partnerPath, "<?php\n\nreturn [];\n");
+
+    // The destination was free when the move began, but another writer won
+    // it before staging. It is not this transaction's folder to empty.
+    mkdir($folder, 0o777, true);
+    file_put_contents($folder . '/other-writer.txt', 'theirs');
+
+    expect(fn() => $transaction->stage())->toThrow(FileSetTransactionFailure::class, 'already exists')
+        ->and(file_get_contents($folder . '/other-writer.txt'))->toBe('theirs')
+        ->and(is_file($dataPath))->toBeFalse()
+        ->and(is_file($partnerPath))->toBeFalse();
+});
+
+it('loses an atomic folder-creation race without claiming or deleting the winner', function () {
+    [$folder, $dataPath, $partnerPath] = transactionFolder(withPair: false);
+    mkdir(dirname($folder), 0o777, true);
+    $files = new FailingFileSetOperations(before: [
+        'makeDirectory' => static function (string $path): void {
+            mkdir($path, 0o777);
+            file_put_contents($path . '/other-writer.txt', 'theirs');
+        },
+    ]);
+    $transaction = new FileSetTransaction($folder, $files, reserveFolder: true);
+    $transaction->write($dataPath, "<?php\n\nreturn ['id' => 'asset'];\n");
+    $transaction->write($partnerPath, "<?php\n\nreturn [];\n");
+
+    expect(fn() => $transaction->stage())->toThrow(FileSetTransactionFailure::class, 'Unable to create')
+        ->and(file_get_contents($folder . '/other-writer.txt'))->toBe('theirs')
+        ->and(is_file($dataPath))->toBeFalse()
+        ->and(is_file($partnerPath))->toBeFalse();
+});
+
+it('validates the installed state and restores every path when validation refuses it', function () {
+    [$sourceFolder, $dataPath, $partnerPath] = transactionFolder();
+    $before = folderState($sourceFolder);
+    $destination = dirname($sourceFolder) . '/moved-asset';
+    $movedData = $destination . '/moved-asset.data.php';
+    $movedPartner = $destination . '/moved-asset.script.php';
+    $observed = [];
+    $transaction = new FileSetTransaction($destination, reserveFolder: true);
+    $transaction->write($movedData, "<?php\n\nreturn ['id' => 'moved'];\n");
+    $transaction->write($movedPartner, "<?php\n\nreturn [];\n");
+    $transaction->remove($dataPath);
+    $transaction->remove($partnerPath);
+
+    $failure = null;
+
+    try {
+        $transaction->commit(validate: static function () use (
+            &$observed,
+            $movedData,
+            $movedPartner,
+            $dataPath,
+            $partnerPath,
+        ): void {
+            $observed = [
+                is_file($movedData),
+                is_file($movedPartner),
+                is_file($dataPath),
+                is_file($partnerPath),
+                glob(dirname($movedData) . '/*.tmp-*'),
+            ];
+
+            throw new RuntimeException('the final files cannot be loaded');
+        });
+    } catch (FileSetTransactionFailure $thrown) {
+        $failure = $thrown;
+    }
+
+    expect($observed)->toBe([true, true, false, false, []], 'validation sees exactly the installed members')
+        ->and($failure)->not->toBeNull()
+        ->and($failure->wasRolledBack)->toBeTrue()
+        ->and($failure->getPrevious())->toBeInstanceOf(RuntimeException::class)
+        ->and(folderState($sourceFolder))->toBe($before, 'the complete source pair was restored exactly')
+        ->and(is_dir($destination))->toBeFalse('the refused destination was taken back');
+});
+
+it('reports a failed source restoration after installed-state validation', function () {
+    [$sourceFolder, $dataPath, $partnerPath] = transactionFolder();
+    $destination = dirname($sourceFolder) . '/moved-asset';
+    $files = new FailingFileSetOperations(failures: ['write' => [$dataPath]]);
+    $transaction = new FileSetTransaction($destination, $files, reserveFolder: true);
+    $transaction->write($destination . '/moved-asset.data.php', "<?php\n\nreturn ['id' => 'moved'];\n");
+    $transaction->write($destination . '/moved-asset.script.php', "<?php\n\nreturn [];\n");
+    $transaction->remove($dataPath);
+    $transaction->remove($partnerPath);
+
+    $failure = null;
+
+    try {
+        $transaction->commit(validate: static function (): void {
+            throw new RuntimeException('invalid after installation');
+        });
+    } catch (FileSetTransactionFailure $thrown) {
+        $failure = $thrown;
+    }
+
+    expect($failure)->not->toBeNull()
+        ->and($failure->wasRolledBack)->toBeFalse()
+        ->and($failure->unrestoredPaths)->toBe([$dataPath])
+        ->and($failure->getMessage())->toContain('asset.data.php')
+        ->and($failure->getMessage())->not->toContain('nothing was changed');
+});
+
+it('never overwrites an entry a competing writer creates before rollback', function () {
+    [$sourceFolder, $dataPath, $partnerPath] = transactionFolder();
+    $destination = dirname($sourceFolder) . '/moved-asset';
+    $transaction = new FileSetTransaction($destination, reserveFolder: true);
+    $transaction->write($destination . '/moved-asset.data.php', "<?php\n\nreturn ['id' => 'moved'];\n");
+    $transaction->write($destination . '/moved-asset.script.php', "<?php\n\nreturn [];\n");
+    $transaction->remove($dataPath);
+    $transaction->remove($partnerPath);
+
+    $failure = null;
+
+    try {
+        $transaction->commit(validate: static function () use ($dataPath): void {
+            file_put_contents($dataPath, 'the competing writer owns this');
+
+            throw new RuntimeException('validation refused the move');
+        });
+    } catch (FileSetTransactionFailure $thrown) {
+        $failure = $thrown;
+    }
+
+    expect($failure)->not->toBeNull()
+        ->and($failure->wasRolledBack)->toBeFalse()
+        ->and($failure->unrestoredPaths)->toContain($dataPath)
+        ->and(file_get_contents($dataPath))->toBe('the competing writer owns this');
 });
 
 // -- The asset's own save and delete, over the real filesystem ---------------
@@ -322,7 +377,7 @@ it('leaves no half pair on disk when a new cutscene cannot install its script', 
     mkdir($folder . '/half-written.script.php', 0o777, true);
     file_put_contents($folder . '/half-written.script.php/inside', 'not ours');
 
-    expect(fn() => $created->save())->toThrow(PairedFileTransactionFailure::class);
+    expect(fn() => $created->save())->toThrow(FileSetTransactionFailure::class);
     expect(is_file($folder . '/half-written.data.php'))->toBeFalse('no data file without its script')
         ->and(glob($folder . '/*.tmp-*'))->toBe([])
         ->and($created->isDirty())->toBeTrue('a refused save leaves the work unsaved')
@@ -352,7 +407,7 @@ it('keeps both original files when an existing cutscene cannot install its secon
 
     try {
         $asset->save();
-    } catch (PairedFileTransactionFailure $thrown) {
+    } catch (FileSetTransactionFailure $thrown) {
         $failure = $thrown;
     }
 
@@ -385,7 +440,7 @@ it('keeps the complete pair when a cutscene deletion cannot remove its files', f
 
     try {
         $asset->save();
-    } catch (PairedFileTransactionFailure $thrown) {
+    } catch (FileSetTransactionFailure $thrown) {
         $failure = $thrown;
     }
 
@@ -424,4 +479,137 @@ it('writes one file of the pair without touching the other, or its modification 
         ->and(folderState($folder)['harbour-lanterns.data.php'])->toBe($dataBefore, 'the data file was not rewritten')
         ->and(file_get_contents($scriptPath))->toContain("'type' => 'wait'")
         ->and(glob($folder . '/*.tmp-*'))->toBe([]);
+});
+
+it('reports a rollback as failed when a restored file\'s metadata cannot be put back', function () {
+    [$folder, $dataPath, $partnerPath] = transactionFolder();
+    // The partner cannot be replaced, forcing a rollback of the data file --
+    // whose bytes go back, but whose original metadata cannot.
+    $files = new FailingFileSetOperations(failures: ['move' => [$partnerPath], 'restoreMetadata' => [$dataPath]]);
+    $transaction = new FileSetTransaction($folder, $files);
+    $transaction->write($dataPath, "<?php\n\nreturn ['id' => 'asset', 'name' => 'Edited'];\n");
+    $transaction->write($partnerPath, "<?php\n\nreturn [];\n");
+    $transaction->stage();
+
+    $failure = null;
+
+    try {
+        $transaction->commit();
+    } catch (FileSetTransactionFailure $thrown) {
+        $failure = $thrown;
+    }
+
+    expect($failure)->not->toBeNull()
+        ->and($failure->wasRolledBack)->toBeFalse('a file with different metadata is not the file that was there')
+        ->and($failure->unrestoredPaths)->toBe([$dataPath])
+        ->and($failure->getMessage())->toContain('asset.data.php')
+        ->and($failure->getMessage())->not->toContain('nothing was changed');
+});
+
+it('leaves destinations untouched and takes back all staging when a backup callback throws', function () {
+    [$folder, $dataPath, $partnerPath] = transactionFolder();
+    $before = folderState($folder);
+    $transaction = new FileSetTransaction($folder);
+    $transaction->write($dataPath, "<?php\n\nreturn ['id' => 'asset', 'name' => 'Edited'];\n");
+    $transaction->write($partnerPath, "<?php\n\nreturn [['type' => 'wait']];\n");
+    $transaction->stage();
+
+    $failure = null;
+
+    try {
+        $transaction->commit(static function (string ...$paths): void {
+            throw new RuntimeException('the backup disk is full');
+        });
+    } catch (FileSetTransactionFailure $thrown) {
+        $failure = $thrown;
+    }
+
+    expect($failure)->not->toBeNull()
+        ->and($failure->wasRolledBack)->toBeTrue('nothing was installed, so nothing needed restoring')
+        ->and($failure->getMessage())->toContain('backup step failed')
+        ->and($failure->getMessage())->toContain('the backup disk is full')
+        ->and(folderState($folder))->toBe($before, 'both destinations are exactly what they were')
+        ->and(count(array_diff(scandir($folder) ?: [], ['.', '..'])))->toBe(2, 'no staged temporary survives');
+});
+
+it('takes back a folder it created when the backup callback throws on a moving set', function () {
+    [$folder, $dataPath, $partnerPath] = transactionFolder();
+    $destination = dirname($folder) . '/moved-asset';
+    $transaction = new FileSetTransaction($destination);
+    $transaction->write($destination . '/moved-asset.data.php', "<?php\n\nreturn ['id' => 'moved'];\n");
+    $transaction->remove($dataPath);
+    $transaction->remove($partnerPath);
+    $transaction->stage();
+
+    expect(is_dir($destination))->toBeTrue('staging created the destination folder');
+
+    try {
+        $transaction->commit(static function (): void {
+            throw new RuntimeException('no backups today');
+        });
+    } catch (FileSetTransactionFailure) {
+        // Expected.
+    }
+
+    expect(is_dir($destination))->toBeFalse('the folder this transaction created is gone')
+        ->and(is_file($dataPath))->toBeTrue()
+        ->and(is_file($partnerPath))->toBeTrue();
+});
+
+it('shares reservations with a same-user process that has no POSIX functions', function () {
+    [$folder, $dataPath] = transactionFolder();
+    $transaction = new FileSetTransaction($folder);
+    $transaction->write($dataPath, "<?php\n\nreturn ['id' => 'parent'];\n");
+    $transaction->stage();
+    $probe = <<<'PHP'
+    require $argv[1];
+
+    if (function_exists('posix_geteuid')) {
+        fwrite(STDERR, 'POSIX was not disabled');
+        exit(2);
+    }
+
+    $transaction = new \Ichiloto\Editor\Storage\FileSetTransaction($argv[2]);
+    $transaction->write($argv[3], 'child');
+
+    try {
+        $transaction->stage();
+        $transaction->rollBack();
+        fwrite(STDOUT, 'acquired');
+        exit(3);
+    } catch (\Ichiloto\Editor\Storage\FileSetTransactionFailure $failure) {
+        fwrite(STDOUT, str_contains($failure->getMessage(), 'Another file transaction') ? 'reserved' : $failure->getMessage());
+    }
+    PHP;
+    $process = proc_open(
+        [
+            PHP_BINARY,
+            '-d',
+            'disable_functions=posix_geteuid',
+            '-r',
+            $probe,
+            dirname(__DIR__, 2) . '/vendor/autoload.php',
+            $folder,
+            $dataPath,
+        ],
+        [
+            0 => ['pipe', 'r'],
+            1 => ['pipe', 'w'],
+            2 => ['pipe', 'w'],
+        ],
+        $pipes,
+    );
+
+    expect(is_resource($process))->toBeTrue();
+    fclose($pipes[0]);
+    $output = stream_get_contents($pipes[1]);
+    $error = stream_get_contents($pipes[2]);
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+    $exitCode = proc_close($process);
+    $transaction->rollBack();
+
+    expect($exitCode)->toBe(0)
+        ->and($output)->toBe('reserved')
+        ->and($error)->toBe('');
 });

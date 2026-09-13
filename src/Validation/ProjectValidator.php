@@ -2,6 +2,8 @@
 
 namespace Ichiloto\Editor\Validation;
 
+use Ichiloto\Editor\Database\BattleEntryActorResolver;
+use Ichiloto\Editor\Database\BattleEntryRuleContract;
 use Ichiloto\Editor\Database\InventoryCatalog;
 use Ichiloto\Editor\Database\InventoryClaimant;
 use Ichiloto\Editor\Database\KnowledgeCommandShape;
@@ -100,6 +102,7 @@ class ProjectValidator
       ...$this->checkMaps($workspace),
       ...$this->checkQuests($workspace),
       ...$this->checkTroops($workspace),
+      ...$this->checkBattleEntryRules($workspace),
       ...$this->checkSummons($workspace),
       ...$this->checkCutscenes($workspace),
       ...$this->checkReferences($workspace),
@@ -1177,6 +1180,103 @@ class ProjectValidator
       }
     }
 
+    foreach ($database->getRecords() as $record) {
+      $name = trim(strval($record->get('name') ?? '')) ?: '(unnamed)';
+      $problem = BattleEntryRuleContract::classificationProblem(
+        $record->get('classification'),
+        sprintf('Data/troops.php troop "%s"', $name),
+      );
+
+      if ($problem !== null) {
+        // The engine refuses to load the troop at all, so the message is
+        // the one the runtime would give.
+        $issues[] = Issue::error(
+          'troop ' . $name,
+          $problem,
+          'Use ordinary or boss, or omit the field to keep the ordinary default.',
+        );
+      }
+    }
+
+    return $issues;
+  }
+
+  /**
+   * Checks authored battle-entry rules against the engine's hydration
+   * contract, with the engine's own diagnostic wording.
+   *
+   * A missing file means no rules and no finding, exactly as the runtime
+   * treats it. Actor identities resolve the way the engine's store resolves
+   * them; a duplicate or ambiguous identity is reported rather than
+   * silently substituted, and the rules are then checked shape-only, since
+   * the runtime would never reach them.
+   *
+   * @param ProjectWorkspace $workspace The project.
+   * @return Issue[] The issues.
+   */
+  protected function checkBattleEntryRules(ProjectWorkspace $workspace): array
+  {
+    $database = $workspace->getRecordDatabase('battle_entry_rules');
+
+    if (! $database instanceof ProjectRecordDatabase) {
+      return [];
+    }
+
+    $where = 'assets/Data/battle-entry-rules.php';
+    $path = $database->backingFilePath();
+    $fileExists = is_file($path);
+    $freshPayload = null;
+
+    if ($fileExists) {
+      try {
+        $freshPayload = PhpDataFile::evaluateIsolated($path, $workspace->projectRoot);
+      } catch (Throwable $throwable) {
+        return [Issue::error(
+          $where,
+          sprintf('The file could not be evaluated: %s.', $throwable->getMessage()),
+          'Battle startup fails closed until the file loads.',
+        )];
+      }
+    }
+
+    if (! $fileExists && ! $database->isDirty()) {
+      return [];
+    }
+
+    $records = $database->getRecords();
+
+    $issues = [];
+    $resolver = BattleEntryActorResolver::fromActors($workspace->actorDatabase->getActors());
+
+    foreach ($resolver->problems() as $problem) {
+      $issues[] = Issue::error(
+        $where,
+        $problem,
+        'Battle-entry rules resolve actors by durable identity; give each actor one unambiguous id.',
+      );
+    }
+
+    // Dirty records represent actual unsaved Editor work, but only while the
+    // freshly re-read file still has a shape the projection can preserve. If
+    // an external edit made the current file lossy, validate that raw payload
+    // instead of trusting stale records loaded before the edit.
+    $validateCurrentRecords = $database->isDirty()
+      && (! $fileExists || $database->projectionPreservationIssue($freshPayload) === null);
+    $data = $validateCurrentRecords
+      ? ['rules' => array_map(
+        static fn(ProjectRecord $record): array => $record->toArray(),
+        $records,
+      )]
+      : $freshPayload;
+
+    foreach (BattleEntryRuleContract::problems($data, $where, $resolver->problems() === [] ? $resolver : null) as $problem) {
+      $issues[] = Issue::error(
+        $where,
+        $problem,
+        'Battle startup fails closed until this rule is corrected.',
+      );
+    }
+
     return $issues;
   }
 
@@ -1453,6 +1553,7 @@ class ProjectValidator
         ...$this->checkEncounters($map, $troops),
         ...$this->checkNpcs($map, $workspace),
         ...$this->checkDuplicateKeys($map),
+        ...$this->checkMapSource($map),
       ];
     }
 
@@ -2481,6 +2582,67 @@ class ProjectValidator
       );
     }
 
+    foreach ($this->duplicateKeysAt($map, ['events']) as $marker => $lines) {
+      $issues[] = Issue::error(
+        $map->mapId,
+        sprintf('The event marker "%s" is defined %d times (lines %s).', $marker, count($lines), implode(', ', $lines)),
+        'PHP keeps the last definition and discards the rest without a word.'
+      );
+    }
+
+    return $issues;
+  }
+
+  /**
+   * Checks what the editor's source model makes of the map's data file.
+   *
+   * A data file whose source cannot be held for in-place rewriting keeps
+   * every byte -- the editor refuses data edits on that map rather than
+   * regenerate the file -- so the author should hear it here, not first at
+   * a refused edit. Two id-less NPCs sharing one name are reported for the
+   * same reason: a structural edit identifies a legacy NPC by its name, and
+   * a name two rows carry identifies nothing.
+   *
+   * @param ProjectMap $map The map.
+   * @return Issue[] The issues found.
+   */
+  protected function checkMapSource(ProjectMap $map): array
+  {
+    $issues = [];
+    $issue = $map->dataSourceIssue();
+
+    if ($issue !== null) {
+      $issues[] = Issue::error(
+        $map->mapId,
+        sprintf('%s cannot be preserved for editing: %s.', basename($map->dataPath), $issue),
+        'The editor refuses data edits on this map rather than rewrite the file; repair it by hand.'
+      );
+    }
+
+    $names = [];
+
+    foreach ((array) ($map->data['npcs'] ?? []) as $npc) {
+      if (! is_array($npc) || trim(strval($npc['id'] ?? '')) !== '') {
+        continue;
+      }
+
+      $name = trim(strval($npc['name'] ?? ''));
+
+      if ($name !== '') {
+        $names[$name] = ($names[$name] ?? 0) + 1;
+      }
+    }
+
+    foreach ($names as $name => $count) {
+      if ($count > 1) {
+        $issues[] = Issue::warning(
+          $map->mapId,
+          sprintf('%d NPCs named "%s" have no stable id.', $count, $name),
+          'A structural edit identifies a legacy NPC by its unique name; give each an id.'
+        );
+      }
+    }
+
     return $issues;
   }
 
@@ -3169,6 +3331,7 @@ class ProjectValidator
       $issues = [
         ...$issues,
         ...$this->checkReference(strval($map->data['bgm'] ?? ''), 'bgm', 'track', $map->mapId, $known),
+        ...$this->checkBgmVariants($map, $known),
       ];
 
       foreach ((array) ($map->data['events'] ?? []) as $marker => $definition) {
@@ -3268,6 +3431,124 @@ class ProjectValidator
    * @param array<string, string[]> $known What the project defines.
    * @return Issue[] The issues found.
    */
+  /**
+   * Checks a map's conditional music the way the engine reads it: an
+   * ordered list whose first matching variant selects the track.
+   *
+   * The engine silently skips a variant it cannot read - no track, or
+   * conditions that are not a list - so every silently-skipped shape is a
+   * finding here. An empty conditions list is an unconditional match, which
+   * is why one placed before later variants makes them unreachable.
+   *
+   * @param array<string, string[]> $known The known reference values.
+   * @return Issue[] The issues.
+   */
+  protected function checkBgmVariants(ProjectMap $map, array $known): array
+  {
+    if (! array_key_exists('bgmVariants', $map->data)) {
+      return [];
+    }
+
+    $variants = $map->data['bgmVariants'];
+    $where = $map->mapId;
+
+    if (! is_array($variants) || ! array_is_list($variants)) {
+      return [Issue::error(
+        $where,
+        sprintf(
+          'Its bgmVariants block is %s, not an ordered list.',
+          is_array($variants) ? 'a keyed array' : get_debug_type($variants)
+        ),
+        'The engine reads an ordered list of variants; the first whose conditions hold selects the track.'
+      )];
+    }
+
+    $issues = [];
+    $unconditionalAt = null;
+    $shadowed = [];
+
+    foreach (array_values($variants) as $index => $variant) {
+      $label = sprintf('%s bgmVariants variant %d', $where, $index + 1);
+
+      if (! is_array($variant)) {
+        $issues[] = Issue::error(
+          $label,
+          sprintf('It is %s, not an array.', get_debug_type($variant)),
+          'The engine skips it silently; author a track and optional conditions.'
+        );
+
+        continue;
+      }
+
+      $track = $variant['track'] ?? null;
+      $playable = false;
+
+      if (! is_string($track)) {
+        $issues[] = Issue::error(
+          $label,
+          $track === null
+            ? 'It has no track.'
+            : sprintf('Its track is %s, not a track name.', get_debug_type($track)),
+          'The engine skips a variant without a track; pick one in the Inspector.'
+        );
+      } elseif (trim($track) === '') {
+        $issues[] = Issue::error(
+          $label,
+          'Its track is empty.',
+          'The engine skips a variant without a track; pick one in the Inspector.'
+        );
+      } else {
+        $playable = true;
+        $issues = [
+          ...$issues,
+          ...$this->checkReference(trim($track), 'bgm', 'track', $label, $known),
+        ];
+      }
+
+      $conditions = $variant['conditions'] ?? [];
+
+      if (! is_array($conditions) || ! array_is_list($conditions)) {
+        $issues[] = Issue::error(
+          $label,
+          sprintf(
+            'Its conditions are %s, not a list.',
+            is_array($conditions) ? 'a keyed array' : get_debug_type($conditions)
+          ),
+          'The engine skips the variant; use a list of shared world conditions, or none for an unconditional match.'
+        );
+
+        continue;
+      }
+
+      $issues = [...$issues, ...$this->checkConditions($conditions, $label, $known)];
+
+      if ($unconditionalAt !== null) {
+        $shadowed[] = $index + 1;
+
+        continue;
+      }
+
+      if ($playable && $conditions === []) {
+        $unconditionalAt = $index + 1;
+      }
+    }
+
+    if ($unconditionalAt !== null && $shadowed !== []) {
+      $issues[] = Issue::warning(
+        $where,
+        sprintf(
+          'bgmVariants variant %d always matches, so variant%s %s can never play.',
+          $unconditionalAt,
+          count($shadowed) === 1 ? '' : 's',
+          implode(', ', $shadowed)
+        ),
+        'The first matching variant wins. Move the unconditional variant last, or give it conditions.'
+      );
+    }
+
+    return $issues;
+  }
+
   protected function checkChestLoot(array $data, string $where, array $known): array
   {
     if (! array_key_exists('lootType', $data) && ! array_key_exists('loot', $data)) {
