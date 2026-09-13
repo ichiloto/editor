@@ -637,7 +637,8 @@ it('evaluates staged map members under their final basenames', function () {
     file_put_contents(
         $mapPath,
         "<?php\n\nrequire __DIR__ . '/' . str_replace('.map.php', '.event.php', basename(__FILE__));\n\n"
-            . "return str_ends_with(basename(__FILE__), '.map.php') ? "
+            . "return str_ends_with(basename(__FILE__), '.map.php')"
+            . " && in_array(basename(__DIR__), ['test-map', 'harbour'], true) ? "
             . var_export($mapText, true) . " : '';\n",
     );
 

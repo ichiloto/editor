@@ -116,7 +116,7 @@ final class PhpDataFile
             return self::evaluateIsolatedPaths($paths, $workingDirectory);
         }
 
-        [$evaluationPaths, $validationDirectory] = self::stageRuntimeNamedCopies($paths, $runtimePaths);
+        $evaluationPaths = self::stageRuntimeNamedCopies($paths, $runtimePaths);
 
         try {
             return self::evaluateIsolatedPaths($evaluationPaths, $workingDirectory);
@@ -132,18 +132,17 @@ final class PhpDataFile
             foreach ($evaluationPaths as $evaluationPath) {
                 @unlink($evaluationPath);
             }
-
-            @rmdir($validationDirectory);
         }
     }
 
     /**
-     * Copies a load unit into an isolated sibling directory while retaining
-     * the final member basenames and directory depth.
+     * Copies a load unit under its exact, still-unoccupied runtime paths.
+     * This is used only while a transaction owns a newly created destination
+     * directory, and the caller removes every preview copy before commit.
      *
      * @param list<string> $paths The staged source paths.
      * @param list<string> $runtimePaths The final runtime paths.
-     * @return array{0: list<string>, 1: string} Evaluation paths and their directory.
+     * @return list<string> The temporary runtime-named evaluation paths.
      */
     private static function stageRuntimeNamedCopies(array $paths, array $runtimePaths): array
     {
@@ -152,11 +151,9 @@ final class PhpDataFile
         }
 
         $runtimeDirectory = dirname($runtimePaths[0]);
-        $validationDirectory = dirname($runtimeDirectory) . DIRECTORY_SEPARATOR
-            . '.ichiloto-evaluation-' . bin2hex(random_bytes(8));
 
-        if (! @mkdir($validationDirectory, 0o700)) {
-            throw new RuntimeException('Unable to create an isolated authored-PHP evaluation directory.');
+        if (! is_dir($runtimeDirectory)) {
+            throw new RuntimeException('The runtime evaluation directory does not exist.');
         }
 
         $evaluationPaths = [];
@@ -169,7 +166,11 @@ final class PhpDataFile
                     throw new RuntimeException('Runtime evaluation files must share one directory.');
                 }
 
-                $evaluationPath = $validationDirectory . DIRECTORY_SEPARATOR . basename($runtimePath);
+                if (file_exists($runtimePath)) {
+                    throw new RuntimeException(sprintf('%s already exists and cannot be used as a validation preview.', basename($runtimePath)));
+                }
+
+                $evaluationPath = $runtimePath;
                 $contents = @file_get_contents($path);
                 $written = $contents === false ? false : @file_put_contents($evaluationPath, $contents);
 
@@ -184,12 +185,10 @@ final class PhpDataFile
                 @unlink($evaluationPath);
             }
 
-            @rmdir($validationDirectory);
-
             throw $throwable;
         }
 
-        return [$evaluationPaths, $validationDirectory];
+        return $evaluationPaths;
     }
 
     /**
