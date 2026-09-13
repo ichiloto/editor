@@ -78,6 +78,26 @@ it('separates direct authored stdout from the isolated result frame', function (
     }
 });
 
+it('keeps authored local variables out of the isolated runner protocol', function (): void {
+    $root = makeTemporaryProject();
+    $path = $root . '/assets/Data/runner-locals.php';
+    file_put_contents($path, <<<'PHP'
+    <?php
+
+    $payloads = 'authored helper state';
+    $fingerprints = ['not', 'protocol', 'state'];
+    $resultMarker = 'authored marker';
+
+    return ['ok' => true];
+    PHP);
+
+    try {
+        expect(PhpDataFile::evaluateIsolated($path, $root))->toBe(['ok' => true]);
+    } finally {
+        removeDirectoryRecursively($root);
+    }
+});
+
 it('refuses to rewrite a file whose data carries comments', function (): void {
     $root = makeTemporaryProject();
     $path = $root . '/assets/Data/states.php';

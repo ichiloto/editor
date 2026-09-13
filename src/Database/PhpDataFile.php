@@ -176,14 +176,21 @@ final class PhpDataFile
         $resultExitCode = 0;
 
         try {
-            $payloads = [];
-            $fingerprints = [];
-
-            foreach ($paths as $path) {
-                $payload = require $path;
-                $payloads[] = $payload;
-                $fingerprints[] = hash('sha256', serialize($payload));
-            }
+            // Authored files share one static closure activation, matching an
+            // ordinary ordered load unit. The array assignment happens only
+            // after every require completes, and no runner variables are
+            // imported into authored scope, so authored helper names cannot
+            // overwrite protocol state.
+            $authoredLoader = static function (): array {
+                return [
+        /*__ICHILOTO_AUTHORED_REQUIRES__*/
+                ];
+            };
+            $payloads = $authoredLoader();
+            $fingerprints = array_map(
+                static fn(mixed $payload): string => hash('sha256', serialize($payload)),
+                $payloads,
+            );
 
             $serializedResult = serialize([
                 'payloads' => $payloads,
@@ -191,8 +198,37 @@ final class PhpDataFile
             ]);
         } catch (Throwable $throwable) {
             $resultExitCode = 1;
+            $currentPath = '';
+            $failureFiles = [$throwable->getFile()];
+
+            foreach ($throwable->getTrace() as $frame) {
+                if (is_string($frame['file'] ?? null)) {
+                    $failureFiles[] = $frame['file'];
+                }
+            }
+
+            foreach ($failureFiles as $failureFile) {
+                foreach ($paths as $path) {
+                    if ($failureFile === $path
+                        || (realpath($failureFile) !== false && realpath($failureFile) === realpath($path))
+                    ) {
+                        $currentPath = $path;
+
+                        break 2;
+                    }
+                }
+            }
+
+            if ($currentPath === '') {
+                foreach ($paths as $path) {
+                    if (in_array($path, get_included_files(), true)) {
+                        $currentPath = $path;
+                    }
+                }
+            }
+
             $serializedResult = serialize([
-                'path' => $path ?? '',
+                'path' => $currentPath,
                 'reason' => $throwable->getMessage(),
             ]);
         }
@@ -202,6 +238,11 @@ final class PhpDataFile
         fwrite(STDOUT, $resultMarker . strlen($encodedResult) . ':' . $encodedResult);
         exit($resultExitCode);
         PHP;
+        $authoredRequires = implode("\n", array_map(
+            static fn(string $path): string => '                    require ' . var_export($path, true) . ',',
+            $paths,
+        ));
+        $runner = str_replace('/*__ICHILOTO_AUTHORED_REQUIRES__*/', $authoredRequires, $runner);
         $pipes = [];
         $resultMarker = 'ICHILOTO_EVAL_RESULT:' . bin2hex(random_bytes(16)) . ':';
         $arguments = [PHP_BINARY, '-r', substr($runner, strlen("<?php\n")), $workingDirectory ?? '', $autoload ?? '', $resultMarker, ...$paths];

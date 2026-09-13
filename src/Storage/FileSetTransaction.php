@@ -29,7 +29,7 @@ use Throwable;
  *  4. any failure restores every file already touched, and says so.
  *
  * A restoration that itself fails is reported as such rather than swallowed:
- * `FileSetTransactionFailure::$wasRolledBack` is false and the files left
+ * `FileSetTransactionFailure::$wasRolledBack` is false and the paths left
  * in an unknown state are named. Nothing the transaction created survives a
  * refusal -- no temporary file, and no folder it made.
  *
@@ -238,9 +238,16 @@ final class FileSetTransaction
      * @param callable(string ...$paths): void|null $backup Receives the existing files about to be replaced or removed.
      * @param callable(): void|null $validate Proves the fully installed state
      *   before it is accepted. A thrown exception rolls every target back.
+     * @param callable(): list<string>|null $afterRollback Restores related
+     *   filesystem state after the files have been put back. Any returned
+     *   paths are reported as unrestored rather than hidden.
      * @throws FileSetTransactionFailure When any target cannot be installed.
      */
-    public function commit(?callable $backup = null, ?callable $validate = null): void
+    public function commit(
+        ?callable $backup = null,
+        ?callable $validate = null,
+        ?callable $afterRollback = null,
+    ): void
     {
         if ($this->isFinished) {
             return;
@@ -283,7 +290,11 @@ final class FileSetTransaction
 
             if ($target['intent'] === self::INTENT_WRITE) {
                 if (! $this->files->move($this->staged[$path], $path)) {
-                    $this->undo($installed, sprintf('Unable to replace %s', basename($path)));
+                    $this->undo(
+                        $installed,
+                        sprintf('Unable to replace %s', basename($path)),
+                        afterRollback: $afterRollback,
+                    );
                 }
 
                 unset($this->staged[$path]);
@@ -298,7 +309,11 @@ final class FileSetTransaction
             }
 
             if (! $this->files->remove($path)) {
-                $this->undo($installed, sprintf('Unable to remove %s', basename($path)));
+                $this->undo(
+                    $installed,
+                    sprintf('Unable to remove %s', basename($path)),
+                    afterRollback: $afterRollback,
+                );
             }
 
             $installed[] = $target;
@@ -312,6 +327,7 @@ final class FileSetTransaction
                     $installed,
                     sprintf('The installed files failed validation (%s)', rtrim($validationFailure->getMessage(), '.')),
                     $validationFailure,
+                    $afterRollback,
                 );
             }
         }
@@ -341,7 +357,12 @@ final class FileSetTransaction
      * @param array<int, array{path: string, intent: string, contents: string|null}> $installed
      * @throws FileSetTransactionFailure Always.
      */
-    private function undo(array $installed, string $reason, ?Throwable $previous = null): never
+    private function undo(
+        array $installed,
+        string $reason,
+        ?Throwable $previous = null,
+        ?callable $afterRollback = null,
+    ): never
     {
         $unrestored = [];
 
@@ -395,6 +416,14 @@ final class FileSetTransaction
                 // file whose time could not be restored is not the file that
                 // was there, and saying the rollback succeeded would hide it.
                 $unrestored[] = $path;
+            }
+        }
+
+        if ($afterRollback !== null) {
+            foreach ($afterRollback() as $path) {
+                if (! in_array($path, $unrestored, true)) {
+                    $unrestored[] = $path;
+                }
             }
         }
 
@@ -459,7 +488,13 @@ final class FileSetTransaction
         $reservedDirectories[] = $common;
         $reservedDirectories = array_values(array_unique($reservedDirectories));
         sort($reservedDirectories, SORT_STRING);
-        $lockRoot = sys_get_temp_dir() . DIRECTORY_SEPARATOR . sprintf('ichiloto-editor-file-set-locks-%d', getmyuid());
+        // getmyuid() reports the owner of the entry script, not the process.
+        // The effective user keeps two processes run by the same account in
+        // one namespace even when their PHP entry points have different
+        // owners (a common Linux package-install layout). On platforms
+        // without POSIX, the system temp directory is already user-scoped.
+        $userNamespace = function_exists('posix_geteuid') ? (string) posix_geteuid() : 'current-user';
+        $lockRoot = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'ichiloto-editor-file-set-locks-' . $userNamespace;
 
         if (! is_dir($lockRoot) && ! @mkdir($lockRoot, 0o700, true) && ! is_dir($lockRoot)) {
             throw new FileSetTransactionFailure('Unable to create the file transaction lock directory');

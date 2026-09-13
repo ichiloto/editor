@@ -582,12 +582,24 @@ it('refuses and rolls back a move that only validates while an old source member
             . ";\n",
     );
     $map = authoredMap($root);
+    chmod($map->directory, 0o710);
+    touch($map->directory, time() - 3600, time() - 7200);
+    clearstatcache(true, $map->directory);
+    $directoryBefore = stat($map->directory);
     $before = tripletState($map);
 
     expect(fn() => $map->moveTo('district/harbour'))
         ->toThrow(RuntimeException::class, 'harbour.map.php does not evaluate at district/harbour');
+    clearstatcache(true, $map->directory);
+    $directoryAfter = stat($map->directory);
     expect(is_dir($root . '/assets/Maps/district'))->toBeFalse()
-        ->and(tripletState($map))->toBe($before, 'the source triplet was restored byte-for-byte and at the same times');
+        ->and(tripletState($map))->toBe($before, 'the source triplet was restored byte-for-byte and at the same times')
+        ->and(is_array($directoryBefore))->toBeTrue()
+        ->and(is_array($directoryAfter))->toBeTrue()
+        ->and(((int) $directoryAfter['mode']) & 0o7777)->toBe(((int) $directoryBefore['mode']) & 0o7777)
+        ->and((int) $directoryAfter['uid'])->toBe((int) $directoryBefore['uid'])
+        ->and((int) $directoryAfter['gid'])->toBe((int) $directoryBefore['gid'])
+        ->and((int) $directoryAfter['mtime'])->toBe((int) $directoryBefore['mtime']);
 });
 
 it('validates a move after the obsolete source directory has left the runtime view', function () {
@@ -776,6 +788,36 @@ it('moves preserved map data containing an object without reconstructing it in t
     expect($moved->mapId)->toBe('district/harbour')
         ->and($reloaded->getEditableData()['opaque'])->toBeInstanceOf(stdClass::class)
         ->and($reloaded->getEditableData()['opaque']->label)->toBe('preserved');
+});
+
+it('fingerprints the final shared object state after the complete map load unit', function () {
+    $root = authoredMapProject();
+    $dataPath = $root . '/assets/Maps/test-map/test-map.data.php';
+    $mapPath = $root . '/assets/Maps/test-map/test-map.map.php';
+    $portableData = str_replace(
+        "\$watchScript = require dirname(__DIR__, 2) . '/Events/harbour-watch.php';\n\n",
+        "\$shared = (object) ['label' => 'before-grid'];\n\n",
+        (string) file_get_contents($dataPath),
+    );
+    $portableData = str_replace("'script' => \$watchScript,", "'script' => [],", $portableData);
+    $portableData = str_replace("'script' => require dirname(__DIR__, 2) . '/Events/harbour-watch.php',", "'script' => [],", $portableData);
+    $portableData = str_replace(
+        "  'triggers' => [],\n",
+        "  'opaque' => \$shared,\n  'triggers' => [],\n",
+        $portableData,
+    );
+    file_put_contents($dataPath, $portableData);
+    $mapText = require $mapPath;
+    file_put_contents(
+        $mapPath,
+        "<?php\n\n\$shared->label = 'after-grid';\n\nreturn " . var_export($mapText, true) . ";\n",
+    );
+
+    $map = authoredMap($root);
+    $moved = $map->moveTo('district/harbour');
+
+    expect($moved->getEditableData()['opaque']->label)->toBe('after-grid')
+        ->and(ProjectMap::fromDirectory($root . '/assets/Maps', $moved->directory)->getEditableData()['opaque']->label)->toBe('after-grid');
 });
 
 // -- Editor-level flows -------------------------------------------------------

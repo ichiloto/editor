@@ -1708,6 +1708,9 @@ final class ProjectMap
                 $movedMapPath => array_map($this->buildStyledLine(...), $this->tileCells),
                 $movedEventPath => array_map($this->buildPlainLine(...), $this->eventCells),
             ];
+            $sourceDirectoryMetadata = self::captureDirectoryMetadata($previousDirectory);
+            $removedSourceDirectories = [];
+            $directoryRestorationFailures = [];
 
             // Validation runs only after the destination triplet has its
             // exact runtime names and every source member is gone. That is
@@ -1722,8 +1725,15 @@ final class ProjectMap
                 $newRelativeId,
                 $previousDirectory,
                 $mapsRoot,
+                $sourceDirectoryMetadata,
+                &$removedSourceDirectories,
+                &$directoryRestorationFailures,
             ): void {
-                $removedSourceDirectories = self::removeEmptyDirectoryChain($previousDirectory, $mapsRoot);
+                $removedSourceDirectories = self::removeEmptyDirectoryChain(
+                    $previousDirectory,
+                    $mapsRoot,
+                    $sourceDirectoryMetadata,
+                );
 
                 try {
                     try {
@@ -1778,10 +1788,21 @@ final class ProjectMap
                     // The file rollback needs the old directories in place.
                     // Recreate only directories this validation removed; the
                     // transaction then restores each original source member.
-                    self::restoreDirectories($removedSourceDirectories);
+                    $directoryRestorationFailures = self::recreateDirectories($removedSourceDirectories);
 
                     throw $validationFailure;
                 }
+            }, afterRollback: static function () use (
+                &$removedSourceDirectories,
+                &$directoryRestorationFailures,
+            ): array {
+                return array_values(array_unique([
+                    ...$directoryRestorationFailures,
+                    ...self::restoreDirectoryMetadata(
+                        $removedSourceDirectories,
+                        $directoryRestorationFailures,
+                    ),
+                ]));
             });
         } catch (\Throwable $throwable) {
             if ($throwable instanceof FileSetTransactionFailure && ! $throwable->wasRolledBack) {
@@ -1903,45 +1924,172 @@ final class ProjectMap
     /**
      * Removes the empty source directory and its empty parents for a move.
      *
-     * The returned leaf-first list is enough to recreate exactly those
-     * directories before a refused installed-state validation is rolled back.
+     * The returned leaf-first list carries the directory metadata needed to
+     * recreate exactly those directories before a refused installed-state
+     * validation is rolled back. The whole candidate chain is inspected
+     * before its leaf is removed, so removing a child cannot change the
+     * parent timestamp before it is captured.
      *
-     * @return list<string> The directories that were removed, leaf first.
+     * @param array{path: string, mode: int, owner: int, group: int, modifiedAt: int, accessedAt: int} $sourceDirectoryMetadata Metadata captured before source members are removed.
+     * @return list<array{path: string, mode: int, owner: int, group: int, modifiedAt: int, accessedAt: int}> The removed directories, leaf first.
      */
-    private static function removeEmptyDirectoryChain(string $directory, string $mapsRoot): array
-    {
-        $removed = [];
+    private static function removeEmptyDirectoryChain(
+        string $directory,
+        string $mapsRoot,
+        array $sourceDirectoryMetadata,
+    ): array {
+        $candidates = [];
         $mapsRoot = rtrim($mapsRoot, DIRECTORY_SEPARATOR);
         $directory = rtrim($directory, DIRECTORY_SEPARATOR);
+        $child = null;
 
         while ($directory !== '' && $directory !== $mapsRoot && str_starts_with($directory, $mapsRoot . DIRECTORY_SEPARATOR)) {
-            if (! is_dir($directory) || self::directoryHasContents($directory) || ! @rmdir($directory)) {
-                return $removed;
+            $metadata = $directory === $sourceDirectoryMetadata['path']
+                ? $sourceDirectoryMetadata
+                : self::captureDirectoryMetadata($directory);
+            $entries = is_dir($directory) ? scandir($directory) : false;
+
+            if (! is_array($entries)) {
+                break;
             }
 
-            $removed[] = $directory;
+            $entries = array_values(array_diff($entries, ['.', '..']));
+            $expectedEntries = $child === null ? [] : [basename($child)];
+
+            if ($entries !== $expectedEntries) {
+                break;
+            }
+
+            $candidates[] = $metadata;
+            $child = $directory;
             $directory = dirname($directory);
+        }
+
+        $removed = [];
+
+        foreach ($candidates as $candidate) {
+            if (! @rmdir($candidate['path'])) {
+                break;
+            }
+
+            $removed[] = $candidate;
         }
 
         return $removed;
     }
 
     /**
+     * Captures the filesystem metadata needed for an exact directory
+     * rollback before any member or child is removed.
+     *
+     * @return array{path: string, mode: int, owner: int, group: int, modifiedAt: int, accessedAt: int}
+     */
+    private static function captureDirectoryMetadata(string $directory): array
+    {
+        $metadata = @stat($directory);
+
+        if (! is_array($metadata)) {
+            throw new RuntimeException(sprintf('Unable to capture the directory metadata for %s.', $directory));
+        }
+
+        return [
+            'path' => $directory,
+            'mode' => ((int) $metadata['mode']) & 0o7777,
+            'owner' => (int) $metadata['uid'],
+            'group' => (int) $metadata['gid'],
+            'modifiedAt' => (int) $metadata['mtime'],
+            'accessedAt' => (int) $metadata['atime'],
+        ];
+    }
+
+    /**
      * Recreates a removed directory chain, parents first, for file rollback.
      *
-     * A failure remains visible to FileSetTransaction when it tries to put
-     * the original members back, so rollback diagnostics still name every
-     * source file whose restoration could not complete.
+     * Directories are deliberately private while files are restored. Their
+     * authored metadata is applied only after file rollback, because those
+     * writes change directory timestamps.
      *
-     * @param list<string> $directories Leaf-first removed directories.
+     * @param list<array{path: string, mode: int, owner: int, group: int, modifiedAt: int, accessedAt: int}> $directories Leaf-first removed directories.
+     * @return list<string> Paths that could not be recreated.
      */
-    private static function restoreDirectories(array $directories): void
+    private static function recreateDirectories(array $directories): array
     {
-        foreach (array_reverse($directories) as $directory) {
-            if (! is_dir($directory)) {
-                @mkdir($directory, 0o777);
+        $failed = [];
+        $blocked = false;
+
+        foreach (array_reverse($directories) as $metadata) {
+            $directory = $metadata['path'];
+
+            if ($blocked || is_dir($directory) || ! @mkdir($directory, 0o700)) {
+                $failed[] = $directory;
+                $blocked = true;
             }
         }
+
+        return $failed;
+    }
+
+    /**
+     * Restores and verifies the metadata of directories recreated for a
+     * refused move. Leaf-first order makes each parent's final timestamp the
+     * one it had before its children were removed and restored.
+     *
+     * @param list<array{path: string, mode: int, owner: int, group: int, modifiedAt: int, accessedAt: int}> $directories Leaf-first removed directories.
+     * @param list<string> $excluded Paths now owned by someone else, which
+     *   must be reported without changing their metadata.
+     * @return list<string> Paths whose metadata could not be restored exactly.
+     */
+    private static function restoreDirectoryMetadata(array $directories, array $excluded = []): array
+    {
+        $failed = [];
+
+        foreach ($directories as $metadata) {
+            $directory = $metadata['path'];
+
+            if (in_array($directory, $excluded, true)) {
+                $failed[] = $directory;
+
+                continue;
+            }
+
+            $restored = is_dir($directory);
+
+            if ($restored && PHP_OS_FAMILY !== 'Windows') {
+                $current = @stat($directory);
+
+                if (! is_array($current)) {
+                    $restored = false;
+                } else {
+                    if ((int) $current['uid'] !== $metadata['owner']) {
+                        $restored = @chown($directory, $metadata['owner']);
+                    }
+
+                    if ((int) $current['gid'] !== $metadata['group']) {
+                        $restored = @chgrp($directory, $metadata['group']) && $restored;
+                    }
+                }
+            }
+
+            if ($restored) {
+                $restored = @chmod($directory, $metadata['mode'])
+                    && @touch($directory, $metadata['modifiedAt'], $metadata['accessedAt']);
+            }
+
+            clearstatcache(true, $directory);
+            $actual = @stat($directory);
+            $restored = $restored
+                && is_array($actual)
+                && (((int) $actual['mode']) & 0o7777) === $metadata['mode']
+                && (int) $actual['mtime'] === $metadata['modifiedAt']
+                && (PHP_OS_FAMILY === 'Windows'
+                    || ((int) $actual['uid'] === $metadata['owner'] && (int) $actual['gid'] === $metadata['group']));
+
+            if (! $restored) {
+                $failed[] = $directory;
+            }
+        }
+
+        return $failed;
     }
 
     /**
