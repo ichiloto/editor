@@ -8,5 +8,6 @@ Everything here describes the editor as it exists today.
 | [guides/](guides/README.md) | Task-oriented walkthroughs, in reading order: a first map, an NPC, a quest, a Common Event, a skit, a cinematic, a summon. |
 | [roadmap.md](roadmap.md) | The development record: the original diagnosis, each shipped phase and gate, and what was deliberately deferred with the reason. |
 | [website/](website/README.md) | Draft introduction pages staged for the website repository — copies, not canon; the manual stays the covered reference. |
+| [0.5.1 release notes](releases/0.5.1-notes.md) | PHP 8.4 compatibility, map-save safety, authoring improvements, and upgrade guidance. |
 
 The repository's own [README](../README.md) is the front door; [AGENTS.md](../AGENTS.md) carries the engineering rules for anyone (or anything) changing the editor.
