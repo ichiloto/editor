@@ -69,7 +69,7 @@ the row after you commit it — what you see is what was stored.
 
 A quest nobody offers never starts. Put it on an event:
 
-1. `Esc` back to the map, and switch the canvas to Event mode with `^`.
+1. `Esc` back to the map, and switch the canvas to Event mode with `e`.
 2. Place or select the marker for the character giving the quest (see
    [Add an NPC](add-an-npc.md)).
 3. In the `Inspector`, set the event's `sets` entry to

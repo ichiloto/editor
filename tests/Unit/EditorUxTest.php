@@ -27,6 +27,7 @@ it('paints ! on the canvas instead of opening the Database', function () {
   setEditorProperty($editor, 'focusedPane', 'canvas');
   setEditorProperty($editor, 'cursorX', 1);
   setEditorProperty($editor, 'cursorY', 1);
+  callEditorMethod($editor, 'dispatchInput', 'i'); // Paint mode.
   callEditorMethod($editor, 'dispatchInput', '!');
 
   /** @var ProjectWorkspace $workspace */
@@ -42,6 +43,7 @@ it('paints h, j, k, and l as glyphs — the movement aliases are gone', function
 
   /** @var ProjectWorkspace $workspace */
   $workspace = getEditorProperty($editor, 'workspace');
+  callEditorMethod($editor, 'dispatchInput', 'i'); // Paint mode.
 
   foreach (['h', 'j', 'k', 'l'] as $column => $glyph) {
     setEditorProperty($editor, 'cursorX', $column);

@@ -226,6 +226,7 @@ it('paints a whole brush footprint as one undoable dab', function () {
     $before = tileRows($editor);
     setEditorProperty($editor, 'canvasBrushSize', 3);
     placeCursor($editor, 5, 2);
+    callEditorMethod($editor, 'dispatchInput', 'i');
     callEditorMethod($editor, 'dispatchInput', 'W');
 
     /** @var CommandHistory $history */
@@ -240,7 +241,7 @@ it('paints a whole brush footprint as one undoable dab', function () {
     expect(tileRows($editor))->toBe($before);
 });
 
-it('selects, copies, and stamps a region — each paste one undo step', function () {
+it('selects, copies, and stamps a region - each paste one undo step', function () {
     $editor = canvasEditor();
     $before = tileRows($editor);
 
@@ -337,6 +338,7 @@ it('loads a typed glyph into the brush without painting under a shape tool', fun
     $before = tileRows($editor);
     setEditorProperty($editor, 'canvasTool', CanvasTool::LINE);
     placeCursor($editor, 5, 2);
+    callEditorMethod($editor, 'dispatchInput', 'i');
     callEditorMethod($editor, 'dispatchInput', 'Q');
 
     /** @var CommandHistory $history */
@@ -351,6 +353,251 @@ it('loads a typed glyph into the brush without painting under a shape tool', fun
     callEditorMethod($editor, 'dispatchInput', 'Q');
 
     expect(tileRows($editor)[2][5])->toBe('Q');
+});
+
+it('paints every reserved glyph in Paint mode instead of running commands', function () {
+    $editor = canvasEditor();
+    setEditorProperty($editor, 'canvasTool', CanvasTool::BRUSH);
+    placeCursor($editor, 4, 2);
+
+    callEditorMethod($editor, 'dispatchInput', 'i');
+
+    foreach (['?', '%', '^', '@'] as $index => $glyph) {
+        placeCursor($editor, 4 + $index, 2);
+        callEditorMethod($editor, 'dispatchInput', $glyph);
+        expect(tileRows($editor)[2][4 + $index])->toBe($glyph);
+    }
+
+    expect(getEditorProperty($editor, 'isHelpOpen'))->toBeFalse()
+        ->and(getEditorProperty($editor, 'isCharacterMapOpen'))->toBeFalse()
+        ->and(getEditorProperty($editor, 'editingMode'))->toBe('map');
+});
+
+it('leaves Paint mode with Esc and treats letters as commands again', function () {
+    $editor = canvasEditor();
+    callEditorMethod($editor, 'dispatchInput', 'i');
+
+    expect(getEditorProperty($editor, 'inputMode'))->toBe('paint');
+
+    callEditorMethod($editor, 'dispatchInput', "\033");
+
+    expect(getEditorProperty($editor, 'inputMode'))->toBe('normal');
+
+    // In Normal mode, letters command: b selects the brush, e switches layer.
+    setEditorProperty($editor, 'canvasTool', CanvasTool::LINE);
+    callEditorMethod($editor, 'dispatchInput', 'b');
+    expect(getEditorProperty($editor, 'canvasTool'))->toBe(CanvasTool::BRUSH);
+
+    callEditorMethod($editor, 'dispatchInput', 'e');
+    expect(getEditorProperty($editor, 'editingMode'))->toBe('event');
+
+    callEditorMethod($editor, 'dispatchInput', 'm');
+    expect(getEditorProperty($editor, 'editingMode'))->toBe('map');
+
+    callEditorMethod($editor, 'dispatchInput', 'c');
+    expect(getEditorProperty($editor, 'isCharacterMapOpen'))->toBeTrue();
+});
+
+it('never paints typed glyphs in Normal mode', function () {
+    $editor = canvasEditor();
+    $before = tileRows($editor);
+    placeCursor($editor, 5, 2);
+
+    callEditorMethod($editor, 'dispatchInput', 'Q');
+
+    expect(tileRows($editor))->toBe($before)
+        ->and(getEditorProperty($editor, 'statusMessage'))->toContain('Normal mode');
+});
+
+it('opens help with ? in Normal mode and paints ? in Paint mode', function () {
+    $editor = canvasEditor();
+
+    callEditorMethod($editor, 'dispatchInput', '?');
+    expect(getEditorProperty($editor, 'isHelpOpen'))->toBeTrue();
+
+    callEditorMethod($editor, 'dispatchInput', "\033");
+    callEditorMethod($editor, 'dispatchInput', 'i');
+    placeCursor($editor, 5, 2);
+    callEditorMethod($editor, 'dispatchInput', '?');
+
+    expect(tileRows($editor)[2][5])->toBe('?')
+        ->and(getEditorProperty($editor, 'isHelpOpen'))->toBeFalse();
+});
+
+it('paints with the brush colour and undoes glyph and colour together', function () {
+    $editor = canvasEditor();
+    /** @var ProjectWorkspace $workspace */
+    $workspace = getEditorProperty($editor, 'workspace');
+    $map = $workspace->getMapByIndex(0);
+    placeCursor($editor, 5, 2);
+
+    setEditorProperty($editor, 'selectedPaintColor', 'bright-cyan');
+    callEditorMethod($editor, 'dispatchInput', 'i');
+    callEditorMethod($editor, 'dispatchInput', '?');
+
+    expect($map->getTileSymbol(5, 2))->toBe('?')
+        ->and($map->getTileColor(5, 2))->toBe('bright-cyan')
+        ->and($map->getTileCellStyle(5, 2))->toBe(['prefix' => '<fg=bright-cyan>', 'suffix' => '</>']);
+
+    callEditorMethod($editor, 'dispatchInput', "\x1a");
+
+    expect($map->getTileSymbol(5, 2))->toBe(' ')
+        ->and($map->getTileColor(5, 2))->toBeNull();
+});
+
+it('keeps a cell\'s authored styling byte-for-byte when the brush has no colour directive', function () {
+    $editor = canvasEditor();
+    /** @var ProjectWorkspace $workspace */
+    $workspace = getEditorProperty($editor, 'workspace');
+    $map = $workspace->getMapByIndex(0);
+    $map->setTileCell(5, 2, '~', '<fg=yellow;options=bold>', '</>');
+    placeCursor($editor, 5, 2);
+
+    // Default brush: keep the cell colour, exotic options included.
+    callEditorMethod($editor, 'dispatchInput', 'i');
+    callEditorMethod($editor, 'dispatchInput', 'Q');
+
+    expect($map->getTileSymbol(5, 2))->toBe('Q')
+        ->and($map->getTileCellStyle(5, 2))->toBe(['prefix' => '<fg=yellow;options=bold>', 'suffix' => '</>']);
+
+    // Undo restores the original symbol with the original bytes.
+    callEditorMethod($editor, 'dispatchInput', "\x1a");
+
+    expect($map->getTileSymbol(5, 2))->toBe('~')
+        ->and($map->getTileCellStyle(5, 2))->toBe(['prefix' => '<fg=yellow;options=bold>', 'suffix' => '</>']);
+});
+
+it('never leaves styling behind an erased cell', function () {
+    $editor = canvasEditor();
+    /** @var ProjectWorkspace $workspace */
+    $workspace = getEditorProperty($editor, 'workspace');
+    $map = $workspace->getMapByIndex(0);
+    $map->setTileCell(5, 2, 'i', '<fg=bright-cyan>', '</>');
+    placeCursor($editor, 5, 2);
+    setEditorProperty($editor, 'selectedPaintColor', 'red');
+
+    callEditorMethod($editor, 'dispatchInput', 'i');
+    callEditorMethod($editor, 'dispatchInput', "\177"); // Backspace erases.
+
+    expect($map->getTileSymbol(5, 2))->toBe(' ')
+        ->and($map->getTileCellStyle(5, 2))->toBe(['prefix' => '', 'suffix' => '']);
+});
+
+it('picks up the colour with the glyph through the eyedropper', function () {
+    $editor = canvasEditor();
+    /** @var ProjectWorkspace $workspace */
+    $workspace = getEditorProperty($editor, 'workspace');
+    $map = $workspace->getMapByIndex(0);
+    $map->setTileCell(5, 2, 'm', '<fg=yellow>', '</>');
+    placeCursor($editor, 5, 2);
+
+    callEditorMethod($editor, 'dispatchInput', 'k');
+
+    expect(getEditorProperty($editor, 'selectedPaintSymbol'))->toBe('m')
+        ->and(getEditorProperty($editor, 'selectedPaintColor'))->toBe('yellow');
+
+    // An uncoloured cell loads an uncoloured brush.
+    placeCursor($editor, 6, 2);
+    callEditorMethod($editor, 'dispatchInput', 'k');
+
+    expect(getEditorProperty($editor, 'selectedPaintColor'))->toBe('');
+});
+
+it('recolours the cell under the cursor from the colour picker', function () {
+    $editor = canvasEditor();
+    /** @var ProjectWorkspace $workspace */
+    $workspace = getEditorProperty($editor, 'workspace');
+    $map = $workspace->getMapByIndex(0);
+    $map->setTileSymbol(5, 2, 'i');
+    placeCursor($editor, 5, 2);
+
+    callEditorMethod($editor, 'dispatchInput', 'o');
+
+    expect(getEditorProperty($editor, 'isColorPickerOpen'))->toBeTrue();
+
+    // Down twice from 'Keep cell colour' lands on the first ANSI colour.
+    callEditorMethod($editor, 'dispatchInput', "\033[B");
+    callEditorMethod($editor, 'dispatchInput', "\033[B");
+    callEditorMethod($editor, 'dispatchInput', "\n");
+
+    expect(getEditorProperty($editor, 'isColorPickerOpen'))->toBeFalse()
+        ->and(getEditorProperty($editor, 'selectedPaintColor'))->toBe('black')
+        ->and($map->getTileSymbol(5, 2))->toBe('i')
+        ->and($map->getTileColor(5, 2))->toBe('black');
+});
+
+it('refuses the colour picker on the event layer and in Paint mode', function () {
+    $editor = canvasEditor();
+    callEditorMethod($editor, 'dispatchInput', 'e');
+    callEditorMethod($editor, 'dispatchInput', 'o');
+
+    expect(getEditorProperty($editor, 'isColorPickerOpen'))->toBeFalse()
+        ->and(getEditorProperty($editor, 'statusMessage'))->toContain('Map layer');
+
+    callEditorMethod($editor, 'dispatchInput', 'm');
+    callEditorMethod($editor, 'dispatchInput', 'i');
+    placeCursor($editor, 5, 2);
+    callEditorMethod($editor, 'dispatchInput', 'o');
+
+    // In Paint mode, o is a glyph.
+    expect(getEditorProperty($editor, 'isColorPickerOpen'))->toBeFalse()
+        ->and(tileRows($editor)[2][5])->toBe('o');
+});
+
+it('exits NPC mode with Esc, cancelling a pending move first', function () {
+    $editor = canvasEditor();
+    callEditorMethod($editor, 'dispatchInput', "\033OR"); // F3: NPC mode.
+
+    expect(getEditorProperty($editor, 'editingMode'))->toBe('npc');
+
+    // A pending move consumes the first Esc; the mode survives it.
+    setEditorProperty($editor, 'npcMoveInProgress', ['mapIndex' => 0, 'npcIndex' => 0]);
+    callEditorMethod($editor, 'dispatchInput', "\033");
+
+    expect(getEditorProperty($editor, 'npcMoveInProgress'))->toBeNull()
+        ->and(getEditorProperty($editor, 'editingMode'))->toBe('npc');
+
+    // With nothing pending, Esc walks out to the Map layer.
+    callEditorMethod($editor, 'dispatchInput', "\033");
+
+    expect(getEditorProperty($editor, 'editingMode'))->toBe('map');
+});
+
+it('drops Paint mode when focus leaves the canvas or NPC mode begins', function () {
+    $editor = canvasEditor();
+    callEditorMethod($editor, 'dispatchInput', 'i');
+    callEditorMethod($editor, 'setFocusedPane', 'assets');
+
+    expect(getEditorProperty($editor, 'inputMode'))->toBe('normal');
+
+    callEditorMethod($editor, 'setFocusedPane', 'canvas');
+    callEditorMethod($editor, 'dispatchInput', 'i');
+    callEditorMethod($editor, 'dispatchInput', "\033OR"); // F3: NPC mode.
+
+    expect(getEditorProperty($editor, 'inputMode'))->toBe('normal')
+        ->and(getEditorProperty($editor, 'editingMode'))->toBe('npc');
+});
+
+it('always offers the reserved and project vocabulary glyphs in the character map', function () {
+    $projectRoot = makeTemporaryProject();
+    file_put_contents(
+        $projectRoot . '/assets/Maps/collisions.php',
+        "<?php\n\nreturn ['?' => 6, 'z' => 1, ' ' => 0];\n",
+    );
+
+    $editor = createEditorForTesting($projectRoot);
+    setEditorProperty($editor, 'workspace', ProjectWorkspace::fromProject($projectRoot));
+    setEditorProperty($editor, 'lastTerminalSize', ['width' => 120, 'height' => 40]);
+    setEditorProperty($editor, 'isRunning', true);
+    setEditorProperty($editor, 'focusedPane', 'canvas');
+
+    $palette = callEditorMethod($editor, 'getCharacterPalette');
+
+    // Stolen shortcut glyphs and dictionary vocabulary are always pickable,
+    // whether or not the current map still contains them.
+    foreach (['?', '%', '^', '@', 'z'] as $glyph) {
+        expect($palette)->toContain($glyph);
+    }
 });
 
 it('leaves the canvas shortcuts alone when another pane has focus', function () {
@@ -374,6 +621,8 @@ it('documents every canvas tool binding in the help overlay', function () {
 
 it('scrolls the help overlay now that the binding table outgrew a short screen', function () {
     $editor = canvasEditor();
+    // The canvas owns ? for painting, so help opens from another pane.
+    setEditorProperty($editor, 'focusedPane', 'assets');
     callEditorMethod($editor, 'dispatchInput', '?');
 
     expect(getEditorProperty($editor, 'isHelpOpen'))->toBeTrue()
@@ -398,4 +647,27 @@ it('scrolls the help overlay now that the binding table outgrew a short screen',
     callEditorMethod($editor, 'dispatchInput', "\033");
 
     expect(getEditorProperty($editor, 'isHelpOpen'))->toBeFalse();
+});
+
+it('renders authored cell colours in the canvas preview', function () {
+    $editor = canvasEditor();
+    /** @var ProjectWorkspace $workspace */
+    $workspace = getEditorProperty($editor, 'workspace');
+    $map = $workspace->getMapByIndex(0);
+    $map->setTileCell(2, 2, ';', '<fg=bright-green>', '</>');
+    $map->setTileCell(3, 2, '~', '<fg=#b87333>', '</>');
+
+    $lines = $map->renderPreview(12, 5);
+
+    // Named colours use the 4-bit palette; hex values use truecolor. Both
+    // reset immediately so neighbouring cells stay untouched.
+    expect($lines[2])->toContain("\033[92m;\033[0m")
+        ->and($lines[2])->toContain("\033[38;2;184;115;51m~\033[0m");
+
+    // An event marker over a coloured tile stays plain authoring geometry.
+    $map->setEventSymbol(2, 2, 'A');
+    $lines = $map->renderPreview(12, 5);
+
+    expect($lines[2])->not->toContain("\033[92m")
+        ->and($lines[2])->toContain('A');
 });

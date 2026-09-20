@@ -16,6 +16,7 @@ use Ichiloto\Editor\Storage\FilesystemFileSetOperations;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
 use RuntimeException;
+use Throwable;
 
 /**
  * Represents the currently opened Ichiloto project in the editor.
@@ -495,5 +496,49 @@ final readonly class ProjectWorkspace
     private static function humanizeBaseName(string $baseName): string
     {
         return ucwords(str_replace('-', ' ', $baseName));
+    }
+
+    /**
+     * Returns the glyphs the project's collision dictionary gives meaning.
+     *
+     * `assets/Maps/collisions.php` is the project's authored glyph
+     * vocabulary: every key in it is a symbol the game understands, so every
+     * one of them belongs in the character map whether or not the current
+     * map already uses it. A missing or invalid dictionary yields an empty
+     * vocabulary rather than an error, matching preview loading.
+     *
+     * @return string[]
+     */
+    public function getCollisionGlyphs(): array
+    {
+        $dictionaryFile = rtrim($this->projectRoot, DIRECTORY_SEPARATOR)
+            . DIRECTORY_SEPARATOR . 'assets' . DIRECTORY_SEPARATOR . 'Maps' . DIRECTORY_SEPARATOR . 'collisions.php';
+
+        if (! is_file($dictionaryFile)) {
+            return [];
+        }
+
+        try {
+            $dictionary = (static fn(string $file): mixed => require $file)($dictionaryFile);
+        } catch (Throwable) {
+            return [];
+        }
+
+        if (! is_array($dictionary)) {
+            return [];
+        }
+
+        $glyphs = [];
+
+        foreach (array_keys($dictionary) as $key) {
+            // PHP normalizes digit-only string keys such as "8" to integers.
+            $glyph = (string) $key;
+
+            if ($glyph !== '' && trim($glyph) !== '') {
+                $glyphs[$glyph] = $glyph;
+            }
+        }
+
+        return array_values($glyphs);
     }
 }

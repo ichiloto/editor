@@ -4,7 +4,7 @@ This document is a living guide to the Ichiloto editor.
 
 It tracks the editor as it exists today, including current keybindings, panel
 workflows, Database categories, and known limits. Update this file whenever
-the editor gains new tools, panels, controls, or shortcuts — a test in
+the editor gains new tools, panels, controls, or shortcuts - a test in
 `tests/Unit/ManualCoverageTest.php` fails if a registered keybinding is not
 documented here.
 
@@ -12,7 +12,7 @@ For task-oriented walkthroughs, start with [docs/guides/README.md](guides/README
 
 ## Starting the Editor
 
-The editor opens one Ichiloto project — a directory containing `ichiloto.json`.
+The editor opens one Ichiloto project - a directory containing `ichiloto.json`.
 Run it from inside the project:
 
 ```bash
@@ -35,7 +35,7 @@ Options:
 
 The editor requires a terminal at least 80 columns wide. It runs on the
 alternate screen, so your scrollback is untouched, and it restores your
-terminal settings on exit — including after a crash.
+terminal settings on exit - including after a crash.
 
 Current behavior: the editor never writes to your project until you ask it to.
 Every edit lives in memory until a save, and every save path is listed under
@@ -65,11 +65,11 @@ is what the code draws rather than a sketch of it:
  │                              │ │                            │ │     Background Music: (None)   │
  │                              │ │                            │ │     Music Variants · None      │
  │                              │ │                            │ │   Encounters · off             │
- └─/:Filter  Del:Delete─────────┘ └─%:Map  ^:Event  @:Chars────┘ └─Enter:Edit─────────────────────┘
+ └─/:Filter  Del:Delete─────────┘ └─i:Paint  m:Map  e:Event────┘ └─Enter:Edit─────────────────────┘
  ┌─Status─────────────────────────────────────────────────────────────────────────────────────────┐
  │ Selected map: test-map | Focus: Assets | Mode: Map | Tool: Brush 1                             │
  │ Cursor: (0, 0) | Viewport: (0, 0) | Ready.                                                     │
- └─?:Help  Ctrl+P:Palette  Tab:Pane  Enter:Edit  Ctrl+S:Save  Ctrl+A:Save All  Ctrl+Z:Undo  Ctrl+Y┘
+ └─Ctrl+P:Palette  Tab:Pane  Ctrl+S:Save  Ctrl+A:Save All  Ctrl+Z:Undo  Ctrl+Y:Redo  Ctrl+Q:Quit──┘
 ```
 
 - `Assets` lists every map discovered under `assets/Maps`.
@@ -80,7 +80,7 @@ is what the code draws rather than a sketch of it:
   message.
 
 Each panel writes its own keys into its bottom border, and shortens them on a
-narrow terminal rather than cutting one in half — so what a panel offers is
+narrow terminal rather than cutting one in half - so what a panel offers is
 always on the panel. `?` lists everything at any width.
 
 The header's second line is a permanent hint; the header's first line shows the
@@ -106,17 +106,19 @@ Every selection list wraps: `Down` on the last row selects the first, and
 `Up` on the first row selects the last. This holds for the asset list, the
 Database categories, entries, settings rows and animation frames, dialog and
 picker lists, the command palette, option-value cycling, and the Cutscenes
-lists. Map cursors, scrolling panes and text editing keep ordinary bounds —
+lists. Map cursors, scrolling panes and text editing keep ordinary bounds -
 wrapping is for choosing from a list, not for walking a canvas.
 
 ## Global Shortcuts
 
 These work from any panel. They are control bytes on purpose: no shortcut
-steals a glyph you might want to paint on a map.
+steals a glyph you might want to paint on a map. Printable keys carry meaning
+only in the canvas's Normal mode (see [Canvas Panel](#canvas-panel)); in
+Paint mode every printable key, `?` included, paints its glyph.
 
 | Key | Action |
 | --- | --- |
-| `?` | Toggle the help overlay |
+| `?` | Toggle the help overlay (in Paint mode, `?` paints like any glyph) |
 | `Ctrl+P` | Open the command palette |
 | `Ctrl+D` | Open or close the Database screen |
 | `F2` | Open or close the Database screen (same as `Ctrl+D`) |
@@ -177,27 +179,80 @@ asks first and defaults to Cancel.
 
 ## Canvas Panel
 
-The canvas previews the selected map and is where you paint.
+The canvas previews the selected map and is where you paint. It is modal, in
+the vim tradition: in **Normal mode** letters are commands, and in **Paint
+mode** every printable key is a glyph. This is what guarantees that no
+command can ever steal a paintable character - `?`, `%`, `^`, `@` and
+anything else all paint in Paint mode, with no reserved list.
+
+The canvas starts in Normal mode. `i` enters Paint mode; `Esc` returns to
+Normal. While painting, the Status pane shows `[PAINT]` beside the mode.
+Control-byte and function-key shortcuts (`Ctrl+S`, `F3`, ...) work in both
+modes, since they are not glyphs.
+
+### Normal mode
 
 | Key | Action |
 | --- | --- |
-| `%` | Switch to Map mode (paint tiles) |
-| `^` | Switch to Event mode (paint event markers) |
-| `F3` | Toggle NPC mode (place and edit the map's NPCs) |
-| `@` | Open the character map |
+| `i` | Enter Paint mode (every key paints; `Esc` returns to Normal) |
+| `m` | Switch to Map mode (paint tiles) |
+| `e` | Switch to Event mode (paint event markers) |
+| `n` / `F3` | Toggle NPC mode (place and edit the map's NPCs) |
+| `c` | Open the character map |
+| `o` | Open the brush colour picker (see [Colour](#colour)) |
+| `b` / `l` / `r` / `R` / `s` | Choose a tool: Brush, Line, Rectangle, Filled Rectangle, Select |
+| `f` | Flood fill from the cursor (same as `Ctrl+F`) |
+| `k` | Eyedropper - pick up the symbol under the cursor (same as `Ctrl+K`) |
+| `w` | Cycle brush width (same as `Ctrl+W`) |
+| `y` | Lift (yank) the selection (same as `Ctrl+L`) |
+| `x` | Cut the selection (same as `Ctrl+X`) |
+| `p` | Paste/stamp the clipboard at the cursor (same as `Ctrl+U`) |
+| `u` / `U` | Undo / redo (same as `Ctrl+Z` / `Ctrl+Y`) |
+| `?` | Open the help overlay |
 | `Arrows` | Move the cursor |
 | `Enter` | Apply the active tool |
+| `Esc` | Pop one canvas level: a pending tool anchor, then the selection |
 
-Typing any other printable glyph paints it at the cursor with the brush tool.
-Under a shape or select tool, typing a glyph loads it into the brush instead.
+Typing an unassigned printable key in Normal mode paints nothing; the status
+line points to `i` instead.
+
+### Paint mode
+
+Every printable key paints its glyph at the cursor with the brush tool, or
+loads it into the brush under a shape or select tool. `Arrows` move,
+`Enter` applies the active tool, erase keys erase, and `Esc` returns to
+Normal mode. Entering NPC mode or moving focus off the canvas also returns
+to Normal.
+
+### Colour
+
+`o` in Normal mode opens the brush colour picker: the 16 standard 4-bit
+ANSI colours (in the map format's Symfony colour names, where `gray` is
+bright black), rendered as live swatches, plus two brush states above them.
+The brush colour applies to every paint on the Map layer - brush dabs,
+shapes, flood fills - and is written as `<fg=...>` tags, exactly the
+styling authored by hand.
+
+- **Keep cell colour** (the default): painting changes the glyph and leaves
+  each cell's existing styling byte-for-byte, authored options included.
+- **No colour**: painting strips styling and writes plain glyphs.
+- **A colour**: painting writes the glyph in that colour. Selecting a
+  colour under the brush tool also recolours the cell at the cursor in
+  place, keeping its glyph, as one undoable stroke.
+
+The eyedropper (`k` / `Ctrl+K`) picks up a cell's colour along with its
+glyph; an uncoloured cell loads an uncoloured brush. A painted space is
+always uncoloured, so erasing never leaves invisible styling behind. Event
+markers are authoring geometry and carry no colour; the picker says so on
+the Event layer. The Status pane shows the brush colour beside the tool.
 
 ### NPC Mode
 
 `F3` enters NPC mode: the map's `npcs` collection is drawn over the tiles as
-an overlay — sprites at their authored anchor, wide glyphs occupying the two
-columns the game gives them, styled sprites as the plain glyph — and nothing
+an overlay - sprites at their authored anchor, wide glyphs occupying the two
+columns the game gives them, styled sprites as the plain glyph - and nothing
 you do here paints a tile or an event marker. The selected NPC is shown in
-brackets. NPC mode is a function key rather than a glyph so no paintable
+brackets. NPC mode sits on `n` in Normal mode and on `F3` everywhere, so no paintable
 character is taken from you (and not a control byte, since the terminal driver
 reserves the remaining ones).
 
@@ -208,8 +263,9 @@ reserves the remaining ones).
 | `D` | Duplicate the selected NPC under a fresh stable id, one column to the right when free |
 | `L` | List the map's NPCs by name and id; type to narrow, `Enter` selects one and jumps the cursor to it |
 | `[` / `]` | Select the previous / next NPC in the map's list |
-| `Del` | Delete the selected NPC — refused, with the list, while anything names its id |
+| `Del` | Delete the selected NPC - refused, with the list, while anything names its id |
 | `Tab` | Edit the selected NPC in the Inspector |
+| `Esc` | Cancel a pending move or prompt first; otherwise exit NPC mode back to the Map layer (`F3` and `n` also toggle out) |
 
 Create, move, duplicate and delete each undo and redo as one step, and dirty
 state follows the map's persisted-state fingerprint like every other edit:
@@ -219,8 +275,8 @@ with a hint rather than painted under an NPC.
 #### Stable ids
 
 `Enter` on an empty tile asks for the NPC's name first, and derives its stable
-`id` from that name — `Gate Guard` becomes `gate-guard`, numbered if the map
-already has one — because the id is what `move_route` and script diagnostics
+`id` from that name - `Gate Guard` becomes `gate-guard`, numbered if the map
+already has one - because the id is what `move_route` and script diagnostics
 name, and it is **immutable after creation**: renaming the NPC, moving it, or
 changing its sprite never touches it. Duplicating assigns a fresh id from the
 name. An NPC authored without an id loads and edits normally, shows a
@@ -232,8 +288,8 @@ existing id is an identity migration, which the editor does not offer.
 #### The NPC Inspector
 
 `Tab` from the canvas edits the selected NPC with the same pane every Database
-category uses — pickers, condition lines, world-write rows, command frames,
-`Shift+O` / `Shift+X` on lists — grouped as:
+category uses - pickers, condition lines, world-write rows, command frames,
+`Shift+O` / `Shift+X` on lists - grouped as:
 
 | Group | Rows |
 | --- | --- |
@@ -241,9 +297,9 @@ category uses — pickers, condition lines, world-write rows, command frames,
 | Placement | `X`, `Y` (the canvas moves it too) |
 | Appearance | `Sprite`, `Facing North/South/East/West` |
 | Movement | `Movement` (`fixed` / `wander`), and while wandering `Wander X/Y/Width/Height` |
-| Visibility | `Visible When` — a condition line |
+| Visibility | `Visible When` - a condition line |
 | Interaction | `Script` (a command frame), then one `Dialogue variant N` heading per variant with its rows `When`, `Then Set`, `Script Commands`, `Line 1 Speaker`, `Line 1 Text`, … |
-| Completion Writes | `After Talking` — world-write rows |
+| Completion Writes | `After Talking` - world-write rows |
 
 Rows read as the game will read them: an unset `Movement` shows `fixed`, an
 unset `Sprite` shows `@`. Fields the game does not read are listed in a
@@ -283,16 +339,16 @@ wander area, naming each one (`Ctrl+E` shows the list); move or resize them
 first. Growing a map never touches an NPC.
 
 Validation (`Ctrl+E` after a save, or `ichiloto validate`) checks every NPC
-field against what the game does with it — malformed shapes the game would
+field against what the game does with it - malformed shapes the game would
 drop, coordinates off the map, an NPC on an event tile it would make
 unreachable, wander areas that leave the map or that the NPC starts outside,
-a script shadowing dialogue, unknown fields — as errors where the authored
+a script shadowing dialogue, unknown fields - as errors where the authored
 content cannot happen and warnings where it can but probably not as meant.
 
 ### Canvas Tools
 
 The active tool is modal and always shown in the footer, for example
-`Tool: Rect Fill 2 @0,0 [5x3] clip 2x1` — tool, brush width, pending anchor,
+`Tool: Rect Fill 2 @0,0 [5x3] clip 2x1` - tool, brush width, pending anchor,
 selection size, and clipboard size.
 
 | Key | Action |
@@ -300,7 +356,7 @@ selection size, and clipboard size.
 | `Ctrl+N` | Next tool (Brush → Line → Rect → Rect Fill → Select) |
 | `Ctrl+W` | Cycle brush width (1 / 2 / 3 / 5) |
 | `Ctrl+F` | Flood fill from the cursor |
-| `Ctrl+K` | Eyedropper — pick up the symbol under the cursor |
+| `Ctrl+K` | Eyedropper - pick up the symbol under the cursor |
 | `Ctrl+L` | Lift (copy) the selection |
 | `Ctrl+X` | Cut the selection |
 | `Ctrl+U` | Paste/stamp the clipboard at the cursor |
@@ -321,7 +377,7 @@ size instead.
 
 ## Inspector Panel
 
-The Inspector shows the fields of the current selection — the map's metadata in
+The Inspector shows the fields of the current selection - the map's metadata in
 Map mode, the selected event's data in Event mode, the selected NPC in NPC mode
 (see [NPC Mode](#npc-mode)).
 
@@ -329,7 +385,7 @@ Controls:
 
 - `Up` / `Down`: move between fields
 - `Enter`: start editing a text or number field
-- `Left` / `Right`: adjust without entering edit mode — cycle enum options,
+- `Left` / `Right`: adjust without entering edit mode - cycle enum options,
   toggle a boolean, step a number
 - `Esc`: cancel an edit
 
@@ -337,7 +393,7 @@ Field rows are typed. A text field accepts anything; an integer field accepts
 digits and a leading `-`; a float field also accepts one `.`; a boolean toggles;
 an enum cycles through its options.
 
-Rows shown as `Label · value` are visible but fixed — they display information
+Rows shown as `Label · value` are visible but fixed - they display information
 the editor does not let you edit here. Rows shown as `Label: value` are
 editable.
 
@@ -355,7 +411,7 @@ identity rows.
 
 **Audio.** `Background Music` is a picker over the project's own tracks
 (`assets/Audio/BGM`, shown by file name): Enter opens it, `(None)` clears
-the authored track by removing the `bgm` key — the editor never writes a
+the authored track by removing the `bgm` key - the editor never writes a
 misleading empty one. A track the project no longer has stays visible as
 `name · not in assets/Audio/BGM` rather than silently jumping to a valid
 one, and validation names it. There is no in-editor audition in this gate;
@@ -367,7 +423,7 @@ instead of its default. The engine evaluates the variants in declaration
 order and **the first whose conditions all hold selects the track**; when
 none matches, the static `Background Music` plays, and when neither
 resolves to a track the current music simply continues. An empty conditions
-list is an unconditional match — that is what the engine evaluates — so an
+list is an unconditional match - that is what the engine evaluates - so an
 unconditional variant belongs last, and validation warns when one shadows
 later variants.
 
@@ -376,8 +432,8 @@ later variants.
   without a track, and validation names it, so nothing plausible is ever
   inserted silently.
 - Each variant's `Track` is the same picker over the project's own tracks.
-  A variant offers no `(None)` row — an empty track is a skipped variant,
-  not silence — so removing the variant is how it is un-authored.
+  A variant offers no `(None)` row - an empty track is a skipped variant,
+  not silence - so removing the variant is how it is un-authored.
 - Each variant's `When` opens the same shared Condition editor every other
   surface uses (`a`/`d` add and remove, `t` cycles the type, `n` names or
   picks, `!` negates, Enter keeps, Esc leaves it alone), hosted right in
@@ -388,8 +444,8 @@ later variants.
   undoable, saves with the map, and reopens in the authored order.
 
 Keys inside a variant the editor does not own ride every edit untouched. A
-list the editor cannot hold as rows — a keyed block, a variant that is not
-an array — is shown read-only with the shape named, and a variant whose
+list the editor cannot hold as rows - a keyed block, a variant that is not
+an array - is shown read-only with the shape named, and a variant whose
 conditions carry something the shared editor cannot (an unknown key, an
 unrecognised type) keeps an editable track while its conditions say why
 they are not. Validation reports every shape the engine would silently
@@ -405,22 +461,22 @@ rows beneath it edit the engine's own `encounters` block:
   troop the table does not already use), `Del`/`Shift+X` removes the row the
   cursor is in, and removing the last row disables encounters and removes
   the empty block. Each row is a `Troop` picker over the project's troops
-  and a positive whole-number `Weight` — the chance of a fight being that
+  and a positive whole-number `Weight` - the chance of a fight being that
   troop is its weight over the sum. Two rows can never name the same troop:
   PHP would keep the last weight and discard the other without a word, so
   the editor refuses the edit and says which row already has it.
 - `Rate` is the **average** number of steps between fights, not an exact
-  interval — the engine rolls each gap between half and one-and-a-half
+  interval - the engine rolls each gap between half and one-and-a-half
   times this value. Until you set one it shows `(engine default: 15)`, and
   merely opening or browsing the map never writes that default into the
   file.
-- `Tiles` chooses which steps count: `encounter` (only danger tiles — the
+- `Tiles` chooses which steps count: `encounter` (only danger tiles - the
   `;` glyphs) or `any` (every step, with danger tiles counting double).
   Its default, `encounter`, is likewise shown in parentheses and never
   written by browsing.
 
-A key inside the block the editor does not own — a field a later engine will
-read — is preserved untouched, and keeps the block alive even when the last
+A key inside the block the editor does not own - a field a later engine will
+read - is preserved untouched, and keeps the block alive even when the last
 troop is removed. A block shaped in a way the editor cannot hold exactly
 (troops keyed by number, a weight that is an array) is shown read-only with
 the shape named, and no edit anywhere rewrites it.
@@ -473,14 +529,14 @@ baseline. Adjustments keep their sign, because being slower than the
 baseline is a legitimate nature, and an adjustment of zero is removed rather
 than written.
 
-An actor may also declare named *natural variants* — one set of adjustments
+An actor may also declare named *natural variants* - one set of adjustments
 per variant, with a `Default Variant` the game starts on. The game
 **composes** the two: the fixed adjustments always apply, and the selected
 variant is added on top, summing where both name the same stat. So a fixed
 `attack 4` under a variant's `attack 12` is `16`, and a variant may also
 take away what the fixed layer gave. Both layers are therefore shown and
-both are editable — `Fixed, always applied` and `Variant <id>, added on top`
-— with an `In force` row showing what they come to together.
+both are editable - `Fixed, always applied` and `Variant <id>, added on top`
+- with an `In force` row showing what they come to together.
 `Editing Variant` chooses which variant the rows show, and is a view of the
 pane rather than a change to the project. A variant the actor does not
 declare contributes nothing, which leaves the fixed layer standing.
@@ -490,12 +546,12 @@ game's own resolver rather than by the editor: the class baseline, this
 actor's nature, permanent growth the party has earned, what it is holding,
 and whatever a battle is doing to it, then capped. A row reads
 `33 · 10 natural, +12 nature, +6 growth, +5 battle · 966 to the cap`, and
-says `41 lost to the 999 cap` when the total runs past the cap — which is
+says `41 lost to the 999 cap` when the total runs past the cap - which is
 the case worth seeing, since further adjustments there do nothing. Player
 and enemy caps differ, and the preview never writes anything.
 
 `Assumed Growth` chooses which permanent growth the preview pretends the
-party has already earned — none of it, all of it, or one definition. Earned
+party has already earned - none of it, all of it, or one definition. Earned
 growth belongs to a save file rather than to a project, so this is a fixture
 for looking at: choosing one changes what the rows read and writes nothing.
 
@@ -503,7 +559,7 @@ for looking at: choosing one changes what the rows read and writes nothing.
 this actor, best first, scored by the game's own policy rather than by the
 editor. `Policy` names which policy is doing the scoring. `Slot` chooses the
 kind of slot being filled. Each candidate reads as its score followed by the
-components that made it — `18 · attack +12, speed -20` — and a candidate the
+components that made it - `18 · attack +12, speed -20` - and a candidate the
 project excludes from automatic selection says so instead of scoring zero.
 
 Accuracy and Critical are deliberately absent from nature and from the
@@ -523,15 +579,15 @@ status line says exactly why.
 | Actors | `assets/Data/Actors/*.php` | Editable |
 | Classes | `assets/Data/classes.php` | Editable |
 | Skills | `assets/Data/skills.php` | Editable |
-| Items | `assets/Data/items.php` | Editable — authored as `new Item(...)` calls, edited entry by entry |
-| Weapons | `assets/Data/items.php` | Editable — authored as `new Weapon(...)` calls, edited entry by entry |
-| Armors | `assets/Data/items.php` | Editable — authored as `new Armor(...)` calls, edited entry by entry |
-| Enemies | `assets/Data/enemies.php` | Editable — authored as `new Enemy(...)` calls, edited entry by entry |
+| Items | `assets/Data/items.php` | Editable - authored as `new Item(...)` calls, edited entry by entry |
+| Weapons | `assets/Data/items.php` | Editable - authored as `new Weapon(...)` calls, edited entry by entry |
+| Armors | `assets/Data/items.php` | Editable - authored as `new Armor(...)` calls, edited entry by entry |
+| Enemies | `assets/Data/enemies.php` | Editable - authored as `new Enemy(...)` calls, edited entry by entry |
 | Troops | `assets/Data/troops.php` | Editable |
 | Battle Entry | `assets/Data/battle-entry-rules.php` | Editable |
 | States | `assets/Data/states.php` | Editable |
 | Animations | `assets/Data/animations.php` | Editable |
-| Tilesets | — | Read-only — the engine has no tileset system |
+| Tilesets | - | Read-only - the engine has no tileset system |
 | Common Events | `assets/Events/*.php` | Editable |
 | Quests | `assets/Data/quests.php` | Editable |
 | Skits | `assets/Data/Skits/*.php` | Editable |
@@ -544,7 +600,7 @@ status line says exactly why.
 | Optimize Outcomes | `assets/Data/equipment-optimization.php` | Editable |
 | Optimize Exclusions | `assets/Data/equipment-optimization.php` | Editable |
 | System | `assets/Data/system.php` | Editable |
-| Types | `assets/Data/Types/*.php` | Read-only — PHP enum declarations |
+| Types | `assets/Data/Types/*.php` | Read-only - PHP enum declarations |
 | Terms | `config.php` (`vocab`, `messages`) | Editable when the config carries no inline comments |
 
 Why a category can still turn out read-only: a file the editor cannot
@@ -563,18 +619,18 @@ wrote, and rewrite every entry to change one. So the editor does not
 regenerate it. It edits the author's own source, entry by entry:
 
 - **A changed value** is patched where its argument sits. Every other byte of
-  the file — the other arguments, the other entries, the comments between
-  them — is the same afterwards.
+  the file - the other arguments, the other entries, the comments between
+  them - is the same afterwards.
 - **A new entry** is written as a constructor call in the file's own
   indentation, after the last entry.
 - **A deleted entry** is cut whole, with its separator.
 - **A deleted entry put back** by undo goes back exactly where it was when
   the file has not been saved in between, and, when it has, is written back
-  ahead of the entry that follows it in the list — so the file reads in the
+  ahead of the entry that follows it in the list - so the file reads in the
   order the editor does.
 
-Every entry is found by the identity it declares — an item's stable id, an
-enemy's name — looked up in a fresh reading of the file at the moment of
+Every entry is found by the identity it declares - an item's stable id, an
+enemy's name - looked up in a fresh reading of the file at the moment of
 writing, never by where it happened to sit when it was loaded. That is what
 lets three categories share one file: Items, Weapons and Armors are three
 views of `items.php`, and saving one of them, or all of them with `Ctrl+A`,
@@ -586,7 +642,7 @@ line says why: two entries in the file declaring one id, an entry declaring
 none, or a save that would leave two entries declaring one id. Give each
 entry a distinct id, reload, and save again.
 
-Files that are data — Troops, States, Permanent Growth — are regenerated as
+Files that are data - Troops, States, Permanent Growth - are regenerated as
 data, keeping everything from `<?php` to the top-level `return` byte for
 byte, and a file several categories share is folded from all of them into
 one payload before its one write.
@@ -602,7 +658,7 @@ pairs, and the line reads back exactly what was written:
   mean nothing.
 - Bare, `true` and `false` are booleans, `INF`, `-INF` and `NAN` are the
   floats digits cannot spell, digits are an integer, digits with a fraction
-  or an exponent are a float — `1.0` stays `1.0` and `1.0E+20` stays exact —
+  or an exponent are a float - `1.0` stays `1.0` and `1.0E+20` stays exact -
   and anything else is the string it spells. A leading zero makes an
   identifier such as `007`, not a number.
 - Anything that would read back as something else is quoted: the string
@@ -612,8 +668,8 @@ pairs, and the line reads back exactly what was written:
   backslash; any other backslash is refused rather than silently dropped.
 - Nested lists and maps do not fit on the line. They are not shown, and they
   are not touched.
-- A line the editor cannot read — a name without a value, a value with a
-  stray quote, an unknown escape — is refused with the reason on the status
+- A line the editor cannot read - a name without a value, a value with a
+  stray quote, an unknown escape - is refused with the reason on the status
   line, and the record is left exactly as it was.
 
 ### States
@@ -639,7 +695,7 @@ resolved by its authored continuation.
 `Shift+O` appends a member, `Shift+X` removes the last one. The `Enemy` value
 must match a name in the Enemies category.
 
-A troop may also declare a `Classification` — `ordinary` or `boss` — which
+A troop may also declare a `Classification` - `ordinary` or `boss` - which
 battle-entry rules match against. An omitted classification is the engine's
 `ordinary` default; the picker shows that without writing the key into older
 data.
@@ -650,25 +706,25 @@ Rules the engine applies as a battle begins, in
 `assets/Data/battle-entry-rules.php`. Each rule grants temporary stat stages
 to specific actors before the first action, and may commit durable world
 writes when it succeeds. The editor authors the file; the engine alone
-decides eligibility, applies effects, and rolls back — nothing here
+decides eligibility, applies effects, and rolls back - nothing here
 duplicates that runtime.
 
 Each rule has:
 
 - a required unique stable `Id`;
-- an optional integer `Priority` — the runtime defaults it to `0`, lower
+- an optional integer `Priority` - the runtime defaults it to `0`, lower
   runs first, and the pane shows that default without writing the key;
 - an optional `Classification` (`ordinary` or `boss`) matched against the
   troop's own, defaulting to `ordinary` the same silent way;
 - `Actor Predicates`, a required non-empty list built in its own editor:
   `a`/`d` add and remove a row, `n` picks the actor from the project's
   durable actor identities (never typed, never a display label), and
-  `x`/`X` cycle the presence through `active`, `reserve`, and `any` — the
+  `x`/`X` cycle the presence through `active`, `reserve`, and `any` - the
   entry roster the actor must occupy when the battle begins;
 - optional `Conditions`, the same shared world-condition editor every other
   surface uses;
 - required non-empty effects, flattened into the pane as `Effect 1 Type`,
-  `Effect 1 Actor`, `Effect 1 Stat`, `Effect 1 Delta`, and so on —
+  `Effect 1 Actor`, `Effect 1 Stat`, `Effect 1 Delta`, and so on -
   `Shift+O`/`Shift+X` append and remove. The one effect type is
   `stat_stage`; the stat picker offers exactly the engine's stage-capable
   seven (`attack`, `defence`, `magicAttack`, `magicDefence`, `speed`,
@@ -676,8 +732,8 @@ Each rule has:
   clamped or applied by the editor;
 - optional `World Writes` through the shared write editor, restricted here
   to the engine's reversible transactional vocabulary: `switch`, `event`,
-  and `variable`. Quest acceptance cannot be authored in this category —
-  its confirmation flow cannot be rolled back — and one already in the
+  and `variable`. Quest acceptance cannot be authored in this category -
+  its confirmation flow cannot be rolled back - and one already in the
   source is preserved untouched but reported by validation.
 
 Rules run in priority then declaration order, so the order of the list is
@@ -687,15 +743,15 @@ Execution Order pane beside the settings shows the exact order the runtime
 will use, with the selected rule marked.
 
 Reordering with `[` and `]` is offered only where a category's file
-actually stores its list order — here, and in the knowledge categories,
+actually stores its list order - here, and in the knowledge categories,
 whose saves write the list back in record order. A plain or
 constructor-authored data file keeps its authored entry order (the editor
 writes those entries in place), and a per-file category has no list order
 to store, so the move is refused with the reason in the status line rather
 than pretending an order the next reload would lose.
 
-Validation checks the whole file with the engine's own diagnostic wording —
-file, rule id, field, offending value — including duplicate ids, empty
+Validation checks the whole file with the engine's own diagnostic wording -
+file, rule id, field, offending value - including duplicate ids, empty
 required lists, unknown or contested actor identities (a reference two
 definitions claim fails loudly rather than resolving to either), stats that
 are canonical but not stage-capable, and quest writes. A missing file means
@@ -704,12 +760,12 @@ no rules and no finding, exactly as the runtime treats it.
 ### Terms
 
 The `vocab` and `messages` trees of the project's `config.php`, flattened to
-one row per term with its dotted path — `vocab.game.new_game`,
+one row per term with its dotted path - `vocab.game.new_game`,
 `messages.confirm.quit`, and so on.
 
 Current limit: the category is read-only when `config.php` contains comments
 inside the returned array, because rewriting the file would drop them. Move
-such comments above the `return` statement and the category becomes editable —
+such comments above the `return` statement and the category becomes editable -
 everything before `return` is preserved byte-for-byte on save.
 
 ### Knowledge
@@ -721,7 +777,7 @@ read it.
 
 **Knowledge** authors the subjects. A subject is anything the party can
 learn about: a creature, a person, a place, a practice. Nothing here needs
-an enemy — a subject the party never fights is an ordinary record — and
+an enemy - a subject the party never fights is an ordinary record - and
 defeat is not the only outcome a record can have. Each subject has a stable
 `Id`, a `Record Type` chosen from the kinds the project declares, a display
 name, a `Quick Card` for what is known at a glance and an optional
@@ -733,7 +789,7 @@ related subject picked from the catalogue.
 
 **Knowledge Reports** authors claims about those subjects: a stable `Id`,
 the `Subject` it concerns, a title and summary, optional details, a display
-order, and the reports it disagrees with — each one a sub-list row picked
+order, and the reports it disagrees with - each one a sub-list row picked
 from the project's reports rather than spelled, because a disagreement
 spelled by hand is a disagreement with nothing. The file keeps the flat list
 of ids the game reads.
@@ -743,7 +799,7 @@ be. A subject's `Record Type` is picked from what this declares, so this is
 where a new kind comes from.
 
 **Knowledge Enemies** authors `enemyMappings`: which subject an enemy is a
-record of. Both sides are picked — the enemy from the project's enemies, the
+record of. Both sides are picked - the enemy from the project's enemies, the
 subject from its knowledge subjects. Knowledge does not require an enemy;
 this is only for the subjects that are fought. A mapping missing either side
 is kept out of the file, because the game refuses the whole catalogue over a
@@ -772,8 +828,8 @@ are filled, that confidence sits between 0 and 1, that a report belongs to
 the subject it is named with, that an observation is one the subject
 authors, and that a report is not superseded by itself.
 
-Runtime progress — what has actually been discovered, observed or unlocked
-— lives in a save, not here. This is the catalogue those records point at.
+Runtime progress - what has actually been discovered, observed or unlocked
+- lives in a save, not here. This is the catalogue those records point at.
 
 ### Permanent Growth
 
@@ -782,7 +838,7 @@ Stat increases the party can earn and keep, in
 game grants and what a save records), an optional `Label` for recognising it
 here, the `Stat` it moves, a signed `Amount`, and its provenance: a
 `Source Type` for what kind of thing granted it and a `Source Id` for which
-one. Both are deliberately open — the game imposes no vocabulary of sources,
+one. Both are deliberately open - the game imposes no vocabulary of sources,
 because it does not know what a project grants growth from. A `Note` may be
 added, and any other project-owned metadata authored by hand is carried
 through untouched.
@@ -798,7 +854,7 @@ raises it here first.
 **What is not authored here.** The growth a party has actually *earned* is
 save state, in the game's permanent-growth ledger, and the editor does not
 edit save files. **This engine version grants growth through runtime API
-only — there is no event-script command for it** — so a project defines what
+only - there is no event-script command for it** - so a project defines what
 a grant would be and the game decides when one happens. Authoring the grant
 itself is deferred until the engine offers a project command for it; the
 Actors Inspector's `Assumed Growth` row is a preview fixture, not a grant.
@@ -840,7 +896,7 @@ the name is composed for you:
 
 `Element` may be a specific element or `*`, which matches whichever element
 an outcome happened to be. An outcome is one of `weak`, `resist`, `null`,
-`absorb` or `neutral` — what the game derives from an affinity multiplier. A
+`absorb` or `neutral` - what the game derives from an affinity multiplier. A
 name that matches neither shape is shown as authored and kept, and
 validation says the game will never look it up.
 
@@ -872,7 +928,7 @@ then one pair of `Beat N Speaker` / `Beat N Text` rows per beat.
 `Shift+A` creates a new skit as its own file, named after its generated id.
 
 Current behavior: a skit plays at most once per save file, and the engine
-announces availability rather than interrupting — the player presses `T`.
+announces availability rather than interrupting - the player presses `T`.
 
 ### Common Events
 
@@ -942,7 +998,7 @@ or speed in steps per second.
 Current limit: nested arms are shown but not edited. A `choice` command's
 `Options` and a `branch` command's `Then` / `Else` appear as fixed rows, and
 their contents round-trip untouched when you save. Editing a nested arm means
-editing the file directly — flattening a command tree into one settings pane
+editing the file directly - flattening a command tree into one settings pane
 would be unreadable, and dropping it on save would be worse.
 
 `start_battle` may occur in the middle of a script. The event suspends until
@@ -974,8 +1030,8 @@ Choice options and branch arms are edited as frames, mirroring how the
 runtime executes them. A `choice` command lists each option as two rows: its
 text, editable in place, and a `Commands · N` row that opens the option's own
 command list on Enter. A `branch` shows `Then Commands` and `Else Commands`
-rows the same way. Inside a frame the pane shows only that list — the same
-rows, pickers, and Shift+O / Shift+X / Del as the top level, at any depth —
+rows the same way. Inside a frame the pane shows only that list - the same
+rows, pickers, and Shift+O / Shift+X / Del as the top level, at any depth -
 and the pane title is the trail back out (`Commands › Choice 2 › Option 1`).
 Esc pops exactly one frame; at the top it closes the Database as before. An
 arm with no commands yet opens all the same, showing one `No commands yet`
@@ -1211,8 +1267,8 @@ finalizer uses its restricted vocabulary: `set_switch`, `set_variable`,
 `record_event`, `move_player`, `transfer`, `camera` (`attach` or `reset`),
 `remove_actor`, `clear_presentation` and `cinematic_music`, each with its
 explicit shape. The Skip group of the record pane says which road the
-current policy takes; `C` on the Preview pane runs the cinematic twice —
-watched to the end and skipped at once — and lists every observable
+current policy takes; `C` on the Preview pane runs the cinematic twice -
+watched to the end and skipped at once - and lists every observable
 difference between the two final states, so an unfinished finalizer shows
 up as a row rather than a surprise. What it compares: the final map, the
 player's position and facing, the camera, the staged cast, switches,
@@ -1271,7 +1327,7 @@ field would (position, content lines, an `[ASSET]` placeholder for an asset
 reference, visibility), with a ruler across the timeline, the keyframe bars
 per track, `◆` for cues and `▼` at the playhead; beside it, the frame
 counter, the cues on this frame, the cues the playhead has crossed (the cue
-log — audio cannot be hosted here, so a cue is reported, never claimed
+log - audio cannot be hosted here, so a cue is reported, never claimed
 audible), and what is drawn now.
 
 | Key (Preview focused, summon) | Action |
@@ -1332,7 +1388,7 @@ fields are preserved and are not errors.
   frame, and a preview owns its own clock instead. The preview reports the
   music state the engine has actually reached, so a cinematic that fades its
   music out at the end shows that track still playing. Completion behaviour
-  stated without a fade — which is what the finalizer vocabulary requires —
+  stated without a fade - which is what the finalizer vocabulary requires -
   settles at once and compares exactly.
 
 ## Overlays
@@ -1341,11 +1397,11 @@ fields are preserved and are not errors.
 | --- | --- | --- |
 | Help | `?` | Generated from the binding table; scrolls with arrows |
 | Command palette | `Ctrl+P` | Fuzzy search over actions, tools, maps, categories, and event markers |
-| Character map | `@` | Insert glyphs the keyboard reserves |
+| Character map | `@` | Insert glyphs the keyboard reserves; lists the map's symbols, the project's collision vocabulary, and the reserved glyphs |
 | Status detail | `Ctrl+E` | Full text of the last message, and the log file path |
 
 Current limit: the help overlay and command palette cannot open while a picker
-dialog is up. Press `Esc` first — dialogs consume all input by design.
+dialog is up. Press `Esc` first - dialogs consume all input by design.
 
 ## Navigation
 
@@ -1373,7 +1429,7 @@ matches.
 | Map create / duplicate / delete | the filesystem | immediately |
 
 `Ctrl+A` saves every dirty map and every editable database in one pass.
-Read-only categories are never included — they hold no edits.
+Read-only categories are never included - they hold no edits.
 
 Saving writes through a temporary file and a rename, so an interrupted save
 cannot truncate your work. When a save regenerates a data file, everything from
@@ -1386,10 +1442,10 @@ cutscene all survive.
 A map's `.data.php` is authored PHP the editor did not write, and the editor
 never regenerates it. An edit is rewritten into the file as the smallest
 change that expresses it: change the description and one line changes;
-everything else — comments and blank lines, `namespace` and `use`
+everything else - comments and blank lines, `namespace` and `use`
 declarations, enum and class-constant expressions, `require` expressions and
 the prelude variables they feed, string quoting, key order, trailing commas,
-unknown and future keys — keeps its exact bytes. An entry added or removed
+unknown and future keys - keeps its exact bytes. An entry added or removed
 (an NPC, an event definition) is inserted or cut as its own lines; the rest
 of the file is untouched. Structural edits find their entry by durable
 identity, never by position: an event by its marker, an NPC by its stable
@@ -1397,37 +1453,37 @@ identity, never by position: an event by its marker, an NPC by its stable
 the map (validation warns when it is not).
 
 What the editor cannot rewrite reversibly it refuses, precisely: a value
-written as an expression — `'script' => require …` in place — cannot take an
+written as an expression - `'script' => require …` in place - cannot take an
 edit without destroying the expression, so that one edit is refused with the
 map, file and path named, and nothing changes. The refusal is that narrow: a
 value written as a *variable reference* can be repointed (the entry gets the
 literal; the shared variable stays for its other users), an opaque sibling
 never blocks an edit beside it, and browsing, previewing and validation
 always work. Only a data file whose whole source cannot be parsed for
-preservation makes the map's *data* read-only — the grids stay editable, and
+preservation makes the map's *data* read-only - the grids stay editable, and
 validation names the file.
 
 The three files save as one transaction. Only the members whose content
-actually changed are written at all — a metadata edit touches `.data.php`
+actually changed are written at all - a metadata edit touches `.data.php`
 alone; a tile stroke touches `.map.php` alone, byte and mtime, and a tile
 file an author generates with a helper class is never rewritten by a data
 edit. Each written member is staged beside its destination, the staged data
 file is evaluated from the project root and must read back as exactly the
 map being saved, backups are taken once per member being replaced (and only
-those members — a clean save backs up nothing), and then the set installs.
+those members - a clean save backs up nothing), and then the set installs.
 If any member cannot be installed, every file already touched is restored to
 its exact bytes and modification time, no temporary survives, and the map
-stays dirty with its checkpoint unmoved — a refused save leaves the complete
+stays dirty with its checkpoint unmoved - a refused save leaves the complete
 old triplet, never new data over old tiles. The explicit move carries the
 same guarantee, plus one more: the authored bytes must still evaluate at the
 destination, so a `require` written against the old folder depth refuses the
 move whole rather than installing a map the game cannot load.
 
 Creating, duplicating and deleting a map are the same kind of transaction.
-A new map's triplet installs complete or not at all — a failure leaves no
+A new map's triplet installs complete or not at all - a failure leaves no
 file and no folder. A duplicate carries the original's authored bytes with
 only its display name rewritten, is proven to evaluate before anything is
-installed, and is **refused** — before any file or folder exists — when the
+installed, and is **refused** - before any file or folder exists - when the
 source cannot be rewritten reversibly; duplicating never flattens a file the
 editor promised to preserve. Deleting a map removes only its own three
 files: anything else you keep in that folder (notes, sketches, references)
@@ -1436,13 +1492,13 @@ deletion puts every removed member back at its exact bytes and time.
 
 ### Stable map identities
 
-A map's project-relative path is its stable identity — doors transfer to it,
+A map's project-relative path is its stable identity - doors transfer to it,
 quests reach for it, saves record it. The display name and region are
 metadata: editing them saves in place and never moves or renames the map's
 directory. A new map derives its initial path from its name once, at
 creation; after that, ordinary saves never infer a rename.
 
-Moving a map is its own operation — *Move Map to Derived Path* in the
+Moving a map is its own operation - *Move Map to Derived Path* in the
 command palette. It shows the current and proposed ids, requires an explicit
 `y`, rejects collisions, and fails closed rather than half-moving. References
 are **not** migrated: anything naming the old id keeps naming it, and the
@@ -1451,7 +1507,7 @@ prompt says so before you confirm.
 ### Dirty means "differs from the last save"
 
 An asset is dirty exactly when its content differs from what the last
-successful save wrote — not because a mutator ran. Undoing your way back to
+successful save wrote - not because a mutator ran. Undoing your way back to
 the saved state clears the marker; redoing away restores it; saving partway
 through history simply sets a new checkpoint; a failed save leaves the old
 one intact. Setting a field to the value it already has, painting a tile
@@ -1461,12 +1517,12 @@ nor a history entry.
 Clean saves are no-ops, everywhere: `Ctrl+S` on an unchanged asset or
 database writes nothing, keeps mtimes, and never canonicalizes authored
 formatting. File-per-entry categories (actors, skits, event scripts) write
-only their dirty, new, or explicitly deleted entries — saving one actor
+only their dirty, new, or explicitly deleted entries - saving one actor
 leaves every other actor file byte-for-byte untouched.
 
 ### Validation
 
-Before a map save the editor runs a validation pass and warns — never blocks —
+Before a map save the editor runs a validation pass and warns - never blocks -
 on dangling destination references, event markers without definitions, and
 spawn points outside the map. The warnings appear in the status footer;
 `Ctrl+E` shows the full text. The project-wide pass (`ichiloto validate`) also
@@ -1474,7 +1530,7 @@ covers every NPC field, as described under [NPC Mode](#npc-mode).
 
 An inventory id two definitions claim is reported once, naming every
 claimant with the category it was authored in, the aliases it brought, and
-its entry in `items.php` — the game refuses the whole catalogue until one
+its entry in `items.php` - the game refuses the whole catalogue until one
 of them is renamed, and until then nothing under any claimant is offered by
 a picker, resolved by a reference, or accepted as a save alias target.
 
@@ -1494,7 +1550,7 @@ Backups are off by default and opt-in per project, in `ichiloto.json`:
 this for a single session.
 
 A backup is a timestamped copy taken immediately *before* an overwriting save.
-The editor never writes into your source files in the background — "autosave"
+The editor never writes into your source files in the background - "autosave"
 here means a safety copy, not a silent write. Copies mirror the
 project-relative path under the backup root, retention prunes oldest-first per
 file, and a backup failure warns without blocking the save. The active policy
@@ -1507,7 +1563,7 @@ The editor hands the terminal to the game and takes it back when the game
 exits.
 
 How it avoids touching your project: the editor builds a temporary project root
-of symlinks back to your real files, and replaces exactly two entries — a
+of symlinks back to your real files, and replaces exactly two entries - a
 generated `assets/Data/system.php` carrying the playtest spawn, and an empty
 `.data/` so playtest saves cannot overwrite your save slots. Maps and every
 other asset are symlinks, so the playtest runs against your live files. The
@@ -1534,11 +1590,11 @@ error names every path it tried.
 The editor adopts the look of the project it has open, reading two keys from
 `config.php`:
 
-- `ui.menu.border` — the border pack every editor window draws with. Any of the
+- `ui.menu.border` - the border pack every editor window draws with. Any of the
   engine's packs works (`DefaultBorderPack`, `FancyBorderPack`, `SlimBorderPack`,
   `BoldBorderPack`, `CrossedBorderPack`, `HashedBorderPack`), given either as an
   instance or a class name.
-- `ui.menu.selection_color` — the color marking the focused panel, the same
+- `ui.menu.selection_color` - the color marking the focused panel, the same
   color the game uses to highlight a selected menu row.
 
 A project that declares neither keeps the editor's defaults. A project that
@@ -1561,7 +1617,7 @@ the undo history, the navigation stack, filters, and the clipboard.
 - The editor is keyboard-first. Mouse support is limited to canvas painting.
 - The editor never writes to your project except through the save paths listed
   above.
-- Read-only Database categories are a safety decision, not a missing feature —
+- Read-only Database categories are a safety decision, not a missing feature -
   see [Editable And Read-Only Categories](#editable-and-read-only-categories).
 - This document should be updated whenever a new shortcut, panel workflow, or
   Database category is added. `tests/Unit/ManualCoverageTest.php` enforces the

@@ -168,7 +168,7 @@ or a fixture.
 
 1. On the `Canvas` in Map mode, type the glyph on the tile — `i` for a
    noticeboard, say.
-2. Press `^` for Event mode and type a letter on the same tile. That letter is
+2. Press `e` for Event mode, `i` for Paint mode, and type a letter on the same tile. That letter is
    the marker; reuse it elsewhere and both tiles run the same event.
 3. `Tab` to the Inspector, open the type picker with `Enter`, and choose
    `Dialogue`.

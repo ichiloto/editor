@@ -51,6 +51,7 @@ it('marks panels dirty on mutation instead of painting immediately', function ()
   ob_start();
 
   try {
+    callEditorMethod($editor, "dispatchInput", "i"); // Paint mode.
     callEditorMethod($editor, 'dispatchInput', '#');
   } finally {
     $paintedBytes = (string) ob_get_clean();
@@ -91,9 +92,11 @@ it('routes Tab through the binding table to cycle panel focus', function () {
 it('gates pane input by focus', function () {
   $editor = shellEditor();
 
-  // Assets pane focused: the canvas Enter/paint handler must not fire.
+  // Assets pane focused: the canvas Paint handler must not fire, and the
+  // Paint-mode entry itself belongs to the canvas alone.
   setEditorProperty($editor, 'cursorX', 1);
   setEditorProperty($editor, 'cursorY', 2);
+  callEditorMethod($editor, 'dispatchInput', 'i');
   callEditorMethod($editor, 'dispatchInput', 'x');
 
   /** @var ProjectWorkspace $workspace */
@@ -101,8 +104,9 @@ it('gates pane input by focus', function () {
 
   expect($workspace->getMapByIndex(0)->getTileSymbol(1, 2))->toBe(' ');
 
-  // Canvas focused: the same key paints.
+  // Canvas focused: Paint mode enters and the same key paints.
   setEditorProperty($editor, 'focusedPane', 'canvas');
+  callEditorMethod($editor, 'dispatchInput', 'i'); // Paint mode.
   callEditorMethod($editor, 'dispatchInput', 'x');
 
   expect($workspace->getMapByIndex(0)->getTileSymbol(1, 2))->toBe('x');
@@ -165,6 +169,7 @@ it('still undoes a painted tile after routing through the binding table', functi
   setEditorProperty($editor, 'focusedPane', 'canvas');
   setEditorProperty($editor, 'cursorX', 1);
   setEditorProperty($editor, 'cursorY', 2);
+  callEditorMethod($editor, "dispatchInput", "i"); // Paint mode.
   callEditorMethod($editor, 'dispatchInput', '#');
 
   /** @var ProjectWorkspace $workspace */
@@ -190,6 +195,7 @@ it('repaints the header the tick the unsaved truth changes, a save included', fu
   flushShell($editor);
 
   // An edit dirties the project: the header says so on the next flush.
+  callEditorMethod($editor, "dispatchInput", "i"); // Paint mode.
   callEditorMethod($editor, 'dispatchInput', 'x');
   expect(flushShell($editor))->toContain('unsaved changes');
 

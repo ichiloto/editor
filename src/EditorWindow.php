@@ -185,15 +185,60 @@ final class EditorWindow extends Window
     }
 
     /**
+     * Returns a string's display width, ignoring ANSI escape sequences.
+     *
+     * Styled content (the canvas preview, colour swatches) embeds escape
+     * bytes that occupy no columns; measuring them as width under-pads and
+     * over-truncates, letting the layer beneath a window bleed through.
+     *
+     * @param string $text The text to measure.
+     * @return int
+     */
+    public static function visibleWidth(string $text): int
+    {
+        return mb_strwidth((string) preg_replace('/\033\[[0-9;?]*[A-Za-z]/', '', $text));
+    }
+
+    /**
      * Truncates a string to the requested display width.
+     *
+     * Escape sequences pass through without spending width, and sequences
+     * after the cut survive so a styled line's reset is never lost.
      *
      * @param string $text The text to truncate.
      * @param int $width The maximum display width.
      * @return string
      */
-    private static function truncateToWidth(string $text, int $width): string
+    public static function truncateToWidth(string $text, int $width): string
     {
-        return mb_strimwidth($text, 0, $width, '');
+        if (self::visibleWidth($text) <= $width) {
+            return $text;
+        }
+
+        $parts = preg_split('/(\033\[[0-9;?]*[A-Za-z])/', $text, -1, PREG_SPLIT_DELIM_CAPTURE) ?: [];
+        $out = '';
+        $used = 0;
+
+        foreach ($parts as $part) {
+            if ($part === '') {
+                continue;
+            }
+
+            if (str_starts_with($part, "\033")) {
+                $out .= $part;
+                continue;
+            }
+
+            if ($used >= $width) {
+                continue;
+            }
+
+            $chunk = mb_strimwidth($part, 0, $width - $used, '');
+            $out .= $chunk;
+            $used += mb_strwidth($chunk);
+        }
+
+        return $out;
     }
 
     /**
@@ -205,7 +250,7 @@ final class EditorWindow extends Window
      */
     private static function padToWidth(string $text, int $width): string
     {
-        $padding = max(0, $width - mb_strwidth($text));
+        $padding = max(0, $width - self::visibleWidth($text));
 
         return $text . str_repeat(' ', $padding);
     }

@@ -78,6 +78,11 @@ enum Modal: string
      */
     case CHARACTER_MAP = 'character_map';
     /**
+     * The brush colour picker (4-bit ANSI palette). Mouse input still
+     * routes to the shared mouse handler while this is open.
+     */
+    case COLOR_PICKER = 'color_picker';
+    /**
      * The map delete confirmation. Mouse input still routes while open.
      */
     case DELETE_CONFIRMATION = 'delete_confirmation';

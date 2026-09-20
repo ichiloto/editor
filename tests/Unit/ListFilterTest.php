@@ -124,6 +124,7 @@ it('leaves / paintable on the canvas', function () {
     setEditorProperty($editor, 'focusedPane', 'canvas');
     setEditorProperty($editor, 'cursorX', 2);
     setEditorProperty($editor, 'cursorY', 2);
+    callEditorMethod($editor, 'dispatchInput', 'i'); // Paint mode.
     callEditorMethod($editor, 'dispatchInput', '/');
 
     /** @var ProjectWorkspace $workspace */
