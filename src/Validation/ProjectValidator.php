@@ -60,6 +60,15 @@ class ProjectValidator
    */
   protected ?array $knowledgeCatalogData = null;
 
+  /** @var array<string, array<int, mixed>> Common Event payloads for this validation run. */
+  protected array $commonEventScripts = [];
+
+  /** @var array<string, true> Common Events reached from a first-class cinematic. */
+  protected array $cinematicCommonEventIds = [];
+
+  /** @var array<string, true> Common Events reached from a legacy event entry point. */
+  protected array $legacyCommonEventIds = [];
+
   /**
    * @var string|null The project root, for the catalogue a command names.
    */
@@ -78,6 +87,9 @@ class ProjectValidator
   {
     $this->projectRootForKnowledge = $workspace->projectRoot;
     $this->knowledgeCatalogData = null;
+    $this->commonEventScripts = $this->eventScriptsById($workspace);
+    $this->cinematicCommonEventIds = [];
+    $this->legacyCommonEventIds = [];
 
     try {
       $this->inventoryCatalog = InventoryCatalog::fromWorkspace($workspace);
@@ -2935,8 +2947,8 @@ class ProjectValidator
 
     return [
       ...$this->checkSkitReferences($workspace, $known),
-      ...$this->checkScriptReferences($workspace, $known),
       ...$this->checkMapReferences($workspace, $known),
+      ...$this->checkScriptReferences($workspace, $known),
       ...$this->checkAchievementReferences($workspace, $known),
     ];
   }
@@ -3035,9 +3047,33 @@ class ProjectValidator
 
     foreach ($database->getRecords() as $record) {
       $script = (array) $record->toArray();
-      $where = sprintf('event script %s', strval($script['__scriptId'] ?? '(unnamed)'));
+      $scriptId = trim(strval($script['__scriptId'] ?? ''));
+      $where = sprintf('event script %s', $scriptId !== '' ? $scriptId : '(unnamed)');
 
-      $issues = [...$issues, ...$this->checkCommands((array) ($script['commands'] ?? []), $where, $known)];
+      if ($scriptId !== '') {
+        if (isset($this->legacyCommonEventIds[$scriptId])) {
+          // Already checked from each real legacy entry point, with the map
+          // and NPC context that invocation actually receives.
+          continue;
+        }
+
+        if (isset($this->cinematicCommonEventIds[$scriptId])) {
+          // Cinematic-only Common Events are checked while walking their
+          // owner, where cast, stage and current-map context exist.
+          continue;
+        }
+
+        // With no cinematic owner or legacy caller, retain the conservative
+        // standalone contract used before context-aware validation.
+        $this->legacyCommonEventIds[$scriptId] = true;
+      }
+
+      $issues = [...$issues, ...$this->checkCommands(
+        (array) ($script['commands'] ?? []),
+        $where,
+        $known,
+        commonEventStack: $scriptId !== '' ? [$scriptId] : [],
+      )];
     }
 
     return $issues;
@@ -3058,6 +3094,7 @@ class ProjectValidator
     ?array $npcIds = null,
     ?string $mapId = null,
     array $npcIdsByMap = [],
+    array $commonEventStack = [],
   ): array
   {
     $issues = [];
@@ -3106,6 +3143,41 @@ class ProjectValidator
         ];
       }
 
+      if ($type === 'common_event') {
+        $eventId = trim(strval($command['id'] ?? ''));
+
+        if ($eventId === '' || preg_match('/^[a-zA-Z0-9._-]+$/', $eventId) !== 1) {
+          $issues[] = Issue::error(
+            $where,
+            'A common_event command requires a safe stable id.',
+            'Choose an existing Common Event from the picker.'
+          );
+        } else {
+          $issues = [
+            ...$issues,
+            ...$this->checkReference($eventId, 'common_events', 'common event', $where, $known),
+          ];
+
+          if (isset($this->commonEventScripts[$eventId])) {
+            $this->legacyCommonEventIds[$eventId] = true;
+
+            if (in_array($eventId, $commonEventStack, true)) {
+              $issues[] = $this->getCommonEventCycleIssue($where, [...$commonEventStack, $eventId]);
+            } else {
+              $issues = [...$issues, ...$this->checkCommands(
+                $this->commonEventScripts[$eventId],
+                sprintf('%s common event %s', $where, $eventId),
+                $known,
+                $npcIds,
+                $mapId,
+                $npcIdsByMap,
+                [...$commonEventStack, $eventId],
+              )];
+            }
+          }
+        }
+      }
+
       if ($type === 'start_battle') {
         $issues = [
           ...$issues,
@@ -3114,6 +3186,37 @@ class ProjectValidator
       }
 
       $issues = [...$issues, ...$this->checkConditions((array) ($command['conditions'] ?? []), $where, $known)];
+
+      if ($type === 'sequence') {
+        $issues = [...$issues, ...$this->checkCommands(
+          (array) ($command['commands'] ?? []),
+          $where,
+          $known,
+          $npcIds,
+          $mapId,
+          $npcIdsByMap,
+          $commonEventStack,
+        )];
+      }
+
+      if ($type === 'parallel') {
+        foreach ((array) ($command['lanes'] ?? []) as $lane) {
+          if (! is_array($lane)) {
+            continue;
+          }
+
+          $laneCommands = array_is_list($lane) ? $lane : (array) ($lane['commands'] ?? []);
+          $issues = [...$issues, ...$this->checkCommands(
+            $laneCommands,
+            $where,
+            $known,
+            $npcIds,
+            $mapId,
+            $npcIdsByMap,
+            $commonEventStack,
+          )];
+        }
+      }
 
       // A choice hides its commands one level down, per option.
       foreach ((array) ($command['options'] ?? []) as $option) {
@@ -3125,11 +3228,12 @@ class ProjectValidator
             $npcIds,
             $mapId,
             $npcIdsByMap,
+            $commonEventStack,
           )];
         }
       }
 
-      foreach (['then', 'else'] as $arm) {
+      foreach (['then', 'else', 'cancel'] as $arm) {
         $issues = [...$issues, ...$this->checkCommands(
           (array) ($command[$arm] ?? []),
           $where,
@@ -3137,6 +3241,7 @@ class ProjectValidator
           $npcIds,
           $mapId,
           $npcIdsByMap,
+          $commonEventStack,
         )];
       }
 
@@ -3166,6 +3271,17 @@ class ProjectValidator
   protected function checkMovementRoute(array $command, string $where, ?array $npcIds, ?string $mapId): array
   {
     $issues = [];
+
+    try {
+      MovementRouteRunner::validatePathOptions($command);
+    } catch (Throwable $throwable) {
+      $issues[] = Issue::error(
+        $where,
+        $throwable->getMessage(),
+        'Use exactly one valid steps, waypoints, or retrace route definition.'
+      );
+    }
+
     $subject = strtolower(trim(strval($command['subject'] ?? 'player')));
 
     if (! in_array($subject, ['player', 'npc'], true)) {
@@ -3173,6 +3289,14 @@ class ProjectValidator
         $where,
         sprintf('A movement route uses unsupported subject "%s".', $subject !== '' ? $subject : '(empty)'),
         'Choose player or npc.'
+      );
+    }
+
+    if (array_key_exists('remember', $command) || array_key_exists('retrace', $command)) {
+      $issues[] = Issue::error(
+        $where,
+        'Recorded movement routes require an active cinematic session.',
+        'Use remember and retrace only from a first-class cinematic or one of its Common Events.'
       );
     }
 
@@ -3215,7 +3339,11 @@ class ProjectValidator
       }
     }
 
-    $steps = $command['steps'] ?? null;
+    if (! array_key_exists('steps', $command)) {
+      return $issues;
+    }
+
+    $steps = $command['steps'];
 
     if (! is_array($steps) || $steps === []) {
       $issues[] = Issue::error($where, 'A movement route has no steps.', 'Add at least one structured route step.');
@@ -3267,6 +3395,16 @@ class ProjectValidator
     }
 
     return $issues;
+  }
+
+  /** @param string[] $stack */
+  protected function getCommonEventCycleIssue(string $where, array $stack): Issue
+  {
+    return Issue::error(
+      $where,
+      sprintf('Common Event references contain a cycle: %s.', implode(' -> ', $stack)),
+      'Break the cycle so every Common Event invocation eventually returns.'
+    );
   }
 
   /** @return Issue[] Invalid optional start_battle continuation fields. */
@@ -3325,7 +3463,7 @@ class ProjectValidator
   {
     $issues = [];
     $npcIdsByMap = $this->npcIdsByMap($workspace);
-    $eventScripts = $this->eventScriptsById($workspace);
+    $eventScripts = $this->commonEventScripts;
 
     foreach ($workspace->maps as $map) {
       $issues = [
@@ -3680,6 +3818,7 @@ class ProjectValidator
       ];
 
       if (isset($eventScripts[$scriptId])) {
+        $this->legacyCommonEventIds[$scriptId] = true;
         $issues = [
           ...$issues,
           ...$this->checkCommands(
@@ -3689,6 +3828,7 @@ class ProjectValidator
             $npcIds,
             $mapId,
             $npcIdsByMap,
+            [$scriptId],
           ),
         ];
       }
