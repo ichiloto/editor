@@ -224,6 +224,22 @@ loads it into the brush under a shape or select tool. `Arrows` move,
 Normal mode. Entering NPC mode or moving focus off the canvas also returns
 to Normal.
 
+### Mouse
+
+The mouse honors the canvas's modality. In Normal mode a click **selects**:
+the cursor jumps to the clicked cell and the status line reads out its
+coordinates - the fastest way to find a tile's position for a spawn point or
+event without walking the cursor there. In Paint mode a left click paints
+the brush symbol and a right click erases, dragging paints a stroke, and in
+Event mode clicks keep their event-editing behavior.
+
+The wheel scrolls the viewport without moving the cursor - free look for
+surveying a map larger than the canvas (horizontal wheel scrolls sideways).
+The next cursor movement reclaims the view; clicking a surveyed tile in
+Normal mode brings the cursor to it instead. The canvas header always shows
+`view x,y` and `cursor x,y`, and the Status pane repeats the cursor position
+beside the viewport offset.
+
 ### Colour
 
 `o` in Normal mode opens the brush colour picker: the 16 standard 4-bit

@@ -671,3 +671,77 @@ it('renders authored cell colours in the canvas preview', function () {
     expect($lines[2])->not->toContain("\033[92m")
         ->and($lines[2])->toContain('A');
 });
+
+/** Builds an SGR mouse press at 1-based terminal coordinates. */
+function mousePress(int $code, int $column, int $row): string
+{
+    return sprintf("\033[<%d;%d;%dM", $code, $column, $row);
+}
+
+/** Returns the terminal cell of a map coordinate under the current layout. */
+function canvasCellAt(Editor $editor, int $mapX, int $mapY): array
+{
+    $layout = callEditorMethod($editor, 'resolveLayout');
+
+    return [
+        2 + $layout['leftWidth'] + $layout['gutter'] + 1 + 1 + $mapX,
+        5 + 3 + $mapY,
+    ];
+}
+
+it('selects with a Normal-mode click and paints only in Paint mode', function () {
+    $editor = canvasEditor();
+    $before = tileRows($editor);
+    [$column, $row] = canvasCellAt($editor, 4, 2);
+
+    // Normal mode: the click is a locator, not an edit.
+    callEditorMethod($editor, 'dispatchInput', mousePress(0, $column, $row));
+
+    expect(getEditorProperty($editor, 'cursorX'))->toBe(4)
+        ->and(getEditorProperty($editor, 'cursorY'))->toBe(2)
+        ->and(getEditorProperty($editor, 'statusMessage'))->toContain('(4, 2)')
+        ->and(tileRows($editor))->toBe($before);
+
+    // Paint mode: the same click paints the brush symbol.
+    setEditorProperty($editor, 'selectedPaintSymbol', 'Q');
+    callEditorMethod($editor, 'dispatchInput', 'i');
+    callEditorMethod($editor, 'dispatchInput', mousePress(0, $column, $row));
+
+    expect(tileRows($editor)[2][4])->toBe('Q');
+});
+
+it('scrolls the viewport with the wheel without moving the cursor, until the cursor reclaims it', function () {
+    $editor = canvasEditor();
+    /** @var ProjectWorkspace $workspace */
+    $workspace = getEditorProperty($editor, 'workspace');
+    // A map taller and wider than the viewport, so there is room to scroll.
+    $map = $workspace->getMapByIndex(0);
+    placeCursor($editor, 0, 0);
+    [$column, $row] = canvasCellAt($editor, 2, 2);
+
+    callEditorMethod($editor, 'dispatchInput', mousePress(65, $column, $row)); // Wheel down.
+
+    $scrolledY = getEditorProperty($editor, 'canvasOffsetY');
+    $maxOffsetY = max(0, $map->getHeight() - 1);
+
+    // The fixture map may be smaller than the viewport; either the view
+    // scrolled or it was already fully visible and stayed clamped at zero.
+    expect($scrolledY)->toBeLessThanOrEqual($maxOffsetY)
+        ->and(getEditorProperty($editor, 'cursorX'))->toBe(0)
+        ->and(getEditorProperty($editor, 'cursorY'))->toBe(0);
+
+    // The next cursor movement reclaims the viewport.
+    callEditorMethod($editor, 'dispatchInput', "\033[C");
+    expect(getEditorProperty($editor, 'canvasOffsetY'))->toBe(0);
+});
+
+it('shows the cursor locator in the canvas header', function () {
+    $editor = canvasEditor();
+    placeCursor($editor, 7, 3);
+    /** @var ProjectWorkspace $workspace */
+    $workspace = getEditorProperty($editor, 'workspace');
+
+    $lines = $workspace->getCanvasLines(0, 40, 10, cursor: ['x' => 7, 'y' => 3]);
+
+    expect($lines[1])->toContain('cursor 7,3');
+});

@@ -287,6 +287,7 @@ final readonly class ProjectWorkspace
         bool $showNpcOverlay = false,
         ?int $selectedNpcIndex = null,
         ?string $selectedNpcSprite = null,
+        ?array $cursor = null,
     ): array
     {
         $selectedMap = $this->getMapByIndex($selectedMapIndex);
@@ -305,13 +306,14 @@ final readonly class ProjectWorkspace
         return [
             sprintf('Preview: %s', $selectedMap->mapId),
             sprintf(
-                '%s | %s | %d x %d | view %d,%d',
+                '%s | %s | %d x %d | view %d,%d%s',
                 $selectedMap->getDisplayName(),
                 $selectedMap->getRegion(),
                 $selectedMap->getWidth(),
                 $selectedMap->getHeight(),
                 $offsetX,
                 $offsetY,
+                $cursor === null ? '' : sprintf(' | cursor %d,%d', $cursor['x'], $cursor['y']),
             ),
             ...$previewLines,
         ];

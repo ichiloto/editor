@@ -145,6 +145,9 @@ final class Editor
     private const string DATABASE_FOCUS_FRAMES = 'database_frames';
     private const string DATABASE_FOCUS_PREVIEW = 'database_preview';
     private const int CHARACTER_MAP_COLUMNS = 8;
+
+    /** Rows or columns one wheel tick scrolls the canvas viewport. */
+    private const int WHEEL_SCROLL_ROWS = 3;
     private const int WINDOW_HORIZONTAL_PADDING = 1;
     private const string GUARD_ACTION_QUIT = 'quit';
     private const string GUARD_ACTION_RELOAD = 'reload';
@@ -4262,11 +4265,64 @@ final class Editor
             return true;
         }
 
+        if ($event->isWheel) {
+            return $this->handleCanvasWheelScroll($event);
+        }
+
         if (! in_array($event->button, [MouseButton::LEFT_BUTTON, MouseButton::RIGHT_BUTTON], true)) {
             return true;
         }
 
         return $this->handleCanvasMouseEdit($event);
+    }
+
+    /**
+     * Scrolls the canvas viewport with the wheel, without moving the cursor.
+     *
+     * This is free look for surveying a large map: the view drifts where
+     * the wheel points, and the next cursor movement reclaims it. Clicking
+     * a surveyed tile in Normal mode brings the cursor there instead.
+     *
+     * @param MouseEvent $event The wheel event.
+     * @return bool
+     */
+    private function handleCanvasWheelScroll(MouseEvent $event): bool
+    {
+        $selectedMap = $this->getSelectedMap();
+
+        if (! $selectedMap instanceof ProjectMap) {
+            return true;
+        }
+
+        [$deltaX, $deltaY] = match ($event->button) {
+            MouseButton::SCROLL_UP => [0, -self::WHEEL_SCROLL_ROWS],
+            MouseButton::SCROLL_DOWN => [0, self::WHEEL_SCROLL_ROWS],
+            MouseButton::SCROLL_LEFT => [-self::WHEEL_SCROLL_ROWS, 0],
+            MouseButton::SCROLL_RIGHT => [self::WHEEL_SCROLL_ROWS, 0],
+            default => [0, 0],
+        };
+
+        if ($deltaX === 0 && $deltaY === 0) {
+            return true;
+        }
+
+        $layout = $this->resolveLayout();
+        $viewportWidth = max(1, $layout['centerWidth'] - 2);
+        $viewportHeight = max(1, $layout['contentHeight'] - 4);
+        $maxOffsetX = max(0, $selectedMap->getWidth() - $viewportWidth);
+        $maxOffsetY = max(0, $selectedMap->getHeight() - $viewportHeight);
+        $nextOffsetX = max(0, min($maxOffsetX, $this->canvasOffsetX + $deltaX));
+        $nextOffsetY = max(0, min($maxOffsetY, $this->canvasOffsetY + $deltaY));
+
+        if ($nextOffsetX === $this->canvasOffsetX && $nextOffsetY === $this->canvasOffsetY) {
+            return true;
+        }
+
+        $this->canvasOffsetX = $nextOffsetX;
+        $this->canvasOffsetY = $nextOffsetY;
+        $this->renderCanvasArea();
+
+        return true;
     }
 
     /**
@@ -4306,6 +4362,17 @@ final class Editor
 
         $focusChanged = $this->focusedPane !== self::FOCUS_CANVAS;
         $this->setFocusedPane(self::FOCUS_CANVAS, false);
+
+        if ($this->editingMode === self::MODE_MAP && $this->inputMode === self::INPUT_NORMAL) {
+            // The mouse honors the canvas's modality: in Normal mode a click
+            // selects the cell, moving the cursor and reading out its
+            // coordinates; painting by mouse belongs to Paint mode.
+            $this->cursorX = $targetX;
+            $this->cursorY = $targetY;
+            $this->statusMessage = sprintf('Cursor at (%d, %d).', $targetX, $targetY);
+            $this->renderCanvasArea();
+            return true;
+        }
 
         if ($this->editingMode === self::MODE_EVENT) {
             $this->handleEventCanvasMouseEdit($selectedMap, $event->button, $targetX, $targetY);
@@ -17825,6 +17892,7 @@ final class Editor
                     $this->editingMode === self::MODE_NPC,
                     $this->selectedNpcIndex,
                     $this->previewedNpcSprite(),
+                    ['x' => $this->cursorX, 'y' => $this->cursorY],
                 ) ?? [],
                 $contentWidth,
                 $layout['contentHeight'] - 2
