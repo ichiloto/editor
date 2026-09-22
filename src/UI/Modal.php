@@ -68,6 +68,8 @@ enum Modal: string
      * The generic event-option picker dialog.
      */
     case EVENT_OPTION_DIALOG = 'event_option_dialog';
+    /** The brush colour picker owns mouse input above the shared interceptor. */
+    case COLOR_PICKER = 'color_picker';
     /**
      * The event-type picker dialog.
      */

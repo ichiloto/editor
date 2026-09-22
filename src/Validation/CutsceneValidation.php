@@ -10,6 +10,7 @@ use Ichiloto\Editor\Cutscenes\CutsceneLibrary;
 use Ichiloto\Editor\Cutscenes\CutsceneType;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicCommandSchema;
+use Ichiloto\Engine\Cutscenes\Cinematics\CinematicScriptValidator;
 use Throwable;
 
 /**
@@ -182,7 +183,13 @@ trait CutsceneValidation
      * @param array{castIds: string[], checkpoints: string[], npcIds: string[]|null, mapId: string|null, npcIdsByMap: array<string, string[]>, seenCheckpoints: string[]} $context
      * @return Issue[]
      */
-    protected function walkCinematicCommands(array $commands, string $where, array $known, array &$context): array
+    protected function walkCinematicCommands(
+        array $commands,
+        string $where,
+        array $known,
+        array &$context,
+        array $commonEventStack = [],
+    ): array
     {
         $issues = [];
 
@@ -243,28 +250,41 @@ trait CutsceneValidation
                 $issues = [...$issues, ...$this->checkCinematicSubject($command, $where, $context)];
             }
 
+            if ($type === 'common_event') {
+                $issues = [
+                    ...$issues,
+                    ...$this->walkCinematicCommonEvent(
+                        trim(strval($command['id'] ?? '')),
+                        $where,
+                        $known,
+                        $context,
+                        $commonEventStack,
+                    ),
+                ];
+            }
+
             $issues = [...$issues, ...$this->checkConditions((array) ($command['conditions'] ?? []), $where, $known)];
 
             if ($type === 'sequence') {
-                $issues = [...$issues, ...$this->walkCinematicCommands((array) ($command['commands'] ?? []), $where, $known, $context)];
+                $issues = [...$issues, ...$this->walkCinematicCommands((array) ($command['commands'] ?? []), $where, $known, $context, $commonEventStack)];
             }
 
             if ($type === 'parallel') {
                 foreach ((array) ($command['lanes'] ?? []) as $lane) {
                     $laneCommands = is_array($lane) && array_is_list($lane) ? $lane : (is_array($lane) ? (array) ($lane['commands'] ?? []) : []);
-                    $issues = [...$issues, ...$this->walkCinematicCommands($laneCommands, $where, $known, $context)];
+                    $issues = [...$issues, ...$this->walkCinematicCommands($laneCommands, $where, $known, $context, $commonEventStack)];
                 }
             }
 
             foreach (['then', 'else', 'cancel'] as $arm) {
                 if (is_array($command[$arm] ?? null)) {
-                    $issues = [...$issues, ...$this->walkCinematicCommands($command[$arm], $where, $known, $context)];
+                    $issues = [...$issues, ...$this->walkCinematicCommands($command[$arm], $where, $known, $context, $commonEventStack)];
                 }
             }
 
             foreach ((array) ($command['options'] ?? []) as $option) {
                 if (is_array($option) && is_array($option['then'] ?? null)) {
-                    $issues = [...$issues, ...$this->walkCinematicCommands($option['then'], $where, $known, $context)];
+                    $issues = [...$issues, ...$this->walkCinematicCommands($option['then'], $where, $known, $context, $commonEventStack)];
                 }
             }
 
@@ -276,6 +296,57 @@ trait CutsceneValidation
         }
 
         return $issues;
+    }
+
+    /**
+     * Validates and follows one Common Event in the same cinematic session.
+     *
+     * Engine owns command and route shapes. This layer contributes the
+     * project context Engine cannot know without loading the game: Common
+     * Event files, cast ids, current-map NPCs, and recursion safety.
+     *
+     * @param array<string, string[]> $known
+     * @param array{castIds: string[], checkpoints: string[], npcIds: string[]|null, mapId: string|null, npcIdsByMap: array<string, string[]>, seenCheckpoints: string[]} $context
+     * @param string[] $commonEventStack
+     * @return Issue[]
+     */
+    protected function walkCinematicCommonEvent(
+        string $eventId,
+        string $where,
+        array $known,
+        array &$context,
+        array $commonEventStack,
+    ): array {
+        if ($eventId === '' || ! isset($this->commonEventScripts[$eventId])) {
+            return [];
+        }
+
+        $this->cinematicCommonEventIds[$eventId] = true;
+
+        if (in_array($eventId, $commonEventStack, true)) {
+            return [$this->getCommonEventCycleIssue($where, [...$commonEventStack, $eventId])];
+        }
+
+        $commands = $this->commonEventScripts[$eventId];
+        $eventWhere = sprintf('%s common event %s', $where, $eventId);
+
+        try {
+            CinematicScriptValidator::validate($commands, sprintf('%s:common_event:%s', $where, $eventId));
+        } catch (Throwable $throwable) {
+            return [Issue::error(
+                $eventWhere,
+                $throwable->getMessage(),
+                'The Engine refuses this Common Event in a cinematic session; the message names the command path.',
+            )];
+        }
+
+        return $this->walkCinematicCommands(
+            $commands,
+            $eventWhere,
+            $known,
+            $context,
+            [...$commonEventStack, $eventId],
+        );
     }
 
     /**

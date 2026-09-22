@@ -43,7 +43,7 @@ explicit confirmation before it does.
 ## Paint The Tile Layer
 
 1. `Tab` to the `Canvas`.
-2. Press `%` to be sure you are in Map mode.
+2. Press `m` to be sure you are in Map mode, then `i` to enter Paint mode.
 3. Move with the arrow keys and type a glyph to paint it.
 
 For anything larger than a few tiles, use the tools:
@@ -63,7 +63,7 @@ and clipboard, so you never have to guess what `Enter` will do next.
 Each completed tool action is one undo step. A filled rectangle undoes in one
 `Ctrl+Z`, not one press per tile.
 
-For glyphs the keyboard reserves, press `@` to open the character map, pick one,
+For glyphs not on your keyboard, press `c` in Normal mode to open the character map, pick one,
 and press `Enter`.
 
 ## Music And Random Encounters

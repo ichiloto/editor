@@ -145,6 +145,9 @@ final class Editor
     private const string DATABASE_FOCUS_FRAMES = 'database_frames';
     private const string DATABASE_FOCUS_PREVIEW = 'database_preview';
     private const int CHARACTER_MAP_COLUMNS = 8;
+
+    /** Rows or columns one wheel tick scrolls the canvas viewport. */
+    private const int WHEEL_SCROLL_ROWS = 3;
     private const int WINDOW_HORIZONTAL_PADDING = 1;
     private const string GUARD_ACTION_QUIT = 'quit';
     private const string GUARD_ACTION_RELOAD = 'reload';
@@ -188,6 +191,36 @@ final class Editor
     private int $selectedAssetIndex = 0;
     private string $focusedPane = self::FOCUS_ASSETS;
     private string $editingMode = self::MODE_MAP;
+
+    /**
+     * The canvas input mode: Normal interprets keys as commands, Paint
+     * interprets every printable key as a glyph. Modeled on vim so no
+     * command can ever steal a paintable character.
+     */
+    private const string INPUT_NORMAL = 'normal';
+
+    private const string INPUT_PAINT = 'paint';
+
+    private string $inputMode = self::INPUT_NORMAL;
+
+    /**
+     * The 4-bit standard ANSI palette, in Symfony formatter colour names.
+     * `gray` is the formatter's name for bright black.
+     */
+    private const array PAINT_COLORS = [
+        'black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white',
+        'gray', 'bright-red', 'bright-green', 'bright-yellow', 'bright-blue',
+        'bright-magenta', 'bright-cyan', 'bright-white',
+    ];
+
+    /**
+     * The brush colour: null keeps whatever colour a cell already has, an
+     * empty string paints without colour, and any other value is the
+     * formatter `fg=` value the paint applies.
+     */
+    private ?string $selectedPaintColor = null;
+
+    private int $colorPaletteIndex = 0;
     private int $cursorX = 0;
     private int $cursorY = 0;
     private int $canvasOffsetX = 0;
@@ -225,6 +258,12 @@ final class Editor
         get => $this->modals->has(Modal::CHARACTER_MAP);
         set {
             $value ? $this->modals->push(Modal::CHARACTER_MAP) : $this->modals->remove(Modal::CHARACTER_MAP);
+        }
+    }
+    private bool $isColorPickerOpen {
+        get => $this->modals->has(Modal::COLOR_PICKER);
+        set {
+            $value ? $this->modals->push(Modal::COLOR_PICKER) : $this->modals->remove(Modal::COLOR_PICKER);
         }
     }
     private bool $isDeleteConfirmationOpen {
@@ -783,7 +822,7 @@ final class Editor
 
         set_error_handler(function (int $errno, string $errstr, string $errfile, int $errline) {
             // Recoverable diagnostics must never tear down a live editing
-            // session — log them and keep running.
+            // session - log them and keep running.
             if (in_array($errno, [E_WARNING, E_NOTICE, E_DEPRECATED, E_USER_WARNING, E_USER_NOTICE, E_USER_DEPRECATED], true)) {
                 Debug::warn("PHP {$errno}: {$errstr} in {$errfile} on line {$errline}");
                 return true;
@@ -1189,6 +1228,7 @@ final class Editor
         $router->bindModal(Modal::EVENT_OPTION_DIALOG, $this->handleEventOptionDialogInput(...));
         $router->bindModal(Modal::EVENT_TYPE_DIALOG, $this->handleEventTypeDialogInput(...));
         $router->bindModal(Modal::CHARACTER_MAP, $this->handleCharacterMapInput(...));
+        $router->bindModal(Modal::COLOR_PICKER, $this->handleColorPickerInput(...));
         $router->bindModal(Modal::DELETE_CONFIRMATION, $this->handleDeleteConfirmationInput(...));
 
         $router->onStatusDetailShortcut($this->openStatusDetailOverlay(...));
@@ -1267,7 +1307,7 @@ final class Editor
                 $this->isCanvasShortcut("\x0b"),
                 $this->pickSymbolUnderCursor(...),
                 'Ctrl+K',
-                'Canvas: eyedropper — pick up the symbol under the cursor',
+                'Canvas: eyedropper - pick up the symbol under the cursor',
             ),
             KeyBinding::when(
                 $this->isCanvasShortcut("\x0c"),
@@ -1287,7 +1327,35 @@ final class Editor
                 'Ctrl+U',
                 'Canvas: paste/stamp the clipboard at the cursor',
             ),
-            KeyBinding::exact('?', $this->openHelpOverlay(...), '?', 'Toggle this help overlay'),
+            // Normal-mode command letters, modeled on vim: in Normal mode a
+            // letter is a command; in Paint mode every printable key is a
+            // glyph. The predicates keep NPC mode's own letters and the
+            // other panes' typing untouched.
+            KeyBinding::when($this->isNormalModeCommand('i'), $this->enterPaintMode(...), 'i', 'Canvas: enter Paint mode (every key paints; Esc returns to Normal)'),
+            KeyBinding::when($this->isNormalModeCommand('m'), fn() => $this->setEditingMode(self::MODE_MAP), 'm', 'Canvas: Map mode (paint tiles)'),
+            KeyBinding::when($this->isNormalModeCommand('e'), fn() => $this->setEditingMode(self::MODE_EVENT), 'e', 'Canvas: Event mode (paint event markers)'),
+            KeyBinding::when($this->isNormalModeCommand('n'), fn() => $this->setEditingMode(self::MODE_NPC), 'n', 'Canvas: NPC mode (place and edit the map\'s NPCs)'),
+            KeyBinding::when($this->isNormalModeCommand('c'), $this->openCharacterMap(...), 'c', 'Canvas: open the character map'),
+            KeyBinding::when($this->isNormalModeCommand('o'), $this->openColorPicker(...), 'o', 'Canvas: colour picker (4-bit ANSI palette; sets the brush colour)'),
+            KeyBinding::when($this->isNormalModeCommand('b'), fn() => $this->selectCanvasTool(CanvasTool::BRUSH), 'b', 'Canvas: Brush tool'),
+            KeyBinding::when($this->isNormalModeCommand('l'), fn() => $this->selectCanvasTool(CanvasTool::LINE), 'l', 'Canvas: Line tool'),
+            KeyBinding::when($this->isNormalModeCommand('r'), fn() => $this->selectCanvasTool(CanvasTool::RECTANGLE), 'r', 'Canvas: Rectangle tool'),
+            KeyBinding::when($this->isNormalModeCommand('R'), fn() => $this->selectCanvasTool(CanvasTool::FILLED_RECTANGLE), 'R', 'Canvas: Filled Rectangle tool'),
+            KeyBinding::when($this->isNormalModeCommand('s'), fn() => $this->selectCanvasTool(CanvasTool::SELECT), 's', 'Canvas: Select tool'),
+            KeyBinding::when($this->isNormalModeCommand('f'), $this->floodFillFromCursor(...), 'f', 'Canvas: flood fill from the cursor (same as Ctrl+F)'),
+            KeyBinding::when($this->isNormalModeCommand('k'), $this->pickSymbolUnderCursor(...), 'k', 'Canvas: eyedropper (same as Ctrl+K)'),
+            KeyBinding::when($this->isNormalModeCommand('w'), $this->cycleCanvasBrushSize(...), 'w', 'Canvas: cycle brush width (same as Ctrl+W)'),
+            KeyBinding::when($this->isNormalModeCommand('y'), $this->copyCanvasSelection(...), 'y', 'Canvas: lift (yank) the selection (same as Ctrl+L)'),
+            KeyBinding::when($this->isNormalModeCommand('x'), $this->cutCanvasSelection(...), 'x', 'Canvas: cut the selection (same as Ctrl+X)'),
+            KeyBinding::when($this->isNormalModeCommand('p'), $this->pasteCanvasClipboard(...), 'p', 'Canvas: paste/stamp the clipboard (same as Ctrl+U)'),
+            KeyBinding::when($this->isNormalModeCommand('u'), $this->performUndo(...), 'u', 'Canvas: undo (same as Ctrl+Z)'),
+            KeyBinding::when($this->isNormalModeCommand('U'), $this->performRedo(...), 'U', 'Canvas: redo (same as Ctrl+Y)'),
+            KeyBinding::when(
+                fn(string $input): bool => $input === '?' && ! $this->canvasConsumesTypedGlyphs(),
+                $this->openHelpOverlay(...),
+                '?',
+                'Toggle this help overlay (in Paint mode, ? paints like any glyph)',
+            ),
         );
         $router->setFallback($this->handleFocusedPaneInput(...));
 
@@ -1350,6 +1418,7 @@ final class Editor
     private function exitFocusedPane(string $pane): void
     {
         if ($pane === self::FOCUS_CANVAS) {
+            $this->inputMode = self::INPUT_NORMAL;
             $this->finalizeActiveStroke();
             $this->activeMousePaintButton = null;
             $this->lastMousePaintPoint = null;
@@ -1623,28 +1692,13 @@ final class Editor
      */
     private function handleCanvasPaneInput(string $input, string $normalizedInput): void
     {
-        // A prompt or list open on the canvas in NPC mode owns every key,
-        // the mode glyphs included: a name may contain a % or an @.
+        // A prompt or list open on the canvas in NPC mode owns every key:
+        // a name may contain any glyph, command letters included.
         if (
             $this->editingMode === self::MODE_NPC
             && ($this->npcCreationInProgress !== null || $this->referencePicker->isOpen())
             && $this->handleNpcModeInput($input)
         ) {
-            return;
-        }
-
-        if (str_contains($input, '%')) {
-            $this->setEditingMode(self::MODE_MAP);
-            return;
-        }
-
-        if (str_contains($input, '^')) {
-            $this->setEditingMode(self::MODE_EVENT);
-            return;
-        }
-
-        if (str_contains($input, '@')) {
-            $this->openCharacterMap();
             return;
         }
 
@@ -1657,10 +1711,24 @@ final class Editor
             return;
         }
 
-        // Esc pops exactly one canvas level: a pending tool anchor first,
-        // then the completed selection.
-        if ($input === "\033" && $this->cancelCanvasToolState()) {
-            return;
+        if ($input === "\033") {
+            // Esc always walks one level out: Paint returns to Normal, a
+            // pending tool anchor pops before the completed selection, and
+            // NPC mode (its moves and prompts already cancelled above)
+            // returns to the Map layer.
+            if ($this->inputMode === self::INPUT_PAINT) {
+                $this->leavePaintMode();
+                return;
+            }
+
+            if ($this->cancelCanvasToolState()) {
+                return;
+            }
+
+            if ($this->editingMode === self::MODE_NPC) {
+                $this->setEditingMode(self::MODE_MAP);
+                return;
+            }
         }
 
         // Cursor movement is arrows-only: the historic hjkl aliases stole
@@ -1689,7 +1757,38 @@ final class Editor
             return;
         }
 
-        $this->handleTypedSymbolInput($input);
+        if ($this->inputMode === self::INPUT_PAINT) {
+            $this->handleTypedSymbolInput($input);
+            return;
+        }
+
+        $this->handleNormalModeTypedInput($input);
+    }
+
+    /**
+     * Explains Normal mode when a printable key is typed without a command.
+     *
+     * Normal mode never paints: that is what makes every glyph paintable in
+     * Paint mode without any reserved list. An unassigned printable key gets
+     * a pointer instead of a silent nothing.
+     *
+     * @param string $input The raw input.
+     * @return void
+     */
+    private function handleNormalModeTypedInput(string $input): void
+    {
+        if (str_contains($input, "\033") || preg_match('/^\X/u', $input, $matches) !== 1) {
+            return;
+        }
+
+        $symbol = $matches[0];
+
+        if ($symbol === "\n" || $symbol === "\r" || $symbol === "\t") {
+            return;
+        }
+
+        $this->statusMessage = 'Normal mode: i paints, b/l/r/R/s pick a tool, m/e/n switch layers, c opens the character map, ? lists everything.';
+        $this->renderFooter();
     }
 
     /**
@@ -2634,7 +2733,7 @@ final class Editor
         }
 
         $this->npcMoveInProgress = ['mapIndex' => $this->selectedAssetIndex, 'npcIndex' => $this->selectedNpcIndex];
-        $this->setStatus(sprintf('Moving %s — move the cursor and press Enter, or Esc.', $this->describeSelectedNpc()));
+        $this->setStatus(sprintf('Moving %s - move the cursor and press Enter, or Esc.', $this->describeSelectedNpc()));
         $this->renderFooter();
     }
 
@@ -2790,7 +2889,7 @@ final class Editor
             // Refusing beats a route or script that silently stops
             // resolving. The list is what the author needs to go fix.
             $this->setStatus(
-                sprintf('%s is named by %s — resolve those before deleting.', $npc->getName(), implode(', ', $references)),
+                sprintf('%s is named by %s - resolve those before deleting.', $npc->getName(), implode(', ', $references)),
                 StatusLevel::ERROR,
                 array_map(static fn(string $reference): string => '- ' . $reference, $references),
             );
@@ -3707,6 +3806,11 @@ final class Editor
     {
         $this->editingMode = $mode;
         $this->showEventOverlay = $mode === self::MODE_EVENT;
+
+        if ($mode === self::MODE_NPC) {
+            // NPC mode owns its own letter commands; Paint cannot persist.
+            $this->inputMode = self::INPUT_NORMAL;
+        }
         $this->selectedInspectorFieldIndex = 0;
         $this->isInspectorEditing = false;
         $this->inspectorEditBuffer = '';
@@ -3724,7 +3828,7 @@ final class Editor
 
         $this->statusMessage = match ($mode) {
             self::MODE_EVENT => 'Event mode active.',
-            self::MODE_NPC => 'NPC mode active. Enter selects or creates, M moves, D duplicates, L lists, Del removes.',
+            self::MODE_NPC => 'NPC mode active. Enter selects or creates, M moves, D duplicates, L lists, Del removes, Esc exits.',
             default => 'Map mode active.',
         };
         $this->renderCanvasArea();
@@ -3857,6 +3961,142 @@ final class Editor
     }
 
     /**
+     * Opens the brush colour picker over the canvas.
+     *
+     * @return void
+     */
+    private function openColorPicker(): void
+    {
+        if (! $this->getSelectedMap() instanceof ProjectMap) {
+            return;
+        }
+
+        if ($this->editingMode === self::MODE_EVENT) {
+            $this->statusMessage = 'Colour applies to the Map layer; event markers are authoring geometry.';
+            $this->renderFooter();
+            return;
+        }
+
+        $this->isColorPickerOpen = true;
+        $this->colorPaletteIndex = $this->currentColorPaletteIndex();
+        $this->statusMessage = 'Colour picker open.';
+        $this->requestFullRender();
+    }
+
+    /**
+     * Returns the colour palette entries: the brush contract's keep and
+     * no-colour states, then the 16 standard 4-bit ANSI colours.
+     *
+     * @return array<int, array{label: string, value: string|null}>
+     */
+    private function getColorPalette(): array
+    {
+        $entries = [
+            ['label' => 'Keep cell colour', 'value' => null],
+            ['label' => 'No colour', 'value' => ''],
+        ];
+
+        foreach (self::PAINT_COLORS as $color) {
+            $entries[] = ['label' => $color, 'value' => $color];
+        }
+
+        return $entries;
+    }
+
+    /**
+     * Returns the palette index matching the current brush colour.
+     *
+     * @return int
+     */
+    private function currentColorPaletteIndex(): int
+    {
+        foreach ($this->getColorPalette() as $index => $entry) {
+            if ($entry['value'] === $this->selectedPaintColor) {
+                return $index;
+            }
+        }
+
+        return 0;
+    }
+
+    /**
+     * Handles input while the colour picker is open.
+     *
+     * @param string $input The raw input.
+     * @param string $normalizedInput The normalized input.
+     * @return void
+     */
+    private function handleColorPickerInput(string $input, string $normalizedInput): void
+    {
+        $count = count($this->getColorPalette());
+
+        if (str_contains($input, "\033[A")) {
+            $this->colorPaletteIndex = ($this->colorPaletteIndex + $count - 1) % $count;
+            $this->requestFullRender();
+            return;
+        }
+
+        if (str_contains($input, "\033[B")) {
+            $this->colorPaletteIndex = ($this->colorPaletteIndex + 1) % $count;
+            $this->requestFullRender();
+            return;
+        }
+
+        if ($input === "\n" || $input === "\r") {
+            $this->applyColorPaletteSelection();
+            return;
+        }
+
+        if ($input === "\033") {
+            $this->isColorPickerOpen = false;
+            $this->statusMessage = 'Colour picker closed.';
+            $this->requestFullRender();
+        }
+    }
+
+    /**
+     * Applies the selected palette colour to the brush, and under the brush
+     * tool recolours the cell under the cursor in place.
+     *
+     * @return void
+     */
+    private function applyColorPaletteSelection(): void
+    {
+        $entry = $this->getColorPalette()[$this->colorPaletteIndex] ?? null;
+
+        if ($entry === null) {
+            $this->isColorPickerOpen = false;
+            $this->requestFullRender();
+            return;
+        }
+
+        $this->selectedPaintColor = $entry['value'];
+        $this->isColorPickerOpen = false;
+
+        $selectedMap = $this->getSelectedMap();
+
+        if (
+            $entry['value'] !== null
+            && $this->canvasTool === CanvasTool::BRUSH
+            && $selectedMap instanceof ProjectMap
+            && $this->editingMode !== self::MODE_EVENT
+        ) {
+            // Recolour in place: the cell keeps its glyph and takes the
+            // brush colour, as one undoable stroke.
+            $symbol = $selectedMap->getTileSymbol($this->cursorX, $this->cursorY);
+            $this->paintCanvasCells(
+                $selectedMap,
+                [['x' => $this->cursorX, 'y' => $this->cursorY]],
+                $symbol,
+                'Recolour',
+            );
+        }
+
+        $this->statusMessage = sprintf('Brush colour: %s.', $entry['label']);
+        $this->requestFullRender();
+    }
+
+    /**
      * Handles direct typing in the canvas.
      *
      * @param string $input The raw input.
@@ -3883,12 +4123,8 @@ final class Editor
             return;
         }
 
-        $reservedSymbols = ['%', '^', '@'];
-
-        if (in_array($symbol, $reservedSymbols, true)) {
-            return;
-        }
-
+        // Paint mode has no reserved glyphs: %, ^, @ and ? paint like
+        // anything else. Commands live in Normal mode.
         $this->adoptPaintSymbol($symbol);
     }
 
@@ -4029,6 +4265,10 @@ final class Editor
             return true;
         }
 
+        if ($event->isWheel) {
+            return $this->handleCanvasWheelScroll($event);
+        }
+
         if (! in_array($event->button, [MouseButton::LEFT_BUTTON, MouseButton::RIGHT_BUTTON], true)) {
             return true;
         }
@@ -4037,12 +4277,62 @@ final class Editor
     }
 
     /**
-     * Handles mouse editing over the canvas preview.
+     * Scrolls the canvas viewport with the wheel, without moving the cursor.
      *
-     * @param MouseEvent $event The mouse event.
+     * This is free look for surveying a large map: the view drifts where
+     * the wheel points, and the next cursor movement reclaims it. Clicking
+     * a surveyed tile in Normal mode brings the cursor there instead.
+     *
+     * @param MouseEvent $event The wheel event.
      * @return bool
      */
-    private function handleCanvasMouseEdit(MouseEvent $event): bool
+    private function handleCanvasWheelScroll(MouseEvent $event): bool
+    {
+        $bounds = $this->getCanvasPreviewBounds();
+
+        if ($event->x < $bounds['left'] || $event->x > $bounds['right']
+            || $event->y < $bounds['top'] || $event->y > $bounds['bottom']) {
+            return true;
+        }
+
+        $selectedMap = $this->getSelectedMap();
+
+        if (! $selectedMap instanceof ProjectMap) {
+            return true;
+        }
+
+        [$deltaX, $deltaY] = match ($event->button) {
+            MouseButton::SCROLL_UP => [0, -self::WHEEL_SCROLL_ROWS],
+            MouseButton::SCROLL_DOWN => [0, self::WHEEL_SCROLL_ROWS],
+            MouseButton::SCROLL_LEFT => [-self::WHEEL_SCROLL_ROWS, 0],
+            MouseButton::SCROLL_RIGHT => [self::WHEEL_SCROLL_ROWS, 0],
+            default => [0, 0],
+        };
+
+        if ($deltaX === 0 && $deltaY === 0) {
+            return true;
+        }
+
+        $viewportWidth = $bounds['right'] - $bounds['left'] + 1;
+        $viewportHeight = $bounds['bottom'] - $bounds['top'] + 1;
+        $maxOffsetX = max(0, $selectedMap->getWidth() - $viewportWidth);
+        $maxOffsetY = max(0, $selectedMap->getHeight() - $viewportHeight);
+        $nextOffsetX = max(0, min($maxOffsetX, $this->canvasOffsetX + $deltaX));
+        $nextOffsetY = max(0, min($maxOffsetY, $this->canvasOffsetY + $deltaY));
+
+        if ($nextOffsetX === $this->canvasOffsetX && $nextOffsetY === $this->canvasOffsetY) {
+            return true;
+        }
+
+        $this->canvasOffsetX = $nextOffsetX;
+        $this->canvasOffsetY = $nextOffsetY;
+        $this->renderCanvasArea();
+
+        return true;
+    }
+
+    /** @return array{left: int, top: int, right: int, bottom: int} */
+    private function getCanvasPreviewBounds(): array
     {
         $layout = $this->resolveLayout();
         $contentWidth = $this->getWindowContentWidth($layout['centerWidth']);
@@ -4051,8 +4341,22 @@ final class Editor
         $canvasTop = 5;
         $mapLeft = $canvasLeft + 1 + self::WINDOW_HORIZONTAL_PADDING;
         $mapTop = $canvasTop + 3;
-        $mapRight = $mapLeft + $contentWidth - 1;
-        $mapBottom = $mapTop + $previewHeight - 1;
+        return [
+            'left' => $mapLeft,
+            'top' => $mapTop,
+            'right' => $mapLeft + $contentWidth - 1,
+            'bottom' => $mapTop + $previewHeight - 1,
+        ];
+    }
+
+    /** Handles mouse editing over the canvas preview. */
+    private function handleCanvasMouseEdit(MouseEvent $event): bool
+    {
+        $bounds = $this->getCanvasPreviewBounds();
+        $mapLeft = $bounds['left'];
+        $mapTop = $bounds['top'];
+        $mapRight = $bounds['right'];
+        $mapBottom = $bounds['bottom'];
 
         if ($event->x < $mapLeft || $event->x > $mapRight || $event->y < $mapTop || $event->y > $mapBottom) {
             return true;
@@ -4073,6 +4377,17 @@ final class Editor
 
         $focusChanged = $this->focusedPane !== self::FOCUS_CANVAS;
         $this->setFocusedPane(self::FOCUS_CANVAS, false);
+
+        if ($this->editingMode === self::MODE_MAP && $this->inputMode === self::INPUT_NORMAL) {
+            // The mouse honors the canvas's modality: in Normal mode a click
+            // selects the cell, moving the cursor and reading out its
+            // coordinates; painting by mouse belongs to Paint mode.
+            $this->cursorX = $targetX;
+            $this->cursorY = $targetY;
+            $this->statusMessage = sprintf('Cursor at (%d, %d).', $targetX, $targetY);
+            $this->renderCanvasArea();
+            return true;
+        }
 
         if ($this->editingMode === self::MODE_EVENT) {
             $this->handleEventCanvasMouseEdit($selectedMap, $event->button, $targetX, $targetY);
@@ -4193,20 +4508,29 @@ final class Editor
                 continue;
             }
 
-            $oldSymbol = $paintEvents
-                ? $selectedMap->getEventSymbol($point['x'], $point['y'])
-                : $selectedMap->getTileSymbol($point['x'], $point['y']);
-
             if ($paintEvents) {
+                $oldSymbol = $selectedMap->getEventSymbol($point['x'], $point['y']);
                 $selectedMap->setEventSymbol($point['x'], $point['y'], $symbol);
-            } else {
-                $selectedMap->setTileSymbol($point['x'], $point['y'], $symbol);
+                $newSymbol = $selectedMap->getEventSymbol($point['x'], $point['y']);
+                $this->activeStrokeCommand->appendCell($point['x'], $point['y'], $oldSymbol, $newSymbol);
+                continue;
             }
 
-            $newSymbol = $paintEvents
-                ? $selectedMap->getEventSymbol($point['x'], $point['y'])
-                : $selectedMap->getTileSymbol($point['x'], $point['y']);
-            $this->activeStrokeCommand->appendCell($point['x'], $point['y'], $oldSymbol, $newSymbol);
+            $oldSymbol = $selectedMap->getTileSymbol($point['x'], $point['y']);
+            $oldStyle = $selectedMap->getTileCellStyle($point['x'], $point['y']);
+            [$newPrefix, $newSuffix] = $this->resolvePaintStyle($symbol, $this->selectedPaintColor, $oldStyle);
+            $selectedMap->setTileCell($point['x'], $point['y'], $symbol, $newPrefix, $newSuffix);
+            $newSymbol = $selectedMap->getTileSymbol($point['x'], $point['y']);
+            $this->activeStrokeCommand->appendCell(
+                $point['x'],
+                $point['y'],
+                $oldSymbol,
+                $newSymbol,
+                $oldStyle['prefix'],
+                $oldStyle['suffix'],
+                $newPrefix,
+                $newSuffix,
+            );
         }
 
         $this->activeMousePaintButton = $button;
@@ -4244,6 +4568,96 @@ final class Editor
         return fn(string $input): bool => $input === $key
             && $this->focusedPane === self::FOCUS_CANVAS
             && $this->getSelectedMap() instanceof ProjectMap;
+    }
+
+    /**
+     * Returns whether Paint mode currently owns every printable key.
+     *
+     * In Paint mode the canvas accepts any typed glyph as paint, `?`, `%`,
+     * `^` and `@` included, so printable shortcuts must stand aside: no
+     * command steals a glyph an author might want on a map.
+     *
+     * @return bool
+     */
+    private function canvasConsumesTypedGlyphs(): bool
+    {
+        return $this->inputMode === self::INPUT_PAINT
+            && $this->focusedPane === self::FOCUS_CANVAS
+            && $this->getSelectedMap() instanceof ProjectMap;
+    }
+
+    /**
+     * Builds a predicate for one Normal-mode canvas command letter.
+     *
+     * Command letters apply only while the canvas paints tiles or events in
+     * Normal mode: Paint mode keeps every printable key as a glyph, NPC mode
+     * keeps its own letter commands, and the other panes type into lists
+     * and fields.
+     *
+     * @param string $letter The command letter.
+     * @return Closure
+     */
+    private function isNormalModeCommand(string $letter): Closure
+    {
+        return fn(string $input): bool => $input === $letter
+            && $this->inputMode === self::INPUT_NORMAL
+            && $this->focusedPane === self::FOCUS_CANVAS
+            && $this->getSelectedMap() instanceof ProjectMap
+            && ($this->editingMode === self::MODE_MAP || $this->editingMode === self::MODE_EVENT);
+    }
+
+    /**
+     * Enters Paint mode: every printable key paints until Esc.
+     *
+     * @return void
+     */
+    private function enterPaintMode(): void
+    {
+        if ($this->editingMode !== self::MODE_MAP && $this->editingMode !== self::MODE_EVENT) {
+            $this->statusMessage = 'Paint mode needs the Map or Event layer. Press m or e first.';
+            $this->renderFooter();
+            return;
+        }
+
+        $this->inputMode = self::INPUT_PAINT;
+        $this->statusMessage = 'Paint mode: every key paints its glyph. Esc returns to Normal.';
+        $this->renderFocusDependentArea();
+    }
+
+    /**
+     * Returns to Normal mode, where letters are commands.
+     *
+     * @param string $statusMessage The footer status message.
+     * @return void
+     */
+    private function leavePaintMode(string $statusMessage = 'Normal mode.'): void
+    {
+        if ($this->inputMode === self::INPUT_NORMAL) {
+            return;
+        }
+
+        $this->inputMode = self::INPUT_NORMAL;
+        $this->statusMessage = $statusMessage;
+        $this->renderFocusDependentArea();
+    }
+
+    /**
+     * Selects a canvas tool directly, as the Normal-mode letters do.
+     *
+     * @param CanvasTool $tool The tool to activate.
+     * @return void
+     */
+    private function selectCanvasTool(CanvasTool $tool): void
+    {
+        $this->canvasTool = $tool;
+        $this->canvasToolAnchor = null;
+
+        if ($tool !== CanvasTool::SELECT) {
+            $this->canvasSelection = null;
+        }
+
+        $this->setStatus(sprintf('%s tool. %s', $tool->label(), $this->describeCanvasToolUsage()));
+        $this->renderCanvasArea();
     }
 
     /**
@@ -4300,7 +4714,7 @@ final class Editor
      * PaintStrokeCommand, so each undoes in exactly one Ctrl+Z.
      *
      * @param ProjectMap $map The target map.
-     * @param array<int, array{x: int, y: int, symbol: string}> $writes The cells to write.
+     * @param array<int, array{x: int, y: int, symbol: string, color?: string|null, style?: array{prefix: string, suffix: string}}> $writes The cells to write.
      * @param string $label The undo/status label.
      * @return int The number of cells that actually changed.
      */
@@ -4311,6 +4725,7 @@ final class Editor
         }
 
         $this->finalizeActiveStroke();
+        $isTileLayer = $this->getActiveCanvasLayer() === PaintStrokeCommand::LAYER_TILE;
         $stroke = new PaintStrokeCommand($map, $this->getActiveCanvasLayer(), $label);
         $changed = 0;
 
@@ -4320,6 +4735,36 @@ final class Editor
             }
 
             $oldSymbol = $this->readCanvasSymbol($map, $write['x'], $write['y']);
+
+            if ($isTileLayer) {
+                $oldStyle = $map->getTileCellStyle($write['x'], $write['y']);
+                [$newPrefix, $newSuffix] = isset($write['style'])
+                    ? [$write['style']['prefix'], $write['style']['suffix']]
+                    : $this->resolvePaintStyle(
+                        $write['symbol'],
+                        $write['color'] ?? null,
+                        $oldStyle,
+                    );
+                $map->setTileCell($write['x'], $write['y'], $write['symbol'], $newPrefix, $newSuffix);
+                $newSymbol = $this->readCanvasSymbol($map, $write['x'], $write['y']);
+                $stroke->appendCell(
+                    $write['x'],
+                    $write['y'],
+                    $oldSymbol,
+                    $newSymbol,
+                    $oldStyle['prefix'],
+                    $oldStyle['suffix'],
+                    $newPrefix,
+                    $newSuffix,
+                );
+
+                if ($oldSymbol !== $newSymbol || $oldStyle['prefix'] !== $newPrefix || $oldStyle['suffix'] !== $newSuffix) {
+                    $changed++;
+                }
+
+                continue;
+            }
+
             $this->writeCanvasSymbol($map, $write['x'], $write['y'], $write['symbol']);
             $newSymbol = $this->readCanvasSymbol($map, $write['x'], $write['y']);
             $stroke->appendCell($write['x'], $write['y'], $oldSymbol, $newSymbol);
@@ -4337,6 +4782,36 @@ final class Editor
     }
 
     /**
+     * Resolves the styling bytes a tile paint writes.
+     *
+     * The colour directive follows the brush contract: null keeps the
+     * cell's existing styling byte-for-byte, an empty string paints without
+     * colour, and any other value becomes an `fg=` tag. A space is always
+     * uncoloured, so erasing never leaves invisible styling behind.
+     *
+     * @param string $symbol The symbol being painted.
+     * @param string|null $colorDirective The brush colour directive.
+     * @param array{prefix: string, suffix: string} $oldStyle The cell's current styling.
+     * @return array{0: string, 1: string} The prefix and suffix to write.
+     */
+    private function resolvePaintStyle(string $symbol, ?string $colorDirective, array $oldStyle): array
+    {
+        if ($symbol === ' ') {
+            return ['', ''];
+        }
+
+        if ($colorDirective === null) {
+            return [$oldStyle['prefix'], $oldStyle['suffix']];
+        }
+
+        if ($colorDirective === '') {
+            return ['', ''];
+        }
+
+        return [sprintf('<fg=%s>', $colorDirective), '</>'];
+    }
+
+    /**
      * Paints one symbol across a cell list as a single stroke.
      *
      * @param ProjectMap $map The target map.
@@ -4347,10 +4822,14 @@ final class Editor
      */
     private function paintCanvasCells(ProjectMap $map, array $cells, string $symbol, string $label): int
     {
+        // Glyph paints carry the brush colour; the space rule and the event
+        // layer's lack of styling are resolved at the commit path.
+        $color = $this->selectedPaintColor;
+
         return $this->applyCanvasWrites(
             $map,
             array_map(
-                static fn(array $cell): array => ['x' => $cell['x'], 'y' => $cell['y'], 'symbol' => $symbol],
+                static fn(array $cell): array => ['x' => $cell['x'], 'y' => $cell['y'], 'symbol' => $symbol, 'color' => $color],
                 $cells,
             ),
             $label,
@@ -4415,6 +4894,10 @@ final class Editor
     private function describeCanvasToolState(): string
     {
         $state = sprintf('%s %d', $this->canvasTool->label(), $this->canvasBrushSize);
+
+        if ($this->selectedPaintColor !== null) {
+            $state .= ' ' . ($this->selectedPaintColor === '' ? 'no-colour' : $this->selectedPaintColor);
+        }
 
         if (is_array($this->canvasToolAnchor)) {
             $state .= sprintf(' @%d,%d', $this->canvasToolAnchor['x'], $this->canvasToolAnchor['y']);
@@ -4600,9 +5083,20 @@ final class Editor
         }
 
         $this->selectedPaintSymbol = $this->readCanvasSymbol($selectedMap, $this->cursorX, $this->cursorY);
+
+        // On the tile layer the eyedropper picks the colour with the glyph:
+        // an uncoloured cell loads an uncoloured brush.
+        $pickedColor = null;
+
+        if ($this->editingMode !== self::MODE_EVENT) {
+            $pickedColor = $selectedMap->getTileColor($this->cursorX, $this->cursorY);
+            $this->selectedPaintColor = $pickedColor ?? '';
+        }
+
         $this->setStatus(sprintf(
-            'Picked up %s from (%d, %d).',
+            'Picked up %s%s from (%d, %d).',
             $this->selectedPaintSymbol === ' ' ? 'space' : $this->selectedPaintSymbol,
+            $pickedColor === null ? '' : ' (' . $pickedColor . ')',
             $this->cursorX,
             $this->cursorY,
         ));
@@ -4661,7 +5155,7 @@ final class Editor
     }
 
     /**
-     * Copies the selected region's symbols into the clipboard.
+     * Copies the selected region's symbols and authored tile styles into the clipboard.
      *
      * @return int The number of captured cells.
      */
@@ -4674,25 +5168,32 @@ final class Editor
         }
 
         if (! is_array($this->canvasSelection)) {
-            $this->setStatus('Nothing selected — Ctrl+N to the Select tool, then Enter twice.', StatusLevel::WARN);
+            $this->setStatus('Nothing selected - Ctrl+N to the Select tool, then Enter twice.', StatusLevel::WARN);
             $this->renderFooter();
             return 0;
         }
 
         $selection = $this->canvasSelection;
         $rows = [];
+        $styles = [];
 
         for ($rowIndex = 0; $rowIndex < $selection['height']; $rowIndex++) {
             $row = [];
+            $styleRow = [];
 
             for ($columnIndex = 0; $columnIndex < $selection['width']; $columnIndex++) {
                 $row[] = $this->readCanvasSymbol($selectedMap, $selection['x'] + $columnIndex, $selection['y'] + $rowIndex);
+
+                if ($this->getActiveCanvasLayer() === PaintStrokeCommand::LAYER_TILE) {
+                    $styleRow[] = $selectedMap->getTileCellStyle($selection['x'] + $columnIndex, $selection['y'] + $rowIndex);
+                }
             }
 
             $rows[] = $row;
+            $styles[] = $styleRow;
         }
 
-        $this->clipboard->store($rows, $this->getActiveCanvasLayer());
+        $this->clipboard->store($rows, $this->getActiveCanvasLayer(), $styles);
 
         return $selection['width'] * $selection['height'];
     }
@@ -4711,7 +5212,7 @@ final class Editor
         }
 
         if ($this->clipboard->isEmpty()) {
-            $this->setStatus('The clipboard is empty — select a region and press Ctrl+L.', StatusLevel::WARN);
+            $this->setStatus('The clipboard is empty - select a region and press Ctrl+L.', StatusLevel::WARN);
             $this->renderFooter();
             return;
         }
@@ -4751,7 +5252,7 @@ final class Editor
      * temporary root of symlinks with a generated `system.php` and an isolated
      * save directory, and the overlay is torn down when the game exits. The
      * engine offers no starting-map override today, so this is the honest way
-     * to do it — see the Phase 6 deferral note in `docs/roadmap.md`.
+     * to do it - see the Phase 6 deferral note in `docs/roadmap.md`.
      *
      * @return void
      */
@@ -4768,7 +5269,7 @@ final class Editor
         if ($selectedMap->isDirty()) {
             // The playtest reads the map through a symlink, so an unsaved
             // edit simply would not appear. Say so rather than confuse.
-            $this->setStatus('Save this map (Ctrl+S) before playtesting — the game reads the file on disk.', StatusLevel::WARN);
+            $this->setStatus('Save this map (Ctrl+S) before playtesting - the game reads the file on disk.', StatusLevel::WARN);
             $this->renderFooter();
             return;
         }
@@ -4871,7 +5372,7 @@ final class Editor
     {
         $this->pendingGuardAction = $action;
         $this->isUnsavedChangesGuardOpen = true;
-        $this->setStatus('Unsaved changes — confirm before continuing.', StatusLevel::WARN);
+        $this->setStatus('Unsaved changes - confirm before continuing.', StatusLevel::WARN);
         $this->renderOverlays();
     }
 
@@ -4885,7 +5386,7 @@ final class Editor
     private function handleUnsavedChangesGuardInput(string $input, string $normalizedInput): void
     {
         // Destructive confirmation: Cancel is the default, so Enter cancels
-        // too — discarding work always requires an explicit `y`.
+        // too - discarding work always requires an explicit `y`.
         if (
             $input === "\033" ||
             $input === "\n" ||
@@ -4907,7 +5408,7 @@ final class Editor
 
             if ($this->workspace?->hasUnsavedChanges() === true) {
                 // Some assets could not be saved (pending folder moves or
-                // errors) — keep the guard up so nothing is lost silently.
+                // errors) - keep the guard up so nothing is lost silently.
                 $this->renderOverlays();
                 return;
             }
@@ -5215,21 +5716,31 @@ final class Editor
             new PaletteItem('Redo', 'Ctrl+Y', fn() => $this->performRedo()),
             new PaletteItem('Playtest Selected Map', 'Ctrl+T', fn() => $this->startPlaytest()),
             new PaletteItem('Reload Workspace', 'Ctrl+R', fn() => $this->requestReload()),
-            new PaletteItem('Tool: Map Mode', '%', function (): void {
+            new PaletteItem('Tool: Map Mode', 'm', function (): void {
                 $this->closeDatabaseIfOpen();
                 $this->setEditingMode(self::MODE_MAP);
             }),
-            new PaletteItem('Tool: Event Mode', '^', function (): void {
+            new PaletteItem('Tool: Event Mode', 'e', function (): void {
                 $this->closeDatabaseIfOpen();
                 $this->setEditingMode(self::MODE_EVENT);
             }),
-            new PaletteItem('Tool: NPC Mode', 'F3', function (): void {
+            new PaletteItem('Tool: NPC Mode', 'n / F3', function (): void {
                 $this->focusedPane = self::FOCUS_CANVAS;
                 $this->setEditingMode(self::MODE_NPC);
             }),
-            new PaletteItem('Tool: Character Map', '@', function (): void {
+            new PaletteItem('Tool: Character Map', 'c', function (): void {
                 $this->closeDatabaseIfOpen();
                 $this->openCharacterMap();
+            }),
+            new PaletteItem('Canvas: Colour Picker', 'o', function (): void {
+                $this->closeDatabaseIfOpen();
+                $this->focusedPane = self::FOCUS_CANVAS;
+                $this->openColorPicker();
+            }),
+            new PaletteItem('Canvas: Paint Mode', 'i', function (): void {
+                $this->closeDatabaseIfOpen();
+                $this->focusedPane = self::FOCUS_CANVAS;
+                $this->enterPaintMode();
             }),
             new PaletteItem('Help', '?', fn() => $this->openHelpOverlay()),
             new PaletteItem('Go to Definition', 'Ctrl+G', fn() => $this->goToDefinition()),
@@ -5828,7 +6339,7 @@ final class Editor
      * Jumps from the current selection to the thing it references.
      *
      * The destination round trip proved the shape: remember where the author
-     * was, move them, and let one key bring them back. This generalizes it —
+     * was, move them, and let one key bring them back. This generalizes it -
      * actor→class and skill→animation inside the Database, event→destination
      * map (and the Inspector's destination field) in the main shell.
      *
@@ -5943,7 +6454,7 @@ final class Editor
 
         if ($animationIndex === null) {
             $this->setStatus(
-                sprintf('No animation named "%s" — skills carry no animation reference yet.', $skill->getName()),
+                sprintf('No animation named "%s" - skills carry no animation reference yet.', $skill->getName()),
                 StatusLevel::WARN,
             );
             $this->renderFooter();
@@ -5978,7 +6489,7 @@ final class Editor
 
         if ($destination === null) {
             $this->setStatus(
-                'Nothing to go to — put the cursor on a transporter event, or select its Destination field.',
+                'Nothing to go to - put the cursor on a transporter event, or select its Destination field.',
                 StatusLevel::WARN,
             );
             $this->renderFooter();
@@ -6168,7 +6679,7 @@ final class Editor
     /**
      * Saves every dirty map and database in one pass.
      *
-     * Maps whose save would move their folder are skipped — the rename flow
+     * Maps whose save would move their folder are skipped - the rename flow
      * requires its own explicit confirmation via Ctrl+S on that map.
      *
      * @return void
@@ -6274,7 +6785,7 @@ final class Editor
         $detailLines = [];
 
         if ($skippedRenames !== []) {
-            $detailLines[] = 'Skipped — saving would move the map folder (use Ctrl+S on the map to confirm):';
+            $detailLines[] = 'Skipped - saving would move the map folder (use Ctrl+S on the map to confirm):';
             $detailLines = [...$detailLines, ...array_map(static fn(string $mapId): string => '  ' . $mapId, $skippedRenames), ''];
         }
 
@@ -6429,7 +6940,7 @@ final class Editor
     private function handleRenameConfirmationInput(string $input, string $normalizedInput): void
     {
         // Destructive confirmation: Cancel is the default, so Enter cancels
-        // too — moving the map folder always requires an explicit `y`.
+        // too - moving the map folder always requires an explicit `y`.
         if (
             $input === "\033" ||
             $input === "\n" ||
@@ -6439,7 +6950,7 @@ final class Editor
             $this->isRenameConfirmationOpen = false;
             // The prompt's WARN toast dies with the prompt.
             $this->toasts->dismissCurrent(microtime(true), StatusLevel::WARN);
-            $this->setStatus('Save cancelled — the map folder was not moved.');
+            $this->setStatus('Save cancelled - the map folder was not moved.');
             $this->requestFullRender();
             return;
         }
@@ -6477,7 +6988,7 @@ final class Editor
         $this->isRenameConfirmationOpen = true;
         $this->setStatus(
             sprintf(
-                'Move %s to %s? References are NOT migrated: doors, quests, saves and one-shot events naming the old id will break — confirm with y.',
+                'Move %s to %s? References are NOT migrated: doors, quests, saves and one-shot events naming the old id will break - confirm with y.',
                 $selectedMap->mapId,
                 $proposed,
             ),
@@ -6531,7 +7042,7 @@ final class Editor
     }
 
     /**
-     * Persists the selected map in place — the rest of the workspace stays
+     * Persists the selected map in place - the rest of the workspace stays
      * loaded, so edits on other maps and databases survive the save.
      *
      * @return void
@@ -6751,7 +7262,7 @@ final class Editor
      * Handles the shared `/` filter caret inside a picker dialog.
      *
      * Dialogs consume all input by design, so the filter has to live inside
-     * each of them — but the query, the ranking, and the Esc-pops-one-level
+     * each of them - but the query, the ranking, and the Esc-pops-one-level
      * behaviour are shared here.
      *
      * @param string $input The raw input token.
@@ -7602,7 +8113,7 @@ final class Editor
     private function handleDeleteConfirmationInput(string $input, string $normalizedInput): void
     {
         // Destructive confirmation: Cancel is the default, so Enter cancels
-        // too — deleting a map always requires an explicit `y`.
+        // too - deleting a map always requires an explicit `y`.
         if (
             $input === "\033" ||
             $input === "\n" ||
@@ -7670,7 +8181,7 @@ final class Editor
     private function reloadWorkspaceSelectingMap(string $mapId): void
     {
         // A full rescan replaces every loaded map object, so retained undo
-        // commands would mutate stale instances — drop them.
+        // commands would mutate stale instances - drop them.
         $this->history->clear();
         $this->activeStrokeCommand = null;
         $this->workspace = ProjectWorkspace::fromProject($this->projectRoot);
@@ -7866,7 +8377,7 @@ final class Editor
         $control = $this->getInspectorFieldControl($field);
 
         if ($control instanceof InputControl && $control->type === InputControlType::BOOLEAN) {
-            // Booleans toggle in place — there is nothing to type.
+            // Booleans toggle in place - there is nothing to type.
             $this->applyInspectorAdjustment($field, $control->adjust((string) ($field['value'] ?? 'false'), 1));
             return;
         }
@@ -7877,7 +8388,7 @@ final class Editor
     /**
      * Adjusts the selected inspector field with the Left/Right idiom:
      * enum fields cycle their options, booleans toggle, and numeric fields
-     * step — mirroring the Database settings pane exactly.
+     * step - mirroring the Database settings pane exactly.
      *
      * @param int $step The adjustment direction.
      * @return void
@@ -8533,8 +9044,8 @@ final class Editor
     /**
      * Moves the selected record up or down its list, undoably.
      *
-     * Declaration order is part of some categories' meaning — battle-entry
-     * rules break priority ties by it — so the move is a recorded edit.
+     * Declaration order is part of some categories' meaning - battle-entry
+     * rules break priority ties by it - so the move is a recorded edit.
      *
      * @param int $step The direction to move.
      * @return void
@@ -13332,8 +13843,10 @@ final class Editor
      */
     private function fitLines(array $lines, int $availableWidth, int $availableLines): array
     {
+        // ANSI-aware: styled lines (the coloured canvas preview) measure by
+        // visible width, so escape bytes never eat real content.
         $lines = array_map(
-            static fn(string $line): string => mb_strimwidth($line, 0, $availableWidth, ''),
+            static fn(string $line): string => EditorWindow::truncateToWidth($line, $availableWidth),
             array_slice($lines, 0, $availableLines)
         );
 
@@ -13508,6 +14021,61 @@ final class Editor
             height: $overlayHeight,
             foregroundColor: Color::LIGHT_BLUE,
             content: $this->fitLines($rows, max(1, $overlayWidth - 2), max(1, $overlayHeight - 2)),
+        );
+
+        $window->render();
+    }
+
+    /**
+     * Renders the brush colour picker overlay.
+     *
+     * Each colour renders its own swatch in the actual 4-bit ANSI colour,
+     * so the palette previews exactly what the terminal will show.
+     *
+     * @param array{width: int, height: int, leftWidth: int, rightWidth: int, gutter: int, centerWidth: int, contentHeight: int} $layout The active layout.
+     * @return void
+     */
+    private function renderColorPickerOverlay(array $layout): void
+    {
+        $sgr = [
+            'black' => 30, 'red' => 31, 'green' => 32, 'yellow' => 33,
+            'blue' => 34, 'magenta' => 35, 'cyan' => 36, 'white' => 37,
+            'gray' => 90, 'bright-red' => 91, 'bright-green' => 92,
+            'bright-yellow' => 93, 'bright-blue' => 94, 'bright-magenta' => 95,
+            'bright-cyan' => 96, 'bright-white' => 97,
+        ];
+        $rows = [];
+
+        foreach ($this->getColorPalette() as $index => $entry) {
+            $swatch = is_string($entry['value']) && isset($sgr[$entry['value']])
+                ? sprintf("\033[%dm■\033[0m", $sgr[$entry['value']])
+                : '·';
+            $rows[] = sprintf(
+                '%s %s %s',
+                $index === $this->colorPaletteIndex ? '>' : ' ',
+                $swatch,
+                $entry['label'],
+            );
+        }
+
+        $overlayWidth = 40;
+        $overlayHeight = min(count($rows) + 2, max(5, $layout['height'] - 6));
+        $left = max(2, intdiv($layout['width'] - $overlayWidth, 2));
+        $top = max(2, intdiv($layout['height'] - $overlayHeight, 2));
+
+        // Keep the selection visible when the terminal is too short for
+        // every row at once.
+        $visibleRows = max(1, $overlayHeight - 2);
+        $firstRow = max(0, min($this->colorPaletteIndex - intdiv($visibleRows, 2), count($rows) - $visibleRows));
+
+        $window = new EditorWindow(
+            title: 'Brush Colour',
+            help: 'Enter:Select  Esc:Close',
+            position: ['x' => $left, 'y' => $top],
+            width: $overlayWidth,
+            height: $overlayHeight,
+            foregroundColor: Color::LIGHT_BLUE,
+            content: array_pad(array_slice($rows, $firstRow, $visibleRows), $visibleRows, ''),
         );
 
         $window->render();
@@ -16555,7 +17123,28 @@ final class Editor
 
         $selectedMap = $this->workspace->getMapByIndex($this->selectedAssetIndex);
 
-        return $selectedMap instanceof ProjectMap ? $selectedMap->getCharacterPalette() : [];
+        if (! $selectedMap instanceof ProjectMap) {
+            return [];
+        }
+
+        // The map's own symbols come first, then the project's authored
+        // collision vocabulary, then the glyphs keyboard shortcuts reserve.
+        // Erasing a glyph's last use can therefore never make it unpaintable.
+        $palette = [];
+
+        foreach ($selectedMap->getCharacterPalette() as $symbol) {
+            $palette[$symbol] = $symbol;
+        }
+
+        foreach ($this->workspace->getCollisionGlyphs() as $symbol) {
+            $palette[$symbol] = $symbol;
+        }
+
+        foreach (['?', '%', '^', '@'] as $symbol) {
+            $palette[$symbol] = $symbol;
+        }
+
+        return array_values($palette);
     }
 
     /**
@@ -16857,7 +17446,7 @@ final class Editor
         $rows = ScrollWindow::slice($rows, $this->helpScrollRow, $visibleRows);
 
         $window = new EditorWindow(
-            title: 'Help — Key Bindings',
+            title: 'Help - Key Bindings',
             help: $isScrollable ? 'Arrows:Scroll  Esc:Close' : 'Esc:Close',
             position: [
                 'x' => max(2, intdiv($layout['width'] - $overlayWidth, 2)),
@@ -17099,6 +17688,11 @@ final class Editor
             return;
         }
 
+        if ($this->isColorPickerOpen) {
+            $this->renderColorPickerOverlay($layout);
+            return;
+        }
+
         if ($this->isDeleteConfirmationOpen) {
             $this->renderDeleteConfirmationOverlay($layout);
             return;
@@ -17284,21 +17878,27 @@ final class Editor
         return new EditorWindow(
             title: $this->focusedPane === self::FOCUS_CANVAS ? 'Canvas [Focus]' : 'Canvas',
             help: match (true) {
-                $this->isDestinationSpawnSelectionOpen => 'Enter:Select Spawn  Esc:Cancel',
+                $this->isDestinationSpawnConfirmationOpen => 'Enter:Apply  Esc:Back',
+                $this->isDestinationSpawnSelectionOpen => 'Arrows:Move  Enter:Select Spawn  Esc:Cancel',
                 // Longest that fits wins; the overlay (?) has the full table.
                 $this->editingMode === self::MODE_NPC && $this->npcCreationInProgress !== null => 'Enter:Create  Esc:Cancel',
                 $this->editingMode === self::MODE_NPC => $this->fitHelp(
                     $layout['centerWidth'],
-                    'Enter:Select/Create  M:Move  D:Dup  L:List  Del:Delete  F3:Exit',
-                    'Enter:Select  M:Move  D:Dup  L:List  F3:Exit',
-                    'Enter  M  D  L  Del  F3:Exit',
-                    'F3:Exit',
+                    'Enter:Select/Create  M:Move  D:Dup  L:List  Del:Delete  Esc:Exit',
+                    'Enter:Select  M:Move  D:Dup  L:List  Esc:Exit',
+                    'Enter  M  D  L  Del  Esc:Exit',
+                    'Esc:Exit',
+                ),
+                $this->inputMode === self::INPUT_PAINT => $this->fitHelp(
+                    $layout['centerWidth'],
+                    'PAINT: every key paints its glyph  Esc:Normal',
+                    'PAINT  Esc:Normal',
                 ),
                 default => $this->fitHelp(
                     $layout['centerWidth'],
-                    '%:Map  ^:Event  F3:NPC  @:Chars',
-                    '%:Map ^:Event F3:NPC @:Chars',
-                    '%:Map  ^:Event  @:Chars',
+                    'i:Paint  m:Map  e:Event  n:NPC  c:Chars  o:Colour  ?:Help',
+                    'i:Paint m:Map e:Event n:NPC c:Chars o:Colour',
+                    'i:Paint  m:Map  e:Event',
                 ),
             },
             position: ['x' => 2 + $layout['leftWidth'] + $layout['gutter'], 'y' => 5],
@@ -17316,6 +17916,7 @@ final class Editor
                     $this->editingMode === self::MODE_NPC,
                     $this->selectedNpcIndex,
                     $this->previewedNpcSprite(),
+                    ['x' => $this->cursorX, 'y' => $this->cursorY],
                 ) ?? [],
                 $contentWidth,
                 $layout['contentHeight'] - 2
@@ -17373,11 +17974,10 @@ final class Editor
         $layout = $this->resolveLayout();
         $selectedMap = $this->workspace?->getMapByIndex($this->selectedAssetIndex);
         $contentWidth = $this->getWindowContentWidth($layout['width'] - 2);
-        $helpText = match (true) {
-            $this->isDestinationSpawnConfirmationOpen => 'Enter:Apply  Esc:Back',
-            $this->isDestinationSpawnSelectionOpen => 'Arrows:Move  Enter:Select Spawn  Esc:Cancel',
-            default => '?:Help  Ctrl+P:Palette  Tab:Pane  Enter:Edit  Ctrl+S:Save  Ctrl+A:Save All  Ctrl+Z:Undo  Ctrl+Y:Redo  Ctrl+Q:Quit',
-        };
+        // The bottom bar lists only commands that are globally true and never
+        // change with context. Contextual keys, the spawn dialogs included,
+        // belong to the border of the window they apply to.
+        $helpText = 'Ctrl+P:Palette  Tab:Pane  Ctrl+S:Save  Ctrl+A:Save All  Ctrl+Z:Undo  Ctrl+Y:Redo  Ctrl+Q:Quit';
 
         return new EditorWindow(
             title: 'Status',
@@ -17389,11 +17989,12 @@ final class Editor
             content: $this->fitLines([
                 $selectedMap instanceof ProjectMap
                     ? sprintf(
-                        'Selected map: %s%s | Focus: %s | Mode: %s | Tool: %s',
+                        'Selected map: %s%s | Focus: %s | Mode: %s%s | Tool: %s',
                         $selectedMap->mapId,
                         $selectedMap->isDirty() ? ' *' : '',
                         ucfirst($this->focusedPane),
                         $this->editingMode === self::MODE_NPC ? 'NPC' : ucfirst($this->editingMode),
+                        $this->inputMode === self::INPUT_PAINT ? ' [PAINT]' : '',
                         $this->describeCanvasToolState(),
                     )
                     : 'No map is currently selected.',

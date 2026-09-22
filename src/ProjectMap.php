@@ -312,10 +312,7 @@ final class ProjectMap
         $npcCells = $showNpcOverlay ? $this->npcOverlayCells($selectedNpcIndex, $selectedNpcSprite) : [];
 
         for ($row = $offsetY; $row < $rowLimit; $row++) {
-            $tileSymbols = array_map(
-                static fn(array $cell): string => $cell['symbol'],
-                $this->tileCells[$row] ?? []
-            );
+            $tileRow = $this->tileCells[$row] ?? [];
             $eventSymbols = $showEventOverlay ? ($this->eventCells[$row] ?? []) : [];
             $mergedSymbols = [];
 
@@ -328,14 +325,72 @@ final class ProjectMap
                 }
 
                 $eventSymbol = $eventSymbols[$column] ?? ' ';
-                $tileSymbol = $tileSymbols[$column] ?? ' ';
-                $mergedSymbols[] = trim($eventSymbol) !== '' ? $eventSymbol : $tileSymbol;
+
+                if (trim($eventSymbol) !== '') {
+                    // Event markers are authoring geometry: they stay plain
+                    // so they read as markers over any terrain colour.
+                    $mergedSymbols[] = $eventSymbol;
+                    continue;
+                }
+
+                $tileCell = $tileRow[$column] ?? null;
+                $tileSymbol = is_array($tileCell) ? $tileCell['symbol'] : ' ';
+                $ansiOpen = is_array($tileCell)
+                    ? self::ansiOpenForPrefix((string) ($tileCell['prefix'] ?? ''))
+                    : null;
+                $mergedSymbols[] = $ansiOpen === null ? $tileSymbol : $ansiOpen . $tileSymbol . "\033[0m";
             }
 
             $lines[] = rtrim(implode('', $mergedSymbols));
         }
 
         return array_pad($lines, $height, '');
+    }
+
+    /**
+     * The 4-bit ANSI foreground codes for the formatter's colour names.
+     * `gray` is the formatter's name for bright black.
+     */
+    private const array ANSI_FOREGROUNDS = [
+        'black' => 30, 'red' => 31, 'green' => 32, 'yellow' => 33,
+        'blue' => 34, 'magenta' => 35, 'cyan' => 36, 'white' => 37,
+        'gray' => 90, 'bright-red' => 91, 'bright-green' => 92,
+        'bright-yellow' => 93, 'bright-blue' => 94, 'bright-magenta' => 95,
+        'bright-cyan' => 96, 'bright-white' => 97,
+    ];
+
+    /**
+     * Converts a cell's authored `fg=` prefix into an ANSI opening sequence.
+     *
+     * Named colours use the 4-bit palette; `#RRGGBB` values use truecolor.
+     * Anything the preview cannot express safely renders unstyled rather
+     * than guessing.
+     *
+     * @param string $prefix The cell's styling prefix bytes.
+     * @return string|null The opening escape sequence, or null for none.
+     */
+    private static function ansiOpenForPrefix(string $prefix): ?string
+    {
+        if ($prefix === '' || preg_match('/<fg=([^;>]+)[^>]*>/', $prefix, $matches) !== 1) {
+            return null;
+        }
+
+        $value = $matches[1];
+
+        if (isset(self::ANSI_FOREGROUNDS[$value])) {
+            return sprintf("\033[%dm", self::ANSI_FOREGROUNDS[$value]);
+        }
+
+        if (preg_match('/^#([0-9a-fA-F]{6})$/', $value, $hex) === 1) {
+            return sprintf(
+                "\033[38;2;%d;%d;%dm",
+                hexdec(substr($hex[1], 0, 2)),
+                hexdec(substr($hex[1], 2, 2)),
+                hexdec(substr($hex[1], 4, 2)),
+            );
+        }
+
+        return null;
     }
 
     /**
@@ -425,6 +480,66 @@ final class ProjectMap
         }
 
         $this->tileCells[$y][$x]['symbol'] = self::normalizeSymbol($symbol);
+        $this->touchState();
+    }
+
+    /**
+     * Returns a tile cell's raw styling bytes.
+     *
+     * The prefix and suffix are the authored formatter tags exactly as the
+     * map file holds them, so callers can restore them byte-for-byte.
+     *
+     * @param int $x The cell x coordinate.
+     * @param int $y The cell y coordinate.
+     * @return array{prefix: string, suffix: string}
+     */
+    public function getTileCellStyle(int $x, int $y): array
+    {
+        $cell = $this->tileCells[$y][$x] ?? null;
+
+        return [
+            'prefix' => is_array($cell) ? (string) ($cell['prefix'] ?? '') : '',
+            'suffix' => is_array($cell) ? (string) ($cell['suffix'] ?? '') : '',
+        ];
+    }
+
+    /**
+     * Returns a tile cell's foreground colour, when its prefix declares one.
+     *
+     * @param int $x The cell x coordinate.
+     * @param int $y The cell y coordinate.
+     * @return string|null The `fg=` value (a name or `#RRGGBB`), or null.
+     */
+    public function getTileColor(int $x, int $y): ?string
+    {
+        $style = $this->getTileCellStyle($x, $y);
+
+        if (preg_match('/<fg=([^;>]+)[^>]*>/', $style['prefix'], $matches) === 1) {
+            return $matches[1];
+        }
+
+        return null;
+    }
+
+    /**
+     * Replaces a tile cell's symbol and raw styling bytes together.
+     *
+     * @param int $x The cell x coordinate.
+     * @param int $y The cell y coordinate.
+     * @param string $symbol The replacement symbol.
+     * @param string $prefix The styling prefix bytes, or an empty string.
+     * @param string $suffix The styling suffix bytes, or an empty string.
+     * @return void
+     */
+    public function setTileCell(int $x, int $y, string $symbol, string $prefix, string $suffix): void
+    {
+        if (! isset($this->tileCells[$y][$x])) {
+            return;
+        }
+
+        $this->tileCells[$y][$x]['symbol'] = self::normalizeSymbol($symbol);
+        $this->tileCells[$y][$x]['prefix'] = $prefix;
+        $this->tileCells[$y][$x]['suffix'] = $suffix;
         $this->touchState();
     }
 

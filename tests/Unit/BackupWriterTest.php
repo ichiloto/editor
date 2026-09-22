@@ -175,6 +175,7 @@ it("backs up a map's three files on save only when enabled", function () {
         setEditorProperty($editor, 'focusedPane', 'canvas');
         setEditorProperty($editor, 'cursorX', 2);
         setEditorProperty($editor, 'cursorY', 2);
+        callEditorMethod($editor, "dispatchInput", "i"); // Paint mode.
         callEditorMethod($editor, 'dispatchInput', 'x');
         callEditorMethod($editor, 'dispatchInput', "\x13");
 
@@ -200,6 +201,7 @@ it('takes no backup on save while disabled', function () {
         setEditorProperty($editor, 'focusedPane', 'canvas');
         setEditorProperty($editor, 'cursorX', 2);
         setEditorProperty($editor, 'cursorY', 2);
+        callEditorMethod($editor, "dispatchInput", "i"); // Paint mode.
         callEditorMethod($editor, 'dispatchInput', 'x');
         callEditorMethod($editor, 'dispatchInput', "\x13");
 

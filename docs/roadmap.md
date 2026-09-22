@@ -117,6 +117,40 @@ preview; helpful empty states; live resize handling.
 
 ## The plan
 
+### Renderer-neutral presentation authoring (planned)
+
+Runtime presentation support is not complete Editor authoring support. The TUI
+must expose the same editable data and operations as a future graphical Editor;
+graphical previews are an enhancement, not a prerequisite for authoring a game.
+The current database/reference catalogues do not yet expose the shared menu
+theme or PNG portrait selection. This remains an implementation gap.
+
+Acceptance criteria for the presentation-authoring slice:
+
+- Select a stable actor/resource and artwork role, then select a project image
+  with a shared asset picker. For example, choosing
+  `assets/Graphics/Characters/Kaelion/Portraits/Menu.png` stores
+  `Graphics/Characters/Kaelion/Portraits/Menu.png` relative to the asset root.
+  Actor identity is not inferred from its display name or directory spelling.
+- Reuse each semantic artwork binding across its consumers. Authors must not
+  maintain separate menu-portrait registrations for Main Menu, Status and Results.
+  Replacing the selected file requires no historical hash or dimension update.
+- Expose supported theme colours, metrics, image roles and optional slice/crop
+  settings through typed fields and pickers, using the Engine's validation
+  contract. Show actual image facts and distinguish recommended sizes from hard
+  format/resource limits; do not duplicate those facts as required author input.
+- Read, edit, validate, save, reload, undo and cancel through shared Editor
+  services. Preserve comments, unrelated/unknown fields and expressions; refuse
+  unsupported writes with a useful diagnostic rather than flattening the source.
+  A graphical Editor must reuse those services and persisted references.
+- Prove TUI round trips with two distinct game themes, renamed actors retaining
+  stable IDs, same-path replacement PNGs, missing/invalid/out-of-root assets,
+  unsupported PHP and failed writes. Unrelated data must remain unchanged.
+
+This scope does not replace the map source-integrity work or authorize a new GUI
+implementation. Keep runtime availability and TUI authoring completion separate
+until both have been verified.
+
 ### Phase 1 — The responsiveness sprint (quick wins, no redesign) ✅ *shipped 2026-08*
 > Status: implemented. `InputDecoder` (src/IO/InputDecoder.php, unit-tested)
 > replaces the blocking reader: non-blocking drained stdin, offline escape
