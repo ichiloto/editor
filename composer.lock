@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "992db93ca76233f28842351d8e27223b",
+    "content-hash": "3d95c845dd479651408d0333de81afee",
     "packages": [
         {
             "name": "amasiye/figlet",
@@ -256,16 +256,16 @@
         },
         {
             "name": "ichiloto/engine",
-            "version": "0.5.0",
+            "version": "dev-develop",
             "source": {
                 "type": "git",
                 "url": "https://github.com/ichiloto/engine.git",
-                "reference": "6c0c3dfc177796b5af3d6951a0c85a321a3ba8ce"
+                "reference": "2161b83d8ac9ef1a7153dc0d5001994a3caff551"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/ichiloto/engine/zipball/6c0c3dfc177796b5af3d6951a0c85a321a3ba8ce",
-                "reference": "6c0c3dfc177796b5af3d6951a0c85a321a3ba8ce",
+                "url": "https://api.github.com/repos/ichiloto/engine/zipball/2161b83d8ac9ef1a7153dc0d5001994a3caff551",
+                "reference": "2161b83d8ac9ef1a7153dc0d5001994a3caff551",
                 "shasum": ""
             },
             "require": {
@@ -304,9 +304,9 @@
             "description": "A simple game engine for making terminal based JRPGs, lovingly written in PHP.",
             "support": {
                 "issues": "https://github.com/ichiloto/engine/issues",
-                "source": "https://github.com/ichiloto/engine/tree/0.5.0"
+                "source": "https://github.com/ichiloto/engine/tree/develop"
             },
-            "time": "2026-08-21T17:13:04+00:00"
+            "time": "2026-09-22T13:49:38+00:00"
         },
         {
             "name": "league/climate",
@@ -4806,7 +4806,9 @@
     ],
     "aliases": [],
     "minimum-stability": "stable",
-    "stability-flags": {},
+    "stability-flags": {
+        "ichiloto/engine": 20
+    },
     "prefer-stable": false,
     "prefer-lowest": false,
     "platform": {

@@ -91,6 +91,10 @@ Press `?` anywhere for every shortcut the current context offers, and `Ctrl+P` f
 
 ## Local Development
 
+Editor development currently tracks Engine `dev-develop` for the shared
+cinematic route-validation API. `composer.lock` pins the published Engine
+revision used by local tests and CI.
+
 Install and verify from the `editor` repo:
 
 ```bash
