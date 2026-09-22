@@ -23,6 +23,8 @@ use Throwable;
  */
 final readonly class ProjectWorkspace
 {
+    /** Preview title and map metadata lines preceding the rendered grid. */
+    public const int CANVAS_HEADER_ROWS = 2;
     /**
      * @param ProjectMap[] $maps
      * @param array<string, ProjectRecordDatabase> $recordDatabases Schema-driven categories, keyed by category key.
@@ -300,7 +302,7 @@ final readonly class ProjectWorkspace
             ];
         }
 
-        $previewHeight = max(0, $height - 2);
+        $previewHeight = max(0, $height - self::CANVAS_HEADER_ROWS);
         $previewLines = $selectedMap->renderPreview($width, $previewHeight, $offsetX, $offsetY, $showEventOverlay, $showNpcOverlay, $selectedNpcIndex, $selectedNpcSprite);
 
         return [

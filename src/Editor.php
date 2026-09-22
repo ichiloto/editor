@@ -149,6 +149,8 @@ final class Editor
     /** Rows or columns one wheel tick scrolls the canvas viewport. */
     private const int WHEEL_SCROLL_ROWS = 3;
     private const int WINDOW_HORIZONTAL_PADDING = 1;
+    /** Top and bottom borders surrounding window content. */
+    private const int WINDOW_BORDER_ROWS = 2;
     private const string GUARD_ACTION_QUIT = 'quit';
     private const string GUARD_ACTION_RELOAD = 'reload';
     /**
@@ -4313,8 +4315,8 @@ final class Editor
             return true;
         }
 
-        $viewportWidth = $bounds['right'] - $bounds['left'] + 1;
-        $viewportHeight = $bounds['bottom'] - $bounds['top'] + 1;
+        $viewportWidth = $bounds['width'];
+        $viewportHeight = $bounds['height'];
         $maxOffsetX = max(0, $selectedMap->getWidth() - $viewportWidth);
         $maxOffsetY = max(0, $selectedMap->getHeight() - $viewportHeight);
         $nextOffsetX = max(0, min($maxOffsetX, $this->canvasOffsetX + $deltaX));
@@ -4331,21 +4333,26 @@ final class Editor
         return true;
     }
 
-    /** @return array{left: int, top: int, right: int, bottom: int} */
-    private function getCanvasPreviewBounds(): array
+    /**
+     * Shared geometry for rendering, cursor visibility, hit testing and scrolling.
+     * @return array{left: int, top: int, right: int, bottom: int, width: int, height: int}
+     */
+    private function getCanvasPreviewBounds(?array $layout = null): array
     {
-        $layout = $this->resolveLayout();
+        $layout ??= $this->resolveLayout();
         $contentWidth = $this->getWindowContentWidth($layout['centerWidth']);
-        $previewHeight = max(1, $layout['contentHeight'] - 4);
+        $previewHeight = max(1, $layout['contentHeight'] - self::WINDOW_BORDER_ROWS - ProjectWorkspace::CANVAS_HEADER_ROWS);
         $canvasLeft = 2 + $layout['leftWidth'] + $layout['gutter'];
         $canvasTop = 5;
         $mapLeft = $canvasLeft + 1 + self::WINDOW_HORIZONTAL_PADDING;
-        $mapTop = $canvasTop + 3;
+        $mapTop = $canvasTop + 1 + ProjectWorkspace::CANVAS_HEADER_ROWS;
         return [
             'left' => $mapLeft,
             'top' => $mapTop,
             'right' => $mapLeft + $contentWidth - 1,
             'bottom' => $mapTop + $previewHeight - 1,
+            'width' => $contentWidth,
+            'height' => $previewHeight,
         ];
     }
 
@@ -13777,9 +13784,9 @@ final class Editor
             return;
         }
 
-        $layout = $this->resolveLayout();
-        $viewportWidth = max(1, $layout['centerWidth'] - 2);
-        $viewportHeight = max(1, $layout['contentHeight'] - 4);
+        $bounds = $this->getCanvasPreviewBounds();
+        $viewportWidth = $bounds['width'];
+        $viewportHeight = $bounds['height'];
         $this->canvasOffsetX = max(0, min(max(0, $selectedMap->getWidth() - $viewportWidth), $this->canvasOffsetX));
         $this->canvasOffsetY = max(0, min(max(0, $selectedMap->getHeight() - $viewportHeight), $this->canvasOffsetY));
     }
@@ -13816,9 +13823,9 @@ final class Editor
      */
     private function syncViewportToCursor(): void
     {
-        $layout = $this->resolveLayout();
-        $viewportWidth = max(1, $layout['centerWidth'] - 2);
-        $viewportHeight = max(1, $layout['contentHeight'] - 4);
+        $bounds = $this->getCanvasPreviewBounds();
+        $viewportWidth = $bounds['width'];
+        $viewportHeight = $bounds['height'];
 
         if ($this->cursorX < $this->canvasOffsetX) {
             $this->canvasOffsetX = $this->cursorX;
@@ -13966,20 +13973,19 @@ final class Editor
 
         $previewRow = $this->cursorY - $this->canvasOffsetY;
         $previewColumn = $this->cursorX - $this->canvasOffsetX;
-        $previewHeight = max(1, $layout['contentHeight'] - 4);
-        $previewWidth = $this->getWindowContentWidth($layout['centerWidth']);
+        $bounds = $this->getCanvasPreviewBounds($layout);
+        $previewHeight = $bounds['height'];
+        $previewWidth = $bounds['width'];
 
         if ($previewRow < 0 || $previewRow >= $previewHeight || $previewColumn < 0 || $previewColumn >= $previewWidth) {
             Console::cursor()->hide();
             return;
         }
 
-        $canvasLeft = 2 + $layout['leftWidth'] + $layout['gutter'];
-        $canvasTop = 5;
         Console::cursor()->show();
         Console::cursor()->moveTo(
-            $canvasLeft + 1 + self::WINDOW_HORIZONTAL_PADDING + $previewColumn,
-            $canvasTop + 3 + $previewRow
+            $bounds['left'] + $previewColumn,
+            $bounds['top'] + $previewRow
         );
     }
 
@@ -17873,7 +17879,9 @@ final class Editor
     private function createCanvasWindow(): EditorWindow
     {
         $layout = $this->resolveLayout();
-        $contentWidth = $this->getWindowContentWidth($layout['centerWidth']);
+        $bounds = $this->getCanvasPreviewBounds($layout);
+        $contentWidth = $bounds['width'];
+        $contentHeight = $bounds['height'] + ProjectWorkspace::CANVAS_HEADER_ROWS;
 
         return new EditorWindow(
             title: $this->focusedPane === self::FOCUS_CANVAS ? 'Canvas [Focus]' : 'Canvas',
@@ -17909,7 +17917,7 @@ final class Editor
                 $this->workspace?->getCanvasLines(
                     $this->selectedAssetIndex,
                     $contentWidth,
-                    max(1, $layout['contentHeight'] - 2),
+                    $contentHeight,
                     $this->canvasOffsetX,
                     $this->canvasOffsetY,
                     $this->showEventOverlay,
@@ -17919,7 +17927,7 @@ final class Editor
                     ['x' => $this->cursorX, 'y' => $this->cursorY],
                 ) ?? [],
                 $contentWidth,
-                $layout['contentHeight'] - 2
+                $contentHeight
             ),
         );
     }
