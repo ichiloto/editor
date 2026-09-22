@@ -18,6 +18,8 @@ final class Clipboard
      * @var array<int, array<int, string>> Rows of symbols, top-left first.
      */
     private array $rows = [];
+    /** @var array<int, array<int, array{prefix: string, suffix: string}>> */
+    private array $styles = [];
     /**
      * The layer the block was lifted from (a PaintStrokeCommand LAYER_* value).
      */
@@ -28,11 +30,13 @@ final class Clipboard
      *
      * @param array<int, array<int, string>> $rows Rows of symbols, top-left first.
      * @param string $layer The source layer.
+     * @param array<int, array<int, array{prefix: string, suffix: string}>> $styles Optional tile styles, aligned with rows.
      * @return void
      */
-    public function store(array $rows, string $layer): void
+    public function store(array $rows, string $layer, array $styles = []): void
     {
         $this->rows = array_values(array_map(static fn(array $row): array => array_values($row), $rows));
+        $this->styles = array_values(array_map(static fn(array $row): array => array_values($row), $styles));
         $this->layer = $layer;
     }
 
@@ -44,6 +48,7 @@ final class Clipboard
     public function clear(): void
     {
         $this->rows = [];
+        $this->styles = [];
         $this->layer = '';
     }
 
@@ -100,7 +105,7 @@ final class Clipboard
      * @param int $originY The paste origin y coordinate.
      * @param int $width The target map width.
      * @param int $height The target map height.
-     * @return array<int, array{x: int, y: int, symbol: string}> The clipped placements.
+     * @return array<int, array{x: int, y: int, symbol: string, style?: array{prefix: string, suffix: string}}> The clipped placements.
      */
     public function project(int $originX, int $originY, int $width, int $height): array
     {
@@ -115,7 +120,13 @@ final class Clipboard
                     continue;
                 }
 
-                $placements[] = ['x' => $x, 'y' => $y, 'symbol' => $symbol];
+                $placement = ['x' => $x, 'y' => $y, 'symbol' => $symbol];
+
+                if (isset($this->styles[$rowIndex][$columnIndex])) {
+                    $placement['style'] = $this->styles[$rowIndex][$columnIndex];
+                }
+
+                $placements[] = $placement;
             }
         }
 

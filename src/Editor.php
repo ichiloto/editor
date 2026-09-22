@@ -4288,6 +4288,13 @@ final class Editor
      */
     private function handleCanvasWheelScroll(MouseEvent $event): bool
     {
+        $bounds = $this->getCanvasPreviewBounds();
+
+        if ($event->x < $bounds['left'] || $event->x > $bounds['right']
+            || $event->y < $bounds['top'] || $event->y > $bounds['bottom']) {
+            return true;
+        }
+
         $selectedMap = $this->getSelectedMap();
 
         if (! $selectedMap instanceof ProjectMap) {
@@ -4306,9 +4313,8 @@ final class Editor
             return true;
         }
 
-        $layout = $this->resolveLayout();
-        $viewportWidth = max(1, $layout['centerWidth'] - 2);
-        $viewportHeight = max(1, $layout['contentHeight'] - 4);
+        $viewportWidth = $bounds['right'] - $bounds['left'] + 1;
+        $viewportHeight = $bounds['bottom'] - $bounds['top'] + 1;
         $maxOffsetX = max(0, $selectedMap->getWidth() - $viewportWidth);
         $maxOffsetY = max(0, $selectedMap->getHeight() - $viewportHeight);
         $nextOffsetX = max(0, min($maxOffsetX, $this->canvasOffsetX + $deltaX));
@@ -4325,13 +4331,8 @@ final class Editor
         return true;
     }
 
-    /**
-     * Handles mouse editing over the canvas preview.
-     *
-     * @param MouseEvent $event The mouse event.
-     * @return bool
-     */
-    private function handleCanvasMouseEdit(MouseEvent $event): bool
+    /** @return array{left: int, top: int, right: int, bottom: int} */
+    private function getCanvasPreviewBounds(): array
     {
         $layout = $this->resolveLayout();
         $contentWidth = $this->getWindowContentWidth($layout['centerWidth']);
@@ -4340,8 +4341,22 @@ final class Editor
         $canvasTop = 5;
         $mapLeft = $canvasLeft + 1 + self::WINDOW_HORIZONTAL_PADDING;
         $mapTop = $canvasTop + 3;
-        $mapRight = $mapLeft + $contentWidth - 1;
-        $mapBottom = $mapTop + $previewHeight - 1;
+        return [
+            'left' => $mapLeft,
+            'top' => $mapTop,
+            'right' => $mapLeft + $contentWidth - 1,
+            'bottom' => $mapTop + $previewHeight - 1,
+        ];
+    }
+
+    /** Handles mouse editing over the canvas preview. */
+    private function handleCanvasMouseEdit(MouseEvent $event): bool
+    {
+        $bounds = $this->getCanvasPreviewBounds();
+        $mapLeft = $bounds['left'];
+        $mapTop = $bounds['top'];
+        $mapRight = $bounds['right'];
+        $mapBottom = $bounds['bottom'];
 
         if ($event->x < $mapLeft || $event->x > $mapRight || $event->y < $mapTop || $event->y > $mapBottom) {
             return true;
@@ -4699,7 +4714,7 @@ final class Editor
      * PaintStrokeCommand, so each undoes in exactly one Ctrl+Z.
      *
      * @param ProjectMap $map The target map.
-     * @param array<int, array{x: int, y: int, symbol: string}> $writes The cells to write.
+     * @param array<int, array{x: int, y: int, symbol: string, color?: string|null, style?: array{prefix: string, suffix: string}}> $writes The cells to write.
      * @param string $label The undo/status label.
      * @return int The number of cells that actually changed.
      */
@@ -4723,11 +4738,13 @@ final class Editor
 
             if ($isTileLayer) {
                 $oldStyle = $map->getTileCellStyle($write['x'], $write['y']);
-                [$newPrefix, $newSuffix] = $this->resolvePaintStyle(
-                    $write['symbol'],
-                    array_key_exists('color', $write) ? $write['color'] : null,
-                    $oldStyle,
-                );
+                [$newPrefix, $newSuffix] = isset($write['style'])
+                    ? [$write['style']['prefix'], $write['style']['suffix']]
+                    : $this->resolvePaintStyle(
+                        $write['symbol'],
+                        $write['color'] ?? null,
+                        $oldStyle,
+                    );
                 $map->setTileCell($write['x'], $write['y'], $write['symbol'], $newPrefix, $newSuffix);
                 $newSymbol = $this->readCanvasSymbol($map, $write['x'], $write['y']);
                 $stroke->appendCell(
@@ -5138,7 +5155,7 @@ final class Editor
     }
 
     /**
-     * Copies the selected region's symbols into the clipboard.
+     * Copies the selected region's symbols and authored tile styles into the clipboard.
      *
      * @return int The number of captured cells.
      */
@@ -5158,18 +5175,25 @@ final class Editor
 
         $selection = $this->canvasSelection;
         $rows = [];
+        $styles = [];
 
         for ($rowIndex = 0; $rowIndex < $selection['height']; $rowIndex++) {
             $row = [];
+            $styleRow = [];
 
             for ($columnIndex = 0; $columnIndex < $selection['width']; $columnIndex++) {
                 $row[] = $this->readCanvasSymbol($selectedMap, $selection['x'] + $columnIndex, $selection['y'] + $rowIndex);
+
+                if ($this->getActiveCanvasLayer() === PaintStrokeCommand::LAYER_TILE) {
+                    $styleRow[] = $selectedMap->getTileCellStyle($selection['x'] + $columnIndex, $selection['y'] + $rowIndex);
+                }
             }
 
             $rows[] = $row;
+            $styles[] = $styleRow;
         }
 
-        $this->clipboard->store($rows, $this->getActiveCanvasLayer());
+        $this->clipboard->store($rows, $this->getActiveCanvasLayer(), $styles);
 
         return $selection['width'] * $selection['height'];
     }
