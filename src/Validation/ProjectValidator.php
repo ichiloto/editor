@@ -3097,7 +3097,24 @@ class ProjectValidator
     array $commonEventStack = [],
   ): array
   {
+    $context = ['npcIds' => $npcIds, 'mapId' => $mapId, 'npcIdsByMap' => $npcIdsByMap];
+
+    return $this->walkEventCommands($commands, $where, $known, $context, $commonEventStack);
+  }
+
+  /**
+   * Nested sequences and Common Events share the caller's current map.
+   * Independent entry points receive a fresh context through checkCommands().
+   * @param array<int, mixed> $commands
+   * @param array<string, string[]> $known
+   * @param array{npcIds: string[]|null, mapId: string|null, npcIdsByMap: array<string, string[]>} $context
+   * @param string[] $commonEventStack
+   * @return Issue[]
+   */
+  protected function walkEventCommands(array $commands, string $where, array $known, array &$context, array $commonEventStack = []): array
+  {
     $issues = [];
+    $npcIdsByMap = $context['npcIdsByMap'];
 
     foreach ($commands as $command) {
       if (! is_array($command)) {
@@ -3114,9 +3131,7 @@ class ProjectValidator
         );
       }
 
-      if ($type === 'knowledge') {
-        $issues = [...$issues, ...$this->checkKnowledgeCommand($command, $where)];
-      }
+      $issues = [...$issues, ...$this->checkSharedCommandSemantics($command, $where, $context['npcIds'], $context['mapId'])];
 
       $named = match ($type) {
         'give_item' => ['inventory', 'item', 'item'],
@@ -3133,13 +3148,6 @@ class ProjectValidator
         $issues = [
           ...$issues,
           ...$this->checkReference(strval($command[$key] ?? ''), $category, $noun, $where, $known),
-        ];
-      }
-
-      if ($type === 'move_route') {
-        $issues = [
-          ...$issues,
-          ...$this->checkMovementRoute($command, $where, $npcIds, $mapId),
         ];
       }
 
@@ -3164,13 +3172,11 @@ class ProjectValidator
             if (in_array($eventId, $commonEventStack, true)) {
               $issues[] = $this->getCommonEventCycleIssue($where, [...$commonEventStack, $eventId]);
             } else {
-              $issues = [...$issues, ...$this->checkCommands(
+              $issues = [...$issues, ...$this->walkEventCommands(
                 $this->commonEventScripts[$eventId],
                 sprintf('%s common event %s', $where, $eventId),
                 $known,
-                $npcIds,
-                $mapId,
-                $npcIdsByMap,
+                $context,
                 [...$commonEventStack, $eventId],
               )];
             }
@@ -3178,23 +3184,14 @@ class ProjectValidator
         }
       }
 
-      if ($type === 'start_battle') {
-        $issues = [
-          ...$issues,
-          ...$this->checkBattleContinuation($command, $where),
-        ];
-      }
-
       $issues = [...$issues, ...$this->checkConditions((array) ($command['conditions'] ?? []), $where, $known)];
 
       if ($type === 'sequence') {
-        $issues = [...$issues, ...$this->checkCommands(
+        $issues = [...$issues, ...$this->walkEventCommands(
           (array) ($command['commands'] ?? []),
           $where,
           $known,
-          $npcIds,
-          $mapId,
-          $npcIdsByMap,
+          $context,
           $commonEventStack,
         )];
       }
@@ -3206,54 +3203,66 @@ class ProjectValidator
           }
 
           $laneCommands = array_is_list($lane) ? $lane : (array) ($lane['commands'] ?? []);
-          $issues = [...$issues, ...$this->checkCommands(
+          $issues = [...$issues, ...$this->walkEventCommands(
             $laneCommands,
             $where,
             $known,
-            $npcIds,
-            $mapId,
-            $npcIdsByMap,
+            $context,
             $commonEventStack,
           )];
         }
       }
 
-      // A choice hides its commands one level down, per option.
+      // Alternative arms start on the same map, not at the end of a sibling arm.
+      $branchContexts = [];
       foreach ((array) ($command['options'] ?? []) as $option) {
         if (is_array($option)) {
-          $issues = [...$issues, ...$this->checkCommands(
+          $branchContext = $context;
+          $issues = [...$issues, ...$this->walkEventCommands(
             (array) ($option['then'] ?? []),
             $where,
             $known,
-            $npcIds,
-            $mapId,
-            $npcIdsByMap,
+            $branchContext,
             $commonEventStack,
           )];
+          $branchContexts[] = $branchContext;
         }
       }
 
       foreach (['then', 'else', 'cancel'] as $arm) {
-        $issues = [...$issues, ...$this->checkCommands(
+        if (! array_key_exists($arm, $command)) {
+          continue;
+        }
+
+        $branchContext = $context;
+        $issues = [...$issues, ...$this->walkEventCommands(
           (array) ($command[$arm] ?? []),
           $where,
           $known,
-          $npcIds,
-          $mapId,
-          $npcIdsByMap,
+          $branchContext,
           $commonEventStack,
         )];
+        $branchContexts[] = $branchContext;
+      }
+
+      if ($branchContexts !== []) {
+        // An omitted alternative can leave the current map unchanged.
+        if (($type === 'branch' && (! isset($command['then']) || ! isset($command['else'])))
+          || ($type === 'choice' && ! isset($command['cancel']))) {
+          $branchContexts[] = $context;
+        }
+        $this->mergeCommandMapContexts($context, $branchContexts);
       }
 
       if ($type === 'transfer') {
         $destination = trim(strval($command['map'] ?? ''));
 
         if ($destination !== '' && array_key_exists($destination, $npcIdsByMap)) {
-          $mapId = $destination;
-          $npcIds = $npcIdsByMap[$destination];
+          $context['mapId'] = $destination;
+          $context['npcIds'] = $npcIdsByMap[$destination];
         } else {
-          $mapId = $destination !== '' ? $destination : $mapId;
-          $npcIds = null;
+          $context['mapId'] = $destination !== '' ? $destination : $context['mapId'];
+          $context['npcIds'] = null;
         }
       }
     }
@@ -3262,13 +3271,43 @@ class ProjectValidator
   }
 
   /**
-   * Checks one deterministic, awaited movement route.
+   * A command after a branch can address only NPCs present on every possible map.
+   * Unknown map contents remain unknown rather than inventing an empty NPC list.
+   * @param array{mapId: string|null, npcIds: string[]|null, npcIdsByMap: array<string, string[]>} $context
+   * @param array<array{mapId: string|null, npcIds: string[]|null}> $branches
+   */
+  protected function mergeCommandMapContexts(array &$context, array $branches): void
+  {
+    $mapIds = array_unique(array_column($branches, 'mapId'));
+    $context['mapId'] = in_array(null, $mapIds, true) ? null : implode(' or ', $mapIds);
+    $npcLists = array_column($branches, 'npcIds');
+    $context['npcIds'] = in_array(null, $npcLists, true) ? null : array_values(array_intersect(...$npcLists));
+  }
+
+  /**
+   * Shared project/runtime checks used by both event ownership paths.
+   * @param array<string, mixed> $command
+   * @param string[]|null $npcIds
+   * @return Issue[]
+   */
+  protected function checkSharedCommandSemantics(array $command, string $where, ?array $npcIds, ?string $mapId, bool $cinematic = false): array
+  {
+    return match ($command['type'] ?? '') {
+      'knowledge' => $this->checkKnowledgeCommand($command, $where),
+      'start_battle' => $this->checkBattleContinuation($command, $where),
+      'move_route' => $this->checkMovementRoute($command, $where, $npcIds, $mapId, $cinematic),
+      default => [],
+    };
+  }
+
+  /**
+   * Checks one deterministic, awaited movement route in its owning lifecycle.
    *
    * @param array<string, mixed> $command The route command.
    * @param string[]|null $npcIds Current-map NPC ids, or null without map context.
    * @return Issue[] The issues found.
    */
-  protected function checkMovementRoute(array $command, string $where, ?array $npcIds, ?string $mapId): array
+  protected function checkMovementRoute(array $command, string $where, ?array $npcIds, ?string $mapId, bool $cinematic = false): array
   {
     $issues = [];
 
@@ -3284,15 +3323,17 @@ class ProjectValidator
 
     $subject = strtolower(trim(strval($command['subject'] ?? 'player')));
 
-    if (! in_array($subject, ['player', 'npc'], true)) {
+    $subjects = $cinematic ? ['player', 'npc', 'staged_actor'] : ['player', 'npc'];
+
+    if (! in_array($subject, $subjects, true)) {
       $issues[] = Issue::error(
         $where,
         sprintf('A movement route uses unsupported subject "%s".', $subject !== '' ? $subject : '(empty)'),
-        'Choose player or npc.'
+        'Choose ' . implode(', ', $subjects) . '.'
       );
     }
 
-    if (array_key_exists('remember', $command) || array_key_exists('retrace', $command)) {
+    if (! $cinematic && (array_key_exists('remember', $command) || array_key_exists('retrace', $command))) {
       $issues[] = Issue::error(
         $where,
         'Recorded movement routes require an active cinematic session.',
@@ -3304,7 +3345,7 @@ class ProjectValidator
 
     if ($subject === 'npc' && $npcId === '') {
       $issues[] = Issue::error($where, 'An NPC movement route has no npcId.', 'Choose a stable current-map NPC id.');
-    } elseif ($subject === 'npc' && $npcIds !== null && ! in_array($npcId, $npcIds, true)) {
+    } elseif (! $cinematic && $subject === 'npc' && $npcIds !== null && ! in_array($npcId, $npcIds, true)) {
       $issues[] = Issue::error(
         $where,
         sprintf('The route targets NPC id "%s", which is not on map "%s".', $npcId, $mapId ?? '(unknown)'),

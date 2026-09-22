@@ -204,6 +204,10 @@ trait CutsceneValidation
                 continue; // The Engine already refused the tree.
             }
 
+            $issues = [...$issues, ...$this->checkSharedCommandSemantics(
+                $command, $where, $context['npcIds'], $context['mapId'], cinematic: true,
+            )];
+
             $named = match ($type) {
                 'give_item' => ['inventory', 'item', 'item'],
                 'play_music' => ['bgm', 'music', 'track'],
@@ -329,24 +333,25 @@ trait CutsceneValidation
 
         $commands = $this->commonEventScripts[$eventId];
         $eventWhere = sprintf('%s common event %s', $where, $eventId);
+        $issues = [];
 
         try {
             CinematicScriptValidator::validate($commands, sprintf('%s:common_event:%s', $where, $eventId));
         } catch (Throwable $throwable) {
-            return [Issue::error(
+            $issues[] = Issue::error(
                 $eventWhere,
                 $throwable->getMessage(),
                 'The Engine refuses this Common Event in a cinematic session; the message names the command path.',
-            )];
+            );
         }
 
-        return $this->walkCinematicCommands(
+        return [...$issues, ...$this->walkCinematicCommands(
             $commands,
             $eventWhere,
             $known,
             $context,
             [...$commonEventStack, $eventId],
-        );
+        )];
     }
 
     /**
