@@ -95,6 +95,11 @@ Editor development currently tracks Engine `dev-develop` for the shared
 cinematic route-validation API. `composer.lock` pins the published Engine
 revision used by local tests and CI.
 
+`dev-develop` is for unreleased integration. Before publishing an Editor
+release, require a compatible released Engine version, refresh the lockfile,
+and verify a clean Console installation with Composer's default stable
+dependency settings.
+
 Install and verify from the `editor` repo:
 
 ```bash
