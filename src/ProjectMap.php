@@ -32,6 +32,13 @@ final class ProjectMap
      */
     private array $tileCells;
     /**
+     * The tile cells as loaded, so a row that ends up unchanged is written
+     * back as its original bytes rather than rebuilt.
+     *
+     * @var array<int, array<int, array{symbol: string, prefix: string, suffix: string}>>
+     */
+    private array $loadedTileCells;
+    /**
      * @var array<int, array<int, string>>
      */
     private array $eventCells;
@@ -101,6 +108,7 @@ final class ProjectMap
     ) {
         $this->editableData = $data;
         $this->tileCells = self::parseStyledLines($tileLines);
+        $this->loadedTileCells = $this->tileCells;
         $this->eventCells = self::parsePlainLines($eventLines);
         $this->loadedData = $data;
         $this->adoptDataSource($dataSource ?? "<?php\n\nreturn " . self::exportPhpValue($data) . ";\n");
@@ -410,6 +418,8 @@ final class ProjectMap
      * The 4-bit ANSI foreground codes for the formatter's colour names.
      * `gray` is the formatter's name for bright black.
      */
+    private const string STYLE_CLOSE_TAG = '</>';
+
     private const array ANSI_FOREGROUNDS = [
         'black' => 30, 'red' => 31, 'green' => 32, 'yellow' => 33,
         'blue' => 34, 'magenta' => 35, 'cyan' => 36, 'white' => 37,
@@ -430,11 +440,11 @@ final class ProjectMap
      */
     private static function ansiOpenForPrefix(string $prefix): ?string
     {
-        if ($prefix === '' || preg_match('/<fg=([^;>]+)[^>]*>/', $prefix, $matches) !== 1) {
+        $value = self::getInnermostForeground($prefix);
+
+        if ($value === null) {
             return null;
         }
-
-        $value = $matches[1];
 
         if (isset(self::ANSI_FOREGROUNDS[$value])) {
             return sprintf("\033[%dm", self::ANSI_FOREGROUNDS[$value]);
@@ -572,13 +582,23 @@ final class ProjectMap
      */
     public function getTileColor(int $x, int $y): ?string
     {
-        $style = $this->getTileCellStyle($x, $y);
+        return self::getInnermostForeground($this->getTileCellStyle($x, $y)['prefix']);
+    }
 
-        if (preg_match('/<fg=([^;>]+)[^>]*>/', $style['prefix'], $matches) === 1) {
-            return $matches[1];
+    /**
+     * Returns the `fg=` value a styling prefix renders in. Nested tags
+     * override outer ones, so the last declared foreground wins.
+     *
+     * @param string $prefix The cell's styling prefix bytes.
+     * @return string|null The `fg=` value, or null when none is declared.
+     */
+    private static function getInnermostForeground(string $prefix): ?string
+    {
+        if (preg_match_all('/<[^>]*\bfg=([^;>]+)[^>]*>/', $prefix, $matches) < 1) {
+            return null;
         }
 
-        return null;
+        return $matches[1][array_key_last($matches[1])];
     }
 
     /**
@@ -1672,29 +1692,26 @@ final class ProjectMap
             preg_match_all('/<[^>]+>|[^<]+/u', $line, $matches);
             $segments = $matches[0] ?? [];
             $cells = [];
-            $activePrefix = '';
+            $openTags = [];
 
             foreach ($segments as $segment) {
                 if (preg_match('/^<[^\/][^>]*>$/u', $segment) === 1) {
-                    $activePrefix .= $segment;
+                    $openTags[] = $segment;
                     continue;
                 }
 
-                if (preg_match('/^<\/[^>]*>$/u', $segment) === 1 || $segment === '</>') {
-                    if ($cells !== []) {
-                        $cells[array_key_last($cells)]['suffix'] .= $segment;
-                    }
-
-                    $activePrefix = '';
+                if (preg_match('/^<\/[^>]*>$/u', $segment) === 1) {
+                    array_pop($openTags);
                     continue;
                 }
 
-                foreach (self::toSymbols($segment) as $index => $symbol) {
-                    $cells[] = [
-                        'symbol' => $symbol,
-                        'prefix' => $index === 0 ? $activePrefix : '',
-                        'suffix' => '',
-                    ];
+                // Each cell carries the complete style it renders in, so a
+                // cell inside a run is as coloured as the run's first cell.
+                $prefix = implode('', $openTags);
+                $suffix = str_repeat(self::STYLE_CLOSE_TAG, count($openTags));
+
+                foreach (self::toSymbols($segment) as $symbol) {
+                    $cells[] = ['symbol' => $symbol, 'prefix' => $prefix, 'suffix' => $suffix];
                 }
             }
 
@@ -1760,15 +1777,43 @@ final class ProjectMap
      * @param array<int, array{symbol: string, prefix: string, suffix: string}> $cells The tile cells.
      * @return string
      */
-    private function buildStyledLine(array $cells): string
+    private static function buildStyledLine(array $cells): string
     {
         $line = '';
+        $open = null;
 
         foreach ($cells as $cell) {
-            $line .= $cell['prefix'] . $cell['symbol'] . $cell['suffix'];
+            $style = [$cell['prefix'], $cell['suffix']];
+
+            if ($style !== $open) {
+                $line .= ($open[1] ?? '') . $style[0];
+                $open = $style;
+            }
+
+            $line .= $cell['symbol'];
         }
 
-        return $line;
+        return $line . ($open[1] ?? '');
+    }
+
+    /**
+     * Rebuilds every tile row. A row whose cells still match what was
+     * loaded keeps its original bytes; an edited row is written as runs of
+     * identically styled cells.
+     *
+     * @return string[]
+     */
+    private function buildStyledLines(): array
+    {
+        $lines = [];
+
+        foreach ($this->tileCells as $rowIndex => $cells) {
+            $lines[] = isset($this->tileLines[$rowIndex]) && ($this->loadedTileCells[$rowIndex] ?? null) === $cells
+                ? $this->tileLines[$rowIndex]
+                : self::buildStyledLine($cells);
+        }
+
+        return $lines;
     }
 
     /**
@@ -1798,7 +1843,7 @@ final class ProjectMap
     private function buildMapPayload(): string
     {
         return MapGridSource::buildSource(
-            implode(PHP_EOL, array_map($this->buildStyledLine(...), $this->tileCells)),
+            implode(PHP_EOL, $this->buildStyledLines()),
             'ICHILOTO_MAP',
         );
     }
@@ -1898,7 +1943,7 @@ final class ProjectMap
             $transaction->remove($this->eventPath);
 
             $expectedGrids = [
-                $movedMapPath => array_map($this->buildStyledLine(...), $this->tileCells),
+                $movedMapPath => $this->buildStyledLines(),
                 $movedEventPath => array_map($this->buildPlainLine(...), $this->eventCells),
             ];
             $sourceDirectoryMetadata = self::captureDirectoryMetadata($previousDirectory);

@@ -252,9 +252,10 @@ styling authored by hand.
 - **Keep cell colour** (the default): painting changes the glyph and leaves
   each cell's existing styling byte-for-byte, authored options included.
 - **No colour**: painting strips styling and writes plain glyphs.
-- **A colour**: painting writes the glyph in that colour. Selecting a
-  colour under the brush tool also recolours the cell at the cursor in
-  place, keeping its glyph, as one undoable stroke.
+- **A colour**: painting writes the glyph in that colour. Choosing a
+  colour recolours in place, keeping the glyphs, as one undoable stroke:
+  with a selection active (`s`), every cell in the selection; otherwise,
+  under the brush tool, the cell at the cursor. Spaces stay uncoloured.
 
 The eyedropper (`k` / `Ctrl+K`) picks up a cell's colour along with its
 glyph; an uncoloured cell loads an uncoloured brush. A painted space is

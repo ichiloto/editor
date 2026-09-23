@@ -745,3 +745,33 @@ it('shows the cursor locator in the canvas header', function () {
 
     expect($lines[1])->toContain('cursor 7,3');
 });
+
+it('recolours every cell of an active selection from the colour picker', function () {
+    $editor = canvasEditor();
+    /** @var ProjectWorkspace $workspace */
+    $workspace = getEditorProperty($editor, 'workspace');
+    $map = $workspace->getMapByIndex(0);
+
+    foreach ([2, 3, 4, 5] as $x) {
+        $map->setTileSymbol($x, 2, '#');
+    }
+
+    setEditorProperty($editor, 'canvasSelection', ['x' => 2, 'y' => 2, 'width' => 4, 'height' => 1]);
+    callEditorMethod($editor, 'dispatchInput', 'o');
+    // Down twice from 'Keep cell colour' lands on the first ANSI colour.
+    callEditorMethod($editor, 'dispatchInput', "\033[B");
+    callEditorMethod($editor, 'dispatchInput', "\033[B");
+    callEditorMethod($editor, 'dispatchInput', "\n");
+
+    foreach ([2, 3, 4, 5] as $x) {
+        expect($map->getTileSymbol($x, 2))->toBe('#')
+            ->and($map->getTileColor($x, 2))->toBe('black', "cell {$x} of the selection");
+    }
+
+    // One undo restores the whole recolour.
+    callEditorMethod($editor, 'dispatchInput', 'u');
+
+    foreach ([2, 3, 4, 5] as $x) {
+        expect($map->getTileColor($x, 2))->toBeNull();
+    }
+});

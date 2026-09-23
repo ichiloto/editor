@@ -4077,6 +4077,25 @@ final class Editor
     }
 
     /**
+     * Lists the cells a canvas selection covers, row by row.
+     *
+     * @param array{x: int, y: int, width: int, height: int} $selection The selection.
+     * @return array<int, array{x: int, y: int}>
+     */
+    private function getSelectionCells(array $selection): array
+    {
+        $cells = [];
+
+        for ($y = $selection['y']; $y < $selection['y'] + $selection['height']; $y++) {
+            for ($x = $selection['x']; $x < $selection['x'] + $selection['width']; $x++) {
+                $cells[] = ['x' => $x, 'y' => $y];
+            }
+        }
+
+        return $cells;
+    }
+
+    /**
      * Applies the selected palette colour to the brush, and under the brush
      * tool recolours the cell under the cursor in place.
      *
@@ -4099,17 +4118,27 @@ final class Editor
 
         if (
             $entry['value'] !== null
-            && $this->canvasTool === CanvasTool::BRUSH
             && $selectedMap instanceof ProjectMap
             && $this->editingMode !== self::MODE_EVENT
         ) {
-            // Recolour in place: the cell keeps its glyph and takes the
-            // brush colour, as one undoable stroke.
-            $symbol = $selectedMap->getTileSymbol($this->cursorX, $this->cursorY);
-            $this->paintCanvasCells(
+            // Recolour in place: cells keep their glyphs and take the brush
+            // colour, as one undoable stroke. A selection recolours every
+            // cell in it; otherwise the brush recolours the cursor cell.
+            $cells = $this->canvasSelection !== null
+                ? $this->getSelectionCells($this->canvasSelection)
+                : ($this->canvasTool === CanvasTool::BRUSH ? [['x' => $this->cursorX, 'y' => $this->cursorY]] : []);
+
+            $this->applyCanvasWrites(
                 $selectedMap,
-                [['x' => $this->cursorX, 'y' => $this->cursorY]],
-                $symbol,
+                array_map(
+                    fn(array $cell): array => [
+                        'x' => $cell['x'],
+                        'y' => $cell['y'],
+                        'symbol' => $selectedMap->getTileSymbol($cell['x'], $cell['y']),
+                        'color' => $this->selectedPaintColor,
+                    ],
+                    $cells,
+                ),
                 'Recolour',
             );
         }
