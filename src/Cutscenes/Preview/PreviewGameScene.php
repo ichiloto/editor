@@ -82,7 +82,7 @@ final class PreviewGameScene extends GameScene
         return $camera;
     }
 
-    public function transferPlayer(Location $location, bool $useConfiguredTransition = true): void
+    public function transferPlayer(Location $location, bool $useConfiguredTransition = true): bool
     {
         $this->transfers[] = [
             'map' => $location->mapFilename,
@@ -118,6 +118,7 @@ final class PreviewGameScene extends GameScene
 
         $this->eventInterpreter?->resumeAfterTransfer();
         $this->autoSave();
+        return true;
     }
 
     public function onEventSessionStarted(EventExecutionSession $session): void

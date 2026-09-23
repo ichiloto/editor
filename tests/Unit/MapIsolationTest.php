@@ -3,9 +3,11 @@
 declare(strict_types=1);
 
 use Ichiloto\Editor\MapSourceRefusal;
+use Ichiloto\Editor\Editor;
 use Ichiloto\Editor\Playtest\PlaytestOverlay;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
+use Ichiloto\Editor\Status\StatusLevel;
 use Ichiloto\Editor\Validation\ProjectValidator;
 use Ichiloto\Engine\Field\MapGridSource;
 
@@ -30,10 +32,19 @@ it('opens valid maps alongside multiple read-only invalid maps and reports each 
     $badIssues = array_values(array_filter($issues, static fn ($issue): bool => str_contains($issue->message, 'Map source is read-only')));
 
     expect(is_file($executed))->toBeFalse()
-        ->and($badA->getGridSourceIssue())->toContain('bad-a.map.php')
+        ->and($badA->getGridSourceIssue())->toContain('bad-a/bad-a.map.php: found T_STRING at line 2')
+        ->and($badA->getGridSourceIssue())->not->toContain($root)
         ->and($workspace->getCanvasLines(array_search('bad-a', $workspace->mapIds, true), 40, 10))->toContain('Read-only: repair this map before editing.')
         ->and($good->getGridSourceIssue())->toBeNull()
         ->and($badIssues)->toHaveCount(2);
+
+    /** @var Editor $editor */
+    $editor = createEditorForTesting($root);
+    setEditorProperty($editor, 'workspace', $workspace);
+    callEditorMethod($editor, 'reportRefusedMapsAtBoot');
+    expect(getEditorProperty($editor, 'statusMessage'))->toBe('2 map(s) are read-only (Ctrl+E for details).')
+        ->and(getEditorProperty($editor, 'statusLevel'))->toBe(StatusLevel::WARN)
+        ->and(getEditorProperty($editor, 'statusDetailLines'))->toHaveCount(2);
 
     expect(fn () => $badA->setMapField('name', 'Changed'))->toThrow(MapSourceRefusal::class, 'read-only');
     expect(fn () => $badA->save())->toThrow(MapSourceRefusal::class, 'read-only');

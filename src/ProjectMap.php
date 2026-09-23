@@ -207,13 +207,10 @@ final class ProjectMap
     private static function readGridSource(string $path, string $mapId): string
     {
         try {
-            return MapGridSource::readFile($path);
+            return MapGridSource::readFile($path, $mapId . '/' . basename($path));
         } catch (InvalidArgumentException $error) {
             throw new MapSourceRefusal(sprintf(
-                '%s: %s (%s) cannot be loaded or saved: %s Repair it as a literal nowdoc, then retry; nothing was changed.',
-                $mapId,
-                basename($path),
-                $path,
+                '%s The map cannot be loaded or saved. Repair it as a literal nowdoc, then retry; nothing was changed.',
                 $error->getMessage(),
             ), previous: $error);
         }
