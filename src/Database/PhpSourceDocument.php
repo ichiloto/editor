@@ -272,6 +272,21 @@ final class PhpSourceDocument
         $end = $span['end'];
         $source = $this->source;
 
+        // A comment may separate the value from its comma. Keep the comment,
+        // but remove the separator as well as the argument it belonged to.
+        $hasComment = false;
+        foreach (self::tokenize($source) as $token) {
+            if ($token['offset'] < $end) { continue; }
+            if (in_array($token['id'], [T_COMMENT, T_DOC_COMMENT], true)) { $hasComment = true; }
+            if (self::isSkippable($token)) { continue; }
+            if ($hasComment && $token['text'] === ',') {
+                return self::parse(substr($source, 0, $start)
+                    . substr($source, $end, $token['offset'] - $end)
+                    . substr($source, $token['offset'] + 1));
+            }
+            break;
+        }
+
         // Take the separator and the blank line the argument occupied with
         // it, so removing one never leaves a stray comma or an empty line.
         while ($end < strlen($source) && ($source[$end] === ' ' || $source[$end] === "\t")) {

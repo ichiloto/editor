@@ -176,3 +176,15 @@ PHP);
     expect(require $path)->toHaveCount(2)
         ->and(file_get_contents($path))->toContain("0), // Keep this note.\n");
 });
+
+it('clears a commented animation argument without leaving an orphan separator', function (): void {
+    $root = makeTemporaryProject();
+    $path = $root . '/assets/Data/skills.php';
+    file_put_contents($path, "<?php return [new \\Ichiloto\\Engine\\Entities\\Skills\\SpecialSkill('Skill', '', '', 0, 0, animationId: 12 /* authored note */, effects: [])];");
+    $database = ProjectSkillDatabase::fromProject($root);
+    $database->setField(0, 'animationId', null);
+    $database->save();
+    expect((require $path)[0]->animationId)->toBeNull()
+        ->and(file_get_contents($path))->not->toContain('animationId:')
+        ->and(file_get_contents($path))->toContain('/* authored note */');
+});
