@@ -10,6 +10,7 @@ use Atatusoft\Termutil\IO\Console\Console;
 use Atatusoft\Termutil\IO\Enumerations\Color;
 use Atatusoft\Termutil\IO\Mouse\Enumerations\MouseButton;
 use Ichiloto\Editor\Backup\BackupSettings;
+use Ichiloto\Editor\Actors\ActorIdentityMigration;
 use Ichiloto\Editor\Backup\BackupWriter;
 use Ichiloto\Editor\Canvas\CanvasTool;
 use Ichiloto\Editor\Canvas\Clipboard;
@@ -7756,6 +7757,11 @@ final class Editor
             $field = $this->optionDialogField;
             $title = $this->eventOptionDialogTitle;
 
+            if (($field['actorIdentityMigration'] ?? null) instanceof ProjectActor) {
+                $this->confirmActorIdentityMigration($field['actorIdentityMigration'], $selectedEntry['value'] === 'freeze');
+                return;
+            }
+
             try {
                 $this->applyInspectorFieldValue($field, (string) $selectedEntry['value']);
                 $this->closeEventOptionDialog(sprintf('Set %s to %s.', mb_strtolower($title), $selectedEntry['label']));
@@ -10232,17 +10238,17 @@ final class Editor
      * @param ProjectActor $actor The actor.
      * @return array<int, array<string, mixed>> The rows.
      */
-    private function actorIdentityFields(ProjectActor $actor): array
+    private function getActorIdentityFields(ProjectActor $actor): array
     {
         return [
             ['label' => 'Identity', 'value' => '', 'editable' => false, 'field' => ''],
             [
                 'label' => 'Definition Id',
                 'value' => $actor->hasDefinitionId() ? $actor->getDefinitionId() : '',
-                'control' => new InputControl(InputControlType::TEXT, $actor->hasDefinitionId() ? $actor->getDefinitionId() : ''),
-                'editable' => ! $actor->hasDefinitionId(),
+                'editable' => ! array_key_exists('id', $actor->getData()),
+                'actorIdentityMigration' => $actor,
                 'field' => 'id',
-                'displayDefault' => sprintf('Required: use the original identity (%s for an unmigrated legacy actor)', $actor->getName()),
+                'displayDefault' => sprintf('Enter to freeze the current name (%s) as its permanent id', $actor->getName()),
             ],
         ];
     }
@@ -10559,7 +10565,7 @@ final class Editor
         }
 
         return [
-            ...$this->actorIdentityFields($actor),
+            ...$this->getActorIdentityFields($actor),
             [
                 'label' => 'Name',
                 'value' => $actor->getName(),
@@ -10980,6 +10986,11 @@ final class Editor
             return;
         }
 
+        if (($field['actorIdentityMigration'] ?? null) instanceof ProjectActor) {
+            $this->openActorIdentityMigration($field['actorIdentityMigration']);
+            return;
+        }
+
         // A field that names another record is chosen from, never typed into.
         if (is_string($field['reference'] ?? null) && $this->openReferencePicker($field)) {
             return;
@@ -11033,6 +11044,47 @@ final class Editor
         $this->databaseEditCursorIndex = mb_strlen($this->databaseEditBuffer);
         $this->statusMessage = sprintf('Editing %s.', $field['label'] ?? 'field');
         $this->renderDatabasePanes(['settings']);
+    }
+
+    private function openActorIdentityMigration(ProjectActor $actor): void
+    {
+        $this->optionDialogField = ['actorIdentityMigration' => $actor];
+        $this->eventOptionDialogMarker = null;
+        $this->eventOptionDialogPath = null;
+        $this->eventOptionDialogTitle = 'Freeze actor identity';
+        $this->eventOptionDialogEntries = [
+            ['label' => 'Cancel', 'value' => 'cancel', 'description' => 'Leave the actor unchanged.'],
+            ['label' => sprintf('Freeze "%s" as the permanent id', $actor->getName()), 'value' => 'freeze',
+                'description' => 'Later display-name changes will keep this identity. Save the project to write it.'],
+        ];
+        $this->selectedEventOptionIndex = 0;
+        $this->dialogFilter->clear();
+        $this->isEventOptionDialogOpen = true;
+        $this->statusMessage = 'Confirm the one-time actor identity migration.';
+        $this->renderSelectionDependentArea();
+    }
+
+    private function confirmActorIdentityMigration(ProjectActor $actor, bool $confirmed): void
+    {
+        if (! $confirmed) {
+            $this->closeEventOptionDialog('Actor identity migration cancelled.');
+            return;
+        }
+        try {
+            $before = $actor->getData();
+            ActorIdentityMigration::freezeCurrentName($this->workspace->actorDatabase, $actor);
+            $after = $actor->getData();
+            $this->recordCommand(new GenericCommand(
+                'Freeze actor identity',
+                static fn() => $actor->restoreData($after),
+                static fn() => $actor->restoreData($before),
+            ));
+            $this->closeEventOptionDialog('Actor identity frozen. Save the project to write it.');
+        } catch (Throwable $failure) {
+            $this->closeEventOptionDialog('');
+            $this->setErrorStatus($failure, 'Actor identity migration');
+        }
+        $this->renderDatabasePanes(['list', 'settings']);
     }
 
     /**
@@ -17563,6 +17615,11 @@ final class Editor
             return true;
         }
 
+        if ($this->isEventOptionDialogOpen) {
+            $this->renderEventOptionDialogOverlay($layout);
+            return true;
+        }
+
         return false;
     }
 
@@ -17847,11 +17904,6 @@ final class Editor
 
         if ($this->isLootDialogOpen) {
             $this->renderLootDialogOverlay($layout);
-            return;
-        }
-
-        if ($this->isEventOptionDialogOpen) {
-            $this->renderEventOptionDialogOverlay($layout);
             return;
         }
 
