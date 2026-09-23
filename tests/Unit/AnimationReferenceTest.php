@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Ichiloto\Editor\Database\ReferenceCatalog;
+use Ichiloto\Editor\Database\CutsceneSchemas;
 use Ichiloto\Editor\Database\ReferencePicker;
 use Ichiloto\Editor\ProjectSkill;
 use Ichiloto\Editor\ProjectSkillDatabase;
@@ -12,6 +13,15 @@ use Ichiloto\Editor\Validation\Severity;
 use Ichiloto\Engine\Entities\Skills\BasicSkill;
 use Ichiloto\Engine\Entities\Skills\MagicSkill;
 use Ichiloto\Engine\Entities\Skills\SpecialSkill;
+use Ichiloto\Engine\Entities\Magic\MagicEffectType;
+use Ichiloto\Engine\Cutscenes\Summons\SummonEffectTiming;
+
+it('displays the engine default summon effect timing in the editor', function () {
+    $timing = array_values(array_filter(CutsceneSchemas::summons()->fields,
+        static fn($field): bool => $field->key === 'effectTiming.mode'))[0];
+    expect($timing->displayDefault)->toBe(SummonEffectTiming::DEFAULT_MODE)
+        ->and($timing->options)->toBe(SummonEffectTiming::AUTHORING_MODES);
+});
 
 it('offers animation names while storing stable numeric ids', function () {
     $catalog = new ReferenceCatalog(ProjectWorkspace::fromProject(makeTemporaryProject()));
@@ -63,6 +73,19 @@ it('reports deprecated name fallback and stale ids without rejecting gameplay', 
         ->and($issues[0]->message)->toContain('deprecated')
         ->and($issues[1]->severity)->toBe(Severity::WARNING)
         ->and($issues[1]->message)->toContain('animationId');
+});
+
+it('uses the engine fallback rules for magic animation diagnostics', function () {
+    $root = makeTemporaryProject();
+    file_put_contents($root . '/assets/Data/animations.php', "<?php return [['id' => 2, 'name' => 'Healing Aura']];");
+    $database = new ProjectSkillDatabase($root . '/assets/Data/skills.php', [
+        ProjectSkill::fromSkill(new MagicSkill('Cure', '', '', 0, 0, effectType: MagicEffectType::RESTORATIVE), 1),
+        ProjectSkill::fromSkill(new MagicSkill('Flare', '', '', 0, 0, effectType: MagicEffectType::DESTRUCTIVE), 2),
+    ], true);
+    $database->save();
+    $issues = new AnimationReferenceValidator()->validate(ProjectWorkspace::fromProject($root));
+    expect($issues)->toHaveCount(1)
+        ->and($issues[0]->where)->toContain('Cure');
 });
 
 it('routes skill animation edits through the existing picker and undo transaction', function () {

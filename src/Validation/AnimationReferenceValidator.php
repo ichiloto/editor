@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Validation;
 
 use Ichiloto\Editor\ProjectWorkspace;
+use Ichiloto\Engine\Animations\ActionAnimationResolver;
 use Ichiloto\Engine\Entities\Magic\MagicEffectType;
 
 /** Checks optional presentation references without invalidating gameplay. */
@@ -25,10 +26,10 @@ final class AnimationReferenceValidator
                 continue;
             }
 
-            $fallback = $skill->getType() === 'magic'
-                && in_array($skill->getEffectType(), [MagicEffectType::RESTORATIVE->value, MagicEffectType::BUFF->value], true)
-                    ? 'Healing Aura' : 'Hit Spark';
-            if (in_array($skill->getName(), $names, true) || in_array($fallback, $names, true)) {
+            $magicEffectType = $skill->getType() === 'magic'
+                ? MagicEffectType::tryFrom($skill->getEffectType() ?? '') : null;
+            $candidates = ActionAnimationResolver::getSkillCandidateNames($skill->getName(), $magicEffectType);
+            if (array_intersect($candidates, $names) !== []) {
                 $issues[] = Issue::warning(
                     $where,
                     'Animation selection by name is deprecated.',
