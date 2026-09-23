@@ -11,6 +11,8 @@ use Atatusoft\Termutil\IO\Enumerations\Color;
 use Atatusoft\Termutil\IO\Mouse\Enumerations\MouseButton;
 use Ichiloto\Editor\Backup\BackupSettings;
 use Ichiloto\Editor\Actors\ActorIdentityMigration;
+use Ichiloto\Editor\Actors\ActorIdentityMigrationCommand;
+use Ichiloto\Editor\Actors\ActorIdentityMigrationPlan;
 use Ichiloto\Editor\Backup\BackupWriter;
 use Ichiloto\Editor\Canvas\CanvasTool;
 use Ichiloto\Editor\Canvas\Clipboard;
@@ -1081,7 +1083,12 @@ final class Editor
     private function performUndo(): void
     {
         $this->finalizeActiveStroke();
-        $command = $this->history->undo();
+        try {
+            $command = $this->history->undo();
+        } catch (Throwable $failure) {
+            $this->setErrorStatus($failure, 'Undo');
+            return;
+        }
 
         if (! $command instanceof Command) {
             $this->setStatus('Nothing to undo.');
@@ -1103,7 +1110,12 @@ final class Editor
      */
     private function performRedo(): void
     {
-        $command = $this->history->redo();
+        try {
+            $command = $this->history->redo();
+        } catch (Throwable $failure) {
+            $this->setErrorStatus($failure, 'Redo');
+            return;
+        }
 
         if (! $command instanceof Command) {
             $this->setStatus('Nothing to redo.');
@@ -5773,6 +5785,7 @@ final class Editor
             new PaletteItem('Redo', 'Ctrl+Y', fn() => $this->performRedo()),
             new PaletteItem('Playtest Selected Map', 'Ctrl+T', fn() => $this->startPlaytest()),
             new PaletteItem('Reload Workspace', 'Ctrl+R', fn() => $this->requestReload()),
+            new PaletteItem('Repair Actor Identities and References', '', fn() => $this->openActorReferenceMigration()),
             new PaletteItem('Tool: Map Mode', 'm', function (): void {
                 $this->closeDatabaseIfOpen();
                 $this->setEditingMode(self::MODE_MAP);
@@ -7765,6 +7778,12 @@ final class Editor
         if (is_array($this->optionDialogField) && is_array($selectedEntry)) {
             $field = $this->optionDialogField;
             $title = $this->eventOptionDialogTitle;
+
+            if (($field['actorReferenceMigration'] ?? null) instanceof ActorIdentityMigrationPlan) {
+                if ($selectedEntry['value'] === 'preview') { return; }
+                $this->confirmActorReferenceMigration($field['actorReferenceMigration'], $selectedEntry['value'] === 'migrate');
+                return;
+            }
 
             if (($field['actorIdentityMigration'] ?? null) instanceof ProjectActor) {
                 $this->confirmActorIdentityMigration($field['actorIdentityMigration'], $selectedEntry['value'] === 'freeze');
@@ -11060,6 +11079,16 @@ final class Editor
 
     private function openActorIdentityMigration(ProjectActor $actor): void
     {
+        try {
+            $plan = ActorIdentityMigration::planProject($this->projectRoot);
+            if ($plan->getChangedPaths() !== [$actor->path]) {
+                $this->openActorReferenceMigration($plan);
+                return;
+            }
+        } catch (Throwable $failure) {
+            $this->setErrorStatus($failure, 'Actor identity migration');
+            return;
+        }
         $this->optionDialogField = ['actorIdentityMigration' => $actor];
         $this->eventOptionDialogMarker = null;
         $this->eventOptionDialogPath = null;
@@ -11097,6 +11126,65 @@ final class Editor
             $this->setErrorStatus($failure, 'Actor identity migration');
         }
         $this->renderDatabasePanes(['list', 'settings']);
+    }
+
+    private function openActorReferenceMigration(?ActorIdentityMigrationPlan $plan = null): void
+    {
+        if (! $this->workspace instanceof ProjectWorkspace) { return; }
+        if ($this->workspace->hasUnsavedChanges()) {
+            $this->setStatus('Save or undo pending edits before repairing actor references. No files were changed.', StatusLevel::WARN);
+            return;
+        }
+        try {
+            $plan ??= ActorIdentityMigration::planProject($this->projectRoot);
+            $paths = $plan->getChangedPaths();
+            if ($paths === []) {
+                $this->setStatus('Actor identities and references need no repair.');
+                return;
+            }
+            $relativePaths = array_map(fn(string $path): string => substr($path, strlen($this->projectRoot) + 1), $paths);
+            $this->optionDialogField = ['actorReferenceMigration' => $plan];
+            $this->eventOptionDialogMarker = null;
+            $this->eventOptionDialogPath = null;
+            $this->eventOptionDialogTitle = 'Repair actor identities and references';
+            $this->eventOptionDialogEntries = [
+                ['label' => 'Cancel', 'value' => 'cancel', 'description' => 'Leave all files unchanged.'],
+                ['label' => sprintf('Write %d repaired files now', count($paths)), 'value' => 'migrate',
+                    'description' => 'Writes now, not on Save. Ctrl+Z restores files.'],
+                ...array_map(static fn(string $path): array => [
+                    'label' => $path, 'value' => 'preview',
+                    'description' => 'Repair preview only. Select Write to apply all files.',
+                ], $relativePaths),
+            ];
+            $this->selectedEventOptionIndex = 0;
+            $this->dialogFilter->clear();
+            $this->isEventOptionDialogOpen = true;
+            $this->statusMessage = 'Confirm source-preserving actor reference repair.';
+            $this->renderSelectionDependentArea();
+        } catch (Throwable $failure) {
+            $this->setErrorStatus($failure, 'Actor reference migration');
+        }
+    }
+
+    private function confirmActorReferenceMigration(ActorIdentityMigrationPlan $plan, bool $confirmed): void
+    {
+        if (! $confirmed || ! $this->workspace instanceof ProjectWorkspace) {
+            $this->closeEventOptionDialog('Actor reference migration cancelled.');
+            return;
+        }
+        try {
+            $command = new ActorIdentityMigrationCommand($plan, $this->workspace,
+                fn(): ?ProjectWorkspace => $this->workspace,
+                function (ProjectWorkspace $workspace): void { $this->workspace = $workspace; },
+            );
+            $command->execute();
+            $this->recordCommand($command);
+            $this->closeEventOptionDialog('Actor identities and references repaired. Ctrl+Z restores the original files.');
+            $this->requestFullRender();
+        } catch (Throwable $failure) {
+            $this->closeEventOptionDialog('');
+            $this->setErrorStatus($failure, 'Actor reference migration');
+        }
     }
 
     /**

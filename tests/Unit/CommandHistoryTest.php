@@ -61,6 +61,28 @@ it('returns null when there is nothing to undo or redo', function () {
     ->and($history->canRedo())->toBeFalse();
 });
 
+it('retains failed commands for a safe retry without losing undo or redo history', function () {
+  $history = new CommandHistory();
+  $refuse = new ArrayObject(['undo' => true, 'redo' => true]);
+  $command = new GenericCommand('Guarded source transaction',
+    static function () use ($refuse): void {
+      if ($refuse['redo']) { throw new RuntimeException('Changed source'); }
+    },
+    static function () use ($refuse): void {
+      if ($refuse['undo']) { throw new RuntimeException('Changed source'); }
+    },
+  );
+  $history->record($command);
+  expect(fn() => $history->undo())->toThrow(RuntimeException::class, 'Changed source');
+  expect($history->count())->toBe(1)->and($history->canRedo())->toBeFalse();
+  $refuse['undo'] = false;
+  expect($history->undo())->toBe($command);
+  expect(fn() => $history->redo())->toThrow(RuntimeException::class, 'Changed source');
+  expect($history->canUndo())->toBeFalse()->and($history->canRedo())->toBeTrue();
+  $refuse['redo'] = false;
+  expect($history->redo())->toBe($command)->and($history->count())->toBe(1);
+});
+
 it('clears the redo stack when a new command is recorded', function () {
   $state = new ArrayObject(['value' => 0]);
   $history = new CommandHistory();
