@@ -323,7 +323,7 @@ it('fails duplicate stable rule ids', function (): void {
     }
 });
 
-it('keeps missing, ambiguous, and contested actor identities visible', function (): void {
+it('keeps missing and duplicate actor ids visible while removing display-name ambiguity', function (): void {
     $root = makeTemporaryProject();
 
     try {
@@ -347,14 +347,13 @@ it('keeps missing, ambiguous, and contested actor identities visible', function 
             'assets/Data/battle-entry-rules.php rule "ghost-rule" field "actors[0]" field "actor" references unknown actor "Nobody".',
         ]);
 
-        // A reference two definitions claim is contested, and the rules are
-        // then checked shape-only, exactly as the runtime never reaches them.
+        // Display names are no longer lookup aliases, so this is not a collision.
         addProjectActor($root, 'Impostor', 'Kaelion', 'actor.impostor');
 
         $messages = battleEntryProblemMessages($root);
 
-        expect($messages)->toContain('Actor reference "kaelion" is ambiguous.')
-            ->and($messages)->not->toContain(
+        expect($messages)->not->toContain('Actor reference "kaelion" is ambiguous.')
+            ->and($messages)->toContain(
                 'assets/Data/battle-entry-rules.php rule "ghost-rule" field "actors[0]" field "actor" references unknown actor "Nobody".',
             );
 

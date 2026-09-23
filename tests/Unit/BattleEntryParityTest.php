@@ -192,10 +192,8 @@ it('resolves actor identities exactly as the accepted engine store does', functi
     try {
         $ruleFile = $directory . '/rules.php';
 
-        // Resolution: id, display name, and file stem all reach the same
-        // durable identity; an unknown reference is refused with the same
-        // wording; a healthy store accepts all three reference kinds.
-        file_put_contents($ruleFile, "<?php\nreturn ['rules' => [['id' => 'one', 'actors' => [['actor' => 'actor.rook', 'presence' => 'any'], ['actor' => 'Rook', 'presence' => 'active'], ['actor' => 'RookFile', 'presence' => 'reserve']], 'effects' => [['type' => 'stat_stage', 'actor' => 'ROOK', 'stat' => 'speed', 'delta' => 1]]]]];");
+        // ID-only resolution removes inferred display-name and filename aliases.
+        file_put_contents($ruleFile, "<?php\nreturn ['rules' => [['id' => 'one', 'actors' => [['actor' => 'actor.rook', 'presence' => 'any']], 'effects' => [['type' => 'stat_stage', 'actor' => 'ACTOR.ROOK', 'stat' => 'speed', 'delta' => 1]]]]];");
         $healthy = parityActorsDirectory(['RookFile' => ['Rook', 'actor.rook'], 'Vale' => ['Vale', 'Vale']]);
         $engine = hydrateThroughAcceptedEngine($engineRoot, $ruleFile, $healthy);
         $resolver = parityResolver($healthy);
@@ -203,8 +201,9 @@ it('resolves actor identities exactly as the accepted engine store does', functi
         expect($engine['ok'] ?? false)->toBeTrue()
             ->and($resolver->problems())->toBe([])
             ->and(BattleEntryRuleContract::problems(require $ruleFile, $ruleFile, $resolver))->toBe([])
-            ->and($resolver->canonicalId('ROOK'))->toBe('actor.rook')
-            ->and($resolver->canonicalId('RookFile'))->toBe('actor.rook');
+            ->and($resolver->canonicalId('ACTOR.ROOK'))->toBe('actor.rook')
+            ->and($resolver->canonicalId('ROOK'))->toBeNull()
+            ->and($resolver->canonicalId('RookFile'))->toBeNull();
 
         // Unknown actor: same verdict, same wording.
         file_put_contents($ruleFile, "<?php\nreturn ['rules' => [['id' => 'one', 'actors' => [['actor' => 'Nobody', 'presence' => 'any']], 'effects' => [['type' => 'stat_stage', 'actor' => 'Rook', 'stat' => 'speed', 'delta' => 1]]]]];");
@@ -214,21 +213,23 @@ it('resolves actor identities exactly as the accepted engine store does', functi
         expect($engine['ok'] ?? true)->toBeFalse()
             ->and($problems[0] ?? null)->toBe(strval($engine['error'] ?? ''));
 
-        // A contested reference refuses the store itself, with the same
-        // wording the resolver reports.
+        // A shared name is not a contested identity anymore.
+        file_put_contents($ruleFile, "<?php return ['rules' => []];");
         $contested = parityActorsDirectory(['Kael' => ['Kael', 'Kael'], 'Impostor' => ['Kael', 'actor.impostor']]);
         $engine = hydrateThroughAcceptedEngine($engineRoot, $ruleFile, $contested);
         $resolver = parityResolver($contested);
 
-        expect($engine['phase'] ?? null)->toBe('store')
-            ->and($resolver->problems())->toContain(strval($engine['error'] ?? ''));
+        expect($engine['ok'] ?? false)->toBeTrue()
+            ->and($resolver->problems())->toBe([])
+            ->and($resolver->canonicalId('Kael'))->toBe('Kael');
 
-        // Missing ids are no longer inferred from display names in either surface.
+        // Runtime file compatibility is provisional; authoring still requires explicit repair.
         $missing = parityActorsDirectory(['Missing' => ['Display Name', null]]);
         $engine = hydrateThroughAcceptedEngine($engineRoot, $ruleFile, $missing);
         $resolver = parityResolver($missing);
-        expect($engine['phase'] ?? null)->toBe('store')
-            ->and($resolver->problems())->toContain(strval($engine['error'] ?? ''));
+        expect($engine['ok'] ?? false)->toBeTrue()
+            ->and($resolver->problems())->not->toBeEmpty()
+            ->and($resolver->canonicalId('Display Name'))->toBeNull();
 
         // Two definitions sharing an identity refuse the store the same way.
         $duplicated = parityActorsDirectory(['EchoOne' => ['Echo', 'actor.echo'], 'EchoTwo' => ['Echo Again', 'actor.echo']]);

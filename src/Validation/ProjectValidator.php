@@ -266,7 +266,8 @@ class ProjectValidator
       $where = sprintf('actor %s', $actor->getName());
       $id = $actor->getDefinitionId();
 
-      if (isset($seen[$id])) {
+      $identityKey = strtolower($id);
+      if ($id !== '' && isset($seen[$identityKey])) {
         $issues[] = Issue::error(
           $where,
           sprintf('Two actors resolve to the identity "%s".', $id),
@@ -274,11 +275,11 @@ class ProjectValidator
         );
       }
 
-      $seen[$id] = true;
+      if ($id !== '') { $seen[$identityKey] = true; }
 
       if (! $actor->hasDefinitionId()) {
         $issues[] = Issue::error($where, 'Actor has no explicit stable id.',
-          'Declare its existing identity before renaming it. For legacy actors, use the original display name to preserve references and saves.');
+          'For an absent id, use Freeze current name as ID in the actor editor or the CLI validation migration before renaming. Malformed explicit ids require manual correction; no file is repaired automatically.');
       }
 
       $variants = $actor->getNaturalVariants();

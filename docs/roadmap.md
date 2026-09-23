@@ -1000,13 +1000,23 @@ refused rather than rewritten, and the ordinary writer takes over.
 
 **An actor is more than its class.** An explicit, immutable definition id
 (assigned at creation; missing legacy ids are validation errors and must be
-declared before renaming), actor-natural adjustments that keep
+frozen from the current name before renaming), actor-natural adjustments that keep
 their sign and drop zeroes, and named natural variants with a default —
 where the rows edit whichever set the runtime has in force. Beside them, what
 each stat actually comes to, resolved by `StatResolver` and
 `EntityStatCapPolicy`: natural, nature, growth, gear, battle, then the cap,
 with what the cap threw away. Accuracy and Critical are absent by design;
 the runtime does not resolve them as layers.
+
+Legacy actor identity repair is shared by the TUI and CLI through
+`ActorIdentityMigration`. It offers a one-time freeze of the current name, not
+free-text identity retargeting. The TUI records the repair in normal undo history;
+CLI migration preflights the whole batch and uses a file-set transaction.
+Existing actor saves now preserve authored source instead of regenerating the
+file: comments, imports and unchanged expressions survive repair and rename.
+Unsupported source edits and externally changed files are refused before writes.
+Display-name and filename lookup aliases are removed; only definition IDs bind
+references, independently of names, filenames and artwork.
 
 **A catalogue in a file that holds several.** `RecordProjection` is the seam
 for a data file shaped for the runtime rather than for an editor. A category

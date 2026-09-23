@@ -9,10 +9,8 @@ use Ichiloto\Editor\ProjectActor;
 /**
  * The editor's mirror of the engine `ActorStore` reference resolution.
  *
- * The engine registers every actor definition under three references — its
- * durable id, its display name, and its file stem — normalized by lowercased
- * trim, and refuses to build the store at all when two definitions share an
- * identity or a reference points two ways. Battle-entry rules resolve actors
+ * Only durable IDs resolve, normalized by lowercased trim. Display names and
+ * filenames do not create aliases or collisions. Battle-entry rules resolve actors
  * through that store, so the editor resolves them the same way: a missing,
  * ambiguous, or contested identity stays visible and fails validation rather
  * than being substituted with whichever record happened to load first.
@@ -61,25 +59,7 @@ final class BattleEntryActorResolver
 
             $definitions[$normalizedId] = $id;
 
-            $fileStem = $actor->path === '' ? '' : pathinfo($actor->path, PATHINFO_FILENAME);
-
-            foreach ([$id, $actor->getName(), $fileStem] as $reference) {
-                $reference = self::normalize($reference);
-
-                if ($reference === '') {
-                    continue;
-                }
-
-                $existing = $references[$reference] ?? null;
-
-                if ($existing !== null && $existing !== $normalizedId) {
-                    $problems[] = sprintf('Actor reference "%s" is ambiguous.', $reference);
-
-                    continue;
-                }
-
-                $references[$reference] = $normalizedId;
-            }
+            $references[$normalizedId] = $normalizedId;
         }
 
         $canonical = [];
