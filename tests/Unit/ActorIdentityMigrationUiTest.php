@@ -39,3 +39,21 @@ it('offers a confirmed one-time identity migration with cancellation and saved u
     $actor->save();
     expect((require $path)['data']['id'])->toBe('Kaelion');
 });
+
+it('explains malformed explicit ids without offering a migration or opening input', function (): void {
+    $root = makeTemporaryProject();
+    $path = $root . '/assets/Data/Actors/Kaelion.php';
+    file_put_contents($path, str_replace("'id' => 'Kaelion'", "'id' => ''", (string) file_get_contents($path)));
+    $editor = deletionEditor($root);
+    openDatabaseCategory($editor, 'actors');
+    setEditorProperty($editor, 'databaseFocus', 'database_settings');
+    $fields = callEditorMethod($editor, 'getDatabaseActorSettingsFields');
+    $index = array_search('id', array_column($fields, 'field'), true);
+    expect($fields[$index]['editable'])->toBeFalse()
+        ->and($fields[$index]['displayDefault'])->toContain('Malformed explicit id')
+        ->and($fields[$index]['actorIdentityMigration'])->toBeNull();
+    setEditorProperty($editor, 'databaseSelectedSettingIndex', $index);
+    callEditorMethod($editor, 'dispatchInput', "\r");
+    expect(getEditorProperty($editor, 'isDatabaseEditing'))->toBeFalse()
+        ->and(getEditorProperty($editor, 'isEventOptionDialogOpen'))->toBeFalse();
+});

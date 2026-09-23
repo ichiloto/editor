@@ -10240,15 +10240,18 @@ final class Editor
      */
     private function getActorIdentityFields(ProjectActor $actor): array
     {
+        $missingId = ! array_key_exists('id', $actor->getData());
         return [
             ['label' => 'Identity', 'value' => '', 'editable' => false, 'field' => ''],
             [
                 'label' => 'Definition Id',
                 'value' => $actor->hasDefinitionId() ? $actor->getDefinitionId() : '',
-                'editable' => ! array_key_exists('id', $actor->getData()),
-                'actorIdentityMigration' => $actor,
+                'editable' => $missingId,
+                'actorIdentityMigration' => $missingId ? $actor : null,
                 'field' => 'id',
-                'displayDefault' => sprintf('Enter to freeze the current name (%s) as its permanent id', $actor->getName()),
+                'displayDefault' => $missingId
+                    ? sprintf('Enter to freeze the current name (%s) as its permanent id', $actor->getName())
+                    : 'Malformed explicit id: correct the authored actor file; automatic replacement is not allowed.',
             ],
         ];
     }
