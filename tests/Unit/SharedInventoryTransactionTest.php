@@ -150,10 +150,12 @@ it('preserves a removal from all three categories at once', function () {
     }
 
     // Three entries gone, and everything else spelled as the author spelled it.
+    preg_match('/parameterChanges:[ \t]*new[ \t]+[^\s(]+[ \t]*\(/', $source, $authoredParameterConstructor);
+    expect($authoredParameterConstructor)->not->toBe([]);
     expect(PhpSourceDocument::parse((string) file_get_contents($path))->entryCount())
         ->toBe(PhpSourceDocument::parse($source)->entryCount() - 3)
         ->and((string) file_get_contents($path))->toContain('use Ichiloto\Engine\Entities\Effects\HPRecoveryEffect;')
-        ->and((string) file_get_contents($path))->toContain('parameterChanges: new \Ichiloto\Engine\Entities\ParameterChanges(');
+        ->and((string) file_get_contents($path))->toContain($authoredParameterConstructor[0]);
 })->group('engine');
 
 it('composes a field edit in one category with a structural edit in another', function () {
