@@ -157,6 +157,10 @@ final readonly class ProjectWorkspace
                 sprintf('Size: %d x %d', $selectedMap->getWidth(), $selectedMap->getHeight()),
                 sprintf('Events: %d', $selectedMap->getEventDefinitionCount()),
                 sprintf('Triggers: %d', $selectedMap->getTriggerCount()),
+                ...($selectedMap->getGridSourceIssue() === null ? [] : [
+                    'Read-only: map source needs repair.',
+                    $selectedMap->getGridSourceIssue(),
+                ]),
                 '',
                 basename($selectedMap->dataPath),
                 basename($selectedMap->mapPath),
@@ -199,7 +203,8 @@ final readonly class ProjectWorkspace
 
             $prefix = $index === $selectedMapIndex ? '> ' : '  ';
             $dirty = $this->maps[$index]->isDirty() ? ' *' : '';
-            $lines[] = sprintf('%s%s%s', $prefix, $mapId, $dirty);
+            $readOnly = $this->maps[$index]->getGridSourceIssue() === null ? '' : ' [read-only]';
+            $lines[] = sprintf('%s%s%s%s', $prefix, $mapId, $dirty, $readOnly);
         }
 
         return $lines;
@@ -302,6 +307,14 @@ final readonly class ProjectWorkspace
             ];
         }
 
+        if ($selectedMap->getGridSourceIssue() !== null) {
+            return [
+                sprintf('Preview: %s', $selectedMap->mapId),
+                'Read-only: repair this map before editing.',
+                $selectedMap->getGridSourceIssue(),
+            ];
+        }
+
         $previewHeight = max(0, $height - self::CANVAS_HEADER_ROWS);
         $previewLines = $selectedMap->renderPreview($width, $previewHeight, $offsetX, $offsetY, $showEventOverlay, $showNpcOverlay, $selectedNpcIndex, $selectedNpcSprite);
 
@@ -362,6 +375,10 @@ final readonly class ProjectWorkspace
             return null;
         }
 
+        if ($selectedMap->getGridSourceIssue() !== null) {
+            throw new MapSourceRefusal("{$selectedMap->mapId} is read-only: {$selectedMap->getGridSourceIssue()}");
+        }
+
         $parentDirectory = dirname($selectedMap->directory);
         $originalBaseName = basename($selectedMap->directory);
         $baseName = $this->getNextAvailableSiblingBaseName($parentDirectory, $originalBaseName . '-copy');
@@ -386,6 +403,10 @@ final readonly class ProjectWorkspace
 
         if (! $selectedMap instanceof ProjectMap) {
             return null;
+        }
+
+        if ($selectedMap->getGridSourceIssue() !== null) {
+            throw new MapSourceRefusal("{$selectedMap->mapId} is read-only: {$selectedMap->getGridSourceIssue()}");
         }
 
         // Only the split triplet is the map's; deleting a map must not take
@@ -445,10 +466,16 @@ final readonly class ProjectWorkspace
 
         ksort($mapDirectories);
 
-        return array_values(array_map(
-            static fn(string $directory): ProjectMap => ProjectMap::fromDirectory($mapsRoot, $directory),
-            $mapDirectories
-        ));
+        $maps = [];
+        foreach ($mapDirectories as $directory) {
+            try {
+                $maps[] = ProjectMap::fromDirectory($mapsRoot, $directory);
+            } catch (Throwable $error) {
+                $maps[] = ProjectMap::createReadOnlyFromDirectory($mapsRoot, $directory, $error->getMessage());
+            }
+        }
+
+        return $maps;
     }
 
     /**

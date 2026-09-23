@@ -97,6 +97,7 @@ final class ProjectMap
         public readonly array $tileLines,
         public readonly array $eventLines,
         ?string $dataSource = null,
+        private readonly ?string $gridSourceIssue = null,
     ) {
         $this->editableData = $data;
         $this->tileCells = self::parseStyledLines($tileLines);
@@ -169,6 +170,37 @@ final class ProjectMap
             eventLines: self::splitMapText($eventText),
             dataSource: (string) file_get_contents($dataPath),
         )->withLoadedBaseline();
+    }
+
+    /** Keeps an invalid map discoverable without evaluating or rewriting its files. */
+    public static function createReadOnlyFromDirectory(string $mapsRoot, string $directory, string $issue): self
+    {
+        $baseName = basename($directory);
+        $mapId = str_replace(DIRECTORY_SEPARATOR, '/', substr($directory, strlen($mapsRoot) + 1));
+
+        return new self(
+            mapId: $mapId,
+            directory: $directory,
+            dataPath: $directory . DIRECTORY_SEPARATOR . $baseName . '.data.php',
+            mapPath: $directory . DIRECTORY_SEPARATOR . $baseName . '.map.php',
+            eventPath: $directory . DIRECTORY_SEPARATOR . $baseName . '.event.php',
+            data: [],
+            tileLines: [],
+            eventLines: [],
+            gridSourceIssue: $issue,
+        )->withLoadedBaseline();
+    }
+
+    public function getGridSourceIssue(): ?string
+    {
+        return $this->gridSourceIssue;
+    }
+
+    private function assertEditable(): void
+    {
+        if ($this->gridSourceIssue !== null) {
+            throw new MapSourceRefusal("{$this->mapId} is read-only: {$this->gridSourceIssue}");
+        }
     }
 
     /** Reads one canonical grid, refusing executable or generated source. */
@@ -505,6 +537,7 @@ final class ProjectMap
      */
     public function setTileSymbol(int $x, int $y, string $symbol): void
     {
+        $this->assertEditable();
         if (! isset($this->tileCells[$y][$x])) {
             return;
         }
@@ -563,6 +596,7 @@ final class ProjectMap
      */
     public function setTileCell(int $x, int $y, string $symbol, string $prefix, string $suffix): void
     {
+        $this->assertEditable();
         if (! isset($this->tileCells[$y][$x])) {
             return;
         }
@@ -583,6 +617,7 @@ final class ProjectMap
      */
     public function setEventSymbol(int $x, int $y, string $symbol): void
     {
+        $this->assertEditable();
         if (! isset($this->eventCells[$y][$x])) {
             return;
         }
@@ -633,6 +668,7 @@ final class ProjectMap
      */
     public function restoreGridSnapshot(array $snapshot): void
     {
+        $this->assertEditable();
         $this->tileCells = $snapshot['tiles'];
         $this->eventCells = $snapshot['events'];
         $this->cachedWidth = null;
@@ -729,6 +765,7 @@ final class ProjectMap
      */
     public function setNpcs(NpcCollection $npcs): void
     {
+        $this->assertEditable();
         $entries = $npcs->toMapData();
 
         if (($this->editableData['npcs'] ?? null) === $entries) {
@@ -882,6 +919,7 @@ final class ProjectMap
      */
     public function setMapDataField(array $path, mixed $value): void
     {
+        $this->assertEditable();
         if ($path === []) {
             return;
         }
@@ -1073,6 +1111,7 @@ final class ProjectMap
      */
     public function setMapField(string $field, mixed $value): void
     {
+        $this->assertEditable();
         $next = $this->editableData;
         $next[$field] = $value;
         $this->writeData($next);
@@ -1087,6 +1126,7 @@ final class ProjectMap
      */
     public function resize(int $width, int $height): void
     {
+        $this->assertEditable();
         $width = max(1, $width);
         $height = max(1, $height);
 
@@ -1135,6 +1175,7 @@ final class ProjectMap
      */
     public function setEventField(string $marker, array $path, mixed $value): void
     {
+        $this->assertEditable();
         if ($path === []) {
             return;
         }
@@ -1171,6 +1212,7 @@ final class ProjectMap
      */
     public function setEventDefinition(string $marker, array $definition): void
     {
+        $this->assertEditable();
         $next = $this->editableData;
 
         if (! isset($next['events']) || ! is_array($next['events'])) {
@@ -1190,6 +1232,7 @@ final class ProjectMap
      */
     public function removeEventDefinition(string $marker): void
     {
+        $this->assertEditable();
         if (! isset($this->editableData['events'][$marker])) {
             return;
         }
@@ -1211,6 +1254,7 @@ final class ProjectMap
      */
     public function setEventBounds(string $marker, int $x, int $y, int $width, int $height): void
     {
+        $this->assertEditable();
         foreach ($this->eventCells as $rowIndex => $row) {
             foreach ($row as $columnIndex => $symbol) {
                 if ($symbol === $marker) {
@@ -1262,6 +1306,7 @@ final class ProjectMap
      */
     public function save(?callable $backup = null, ?FileSetOperations $files = null): string
     {
+        $this->assertEditable();
         $target = $this->resolveSaveTarget();
         $moving = $target['directory'] !== $this->directory;
         $this->assertGridSourcesCanonical();
@@ -1473,11 +1518,11 @@ final class ProjectMap
         );
         $transaction->write(
             $directory . DIRECTORY_SEPARATOR . $baseName . '.map.php',
-            "<?php\n\nreturn <<<'ICHILOTO_MAP'\n{$tileText}\nICHILOTO_MAP;\n",
+            MapGridSource::buildSource($tileText, 'ICHILOTO_MAP'),
         );
         $transaction->write(
             $directory . DIRECTORY_SEPARATOR . $baseName . '.event.php',
-            "<?php\n\nreturn <<<'ICHILOTO_EVENT_MAP'\n{$eventText}\nICHILOTO_EVENT_MAP;\n",
+            MapGridSource::buildSource($eventText, 'ICHILOTO_EVENT_MAP'),
         );
         $transaction->commit();
     }
@@ -1492,6 +1537,7 @@ final class ProjectMap
      */
     public function duplicateTo(string $directory, string $baseName, string $displayName, ?FileSetOperations $files = null): void
     {
+        $this->assertEditable();
         $this->assertGridSourcesCanonical();
         // The copy keeps everything the original authored -- comments,
         // expressions, formatting -- with only the display name rewritten.
@@ -1754,9 +1800,10 @@ final class ProjectMap
      */
     private function buildMapPayload(): string
     {
-        return "<?php\n\nreturn <<<'ICHILOTO_MAP'\n"
-            . implode(PHP_EOL, array_map($this->buildStyledLine(...), $this->tileCells))
-            . "\nICHILOTO_MAP;\n";
+        return MapGridSource::buildSource(
+            implode(PHP_EOL, array_map($this->buildStyledLine(...), $this->tileCells)),
+            'ICHILOTO_MAP',
+        );
     }
 
     /**
@@ -1764,9 +1811,10 @@ final class ProjectMap
      */
     private function buildEventPayload(): string
     {
-        return "<?php\n\nreturn <<<'ICHILOTO_EVENT_MAP'\n"
-            . implode(PHP_EOL, array_map($this->buildPlainLine(...), $this->eventCells))
-            . "\nICHILOTO_EVENT_MAP;\n";
+        return MapGridSource::buildSource(
+            implode(PHP_EOL, array_map($this->buildPlainLine(...), $this->eventCells)),
+            'ICHILOTO_EVENT_MAP',
+        );
     }
 
     /**
@@ -1799,6 +1847,7 @@ final class ProjectMap
      */
     public function moveTo(string $newRelativeId): self
     {
+        $this->assertEditable();
         $newRelativeId = trim(str_replace('\\', '/', $newRelativeId), '/ ');
 
         if ($newRelativeId === '') {
