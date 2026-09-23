@@ -99,8 +99,30 @@ final class ProjectSkillDatabase
         if ($authored !== null && $authored['source'] === null) {
             throw $this->getSourceRefusal($skill);
         }
+        if (! $this->canEditField($index, $field)) {
+            throw new RuntimeException(sprintf('Skill "%s" does not support editing %s.', $skill->getName(), $field));
+        }
         $skill->setField($field, $value);
         $this->touchState();
+    }
+
+    public function canEditField(int $index, string $field): bool
+    {
+        $skill = $this->getSkillByIndex($index);
+        if ($skill === null || in_array($field, ['type', 'effects'], true)) { return false; }
+        $authored = $this->authored[spl_object_id($skill)] ?? null;
+        if ($authored !== null && $authored['source'] === null) { return false; }
+        $parameter = str_starts_with($field, 'scope') ? 'scope'
+            : (str_starts_with($field, 'invocation') ? 'invocation' : $field);
+        return in_array($parameter, $this->getConstructorParameters($skill), true);
+    }
+
+    /** @return list<string> */
+    private function getConstructorParameters(ProjectSkill $skill): array
+    {
+        $class = $this->authored[spl_object_id($skill)]['class'] ?? $this->getSkillClass($skill);
+        return array_map(static fn(\ReflectionParameter $parameter): string => $parameter->getName(),
+            (new ReflectionClass($class))->getConstructor()?->getParameters() ?? []);
     }
 
     /**
@@ -267,8 +289,7 @@ final class ProjectSkillDatabase
     private function applySkillChanges(PhpSourceDocument $document, int $index, ProjectSkill $skill): PhpSourceDocument
     {
         $authored = $this->authored[spl_object_id($skill)];
-        $parameters = array_map(static fn(\ReflectionParameter $parameter): string => $parameter->getName(),
-            (new ReflectionClass($authored['class']))->getConstructor()?->getParameters() ?? []);
+        $parameters = $this->getConstructorParameters($skill);
         foreach ($skill->toArray() as $field => $value) {
             if ($value === ($authored['payload'][$field] ?? null)) { continue; }
             if (in_array($field, ['type', 'effects'], true)) {

@@ -98,7 +98,7 @@ final class ProjectSkill
                 "apGain" => 10,
             ],
             "effects" => [],
-            "effectType" => MagicEffectType::DESTRUCTIVE->value,
+            "effectType" => null,
         ], true);
     }
 

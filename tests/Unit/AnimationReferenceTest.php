@@ -110,3 +110,31 @@ it('routes skill animation edits through the existing picker and undo transactio
     callEditorMethod($editor, 'applyDatabaseFieldValueRecorded', $field, '(Legacy fallback)');
     expect($workspace->skillDatabase->getSkillByIndex(0)->animationId)->toBeNull();
 });
+
+it('offers only supported skill fields and leaves a no-op pick unchanged', function (string $class) {
+    $root = makeTemporaryProject();
+    $database = new ProjectSkillDatabase($root . '/assets/Data/skills.php', [
+        ProjectSkill::fromSkill(new $class('Skill', '', '', 0, 0), 1),
+    ], true);
+    $database->save();
+    $editor = deletionEditor($root);
+    openDatabaseCategory($editor, 'skills');
+    $fields = callEditorMethod($editor, 'getDatabaseSkillSettingsFields');
+    $byName = array_column($fields, null, 'field');
+    expect($byName)->not->toHaveKey('type');
+    $workspace = getEditorProperty($editor, 'workspace');
+    $skill = $workspace->skillDatabase->getSkillByIndex(0);
+    $before = $skill->toArray();
+    if ($class === MagicSkill::class) {
+        expect($byName)->toHaveKey('effectType');
+        callEditorMethod($editor, 'applyDatabaseFieldValueRecorded', $byName['effectType'], $byName['effectType']['value']);
+    } else {
+        expect($byName)->not->toHaveKey('effectType');
+        expect(fn() => $workspace->skillDatabase->setField(0, 'effectType', 'Destructive'))
+            ->toThrow(RuntimeException::class, 'does not support editing effectType');
+    }
+    expect($skill->toArray())->toBe($before)->and($workspace->skillDatabase->isDirty())->toBeFalse();
+    callEditorMethod($editor, 'applyDatabaseFieldValueRecorded', $byName['animationId'], '1');
+    $workspace->skillDatabase->save();
+    expect((require $root . '/assets/Data/skills.php')[0]->animationId)->toBe(1);
+})->with([BasicSkill::class, MagicSkill::class, SpecialSkill::class]);

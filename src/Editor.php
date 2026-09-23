@@ -941,6 +941,7 @@ final class Editor
         $this->isHelpOpen = false;
         $this->isCommandPaletteOpen = false;
         $this->commandPalette->close();
+        $this->reportRefusedMapsAtBoot();
         $this->terminal->enterRawMode();
         $this->inputDecoder = new InputDecoder();
         $this->inputDecoder->attach();
@@ -952,6 +953,25 @@ final class Editor
         $this->lastTerminalSize = $size;
         $this->isRunning = true;
         $this->requestFullRender();
+    }
+
+    /** Warns about maps whose authored grids cannot be safely loaded. */
+    private function reportRefusedMapsAtBoot(): void
+    {
+        $refusals = [];
+        foreach ($this->workspace->maps as $map) {
+            if (($issue = $map->getGridSourceIssue()) !== null) {
+                $refusals[] = $issue;
+            }
+        }
+
+        if ($refusals !== []) {
+            $this->setStatus(
+                sprintf('%d map(s) are read-only (Ctrl+E for details).', count($refusals)),
+                StatusLevel::WARN,
+                $refusals,
+            );
+        }
     }
 
     /**
@@ -10707,10 +10727,9 @@ final class Editor
         $scope = $skill->getScope();
         $invocation = $skill->getInvocation();
 
-        return [
+        $fields = [
             ['label' => 'Name', 'value' => $skill->getName(), 'control' => new InputControl(InputControlType::TEXT, $skill->getName()), 'field' => 'name'],
             ['label' => 'Description', 'value' => $skill->getDescription(), 'control' => new InputControl(InputControlType::TEXT, $skill->getDescription()), 'field' => 'description'],
-            ['label' => 'Type', 'value' => $skill->getType(), 'options' => ['basic', 'special', 'magic'], 'field' => 'type'],
             ['label' => 'Icon', 'value' => $skill->getIcon(), 'control' => new InputControl(InputControlType::TEXT, $skill->getIcon()), 'field' => 'icon'],
             ['label' => 'Cost', 'value' => (string) $skill->getCost(), 'control' => new InputControl(InputControlType::INTEGER, (string) $skill->getCost()), 'field' => 'cost'],
             ['label' => 'Cooldown', 'value' => (string) $skill->getCooldown(), 'control' => new InputControl(InputControlType::INTEGER, (string) $skill->getCooldown()), 'field' => 'cooldown'],
@@ -10734,6 +10753,8 @@ final class Editor
                 'noneLabel' => '(Legacy fallback)',
             ],
         ];
+        return array_values(array_filter($fields, fn(array $field): bool =>
+            $this->workspace->skillDatabase->canEditField($this->databaseSelectedSkillIndex, $field['field'])));
     }
     /**
      * Returns the editable settings fields for the selected quest.

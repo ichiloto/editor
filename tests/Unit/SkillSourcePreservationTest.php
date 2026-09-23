@@ -97,9 +97,8 @@ it('refuses changing skill type rather than dropping its authored effects', func
     $source = "<?php return [new \\Ichiloto\\Engine\\Entities\\Skills\\SpecialSkill('Original', '', '', 0, 0)];";
     file_put_contents($path, $source);
     $database = ProjectSkillDatabase::fromProject($root);
-    $database->setField(0, 'type', 'magic');
-    expect(fn() => $database->save())->toThrow(RuntimeException::class, 'Refusing to regenerate')
-        ->and(file_get_contents($path))->toBe($source)->and($database->isDirty())->toBeTrue();
+    expect(fn() => $database->setField(0, 'type', 'magic'))->toThrow(RuntimeException::class, 'does not support editing type')
+        ->and(file_get_contents($path))->toBe($source)->and($database->isDirty())->toBeFalse();
 });
 
 it('refuses unsafe source and externally changed skills without writing or clearing dirty state', function (): void {
