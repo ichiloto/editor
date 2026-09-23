@@ -94,7 +94,13 @@ final class ProjectSkillDatabase
     public function setField(int $index, string $field, mixed $value): void
     {
         $skill = $this->getSkillByIndex($index);
-        if ($skill instanceof ProjectSkill) { $skill->setField($field, $value); $this->touchState(); }
+        if (! $skill instanceof ProjectSkill) { return; }
+        $authored = $this->authored[spl_object_id($skill)] ?? null;
+        if ($authored !== null && $authored['source'] === null) {
+            throw $this->getSourceRefusal($skill);
+        }
+        $skill->setField($field, $value);
+        $this->touchState();
     }
 
     /**
@@ -204,10 +210,21 @@ final class ProjectSkillDatabase
         if ($document->entryCount() !== count($order)) {
             throw new RuntimeException('Refusing to flatten skills.php: its entries cannot be matched to the loaded skills.');
         }
+        $retained = array_map(spl_object_id(...), $this->getSkills());
+        foreach (array_reverse(array_keys($order)) as $index) {
+            if (in_array($order[$index], $retained, true)) { continue; }
+            $removed = $this->authored[$order[$index]];
+            if ($removed['source'] === null) { throw $this->getSourceRefusal($removed['skill']); }
+            $document = $document->withoutEntry($index);
+            array_splice($order, $index, 1);
+        }
         foreach ($this->getSkills() as $index => $skill) {
             $key = spl_object_id($skill);
-            $entrySource = $this->getUpdatedEntry($skill);
             $position = array_search($key, $order, true);
+            if ($position === $index && $skill->toArray() === $this->authored[$key]['payload']) {
+                continue;
+            }
+            $entrySource = $this->getUpdatedEntry($skill);
             if ($position === $index) {
                 if ($document->entrySource($index) !== $entrySource) {
                     $old = $document->entrySource($index);
@@ -235,11 +252,16 @@ final class ProjectSkillDatabase
         $authored = $this->authored[spl_object_id($skill)] ?? null;
         if ($authored === null) { return ltrim($this->exportSkill($skill)); }
         if ($authored['source'] === null) {
-            throw new RuntimeException('Refusing to flatten an unsupported skill expression. Edit its source directly.');
+            throw $this->getSourceRefusal($skill);
         }
         $document = PhpSourceDocument::parse('<?php return [' . $authored['source'] . '];');
         return $this->applySkillChanges($document, 0, $skill)->entrySource(0)
             ?? throw new RuntimeException('Cannot preserve the edited skill constructor.');
+    }
+
+    private function getSourceRefusal(ProjectSkill $skill): RuntimeException
+    {
+        return new RuntimeException(sprintf('Refusing to flatten skill "%s" (entry %d): its authored expression is read-only. Edit its source directly.', $skill->getName(), $skill->id));
     }
 
     private function applySkillChanges(PhpSourceDocument $document, int $index, ProjectSkill $skill): PhpSourceDocument

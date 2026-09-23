@@ -112,11 +112,36 @@ return [$skill];
 PHP;
     file_put_contents($path, $source);
     $database = ProjectSkillDatabase::fromProject($root);
-    $database->setField(0, 'animationId', 1);
-    expect(fn() => $database->save())->toThrow(RuntimeException::class, 'Refusing to flatten')
+    expect(fn() => $database->setField(0, 'animationId', 1))->toThrow(RuntimeException::class, 'skill "Computed" (entry 1)')
         ->and(file_get_contents($path))->toBe($source)
-        ->and($database->isDirty())->toBeTrue();
+        ->and($database->isDirty())->toBeFalse();
     file_put_contents($path, $source . "\n// External edit\n");
+    $database->addSkill();
     expect(fn() => $database->save())->toThrow(RuntimeException::class, 'changed outside')
         ->and(file_get_contents($path))->toBe($source . "\n// External edit\n");
+});
+
+it('keeps an unsupported skill untouched while saving and removing supported neighbours', function (): void {
+    $root = makeTemporaryProject();
+    $path = $root . '/assets/Data/skills.php';
+    $source = <<<'PHP'
+<?php
+use Ichiloto\Engine\Entities\Skills\SpecialSkill;
+$computed = new SpecialSkill('Computed', '', '', 0, 0);
+return [
+  new SpecialSkill('Before', '', '', 0, 0),
+  $computed,
+  new SpecialSkill('After', '', '', 0, 0),
+];
+PHP;
+    file_put_contents($path, $source);
+    $database = ProjectSkillDatabase::fromProject($root);
+    expect(fn() => $database->setField(1, 'animationId', 3))->toThrow(RuntimeException::class, '"Computed"');
+    $database->setField(2, 'animationId', 4);
+    $database->save();
+    expect(file_get_contents($path))->toBe(str_replace("'After', '', '', 0, 0)", "'After', '', '', 0, 0, animationId: 4)", $source));
+    $database->removeSkill(0);
+    $database->save();
+    expect((require $path)[0]->name)->toBe('Computed')
+        ->and((require $path)[1]->animationId)->toBe(4);
 });
