@@ -155,6 +155,10 @@ final class ProjectSkillDatabase
             return null;
         }
 
+        if ($this->getReadOnlyReason($index) !== null) {
+            throw $this->getSourceRefusal($skill);
+        }
+
         array_splice($skills, $index, 1);
         $this->skills = $skills;
         $this->touchState();

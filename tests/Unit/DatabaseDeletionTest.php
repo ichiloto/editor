@@ -197,3 +197,45 @@ it('consumes every keystroke while the delete confirmation is open', function ()
         removeDirectoryRecursively($root);
     }
 });
+
+it('refuses opaque skill deletion before prompting and still saves supported pending edits', function () {
+    $root = makeTemporaryProject();
+    $path = $root . '/assets/Data/skills.php';
+    $source = <<<'PHP'
+<?php
+use Ichiloto\Engine\Entities\Skills\SpecialSkill;
+$opaque = new SpecialSkill('Computed', '', '', 0, 0);
+return [
+    $opaque, // Keep the authored expression.
+    new SpecialSkill('Editable', '', '', 0, 0),
+];
+PHP;
+
+    try {
+        file_put_contents($path, $source);
+        $editor = deletionEditor($root);
+        openDatabaseCategory($editor, 'skills');
+        $workspace = getEditorProperty($editor, 'workspace');
+        $database = $workspace->skillDatabase;
+        $database->setField(1, 'animationId', 3);
+        $reason = $database->getReadOnlyReason(0);
+
+        callEditorMethod($editor, 'dispatchInput', "\033[3~");
+
+        expect(getEditorProperty($editor, 'isDatabaseEntryDeleteConfirmationOpen'))->toBeFalse()
+            ->and(getEditorProperty($editor, 'pendingDatabaseDeletion'))->toBeNull()
+            ->and(getEditorProperty($editor, 'statusMessage'))->toBe($reason)
+            ->and($database->getSkills())->toHaveCount(2)
+            ->and($database->isDirty())->toBeTrue();
+        expect(fn() => $database->removeSkill(0))->toThrow(RuntimeException::class, $reason);
+
+        callEditorMethod($editor, 'dispatchInput', "\x13");
+
+        expect($database->isDirty())->toBeFalse()
+            ->and(file_get_contents($path))->toBe(str_replace(
+                "'Editable', '', '', 0, 0)", "'Editable', '', '', 0, 0, animationId: 3)", $source,
+            ));
+    } finally {
+        removeDirectoryRecursively($root);
+    }
+});

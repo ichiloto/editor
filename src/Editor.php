@@ -6202,6 +6202,15 @@ final class Editor
             return;
         }
 
+        if ($this->getSelectedDatabaseCategoryDefinition()->key === self::DATABASE_CATEGORY_SKILLS) {
+            $reason = $this->workspace->skillDatabase->getReadOnlyReason($index);
+            if ($reason !== null) {
+                $this->setStatus($reason, StatusLevel::WARN);
+                $this->renderFooter();
+                return;
+            }
+        }
+
         $this->pendingDatabaseDeletion = [
             'category' => $this->getSelectedDatabaseCategoryDefinition()->key,
             'index' => $index,
