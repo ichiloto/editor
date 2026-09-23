@@ -25,7 +25,7 @@ final class ProjectSkillDatabase
     private ?string $source = null;
     /** @var list<int> */
     private array $sourceOrder = [];
-    /** @var array<int, array{skill: ProjectSkill, payload: array, source: string|null, class: class-string}> */
+    /** @var array<int, array{skill: ProjectSkill, payload: array, source: string|null, block: string|null, class: class-string}> */
     private array $authored = [];
 
     public function __construct(
@@ -69,6 +69,7 @@ final class ProjectSkillDatabase
                 'skill' => $skill,
                 'payload' => $skill->toArray(),
                 'source' => count($payload) === count($skills) ? $document->entrySource($index) : null,
+                'block' => count($payload) === count($skills) ? $document->getEntryBlockSource($index) : null,
                 'class' => $classes[$index],
             ];
         }
@@ -194,6 +195,7 @@ final class ProjectSkillDatabase
                 'skill' => $skill,
                 'payload' => $skill->toArray(),
                 'source' => $document->entrySource($index),
+                'block' => $document->getEntryBlockSource($index),
                 'class' => $this->authored[$key]['class'] ?? $this->getSkillClass($skill),
             ];
         }
@@ -260,7 +262,15 @@ final class ProjectSkillDatabase
                 $document = $document->withoutEntry($position);
                 array_splice($order, $position, 1);
             }
-            $document = $document->getWithEntrySource($entrySource, $index < count($order) ? $index : null);
+            $before = $index < count($order) ? $index : null;
+            $block = $this->authored[$key]['block'] ?? null;
+            if ($block !== null) {
+                $preserved = PhpSourceDocument::parse("<?php return [\n" . $block . "\n];");
+                $block = $this->applySkillChanges($preserved, 0, $skill)->getEntryBlockSource(0);
+                $document = $document->getWithEntryBlockSource($block, $before);
+            } else {
+                $document = $document->getWithEntrySource($entrySource, $before);
+            }
             array_splice($order, $index, 0, [$key]);
         }
         for ($index = count($order) - 1; $index >= count($this->skills); $index--) {
@@ -294,6 +304,10 @@ final class ProjectSkillDatabase
             if ($value === ($authored['payload'][$field] ?? null)) { continue; }
             if (in_array($field, ['type', 'effects'], true)) {
                 throw new RuntimeException('Refusing to regenerate skill type or effects; edit those expressions in source.');
+            }
+            if ($field === 'animationId' && $value === null) {
+                $document = $document->getWithoutConstructorArgument($index, $field, $parameters);
+                continue;
             }
             $literal = match ($field) {
                 'scope' => $this->exportScope($skill),

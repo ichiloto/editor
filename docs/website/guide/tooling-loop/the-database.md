@@ -23,8 +23,15 @@ which incorrectly regenerated non-damage effects as damage effects. Changing a
 skill's class or regenerating effects without their original source is refused
 before writing; edit those expressions in source instead.
 
+An unsupported skill expression is read-only, not a reason to block other
+skills in the same file. Refusals identify the skill. The form omits Type
+and any fields the selected constructor cannot save, including Effect Type
+on non-magic skills. Leading documentation and same-line trailing comments
+travel with a skill when it is moved, deleted or restored.
+
 Choose **(Legacy fallback)** for a skill or **(None)** for an item to clear
-the reference. Skills then retain their
+the reference, removing the authored argument rather than writing a null
+placeholder. Skills then retain their
 deprecated name-based selection, which project validation reports as a
 warning when it matches. Items without a reference retain their existing
 no-animation behavior. A missing explicit id omits the animation, not the

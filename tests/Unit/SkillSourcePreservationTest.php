@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Ichiloto\Editor\ProjectSkillDatabase;
+use Ichiloto\Editor\Database\PhpSourceDocument;
 
 it('changes only the animation field in real Last Legend skills and preserves every effect', function (): void {
     $game = gameSourceRoot();
@@ -28,7 +29,7 @@ it('changes only the animation field in real Last Legend skills and preserves ev
     expect(file_get_contents($path))->toBe(str_replace('animationId: 17', 'animationId: 18', $after));
     $database->setField(2, 'animationId', null);
     $database->save();
-    expect((require $path)[2]->animationId)->toBeNull();
+    expect((require $path)[2]->animationId)->toBeNull()->and(file_get_contents($path))->toBe($before);
 });
 
 it('preserves positional and aliased constructors with nested effects and trailing comments', function (): void {
@@ -60,8 +61,10 @@ it('preserves skill removal and saved undo without regenerating effects', functi
 use Ichiloto\Engine\Entities\Skills\SpecialSkill;
 use Ichiloto\Engine\Entities\Effects\SkillEffects\RemoveStateSkillEffect;
 return [
+  // Cleanse documentation.
   new SpecialSkill('Cleanse', '', '', 5, 0, effects: [new RemoveStateSkillEffect(['poison'])]),
-  new SpecialSkill('Other', '', '', 0, 0),
+  // Other documentation.
+  new SpecialSkill('Other', '', '', 0, 0), // Other tail.
 ];
 PHP;
     file_put_contents($path, $source);
@@ -69,10 +72,16 @@ PHP;
     $removed = $database->removeSkill(0);
     $database->save();
     expect(require $path)->toHaveCount(1);
+    expect(file_get_contents($path))->not->toContain('Cleanse documentation.')
+        ->and(file_get_contents($path))->toContain("// Other documentation.\n  new SpecialSkill('Other', '', '', 0, 0), // Other tail.");
     $database->insertSkill(0, $removed);
     $database->save();
     expect(file_get_contents($path))->toBe($source);
     expect((require $path)[0]->effects[0]->stateIds)->toBe(['poison']);
+    $moved = $database->removeSkill(1);
+    $database->insertSkill(0, $moved);
+    $database->save();
+    expect(file_get_contents($path))->toContain("// Other documentation.\n  new SpecialSkill('Other', '', '', 0, 0), // Other tail.\n  // Cleanse documentation.");
 });
 
 it('adds a named animation after positional arguments without swallowing a trailing comment', function (): void {
@@ -143,4 +152,11 @@ PHP;
     $database->save();
     expect((require $path)[0]->name)->toBe('Computed')
         ->and((require $path)[1]->animationId)->toBe(4);
+});
+
+it('removes optional positional arguments without shifting the arguments that follow', function (): void {
+    $source = "<?php return [new Ability('Skill', 12, 'tail')];";
+    $document = PhpSourceDocument::parse($source)->getWithoutConstructorArgument(0, 'animationId', ['name', 'animationId', 'note']);
+    expect($document->source)->toBe("<?php return [new Ability('Skill', note: 'tail')];");
+    expect(fn() => PhpToken::tokenize($document->source, TOKEN_PARSE))->not->toThrow(ParseError::class);
 });

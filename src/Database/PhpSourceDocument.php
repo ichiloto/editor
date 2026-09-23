@@ -195,6 +195,27 @@ final class PhpSourceDocument
      */
     public function getWithConstructorArgument(int $entryIndex, string $name, string $literal, array $parameters): self
     {
+        return $this->getMappedConstructor($entryIndex, $name, $parameters)->withArgument($entryIndex, $name, $literal);
+    }
+
+    /** Removes an optional argument without shifting any later positional arguments. @param list<string> $parameters */
+    public function getWithoutConstructorArgument(int $entryIndex, string $name, array $parameters): self
+    {
+        $document = $this->getMappedConstructor($entryIndex, $name, $parameters);
+        $entry = $document->entries[$entryIndex];
+        $removed = $entry['arguments'][$name] ?? null;
+        if ($removed === null) { return $this; }
+        $source = $this->source;
+        foreach (array_reverse($entry['arguments'], true) as $parameter => $span) {
+            if ($span['start'] <= $removed['start'] || ($span['nameStart'] ?? null) !== $span['start']) { continue; }
+            $source = substr($source, 0, $span['start']) . $parameter . ': ' . substr($source, $span['start']);
+        }
+        return self::parse($source)->getMappedConstructor($entryIndex, $name, $parameters)->withoutArgument($entryIndex, $name);
+    }
+
+    /** @param list<string> $parameters */
+    private function getMappedConstructor(int $entryIndex, string $name, array $parameters): self
+    {
         if (! $this->isConstructorEntry($entryIndex) || ! in_array($name, $parameters, true)) {
             throw new RuntimeException('Cannot edit an unknown constructor or parameter.');
         }
@@ -223,7 +244,7 @@ final class PhpSourceDocument
         $entry['positional'] = false;
         $entries[$entryIndex] = $entry;
 
-        return new self($this->source, $entries, $this->arrayClose)->withArgument($entryIndex, $name, $literal);
+        return new self($this->source, $entries, $this->arrayClose);
     }
 
     /**
@@ -315,25 +336,41 @@ final class PhpSourceDocument
     /** Inserts a previously preserved or newly authored constructor without re-exporting its values. */
     public function getWithEntrySource(string $source, ?int $before = null): self
     {
+        return $this->getWithEntryBlockSource($this->entryIndent() . $source . ",\n", $before);
+    }
+
+    /** Inserts a preserved entry together with its leading and same-line trailing comments. */
+    public function getWithEntryBlockSource(string $block, ?int $before = null): self
+    {
         if ($this->arrayClose === null) {
             throw new RuntimeException('This file does not return an array to add an entry to.');
         }
-        $candidate = self::parse("<?php return [" . $source . "];\n");
+        $candidate = self::parse("<?php return [\n" . $block . "\n];\n");
         if ($candidate->entryCount() !== 1 || ! $candidate->isConstructorEntry(0)) {
             throw new RuntimeException('Only a complete constructor entry can be inserted.');
         }
-        $indent = $this->entryIndent();
-        $block = $indent . $source . ",\n";
+        $entry = $candidate->entries[0];
+        $hasComma = false;
+        foreach (self::tokenize('<?php ' . substr($candidate->source, $entry['close'] + 1)) as $token) {
+            if (self::isSkippable($token) || $token['id'] === T_OPEN_TAG) { continue; }
+            $hasComma = $token['text'] === ',';
+            break;
+        }
+        if (! $hasComma) {
+            $offset = $entry['close'] + 1 - strlen("<?php return [\n");
+            $block = substr($block, 0, $offset) . ',' . substr($block, $offset);
+        }
+        if (! str_ends_with($block, "\n")) { $block .= "\n"; }
 
         if ($before !== null) {
-            if (! $this->isConstructorEntry($before)) {
+            if (! isset($this->entries[$before])) {
                 throw new RuntimeException(sprintf(
                     'Cannot place an entry before %s: it is not a constructor call this editor can position against.',
                     $this->describeEntry($before),
                 ));
             }
 
-            $start = $this->entries[$before]['start'];
+            $start = $this->getEntryBounds($before)['start'];
             $lineBreak = strrpos(substr($this->source, 0, $start), "\n");
             $lineStart = $lineBreak === false ? 0 : $lineBreak + 1;
 
@@ -346,7 +383,7 @@ final class PhpSourceDocument
             // The neighbour shares a line with something before it. The new
             // entry still goes ahead of it, and the neighbour continues on a
             // fresh line at the entries' indentation.
-            return self::parse(substr($this->source, 0, $start) . ltrim($block) . $indent . substr($this->source, $start));
+            return self::parse(substr($this->source, 0, $start) . ltrim($block) . $this->entryIndent() . substr($this->source, $start));
         }
 
         $beforeClose = substr($this->source, 0, $this->arrayClose);
@@ -382,28 +419,48 @@ final class PhpSourceDocument
             ));
         }
 
+        $bounds = $this->getEntryBounds($entryIndex);
+        return self::parse(substr($this->source, 0, $bounds['start']) . substr($this->source, $bounds['end']));
+    }
+
+    public function getEntryBlockSource(int $entryIndex): ?string
+    {
+        if (! $this->isConstructorEntry($entryIndex)) { return null; }
+        $bounds = $this->getEntryBounds($entryIndex);
+        return substr($this->source, $bounds['start'], $bounds['end'] - $bounds['start']);
+    }
+
+    /** @return array{start: int, end: int} */
+    private function getEntryBounds(int $entryIndex): array
+    {
         $entry = $this->entries[$entryIndex];
+        $tokens = self::tokenize($this->source);
         $start = $entry['start'];
+        foreach (array_reverse($tokens) as $token) {
+            if ($token['offset'] >= $entry['start']) { continue; }
+            if ($token['id'] === T_WHITESPACE) { continue; }
+            if (! in_array($token['id'], [T_COMMENT, T_DOC_COMMENT], true)) { break; }
+            $lineStart = strrpos(substr($this->source, 0, $token['offset']), "\n");
+            $lineStart = $lineStart === false ? 0 : $lineStart + 1;
+            if (trim(substr($this->source, $lineStart, $token['offset'] - $lineStart)) !== '') { break; }
+            $start = $token['offset'];
+        }
+        $lineStart = strrpos(substr($this->source, 0, $start), "\n");
+        $lineStart = $lineStart === false ? 0 : $lineStart + 1;
+        if (trim(substr($this->source, $lineStart, $start - $lineStart)) === '') { $start = $lineStart; }
+
         $end = $entry['close'] + 1;
-        $source = $this->source;
-
-        while ($end < strlen($source) && ($source[$end] === ' ' || $source[$end] === "\t")) {
-            $end++;
+        foreach ($tokens as $token) {
+            if ($token['offset'] < $end) { continue; }
+            if ($token['id'] === T_WHITESPACE) {
+                $newline = strpos($token['text'], "\n");
+                $end = $token['offset'] + ($newline === false ? strlen($token['text']) : $newline + 1);
+                if ($newline !== false) { break; }
+            } elseif ($token['text'] === ',' || in_array($token['id'], [T_COMMENT, T_DOC_COMMENT], true)) {
+                $end = $token['offset'] + strlen($token['text']);
+            } else { break; }
         }
-
-        if ($end < strlen($source) && $source[$end] === ',') {
-            $end++;
-        }
-
-        if ($end < strlen($source) && $source[$end] === "\n") {
-            $end++;
-
-            while ($start > 0 && ($source[$start - 1] === ' ' || $source[$start - 1] === "\t")) {
-                $start--;
-            }
-        }
-
-        return self::parse(substr($source, 0, $start) . substr($source, $end));
+        return ['start' => $start, 'end' => $end];
     }
 
     /**

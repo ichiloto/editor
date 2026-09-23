@@ -43,7 +43,8 @@ it('round trips explicit animation ids for every skill subtype and allows cleari
     expect($loaded->getSkillByIndex(0)->animationId)->toBe(1);
     $loaded->setField(0, 'animationId', '');
     $loaded->save();
-    expect(ProjectSkillDatabase::fromProject($root)->getSkillByIndex(0)->animationId)->toBeNull();
+    expect(ProjectSkillDatabase::fromProject($root)->getSkillByIndex(0)->animationId)->toBeNull()
+        ->and(file_get_contents($root . '/assets/Data/skills.php'))->not->toContain('animationId:');
 })->with([BasicSkill::class, MagicSkill::class, SpecialSkill::class]);
 
 it('round trips item animation references through the existing typed resource picker schema', function () {
