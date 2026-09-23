@@ -863,10 +863,12 @@ final class RecordSchemaCatalog
                 prefix: 'beat',
                 singular: 'beat',
                 fields: [
-                    RecordField::reference('speaker', 'Speaker', 'actors'),
+                    RecordField::reference('actor', 'Actor', 'actor_ids', allowsNone: true, noneLabel: '(Non-actor speaker)'),
+                    new RecordField('speaker', 'Non-actor Speaker', removeWhenEmpty: true),
                     new RecordField('text', 'Text'),
                 ],
                 blank: ['speaker' => 'Speaker', 'text' => 'Say something.'],
+                exclusiveFields: [['actor', 'speaker']],
             ),
         );
     }

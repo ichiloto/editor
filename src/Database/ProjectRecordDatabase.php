@@ -2358,6 +2358,7 @@ final class ProjectRecordDatabase
                 explode('.', $field->key),
                 self::coerce($field, $rawValue),
             );
+            $entries[$entryIndex] = $subList->removeConflictingFields($entries[$entryIndex], $field->key);
             $record->setSubList($subList->key, $entries);
             $this->touchState();
 
@@ -3686,6 +3687,7 @@ final class ProjectRecordDatabase
             }
 
             $written = self::writeNested($entry, explode('.', $field->key), self::coerce($field, $rawValue));
+            $written = $subList->removeConflictingFields($written, $field->key);
 
             if ($field->key === $subList->variantKey && $written !== null) {
                 $written = self::withoutStaleVariantFields($subList, $entry, $written);

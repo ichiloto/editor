@@ -79,6 +79,55 @@ it('adds and removes skit beats', function (): void {
     removeDirectoryRecursively($root);
 });
 
+it('selects stable skit actors and keeps non-actor speaker text mutually exclusive', function (): void {
+    $root = makeTemporaryProject();
+    $editor = deletionEditor($root);
+    openDatabaseCategory($editor, 'skits');
+    $workspace = getEditorProperty($editor, 'workspace');
+    $database = $workspace->getRecordDatabase('skits');
+    $fields = array_column($database->getSettingsFields(0), null, 'field');
+    $actor = $workspace->actorDatabase->getActors()[0];
+    expect($fields['beat0Actor']['reference'])->toBe('actor_ids')
+        ->and(isset($fields['beat0Actor']['control']))->toBeFalse()
+        ->and(isset($fields['beat0Speaker']['reference']))->toBeFalse();
+    callEditorMethod($editor, 'applyDatabaseFieldValueRecorded', $fields['beat0Actor'], $actor->getDefinitionId());
+    $database->save();
+    $path = $root . '/assets/Data/Skits/breakfast-banter.php';
+    $beat = (require $path)['beats'][0];
+    expect($beat['actor'])->toBe($actor->getDefinitionId())->and($beat)->not->toHaveKey('speaker');
+    callEditorMethod($editor, 'performUndo');
+    expect($database->getRecords()[0]->toArray()['beats'][0]['speaker'])->toBe('Liora');
+    callEditorMethod($editor, 'performRedo');
+    expect($database->getRecords()[0]->toArray()['beats'][0]['actor'])->toBe($actor->getDefinitionId());
+    $database->setField(0, 'beat0Speaker', 'Innkeeper');
+    $database->save();
+    $beat = (require $path)['beats'][0];
+    expect($beat['speaker'])->toBe('Innkeeper')->and($beat)->not->toHaveKey('actor');
+});
+
+it('validates skit actor identity with the shared runtime resolver and warns on legacy speaker ids', function (): void {
+    $root = makeTemporaryProject();
+    $workspace = \Ichiloto\Editor\ProjectWorkspace::fromProject($root);
+    $actor = $workspace->actorDatabase->getActors()[0];
+    $database = $workspace->getRecordDatabase('skits');
+    $record = $database->getRecords()[0];
+    $record->setSubList('beats', [
+        ['actor' => $actor->getDefinitionId(), 'text' => 'Canonical'],
+        ['speaker' => $actor->getDefinitionId(), 'text' => 'Legacy'],
+        ['actor' => 'not-an-actor', 'text' => 'Invalid'],
+        ['actor' => $actor->getDefinitionId(), 'speaker' => 'Innkeeper', 'text' => 'Conflict'],
+        ['speaker' => 'Innkeeper', 'text' => 'Plain text'],
+    ]);
+    $validator = new \Ichiloto\Editor\Validation\ProjectValidator();
+    $method = new ReflectionMethod($validator, 'checkSkitReferences');
+    $issues = $method->invoke($validator, $workspace, ['maps' => ['happyville/town-center'], 'quests' => ['breakfast-duty']]);
+    $speakers = array_values(array_filter($issues, static fn($issue): bool => str_contains($issue->where, ' beat ')));
+    expect($speakers)->toHaveCount(3)
+        ->and($speakers[0]->message)->toContain('Deprecated')
+        ->and($speakers[1]->message)->toContain('stable actor id')
+        ->and($speakers[2]->message)->toContain('not both');
+});
+
 it('creates a new skit as its own file', function (): void {
     $root = makeTemporaryProject();
     $database = loadRecordDatabase($root, 'skits');

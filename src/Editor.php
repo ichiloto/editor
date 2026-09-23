@@ -12249,7 +12249,21 @@ final class Editor
             'records' => $this->databaseSelectedRecordIndexes,
         ];
 
+        $record = $this->getSelectedRecordDatabase()?->getRecordByIndex($this->getSelectedRecordIndex());
+        $before = $record?->toArray();
         $this->applyDatabaseFieldValue($fieldId, $rawValue);
+
+        if ($record !== null && $before !== null) {
+            $after = $record->toArray();
+            if ($before !== $after) {
+                $this->recordCommand(new GenericCommand(
+                    sprintf('%s edit', $field['label'] ?? 'Database field'),
+                    static fn() => $record->restorePayload($after),
+                    static fn() => $record->restorePayload($before),
+                ));
+            }
+            return;
+        }
 
         if (in_array($fieldId, ['brushSymbol', 'brushColor'], true) || $oldRawValue === $rawValue) {
             return;

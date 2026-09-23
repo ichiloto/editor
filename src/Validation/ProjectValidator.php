@@ -22,6 +22,8 @@ use Ichiloto\Editor\ProjectQuest;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Engine\Core\WorldConditionType;
+use Ichiloto\Engine\Field\SkitSpeaker;
+use Ichiloto\Engine\Util\Stores\ActorStore;
 use Ichiloto\Engine\Events\Interpreter\EventInterpreter;
 use Ichiloto\Engine\Events\Interpreter\MovementRouteRunner;
 use Ichiloto\Engine\IO\Console\TerminalText;
@@ -1558,6 +1560,15 @@ class ProjectValidator
     $troops = $this->labelsOf($workspace, 'troops');
 
     foreach ($workspace->maps as $map) {
+      if (($sourceIssue = $map->getGridSourceIssue()) !== null) {
+        $issues[] = Issue::error(
+          $map->mapId,
+          "Map source is read-only: {$sourceIssue}",
+          'Repair the source by hand, then reopen the project. Other maps remain editable.',
+        );
+        continue;
+      }
+
       $issues = [
         ...$issues,
         ...$this->checkLayers($map),
@@ -3009,6 +3020,12 @@ class ProjectValidator
     }
 
     $issues = [];
+    try {
+      $actors = new ActorStore($workspace->projectRoot . '/assets/Data/Actors');
+    } catch (InvalidArgumentException|\RuntimeException $exception) {
+      $actors = null;
+      $issues[] = Issue::error('skit actors', $exception->getMessage(), 'Repair the actor registry before validating skit actor references.');
+    }
 
     foreach ($database->getRecords() as $record) {
       $skit = (array) $record->toArray();
@@ -3024,6 +3041,21 @@ class ProjectValidator
       }
 
       $issues = [...$issues, ...$this->checkConditions((array) ($skit['conditions'] ?? []), $where, $known)];
+      foreach ($skit['beats'] ?? [] as $index => $beat) {
+        if (! is_array($beat)) {
+          $issues[] = Issue::error($where, 'Each skit beat must be a data record.');
+          continue;
+        }
+        if ($actors === null) { continue; }
+        $speaker = SkitSpeaker::getFromBeat($beat, $actors);
+        $beatLocation = sprintf('%s beat %d', $where, $index + 1);
+        foreach ($speaker->notices as $notice) {
+          $issues[] = Issue::warning($beatLocation, $notice, 'Choose the Actor picker to persist the stable actor id.');
+        }
+        foreach ($speaker->errors as $error) {
+          $issues[] = Issue::error($beatLocation, $error, 'Choose an Actor, or enter a non-actor speaker, not both.');
+        }
+      }
     }
 
     return $issues;
