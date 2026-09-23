@@ -409,11 +409,7 @@ it('catches a marker that is not one solid rectangle', function () {
     $root = makeTemporaryProject();
     $path = $root . '/assets/Maps/test-map/test-map.event.php';
 
-    file_put_contents($path, <<<'PHP'
-    <?php
-
-    return " A  \nAAA \n    \n    ";
-    PHP);
+    file_put_contents($path, "<?php\n\nreturn <<<'ICHILOTO_EVENT_MAP'\n A  \nAAA \n    \n    \nICHILOTO_EVENT_MAP;\n");
 
     editTestMapData($root, static fn(string $source): string => str_replace(
         "'events' => [",

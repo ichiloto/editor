@@ -8,7 +8,6 @@ use Ichiloto\Editor\Cutscenes\Source\ArraySourceWriter;
 use Ichiloto\Editor\Cutscenes\Source\PhpArraySourceDocument;
 use Ichiloto\Editor\Cutscenes\Source\SourcePreservationRefusal;
 use Ichiloto\Editor\Cutscenes\Source\SourceUnreadable;
-use Ichiloto\Editor\Database\IsolatedPhpEvaluationFailure;
 use Ichiloto\Editor\Database\PhpDataFile;
 use Ichiloto\Editor\Field\NpcCollection;
 use Ichiloto\Editor\Field\ProjectNpc;
@@ -17,6 +16,8 @@ use Ichiloto\Editor\Storage\FileSetOperations;
 use Ichiloto\Editor\Storage\FileSetTransactionFailure;
 use Ichiloto\Editor\Storage\FilesystemFileSetOperations;
 use Ichiloto\Editor\Storage\FileSetTransaction;
+use Ichiloto\Engine\Field\MapGridSource;
+use InvalidArgumentException;
 use RuntimeException;
 
 /**
@@ -144,18 +145,21 @@ final class ProjectMap
             throw new RuntimeException("Map files are incomplete in {$directory}.");
         }
 
-        $data = require $dataPath;
-        $mapText = require $mapPath;
-        $eventText = require $eventPath;
+        $relativeDirectory = substr($directory, strlen($mapsRoot) + 1);
+        $mapId = str_replace(DIRECTORY_SEPARATOR, '/', $relativeDirectory);
 
-        if (! is_array($data) || ! is_string($mapText) || ! is_string($eventText)) {
+        // Grid PHP is data, not executable map-building code. Refuse it before
+        // evaluating even the separate data member of an incomplete map.
+        $mapText = self::readGridSource($mapPath, $mapId);
+        $eventText = self::readGridSource($eventPath, $mapId);
+        $data = require $dataPath;
+
+        if (! is_array($data)) {
             throw new RuntimeException("Map files could not be parsed in {$directory}.");
         }
 
-        $relativeDirectory = substr($directory, strlen($mapsRoot) + 1);
-
         return new self(
-            mapId: str_replace(DIRECTORY_SEPARATOR, '/', $relativeDirectory),
+            mapId: $mapId,
             directory: $directory,
             dataPath: $dataPath,
             mapPath: $mapPath,
@@ -165,6 +169,32 @@ final class ProjectMap
             eventLines: self::splitMapText($eventText),
             dataSource: (string) file_get_contents($dataPath),
         )->withLoadedBaseline();
+    }
+
+    /** Reads one canonical grid, refusing executable or generated source. */
+    private static function readGridSource(string $path, string $mapId): string
+    {
+        try {
+            return MapGridSource::readFile($path);
+        } catch (InvalidArgumentException $error) {
+            throw new MapSourceRefusal(sprintf(
+                '%s: %s (%s) cannot be loaded or saved: %s Repair it as a literal nowdoc, then retry; nothing was changed.',
+                $mapId,
+                basename($path),
+                $path,
+                $error->getMessage(),
+            ), previous: $error);
+        }
+    }
+
+    /** Refuses a source changed on disk after this map was opened. */
+    private function assertGridSourcesCanonical(): void
+    {
+        foreach ([$this->mapPath, $this->eventPath] as $path) {
+            if (is_file($path)) {
+                self::readGridSource($path, $this->mapId);
+            }
+        }
     }
 
     /**
@@ -1234,6 +1264,7 @@ final class ProjectMap
     {
         $target = $this->resolveSaveTarget();
         $moving = $target['directory'] !== $this->directory;
+        $this->assertGridSourcesCanonical();
 
         $tripletExists = is_file($this->dataPath)
             && is_file($this->mapPath)
@@ -1249,8 +1280,8 @@ final class ProjectMap
 
         // Which members actually changed. The tile and event files compare
         // against the grids as of the last save, never against the bytes on
-        // disk, so a file an author keeps in another form -- a tile map
-        // built by a helper class -- is rewritten only when its grid is.
+        // disk. Existing grid sources have already passed the literal-nowdoc
+        // check, so an edited grid cannot silently flatten authored PHP.
         // A data file the parser cannot hold never reaches the writer unless
         // the on-disk member disappeared: its edits were refused, so its
         // cached source bytes are its own and are restored unchanged.
@@ -1461,6 +1492,7 @@ final class ProjectMap
      */
     public function duplicateTo(string $directory, string $baseName, string $displayName, ?FileSetOperations $files = null): void
     {
+        $this->assertGridSourcesCanonical();
         // The copy keeps everything the original authored -- comments,
         // expressions, formatting -- with only the display name rewritten.
         // A source the editor cannot rewrite reversibly refuses the
@@ -1717,9 +1749,8 @@ final class ProjectMap
     /**
      * The tile file the current grid should be saved as.
      *
-     * The tile and event files are the editor's own format -- a heredoc
-     * grid -- so a *changed* grid is written canonically; an untouched grid
-     * is never written at all, whatever form its author kept it in.
+     * A changed grid is written as a nowdoc; an untouched canonical source
+     * keeps its exact bytes.
      */
     private function buildMapPayload(): string
     {
@@ -1778,6 +1809,8 @@ final class ProjectMap
             return $this;
         }
 
+        $this->assertGridSourcesCanonical();
+
         $mapsRoot = $this->getMapsRoot();
         $directory = $mapsRoot . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $newRelativeId);
 
@@ -1818,7 +1851,6 @@ final class ProjectMap
             $transaction->remove($this->mapPath);
             $transaction->remove($this->eventPath);
 
-            $destinationPaths = [$movedDataPath, $movedMapPath, $movedEventPath];
             $expectedGrids = [
                 $movedMapPath => array_map($this->buildStyledLine(...), $this->tileCells),
                 $movedEventPath => array_map($this->buildPlainLine(...), $this->eventCells),
@@ -1832,7 +1864,6 @@ final class ProjectMap
             // the state the game will load: no preview copies, temporary
             // neighbours, or old member can make an invalid move look valid.
             $transaction->commit(validate: function () use (
-                $destinationPaths,
                 $movedDataPath,
                 $movedMapPath,
                 $movedEventPath,
@@ -1852,29 +1883,19 @@ final class ProjectMap
 
                 try {
                     try {
-                        $evaluatedFingerprints = [];
-                        [$evaluated, $evaluatedMap, $evaluatedEvent] = $this->evaluateFiles($destinationPaths, $evaluatedFingerprints);
+                        $evaluatedFingerprint = null;
+                        $evaluated = $this->evaluateFile($movedDataPath, $evaluatedFingerprint);
                     } catch (\Throwable $evaluationFailure) {
-                        $failedPath = $movedDataPath;
-
-                        if ($evaluationFailure instanceof IsolatedPhpEvaluationFailure) {
-                            $failedIndex = array_search($evaluationFailure->path, $destinationPaths, true);
-
-                            if (is_int($failedIndex)) {
-                                $failedPath = $destinationPaths[$failedIndex];
-                            }
-                        }
-
                         throw new RuntimeException(sprintf(
-                            '%s does not evaluate at %s (%s) — an expression written against the old folder depth, such as a relative require, must be adjusted in the file first.',
-                            basename($failedPath),
+                            '%s does not evaluate at %s (%s) - an expression written against the old folder depth, such as a relative require, must be adjusted in the file first.',
+                            basename($movedDataPath),
                             $newRelativeId,
                             $evaluationFailure->getMessage(),
                         ), previous: $evaluationFailure);
                     }
 
                     if (! is_array($evaluated)
-                        || ($evaluatedFingerprints[0] ?? null) !== PhpDataFile::valueFingerprint($this->editableData)
+                        || $evaluatedFingerprint !== PhpDataFile::valueFingerprint($this->editableData)
                     ) {
                         throw new RuntimeException(sprintf(
                             '%s would not read back as this map at %s.',
@@ -1884,14 +1905,14 @@ final class ProjectMap
                     }
 
                     $evaluatedGrids = [
-                        $movedMapPath => $evaluatedMap,
-                        $movedEventPath => $evaluatedEvent,
+                        $movedMapPath => MapGridSource::readFile($movedMapPath),
+                        $movedEventPath => MapGridSource::readFile($movedEventPath),
                     ];
 
                     foreach ($expectedGrids as $path => $expectedLines) {
                         $evaluatedGrid = $evaluatedGrids[$path];
 
-                        if (! is_string($evaluatedGrid) || self::splitMapText($evaluatedGrid) !== $expectedLines) {
+                        if (self::splitMapText($evaluatedGrid) !== $expectedLines) {
                             throw new RuntimeException(sprintf(
                                 '%s would not read back as this map at %s.',
                                 basename($path),
