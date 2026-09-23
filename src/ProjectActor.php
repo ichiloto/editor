@@ -668,7 +668,7 @@ final class ProjectActor
         if ($this->originalSource !== null) {
             $document = PhpArraySourceDocument::parse($this->originalSource);
             if ($current !== $this->originalPayload && $document->nodeAt(['data'])?->kind !== SourceNode::ARRAY) {
-                throw new SourcePreservationRefusal('Actor data is not an editable array literal; refusing to flatten its source.');
+                throw new SourcePreservationRefusal("{$this->path}: Actor data is not an editable array literal; refusing to flatten its source.");
             }
             return ArraySourceWriter::rewrite($document, $this->originalPayload, $current)->source;
         }

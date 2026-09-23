@@ -198,6 +198,12 @@ final class PhpSourceDocument
         return $this->getMappedConstructor($entryIndex, $name, $parameters)->withArgument($entryIndex, $name, $literal);
     }
 
+    /** Reads a named or positional argument using a known constructor signature. @param list<string> $parameters */
+    public function getConstructorArgumentSource(int $entryIndex, string $name, array $parameters): ?string
+    {
+        return $this->getMappedConstructor($entryIndex, $name, $parameters)->argumentSource($entryIndex, $name);
+    }
+
     /** Removes an optional argument without shifting any later positional arguments. @param list<string> $parameters */
     public function getWithoutConstructorArgument(int $entryIndex, string $name, array $parameters): self
     {

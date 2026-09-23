@@ -6,7 +6,8 @@ namespace Ichiloto\Editor\Actors;
 
 use Ichiloto\Editor\ProjectActor;
 use Ichiloto\Editor\ProjectActorDatabase;
-use Ichiloto\Editor\Storage\FileSetTransaction;
+use Ichiloto\Editor\ProjectDirectoryContext;
+use Ichiloto\Editor\Database\PhpDataFile;
 use RuntimeException;
 use Throwable;
 
@@ -47,27 +48,59 @@ final class ActorIdentityMigration
         $actor->setField('id', $id);
     }
 
-    /** Explicit CLI operation. Preflight the whole batch and install it as one transaction.
-     * @return list<string> Changed actor file paths.
-     */
-    public static function migrateProject(string $projectRoot): array
+    /** Read-only plan; callers show changed paths and obtain confirmation before apply. */
+    public static function planProject(string $projectRoot): ActorIdentityMigrationPlan
+    {
+        return ProjectDirectoryContext::run($projectRoot, self::buildPlan(...));
+    }
+
+    private static function buildPlan(string $projectRoot): ActorIdentityMigrationPlan
     {
         $database = ProjectActorDatabase::fromProject($projectRoot);
-        $actors = self::getPendingActors($database);
-        if ($actors === []) { return []; }
-        $transaction = new FileSetTransaction($database->directory);
-        foreach ($actors as $actor) {
-            self::freezeCurrentName($database, $actor);
-            $transaction->write($actor->path, $actor->getProposedSource());
+        $index = new ActorIdentityIndex($database);
+        $watched = $originals = $proposals = $before = $after = [];
+        foreach ($database->getActors() as $actor) {
+            $watched[$actor->path] = (string) file_get_contents($actor->path);
+            if (array_key_exists('id', $actor->getData())) { continue; }
+            $before[$actor->path] = ActorReferenceInventory::getComparableValue(PhpDataFile::evaluateIsolated($actor->path, $projectRoot));
+            try {
+                self::freezeCurrentName($database, $actor);
+                $proposals[$actor->path] = $actor->getProposedSource();
+            } catch (Throwable $failure) {
+                throw new ($failure::class)("{$actor->path}: {$failure->getMessage()}");
+            }
+            $originals[$actor->path] = $watched[$actor->path];
+            $after[$actor->path] = $before[$actor->path];
+            $after[$actor->path]['data'] = $actor->getData();
         }
-        try {
-            $staged = $transaction->stage();
-            foreach ($actors as $actor) { $actor->validateStagedSource($staged[$actor->path]); }
-            $transaction->commit();
-        } catch (Throwable $failure) {
-            $transaction->rollBack();
-            throw $failure;
+        foreach (ActorReferenceInventory::getSourcePaths($projectRoot) as $path) {
+            $source = (string) file_get_contents($path);
+            $watched[$path] = $source;
+            $payload = PhpDataFile::evaluateIsolated($path, $projectRoot);
+            $relative = substr($path, strlen($projectRoot) + 1);
+            $changes = [];
+            foreach (ActorReferenceInventory::getReferences($payload, $relative) as $reference) {
+                $target = $index->resolveReference($reference['reference'], $path . ':' . implode('.', $reference['path']), $reference['kind'] === 'speaker');
+                if ($target !== null && ($target !== $reference['reference'] || $reference['kind'] === 'speaker')) {
+                    $changes[] = [...$reference, 'target' => $target];
+                }
+            }
+            if ($changes === []) { continue; }
+            try {
+                $after[$path] = ActorReferenceSource::getUpdatedValue($payload, $changes);
+                $proposals[$path] = ActorReferenceSource::rewrite($source, $changes);
+            } catch (Throwable $failure) {
+                throw new RuntimeException("{$path}: {$failure->getMessage()}", previous: $failure);
+            }
+            $originals[$path] = $source;
+            $before[$path] = ActorReferenceInventory::getComparableValue($payload);
         }
-        return array_map(static fn(ProjectActor $actor): string => $actor->path, $actors);
+        return new ActorIdentityMigrationPlan($projectRoot, $watched, $originals, $proposals, $before, $after);
+    }
+
+    /** Explicit confirmed operation. Returns every changed actor and reference file. */
+    public static function migrateProject(string $projectRoot): array
+    {
+        return self::planProject($projectRoot)->apply();
     }
 }

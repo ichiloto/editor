@@ -122,6 +122,7 @@ class ProjectValidator
       ...new AnimationReferenceValidator()->validate($workspace),
       ...$this->checkDefinitionIdentities($workspace),
       ...$this->checkActorDefinitions($workspace),
+      ...new ActorReferenceValidator()->validate($workspace),
       ...$this->checkKnowledgeCatalog($workspace),
       ...$this->checkSpecialProperties($workspace),
       ...$this->checkPermanentGrowth($workspace),

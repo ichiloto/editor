@@ -1010,8 +1010,13 @@ the runtime does not resolve them as layers.
 
 Legacy actor identity repair is shared by the TUI and CLI through
 `ActorIdentityMigration`. It offers a one-time freeze of the current name, not
-free-text identity retargeting. The TUI records the repair in normal undo history;
-CLI migration preflights the whole batch and uses a file-set transaction.
+free-text identity retargeting. Read-only project plans include starting-party,
+skit, presentation and battle-entry-rule actor-reference repairs, even when
+IDs were frozen earlier. Confirmation applies all listed files transactionally;
+the reversible plan guards undo/redo against outside changes. Project repair
+writes immediately after confirmation, unlike the retained single-actor freeze
+which stays deferred until save when no other reference files need changing.
+Both TUI and CLI use that plan; unresolved references are validation errors.
 Existing actor saves now preserve authored source instead of regenerating the
 file: comments, imports and unchanged expressions survive repair and rename.
 Unsupported source edits and externally changed files are refused before writes.
