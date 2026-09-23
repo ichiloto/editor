@@ -6,6 +6,11 @@ namespace Ichiloto\Editor;
 
 use Ichiloto\Editor\History\TracksPersistedState;
 use Ichiloto\Editor\IO\AtomicFile;
+use Ichiloto\Editor\Database\PhpSourceDocument;
+use Ichiloto\Engine\Entities\Skills\BasicSkill;
+use Ichiloto\Engine\Entities\Skills\MagicSkill;
+use Ichiloto\Engine\Entities\Skills\SpecialSkill;
+use ReflectionClass;
 
 use Ichiloto\Engine\Entities\Enumerations\ItemScopeNumber;
 use Ichiloto\Engine\Entities\Enumerations\ItemScopeSide;
@@ -16,6 +21,12 @@ use RuntimeException;
 final class ProjectSkillDatabase
 {
     use TracksPersistedState;
+
+    private ?string $source = null;
+    /** @var list<int> */
+    private array $sourceOrder = [];
+    /** @var array<int, array{skill: ProjectSkill, payload: array, source: string|null, class: class-string}> */
+    private array $authored = [];
 
     public function __construct(
         public readonly string $path,
@@ -41,12 +52,27 @@ final class ProjectSkillDatabase
             throw new RuntimeException(sprintf("Unable to parse %s.", $path));
         }
         $skills = [];
+        $classes = [];
         foreach (array_values($payload) as $index => $skill) {
             if ($skill instanceof \Ichiloto\Engine\Entities\Skills\Skill) {
                 $skills[] = ProjectSkill::fromSkill($skill, $index + 1);
+                $classes[] = $skill::class;
             }
         }
-        return new self($path, $skills);
+        $database = new self($path, $skills);
+        $database->source = (string) file_get_contents($path);
+        $document = PhpSourceDocument::parse($database->source);
+        foreach ($skills as $index => $skill) {
+            $key = spl_object_id($skill);
+            $database->sourceOrder[] = $key;
+            $database->authored[$key] = [
+                'skill' => $skill,
+                'payload' => $skill->toArray(),
+                'source' => count($payload) === count($skills) ? $document->entrySource($index) : null,
+                'class' => $classes[$index],
+            ];
+        }
+        return $database;
     }
 
     public function getSkills(): array { return array_values($this->skills); }
@@ -120,7 +146,29 @@ final class ProjectSkillDatabase
             return;
         }
 
-        AtomicFile::write($this->path, $this->buildPersistedPayload());
+        if ($this->source !== null && file_get_contents($this->path) !== $this->source) {
+            throw new RuntimeException('Refusing to overwrite skills.php changed outside the editor. Reload before saving.');
+        }
+        $source = $this->getUpdatedSource();
+        try {
+            \PhpToken::tokenize($source, TOKEN_PARSE);
+        } catch (\ParseError $error) {
+            throw new RuntimeException('Refusing to write invalid skill source: ' . $error->getMessage(), previous: $error);
+        }
+        AtomicFile::write($this->path, $source);
+        $this->source = $source;
+        $document = PhpSourceDocument::parse($source);
+        $this->sourceOrder = [];
+        foreach ($this->getSkills() as $index => $skill) {
+            $key = spl_object_id($skill);
+            $this->sourceOrder[] = $key;
+            $this->authored[$key] = [
+                'skill' => $skill,
+                'payload' => $skill->toArray(),
+                'source' => $document->entrySource($index),
+                'class' => $this->authored[$key]['class'] ?? $this->getSkillClass($skill),
+            ];
+        }
         $this->captureBaseline();
     }
 
@@ -143,48 +191,102 @@ final class ProjectSkillDatabase
      */
     protected function buildPersistedPayload(): string
     {
-        $imports = $this->getImportLines();
-        $definitions = array_map(fn(ProjectSkill $skill): string => $this->exportSkill($skill), $this->getSkills());
-        $payload = [self::openTag(), self::emptyString()];
-        foreach ($imports as $import) { $payload[] = $import; }
-        $payload[] = self::emptyString();
-        $payload[] = self::returnArray();
-        foreach ($definitions as $definition) { $payload[] = $definition . self::comma(); }
-        $payload[] = self::closingArray();
-        $payload[] = self::emptyString();
-
-        return implode(PHP_EOL, $payload);
+        return serialize(array_map(static fn(ProjectSkill $skill): array => $skill->toArray(), $this->getSkills()));
     }
 
-    private function getImportLines(): array
+    private function getUpdatedSource(): string
     {
-        $imports = [
-            "use Ichiloto\Engine\Entities\Enumerations\ItemScopeNumber;",
-            "use Ichiloto\Engine\Entities\Enumerations\ItemScopeSide;",
-            "use Ichiloto\Engine\Entities\Enumerations\ItemScopeStatus;",
-            "use Ichiloto\Engine\Entities\Enumerations\Occasion;",
-            "use Ichiloto\Engine\Entities\ItemScope;",
-            "use Ichiloto\Engine\Entities\Skills\BasicSkill;",
-            "use Ichiloto\Engine\Entities\Skills\MagicSkill;",
-            "use Ichiloto\Engine\Entities\Skills\SkillInvocation;",
-            "use Ichiloto\Engine\Entities\Skills\SpecialSkill;",
-        ];
-        foreach ($this->getSkills() as $skill) {
-            if ($skill->getType() === "magic") { $imports[] = "use Ichiloto\Engine\Entities\Magic\MagicEffectType;"; }
-            foreach ($skill->getEffects() as $effect) { $imports[] = "use " . strval($effect["class"] ?? "") . ";"; }
+        if ($this->source === null) {
+            return $this->getNewSource();
         }
-        sort($imports);
-        return array_values(array_unique($imports));
+        $document = PhpSourceDocument::parse($this->source);
+        $order = $this->sourceOrder;
+        if ($document->entryCount() !== count($order)) {
+            throw new RuntimeException('Refusing to flatten skills.php: its entries cannot be matched to the loaded skills.');
+        }
+        foreach ($this->getSkills() as $index => $skill) {
+            $key = spl_object_id($skill);
+            $entrySource = $this->getUpdatedEntry($skill);
+            $position = array_search($key, $order, true);
+            if ($position === $index) {
+                if ($document->entrySource($index) !== $entrySource) {
+                    $old = $document->entrySource($index);
+                    if ($old === null) { throw new RuntimeException('Refusing to replace an unsupported skill expression.'); }
+                    // Patch the entry's values through the same constructor-span writer.
+                    $document = $this->applySkillChanges($document, $index, $skill);
+                }
+                continue;
+            }
+            if ($position !== false) {
+                $document = $document->withoutEntry($position);
+                array_splice($order, $position, 1);
+            }
+            $document = $document->getWithEntrySource($entrySource, $index < count($order) ? $index : null);
+            array_splice($order, $index, 0, [$key]);
+        }
+        for ($index = count($order) - 1; $index >= count($this->skills); $index--) {
+            $document = $document->withoutEntry($index);
+        }
+        return $document->source;
+    }
+
+    private function getUpdatedEntry(ProjectSkill $skill): string
+    {
+        $authored = $this->authored[spl_object_id($skill)] ?? null;
+        if ($authored === null) { return ltrim($this->exportSkill($skill)); }
+        if ($authored['source'] === null) {
+            throw new RuntimeException('Refusing to flatten an unsupported skill expression. Edit its source directly.');
+        }
+        $document = PhpSourceDocument::parse('<?php return [' . $authored['source'] . '];');
+        return $this->applySkillChanges($document, 0, $skill)->entrySource(0)
+            ?? throw new RuntimeException('Cannot preserve the edited skill constructor.');
+    }
+
+    private function applySkillChanges(PhpSourceDocument $document, int $index, ProjectSkill $skill): PhpSourceDocument
+    {
+        $authored = $this->authored[spl_object_id($skill)];
+        $parameters = array_map(static fn(\ReflectionParameter $parameter): string => $parameter->getName(),
+            (new ReflectionClass($authored['class']))->getConstructor()?->getParameters() ?? []);
+        foreach ($skill->toArray() as $field => $value) {
+            if ($value === ($authored['payload'][$field] ?? null)) { continue; }
+            if (in_array($field, ['type', 'effects'], true)) {
+                throw new RuntimeException('Refusing to regenerate skill type or effects; edit those expressions in source.');
+            }
+            $literal = match ($field) {
+                'scope' => $this->exportScope($skill),
+                'invocation' => $this->exportInvocation($skill),
+                'occasion' => $this->exportOccasion($skill->getOccasion()),
+                'effectType' => $this->exportMagicEffectType($skill->getEffectType()),
+                default => var_export($value, true),
+            };
+            $document = $document->getWithConstructorArgument($index, $field, $literal, $parameters);
+        }
+        return $document;
+    }
+
+    /** @return class-string */
+    private function getSkillClass(ProjectSkill $skill): string
+    {
+        return match ($skill->getType()) {
+            'basic' => BasicSkill::class,
+            'magic' => MagicSkill::class,
+            default => SpecialSkill::class,
+        };
+    }
+
+    private function getNewSource(): string
+    {
+        $definitions = array_map(fn(ProjectSkill $skill): string => $this->exportSkill($skill), $this->getSkills());
+        return "<?php\n\nreturn [\n" . implode("\n", array_map(static fn(string $definition): string => $definition . ',', $definitions)) . "\n];\n";
     }
 
     private function exportSkill(ProjectSkill $skill): string
     {
+        if ($skill->getEffects() !== []) {
+            throw new RuntimeException('Refusing to regenerate skill effects without their authored source.');
+        }
         $lines = [
-            sprintf("  new %s(", match ($skill->getType()) {
-                "basic" => "BasicSkill",
-                "magic" => "MagicSkill",
-                default => "SpecialSkill",
-            }),
+            sprintf("  new \\%s(", $this->getSkillClass($skill)),
             "    " . var_export($skill->getName(), true) . ",",
             "    " . var_export($skill->getDescription(), true) . ",",
             "    " . var_export($skill->getIcon(), true) . ",",
@@ -195,7 +297,6 @@ final class ProjectSkillDatabase
             "    " . $this->exportInvocation($skill) . ",",
             "    [",
         ];
-        foreach ($skill->getEffects() as $effect) { $lines[] = "      " . $this->exportEffect($effect) . ","; }
         $lines[] = "    ],";
         if ($skill->getType() === "magic") {
             $lines[] = "    [],";
@@ -212,24 +313,24 @@ final class ProjectSkillDatabase
     {
         $scope = $skill->getScope();
         $parts = [
-            "ItemScopeSide::" . $this->enumCaseFromValue(ItemScopeSide::class, strval($scope["side"] ?? "Enemy"), "ENEMY"),
-            "ItemScopeNumber::" . $this->enumCaseFromValue(ItemScopeNumber::class, strval($scope["number"] ?? "One"), "ONE"),
-            "ItemScopeStatus::" . $this->enumCaseFromValue(ItemScopeStatus::class, strval($scope["status"] ?? "Alive"), "ALIVE"),
+            "\\" . ItemScopeSide::class . "::" . $this->enumCaseFromValue(ItemScopeSide::class, strval($scope["side"] ?? "Enemy"), "ENEMY"),
+            "\\" . ItemScopeNumber::class . "::" . $this->enumCaseFromValue(ItemScopeNumber::class, strval($scope["number"] ?? "One"), "ONE"),
+            "\\" . ItemScopeStatus::class . "::" . $this->enumCaseFromValue(ItemScopeStatus::class, strval($scope["status"] ?? "Alive"), "ALIVE"),
         ];
         if (($scope["targetCount"] ?? null) !== null) { $parts[] = strval(max(0, intval($scope["targetCount"]))); }
-        return "new ItemScope(" . implode(", ", $parts) . ")";
+        return "new \\Ichiloto\\Engine\\Entities\\ItemScope(" . implode(", ", $parts) . ")";
     }
 
     private function exportOccasion(string $occasion): string
     {
-        return "Occasion::" . $this->enumCaseFromValue(Occasion::class, $occasion, "BATTLE_SCREEN");
+        return "\\" . Occasion::class . "::" . $this->enumCaseFromValue(Occasion::class, $occasion, "BATTLE_SCREEN");
     }
 
     private function exportInvocation(ProjectSkill $skill): string
     {
         $invocation = $skill->getInvocation();
         return sprintf(
-            "new SkillInvocation(%s, %d, %d, %d, %d)",
+            "new \\Ichiloto\\Engine\\Entities\\Skills\\SkillInvocation(%s, %d, %d, %d, %d)",
             var_export(strval($invocation["message"] ?? ""), true),
             max(0, intval($invocation["speed"] ?? 0)),
             max(0, intval($invocation["accuracy"] ?? 0)),
@@ -238,24 +339,11 @@ final class ProjectSkillDatabase
         );
     }
 
-    private function exportEffect(array $effect): string
-    {
-        $class = basename(str_replace(chr(92), "/", strval($effect["class"] ?? "SkillEffect")));
-        return sprintf(
-            "new %s(%s, %s, %s, %s)",
-            $class,
-            var_export(strval($effect["formula"] ?? "0"), true),
-            var_export($effect["element"] ?? null, true),
-            var_export(floatval($effect["variance"] ?? 0.2), true),
-            var_export(boolval($effect["isCriticalHit"] ?? false), true),
-        );
-    }
-
     private function exportMagicEffectType(?string $effectType): string
     {
         return $effectType === null
             ? "null"
-            : "MagicEffectType::" . $this->enumCaseFromValue(\Ichiloto\Engine\Entities\Magic\MagicEffectType::class, $effectType, "DESTRUCTIVE");
+            : "\\Ichiloto\\Engine\\Entities\\Magic\\MagicEffectType::" . $this->enumCaseFromValue(\Ichiloto\Engine\Entities\Magic\MagicEffectType::class, $effectType, "DESTRUCTIVE");
     }
 
     private function enumCaseFromValue(string $enumClass, string $value, string $fallback): string
@@ -264,23 +352,5 @@ final class ProjectSkillDatabase
             if ($case->value === $value) { return $case->name; }
         }
         return $fallback;
-    }
-
-
-    private static function openTag(): string { return chr(60) . chr(63) . chr(112) . chr(104) . chr(112); }
-    private static function emptyString(): string { return str_repeat(chr(32), 0); }
-    private static function returnArray(): string { return chr(114) . chr(101) . chr(116) . chr(117) . chr(114) . chr(110) . chr(32) . chr(91); }
-    private static function comma(): string { return chr(44); }
-    private static function closingArray(): string { return chr(93) . chr(59); }
-    private static function writeFileTransactionally(string $path, string $contents): void
-    {
-        $temporaryPath = $path . ".tmp";
-        if (file_put_contents($temporaryPath, $contents) === false) {
-            throw new RuntimeException(sprintf("Unable to write temporary file for %s.", $path));
-        }
-        if (rename($temporaryPath, $path) === false) {
-            @unlink($temporaryPath);
-            throw new RuntimeException(sprintf("Unable to replace %s.", $path));
-        }
     }
 }

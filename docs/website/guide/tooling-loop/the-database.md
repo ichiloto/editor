@@ -16,7 +16,12 @@ Skills and Items have an **Animation** resource picker. It shows each
 animation's name and numeric id and stores the id, so renaming an animation
 does not break the reference. Skill `Ctrl+G` follows that id to the animation.
 The edit participates in the existing undo/redo and safe-save paths; an
-unsupported source form is still refused rather than flattened.
+unsupported source form is refused rather than flattened. Skill saves now patch
+only changed constructor arguments, preserving effects, weapon requirements,
+comments and other authored expressions. This replaces the old skill exporter,
+which incorrectly regenerated non-damage effects as damage effects. Changing a
+skill's class or regenerating effects without their original source is refused
+before writing; edit those expressions in source instead.
 
 Choose **(Legacy fallback)** for a skill or **(None)** for an item to clear
 the reference. Skills then retain their
