@@ -161,6 +161,45 @@ it('removes optional positional arguments without shifting the arguments that fo
     expect(fn() => PhpToken::tokenize($document->source, TOKEN_PARSE))->not->toThrow(ParseError::class);
 });
 
+it('moves supported skills across opaque neighbours without rewriting their expressions', function (): void {
+    $root = makeTemporaryProject();
+    $path = $root . '/assets/Data/skills.php';
+    $source = <<<'PHP'
+<?php
+use Ichiloto\Engine\Entities\Skills\SpecialSkill;
+$computed = new SpecialSkill('Computed', '', '', 0, 0);
+return [
+  // Before documentation.
+  new SpecialSkill('Before', '', '', 0, 0), // Before tail.
+  // Opaque documentation.
+  $computed, // Opaque tail.
+  // After documentation.
+  new SpecialSkill('After', '', '', 0, 0),
+];
+PHP;
+    file_put_contents($path, $source);
+    $database = ProjectSkillDatabase::fromProject($root);
+    $moved = $database->removeSkill(0);
+    $database->insertSkill(2, $moved);
+    $database->save();
+    expect(array_map(static fn($skill) => $skill->name, require $path))->toBe(['Computed', 'After', 'Before'])
+        ->and(file_get_contents($path))->toContain("// Opaque documentation.\n  \$computed, // Opaque tail.")
+        ->and(file_get_contents($path))->toContain("// Before documentation.\n  new SpecialSkill('Before', '', '', 0, 0), // Before tail.");
+    $database = ProjectSkillDatabase::fromProject($root);
+    $moved = $database->removeSkill(2);
+    $database->insertSkill(0, $moved);
+    $database->save();
+    expect(file_get_contents($path))->toBe($source);
+    $moved = $database->removeSkill(2);
+    $database->insertSkill(0, $moved);
+    $database->save();
+    expect(array_map(static fn($skill) => $skill->name, require $path))->toBe(['After', 'Before', 'Computed']);
+    $moved = $database->removeSkill(0);
+    $database->insertSkill(2, $moved);
+    $database->save();
+    expect(file_get_contents($path))->toBe($source);
+});
+
 it('adds skills after a trailing comment without hiding the separator in that comment', function (): void {
     $root = makeTemporaryProject();
     $path = $root . '/assets/Data/skills.php';

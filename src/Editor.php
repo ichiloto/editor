@@ -10801,8 +10801,18 @@ final class Editor
                 'noneLabel' => '(Legacy fallback)',
             ],
         ];
-        return array_values(array_filter($fields, fn(array $field): bool =>
-            $this->workspace->skillDatabase->canEditField($this->databaseSelectedSkillIndex, $field['field'])));
+        $database = $this->workspace->skillDatabase;
+        $fields = array_values(array_filter($fields, fn(array $field): bool =>
+            $database->supportsField($this->databaseSelectedSkillIndex, $field['field'])));
+        $reason = $database->getReadOnlyReason($this->databaseSelectedSkillIndex);
+        if ($reason !== null) {
+            foreach ($fields as &$field) {
+                $field['editable'] = false;
+            }
+            unset($field);
+            array_unshift($fields, ['label' => 'Read-only', 'value' => $reason, 'editable' => false]);
+        }
+        return $fields;
     }
     /**
      * Returns the editable settings fields for the selected quest.
@@ -10946,6 +10956,7 @@ final class Editor
      */
     private function getDatabaseFieldControl(array $field): ?InputControl
     {
+        if (($field['editable'] ?? null) === false) { return null; }
         $control = $field['control'] ?? null;
 
         return $control instanceof InputControl ? $control : null;
@@ -10962,6 +10973,10 @@ final class Editor
         $field = $fields[$this->databaseSelectedSettingIndex] ?? null;
 
         if (! is_array($field)) {
+            return;
+        }
+
+        if (($field['editable'] ?? null) === false && ! isset($field['frame'])) {
             return;
         }
 
@@ -12620,7 +12635,7 @@ final class Editor
         $fields = $this->getDatabaseSettingsFields();
         $field = $fields[$this->databaseSelectedSettingIndex] ?? null;
 
-        if (! is_array($field)) {
+        if (! is_array($field) || ($field['editable'] ?? null) === false) {
             return;
         }
 
@@ -17350,6 +17365,7 @@ final class Editor
      */
     private function isInspectorFieldInteractive(array $field): bool
     {
+        if (($field['editable'] ?? null) === false) { return isset($field['frame']); }
         return $this->getInspectorFieldControl($field) instanceof InputControl
             || ($field['editable'] ?? null) === true
             || ! empty($field['options'])
@@ -17368,6 +17384,7 @@ final class Editor
      */
     private function getInspectorFieldControl(array $field): ?InputControl
     {
+        if (($field['editable'] ?? null) === false) { return null; }
         $control = $field['control'] ?? null;
 
         return $control instanceof InputControl ? $control : null;

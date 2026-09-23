@@ -139,3 +139,44 @@ it('offers only supported skill fields and leaves a no-op pick unchanged', funct
     $workspace->skillDatabase->save();
     expect((require $root . '/assets/Data/skills.php')[0]->animationId)->toBe(1);
 })->with([BasicSkill::class, MagicSkill::class, SpecialSkill::class]);
+
+it('shows opaque skill fields read-only and refuses Enter and directional edits before opening controls', function () {
+    $root = makeTemporaryProject();
+    $path = $root . '/assets/Data/skills.php';
+    $source = <<<'PHP'
+<?php
+$computed = new \Ichiloto\Engine\Entities\Skills\SpecialSkill('Computed', 'Authored description', '', 4, 0);
+return [$computed];
+PHP;
+    file_put_contents($path, $source);
+    $editor = deletionEditor($root);
+    openDatabaseCategory($editor, 'skills');
+    setEditorProperty($editor, 'databaseFocus', 'database_settings');
+    $fields = callEditorMethod($editor, 'getDatabaseSkillSettingsFields');
+    expect($fields[0]['value'])->toContain('Computed', 'read-only');
+    $values = array_column($fields, 'value', 'label');
+    expect($values)->toMatchArray(['Name' => 'Computed', 'Description' => 'Authored description', 'Cost' => '4']);
+    foreach ($fields as $index => $field) {
+        expect($field['editable'])->toBeFalse();
+        setEditorProperty($editor, 'databaseSelectedSettingIndex', $index);
+        callEditorMethod($editor, 'dispatchInput', "\r");
+        callEditorMethod($editor, 'dispatchInput', "\033[C");
+        expect(getEditorProperty($editor, 'isDatabaseEditing'))->toBeFalse()
+            ->and(callEditorMethod($editor, 'isInspectorFieldInteractive', $field))->toBeFalse();
+    }
+    expect(getEditorProperty($editor, 'workspace')->skillDatabase->isDirty())->toBeFalse()
+        ->and(file_get_contents($path))->toBe($source);
+});
+
+it('does not enter text editing for an established actor id', function () {
+    $root = makeTemporaryProject();
+    $editor = deletionEditor($root);
+    openDatabaseCategory($editor, 'actors');
+    setEditorProperty($editor, 'databaseFocus', 'database_settings');
+    $fields = callEditorMethod($editor, 'getDatabaseActorSettingsFields');
+    $index = array_search('id', array_column($fields, 'field'), true);
+    expect($index)->not->toBeFalse()->and($fields[$index]['editable'])->toBeFalse();
+    setEditorProperty($editor, 'databaseSelectedSettingIndex', $index);
+    callEditorMethod($editor, 'dispatchInput', "\r");
+    expect(getEditorProperty($editor, 'isDatabaseEditing'))->toBeFalse();
+});

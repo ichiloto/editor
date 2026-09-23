@@ -109,10 +109,23 @@ final class ProjectSkillDatabase
 
     public function canEditField(int $index, string $field): bool
     {
+        return $this->getReadOnlyReason($index) === null && $this->supportsField($index, $field);
+    }
+
+    public function getReadOnlyReason(int $index): ?string
+    {
+        $skill = $this->getSkillByIndex($index);
+        if ($skill === null) { return null; }
+        $authored = $this->authored[spl_object_id($skill)] ?? null;
+        return $authored !== null && $authored['source'] === null
+            ? $this->getSourceRefusal($skill)->getMessage()
+            : null;
+    }
+
+    public function supportsField(int $index, string $field): bool
+    {
         $skill = $this->getSkillByIndex($index);
         if ($skill === null || in_array($field, ['type', 'effects'], true)) { return false; }
-        $authored = $this->authored[spl_object_id($skill)] ?? null;
-        if ($authored !== null && $authored['source'] === null) { return false; }
         $parameter = str_starts_with($field, 'scope') ? 'scope'
             : (str_starts_with($field, 'invocation') ? 'invocation' : $field);
         return in_array($parameter, $this->getConstructorParameters($skill), true);
@@ -245,7 +258,20 @@ final class ProjectSkillDatabase
         foreach ($this->getSkills() as $index => $skill) {
             $key = spl_object_id($skill);
             $position = array_search($key, $order, true);
-            if ($position === $index && $skill->toArray() === $this->authored[$key]['payload']) {
+            $authored = $this->authored[$key] ?? null;
+            if ($authored !== null && $authored['source'] === null) {
+                if ($skill->toArray() !== $authored['payload']) { throw $this->getSourceRefusal($skill); }
+                // Opaque expressions stay untouched. Move editable neighbours past them.
+                while ($position !== $index) {
+                    $neighbour = $this->authored[$order[$index]]['skill'];
+                    $destination = array_search(spl_object_id($neighbour), $retained, true);
+                    if ($destination === false || $destination <= $index) { throw $this->getSourceRefusal($skill); }
+                    $document = $this->moveSkillEntry($document, $order, $neighbour, $destination);
+                    $position = array_search($key, $order, true);
+                }
+                continue;
+            }
+            if ($position === $index && $skill->toArray() === ($authored['payload'] ?? null)) {
                 continue;
             }
             $entrySource = $this->getUpdatedEntry($skill);
@@ -258,25 +284,36 @@ final class ProjectSkillDatabase
                 }
                 continue;
             }
-            if ($position !== false) {
-                $document = $document->withoutEntry($position);
-                array_splice($order, $position, 1);
-            }
-            $before = $index < count($order) ? $index : null;
-            $block = $this->authored[$key]['block'] ?? null;
-            if ($block !== null) {
-                $preserved = PhpSourceDocument::parse("<?php return [\n" . $block . "\n];");
-                $block = $this->applySkillChanges($preserved, 0, $skill)->getEntryBlockSource(0);
-                $document = $document->getWithEntryBlockSource($block, $before);
-            } else {
-                $document = $document->getWithEntrySource($entrySource, $before);
-            }
-            array_splice($order, $index, 0, [$key]);
+            $document = $this->moveSkillEntry($document, $order, $skill, $index);
         }
         for ($index = count($order) - 1; $index >= count($this->skills); $index--) {
             $document = $document->withoutEntry($index);
         }
         return $document->source;
+    }
+
+    /** @param list<int> $order */
+    private function moveSkillEntry(PhpSourceDocument $document, array &$order, ProjectSkill $skill, int $index): PhpSourceDocument
+    {
+        $key = spl_object_id($skill);
+        $entrySource = $this->getUpdatedEntry($skill);
+        $position = array_search($key, $order, true);
+        if ($position !== false) {
+            $document = $document->withoutEntry($position);
+            array_splice($order, $position, 1);
+        }
+        $index = min($index, count($order));
+        $before = $index < count($order) ? $index : null;
+        $block = $this->authored[$key]['block'] ?? null;
+        if ($block !== null) {
+            $preserved = PhpSourceDocument::parse("<?php return [\n" . $block . "\n];");
+            $block = $this->applySkillChanges($preserved, 0, $skill)->getEntryBlockSource(0);
+            $document = $document->getWithEntryBlockSource($block, $before);
+        } else {
+            $document = $document->getWithEntrySource($entrySource, $before);
+        }
+        array_splice($order, $index, 0, [$key]);
+        return $document;
     }
 
     private function getUpdatedEntry(ProjectSkill $skill): string
