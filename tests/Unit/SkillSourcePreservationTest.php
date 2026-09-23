@@ -160,3 +160,19 @@ it('removes optional positional arguments without shifting the arguments that fo
     expect($document->source)->toBe("<?php return [new Ability('Skill', note: 'tail')];");
     expect(fn() => PhpToken::tokenize($document->source, TOKEN_PARSE))->not->toThrow(ParseError::class);
 });
+
+it('adds skills after a trailing comment without hiding the separator in that comment', function (): void {
+    $root = makeTemporaryProject();
+    $path = $root . '/assets/Data/skills.php';
+    file_put_contents($path, <<<'PHP'
+<?php
+return [
+  new \Ichiloto\Engine\Entities\Skills\SpecialSkill('Original', '', '', 0, 0) // Keep this note.
+];
+PHP);
+    $database = ProjectSkillDatabase::fromProject($root);
+    $database->addSkill('New');
+    $database->save();
+    expect(require $path)->toHaveCount(2)
+        ->and(file_get_contents($path))->toContain("0), // Keep this note.\n");
+});

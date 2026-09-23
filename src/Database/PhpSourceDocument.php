@@ -387,13 +387,22 @@ final class PhpSourceDocument
         }
 
         $beforeClose = substr($this->source, 0, $this->arrayClose);
+        if ($this->entries !== []) {
+            foreach (array_reverse(self::tokenize($beforeClose)) as $token) {
+                if (self::isSkippable($token)) { continue; }
+                if ($token['text'] !== ',') {
+                    $offset = $token['offset'] + strlen($token['text']);
+                    $beforeClose = substr($beforeClose, 0, $offset) . ',' . substr($beforeClose, $offset);
+                }
+                break;
+            }
+        }
         $after = substr($this->source, $this->arrayClose);
         $trimmed = rtrim($beforeClose);
-        $needsComma = ! str_ends_with($trimmed, ',') && ! str_ends_with($trimmed, '[');
         $closingIndent = substr($beforeClose, strrpos($beforeClose, "\n") === false ? 0 : strrpos($beforeClose, "\n") + 1);
 
         return self::parse(
-            $trimmed . ($needsComma ? ',' : '') . "\n" . $block . (trim($closingIndent) === '' ? $closingIndent : '') . $after,
+            $trimmed . "\n" . $block . (trim($closingIndent) === '' ? $closingIndent : '') . $after,
         );
     }
 
