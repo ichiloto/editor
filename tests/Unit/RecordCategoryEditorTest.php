@@ -103,6 +103,8 @@ it('adds and removes a skit beat with Shift+O and Shift+X, both undoable', funct
 
         callEditorMethod($editor, 'dispatchInput', 'O');
         expect($database->countSubItems(0))->toBe(3);
+        expect(getEditorProperty($editor, 'referencePicker')->isOpen())->toBeTrue();
+        callEditorMethod($editor, 'dispatchInput', "\x1b");
 
         callEditorMethod($editor, 'dispatchInput', "\x1a");
         expect($database->countSubItems(0))->toBe(2);

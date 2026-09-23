@@ -16,6 +16,9 @@ final class ProjectActor
 {
     use TracksPersistedState;
 
+    private ?string $establishedDefinitionId;
+    private readonly bool $loadedWithoutDefinitionId;
+
     /**
      * The sentinel option meaning "no class reference" in the editor picker.
      */
@@ -30,6 +33,9 @@ final class ProjectActor
         private array $payload,
         bool $isDirty = false,
     ) {
+        $id = $this->getDefinitionId();
+        $this->establishedDefinitionId = $id === '' ? null : $id;
+        $this->loadedWithoutDefinitionId = $id === '';
         if (! $isDirty) {
             // Loaded from disk: the current content is the saved content.
             $this->captureBaseline();
@@ -73,6 +79,7 @@ final class ProjectActor
             payload: [
                 'class' => 'Ichiloto\\Engine\\Entities\\Character',
                 'data' => [
+                    'id' => $id,
                     'name' => $name,
                     'description' => '',
                     'level' => 1,
@@ -251,16 +258,12 @@ final class ProjectActor
     /**
      * Returns the durable definition id a save resolves this actor by.
      *
-     * The engine falls back to the display name when a project has not
-     * declared one, which is why renaming an actor used to strand a save.
-     *
-     * @return string The id, or the name when none is declared.
+     * @return string The explicit id, or an empty string for an invalid legacy asset.
      */
     public function getDefinitionId(): string
     {
-        $id = trim(strval($this->getData()['id'] ?? ''));
-
-        return $id === '' ? $this->getName() : $id;
+        $id = $this->getData()['id'] ?? null;
+        return is_string($id) ? trim($id) : '';
     }
 
     /**
@@ -270,7 +273,7 @@ final class ProjectActor
      */
     public function hasDefinitionId(): bool
     {
-        return trim(strval($this->getData()['id'] ?? '')) !== '';
+        return $this->getDefinitionId() !== '';
     }
 
     /**
@@ -496,6 +499,17 @@ final class ProjectActor
      */
     public function setField(string $field, mixed $value): void
     {
+        if ($field === 'id') {
+            $identity = trim((string) $value);
+            if ($identity === $this->getDefinitionId()) { return; }
+            if (($this->establishedDefinitionId !== null && $identity !== $this->establishedDefinitionId) || $identity === '') {
+                throw new RuntimeException('An actor id is permanent. Change the display name, not its identity.');
+            }
+            $this->establishedDefinitionId = $identity;
+        }
+        if ($field === 'name' && ! $this->hasDefinitionId()) {
+            throw new RuntimeException('Declare the existing actor identity before renaming this actor so references and saves remain valid.');
+        }
         if (! isset($this->payload['data']) || ! is_array($this->payload['data'])) {
             $this->payload['data'] = [];
         }
@@ -616,6 +630,20 @@ final class ProjectActor
         $this->captureBaseline();
     }
 
+    /** Restores an authoring snapshot for undo/redo without allowing identity retargeting.
+     * @param array<string, mixed> $data
+     */
+    public function restoreData(array $data): void
+    {
+        $id = $data['id'] ?? null;
+        $isLegacyUndo = $this->loadedWithoutDefinitionId && $id === null;
+        if (! $isLegacyUndo && $id !== $this->establishedDefinitionId) {
+            throw new RuntimeException('An actor id is permanent. Undo cannot retarget its identity.');
+        }
+        $this->payload['data'] = $data;
+        $this->touchState();
+    }
+
     /**
      * @inheritDoc
      */
@@ -632,7 +660,7 @@ final class ProjectActor
      *
      * @return array<string, mixed>
      */
-    private function getData(): array
+    public function getData(): array
     {
         $data = $this->payload['data'] ?? [];
 

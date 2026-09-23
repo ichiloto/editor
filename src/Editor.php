@@ -9025,6 +9025,10 @@ final class Editor
         $this->databaseFocus = self::DATABASE_FOCUS_SETTINGS;
         $this->setStatus(sprintf('Created a new %s.', $database->schema->entryNoun), StatusLevel::SUCCESS);
         $this->renderDatabaseArea();
+        if ($database->schema->key === 'skits') {
+            $this->selectNewSkitActor(0);
+            return;
+        }
         $this->beginDatabaseEdit();
     }
 
@@ -9410,6 +9414,21 @@ final class Editor
 
         $this->setStatus(sprintf('Added %s %d.', $subList->singular, $entryIndex + 1), StatusLevel::SUCCESS);
         $this->renderDatabaseArea();
+        if ($database->schema->key === 'skits') {
+            $this->selectNewSkitActor($entryIndex);
+        }
+    }
+
+    /** New beats start with a resource choice, never an invented speaker. */
+    private function selectNewSkitActor(int $entryIndex): void
+    {
+        foreach ($this->getDatabaseSettingsFields() as $index => $field) {
+            if (($field['field'] ?? '') !== sprintf('beat%dActor', $entryIndex)) { continue; }
+            $this->databaseSelectedSettingIndex = $index;
+            $this->databaseFocus = self::DATABASE_FOCUS_SETTINGS;
+            $this->openReferencePicker($field);
+            return;
+        }
     }
 
     /**
@@ -10192,10 +10211,9 @@ final class Editor
                 'label' => 'Definition Id',
                 'value' => $actor->hasDefinitionId() ? $actor->getDefinitionId() : '',
                 'control' => new InputControl(InputControlType::TEXT, $actor->hasDefinitionId() ? $actor->getDefinitionId() : ''),
+                'editable' => ! $actor->hasDefinitionId(),
                 'field' => 'id',
-                // A project that declares no id is resolved by name, which is
-                // what strands a save when the actor is renamed.
-                'displayDefault' => sprintf('%s (the name; declare an id so a rename keeps saves)', $actor->getName()),
+                'displayDefault' => sprintf('Required: use the original identity (%s for an unmigrated legacy actor)', $actor->getName()),
             ],
         ];
     }
@@ -10517,6 +10535,7 @@ final class Editor
                 'label' => 'Name',
                 'value' => $actor->getName(),
                 'control' => new InputControl(InputControlType::TEXT, $actor->getName()),
+                'editable' => $actor->hasDefinitionId(),
                 'field' => 'name',
             ],
             [
@@ -12272,7 +12291,21 @@ final class Editor
 
         $record = $this->getSelectedRecordDatabase()?->getRecordByIndex($this->getSelectedRecordIndex());
         $before = $record?->toArray();
+        $actor = $this->isActorsDatabaseSelected() ? $this->getSelectedActor() : null;
+        $actorBefore = $actor?->getData();
         $this->applyDatabaseFieldValue($fieldId, $rawValue);
+
+        if ($actor !== null && $actorBefore !== null) {
+            $actorAfter = $actor->getData();
+            if ($actorBefore !== $actorAfter) {
+                $this->recordCommand(new GenericCommand(
+                    sprintf('%s edit', $field['label'] ?? 'Actor field'),
+                    static fn() => $actor->restoreData($actorAfter),
+                    static fn() => $actor->restoreData($actorBefore),
+                ));
+            }
+            return;
+        }
 
         if ($record !== null && $before !== null) {
             $after = $record->toArray();

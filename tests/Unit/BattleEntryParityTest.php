@@ -196,7 +196,7 @@ it('resolves actor identities exactly as the accepted engine store does', functi
         // durable identity; an unknown reference is refused with the same
         // wording; a healthy store accepts all three reference kinds.
         file_put_contents($ruleFile, "<?php\nreturn ['rules' => [['id' => 'one', 'actors' => [['actor' => 'actor.rook', 'presence' => 'any'], ['actor' => 'Rook', 'presence' => 'active'], ['actor' => 'RookFile', 'presence' => 'reserve']], 'effects' => [['type' => 'stat_stage', 'actor' => 'ROOK', 'stat' => 'speed', 'delta' => 1]]]]];");
-        $healthy = parityActorsDirectory(['RookFile' => ['Rook', 'actor.rook'], 'Vale' => ['Vale', null]]);
+        $healthy = parityActorsDirectory(['RookFile' => ['Rook', 'actor.rook'], 'Vale' => ['Vale', 'Vale']]);
         $engine = hydrateThroughAcceptedEngine($engineRoot, $ruleFile, $healthy);
         $resolver = parityResolver($healthy);
 
@@ -216,10 +216,17 @@ it('resolves actor identities exactly as the accepted engine store does', functi
 
         // A contested reference refuses the store itself, with the same
         // wording the resolver reports.
-        $contested = parityActorsDirectory(['Kael' => ['Kael', null], 'Impostor' => ['Kael', 'actor.impostor']]);
+        $contested = parityActorsDirectory(['Kael' => ['Kael', 'Kael'], 'Impostor' => ['Kael', 'actor.impostor']]);
         $engine = hydrateThroughAcceptedEngine($engineRoot, $ruleFile, $contested);
         $resolver = parityResolver($contested);
 
+        expect($engine['phase'] ?? null)->toBe('store')
+            ->and($resolver->problems())->toContain(strval($engine['error'] ?? ''));
+
+        // Missing ids are no longer inferred from display names in either surface.
+        $missing = parityActorsDirectory(['Missing' => ['Display Name', null]]);
+        $engine = hydrateThroughAcceptedEngine($engineRoot, $ruleFile, $missing);
+        $resolver = parityResolver($missing);
         expect($engine['phase'] ?? null)->toBe('store')
             ->and($resolver->problems())->toContain(strval($engine['error'] ?? ''));
 

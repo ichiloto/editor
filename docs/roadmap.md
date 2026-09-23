@@ -998,8 +998,9 @@ line and leaves comments, fully-qualified class names, nested constructors
 and emoji exactly as authored. A file it cannot read by argument name is
 refused rather than rewritten, and the ordinary writer takes over.
 
-**An actor is more than its class.** A durable definition id (with the row
-saying what a save resolves without one), actor-natural adjustments that keep
+**An actor is more than its class.** An explicit, immutable definition id
+(assigned at creation; missing legacy ids are validation errors and must be
+declared before renaming), actor-natural adjustments that keep
 their sign and drop zeroes, and named natural variants with a default —
 where the rows edit whichever set the runtime has in force. Beside them, what
 each stat actually comes to, resolved by `StatResolver` and

@@ -49,6 +49,7 @@ final class BattleEntryActorResolver
             $normalizedId = self::normalize($id);
 
             if ($normalizedId === '') {
+                $problems[] = sprintf('%s must declare an explicit non-empty actor id. Display names are not identities.', $actor->path);
                 continue;
             }
 

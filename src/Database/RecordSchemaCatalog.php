@@ -855,7 +855,7 @@ final class RecordSchemaCatalog
                 'id' => 'new-skit',
                 'title' => 'New Skit',
                 'beats' => [
-                    ['speaker' => 'Speaker', 'text' => 'Say something.'],
+                    ['actor' => '', 'text' => 'Say something.'],
                 ],
             ],
             subList: new RecordSubList(
@@ -867,7 +867,7 @@ final class RecordSchemaCatalog
                     new RecordField('speaker', 'Non-actor Speaker', removeWhenEmpty: true),
                     new RecordField('text', 'Text'),
                 ],
-                blank: ['speaker' => 'Speaker', 'text' => 'Say something.'],
+                blank: ['actor' => '', 'text' => 'Say something.'],
                 exclusiveFields: [['actor', 'speaker']],
             ),
         );

@@ -117,7 +117,8 @@ final class ReferenceCatalog
             // definition id, which is the one thing a rename never changes.
             'actor_ids' => array_map(
                 static fn(ProjectActor $actor): string => $actor->getDefinitionId(),
-                $this->workspace->actorDatabase->getActors()
+                array_values(array_filter($this->workspace->actorDatabase->getActors(),
+                    static fn(ProjectActor $actor): bool => $actor->hasDefinitionId()))
             ),
             'classes' => array_map(
                 static fn(ProjectClass $class): string => $class->getName(),
@@ -350,6 +351,7 @@ final class ReferenceCatalog
             foreach ($this->workspace->actorDatabase->getActors() as $actor) {
                 $id = $actor->getDefinitionId();
                 $name = $actor->getName();
+                if ($id === '') { continue; }
 
                 if ($name !== '' && $name !== $id) {
                     $labels[$id] = sprintf('%s (%s)', $name, $id);

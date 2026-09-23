@@ -70,7 +70,7 @@ it('adds and removes skit beats', function (): void {
     $database->save();
 
     $payload = require $root . '/assets/Data/Skits/breakfast-banter.php';
-    expect($payload['beats'][2])->toBe(['speaker' => 'Drazek', 'text' => 'I have seen her with a wooden spoon.']);
+    expect($payload['beats'][2])->toEqual(['speaker' => 'Drazek', 'text' => 'I have seen her with a wooden spoon.']);
 
     $removed = $database->removeSubItem(0, 2);
     expect($removed['speaker'])->toBe('Drazek');
@@ -126,6 +126,38 @@ it('validates skit actor identity with the shared runtime resolver and warns on 
         ->and($speakers[0]->message)->toContain('Deprecated')
         ->and($speakers[1]->message)->toContain('stable actor id')
         ->and($speakers[2]->message)->toContain('not both');
+    expect($speakers[1]->hint)->toContain('existing actor')->not->toContain('not both');
+});
+
+it('uses unsaved and renamed actors consistently in the skit picker and validator', function (): void {
+    $root = makeTemporaryProject();
+    $workspace = \Ichiloto\Editor\ProjectWorkspace::fromProject($root);
+    $index = $workspace->actorDatabase->addActor('Liora');
+    $workspace->actorDatabase->setField($index, 'name', 'Liora Vey');
+    $catalog = new \Ichiloto\Editor\Database\ReferenceCatalog($workspace);
+    expect($catalog->valuesFor('actor_ids'))->toContain('Liora')
+        ->and($catalog->labelsFor('actor_ids')['Liora'])->toBe('Liora Vey (Liora)')
+        ->and(is_file($root . '/assets/Data/Actors/Liora.php'))->toBeFalse();
+    $workspace->getRecordDatabase('skits')->getRecords()[0]->setSubList('beats', [['actor' => 'Liora', 'text' => 'Hello.']]);
+    $validator = new \Ichiloto\Editor\Validation\ProjectValidator();
+    $issues = new ReflectionMethod($validator, 'checkSkitReferences')->invoke($validator, $workspace,
+        ['maps' => ['happyville/town-center'], 'quests' => ['breakfast-duty']]);
+    expect($issues)->toBeEmpty();
+});
+
+it('opens the Actor picker when adding a beat or creating a skit instead of inventing a speaker', function (): void {
+    $root = makeTemporaryProject();
+    $editor = deletionEditor($root);
+    openDatabaseCategory($editor, 'skits');
+    callEditorMethod($editor, 'addDatabaseRecordSubItem');
+    $picker = getEditorProperty($editor, 'referencePicker');
+    expect($picker->isOpen())->toBeTrue();
+    $database = getEditorProperty($editor, 'workspace')->getRecordDatabase('skits');
+    expect($database->getRecords()[0]->toArray()['beats'][2])->toBe(['actor' => '', 'text' => 'Say something.']);
+    $picker->close();
+    callEditorMethod($editor, 'createDatabaseRecord');
+    expect($picker->isOpen())->toBeTrue()
+        ->and($database->getRecords()[1]->toArray()['beats'][0])->toBe(['actor' => '', 'text' => 'Say something.']);
 });
 
 it('creates a new skit as its own file', function (): void {

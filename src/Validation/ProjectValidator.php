@@ -23,7 +23,6 @@ use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Engine\Core\WorldConditionType;
 use Ichiloto\Engine\Field\SkitSpeaker;
-use Ichiloto\Engine\Util\Stores\ActorStore;
 use Ichiloto\Engine\Events\Interpreter\EventInterpreter;
 use Ichiloto\Engine\Events\Interpreter\MovementRouteRunner;
 use Ichiloto\Engine\IO\Console\TerminalText;
@@ -277,11 +276,10 @@ class ProjectValidator
 
       $seen[$id] = true;
 
-      // An actor without its own id is resolved by display name, which the
-      // runtime supports deliberately. That is a convention worth adopting
-      // rather than a defect, so the Inspector says so on the row where it
-      // can be acted on; a validator reporting it on every legacy actor
-      // would be noise in front of the findings that are defects.
+      if (! $actor->hasDefinitionId()) {
+        $issues[] = Issue::error($where, 'Actor has no explicit stable id.',
+          'Declare its existing identity before renaming it. For legacy actors, use the original display name to preserve references and saves.');
+      }
 
       $variants = $actor->getNaturalVariants();
       $default = $actor->getDefaultNaturalVariantId();
@@ -3021,7 +3019,7 @@ class ProjectValidator
 
     $issues = [];
     try {
-      $actors = new ActorStore($workspace->projectRoot . '/assets/Data/Actors');
+      $actors = $workspace->actorDatabase->createActorStore();
     } catch (InvalidArgumentException|\RuntimeException $exception) {
       $actors = null;
       $issues[] = Issue::error('skit actors', $exception->getMessage(), 'Repair the actor registry before validating skit actor references.');
@@ -3053,7 +3051,12 @@ class ProjectValidator
           $issues[] = Issue::warning($beatLocation, $notice, 'Choose the Actor picker to persist the stable actor id.');
         }
         foreach ($speaker->errors as $error) {
-          $issues[] = Issue::error($beatLocation, $error, 'Choose an Actor, or enter a non-actor speaker, not both.');
+          $hint = array_key_exists('actor', $beat) && array_key_exists('speaker', $beat)
+            ? 'Choose an Actor, or enter a non-actor speaker, not both.'
+            : (array_key_exists('actor', $beat)
+              ? 'Choose an existing actor from the Actor picker; the reference must use its stable id, not its display name.'
+              : 'Enter plain display text for a non-actor speaker.');
+          $issues[] = Issue::error($beatLocation, $error, $hint);
         }
       }
     }
