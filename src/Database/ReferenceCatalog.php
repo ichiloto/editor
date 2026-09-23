@@ -43,6 +43,7 @@ final class ReferenceCatalog
         'troops',
         'states',
         'animations',
+        'animation_ids',
         'skits',
         'common_events',
         'inventory',
@@ -165,6 +166,10 @@ final class ReferenceCatalog
             'map_npcs' => $this->currentMap?->getNpcs()->ids() ?? [],
             'animations' => array_map(
                 static fn(object $animation): string => $animation->name ?? '',
+                $this->workspace->animationDatabase->getAnimations()
+            ),
+            'animation_ids' => array_map(
+                static fn(object $animation): string => (string) $animation->id,
                 $this->workspace->animationDatabase->getAnimations()
             ),
             // Cutscenes are folders, so the stable id is the folder name.
@@ -323,10 +328,18 @@ final class ReferenceCatalog
      * identity that will actually be written.
      *
      * @param string $category The kind of reference.
-     * @return array<string, string> Labels keyed by stored value.
+     * @return array<string|int, string> Labels keyed by stored value; PHP converts numeric ids to integer keys.
      */
     public function labelsFor(string $category): array
     {
+        if ($category === 'animation_ids') {
+            $labels = [];
+            foreach ($this->workspace->animationDatabase->getAnimations() as $animation) {
+                $labels[(string) $animation->id] = sprintf('%s (%d)', $animation->name, $animation->id);
+            }
+            return $labels;
+        }
+
         if ($category === 'elements_or_any') {
             return ['*' => '* (whichever element it was)'];
         }

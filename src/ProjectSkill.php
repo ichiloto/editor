@@ -18,6 +18,10 @@ final class ProjectSkill
 {
     use TracksPersistedState;
 
+    public ?int $animationId {
+        get => isset($this->payload['animationId']) ? intval($this->payload['animationId']) : null;
+    }
+
     public function __construct(
         public readonly int $id,
         private array $payload,
@@ -66,6 +70,7 @@ final class ProjectSkill
                 $skill->effects,
             ),
             "effectType" => $skill instanceof MagicSkill ? $skill->effectType?->value : null,
+            "animationId" => $skill->animationId,
         ]);
     }
 
@@ -119,6 +124,12 @@ final class ProjectSkill
 
     public function setField(string $field, mixed $value): void
     {
+        if ($field === 'animationId') {
+            $this->payload[$field] = $value === null || trim(strval($value)) === '' ? null : intval($value);
+            $this->touchState();
+            return;
+        }
+
         if (in_array($field, ["name", "description", "icon", "type", "occasion", "effectType"], true)) {
             $this->payload[$field] = is_string($value) ? trim($value) : strval($value);
             $this->touchState();

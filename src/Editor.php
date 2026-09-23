@@ -6430,11 +6430,7 @@ final class Editor
     }
 
     /**
-     * Jumps from the selected skill to the animation sharing its name.
-     *
-     * Skills carry no explicit animation id yet (the engine models a magic
-     * *effect type*, not a database reference), so the hop resolves by name:
-     * the skill name first, then its effect type.
+     * Jumps to the selected skill's animation, preferring its stable id.
      *
      * @return void
      */
@@ -6450,18 +6446,28 @@ final class Editor
         $animationIndex = null;
         $matchedName = '';
 
-        foreach ($candidates as $candidate) {
-            $animationIndex = $this->findDatabaseAnimationIndex($candidate);
+        if ($skill->animationId !== null) {
+            foreach ($this->workspace?->animationDatabase->getAnimations() ?? [] as $index => $animation) {
+                if ($animation->id === $skill->animationId) {
+                    $animationIndex = $index;
+                    $matchedName = $animation->name;
+                    break;
+                }
+            }
+        } else {
+            foreach ($candidates as $candidate) {
+                $animationIndex = $this->findDatabaseAnimationIndex($candidate);
 
-            if ($animationIndex !== null) {
-                $matchedName = $candidate;
-                break;
+                if ($animationIndex !== null) {
+                    $matchedName = $candidate;
+                    break;
+                }
             }
         }
 
         if ($animationIndex === null) {
             $this->setStatus(
-                sprintf('No animation named "%s" - skills carry no animation reference yet.', $skill->getName()),
+                sprintf('No animation found for "%s". Choose its Animation in the settings picker.', $skill->getName()),
                 StatusLevel::WARN,
             );
             $this->renderFooter();
@@ -10719,6 +10725,14 @@ final class Editor
             ['label' => 'Repeat', 'value' => (string) ($invocation['repeat'] ?? 1), 'control' => new InputControl(InputControlType::INTEGER, (string) ($invocation['repeat'] ?? 1)), 'field' => 'invocationRepeat'],
             ['label' => 'AP Gain', 'value' => (string) ($invocation['apGain'] ?? 10), 'control' => new InputControl(InputControlType::INTEGER, (string) ($invocation['apGain'] ?? 10)), 'field' => 'invocationApGain'],
             ['label' => 'Effect Type', 'value' => $skill->getEffectType() ?? MagicEffectType::DESTRUCTIVE->value, 'options' => array_map(static fn(MagicEffectType $effectType): string => $effectType->value, MagicEffectType::cases()), 'field' => 'effectType'],
+            [
+                'label' => 'Animation',
+                'value' => $skill->animationId === null ? '(Legacy fallback)' : (string) $skill->animationId,
+                'field' => 'animationId',
+                'reference' => 'animation_ids',
+                'allowsNone' => true,
+                'noneLabel' => '(Legacy fallback)',
+            ],
         ];
     }
     /**
@@ -12221,6 +12235,9 @@ final class Editor
         $oldRawValue = $control instanceof InputControl
             ? $control->rawValue
             : (string) ($field['value'] ?? '');
+        if (($field['allowsNone'] ?? false) === true && $oldRawValue === (string) ($field['noneLabel'] ?? '(None)')) {
+            $oldRawValue = '';
+        }
         $identity = [
             'category' => $this->databaseCategoryIndex,
             'actor' => $this->databaseSelectedActorIndex,

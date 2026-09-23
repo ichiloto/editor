@@ -201,6 +201,9 @@ final class ProjectSkillDatabase
             $lines[] = "    [],";
             $lines[] = "    " . $this->exportMagicEffectType($skill->getEffectType()) . ",";
         }
+        if ($skill->animationId !== null) {
+            $lines[] = '    animationId: ' . $skill->animationId . ',';
+        }
         $lines[] = "  )";
         return implode(PHP_EOL, $lines);
     }

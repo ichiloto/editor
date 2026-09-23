@@ -291,6 +291,14 @@ final class RecordSchemaCatalog
                 // Only a plain item carries a stack limit: the engine's
                 // Equipment constructor does not take one.
                 new RecordField('maxQuantity', 'Max Quantity', InputControlType::INTEGER),
+                new RecordField(
+                    'animationId',
+                    'Animation',
+                    InputControlType::INTEGER,
+                    reference: 'animation_ids',
+                    allowsNone: true,
+                    displayDefault: '(None)',
+                ),
             ],
             labelKey: 'name',
             identityKey: 'id',

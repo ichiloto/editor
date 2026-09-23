@@ -10,6 +10,21 @@ readTime: 4
 
 Every field edit, entry creation, and deletion is undoable. Undo is identity-pinned, so `Ctrl+Z` applies to the entry you edited even after you have moved on to another one.
 
+## Animation references
+
+Skills and Items have an **Animation** resource picker. It shows each
+animation's name and numeric id and stores the id, so renaming an animation
+does not break the reference. Skill `Ctrl+G` follows that id to the animation.
+The edit participates in the existing undo/redo and safe-save paths; an
+unsupported source form is still refused rather than flattened.
+
+Choose **(Legacy fallback)** for a skill or **(None)** for an item to clear
+the reference. Skills then retain their
+deprecated name-based selection, which project validation reports as a
+warning when it matches. Items without a reference retain their existing
+no-animation behavior. A missing explicit id omits the animation, not the
+gameplay effect, and does not silently substitute a name-matched animation.
+
 ## Repeating fields
 
 Quest objectives, skit beats, troop members, and event commands are all *sub-lists*, flattened into the field pane as numbered rows. Two keys manage them everywhere:
