@@ -67,7 +67,7 @@ final class ActorIdentityMigration
                 self::freezeCurrentName($database, $actor);
                 $proposals[$actor->path] = $actor->getProposedSource();
             } catch (Throwable $failure) {
-                throw new ($failure::class)("{$actor->path}: {$failure->getMessage()}");
+                throw self::createContextualFailure($actor->path, $failure);
             }
             $originals[$actor->path] = $watched[$actor->path];
             $after[$actor->path] = $before[$actor->path];
@@ -90,7 +90,7 @@ final class ActorIdentityMigration
                 $after[$path] = ActorReferenceSource::getUpdatedValue($payload, $changes);
                 $proposals[$path] = ActorReferenceSource::rewrite($source, $changes);
             } catch (Throwable $failure) {
-                throw new RuntimeException("{$path}: {$failure->getMessage()}", previous: $failure);
+                throw self::createContextualFailure($path, $failure);
             }
             $originals[$path] = $source;
             $before[$path] = ActorReferenceInventory::getComparableValue($payload);
@@ -102,5 +102,12 @@ final class ActorIdentityMigration
     public static function migrateProject(string $projectRoot): array
     {
         return self::planProject($projectRoot)->apply();
+    }
+
+    private static function createContextualFailure(string $path, Throwable $failure): RuntimeException
+    {
+        $message = $failure->getMessage();
+        if (! str_contains($message, $path)) { $message = "{$path}: {$message}"; }
+        return new RuntimeException($message, previous: $failure);
     }
 }

@@ -12,6 +12,8 @@ use Throwable;
 /** Check the same catalogue-reference locations the confirmed migration repairs. */
 final class ActorReferenceValidator
 {
+    public const string UNRESOLVED_ACTOR_REFERENCE = 'actor.reference.unresolved';
+
     public function validate(ProjectWorkspace $workspace): array
     {
         $ids = [];
@@ -23,7 +25,12 @@ final class ActorReferenceValidator
             $database = $workspace->getRecordDatabase($category);
             if ($database === null) { continue; }
             foreach ($database->getRecords() as $index => $record) {
-                $path = $category === 'skits' ? 'assets/Data/Skits/' . $index . '.php' : $database->schema->relativePath . ':' . $index;
+                $path = $database->schema->relativePath . ':' . $index;
+                if ($category === 'skits') {
+                    $path = $record->sourcePath ?? $database->path . '/' . $record->recordId . '.php';
+                    $root = rtrim($workspace->projectRoot, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
+                    if (str_starts_with($path, $root)) { $path = substr($path, strlen($root)); }
+                }
                 $payloads[$path] = $record->toArray();
             }
         }
@@ -53,7 +60,8 @@ final class ActorReferenceValidator
                 if (! is_string($value) || ! in_array($value, $known, true)) {
                     $issues[] = Issue::error($where . ':' . implode('.', $reference['path']),
                         'Unresolved actor reference ' . var_export($reference['reference'], true) . '; use an explicit stable actor id.',
-                        'Review and confirm the project actor identity migration, or select an existing actor.');
+                        'Review and confirm the project actor identity migration, or select an existing actor.',
+                        self::UNRESOLVED_ACTOR_REFERENCE);
                 }
             }
         }

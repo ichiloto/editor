@@ -1017,6 +1017,10 @@ the reversible plan guards undo/redo against outside changes. Project repair
 writes immediately after confirmation, unlike the retained single-actor freeze
 which stays deferred until save when no other reference files need changing.
 Both TUI and CLI use that plan; unresolved references are validation errors.
+Actor-reference issues carry the shared `UNRESOLVED_ACTOR_REFERENCE` code so
+callers need not match diagnostic prose. Skit diagnostics identify the actual
+source filename, not its sorted record index. Migration failures retain their
+original exception as the cause and add file context only once.
 Existing actor saves now preserve authored source instead of regenerating the
 file: comments, imports and unchanged expressions survive repair and rename.
 Unsupported source edits and externally changed files are refused before writes.

@@ -11,7 +11,7 @@ declare(strict_types=1);
  * source checkout.
  *
  * argv: [1] engine source root, [2] rule file path, [3] actors directory
- * (empty string for none). Prints one JSON object: {ok, order} on success,
+ * (empty string for none). Prints one JSON object: {ok, order, diagnostics} on success,
  * {ok: false, phase, class, error} on refusal.
  */
 
@@ -55,6 +55,7 @@ try {
     $catalog = Ichiloto\Engine\Battle\Entry\BattleEntryRuleCatalog::fromProject($ruleFile, $store);
     echo json_encode([
         'ok' => true,
+        'diagnostics' => $catalog->getDiagnostics(),
         'order' => array_map(
             static fn(Ichiloto\Engine\Battle\Entry\BattleEntryRule $rule): string => $rule->id,
             $catalog->rules(),

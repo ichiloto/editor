@@ -73,7 +73,14 @@ it('refuses unsupported source anywhere in the batch before writing any actor', 
     $other = dirname($path) . '/Other.php';
     file_put_contents($other, "<?php \$actor = ['data' => ['name' => 'Other']]; return \$actor;");
     $before = sourceHashTree($root);
-    expect(fn() => ActorIdentityMigration::migrateProject($root))->toThrow(SourceUnreadable::class);
+    // The public migration supplies file context without discarding the source parser cause.
+    try {
+        ActorIdentityMigration::migrateProject($root);
+        $this->fail('Unsupported actor source must be refused.');
+    } catch (RuntimeException $failure) {
+        expect($failure->getPrevious())->toBeInstanceOf(SourceUnreadable::class)
+            ->and(substr_count($failure->getMessage(), $other))->toBe(1);
+    }
     expect(sourceHashTree($root))->toBe($before);
 });
 
@@ -81,7 +88,14 @@ it('refuses a variable backed data block without flattening it', function () {
     [$root, $path] = createLegacyActorProject();
     file_put_contents($path, "<?php \$data = ['name' => 'Kaelion']; return ['data' => \$data];");
     $before = sourceHashTree($root);
-    expect(fn() => ActorIdentityMigration::migrateProject($root))->toThrow(RuntimeException::class, 'refusing to flatten');
+    try {
+        ActorIdentityMigration::migrateProject($root);
+        $this->fail('Variable-backed actor data must be refused.');
+    } catch (RuntimeException $failure) {
+        expect($failure->getPrevious())->toBeInstanceOf(\Ichiloto\Editor\Cutscenes\Source\SourcePreservationRefusal::class)
+            ->and($failure->getMessage())->toContain('refusing to flatten')
+            ->and(substr_count($failure->getMessage(), $path))->toBe(1);
+    }
     expect(sourceHashTree($root))->toBe($before);
 });
 
@@ -225,8 +239,24 @@ it('uses each consumer case semantics without restoring display name aliases', f
     expect($validator->validate(\Ichiloto\Editor\ProjectWorkspace::fromProject($root)))->toBe([]);
     file_put_contents($root . '/assets/Data/Skits/case.php', "<?php return ['beats' => [['actor' => 'hero', 'text' => 'Hello']]];");
     $issues = $validator->validate(\Ichiloto\Editor\ProjectWorkspace::fromProject($root));
-    expect($issues)->toHaveCount(1)->and($issues[0]->where)->toContain('beats.0.actor');
+    expect($issues)->toHaveCount(1)
+        ->and($issues[0]->where)->toBe('assets/Data/Skits/case.php:beats.0.actor')
+        ->and($issues[0]->code)->toBe(\Ichiloto\Editor\Validation\ActorReferenceValidator::UNRESOLVED_ACTOR_REFERENCE);
     file_put_contents($root . '/assets/Data/system.php', "<?php return ['startingParty' => ['Kaelion']];");
     $issues = $validator->validate(\Ichiloto\Editor\ProjectWorkspace::fromProject($root));
     expect($issues)->toHaveCount(2);
+});
+
+it('keeps skit diagnostics attached to their files when sorted record positions change', function () {
+    [$root, $path] = createLegacyActorProject();
+    file_put_contents($path, "<?php return ['data' => ['id' => 'Kaelion', 'name' => 'Kaelion']];");
+    $skits = $root . '/assets/Data/Skits';
+    file_put_contents($skits . '/z-last-scene.php', "<?php return ['beats' => [['actor' => 'missing', 'text' => 'Hello']]];");
+    $validator = new \Ichiloto\Editor\Validation\ActorReferenceValidator();
+    $before = $validator->validate(\Ichiloto\Editor\ProjectWorkspace::fromProject($root));
+    file_put_contents($skits . '/a-first-scene.php', "<?php return ['beats' => [['actor' => 'Kaelion', 'text' => 'Hello']]];");
+    $after = $validator->validate(\Ichiloto\Editor\ProjectWorkspace::fromProject($root));
+    expect($before)->toHaveCount(1)->and($after)->toEqual($before)
+        ->and($after[0]->where)->toBe('assets/Data/Skits/z-last-scene.php:beats.0.actor')
+        ->and(\Ichiloto\Editor\Validation\Issue::error('elsewhere', 'Other failure')->code)->toBeNull();
 });

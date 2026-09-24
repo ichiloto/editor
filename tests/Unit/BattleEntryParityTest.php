@@ -159,6 +159,18 @@ it('matches the accepted engine verdict and first diagnostic for the whole corpu
             $engine = hydrateThroughAcceptedEngine($engineRoot, $ruleFile);
             $problems = BattleEntryRuleContract::problems(require $ruleFile, $ruleFile);
 
+            // Runtime now removes only the invalid-actor rule instead of aborting
+            // startup; authoring still rejects it with the same root diagnostic.
+            if ($case === 'actor-empty-identity') {
+                expect($engine['ok'] ?? false)->toBeTrue()
+                    ->and($engine['order'] ?? null)->toBe([])
+                    ->and($problems)->toHaveCount(1)
+                    ->and($engine['diagnostics'] ?? null)->toBe([
+                        $problems[0] . ' This battle-entry rule is disabled; correct its actor reference.',
+                    ]);
+                continue;
+            }
+
             if (($engine['ok'] ?? false) === true) {
                 expect($problems)->toBe([], sprintf(
                     '%s: the engine accepted what the editor refused: %s',
@@ -205,13 +217,18 @@ it('resolves actor identities exactly as the accepted engine store does', functi
             ->and($resolver->canonicalId('ROOK'))->toBeNull()
             ->and($resolver->canonicalId('RookFile'))->toBeNull();
 
-        // Unknown actor: same verdict, same wording.
+        // Unknown actor: rule disabled, startup-wide failure removed. Authoring
+        // remains strict, with the same root diagnostic and no alias fallback.
         file_put_contents($ruleFile, "<?php\nreturn ['rules' => [['id' => 'one', 'actors' => [['actor' => 'Nobody', 'presence' => 'any']], 'effects' => [['type' => 'stat_stage', 'actor' => 'Rook', 'stat' => 'speed', 'delta' => 1]]]]];");
         $engine = hydrateThroughAcceptedEngine($engineRoot, $ruleFile, $healthy);
         $problems = BattleEntryRuleContract::problems(require $ruleFile, $ruleFile, $resolver);
 
-        expect($engine['ok'] ?? true)->toBeFalse()
-            ->and($problems[0] ?? null)->toBe(strval($engine['error'] ?? ''));
+        expect($engine['ok'] ?? false)->toBeTrue()
+            ->and($engine['order'] ?? null)->toBe([])
+            ->and($problems)->not->toBeEmpty()
+            ->and($engine['diagnostics'] ?? null)->toBe([
+                $problems[0] . ' This battle-entry rule is disabled; correct its actor reference.',
+            ]);
 
         // A shared name is not a contested identity anymore.
         file_put_contents($ruleFile, "<?php return ['rules' => []];");
