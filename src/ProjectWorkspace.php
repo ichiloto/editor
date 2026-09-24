@@ -163,7 +163,7 @@ final readonly class ProjectWorkspace
                 ]),
                 '',
                 basename($selectedMap->dataPath),
-                basename($selectedMap->mapPath),
+                $selectedMap->isLegacyMap() ? basename($selectedMap->mapPath) : 'layers/ (' . (count($selectedMap->getLayers()) - 1) . ' layers)',
                 basename($selectedMap->eventPath),
             ] : [
                 'No map selected.',
@@ -295,6 +295,10 @@ final readonly class ProjectWorkspace
         ?int $selectedNpcIndex = null,
         ?string $selectedNpcSprite = null,
         ?array $cursor = null,
+        array $layerVisibility = [],
+        ?string $activeLayer = null,
+        bool $terminalPreview = false,
+        bool $dimInactive = false,
     ): array
     {
         $selectedMap = $this->getMapByIndex($selectedMapIndex);
@@ -316,7 +320,7 @@ final readonly class ProjectWorkspace
         }
 
         $previewHeight = max(0, $height - self::CANVAS_HEADER_ROWS);
-        $previewLines = $selectedMap->renderPreview($width, $previewHeight, $offsetX, $offsetY, $showEventOverlay, $showNpcOverlay, $selectedNpcIndex, $selectedNpcSprite);
+        $previewLines = $selectedMap->renderPreview($width, $previewHeight, $offsetX, $offsetY, $showEventOverlay, $showNpcOverlay, $selectedNpcIndex, $selectedNpcSprite, $layerVisibility, $activeLayer, $terminalPreview, $dimInactive);
 
         return [
             sprintf('Preview: %s', $selectedMap->mapId),
@@ -416,9 +420,16 @@ final readonly class ProjectWorkspace
         // the folder goes only once it is empty.
         $transaction = new FileSetTransaction($selectedMap->directory, $files ?? new FilesystemFileSetOperations());
         $transaction->remove($selectedMap->dataPath);
-        $transaction->remove($selectedMap->mapPath);
-        $transaction->remove($selectedMap->eventPath);
+        foreach ($selectedMap->getStoredGridPaths() as $path) {
+            $transaction->remove($path);
+        }
         $transaction->commit();
+
+        foreach ([$selectedMap->directory . '/layers', $selectedMap->directory] as $directory) {
+            if (is_dir($directory) && array_diff(scandir($directory) ?: [], ['.', '..']) === []) {
+                @rmdir($directory);
+            }
+        }
 
         return $selectedMap->mapId;
     }
@@ -540,7 +551,7 @@ final readonly class ProjectWorkspace
      *
      * @return string[]
      */
-    public function getCollisionGlyphs(): array
+    public function getCollisionGlyphs(?string $layerName = null): array
     {
         $dictionaryFile = rtrim($this->projectRoot, DIRECTORY_SEPARATOR)
             . DIRECTORY_SEPARATOR . 'assets' . DIRECTORY_SEPARATOR . 'Maps' . DIRECTORY_SEPARATOR . 'collisions.php';
@@ -561,7 +572,13 @@ final readonly class ProjectWorkspace
 
         $glyphs = [];
 
-        foreach (array_keys($dictionary) as $key) {
+        $entries = array_filter($dictionary, static fn(mixed $value): bool => ! is_array($value));
+        foreach ($dictionary as $name => $section) {
+            if (is_array($section) && ($layerName === null || $name === $layerName)) {
+                $entries = array_replace($entries, $section);
+            }
+        }
+        foreach (array_keys($entries) as $key) {
             // PHP normalizes digit-only string keys such as "8" to integers.
             $glyph = (string) $key;
 

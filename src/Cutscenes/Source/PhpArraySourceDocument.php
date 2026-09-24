@@ -388,6 +388,48 @@ final class PhpArraySourceDocument
         return [$entry->value->start, $entry->value->end, self::reindent($literal, $this->lineIndentBefore($entry->start) ?? '')];
     }
 
+    /** Nests an authored value without regenerating its comments or expressions. */
+    public function wrapValueEdit(array $path, array $keys): array
+    {
+        $entry = $this->entryAt($path);
+        if ($entry === null || $entry->keyIsOpaque) {
+            throw new SourcePreservationRefusal('The value cannot be wrapped at ' . self::describePath($path));
+        }
+        $value = $entry->value;
+        $text = substr($this->source, $value->start, $value->end - $value->start);
+        foreach (array_reverse($keys) as $key) {
+            $text = '[' . var_export($key, true) . ' => ' . $text . ']';
+        }
+        return [$value->start, $value->end, $text];
+    }
+
+    /** Renames only a literal key; its value, comments and position survive. */
+    public function renameKeyEdit(array $path, string $newKey): array
+    {
+        $entry = $this->entryAt($path);
+        $parent = $this->nodeAt(array_slice($path, 0, -1));
+        if ($entry === null || $entry->keyIsOpaque || $parent === null || $parent->hasOpaqueKey
+            || $parent->entryFor($newKey) !== null) {
+            throw new SourcePreservationRefusal('The requested key rename cannot be preserved at ' . self::describePath($path));
+        }
+        $end = $entry->start;
+        foreach (PhpToken::tokenize($this->source) as $token) {
+            if ($token->pos < $entry->start) {
+                continue;
+            }
+            if ($token->is(T_DOUBLE_ARROW)) {
+                return [$entry->start, $end, var_export($newKey, true)];
+            }
+            if (! $token->is([T_WHITESPACE, T_COMMENT, T_DOC_COMMENT])) {
+                $end = $token->pos + strlen($token->text);
+            }
+            if ($end > $entry->value->start) {
+                break;
+            }
+        }
+        throw new SourcePreservationRefusal('No literal key at ' . self::describePath($path));
+    }
+
     /**
      * Plans inserting an entry into an array: ahead of the entry now at a
      * position, or after the last one.

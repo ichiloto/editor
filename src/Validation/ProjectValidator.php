@@ -1592,6 +1592,14 @@ class ProjectValidator
    */
   protected function checkLayers(ProjectMap $map): array
   {
+    if (! $map->isLegacyMap()) {
+      try {
+        $map->validateLayerContracts();
+      } catch (\Throwable $error) {
+        return [Issue::error($map->mapId, $error->getMessage(), 'Repair the authored layer or its dictionary/crop table before saving.')];
+      }
+      return [];
+    }
     $tileRows = count($map->tileLines);
     $eventRows = count($map->eventLines);
 

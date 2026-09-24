@@ -41,7 +41,9 @@ final class PreviewMapManager extends MapManager
         $this->calculateMapDimensions();
         $dictionaryPath = getcwd() . '/assets/Maps/collisions.php';
         $dictionary = is_file($dictionaryPath) ? $this->loadCollisionDictionary($dictionaryPath) : [];
-        $this->collisionMap = $this->generateCollisionMap($this->tileMap, $dictionary);
+        $this->collisionMap = $this->layers === null
+            ? $this->generateCollisionMap($this->tileMap, $dictionary)
+            : $this->generateLayerCollisionMap($this->layers, $dictionary);
         $this->gameScene->npcManager?->configure(is_array($map['npcs'] ?? null) ? $map['npcs'] : []);
 
         return $map;
@@ -53,10 +55,7 @@ final class PreviewMapManager extends MapManager
     public function unload(): void
     {
         $this->mapData = [];
-        $this->tileMap = [];
-        $this->collisionMap = [];
-        $this->calculateMapDimensions();
-        $this->camera->worldSpace = [];
+        $this->clearMapGeometry();
         $this->gameScene->npcManager?->configure([]);
     }
 

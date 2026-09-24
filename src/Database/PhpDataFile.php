@@ -155,6 +155,13 @@ final class PhpDataFile
             $autoload = $localAutoload;
         }
 
+        // Child evaluation must use the same source roots as this process,
+        // including a development Engine selected by the test bootstrap.
+        $prefixes = [];
+        foreach (\Composer\Autoload\ClassLoader::getRegisteredLoaders() as $loader) {
+            $prefixes = array_replace($prefixes, $loader->getPrefixesPsr4());
+        }
+
         $runner = <<<'PHP'
         <?php
 
@@ -162,10 +169,14 @@ final class PhpDataFile
         $workingDirectory = $arguments[1];
         $autoload = $arguments[2];
         $resultMarker = $arguments[3];
-        $paths = array_slice($arguments, 4);
+        $prefixes = json_decode($arguments[4], true, flags: JSON_THROW_ON_ERROR);
+        $paths = array_slice($arguments, 5);
 
         if ($autoload !== '') {
-            require $autoload;
+            $loader = require $autoload;
+            foreach ($prefixes as $prefix => $directories) {
+                $loader->setPsr4($prefix, $directories);
+            }
         }
 
         if ($workingDirectory !== '' && is_dir($workingDirectory)) {
@@ -247,7 +258,7 @@ final class PhpDataFile
         $runner = str_replace('/*__ICHILOTO_AUTHORED_REQUIRES__*/', $authoredRequires, $runner);
         $pipes = [];
         $resultMarker = 'ICHILOTO_EVAL_RESULT:' . bin2hex(random_bytes(16)) . ':';
-        $arguments = [PHP_BINARY, '-r', substr($runner, strlen("<?php\n")), $workingDirectory ?? '', $autoload ?? '', $resultMarker, ...$paths];
+        $arguments = [PHP_BINARY, '-r', substr($runner, strlen("<?php\n")), $workingDirectory ?? '', $autoload ?? '', $resultMarker, json_encode($prefixes, JSON_THROW_ON_ERROR), ...$paths];
         $process = proc_open(
             $arguments,
             [

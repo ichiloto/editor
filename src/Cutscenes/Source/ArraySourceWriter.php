@@ -67,8 +67,26 @@ final class ArraySourceWriter
      *   instance when nothing differs.
      * @throws SourcePreservationRefusal When a change cannot be expressed in the source.
      */
-    public static function rewrite(PhpArraySourceDocument $document, array $old, array $new): PhpArraySourceDocument
+    public static function rewrite(PhpArraySourceDocument $document, array $old, array $new, array $keyRenames = []): PhpArraySourceDocument
     {
+        foreach ($keyRenames as $rename) {
+            $path = $rename['path'];
+            $oldKey = array_pop($path);
+            $parent = &$old;
+            foreach ($path as $step) {
+                $parent = &$parent[$step];
+            }
+            if (! is_array($parent) || ! array_key_exists($oldKey, $parent) || array_key_exists($rename['key'], $parent)) {
+                throw new SourcePreservationRefusal('The key rename does not match the loaded data.');
+            }
+            $document = $document->withEdits([$document->renameKeyEdit($rename['path'], $rename['key'])]);
+            $renamed = [];
+            foreach ($parent as $key => $value) {
+                $renamed[$key === $oldKey ? $rename['key'] : $key] = $value;
+            }
+            $parent = $renamed;
+            unset($parent);
+        }
         if ($old === $new) {
             return $document;
         }
