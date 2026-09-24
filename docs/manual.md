@@ -65,7 +65,7 @@ is what the code draws rather than a sketch of it:
  │                              │ │                            │ │     Background Music: (None)   │
  │                              │ │                            │ │     Music Variants · None      │
  │                              │ │                            │ │   Encounters · off             │
- └─/:Filter  Del:Delete─────────┘ └─i:Paint  m:Map  e:Event────┘ └─Enter:Edit─────────────────────┘
+ └─/:Filter  Del:Delete─────────┘ └─i:Paint []:Layer t:Terminal┘ └─Enter:Edit─────────────────────┘
  ┌─Status─────────────────────────────────────────────────────────────────────────────────────────┐
  │ Selected map: test-map | Focus: Assets | Mode: Map | Tool: Brush 1                             │
  │ Cursor: (0, 0) | Viewport: (0, 0) | Ready.                                                     │
@@ -179,6 +179,41 @@ asks first and defaults to Cancel.
 
 ## Canvas Panel
 
+### Authored Layers
+
+Maps with `layers/` show every numbered gameplay (`NN.name.map.php`) and
+decoration (`NN.name.deco.php`) layer, followed by Events. In Normal mode,
+`[` and `]` cycle layers, `v` toggles the selected layer's visibility, `d`
+dims inactive layers, and `t` opens a read-only terminal preview. That preview
+always composes all gameplay layers, ignores decoration and event markers,
+and ignores authoring visibility settings. Spaces above the base show through.
+Layer visibility and dimming are session settings, not map data.
+
+Use `Ctrl+P` and select a layer by name, or choose a Layers action to create,
+rename or remove it. New layers preserve each row's width, including ragged
+maps. Renaming retains its numeric order and changes its local `tiles2d` key
+without regenerating the crop table. If the actual resolved collisions would
+change, the rename dialog names the change and requires `y` confirmation;
+shared `collisions.php` is never changed. Removal is confirmed and undoable.
+Creating a layer on a legacy map explicitly moves its terrain into
+`layers/00.terrain.map.php` in the same save transaction; ordinary legacy
+saves keep the original layout.
+
+Every layer uses the same Paint/Normal modes, tools, mouse strokes, selection,
+colour, clipboard and undo. The inspector lists visibility and read-only
+per-layer `tiles2d` atlas/crop mappings. Painting a mapped glyph, or replacing
+one, shows a crop warning. Invalid decoration crop coverage is refused at save.
+Untouched layer files are never written; unchanged rows retain their authored
+bytes, and all changed files are saved or rolled back together.
+
+Text catalogues in `assets/Graphics/Tilesets/*.txt` appear as Facade brushes in
+`Ctrl+P`. Separate multi-row shapes with blank lines. Select a brush to target
+the gameplay `buildings` layer, then press `Enter` to stamp it as one undo
+step. In Paint mode (`i`), a left click also stamps; Normal-mode clicks only
+move the cursor. Mode and map changes clear the stamp brush; `b` returns to a
+glyph brush. Every stamp rereads its catalogue, so
+the catalogue remains the single source of shapes. Clipping never grows rows.
+
 The canvas previews the selected map and is where you paint. It is modal, in
 the vim tradition: in **Normal mode** letters are commands, and in **Paint
 mode** every printable key is a glyph. This is what guarantees that no
@@ -245,7 +280,7 @@ beside the viewport offset.
 `o` in Normal mode opens the brush colour picker: the 16 standard 4-bit
 ANSI colours (in the map format's Symfony colour names, where `gray` is
 bright black), rendered as live swatches, plus two brush states above them.
-The brush colour applies to every paint on the Map layer - brush dabs,
+The brush colour applies to every paint on every layer - brush dabs,
 shapes, flood fills - and is written as `<fg=...>` tags, exactly the
 styling authored by hand.
 
@@ -260,8 +295,8 @@ styling authored by hand.
 The eyedropper (`k` / `Ctrl+K`) picks up a cell's colour along with its
 glyph; an uncoloured cell loads an uncoloured brush. A painted space is
 always uncoloured, so erasing never leaves invisible styling behind. Event
-markers are authoring geometry and carry no colour; the picker says so on
-the Event layer. The Status pane shows the brush colour beside the tool.
+markers remain authoring geometry, but can now carry colour through the same
+picker and undo workflow. The Status pane shows the brush colour beside the tool.
 
 ### NPC Mode
 

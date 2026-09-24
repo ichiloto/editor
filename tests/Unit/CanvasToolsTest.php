@@ -526,13 +526,15 @@ it('recolours the cell under the cursor from the colour picker', function () {
         ->and($map->getTileColor(5, 2))->toBe('black');
 });
 
-it('refuses the colour picker on the event layer and in Paint mode', function () {
+it('allows event colour authoring while Paint mode still treats o as a glyph', function () {
     $editor = canvasEditor();
     callEditorMethod($editor, 'dispatchInput', 'e');
     callEditorMethod($editor, 'dispatchInput', 'o');
 
-    expect(getEditorProperty($editor, 'isColorPickerOpen'))->toBeFalse()
-        ->and(getEditorProperty($editor, 'statusMessage'))->toContain('Map layer');
+    // Phase 2 removes the event-layer colour restriction; all layers use
+    // the same styled-cell workflow now.
+    expect(getEditorProperty($editor, 'isColorPickerOpen'))->toBeTrue();
+    callEditorMethod($editor, 'dispatchInput', "\033");
 
     callEditorMethod($editor, 'dispatchInput', 'm');
     callEditorMethod($editor, 'dispatchInput', 'i');

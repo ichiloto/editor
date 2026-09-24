@@ -158,11 +158,6 @@ final class PaintStrokeCommand implements Command
      */
     private function applyCell(int $x, int $y, string $symbol, string $prefix, string $suffix): void
     {
-        if ($this->layer === self::LAYER_EVENT) {
-            $this->map->setEventSymbol($x, $y, $symbol);
-            return;
-        }
-
-        $this->map->setTileCell($x, $y, $symbol, $prefix, $suffix);
+        $this->map->setLayerCell($this->layer, $x, $y, $symbol, $prefix, $suffix);
     }
 }
