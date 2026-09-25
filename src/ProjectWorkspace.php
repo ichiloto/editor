@@ -45,6 +45,7 @@ final readonly class ProjectWorkspace
         public ProjectQuestDatabase     $questDatabase,
         public array                    $recordDatabases = [],
         public ?CutsceneLibrary         $cutscenes = null,
+        public ?ProjectConfig           $config = null,
     ) {
     }
 
@@ -111,6 +112,7 @@ final readonly class ProjectWorkspace
         // item store; without this the category would report a bootstrap
         // failure instead of the author's enemies.
         EngineDataBootstrap::ensure($projectRoot);
+        $projectConfig = new ProjectConfig($projectRoot);
 
         return new self(
             projectRoot: $projectRoot,
@@ -126,10 +128,11 @@ final readonly class ProjectWorkspace
             systemDatabase: ProjectSystemDatabase::fromProject($projectRoot),
             questDatabase: ProjectQuestDatabase::fromProject($projectRoot),
             recordDatabases: array_map(
-                static fn(RecordSchema $schema): ProjectRecordDatabase => ProjectRecordDatabase::fromProject($projectRoot, $schema),
+                static fn(RecordSchema $schema): ProjectRecordDatabase => ProjectRecordDatabase::fromProject($projectRoot, $schema, $projectConfig),
                 RecordSchemaCatalog::all(),
             ),
             cutscenes: CutsceneLibrary::fromProject($projectRoot),
+            config: $projectConfig,
         );
     }
 
@@ -235,6 +238,7 @@ final readonly class ProjectWorkspace
             || $this->animationDatabase->isDirty()
             || $this->systemDatabase->isDirty()
             || $this->questDatabase->isDirty()
+            || ($this->config?->isDirty() ?? false)
             || ($this->cutscenes?->hasUnsavedChanges() ?? false);
     }
 
@@ -270,6 +274,7 @@ final readonly class ProjectWorkspace
             questDatabase: $this->questDatabase,
             recordDatabases: $this->recordDatabases,
             cutscenes: $this->cutscenes,
+            config: $this->config,
         );
     }
 

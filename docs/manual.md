@@ -423,7 +423,7 @@ category uses - pickers, condition lines, world-write rows, command frames,
 | --- | --- |
 | Identity | `Id` (read-only), `Name` |
 | Placement | `X`, `Y` (the canvas moves it too) |
-| Appearance | `Sprite`, `Facing North/South/East/West` |
+| Appearance | `Sprite`, `Facing North/South/East/West`, `Graphical Sprites` |
 | Movement | `Movement` (`fixed` / `wander`), and while wandering `Wander X/Y/Width/Height` |
 | Visibility | `Visible When` - a condition line |
 | Interaction | `Script` (a command frame), then one `Dialogue variant N` heading per variant with its rows `When`, `Then Set`, `Script Commands`, `Line 1 Speaker`, `Line 1 Text`, … |
@@ -452,6 +452,21 @@ character says is read in the pane rather than in the edit buffer.
 - **Directional sprites.** Optional glyphs shown when the NPC turns; the base
   sprite covers a heading you leave blank. Resting the Inspector cursor on a
   `Facing …` row previews that glyph on the canvas in the NPC's place.
+- **Graphical sprites.** Select an NPC, focus its Inspector, and press `Enter`
+  on `Graphical Sprites`. Choose a direction/role, then select its PNG through
+  the shared project asset picker. Set its logical-pixel width and height;
+  optional crop X/Y/width/height are source-image pixels. Repeat for all four
+  directions. `S` applies the complete set as one undo step; `Ctrl+S` saves it.
+  `Esc` cancels without changing the NPC. `R`, then `Y`, removes the optional
+  `sprites2d` key, not its terminal glyph, identity, dialogue or collision.
+  For new animated artwork choose `sheet` before entering fields: size,
+  frame size, timing and anchor are shared, while each direction picks its own
+  PNG, columns, rows and populated frame count. Existing sheets and pose crops
+  retain their shape; changing representation never silently discards them.
+  Apply uses Engine validation and PNG header/bounds preflight; native rendering
+  remains the decode authority. Opaque source is refused before mutation.
+  This is a numeric authoring form, not an image preview. Player and cinematic
+  staged-actor `sprites2d` authoring are still separate TUI gaps.
 - **Dialogue.** Pages are shown as variants: one variant with lines is written
   back as plain pages; add a second variant, or give one a `When` condition, a
   `Then Set`, or a `Script`, and the whole thing is written as conditional
@@ -737,7 +752,7 @@ status line says exactly why.
 | Optimize Exclusions | `assets/Data/equipment-optimization.php` | Editable |
 | System | `assets/Data/system.php` | Editable |
 | Types | `assets/Data/Types/*.php` | Read-only - PHP enum declarations |
-| Terms | `config.php` (`vocab`, `messages`) | Editable when the config carries no inline comments |
+| Terms | `config.php` (`vocab`, `messages`) | Literal terms editable; comments and unrelated expressions preserved |
 
 Why a category can still turn out read-only: a file the editor cannot
 evaluate, a value it could not write back out, or a comment sitting inside
@@ -899,10 +914,23 @@ The `vocab` and `messages` trees of the project's `config.php`, flattened to
 one row per term with its dotted path - `vocab.game.new_game`,
 `messages.confirm.quit`, and so on.
 
-Current limit: the category is read-only when `config.php` contains comments
-inside the returned array, because rewriting the file would drop them. Move
-such comments above the `return` statement and the category becomes editable -
-everything before `return` is preserved byte-for-byte on save.
+Terms and System's field zoom share one source-preserving configuration owner.
+Saving either writes all pending configuration edits in one atomic operation.
+Only edited literal values are patched; comments, spacing, enum references and
+unrelated executable expressions remain untouched. An opaque term expression
+is individually read-only, and ambiguous parent arrays or nonliteral returned
+configuration are refused rather than regenerated. A config changed on disk
+must be reloaded before saving, so newer external edits are not overwritten.
+
+### Field Zoom
+
+Open **Database > System > Field Zoom (GPUI only)**. Enter a finite number from
+`1` through `8` (`2.5` is valid); the default is `1`. This writes the game's
+`config.php` at `graphics.field.zoom`, not `system.php` or `ichiloto.json`.
+It magnifies the GPUI field only: terminal maps, menus and UI sizing do not
+change. `Ctrl+S` saves, `Ctrl+Z` undoes, and `Ctrl+Y` redoes. Undoing the first
+edit restores an originally absent setting without leaving a default entry.
+The same pending Terms edits are included when this configuration is saved.
 
 ### Knowledge
 

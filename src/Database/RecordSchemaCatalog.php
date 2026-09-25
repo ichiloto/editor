@@ -909,9 +909,9 @@ final class RecordSchemaCatalog
      * UI vocabulary — the `vocab` and `messages` trees of the project's
      * `config.php`, flattened to one editable row per term.
      *
-     * Editable only when the whole config file round-trips (it holds enum
-     * cases, which export fine; a `new Something()` in there would make the
-     * category read-only, and say so).
+     * ProjectConfig shares these records with System's field zoom and
+     * patches literal leaves only. Unrelated comments and expressions stay
+     * untouched; opaque term values are individually read-only.
      *
      * @return RecordSchema
      */

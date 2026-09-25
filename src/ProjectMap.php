@@ -34,6 +34,7 @@ use RuntimeException;
  */
 final class ProjectMap
 {
+    use \Ichiloto\Editor\Field\NpcSpriteArt;
     use TracksPersistedState;
     use \Ichiloto\Editor\Maps\TileArt;
 

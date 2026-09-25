@@ -350,7 +350,7 @@ it('writes enum cases back as fully-qualified references', function (): void {
     removeDirectoryRecursively($root);
 });
 
-it('turns terms read-only when the config carries inline comments', function (): void {
+it('edits literal terms while preserving inline config comments byte for byte', function (): void {
     $root = makeTemporaryProject();
     $path = $root . '/config.php';
     $contents = (string) file_get_contents($path);
@@ -358,14 +358,14 @@ it('turns terms read-only when the config carries inline comments', function ():
 
     $database = loadRecordDatabase($root, 'terms');
 
-    expect($database->isEditable())->toBeFalse();
-    expect($database->getReadOnlyReason())->toContain('comments inside its data');
-    // Rows still render, just without controls.
+    expect($database->isEditable())->toBeTrue();
+    expect($database->getReadOnlyReason())->toBeNull();
     expect($database->getEntryLabels())->not->toBeEmpty();
-
-    foreach ($database->getSettingsFields(0) as $field) {
-        expect($field)->not->toHaveKey('control');
-    }
+    $before = file_get_contents($path);
+    $old = $database->getRecordByIndex(0)->get('value');
+    $database->setField(0, 'value', 'New title');
+    $database->save();
+    expect(file_get_contents($path))->toBe(str_replace(var_export($old, true), "'New title'", $before));
 
     removeDirectoryRecursively($root);
 });

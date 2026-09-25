@@ -111,6 +111,7 @@ final class Editor
 {
     use \Ichiloto\Editor\Canvas\LayerCanvas;
     use \Ichiloto\Editor\Canvas\TileArtCanvas;
+    use \Ichiloto\Editor\Field\NpcSpriteCanvas;
     use CutscenesWorkspace;
     use CutsceneOutlinePane;
     use CutscenePreviewPane;
@@ -1256,6 +1257,7 @@ final class Editor
         $router->bindModal(Modal::RENAME_CONFIRMATION, $this->handleRenameConfirmationInput(...));
         $router->bindModal(Modal::LAYER_EDIT, $this->handleLayerPromptInput(...));
         $router->bindModal(Modal::TILE_ART, $this->handleTileArtInput(...));
+        $router->bindModal(Modal::NPC_ART, $this->handleNpcArtInput(...));
         $router->bindModal(Modal::COMMAND_PALETTE, $this->handleCommandPaletteInput(...));
         $router->bindModal(Modal::HELP, $this->handleHelpInput(...));
         $router->bindModal(Modal::DATABASE, $this->handleDatabaseInput(...));
@@ -1903,6 +1905,10 @@ final class Editor
 
                 return;
             }
+            if (is_array($current) && ($current['field'] ?? null) === self::NPC_ART_FIELD) {
+                $this->openNpcSpriteArt();
+                return;
+            }
 
             $this->beginDatabaseEdit();
 
@@ -2086,6 +2092,9 @@ final class Editor
 
         $records = $this->npcInspector->records();
         $fields = $records->getFrameSettingsFields($this->selectedNpcIndex, $this->databaseCommandFramePath);
+        if ($this->databaseCommandFramePath === []) {
+            $fields[] = ['label' => 'Graphical Sprites', 'value' => 'Enter: four directional PNG roles', 'field' => self::NPC_ART_FIELD, 'editable' => true];
+        }
 
         if (
             $this->databaseCommandFramePath !== []
@@ -2128,7 +2137,7 @@ final class Editor
         $sections = [
             'Identity' => ['id', 'name'],
             'Placement' => ['x', 'y'],
-            'Appearance' => ['sprite', 'sprites.north', 'sprites.south', 'sprites.east', 'sprites.west'],
+            'Appearance' => ['sprite', 'sprites.north', 'sprites.south', 'sprites.east', 'sprites.west', self::NPC_ART_FIELD],
             'Movement' => ['movement', 'wanderArea.x', 'wanderArea.y', 'wanderArea.width', 'wanderArea.height'],
             'Visibility' => ['conditions'],
             'Interaction' => ['commandListScript'],
@@ -6966,6 +6975,7 @@ final class Editor
             'Animations' => $this->workspace->animationDatabase,
             'System' => $this->workspace->systemDatabase,
         ];
+        if ($this->workspace->config !== null) { $databases['Project configuration'] = $this->workspace->config; }
 
         // Read-only categories never join Save All: they hold no edits, and
         // asking them to save would raise instead of no-op.
@@ -10107,6 +10117,10 @@ final class Editor
                 $this->workspace->animationDatabase->save();
                 $this->setStatus('Animation database saved.', StatusLevel::SUCCESS);
             } elseif ($this->isSystemDatabaseSelected()) {
+                if ($this->workspace->config?->isDirty()) {
+                    $this->backupBeforeSave($this->workspace->config->path);
+                    $this->workspace->config->save();
+                }
                 $this->backupBeforeSave(...$this->getDatabaseBackupPaths($this->workspace->systemDatabase));
                 $this->workspace->systemDatabase->save();
                 $this->setStatus('System database saved.', StatusLevel::SUCCESS);
@@ -12412,6 +12426,15 @@ final class Editor
         }
 
         $system = $this->workspace->systemDatabase;
+        $config = $this->workspace->config;
+        $zoomIssue = $config?->getFieldIssue(ProjectConfig::FIELD_ZOOM);
+        $zoom = $config === null ? [] : [[
+            'label' => 'Field Zoom (GPUI only)',
+            'value' => ProjectRecord::stringify($config->getFieldZoom()),
+            'field' => ProjectConfig::FIELD_ZOOM,
+            ...($zoomIssue === null ? ['control' => new InputControl(InputControlType::FLOAT, ProjectRecord::stringify($config->getFieldZoom()))] : []),
+        ], ['label' => $zoomIssue === null ? 'Field Zoom Range' : 'Read-only',
+            'value' => $zoomIssue ?? '1 to 8; default 1. Terminal and UI size stay unchanged.', 'editable' => false]];
 
         return [
             [
@@ -12438,6 +12461,7 @@ final class Editor
                 'control' => new InputControl(InputControlType::INTEGER, (string) $system->getAtbSpeedFactorPercent()),
                 'field' => 'atbSpeedFactorPercent',
             ],
+            ...$zoom,
         ];
     }
 
@@ -12493,6 +12517,9 @@ final class Editor
         ];
 
         $record = $this->getSelectedRecordDatabase()?->getRecordByIndex($this->getSelectedRecordIndex());
+        if ($this->isSystemDatabaseSelected() && $fieldId === ProjectConfig::FIELD_ZOOM) {
+            $record = $this->workspace?->config?->getRecord(ProjectConfig::FIELD_ZOOM);
+        }
         $before = $record?->toArray();
         $actor = $this->isActorsDatabaseSelected() ? $this->getSelectedActor() : null;
         $actorBefore = $actor?->getData();
@@ -12689,6 +12716,10 @@ final class Editor
         }
 
         if ($this->isSystemDatabaseSelected()) {
+            if ($field === ProjectConfig::FIELD_ZOOM) {
+                $this->workspace->config?->setFieldZoom($rawValue);
+                return;
+            }
             $value = in_array($field, ['battleEngine', 'atbMode'], true)
                 ? trim($rawValue)
                 : max(0, intval($rawValue));
@@ -16563,7 +16594,7 @@ final class Editor
      */
     private function getDatabaseSystemListLines(): array
     {
-        $dirty = $this->workspace?->systemDatabase->isDirty() === true ? ' *' : '';
+        $dirty = $this->workspace?->systemDatabase->isDirty() === true || $this->workspace?->config?->isDirty() === true ? ' *' : '';
 
         return [sprintf('> Project System%s', $dirty)];
     }
@@ -17369,7 +17400,7 @@ final class Editor
             self::DATABASE_CATEGORY_CLASSES => $this->workspace->classDatabase->isDirty(),
             self::DATABASE_CATEGORY_SKILLS => $this->workspace->skillDatabase->isDirty(),
             self::DATABASE_CATEGORY_ANIMATIONS => $this->workspace->animationDatabase->isDirty(),
-            self::DATABASE_CATEGORY_SYSTEM => $this->workspace->systemDatabase->isDirty(),
+            self::DATABASE_CATEGORY_SYSTEM => $this->workspace->systemDatabase->isDirty() || ($this->workspace->config?->isDirty() ?? false),
             self::DATABASE_CATEGORY_QUESTS => $this->workspace->questDatabase->isDirty(),
             default => false,
         };
@@ -17721,6 +17752,10 @@ final class Editor
 
         if ($this->modals->has(Modal::TILE_ART)) {
             $this->renderTileArtDialog($layout);
+            return true;
+        }
+        if ($this->modals->has(Modal::NPC_ART)) {
+            $this->renderNpcArtDialog($layout);
             return true;
         }
 

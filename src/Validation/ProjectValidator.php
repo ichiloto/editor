@@ -1926,6 +1926,16 @@ class ProjectValidator
       $name = is_scalar($entry['name'] ?? null) ? trim(strval($entry['name'])) : '';
       $where = sprintf('%s NPC %s', $map->mapId, $name !== '' ? $name : sprintf('entry %s', $ordinal));
 
+      if (array_key_exists('sprites2d', $entry)) {
+        try {
+          if (! is_array($entry['sprites2d'])) { throw new \RuntimeException('sprites2d must be a complete directional definition array.'); }
+          (new \Ichiloto\Editor\Field\DirectionalSpriteDraft($entry['sprites2d']))->validate($workspace->projectRoot . '/assets');
+        } catch (\Throwable $error) {
+          $issues[] = Issue::warning($where, 'Invalid sprites2d: ' . $error->getMessage(),
+            'The game keeps terminal appearance and interaction. Choose Graphical Sprites in the NPC Inspector to repair literal art, or remove the optional set.');
+        }
+      }
+
       if ($name === '') {
         $issues[] = Issue::error(
           $where,
