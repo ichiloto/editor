@@ -113,13 +113,18 @@ final class ProjectNpc
 
     /**
      * Returns a sprite as the terminal shows it: style tags stripped,
-     * measured the way the engine measures it, `@` when nothing is left.
+     * measured the way the engine measures it. An explicit empty sprite
+     * draws no overlay; style-only source retains the diagnostic fallback.
      *
      * @param string $sprite The sprite as authored.
      * @return string The visible glyph(s).
      */
     public static function visibleGlyph(string $sprite): string
     {
+        if ($sprite === '') {
+            return '';
+        }
+
         $stripped = self::strippedGlyph($sprite);
 
         return $stripped === '' ? '@' : $stripped;

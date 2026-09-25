@@ -304,8 +304,10 @@ picker and undo workflow. The Status pane shows the brush colour beside the tool
 an overlay - sprites at their authored anchor, wide glyphs occupying the two
 columns the game gives them, styled sprites as the plain glyph - and nothing
 you do here paints a tile or an event marker. The selected NPC is shown in
-brackets. NPC mode sits on `n` in Normal mode and on `F3` everywhere, so no paintable
-character is taken from you (and not a control byte, since the terminal driver
+brackets, except an explicitly empty sprite: selection highlights its existing
+map cell without replacing the glyph or neighbouring cells. An unselected empty
+sprite draws no overlay. NPC mode sits on `n` in Normal mode and on `F3`
+everywhere, so no paintable character is taken from you (and not a control byte, since the terminal driver
 reserves the remaining ones).
 
 | Key | Action |
@@ -360,6 +362,14 @@ heading (`Dialogue variant 2 · when switch:gate_open` once it has a
 condition) with short row labels under it, and long lines wrap, so what a
 character says is read in the pane rather than in the edit buffer.
 
+- **Map-owned appearance.** For a fixed interaction already drawn on a map
+  layer (such as a mounted notice on `fixtures`), clear the `Sprite` text
+  completely and press `Enter`. This stores `'sprite' => ''`, not a missing
+  field, and removes the duplicate NPC overlay. The NPC retains its stable id,
+  dialogue, conditions and blocking anchor. Select it at that anchor, through
+  `L`, or with `[` / `]`; selection highlights the underlying cell. Omitting
+  `sprite` still defaults to `@`. Whitespace-only or style-only sprite text
+  still warns: use genuinely empty text when the map owns the appearance.
 - **Movement.** `wander` roams one tile at a time; the wander bounds only
   appear while wandering, and loaded bounds are kept (not shown) for a fixed
   NPC. Omitting every bound leaves the game's unbounded wander. Patrol routes,

@@ -2020,7 +2020,8 @@ class ProjectValidator
   }
 
   /**
-   * Checks the base sprite: present as text, visible, and inside the map.
+   * Checks the base sprite: text and inside the map, with explicit empty
+   * text reserved for an interaction whose appearance belongs to the map.
    *
    * @param array<string, mixed> $entry The NPC entry.
    * @param string $where Where it lives.
@@ -2039,6 +2040,10 @@ class ProjectValidator
         sprintf('Its sprite is %s, not text.', get_debug_type($entry['sprite'])),
         'Write the glyph as a string, with optional <fg=...> style tags.'
       )];
+    }
+
+    if ($entry['sprite'] === '') {
+      return [];
     }
 
     $sprite = strval($entry['sprite']);

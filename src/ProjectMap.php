@@ -639,15 +639,18 @@ final class ProjectMap
 
                 $tileCell = $tileRow[$column] ?? null;
                 $tileSymbol = is_array($tileCell) ? $tileCell['symbol'] : ' ';
+                // A selected map-owned NPC marks the existing cell, never a replacement sprite.
+                $anchorHighlight = array_key_exists($column, $npcCells[$row] ?? []) ? "\033[7m" : '';
                 if (! $this->layers->legacy && is_array($tileCell)) {
-                    $styled = TerminalText::formatStyles($tileCell['prefix'] . $tileSymbol . $tileCell['suffix']);
-                    $mergedSymbols[] = ($tileCell['dim'] ?? false) ? "\033[2m" . $styled . "\033[0m" : $styled;
+                    $styled = TerminalText::formatStyles($tileCell['prefix'] . $anchorHighlight . $tileSymbol . $tileCell['suffix']);
+                    $styled = ($tileCell['dim'] ?? false) ? "\033[2m" . $styled . "\033[0m" : $styled;
+                    $mergedSymbols[] = $anchorHighlight === '' ? $styled : $styled . "\033[0m";
                     continue;
                 }
                 $ansiOpen = is_array($tileCell)
                     ? self::ansiOpenForPrefix((string) ($tileCell['prefix'] ?? ''))
                     : null;
-                $dim = ($tileCell['dim'] ?? false) ? "\033[2m" : '';
+                $dim = (($tileCell['dim'] ?? false) ? "\033[2m" : '') . $anchorHighlight;
                 $mergedSymbols[] = $ansiOpen === null && $dim === '' ? $tileSymbol : $dim . $ansiOpen . $tileSymbol . "\033[0m";
             }
 
@@ -714,13 +717,15 @@ final class ProjectMap
      * cell holds an empty string, so the terminal draws the wide glyph in
      * the space it needs rather than a symbol shoved half under it. The
      * selected NPC is drawn with brackets around a one-column sprite, or as
-     * itself when wide, since brackets would misalign the row.
+     * itself when wide, since brackets would misalign the row. An explicitly
+     * empty sprite contributes only a selected anchor (null), highlighting
+     * the underlying map cell without replacing its glyph or neighbours.
      *
      * @param int|null $selectedNpcIndex The NPC to mark selected.
      * @param string|null $selectedNpcSprite A glyph to draw for the selected
      *   NPC in place of its base sprite -- a directional sprite being
      *   previewed -- as authored; it is shown as the terminal would show it.
-     * @return array<int, array<int, string>> The cells.
+     * @return array<int, array<int, string|null>> The cells, or selected map-owned anchors.
      */
     private function npcOverlayCells(?int $selectedNpcIndex, ?string $selectedNpcSprite = null): array
     {
@@ -735,6 +740,13 @@ final class ProjectMap
             if ($index === $selectedNpcIndex && $selectedNpcSprite !== null && trim($selectedNpcSprite) !== '') {
                 $sprite = ProjectNpc::visibleGlyph($selectedNpcSprite);
                 $columns = max(1, mb_strwidth($sprite));
+            }
+
+            if ($sprite === '') {
+                if ($index === $selectedNpcIndex) {
+                    $cells[$y][$x] = null;
+                }
+                continue;
             }
 
             if ($index === $selectedNpcIndex && $columns === 1) {
