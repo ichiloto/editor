@@ -365,7 +365,16 @@ final class PhpArraySourceDocument
             $start = $previousStart;
         }
 
-        return [$start, $this->lineEndAfter(max($entry->end, $entry->separatorEnd) - 1)];
+        $end = $this->lineEndAfter(max($entry->end, $entry->separatorEnd) - 1);
+        // An indented first entry may still share its line with siblings or
+        // closing syntax. Its heading belongs to it; those later bytes do not.
+        $tail = substr($this->source, $entry->separatorEnd, $end - $entry->separatorEnd);
+        foreach (PhpToken::tokenize('<?php ' . $tail) as $token) {
+            if (! $token->is([T_OPEN_TAG, T_WHITESPACE, T_COMMENT, T_DOC_COMMENT])) {
+                return [$start, $entry->separatorEnd];
+            }
+        }
+        return [$start, $end];
     }
 
     // -- Planning edits ------------------------------------------------------

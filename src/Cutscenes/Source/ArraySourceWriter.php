@@ -216,6 +216,9 @@ final class ArraySourceWriter
      */
     private function diffList(SourceNode $node, array $old, array $new, array $path): void
     {
+        if ($this->tryDiffCoordinateList($node, $old, $new, $path)) {
+            return;
+        }
         $oldCount = count($old);
         $newCount = count($new);
         $matchedOld = [];
@@ -339,6 +342,12 @@ final class ArraySourceWriter
             $previousNew = $anchorNew;
         }
 
+        $this->emitListMatches($node, $old, $new, $path, $matchedOld, $matchedNew);
+    }
+
+    /** Emit aligned entries through the same source/comment ownership rules for every list. */
+    private function emitListMatches(SourceNode $node, array $old, array $new, array $path, array $matchedOld, array $matchedNew): void
+    {
         // 6. Which matched entries stay in place: the longest run of them
         //    whose old order agrees with their new order. The rest move.
         ksort($matchedNew);
@@ -372,22 +381,19 @@ final class ArraySourceWriter
             }
         }
 
+        $anchor = null;
+        $anchors = [];
+        for ($j = count($new) - 1; $j >= 0; $j--) {
+            $anchors[$j] = $anchor;
+            if (isset($kept[$j])) { $anchor = $kept[$j]; }
+        }
+        $inline = self::prefersInline($node);
         foreach ($new as $j => $item) {
             if (isset($kept[$j])) {
                 continue;
             }
 
-            $anchor = null;
-
-            for ($next = $j + 1; $next < $newCount; $next++) {
-                if (isset($kept[$next])) {
-                    $anchor = $kept[$next];
-
-                    break;
-                }
-            }
-
-            $position = $anchor ?? count($node->entries);
+            $position = $anchors[$j] ?? count($node->entries);
 
             if (isset($moved[$j])) {
                 $this->emitMove($node, $moved[$j], $old[$moved[$j]], $item, $path, $position);
@@ -396,7 +402,7 @@ final class ArraySourceWriter
             }
 
             if ($position >= count($node->entries)) {
-                $this->queueAppend($node, null, $this->literalFor($item, [...$path, $j], self::prefersInline($node)));
+                $this->queueAppend($node, null, $this->literalFor($item, [...$path, $j], $inline));
 
                 continue;
             }
@@ -405,9 +411,41 @@ final class ArraySourceWriter
                 $path,
                 $position,
                 null,
-                $this->literalFor($item, [...$path, $j], self::prefersInline($node)),
+                $this->literalFor($item, [...$path, $j], $inline),
             );
         }
+    }
+
+    /** Declared cell identities avoid a quadratic LCS table for large tile-art lists. */
+    private function tryDiffCoordinateList(SourceNode $node, array $old, array $new, array $path): bool
+    {
+        // Row/column is identity only in the declared tile-art contract, not arbitrary user lists.
+        if ($path !== ['tiles2d', 'cells'] && ! (count($path) === 4 && $path[0] === 'tiles2d'
+            && $path[1] === 'layers' && is_string($path[2]) && $path[3] === 'cells')) {
+            return false;
+        }
+        $indices = [];
+        foreach ([$old, $new] as $side => $items) {
+            $indices[$side] = [];
+            foreach ($items as $index => $item) {
+                if (! is_array($item) || ! is_int($item['row'] ?? null) || ! is_int($item['column'] ?? null)) {
+                    return false;
+                }
+                $key = $item['row'] . ':' . $item['column'];
+                if (isset($indices[$side][$key])) { return false; }
+                $indices[$side][$key] = $index;
+            }
+        }
+        $matchedOld = [];
+        $matchedNew = [];
+        foreach ($indices[1] as $key => $index) {
+            if (! isset($indices[0][$key])) { continue; }
+            $previous = $indices[0][$key];
+            $matchedOld[$previous] = $index;
+            $matchedNew[$index] = $previous;
+        }
+        $this->emitListMatches($node, $old, $new, $path, $matchedOld, $matchedNew);
+        return true;
     }
 
     /**
