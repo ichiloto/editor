@@ -34,7 +34,10 @@ final class EditableGrid
 
     public static function parseLines(array $lines, bool $legacyTags = false): array
     {
-        return array_map(static function (string $line) use ($legacyTags): array {
+        // Equal cells share PHP copy-on-write values, not mutable references.
+        // Keep the pool local to this parse so closed maps retain no cache.
+        $cellValues = [];
+        return array_map(static function (string $line) use ($legacyTags, &$cellValues): array {
             preg_match_all('/<[^>]+>|[^<]+|</u', $line, $matches);
             $cells = $tags = [];
             foreach ($matches[0] as $segment) {
@@ -46,9 +49,12 @@ final class EditableGrid
                 } else {
                     foreach (TerminalText::visibleSymbols($segment) as $symbol) {
                         preg_match('/\A((?:\x1b\[[0-9;]*m)*)(.*?)((?:\x1b\[[0-9;]*m)*)\z/us', $symbol, $styled);
-                        $cells[] = ['symbol' => $styled[2] ?? $symbol,
-                            'prefix' => implode('', $tags) . ($styled[1] ?? ''),
-                            'suffix' => ($styled[3] ?? '') . str_repeat('</>', count($tags))];
+                        $glyph = $styled[2] ?? $symbol;
+                        $prefix = implode('', $tags) . ($styled[1] ?? '');
+                        $suffix = ($styled[3] ?? '') . str_repeat('</>', count($tags));
+                        $cells[] = $cellValues[$prefix][$suffix][$glyph] ??= [
+                            'symbol' => $glyph, 'prefix' => $prefix, 'suffix' => $suffix,
+                        ];
                     }
                 }
             }
