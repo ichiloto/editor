@@ -225,6 +225,38 @@ Normal. While painting, the Status pane shows `[PAINT]` beside the mode.
 Control-byte and function-key shortcuts (`Ctrl+S`, `F3`, ...) work in both
 modes, since they are not glyphs.
 
+### Mixed Floor and Wall Materials
+
+Keep walkable floors as spaces and solid walls as wall glyphs on gameplay
+layers. Put wood, kitchen tile, stone, rugs, carpet, and purely cosmetic wall
+writing or ornaments on decoration layers. Their markers select graphical
+crops; they never change terminal glyphs or collision. A readable notice or
+other interactive fixture still needs its own gameplay glyph and interaction,
+not just a decoration marker.
+
+1. Start with decoration layers and their per-layer `tiles2d` mappings already
+   defined in the map source. For example, a `floors` layer might map `w`, `k`
+   and `s` to wood, kitchen tile and stone, with `r`/`c` on a higher `rugs`
+   layer for rugs/red carpet. A `wall-detail` layer can use its own markers
+   for ornamental writing and trim over solid gameplay walls.
+2. Focus the canvas, use `[` / `]` or `Ctrl+P` to choose the layer, and press
+   `i` to paint its mapped markers. The crop warning is expected. `Esc`
+   returns to Normal mode before switching layers; in Paint mode brackets
+   paint characters rather than switching. The same tools and mouse strokes
+   work on every decoration layer.
+3. Use `Ctrl+Z` / `Ctrl+Y` to undo/redo, even after switching layers, then
+   `Ctrl+S` to save. `Ctrl+R` reloads the saved workspace and clears history.
+   Press `t` in Normal mode to check terminal preview: floors remain blank,
+   walls retain their gameplay glyphs, and interaction markers remain visible.
+
+**Current authoring gap:** the TUI displays atlas paths and crop rectangles
+read-only. It can place existing mapped materials, but cannot select a new
+material asset or add/change a glyph's crop mapping. Creating a decoration
+layer does not create those mappings; they must currently be authored in the
+map's `.data.php` source outside the TUI. Saving an unmapped decoration glyph
+is refused before writing. There is no graphical material picker or image
+preview in this workflow; the canvas shows authoring markers, not the artwork.
+
 ### Normal mode
 
 | Key | Action |
