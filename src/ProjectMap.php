@@ -35,10 +35,12 @@ use RuntimeException;
 final class ProjectMap
 {
     use TracksPersistedState;
+    use \Ichiloto\Editor\Maps\TileArt;
 
     private MapLayers $layers;
-    private ?string $tileDefinitionKey = null;
-    private array $tileDefinitions = [];
+    /** Invalidated by data/layer/dimension changes, not by painting individual glyphs. */
+    private ?array $tileDefinitions = null;
+    private array $tileDefinitionGeometry = [];
 
     /**
      * @var array<string, mixed>
@@ -128,6 +130,7 @@ final class ProjectMap
      */
     private function adoptDataSource(string $source): void
     {
+        $this->tileDefinitions = null;
         $this->dataLayerNames = array_column($this->getLayers(), 'name', 'id');
         try {
             $this->dataDocument = PhpArraySourceDocument::parse($source);
@@ -434,6 +437,7 @@ final class ProjectMap
             $this->editableData = $this->loadedData = $data;
             $this->adoptDataSource($document->source);
         }
+        $this->tileDefinitions = null;
         $this->cachedWidth = null;
         $this->touchState();
         return $id;
@@ -463,6 +467,7 @@ final class ProjectMap
             $this->layers->restoreSnapshot($before);
             throw $error;
         }
+        $this->tileDefinitions = null;
         $this->touchState();
     }
 
@@ -480,6 +485,7 @@ final class ProjectMap
         }
         $this->layers->removeLayer($id);
         $this->writeData($data);
+        $this->tileDefinitions = null;
         $this->cachedWidth = null;
         $this->touchState();
     }
@@ -503,14 +509,20 @@ final class ProjectMap
 
     public function getLayerTileDefinitions(): array
     {
-        $key = serialize([$this->editableData['tiles2d'] ?? null, $this->getLayers(), $this->layers->legacy]);
-        if ($key === $this->tileDefinitionKey) {
+        // Retained MapLayers/EditableGrid objects may change outside our setters.
+        // Compare only row shapes and layer identity, never every crop on each paint dab.
+        $geometry = [$this->layers->legacy, array_map(static function (array $layer): array {
+            $rows = array_map(count(...), $layer['grid']->cells);
+            unset($layer['grid']);
+            return [$layer, $rows];
+        }, $this->layers->getLayers())];
+        if ($this->tileDefinitions !== null && $this->tileDefinitionGeometry === $geometry) {
             return $this->tileDefinitions;
         }
         $definitions = isset($this->editableData['tiles2d'])
             ? GraphicalTileDefinition::getForLayers($this->editableData['tiles2d'], $this->layers->getLayerSet(), $this->mapId)
             : [];
-        $this->tileDefinitionKey = $key;
+        $this->tileDefinitionGeometry = $geometry;
         return $this->tileDefinitions = $definitions;
     }
 
@@ -972,6 +984,7 @@ final class ProjectMap
     {
         $this->assertEditable();
         $this->layers->restoreSnapshot($snapshot['layers']);
+        $this->tileDefinitions = null;
         $this->cachedWidth = null;
         $this->touchState();
     }
@@ -1116,6 +1129,7 @@ final class ProjectMap
 
         $this->assertDataPreservable($next);
         $this->editableData = $next;
+        $this->tileDefinitions = null;
         $this->touchState();
     }
 
@@ -1453,6 +1467,7 @@ final class ProjectMap
 
         $this->layers->resize($width, $height);
 
+        $this->tileDefinitions = null;
         $this->cachedWidth = null;
         $this->touchState();
     }

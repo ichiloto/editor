@@ -106,7 +106,7 @@ it('shows crop tables read-only and keeps layer-specific painting warnings visib
     [$editor, $map] = layeredCanvasEditor();
     callEditorMethod($editor, 'selectCanvasLayer', 'map:4');
     $fields = callEditorMethod($editor, 'getLayerInspectorFields');
-    expect(array_column($fields, 'editable'))->each->toBeFalse()
+    expect(array_column(array_filter($fields, static fn(array $field): bool => ($field['target'] ?? '') !== 'tile-art'), 'editable'))->each->toBeFalse()
         ->and(json_encode($fields))->toContain('shared.png', '16');
     callEditorMethod($editor, 'applyCanvasWrites', $map, [['x' => 0, 'y' => 0, 'symbol' => 'x']], 'mapped');
     expect(getEditorProperty($editor, 'canvasPaintWarning'))->toContain('Crop mapping');

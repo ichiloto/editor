@@ -200,9 +200,10 @@ Creating a layer on a legacy map explicitly moves its terrain into
 saves keep the original layout.
 
 Every layer uses the same Paint/Normal modes, tools, mouse strokes, selection,
-colour, clipboard and undo. The inspector lists visibility and read-only
-per-layer `tiles2d` atlas/crop mappings. Painting a mapped glyph, or replacing
-one, shows a crop warning. Invalid decoration crop coverage is refused at save.
+colour, clipboard and undo. The inspector lists visibility, inherited per-layer
+`tiles2d` mappings, and an editable selected-cell tile-art action. Painting a
+mapped glyph, replacing one, or painting at a coordinate with a crop override
+shows a warning. Invalid decoration crop coverage is refused at save.
 Untouched layer files are never written; unchanged rows retain their authored
 bytes, and all changed files are saved or rolled back together.
 
@@ -249,13 +250,54 @@ not just a decoration marker.
    Press `t` in Normal mode to check terminal preview: floors remain blank,
    walls retain their gameplay glyphs, and interaction markers remain visible.
 
-**Current authoring gap:** the TUI displays atlas paths and crop rectangles
-read-only. It can place existing mapped materials, but cannot select a new
-material asset or add/change a glyph's crop mapping. Creating a decoration
-layer does not create those mappings; they must currently be authored in the
-map's `.data.php` source outside the TUI. Saving an unmapped decoration glyph
-is refused before writing. There is no graphical material picker or image
-preview in this workflow; the canvas shows authoring markers, not the artwork.
+Alternatively, use selected-cell tile art below to author material crops without
+predefined glyph mappings, including crops on blank decoration cells.
+**Remaining authoring gap:** glyph-wide defaults remain read-only in the TUI;
+adding/changing a reusable glyph mapping still requires the map's `.data.php`
+source. There is no visual crop picker or image preview: the canvas shows
+authoring glyphs, and the crop form uses pixel coordinates.
+
+### Selected-Cell Tile Art
+
+This workflow requires the Engine per-cell `tiles2d.cells` capability, currently
+available in the local Engine candidate, not the Editor's older locked
+Engine package. Integration tests select that Engine source explicitly; the
+dependency lock must be updated separately when publishing is authorized.
+
+1. In Normal mode, select the gameplay or decoration layer and cell. Choose
+   `Tile art: Edit selected cell` in `Ctrl+P`, or activate `Tile art: selected
+   cell` in the inspector. Events and terminal-preview mode cannot own tile art.
+2. Press `a` or activate `Layer atlas` to select a PNG already under the project's
+   `assets/` directory. Type to filter the shared picker, then select with
+   arrows and `Enter`; typed text is never saved as a resource path.
+3. Use arrows/Tab and `Enter` to edit X, Y, width and height in pixels. Origins
+   start at zero, extents must be positive, and crops must fit the selected PNG.
+   The form starts from this cell's crop, its inherited glyph crop, or a
+   16-by-16 rectangle. Press `s` or activate `Apply override` to stage the edit.
+4. Changing the atlas of a layer that already inherits/owns one requires `y`
+   confirmation: every existing crop on that layer will use the new PNG. The
+   change writes only that layer's asset override, never the shared atlas or
+   another layer. The dialog names the old and new assets and this impact.
+5. `r` / `Remove override` asks for confirmation before removing only that cell's
+   crop; its glyph default, if any, becomes effective again. Empty definitions
+   are pruned. `Esc` cancels a field, picker or confirmation first, then the form.
+   Nothing changes until Apply or confirmed Remove. `Ctrl+S` saves transactionally;
+   `Ctrl+Z` / `Ctrl+Y` undo/redo even after changing the selected layer or saving.
+
+Overrides belong to the captured map, layer and coordinate, not the painted
+glyph. They do not change text or walkability. Paint, erase and clipboard tools
+leave crop coordinates in place; layer rename/duplicate/move preserve ownership,
+and layer removal removes its own table. Shrinking a grid never silently moves
+or drops crops: save refuses coordinates outside a row. Undo the resize, remove
+the affected crops, then resize again if intended. Reload reads saved crops.
+
+Literal `.data.php` arrays retain untouched source bytes and comments. Opaque
+expressions, variables, unreadable keys or explicitly indexed cell lists that
+cannot be safely edited are refused before mutation with a reason; they are
+never flattened to evaluated data. The picker and shared Engine preflight check
+asset containment, PNG header and crop bounds; native rendering remains the
+full PNG decode authority. Decoration coverage may be staged across several
+cell edits but must be complete before save.
 
 ### Normal mode
 

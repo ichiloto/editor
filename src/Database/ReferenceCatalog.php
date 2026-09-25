@@ -50,6 +50,7 @@ final class ReferenceCatalog
         'bgm',
         'sfx',
         'enemy_sprites',
+        'png_assets',
         'elements',
         'map_npcs',
         'knowledge_subjects',
@@ -148,6 +149,7 @@ final class ReferenceCatalog
             // Graphics/Enemies/<value>.txt, appending the extension itself,
             // so the file stems are the values.
             'enemy_sprites' => $this->fileValues('assets/Graphics/Enemies'),
+            'png_assets' => self::getPngAssets($this->workspace->projectRoot),
             'elements' => $this->elementValues(),
             // An Optimize weight may apply to one element or to whichever
             // element an outcome happened to be, which the runtime spells
@@ -641,6 +643,26 @@ final class ReferenceCatalog
         sort($names);
 
         return $names;
+    }
+
+    /** Returns asset-root-relative PNG choices without following paths outside the asset root. */
+    public static function getPngAssets(string $projectRoot): array
+    {
+        $root = realpath(rtrim($projectRoot, '/') . '/assets');
+        if ($root === false) {
+            return [];
+        }
+        $paths = [];
+        $files = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($root, \FilesystemIterator::SKIP_DOTS));
+        foreach ($files as $file) {
+            $resolved = $file->getRealPath();
+            if ($file->isFile() && strtolower($file->getExtension()) === 'png' && $resolved !== false
+                && str_starts_with($resolved, $root . DIRECTORY_SEPARATOR)) {
+                $paths[] = str_replace(DIRECTORY_SEPARATOR, '/', substr($file->getPathname(), strlen($root) + 1));
+            }
+        }
+        sort($paths);
+        return $paths;
     }
 
     /**

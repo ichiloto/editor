@@ -19,12 +19,14 @@ trait LayerCanvas
     private ?array $facadeBrush = null;
     private string $canvasPaintWarning = '';
 
-    private function recordCanvasCropWarning(\Ichiloto\Editor\ProjectMap $map, string $symbol, string $oldSymbol): void
+    private function recordCanvasCropWarning(\Ichiloto\Editor\ProjectMap $map, string $symbol, string $oldSymbol, int $column, int $row): void
     {
         try {
             $symbols = $map->getLayerTiles2d($this->getActiveCanvasLayer())['symbols'] ?? [];
-            if (array_key_exists($symbol, $symbols) || array_key_exists($oldSymbol, $symbols)) {
-                $this->canvasPaintWarning = 'Crop mapping on this layer: painted glyph affects graphical artwork (tiles2d is read-only).';
+            $override = $this->getActiveCanvasLayer() !== MapLayers::EVENT
+                && $map->getCellTileArt($this->getActiveCanvasLayer(), $column, $row)['override'] !== null;
+            if ($override || array_key_exists($symbol, $symbols) || array_key_exists($oldSymbol, $symbols)) {
+                $this->canvasPaintWarning = 'Crop mapping on this layer: glyphs can affect artwork; cell overrides stay at their coordinates. Tile art edits cell crops; symbol defaults are read-only.';
             }
         } catch (\Throwable $error) {
             $this->canvasPaintWarning = $error->getMessage();
@@ -105,6 +107,7 @@ trait LayerCanvas
             return [];
         }
         $items = [
+            new PaletteItem('Tile art: Edit selected cell', '', fn() => $this->openCellTileArt()),
             new PaletteItem('Layers: Create gameplay layer', '', fn() => $this->openLayerPrompt('create')),
             new PaletteItem('Layers: Create decoration layer', '', fn() => $this->openLayerPrompt('decoration')),
             new PaletteItem('Layers: Rename selected layer', '', fn() => $this->openLayerPrompt('rename')),
@@ -289,6 +292,15 @@ trait LayerCanvas
         $fields[] = ['label' => 'tiles2d (read-only)', 'value' => (string) ($tiles['asset'] ?? '(no atlas)'), 'editable' => false];
         foreach ($tiles['symbols'] ?? [] as $symbol => $crop) {
             $fields[] = ['label' => '  ' . $symbol, 'value' => json_encode($crop, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), 'editable' => false];
+        }
+        if ($id !== MapLayers::EVENT) {
+            try {
+                $art = $map->getCellTileArt($id, $this->cursorX, $this->cursorY);
+                $fields[] = ['label' => 'Tile art: selected cell', 'value' => $art['override'] === null ? 'Inherited / unmapped' : json_encode($art['override']),
+                    'editable' => true, 'target' => 'tile-art'];
+            } catch (\Throwable $error) {
+                $fields[] = ['label' => 'Cell art', 'value' => $error->getMessage(), 'editable' => false];
+            }
         }
         return $fields;
     }

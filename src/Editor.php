@@ -110,6 +110,7 @@ use Throwable;
 final class Editor
 {
     use \Ichiloto\Editor\Canvas\LayerCanvas;
+    use \Ichiloto\Editor\Canvas\TileArtCanvas;
     use CutscenesWorkspace;
     use CutsceneOutlinePane;
     use CutscenePreviewPane;
@@ -1254,6 +1255,7 @@ final class Editor
         $router->bindModal(Modal::DATABASE_ENTRY_DELETE_CONFIRMATION, $this->handleDatabaseEntryDeleteConfirmationInput(...));
         $router->bindModal(Modal::RENAME_CONFIRMATION, $this->handleRenameConfirmationInput(...));
         $router->bindModal(Modal::LAYER_EDIT, $this->handleLayerPromptInput(...));
+        $router->bindModal(Modal::TILE_ART, $this->handleTileArtInput(...));
         $router->bindModal(Modal::COMMAND_PALETTE, $this->handleCommandPaletteInput(...));
         $router->bindModal(Modal::HELP, $this->handleHelpInput(...));
         $router->bindModal(Modal::DATABASE, $this->handleDatabaseInput(...));
@@ -4593,7 +4595,7 @@ final class Editor
             [$newPrefix, $newSuffix] = $this->resolvePaintStyle($symbol, $this->selectedPaintColor, $oldStyle);
             $selectedMap->setLayerCell($this->getActiveCanvasLayer(), $point['x'], $point['y'], $symbol, $newPrefix, $newSuffix);
             $newSymbol = $selectedMap->getLayerSymbol($this->getActiveCanvasLayer(), $point['x'], $point['y']);
-            $this->recordCanvasCropWarning($selectedMap, $symbol, $oldSymbol);
+            $this->recordCanvasCropWarning($selectedMap, $symbol, $oldSymbol, $point['x'], $point['y']);
             $this->activeStrokeCommand->appendCell(
                 $point['x'],
                 $point['y'],
@@ -4837,7 +4839,7 @@ final class Editor
                 $changed++;
             }
 
-            $this->recordCanvasCropWarning($map, $write['symbol'], $oldSymbol);
+            $this->recordCanvasCropWarning($map, $write['symbol'], $oldSymbol, $write['x'], $write['y']);
         }
 
         if ($stroke->hasChanges()) {
@@ -8387,6 +8389,11 @@ final class Editor
         $field = $fields[$this->selectedInspectorFieldIndex] ?? null;
 
         if (! is_array($field)) {
+            return;
+        }
+
+        if (($field['target'] ?? null) === 'tile-art') {
+            $this->openCellTileArt();
             return;
         }
 
@@ -17709,6 +17716,11 @@ final class Editor
 
         if ($this->modals->has(Modal::LAYER_EDIT)) {
             $this->renderLayerPrompt($layout);
+            return true;
+        }
+
+        if ($this->modals->has(Modal::TILE_ART)) {
+            $this->renderTileArtDialog($layout);
             return true;
         }
 

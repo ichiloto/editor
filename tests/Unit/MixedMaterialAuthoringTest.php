@@ -154,13 +154,14 @@ it('authors mapped floor and wall decoration through real canvas commands withou
     expect(sourceHashTree($root . '/assets/Maps'))->toBe($saved);
 });
 
-it('keeps new material crop authoring explicitly read-only and refuses unmapped decoration through Ctrl-S', function () {
+it('keeps symbol defaults read-only alongside cell art authoring and refuses unmapped decoration through Ctrl-S', function () {
     $root = createMixedMaterialProject();
     [$editor, $map] = layeredCanvasEditor($root);
     $before = sourceHashTree($root);
     callEditorMethod($editor, 'dispatchInput', ']');
     $fields = callEditorMethod($editor, 'getLayerInspectorFields');
-    expect(array_column($fields, 'editable'))->each->toBeFalse();
+    expect(array_column(array_filter($fields, static fn(array $field): bool => ($field['target'] ?? '') !== 'tile-art'), 'editable'))->each->toBeFalse();
+    expect(array_values(array_filter($fields, static fn(array $field): bool => ($field['target'] ?? '') === 'tile-art'))[0]['editable'])->toBeTrue();
     callEditorMethod($editor, 'dispatchInput', "\t");
     $attempted = [];
     foreach (callEditorMethod($editor, 'getInspectorFields') as $index => $field) {
