@@ -1928,11 +1928,11 @@ class ProjectValidator
 
       if (array_key_exists('sprites2d', $entry)) {
         try {
-          if (! is_array($entry['sprites2d'])) { throw new \RuntimeException('sprites2d must be a complete directional definition array.'); }
-          (new \Ichiloto\Editor\Field\DirectionalSpriteDraft($entry['sprites2d']))->validate($workspace->projectRoot . '/assets');
+          if (! is_array($entry['sprites2d'])) { throw new \RuntimeException('sprites2d must be a character sheet definition array.'); }
+          \Ichiloto\Editor\Field\NpcCharacterSheet::validate($entry['sprites2d'], $workspace->projectRoot . '/assets');
         } catch (\Throwable $error) {
           $issues[] = Issue::warning($where, 'Invalid sprites2d: ' . $error->getMessage(),
-            'The game keeps terminal appearance and interaction. Choose Graphical Sprites in the NPC Inspector to repair literal art, or remove the optional set.');
+            'The game keeps the terminal appearance and interaction. Name an RPG Maker character sheet (sheet, optional index and layer), or remove the optional sprites2d.');
         }
       }
 

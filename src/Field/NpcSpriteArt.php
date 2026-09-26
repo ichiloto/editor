@@ -25,13 +25,9 @@ trait NpcSpriteArt
         }
         if ($node !== null) { $this->assertNpcArtLiteral($node, true); }
         if ($data !== null) {
-            $set = (new DirectionalSpriteDraft($data))->validate(dirname($this->getMapsRoot()));
-            $assets = ReferenceCatalog::getPngAssets(dirname($this->getMapsRoot(), 2));
-            foreach (ProjectNpc::DIRECTIONS as $direction) {
-                $definition = $set->$direction;
-                if (! in_array($definition->asset, $assets, true)) {
-                    throw new MapSourceRefusal('Choose each directional PNG through the project asset picker.');
-                }
+            $sheet = NpcCharacterSheet::validate($data, dirname($this->getMapsRoot()));
+            if (! in_array($sheet->asset, ReferenceCatalog::getPngAssets(dirname($this->getMapsRoot(), 2)), true)) {
+                throw new MapSourceRefusal('Choose the character sheet through the project asset picker.');
             }
         }
         $entries = $this->getNpcs()->toMapData();

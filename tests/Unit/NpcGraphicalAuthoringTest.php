@@ -2,31 +2,30 @@
 
 declare(strict_types=1);
 
-use Ichiloto\Editor\Field\DirectionalSpriteDraft;
-use Ichiloto\Editor\Field\ProjectNpc;
+use Ichiloto\Editor\Field\NpcCharacterSheet;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
-use Ichiloto\Engine\Rendering\Sprites\DirectionalGraphicalSpriteSet;
 
 function createNpcArtProject(): string
 {
     $root = makeTemporaryProject('npc-art-');
-    mkdir($root . '/assets/Graphics/Npcs', 0777, true);
-    $chunk = static fn(string $kind, string $bytes): string => pack('N', strlen($bytes)) . $kind . $bytes . pack('N', crc32($kind . $bytes));
-    $png = "\x89PNG\r\n\x1a\n" . $chunk('IHDR', pack('NNC5', 64, 64, 8, 6, 0, 0, 0))
-        . $chunk('IDAT', gzcompress(str_repeat("\0" . str_repeat("\xff\xff\xff\xff", 64), 64))) . $chunk('IEND', '');
-    foreach (ProjectNpc::DIRECTIONS as $direction) { file_put_contents($root . '/assets/Graphics/Npcs/' . $direction . '.png', $png); }
+    mkdir($root . '/assets/Graphics/Characters', 0777, true);
+    // RPG Maker character sheets: 12 x 8 frames, or 3 x 4 for a `$` single character.
+    $png = static function (int $width, int $height): string {
+        $chunk = static fn(string $kind, string $bytes): string => pack('N', strlen($bytes)) . $kind . $bytes . pack('N', crc32($kind . $bytes));
+        return "\x89PNG\r\n\x1a\n" . $chunk('IHDR', pack('NNC5', $width, $height, 8, 6, 0, 0, 0))
+            . $chunk('IDAT', gzcompress(str_repeat("\0" . str_repeat("\xff\xff\xff\xff", $width), $height))) . $chunk('IEND', '');
+    };
+    file_put_contents($root . '/assets/Graphics/Characters/People.png', $png(48, 32));
+    file_put_contents($root . '/assets/Graphics/Characters/$Guard.png', $png(12, 16));
+    file_put_contents($root . '/assets/Graphics/Characters/Uneven.png', $png(50, 50));
     file_put_contents($root . '/assets/Maps/test-map/test-map.data.php', "<?php\n// Authored NPCs.\nreturn ['name' => 'Test Map', 'events' => [], 'npcs' => [\n  /* resident */ ['id' => 'resident', 'name' => 'Resident', 'sprite' => '', 'x' => 1, 'y' => 1, 'dialogue' => [['text' => 'Hello']]],\n  /* neighbor */ ['id' => 'neighbor', 'name' => 'Neighbor', 'x' => 2, 'y' => 1],\n], 'custom' => strtoupper('unchanged')];\n");
     return $root;
 }
 
 function getNpcArtPoses(): array
 {
-    $data = [];
-    foreach (ProjectNpc::DIRECTIONS as $direction) {
-        $data[$direction] = ['asset' => 'Graphics/Npcs/' . $direction . '.png', 'width' => 16, 'height' => 24];
-    }
-    return $data;
+    return ['sheet' => 'Graphics/Characters/People.png', 'index' => 2, 'layer' => 100];
 }
 
 it('keeps graphical NPC model save restore reload and duplication source-preserving', function () {
@@ -50,27 +49,23 @@ it('keeps graphical NPC model save restore reload and duplication source-preserv
     $map->save();
     expect(file_get_contents($map->dataPath))->toBe($saved);
     $reloaded = ProjectMap::fromDirectory($root . '/assets/Maps', $map->directory);
-    expect(DirectionalGraphicalSpriteSet::fromArray($reloaded->getNpcs()->get(0)->toArray()['sprites2d'])->south->height)->toBe(24);
+    expect(NpcCharacterSheet::validate($reloaded->getNpcs()->get(0)->toArray()['sprites2d'])->index)->toBe(2);
     $map->duplicateTo($root . '/assets/Maps/art-copy', 'art-copy', 'Art Copy');
     expect((require $root . '/assets/Maps/art-copy/art-copy.data.php')['npcs'][0]['sprites2d'])->toEqual(getNpcArtPoses());
 });
 
-it('preserves sheets and crop metadata while editing one role and refuses implicit representation conversion', function () {
+it('changes one character selection in place and accepts single-character sheets', function () {
     $root = createNpcArtProject();
     $map = ProjectWorkspace::fromProject($root)->getMapByIndex(0);
-    $data = ['mode' => 'sheet', 'frameWidth' => 16, 'frameHeight' => 16, 'width' => 16, 'height' => 24,
-        'frameDurationMs' => 90, 'stepDurationMs' => 180, 'idleFrame' => 1, 'anchor' => 'bottom_center', 'layer' => 3,
-        'directions' => array_map(static fn(array $pose): array => ['asset' => $pose['asset'], 'columns' => 4, 'rows' => 4, 'frames' => 12], getNpcArtPoses())];
-    $map->setNpcGraphicalSprites(0, $data);
+    $map->setNpcGraphicalSprites(0, getNpcArtPoses());
     $map->save();
-    $draft = new DirectionalSpriteDraft($data);
-    expect(fn() => $draft->setMode('poses'))->toThrow(RuntimeException::class, 'never converted');
-    $draft->setField('north', 'directions.north.asset', 'Graphics/Npcs/south.png');
-    $map->setNpcGraphicalSprites(0, $draft->getData());
+    $map->setNpcGraphicalSprites(0, ['sheet' => 'Graphics/Characters/People.png', 'index' => 5, 'layer' => 100]);
     $map->save();
-    $expected = $data;
-    $expected['directions']['north']['asset'] = 'Graphics/Npcs/south.png';
-    expect((require $map->dataPath)['npcs'][0]['sprites2d'])->toBe($expected);
+    expect((require $map->dataPath)['npcs'][0]['sprites2d'])
+        ->toBe(['sheet' => 'Graphics/Characters/People.png', 'index' => 5, 'layer' => 100]);
+    $map->setNpcGraphicalSprites(1, ['sheet' => 'Graphics/Characters/$Guard.png']);
+    $map->save();
+    expect((require $map->dataPath)['npcs'][1]['sprites2d'])->toBe(['sheet' => 'Graphics/Characters/$Guard.png']);
 });
 
 it('refuses incomplete unsafe invalid crop and reserved layer art before changing the map', function (Closure $change) {
@@ -80,12 +75,13 @@ it('refuses incomplete unsafe invalid crop and reserved layer art before changin
         ->and($map->captureLayerSnapshot())->toBe($before);
 })->with([
     fn(array $data) => [],
-    function (array $data) { unset($data['north']); return $data; },
-    function (array $data) { $data['north']['asset'] = '../outside.png'; return $data; },
-    function (array $data) { $data['north']['asset'] = 'Graphics/Npcs/missing.png'; return $data; },
-    function (array $data) { $data['north']['layer'] = 1000; return $data; },
-    function (array $data) { $data['north']['width'] = 0; return $data; },
-    function (array $data) { $data['north']['sourceRect'] = ['x' => 63, 'y' => 0, 'width' => 16, 'height' => 16]; return $data; },
+    function (array $data) { unset($data['sheet']); return $data; },
+    function (array $data) { $data['sheet'] = '../outside.png'; return $data; },
+    function (array $data) { $data['sheet'] = 'Graphics/Characters/Missing.png'; return $data; },
+    function (array $data) { $data['sheet'] = 'Graphics/Characters/Uneven.png'; return $data; },
+    function (array $data) { $data['layer'] = 1000; return $data; },
+    function (array $data) { $data['index'] = 8; return $data; },
+    function (array $data) { $data['width'] = 48; return $data; },
 ]);
 
 it('refuses opaque sprites without flattening them', function () {
@@ -157,18 +153,17 @@ it('warns for malformed optional NPC graphics while accepting omission and retai
     expect($warnings)->toHaveCount(1)->and($workspace->getMapByIndex(0)->getNpcs()->get(0)->getId())->toBe('resident');
 })->with([[null], [[]], ['invalid']]);
 
-it('patches one literal NPC role asset without rewriting crop comments or other directions', function () {
+it('patches one literal character selection without rewriting its comments or other fields', function () {
     $root = createNpcArtProject();
     $map = ProjectWorkspace::fromProject($root)->getMapByIndex(0);
-    $poses = getNpcArtPoses();
-    $poses['north']['sourceRect'] = ['x' => 16, 'y' => 0, 'width' => 16, 'height' => 32];
-    $map->setNpcGraphicalSprites(0, $poses);
+    $sheet = getNpcArtPoses();
+    $map->setNpcGraphicalSprites(0, $sheet);
     $map->save();
-    $source = str_replace("'sourceRect' =>", "/* retain crop */ 'sourceRect' =>", file_get_contents($map->dataPath));
+    $source = str_replace("'index' =>", "/* chosen character */ 'index' =>", file_get_contents($map->dataPath));
     file_put_contents($map->dataPath, $source);
     $map = ProjectMap::fromDirectory($root . '/assets/Maps', $map->directory);
-    $poses['north']['asset'] = 'Graphics/Npcs/south.png';
-    $map->setNpcGraphicalSprites(0, $poses);
+    $sheet['index'] = 6;
+    $map->setNpcGraphicalSprites(0, $sheet);
     $map->save();
-    expect(file_get_contents($map->dataPath))->toBe(str_replace('Graphics/Npcs/north.png', 'Graphics/Npcs/south.png', $source));
+    expect(file_get_contents($map->dataPath))->toBe(str_replace("'index' => 2", "'index' => 6", $source));
 });
