@@ -395,7 +395,7 @@ it('catches a marker placed on a map that defines no such event', function () {
     $source = file_get_contents($path);
 
     // Drop a stray marker onto the layer, the way a mis-click would.
-    file_put_contents($path, preg_replace('/\n( +)\n/', "\nZ\n", $source, 1));
+    file_put_contents($path, preg_replace('/\n( +)\n/', "\nZZ\n", $source, 1));
 
     $issues = issuesMentioning(validateProject($root), 'places marker "Z"');
 

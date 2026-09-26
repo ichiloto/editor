@@ -1,5 +1,6 @@
 {
   "id": "ichiloto/editor-sample-project",
   "name": "Sample Project",
-  "main": "main.php"
+  "main": "main.php",
+  "format": 2
 }

@@ -8,7 +8,7 @@ use Ichiloto\Editor\Validation\MapValidator;
 /**
  * Builds an in-memory map with the given data and event rows.
  */
-function validatorMap(string $mapId, array $data, array $eventLines = ['    ', '    ']): ProjectMap
+function validatorMap(string $mapId, array $data, array $eventLines = ['        ', '        ']): ProjectMap
 {
   return new ProjectMap(
     mapId: $mapId,
@@ -17,7 +17,7 @@ function validatorMap(string $mapId, array $data, array $eventLines = ['    ', '
     mapPath: "/virtual/Maps/{$mapId}/{$mapId}.map.php",
     eventPath: "/virtual/Maps/{$mapId}/{$mapId}.event.php",
     data: $data,
-    tileLines: ['....', '....'],
+    tileLines: ['........', '........'],
     eventLines: $eventLines,
   );
 }
@@ -28,13 +28,13 @@ it('accepts a clean map without warnings', function () {
     'events' => [
       'E' => ['class' => 'SomeTrigger', 'data' => []],
     ],
-  ], ['E   ', '    ']);
+  ], ['EE      ', '        ']);
 
   expect(MapValidator::validate($map, ['town' => $map]))->toBe([]);
 });
 
 it('warns about event markers without definitions', function () {
-  $map = validatorMap('town', ['name' => 'Town', 'events' => []], ['E   ', '    ']);
+  $map = validatorMap('town', ['name' => 'Town', 'events' => []], ['EE      ', '        ']);
 
   $warnings = MapValidator::validate($map, ['town' => $map]);
 
@@ -49,7 +49,7 @@ it('warns when a marker does not occupy one solid rectangle', function () {
     'events' => [
       'E' => ['class' => 'SomeTrigger', 'data' => []],
     ],
-  ], [' E  ', 'EEE ']);
+  ], ['  EE    ', 'EEEEEE  ']);
 
   $warnings = MapValidator::validate($map, ['town' => $map]);
 
@@ -64,7 +64,7 @@ it('warns about dangling transfer destinations', function () {
     'events' => [
       'T' => ['class' => 'Transfer', 'data' => ['destinationMap' => 'vanished-map']],
     ],
-  ], ['T   ', '    ']);
+  ], ['TT      ', '        ']);
 
   $warnings = MapValidator::validate($map, ['town' => $map]);
 
@@ -86,7 +86,7 @@ it('warns about spawn points outside the destination map', function () {
         ],
       ],
     ],
-  ], ['T   ', '    ']);
+  ], ['TT      ', '        ']);
 
   $warnings = MapValidator::validate($map, ['town' => $map, 'cave' => $destination]);
 
@@ -102,7 +102,7 @@ it('validates spawn points against this map when no destination is set', functio
       'S' => ['class' => 'Spawn', 'data' => ['spawnPoint' => ['x' => 1, 'y' => 1]]],
       'B' => ['class' => 'Spawn', 'data' => ['spawnPoint' => ['x' => 9, 'y' => 9]]],
     ],
-  ], ['SB  ', '    ']);
+  ], ['SSBB    ', '        ']);
 
   $warnings = MapValidator::validate($map, ['town' => $map]);
 
@@ -117,7 +117,7 @@ it('collects multiple findings in one pass', function () {
     'events' => [
       'T' => ['class' => 'Transfer', 'data' => ['destinationMap' => 'gone']],
     ],
-  ], ['TX  ', '    ']);
+  ], ['TTXX    ', '        ']);
 
   $warnings = MapValidator::validate($map, ['town' => $map]);
 

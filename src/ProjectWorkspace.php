@@ -13,6 +13,7 @@ use Ichiloto\Editor\Database\RecordSchemaCatalog;
 use Ichiloto\Editor\Storage\FileSetOperations;
 use Ichiloto\Editor\Storage\FileSetTransaction;
 use Ichiloto\Editor\Storage\FilesystemFileSetOperations;
+use Ichiloto\Engine\Core\ProjectFormat;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
 use RuntimeException;
@@ -103,6 +104,10 @@ final readonly class ProjectWorkspace
         if (! is_array($config)) {
             throw new RuntimeException("Unable to parse $configPath.");
         }
+
+        // A project in another format places its contents differently; open
+        // nothing rather than misplace it. `ichiloto upgrade` converts it.
+        ProjectFormat::assertSupported($config[ProjectFormat::KEY] ?? null);
 
         $projectName = (string) ($config['name'] ?? basename($projectRoot));
         $projectId = trim((string) ($config['id'] ?? ''));
@@ -282,7 +287,7 @@ final readonly class ProjectWorkspace
      * Returns a preview of the selected map.
      *
      * @param int $selectedMapIndex The selected map index.
-     * @param int $width The preview width.
+     * @param int $width The preview width, in two-column cells.
      * @param int $height The preview height.
      * @param int $offsetX The horizontal preview offset.
      * @param int $offsetY The vertical preview offset.

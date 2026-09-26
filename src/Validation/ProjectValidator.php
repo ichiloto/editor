@@ -22,6 +22,7 @@ use Ichiloto\Editor\ProjectQuest;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Engine\Core\WorldConditionType;
+use Ichiloto\Engine\Field\MapCell;
 use Ichiloto\Engine\Field\SkitSpeaker;
 use Ichiloto\Engine\Events\Interpreter\EventInterpreter;
 use Ichiloto\Engine\Events\Interpreter\MovementRouteRunner;
@@ -1572,6 +1573,7 @@ class ProjectValidator
       $issues = [
         ...$issues,
         ...$this->checkLayers($map),
+        ...$this->checkRetiredMapData($map),
         ...$this->checkEventMarkers($map),
         ...$this->checkDoors($map, $workspace->mapIds),
         ...$this->checkEncounters($map, $troops),
@@ -1596,7 +1598,7 @@ class ProjectValidator
       try {
         $map->validateLayerContracts();
       } catch (\Throwable $error) {
-        return [Issue::error($map->mapId, $error->getMessage(), 'Repair the authored layer or its dictionary/crop table before saving.')];
+        return [Issue::error($map->mapId, $error->getMessage(), 'Repair the authored layer or the collision dictionary before saving.')];
       }
       return [];
     }
@@ -1615,6 +1617,25 @@ class ProjectValidator
   }
 
   /**
+   * Checks for map data the Engine no longer reads.
+   *
+   * @param ProjectMap $map The map.
+   * @return Issue[] The issues found.
+   */
+  protected function checkRetiredMapData(ProjectMap $map): array
+  {
+    if (! array_key_exists('tiles2d', $map->getEditableData())) {
+      return [];
+    }
+
+    return [Issue::warning(
+      $map->mapId,
+      'Its tiles2d crop table is no longer read.',
+      'Glyph-keyed crops cannot address two-column cells; the map shows its terminal glyphs until it has a tileset. Remove the tiles2d key.'
+    )];
+  }
+
+  /**
    * Checks that placed markers and event definitions agree.
    *
    * @param ProjectMap $map The map.
@@ -1622,7 +1643,14 @@ class ProjectValidator
    */
   protected function checkEventMarkers(ProjectMap $map): array
   {
-    $issues = [];
+    $issues = array_map(
+      static fn(string $conflict): Issue => Issue::error(
+        $map->mapId,
+        $conflict,
+        'The engine refuses to load the map. Give each event cell one marker.'
+      ),
+      $map->describeConflictingEventCells(),
+    );
     $defined = array_keys((array) ($map->data['events'] ?? []));
     $placed = $map->getPlacedEventMarkers();
 
@@ -1949,7 +1977,7 @@ class ProjectValidator
       $issues = [
         ...$issues,
         ...$this->checkNpcPlacement($entry, $where, $width, $height, $anchors, $name, $index),
-        ...$this->checkNpcSprite($entry, $where, $width),
+        ...$this->checkNpcSprite($entry, $where),
         ...$this->checkNpcMovement($entry, $where, $width, $height),
         ...$this->checkNpcDirectionalSprites($entry, $where),
         ...$this->checkNpcInteractionShapes($entry, $where),
@@ -1971,7 +1999,7 @@ class ProjectValidator
    * @param string $where Where it lives.
    * @param int $width The map width.
    * @param int $height The map height.
-   * @param array<int, array{x: int, y: int, name: string, where: string, wanders: bool, width: int}> $anchors Anchors seen so far, appended to.
+   * @param array<int, array{x: int, y: int, name: string, where: string, wanders: bool}> $anchors Anchors seen so far, appended to.
    * @param string $name The NPC's name.
    * @param int|string $index The entry index.
    * @return Issue[] The issues found.
@@ -2008,14 +2036,12 @@ class ProjectValidator
 
     $x = intval($entry['x']);
     $y = intval($entry['y']);
-    $sprite = is_scalar($entry['sprite'] ?? null) ? strval($entry['sprite']) : '@';
     $anchors[] = [
       'x' => $x,
       'y' => $y,
       'name' => $name !== '' ? $name : sprintf('entry %s', is_int($index) ? $index + 1 : $index),
       'where' => $where,
       'wanders' => strval($entry['movement'] ?? 'fixed') === 'wander',
-      'width' => ProjectNpc::glyphWidth($sprite),
     ];
 
     if ($x < 0 || $y < 0 || $x >= $width || $y >= $height) {
@@ -2030,15 +2056,15 @@ class ProjectValidator
   }
 
   /**
-   * Checks the base sprite: text and inside the map, with explicit empty
-   * text reserved for an interaction whose appearance belongs to the map.
+   * Checks the base sprite: text that fits the NPC's one cell, with
+   * explicit empty text reserved for an interaction whose appearance
+   * belongs to the map.
    *
    * @param array<string, mixed> $entry The NPC entry.
    * @param string $where Where it lives.
-   * @param int $width The map width.
    * @return Issue[] The issues found.
    */
-  protected function checkNpcSprite(array $entry, string $where, int $width): array
+  protected function checkNpcSprite(array $entry, string $where): array
   {
     if (! array_key_exists('sprite', $entry)) {
       return [];
@@ -2068,11 +2094,11 @@ class ProjectValidator
 
     $columns = ProjectNpc::glyphWidth($sprite);
 
-    if ($columns > 1 && is_numeric($entry['x'] ?? null) && intval($entry['x']) + $columns > $width) {
+    if ($columns > MapCell::COLUMNS) {
       return [Issue::warning(
         $where,
-        sprintf('Its %d-column sprite overhangs the right edge of the map.', $columns),
-        'The game anchors a wide glyph at its tile and lets it spill right; part of it is drawn off the map.'
+        sprintf('Its %d-column sprite overhangs its cell.', $columns),
+        sprintf('A character occupies one cell of %d columns; a wider sprite is drawn over the cells to its right.', MapCell::COLUMNS)
       )];
     }
 
@@ -2403,7 +2429,7 @@ class ProjectValidator
    *
    * @param ProjectMap $map The map.
    * @param ProjectWorkspace $workspace The project.
-   * @param array<int, array{x: int, y: int, name: string, where: string, wanders: bool, width: int}> $anchors The NPC anchors.
+   * @param array<int, array{x: int, y: int, name: string, where: string, wanders: bool}> $anchors The NPC anchors.
    * @return Issue[] The issues found.
    */
   protected function checkNpcCollisions(ProjectMap $map, ProjectWorkspace $workspace, array $anchors): array
@@ -2430,23 +2456,12 @@ class ProjectValidator
               sprintf('It shares tile (%d, %d) with NPC %s.', $anchor['x'], $anchor['y'], $other['name']),
               'The game finds the first NPC on a tile; the other can never be spoken to. Move one.'
             );
-        } elseif (
-          $anchor['width'] > 1
-          && $anchor['y'] === $other['y']
-          && $other['x'] > $anchor['x']
-          && $other['x'] < $anchor['x'] + $anchor['width']
-        ) {
-          $issues[] = Issue::warning(
-            $anchor['where'],
-            sprintf('Its %d-column sprite covers the tile of NPC %s at (%d, %d).', $anchor['width'], $other['name'], $other['x'], $other['y']),
-            'The wide glyph is drawn over the neighbour. Leave a column between them.'
-          );
         }
       }
 
-      $marker = $map->getEventSymbol($anchor['x'], $anchor['y']);
+      $marker = $map->getEventMarkerAt($anchor['x'], $anchor['y']);
 
-      if (trim($marker) !== '' && isset($definitions[$marker])) {
+      if ($marker !== null && isset($definitions[$marker])) {
         $class = is_array($definitions[$marker]) ? strval($definitions[$marker]['class'] ?? '') : '';
         $classLabel = $class !== '' ? sprintf(' (%s)', basename(str_replace('\\', '/', $class))) : '';
         $issues[] = $anchor['wanders']
@@ -3986,7 +4001,7 @@ class ProjectValidator
 
     $rawSymbol = $cue['symbol'] ?? '';
     if (! is_string($rawSymbol)) {
-      return [...$issues, Issue::error($where, 'Its event cue symbol is malformed.', 'Use a string containing one terminal cell.')];
+      return [...$issues, Issue::error($where, 'Its event cue symbol is malformed.', 'Use a string holding one character that fits one map cell.')];
     }
 
     $symbol = trim($rawSymbol);
@@ -3994,8 +4009,8 @@ class ProjectValidator
       return $issues;
     }
 
-    if (TerminalText::symbolCount($symbol) !== 1 || TerminalText::displayWidth($symbol) !== 1) {
-      $issues[] = Issue::error($where, 'Its event cue does not occupy exactly one terminal cell.', 'Choose one single-cell symbol.');
+    if (TerminalText::symbolCount($symbol) !== 1 || TerminalText::displayWidth($symbol) > MapCell::COLUMNS) {
+      $issues[] = Issue::error($where, 'Its event cue is not one character that fits one map cell.', sprintf('Choose one character of up to %d columns.', MapCell::COLUMNS));
     }
 
     $rawColor = $cue['color'] ?? 'bright-yellow';
