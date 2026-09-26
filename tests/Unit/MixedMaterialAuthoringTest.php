@@ -29,18 +29,10 @@ function createMixedMaterialProject(): string
         file_put_contents($directory . '/layers/' . $file, MapGridSource::buildSource($grid, 'ROOM', "// Keep $file.\n"));
     }
     file_put_contents($directory . '/test-map.event.php', MapGridSource::buildSource($blank, 'EVENTS'));
-    $crops = [];
-    foreach (['floors' => ['w', 'k', 's'], 'rugs' => ['r', 'c'], 'wall-detail' => ['w', 'o']] as $layer => $symbols) {
-        $y = count($crops) * 16;
-        foreach ($symbols as $x => $symbol) {
-            $crops[$layer]['symbols'][$symbol] = ['x' => $x * 16, 'y' => $y, 'width' => 16, 'height' => 16];
-        }
-    }
     file_put_contents($directory . '/test-map.data.php', "<?php\n// Preserve material definitions and interactions.\nreturn " . var_export([
         'name' => 'Mixed materials', 'region' => '', 'events' => [],
         'npcs' => [['id' => 'notice', 'name' => 'Notice', 'x' => 4, 'y' => 0, 'sprite' => '',
             'movement' => 'fixed', 'dialogue' => [['text' => 'Read the notice.']]]],
-        'tiles2d' => ['asset' => 'Graphics/Tilesets/materials.png', 'layers' => $crops],
     ], true) . ";\n");
     file_put_contents($root . '/assets/Maps/collisions.php', <<<'PHP'
 <?php
@@ -111,16 +103,6 @@ it('preserves mixed graphical materials through model save restore and reload wi
         ->and(MapCollisionResolver::resolveLayers($reloaded->getLayerSet(), $dictionary))->toBe($collision)
         ->and($reloaded->getEditableData()['npcs'][0]['dialogue'])->toBe([['text' => 'Read the notice.']])
         ->and($reloaded->getEditableData()['npcs'][0]['sprite'])->toBe('');
-
-    $rectangles = [];
-    foreach (['map:2' => ['w', 'k', 's'], 'map:3' => ['r', 'c'], 'map:5' => ['w', 'o']] as $id => $glyphs) {
-        $definition = $reloaded->getLayerTiles2d($id);
-        expect($definition['asset'])->toBe('Graphics/Tilesets/materials.png');
-        foreach ($glyphs as $glyph) {
-            $rectangles[] = json_encode($definition['symbols'][$glyph]);
-        }
-    }
-    expect(array_unique($rectangles))->toHaveCount(7);
 });
 
 it('excludes material markers and crop controls from the TUI while terminal editing preserves their source', function () {
@@ -167,19 +149,4 @@ it('excludes material markers and crop controls from the TUI while terminal edit
     expect(getMixedMaterialCanvasRows($editor)[0])->toBe('##########');
     callEditorMethod($editor, 'dispatchInput', 'v');
     expect(getMixedMaterialCanvasRows($editor)[0])->toBe('####i#####');
-});
-
-it('retains strict model refusal of newly unmapped graphical material without exposing a TUI crop workflow', function () {
-    $root = createMixedMaterialProject();
-    $map = loadLayeredMap($root);
-    $before = sourceHashTree($root);
-    $original = $map->captureLayerSnapshot();
-    $map->setLayerCell('map:2', 1, 1, 'z');
-    expect(fn() => $map->save())->toThrow(InvalidArgumentException::class, 'has no crop mapping')
-        ->and($map->isDirty())->toBeTrue()
-        ->and(sourceHashTree($root))->toBe($before);
-    $map->restoreLayerSnapshot($original);
-    $map->save();
-    expect($map->isDirty())->toBeFalse()
-        ->and(sourceHashTree($root))->toBe($before);
 });

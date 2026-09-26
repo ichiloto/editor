@@ -24,10 +24,3 @@ it('refuses key renames into an existing key or across an opaque sibling', funct
     "<?php return ['layers' => ['buildings' => [], 'houses' => []]];",
     "<?php return ['layers' => ['buildings' => [], strtolower('OTHER') => []]];",
 ]);
-
-it('wraps a legacy table expression without evaluating or flattening it', function () {
-    $source = "<?php return ['tiles2d' => require __DIR__ . '/crops.php'];";
-    $document = PhpArraySourceDocument::parse($source);
-    expect($document->withEdits([$document->wrapValueEdit(['tiles2d'], ['layers', 'terrain'])])->source)
-        ->toBe("<?php return ['tiles2d' => ['layers' => ['terrain' => require __DIR__ . '/crops.php']]];");
-});

@@ -397,21 +397,6 @@ final class PhpArraySourceDocument
         return [$entry->value->start, $entry->value->end, self::reindent($literal, $this->lineIndentBefore($entry->start) ?? '')];
     }
 
-    /** Nests an authored value without regenerating its comments or expressions. */
-    public function wrapValueEdit(array $path, array $keys): array
-    {
-        $entry = $this->entryAt($path);
-        if ($entry === null || $entry->keyIsOpaque) {
-            throw new SourcePreservationRefusal('The value cannot be wrapped at ' . self::describePath($path));
-        }
-        $value = $entry->value;
-        $text = substr($this->source, $value->start, $value->end - $value->start);
-        foreach (array_reverse($keys) as $key) {
-            $text = '[' . var_export($key, true) . ' => ' . $text . ']';
-        }
-        return [$value->start, $value->end, $text];
-    }
-
     /** Renames only a literal key; its value, comments and position survive. */
     public function renameKeyEdit(array $path, string $newKey): array
     {

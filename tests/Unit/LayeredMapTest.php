@@ -98,8 +98,7 @@ it('rolls the complete layered save and rename back after any installation failu
         ->and($map->isDirty())->toBeTrue();
     $map->save();
     expect(is_file($map->directory . '/layers/04.houses.map.php'))->toBeTrue()
-        ->and(is_file($map->directory . '/layers/04.buildings.map.php'))->toBeFalse()
-        ->and($map->getEditableData()['tiles2d']['layers'])->toHaveKey('houses');
+        ->and(is_file($map->directory . '/layers/04.buildings.map.php'))->toBeFalse();
 });
 
 it('duplicates and moves every layer preserving authored bytes and numeric order', function () {
@@ -170,129 +169,6 @@ it('converts legacy only when a layer is created and undo restores the original 
         ->and(authoredMap($root)->isLegacyMap())->toBeTrue();
 });
 
-it('rejects decoration glyphs without crops and reports normalized layer-specific crop tables', function () {
-    $map = loadLayeredMap(layeredMapProject());
-    expect($map->getLayerTiles2d('map:4')['asset'])->toBe('Graphics/Tilesets/shared.png')
-        ->and($map->getLayerTiles2d('map:7')['asset'])->toBe('Graphics/Tilesets/detail.png')
-        ->and($map->getLayerTiles2d('map:1'))->toBe([]);
-    $before = sourceHashTree($map->directory);
-    $map->setLayerCell('map:7', 2, 0, '?');
-    expect(fn() => $map->save())->toThrow(InvalidArgumentException::class, 'no crop mapping')
-        ->and(sourceHashTree($map->directory))->toBe($before);
-});
-
-it('preserves unchanged invalid graphical source when persisting terminal edits', function (string $action, string $edit) {
-    $root = layeredMapProject();
-    $path = $root . '/assets/Maps/test-map/test-map.data.php';
-    $source = preg_replace("/'width' => 16/", "'width' => 0", file_get_contents($path), 1);
-    file_put_contents($path, $source);
-    $map = loadLayeredMap($root);
-    $decoration = file_get_contents($map->directory . '/layers/07.detail.deco.php');
-    expect(fn() => $map->validateLayerContracts())->toThrow(InvalidArgumentException::class);
-    match ($edit) {
-        'glyph' => $map->setLayerCell('map:1', 0, 0, 'Z'),
-        'event' => $map->setLayerCell('event', 2, 0, 'Q'),
-        'metadata' => $map->setMapField('name', 'Renamed Map'),
-    };
-    $expectedSource = $edit === 'metadata' ? str_replace("'Test Map'", "'Renamed Map'", $source) : $source;
-    if ($action === 'save') {
-        $map->save();
-        $loaded = loadLayeredMap($root);
-    } elseif ($action === 'duplicate') {
-        $map->duplicateTo($root . '/assets/Maps/copy', 'copy', $map->getDisplayName());
-        $loaded = ProjectMap::fromDirectory($root . '/assets/Maps', $root . '/assets/Maps/copy');
-        expect(file_get_contents($path))->toBe($source);
-    } else {
-        $loaded = $map->moveTo('district/moved');
-    }
-    expect(file_get_contents($loaded->dataPath))->toBe($expectedSource)
-        ->and(file_get_contents($loaded->directory . '/layers/07.detail.deco.php'))->toBe($decoration)
-        ->and($loaded->getLayerSymbol('map:1', 0, 0))->toBe($edit === 'glyph' ? 'Z' : '.')
-        ->and($loaded->getLayerSymbol('event', 2, 0))->toBe($edit === 'event' ? 'Q' : ' ')
-        ->and($loaded->getDisplayName())->toBe($edit === 'metadata' ? 'Renamed Map' : 'Test Map')
-        ->and(fn() => $loaded->validateLayerContracts())->toThrow(InvalidArgumentException::class);
-})->with(['save', 'duplicate', 'move'])->with(['glyph', 'event', 'metadata']);
-
-it('still refuses changed graphical inputs before saving invalid graphical definitions', function (string $edit) {
-    $root = layeredMapProject();
-    $path = $root . '/assets/Maps/test-map/test-map.data.php';
-    file_put_contents($path, preg_replace("/'width' => 16/", "'width' => 0", file_get_contents($path), 1));
-    $map = loadLayeredMap($root);
-    $disk = sourceHashTree($root);
-    match ($edit) {
-        'decoration' => $map->setLayerCell('map:7', 1, 0, 'd'),
-        'geometry' => $map->resize(5, 3),
-        'crop' => $map->setMapDataField(['tiles2d', 'layers', 'buildings', 'symbols', 'x', 'width'], -1),
-    };
-    expect(fn() => $map->save())->toThrow(InvalidArgumentException::class)
-        ->and(sourceHashTree($root))->toBe($disk);
-})->with(['decoration', 'geometry', 'crop']);
-
-it('keeps the graphical validation baseline sound across failed saves and restored terminal edits', function () {
-    $root = layeredMapProject();
-    $path = $root . '/assets/Maps/test-map/test-map.data.php';
-    $source = preg_replace("/'width' => 16/", "'width' => 0", file_get_contents($path), 1);
-    file_put_contents($path, $source);
-    $map = loadLayeredMap($root);
-    $before = $map->captureLayerSnapshot();
-    $disk = sourceHashTree($root);
-    $map->setLayerCell('map:1', 0, 0, 'Z');
-    $map->setMapField('name', 'Renamed Map');
-    $edited = $map->captureLayerSnapshot();
-    $failure = new FailingFileSetOperations(failures: ['move' => [$map->dataPath]]);
-    expect(fn() => $map->save(files: $failure))->toThrow(FileSetTransactionFailure::class)
-        ->and(sourceHashTree($root))->toBe($disk);
-    $map->save();
-    $saved = sourceHashTree($root);
-    $map->restoreLayerSnapshot($before);
-    $map->save();
-    expect(sourceHashTree($root))->toBe($disk);
-    $map->restoreLayerSnapshot($edited);
-    $map->save();
-    expect(sourceHashTree($root))->toBe($saved)
-        ->and(fn() => $map->validateLayerContracts())->toThrow(InvalidArgumentException::class);
-});
-
-it('refuses invalid graphical data on a new unsaved map without installing any files', function () {
-    $root = layeredMapProject();
-    $directory = $root . '/assets/Maps/new-map';
-    $map = new ProjectMap(
-        mapId: 'new-map', directory: $directory,
-        dataPath: $directory . '/new-map.data.php', mapPath: $directory . '/new-map.map.php',
-        eventPath: $directory . '/new-map.event.php',
-        data: ['name' => 'New Map', 'tiles2d' => [
-            'asset' => 'Graphics/Tilesets/shared.png',
-            'symbols' => ['x' => ['x' => 0, 'y' => 0, 'width' => 0, 'height' => 16]],
-        ]], tileLines: ['xx'], eventLines: ['  '],
-    );
-    $before = sourceHashTree($root);
-    expect(fn() => $map->save())->toThrow(InvalidArgumentException::class)
-        ->and(sourceHashTree($root))->toBe($before)
-        ->and(is_dir($directory))->toBeFalse();
-});
-
-it('rejects restoring invalid graphical data after a valid graphical correction has been persisted', function () {
-    $root = layeredMapProject();
-    $path = $root . '/assets/Maps/test-map/test-map.data.php';
-    $validSource = file_get_contents($path);
-    file_put_contents($path, preg_replace("/'width' => 16/", "'width' => 0", $validSource, 1));
-    $map = loadLayeredMap($root);
-    $invalid = $map->captureLayerSnapshot();
-    $map->setMapDataField(['tiles2d', 'layers', 'buildings', 'symbols', 'x', 'width'], 16);
-    $valid = $map->captureLayerSnapshot();
-    $map->save();
-    expect(file_get_contents($path))->toBe($validSource);
-    $saved = sourceHashTree($root);
-    $map->restoreLayerSnapshot($invalid);
-    expect(fn() => $map->save())->toThrow(InvalidArgumentException::class)
-        ->and(sourceHashTree($root))->toBe($saved);
-    $map->restoreLayerSnapshot($valid);
-    $map->setLayerCell('map:1', 0, 0, 'Z');
-    $map->save();
-    expect(loadLayeredMap($root)->getLayerSymbol('map:1', 0, 0))->toBe('Z')
-        ->and(file_get_contents($path))->toBe($validSource);
-});
-
 it('composes terminal preview with the exact shared Engine style and transparency semantics', function () {
     $root = layeredMapProject();
     $path = $root . '/assets/Maps/test-map/layers/04.buildings.map.php';
@@ -305,44 +181,7 @@ it('composes terminal preview with the exact shared Engine style and transparenc
     expect($map->renderPreview(4, 2, terminalPreview: true))->toBe($expected);
 });
 
-it('converts a legacy flat crop table without losing authored comments expressions or crops', function () {
-    $root = makeTemporaryProject();
-    $directory = $root . '/assets/Maps/test-map';
-    file_put_contents($directory . '/test-map.map.php', MapGridSource::buildSource("xx\nx ", 'MAP'));
-    file_put_contents($directory . '/test-map.event.php', MapGridSource::buildSource("  \n  ", 'EVENT'));
-    $source = <<<'PHP'
-<?php
-$cropWidth = 8 * 2;
-return [
-    'name' => 'Test Map',
-    // Preserve the complete table, not merely its evaluated value.
-    'tiles2d' => [
-        'asset' => 'Graphics/Tilesets/shared.png',
-        // An author-owned expression.
-        'symbols' => ['x' => ['x' => 0, 'y' => 0, 'width' => $cropWidth, 'height' => 16]],
-    ],
-];
-PHP;
-    file_put_contents($directory . '/test-map.data.php', $source);
-    $map = authoredMap($root);
-    $before = $map->captureLayerSnapshot();
-    $crops = $map->getLayerTiles2d('tile');
-    $map->createLayer('buildings');
-    $after = $map->captureLayerSnapshot();
-    $map->save();
-    $converted = str_replace("'tiles2d' => [", "'tiles2d' => ['layers' => ['terrain' => [", $source);
-    $converted = str_replace("    ],\n];", "    ]]],\n];", $converted);
-    expect(file_get_contents($map->dataPath))->toBe($converted)
-        ->and(authoredMap($root)->getLayerTiles2d('map:0'))->toBe($crops);
-    $map->restoreLayerSnapshot($before);
-    $map->save();
-    expect(file_get_contents($map->dataPath))->toBe($source);
-    $map->restoreLayerSnapshot($after);
-    $map->save();
-    expect(file_get_contents($map->dataPath))->toBe($converted);
-});
-
-it('restores removed crop-table source and layer bytes through undo after save', function () {
+it('restores removed layer bytes through undo after save', function () {
     $root = layeredMapProject();
     $map = loadLayeredMap($root);
     $before = $map->captureLayerSnapshot();
@@ -352,9 +191,6 @@ it('restores removed crop-table source and layer bytes through undo after save',
     $map->restoreLayerSnapshot($before);
     $map->save();
     expect(sourceHashTree($map->directory))->toBe($files);
-    $map->renameLayer('map:7', 'floors');
-    $map->save();
-    expect(file_get_contents($map->dataPath))->toContain("'floors' => ['asset' =>");
 });
 
 it('validates combined named and flat collision fallback through the shared resolver', function () {

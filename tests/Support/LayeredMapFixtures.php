@@ -32,14 +32,6 @@ function layeredMapProject(bool $ragged = false): string
 // Authored metadata remains authored.
 return [
     'name' => 'Test Map', 'region' => '', 'events' => [],
-    'tiles2d' => [
-        'asset' => 'Graphics/Tilesets/shared.png',
-        'layers' => [
-            // Facade crop table.
-            'buildings' => ['symbols' => ['x' => ['x' => 0, 'y' => 0, 'width' => 16, 'height' => 16]]],
-            'detail' => ['asset' => 'Graphics/Tilesets/detail.png', 'symbols' => ['d' => ['x' => 16, 'y' => 0, 'width' => 16, 'height' => 16]]],
-        ],
-    ],
 ];
 SOURCE);
     return $root;

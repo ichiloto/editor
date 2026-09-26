@@ -299,62 +299,6 @@ it('refuses to rewrite what it cannot express, and names the place', function ()
     expect(ArraySourceWriter::rewrite($document, $old, $new)->source)->toBe(str_replace("'plain' => 1", "'plain' => 2", $source));
 });
 
-it('preserves cell-list comment ownership across insert remove and edited reorder operations', function (bool $layered, bool $inline) {
-    $body = <<<'PHP'
-    // First cell owns this heading.
-    ['column'=>23, 'row'=>1, 'source'=>['x'=>0, 'y'=>0, 'width'=>16, 'height'=>16]], // first
-    // Second cell owns this heading.
-    ['column'=>3, 'row'=>12, 'source'=>['x'=>0, 'y'=>0, 'width'=>16, 'height'=>16]], // second
-    // Third cell owns this heading.
-    ['column'=>5, 'row'=>3, 'source'=>['x'=>0, 'y'=>0, 'width'=>16, 'height'=>16]], // third
-PHP;
-    if ($inline) {
-        $body = preg_replace('/\/\/[^\n]*/', '', $body);
-        $body = str_replace("\n", '', $body);
-    }
-    $source = "<?php\nreturn ['tiles2d' => " . ($layered ? "['layers'=>['furniture'=>" : '')
-        . "['cells'=>[\n$body\n]]" . ($layered ? ']]' : '') . "];\n";
-    $path = $layered ? ['tiles2d', 'layers', 'furniture', 'cells'] : ['tiles2d', 'cells'];
-    foreach (['edit', 'insert-remove', 'reorder', 'replace-all'] as $operation) {
-        $old = evaluateSource($source);
-        $new = $old;
-        $cells = &$new;
-        foreach ($path as $step) { $cells = &$cells[$step]; }
-        if ($operation === 'edit') {
-            $cells[1]['source']['x'] = 32;
-        } elseif ($operation === 'insert-remove') {
-            $insert = $cells[1];
-            $insert['column'] = 4;
-            $other = $insert;
-            $other['column'] = 6;
-            $cells = [$insert, $cells[1], $other, $cells[2], $insert + []];
-            $cells[4]['column'] = 7;
-        } elseif ($operation === 'reorder') {
-            $cells = [$cells[2], $cells[0], $cells[1]];
-            $cells[0]['source']['x'] = 32;
-        } else {
-            $cells = [array_replace($cells[0], ['row' => 99])];
-        }
-        unset($cells);
-        $rewritten = ArraySourceWriter::rewrite(PhpArraySourceDocument::parse($source), $old, $new)->source;
-        expect(evaluateSource($rewritten))->toBe($new);
-        if ($operation === 'edit') {
-            expect($rewritten)->toBe(str_replace("'column'=>3, 'row'=>12, 'source'=>['x'=>0", "'column'=>3, 'row'=>12, 'source'=>['x'=>32", $source));
-        }
-        if (! $inline) {
-            if ($operation === 'insert-remove') {
-                expect($rewritten)->not->toContain('First cell owns', '// first')
-                    ->and($rewritten)->toContain("// Second cell owns this heading.\n    ['column'=>3", "// Third cell owns this heading.\n    ['column'=>5");
-            } elseif ($operation === 'reorder') {
-                expect($rewritten)->toContain("// Third cell owns this heading.\n    ['column'=>5, 'row'=>3, 'source'=>['x'=>32")
-                    ->and(strpos($rewritten, 'Third cell owns'))->toBeLessThan(strpos($rewritten, 'First cell owns'));
-            } elseif ($operation === 'replace-all') {
-                expect($rewritten)->not->toContain('First cell owns', 'Second cell owns', 'Third cell owns');
-            }
-        }
-    }
-})->with([[false, false], [true, false], [false, true], [true, true]]);
-
 it('retains existing non-tile list identity and comment rules without treating arbitrary coordinates as ids', function () {
     $source = <<<'PHP'
 <?php
@@ -390,59 +334,6 @@ it('removes only an indented inline entry and its heading in other existing list
     expect(evaluateSource($rewritten))->toBe($new)
         ->and($rewritten)->toBe(str_replace("    // Removed entry owns this heading.\n    ['id'=>'first'],", '', $source));
 })->with(['npcs', 'tracks', 'cues']);
-
-it('refuses opaque changed leaves inside coordinate lists without regenerating their expressions', function () {
-    $source = "<?php return ['tiles2d'=>['cells'=>[['column'=>0,'row'=>0,'source'=>['x'=>abs(0),'y'=>0,'width'=>16,'height'=>16]]]]];";
-    $old = evaluateSource($source);
-    $new = $old;
-    $new['tiles2d']['cells'][0]['source']['x'] = 16;
-    expect(fn() => ArraySourceWriter::rewrite(PhpArraySourceDocument::parse($source), $old, $new))
-        ->toThrow(SourcePreservationRefusal::class, 'expression');
-});
-
-it('patches a large ordered cell list without a quadratic alignment table within 128 MiB', function () {
-    $probe = <<<'PHP'
-    require $argv[1];
-    $rows = [];
-    $cells = [];
-    for ($index = 0; $index < 3000; $index++) {
-        $rows[] = "    ['column'=>$index, 'row'=>0, 'source'=>['x'=>0, 'y'=>0, 'width'=>16, 'height'=>16]], // cell $index";
-        $cells[] = ['column'=>$index, 'row'=>0, 'source'=>['x'=>0, 'y'=>0, 'width'=>16, 'height'=>16]];
-    }
-    $source = "<?php\nreturn ['tiles2d'=>['cells'=>[\n" . implode("\n", $rows) . "\n]]];\n";
-    $old = ['tiles2d'=>['cells'=>$cells]];
-    $new = $old;
-    $expected = $source;
-    foreach ([0, 1500, 2999] as $index) {
-        $new['tiles2d']['cells'][$index]['source']['x'] = 32;
-        $expected = str_replace("'column'=>$index, 'row'=>0, 'source'=>['x'=>0", "'column'=>$index, 'row'=>0, 'source'=>['x'=>32", $expected);
-    }
-    $document = \Ichiloto\Editor\Cutscenes\Source\PhpArraySourceDocument::parse($source);
-    $edited = \Ichiloto\Editor\Cutscenes\Source\ArraySourceWriter::rewrite($document, $old, $new);
-    $exact = $edited->source === $expected;
-    unset($document);
-    $changed = $new;
-    array_splice($changed['tiles2d']['cells'], 1500, 1);
-    $changed['tiles2d']['cells'][] = ['column'=>3000, 'row'=>0, 'source'=>['x'=>16, 'y'=>0, 'width'=>16, 'height'=>16]];
-    $updated = \Ichiloto\Editor\Cutscenes\Source\ArraySourceWriter::rewrite($edited, $new, $changed);
-    $evaluated = eval(substr($updated->source, 5));
-    echo json_encode(['exact'=>$exact, 'values'=>$evaluated === $changed,
-        'kept'=>str_contains($updated->source, '// cell 2999'), 'removed'=>!str_contains($updated->source, '// cell 1500'),
-        'limit'=>ini_get('memory_limit'), 'peak'=>memory_get_peak_usage(true)], JSON_THROW_ON_ERROR);
-    PHP;
-    $process = proc_open([PHP_BINARY, '-d', 'memory_limit=128M', '-r', $probe, dirname(__DIR__, 2) . '/bootstrap.php'],
-        [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
-    expect(is_resource($process))->toBeTrue();
-    fclose($pipes[0]);
-    $output = stream_get_contents($pipes[1]);
-    $error = stream_get_contents($pipes[2]);
-    fclose($pipes[1]);
-    fclose($pipes[2]);
-    expect(proc_close($process))->toBe(0, $error)->and($error)->toBe('');
-    $result = json_decode($output, true, flags: JSON_THROW_ON_ERROR);
-    expect($result)->toMatchArray(['exact' => true, 'values' => true, 'kept' => true, 'removed' => true, 'limit' => '128M'])
-        ->and($result['peak'])->toBeLessThan(128 * 1024 * 1024);
-});
 
 it('rewrites the real Last Legend summon timelines to themselves and back from any change', function () {
     $game = gameSourceRoot();

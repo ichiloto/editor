@@ -21,7 +21,6 @@ use Ichiloto\Engine\Field\MapLayer;
 use Ichiloto\Engine\Field\MapLayerSource;
 use Ichiloto\Engine\Field\MapLayerSet;
 use Ichiloto\Engine\Field\MapCollisionResolver;
-use Ichiloto\Engine\Rendering\Tiles\GraphicalTileDefinition;
 use Ichiloto\Engine\IO\Console\TerminalText;
 use Ichiloto\Engine\IO\Console\SgrStyleState;
 use Ichiloto\Editor\Maps\EditableGrid;
@@ -36,13 +35,8 @@ final class ProjectMap
 {
     use \Ichiloto\Editor\Field\NpcSpriteArt;
     use TracksPersistedState;
-    use \Ichiloto\Editor\Maps\TileArt;
 
     private MapLayers $layers;
-    /** Invalidated by data/layer/dimension changes, not by painting individual glyphs. */
-    private ?array $tileDefinitions = null;
-    private array $tileDefinitionGeometry = [];
-    private ?string $baselineGraphicalLayerFingerprint = null;
 
     /**
      * @var array<string, mixed>
@@ -79,7 +73,6 @@ final class ProjectMap
      */
     private array $loadedData;
     private string $baselineDataSource;
-    private array $dataLayerNames = [];
 
     /**
      * The tile payload as of the last load or save, so a save can tell a
@@ -132,8 +125,6 @@ final class ProjectMap
      */
     private function adoptDataSource(string $source): void
     {
-        $this->tileDefinitions = null;
-        $this->dataLayerNames = array_column($this->getLayers(), 'name', 'id');
         try {
             $this->dataDocument = PhpArraySourceDocument::parse($source);
             $this->dataSourceIssue = null;
@@ -259,7 +250,6 @@ final class ProjectMap
      */
     private function withLoadedBaseline(): self
     {
-        $this->baselineGraphicalLayerFingerprint = $this->getGraphicalLayerFingerprint();
         $this->captureBaseline();
 
         return $this;
@@ -418,16 +408,6 @@ final class ProjectMap
     public function createLayer(string $name, bool $decoration = false, ?int $order = null): string
     {
         $this->assertEditable();
-        $data = $this->editableData;
-        $document = null;
-        if ($this->layers->legacy && isset($data['tiles2d'])) {
-            if ($this->dataDocument === null) {
-                $this->assertDataPreservable($data);
-            }
-            $current = PhpArraySourceDocument::parse($this->proposedDataSource());
-            $document = $current->withEdits([$current->wrapValueEdit(['tiles2d'], ['layers', 'terrain'])]);
-            $data['tiles2d'] = ['layers' => ['terrain' => $data['tiles2d']]];
-        }
         $before = $this->layers->captureSnapshot();
         try {
             $id = $this->layers->createLayer($name, $decoration, $order);
@@ -436,11 +416,6 @@ final class ProjectMap
             $this->layers->restoreSnapshot($before);
             throw $error;
         }
-        if ($document !== null) {
-            $this->editableData = $this->loadedData = $data;
-            $this->adoptDataSource($document->source);
-        }
-        $this->tileDefinitions = null;
         $this->cachedWidth = null;
         $this->touchState();
         return $id;
@@ -449,84 +424,19 @@ final class ProjectMap
     public function renameLayer(string $id, string $name, bool $confirmCollisionChange = false): void
     {
         $this->assertEditable();
-        $oldName = $this->layers->getLayer($id)['name'];
-        $tables = $this->editableData['tiles2d']['layers'] ?? [];
         if (! $confirmCollisionChange && $this->getLayerRenameCollisionChange($id, $name) !== null) {
             throw new MapSourceRefusal('Renaming this layer changes resolved collisions. Explicit confirmation is required.');
         }
-        $data = $this->editableData;
-        if (array_key_exists($oldName, $tables) && $oldName !== $name) {
-            $renamed = [];
-            foreach ($tables as $key => $value) {
-                $renamed[$key === $oldName ? $name : $key] = $value;
-            }
-            $data['tiles2d']['layers'] = $renamed;
-        }
-        $before = $this->layers->captureSnapshot();
-        try {
-            $this->layers->renameLayer($id, $name);
-            $this->writeData($data);
-        } catch (\Throwable $error) {
-            $this->layers->restoreSnapshot($before);
-            throw $error;
-        }
-        $this->tileDefinitions = null;
+        $this->layers->renameLayer($id, $name);
         $this->touchState();
     }
 
     public function removeLayer(string $id): void
     {
         $this->assertEditable();
-        $name = $this->layers->getLayer($id)['name'];
-        $data = $this->editableData;
-        if (isset($data['tiles2d']['layers'][$name])) {
-            unset($data['tiles2d']['layers'][$name]);
-            if ($data['tiles2d']['layers'] === []) {
-                unset($data['tiles2d']);
-            }
-            $this->assertDataPreservable($data);
-        }
         $this->layers->removeLayer($id);
-        $this->writeData($data);
-        $this->tileDefinitions = null;
         $this->cachedWidth = null;
         $this->touchState();
-    }
-
-    public function getLayerTiles2d(string $id): array
-    {
-        if ($id === MapLayers::EVENT) {
-            return [];
-        }
-        $name = $this->layers->getLayer($id)['name'];
-        $definition = $this->getLayerTileDefinitions()[$name] ?? null;
-        if ($definition === null) {
-            return [];
-        }
-        $symbols = [];
-        foreach ($definition->symbols as $symbol => $index) {
-            $symbols[$symbol] = $definition->sources[$index]->toArray();
-        }
-        return ['asset' => $definition->asset, 'symbols' => $symbols];
-    }
-
-    public function getLayerTileDefinitions(): array
-    {
-        // Retained MapLayers/EditableGrid objects may change outside our setters.
-        // Compare only row shapes and layer identity, never every crop on each paint dab.
-        $geometry = [$this->layers->legacy, array_map(static function (array $layer): array {
-            $rows = array_map(count(...), $layer['grid']->cells);
-            unset($layer['grid']);
-            return [$layer, $rows];
-        }, $this->layers->getLayers())];
-        if ($this->tileDefinitions !== null && $this->tileDefinitionGeometry === $geometry) {
-            return $this->tileDefinitions;
-        }
-        $definitions = isset($this->editableData['tiles2d'])
-            ? GraphicalTileDefinition::getForLayers($this->editableData['tiles2d'], $this->layers->getLayerSet(), $this->mapId)
-            : [];
-        $this->tileDefinitionGeometry = $geometry;
-        return $this->tileDefinitions = $definitions;
     }
 
     public function getLayerSet(): MapLayerSet
@@ -540,13 +450,8 @@ final class ProjectMap
         return $this->layers->getStoredPaths();
     }
 
+    /** Proves the layers compose and resolve collisions as the engine will load them. */
     public function validateLayerContracts(): void
-    {
-        $this->validateGameplayLayerContracts();
-        GraphicalTileDefinition::validateDecoration($this->layers->getLayerSet(), $this->getLayerTileDefinitions());
-    }
-
-    private function validateGameplayLayerContracts(): void
     {
         $this->assertGridsAgree();
         $set = $this->layers->getLayerSet();
@@ -556,35 +461,6 @@ final class ProjectMap
             throw new MapSourceRefusal('The collision dictionary must return an array.');
         }
         MapCollisionResolver::resolveLayers($set, $dictionary);
-    }
-
-    private function validateLayerPersistence(): void
-    {
-        // Unrelated terminal edits preserve existing art, even when that art
-        // needs repair. New maps and changed visual inputs still validate fully.
-        if ($this->baselineGraphicalLayerFingerprint === $this->getGraphicalLayerFingerprint()) {
-            $this->validateGameplayLayerContracts();
-        } else {
-            $this->validateLayerContracts();
-        }
-    }
-
-    private function getGraphicalLayerFingerprint(): string
-    {
-        $layers = [];
-        foreach ($this->layers->getLayers() as $layer) {
-            if ($layer['id'] === MapLayers::EVENT) {
-                continue;
-            }
-            $layers[] = [$layer['id'], $layer['name'], $layer['order'], $layer['decoration'],
-                array_map(count(...), $layer['grid']->cells),
-                $layer['decoration'] ? $layer['grid']->cells : null];
-        }
-        return PhpDataFile::valueFingerprint([
-            array_intersect_key($this->editableData, ['tiles2d' => true]),
-            $this->layers->legacy,
-            $layers,
-        ]);
     }
 
     public function getLayerRenameCollisionChange(string $id, string $name): ?string
@@ -1021,7 +897,6 @@ final class ProjectMap
     {
         $this->assertEditable();
         $this->layers->restoreSnapshot($snapshot['layers']);
-        $this->tileDefinitions = null;
         $this->cachedWidth = null;
         $this->touchState();
     }
@@ -1166,7 +1041,6 @@ final class ProjectMap
 
         $this->assertDataPreservable($next);
         $this->editableData = $next;
-        $this->tileDefinitions = null;
         $this->touchState();
     }
 
@@ -1188,7 +1062,7 @@ final class ProjectMap
         }
 
         try {
-            ArraySourceWriter::rewrite($this->dataDocument, $this->loadedData, $next, $this->getDataKeyRenames($next));
+            ArraySourceWriter::rewrite($this->dataDocument, $this->loadedData, $next);
         } catch (SourcePreservationRefusal $refusal) {
             throw new MapSourceRefusal(sprintf(
                 '%s: %s — %s Everything else in the file is untouched.',
@@ -1197,22 +1071,6 @@ final class ProjectMap
                 rtrim($refusal->getMessage(), '.') . '.',
             ), previous: $refusal);
         }
-    }
-
-    private function getDataKeyRenames(array $next): array
-    {
-        $renames = [];
-        foreach ($this->getLayers() as $layer) {
-            $oldName = $this->dataLayerNames[$layer['id']] ?? $layer['name'];
-            $newName = $layer['name'];
-            if ($oldName === $newName) {
-                continue;
-            }
-            if (isset($this->loadedData['tiles2d']['layers'][$oldName], $next['tiles2d']['layers'][$newName])) {
-                $renames[] = ['path' => ['tiles2d', 'layers', $oldName], 'key' => $newName];
-            }
-        }
-        return $renames;
     }
 
     /**
@@ -1231,7 +1089,7 @@ final class ProjectMap
         }
 
         try {
-            return ArraySourceWriter::rewrite($this->dataDocument, $this->loadedData, $this->editableData, $this->getDataKeyRenames($this->editableData))->source;
+            return ArraySourceWriter::rewrite($this->dataDocument, $this->loadedData, $this->editableData)->source;
         } catch (SourcePreservationRefusal $refusal) {
             throw new MapSourceRefusal(sprintf(
                 '%s: %s — %s',
@@ -1504,7 +1362,6 @@ final class ProjectMap
 
         $this->layers->resize($width, $height);
 
-        $this->tileDefinitions = null;
         $this->cachedWidth = null;
         $this->touchState();
     }
@@ -1665,7 +1522,7 @@ final class ProjectMap
             return $target['mapId'];
         }
 
-        $this->validateLayerPersistence();
+        $this->validateLayerContracts();
 
         // Which members actually changed. The tile and event files compare
         // against the grids as of the last save, never against the bytes on
@@ -1764,7 +1621,6 @@ final class ProjectMap
         $this->baselineMapPayload = $mapPayload;
         $this->baselineEventPayload = $eventPayload;
         $this->layers->captureBaseline();
-        $this->baselineGraphicalLayerFingerprint = $this->getGraphicalLayerFingerprint();
         $this->captureBaseline();
     }
 
@@ -1899,7 +1755,7 @@ final class ProjectMap
         $duplicatedData['name'] = $displayName;
 
         try {
-            $dataSource = ArraySourceWriter::rewrite($this->dataDocument, $this->loadedData, $duplicatedData, $this->getDataKeyRenames($duplicatedData))->source;
+            $dataSource = ArraySourceWriter::rewrite($this->dataDocument, $this->loadedData, $duplicatedData)->source;
         } catch (SourcePreservationRefusal $refusal) {
             throw new MapSourceRefusal(sprintf(
                 '%s: %s — %s Nothing was duplicated.',
@@ -1912,7 +1768,7 @@ final class ProjectMap
         $transaction = new FileSetTransaction($directory, $files ?? new FilesystemFileSetOperations());
         $duplicatedDataPath = $directory . DIRECTORY_SEPARATOR . $baseName . '.data.php';
         $transaction->write($duplicatedDataPath, $dataSource);
-        $this->validateLayerPersistence();
+        $this->validateLayerContracts();
         $this->layers->stageChanges($transaction, $directory, $baseName);
 
         // The staged copy must evaluate to exactly the duplicate's content
@@ -2109,7 +1965,7 @@ final class ProjectMap
                 $movedDataPath,
                 $this->dataDocument === null ? (string) $this->unparsedDataSource : $this->proposedDataSource(),
             );
-            $this->validateLayerPersistence();
+            $this->validateLayerContracts();
             $this->layers->stageChanges($transaction, $directory, $baseName, true);
             $transaction->remove($this->dataPath);
             $expectedGrids = $this->layers->getSources($directory, $baseName);
