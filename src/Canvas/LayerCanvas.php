@@ -6,6 +6,7 @@ namespace Ichiloto\Editor\Canvas;
 
 use Ichiloto\Editor\EditorWindow;
 use Ichiloto\Editor\History\GenericCommand;
+use Ichiloto\Editor\MapSourceRefusal;
 use Ichiloto\Editor\Maps\MapLayers;
 use Ichiloto\Editor\UI\Modal;
 use Ichiloto\Editor\UI\PaletteItem;
@@ -17,20 +18,11 @@ trait LayerCanvas
     private array $canvasLayerStates = [];
     private ?array $layerPrompt = null;
     private ?array $facadeBrush = null;
-    private string $canvasPaintWarning = '';
 
-    private function recordCanvasCropWarning(\Ichiloto\Editor\ProjectMap $map, string $symbol, string $oldSymbol, int $column, int $row): void
+    private function getTerminalCanvasLayers(): array
     {
-        try {
-            $symbols = $map->getLayerTiles2d($this->getActiveCanvasLayer())['symbols'] ?? [];
-            $override = $this->getActiveCanvasLayer() !== MapLayers::EVENT
-                && $map->getCellTileArt($this->getActiveCanvasLayer(), $column, $row)['override'] !== null;
-            if ($override || array_key_exists($symbol, $symbols) || array_key_exists($oldSymbol, $symbols)) {
-                $this->canvasPaintWarning = 'Crop mapping on this layer: glyphs can affect artwork; cell overrides stay at their coordinates. Tile art edits cell crops; symbol defaults are read-only.';
-            }
-        } catch (\Throwable $error) {
-            $this->canvasPaintWarning = $error->getMessage();
-        }
+        return array_values(array_filter($this->getSelectedMap()?->getLayers() ?? [],
+            static fn(array $layer): bool => ! $layer['decoration']));
     }
 
     private function getCanvasLayerState(): array
@@ -38,7 +30,7 @@ trait LayerCanvas
         $map = $this->getSelectedMap();
         $state = $this->canvasLayerStates[$map?->mapId ?? ''] ?? [];
         return $state + ['selected' => $map?->getBaseLayerId() ?? MapLayers::BASE,
-            'visibility' => [], 'dim' => false, 'terminal' => false];
+            'visibility' => [], 'dim' => false];
     }
 
     private function getCanvasLayerTitle(): string
@@ -47,7 +39,7 @@ trait LayerCanvas
         if ($map === null || $map->isLegacyMap() || $this->editingMode === self::MODE_NPC) {
             return '';
         }
-        foreach ($map->getLayers() as $layer) {
+        foreach ($this->getTerminalCanvasLayers() as $layer) {
             if ($layer['id'] === $this->getActiveCanvasLayer()) {
                 return ' [' . $layer['name'] . ']';
             }
@@ -63,21 +55,23 @@ trait LayerCanvas
 
     private function selectCanvasLayer(string $id): void
     {
+        if (! in_array($id, array_column($this->getTerminalCanvasLayers(), 'id'), true)) {
+            $this->setStatus('Graphical layers are preserved separately and are not editable in the terminal canvas.', StatusLevel::WARN);
+            return;
+        }
         $this->finalizeActiveStroke();
         $this->activeMousePaintButton = null;
         $this->lastMousePaintPoint = null;
         $this->canvasToolAnchor = null;
         $this->canvasSelection = null;
         $this->facadeBrush = null;
-        $this->canvasPaintWarning = '';
         $this->setCanvasLayerState('selected', $id);
-        $this->setCanvasLayerState('terminal', false);
         $this->setEditingMode($id === MapLayers::EVENT ? self::MODE_EVENT : self::MODE_MAP);
     }
 
     private function cycleCanvasLayer(int $step = 1): void
     {
-        $ids = array_column($this->getSelectedMap()?->getLayers() ?? [], 'id');
+        $ids = array_column($this->getTerminalCanvasLayers(), 'id');
         if ($ids === []) {
             return;
         }
@@ -88,6 +82,9 @@ trait LayerCanvas
     private function toggleCanvasLayerVisibility(?string $id = null): void
     {
         $id ??= $this->getActiveCanvasLayer();
+        if (! in_array($id, array_column($this->getTerminalCanvasLayers(), 'id'), true)) {
+            return;
+        }
         $visibility = $this->getCanvasLayerState()['visibility'];
         $visibility[$id] = ! ($visibility[$id] ?? true);
         $this->setCanvasLayerState('visibility', $visibility);
@@ -95,6 +92,9 @@ trait LayerCanvas
 
     private function toggleCanvasLayerOption(string $option): void
     {
+        if ($option !== 'dim') {
+            return;
+        }
         $this->finalizeActiveStroke();
         $this->inputMode = self::INPUT_NORMAL;
         $this->setCanvasLayerState($option, ! $this->getCanvasLayerState()[$option]);
@@ -107,17 +107,14 @@ trait LayerCanvas
             return [];
         }
         $items = [
-            new PaletteItem('Tile art: Edit selected cell', '', fn() => $this->openCellTileArt()),
             new PaletteItem('Layers: Create gameplay layer', '', fn() => $this->openLayerPrompt('create')),
-            new PaletteItem('Layers: Create decoration layer', '', fn() => $this->openLayerPrompt('decoration')),
             new PaletteItem('Layers: Rename selected layer', '', fn() => $this->openLayerPrompt('rename')),
             new PaletteItem('Layers: Remove selected layer', '', fn() => $this->openLayerPrompt('remove')),
-            new PaletteItem('Layers: Terminal preview', 't', fn() => $this->toggleCanvasLayerOption('terminal')),
             new PaletteItem('Layers: Dim inactive layers', 'd', fn() => $this->toggleCanvasLayerOption('dim')),
         ];
-        foreach ($map->getLayers() as $layer) {
+        foreach ($this->getTerminalCanvasLayers() as $layer) {
             $label = sprintf('%s %s (%s)', $layer['order'] === null ? '--' : sprintf('%02d', $layer['order']),
-                $layer['name'], $layer['id'] === MapLayers::EVENT ? 'events' : ($layer['decoration'] ? 'decoration' : 'gameplay'));
+                $layer['name'], $layer['id'] === MapLayers::EVENT ? 'events' : 'gameplay');
             $items[] = new PaletteItem('Layer: ' . $label, '', fn() => $this->selectCanvasLayer($layer['id']));
             $items[] = new PaletteItem('Visibility: ' . $label, '', fn() => $this->toggleCanvasLayerVisibility($layer['id']));
         }
@@ -137,12 +134,12 @@ trait LayerCanvas
     private function openLayerPrompt(string $action): void
     {
         $map = $this->getSelectedMap();
-        if ($map === null) {
+        if ($map === null || ! in_array($action, ['create', 'rename', 'remove'], true)) {
             return;
         }
         $this->finalizeActiveStroke();
         $id = $this->getActiveCanvasLayer();
-        $layer = array_values(array_filter($map->getLayers(), static fn(array $layer): bool => $layer['id'] === $id))[0] ?? null;
+        $layer = array_values(array_filter($this->getTerminalCanvasLayers(), static fn(array $layer): bool => $layer['id'] === $id))[0] ?? null;
         $this->layerPrompt = ['action' => $action, 'id' => $id, 'name' => $action === 'rename' ? ($layer['name'] ?? '') : ''];
         $this->modals->push(Modal::LAYER_EDIT);
         $this->requestFullRender();
@@ -160,11 +157,18 @@ trait LayerCanvas
         if ($prompt === null) {
             return;
         }
+        if (! in_array($prompt['action'], ['create', 'rename', 'remove'], true)) {
+            $this->setStatus('Only gameplay layers can be managed in the terminal canvas.', StatusLevel::WARN);
+            return;
+        }
         if (($input === "\r" || $input === "\n") && $prompt['action'] !== 'remove' && ! isset($prompt['confirmation'])
             || ($input === 'y' && ($prompt['action'] === 'remove' || isset($prompt['confirmation'])))) {
             $map = $this->getSelectedMap();
-            $before = $map->captureLayerSnapshot();
             try {
+                if ($map === null || ! in_array($prompt['id'], array_column($this->getTerminalCanvasLayers(), 'id'), true)) {
+                    throw new MapSourceRefusal('This layer is not available in the terminal canvas. Cancel and select a gameplay layer.');
+                }
+                $before = $map->captureLayerSnapshot();
                 if ($prompt['action'] === 'rename' && ! isset($prompt['confirmation'])) {
                     $change = $map->getLayerRenameCollisionChange($prompt['id'], $prompt['name']);
                     if ($change !== null) {
@@ -174,7 +178,7 @@ trait LayerCanvas
                     }
                 }
                 $id = match ($prompt['action']) {
-                    'create', 'decoration' => $map->createLayer($prompt['name'], $prompt['action'] === 'decoration'),
+                    'create' => $map->createLayer($prompt['name']),
                     'rename' => (function () use ($map, $prompt): string {
                         $map->renameLayer($prompt['id'], $prompt['name'], isset($prompt['confirmation']));
                         return $prompt['id'];
@@ -225,8 +229,8 @@ trait LayerCanvas
 
     private function selectFacadeBrush(string $path, int $index): void
     {
-        foreach ($this->getSelectedMap()?->getLayers() ?? [] as $layer) {
-            if ($layer['name'] === 'buildings' && ! $layer['decoration']) {
+        foreach ($this->getTerminalCanvasLayers() as $layer) {
+            if ($layer['name'] === 'buildings') {
                 $this->selectCanvasLayer($layer['id']);
                 $this->facadeBrush = ['path' => $path, 'index' => $index, 'mapId' => $this->getSelectedMap()->mapId];
                 $this->canvasTool = CanvasTool::BRUSH;
@@ -245,7 +249,7 @@ trait LayerCanvas
             return;
         }
         $map = $this->getSelectedMap();
-        $target = array_values(array_filter($map?->getLayers() ?? [],
+        $target = array_values(array_filter($this->getTerminalCanvasLayers(),
             fn(array $layer): bool => $layer['id'] === $this->getActiveCanvasLayer()))[0] ?? null;
         if ($map?->mapId !== $this->facadeBrush['mapId'] || $this->editingMode !== self::MODE_MAP
             || ($target['name'] ?? null) !== 'buildings' || ($target['decoration'] ?? true)) {
@@ -280,27 +284,9 @@ trait LayerCanvas
         }
         $id = $this->getActiveCanvasLayer();
         $fields = [];
-        foreach ($map->getLayers() as $layer) {
+        foreach ($this->getTerminalCanvasLayers() as $layer) {
             $fields[] = ['label' => ($id === $layer['id'] ? '> ' : '  ') . $layer['name'],
                 'value' => ($this->getCanvasLayerState()['visibility'][$layer['id']] ?? true) ? 'visible' : 'hidden', 'editable' => false];
-        }
-        try {
-            $tiles = $map->getLayerTiles2d($id);
-        } catch (\Throwable $error) {
-            return [...$fields, ['label' => 'tiles2d error', 'value' => $error->getMessage(), 'editable' => false]];
-        }
-        $fields[] = ['label' => 'tiles2d (read-only)', 'value' => (string) ($tiles['asset'] ?? '(no atlas)'), 'editable' => false];
-        foreach ($tiles['symbols'] ?? [] as $symbol => $crop) {
-            $fields[] = ['label' => '  ' . $symbol, 'value' => json_encode($crop, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), 'editable' => false];
-        }
-        if ($id !== MapLayers::EVENT) {
-            try {
-                $art = $map->getCellTileArt($id, $this->cursorX, $this->cursorY);
-                $fields[] = ['label' => 'Tile art: selected cell', 'value' => $art['override'] === null ? 'Inherited / unmapped' : json_encode($art['override']),
-                    'editable' => true, 'target' => 'tile-art'];
-            } catch (\Throwable $error) {
-                $fields[] = ['label' => 'Cell art', 'value' => $error->getMessage(), 'editable' => false];
-            }
         }
         return $fields;
     }

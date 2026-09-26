@@ -65,7 +65,7 @@ is what the code draws rather than a sketch of it:
  │                              │ │                            │ │     Background Music: (None)   │
  │                              │ │                            │ │     Music Variants · None      │
  │                              │ │                            │ │   Encounters · off             │
- └─/:Filter  Del:Delete─────────┘ └─i:Paint []:Layer t:Terminal┘ └─Enter:Edit─────────────────────┘
+ └─/:Filter  Del:Delete─────────┘ └─i:Paint []:Layer ?:Help────┘ └─Enter:Edit─────────────────────┘
  ┌─Status─────────────────────────────────────────────────────────────────────────────────────────┐
  │ Selected map: test-map | Focus: Assets | Mode: Map | Tool: Brush 1                             │
  │ Cursor: (0, 0) | Viewport: (0, 0) | Ready.                                                     │
@@ -181,16 +181,22 @@ asks first and defaults to Cancel.
 
 ### Authored Layers
 
-Maps with `layers/` show every numbered gameplay (`NN.name.map.php`) and
-decoration (`NN.name.deco.php`) layer, followed by Events. In Normal mode,
-`[` and `]` cycle layers, `v` toggles the selected layer's visibility, `d`
-dims inactive layers, and `t` opens a read-only terminal preview. That preview
-always composes all gameplay layers, ignores decoration and event markers,
-and ignores authoring visibility settings. Spaces above the base show through.
-Layer visibility and dimming are session settings, not map data.
+The TUI edits the terminal experience. Maps with `layers/` show numbered
+gameplay (`NN.name.map.php`) layers and Events, with NPC overlays in their
+authoring context. Graphical decoration (`NN.name.deco.php`) never appears on
+the terminal canvas or in its layer selection, palette or inspector. In Normal
+mode, `[` and `]` cycle gameplay and event layers, `v` toggles the selected
+layer's visibility, and `d` dims inactive layers. Spaces above the base show
+through. Visibility and dimming are session settings, not map data.
 
-Use `Ctrl+P` and select a layer by name, or choose a Layers action to create,
-rename or remove it. New layers preserve each row's width, including ragged
+The normal canvas is editable immediately: press `i` and paint terminal glyphs.
+The separate read-only terminal-preview toggle has been removed; there is no
+graphical-marker view to switch away from.
+
+Use `Ctrl+P` and select a gameplay or event layer by name, or choose a Layers
+action to create, rename or remove a gameplay layer. The TUI cannot create,
+select, rename or remove graphical decoration layers. New gameplay layers
+preserve each row's width, including ragged
 maps. Renaming retains its numeric order and changes its local `tiles2d` key
 without regenerating the crop table. If the actual resolved collisions would
 change, the rename dialog names the change and requires `y` confirmation;
@@ -199,11 +205,17 @@ Creating a layer on a legacy map explicitly moves its terrain into
 `layers/00.terrain.map.php` in the same save transaction; ordinary legacy
 saves keep the original layout.
 
-Every layer uses the same Paint/Normal modes, tools, mouse strokes, selection,
-colour, clipboard and undo. The inspector lists visibility, inherited per-layer
-`tiles2d` mappings, and an editable selected-cell tile-art action. Painting a
-mapped glyph, replacing one, or painting at a coordinate with a crop override
-shows a warning. Invalid decoration crop coverage is refused at save.
+Gameplay and event layers use the same Paint/Normal modes, tools, mouse strokes,
+selection, colour, clipboard and undo. The layer inspector lists terminal layer
+visibility only. Graphical crop tables, selected-cell Tile art actions, crop
+dialogs and crop-painting warnings have been removed from the terminal shell.
+Ordinary glyph edits do not rewrite graphical decoration or `tiles2d` data.
+An unchanged graphical definition that was already invalid when loaded does
+not block terminal glyph, event or unrelated metadata saves, copies or moves.
+It is preserved, not repaired or certified valid: explicit graphical validation
+still reports it. Changes to graphical definitions, decoration contents or
+layer structure/geometry still require graphical validation; canonical source
+safety, collision and grid checks remain in force for terminal edits.
 Untouched layer files are never written; unchanged rows retain their authored
 bytes, and all changed files are saved or rolled back together.
 
@@ -226,78 +238,33 @@ Normal. While painting, the Status pane shows `[PAINT]` beside the mode.
 Control-byte and function-key shortcuts (`Ctrl+S`, `F3`, ...) work in both
 modes, since they are not glyphs.
 
-### Mixed Floor and Wall Materials
+### Terminal Editing and Pending Graphical GUI
 
-Keep walkable floors as spaces and solid walls as wall glyphs on gameplay
-layers. Put wood, kitchen tile, stone, rugs, carpet, and purely cosmetic wall
-writing or ornaments on decoration layers. Their markers select graphical
-crops; they never change terminal glyphs or collision. A readable notice or
-other interactive fixture still needs its own gameplay glyph and interaction,
-not just a decoration marker.
+Keep walkable floors and solid walls readable as terminal gameplay glyphs.
+A readable notice or interactive fixture needs its gameplay glyph and
+interaction, not a graphical decoration marker. Graphical representations
+must not drive or change the terminal editing experience.
 
-1. Start with decoration layers and their per-layer `tiles2d` mappings already
-   defined in the map source. For example, a `floors` layer might map `w`, `k`
-   and `s` to wood, kitchen tile and stone, with `r`/`c` on a higher `rugs`
-   layer for rugs/red carpet. A `wall-detail` layer can use its own markers
-   for ornamental writing and trim over solid gameplay walls.
-2. Focus the canvas, use `[` / `]` or `Ctrl+P` to choose the layer, and press
-   `i` to paint its mapped markers. The crop warning is expected. `Esc`
-   returns to Normal mode before switching layers; in Paint mode brackets
-   paint characters rather than switching. The same tools and mouse strokes
-   work on every decoration layer.
-3. Use `Ctrl+Z` / `Ctrl+Y` to undo/redo, even after switching layers, then
-   `Ctrl+S` to save. `Ctrl+R` reloads the saved workspace and clears history.
-   Press `t` in Normal mode to check terminal preview: floors remain blank,
-   walls retain their gameplay glyphs, and interaction markers remain visible.
+1. Focus the canvas and choose a gameplay or event layer with `[` / `]` or
+   `Ctrl+P`. Press `i` to paint; `Esc` returns to Normal mode. Brackets and
+   other printable characters remain paintable while in Paint mode.
+2. Use the existing glyph tools, colours, selections, clipboard and mouse
+   strokes. Continue authoring events and NPCs in their existing modes.
+3. Use `Ctrl+Z` / `Ctrl+Y` to undo/redo, including after changing layers.
+   `Ctrl+S` saves; `Ctrl+R` reloads the saved workspace and clears history.
+   Existing graphical source data remains preserved during ordinary glyph edits.
 
-Alternatively, use selected-cell tile art below to author material crops without
-predefined glyph mappings, including crops on blank decoration cells.
-**Remaining authoring gap:** glyph-wide defaults remain read-only in the TUI;
-adding/changing a reusable glyph mapping still requires the map's `.data.php`
-source. There is no visual crop picker or image preview: the canvas shows
-authoring glyphs, and the crop form uses pixel coordinates.
+**Removed TUI workflows:** painting decoration markers, choosing graphical
+layers, inspecting graphical crop tables and editing selected-cell crops are
+no longer terminal authoring features. Their data is not deleted. The TileArt
+model services, low-level decoration APIs and source-preserving round trips
+remain available for the graphical editor.
 
-### Selected-Cell Tile Art
-
-This workflow requires the Engine per-cell `tiles2d.cells` capability, currently
-available in the local Engine candidate, not the Editor's older locked
-Engine package. Integration tests select that Engine source explicitly; the
-dependency lock must be updated separately when publishing is authorized.
-
-1. In Normal mode, select the gameplay or decoration layer and cell. Choose
-   `Tile art: Edit selected cell` in `Ctrl+P`, or activate `Tile art: selected
-   cell` in the inspector. Events and terminal-preview mode cannot own tile art.
-2. Press `a` or activate `Layer atlas` to select a PNG already under the project's
-   `assets/` directory. Type to filter the shared picker, then select with
-   arrows and `Enter`; typed text is never saved as a resource path.
-3. Use arrows/Tab and `Enter` to edit X, Y, width and height in pixels. Origins
-   start at zero, extents must be positive, and crops must fit the selected PNG.
-   The form starts from this cell's crop, its inherited glyph crop, or a
-   16-by-16 rectangle. Press `s` or activate `Apply override` to stage the edit.
-4. Changing the atlas of a layer that already inherits/owns one requires `y`
-   confirmation: every existing crop on that layer will use the new PNG. The
-   change writes only that layer's asset override, never the shared atlas or
-   another layer. The dialog names the old and new assets and this impact.
-5. `r` / `Remove override` asks for confirmation before removing only that cell's
-   crop; its glyph default, if any, becomes effective again. Empty definitions
-   are pruned. `Esc` cancels a field, picker or confirmation first, then the form.
-   Nothing changes until Apply or confirmed Remove. `Ctrl+S` saves transactionally;
-   `Ctrl+Z` / `Ctrl+Y` undo/redo even after changing the selected layer or saving.
-
-Overrides belong to the captured map, layer and coordinate, not the painted
-glyph. They do not change text or walkability. Paint, erase and clipboard tools
-leave crop coordinates in place; layer rename/duplicate/move preserve ownership,
-and layer removal removes its own table. Shrinking a grid never silently moves
-or drops crops: save refuses coordinates outside a row. Undo the resize, remove
-the affected crops, then resize again if intended. Reload reads saved crops.
-
-Literal `.data.php` arrays retain untouched source bytes and comments. Opaque
-expressions, variables, unreadable keys or explicitly indexed cell lists that
-cannot be safely edited are refused before mutation with a reason; they are
-never flattened to evaluated data. The picker and shared Engine preflight check
-asset containment, PNG header and crop bounds; native rendering remains the
-full PNG decode authority. Decoration coverage may be staged across several
-cell edits but must be complete before save.
+**Pending, not implemented:** richer renderers will use a separate,
+RPG Maker-like GUI editor for graphical materials, atlases and crop authoring.
+The planned `ichiloto edit` entry point will offer a TUI/GUI choice; that choice
+and the GUI itself are not delivered by this TUI boundary correction. See the
+[GUI editor plan](../../gui-editor/README.md).
 
 ### Normal mode
 
@@ -452,21 +419,15 @@ character says is read in the pane rather than in the edit buffer.
 - **Directional sprites.** Optional glyphs shown when the NPC turns; the base
   sprite covers a heading you leave blank. Resting the Inspector cursor on a
   `Facing …` row previews that glyph on the canvas in the NPC's place.
-- **Graphical sprites.** Select an NPC, focus its Inspector, and press `Enter`
-  on `Graphical Sprites`. Choose a direction/role, then select its PNG through
-  the shared project asset picker. Set its logical-pixel width and height;
-  optional crop X/Y/width/height are source-image pixels. Repeat for all four
-  directions. `S` applies the complete set as one undo step; `Ctrl+S` saves it.
-  `Esc` cancels without changing the NPC. `R`, then `Y`, removes the optional
-  `sprites2d` key, not its terminal glyph, identity, dialogue or collision.
-  For new animated artwork choose `sheet` before entering fields: size,
-  frame size, timing and anchor are shared, while each direction picks its own
-  PNG, columns, rows and populated frame count. Existing sheets and pose crops
-  retain their shape; changing representation never silently discards them.
-  Apply uses Engine validation and PNG header/bounds preflight; native rendering
-  remains the decode authority. Opaque source is refused before mutation.
-  This is a numeric authoring form, not an image preview. Player and cinematic
-  staged-actor `sprites2d` authoring are still separate TUI gaps.
+- **Graphical sprites are not edited in the TUI.** The `Graphical Sprites`
+  inspector action and its numeric PNG/crop/sheet dialog have been removed.
+  Existing NPC `sprites2d` data remains preserved when editing terminal glyphs,
+  and its model services and source-preserving validation remain available.
+  Graphical NPC authoring belongs in the pending
+  [GUI editor](../../gui-editor/README.md), not a terminal form. Terminal base
+  and directional glyphs, identity, dialogue, movement and conditions remain
+  editable as before. This correction does not claim that all other actor or
+  database artwork controls have been removed.
 - **Dialogue.** Pages are shown as variants: one variant with lines is written
   back as plain pages; add a second variant, or give one a `When` condition, a
   `Then Set`, or a `Script`, and the whole thing is written as conditional

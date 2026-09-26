@@ -110,8 +110,6 @@ use Throwable;
 final class Editor
 {
     use \Ichiloto\Editor\Canvas\LayerCanvas;
-    use \Ichiloto\Editor\Canvas\TileArtCanvas;
-    use \Ichiloto\Editor\Field\NpcSpriteCanvas;
     use CutscenesWorkspace;
     use CutsceneOutlinePane;
     use CutscenePreviewPane;
@@ -1256,8 +1254,6 @@ final class Editor
         $router->bindModal(Modal::DATABASE_ENTRY_DELETE_CONFIRMATION, $this->handleDatabaseEntryDeleteConfirmationInput(...));
         $router->bindModal(Modal::RENAME_CONFIRMATION, $this->handleRenameConfirmationInput(...));
         $router->bindModal(Modal::LAYER_EDIT, $this->handleLayerPromptInput(...));
-        $router->bindModal(Modal::TILE_ART, $this->handleTileArtInput(...));
-        $router->bindModal(Modal::NPC_ART, $this->handleNpcArtInput(...));
         $router->bindModal(Modal::COMMAND_PALETTE, $this->handleCommandPaletteInput(...));
         $router->bindModal(Modal::HELP, $this->handleHelpInput(...));
         $router->bindModal(Modal::DATABASE, $this->handleDatabaseInput(...));
@@ -1377,7 +1373,6 @@ final class Editor
             KeyBinding::when($this->isNormalModeCommand('['), fn() => $this->cycleCanvasLayer(-1), '[', 'Canvas: previous layer'),
             KeyBinding::when($this->isNormalModeCommand('v'), fn() => $this->toggleCanvasLayerVisibility(), 'v', 'Canvas: toggle selected layer visibility'),
             KeyBinding::when($this->isNormalModeCommand('d'), fn() => $this->toggleCanvasLayerOption('dim'), 'd', 'Canvas: dim inactive layers'),
-            KeyBinding::when($this->isNormalModeCommand('t'), fn() => $this->toggleCanvasLayerOption('terminal'), 't', 'Canvas: terminal gameplay preview'),
             KeyBinding::when($this->isNormalModeCommand('m'), fn() => $this->setEditingMode(self::MODE_MAP), 'm', 'Canvas: Map mode (paint tiles)'),
             KeyBinding::when($this->isNormalModeCommand('e'), fn() => $this->setEditingMode(self::MODE_EVENT), 'e', 'Canvas: Event mode (paint event markers)'),
             KeyBinding::when($this->isNormalModeCommand('n'), fn() => $this->setEditingMode(self::MODE_NPC), 'n', 'Canvas: NPC mode (place and edit the map\'s NPCs)'),
@@ -1905,10 +1900,6 @@ final class Editor
 
                 return;
             }
-            if (is_array($current) && ($current['field'] ?? null) === self::NPC_ART_FIELD) {
-                $this->openNpcSpriteArt();
-                return;
-            }
 
             $this->beginDatabaseEdit();
 
@@ -2092,9 +2083,6 @@ final class Editor
 
         $records = $this->npcInspector->records();
         $fields = $records->getFrameSettingsFields($this->selectedNpcIndex, $this->databaseCommandFramePath);
-        if ($this->databaseCommandFramePath === []) {
-            $fields[] = ['label' => 'Graphical Sprites', 'value' => 'Enter: four directional PNG roles', 'field' => self::NPC_ART_FIELD, 'editable' => true];
-        }
 
         if (
             $this->databaseCommandFramePath !== []
@@ -2137,7 +2125,7 @@ final class Editor
         $sections = [
             'Identity' => ['id', 'name'],
             'Placement' => ['x', 'y'],
-            'Appearance' => ['sprite', 'sprites.north', 'sprites.south', 'sprites.east', 'sprites.west', self::NPC_ART_FIELD],
+            'Appearance' => ['sprite', 'sprites.north', 'sprites.south', 'sprites.east', 'sprites.west'],
             'Movement' => ['movement', 'wanderArea.x', 'wanderArea.y', 'wanderArea.width', 'wanderArea.height'],
             'Visibility' => ['conditions'],
             'Interaction' => ['commandListScript'],
@@ -3781,7 +3769,6 @@ final class Editor
     private function selectAsset(int $selectedIndex): void
     {
         $this->facadeBrush = null;
-        $this->canvasPaintWarning = '';
         if (! $this->workspace instanceof ProjectWorkspace || $selectedIndex === $this->selectedAssetIndex) {
             return;
         }
@@ -4566,9 +4553,6 @@ final class Editor
         MouseButton $button,
         bool $paintEvents = false,
     ): void {
-        if ($this->getCanvasLayerState()['terminal']) {
-            return;
-        }
         $isStartingStroke = $this->activeMousePaintButton !== $button || ! is_array($this->lastMousePaintPoint);
         $start = $isStartingStroke
             ? ['x' => $targetX, 'y' => $targetY]
@@ -4604,7 +4588,6 @@ final class Editor
             [$newPrefix, $newSuffix] = $this->resolvePaintStyle($symbol, $this->selectedPaintColor, $oldStyle);
             $selectedMap->setLayerCell($this->getActiveCanvasLayer(), $point['x'], $point['y'], $symbol, $newPrefix, $newSuffix);
             $newSymbol = $selectedMap->getLayerSymbol($this->getActiveCanvasLayer(), $point['x'], $point['y']);
-            $this->recordCanvasCropWarning($selectedMap, $symbol, $oldSymbol, $point['x'], $point['y']);
             $this->activeStrokeCommand->appendCell(
                 $point['x'],
                 $point['y'],
@@ -4697,10 +4680,6 @@ final class Editor
      */
     private function enterPaintMode(): void
     {
-        if ($this->getCanvasLayerState()['terminal']) {
-            $this->setStatus('Terminal preview is read-only. Press t to return to authoring.');
-            return;
-        }
         if ($this->editingMode !== self::MODE_MAP && $this->editingMode !== self::MODE_EVENT) {
             $this->statusMessage = 'Paint mode needs the Map or Event layer. Press m or e first.';
             $this->renderFooter();
@@ -4761,7 +4740,7 @@ final class Editor
         }
         $map = $this->getSelectedMap();
         $selected = $this->getCanvasLayerState()['selected'];
-        $ids = array_column($map?->getLayers() ?? [], 'id');
+        $ids = array_column($this->getTerminalCanvasLayers(), 'id');
         return $selected !== PaintStrokeCommand::LAYER_EVENT && in_array($selected, $ids, true)
             ? $selected : ($map?->getBaseLayerId() ?? PaintStrokeCommand::LAYER_TILE);
     }
@@ -4808,7 +4787,7 @@ final class Editor
      */
     private function applyCanvasWrites(ProjectMap $map, array $writes, string $label): int
     {
-        if ($writes === [] || $this->getCanvasLayerState()['terminal']) {
+        if ($writes === []) {
             return 0;
         }
 
@@ -4847,8 +4826,6 @@ final class Editor
             if ($oldSymbol !== $newSymbol || $oldStyle['prefix'] !== $newPrefix || $oldStyle['suffix'] !== $newSuffix) {
                 $changed++;
             }
-
-            $this->recordCanvasCropWarning($map, $write['symbol'], $oldSymbol, $write['x'], $write['y']);
         }
 
         if ($stroke->hasChanges()) {
@@ -8399,11 +8376,6 @@ final class Editor
         $field = $fields[$this->selectedInspectorFieldIndex] ?? null;
 
         if (! is_array($field)) {
-            return;
-        }
-
-        if (($field['target'] ?? null) === 'tile-art') {
-            $this->openCellTileArt();
             return;
         }
 
@@ -17462,7 +17434,7 @@ final class Editor
             $palette[$symbol] = $symbol;
         }
 
-        $layerName = array_values(array_filter($selectedMap->getLayers(), fn(array $layer): bool => $layer['id'] === $this->getActiveCanvasLayer()))[0]['name'] ?? null;
+        $layerName = array_values(array_filter($this->getTerminalCanvasLayers(), fn(array $layer): bool => $layer['id'] === $this->getActiveCanvasLayer()))[0]['name'] ?? null;
         foreach ($this->workspace->getCollisionGlyphs($layerName) as $symbol) {
             $palette[$symbol] = $symbol;
         }
@@ -17747,15 +17719,6 @@ final class Editor
 
         if ($this->modals->has(Modal::LAYER_EDIT)) {
             $this->renderLayerPrompt($layout);
-            return true;
-        }
-
-        if ($this->modals->has(Modal::TILE_ART)) {
-            $this->renderTileArtDialog($layout);
-            return true;
-        }
-        if ($this->modals->has(Modal::NPC_ART)) {
-            $this->renderNpcArtDialog($layout);
             return true;
         }
 
@@ -18222,7 +18185,7 @@ final class Editor
 
         return new EditorWindow(
             title: ($this->focusedPane === self::FOCUS_CANVAS ? 'Canvas [Focus]' : 'Canvas')
-                . ($this->getCanvasLayerState()['terminal'] ? ' [Terminal preview]' : $this->getCanvasLayerTitle()),
+                . $this->getCanvasLayerTitle(),
             help: match (true) {
                 $this->isDestinationSpawnConfirmationOpen => 'Enter:Apply  Esc:Back',
                 $this->isDestinationSpawnSelectionOpen => 'Arrows:Move  Enter:Select Spawn  Esc:Cancel',
@@ -18242,9 +18205,9 @@ final class Editor
                 ),
                 default => $this->fitHelp(
                     $layout['centerWidth'],
-                    'i:Paint []:Layer v:Hide d:Dim t:Terminal o:Colour Ctrl+P:Layers',
-                    'i:Paint []:Layer v:Hide t:Terminal Ctrl+P:Layers',
-                    'i:Paint []:Layer t:Terminal',
+                    'i:Paint []:Layer v:Hide d:Dim o:Colour Ctrl+P:Layers',
+                    'i:Paint []:Layer v:Hide Ctrl+P:Layers',
+                    'i:Paint []:Layer ?:Help',
                     'i:Paint  m:Map  e:Event  n:NPC  c:Chars  o:Colour  ?:Help',
                     'i:Paint m:Map e:Event n:NPC c:Chars o:Colour',
                     'i:Paint  m:Map  e:Event',
@@ -18268,7 +18231,7 @@ final class Editor
                     ['x' => $this->cursorX, 'y' => $this->cursorY],
                     $this->getCanvasLayerState()['visibility'],
                     $this->getActiveCanvasLayer(),
-                    $this->getCanvasLayerState()['terminal'],
+                    false,
                     $this->getCanvasLayerState()['dim'],
                 ) ?? [],
                 $contentWidth,
@@ -18357,7 +18320,7 @@ final class Editor
                     $this->cursorY,
                     $this->canvasOffsetX,
                     $this->canvasOffsetY,
-                    $this->canvasPaintWarning !== '' ? $this->canvasPaintWarning : $this->getFooterStatusText()
+                    $this->getFooterStatusText()
                 ),
             ], $contentWidth, 2),
         );

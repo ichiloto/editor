@@ -4,26 +4,29 @@ declare(strict_types=1);
 
 use Ichiloto\Editor\Canvas\CanvasTool;
 use Ichiloto\Editor\Canvas\FacadeCatalogue;
-use Ichiloto\Editor\MapSourceRefusal;
+use Ichiloto\Editor\Field\NpcCollection;
 use Ichiloto\Editor\UI\Modal;
-use Ichiloto\Engine\Events\Enumerations\CollisionType;
 
-it('cycles every layer including events without stealing printable Paint-mode glyphs', function () {
+it('cycles only gameplay and event layers without stealing printable Paint-mode glyphs', function () {
     [$editor, $map] = layeredCanvasEditor();
-    foreach (['map:4', 'map:7', 'event', 'map:1'] as $id) {
+    foreach (['map:4', 'event', 'map:1'] as $id) {
         callEditorMethod($editor, 'dispatchInput', ']');
         expect(callEditorMethod($editor, 'getActiveCanvasLayer'))->toBe($id);
     }
-    callEditorMethod($editor, 'selectCanvasLayer', 'map:7');
+    foreach (['event', 'map:4', 'map:1'] as $id) {
+        callEditorMethod($editor, 'dispatchInput', '[');
+        expect(callEditorMethod($editor, 'getActiveCanvasLayer'))->toBe($id);
+    }
+    callEditorMethod($editor, 'selectCanvasLayer', 'map:4');
     callEditorMethod($editor, 'dispatchInput', 'i');
     foreach (['[', ']', 'v', 'd', 't', 'o'] as $glyph) {
         callEditorMethod($editor, 'dispatchInput', $glyph);
-        expect($map->getLayerSymbol('map:7', 0, 0))->toBe($glyph)
-            ->and(callEditorMethod($editor, 'getActiveCanvasLayer'))->toBe('map:7');
+        expect($map->getLayerSymbol('map:4', 0, 0))->toBe($glyph)
+            ->and(callEditorMethod($editor, 'getActiveCanvasLayer'))->toBe('map:4');
     }
 });
 
-it('uses colour selection clipboard shapes fill eyedropper and undo on every layer', function (string $id) {
+it('uses colour selection clipboard shapes fill eyedropper and undo on gameplay and event layers', function (string $id) {
     [$editor, $map] = layeredCanvasEditor();
     callEditorMethod($editor, 'selectCanvasLayer', $id);
     callEditorMethod($editor, 'applyCanvasWrites', $map, [
@@ -63,7 +66,7 @@ it('uses colour selection clipboard shapes fill eyedropper and undo on every lay
     expect($map->getLayerSymbol($id, 3, 1))->toBe('F');
     callEditorMethod($editor, 'dispatchInput', "\x1a");
     expect($map->captureGridSnapshot())->toBe($before);
-})->with(['map:1', 'map:4', 'map:7', 'event']);
+})->with(['map:1', 'map:4', 'event']);
 
 it('keeps mouse strokes layer-bound through undo and a later layer switch', function (string $id) {
     [$editor, $map] = layeredCanvasEditor();
@@ -83,36 +86,137 @@ it('keeps mouse strokes layer-bound through undo and a later layer switch', func
     expect($map->captureGridSnapshot())->toBe($before);
     callEditorMethod($editor, 'dispatchInput', "\x19");
     expect($map->getLayerSymbol($id, 2, 1))->toBe('M');
-})->with(['map:1', 'map:4', 'map:7', 'event']);
+})->with(['map:1', 'map:4', 'event']);
 
-it('keeps visibility dimming and terminal preview out of authored state and blocks preview painting', function () {
+it('renders readable gameplay immediately and keeps visibility and dimming session-only', function () {
     [$editor, $map] = layeredCanvasEditor();
     $before = $map->captureLayerSnapshot();
+    $frame = renderEditorPlainFrame($editor, 160, 45);
+    expect($frame)->toContain('./..', '.xx.')
+        ->not->toContain('d/..', '.xxd', 'Terminal preview', 't:Terminal');
+    callEditorMethod($editor, 'selectCanvasLayer', 'map:4');
     callEditorMethod($editor, 'dispatchInput', 'v');
     callEditorMethod($editor, 'dispatchInput', 'd');
-    callEditorMethod($editor, 'dispatchInput', 't');
-    callEditorMethod($editor, 'applyCanvasWrites', $map, [['x' => 0, 'y' => 0, 'symbol' => 'X']], 'preview');
-    $bounds = callEditorMethod($editor, 'getCanvasPreviewBounds');
-    callEditorMethod($editor, 'enterPaintMode');
-    callEditorMethod($editor, 'dispatchInput', sprintf("\033[<0;%d;%dM", $bounds['left'], $bounds['top']));
-    expect($map->captureLayerSnapshot())->toBe($before)->and($map->isDirty())->toBeFalse();
-    $frame = renderEditorPlainFrame($editor, 160, 45);
-    expect($frame)->toContain('Terminal preview', 'Ctrl+P:Palette');
-    $footer = callEditorMethod($editor, 'createFooterWindow');
-    expect($footer->help)->not->toContain('Layer', 'Colour', 'Terminal');
+    expect(renderEditorPlainFrame($editor, 160, 45))->toContain('....')
+        ->and($map->captureLayerSnapshot())->toBe($before)
+        ->and($map->isDirty())->toBeFalse();
+    callEditorMethod($editor, 'dispatchInput', 'v');
+    expect(renderEditorPlainFrame($editor, 160, 45))->toContain('./..', '.xx.')
+        ->and($map->captureLayerSnapshot())->toBe($before);
 });
 
-it('shows crop tables read-only and keeps layer-specific painting warnings visible', function () {
+it('edits terminal glyphs immediately through undo redo save and reload without changing graphical bytes', function (bool $invalidGraphics) {
+    $root = layeredMapProject();
+    if ($invalidGraphics) {
+        $path = $root . '/assets/Maps/test-map/test-map.data.php';
+        file_put_contents($path, preg_replace("/'width' => 16/", "'width' => 0", file_get_contents($path), 1));
+    }
+    [$editor, $map] = layeredCanvasEditor($root);
+    $before = sourceHashTree($map->directory);
+    $graphicalSource = file_get_contents($map->dataPath);
+    $decorationSource = file_get_contents($map->directory . '/layers/07.detail.deco.php');
+    foreach (['i', 'Z', "\033", "\x13"] as $key) {
+        callEditorMethod($editor, 'dispatchInput', $key);
+    }
+    expect($map->getLayerSymbol('map:1', 0, 0))->toBe('Z')
+        ->and(array_keys(array_diff_assoc(sourceHashTree($map->directory), $before)))->toBe(['layers/01.terrain.map.php']);
+    callEditorMethod($editor, 'dispatchInput', "\x1a");
+    callEditorMethod($editor, 'dispatchInput', "\x13");
+    expect(sourceHashTree($map->directory))->toBe($before);
+    callEditorMethod($editor, 'dispatchInput', "\x19");
+    callEditorMethod($editor, 'dispatchInput', "\x13");
+    callEditorMethod($editor, 'dispatchInput', "\x12");
+    $reloaded = callEditorMethod($editor, 'getSelectedMap');
+    expect($reloaded)->not->toBe($map)
+        ->and($reloaded->getLayerSymbol('map:1', 0, 0))->toBe('Z')
+        ->and(loadLayeredMap($root)->getLayerSymbol('map:1', 0, 0))->toBe('Z')
+        ->and(file_get_contents($reloaded->dataPath))->toBe($graphicalSource)
+        ->and(file_get_contents($reloaded->directory . '/layers/07.detail.deco.php'))->toBe($decorationSource)
+        ->and(renderEditorPlainFrame($editor, 160, 45))->toContain('Z/..');
+})->with(['valid graphical source' => false, 'invalid graphical source' => true]);
+
+it('does not expose a read-only terminal toggle or crop painting warnings', function () {
     [$editor, $map] = layeredCanvasEditor();
     callEditorMethod($editor, 'selectCanvasLayer', 'map:4');
-    $fields = callEditorMethod($editor, 'getLayerInspectorFields');
-    expect(array_column(array_filter($fields, static fn(array $field): bool => ($field['target'] ?? '') !== 'tile-art'), 'editable'))->each->toBeFalse()
-        ->and(json_encode($fields))->toContain('shared.png', '16');
-    callEditorMethod($editor, 'applyCanvasWrites', $map, [['x' => 0, 'y' => 0, 'symbol' => 'x']], 'mapped');
-    expect(getEditorProperty($editor, 'canvasPaintWarning'))->toContain('Crop mapping');
-    callEditorMethod($editor, 'selectCanvasLayer', 'map:1');
-    callEditorMethod($editor, 'applyCanvasWrites', $map, [['x' => 0, 'y' => 0, 'symbol' => 'x']], 'unmapped');
-    expect(getEditorProperty($editor, 'canvasPaintWarning'))->toBe('');
+    callEditorMethod($editor, 'dispatchInput', 't');
+    foreach (['i', 'x', "\033"] as $key) {
+        callEditorMethod($editor, 'dispatchInput', $key);
+    }
+    expect($map->getLayerSymbol('map:4', 0, 0))->toBe('x')
+        ->and(renderEditorPlainFrame($editor, 160, 45))->not->toContain('Terminal preview', 'Crop mapping', 'cell overrides');
+    callEditorMethod($editor, 'dispatchInput', "\x1a");
+    expect($map->getLayerSymbol('map:4', 0, 0))->toBe(' ');
+});
+
+it('excludes graphical layers and Tile art from the shell palette and inspector', function () {
+    [$editor, $map] = layeredCanvasEditor();
+    $before = $map->captureLayerSnapshot();
+    $labels = implode('\n', array_map(static fn($item): string => $item->label, callEditorMethod($editor, 'buildLayerPaletteItems')));
+    expect($labels)->toContain('terrain', 'buildings', 'Events', 'Create gameplay layer')
+        ->not->toContain('detail', 'decoration', 'Tile art', 'Terminal preview');
+    foreach (['map:1', 'map:4', 'event'] as $id) {
+        callEditorMethod($editor, 'selectCanvasLayer', $id);
+        $fields = json_encode(callEditorMethod($editor, 'getInspectorFields'));
+        expect($fields)->not->toContain('tile-art', 'Tile art', 'tiles2d', 'shared.png', 'detail.png');
+        expect(json_encode(callEditorMethod($editor, 'getLayerInspectorFields')))->not->toContain('detail');
+    }
+    callEditorMethod($editor, 'dispatchInput', "\x10");
+    foreach (str_split('Tile art: Edit selected cell') as $key) {
+        callEditorMethod($editor, 'dispatchInput', $key);
+    }
+    callEditorMethod($editor, 'dispatchInput', "\r");
+    expect(method_exists($editor, 'openCellTileArt'))->toBeFalse()
+        ->and(renderEditorPlainFrame($editor, 160, 45))->not->toContain('Layer atlas', 'Apply override')
+        ->and($map->captureLayerSnapshot())->toBe($before);
+});
+
+it('keeps NPC authoring and event overlays readable on the terminal canvas', function () {
+    [$editor, $map] = layeredCanvasEditor();
+    $map->setNpcs(NpcCollection::fromMapData([
+        ['id' => 'resident', 'name' => 'Resident', 'sprite' => 'N', 'x' => 0, 'y' => 0],
+    ]));
+    $before = $map->captureLayerSnapshot();
+    callEditorMethod($editor, 'dispatchInput', 'n');
+    expect(getEditorProperty($editor, 'editingMode'))->toBe('npc')
+        ->and(renderEditorPlainFrame($editor, 160, 45))->toContain('[N].', '.xx.', 'Name: Resident');
+    callEditorMethod($editor, 'dispatchInput', "\033");
+    callEditorMethod($editor, 'dispatchInput', 'e');
+    expect(callEditorMethod($editor, 'getActiveCanvasLayer'))->toBe('event')
+        ->and(renderEditorPlainFrame($editor, 160, 45))->toContain('./.E', '.xx.')
+        ->and($map->captureLayerSnapshot())->toBe($before);
+});
+
+it('refuses hidden decoration selection creation and stale graphical layer requests in the shell', function (string $action) {
+    [$editor, $map] = layeredCanvasEditor();
+    $before = $map->captureLayerSnapshot();
+    $disk = sourceHashTree($map->directory);
+    callEditorMethod($editor, 'selectCanvasLayer', 'map:7');
+    expect(callEditorMethod($editor, 'getActiveCanvasLayer'))->toBe('map:1');
+    callEditorMethod($editor, 'openLayerPrompt', 'decoration');
+    expect(getEditorProperty($editor, 'layerPrompt'))->toBeNull();
+    setEditorProperty($editor, 'layerPrompt', ['action' => $action, 'id' => 'map:7', 'name' => 'hidden-art']);
+    getEditorProperty($editor, 'modals')->push(Modal::LAYER_EDIT);
+    callEditorMethod($editor, 'dispatchInput', $action === 'remove' ? 'y' : "\r");
+    expect($map->captureLayerSnapshot())->toBe($before)
+        ->and(sourceHashTree($map->directory))->toBe($disk)
+        ->and($map->isDirty())->toBeFalse();
+})->with(['remove', 'rename', 'decoration']);
+
+it('ignores stale graphical selection and terminal read-only state when painting gameplay', function () {
+    [$editor, $map] = layeredCanvasEditor();
+    $before = $map->captureLayerSnapshot();
+    setEditorProperty($editor, 'canvasLayerStates', [$map->mapId => ['selected' => 'map:7', 'terminal' => true]]);
+    expect(callEditorMethod($editor, 'getActiveCanvasLayer'))->toBe('map:1');
+    foreach (['i', 'Z', "\033"] as $key) {
+        callEditorMethod($editor, 'dispatchInput', $key);
+    }
+    expect($map->getLayerSymbol('map:1', 0, 0))->toBe('Z')
+        ->and($map->getLayerSymbol('map:7', 0, 0))->toBe('d')
+        ->and($map->getEditableData())->toBe($before['data'])
+        ->and(renderEditorPlainFrame($editor, 160, 45))->toContain('Z/..')
+        ->not->toContain('Terminal preview');
+    callEditorMethod($editor, 'dispatchInput', "\x1a");
+    expect($map->captureLayerSnapshot())->toBe($before);
 });
 
 it('requires explicit collision-change confirmation before renaming and preserves local crop source bytes', function (bool $changes) {

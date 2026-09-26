@@ -33,8 +33,6 @@ enum Modal: string
      * The folder-move confirmation raised by a renaming save.
      */
     case RENAME_CONFIRMATION = 'rename_confirmation';
-    case TILE_ART = 'tile_art';
-    case NPC_ART = 'npc_art';
     case LAYER_EDIT = 'layer_edit';
     /**
      * The Ctrl+P command palette. Opens above the Database screen and the

@@ -2,13 +2,10 @@
 
 declare(strict_types=1);
 
-use Ichiloto\Editor\Editor;
 use Ichiloto\Editor\Field\DirectionalSpriteDraft;
-use Ichiloto\Editor\Field\NpcCollection;
 use Ichiloto\Editor\Field\ProjectNpc;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
-use Ichiloto\Editor\UI\Modal;
 use Ichiloto\Engine\Rendering\Sprites\DirectionalGraphicalSpriteSet;
 
 function createNpcArtProject(): string
@@ -32,72 +29,25 @@ function getNpcArtPoses(): array
     return $data;
 }
 
-function createNpcArtEditor(string $root): array
-{
-    $editor = createEditorForTesting($root);
-    $workspace = ProjectWorkspace::fromProject($root);
-    setEditorProperty($editor, 'workspace', $workspace);
-    setEditorProperty($editor, 'lastTerminalSize', ['width' => 140, 'height' => 40]);
-    setEditorProperty($editor, 'isRunning', true);
-    callEditorMethod($editor, 'setEditingMode', 'npc');
-    callEditorMethod($editor, 'selectNpc', 0);
-    setEditorProperty($editor, 'focusedPane', 'inspector');
-    foreach (callEditorMethod($editor, 'getInspectorFields') as $index => $field) {
-        if (($field['field'] ?? '') === '__npc_art') { setEditorProperty($editor, 'databaseSelectedSettingIndex', $index); }
-    }
-    callEditorMethod($editor, 'dispatchInput', "\r");
-    expect(getEditorProperty($editor, 'modals')->has(Modal::NPC_ART))->toBeTrue();
-    return [$editor, $workspace->getMapByIndex(0)];
-}
-
-function selectNpcArtField(Editor $editor, string $key): void
-{
-    $fields = callEditorMethod($editor, 'getNpcArtFields');
-    $target = array_search($key, array_column($fields, 'field'), true);
-    expect($target)->not->toBeFalse();
-    for ($i = 0; $i < count($fields) && getEditorProperty($editor, 'npcArtDialog')['selected'] !== $target; $i++) {
-        callEditorMethod($editor, 'dispatchInput', "\t");
-    }
-}
-
-it('authors four NPC roles through the inspector picker numeric fields apply save and source-exact undo', function () {
+it('keeps graphical NPC model save restore reload and duplication source-preserving', function () {
     $root = createNpcArtProject();
-    [$editor, $map] = createNpcArtEditor($root);
+    $map = ProjectWorkspace::fromProject($root)->getMapByIndex(0);
     $original = file_get_contents($map->dataPath);
+    $before = $map->captureLayerSnapshot();
     $terminal = $map->renderPreview(20, 10);
-    callEditorMethod($editor, 'dispatchInput', 's');
-    expect(getEditorProperty($editor, 'npcArtDialog')['error'])->toContain('direction')
-        ->and($map->isDirty())->toBeFalse();
-    foreach (ProjectNpc::DIRECTIONS as $direction) {
-        selectNpcArtField($editor, 'direction');
-        while (getEditorProperty($editor, 'npcArtDialog')['direction'] !== $direction) { callEditorMethod($editor, 'dispatchInput', "\r"); }
-        selectNpcArtField($editor, $direction . '.asset');
-        callEditorMethod($editor, 'dispatchInput', "\r");
-        expect(getEditorProperty($editor, 'referencePicker')->isOpen())->toBeTrue();
-        foreach (str_split($direction . '.png') as $key) { callEditorMethod($editor, 'dispatchInput', $key); }
-        callEditorMethod($editor, 'dispatchInput', "\r");
-        foreach (['width' => '16', 'height' => '24'] as $key => $value) {
-            selectNpcArtField($editor, $direction . '.' . $key);
-            callEditorMethod($editor, 'dispatchInput', "\r");
-            foreach (str_split($value) as $symbol) { callEditorMethod($editor, 'dispatchInput', $symbol); }
-            callEditorMethod($editor, 'dispatchInput', "\r");
-        }
-    }
-    expect($map->isDirty())->toBeFalse()->and(file_get_contents($map->dataPath))->toBe($original);
-    callEditorMethod($editor, 'dispatchInput', 's');
-    expect(getEditorProperty($editor, 'npcArtDialog'))->toBeNull()
-        ->and($map->getNpcs()->get(0)->toArray()['sprites2d'])->toEqual(getNpcArtPoses())
+    $map->setNpcGraphicalSprites(0, getNpcArtPoses());
+    $after = $map->captureLayerSnapshot();
+    expect($map->getNpcs()->get(0)->toArray()['sprites2d'])->toEqual(getNpcArtPoses())
         ->and($map->getNpcs()->get(0)->getSprite())->toBe('')
         ->and($map->renderPreview(20, 10))->toBe($terminal);
-    callEditorMethod($editor, 'dispatchInput', "\x13");
+    $map->save();
     $saved = file_get_contents($map->dataPath);
     expect($saved)->toContain('/* resident */', '/* neighbor */', "strtoupper('unchanged')");
-    callEditorMethod($editor, 'selectNpc', 1);
-    callEditorMethod($editor, 'dispatchInput', "\x1a");
-    callEditorMethod($editor, 'dispatchInput', "\x13");
+    $map->restoreLayerSnapshot($before);
+    $map->save();
     expect(file_get_contents($map->dataPath))->toBe($original);
-    callEditorMethod($editor, 'dispatchInput', "\x19");
-    callEditorMethod($editor, 'dispatchInput', "\x13");
+    $map->restoreLayerSnapshot($after);
+    $map->save();
     expect(file_get_contents($map->dataPath))->toBe($saved);
     $reloaded = ProjectMap::fromDirectory($root . '/assets/Maps', $map->directory);
     expect(DirectionalGraphicalSpriteSet::fromArray($reloaded->getNpcs()->get(0)->toArray()['sprites2d'])->south->height)->toBe(24);
@@ -148,27 +98,41 @@ it('refuses opaque sprites without flattening them', function () {
         ->and(file_get_contents($path))->toBe($source);
 });
 
-it('cancels draft changes and confirms whole set removal with undo and stale NPC protection', function () {
+it('removes graphical NPC authoring from the TUI while terminal sprite edits preserve graphical source', function () {
     $root = createNpcArtProject();
-    [$editor, $map] = createNpcArtEditor($root);
-    callEditorMethod($editor, 'dispatchInput', "\033");
+    $map = ProjectWorkspace::fromProject($root)->getMapByIndex(0);
     $map->setNpcGraphicalSprites(0, getNpcArtPoses());
     $map->save();
-    callEditorMethod($editor, 'openNpcSpriteArt');
-    callEditorMethod($editor, 'dispatchInput', 'r');
-    callEditorMethod($editor, 'dispatchInput', "\r");
-    expect($map->getNpcs()->get(0)->toArray())->toHaveKey('sprites2d');
-    callEditorMethod($editor, 'dispatchInput', 'y');
-    expect($map->getNpcs()->get(0)->toArray())->not->toHaveKey('sprites2d');
+    $source = file_get_contents($map->dataPath);
+    $assets = sourceHashTree($root . '/assets/Graphics');
+    $editor = deletionEditor($root);
+    $map = callEditorMethod($editor, 'getSelectedMap');
+    callEditorMethod($editor, 'setEditingMode', 'npc');
+    callEditorMethod($editor, 'selectNpc', 0);
+    setEditorProperty($editor, 'focusedPane', 'inspector');
+    $fields = callEditorMethod($editor, 'getInspectorFields');
+    expect(json_encode($fields))->not->toContain('__npc_art', 'Graphical Sprites', 'sprites2d')
+        ->and(method_exists($editor, 'openNpcSpriteArt'))->toBeFalse()
+        ->and(renderEditorPlainFrame($editor, 160, 45))->not->toContain('Graphical Sprites');
+    $index = array_find_key($fields, static fn(array $field): bool => ($field['field'] ?? null) === 'sprite');
+    expect($index)->not->toBeNull();
+    setEditorProperty($editor, 'databaseSelectedSettingIndex', $index);
+    foreach (["\r", 'N', "\r", "\x13"] as $key) {
+        callEditorMethod($editor, 'dispatchInput', $key);
+    }
+    $saved = str_replace("'sprite' => ''", "'sprite' => 'N'", $source);
+    expect($map->getNpcs()->get(0)->getSprite())->toBe('N')
+        ->and(file_get_contents($map->dataPath))->toBe($saved);
     callEditorMethod($editor, 'dispatchInput', "\x1a");
-    expect($map->getNpcs()->get(0)->toArray()['sprites2d'])->toBe(getNpcArtPoses());
-    callEditorMethod($editor, 'openNpcSpriteArt');
-    $entries = $map->getNpcs()->toMapData();
-    $entries[0]['name'] = 'New user name';
-    $map->setNpcs(NpcCollection::fromMapData($entries));
-    callEditorMethod($editor, 'dispatchInput', 's');
-    expect(getEditorProperty($editor, 'npcArtDialog')['error'])->toContain('captured map or NPC changed')
-        ->and($map->getNpcs()->get(0)->getName())->toBe('New user name');
+    callEditorMethod($editor, 'dispatchInput', "\x13");
+    expect(file_get_contents($map->dataPath))->toBe($source);
+    foreach (["\x19", "\x13", "\x12"] as $key) {
+        callEditorMethod($editor, 'dispatchInput', $key);
+    }
+    $loaded = callEditorMethod($editor, 'getSelectedMap');
+    expect(file_get_contents($loaded->dataPath))->toBe($saved)
+        ->and($loaded->getNpcs()->get(0)->toArray()['sprites2d'])->toBe(getNpcArtPoses())
+        ->and(sourceHashTree($root . '/assets/Graphics'))->toBe($assets);
 });
 
 it('preserves pending NPC art and all map files when the save transaction fails', function () {

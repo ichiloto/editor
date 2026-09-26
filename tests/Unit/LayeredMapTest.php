@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Ichiloto\Editor\MapSourceRefusal;
+use Ichiloto\Editor\Field\NpcCollection;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Editor\Storage\FileSetTransactionFailure;
@@ -17,10 +18,27 @@ it('loads ordered gameplay decoration and event layers through the Engine source
         ->and($map->getLayerSymbol('map:7', 0, 0))->toBe('d');
     $terminal = array_map(TerminalText::stripAnsi(...), $map->renderPreview(4, 2, terminalPreview: true));
     expect($terminal)->toBe(['./..', '.xx.']);
-    expect(array_map(TerminalText::stripAnsi(...), $map->renderPreview(4, 2)))->toBe(['d/.E', '.xxd']);
-    expect(array_map(TerminalText::stripAnsi(...), $map->renderPreview(4, 2, showEventOverlay: false, layerVisibility: ['map:7' => false])))->toBe($terminal);
+    expect(array_map(TerminalText::stripAnsi(...), $map->renderPreview(4, 2)))->toBe(['./.E', '.xx.']);
+    expect(array_map(TerminalText::stripAnsi(...), $map->renderPreview(4, 2, showEventOverlay: false)))->toBe($terminal);
+    foreach ([true, false] as $visible) {
+        expect(array_map(TerminalText::stripAnsi(...), $map->renderPreview(4, 2, layerVisibility: ['map:7' => $visible])))->toBe(['./.E', '.xx.']);
+    }
+    expect(array_map(TerminalText::stripAnsi(...), $map->renderPreview(4, 2, layerVisibility: ['map:4' => false])))->toBe(['...E', '....'])
+        ->and(array_map(TerminalText::stripAnsi(...), $map->renderPreview(4, 2, layerVisibility: ['event' => false])))->toBe($terminal);
     expect(implode('', $map->renderPreview(4, 2, activeLayer: 'map:4', dimInactive: true)))->toContain("\033[2m")
         ->and(implode('', $map->renderPreview(4, 2, terminalPreview: true, layerVisibility: ['map:4' => false], dimInactive: true)))->not->toContain("\033[2m");
+});
+
+it('keeps events and NPC overlays above terminal gameplay without exposing decoration', function () {
+    $map = loadLayeredMap(layeredMapProject());
+    $map->setNpcs(NpcCollection::fromMapData([
+        ['id' => 'resident', 'name' => 'Resident', 'sprite' => 'N', 'x' => 0, 'y' => 0],
+    ]));
+    $before = $map->captureLayerSnapshot();
+    expect(array_map(TerminalText::stripAnsi(...), $map->renderPreview(4, 2, showNpcOverlay: true)))->toBe(['N/.E', '.xx.'])
+        ->and(array_map(TerminalText::stripAnsi(...), $map->renderPreview(4, 2, showEventOverlay: false, showNpcOverlay: true)))->toBe(['N/..', '.xx.'])
+        ->and(array_map(TerminalText::stripAnsi(...), $map->renderPreview(4, 2, showNpcOverlay: true, layerVisibility: ['map:4' => false])))->toBe(['N..E', '....'])
+        ->and($map->captureLayerSnapshot())->toBe($before);
 });
 
 it('does not write any untouched layer and preserves source scaffolding and unchanged colour-run rows', function () {
@@ -161,6 +179,118 @@ it('rejects decoration glyphs without crops and reports normalized layer-specifi
     $map->setLayerCell('map:7', 2, 0, '?');
     expect(fn() => $map->save())->toThrow(InvalidArgumentException::class, 'no crop mapping')
         ->and(sourceHashTree($map->directory))->toBe($before);
+});
+
+it('preserves unchanged invalid graphical source when persisting terminal edits', function (string $action, string $edit) {
+    $root = layeredMapProject();
+    $path = $root . '/assets/Maps/test-map/test-map.data.php';
+    $source = preg_replace("/'width' => 16/", "'width' => 0", file_get_contents($path), 1);
+    file_put_contents($path, $source);
+    $map = loadLayeredMap($root);
+    $decoration = file_get_contents($map->directory . '/layers/07.detail.deco.php');
+    expect(fn() => $map->validateLayerContracts())->toThrow(InvalidArgumentException::class);
+    match ($edit) {
+        'glyph' => $map->setLayerCell('map:1', 0, 0, 'Z'),
+        'event' => $map->setLayerCell('event', 2, 0, 'Q'),
+        'metadata' => $map->setMapField('name', 'Renamed Map'),
+    };
+    $expectedSource = $edit === 'metadata' ? str_replace("'Test Map'", "'Renamed Map'", $source) : $source;
+    if ($action === 'save') {
+        $map->save();
+        $loaded = loadLayeredMap($root);
+    } elseif ($action === 'duplicate') {
+        $map->duplicateTo($root . '/assets/Maps/copy', 'copy', $map->getDisplayName());
+        $loaded = ProjectMap::fromDirectory($root . '/assets/Maps', $root . '/assets/Maps/copy');
+        expect(file_get_contents($path))->toBe($source);
+    } else {
+        $loaded = $map->moveTo('district/moved');
+    }
+    expect(file_get_contents($loaded->dataPath))->toBe($expectedSource)
+        ->and(file_get_contents($loaded->directory . '/layers/07.detail.deco.php'))->toBe($decoration)
+        ->and($loaded->getLayerSymbol('map:1', 0, 0))->toBe($edit === 'glyph' ? 'Z' : '.')
+        ->and($loaded->getLayerSymbol('event', 2, 0))->toBe($edit === 'event' ? 'Q' : ' ')
+        ->and($loaded->getDisplayName())->toBe($edit === 'metadata' ? 'Renamed Map' : 'Test Map')
+        ->and(fn() => $loaded->validateLayerContracts())->toThrow(InvalidArgumentException::class);
+})->with(['save', 'duplicate', 'move'])->with(['glyph', 'event', 'metadata']);
+
+it('still refuses changed graphical inputs before saving invalid graphical definitions', function (string $edit) {
+    $root = layeredMapProject();
+    $path = $root . '/assets/Maps/test-map/test-map.data.php';
+    file_put_contents($path, preg_replace("/'width' => 16/", "'width' => 0", file_get_contents($path), 1));
+    $map = loadLayeredMap($root);
+    $disk = sourceHashTree($root);
+    match ($edit) {
+        'decoration' => $map->setLayerCell('map:7', 1, 0, 'd'),
+        'geometry' => $map->resize(5, 3),
+        'crop' => $map->setMapDataField(['tiles2d', 'layers', 'buildings', 'symbols', 'x', 'width'], -1),
+    };
+    expect(fn() => $map->save())->toThrow(InvalidArgumentException::class)
+        ->and(sourceHashTree($root))->toBe($disk);
+})->with(['decoration', 'geometry', 'crop']);
+
+it('keeps the graphical validation baseline sound across failed saves and restored terminal edits', function () {
+    $root = layeredMapProject();
+    $path = $root . '/assets/Maps/test-map/test-map.data.php';
+    $source = preg_replace("/'width' => 16/", "'width' => 0", file_get_contents($path), 1);
+    file_put_contents($path, $source);
+    $map = loadLayeredMap($root);
+    $before = $map->captureLayerSnapshot();
+    $disk = sourceHashTree($root);
+    $map->setLayerCell('map:1', 0, 0, 'Z');
+    $map->setMapField('name', 'Renamed Map');
+    $edited = $map->captureLayerSnapshot();
+    $failure = new FailingFileSetOperations(failures: ['move' => [$map->dataPath]]);
+    expect(fn() => $map->save(files: $failure))->toThrow(FileSetTransactionFailure::class)
+        ->and(sourceHashTree($root))->toBe($disk);
+    $map->save();
+    $saved = sourceHashTree($root);
+    $map->restoreLayerSnapshot($before);
+    $map->save();
+    expect(sourceHashTree($root))->toBe($disk);
+    $map->restoreLayerSnapshot($edited);
+    $map->save();
+    expect(sourceHashTree($root))->toBe($saved)
+        ->and(fn() => $map->validateLayerContracts())->toThrow(InvalidArgumentException::class);
+});
+
+it('refuses invalid graphical data on a new unsaved map without installing any files', function () {
+    $root = layeredMapProject();
+    $directory = $root . '/assets/Maps/new-map';
+    $map = new ProjectMap(
+        mapId: 'new-map', directory: $directory,
+        dataPath: $directory . '/new-map.data.php', mapPath: $directory . '/new-map.map.php',
+        eventPath: $directory . '/new-map.event.php',
+        data: ['name' => 'New Map', 'tiles2d' => [
+            'asset' => 'Graphics/Tilesets/shared.png',
+            'symbols' => ['x' => ['x' => 0, 'y' => 0, 'width' => 0, 'height' => 16]],
+        ]], tileLines: ['xx'], eventLines: ['  '],
+    );
+    $before = sourceHashTree($root);
+    expect(fn() => $map->save())->toThrow(InvalidArgumentException::class)
+        ->and(sourceHashTree($root))->toBe($before)
+        ->and(is_dir($directory))->toBeFalse();
+});
+
+it('rejects restoring invalid graphical data after a valid graphical correction has been persisted', function () {
+    $root = layeredMapProject();
+    $path = $root . '/assets/Maps/test-map/test-map.data.php';
+    $validSource = file_get_contents($path);
+    file_put_contents($path, preg_replace("/'width' => 16/", "'width' => 0", $validSource, 1));
+    $map = loadLayeredMap($root);
+    $invalid = $map->captureLayerSnapshot();
+    $map->setMapDataField(['tiles2d', 'layers', 'buildings', 'symbols', 'x', 'width'], 16);
+    $valid = $map->captureLayerSnapshot();
+    $map->save();
+    expect(file_get_contents($path))->toBe($validSource);
+    $saved = sourceHashTree($root);
+    $map->restoreLayerSnapshot($invalid);
+    expect(fn() => $map->save())->toThrow(InvalidArgumentException::class)
+        ->and(sourceHashTree($root))->toBe($saved);
+    $map->restoreLayerSnapshot($valid);
+    $map->setLayerCell('map:1', 0, 0, 'Z');
+    $map->save();
+    expect(loadLayeredMap($root)->getLayerSymbol('map:1', 0, 0))->toBe('Z')
+        ->and(file_get_contents($path))->toBe($validSource);
 });
 
 it('composes terminal preview with the exact shared Engine style and transparency semantics', function () {

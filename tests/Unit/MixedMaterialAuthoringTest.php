@@ -69,68 +69,48 @@ function getMixedMaterialCanvasRows(Editor $editor): array
         array_slice($window->content, ProjectWorkspace::CANVAS_HEADER_ROWS, 7));
 }
 
-it('authors mapped floor and wall decoration through real canvas commands without changing gameplay', function () {
+it('preserves mixed graphical materials through model save restore and reload without changing terminal gameplay', function () {
     $root = createMixedMaterialProject();
-    [$editor, $map] = layeredCanvasEditor($root);
+    $map = loadLayeredMap($root);
     $dictionary = require $root . '/assets/Maps/collisions.php';
     $collision = MapCollisionResolver::resolveLayers($map->getLayerSet(), $dictionary);
-    $terminal = ['####i#####', '#        #', '#        #', '##########', '#        #', '#        #', '##########'];
+    $terminal = $map->renderPreview(10, 7);
+    $original = $map->captureLayerSnapshot();
     $originalFiles = sourceHashTree($root . '/assets/Maps');
-    $getCells = static fn(array $snapshot): array => array_map(
-        static fn(array $layer): array => $layer['grid']['cells'], $snapshot['layers']['layers'],
-    );
     expect($collision[1][2])->toBe(CollisionType::NONE->value)
         ->and($collision[4][2])->toBe(CollisionType::NONE->value)
         ->and($collision[0][1])->toBe(CollisionType::SOLID->value)
         ->and($collision[3][5])->toBe(CollisionType::SOLID->value);
 
-    callEditorMethod($editor, 'dispatchInput', ']');
-    expect(callEditorMethod($editor, 'getActiveCanvasLayer'))->toBe('map:2');
-    foreach ([[1, 1, 'w'], [2, 1, 'w'], [3, 1, 'w'], [7, 1, 'k'], [8, 1, 'k'], [1, 4, 's'], [2, 4, 's']] as [$x, $y, $glyph]) {
-        paintMixedMaterial($editor, $x, $y, $glyph);
-        expect($map->getLayerSymbol('map:2', $x, $y))->toBe($glyph);
+    foreach ([
+        'map:2' => [[1, 1, 'w'], [2, 1, 'w'], [3, 1, 'w'], [7, 1, 'k'], [8, 1, 'k'], [1, 4, 's'], [2, 4, 's']],
+        'map:3' => [[2, 1, 'r'], [2, 4, 'c']],
+        'map:5' => [[1, 0, 'w'], [5, 3, 'o']],
+    ] as $id => $cells) {
+        foreach ($cells as [$x, $y, $glyph]) {
+            $map->setLayerCell($id, $x, $y, $glyph);
+        }
     }
-    expect(getEditorProperty($editor, 'canvasPaintWarning'))->toContain('Crop mapping', 'read-only');
-    callEditorMethod($editor, 'dispatchInput', ']');
-    expect(callEditorMethod($editor, 'getActiveCanvasLayer'))->toBe('map:3');
-    paintMixedMaterial($editor, 2, 1, 'r');
-    paintMixedMaterial($editor, 2, 4, 'c');
-    callEditorMethod($editor, 'dispatchInput', ']'); // Solid gameplay walls, left untouched.
-    expect(callEditorMethod($editor, 'getActiveCanvasLayer'))->toBe('map:4');
-    callEditorMethod($editor, 'dispatchInput', ']');
-    expect(callEditorMethod($editor, 'getActiveCanvasLayer'))->toBe('map:5');
-    paintMixedMaterial($editor, 1, 0, 'w'); // Cosmetic writing, not an interaction marker.
-    paintMixedMaterial($editor, 5, 3, 'o');
-    $painted = $map->captureGridSnapshot();
-    expect(getMixedMaterialCanvasRows($editor))->toBe([
-        '#w##i#####', '#wrw   kk#', '#        #', '#####o####', '#sc      #', '#        #', '##########',
-    ]);
-
-    // Undo stays bound to its layer even after selecting the interactive fixture layer.
-    callEditorMethod($editor, 'dispatchInput', ']');
-    expect(callEditorMethod($editor, 'getActiveCanvasLayer'))->toBe('map:6');
-    callEditorMethod($editor, 'dispatchInput', "\x1a");
-    expect($map->getLayerSymbol('map:5', 5, 3))->toBe(' ')
-        ->and($map->getLayerSymbol('map:6', 4, 0))->toBe('i');
-    callEditorMethod($editor, 'dispatchInput', "\x19");
-    expect($map->captureGridSnapshot())->toBe($painted);
-    callEditorMethod($editor, 'dispatchInput', "\x13");
-    expect($map->isDirty())->toBeFalse();
+    $painted = $map->captureLayerSnapshot();
+    $map->save();
     $saved = sourceHashTree($root . '/assets/Maps');
     expect(array_keys(array_diff_assoc($saved, $originalFiles)))->toBe([
         'test-map/layers/02.floors.deco.php', 'test-map/layers/03.rugs.deco.php', 'test-map/layers/05.wall-detail.deco.php',
     ]);
-    callEditorMethod($editor, 'dispatchInput', "\x1a");
-    callEditorMethod($editor, 'dispatchInput', "\x13");
-    expect(loadLayeredMap($root)->getLayerSymbol('map:5', 5, 3))->toBe(' ');
-    callEditorMethod($editor, 'dispatchInput', "\x19");
-    callEditorMethod($editor, 'dispatchInput', "\x13");
+    $map->restoreLayerSnapshot($original);
+    $map->save();
+    expect(sourceHashTree($root . '/assets/Maps'))->toBe($originalFiles);
+    $map->restoreLayerSnapshot($painted);
+    $map->save();
     expect(sourceHashTree($root . '/assets/Maps'))->toBe($saved);
-    callEditorMethod($editor, 'dispatchInput', "\x12");
-    $reloaded = callEditorMethod($editor, 'getSelectedMap');
-    expect($reloaded)->not->toBe($map)
-        ->and($getCells($reloaded->captureGridSnapshot()))->toBe($getCells($painted))
-        ->and(MapCollisionResolver::resolveLayers($reloaded->getLayerSet(), $dictionary))->toBe($collision);
+    $reloaded = loadLayeredMap($root);
+    expect($reloaded->getLayerSymbol('map:2', 7, 1))->toBe('k')
+        ->and($reloaded->getLayerSymbol('map:3', 2, 4))->toBe('c')
+        ->and($reloaded->getLayerSymbol('map:5', 5, 3))->toBe('o')
+        ->and($reloaded->renderPreview(10, 7))->toBe($terminal)
+        ->and(MapCollisionResolver::resolveLayers($reloaded->getLayerSet(), $dictionary))->toBe($collision)
+        ->and($reloaded->getEditableData()['npcs'][0]['dialogue'])->toBe([['text' => 'Read the notice.']])
+        ->and($reloaded->getEditableData()['npcs'][0]['sprite'])->toBe('');
 
     $rectangles = [];
     foreach (['map:2' => ['w', 'k', 's'], 'map:3' => ['r', 'c'], 'map:5' => ['w', 'o']] as $id => $glyphs) {
@@ -141,47 +121,65 @@ it('authors mapped floor and wall decoration through real canvas commands withou
         }
     }
     expect(array_unique($rectangles))->toHaveCount(7);
-    // Terminal preview ignores the hidden gameplay layer as well as every cosmetic marker.
-    callEditorMethod($editor, 'dispatchInput', 'v');
-    callEditorMethod($editor, 'dispatchInput', 'd');
-    callEditorMethod($editor, 'dispatchInput', 't');
-    expect(callEditorMethod($editor, 'createCanvasWindow')->title)->toContain('Terminal preview')
-        ->and(getMixedMaterialCanvasRows($editor))->toBe($terminal)
-        ->and($reloaded->getLayerSymbol('map:6', 4, 0))->toBe('i')
-        ->and($reloaded->getEditableData()['npcs'][0]['dialogue'])->toBe([['text' => 'Read the notice.']])
-        ->and($reloaded->getEditableData()['npcs'][0]['sprite'])->toBe('');
-    callEditorMethod($editor, 'dispatchInput', "\x13");
-    expect(sourceHashTree($root . '/assets/Maps'))->toBe($saved);
 });
 
-it('keeps symbol defaults read-only alongside cell art authoring and refuses unmapped decoration through Ctrl-S', function () {
+it('excludes material markers and crop controls from the TUI while terminal editing preserves their source', function () {
     $root = createMixedMaterialProject();
-    [$editor, $map] = layeredCanvasEditor($root);
-    $before = sourceHashTree($root);
-    callEditorMethod($editor, 'dispatchInput', ']');
-    $fields = callEditorMethod($editor, 'getLayerInspectorFields');
-    expect(array_column(array_filter($fields, static fn(array $field): bool => ($field['target'] ?? '') !== 'tile-art'), 'editable'))->each->toBeFalse();
-    expect(array_values(array_filter($fields, static fn(array $field): bool => ($field['target'] ?? '') === 'tile-art'))[0]['editable'])->toBeTrue();
-    callEditorMethod($editor, 'dispatchInput', "\t");
-    $attempted = [];
-    foreach (callEditorMethod($editor, 'getInspectorFields') as $index => $field) {
-        if (! in_array($field['label'], ['tiles2d (read-only)', '  w', '  k', '  s'], true)) {
-            continue;
-        }
-        setEditorProperty($editor, 'selectedInspectorFieldIndex', $index);
-        callEditorMethod($editor, 'dispatchInput', "\r");
-        expect(getEditorProperty($editor, 'isInspectorEditing'))->toBeFalse();
-        $attempted[] = $field['label'];
+    $map = loadLayeredMap($root);
+    foreach (['map:2' => [1, 1, 'w'], 'map:3' => [2, 1, 'r'], 'map:5' => [1, 0, 'o']] as $id => [$x, $y, $glyph]) {
+        $map->setLayerCell($id, $x, $y, $glyph);
     }
-    expect($attempted)->toBe(['tiles2d (read-only)', '  w', '  k', '  s']);
-    callEditorMethod($editor, 'dispatchInput', "\033[Z");
-    paintMixedMaterial($editor, 1, 1, 'z');
+    $map->save();
+    $before = sourceHashTree($root . '/assets/Maps');
+    [$editor, $map] = layeredCanvasEditor($root);
+    $terminal = ['####i#####', '#        #', '#        #', '##########', '#        #', '#        #', '##########'];
+    expect(getMixedMaterialCanvasRows($editor))->toBe($terminal);
+    foreach (['map:4', 'map:6', 'event', 'map:1'] as $id) {
+        callEditorMethod($editor, 'dispatchInput', ']');
+        expect(callEditorMethod($editor, 'getActiveCanvasLayer'))->toBe($id);
+    }
+    foreach (['map:2', 'map:3', 'map:5'] as $id) {
+        callEditorMethod($editor, 'selectCanvasLayer', $id);
+        expect(callEditorMethod($editor, 'getActiveCanvasLayer'))->toBe('map:1');
+    }
+    $labels = implode("\n", array_map(static fn($item): string => $item->label, callEditorMethod($editor, 'buildLayerPaletteItems')));
+    expect($labels)->not->toContain('floors', 'rugs', 'wall-detail', 'Tile art', 'Terminal preview')
+        ->and(json_encode(callEditorMethod($editor, 'getLayerInspectorFields')))->not->toContain('floors', 'rugs', 'wall-detail', 'tiles2d', 'tile-art');
+
+    paintMixedMaterial($editor, 2, 1, '#');
     callEditorMethod($editor, 'dispatchInput', "\x13");
-    expect(getEditorProperty($editor, 'statusMessage'))->toContain('has no crop mapping')
-        ->and($map->isDirty())->toBeTrue()
-        ->and(sourceHashTree($root))->toBe($before);
+    expect($map->getLayerSymbol('map:1', 2, 1))->toBe('#')
+        ->and(array_keys(array_diff_assoc(sourceHashTree($root . '/assets/Maps'), $before)))->toBe(['test-map/layers/01.terrain.map.php']);
     callEditorMethod($editor, 'dispatchInput', "\x1a");
     callEditorMethod($editor, 'dispatchInput', "\x13");
+    expect(sourceHashTree($root . '/assets/Maps'))->toBe($before)
+        ->and(getMixedMaterialCanvasRows($editor))->toBe($terminal);
+    callEditorMethod($editor, 'dispatchInput', "\x19");
+    callEditorMethod($editor, 'dispatchInput', "\x13");
+    callEditorMethod($editor, 'dispatchInput', "\x12");
+    $loaded = callEditorMethod($editor, 'getSelectedMap');
+    expect($loaded->getLayerSymbol('map:1', 2, 1))->toBe('#')
+        ->and($loaded->getLayerSymbol('map:2', 1, 1))->toBe('w')
+        ->and($loaded->getLayerSymbol('map:3', 2, 1))->toBe('r')
+        ->and($loaded->getLayerSymbol('map:5', 1, 0))->toBe('o');
+    callEditorMethod($editor, 'selectCanvasLayer', 'map:6');
+    callEditorMethod($editor, 'dispatchInput', 'v');
+    expect(getMixedMaterialCanvasRows($editor)[0])->toBe('##########');
+    callEditorMethod($editor, 'dispatchInput', 'v');
+    expect(getMixedMaterialCanvasRows($editor)[0])->toBe('####i#####');
+});
+
+it('retains strict model refusal of newly unmapped graphical material without exposing a TUI crop workflow', function () {
+    $root = createMixedMaterialProject();
+    $map = loadLayeredMap($root);
+    $before = sourceHashTree($root);
+    $original = $map->captureLayerSnapshot();
+    $map->setLayerCell('map:2', 1, 1, 'z');
+    expect(fn() => $map->save())->toThrow(InvalidArgumentException::class, 'has no crop mapping')
+        ->and($map->isDirty())->toBeTrue()
+        ->and(sourceHashTree($root))->toBe($before);
+    $map->restoreLayerSnapshot($original);
+    $map->save();
     expect($map->isDirty())->toBeFalse()
         ->and(sourceHashTree($root))->toBe($before);
 });

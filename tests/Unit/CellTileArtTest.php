@@ -8,7 +8,6 @@ use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\Storage\FileSetTransactionFailure;
 use Ichiloto\Engine\Field\MapCollisionResolver;
 use Ichiloto\Engine\Field\MapGridSource;
-use Ichiloto\Editor\UI\Modal;
 
 function createCellTileArtProject(bool $legacy = false): string
 {
@@ -186,67 +185,48 @@ PHP;
     expect(file_get_contents($path))->toBe(str_replace("'x' => 16", "'x' => 32", $source));
 });
 
-it('uses the real palette asset picker crop editor confirmation save and undo without losing context', function () {
-    $root = createCellTileArtProject();
+it('preserves existing cell crops and graphical assets through terminal painting undo redo save and reload', function (bool $legacy) {
+    $root = createCellTileArtProject($legacy);
+    $map = loadLayeredMap($root);
+    $id = $legacy ? 'tile' : 'map:4';
+    $map->setCellTileArt($id, 0, 0, getCellTileArtRectangle(32), 'Graphics/Tilesets/shared.png');
+    $map->save();
+    $source = file_get_contents($map->dataPath);
+    $assets = sourceHashTree($root . '/assets/Graphics');
+    $layers = sourceHashTree($map->directory);
     [$editor, $map] = layeredCanvasEditor($root);
-    callEditorMethod($editor, 'dispatchInput', ']');
-    $before = $map->captureLayerSnapshot();
-    callEditorMethod($editor, 'dispatchInput', "\x10");
-    foreach (str_split('Tile art: Edit selected cell') as $key) { callEditorMethod($editor, 'dispatchInput', $key); }
-    callEditorMethod($editor, 'dispatchInput', "\r");
-    expect(getEditorProperty($editor, 'modals')->has(Modal::TILE_ART))->toBeTrue()
-        ->and(renderEditorPlainFrame($editor, 160, 45))->toContain('buildings / cell 0,0');
-    foreach ([']', "\x04", "\x13", "\033[<0;5;5M"] as $key) { callEditorMethod($editor, 'dispatchInput', $key); }
-    expect($map->captureLayerSnapshot())->toBe($before)
-        ->and(callEditorMethod($editor, 'getActiveCanvasLayer'))->toBe('map:4');
-    callEditorMethod($editor, 'dispatchInput', 'a');
-    foreach (str_split('replacement') as $key) { callEditorMethod($editor, 'dispatchInput', $key); }
-    callEditorMethod($editor, 'dispatchInput', "\r");
-    callEditorMethod($editor, 'dispatchInput', "\t");
-    callEditorMethod($editor, 'dispatchInput', "\r");
-    callEditorMethod($editor, 'dispatchInput', "\177");
-    callEditorMethod($editor, 'dispatchInput', '3');
-    callEditorMethod($editor, 'dispatchInput', '2');
-    callEditorMethod($editor, 'dispatchInput', "\r");
-    callEditorMethod($editor, 'dispatchInput', 's');
-    expect(renderEditorPlainFrame($editor, 160, 45))->toContain('Every existing symbol and cell crop', 'Y:Confirm')
-        ->and($map->captureLayerSnapshot())->toBe($before);
-    callEditorMethod($editor, 'dispatchInput', "\r");
-    expect($map->captureLayerSnapshot())->toBe($before);
-    callEditorMethod($editor, 'dispatchInput', 'y');
-    expect($map->getCellTileArt('map:4', 0, 0)['override'])->toBe(getCellTileArtRectangle(32))
-        ->and($map->getEditableData()['tiles2d']['asset'])->toBe('Graphics/Tilesets/shared.png')
-        ->and($map->getCellTileArt('map:7', 0, 0)['asset'])->toBe('Graphics/Tilesets/detail.png');
-    callEditorMethod($editor, 'dispatchInput', "\x13");
-    $saved = file_get_contents($map->dataPath);
-    callEditorMethod($editor, 'dispatchInput', ']');
+    callEditorMethod($editor, 'selectCanvasLayer', $id);
+    $oldSymbol = $map->getLayerSymbol($id, 0, 0);
+    foreach (['i', 'Z', "\033", "\x13"] as $key) {
+        callEditorMethod($editor, 'dispatchInput', $key);
+    }
+    expect($map->getLayerSymbol($id, 0, 0))->toBe('Z')
+        ->and(file_get_contents($map->dataPath))->toBe($source)
+        ->and(renderEditorPlainFrame($editor, 160, 45))->not->toContain('Crop mapping', 'cell overrides', 'Tile art');
     callEditorMethod($editor, 'dispatchInput', "\x1a");
     callEditorMethod($editor, 'dispatchInput', "\x13");
-    expect(file_get_contents($map->dataPath))->toBe($before['source']);
-    callEditorMethod($editor, 'dispatchInput', "\x19");
-    callEditorMethod($editor, 'dispatchInput', "\x13");
-    expect(file_get_contents($map->dataPath))->toBe($saved);
-    callEditorMethod($editor, 'dispatchInput', "\x12");
-    expect(callEditorMethod($editor, 'getSelectedMap')->getCellTileArt('map:4', 0, 0)['override'])->toBe(getCellTileArtRectangle(32));
-});
+    expect($map->getLayerSymbol($id, 0, 0))->toBe($oldSymbol)
+        ->and(sourceHashTree($map->directory))->toBe($layers);
+    foreach (["\x19", "\x13", "\x12"] as $key) {
+        callEditorMethod($editor, 'dispatchInput', $key);
+    }
+    $loaded = callEditorMethod($editor, 'getSelectedMap');
+    expect($loaded->getLayerSymbol($id, 0, 0))->toBe('Z')
+        ->and($loaded->getCellTileArt($id, 0, 0)['override'])->toBe(getCellTileArtRectangle(32))
+        ->and(file_get_contents($loaded->dataPath))->toBe($source)
+        ->and(sourceHashTree($root . '/assets/Graphics'))->toBe($assets);
+    if (! $legacy) {
+        expect(sourceHashTree($loaded->directory)['layers/07.detail.deco.php'])->toBe($layers['layers/07.detail.deco.php']);
+    }
+})->with([false, true]);
 
-it('offers only project-contained PNG assets and never treats picker text as a resource path', function () {
+it('offers only project-contained PNG assets in the shared resource catalogue', function () {
     $root = createCellTileArtProject();
     copy($root . '/assets/Graphics/Tilesets/shared.png', $root . '/outside.png');
     symlink($root . '/outside.png', $root . '/assets/Graphics/Tilesets/outside.png');
     expect(ReferenceCatalog::getPngAssets($root))->toBe([
         'Graphics/Tilesets/detail.png', 'Graphics/Tilesets/replacement.png', 'Graphics/Tilesets/shared.png',
     ]);
-    [$editor, $map] = layeredCanvasEditor($root);
-    $before = $map->captureLayerSnapshot();
-    callEditorMethod($editor, 'openCellTileArt');
-    callEditorMethod($editor, 'dispatchInput', 'a');
-    foreach (str_split('../outside.png') as $key) { callEditorMethod($editor, 'dispatchInput', $key); }
-    callEditorMethod($editor, 'dispatchInput', "\r");
-    expect(getEditorProperty($editor, 'referencePicker')->isOpen())->toBeTrue();
-    callEditorMethod($editor, 'dispatchInput', "\033");
-    callEditorMethod($editor, 'dispatchInput', "\033");
-    expect($map->captureLayerSnapshot())->toBe($before);
 });
 
 it('requires atlas confirmation before mutation and rejects invalid PNGs or existing crops outside the replacement', function () {
@@ -342,49 +322,9 @@ it('rolls back cell metadata and changed grids together when transactional insta
     expect(loadLayeredMap($root)->getCellTileArt('map:4', 0, 1)['override'])->toBe(getCellTileArtRectangle(32));
 });
 
-it('uses inspector remove confirmation and undo without changing inherited defaults', function () {
-    [$editor, $map] = layeredCanvasEditor(createCellTileArtProject());
-    $map->setCellTileArt('map:4', 0, 0, getCellTileArtRectangle(32));
-    $map->save();
-    $before = $map->captureLayerSnapshot();
-    callEditorMethod($editor, 'selectCanvasLayer', 'map:4');
-    callEditorMethod($editor, 'dispatchInput', "\t");
-    $found = false;
-    foreach (callEditorMethod($editor, 'getInspectorFields') as $index => $field) {
-        if (($field['target'] ?? '') !== 'tile-art') { continue; }
-        $found = true;
-        setEditorProperty($editor, 'selectedInspectorFieldIndex', $index);
-        callEditorMethod($editor, 'dispatchInput', "\r");
-    }
-    expect($found)->toBeTrue()->and(getEditorProperty($editor, 'modals')->has(Modal::TILE_ART))->toBeTrue();
-    callEditorMethod($editor, 'dispatchInput', 'r');
-    expect(renderEditorPlainFrame($editor, 160, 45))->toContain('Remove only this cell override?')
-        ->and($map->captureLayerSnapshot())->toBe($before);
-    callEditorMethod($editor, 'dispatchInput', "\033");
-    expect($map->captureLayerSnapshot())->toBe($before);
-    callEditorMethod($editor, 'dispatchInput', 'r');
-    callEditorMethod($editor, 'dispatchInput', 'y');
-    callEditorMethod($editor, 'dispatchInput', "\x13");
-    expect($map->getCellTileArt('map:4', 0, 0)['override'])->toBeNull();
-    callEditorMethod($editor, 'dispatchInput', "\x1a");
-    callEditorMethod($editor, 'dispatchInput', "\x13");
-    expect(file_get_contents($map->dataPath))->toBe($before['source']);
-});
-
-it('refuses stale captured cell art without changing the newer author state', function () {
-    [$editor, $map] = layeredCanvasEditor(createCellTileArtProject());
-    callEditorMethod($editor, 'selectCanvasLayer', 'map:4');
-    callEditorMethod($editor, 'openCellTileArt');
-    $map->setCellTileArt('map:4', 0, 0, getCellTileArtRectangle(32));
-    $newer = $map->captureLayerSnapshot();
-    callEditorMethod($editor, 'dispatchInput', 's');
-    expect($map->captureLayerSnapshot())->toBe($newer)
-        ->and(renderEditorPlainFrame($editor, 160, 45))->toContain('Cancel and reopen Tile art');
-});
-
 it('authors coordinate-only decoration in stages while terminal preview and collision stay unchanged', function () {
     $root = createCellTileArtProject();
-    [$editor, $map] = layeredCanvasEditor($root);
+    $map = loadLayeredMap($root);
     $dictionary = [];
     $collision = MapCollisionResolver::resolveLayers($map->getLayerSet(), $dictionary);
     $terminal = $map->renderPreview(4, 2, terminalPreview: true);
@@ -397,14 +337,9 @@ it('authors coordinate-only decoration in stages while terminal preview and coll
         ->and(sourceHashTree($map->directory))->toBe($before);
     $map->setCellTileArt($id, 2, 0, getCellTileArtRectangle(32));
     $map->save();
-    callEditorMethod($editor, 'selectCanvasLayer', $id);
-    $bounds = callEditorMethod($editor, 'getCanvasPreviewBounds');
-    callEditorMethod($editor, 'dispatchInput', sprintf("\033[<0;%d;%dM", $bounds['left'] + 1, $bounds['top']));
-    callEditorMethod($editor, 'dispatchInput', sprintf("\033[<0;%d;%dm", $bounds['left'] + 1, $bounds['top']));
-    foreach (['i', ' ', "\033"] as $key) { callEditorMethod($editor, 'dispatchInput', $key); }
-    expect(getEditorProperty($editor, 'canvasPaintWarning'))->toContain('cell overrides stay at their coordinates')
-        ->and($map->getCellTileArt($id, 1, 0)['override'])->toBe(getCellTileArtRectangle());
-    callEditorMethod($editor, 'dispatchInput', "\x13");
+    $map->setLayerCell($id, 1, 0, ' ');
+    expect($map->getCellTileArt($id, 1, 0)['override'])->toBe(getCellTileArtRectangle());
+    $map->save();
     expect($map->renderPreview(4, 2, terminalPreview: true))->toBe($terminal)
         ->and(MapCollisionResolver::resolveLayers($map->getLayerSet(), $dictionary))->toBe($collision);
     $map->removeCellTileArt($id, 2, 0);
@@ -412,13 +347,11 @@ it('authors coordinate-only decoration in stages while terminal preview and coll
 });
 
 it('reuses validated crop definitions across every paint dab and invalidates them for data and layer changes', function () {
-    [$editor, $map] = layeredCanvasEditor(createCellTileArtProject());
+    $map = loadLayeredMap(createCellTileArtProject());
     $map->setCellTileArt('map:4', 0, 0, getCellTileArtRectangle(32));
-    callEditorMethod($editor, 'selectCanvasLayer', 'map:4');
     $definitions = $map->getLayerTileDefinitions();
     for ($dab = 0; $dab < 20; $dab++) {
         $map->setLayerCell('map:4', 0, 0, $dab % 2 === 0 ? 'x' : ' ');
-        callEditorMethod($editor, 'recordCanvasCropWarning', $map, 'x', ' ', 0, 0);
         expect($map->getLayerTileDefinitions()['buildings'])->toBe($definitions['buildings']);
     }
     $map->setCellTileArt('map:4', 0, 0, getCellTileArtRectangle());
