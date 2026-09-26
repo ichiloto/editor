@@ -3,53 +3,7 @@
 declare(strict_types=1);
 
 use Ichiloto\Editor\ProjectMap;
-
-/**
- * Loads the fixture map fresh from disk.
- */
-function fixtureMap(): ProjectMap
-{
-  $mapsRoot = fixturePath('sample-project/assets/Maps');
-
-  return ProjectMap::fromDirectory($mapsRoot, $mapsRoot . '/test-map');
-}
-
-/**
- * Copies the fixture map into a scratch maps root for save tests.
- */
-function scratchMapCopy(): array
-{
-  $root = rememberTemporaryProject(sys_get_temp_dir() . '/ichiloto-editor-test-' . bin2hex(random_bytes(4)));
-  $mapsRoot = $root . '/assets/Maps';
-  $directory = $mapsRoot . '/test-map';
-  mkdir($directory, 0777, true);
-
-  foreach (['data', 'map', 'event'] as $part) {
-    copy(
-      fixturePath("sample-project/assets/Maps/test-map/test-map.{$part}.php"),
-      "{$directory}/test-map.{$part}.php",
-    );
-  }
-
-  return [$root, ProjectMap::fromDirectory($mapsRoot, $directory)];
-}
-
-/**
- * Removes a scratch tree created by scratchMapCopy().
- */
-function removeScratchTree(string $root): void
-{
-  $iterator = new RecursiveIteratorIterator(
-    new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS),
-    RecursiveIteratorIterator::CHILD_FIRST,
-  );
-
-  foreach ($iterator as $item) {
-    $item->isDir() ? rmdir($item->getPathname()) : unlink($item->getPathname());
-  }
-
-  rmdir($root);
-}
+use Ichiloto\Engine\IO\Console\TerminalText;
 
 it('parses the fixture map dimensions and styled tiles', function () {
   $map = fixtureMap();
@@ -57,8 +11,8 @@ it('parses the fixture map dimensions and styled tiles', function () {
   expect($map->getWidth())->toBe(12)
     ->and($map->getHeight())->toBe(5)
     ->and($map->getDisplayName())->toBe('Test Map')
-    ->and($map->getTileSymbol(0, 0))->toBe('#')
-    ->and($map->getTileSymbol(3, 1))->toBe('~')
+    ->and($map->getTileSymbol(0, 0))->toBe('##')
+    ->and($map->getTileSymbol(3, 1))->toBe('~~')
     ->and($map->isDirty())->toBeFalse();
 });
 
@@ -78,7 +32,7 @@ it('marks the map dirty on tile and event mutations', function () {
   $map->setTileSymbol(1, 1, '@');
 
   expect($map->isDirty())->toBeTrue()
-    ->and($map->getTileSymbol(1, 1))->toBe('@');
+    ->and($map->getTileSymbol(1, 1))->toBe('@@');
 
   $map = fixtureMap();
   $map->setEventSymbol(2, 2, 'T');
@@ -89,12 +43,13 @@ it('marks the map dirty on tile and event mutations', function () {
 
 it('renders a preview with the event overlay merged over tiles', function () {
   $map = fixtureMap();
-  $withOverlay = $map->renderPreview(12, 5);
-  $withoutOverlay = $map->renderPreview(12, 5, showEventOverlay: false);
+  $withOverlay = array_map(TerminalText::stripAnsi(...), $map->renderPreview(12, 5));
+  $withoutOverlay = array_map(TerminalText::stripAnsi(...), $map->renderPreview(12, 5, showEventOverlay: false));
 
-  expect($withOverlay[0])->toBe('############')
-    ->and($withOverlay[1])->toBe('#  ~~E     #')
-    ->and($withoutOverlay[1])->toBe('#  ~~~     #');
+  // Every cell is two terminal columns of the preview.
+  expect($withOverlay[0])->toBe('########################')
+    ->and($withOverlay[1])->toBe('##    ~~~~EE          ##')
+    ->and($withoutOverlay[1])->toBe('##    ~~~~~~          ##');
 });
 
 it('renders an offset preview window', function () {
@@ -102,7 +57,7 @@ it('renders an offset preview window', function () {
   $lines = $map->renderPreview(4, 2, offsetX: 3, offsetY: 1);
 
   expect($lines)->toHaveCount(2)
-    ->and($lines[0])->toBe('~~E');
+    ->and(TerminalText::stripAnsi($lines[0]))->toBe('~~~~EE');
 });
 
 it('resizes the grid preserving existing content', function () {
@@ -111,14 +66,14 @@ it('resizes the grid preserving existing content', function () {
 
   expect($map->getWidth())->toBe(14)
     ->and($map->getHeight())->toBe(6)
-    ->and($map->getTileSymbol(0, 0))->toBe('#')
-    ->and($map->getTileSymbol(13, 5))->toBe(' ');
+    ->and($map->getTileSymbol(0, 0))->toBe('##')
+    ->and($map->getTileSymbol(13, 5))->toBe('  ');
 
   $map->resize(6, 3);
 
   expect($map->getWidth())->toBe(6)
     ->and($map->getHeight())->toBe(3)
-    ->and($map->getTileSymbol(3, 1))->toBe('~');
+    ->and($map->getTileSymbol(3, 1))->toBe('~~');
 });
 
 it('restores a captured grid snapshot', function () {
@@ -131,7 +86,7 @@ it('restores a captured grid snapshot', function () {
 
   expect($map->getWidth())->toBe(12)
     ->and($map->getHeight())->toBe(5)
-    ->and($map->getTileSymbol(1, 1))->toBe(' ')
+    ->and($map->getTileSymbol(1, 1))->toBe('  ')
     // The snapshot restored the exact loaded content, and dirty is a fact
     // about content now: back to the baseline is back to pristine.
     ->and($map->isDirty())->toBeFalse();
@@ -193,8 +148,8 @@ it('saves in place and preserves styled tile formatting', function () {
     $rawMap = (string) file_get_contents($root . '/assets/Maps/test-map/test-map.map.php');
 
     // The styled water run survives the round trip and the edit lands.
-    expect($rawMap)->toContain('<blue>~~~</blue>')
-      ->and(ProjectMap::fromDirectory($root . '/assets/Maps', $root . '/assets/Maps/test-map')->getTileSymbol(1, 2))->toBe('@');
+    expect($rawMap)->toContain('<fg=blue>~~~~~~</>')
+      ->and(ProjectMap::fromDirectory($root . '/assets/Maps', $root . '/assets/Maps/test-map')->getTileSymbol(1, 2))->toBe('@@');
   } finally {
     removeScratchTree($root);
   }
@@ -283,11 +238,11 @@ it('colours every cell of an authored run, not only its first', function () {
 
   try {
     [, $map] = styledScratchMap($root, [
-      '############',
-      '#<fg=gray>####</>      #',
-      '#          #',
-      '#          #',
-      '############',
+      '########################',
+      '##<fg=gray>########</>            ##',
+      '##                    ##',
+      '##                    ##',
+      '########################',
     ]);
 
     foreach ([1, 2, 3, 4] as $x) {
@@ -295,7 +250,7 @@ it('colours every cell of an authored run, not only its first', function () {
     }
 
     expect($map->getTileColor(5, 1))->toBeNull()
-      ->and(substr_count($map->renderPreview(12, 5)[1], "\033[90m#\033[0m"))->toBe(4);
+      ->and(substr_count($map->renderPreview(12, 5)[1], "\033[90m##\033[0m"))->toBe(4);
   } finally {
     removeScratchTree($root);
   }
@@ -306,11 +261,11 @@ it('rebuilds an edited row as balanced runs and keeps untouched rows byte-identi
 
   try {
     $rows = [
-      '############',
-      '#<fg=gray>####</>      #',
-      '# <fg=gray;options=bold>~~</> #  #',
-      '#          #',
-      '############',
+      '########################',
+      '##<fg=gray>########</>            ##',
+      '##  <fg=gray;options=bold>~~~~</>  ##    ##',
+      '##                    ##',
+      '########################',
     ];
     [$mapFile, $map] = styledScratchMap($root, $rows);
 
@@ -321,7 +276,7 @@ it('rebuilds an edited row as balanced runs and keeps untouched rows byte-identi
 
     $saved = explode("\n", (string) file_get_contents($mapFile));
 
-    expect($saved[4])->toBe('#<fg=gray>#</><fg=red>#</><fg=gray>#</>       #')
+    expect($saved[4])->toBe('##<fg=gray>##</><fg=red>##</><fg=gray>##</>              ##')
       ->and($saved[5])->toBe($rows[2])
       ->and($saved[3])->toBe($rows[0]);
 
@@ -341,11 +296,11 @@ it('writes a row restored to its loaded cells back as its original bytes', funct
 
   try {
     $rows = [
-      '############',
-      '#<fg=gray>####</>      #',
-      '#          #',
-      '#          #',
-      '############',
+      '########################',
+      '##<fg=gray>########</>            ##',
+      '##                    ##',
+      '##                    ##',
+      '########################',
     ];
     [$mapFile, $map] = styledScratchMap($root, $rows);
     $original = (string) file_get_contents($mapFile);
@@ -359,8 +314,8 @@ it('writes a row restored to its loaded cells back as its original bytes', funct
     $saved = explode("\n", (string) file_get_contents($mapFile));
 
     expect($saved[4])->toBe($rows[1])
-      ->and($saved[6])->toBe('#        x #')
-      ->and(str_replace('#        x #', '#          #', (string) file_get_contents($mapFile)))->toBe($original);
+      ->and($saved[6])->toBe('##                xx  ##')
+      ->and(str_replace('##                xx  ##', $rows[3], (string) file_get_contents($mapFile)))->toBe($original);
   } finally {
     removeScratchTree($root);
   }

@@ -78,13 +78,14 @@ it('writes parseable map and event grids when authored rows resemble nowdoc clos
         $directory . '/marker-map.map.php',
         $directory . '/marker-map.event.php',
         ['name' => 'Marker Map'],
-        ['ICHILOTO_MAP;'],
-        ['ICHILOTO_EVENT_MAP;'],
+        // One trailing space completes each row's last two-column cell.
+        ['ICHILOTO_MAP; '],
+        ['ICHILOTO_EVENT_MAP; '],
     );
 
     $map->save();
 
-    expect(MapGridSource::readFile($map->mapPath))->toBe('ICHILOTO_MAP;')
-        ->and(MapGridSource::readFile($map->eventPath))->toBe('ICHILOTO_EVENT_MAP;')
-        ->and(ProjectMap::fromDirectory($root . '/assets/Maps', $directory)->tileLines)->toBe(['ICHILOTO_MAP;']);
+    expect(MapGridSource::readFile($map->mapPath))->toBe('ICHILOTO_MAP; ')
+        ->and(MapGridSource::readFile($map->eventPath))->toBe('ICHILOTO_EVENT_MAP; ')
+        ->and(ProjectMap::fromDirectory($root . '/assets/Maps', $directory)->tileLines)->toBe(['ICHILOTO_MAP; ']);
 });

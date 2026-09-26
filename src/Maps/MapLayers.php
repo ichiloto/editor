@@ -6,6 +6,7 @@ namespace Ichiloto\Editor\Maps;
 
 use Ichiloto\Editor\MapSourceRefusal;
 use Ichiloto\Editor\Storage\FileSetTransaction;
+use Ichiloto\Engine\Field\MapCell;
 use Ichiloto\Engine\Field\MapGridSource;
 use Ichiloto\Engine\Field\MapLayerSource;
 use Ichiloto\Engine\Field\MapLayerSet;
@@ -37,8 +38,10 @@ final class MapLayers
         $this->captureBaseline();
     }
 
-    public static function createFromSource(string $directory, MapLayerSet $set, string $eventPath, string $eventText): self
+    /** @throws \InvalidArgumentException When a grid is not whole two-column cells. */
+    public static function createFromSource(string $directory, MapLayerSet $set, string $eventPath, string $eventText, string $mapId = ''): self
     {
+        $prefix = $mapId === '' ? '' : $mapId . '/';
         $layers = [];
         foreach ($set->layers as $layer) {
             $path = $directory . ($set->legacy ? '/' : '/layers/') . basename($layer->path);
@@ -46,10 +49,11 @@ final class MapLayers
                 'id' => $set->legacy ? self::BASE : 'map:' . $layer->order,
                 'name' => $layer->name, 'order' => $layer->order, 'decoration' => $layer->decoration,
                 'path' => $path,
-                'grid' => new EditableGrid($layer->text, (string) file_get_contents($path), $set->legacy),
+                'grid' => new EditableGrid($layer->text, (string) file_get_contents($path), $set->legacy, $prefix . basename($path)),
             ];
         }
-        return new self($directory, $set->legacy, $layers, new EditableGrid($eventText, (string) file_get_contents($eventPath)), $eventPath);
+        $events = new EditableGrid($eventText, (string) file_get_contents($eventPath), context: $prefix . basename($eventPath));
+        return new self($directory, $set->legacy, $layers, $events, $eventPath);
     }
 
     public function getLayers(): array
@@ -110,7 +114,7 @@ final class MapLayers
         }
         $id = 'map:' . $order;
         $grid = new EditableGrid(implode("\n", array_map(
-            static fn(array $row): string => str_repeat(' ', count($row)), $this->getBaseGrid()->cells,
+            static fn(array $row): string => str_repeat(MapCell::BLANK, count($row)), $this->getBaseGrid()->cells,
         )));
         $this->layers[$id] = ['id' => $id, 'name' => $name, 'order' => $order, 'decoration' => $decoration,
             'path' => $this->buildPath($order, $name, $decoration), 'grid' => $grid];
@@ -178,6 +182,7 @@ final class MapLayers
         $this->layers = array_map(static fn(array $layer): array => [...$layer, 'grid' => EditableGrid::createFromSnapshot($layer['grid'])], $snapshot['layers']);
     }
 
+    /** Resizes every layer to whole cells. */
     public function resize(int $width, int $height): void
     {
         foreach ($this->layers as $layer) {

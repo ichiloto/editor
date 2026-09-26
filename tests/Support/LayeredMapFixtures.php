@@ -12,15 +12,16 @@ function layeredMapProject(bool $ragged = false): string
     $directory = $root . '/assets/Maps/test-map';
     unlink($directory . '/test-map.map.php');
     mkdir($directory . '/layers');
-    $terrain = "<fg=green>....</>\n<fg=red>..</><fg=red>..</>";
-    $building = " /  \n xx ";
-    $decoration = "d   \n   d";
-    $events = "   E\n    ";
+    // Every cell is two terminal columns; each fixture cell repeats one character.
+    $terrain = "<fg=green>........</>\n<fg=red>....</><fg=red>....</>";
+    $building = "  //    \n  xxxx  ";
+    $decoration = "dd      \n      dd";
+    $events = "      EE\n        ";
     if ($ragged) {
-        $terrain = "....\n..";
-        $building = " /  \nx ";
-        $decoration = "d   \n d";
-        $events = "   E\n  ";
+        $terrain = "........\n....";
+        $building = "  //    \nxx  ";
+        $decoration = "dd      \n  dd";
+        $events = "      EE\n    ";
     }
     foreach (['01.terrain.map.php' => $terrain, '04.buildings.map.php' => $building, '07.detail.deco.php' => $decoration] as $file => $text) {
         $source = MapGridSource::buildSource($text, 'AUTHORED', '// keep ' . $file . "\n");

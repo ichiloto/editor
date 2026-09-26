@@ -35,8 +35,8 @@ function strokeTestMap(): ProjectMap
     mapPath: '/virtual/Maps/stroke-map/stroke-map.map.php',
     eventPath: '/virtual/Maps/stroke-map/stroke-map.event.php',
     data: ['name' => 'Stroke Map', 'events' => []],
-    tileLines: ['....', '....', '....'],
-    eventLines: ['    ', '    ', '    '],
+    tileLines: ['........', '........', '........'],
+    eventLines: ['        ', '        ', '        '],
   );
 }
 
@@ -149,49 +149,49 @@ it('coalesces a drag stroke into one undoable command', function () {
 
   foreach ([[0, 0], [1, 0], [2, 0]] as [$x, $y]) {
     $old = $map->getTileSymbol($x, $y);
-    $map->setTileSymbol($x, $y, '#');
-    $stroke->appendCell($x, $y, $old, '#');
+    $map->setTileSymbol($x, $y, '##');
+    $stroke->appendCell($x, $y, $old, '##');
   }
 
   $history->record($stroke);
 
   expect($history->count())->toBe(1)
-    ->and($map->getTileSymbol(1, 0))->toBe('#');
+    ->and($map->getTileSymbol(1, 0))->toBe('##');
 
   $history->undo();
 
-  expect($map->getTileSymbol(0, 0))->toBe('.')
-    ->and($map->getTileSymbol(1, 0))->toBe('.')
-    ->and($map->getTileSymbol(2, 0))->toBe('.');
+  expect($map->getTileSymbol(0, 0))->toBe('..')
+    ->and($map->getTileSymbol(1, 0))->toBe('..')
+    ->and($map->getTileSymbol(2, 0))->toBe('..');
 
   $history->redo();
 
-  expect($map->getTileSymbol(2, 0))->toBe('#');
+  expect($map->getTileSymbol(2, 0))->toBe('##');
 });
 
-it('keeps the first old symbol when a stroke revisits a cell', function () {
+it('keeps the first old cell when a stroke revisits a cell', function () {
   $map = strokeTestMap();
   $stroke = new PaintStrokeCommand($map, PaintStrokeCommand::LAYER_TILE);
 
-  $stroke->appendCell(1, 1, '.', '#');
-  $stroke->appendCell(1, 1, '#', '@');
+  $stroke->appendCell(1, 1, '..', '##');
+  $stroke->appendCell(1, 1, '##', '@@');
 
   expect($stroke->getCellCount())->toBe(1);
 
-  $map->setTileSymbol(1, 1, '@');
+  $map->setTileSymbol(1, 1, '@@');
   $stroke->undo();
 
-  expect($map->getTileSymbol(1, 1))->toBe('.');
+  expect($map->getTileSymbol(1, 1))->toBe('..');
 });
 
-it('reports no changes when a stroke paints identical symbols', function () {
+it('reports no changes when a stroke paints identical cells', function () {
   $map = strokeTestMap();
   $stroke = new PaintStrokeCommand($map, PaintStrokeCommand::LAYER_TILE);
-  $stroke->appendCell(0, 0, '.', '.');
+  $stroke->appendCell(0, 0, '..', '..');
 
   expect($stroke->hasChanges())->toBeFalse();
 
-  $stroke->appendCell(1, 0, '.', '#');
+  $stroke->appendCell(1, 0, '..', '##');
 
   expect($stroke->hasChanges())->toBeTrue();
 });
@@ -199,15 +199,15 @@ it('reports no changes when a stroke paints identical symbols', function () {
 it('paints the event layer when constructed for events', function () {
   $map = strokeTestMap();
   $stroke = new PaintStrokeCommand($map, PaintStrokeCommand::LAYER_EVENT, 'Event stroke');
-  $map->setEventSymbol(2, 1, 'E');
-  $stroke->appendCell(2, 1, ' ', 'E');
+  $map->setEventSymbol(2, 1, 'EE');
+  $stroke->appendCell(2, 1, '  ', 'EE');
 
   $stroke->undo();
 
-  expect($map->getEventSymbol(2, 1))->toBe(' ')
-    ->and($map->getTileSymbol(2, 1))->toBe('.');
+  expect($map->getEventSymbol(2, 1))->toBe('  ')
+    ->and($map->getTileSymbol(2, 1))->toBe('..');
 
   $stroke->execute();
 
-  expect($map->getEventSymbol(2, 1))->toBe('E');
+  expect($map->getEventSymbol(2, 1))->toBe('EE');
 });

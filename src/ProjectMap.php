@@ -20,9 +20,11 @@ use Ichiloto\Engine\Field\MapGridSource;
 use Ichiloto\Engine\Field\MapLayer;
 use Ichiloto\Engine\Field\MapLayerSource;
 use Ichiloto\Engine\Field\MapLayerSet;
+use Ichiloto\Engine\Field\MapCell;
 use Ichiloto\Engine\Field\MapCollisionResolver;
 use Ichiloto\Engine\IO\Console\TerminalText;
 use Ichiloto\Engine\IO\Console\SgrStyleState;
+use Ichiloto\Editor\Maps\CellSymbol;
 use Ichiloto\Editor\Maps\EditableGrid;
 use Ichiloto\Editor\Maps\MapLayers;
 use InvalidArgumentException;
@@ -107,8 +109,8 @@ final class ProjectMap
         $this->editableData = $data;
         $this->layers = $layers ?? new MapLayers($directory, true, [[
             'id' => MapLayers::BASE, 'name' => 'terrain', 'order' => 0, 'decoration' => false,
-            'path' => $mapPath, 'grid' => new EditableGrid(implode("\n", $tileLines), legacyTags: true),
-        ]], new EditableGrid(implode("\n", $eventLines)), $eventPath);
+            'path' => $mapPath, 'grid' => new EditableGrid(implode("\n", $tileLines), legacyTags: true, context: $mapPath),
+        ]], new EditableGrid(implode("\n", $eventLines), context: $eventPath), $eventPath);
         $this->loadedData = $data;
         $this->adoptDataSource($dataSource ?? "<?php\n\nreturn " . self::exportPhpValue($data) . ";\n");
         $this->baselineDataSource = $this->dataDocument?->source ?? (string) $this->unparsedDataSource;
@@ -162,9 +164,11 @@ final class ProjectMap
         try {
             $set = MapLayerSource::loadFromDirectory($directory, $mapId);
             $eventText = self::readGridSource($eventPath, $mapId);
+            $eventGrid = MapLayer::parseGrid($eventText, $mapId . '/' . basename($eventPath));
             if (! $set->legacy) {
-                $set->assertMatchingGrid(MapLayer::parseGrid($eventText), $mapId . '/' . basename($eventPath));
+                $set->assertMatchingGrid($eventGrid, $mapId . '/' . basename($eventPath));
             }
+            $layers = MapLayers::createFromSource($directory, $set, $eventPath, $eventText, $mapId);
         } catch (InvalidArgumentException $error) {
             throw new MapSourceRefusal($error->getMessage(), previous: $error);
         }
@@ -185,7 +189,7 @@ final class ProjectMap
             tileLines: self::splitMapText($mapText),
             eventLines: self::splitMapText($eventText),
             dataSource: (string) file_get_contents($dataPath),
-            layers: MapLayers::createFromSource($directory, $set, $eventPath, $eventText),
+            layers: $layers,
         )->withLoadedBaseline();
     }
 
@@ -296,7 +300,7 @@ final class ProjectMap
     }
 
     /**
-     * Returns the widest tile row after formatting tags are stripped.
+     * Returns the widest tile row, in two-column cells.
      *
      * @return int
      */
@@ -374,9 +378,10 @@ final class ProjectMap
         return $this->layers->legacy;
     }
 
+    /** The unstyled text of one cell: a two-column glyph or two characters. */
     public function getLayerSymbol(string $layer, int $x, int $y): string
     {
-        return $this->layers->getGrid($layer)->cells[$y][$x]['symbol'] ?? ' ';
+        return $this->layers->getGrid($layer)->cells[$y][$x]['symbol'] ?? MapCell::BLANK;
     }
 
     public function hasLayerCell(string $layer, int $x, int $y): bool
@@ -384,10 +389,15 @@ final class ProjectMap
         return isset($this->layers->getGrid($layer)->cells[$y][$x]);
     }
 
+    /**
+     * A cell's raw styling bytes, with one style per character when its
+     * characters are styled differently.
+     *
+     * @return array{prefix: string, suffix: string, styles?: list<array{prefix: string, suffix: string}>}
+     */
     public function getLayerCellStyle(string $layer, int $x, int $y): array
     {
-        $cell = $this->layers->getGrid($layer)->cells[$y][$x] ?? [];
-        return ['prefix' => $cell['prefix'] ?? '', 'suffix' => $cell['suffix'] ?? ''];
+        return EditableGrid::getCellStyle($this->layers->getGrid($layer)->cells[$y][$x] ?? []);
     }
 
     public function getLayerColor(string $layer, int $x, int $y): ?string
@@ -395,12 +405,24 @@ final class ProjectMap
         return self::getInnermostForeground($this->getLayerCellStyle($layer, $x, $y)['prefix']);
     }
 
+    /** Replaces one whole cell, styled uniformly; `#` fills the cell as `##`. */
     public function setLayerCell(string $layer, int $x, int $y, string $symbol, string $prefix = '', string $suffix = ''): void
+    {
+        $this->setStyledLayerCell($layer, $x, $y, $symbol, ['prefix' => $prefix, 'suffix' => $suffix]);
+    }
+
+    /**
+     * Replaces one whole cell with a style as getLayerCellStyle() reads it,
+     * so a cell whose characters are styled differently restores exactly.
+     *
+     * @param array{prefix: string, suffix: string, styles?: list<array{prefix: string, suffix: string}>} $style
+     */
+    public function setStyledLayerCell(string $layer, int $x, int $y, string $symbol, array $style): void
     {
         $this->assertEditable();
         $grid = $this->layers->getGrid($layer);
         if (isset($grid->cells[$y][$x])) {
-            $grid->cells[$y][$x] = ['symbol' => self::normalizeSymbol($symbol), 'prefix' => $prefix, 'suffix' => $suffix];
+            $grid->cells[$y][$x] = EditableGrid::createCell(CellSymbol::normalize($symbol), $style);
             $this->touchState();
         }
     }
@@ -497,9 +519,10 @@ final class ProjectMap
     }
 
     /**
-     * Builds a merged preview where event markers override map tiles.
+     * Builds a merged preview where event markers override map tiles. Each
+     * cell is two terminal columns of the returned lines.
      *
-     * @param int $width The preview width.
+     * @param int $width The preview width, in cells.
      * @param int $height The preview height.
      * @param int $offsetX The horizontal preview offset.
      * @param int $offsetY The vertical preview offset.
@@ -547,7 +570,7 @@ final class ProjectMap
                     continue;
                 }
                 foreach ($layer['grid']->cells[$row] ?? [] as $x => $cell) {
-                    if ($cell['symbol'] !== ' ' || $layer['id'] === $baseLayerId) {
+                    if (! MapCell::isBlank($cell['symbol']) || $layer['id'] === $baseLayerId) {
                         $tileRow[$x] = [...$cell, 'dim' => $dimInactive && $activeLayer !== $layer['id']];
                     }
                 }
@@ -555,34 +578,47 @@ final class ProjectMap
             $mergedSymbols = [];
 
             for ($column = $offsetX; $column < $offsetX + $width; $column++) {
-                if (isset($npcCells[$row][$column])) {
+                // An overhang whose sprite starts left of the view leaves
+                // its cells to the map, so the row keeps its columns.
+                if (isset($npcCells[$row][$column]) && ($npcCells[$row][$column] !== '' || $column > $offsetX)) {
                     // NPCs draw over everything, as they do in the game; the
                     // overlay is derived from map data and never painted.
                     $mergedSymbols[] = $npcCells[$row][$column];
                     continue;
                 }
 
-                $tileCell = $tileRow[$column] ?? null;
-                $tileSymbol = is_array($tileCell) ? $tileCell['symbol'] : ' ';
+                $tileCell = $tileRow[$column] ?? ['symbol' => MapCell::BLANK, 'prefix' => '', 'suffix' => ''];
                 // A selected map-owned NPC marks the existing cell, never a replacement sprite.
-                $anchorHighlight = array_key_exists($column, $npcCells[$row] ?? []) ? "\033[7m" : '';
-                if (! $this->layers->legacy && is_array($tileCell)) {
-                    $styled = TerminalText::formatStyles($tileCell['prefix'] . $anchorHighlight . $tileSymbol . $tileCell['suffix']);
-                    $styled = ($tileCell['dim'] ?? false) ? "\033[2m" . $styled . "\033[0m" : $styled;
-                    $mergedSymbols[] = $anchorHighlight === '' ? $styled : $styled . "\033[0m";
-                    continue;
-                }
-                $ansiOpen = is_array($tileCell)
-                    ? self::ansiOpenForPrefix((string) ($tileCell['prefix'] ?? ''))
-                    : null;
-                $dim = (($tileCell['dim'] ?? false) ? "\033[2m" : '') . $anchorHighlight;
-                $mergedSymbols[] = $ansiOpen === null && $dim === '' ? $tileSymbol : $dim . $ansiOpen . $tileSymbol . "\033[0m";
+                $highlight = array_key_exists($column, $npcCells[$row] ?? []) ? "\033[7m" : '';
+                $mergedSymbols[] = $this->renderPreviewCell($tileCell, $highlight);
             }
 
             $lines[] = rtrim(implode('', $mergedSymbols));
         }
 
         return array_pad($lines, $height, '');
+    }
+
+    /**
+     * Renders one cell for the canvas: each styled run of the cell, dimmed
+     * or highlighted as a whole.
+     *
+     * @param array{symbol: string, prefix: string, suffix: string, styles?: list<array{prefix: string, suffix: string}>, dim?: bool} $cell
+     */
+    private function renderPreviewCell(array $cell, string $highlight): string
+    {
+        $dim = ($cell['dim'] ?? false) ? "\033[2m" : '';
+        $text = '';
+        foreach (EditableGrid::getCellRuns($cell) as $run) {
+            if (! $this->layers->legacy) {
+                $text .= TerminalText::formatStyles($run['prefix'] . $highlight . $run['symbol'] . $run['suffix']);
+                continue;
+            }
+            // Legacy tags are not formatter styles: only their colour is shown.
+            $open = self::ansiOpenForPrefix($run['prefix']);
+            $text .= $open === null && $highlight === '' ? $run['symbol'] : $highlight . $open . $run['symbol'] . "\033[0m";
+        }
+        return $dim === '' && $highlight === '' ? $text : $dim . $text . "\033[0m";
     }
 
     /**
@@ -634,17 +670,16 @@ final class ProjectMap
     }
 
     /**
-     * Returns the cells the NPC overlay occupies, row => column => symbol.
+     * Returns the cells the NPC overlay occupies, row => column => text.
      *
-     * The engine anchors a sprite at its tile and lets it overhang to the
-     * right (NpcManager::eraseNpc clears displayWidth cells), so a
-     * two-column emoji owns its anchor and the cell after it. The overhang
-     * cell holds an empty string, so the terminal draws the wide glyph in
-     * the space it needs rather than a symbol shoved half under it. The
-     * selected NPC is drawn with brackets around a one-column sprite, or as
-     * itself when wide, since brackets would misalign the row. An explicitly
-     * empty sprite contributes only a selected anchor (null), highlighting
-     * the underlying map cell without replacing its glyph or neighbours.
+     * A character occupies one cell, anchored at its first column as the
+     * engine draws it: a sprite of up to two columns sits in its cell, and a
+     * wider one overhangs to the right. Its anchor cell holds the sprite
+     * padded to whole cells, and every cell it overhangs holds an empty
+     * string, so the terminal draws the glyph in the space it needs. The
+     * selected NPC is shown in reverse video within those cells. An
+     * explicitly empty sprite contributes only a selected anchor (null),
+     * highlighting the underlying map cell without replacing its glyph.
      *
      * @param int|null $selectedNpcIndex The NPC to mark selected.
      * @param string|null $selectedNpcSprite A glyph to draw for the selected
@@ -664,7 +699,7 @@ final class ProjectMap
 
             if ($index === $selectedNpcIndex && $selectedNpcSprite !== null && trim($selectedNpcSprite) !== '') {
                 $sprite = ProjectNpc::visibleGlyph($selectedNpcSprite);
-                $columns = max(1, mb_strwidth($sprite));
+                $columns = ProjectNpc::glyphWidth($selectedNpcSprite);
             }
 
             if ($sprite === '') {
@@ -674,16 +709,12 @@ final class ProjectMap
                 continue;
             }
 
-            if ($index === $selectedNpcIndex && $columns === 1) {
-                $sprite = '[' . $sprite . ']';
-                $x = max(0, $x - 1);
-                $columns = 3;
-            }
+            $span = MapCell::getSpanCells($columns);
+            $text = $sprite . str_repeat(' ', max(0, $span * MapCell::COLUMNS - $columns));
+            $cells[$y][$x] = $index === $selectedNpcIndex ? "\033[7m" . $text . "\033[0m" : $text;
 
-            $cells[$y][$x] = $sprite;
-
-            for ($column = 1; $column < $columns; $column++) {
-                $cells[$y][$x + $column] = '';
+            for ($cell = 1; $cell < $span; $cell++) {
+                $cells[$y][$x + $cell] = '';
             }
         }
 
@@ -699,7 +730,7 @@ final class ProjectMap
      */
     public function getTileSymbol(int $x, int $y): string
     {
-        return $this->layers->getBaseGrid()->cells[$y][$x]['symbol'] ?? ' ';
+        return $this->getLayerSymbol(MapLayers::BASE, $x, $y);
     }
 
     /**
@@ -724,13 +755,7 @@ final class ProjectMap
      */
     public function setTileSymbol(int $x, int $y, string $symbol): void
     {
-        $this->assertEditable();
-        if (! isset($this->layers->getBaseGrid()->cells[$y][$x])) {
-            return;
-        }
-
-        $this->layers->getBaseGrid()->cells[$y][$x]['symbol'] = self::normalizeSymbol($symbol);
-        $this->touchState();
+        $this->setStyledLayerCell(MapLayers::BASE, $x, $y, $symbol, $this->getTileCellStyle($x, $y));
     }
 
     /**
@@ -741,16 +766,11 @@ final class ProjectMap
      *
      * @param int $x The cell x coordinate.
      * @param int $y The cell y coordinate.
-     * @return array{prefix: string, suffix: string}
+     * @return array{prefix: string, suffix: string, styles?: list<array{prefix: string, suffix: string}>}
      */
     public function getTileCellStyle(int $x, int $y): array
     {
-        $cell = $this->layers->getBaseGrid()->cells[$y][$x] ?? null;
-
-        return [
-            'prefix' => is_array($cell) ? (string) ($cell['prefix'] ?? '') : '',
-            'suffix' => is_array($cell) ? (string) ($cell['suffix'] ?? '') : '',
-        ];
+        return $this->getLayerCellStyle(MapLayers::BASE, $x, $y);
     }
 
     /**
@@ -822,15 +842,7 @@ final class ProjectMap
      */
     public function setTileCell(int $x, int $y, string $symbol, string $prefix, string $suffix): void
     {
-        $this->assertEditable();
-        if (! isset($this->layers->getBaseGrid()->cells[$y][$x])) {
-            return;
-        }
-
-        $this->layers->getBaseGrid()->cells[$y][$x]['symbol'] = self::normalizeSymbol($symbol);
-        $this->layers->getBaseGrid()->cells[$y][$x]['prefix'] = $prefix;
-        $this->layers->getBaseGrid()->cells[$y][$x]['suffix'] = $suffix;
-        $this->touchState();
+        $this->setLayerCell(MapLayers::BASE, $x, $y, $symbol, $prefix, $suffix);
     }
 
     /**
@@ -843,17 +855,12 @@ final class ProjectMap
      */
     public function setEventSymbol(int $x, int $y, string $symbol): void
     {
-        $this->assertEditable();
-        if (! $this->hasLayerCell(MapLayers::EVENT, $x, $y)) {
-            return;
-        }
-
-        $this->layers->getEventGrid()->cells[$y][$x]['symbol'] = self::normalizeSymbol($symbol);
-        $this->touchState();
+        $this->setLayerCell(MapLayers::EVENT, $x, $y, $symbol);
     }
 
     /**
-     * Returns every distinct event marker painted on the grid.
+     * Returns every distinct event marker painted on the grid. A cell
+     * holding two different markers marks nothing; validation reports it.
      *
      * @return string[]
      */
@@ -861,15 +868,40 @@ final class ProjectMap
     {
         $markers = [];
 
-        foreach ($this->layers->getEventGrid()->getSymbols() as $row) {
-            foreach ($row as $symbol) {
-                if (trim($symbol) !== '') {
-                    $markers[$symbol] = $symbol;
+        foreach ($this->layers->getEventGrid()->getSymbols() as $y => $row) {
+            foreach (array_keys($row) as $x) {
+                $marker = $this->getEventMarkerAt($x, $y);
+
+                if ($marker !== null) {
+                    $markers[$marker] = $marker;
                 }
             }
         }
 
         return array_values($markers);
+    }
+
+    /**
+     * Describes every event cell holding two different markers, which the
+     * Engine refuses to load.
+     *
+     * @return string[] The Engine's refusal for each such cell.
+     */
+    public function describeConflictingEventCells(): array
+    {
+        $conflicts = [];
+
+        foreach ($this->layers->getEventGrid()->getSymbols() as $y => $row) {
+            foreach ($row as $x => $cell) {
+                try {
+                    MapCell::getMarker($cell, "Event cell at row {$y}, column {$x}");
+                } catch (InvalidArgumentException $conflict) {
+                    $conflicts[] = $conflict->getMessage();
+                }
+            }
+        }
+
+        return $conflicts;
     }
 
     /**
@@ -1240,9 +1272,11 @@ final class ProjectMap
      */
     public function getEventMarkerAt(int $x, int $y): ?string
     {
-        $symbol = trim($this->getEventSymbol($x, $y));
-
-        return $symbol === '' ? null : $symbol;
+        try {
+            return MapCell::getMarker($this->getEventSymbol($x, $y));
+        } catch (InvalidArgumentException) {
+            return null;
+        }
     }
 
     /**
@@ -1275,8 +1309,8 @@ final class ProjectMap
         $positions = [];
 
         foreach ($this->layers->getEventGrid()->getSymbols() as $rowIndex => $row) {
-            foreach ($row as $columnIndex => $symbol) {
-                if ($symbol === $marker) {
+            foreach (array_keys($row) as $columnIndex) {
+                if ($this->getEventMarkerAt($columnIndex, $rowIndex) === $marker) {
                     $positions[] = [$columnIndex, $rowIndex];
                 }
             }
@@ -1319,7 +1353,7 @@ final class ProjectMap
 
         for ($y = $bounds['y']; $y < $maxY; $y++) {
             for ($x = $bounds['x']; $x < $maxX; $x++) {
-                if ($this->getEventSymbol($x, $y) !== $marker) {
+                if ($this->getEventMarkerAt($x, $y) !== $marker) {
                     return false;
                 }
             }
@@ -1456,21 +1490,23 @@ final class ProjectMap
     public function setEventBounds(string $marker, int $x, int $y, int $width, int $height): void
     {
         $this->assertEditable();
-        foreach ($this->layers->getEventGrid()->getSymbols() as $rowIndex => $row) {
-            foreach ($row as $columnIndex => $symbol) {
-                if ($symbol === $marker) {
-                    $this->layers->getEventGrid()->cells[$rowIndex][$columnIndex]['symbol'] = ' ';
+        $grid = $this->layers->getEventGrid();
+        foreach ($grid->getSymbols() as $rowIndex => $row) {
+            foreach (array_keys($row) as $columnIndex) {
+                if ($this->getEventMarkerAt($columnIndex, $rowIndex) === $marker) {
+                    $grid->cells[$rowIndex][$columnIndex] = EditableGrid::createCell(MapCell::BLANK, ['prefix' => '', 'suffix' => '']);
                 }
             }
         }
 
         $maxX = max(0, min($this->getWidth() - 1, $x + max(1, $width) - 1));
         $maxY = max(0, min($this->getHeight() - 1, $y + max(1, $height) - 1));
+        $cell = EditableGrid::createCell(CellSymbol::normalize($marker), ['prefix' => '', 'suffix' => '']);
 
         for ($row = max(0, $y); $row <= $maxY; $row++) {
             for ($column = max(0, $x); $column <= $maxX; $column++) {
                 if ($this->hasLayerCell(MapLayers::EVENT, $column, $row)) {
-                    $this->layers->getEventGrid()->cells[$row][$column]['symbol'] = $marker;
+                    $grid->cells[$row][$column] = $cell;
                 }
             }
         }
@@ -1686,14 +1722,14 @@ final class ProjectMap
      * @param string $directory The destination map directory.
      * @param string $baseName The base filename.
      * @param string $displayName The map display name.
-     * @param int $width The map width.
+     * @param int $width The map width, in cells.
      * @param int $height The map height.
      * @return void
      */
-    public static function createBlank(string $directory, string $baseName, string $displayName, int $width = 48, int $height = 18, ?FileSetOperations $files = null): void
+    public static function createBlank(string $directory, string $baseName, string $displayName, int $width = 24, int $height = 18, ?FileSetOperations $files = null): void
     {
-        $blankTileLine = str_repeat(' ', $width);
-        $blankEventLine = str_repeat(' ', $width);
+        $blankTileLine = str_repeat(MapCell::BLANK, $width);
+        $blankEventLine = str_repeat(MapCell::BLANK, $width);
         $tileText = implode(PHP_EOL, array_fill(0, $height, $blankTileLine));
         $eventText = implode(PHP_EOL, array_fill(0, $height, $blankEventLine));
         $data = [
@@ -1809,31 +1845,21 @@ final class ProjectMap
     public function getCharacterPalette(?string $layer = null): array
     {
         $symbols = [];
+        $grids = [$layer === null ? $this->layers->getBaseGrid() : $this->layers->getGrid($layer), $this->layers->getEventGrid()];
 
-        foreach (($layer === null ? $this->layers->getBaseGrid() : $this->layers->getGrid($layer))->cells as $row) {
-            foreach ($row as $cell) {
-                $symbol = $cell['symbol'];
-
-                if (trim($symbol) === '') {
-                    continue;
+        foreach ($grids as $grid) {
+            foreach ($grid->getSymbols() as $row) {
+                foreach ($row as $symbol) {
+                    if (! MapCell::isBlank($symbol)) {
+                        $symbols[$symbol] = $symbol;
+                    }
                 }
-
-                $symbols[$symbol] = $symbol;
-            }
-        }
-
-        foreach ($this->layers->getEventGrid()->getSymbols() as $row) {
-            foreach ($row as $symbol) {
-                if (trim($symbol) === '') {
-                    continue;
-                }
-
-                $symbols[$symbol] = $symbol;
             }
         }
 
         foreach ([' ', ';', '~', '+', '-', '=', '|', '/', '\\', '_', '█', '░', '▒', '▓', '🧍', '🏃🏽‍➡️', '@'] as $symbol) {
-            $symbols[$symbol] = $symbol;
+            $cell = CellSymbol::normalize($symbol);
+            $symbols[$cell] = $cell;
         }
 
         return array_values($symbols);
@@ -1848,36 +1874,6 @@ final class ProjectMap
     private static function splitMapText(string $text): array
     {
         return preg_split('/\R/u', rtrim($text, "\r\n")) ?: [];
-    }
-
-    /**
-     * Normalizes input down to a single visible symbol.
-     *
-     * @param string $symbol The raw input symbol.
-     * @return string
-     */
-    private static function normalizeSymbol(string $symbol): string
-    {
-        $symbols = self::toSymbols($symbol);
-
-        return $symbols[0] ?? ' ';
-    }
-
-    /**
-     * Splits a line into Unicode grapheme symbols.
-     *
-     * @param string $line The line to split.
-     * @return string[]
-     */
-    private static function toSymbols(string $line): array
-    {
-        if ($line === '') {
-            return [];
-        }
-
-        preg_match_all('/\X/u', $line, $matches);
-
-        return $matches[0] ?? [];
     }
 
     /**
@@ -2403,37 +2399,6 @@ final class ProjectMap
         $value = trim($value, '-');
 
         return $value !== '' ? $value : $fallback;
-    }
-
-    /**
-     * Creates a blank tile cell for padded map rows.
-     *
-     * @return array{symbol: string, prefix: string, suffix: string}
-     */
-    private static function createBlankTileCell(): array
-    {
-        return [
-            'symbol' => ' ',
-            'prefix' => '',
-            'suffix' => '',
-        ];
-    }
-
-    /**
-     * Creates a blank tile row.
-     *
-     * @param int $width The desired row width.
-     * @return array<int, array{symbol: string, prefix: string, suffix: string}>
-     */
-    private static function createBlankTileRow(int $width): array
-    {
-        $row = [];
-
-        for ($column = 0; $column < $width; $column++) {
-            $row[] = self::createBlankTileCell();
-        }
-
-        return $row;
     }
 
     /**

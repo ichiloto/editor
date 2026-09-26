@@ -126,3 +126,50 @@ function backdateTriplet(ProjectMap $map): void
         touch($path, time() - 3600);
     }
 }
+
+/**
+ * Loads the fixture map fresh from disk.
+ */
+function fixtureMap(): ProjectMap
+{
+    $mapsRoot = fixturePath('sample-project/assets/Maps');
+
+    return ProjectMap::fromDirectory($mapsRoot, $mapsRoot . '/test-map');
+}
+
+/**
+ * Copies the fixture map into a scratch maps root for save tests.
+ */
+function scratchMapCopy(): array
+{
+    $root = rememberTemporaryProject(sys_get_temp_dir() . '/ichiloto-editor-test-' . bin2hex(random_bytes(4)));
+    $mapsRoot = $root . '/assets/Maps';
+    $directory = $mapsRoot . '/test-map';
+    mkdir($directory, 0777, true);
+
+    foreach (['data', 'map', 'event'] as $part) {
+        copy(
+            fixturePath("sample-project/assets/Maps/test-map/test-map.{$part}.php"),
+            "{$directory}/test-map.{$part}.php",
+        );
+    }
+
+    return [$root, ProjectMap::fromDirectory($mapsRoot, $directory)];
+}
+
+/**
+ * Removes a scratch tree created by scratchMapCopy().
+ */
+function removeScratchTree(string $root): void
+{
+    $iterator = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS),
+        RecursiveIteratorIterator::CHILD_FIRST,
+    );
+
+    foreach ($iterator as $item) {
+        $item->isDir() ? rmdir($item->getPathname()) : unlink($item->getPathname());
+    }
+
+    rmdir($root);
+}
