@@ -236,3 +236,13 @@ it('keeps raw ANSI styling separate from editable glyphs and preserves untouched
     ["\033[31m", 'red'], ["\033[38;2;12;34;56m", '#0c2238'],
     ["\033[38;5;196m", '#ff0000'], ["\033[38;5;232m", '#080808'],
 ]);
+
+it('shows the lower layer through a space in an upper cell, as the Engine composes', function () {
+    $map = loadLayeredMap(layeredMapProject());
+    // Home's chest " m" over a wall: the space keeps the column beneath it visible.
+    $map->setLayerCell('map:4', 0, 0, ' m');
+    $preview = array_map(TerminalText::stripAnsi(...), $map->renderPreview(4, 2));
+    expect($preview[0])->toStartWith('.m')
+        ->and(array_map(TerminalText::stripAnsi(...), $map->renderPreview(4, 2, terminalPreview: true))[0])->toStartWith('.m')
+        ->and($map->renderPreview(4, 2, activeLayer: 'map:4', dimInactive: true)[0])->toStartWith("\033[2m");
+});

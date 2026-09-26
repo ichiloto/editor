@@ -569,9 +569,13 @@ final class ProjectMap
                     || ($layer['id'] === MapLayers::EVENT && ! $showEventOverlay)) {
                     continue;
                 }
+                $dim = $dimInactive && $activeLayer !== $layer['id'];
                 foreach ($layer['grid']->cells[$row] ?? [] as $x => $cell) {
-                    if (! MapCell::isBlank($cell['symbol']) || $layer['id'] === $baseLayerId) {
-                        $tileRow[$x] = [...$cell, 'dim' => $dimInactive && $activeLayer !== $layer['id']];
+                    if ($layer['id'] === $baseLayerId) {
+                        $tileRow[$x] = self::getPreviewColumns($cell, $dim);
+                    } elseif (! MapCell::isBlank($cell['symbol'])) {
+                        $upper = self::getPreviewColumns($cell, $dim);
+                        $tileRow[$x] = isset($tileRow[$x]) ? self::overlayPreviewColumns($tileRow[$x], $upper) : $upper;
                     }
                 }
             }
@@ -587,10 +591,10 @@ final class ProjectMap
                     continue;
                 }
 
-                $tileCell = $tileRow[$column] ?? ['symbol' => MapCell::BLANK, 'prefix' => '', 'suffix' => ''];
+                $tileColumns = $tileRow[$column] ?? self::getPreviewColumns(['symbol' => MapCell::BLANK, 'prefix' => '', 'suffix' => ''], false);
                 // A selected map-owned NPC marks the existing cell, never a replacement sprite.
                 $highlight = array_key_exists($column, $npcCells[$row] ?? []) ? "\033[7m" : '';
-                $mergedSymbols[] = $this->renderPreviewCell($tileCell, $highlight);
+                $mergedSymbols[] = $this->renderPreviewColumns($tileColumns, $highlight);
             }
 
             $lines[] = rtrim(implode('', $mergedSymbols));
@@ -600,27 +604,75 @@ final class ProjectMap
     }
 
     /**
-     * Renders one cell for the canvas: each styled run of the cell, dimmed
-     * or highlighted as a whole.
+     * A cell's characters by column, each with its own style and dimming: two
+     * for a pair, one spanning both columns for a two-column glyph.
      *
-     * @param array{symbol: string, prefix: string, suffix: string, styles?: list<array{prefix: string, suffix: string}>, dim?: bool} $cell
+     * @param array{symbol: string, prefix: string, suffix: string, styles?: list<array{prefix: string, suffix: string}>} $cell
+     * @return list<array{symbol: string, prefix: string, suffix: string, dim: bool}>
      */
-    private function renderPreviewCell(array $cell, string $highlight): string
+    private static function getPreviewColumns(array $cell, bool $dim): array
     {
-        $dim = ($cell['dim'] ?? false) ? "\033[2m" : '';
-        $text = '';
+        $columns = [];
         foreach (EditableGrid::getCellRuns($cell) as $run) {
+            preg_match_all('/\X/u', $run['symbol'], $characters);
+            foreach ($characters[0] as $character) {
+                $columns[] = ['symbol' => $character, 'prefix' => $run['prefix'], 'suffix' => $run['suffix'], 'dim' => $dim];
+            }
+        }
+        return $columns;
+    }
+
+    /**
+     * Lays an upper layer's cell over the cell below column by column, as the
+     * Engine composes layers: a space in an upper pair shows the column
+     * beneath it; a two-column glyph on either side replaces the whole cell.
+     *
+     * @param list<array{symbol: string, prefix: string, suffix: string, dim: bool}> $lower
+     * @param list<array{symbol: string, prefix: string, suffix: string, dim: bool}> $upper
+     * @return list<array{symbol: string, prefix: string, suffix: string, dim: bool}>
+     */
+    private static function overlayPreviewColumns(array $lower, array $upper): array
+    {
+        if (count($lower) !== MapCell::COLUMNS || count($upper) !== MapCell::COLUMNS) {
+            return $upper;
+        }
+        return array_map(static fn(array $top, array $bottom): array => trim($top['symbol']) === '' ? $bottom : $top, $upper, $lower);
+    }
+
+    /**
+     * Renders one cell's columns for the canvas, each dimmed as its own layer
+     * is, and highlighted together.
+     *
+     * @param list<array{symbol: string, prefix: string, suffix: string, dim: bool}> $columns
+     */
+    private function renderPreviewColumns(array $columns, string $highlight): string
+    {
+        // Adjacent columns sharing a style and dimming render as one run.
+        $runs = [];
+        foreach ($columns as $column) {
+            $last = array_key_last($runs);
+            if ($last !== null && [$runs[$last]['prefix'], $runs[$last]['suffix'], $runs[$last]['dim']]
+                === [$column['prefix'], $column['suffix'], $column['dim']]) {
+                $runs[$last]['symbol'] .= $column['symbol'];
+                continue;
+            }
+            $runs[] = $column;
+        }
+        $text = '';
+        foreach ($runs as $column) {
+            $dim = $column['dim'] ? "\033[2m" : '';
             if (! $this->layers->legacy) {
-                $text .= TerminalText::formatStyles($run['prefix'] . $highlight . $run['symbol'] . $run['suffix']);
+                $styled = TerminalText::formatStyles($column['prefix'] . $highlight . $column['symbol'] . $column['suffix']);
+                $text .= $dim === '' && $highlight === '' ? $styled : $dim . $styled . "\033[0m";
                 continue;
             }
             // Legacy tags are not formatter styles: only their colour is shown.
-            $open = self::ansiOpenForPrefix($run['prefix']);
-            $text .= $open === null && $highlight === '' ? $run['symbol'] : $highlight . $open . $run['symbol'] . "\033[0m";
+            $open = self::ansiOpenForPrefix($column['prefix']);
+            $text .= $open === null && $highlight === '' && $dim === ''
+                ? $column['symbol'] : $dim . $highlight . $open . $column['symbol'] . "\033[0m";
         }
-        return $dim === '' && $highlight === '' ? $text : $dim . $text . "\033[0m";
+        return $text;
     }
-
     /**
      * The 4-bit ANSI foreground codes for the formatter's colour names.
      * `gray` is the formatter's name for bright black.
