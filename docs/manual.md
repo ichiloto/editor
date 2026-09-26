@@ -214,6 +214,31 @@ force for terminal edits. Untouched layer files are never written; unchanged
 rows retain their authored bytes, and all changed files are saved or rolled
 back together.
 
+### Map Graphics
+
+A map may name a tileset in its data file (`'tileset' => 'home'`, read from
+`assets/Data/Tilesets/home.php`) and keep RPG Maker tile layers in
+`graphics/NN.name.tiles.php`. The TUI never paints or displays tiles; painting
+them belongs to the GUI editor. It keeps them intact:
+
+- Resizing the map crops or pads every tile layer with empty tiles (`0`) in the
+  same undo step and save as the terminal layers. A resized tile layer is
+  rewritten as a literal nowdoc that keeps its leading comment; an unchanged
+  one keeps its bytes. A resize is refused, changing nothing, while a tile
+  layer cannot be read or does not match the map.
+- Duplicating, moving and deleting a map take `graphics/` with it, in the same
+  transaction and rollback. Other files in `graphics/` are the author's and
+  stay.
+- A tile layer changed or added on disk after opening refuses the save, as
+  terminal layers do.
+
+Validation (`Ctrl+E`, or `ichiloto validate`) reads graphics as the Engine does.
+A missing or invalid tileset, graphics without a tileset, misnamed or
+duplicate-order tile layers, rows or cells that do not match the map, and
+invalid tile identities are errors. Unusable sheets and tiles from a sheet the
+tileset does not provide are warnings. The game shows terminal glyphs for
+anything it cannot draw.
+
 Text catalogues in `assets/Graphics/Tilesets/*.txt` appear as Facade brushes in
 `Ctrl+P`. Author them in two-column cells like any map row, and separate
 multi-row shapes with blank lines. Select a brush to target

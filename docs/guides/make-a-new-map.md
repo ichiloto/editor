@@ -34,7 +34,8 @@ creation is not undoable.
    `Enter` to type a number.
 
 Resizing is undoable. Shrinking a map discards the tiles outside the new bounds,
-so `Ctrl+Z` is your friend if you overshoot.
+in its terminal layers and in any graphical tile layers in `graphics/`, so
+`Ctrl+Z` is your friend if you overshoot.
 
 Current behavior: the map id is derived from the region and name. Changing
 either means the map's *folder* moves on the next save, and the editor asks for
