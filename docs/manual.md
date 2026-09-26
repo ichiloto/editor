@@ -54,11 +54,11 @@ is what the code draws rather than a sketch of it:
  ┌─Assets [Focus]───────────────┐ ┌─Canvas─────────────────────┐ ┌─Inspector──────────────────────┐
  │ Maps                         │ │ Preview: test-map          │ │   Name: Test Map               │
  │ > test-map                   │ │ Test Map |  | 12 x 5 | vie │ │   Region:                      │
- │                              │ │ ############               │ │   Description: A tiny fixture  │
- │                              │ │ #  ~~~     #               │ │                map.            │
- │                              │ │ #          #               │ │   Size                         │
- │                              │ │ #          #               │ │     X: 12                      │
- │                              │ │ ############               │ │     Y: 5                       │
+ │                              │ │ ########################   │ │   Description: A tiny fixture  │
+ │                              │ │ ##    ~~~~~~          ##   │ │                map.            │
+ │                              │ │ ##                    ##   │ │   Size                         │
+ │                              │ │ ##                    ##   │ │     X: 12                      │
+ │                              │ │ ########################   │ │     Y: 5                       │
  │                              │ │                            │ │   Events · 1                   │
  │                              │ │                            │ │   Triggers · 0                 │
  │                              │ │                            │ │   Audio                        │
@@ -197,8 +197,7 @@ Use `Ctrl+P` and select a gameplay or event layer by name, or choose a Layers
 action to create, rename or remove a gameplay layer. The TUI cannot create,
 select, rename or remove graphical decoration layers. New gameplay layers
 preserve each row's width, including ragged
-maps. Renaming retains its numeric order and changes its local `tiles2d` key
-without regenerating the crop table. If the actual resolved collisions would
+maps. Renaming retains its numeric order. If the actual resolved collisions would
 change, the rename dialog names the change and requires `y` confirmation;
 shared `collisions.php` is never changed. Removal is confirmed and undoable.
 Creating a layer on a legacy map explicitly moves its terrain into
@@ -207,20 +206,17 @@ saves keep the original layout.
 
 Gameplay and event layers use the same Paint/Normal modes, tools, mouse strokes,
 selection, colour, clipboard and undo. The layer inspector lists terminal layer
-visibility only. Graphical crop tables, selected-cell Tile art actions, crop
-dialogs and crop-painting warnings have been removed from the terminal shell.
-Ordinary glyph edits do not rewrite graphical decoration or `tiles2d` data.
-An unchanged graphical definition that was already invalid when loaded does
-not block terminal glyph, event or unrelated metadata saves, copies or moves.
-It is preserved, not repaired or certified valid: explicit graphical validation
-still reports it. Changes to graphical definitions, decoration contents or
-layer structure/geometry still require graphical validation; canonical source
-safety, collision and grid checks remain in force for terminal edits.
-Untouched layer files are never written; unchanged rows retain their authored
-bytes, and all changed files are saved or rolled back together.
+visibility only. Ordinary glyph edits do not rewrite graphical decoration.
+Glyph-keyed crop tables (`tiles2d`) are no longer read by the Engine or edited
+here; a map that still has one keeps its bytes, and validation warns that it is
+no longer read. Canonical source safety, collision and grid checks remain in
+force for terminal edits. Untouched layer files are never written; unchanged
+rows retain their authored bytes, and all changed files are saved or rolled
+back together.
 
 Text catalogues in `assets/Graphics/Tilesets/*.txt` appear as Facade brushes in
-`Ctrl+P`. Separate multi-row shapes with blank lines. Select a brush to target
+`Ctrl+P`. Author them in two-column cells like any map row, and separate
+multi-row shapes with blank lines. Select a brush to target
 the gameplay `buildings` layer, then press `Enter` to stamp it as one undo
 step. In Paint mode (`i`), a left click also stamps; Normal-mode clicks only
 move the cursor. Mode and map changes clear the stamp brush; `b` returns to a
@@ -237,6 +233,31 @@ The canvas starts in Normal mode. `i` enters Paint mode; `Esc` returns to
 Normal. While painting, the Status pane shows `[PAINT]` beside the mode.
 Control-byte and function-key shortcuts (`Ctrl+S`, `F3`, ...) work in both
 modes, since they are not glyphs.
+
+### Map Cells
+
+A map cell is two terminal columns: one two-column glyph (an emoji or CJK
+character) or two one-column characters, each with its own style. `##`, `[]`
+and `🌲` are each one cell, and a blank cell is two spaces. Coordinates, map
+sizes, selections, the clipboard and every tool count cells, so the canvas
+shows half as many cells across as it has columns. The cursor rests on a
+cell's first column, and a click on either column selects the cell.
+
+Painting fills whole cells:
+
+- One typed character paints the cell with it repeated: `#` paints `##`.
+- A second one-column key typed straight after, before any other key, click
+  or cursor move, turns that cell into the pair: `[` then `]` paints `[]`, as
+  one undo step. A third key starts the next cell over.
+- A two-column glyph fills the cell as it is.
+- Erase paints a blank cell.
+- On the event layer a cell repeats its one marker (`E` paints `EE`); markers
+  never pair.
+
+The character map offers whole cells, and typing there enters one: a key
+fills the cell, a second makes a pair, and `Enter` places it. A file row that
+is not whole cells (a lone trailing character, or a one-column character
+followed by a two-column glyph) opens read-only with its row and column.
 
 ### Terminal Editing and Pending Graphical GUI
 
@@ -256,9 +277,11 @@ must not drive or change the terminal editing experience.
 
 **Removed TUI workflows:** painting decoration markers, choosing graphical
 layers, inspecting graphical crop tables and editing selected-cell crops are
-no longer terminal authoring features. Their data is not deleted. The TileArt
-model services, low-level decoration APIs and source-preserving round trips
-remain available for the graphical editor.
+no longer terminal authoring features. Decoration data is not deleted, and
+its low-level APIs and source-preserving round trips remain available for the
+graphical editor. Glyph-keyed crop authoring (`tiles2d` and its cell
+overrides) has been removed along with the Engine's support for it; tilesets
+replace it.
 
 **Pending, not implemented:** richer renderers will use a separate,
 RPG Maker-like GUI editor for graphical materials, atlases and crop authoring.
@@ -294,8 +317,9 @@ line points to `i` instead.
 
 ### Paint mode
 
-Every printable key paints its glyph at the cursor with the brush tool, or
-loads it into the brush under a shape or select tool. `Arrows` move,
+Every printable key paints a cell of its glyph at the cursor with the brush
+tool, or loads that cell into the brush under a shape or select tool (see
+[Map Cells](#map-cells) for pairs). `Arrows` move,
 `Enter` applies the active tool, erase keys erase, and `Esc` returns to
 Normal mode. Entering NPC mode or moving focus off the canvas also returns
 to Normal.
@@ -326,15 +350,16 @@ shapes, flood fills - and is written as `<fg=...>` tags, exactly the
 styling authored by hand.
 
 - **Keep cell colour** (the default): painting changes the glyph and leaves
-  each cell's existing styling byte-for-byte, authored options included.
+  each cell's existing styling byte-for-byte, authored options and a
+  separate style per character included.
 - **No colour**: painting strips styling and writes plain glyphs.
 - **A colour**: painting writes the glyph in that colour. Choosing a
   colour recolours in place, keeping the glyphs, as one undoable stroke:
   with a selection active (`s`), every cell in the selection; otherwise,
-  under the brush tool, the cell at the cursor. Spaces stay uncoloured.
+  under the brush tool, the cell at the cursor. Blank cells stay uncoloured.
 
 The eyedropper (`k` / `Ctrl+K`) picks up a cell's colour along with its
-glyph; an uncoloured cell loads an uncoloured brush. A painted space is
+glyph; an uncoloured cell loads an uncoloured brush. A painted blank cell is
 always uncoloured, so erasing never leaves invisible styling behind. Event
 markers remain authoring geometry, but can now carry colour through the same
 picker and undo workflow. The Status pane shows the brush colour beside the tool.
@@ -342,11 +367,12 @@ picker and undo workflow. The Status pane shows the brush colour beside the tool
 ### NPC Mode
 
 `F3` enters NPC mode: the map's `npcs` collection is drawn over the tiles as
-an overlay - sprites at their authored anchor, wide glyphs occupying the two
-columns the game gives them, styled sprites as the plain glyph - and nothing
-you do here paints a tile or an event marker. The selected NPC is shown in
-brackets, except an explicitly empty sprite: selection highlights its existing
-map cell without replacing the glyph or neighbouring cells. An unselected empty
+an overlay - each sprite in its one cell, as the game draws it: a one-column
+sprite in the cell's first column, a two-column glyph filling it, anything
+wider overhanging the cells to its right, styled sprites as the plain glyph -
+and nothing you do here paints a tile or an event marker. The selected NPC is
+shown in reverse video within its cell; an explicitly empty sprite highlights
+its existing map cell without replacing the glyph or neighbouring cells. An unselected empty
 sprite draws no overlay. NPC mode sits on `n` in Normal mode and on `F3`
 everywhere, so no paintable character is taken from you (and not a control byte, since the terminal driver
 reserves the remaining ones).
@@ -355,7 +381,7 @@ reserves the remaining ones).
 | --- | --- |
 | `Enter` | Select the NPC under the cursor; on an empty tile, name and create a new fixed NPC there |
 | `M` | Pick up the selected NPC; the next `Enter` sets it down at the cursor (`Esc` cancels) |
-| `D` | Duplicate the selected NPC under a fresh stable id, one column to the right when free |
+| `D` | Duplicate the selected NPC under a fresh stable id, one cell to the right when free |
 | `L` | List the map's NPCs by name and id; type to narrow, `Enter` selects one and jumps the cursor to it |
 | `[` / `]` | Select the previous / next NPC in the map's list |
 | `Del` | Delete the selected NPC - refused, with the list, while anything names its id |
@@ -1522,7 +1548,7 @@ fields are preserved and are not errors.
 | --- | --- | --- |
 | Help | `?` | Generated from the binding table; scrolls with arrows |
 | Command palette | `Ctrl+P` | Fuzzy search over actions, tools, maps, categories, and event markers |
-| Character map | `@` | Insert glyphs the keyboard reserves; lists the map's symbols, the project's collision vocabulary, and the reserved glyphs |
+| Character map | `@` | Insert whole cells the keyboard reserves; lists the map's cells, the project's collision vocabulary and the reserved glyphs as cells, and takes a typed pair |
 | Status detail | `Ctrl+E` | Full text of the last message, and the log file path |
 
 Current limit: the help overlay and command palette cannot open while a picker
