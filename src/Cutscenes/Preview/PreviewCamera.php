@@ -6,7 +6,7 @@ namespace Ichiloto\Editor\Cutscenes\Preview;
 
 use Ichiloto\Engine\Core\Rect;
 use Ichiloto\Engine\Core\Vector2;
-use Ichiloto\Engine\Field\MapLayerSet;
+use Ichiloto\Engine\Field\MapCell;
 use Ichiloto\Engine\IO\Console\TerminalText;
 use Ichiloto\Engine\Rendering\Camera;
 
@@ -18,27 +18,38 @@ use Ichiloto\Engine\Rendering\Camera;
  * transition covers — reaches the terminal through the camera, so capturing
  * here gives the preview pane an honest picture of the moment without the
  * Engine ever writing a byte over the editor's own screen.
+ *
+ * As in the Engine, the world is addressed in map cells and the frame is
+ * written in console columns, MapCell::COLUMNS to a cell.
  */
 final class PreviewCamera extends Camera
 {
     /** @var string[] The captured rows, one per screen line. */
     private array $frame = [];
 
+    /**
+     * @param int $width The frame width, in console columns.
+     * @param int $height The frame height, in rows.
+     */
     public function __construct(int $width, int $height)
     {
-        $this->screen = new Rect(0, 0, max(1, $width), max(1, $height));
+        $this->screen = new Rect(0, 0, 1, 1);
         $this->position = new Vector2(0, 0);
         $this->player = null;
         $this->worldSpace = [];
+        $this->resizeToConsole($width, $height);
         $this->clearFrame();
     }
 
     /**
-     * Resizes the captured screen.
+     * Resizes the captured screen to a console area.
+     *
+     * @param int $width The frame width, in console columns.
+     * @param int $height The frame height, in rows.
      */
     public function resize(int $width, int $height): void
     {
-        $this->resizeViewport($width, $height);
+        $this->resizeToConsole($width, $height);
         $this->clearFrame();
     }
 
@@ -47,7 +58,7 @@ final class PreviewCamera extends Camera
      */
     public function clearFrame(): void
     {
-        $this->frame = array_fill(0, $this->screen->getHeight(), str_repeat(' ', $this->screen->getWidth()));
+        $this->frame = array_fill(0, $this->screen->getHeight(), str_repeat(' ', $this->getConsoleColumns()));
     }
 
     /**
@@ -61,32 +72,19 @@ final class PreviewCamera extends Camera
     }
 
     /**
-     * Paints the world (the map tiles) into the frame.
+     * Paints the world (the map cells) into the frame, two columns a cell.
      */
     public function renderMap(): void
     {
         $renderOffset = $this->getRenderOffset();
-        $visibleWidth = $this->getVisibleWorldWidth();
-        $visibleHeight = $this->getVisibleWorldHeight();
 
-        for ($row = 0; $row < $visibleHeight; $row++) {
-            $worldRow = $this->worldSpace[(int) $this->position->y + $row] ?? null;
-
-            if ($worldRow === null) {
-                continue;
-            }
-
-            $content = is_array($worldRow)
-                ? implode('', array_slice($worldRow, (int) $this->position->x, $visibleWidth))
-                : TerminalText::sliceSymbols((string) $worldRow, (int) $this->position->x, $visibleWidth);
-
-            $this->draw(TerminalText::padRight($content, $visibleWidth), (int) $renderOffset->x, (int) $renderOffset->y + $row);
+        foreach ($this->visibleMapRows() as $worldY => $cells) {
+            $this->draw(
+                TerminalText::padRight(implode('', $cells), count($cells) * MapCell::COLUMNS),
+                (int) $renderOffset->x * MapCell::COLUMNS,
+                (int) $renderOffset->y + $worldY - (int) $this->position->y,
+            );
         }
-    }
-
-    public function renderLayeredMap(MapLayerSet $layers): void
-    {
-        $this->renderMap();
     }
 
     public function draw(iterable|string $content, int $x = 0, int $y = 0): void
@@ -102,7 +100,7 @@ final class PreviewCamera extends Camera
         }
 
         $height = $this->screen->getHeight();
-        $width = $this->screen->getWidth();
+        $width = $this->getConsoleColumns();
         $index = 0;
 
         foreach ($lines as $line) {
@@ -119,8 +117,7 @@ final class PreviewCamera extends Camera
 
     public function renderOnScreen(array $output, Vector2 $worldSpacePosition): void
     {
-        $screenSpacePosition = $this->getScreenSpacePosition($worldSpacePosition);
-        $this->renderAtScreenPosition($output, $screenSpacePosition);
+        $this->renderAtScreenPosition($output, $this->getConsolePosition($worldSpacePosition));
     }
 
     public function renderAtScreenPosition(array|string $output, Vector2 $screenSpacePosition): void
@@ -166,7 +163,7 @@ final class PreviewCamera extends Camera
      */
     private function writeRow(int $row, int $x, string $text): void
     {
-        $width = $this->screen->getWidth();
+        $width = $this->getConsoleColumns();
         $plain = TerminalText::stripAnsi(TerminalText::formatStyles($text));
         $plain = preg_replace('/\x1b\[[0-9;]*m/', '', $plain) ?? $plain;
         $cells = TerminalText::visibleSymbols($this->frame[$row] ?? str_repeat(' ', $width));
