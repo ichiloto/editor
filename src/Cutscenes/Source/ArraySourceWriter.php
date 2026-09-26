@@ -455,17 +455,8 @@ final class ArraySourceWriter
 
             if ($append['inline'] !== []) {
                 // After the last entry this rewrite keeps; right at the body
-                // start when it keeps none. The comma belongs to whichever
-                // entry the appended items now follow.
-                if ($lastSurviving !== null) {
-                    $anchor = $lastSurviving->separatorEnd;
-                    $prefix = $lastSurviving->separatorEnd === $lastSurviving->end ? ', ' : ' ';
-                } else {
-                    $anchor = (int) $node->bodyStart;
-                    $prefix = '';
-                }
-
-                $this->edits[] = [$anchor, $anchor, $prefix . implode(', ', $append['inline'])];
+                // start when it keeps none.
+                $this->edits[] = $this->document->planInlineAppend($node, $append['inline'], $lastSurviving);
             }
 
             if ($append['lines'] === []) {
