@@ -25,7 +25,7 @@ it('renders the fixture map content inside the frame', function () {
     ->and($plainFrame)->toContain('Project: Sample Project')
     ->and($plainFrame)->toContain('> test-map')
     ->and($plainFrame)->toContain('Preview: test-map')
-    ->and($plainFrame)->toContain('############')
+    ->and($plainFrame)->toContain('########################')
     ->and($plainFrame)->toContain('Name: Test Map')
     ->and($plainFrame)->toContain('Ready.');
 });

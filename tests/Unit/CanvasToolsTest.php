@@ -33,7 +33,15 @@ function placeCursor(Editor $editor, int $x, int $y): void
 }
 
 /**
- * Returns the fixture map's current tile grid as strings.
+ * Returns one cell of the fixture map's current tile grid.
+ */
+function tileCellAt(Editor $editor, int $x, int $y): string
+{
+    return getEditorProperty($editor, 'workspace')->getMapByIndex(0)->getTileSymbol($x, $y);
+}
+
+/**
+ * Returns the fixture map's current tile grid as strings, two columns a cell.
  *
  * @return string[]
  */
@@ -105,7 +113,7 @@ it('draws a filled rectangle and undoes it in ONE Ctrl+Z', function () {
     $before = tileRows($editor);
 
     setEditorProperty($editor, 'canvasTool', CanvasTool::FILLED_RECTANGLE);
-    setEditorProperty($editor, 'selectedPaintSymbol', 'X');
+    setEditorProperty($editor, 'selectedPaintSymbol', 'XX');
     placeCursor($editor, 1, 1);
     callEditorMethod($editor, 'dispatchInput', "\n");
     placeCursor($editor, 4, 3);
@@ -114,8 +122,8 @@ it('draws a filled rectangle and undoes it in ONE Ctrl+Z', function () {
     /** @var CommandHistory $history */
     $history = getEditorProperty($editor, 'history');
 
-    expect(tileRows($editor)[1])->toBe('#XXXX~     #')
-        ->and(tileRows($editor)[3])->toBe('#XXXX      #')
+    expect(tileRows($editor)[1])->toBe('##XXXXXXXX~~          ##')
+        ->and(tileRows($editor)[3])->toBe('##XXXXXXXX            ##')
         ->and($history->count())->toBe(1);
 
     callEditorMethod($editor, 'dispatchInput', "\x1a");
@@ -127,7 +135,7 @@ it('draws a filled rectangle and undoes it in ONE Ctrl+Z', function () {
 it('draws a rectangle outline as one command and leaves the middle alone', function () {
     $editor = canvasEditor();
     setEditorProperty($editor, 'canvasTool', CanvasTool::RECTANGLE);
-    setEditorProperty($editor, 'selectedPaintSymbol', 'O');
+    setEditorProperty($editor, 'selectedPaintSymbol', 'OO');
     placeCursor($editor, 1, 1);
     callEditorMethod($editor, 'dispatchInput', "\n");
     placeCursor($editor, 4, 3);
@@ -136,8 +144,8 @@ it('draws a rectangle outline as one command and leaves the middle alone', funct
     /** @var CommandHistory $history */
     $history = getEditorProperty($editor, 'history');
 
-    expect(tileRows($editor)[1])->toBe('#OOOO~     #')
-        ->and(tileRows($editor)[2])->toBe('#O  O      #')
+    expect(tileRows($editor)[1])->toBe('##OOOOOOOO~~          ##')
+        ->and(tileRows($editor)[2])->toBe('##OO    OO            ##')
         ->and($history->count())->toBe(1);
 });
 
@@ -145,7 +153,7 @@ it('draws a line as one command', function () {
     $editor = canvasEditor();
     $before = tileRows($editor);
     setEditorProperty($editor, 'canvasTool', CanvasTool::LINE);
-    setEditorProperty($editor, 'selectedPaintSymbol', '=');
+    setEditorProperty($editor, 'selectedPaintSymbol', '==');
     placeCursor($editor, 1, 2);
     callEditorMethod($editor, 'dispatchInput', "\n");
     placeCursor($editor, 5, 2);
@@ -154,7 +162,7 @@ it('draws a line as one command', function () {
     /** @var CommandHistory $history */
     $history = getEditorProperty($editor, 'history');
 
-    expect(tileRows($editor)[2])->toBe('#=====     #')
+    expect(tileRows($editor)[2])->toBe('##==========          ##')
         ->and($history->count())->toBe(1);
 
     callEditorMethod($editor, 'dispatchInput', "\x1a");
@@ -165,7 +173,7 @@ it('draws a line as one command', function () {
 it('flood fills with Ctrl+F and undoes the whole region in ONE Ctrl+Z', function () {
     $editor = canvasEditor();
     $before = tileRows($editor);
-    setEditorProperty($editor, 'selectedPaintSymbol', '.');
+    setEditorProperty($editor, 'selectedPaintSymbol', '..');
     placeCursor($editor, 5, 2);
     callEditorMethod($editor, 'dispatchInput', "\x06");
 
@@ -174,8 +182,8 @@ it('flood fills with Ctrl+F and undoes the whole region in ONE Ctrl+Z', function
     $filled = tileRows($editor);
 
     // The interior floods; the wall of `#` bounds it.
-    expect($filled[2])->toBe('#..........#')
-        ->and($filled[1])->toBe('#..~~~.....#')
+    expect($filled[2])->toBe('##....................##')
+        ->and($filled[1])->toBe('##....~~~~~~..........##')
         ->and($filled[0])->toBe($before[0])
         ->and($history->count())->toBe(1);
 
@@ -187,7 +195,7 @@ it('flood fills with Ctrl+F and undoes the whole region in ONE Ctrl+Z', function
 
 it('refuses a flood fill that would change nothing', function () {
     $editor = canvasEditor();
-    setEditorProperty($editor, 'selectedPaintSymbol', '#');
+    setEditorProperty($editor, 'selectedPaintSymbol', '##');
     placeCursor($editor, 0, 0);
     callEditorMethod($editor, 'dispatchInput', "\x06");
 
@@ -199,11 +207,11 @@ it('refuses a flood fill that would change nothing', function () {
 
 it('picks up the symbol under the cursor with Ctrl+K', function () {
     $editor = canvasEditor();
-    setEditorProperty($editor, 'selectedPaintSymbol', 'z');
+    setEditorProperty($editor, 'selectedPaintSymbol', 'zz');
     placeCursor($editor, 0, 0);
     callEditorMethod($editor, 'dispatchInput', "\x0b");
 
-    expect(getEditorProperty($editor, 'selectedPaintSymbol'))->toBe('#');
+    expect(getEditorProperty($editor, 'selectedPaintSymbol'))->toBe('##');
 });
 
 it('cycles tools with Ctrl+N and brush widths with Ctrl+W', function () {
@@ -232,8 +240,8 @@ it('paints a whole brush footprint as one undoable dab', function () {
     /** @var CommandHistory $history */
     $history = getEditorProperty($editor, 'history');
 
-    expect(tileRows($editor)[1])->toBe('#  ~WWW    #')
-        ->and(tileRows($editor)[3])->toBe('#   WWW    #')
+    expect(tileRows($editor)[1])->toBe('##    ~~WWWWWW        ##')
+        ->and(tileRows($editor)[3])->toBe('##      WWWWWW        ##')
         ->and($history->count())->toBe(1);
 
     callEditorMethod($editor, 'dispatchInput', "\x1a");
@@ -246,7 +254,7 @@ it('selects, copies, and stamps a region - each paste one undo step', function (
     $before = tileRows($editor);
 
     // Author a 2x1 block to lift.
-    setEditorProperty($editor, 'selectedPaintSymbol', 'A');
+    setEditorProperty($editor, 'selectedPaintSymbol', 'AA');
     placeCursor($editor, 1, 1);
     callEditorMethod($editor, 'dispatchInput', "\n");
     placeCursor($editor, 2, 1);
@@ -265,7 +273,7 @@ it('selects, copies, and stamps a region - each paste one undo step', function (
     /** @var Clipboard $clipboard */
     $clipboard = getEditorProperty($editor, 'clipboard');
 
-    expect($clipboard->getRows())->toBe([['A', 'A']]);
+    expect($clipboard->getRows())->toBe([['AA', 'AA']]);
 
     placeCursor($editor, 6, 3);
     callEditorMethod($editor, 'dispatchInput', "\x15");
@@ -273,7 +281,7 @@ it('selects, copies, and stamps a region - each paste one undo step', function (
     /** @var CommandHistory $history */
     $history = getEditorProperty($editor, 'history');
 
-    expect(tileRows($editor)[3])->toBe('#     AA   #')
+    expect(tileRows($editor)[3])->toBe('##          AAAA      ##')
         ->and($history->count())->toBe(3);
 
     // One Ctrl+Z removes the whole stamp.
@@ -299,8 +307,8 @@ it('cuts a selection in one undoable command', function () {
     /** @var CommandHistory $history */
     $history = getEditorProperty($editor, 'history');
 
-    expect($clipboard->getRows())->toBe([['~', '~', '~']])
-        ->and(tileRows($editor)[1])->toBe('#          #')
+    expect($clipboard->getRows())->toBe([['~~', '~~', '~~']])
+        ->and(tileRows($editor)[1])->toBe('##                    ##')
         ->and($history->count())->toBe(1);
 
     callEditorMethod($editor, 'dispatchInput', "\x1a");
@@ -344,7 +352,7 @@ it('loads a typed glyph into the brush without painting under a shape tool', fun
     /** @var CommandHistory $history */
     $history = getEditorProperty($editor, 'history');
 
-    expect(getEditorProperty($editor, 'selectedPaintSymbol'))->toBe('Q')
+    expect(getEditorProperty($editor, 'selectedPaintSymbol'))->toBe('QQ')
         ->and(tileRows($editor))->toBe($before)
         ->and($history->count())->toBe(0);
 
@@ -352,7 +360,7 @@ it('loads a typed glyph into the brush without painting under a shape tool', fun
     setEditorProperty($editor, 'canvasTool', CanvasTool::BRUSH);
     callEditorMethod($editor, 'dispatchInput', 'Q');
 
-    expect(tileRows($editor)[2][5])->toBe('Q');
+    expect(tileCellAt($editor, 5, 2))->toBe('QQ');
 });
 
 it('paints every reserved glyph in Paint mode instead of running commands', function () {
@@ -365,7 +373,7 @@ it('paints every reserved glyph in Paint mode instead of running commands', func
     foreach (['?', '%', '^', '@'] as $index => $glyph) {
         placeCursor($editor, 4 + $index, 2);
         callEditorMethod($editor, 'dispatchInput', $glyph);
-        expect(tileRows($editor)[2][4 + $index])->toBe($glyph);
+        expect(tileCellAt($editor, 4 + $index, 2))->toBe($glyph . $glyph);
     }
 
     expect(getEditorProperty($editor, 'isHelpOpen'))->toBeFalse()
@@ -420,7 +428,7 @@ it('opens help with ? in Normal mode and paints ? in Paint mode', function () {
     placeCursor($editor, 5, 2);
     callEditorMethod($editor, 'dispatchInput', '?');
 
-    expect(tileRows($editor)[2][5])->toBe('?')
+    expect(tileCellAt($editor, 5, 2))->toBe('??')
         ->and(getEditorProperty($editor, 'isHelpOpen'))->toBeFalse();
 });
 
@@ -435,13 +443,13 @@ it('paints with the brush colour and undoes glyph and colour together', function
     callEditorMethod($editor, 'dispatchInput', 'i');
     callEditorMethod($editor, 'dispatchInput', '?');
 
-    expect($map->getTileSymbol(5, 2))->toBe('?')
+    expect($map->getTileSymbol(5, 2))->toBe('??')
         ->and($map->getTileColor(5, 2))->toBe('bright-cyan')
         ->and($map->getTileCellStyle(5, 2))->toBe(['prefix' => '<fg=bright-cyan>', 'suffix' => '</>']);
 
     callEditorMethod($editor, 'dispatchInput', "\x1a");
 
-    expect($map->getTileSymbol(5, 2))->toBe(' ')
+    expect($map->getTileSymbol(5, 2))->toBe('  ')
         ->and($map->getTileColor(5, 2))->toBeNull();
 });
 
@@ -457,13 +465,13 @@ it('keeps a cell\'s authored styling byte-for-byte when the brush has no colour 
     callEditorMethod($editor, 'dispatchInput', 'i');
     callEditorMethod($editor, 'dispatchInput', 'Q');
 
-    expect($map->getTileSymbol(5, 2))->toBe('Q')
+    expect($map->getTileSymbol(5, 2))->toBe('QQ')
         ->and($map->getTileCellStyle(5, 2))->toBe(['prefix' => '<fg=yellow;options=bold>', 'suffix' => '</>']);
 
     // Undo restores the original symbol with the original bytes.
     callEditorMethod($editor, 'dispatchInput', "\x1a");
 
-    expect($map->getTileSymbol(5, 2))->toBe('~')
+    expect($map->getTileSymbol(5, 2))->toBe('~~')
         ->and($map->getTileCellStyle(5, 2))->toBe(['prefix' => '<fg=yellow;options=bold>', 'suffix' => '</>']);
 });
 
@@ -479,7 +487,7 @@ it('never leaves styling behind an erased cell', function () {
     callEditorMethod($editor, 'dispatchInput', 'i');
     callEditorMethod($editor, 'dispatchInput', "\177"); // Backspace erases.
 
-    expect($map->getTileSymbol(5, 2))->toBe(' ')
+    expect($map->getTileSymbol(5, 2))->toBe('  ')
         ->and($map->getTileCellStyle(5, 2))->toBe(['prefix' => '', 'suffix' => '']);
 });
 
@@ -493,7 +501,7 @@ it('picks up the colour with the glyph through the eyedropper', function () {
 
     callEditorMethod($editor, 'dispatchInput', 'k');
 
-    expect(getEditorProperty($editor, 'selectedPaintSymbol'))->toBe('m')
+    expect(getEditorProperty($editor, 'selectedPaintSymbol'))->toBe('mm')
         ->and(getEditorProperty($editor, 'selectedPaintColor'))->toBe('yellow');
 
     // An uncoloured cell loads an uncoloured brush.
@@ -522,7 +530,7 @@ it('recolours the cell under the cursor from the colour picker', function () {
 
     expect(getEditorProperty($editor, 'isColorPickerOpen'))->toBeFalse()
         ->and(getEditorProperty($editor, 'selectedPaintColor'))->toBe('black')
-        ->and($map->getTileSymbol(5, 2))->toBe('i')
+        ->and($map->getTileSymbol(5, 2))->toBe('ii')
         ->and($map->getTileColor(5, 2))->toBe('black');
 });
 
@@ -543,7 +551,7 @@ it('allows event colour authoring while Paint mode still treats o as a glyph', f
 
     // In Paint mode, o is a glyph.
     expect(getEditorProperty($editor, 'isColorPickerOpen'))->toBeFalse()
-        ->and(tileRows($editor)[2][5])->toBe('o');
+        ->and(tileCellAt($editor, 5, 2))->toBe('oo');
 });
 
 it('exits NPC mode with Esc, cancelling a pending move first', function () {
@@ -597,8 +605,8 @@ it('always offers the reserved and project vocabulary glyphs in the character ma
 
     // Stolen shortcut glyphs and dictionary vocabulary are always pickable,
     // whether or not the current map still contains them.
-    foreach (['?', '%', '^', '@', 'z'] as $glyph) {
-        expect($palette)->toContain($glyph);
+    foreach (['??', '%%', '^^', '@@', 'zz'] as $cell) {
+        expect($palette)->toContain($cell);
     }
 });
 
@@ -663,15 +671,15 @@ it('renders authored cell colours in the canvas preview', function () {
 
     // Named colours use the 4-bit palette; hex values use truecolor. Both
     // reset immediately so neighbouring cells stay untouched.
-    expect($lines[2])->toContain("\033[92m;\033[0m")
-        ->and($lines[2])->toContain("\033[38;2;184;115;51m~\033[0m");
+    expect($lines[2])->toContain("\033[92m;;\033[0m")
+        ->and($lines[2])->toContain("\033[38;2;184;115;51m~~\033[0m");
 
     // An event marker over a coloured tile stays plain authoring geometry.
     $map->setEventSymbol(2, 2, 'A');
     $lines = $map->renderPreview(12, 5);
 
     expect($lines[2])->not->toContain("\033[92m")
-        ->and($lines[2])->toContain('A');
+        ->and($lines[2])->toContain('AA');
 });
 
 /** Builds an SGR mouse press at 1-based terminal coordinates. */
@@ -680,13 +688,13 @@ function mousePress(int $code, int $column, int $row): string
     return sprintf("\033[<%d;%d;%dM", $code, $column, $row);
 }
 
-/** Returns the terminal cell of a map coordinate under the current layout. */
+/** Returns the terminal position of a map cell's first column under the current layout. */
 function canvasCellAt(Editor $editor, int $mapX, int $mapY): array
 {
     $layout = callEditorMethod($editor, 'resolveLayout');
 
     return [
-        2 + $layout['leftWidth'] + $layout['gutter'] + 1 + 1 + $mapX,
+        2 + $layout['leftWidth'] + $layout['gutter'] + 1 + 1 + $mapX * 2,
         5 + 3 + $mapY,
     ];
 }
@@ -705,11 +713,11 @@ it('selects with a Normal-mode click and paints only in Paint mode', function ()
         ->and(tileRows($editor))->toBe($before);
 
     // Paint mode: the same click paints the brush symbol.
-    setEditorProperty($editor, 'selectedPaintSymbol', 'Q');
+    setEditorProperty($editor, 'selectedPaintSymbol', 'QQ');
     callEditorMethod($editor, 'dispatchInput', 'i');
     callEditorMethod($editor, 'dispatchInput', mousePress(0, $column, $row));
 
-    expect(tileRows($editor)[2][4])->toBe('Q');
+    expect(tileCellAt($editor, 4, 2))->toBe('QQ');
 });
 
 it('scrolls the viewport with the wheel without moving the cursor, until the cursor reclaims it', function () {
@@ -766,7 +774,7 @@ it('recolours every cell of an active selection from the colour picker', functio
     callEditorMethod($editor, 'dispatchInput', "\n");
 
     foreach ([2, 3, 4, 5] as $x) {
-        expect($map->getTileSymbol($x, 2))->toBe('#')
+        expect($map->getTileSymbol($x, 2))->toBe('##')
             ->and($map->getTileColor($x, 2))->toBe('black', "cell {$x} of the selection");
     }
 

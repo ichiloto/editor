@@ -7,6 +7,7 @@ namespace Ichiloto\Editor\Canvas;
 use Ichiloto\Editor\EditorWindow;
 use Ichiloto\Editor\History\GenericCommand;
 use Ichiloto\Editor\MapSourceRefusal;
+use Ichiloto\Editor\Maps\EditableGrid;
 use Ichiloto\Editor\Maps\MapLayers;
 use Ichiloto\Editor\UI\Modal;
 use Ichiloto\Editor\UI\PaletteItem;
@@ -266,7 +267,7 @@ trait LayerCanvas
             foreach ($rows as $y => $row) {
                 foreach ($row as $x => $cell) {
                     $writes[] = ['x' => $this->cursorX + $x, 'y' => $this->cursorY + $y,
-                        'symbol' => $cell['symbol'], 'style' => ['prefix' => $cell['prefix'], 'suffix' => $cell['suffix']]];
+                        'symbol' => $cell['symbol'], 'style' => EditableGrid::getCellStyle($cell)];
                 }
             }
             $this->applyCanvasWrites($map, $writes, 'Facade stamp');

@@ -130,7 +130,7 @@ it('leaves / paintable on the canvas', function () {
     /** @var ProjectWorkspace $workspace */
     $workspace = getEditorProperty($editor, 'workspace');
 
-    expect($workspace->getMapByIndex(0)->getTileSymbol(2, 2))->toBe('/');
+    expect($workspace->getMapByIndex(0)->getTileSymbol(2, 2))->toBe('//');
 });
 
 it('narrows a Database entry list with / and moves selection inside it', function () {

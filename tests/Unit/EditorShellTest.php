@@ -102,14 +102,14 @@ it('gates pane input by focus', function () {
   /** @var ProjectWorkspace $workspace */
   $workspace = getEditorProperty($editor, 'workspace');
 
-  expect($workspace->getMapByIndex(0)->getTileSymbol(1, 2))->toBe(' ');
+  expect($workspace->getMapByIndex(0)->getTileSymbol(1, 2))->toBe('  ');
 
   // Canvas focused: Paint mode enters and the same key paints.
   setEditorProperty($editor, 'focusedPane', 'canvas');
   callEditorMethod($editor, 'dispatchInput', 'i'); // Paint mode.
   callEditorMethod($editor, 'dispatchInput', 'x');
 
-  expect($workspace->getMapByIndex(0)->getTileSymbol(1, 2))->toBe('x');
+  expect($workspace->getMapByIndex(0)->getTileSymbol(1, 2))->toBe('xx');
 });
 
 it('opens and closes the Database screen through the router', function () {
@@ -175,15 +175,15 @@ it('still undoes a painted tile after routing through the binding table', functi
   /** @var ProjectWorkspace $workspace */
   $workspace = getEditorProperty($editor, 'workspace');
 
-  expect($workspace->getMapByIndex(0)->getTileSymbol(1, 2))->toBe('#');
+  expect($workspace->getMapByIndex(0)->getTileSymbol(1, 2))->toBe('##');
 
   callEditorMethod($editor, 'dispatchInput', "\x1a");
 
-  expect($workspace->getMapByIndex(0)->getTileSymbol(1, 2))->toBe(' ');
+  expect($workspace->getMapByIndex(0)->getTileSymbol(1, 2))->toBe('  ');
 
   callEditorMethod($editor, 'dispatchInput', "\x19");
 
-  expect($workspace->getMapByIndex(0)->getTileSymbol(1, 2))->toBe('#');
+  expect($workspace->getMapByIndex(0)->getTileSymbol(1, 2))->toBe('##');
 });
 
 it('repaints the header the tick the unsaved truth changes, a save included', function () {

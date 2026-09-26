@@ -15,9 +15,12 @@ function createMixedMaterialProject(): string
     $directory = $root . '/assets/Maps/test-map';
     unlink($directory . '/test-map.map.php');
     mkdir($directory . '/layers');
-    $blank = implode("\n", array_fill(0, 7, str_repeat(' ', 10)));
-    $walls = "##########\n#        #\n#        #\n##########\n#        #\n#        #\n##########";
-    $fixtures = substr_replace($blank, 'i', 4, 1);
+    // Ten cells across, two terminal columns each.
+    $blank = implode("\n", array_fill(0, 7, str_repeat(' ', 20)));
+    $wall = str_repeat('#', 20);
+    $room = '##' . str_repeat(' ', 16) . '##';
+    $walls = implode("\n", [$wall, $room, $room, $wall, $room, $room, $wall]);
+    $fixtures = substr_replace($blank, 'ii', 8, 2);
     foreach ([
         '01.terrain.map.php' => $blank,
         '02.floors.deco.php' => $blank,
@@ -47,8 +50,8 @@ function paintMixedMaterial(Editor $editor, int $x, int $y, string $symbol): voi
 {
     callEditorMethod($editor, 'dispatchInput', "\033");
     $bounds = callEditorMethod($editor, 'getCanvasPreviewBounds');
-    callEditorMethod($editor, 'dispatchInput', sprintf("\033[<0;%d;%dM", $bounds['left'] + $x, $bounds['top'] + $y));
-    callEditorMethod($editor, 'dispatchInput', sprintf("\033[<0;%d;%dm", $bounds['left'] + $x, $bounds['top'] + $y));
+    callEditorMethod($editor, 'dispatchInput', sprintf("\033[<0;%d;%dM", $bounds['left'] + $x * 2, $bounds['top'] + $y));
+    callEditorMethod($editor, 'dispatchInput', sprintf("\033[<0;%d;%dm", $bounds['left'] + $x * 2, $bounds['top'] + $y));
     callEditorMethod($editor, 'dispatchInput', 'i');
     callEditorMethod($editor, 'dispatchInput', $symbol);
     callEditorMethod($editor, 'dispatchInput', "\033");
@@ -57,7 +60,7 @@ function paintMixedMaterial(Editor $editor, int $x, int $y, string $symbol): voi
 function getMixedMaterialCanvasRows(Editor $editor): array
 {
     $window = callEditorMethod($editor, 'createCanvasWindow');
-    return array_map(static fn(string $line): string => substr(TerminalText::stripAnsi($line), 0, 10),
+    return array_map(static fn(string $line): string => substr(TerminalText::stripAnsi($line), 0, 20),
         array_slice($window->content, ProjectWorkspace::CANVAS_HEADER_ROWS, 7));
 }
 
@@ -96,9 +99,9 @@ it('preserves mixed graphical materials through model save restore and reload wi
     $map->save();
     expect(sourceHashTree($root . '/assets/Maps'))->toBe($saved);
     $reloaded = loadLayeredMap($root);
-    expect($reloaded->getLayerSymbol('map:2', 7, 1))->toBe('k')
-        ->and($reloaded->getLayerSymbol('map:3', 2, 4))->toBe('c')
-        ->and($reloaded->getLayerSymbol('map:5', 5, 3))->toBe('o')
+    expect($reloaded->getLayerSymbol('map:2', 7, 1))->toBe('kk')
+        ->and($reloaded->getLayerSymbol('map:3', 2, 4))->toBe('cc')
+        ->and($reloaded->getLayerSymbol('map:5', 5, 3))->toBe('oo')
         ->and($reloaded->renderPreview(10, 7))->toBe($terminal)
         ->and(MapCollisionResolver::resolveLayers($reloaded->getLayerSet(), $dictionary))->toBe($collision)
         ->and($reloaded->getEditableData()['npcs'][0]['dialogue'])->toBe([['text' => 'Read the notice.']])
@@ -114,7 +117,9 @@ it('excludes material markers and crop controls from the TUI while terminal edit
     $map->save();
     $before = sourceHashTree($root . '/assets/Maps');
     [$editor, $map] = layeredCanvasEditor($root);
-    $terminal = ['####i#####', '#        #', '#        #', '##########', '#        #', '#        #', '##########'];
+    $wall = str_repeat('#', 20);
+    $room = '##' . str_repeat(' ', 16) . '##';
+    $terminal = ['########ii##########', $room, $room, $wall, $room, $room, $wall];
     expect(getMixedMaterialCanvasRows($editor))->toBe($terminal);
     foreach (['map:4', 'map:6', 'event', 'map:1'] as $id) {
         callEditorMethod($editor, 'dispatchInput', ']');
@@ -130,7 +135,7 @@ it('excludes material markers and crop controls from the TUI while terminal edit
 
     paintMixedMaterial($editor, 2, 1, '#');
     callEditorMethod($editor, 'dispatchInput', "\x13");
-    expect($map->getLayerSymbol('map:1', 2, 1))->toBe('#')
+    expect($map->getLayerSymbol('map:1', 2, 1))->toBe('##')
         ->and(array_keys(array_diff_assoc(sourceHashTree($root . '/assets/Maps'), $before)))->toBe(['test-map/layers/01.terrain.map.php']);
     callEditorMethod($editor, 'dispatchInput', "\x1a");
     callEditorMethod($editor, 'dispatchInput', "\x13");
@@ -140,13 +145,13 @@ it('excludes material markers and crop controls from the TUI while terminal edit
     callEditorMethod($editor, 'dispatchInput', "\x13");
     callEditorMethod($editor, 'dispatchInput', "\x12");
     $loaded = callEditorMethod($editor, 'getSelectedMap');
-    expect($loaded->getLayerSymbol('map:1', 2, 1))->toBe('#')
-        ->and($loaded->getLayerSymbol('map:2', 1, 1))->toBe('w')
-        ->and($loaded->getLayerSymbol('map:3', 2, 1))->toBe('r')
-        ->and($loaded->getLayerSymbol('map:5', 1, 0))->toBe('o');
+    expect($loaded->getLayerSymbol('map:1', 2, 1))->toBe('##')
+        ->and($loaded->getLayerSymbol('map:2', 1, 1))->toBe('ww')
+        ->and($loaded->getLayerSymbol('map:3', 2, 1))->toBe('rr')
+        ->and($loaded->getLayerSymbol('map:5', 1, 0))->toBe('oo');
     callEditorMethod($editor, 'selectCanvasLayer', 'map:6');
     callEditorMethod($editor, 'dispatchInput', 'v');
-    expect(getMixedMaterialCanvasRows($editor)[0])->toBe('##########');
+    expect(getMixedMaterialCanvasRows($editor)[0])->toBe($wall);
     callEditorMethod($editor, 'dispatchInput', 'v');
-    expect(getMixedMaterialCanvasRows($editor)[0])->toBe('####i#####');
+    expect(getMixedMaterialCanvasRows($editor)[0])->toBe('########ii##########');
 });
