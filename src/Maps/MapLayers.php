@@ -7,17 +7,24 @@ namespace Ichiloto\Editor\Maps;
 use Ichiloto\Editor\MapSourceRefusal;
 use Ichiloto\Editor\Storage\FileSetTransaction;
 use Ichiloto\Engine\Field\MapCell;
+use Ichiloto\Engine\Field\MapGraphics;
 use Ichiloto\Engine\Field\MapGridSource;
 use Ichiloto\Engine\Field\MapLayerSource;
 use Ichiloto\Engine\Field\MapLayerSet;
 use Ichiloto\Engine\Field\MapLayer;
 
-/** Editable layers and their file-set boundary. Layer ids survive renaming. */
+/**
+ * Editable layers and their file-set boundary. Layer ids survive renaming.
+ * The map's graphical tile layers share the boundary: the TUI never paints
+ * them, but resizes, relocates and removes them with the map.
+ */
 final class MapLayers
 {
     public const string EVENT = 'event';
     public const string BASE = 'tile';
     private array $layers = [];
+    /** @var array<string, string> Tile layer sources in graphics/, by path. */
+    private array $tileSources = [];
     /** Original on-disk members, including layers removed or renamed in memory. */
     private array $baselineSources = [];
 
@@ -27,10 +34,12 @@ final class MapLayers
         array $layers,
         EditableGrid $events,
         string $eventPath,
+        array $tileSources = [],
     ) {
         foreach ($layers as $layer) {
             $this->layers[$layer['id']] = $layer;
         }
+        $this->tileSources = $tileSources;
         $this->layers[self::EVENT] = [
             'id' => self::EVENT, 'name' => 'Events', 'order' => null, 'decoration' => false,
             'path' => $eventPath, 'grid' => $events,
@@ -53,7 +62,17 @@ final class MapLayers
             ];
         }
         $events = new EditableGrid($eventText, (string) file_get_contents($eventPath), context: $prefix . basename($eventPath));
-        return new self($directory, $set->legacy, $layers, $events, $eventPath);
+        $tileSources = [];
+        foreach (TileLayerSource::findPaths($directory) as $path) {
+            $tileSources[$path] = (string) file_get_contents($path);
+        }
+        return new self($directory, $set->legacy, $layers, $events, $eventPath, $tileSources);
+    }
+
+    /** @return array<string, string> Tile layer sources in graphics/, by path. */
+    public function getTileSources(): array
+    {
+        return $this->tileSources;
     }
 
     public function getLayers(): array
@@ -173,21 +192,43 @@ final class MapLayers
     {
         return ['legacy' => $this->legacy, 'layers' => array_map(
             static fn(array $layer): array => [...$layer, 'grid' => $layer['grid']->captureSnapshot()], $this->layers,
-        )];
+        ), 'tiles' => $this->tileSources];
     }
 
     public function restoreSnapshot(array $snapshot): void
     {
         $this->legacy = $snapshot['legacy'];
         $this->layers = array_map(static fn(array $layer): array => [...$layer, 'grid' => EditableGrid::createFromSnapshot($layer['grid'])], $snapshot['layers']);
+        $this->tileSources = $snapshot['tiles'];
     }
 
-    /** Resizes every layer to whole cells. */
+    /**
+     * Resizes every layer to whole cells, tile layers included. Every tile
+     * layer is resized before anything changes, so one the Engine cannot
+     * read refuses the whole resize.
+     *
+     * @throws MapSourceRefusal When a tile layer cannot be read or does not match the map.
+     */
     public function resize(int $width, int $height): void
     {
+        $tileSources = [];
+        if ($this->tileSources !== []) {
+            $set = $this->getLayerSet();
+            foreach ($this->tileSources as $path => $source) {
+                $tileSources[$path] = TileLayerSource::resize($source, $this->getDisplayPath($path), $set, $width, $height,
+                    $this->baselineSources[$path] ?? null);
+            }
+        }
         foreach ($this->layers as $layer) {
             $layer['grid']->resize($width, $height);
         }
+        $this->tileSources = $tileSources;
+    }
+
+    /** A tile layer path relative to its map, as refusals name it. */
+    private function getDisplayPath(string $path): string
+    {
+        return basename($this->directory) . '/' . MapGraphics::DIRECTORY . '/' . basename($path);
     }
 
     public function assertDimensions(): void
@@ -217,7 +258,10 @@ final class MapLayers
             if (! is_file($path)) {
                 throw new MapSourceRefusal("{$path} disappeared after opening; reload before saving.");
             }
-            MapGridSource::readFile($path);
+            if (dirname($path) !== $this->directory . '/' . MapGraphics::DIRECTORY) {
+                // Tile layers are carried as bytes; validation reports one the Engine cannot read.
+                MapGridSource::readFile($path);
+            }
             if (file_get_contents($path) !== $source) {
                 throw new MapSourceRefusal("{$path} changed after opening; reload before saving. Nothing was written.");
             }
@@ -229,6 +273,11 @@ final class MapLayers
                 if (! in_array($layer->path, $known, true)) {
                     throw new MapSourceRefusal("{$layer->path} was added after opening; reload before saving.");
                 }
+            }
+        }
+        foreach (TileLayerSource::findPaths($this->directory) as $path) {
+            if (! array_key_exists($path, $this->baselineSources)) {
+                throw new MapSourceRefusal("{$path} was added after opening; reload before saving.");
             }
         }
     }
@@ -243,6 +292,9 @@ final class MapLayers
                     : ($this->legacy ? "{$directory}/{$baseName}.map.php" : $directory . '/layers/' . basename($path));
             }
             $sources[$path] = $layer['grid']->getSource();
+        }
+        foreach ($this->tileSources as $path => $source) {
+            $sources[$directory === null ? $path : $directory . '/' . MapGraphics::DIRECTORY . '/' . basename($path)] = $source;
         }
         return $sources;
     }

@@ -16,6 +16,7 @@ use Ichiloto\Editor\Storage\FileSetOperations;
 use Ichiloto\Editor\Storage\FileSetTransactionFailure;
 use Ichiloto\Editor\Storage\FilesystemFileSetOperations;
 use Ichiloto\Editor\Storage\FileSetTransaction;
+use Ichiloto\Engine\Field\MapGraphics;
 use Ichiloto\Engine\Field\MapGridSource;
 use Ichiloto\Engine\Field\MapLayer;
 use Ichiloto\Engine\Field\MapLayerSource;
@@ -470,6 +471,23 @@ final class ProjectMap
     {
         $this->assertGridSourcesCanonical();
         return $this->layers->getStoredPaths();
+    }
+
+    /**
+     * The map's graphical tile layers in `graphics/`, unsaved resizes
+     * included. The TUI keeps them intact and never paints them.
+     *
+     * @return array<string, string> Source bytes by path.
+     */
+    public function getTileLayerSources(): array
+    {
+        return $this->layers->getTileSources();
+    }
+
+    /** The project's asset root, where tilesets and their sheets live. */
+    public function getAssetRoot(): string
+    {
+        return dirname($this->getMapsRoot());
     }
 
     /** Proves the layers compose and resolve collisions as the engine will load them. */
@@ -1430,7 +1448,9 @@ final class ProjectMap
     }
 
     /**
-     * Resizes the map and its event overlay while preserving existing content.
+     * Resizes the map, its event overlay and its graphical tile layers while
+     * preserving existing content. A tile layer the Engine cannot read
+     * refuses the resize before anything changes.
      *
      * @param int $width The new map width.
      * @param int $height The new map height.
@@ -2018,8 +2038,12 @@ final class ProjectMap
             $transaction->remove($this->dataPath);
             $expectedGrids = $this->layers->getSources($directory, $baseName);
             $sourceDirectoryMetadata = self::captureDirectoryMetadata($previousDirectory);
-            $layerDirectoryMetadata = is_dir($previousDirectory . '/layers')
-                ? self::captureDirectoryMetadata($previousDirectory . '/layers') : null;
+            $memberDirectoryMetadata = [];
+            foreach (['layers', MapGraphics::DIRECTORY] as $member) {
+                if (is_dir($previousDirectory . '/' . $member)) {
+                    $memberDirectoryMetadata[] = self::captureDirectoryMetadata($previousDirectory . '/' . $member);
+                }
+            }
             $removedSourceDirectories = [];
             $directoryRestorationFailures = [];
 
@@ -2032,18 +2056,16 @@ final class ProjectMap
                 $movedEventPath,
                 $expectedGrids,
                 $newRelativeId,
-                $previousDirectory,
                 $mapsRoot,
                 $sourceDirectoryMetadata,
-                $layerDirectoryMetadata,
+                $memberDirectoryMetadata,
                 &$removedSourceDirectories,
                 &$directoryRestorationFailures,
             ): void {
-                $removedSourceDirectories = self::removeEmptyDirectoryChain(
-                    $layerDirectoryMetadata['path'] ?? $previousDirectory,
+                $removedSourceDirectories = self::removeEmptySourceDirectories(
+                    $memberDirectoryMetadata,
                     $mapsRoot,
-                    $layerDirectoryMetadata ?? $sourceDirectoryMetadata,
-                    [$previousDirectory => $sourceDirectoryMetadata],
+                    $sourceDirectoryMetadata,
                 );
 
                 try {
@@ -2069,8 +2091,13 @@ final class ProjectMap
                         ));
                     }
 
+                    // Terminal grids must read back as literal grids; tile
+                    // layers are carried as bytes, readable or not, so they
+                    // must hold exactly the bytes that were moved.
                     foreach ($expectedGrids as $path => $expectedSource) {
-                        if (MapGridSource::readFile($path) !== MapGridSource::parseSource($expectedSource, $path)) {
+                        if (dirname($path) === dirname($movedDataPath) . '/' . MapGraphics::DIRECTORY
+                            ? @file_get_contents($path) !== $expectedSource
+                            : MapGridSource::readFile($path) !== MapGridSource::parseSource($expectedSource, $path)) {
                             throw new RuntimeException(basename($path) . ' would not read back as this map at ' . $newRelativeId);
                         }
                     }
@@ -2224,6 +2251,33 @@ final class ProjectMap
     }
 
     /**
+     * Removes a moved map's emptied member directories (`layers/`,
+     * `graphics/`), then its source directory and empty parents.
+     *
+     * @param list<array{path: string, mode: int, owner: int, group: int, modifiedAt: int, accessedAt: int, device: int, inode: int}> $memberDirectoryMetadata Metadata captured before source members are removed.
+     * @param array{path: string, mode: int, owner: int, group: int, modifiedAt: int, accessedAt: int, device: int, inode: int} $sourceDirectoryMetadata
+     * @return list<array{path: string, mode: int, owner: int, group: int, modifiedAt: int, accessedAt: int, device: int, inode: int}> The removed directories, leaf first.
+     */
+    private static function removeEmptySourceDirectories(array $memberDirectoryMetadata, string $mapsRoot, array $sourceDirectoryMetadata): array
+    {
+        $removed = [];
+
+        foreach ($memberDirectoryMetadata as $metadata) {
+            $entries = is_dir($metadata['path']) ? scandir($metadata['path']) : false;
+
+            // A member directory holding anything else is its author's.
+            if (is_array($entries) && array_diff($entries, ['.', '..']) === [] && @rmdir($metadata['path'])) {
+                $removed[] = $metadata;
+            }
+        }
+
+        return [
+            ...$removed,
+            ...self::removeEmptyDirectoryChain($sourceDirectoryMetadata['path'], $mapsRoot, $sourceDirectoryMetadata),
+        ];
+    }
+
+    /**
      * Removes the empty source directory and its empty parents for a move.
      *
      * The returned leaf-first list carries the directory metadata needed to
@@ -2239,7 +2293,6 @@ final class ProjectMap
         string $directory,
         string $mapsRoot,
         array $sourceDirectoryMetadata,
-        array $knownMetadata = [],
     ): array {
         $candidates = [];
         $mapsRoot = rtrim($mapsRoot, DIRECTORY_SEPARATOR);
@@ -2249,7 +2302,7 @@ final class ProjectMap
         while ($directory !== '' && $directory !== $mapsRoot && str_starts_with($directory, $mapsRoot . DIRECTORY_SEPARATOR)) {
             $metadata = $directory === $sourceDirectoryMetadata['path']
                 ? $sourceDirectoryMetadata
-                : ($knownMetadata[$directory] ?? self::captureDirectoryMetadata($directory));
+                : self::captureDirectoryMetadata($directory);
             $entries = is_dir($directory) ? scandir($directory) : false;
 
             if (! is_array($entries)) {

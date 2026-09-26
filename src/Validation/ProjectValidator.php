@@ -1573,6 +1573,7 @@ class ProjectValidator
       $issues = [
         ...$issues,
         ...$this->checkLayers($map),
+        ...MapGraphicsValidator::validate($map),
         ...$this->checkRetiredMapData($map),
         ...$this->checkEventMarkers($map),
         ...$this->checkDoors($map, $workspace->mapIds),

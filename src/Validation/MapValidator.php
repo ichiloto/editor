@@ -34,6 +34,7 @@ final class MapValidator
             ...self::findDanglingDestinations($map, $mapsById),
             ...self::findOutOfRangeSpawnPoints($map, $mapsById),
             ...self::findRetiredData($map),
+            ...array_map(static fn(Issue $issue): string => $issue->message, MapGraphicsValidator::validate($map)),
         ];
     }
 

@@ -14,6 +14,7 @@ use Ichiloto\Editor\Storage\FileSetOperations;
 use Ichiloto\Editor\Storage\FileSetTransaction;
 use Ichiloto\Editor\Storage\FilesystemFileSetOperations;
 use Ichiloto\Engine\Core\ProjectFormat;
+use Ichiloto\Engine\Field\MapGraphics;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
 use RuntimeException;
@@ -423,11 +424,12 @@ final readonly class ProjectWorkspace
             throw new MapSourceRefusal("{$selectedMap->mapId} is read-only: {$selectedMap->getGridSourceIssue()}");
         }
 
-        // Only the split triplet is the map's; deleting a map must not take
-        // an author's own notes or assets in the same folder with it. The
-        // three members go as one transaction -- a failure on any of them
-        // puts the removed ones back, bytes and modification times -- and
-        // the folder goes only once it is empty.
+        // Only the split members are the map's -- its data, grid layers and
+        // graphics/ tile layers; deleting a map must not take an author's
+        // own notes or assets in the same folder with it. The members go as
+        // one transaction -- a failure on any of them puts the removed ones
+        // back, bytes and modification times -- and each folder goes only
+        // once it is empty.
         $transaction = new FileSetTransaction($selectedMap->directory, $files ?? new FilesystemFileSetOperations());
         $transaction->remove($selectedMap->dataPath);
         foreach ($selectedMap->getStoredGridPaths() as $path) {
@@ -435,7 +437,7 @@ final readonly class ProjectWorkspace
         }
         $transaction->commit();
 
-        foreach ([$selectedMap->directory . '/layers', $selectedMap->directory] as $directory) {
+        foreach ([$selectedMap->directory . '/layers', $selectedMap->directory . '/' . MapGraphics::DIRECTORY, $selectedMap->directory] as $directory) {
             if (is_dir($directory) && array_diff(scandir($directory) ?: [], ['.', '..']) === []) {
                 @rmdir($directory);
             }
