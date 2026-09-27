@@ -17,7 +17,6 @@ use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Editor\Status\StatusLevel;
 use Ichiloto\Editor\UI\CutscenesScreen;
-use Ichiloto\Engine\Field\MapCell;
 use Throwable;
 
 /**
@@ -868,7 +867,7 @@ trait CutscenePreviewPane
     }
 
     /**
-     * The first blank cell, row by row.
+     * The first tile that is not a wall-like glyph, row by row.
      *
      * @return array{0: int, 1: int}
      */
@@ -876,7 +875,9 @@ trait CutscenePreviewPane
     {
         for ($y = 0; $y < $map->getHeight(); $y++) {
             for ($x = 0; $x < $map->getWidth(); $x++) {
-                if (MapCell::isBlank($map->getTileSymbol($x, $y))) {
+                $symbol = $map->getTileSymbol($x, $y);
+
+                if ($symbol === ' ') {
                     return [$x, $y];
                 }
             }

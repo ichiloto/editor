@@ -128,16 +128,6 @@ function backdateTriplet(ProjectMap $map): void
 }
 
 /**
- * Loads the fixture map fresh from disk.
- */
-function fixtureMap(): ProjectMap
-{
-    $mapsRoot = fixturePath('sample-project/assets/Maps');
-
-    return ProjectMap::fromDirectory($mapsRoot, $mapsRoot . '/test-map');
-}
-
-/**
  * Copies the fixture map into a scratch maps root for save tests.
  */
 function scratchMapCopy(): array

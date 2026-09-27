@@ -343,7 +343,7 @@ it('enters NPC mode on F3, names a new NPC, and derives its id from that name', 
         // The author lands in the Inspector to keep authoring.
         ->and(getEditorProperty($editor, 'focusedPane'))->toBe('inspector')
         // Nothing was painted: tile and event layers are untouched.
-        ->and($map->getTileSymbol(4, 2))->toBe('  ')
+        ->and($map->getTileSymbol(4, 2))->toBe(' ')
         ->and(trim($map->getEventSymbol(4, 2)))->toBe('');
 
     // Enter with an empty name falls back to a placeholder rather than
@@ -391,7 +391,7 @@ it('selects an NPC under the cursor, from the list, and by stepping', function (
         ->and(getEditorProperty($editor, 'cursorX'))->toBe(2);
 });
 
-it('draws NPCs as an overlay in their cells: wide glyphs fill it, styled ones take its first column, the selected one reversed', function () {
+it('draws NPCs as an overlay: wide glyphs own two columns, styled ones one, the selected one bracketed', function () {
     [$root] = npcProject([
         ['id' => 'cat', 'name' => 'Cat', 'sprite' => '🐈', 'x' => 2, 'y' => 2],
         ['id' => 'mum', 'name' => 'Mum', 'sprite' => '<fg=#ff87af>@</>', 'x' => 6, 'y' => 2],
@@ -403,18 +403,18 @@ it('draws NPCs as an overlay in their cells: wide glyphs fill it, styled ones ta
     $overlay = $map->renderPreview(12, 5, showNpcOverlay: true, selectedNpcIndex: 2);
 
     // Not persisted art: without the overlay flag the rows are the tiles.
-    expect($plain[2])->toBe('##                    ##')
-        // The cat fills its two-column cell; Mum is one plain @ in the
-        // first column of hers; the selected guard is reversed within its
-        // cell, so neighbouring cells keep their columns.
-        ->and($overlay[2])->toBe('##  🐈      @         ##')
-        ->and($overlay[3])->toBe('##' . str_repeat(' ', 16) . "\033[7mG \033[0m" . '  ##')
-        ->and(mb_strwidth($overlay[2]))->toBe(24);
+    expect($plain[2])->toBe('#          #')
+        // The cat's second column is the empty overhang cell, so the
+        // terminal draws the emoji in the room it needs; Mum is one plain
+        // @; the selected guard is bracketed.
+        ->and($overlay[2])->toBe('# 🐈  @    #')
+        ->and($overlay[3])->toBe('#       [G]#')
+        ->and(mb_strwidth($overlay[2]))->toBe(12);
 
     // A directional sprite previewed for the selected NPC.
     $previewed = $map->renderPreview(12, 5, showNpcOverlay: true, selectedNpcIndex: 2, selectedNpcSprite: '<fg=cyan>^</>');
-    // Still the selected NPC, so still reversed.
-    expect($previewed[3])->toBe('##' . str_repeat(' ', 16) . "\033[7m^ \033[0m" . '  ##');
+    // Still the selected NPC, so still bracketed.
+    expect($previewed[3])->toBe('#       [^]#');
 });
 
 it('leaves map-owned NPC glyphs untouched and highlights only their selected anchor', function (bool $layered, string $prefix, string $suffix) {
@@ -448,11 +448,11 @@ it('leaves map-owned NPC glyphs untouched and highlights only their selected anc
 
     $allHidden = array_fill_keys(array_column($map->getLayers(), 'id'), false);
     $anchor = $map->renderPreview(4, 2, showNpcOverlay: true, selectedNpcIndex: 0, layerVisibility: $allHidden);
-    expect($anchor[0])->toContain("\033[7m  \033[0m")
+    expect($anchor[0])->toContain("\033[7m \033[0m")
         ->and($anchor[0])->not->toContain('@');
 
     $directional = $map->renderPreview(4, 2, showNpcOverlay: true, selectedNpcIndex: 0, selectedNpcSprite: '^');
-    expect($directional[0])->toContain("\033[7m^ \033[0m")
+    expect($directional[0])->toContain('[^]')
         ->and($map->captureLayerSnapshot())->toBe($before)
         ->and(npcHashTree($root))->toBe($files);
 })->with([
@@ -965,8 +965,7 @@ it('reports every malformed NPC shape with the runtime consequence', function ()
         ['id' => 'mixed', 'name' => 'Mixed', 'x' => 5, 'y' => 3, 'dialogue' => [['conditions' => [], 'lines' => [['text' => 'a']]], ['text' => 'plain']]],
         ['id' => 'empty', 'name' => 'Empty', 'x' => 6, 'y' => 3, 'sprite' => '<fg=red>', 'dialogue' => [['name' => 'x']]],
         ['id' => 'keys', 'name' => 'Keys', 'x' => 7, 'y' => 3, 'sprites' => ['up' => '^', 'north' => ['x']]],
-        ['id' => 'wide', 'name' => 'Wide', 'x' => 11, 'y' => 3, 'sprite' => 'cat'],
-        ['id' => 'emoji', 'name' => 'Emoji', 'x' => 10, 'y' => 3, 'sprite' => '🐈'],
+        ['id' => 'wide', 'name' => 'Wide', 'x' => 11, 'y' => 3, 'sprite' => '🐈'],
         ['id' => 'on-event', 'name' => 'Blocker', 'x' => 5, 'y' => 1],
         ['name' => 'Legacy', 'x' => 8, 'y' => 1],
     ]);
@@ -1002,8 +1001,7 @@ it('reports every malformed NPC shape with the runtime consequence', function ()
         ->toContain('Its sprite draws nothing')
         ->toContain('Dialogue page 1 has no text')
         ->toContain('Its directional sprite key "up" is not a heading')
-        ->toContain('NPC Wide: Its 3-column sprite overhangs its cell')
-        ->not->toContain('NPC Emoji:')
+        ->toContain('Its 2-column sprite overhangs the right edge of the map')
         ->toContain('NPC Legacy: It has no stable id, so a move_route cannot target it');
 
     // Unbounded wander is legal and says nothing.

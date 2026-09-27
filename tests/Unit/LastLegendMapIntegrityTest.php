@@ -9,7 +9,6 @@ use Ichiloto\Editor\MapSourceRefusal;
 use Ichiloto\Editor\ProjectDirectoryContext;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
-use Ichiloto\Engine\Field\MapCell;
 use Ichiloto\Engine\Field\MapGridSource;
 use Ichiloto\Engine\Field\MapLayer;
 use Ichiloto\Engine\Field\MapLayerSource;
@@ -212,7 +211,7 @@ function findIntegrityCell(ProjectMap $map, string $layer): array
         for ($x = 0; $x < $map->getWidth(); $x++) {
             if ($map->hasLayerCell($layer, $x, $y)) {
                 $first ??= [$x, $y];
-                if (! MapCell::isBlank($map->getLayerSymbol($layer, $x, $y))) {
+                if ($map->getLayerSymbol($layer, $x, $y) !== ' ') {
                     return [$x, $y];
                 }
             }
@@ -263,10 +262,10 @@ it('round-trips every authored gameplay decoration and event layer through save 
             $symbol = $map->getLayerSymbol($layer['id'], $x, $y);
             $style = $map->getLayerCellStyle($layer['id'], $x, $y);
             // Preserve decoration crop keys and event identities; recolouring is still a real edit.
-            $painted = $layer['decoration'] || $layer['id'] === 'event' ? $symbol : ($symbol === '##' ? '@@' : '##');
+            $painted = $layer['decoration'] || $layer['id'] === 'event' ? $symbol : ($symbol === '#' ? '@' : '#');
             $prefix = $style['prefix'] === '<fg=#123456>' ? '<fg=#654321>' : '<fg=#123456>';
             $command = new PaintStrokeCommand($map, $layer['id']);
-            $command->appendCell($x, $y, $symbol, $painted, $style, ['prefix' => $prefix, 'suffix' => '</>']);
+            $command->appendCell($x, $y, $symbol, $painted, $style['prefix'], $style['suffix'], $prefix, '</>');
             $history = new CommandHistory();
             $command->execute();
             $history->record($command);
@@ -339,9 +338,9 @@ it('previews every authored map as the Engine composed terminal grid including u
         }
         $top = $gameplay[array_key_last($gameplay)];
         [$x, $y] = findIntegrityCell($map, $top);
-        $symbol = TerminalText::stripAnsi($composed[$y][$x]) === '##' ? '@@' : '##';
+        $symbol = TerminalText::stripAnsi($composed[$y][$x]) === '#' ? '@' : '#';
         $map->setLayerCell($top, $x, $y, $symbol, '<fg=cyan>', '</>');
-        $composed[$y][$x] = MapCell::parseRow('<fg=cyan>' . $symbol . '</>')[0];
+        $composed[$y][$x] = TerminalText::visibleSymbols('<fg=cyan>' . $symbol . '</>')[0];
         $edited = array_map(static fn(array $row): string => rtrim(implode('', $row)), $composed);
         expect($edited)->not->toBe($expected)
             ->and($map->renderPreview($map->getWidth(), $map->getHeight(), terminalPreview: true))->toBe($edited, 'unsaved topmost gameplay edit is visible');

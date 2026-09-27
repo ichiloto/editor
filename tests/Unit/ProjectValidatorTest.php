@@ -395,7 +395,7 @@ it('catches a marker placed on a map that defines no such event', function () {
     $source = file_get_contents($path);
 
     // Drop a stray marker onto the layer, the way a mis-click would.
-    file_put_contents($path, preg_replace('/\n( +)\n/', "\nZZ\n", $source, 1));
+    file_put_contents($path, preg_replace('/\n( +)\n/', "\nZ\n", $source, 1));
 
     $issues = issuesMentioning(validateProject($root), 'places marker "Z"');
 
@@ -723,4 +723,19 @@ it('detects duplicate migration steps and impossible registration order', functi
     expect(issuesMentioning($issues, 'registered more than once'))->toHaveCount(1)
         ->and(issuesMentioning($issues, 'impossible order'))->toHaveCount(2)
         ->and(issuesMentioning($issues, 'Content migration step 2 to 3 is missing'))->toHaveCount(1);
+});
+
+it('warns that a tiles2d crop table is no longer read', function () {
+    $root = makeTemporaryProject();
+    editTestMapData($root, static fn(string $source): string => str_replace(
+        "'triggers' => [],",
+        "'triggers' => [],\n  'tiles2d' => ['asset' => 'Graphics/Tilesets/shared.png', 'symbols' => []],",
+        $source,
+    ));
+
+    $issues = issuesMentioning(validateProject($root), 'tiles2d');
+
+    expect($issues)->toHaveCount(1)
+        ->and($issues[0]->severity)->toBe(Severity::WARNING)
+        ->and($issues[0]->message)->toBe('Its tiles2d crop table is no longer read.');
 });

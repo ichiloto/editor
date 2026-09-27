@@ -26,7 +26,7 @@ Move between panels with `Tab` and `Shift+Tab`, or directionally with `Shift+Arr
 
 ## Painting a map
 
-The canvas is modal, in the vim tradition. `m` switches to Map mode for tiles; `e` switches to Event mode for the letter markers that events hang off. Press `i` to enter Paint mode, where every key paints its glyph (`Esc` returns to Normal mode). Every map cell is two terminal columns: one key fills a cell with its glyph repeated (`#` paints `##`), a second key typed straight after makes a pair such as `[]`, and an emoji fills the cell as it is. For larger work, reach for a tool:
+The canvas is modal, in the vim tradition. `m` switches to Map mode for tiles; `e` switches to Event mode for the letter markers that events hang off. Press `i` to enter Paint mode, where every key paints its glyph (`Esc` returns to Normal mode), or reach for a tool:
 
 - `Ctrl+N` cycles Brush, Line, Rect, Rect Fill, and Select
 - `Ctrl+W` cycles brush width through 1, 2, 3, and 5

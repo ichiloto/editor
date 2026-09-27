@@ -6,7 +6,6 @@ namespace Ichiloto\Editor\Maps;
 
 use Ichiloto\Editor\MapSourceRefusal;
 use Ichiloto\Editor\Storage\FileSetTransaction;
-use Ichiloto\Engine\Field\MapCell;
 use Ichiloto\Engine\Field\MapGraphics;
 use Ichiloto\Engine\Field\MapGridSource;
 use Ichiloto\Engine\Field\MapLayerSource;
@@ -47,10 +46,8 @@ final class MapLayers
         $this->captureBaseline();
     }
 
-    /** @throws \InvalidArgumentException When a grid is not whole two-column cells. */
-    public static function createFromSource(string $directory, MapLayerSet $set, string $eventPath, string $eventText, string $mapId = ''): self
+    public static function createFromSource(string $directory, MapLayerSet $set, string $eventPath, string $eventText): self
     {
-        $prefix = $mapId === '' ? '' : $mapId . '/';
         $layers = [];
         foreach ($set->layers as $layer) {
             $path = $directory . ($set->legacy ? '/' : '/layers/') . basename($layer->path);
@@ -58,10 +55,10 @@ final class MapLayers
                 'id' => $set->legacy ? self::BASE : 'map:' . $layer->order,
                 'name' => $layer->name, 'order' => $layer->order, 'decoration' => $layer->decoration,
                 'path' => $path,
-                'grid' => new EditableGrid($layer->text, (string) file_get_contents($path), $set->legacy, $prefix . basename($path)),
+                'grid' => new EditableGrid($layer->text, (string) file_get_contents($path), $set->legacy),
             ];
         }
-        $events = new EditableGrid($eventText, (string) file_get_contents($eventPath), context: $prefix . basename($eventPath));
+        $events = new EditableGrid($eventText, (string) file_get_contents($eventPath));
         $tileSources = [];
         foreach (TileLayerSource::findPaths($directory) as $path) {
             $tileSources[$path] = (string) file_get_contents($path);
@@ -133,7 +130,7 @@ final class MapLayers
         }
         $id = 'map:' . $order;
         $grid = new EditableGrid(implode("\n", array_map(
-            static fn(array $row): string => str_repeat(MapCell::BLANK, count($row)), $this->getBaseGrid()->cells,
+            static fn(array $row): string => str_repeat(' ', count($row)), $this->getBaseGrid()->cells,
         )));
         $this->layers[$id] = ['id' => $id, 'name' => $name, 'order' => $order, 'decoration' => $decoration,
             'path' => $this->buildPath($order, $name, $decoration), 'grid' => $grid];
@@ -203,9 +200,10 @@ final class MapLayers
     }
 
     /**
-     * Resizes every layer to whole cells, tile layers included. Every tile
-     * layer is resized before anything changes, so one the Engine cannot
-     * read refuses the whole resize.
+     * Resizes every layer, tile layers included: a tile layer holds one tile
+     * per map cell, so it is cropped or padded like the terminal layers.
+     * Every tile layer is resized before anything changes, so one the Engine
+     * cannot read refuses the whole resize.
      *
      * @throws MapSourceRefusal When a tile layer cannot be read or does not match the map.
      */

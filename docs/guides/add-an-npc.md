@@ -47,8 +47,8 @@ The `Id` row in the Inspector is read-only for that reason.
   (type to narrow, `Enter` jumps to one); `[` and `]` step through them.
 - `M` picks the selected NPC up; move the cursor and press `Enter` to set it
   down, or `Esc` to leave it where it was.
-- `D` duplicates the selected NPC under a fresh id, one cell to the right
-  when that cell is free.
+- `D` duplicates the selected NPC under a fresh id, one column to the right
+  when that tile is free.
 - `Del` deletes it — unless something names its id (see
   [Reference-Safe Deletion](#reference-safe-deletion)).
 
@@ -60,9 +60,8 @@ single undo step.
 `Tab` to the Inspector. Under `Appearance`:
 
 - `Sprite` is the glyph the game draws — one character, an emoji, or a styled
-  glyph such as `<fg=#ffaf00>@</>`. A character occupies one cell of two
-  columns: an emoji fills it, a one-column glyph sits in its first column,
-  and styled ones draw as their plain glyph on the canvas.
+  glyph such as `<fg=#ffaf00>@</>`. Wide glyphs take the two columns the game
+  gives them; styled ones draw as their plain glyph on the canvas.
 - `Facing North` / `South` / `East` / `West` are optional glyphs shown when the
   NPC turns that way. Leave a heading blank and the base sprite covers it.
   Rest the cursor on a `Facing …` row and the canvas previews that glyph in

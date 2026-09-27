@@ -68,8 +68,7 @@ final class PreviewPresentation implements EventPresentationInterface
             return;
         }
 
-        // Dialogue is text: it is laid out in console columns, not map cells.
-        $width = $this->camera->getConsoleColumns();
+        $width = $this->camera->screen->getWidth();
         $height = $this->camera->screen->getHeight();
         $boxWidth = max(12, min($width, 60));
         $inner = $boxWidth - 4;

@@ -14,16 +14,16 @@ it('loads ordered gameplay decoration and event layers through the Engine source
     $map = loadLayeredMap(layeredMapProject());
     expect(array_column($map->getLayers(), 'name'))->toBe(['terrain', 'buildings', 'detail', 'Events'])
         ->and(array_column($map->getLayers(), 'order'))->toBe([1, 4, 7, null])
-        ->and($map->getLayerSymbol('map:4', 1, 0))->toBe('//')
-        ->and($map->getLayerSymbol('map:7', 0, 0))->toBe('dd');
+        ->and($map->getLayerSymbol('map:4', 1, 0))->toBe('/')
+        ->and($map->getLayerSymbol('map:7', 0, 0))->toBe('d');
     $terminal = array_map(TerminalText::stripAnsi(...), $map->renderPreview(4, 2, terminalPreview: true));
-    expect($terminal)->toBe(['..//....', '..xxxx..']);
-    expect(array_map(TerminalText::stripAnsi(...), $map->renderPreview(4, 2)))->toBe(['..//..EE', '..xxxx..']);
+    expect($terminal)->toBe(['./..', '.xx.']);
+    expect(array_map(TerminalText::stripAnsi(...), $map->renderPreview(4, 2)))->toBe(['./.E', '.xx.']);
     expect(array_map(TerminalText::stripAnsi(...), $map->renderPreview(4, 2, showEventOverlay: false)))->toBe($terminal);
     foreach ([true, false] as $visible) {
-        expect(array_map(TerminalText::stripAnsi(...), $map->renderPreview(4, 2, layerVisibility: ['map:7' => $visible])))->toBe(['..//..EE', '..xxxx..']);
+        expect(array_map(TerminalText::stripAnsi(...), $map->renderPreview(4, 2, layerVisibility: ['map:7' => $visible])))->toBe(['./.E', '.xx.']);
     }
-    expect(array_map(TerminalText::stripAnsi(...), $map->renderPreview(4, 2, layerVisibility: ['map:4' => false])))->toBe(['......EE', '........'])
+    expect(array_map(TerminalText::stripAnsi(...), $map->renderPreview(4, 2, layerVisibility: ['map:4' => false])))->toBe(['...E', '....'])
         ->and(array_map(TerminalText::stripAnsi(...), $map->renderPreview(4, 2, layerVisibility: ['event' => false])))->toBe($terminal);
     expect(implode('', $map->renderPreview(4, 2, activeLayer: 'map:4', dimInactive: true)))->toContain("\033[2m")
         ->and(implode('', $map->renderPreview(4, 2, terminalPreview: true, layerVisibility: ['map:4' => false], dimInactive: true)))->not->toContain("\033[2m");
@@ -35,10 +35,9 @@ it('keeps events and NPC overlays above terminal gameplay without exposing decor
         ['id' => 'resident', 'name' => 'Resident', 'sprite' => 'N', 'x' => 0, 'y' => 0],
     ]));
     $before = $map->captureLayerSnapshot();
-    // A one-column sprite sits in the first column of its cell.
-    expect(array_map(TerminalText::stripAnsi(...), $map->renderPreview(4, 2, showNpcOverlay: true)))->toBe(['N //..EE', '..xxxx..'])
-        ->and(array_map(TerminalText::stripAnsi(...), $map->renderPreview(4, 2, showEventOverlay: false, showNpcOverlay: true)))->toBe(['N //....', '..xxxx..'])
-        ->and(array_map(TerminalText::stripAnsi(...), $map->renderPreview(4, 2, showNpcOverlay: true, layerVisibility: ['map:4' => false])))->toBe(['N ....EE', '........'])
+    expect(array_map(TerminalText::stripAnsi(...), $map->renderPreview(4, 2, showNpcOverlay: true)))->toBe(['N/.E', '.xx.'])
+        ->and(array_map(TerminalText::stripAnsi(...), $map->renderPreview(4, 2, showEventOverlay: false, showNpcOverlay: true)))->toBe(['N/..', '.xx.'])
+        ->and(array_map(TerminalText::stripAnsi(...), $map->renderPreview(4, 2, showNpcOverlay: true, layerVisibility: ['map:4' => false])))->toBe(['N..E', '....'])
         ->and($map->captureLayerSnapshot())->toBe($before);
 });
 
@@ -56,7 +55,7 @@ it('does not write any untouched layer and preserves source scaffolding and unch
     $map->setLayerCell('map:1', 0, 0, 'T', '<fg=green>', '</>');
     $map->setLayerCell('map:4', 0, 0, '|');
     $map->save();
-    expect(file_get_contents($path))->toContain('// keep 01.terrain.map.php', "return <<<'AUTHORED'", '<fg=red>....</><fg=red>....</>')
+    expect(file_get_contents($path))->toContain('// keep 01.terrain.map.php', "return <<<'AUTHORED'", '<fg=red>..</><fg=red>..</>')
         ->and(filemtime($map->directory . '/layers/07.detail.deco.php'))->toBe(1000000000)
         ->and(filemtime($map->eventPath))->toBe(1000000000);
     $map->setLayerCell('map:1', 0, 0, '.', '<fg=green>', '</>');
@@ -67,12 +66,12 @@ it('does not write any untouched layer and preserves source scaffolding and unch
 it('retains CRLF source indentation comments and unedited rows', function () {
     $root = layeredMapProject();
     $path = $root . '/assets/Maps/test-map/layers/04.buildings.map.php';
-    $source = "<?php\r\n// retained\r\nreturn <<<'HOUSE'\r\n    //      \r\n    xxxx    \r\n    HOUSE; // trailing\r\n";
+    $source = "<?php\r\n// retained\r\nreturn <<<'HOUSE'\r\n    /   \r\n    xx  \r\n    HOUSE; // trailing\r\n";
     file_put_contents($path, $source);
     $map = loadLayeredMap($root);
     $map->setLayerCell('map:4', 2, 0, '|');
     $map->save();
-    expect(file_get_contents($path))->toBe(str_replace('    //      ', '    //  ||  ', $source));
+    expect(file_get_contents($path))->toBe(str_replace('    /   ', '    / | ', $source));
 });
 
 it('preserves ragged per-row dimensions when creating and round-tripping layers', function () {
@@ -85,7 +84,7 @@ it('preserves ragged per-row dimensions when creating and round-tripping layers'
     foreach ($loaded->getLayerSet()->layers as $layer) {
         expect(array_map(count(...), $layer->grid))->toBe([4, 2]);
     }
-    expect($loaded->getLayerSymbol($id, 1, 1))->toBe('ii');
+    expect($loaded->getLayerSymbol($id, 1, 1))->toBe('i');
 });
 
 it('rolls the complete layered save and rename back after any installation failure', function () {
@@ -173,7 +172,7 @@ it('converts legacy only when a layer is created and undo restores the original 
 it('composes terminal preview with the exact shared Engine style and transparency semantics', function () {
     $root = layeredMapProject();
     $path = $root . '/assets/Maps/test-map/layers/04.buildings.map.php';
-    file_put_contents($path, MapGridSource::buildSource("<fg=red;bg=blue;options=bold>  //    </>\n<fg=cyan>  xxxx  </>", 'STYLE'));
+    file_put_contents($path, MapGridSource::buildSource("<fg=red;bg=blue;options=bold> /  </>\n<fg=cyan> xx </>", 'STYLE'));
     $map = loadLayeredMap($root);
     $expected = array_map(static fn(array $row): string => rtrim(implode('', $row)), $map->getLayerSet()->getComposedGrid());
     expect($map->renderPreview(4, 2, showNpcOverlay: true, terminalPreview: true))->toBe($expected);
@@ -224,25 +223,15 @@ it('rolls every layered source back when a move changes relative data evaluation
 it('keeps raw ANSI styling separate from editable glyphs and preserves untouched source rows', function (string $prefix, string $color) {
     $root = layeredMapProject();
     $path = $root . '/assets/Maps/test-map/layers/04.buildings.map.php';
-    $source = MapGridSource::buildSource($prefix . "  //    \033[0m\n  xxxx  ", 'ANSI');
+    $source = MapGridSource::buildSource($prefix . " /  \033[0m\n xx ", 'ANSI');
     file_put_contents($path, $source);
     $map = loadLayeredMap($root);
-    expect($map->getLayerSymbol('map:4', 1, 0))->toBe('//')
+    expect($map->getLayerSymbol('map:4', 1, 0))->toBe('/')
         ->and($map->getLayerColor('map:4', 1, 0))->toBe($color);
     $map->setLayerCell('map:4', 0, 1, '|');
     $map->save();
-    expect(file_get_contents($path))->toBe(str_replace('  xxxx  ', '||xxxx  ', $source));
+    expect(file_get_contents($path))->toBe(str_replace(' xx ', '|xx ', $source));
 })->with([
     ["\033[31m", 'red'], ["\033[38;2;12;34;56m", '#0c2238'],
     ["\033[38;5;196m", '#ff0000'], ["\033[38;5;232m", '#080808'],
 ]);
-
-it('shows the lower layer through a space in an upper cell, as the Engine composes', function () {
-    $map = loadLayeredMap(layeredMapProject());
-    // Home's chest " m" over a wall: the space keeps the column beneath it visible.
-    $map->setLayerCell('map:4', 0, 0, ' m');
-    $preview = array_map(TerminalText::stripAnsi(...), $map->renderPreview(4, 2));
-    expect($preview[0])->toStartWith('.m')
-        ->and(array_map(TerminalText::stripAnsi(...), $map->renderPreview(4, 2, terminalPreview: true))[0])->toStartWith('.m')
-        ->and($map->renderPreview(4, 2, activeLayer: 'map:4', dimInactive: true)[0])->toStartWith("\033[2m");
-});

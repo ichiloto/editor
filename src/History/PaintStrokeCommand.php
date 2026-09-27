@@ -20,7 +20,7 @@ final class PaintStrokeCommand implements Command
     public const string LAYER_EVENT = 'event';
 
     /**
-     * @var array<string, array{x: int, y: int, old: string, new: string, oldStyle: array, newStyle: array}>
+     * @var array<string, array{x: int, y: int, old: string, new: string, oldPrefix: string, oldSuffix: string, newPrefix: string, newSuffix: string}>
      */
     private array $cells = [];
 
@@ -37,20 +37,21 @@ final class PaintStrokeCommand implements Command
     }
 
     /**
-     * Records one painted cell. The old cell survives repeated appends so
+     * Records one painted cell. The old symbol survives repeated appends so
      * undo restores the pre-stroke state.
      *
-     * A cell also carries its raw styling bytes, as ProjectMap reads them,
-     * so undo restores authored formatter tags byte-for-byte, a separate
-     * style per character included. The event layer has no styling; its
-     * styles stay empty.
+     * On the tile layer a cell also carries its raw styling bytes, so undo
+     * restores authored formatter tags byte-for-byte. The event layer has no
+     * styling; its style arguments stay empty.
      *
      * @param int $x The cell x coordinate.
      * @param int $y The cell y coordinate.
-     * @param string $oldSymbol The cell before the stroke touched it.
-     * @param string $newSymbol The cell painted.
-     * @param array{prefix?: string, suffix?: string, styles?: list<array{prefix: string, suffix: string}>} $oldStyle The styling before the stroke.
-     * @param array{prefix?: string, suffix?: string, styles?: list<array{prefix: string, suffix: string}>} $newStyle The styling painted.
+     * @param string $oldSymbol The symbol before the stroke touched the cell.
+     * @param string $newSymbol The symbol painted onto the cell.
+     * @param string $oldPrefix The styling prefix before the stroke.
+     * @param string $oldSuffix The styling suffix before the stroke.
+     * @param string $newPrefix The styling prefix painted onto the cell.
+     * @param string $newSuffix The styling suffix painted onto the cell.
      * @return void
      */
     public function appendCell(
@@ -58,15 +59,17 @@ final class PaintStrokeCommand implements Command
         int $y,
         string $oldSymbol,
         string $newSymbol,
-        array $oldStyle = [],
-        array $newStyle = [],
+        string $oldPrefix = '',
+        string $oldSuffix = '',
+        string $newPrefix = '',
+        string $newSuffix = '',
     ): void {
         $key = $x . ':' . $y;
-        $newStyle = self::normalizeStyle($newStyle);
 
         if (isset($this->cells[$key])) {
             $this->cells[$key]['new'] = $newSymbol;
-            $this->cells[$key]['newStyle'] = $newStyle;
+            $this->cells[$key]['newPrefix'] = $newPrefix;
+            $this->cells[$key]['newSuffix'] = $newSuffix;
             return;
         }
 
@@ -75,8 +78,10 @@ final class PaintStrokeCommand implements Command
             'y' => $y,
             'old' => $oldSymbol,
             'new' => $newSymbol,
-            'oldStyle' => self::normalizeStyle($oldStyle),
-            'newStyle' => $newStyle,
+            'oldPrefix' => $oldPrefix,
+            'oldSuffix' => $oldSuffix,
+            'newPrefix' => $newPrefix,
+            'newSuffix' => $newSuffix,
         ];
     }
 
@@ -88,7 +93,11 @@ final class PaintStrokeCommand implements Command
     public function hasChanges(): bool
     {
         foreach ($this->cells as $cell) {
-            if ($cell['old'] !== $cell['new'] || $cell['oldStyle'] !== $cell['newStyle']) {
+            if (
+                $cell['old'] !== $cell['new']
+                || $cell['oldPrefix'] !== $cell['newPrefix']
+                || $cell['oldSuffix'] !== $cell['newSuffix']
+            ) {
                 return true;
             }
         }
@@ -123,7 +132,7 @@ final class PaintStrokeCommand implements Command
     public function execute(): void
     {
         foreach ($this->cells as $cell) {
-            $this->applyCell($cell['x'], $cell['y'], $cell['new'], $cell['newStyle']);
+            $this->applyCell($cell['x'], $cell['y'], $cell['new'], $cell['newPrefix'], $cell['newSuffix']);
         }
     }
 
@@ -133,7 +142,7 @@ final class PaintStrokeCommand implements Command
     public function undo(): void
     {
         foreach ($this->cells as $cell) {
-            $this->applyCell($cell['x'], $cell['y'], $cell['old'], $cell['oldStyle']);
+            $this->applyCell($cell['x'], $cell['y'], $cell['old'], $cell['oldPrefix'], $cell['oldSuffix']);
         }
     }
 
@@ -142,21 +151,13 @@ final class PaintStrokeCommand implements Command
      *
      * @param int $x The cell x coordinate.
      * @param int $y The cell y coordinate.
-     * @param string $symbol The cell to apply.
-     * @param array{prefix: string, suffix: string, styles?: list<array{prefix: string, suffix: string}>} $style The styling to apply.
+     * @param string $symbol The symbol to apply.
+     * @param string $prefix The styling prefix bytes (tile layer only).
+     * @param string $suffix The styling suffix bytes (tile layer only).
      * @return void
      */
-    private function applyCell(int $x, int $y, string $symbol, array $style): void
+    private function applyCell(int $x, int $y, string $symbol, string $prefix, string $suffix): void
     {
-        $this->map->setStyledLayerCell($this->layer, $x, $y, $symbol, $style);
-    }
-
-    /**
-     * @param array{prefix?: string, suffix?: string, styles?: list<array{prefix: string, suffix: string}>} $style
-     * @return array{prefix: string, suffix: string, styles?: list<array{prefix: string, suffix: string}>}
-     */
-    private static function normalizeStyle(array $style): array
-    {
-        return ['prefix' => $style['prefix'] ?? '', 'suffix' => $style['suffix'] ?? ''] + $style;
+        $this->map->setLayerCell($this->layer, $x, $y, $symbol, $prefix, $suffix);
     }
 }

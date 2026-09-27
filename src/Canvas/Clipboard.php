@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Canvas;
 
 /**
- * The canvas clipboard: one rectangular block of whole cells lifted off a map
+ * The canvas clipboard: one rectangular block of symbols lifted off a map
  * layer, ready to be stamped anywhere (repeatedly) as a single undoable
  * paste per stamp.
  *
@@ -18,7 +18,7 @@ final class Clipboard
      * @var array<int, array<int, string>> Rows of symbols, top-left first.
      */
     private array $rows = [];
-    /** @var array<int, array<int, array{prefix: string, suffix: string, styles?: list<array{prefix: string, suffix: string}>}>> */
+    /** @var array<int, array<int, array{prefix: string, suffix: string}>> */
     private array $styles = [];
     /**
      * The layer the block was lifted from (a PaintStrokeCommand LAYER_* value).
@@ -30,7 +30,7 @@ final class Clipboard
      *
      * @param array<int, array<int, string>> $rows Rows of symbols, top-left first.
      * @param string $layer The source layer.
-     * @param array<int, array<int, array{prefix: string, suffix: string, styles?: list<array{prefix: string, suffix: string}>}>> $styles Optional cell styles, aligned with rows.
+     * @param array<int, array<int, array{prefix: string, suffix: string}>> $styles Optional tile styles, aligned with rows.
      * @return void
      */
     public function store(array $rows, string $layer, array $styles = []): void
@@ -105,7 +105,7 @@ final class Clipboard
      * @param int $originY The paste origin y coordinate.
      * @param int $width The target map width.
      * @param int $height The target map height.
-     * @return array<int, array{x: int, y: int, symbol: string, style?: array{prefix: string, suffix: string, styles?: list<array{prefix: string, suffix: string}>}}> The clipped placements.
+     * @return array<int, array{x: int, y: int, symbol: string, style?: array{prefix: string, suffix: string}}> The clipped placements.
      */
     public function project(int $originX, int $originY, int $width, int $height): array
     {

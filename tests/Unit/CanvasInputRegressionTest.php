@@ -36,18 +36,18 @@ it('projects clipped clipboard styles with their source cells and clears stale s
 it('preserves copied tile styles through paste undo and redo', function (bool $cut) {
     [$editor, $map] = createCanvasRegressionEditor();
     $source = [
-        ['symbol' => 'AA', 'prefix' => '<fg=#b87333;bg=blue;options=bold>', 'suffix' => '</>'],
-        ['symbol' => 'BB', 'prefix' => '', 'suffix' => ''],
-        ['symbol' => '  ', 'prefix' => '<bg=red>', 'suffix' => '</>'],
+        ['symbol' => 'A', 'prefix' => '<fg=#b87333;bg=blue;options=bold>', 'suffix' => '</>'],
+        ['symbol' => 'B', 'prefix' => '', 'suffix' => ''],
+        ['symbol' => ' ', 'prefix' => '<bg=red>', 'suffix' => '</>'],
     ];
     foreach ($source as $index => $cell) {
         $map->setTileCell(1 + $index, 1, ...array_values($cell));
-        $map->setTileCell(5 + $index, 2, 'XX', '<fg=green>', '</>');
+        $map->setTileCell(5 + $index, 2, 'X', '<fg=green>', '</>');
     }
     setEditorProperty($editor, 'canvasSelection', ['x' => 1, 'y' => 1, 'width' => 3, 'height' => 1]);
     callEditorMethod($editor, $cut ? 'cutCanvasSelection' : 'captureCanvasSelection');
     if ($cut) {
-        expect($map->getTileSymbol(1, 1))->toBe('  ')
+        expect($map->getTileSymbol(1, 1))->toBe(' ')
             ->and($map->getTileCellStyle(1, 1))->toBe(['prefix' => '', 'suffix' => '']);
     }
     setEditorProperty($editor, 'cursorX', 5);
@@ -60,7 +60,7 @@ it('preserves copied tile styles through paste undo and redo', function (bool $c
     }
     callEditorMethod($editor, 'dispatchInput', "\x1a");
     foreach (array_keys($source) as $index) {
-        expect($map->getTileSymbol(5 + $index, 2))->toBe('XX')
+        expect($map->getTileSymbol(5 + $index, 2))->toBe('X')
             ->and($map->getTileCellStyle(5 + $index, 2))->toBe(['prefix' => '<fg=green>', 'suffix' => '</>']);
     }
     callEditorMethod($editor, 'dispatchInput', "\x19");
@@ -122,12 +122,12 @@ it('scrolls only within the canvas preview including its edge cells', function (
     expect(getEditorProperty($editor, 'canvasOffsetX'))->toBeGreaterThan(10);
 })->with(['map', 'event']);
 
-it('uses the rendered viewport width in cells through wheel undo tab cursor movement and resize', function (int $terminalWidth) {
+it('uses the rendered viewport width through wheel undo tab cursor movement and resize', function (int $terminalWidth) {
     [$editor, $map] = createCanvasRegressionEditor();
     setEditorProperty($editor, 'lastTerminalSize', ['width' => $terminalWidth, 'height' => 40]);
     $map->resize(200, 100);
     $bounds = callEditorMethod($editor, 'getCanvasPreviewBounds');
-    $lastOffset = $map->getWidth() - $bounds['cells'];
+    $lastOffset = $map->getWidth() - $bounds['width'];
     setEditorProperty($editor, 'cursorX', $map->getWidth() - 1);
     callEditorMethod($editor, 'syncViewportToCursor');
     expect(getEditorProperty($editor, 'canvasOffsetX'))->toBe($lastOffset);
@@ -142,7 +142,7 @@ it('uses the rendered viewport width in cells through wheel undo tab cursor move
     expect(getEditorProperty($editor, 'canvasOffsetX'))->toBe($lastOffset);
 
     setEditorProperty($editor, 'canvasOffsetX', 0);
-    setEditorProperty($editor, 'cursorX', $bounds['cells']);
+    setEditorProperty($editor, 'cursorX', $bounds['width']);
     callEditorMethod($editor, 'syncViewportToCursor');
     expect(getEditorProperty($editor, 'canvasOffsetX'))->toBe(1);
 
@@ -151,7 +151,7 @@ it('uses the rendered viewport width in cells through wheel undo tab cursor move
     setEditorProperty($editor, 'canvasOffsetY', 99);
     callEditorMethod($editor, 'clampCanvasOffsets');
     $resized = callEditorMethod($editor, 'getCanvasPreviewBounds');
-    expect(getEditorProperty($editor, 'canvasOffsetX'))->toBe(200 - $resized['cells'])
+    expect(getEditorProperty($editor, 'canvasOffsetX'))->toBe(200 - $resized['width'])
         ->and(getEditorProperty($editor, 'canvasOffsetY'))->toBe(100 - $resized['height']);
     $map->resize(2, 2);
     callEditorMethod($editor, 'clampCanvasOffsets');

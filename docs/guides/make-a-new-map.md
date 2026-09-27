@@ -45,9 +45,7 @@ explicit confirmation before it does.
 
 1. `Tab` to the `Canvas`.
 2. Press `m` to be sure you are in Map mode, then `i` to enter Paint mode.
-3. Move with the arrow keys and type a glyph to paint it. Every map cell is
-   two terminal columns, so `#` paints `##`; type a second key straight away
-   for a pair such as `[]`, or an emoji to fill the cell with it.
+3. Move with the arrow keys and type a glyph to paint it.
 
 For anything larger than a few tiles, use the tools:
 

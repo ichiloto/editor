@@ -33,7 +33,7 @@ it('paints ! on the canvas instead of opening the Database', function () {
   /** @var ProjectWorkspace $workspace */
   $workspace = getEditorProperty($editor, 'workspace');
 
-  expect($workspace->getMapByIndex(0)->getTileSymbol(1, 1))->toBe('!!')
+  expect($workspace->getMapByIndex(0)->getTileSymbol(1, 1))->toBe('!')
     ->and(getEditorProperty($editor, 'isDatabaseOpen'))->toBeFalse();
 });
 
@@ -50,7 +50,7 @@ it('paints h, j, k, and l as glyphs — the movement aliases are gone', function
     setEditorProperty($editor, 'cursorY', 2);
     callEditorMethod($editor, 'dispatchInput', $glyph);
 
-    expect($workspace->getMapByIndex(0)->getTileSymbol($column, 2))->toBe($glyph . $glyph)
+    expect($workspace->getMapByIndex(0)->getTileSymbol($column, 2))->toBe($glyph)
       ->and(getEditorProperty($editor, 'cursorX'))->toBe($column)
       ->and(getEditorProperty($editor, 'cursorY'))->toBe(2);
   }

@@ -7,7 +7,7 @@ namespace Ichiloto\Editor\Canvas;
 use Ichiloto\Editor\Maps\EditableGrid;
 use RuntimeException;
 
-/** Blank-line-separated authored facades of two-column cells; no duplicated shape definitions. */
+/** Blank-line-separated authored facades; no duplicated shape definitions. */
 final class FacadeCatalogue
 {
     public static function load(string $path): array
@@ -17,7 +17,7 @@ final class FacadeCatalogue
             throw new RuntimeException('The facade catalogue cannot be read as UTF-8: ' . $path);
         }
         $blocks = preg_split('/(?:\r\n|\n|\r)[ \t]*(?:\r\n|\n|\r)+/', rtrim($text, "\r\n")) ?: [];
-        return array_values(array_map(static fn(string $block): array => new EditableGrid($block, context: basename($path))->cells,
+        return array_values(array_map(static fn(string $block): array => new EditableGrid($block)->cells,
             array_filter($blocks, static fn(string $block): bool => trim($block) !== ''),
         ));
     }

@@ -8,7 +8,7 @@ use Ichiloto\Editor\Validation\MapValidator;
 /**
  * Builds an in-memory map with the given data and event rows.
  */
-function validatorMap(string $mapId, array $data, array $eventLines = ['        ', '        ']): ProjectMap
+function validatorMap(string $mapId, array $data, array $eventLines = ['    ', '    ']): ProjectMap
 {
   return new ProjectMap(
     mapId: $mapId,
@@ -17,7 +17,7 @@ function validatorMap(string $mapId, array $data, array $eventLines = ['        
     mapPath: "/virtual/Maps/{$mapId}/{$mapId}.map.php",
     eventPath: "/virtual/Maps/{$mapId}/{$mapId}.event.php",
     data: $data,
-    tileLines: ['........', '........'],
+    tileLines: ['....', '....'],
     eventLines: $eventLines,
   );
 }
@@ -28,13 +28,13 @@ it('accepts a clean map without warnings', function () {
     'events' => [
       'E' => ['class' => 'SomeTrigger', 'data' => []],
     ],
-  ], ['EE      ', '        ']);
+  ], ['E   ', '    ']);
 
   expect(MapValidator::validate($map, ['town' => $map]))->toBe([]);
 });
 
 it('warns about event markers without definitions', function () {
-  $map = validatorMap('town', ['name' => 'Town', 'events' => []], ['EE      ', '        ']);
+  $map = validatorMap('town', ['name' => 'Town', 'events' => []], ['E   ', '    ']);
 
   $warnings = MapValidator::validate($map, ['town' => $map]);
 
@@ -49,7 +49,7 @@ it('warns when a marker does not occupy one solid rectangle', function () {
     'events' => [
       'E' => ['class' => 'SomeTrigger', 'data' => []],
     ],
-  ], ['  EE    ', 'EEEEEE  ']);
+  ], [' E  ', 'EEE ']);
 
   $warnings = MapValidator::validate($map, ['town' => $map]);
 
@@ -64,7 +64,7 @@ it('warns about dangling transfer destinations', function () {
     'events' => [
       'T' => ['class' => 'Transfer', 'data' => ['destinationMap' => 'vanished-map']],
     ],
-  ], ['TT      ', '        ']);
+  ], ['T   ', '    ']);
 
   $warnings = MapValidator::validate($map, ['town' => $map]);
 
@@ -86,7 +86,7 @@ it('warns about spawn points outside the destination map', function () {
         ],
       ],
     ],
-  ], ['TT      ', '        ']);
+  ], ['T   ', '    ']);
 
   $warnings = MapValidator::validate($map, ['town' => $map, 'cave' => $destination]);
 
@@ -102,7 +102,7 @@ it('validates spawn points against this map when no destination is set', functio
       'S' => ['class' => 'Spawn', 'data' => ['spawnPoint' => ['x' => 1, 'y' => 1]]],
       'B' => ['class' => 'Spawn', 'data' => ['spawnPoint' => ['x' => 9, 'y' => 9]]],
     ],
-  ], ['SSBB    ', '        ']);
+  ], ['SB  ', '    ']);
 
   $warnings = MapValidator::validate($map, ['town' => $map]);
 
@@ -117,9 +117,20 @@ it('collects multiple findings in one pass', function () {
     'events' => [
       'T' => ['class' => 'Transfer', 'data' => ['destinationMap' => 'gone']],
     ],
-  ], ['TTXX    ', '        ']);
+  ], ['TX  ', '    ']);
 
   $warnings = MapValidator::validate($map, ['town' => $map]);
 
   expect($warnings)->toHaveCount(2);
+});
+
+it('warns before a save that a tiles2d crop table is no longer read', function () {
+  $map = validatorMap('town', [
+    'name' => 'Town',
+    'events' => [],
+    'tiles2d' => ['asset' => 'Graphics/Tilesets/shared.png', 'symbols' => []],
+  ]);
+
+  expect(MapValidator::validate($map, ['town' => $map]))
+    ->toBe(['tiles2d is no longer read; the map shows its terminal glyphs until it has a tileset.']);
 });

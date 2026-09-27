@@ -288,7 +288,7 @@ final readonly class ProjectWorkspace
      * Returns a preview of the selected map.
      *
      * @param int $selectedMapIndex The selected map index.
-     * @param int $width The preview width, in two-column cells.
+     * @param int $width The preview width.
      * @param int $height The preview height.
      * @param int $offsetX The horizontal preview offset.
      * @param int $offsetY The vertical preview offset.

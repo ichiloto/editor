@@ -31,7 +31,7 @@ it('records keyboard paints and undoes them through the editor', function () {
   $workspace = getEditorProperty($editor, 'workspace');
   $map = $workspace->getMapByIndex(0);
 
-  expect($map->getTileSymbol(1, 2))->toBe('@@')
+  expect($map->getTileSymbol(1, 2))->toBe('@')
     ->and($map->isDirty())->toBeTrue();
 
   /** @var CommandHistory $history */
@@ -41,11 +41,11 @@ it('records keyboard paints and undoes them through the editor', function () {
 
   callEditorMethod($editor, 'performUndo');
 
-  expect($map->getTileSymbol(1, 2))->toBe('  ');
+  expect($map->getTileSymbol(1, 2))->toBe(' ');
 
   callEditorMethod($editor, 'performRedo');
 
-  expect($map->getTileSymbol(1, 2))->toBe('@@');
+  expect($map->getTileSymbol(1, 2))->toBe('@');
 });
 
 it('does not record a command when the paint is a no-op', function () {

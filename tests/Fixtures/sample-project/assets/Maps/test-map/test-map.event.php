@@ -1,9 +1,9 @@
 <?php
 
 return <<<'ICHILOTO_EVENT_MAP'
-                        
-          EE            
-                        
-                        
-                        
+            
+     E      
+            
+            
+            
 ICHILOTO_EVENT_MAP;

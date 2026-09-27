@@ -28,7 +28,6 @@ final class MapValidator
     public static function validate(ProjectMap $map, array $mapsById): array
     {
         return [
-            ...$map->describeConflictingEventCells(),
             ...self::findMarkersWithoutDefinitions($map),
             ...self::findNonRectangularMarkers($map),
             ...self::findDanglingDestinations($map, $mapsById),
@@ -36,18 +35,6 @@ final class MapValidator
             ...self::findRetiredData($map),
             ...array_map(static fn(Issue $issue): string => $issue->message, MapGraphicsValidator::validate($map)),
         ];
-    }
-
-    /**
-     * Finds map data the engine no longer reads.
-     *
-     * @return string[]
-     */
-    private static function findRetiredData(ProjectMap $map): array
-    {
-        return array_key_exists('tiles2d', $map->getEditableData())
-            ? ['tiles2d is no longer read; the map shows its terminal glyphs until it has a tileset.']
-            : [];
     }
 
     /**
@@ -66,6 +53,18 @@ final class MapValidator
         }
 
         return $warnings;
+    }
+
+    /**
+     * Finds map data the engine no longer reads.
+     *
+     * @return string[]
+     */
+    private static function findRetiredData(ProjectMap $map): array
+    {
+        return array_key_exists('tiles2d', $map->getEditableData())
+            ? ['tiles2d is no longer read; the map shows its terminal glyphs until it has a tileset.']
+            : [];
     }
 
     /**

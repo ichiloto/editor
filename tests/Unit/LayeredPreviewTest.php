@@ -9,7 +9,7 @@ use Ichiloto\Engine\Field\MapManager;
 it('loads layer-aware cinematic collision and clears all geometry on unload', function () {
     $root = layeredMapProject();
     file_put_contents($root . '/assets/Maps/test-map/test-map.event.php',
-        Ichiloto\Engine\Field\MapGridSource::buildSource("        \n        ", 'EVENT'));
+        Ichiloto\Engine\Field\MapGridSource::buildSource("    \n    ", 'EVENT'));
     file_put_contents($root . '/assets/Maps/collisions.php', <<<'PHP'
 <?php
 use Ichiloto\Engine\Events\Enumerations\CollisionType;
@@ -29,9 +29,7 @@ PHP);
         $manager->render();
         $output = ob_get_clean();
         expect($output)->toBe('')
-            ->and(implode("\n", $camera->frame()))->toContain('..//....', '..xxxx..')
-            // The player's one-column sprite sits in the first column of its cell.
-            ->and(implode("\n", $preview->frame()))->toContain('@.//....', '..xxxx..');
+            ->and(implode("\n", $camera->frame()))->toContain('./..', '.xx.');
         $manager->unload();
         expect($manager->layers)->toBeNull()
             ->and($manager->tileMap)->toBe([])

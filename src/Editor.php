@@ -15,7 +15,6 @@ use Ichiloto\Editor\Actors\ActorIdentityMigrationCommand;
 use Ichiloto\Editor\Actors\ActorIdentityMigrationPlan;
 use Ichiloto\Editor\Backup\BackupWriter;
 use Ichiloto\Editor\Canvas\CanvasTool;
-use Ichiloto\Editor\Canvas\CellEntry;
 use Ichiloto\Editor\Canvas\Clipboard;
 use Ichiloto\Editor\Canvas\ToolGeometry;
 use Ichiloto\Editor\Cutscenes\CutsceneType;
@@ -57,7 +56,6 @@ use Ichiloto\Editor\History\GenericCommand;
 use Ichiloto\Editor\History\PaintStrokeCommand;
 use Ichiloto\Editor\Inspector\InputControl;
 use Ichiloto\Editor\Inspector\InputControlType;
-use Ichiloto\Editor\Maps\CellSymbol;
 use Ichiloto\Editor\IO\InputDecoder;
 use Ichiloto\Editor\IO\InputRouter;
 use Ichiloto\Editor\IO\KeyBinding;
@@ -99,7 +97,6 @@ use Ichiloto\Engine\Entities\Roles\ExperienceCurveGenerator;
 use Ichiloto\Engine\Entities\Roles\ParameterCurveGenerator;
 use Ichiloto\Engine\Events\Enumerations\ChestType;
 use Ichiloto\Engine\Events\Enumerations\LootType;
-use Ichiloto\Engine\Field\MapCell;
 use Ichiloto\Engine\Quests\QuestObjectiveType;
 use RuntimeException;
 if (! class_exists(__NAMESPACE__ . chr(92) . 'Animation', false)) { class_alias('Ichiloto' . chr(92) . 'Engine' . chr(92) . 'Animations' . chr(92) . 'Animation', __NAMESPACE__ . chr(92) . 'Animation'); }
@@ -331,7 +328,7 @@ final class Editor
      * The row the help overlay scrolls to keep visible.
      */
     private int $helpScrollRow = 0;
-    private string $selectedPaintSymbol = MapCell::BLANK;
+    private string $selectedPaintSymbol = ' ';
     /**
      * The active canvas tool. Every tool commits through one
      * PaintStrokeCommand, so shapes and fills undo in a single step.
@@ -699,20 +696,6 @@ final class Editor
      */
     private ?PaintStrokeCommand $activeStrokeCommand = null;
     /**
-     * The stroke the last canvas write committed, which a pairing keystroke
-     * amends so a typed pair undoes in one step.
-     */
-    private ?PaintStrokeCommand $lastCanvasStroke = null;
-    /**
-     * Typed characters becoming whole cells on the canvas.
-     */
-    private readonly CellEntry $cellEntry;
-    /**
-     * The pair being typed in the character map, and the cell it enters.
-     */
-    private readonly CellEntry $characterMapEntry;
-    private string $characterMapCell = '';
-    /**
      * Which guarded action ('quit'|'reload') the unsaved-changes prompt confirms.
      */
     private ?string $pendingGuardAction = null;
@@ -775,8 +758,6 @@ final class Editor
         $this->toasts = new ToastQueue();
         $this->commandPalette = new CommandPalette();
         $this->clipboard = new Clipboard();
-        $this->cellEntry = new CellEntry();
-        $this->characterMapEntry = new CellEntry();
         $this->assetFilter = new ListFilter();
         $this->databaseFilter = new ListFilter();
         $this->dialogFilter = new ListFilter();
@@ -914,7 +895,7 @@ final class Editor
         $this->optionDialogField = null;
         $this->eventOptionDialogTitle = 'Options';
         $this->eventOptionDialogEntries = [];
-        $this->selectedPaintSymbol = MapCell::BLANK;
+        $this->selectedPaintSymbol = ' ';
         $this->activeMousePaintButton = null;
         $this->lastMousePaintPoint = null;
         $this->characterPaletteIndex = 0;
@@ -1255,11 +1236,7 @@ final class Editor
      */
     private function dispatchInput(string $input): void
     {
-        // A pairing keystroke must be the very next input: anything else
-        // routed in between forgets the half-typed cell.
-        $this->cellEntry->beginInput();
         $this->inputRouter->route($input);
-        $this->cellEntry->endInput();
     }
 
     /**
@@ -2900,8 +2877,7 @@ final class Editor
 
         $id = $collection->uniqueIdFor($npc->getName());
         $copy = $npc->asCopyWithId($id);
-        // A character occupies one cell, so the copy stands in the next one.
-        $x = $npc->getX() + 1;
+        $x = $npc->getX() + $npc->getSpriteWidth();
 
         if ($x < $map->getWidth() && $collection->indexAt($x, $npc->getY()) === null) {
             $copy = $copy->movedTo($x, $npc->getY());
@@ -3919,8 +3895,6 @@ final class Editor
 
         $this->isCharacterMapOpen = true;
         $this->characterPaletteIndex = 0;
-        $this->characterMapEntry->reset();
-        $this->characterMapCell = '';
         $this->statusMessage = 'Character map open.';
         $this->requestFullRender();
     }
@@ -3961,21 +3935,6 @@ final class Editor
 
         if ($input === "\033") {
             $this->closeCharacterMap('Character map closed.');
-            return;
-        }
-
-        if ($input === "\177" || $input === "\010") {
-            $this->characterMapEntry->reset();
-            $this->characterMapCell = '';
-            $this->renderOverlays();
-            return;
-        }
-
-        // Typing enters a cell of its own: one character fills the cell, a
-        // second makes a pair such as [], and a third starts over.
-        if (! str_contains($input, "\033") && preg_match('/\A\X\z/u', $input) === 1 && preg_match('/\A[\x00-\x1F\x7F]\z/', $input) !== 1) {
-            $this->characterMapCell = $this->characterMapEntry->enterCharacter($input, $this->editingMode !== self::MODE_EVENT);
-            $this->renderOverlays();
         }
     }
 
@@ -3988,9 +3947,6 @@ final class Editor
      */
     private function moveCharacterPaletteSelection(int $deltaX, int $deltaY): void
     {
-        // Choosing from the palette sets aside a typed cell.
-        $this->characterMapEntry->reset();
-        $this->characterMapCell = '';
         $palette = $this->getCharacterPalette();
 
         if ($palette === []) {
@@ -4014,15 +3970,14 @@ final class Editor
     }
 
     /**
-     * Applies the typed cell, or else the selected character-map cell, to
-     * the current cursor location.
+     * Applies the selected character-map glyph to the current cursor location.
      *
      * @return void
      */
     private function applyCharacterPaletteSelection(): void
     {
         $palette = $this->getCharacterPalette();
-        $symbol = $this->characterMapCell !== '' ? $this->characterMapCell : ($palette[$this->characterPaletteIndex] ?? null);
+        $symbol = $palette[$this->characterPaletteIndex] ?? null;
 
         if ($symbol === null) {
             $this->closeCharacterMap('Character map closed.');
@@ -4030,9 +3985,9 @@ final class Editor
         }
 
         $this->selectedPaintSymbol = $symbol;
-        $this->replaceCurrentSymbol($this->getBrushCell());
+        $this->replaceCurrentSymbol($symbol);
         $this->isCharacterMapOpen = false;
-        $this->statusMessage = sprintf('Placed %s.', CellSymbol::describe($this->getBrushCell()));
+        $this->statusMessage = sprintf('Placed %s.', $symbol === ' ' ? 'space' : $symbol);
         $this->requestFullRender();
     }
 
@@ -4230,44 +4185,42 @@ final class Editor
             return;
         }
 
+        if ($symbol === ' ') {
+            $this->adoptPaintSymbol(' ');
+            return;
+        }
+
         // Paint mode has no reserved glyphs: %, ^, @ and ? paint like
-        // anything else. Commands live in Normal mode. One character fills
-        // the cell; on a map layer a quick second one makes a pair. An event
-        // cell repeats its one marker.
-        $pairs = $this->editingMode !== self::MODE_EVENT;
-        $target = sprintf('%s|%s|%d|%d', $this->getSelectedMap()?->mapId ?? '', $this->getActiveCanvasLayer(), $this->cursorX, $this->cursorY);
-        $completesPair = $pairs && $this->cellEntry->completesPair($symbol, $target);
-        $this->adoptPaintSymbol($this->cellEntry->enterCharacter($symbol, $pairs, $target), $completesPair);
+        // anything else. Commands live in Normal mode.
+        $this->adoptPaintSymbol($symbol);
     }
 
     /**
-     * Makes a typed cell the active paint symbol.
+     * Makes a typed glyph the active paint symbol.
      *
      * Under the brush this also paints it, which is the historic behaviour.
      * Under a shape or selection tool it only loads the brush: an anchored
      * gesture must not be interrupted by a stray dab where the cursor
      * happens to sit.
      *
-     * @param string $symbol The whole cell to paint.
-     * @param bool $completesPair Whether this keystroke turns the previous
-     *   one's cell into a pair, amending its paint into one undo step.
+     * @param string $symbol The typed symbol.
      * @return void
      */
-    private function adoptPaintSymbol(string $symbol, bool $completesPair = false): void
+    private function adoptPaintSymbol(string $symbol): void
     {
-        $this->selectedPaintSymbol = CellSymbol::normalize($symbol);
+        $this->selectedPaintSymbol = $symbol;
 
         if ($this->canvasTool !== CanvasTool::BRUSH) {
             $this->setStatus(sprintf(
                 'Paint symbol is now %s. %s',
-                CellSymbol::describe($this->selectedPaintSymbol),
+                $symbol === ' ' ? 'space' : $symbol,
                 $this->describeCanvasToolUsage(),
             ));
             $this->renderCanvasArea();
             return;
         }
 
-        $this->replaceCurrentSymbol($this->getBrushCell(), $completesPair);
+        $this->replaceCurrentSymbol($symbol);
         $this->renderCanvasArea();
     }
 
@@ -4280,7 +4233,7 @@ final class Editor
     private function handleEraseInput(string $input): bool
     {
         if ($input === "\177" || $input === "\010") {
-            $this->adoptPaintSymbol(MapCell::BLANK);
+            $this->adoptPaintSymbol(' ');
             return true;
         }
 
@@ -4288,14 +4241,12 @@ final class Editor
     }
 
     /**
-     * Replaces the current cell on the active editing layer.
+     * Replaces the current symbol on the active editing layer.
      *
-     * @param string $symbol The replacement cell.
-     * @param bool $amendsLastStroke Whether the paint joins the previous
-     *   canvas stroke, as a pairing keystroke does.
+     * @param string $symbol The replacement symbol.
      * @return void
      */
-    private function replaceCurrentSymbol(string $symbol, bool $amendsLastStroke = false): void
+    private function replaceCurrentSymbol(string $symbol): void
     {
         if (! $this->workspace instanceof ProjectWorkspace) {
             return;
@@ -4316,7 +4267,6 @@ final class Editor
             ToolGeometry::brush($this->cursorX, $this->cursorY, $this->canvasBrushSize),
             $symbol,
             $isEventLayer ? 'Event edit' : 'Tile edit',
-            $amendsLastStroke ? $this->lastCanvasStroke : null,
         );
 
         $this->statusMessage = sprintf(
@@ -4334,10 +4284,10 @@ final class Editor
      */
     private function applySelectedPaintSymbol(): void
     {
-        $this->replaceCurrentSymbol($this->getBrushCell());
+        $this->replaceCurrentSymbol($this->selectedPaintSymbol);
         $this->statusMessage = sprintf(
             'Painted %s at (%d, %d).',
-            CellSymbol::describe($this->getBrushCell()),
+            $this->selectedPaintSymbol === ' ' ? 'space' : $this->selectedPaintSymbol,
             $this->cursorX,
             $this->cursorY
         );
@@ -4430,7 +4380,7 @@ final class Editor
             return true;
         }
 
-        $viewportWidth = $bounds['cells'];
+        $viewportWidth = $bounds['width'];
         $viewportHeight = $bounds['height'];
         $maxOffsetX = max(0, $selectedMap->getWidth() - $viewportWidth);
         $maxOffsetY = max(0, $selectedMap->getHeight() - $viewportHeight);
@@ -4450,9 +4400,7 @@ final class Editor
 
     /**
      * Shared geometry for rendering, cursor visibility, hit testing and scrolling.
-     * Width is in terminal columns; a map cell is MapCell::COLUMNS of them, so
-     * the canvas shows the whole cells that fit.
-     * @return array{left: int, top: int, right: int, bottom: int, width: int, height: int, cells: int}
+     * @return array{left: int, top: int, right: int, bottom: int, width: int, height: int}
      */
     private function getCanvasPreviewBounds(?array $layout = null): array
     {
@@ -4470,7 +4418,6 @@ final class Editor
             'bottom' => $mapTop + $previewHeight - 1,
             'width' => $contentWidth,
             'height' => $previewHeight,
-            'cells' => max(1, intdiv($contentWidth, MapCell::COLUMNS)),
         ];
     }
 
@@ -4483,9 +4430,7 @@ final class Editor
         $mapRight = $bounds['right'];
         $mapBottom = $bounds['bottom'];
 
-        // A trailing column narrower than a cell belongs to no cell.
-        if ($event->x < $mapLeft || $event->x > $mapRight || $event->y < $mapTop || $event->y > $mapBottom
-            || $event->x - $mapLeft >= $bounds['cells'] * MapCell::COLUMNS) {
+        if ($event->x < $mapLeft || $event->x > $mapRight || $event->y < $mapTop || $event->y > $mapBottom) {
             return true;
         }
 
@@ -4495,7 +4440,7 @@ final class Editor
             return true;
         }
 
-        $targetX = $this->canvasOffsetX + intdiv($event->x - $mapLeft, MapCell::COLUMNS);
+        $targetX = $this->canvasOffsetX + ($event->x - $mapLeft);
         $targetY = $this->canvasOffsetY + ($event->y - $mapTop);
 
         if ($targetX < 0 || $targetX >= $selectedMap->getWidth() || $targetY < 0 || $targetY >= $selectedMap->getHeight()) {
@@ -4527,11 +4472,11 @@ final class Editor
         if ($this->editingMode === self::MODE_EVENT) {
             $this->handleEventCanvasMouseEdit($selectedMap, $event->button, $targetX, $targetY);
         } else {
-            $paintSymbol = $event->button === MouseButton::RIGHT_BUTTON ? MapCell::BLANK : $this->getBrushCell();
+            $paintSymbol = $event->button === MouseButton::RIGHT_BUTTON ? ' ' : $this->selectedPaintSymbol;
             $this->paintCanvasStroke($selectedMap, $paintSymbol, $targetX, $targetY, $event->button);
             $this->statusMessage = sprintf(
                 'Painted %s at (%d, %d).',
-                CellSymbol::describe($paintSymbol),
+                $paintSymbol === ' ' ? 'space' : $paintSymbol,
                 $this->cursorX,
                 $this->cursorY
             );
@@ -4570,10 +4515,10 @@ final class Editor
         $isStartingStroke = $this->activeMousePaintButton !== $button || ! is_array($this->lastMousePaintPoint);
 
         if ($button === MouseButton::LEFT_BUTTON && $clickedMarker !== null) {
-            $this->selectedPaintSymbol = CellSymbol::normalize($clickedMarker);
+            $this->selectedPaintSymbol = $clickedMarker;
         }
 
-        $paintSymbol = $button === MouseButton::RIGHT_BUTTON ? MapCell::BLANK : $this->getBrushCell();
+        $paintSymbol = $button === MouseButton::RIGHT_BUTTON ? ' ' : $this->selectedPaintSymbol;
         $this->paintCanvasStroke($selectedMap, $paintSymbol, $targetX, $targetY, $button, true);
 
         if ($button === MouseButton::LEFT_BUTTON && $clickedMarker !== null && $isStartingStroke) {
@@ -4581,11 +4526,10 @@ final class Editor
             return;
         }
 
-        $marker = MapCell::getMarker($paintSymbol);
         $this->statusMessage = sprintf(
             '%s event %s at (%d, %d).',
-            $marker === null ? 'Cleared' : 'Placed',
-            $marker ?? 'cell',
+            $paintSymbol === ' ' ? 'Cleared' : 'Placed',
+            $paintSymbol === ' ' ? 'cell' : $paintSymbol,
             $this->cursorX,
             $this->cursorY,
         );
@@ -4641,15 +4585,18 @@ final class Editor
 
             $oldSymbol = $selectedMap->getLayerSymbol($this->getActiveCanvasLayer(), $point['x'], $point['y']);
             $oldStyle = $selectedMap->getLayerCellStyle($this->getActiveCanvasLayer(), $point['x'], $point['y']);
-            $selectedMap->setStyledLayerCell($this->getActiveCanvasLayer(), $point['x'], $point['y'], $symbol,
-                $this->resolvePaintStyle($symbol, $this->selectedPaintColor, $oldStyle));
+            [$newPrefix, $newSuffix] = $this->resolvePaintStyle($symbol, $this->selectedPaintColor, $oldStyle);
+            $selectedMap->setLayerCell($this->getActiveCanvasLayer(), $point['x'], $point['y'], $symbol, $newPrefix, $newSuffix);
+            $newSymbol = $selectedMap->getLayerSymbol($this->getActiveCanvasLayer(), $point['x'], $point['y']);
             $this->activeStrokeCommand->appendCell(
                 $point['x'],
                 $point['y'],
                 $oldSymbol,
-                $selectedMap->getLayerSymbol($this->getActiveCanvasLayer(), $point['x'], $point['y']),
-                $oldStyle,
-                $selectedMap->getLayerCellStyle($this->getActiveCanvasLayer(), $point['x'], $point['y']),
+                $newSymbol,
+                $oldStyle['prefix'],
+                $oldStyle['suffix'],
+                $newPrefix,
+                $newSuffix,
             );
         }
 
@@ -4782,27 +4729,6 @@ final class Editor
     }
 
     /**
-     * Returns the cell the brush paints. An event cell holds one marker, so
-     * on the event layer the brush paints its first marker repeated.
-     *
-     * @return string
-     */
-    private function getBrushCell(): string
-    {
-        if ($this->editingMode !== self::MODE_EVENT) {
-            return $this->selectedPaintSymbol;
-        }
-
-        foreach (MapCell::getCharacters($this->selectedPaintSymbol) as $character) {
-            if (trim($character) !== '') {
-                return CellSymbol::normalize($character);
-            }
-        }
-
-        return MapCell::BLANK;
-    }
-
-    /**
      * Returns the layer the canvas tools currently paint on.
      *
      * @return string A PaintStrokeCommand LAYER_* constant.
@@ -4843,7 +4769,8 @@ final class Editor
      */
     private function writeCanvasSymbol(ProjectMap $map, int $x, int $y, string $symbol): void
     {
-        $map->setStyledLayerCell($this->getActiveCanvasLayer(), $x, $y, $symbol, $map->getLayerCellStyle($this->getActiveCanvasLayer(), $x, $y));
+        $style = $map->getLayerCellStyle($this->getActiveCanvasLayer(), $x, $y);
+        $map->setLayerCell($this->getActiveCanvasLayer(), $x, $y, $symbol, $style['prefix'], $style['suffix']);
     }
 
     /**
@@ -4854,21 +4781,18 @@ final class Editor
      * PaintStrokeCommand, so each undoes in exactly one Ctrl+Z.
      *
      * @param ProjectMap $map The target map.
-     * @param array<int, array{x: int, y: int, symbol: string, color?: string|null, style?: array{prefix: string, suffix: string, styles?: list<array{prefix: string, suffix: string}>}}> $writes The cells to write.
+     * @param array<int, array{x: int, y: int, symbol: string, color?: string|null, style?: array{prefix: string, suffix: string}}> $writes The cells to write.
      * @param string $label The undo/status label.
-     * @param PaintStrokeCommand|null $amend A recorded stroke of the same map and layer to extend instead of opening a new one.
      * @return int The number of cells that actually changed.
      */
-    private function applyCanvasWrites(ProjectMap $map, array $writes, string $label, ?PaintStrokeCommand $amend = null): int
+    private function applyCanvasWrites(ProjectMap $map, array $writes, string $label): int
     {
         if ($writes === []) {
             return 0;
         }
 
         $this->finalizeActiveStroke();
-        $amend = $amend?->targets($map) === true ? $amend : null;
-        $stroke = $amend ?? new PaintStrokeCommand($map, $this->getActiveCanvasLayer(), $label);
-        $recorded = $amend?->hasChanges() === true;
+        $stroke = new PaintStrokeCommand($map, $this->getActiveCanvasLayer(), $label);
         $changed = 0;
 
         foreach ($writes as $write) {
@@ -4877,24 +4801,36 @@ final class Editor
             }
 
             $oldSymbol = $this->readCanvasSymbol($map, $write['x'], $write['y']);
-            $oldStyle = $map->getLayerCellStyle($this->getActiveCanvasLayer(), $write['x'], $write['y']);
-            $map->setStyledLayerCell($this->getActiveCanvasLayer(), $write['x'], $write['y'], $write['symbol'],
-                $write['style'] ?? $this->resolvePaintStyle($write['symbol'], $write['color'] ?? null, $oldStyle));
-            $newSymbol = $this->readCanvasSymbol($map, $write['x'], $write['y']);
-            $newStyle = $map->getLayerCellStyle($this->getActiveCanvasLayer(), $write['x'], $write['y']);
-            $stroke->appendCell($write['x'], $write['y'], $oldSymbol, $newSymbol, $oldStyle, $newStyle);
 
-            if ($oldSymbol !== $newSymbol || $oldStyle !== $newStyle) {
+            $oldStyle = $map->getLayerCellStyle($this->getActiveCanvasLayer(), $write['x'], $write['y']);
+            [$newPrefix, $newSuffix] = isset($write['style'])
+                ? [$write['style']['prefix'], $write['style']['suffix']]
+                : $this->resolvePaintStyle(
+                    $write['symbol'],
+                    $write['color'] ?? null,
+                    $oldStyle,
+                );
+            $map->setLayerCell($this->getActiveCanvasLayer(), $write['x'], $write['y'], $write['symbol'], $newPrefix, $newSuffix);
+            $newSymbol = $this->readCanvasSymbol($map, $write['x'], $write['y']);
+            $stroke->appendCell(
+                $write['x'],
+                $write['y'],
+                $oldSymbol,
+                $newSymbol,
+                $oldStyle['prefix'],
+                $oldStyle['suffix'],
+                $newPrefix,
+                $newSuffix,
+            );
+
+            if ($oldSymbol !== $newSymbol || $oldStyle['prefix'] !== $newPrefix || $oldStyle['suffix'] !== $newSuffix) {
                 $changed++;
             }
         }
 
-        // An amended stroke is already in the history, and it now undoes
-        // to the state before its first keystroke.
-        if (! $recorded && $stroke->hasChanges()) {
+        if ($stroke->hasChanges()) {
             $this->recordCommand($stroke);
         }
-        $this->lastCanvasStroke = $stroke;
 
         return $changed;
     }
@@ -4903,27 +4839,30 @@ final class Editor
      * Resolves the styling bytes a tile paint writes.
      *
      * The colour directive follows the brush contract: null keeps the
-     * cell's existing styling byte-for-byte, each character's included, an
-     * empty string paints without colour, and any other value becomes an
-     * `fg=` tag over the whole cell. A blank cell is always uncoloured, so
-     * erasing never leaves invisible styling behind.
+     * cell's existing styling byte-for-byte, an empty string paints without
+     * colour, and any other value becomes an `fg=` tag. A space is always
+     * uncoloured, so erasing never leaves invisible styling behind.
      *
-     * @param string $symbol The cell being painted.
+     * @param string $symbol The symbol being painted.
      * @param string|null $colorDirective The brush colour directive.
-     * @param array{prefix: string, suffix: string, styles?: list<array{prefix: string, suffix: string}>} $oldStyle The cell's current styling.
-     * @return array{prefix: string, suffix: string, styles?: list<array{prefix: string, suffix: string}>} The style to write.
+     * @param array{prefix: string, suffix: string} $oldStyle The cell's current styling.
+     * @return array{0: string, 1: string} The prefix and suffix to write.
      */
     private function resolvePaintStyle(string $symbol, ?string $colorDirective, array $oldStyle): array
     {
-        if (MapCell::isBlank($symbol) || $colorDirective === '') {
-            return ['prefix' => '', 'suffix' => ''];
+        if ($symbol === ' ') {
+            return ['', ''];
         }
 
         if ($colorDirective === null) {
-            return $oldStyle;
+            return [$oldStyle['prefix'], $oldStyle['suffix']];
         }
 
-        return ['prefix' => sprintf('<fg=%s>', $colorDirective), 'suffix' => '</>'];
+        if ($colorDirective === '') {
+            return ['', ''];
+        }
+
+        return [sprintf('<fg=%s>', $colorDirective), '</>'];
     }
 
     /**
@@ -4933,10 +4872,9 @@ final class Editor
      * @param array<int, array{x: int, y: int}> $cells The cells to paint.
      * @param string $symbol The symbol to paint.
      * @param string $label The undo/status label.
-     * @param PaintStrokeCommand|null $amend The recorded stroke this paint joins, if any.
      * @return int The number of cells that actually changed.
      */
-    private function paintCanvasCells(ProjectMap $map, array $cells, string $symbol, string $label, ?PaintStrokeCommand $amend = null): int
+    private function paintCanvasCells(ProjectMap $map, array $cells, string $symbol, string $label): int
     {
         // Glyph paints carry the brush colour; the space rule and the event
         // layer's lack of styling are resolved at the commit path.
@@ -4949,7 +4887,6 @@ final class Editor
                 $cells,
             ),
             $label,
-            $amend,
         );
     }
 
@@ -5089,7 +5026,7 @@ final class Editor
         $changed = $this->paintCanvasCells(
             $selectedMap,
             $cells,
-            $this->getBrushCell(),
+            $this->selectedPaintSymbol,
             $this->canvasTool->commandLabel(),
         );
 
@@ -5098,7 +5035,7 @@ final class Editor
             $this->canvasTool->label(),
             $changed,
             $changed === 1 ? '' : 's',
-            CellSymbol::describe($this->getBrushCell()),
+            $this->selectedPaintSymbol === ' ' ? 'space' : $this->selectedPaintSymbol,
         ));
         $this->renderCanvasArea();
     }
@@ -5167,7 +5104,7 @@ final class Editor
 
         $target = $this->readCanvasSymbol($selectedMap, $this->cursorX, $this->cursorY);
 
-        if ($target === $this->getBrushCell()) {
+        if ($target === $this->selectedPaintSymbol) {
             $this->setStatus('Flood fill skipped: the region already holds that symbol.', StatusLevel::WARN);
             $this->renderFooter();
             return;
@@ -5180,12 +5117,12 @@ final class Editor
             $this->cursorX,
             $this->cursorY,
         );
-        $changed = $this->paintCanvasCells($selectedMap, $cells, $this->getBrushCell(), 'flood fill');
+        $changed = $this->paintCanvasCells($selectedMap, $cells, $this->selectedPaintSymbol, 'flood fill');
         $this->setStatus(sprintf(
             'Flood filled %d cell%s with %s.',
             $changed,
             $changed === 1 ? '' : 's',
-            CellSymbol::describe($this->getBrushCell()),
+            $this->selectedPaintSymbol === ' ' ? 'space' : $this->selectedPaintSymbol,
         ));
         $this->renderCanvasArea();
     }
@@ -5216,7 +5153,7 @@ final class Editor
 
         $this->setStatus(sprintf(
             'Picked up %s%s from (%d, %d).',
-            CellSymbol::describe($this->selectedPaintSymbol),
+            $this->selectedPaintSymbol === ' ' ? 'space' : $this->selectedPaintSymbol,
             $pickedColor === null ? '' : ' (' . $pickedColor . ')',
             $this->cursorX,
             $this->cursorY,
@@ -5264,7 +5201,7 @@ final class Editor
             $selection['x'] + $selection['width'] - 1,
             $selection['y'] + $selection['height'] - 1,
         );
-        $changed = $this->paintCanvasCells($selectedMap, $cells, MapCell::BLANK, 'cut selection');
+        $changed = $this->paintCanvasCells($selectedMap, $cells, ' ', 'cut selection');
         $this->setStatus(sprintf(
             'Cut %d x %d (%d cell%s cleared).',
             $this->clipboard->getWidth(),
@@ -14140,7 +14077,7 @@ final class Editor
         }
 
         $bounds = $this->getCanvasPreviewBounds();
-        $viewportWidth = $bounds['cells'];
+        $viewportWidth = $bounds['width'];
         $viewportHeight = $bounds['height'];
         $this->canvasOffsetX = max(0, min(max(0, $selectedMap->getWidth() - $viewportWidth), $this->canvasOffsetX));
         $this->canvasOffsetY = max(0, min(max(0, $selectedMap->getHeight() - $viewportHeight), $this->canvasOffsetY));
@@ -14179,7 +14116,7 @@ final class Editor
     private function syncViewportToCursor(): void
     {
         $bounds = $this->getCanvasPreviewBounds();
-        $viewportWidth = $bounds['cells'];
+        $viewportWidth = $bounds['width'];
         $viewportHeight = $bounds['height'];
 
         if ($this->cursorX < $this->canvasOffsetX) {
@@ -14327,19 +14264,19 @@ final class Editor
         }
 
         $previewRow = $this->cursorY - $this->canvasOffsetY;
-        $previewCell = $this->cursorX - $this->canvasOffsetX;
+        $previewColumn = $this->cursorX - $this->canvasOffsetX;
         $bounds = $this->getCanvasPreviewBounds($layout);
         $previewHeight = $bounds['height'];
+        $previewWidth = $bounds['width'];
 
-        if ($previewRow < 0 || $previewRow >= $previewHeight || $previewCell < 0 || $previewCell >= $bounds['cells']) {
+        if ($previewRow < 0 || $previewRow >= $previewHeight || $previewColumn < 0 || $previewColumn >= $previewWidth) {
             Console::cursor()->hide();
             return;
         }
 
-        // The cursor rests on the first of the cell's two columns.
         Console::cursor()->show();
         Console::cursor()->moveTo(
-            $bounds['left'] + $previewCell * MapCell::COLUMNS,
+            $bounds['left'] + $previewColumn,
             $bounds['top'] + $previewRow
         );
     }
@@ -14353,16 +14290,16 @@ final class Editor
     private function renderCharacterMapOverlay(array $layout): void
     {
         $palette = $this->getCharacterPalette();
-        $rows = [sprintf('Type a cell: %s', $this->characterMapCell === '' ? '(one key fills it, two make a pair)' : $this->describeCharacterMapCell($this->characterMapCell)), ''];
+        $rows = [];
 
         foreach (array_chunk($palette, self::CHARACTER_MAP_COLUMNS) as $rowIndex => $rowSymbols) {
             $cells = [];
 
             foreach ($rowSymbols as $columnIndex => $symbol) {
                 $index = ($rowIndex * self::CHARACTER_MAP_COLUMNS) + $columnIndex;
-                $label = $index === $this->characterPaletteIndex && $this->characterMapCell === ''
-                    ? sprintf('[%s]', $this->describeCharacterMapCell($symbol))
-                    : sprintf(' %s ', $this->describeCharacterMapCell($symbol));
+                $label = $index === $this->characterPaletteIndex
+                    ? sprintf('[%s]', $symbol === ' ' ? '␠' : $symbol)
+                    : sprintf(' %s ', $symbol === ' ' ? '␠' : $symbol);
                 $cells[] = $label;
             }
 
@@ -14376,7 +14313,7 @@ final class Editor
 
         $window = new EditorWindow(
             title: 'Character Map',
-            help: 'Enter:Insert  Type:Cell  Esc:Close',
+            help: 'Enter:Insert  Esc:Close',
             position: ['x' => $left, 'y' => $top],
             width: $overlayWidth,
             height: $overlayHeight,
@@ -14385,17 +14322,6 @@ final class Editor
         );
 
         $window->render();
-    }
-
-    /**
-     * Shows a cell in the character map, spaces made visible.
-     *
-     * @param string $cell The cell.
-     * @return string
-     */
-    private function describeCharacterMapCell(string $cell): string
-    {
-        return str_replace(' ', '␠', $cell);
     }
 
     /**
@@ -17508,12 +17434,13 @@ final class Editor
             $palette[$symbol] = $symbol;
         }
 
-        // Collision keys and reserved glyphs are single characters; the
-        // palette offers the whole cell each one paints.
         $layerName = array_values(array_filter($this->getTerminalCanvasLayers(), fn(array $layer): bool => $layer['id'] === $this->getActiveCanvasLayer()))[0]['name'] ?? null;
-        foreach ([...$this->workspace->getCollisionGlyphs($layerName), '?', '%', '^', '@'] as $symbol) {
-            $cell = CellSymbol::normalize($symbol);
-            $palette[$cell] = $cell;
+        foreach ($this->workspace->getCollisionGlyphs($layerName) as $symbol) {
+            $palette[$symbol] = $symbol;
+        }
+
+        foreach (['?', '%', '^', '@'] as $symbol) {
+            $palette[$symbol] = $symbol;
         }
 
         return array_values($palette);
@@ -18255,7 +18182,6 @@ final class Editor
         $bounds = $this->getCanvasPreviewBounds($layout);
         $contentWidth = $bounds['width'];
         $contentHeight = $bounds['height'] + ProjectWorkspace::CANVAS_HEADER_ROWS;
-        $contentCells = $bounds['cells'];
 
         return new EditorWindow(
             title: ($this->focusedPane === self::FOCUS_CANVAS ? 'Canvas [Focus]' : 'Canvas')
@@ -18294,7 +18220,7 @@ final class Editor
             content: $this->fitLines(
                 $this->workspace?->getCanvasLines(
                     $this->selectedAssetIndex,
-                    $contentCells,
+                    $contentWidth,
                     $contentHeight,
                     $this->canvasOffsetX,
                     $this->canvasOffsetY,
