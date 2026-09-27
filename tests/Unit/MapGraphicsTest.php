@@ -56,6 +56,18 @@ it('resizes every tile layer with the map, cropping and padding with empty tiles
         ->and(array_map(static fn($layer): array => $layer->tiles, $graphics?->layers ?? []))->toBe([[[2816, 2816, 2816]], [[0, 5, 0]]]);
 });
 
+it('validates tile layer offsets in the map data as the Engine reads them', function () {
+    $root = mapGraphicsProject();
+    $data = $root . '/assets/Maps/test-map/test-map.data.php';
+    $source = (string) file_get_contents($data);
+
+    file_put_contents($data, str_replace("'tileset' => 'home',", "'tileset' => 'home', 'tileLayers' => ['decor' => ['offset' => [0, -0.5]]],", $source));
+    expect(graphicsIssueLines($root, Severity::ERROR))->toBe([]);
+
+    file_put_contents($data, str_replace("'tileset' => 'home',", "'tileset' => 'home', 'tileLayers' => ['rugs' => ['offset' => [0, 1]]],", $source));
+    expect(graphicsIssueLines($root, Severity::ERROR))->toBe(["Map test-map tileLayers names 'rugs', which is not one of its tile layers."]);
+});
+
 it('keeps named tile halves when a resize rewrites a tile layer', function () {
     $root = mapGraphicsProject();
     $map = loadLayeredMap($root);

@@ -48,6 +48,7 @@ final class MapGraphicsValidator
         $issues = [];
         $tileset = self::loadTileset($map, $tilesetId, $issues);
         $layers = self::readLayers($map, $sources, $issues);
+        self::checkLayerOffsets($map, $sources, $issues);
 
         if ($tileset !== null) {
             $issues = [
@@ -58,6 +59,32 @@ final class MapGraphicsValidator
         }
 
         return $issues;
+    }
+
+    /**
+     * Checks the map data's tile layer settings as the Engine reads them.
+     *
+     * @param array<string, string> $sources
+     * @param list<Issue> $issues
+     */
+    private static function checkLayerOffsets(ProjectMap $map, array $sources, array &$issues): void
+    {
+        $names = [];
+        foreach (array_keys($sources) as $path) {
+            if (preg_match(MapGraphics::FILENAME_PATTERN, basename($path), $matches) === 1) {
+                $names[] = $matches['name'];
+            }
+        }
+
+        try {
+            MapGraphics::readLayerOffsets($map->getMapDataField([MapGraphics::SETTINGS_KEY]), $names, $map->mapId);
+        } catch (InvalidArgumentException $error) {
+            $issues[] = Issue::error(
+                $map->mapId,
+                $error->getMessage(),
+                sprintf("Name a tile layer in graphics/ and give it 'offset' => [across, down]. %s", self::GLYPH_FALLBACK),
+            );
+        }
     }
 
     /** @param list<Issue> $issues */
