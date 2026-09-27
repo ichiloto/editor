@@ -56,6 +56,18 @@ it('resizes every tile layer with the map, cropping and padding with empty tiles
         ->and(array_map(static fn($layer): array => $layer->tiles, $graphics?->layers ?? []))->toBe([[[2816, 2816, 2816]], [[0, 5, 0]]]);
 });
 
+it('keeps named tile halves when a resize rewrites a tile layer', function () {
+    $root = mapGraphicsProject();
+    $map = loadLayeredMap($root);
+    $furniture = writeTileLayer($map->directory, '03.furniture.tiles.php', "0 5L 5R 0\n5 0 0 0");
+    $map = loadLayeredMap($root);
+
+    $map->resize(5, 1);
+    $map->save();
+
+    expect(file_get_contents($furniture))->toContain("0 5L 5R 0 0\nTILES;");
+});
+
 it('resizes a ragged map\'s tile rows to the widths its terminal rows take', function () {
     $root = mapGraphicsProject(ragged: true);
     $map = loadLayeredMap($root);

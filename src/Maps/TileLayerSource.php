@@ -56,7 +56,8 @@ final class TileLayerSource
 
     /**
      * Resizes a tile layer with its map: cells and rows beyond the new size
-     * are cropped and new cells are empty (`0`). A layer that reads back as
+     * are cropped and new cells are empty (`0`); kept cells keep their entry,
+     * including a named tile half (`42L`). A layer that reads back as
      * its baseline keeps the baseline's bytes; otherwise it is rewritten as a
      * canonical literal nowdoc, keeping its leading comment and marker.
      *
@@ -75,20 +76,22 @@ final class TileLayerSource
             ), previous: $error);
         }
 
-        $rows = array_slice($layer->tiles, 0, $height);
+        $empty = (string)TileId::EMPTY;
+        $entries = $layer->getEntries();
+        $rows = array_slice($entries, 0, $height);
         foreach ($rows as &$row) {
-            $row = array_pad(array_slice($row, 0, $width), $width, TileId::EMPTY);
+            $row = array_pad(array_slice($row, 0, $width), $width, $empty);
         }
         unset($row);
-        $rows = array_pad($rows, $height, array_fill(0, $width, TileId::EMPTY));
+        $rows = array_pad($rows, $height, array_fill(0, $width, $empty));
 
-        if ($rows === $layer->tiles) {
+        if ($rows === $entries) {
             return $source;
         }
 
         if ($baseline !== null) {
             try {
-                if (self::readLayer($baseline, $displayPath)->tiles === $rows) {
+                if (self::readLayer($baseline, $displayPath)->getEntries() === $rows) {
                     return $baseline;
                 }
             } catch (InvalidArgumentException) {
