@@ -48,6 +48,17 @@ final class MapLayers
         $this->captureBaseline();
     }
 
+    /**
+     * Formats a layer's name for display, so every layer reads alike: the
+     * Events layer and gameplay layers named by their files (fixtures,
+     * upper-floor) show as Events, Fixtures and Upper Floor. The name itself,
+     * which pieces and files use, is unchanged.
+     */
+    public static function formatLabel(string $name): string
+    {
+        return ucwords(str_replace(['-', '_'], ' ', $name));
+    }
+
     public static function createFromSource(string $directory, MapLayerSet $set, string $eventPath, string $eventText): self
     {
         $layers = [];

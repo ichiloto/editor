@@ -41,7 +41,7 @@ trait LayerCanvas
         }
         foreach ($this->getTerminalCanvasLayers() as $layer) {
             if ($layer['id'] === $this->getActiveCanvasLayer()) {
-                return ' [' . $layer['name'] . ']';
+                return ' [' . MapLayers::formatLabel($layer['name']) . ']';
             }
         }
         return '';
@@ -84,7 +84,7 @@ trait LayerCanvas
         $visibility = $this->getCanvasLayerState()['visibility'];
         $active = $this->getActiveCanvasLayer();
         $entries = array_map(fn(array $layer): array => [
-            'label' => $layer['id'] === MapLayers::EVENT ? 'Events' : $layer['name'],
+            'label' => MapLayers::formatLabel($layer['name']),
             'value' => $layer['id'],
             'description' => implode(' · ', array_filter([
                 $layer['id'] === MapLayers::EVENT ? 'event markers' : 'gameplay',
@@ -317,7 +317,7 @@ trait LayerCanvas
         $id = $this->getActiveCanvasLayer();
         $fields = [];
         foreach ($this->getTerminalCanvasLayers() as $layer) {
-            $fields[] = ['label' => ($id === $layer['id'] ? '> ' : '  ') . $layer['name'],
+            $fields[] = ['label' => ($id === $layer['id'] ? '> ' : '  ') . MapLayers::formatLabel($layer['name']),
                 'value' => ($this->getCanvasLayerState()['visibility'][$layer['id']] ?? true) ? 'visible' : 'hidden', 'editable' => false];
         }
         return $fields;

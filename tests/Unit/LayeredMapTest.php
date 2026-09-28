@@ -3,12 +3,18 @@
 declare(strict_types=1);
 
 use Ichiloto\Editor\MapSourceRefusal;
+use Ichiloto\Editor\Maps\MapLayers;
 use Ichiloto\Editor\Field\NpcCollection;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Editor\Storage\FileSetTransactionFailure;
 use Ichiloto\Engine\Field\MapGridSource;
 use Ichiloto\Engine\IO\Console\TerminalText;
+
+it('shows every layer name in the same form', function () {
+    expect(array_map(MapLayers::formatLabel(...), ['terrain', 'fixtures', 'upper-floor', 'north_wing', 'Events']))
+        ->toBe(['Terrain', 'Fixtures', 'Upper Floor', 'North Wing', 'Events']);
+});
 
 it('loads ordered gameplay decoration and event layers through the Engine source contract', function () {
     $map = loadLayeredMap(layeredMapProject());

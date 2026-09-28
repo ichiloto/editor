@@ -62,7 +62,7 @@ trait PieceCanvas
                 'value' => $piece->id,
                 'description' => implode(' · ', array_filter([
                     $piece->connects === null ? sprintf('%d x %d', $piece->width, $piece->height) : 'connected',
-                    $piece->layer,
+                    MapLayers::formatLabel($piece->layer),
                     $tileLayers === [] ? null : 'tiles: ' . implode(', ', $tileLayers),
                 ])),
             ];

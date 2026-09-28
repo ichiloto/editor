@@ -49,6 +49,7 @@ use Ichiloto\Editor\Database\SummonAssignmentDiagnostics;
 use Ichiloto\Editor\Database\RecordSubList;
 use Ichiloto\Editor\Database\ReferencePicker;
 use Ichiloto\Editor\Debug\Debug;
+use Ichiloto\Editor\Maps\MapLayers;
 use Ichiloto\Editor\Events\EventTypeCatalog;
 use Ichiloto\Editor\History\Command;
 use Ichiloto\Editor\History\CommandHistory;
@@ -5337,8 +5338,13 @@ final class Editor
         }
 
         if ($this->clipboard->layer !== $this->getActiveCanvasLayer()) {
+            $source = array_find($this->getSelectedMap()?->getLayers() ?? [],
+                fn(array $layer): bool => $layer['id'] === $this->clipboard->layer);
             $this->setStatus(
-                sprintf('The clipboard holds a %s-layer block; switch layers before pasting.', $this->clipboard->layer),
+                $source === null
+                    ? 'The clipboard holds a block from another layer; switch layers before pasting.'
+                    : sprintf('The clipboard holds a block from the %s layer; switch to it before pasting.',
+                        MapLayers::formatLabel($source['name'])),
                 StatusLevel::WARN,
             );
             $this->renderFooter();

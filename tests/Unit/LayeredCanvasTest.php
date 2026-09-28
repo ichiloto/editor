@@ -216,7 +216,7 @@ it('excludes graphical layers and Tile art from the shell palette and inspector'
     // Layers are chosen in their own picker, which offers no graphical layer either.
     callEditorMethod($editor, 'openCanvasLayerPicker');
     $picked = implode('\n', array_column(getEditorProperty($editor, 'eventOptionDialogEntries'), 'label'));
-    expect($picked)->toContain('terrain', 'buildings', 'Events')->not->toContain('detail', 'decoration');
+    expect($picked)->toContain('Terrain', 'Buildings', 'Events')->not->toContain('Detail', 'decoration');
     callEditorMethod($editor, 'dispatchInput', "\033");
     foreach (['map:1', 'map:4', 'event'] as $id) {
         callEditorMethod($editor, 'selectCanvasLayer', $id);

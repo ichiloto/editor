@@ -61,10 +61,10 @@ it('lists the pieces of the map\'s tileset in the shared picker with P', functio
 
     expect(getEditorProperty($editor, 'eventOptionDialogTitle'))->toBe('Piece')
         ->and(getEditorProperty($editor, 'eventOptionDialogEntries'))->toBe([
-            ['label' => 'Bed', 'value' => 'bed', 'description' => '2 x 2 · buildings · tiles: decor, furniture'],
-            ['label' => 'Lamp', 'value' => 'lamp', 'description' => '1 x 1 · fixtures'],
-            ['label' => 'Rug', 'value' => 'rug', 'description' => '2 x 1 · terrain · tiles: floor'],
-            ['label' => 'Wall', 'value' => 'wall', 'description' => 'connected · buildings · tiles: walls'],
+            ['label' => 'Bed', 'value' => 'bed', 'description' => '2 x 2 · Buildings · tiles: decor, furniture'],
+            ['label' => 'Lamp', 'value' => 'lamp', 'description' => '1 x 1 · Fixtures'],
+            ['label' => 'Rug', 'value' => 'rug', 'description' => '2 x 1 · Terrain · tiles: floor'],
+            ['label' => 'Wall', 'value' => 'wall', 'description' => 'connected · Buildings · tiles: walls'],
         ]);
 
     // Esc cancels without placing anything.
