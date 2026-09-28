@@ -153,7 +153,7 @@ final class ArraySourceWriter
 
         if ($node->hasOpaqueKey) {
             throw new SourcePreservationRefusal(sprintf(
-                'The array at %s has a key the editor cannot read, so it will not rewrite the array.',
+                'The array at %s has a key or spread the editor cannot read, so it will not rewrite the array.',
                 PhpArraySourceDocument::describePath($path),
             ));
         }

@@ -1139,6 +1139,13 @@ final class PhpArraySourceDocument
                 }
             } else {
                 $sawImplicit = true;
+
+                if ($tokens[$cursor]->is(T_ELLIPSIS)) {
+                    // A spread adds entries only PHP can count, so no later
+                    // position or key in this array is the file's to address.
+                    $keyIsOpaque = true;
+                    $hasOpaqueKey = true;
+                }
             }
 
             $value = self::readValue($tokens, $valueAt, $source, [',']);

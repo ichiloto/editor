@@ -27,7 +27,7 @@ final readonly class SourceNode
      * @param int $end The offset just past the node's last byte.
      * @param SourceEntry[] $entries The array's entries, in source order, for an array node.
      * @param bool $isList Whether an array node has no explicit keys at all.
-     * @param bool $hasOpaqueKey Whether an array node holds an entry whose key the parser could not read.
+     * @param bool $hasOpaqueKey Whether an array node holds an entry whose key the parser could not read, or a spread.
      * @param string|null $variable The variable name, without `$`, for a variable node.
      * @param int|null $bodyStart The offset just past `[` or `array(`, for an array node.
      * @param int|null $bodyEnd The offset of the closing `]` or `)`, for an array node.
@@ -46,7 +46,8 @@ final readonly class SourceNode
     }
 
     /**
-     * Returns the entry holding a key, or the entry at a list position.
+     * Returns the entry holding a key, or the entry at a list position. A
+     * list with a spread has no position the file can address.
      *
      * @param int|string $key The key, or the position for a list.
      * @return SourceEntry|null The entry.
@@ -54,7 +55,7 @@ final readonly class SourceNode
     public function entryFor(int|string $key): ?SourceEntry
     {
         if ($this->isList) {
-            return is_int($key) ? ($this->entries[$key] ?? null) : null;
+            return is_int($key) && ! $this->hasOpaqueKey ? ($this->entries[$key] ?? null) : null;
         }
 
         foreach ($this->entries as $entry) {
