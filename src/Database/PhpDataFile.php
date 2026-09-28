@@ -119,6 +119,22 @@ final class PhpDataFile
     }
 
     /**
+     * An isolated payload with object identity stripped but authored values
+     * kept, so a staged file can be compared with the value it was planned
+     * to read back as.
+     */
+    public static function getComparableValue(mixed $value): mixed
+    {
+        if (is_object($value)) {
+            $fields = get_object_vars($value);
+            $class = $fields['__PHP_Incomplete_Class_Name'] ?? $value::class;
+            unset($fields['__PHP_Incomplete_Class_Name']);
+            return ['__class' => $class, ...array_map(self::getComparableValue(...), $fields)];
+        }
+        return is_array($value) ? array_map(self::getComparableValue(...), $value) : $value;
+    }
+
+    /**
      * A stable comparison value that includes an object's class and state.
      *
      * Isolated payloads are decoded with object construction disabled. The

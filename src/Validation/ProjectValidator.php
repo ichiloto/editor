@@ -12,6 +12,7 @@ use Ichiloto\Editor\Database\ProjectRecord;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\Database\SummonAssignmentDiagnostics;
+use Ichiloto\Editor\Events\CommandMapContext;
 use Ichiloto\Editor\Field\MapEncounters;
 use Ichiloto\Editor\Field\ProjectNpc;
 use Ichiloto\Editor\ActorStatPreview;
@@ -3297,28 +3298,10 @@ class ProjectValidator
 
       // Alternative arms start on the same map, not at the end of a sibling arm.
       $branchContexts = [];
-      foreach ((array) ($command['options'] ?? []) as $option) {
-        if (is_array($option)) {
-          $branchContext = $context;
-          $issues = [...$issues, ...$this->walkEventCommands(
-            (array) ($option['then'] ?? []),
-            $where,
-            $known,
-            $branchContext,
-            $commonEventStack,
-          )];
-          $branchContexts[] = $branchContext;
-        }
-      }
-
-      foreach (['then', 'else', 'cancel'] as $arm) {
-        if (! array_key_exists($arm, $command)) {
-          continue;
-        }
-
+      foreach (CommandMapContext::getArms($command) as $arm) {
         $branchContext = $context;
         $issues = [...$issues, ...$this->walkEventCommands(
-          (array) ($command[$arm] ?? []),
+          $arm['commands'],
           $where,
           $known,
           $branchContext,
@@ -3329,8 +3312,7 @@ class ProjectValidator
 
       if ($branchContexts !== []) {
         // An omitted alternative can leave the current map unchanged.
-        if (($type === 'branch' && (! isset($command['then']) || ! isset($command['else'])))
-          || ($type === 'choice' && ! isset($command['cancel']))) {
+        if (CommandMapContext::canSkipArms($command)) {
           $branchContexts[] = $context;
         }
         $this->mergeCommandMapContexts($context, $branchContexts);

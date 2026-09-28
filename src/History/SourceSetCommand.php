@@ -2,31 +2,38 @@
 
 declare(strict_types=1);
 
-namespace Ichiloto\Editor\Actors;
+namespace Ichiloto\Editor\History;
 
 use Closure;
-use Ichiloto\Editor\History\Command;
 use Ichiloto\Editor\ProjectWorkspace;
+use Ichiloto\Editor\Storage\SourceSetPlan;
 use RuntimeException;
 use Throwable;
 
-/** Keeps source migration and the corresponding editor models together through history. */
-final class ActorIdentityMigrationCommand implements Command
+/**
+ * Keeps a written source set and the editor models read from it together
+ * through history: executing writes the planned files and reloads the
+ * workspace from them; undoing restores every file and the workspace as it
+ * was.
+ */
+final class SourceSetCommand implements Command
 {
-    public readonly string $label;
     private ?ProjectWorkspace $after = null;
 
     /**
+     * @param string $label The status-line action label.
+     * @param string $subject What the plan does, for refusals (this actor migration).
      * @param Closure(): ?ProjectWorkspace $getWorkspace
      * @param Closure(ProjectWorkspace): void $replaceWorkspace
      */
     public function __construct(
-        private readonly ActorIdentityMigrationPlan $plan,
+        public readonly string $label,
+        private readonly string $subject,
+        private readonly SourceSetPlan $plan,
         private readonly ProjectWorkspace $before,
         private readonly Closure $getWorkspace,
         private readonly Closure $replaceWorkspace,
     ) {
-        $this->label = 'Migrate actor identities and references';
     }
 
     public function execute(): void
@@ -53,10 +60,10 @@ final class ActorIdentityMigrationCommand implements Command
     {
         $current = ($this->getWorkspace)();
         if ($current === null || $current !== $expected) {
-            throw new RuntimeException('The workspace changed since this actor migration. Reload before migrating again.');
+            throw new RuntimeException("The workspace changed since {$this->subject}. Reload before trying again.");
         }
         if ($current->hasUnsavedChanges()) {
-            throw new RuntimeException('Save or undo pending edits before changing the actor migration. No files were changed.');
+            throw new RuntimeException("Save or undo pending edits before changing {$this->subject}. No files were changed.");
         }
     }
 }

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Actors;
 
+use Ichiloto\Editor\Database\PhpDataFile;
+
 /** Catalogue actor references, not NPC/staged identities or ordinary speaker text. */
 final class ActorReferenceInventory
 {
@@ -60,13 +62,7 @@ final class ActorReferenceInventory
     /** Strip object identity, not authored values, for isolated readback comparisons. */
     public static function getComparableValue(mixed $value): mixed
     {
-        if (is_object($value)) {
-            $fields = get_object_vars($value);
-            $class = $fields['__PHP_Incomplete_Class_Name'] ?? $value::class;
-            unset($fields['__PHP_Incomplete_Class_Name']);
-            return ['__class' => $class, ...array_map(self::getComparableValue(...), $fields)];
-        }
-        return is_array($value) ? array_map(self::getComparableValue(...), $value) : $value;
+        return PhpDataFile::getComparableValue($value);
     }
 
     /** Only runtime content locations, never saves, unrelated PHP or map glyph layers. */

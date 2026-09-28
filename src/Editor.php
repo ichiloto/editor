@@ -11,7 +11,6 @@ use Atatusoft\Termutil\IO\Enumerations\Color;
 use Atatusoft\Termutil\IO\Mouse\Enumerations\MouseButton;
 use Ichiloto\Editor\Backup\BackupSettings;
 use Ichiloto\Editor\Actors\ActorIdentityMigration;
-use Ichiloto\Editor\Actors\ActorIdentityMigrationCommand;
 use Ichiloto\Editor\Actors\ActorIdentityMigrationPlan;
 use Ichiloto\Editor\Backup\BackupWriter;
 use Ichiloto\Editor\Canvas\CanvasTool;
@@ -56,6 +55,7 @@ use Ichiloto\Editor\History\Command;
 use Ichiloto\Editor\History\CommandHistory;
 use Ichiloto\Editor\History\GenericCommand;
 use Ichiloto\Editor\History\PaintStrokeCommand;
+use Ichiloto\Editor\History\SourceSetCommand;
 use Ichiloto\Editor\Inspector\InputControl;
 use Ichiloto\Editor\Inspector\InputControlType;
 use Ichiloto\Editor\IO\InputDecoder;
@@ -11381,7 +11381,7 @@ final class Editor
             return;
         }
         try {
-            $command = new ActorIdentityMigrationCommand($plan, $this->workspace,
+            $command = new SourceSetCommand('Migrate actor identities and references', 'this actor migration', $plan->getSourceSet(), $this->workspace,
                 fn(): ?ProjectWorkspace => $this->workspace,
                 function (ProjectWorkspace $workspace): void { $this->workspace = $workspace; },
             );
