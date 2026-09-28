@@ -49,6 +49,7 @@ use Ichiloto\Editor\Database\SummonAssignmentDiagnostics;
 use Ichiloto\Editor\Database\RecordSubList;
 use Ichiloto\Editor\Database\ReferencePicker;
 use Ichiloto\Editor\Debug\Debug;
+use Ichiloto\Editor\Maps\LineInsertionPlan;
 use Ichiloto\Editor\Maps\MapLayers;
 use Ichiloto\Editor\Events\EventTypeCatalog;
 use Ichiloto\Editor\History\Command;
@@ -114,6 +115,7 @@ final class Editor
 {
     use \Ichiloto\Editor\Canvas\LayerCanvas;
     use \Ichiloto\Editor\Canvas\PieceCanvas;
+    use \Ichiloto\Editor\Canvas\LineInsertCanvas;
     use CutscenesWorkspace;
     use CutsceneOutlinePane;
     use CutscenePreviewPane;
@@ -1260,6 +1262,7 @@ final class Editor
         $router->bindModal(Modal::DATABASE_ENTRY_DELETE_CONFIRMATION, $this->handleDatabaseEntryDeleteConfirmationInput(...));
         $router->bindModal(Modal::RENAME_CONFIRMATION, $this->handleRenameConfirmationInput(...));
         $router->bindModal(Modal::LAYER_EDIT, $this->handleLayerPromptInput(...));
+        $router->bindModal(Modal::LINE_INSERT, $this->handleLineInsertPromptInput(...));
         $router->bindModal(Modal::COMMAND_PALETTE, $this->handleCommandPaletteInput(...));
         $router->bindModal(Modal::HELP, $this->handleHelpInput(...));
         $router->bindModal(Modal::DATABASE, $this->handleDatabaseInput(...));
@@ -5963,6 +5966,7 @@ final class Editor
         $items = [
             ...$this->buildLayerPaletteItems(),
             ...$this->buildPiecePaletteItems(),
+            ...$this->buildLineInsertPaletteItems(),
             new PaletteItem('Save Map', 'Ctrl+S', fn() => $this->saveSelectedMap()),
             new PaletteItem('Move Map to Derived Path', '', fn() => $this->beginExplicitMapMove()),
             new PaletteItem('Save All', 'Ctrl+A', fn() => $this->saveAllAssets()),
@@ -7980,6 +7984,12 @@ final class Editor
             if (($field['canvasPiece'] ?? false) === true) {
                 $this->closeEventOptionDialog();
                 $this->choosePiece((string) $selectedEntry['value']);
+                return;
+            }
+
+            if (($field['lineInsertion'] ?? null) instanceof LineInsertionPlan) {
+                if ($selectedEntry['value'] === 'preview') { return; }
+                $this->confirmLineInsertion($field['lineInsertion'], $selectedEntry['value'] === 'insert');
                 return;
             }
 
@@ -17935,6 +17945,11 @@ final class Editor
 
         if ($this->modals->has(Modal::LAYER_EDIT)) {
             $this->renderLayerPrompt($layout);
+            return true;
+        }
+
+        if ($this->modals->has(Modal::LINE_INSERT)) {
+            $this->renderLineInsertPrompt($layout);
             return true;
         }
 

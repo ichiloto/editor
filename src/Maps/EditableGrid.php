@@ -155,4 +155,32 @@ final class EditableGrid
         unset($row);
         $this->cells = array_pad($this->cells, $height, array_fill(0, $width, $blank));
     }
+
+    /**
+     * Inserts blank rows before row `$at` (axis `y`), each as wide as the
+     * row it is inserted beside, or blank cells before column `$at` of every
+     * row that reaches it (axis `x`). Every other cell keeps its glyph and
+     * style, and rows that only move keep their authored bytes.
+     */
+    public function insertLines(string $axis, int $at, int $count): void
+    {
+        $blank = ['symbol' => ' ', 'prefix' => '', 'suffix' => ''];
+        if ($axis === 'y') {
+            $beside = $this->cells[$at] ?? $this->cells[$at - 1] ?? [];
+            $rows = array_fill(0, $count, array_fill(0, count($beside), $blank));
+            array_splice($this->cells, $at, 0, $rows);
+            // New rows have no authored line, so they are written from their cells.
+            array_splice($this->originalCells, $at, 0, array_fill(0, $count, null));
+            array_splice($this->lines, $at, 0, array_fill(0, $count, ''));
+            $separator = $this->separators[max(0, $at - 1)] ?? $this->separators[0] ?? "\n";
+            array_splice($this->separators, min($at, count($this->separators)), 0, array_fill(0, $count, $separator));
+            return;
+        }
+        foreach ($this->cells as &$row) {
+            if (count($row) >= $at) {
+                array_splice($row, $at, 0, array_fill(0, $count, $blank));
+            }
+        }
+        unset($row);
+    }
 }

@@ -82,6 +82,37 @@ final class TileLayerSource
     }
 
     /**
+     * Inserts empty (`0`) rows before row `$at` (axis `y`) or empty cells
+     * before column `$at` of every row that reaches it (axis `x`), as
+     * {@see EditableGrid::insertLines()} inserts them into the terminal
+     * layers. The result is rewritten as {@see resize()} rewrites a layer.
+     *
+     * @param MapLayerSet $layers The map's terminal layers before the insertion.
+     * @throws MapSourceRefusal When the layer cannot be read or does not match the map; nothing is changed.
+     */
+    public static function insertLines(string $source, string $displayPath, MapLayerSet $layers, string $axis, int $at, int $count, ?string $baseline = null): string
+    {
+        $layer = self::readMatchingLayer($source, $displayPath, $layers, 'inserting rows or columns');
+
+        $empty = (string)TileId::EMPTY;
+        $entries = $layer->getEntries();
+        $rows = $entries;
+        if ($axis === 'y') {
+            $beside = $rows[$at] ?? $rows[$at - 1] ?? [];
+            array_splice($rows, $at, 0, array_fill(0, $count, array_fill(0, count($beside), $empty)));
+        } else {
+            foreach ($rows as &$row) {
+                if (count($row) >= $at) {
+                    array_splice($row, $at, 0, array_fill(0, $count, $empty));
+                }
+            }
+            unset($row);
+        }
+
+        return self::rewrite($rows, $entries, $source, $displayPath, $baseline);
+    }
+
+    /**
      * Writes a piece's tile entries into a tile layer with its top-left cell
      * at (x, y). A `0` entry leaves its cell as it was; every other entry,
      * a named tile half included, replaces the cell's entry. The result is

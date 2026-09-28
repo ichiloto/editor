@@ -237,6 +237,31 @@ final class MapLayers
     }
 
     /**
+     * Inserts blank rows before row `$at` (axis `y`) or blank columns before
+     * column `$at` (axis `x`) into every layer: the terminal layers, the
+     * event layer and the tile layers, whose new cells are empty. Every tile
+     * layer is rewritten before anything changes, so one the Engine cannot
+     * read refuses the whole insertion.
+     *
+     * @throws MapSourceRefusal When a tile layer cannot be read or does not match the map.
+     */
+    public function insertLines(string $axis, int $at, int $count): void
+    {
+        $tileSources = [];
+        if ($this->tileSources !== []) {
+            $set = $this->getLayerSet();
+            foreach ($this->tileSources as $path => $source) {
+                $tileSources[$path] = TileLayerSource::insertLines($source, $this->getDisplayPath($path), $set, $axis, $at, $count,
+                    $this->baselineSources[$path] ?? null);
+            }
+        }
+        foreach ($this->layers as $layer) {
+            $layer['grid']->insertLines($axis, $at, $count);
+        }
+        $this->tileSources = $tileSources;
+    }
+
+    /**
      * Writes tile entries into the named tile layers with their top-left
      * cell at (x, y), as one stamped piece: a `0` entry leaves its cell as it
      * was. A layer the map does not have yet is created in `graphics/` with

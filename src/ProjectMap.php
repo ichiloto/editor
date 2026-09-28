@@ -1512,6 +1512,45 @@ final class ProjectMap
     }
 
     /**
+     * Inserts `$count` blank rows before row `$at` (axis `y`) or blank
+     * columns before column `$at` (axis `x`) into every grid the map has:
+     * its terminal layers, its event layer and its tile layers. Only the
+     * grids change; the coordinates stored in data files move through the
+     * project-wide insertion plan.
+     *
+     * @throws MapSourceRefusal When the line is outside the map or a tile layer cannot take it; nothing is changed.
+     */
+    public function insertLines(string $axis, int $at, int $count): void
+    {
+        $this->assertEditable();
+        $size = match ($axis) {
+            'x' => $this->getWidth(),
+            'y' => $this->getHeight(),
+            default => throw new MapSourceRefusal("Insert rows (y) or columns (x), not '{$axis}'."),
+        };
+        if ($count < 1 || $at < 0 || $at > $size) {
+            throw new MapSourceRefusal(sprintf('%s cannot take %d %s at %d; nothing was changed.',
+                $this->mapId, $count, $axis === 'y' ? 'rows' : 'columns', $at));
+        }
+
+        $this->layers->insertLines($axis, $at, $count);
+
+        $this->cachedWidth = null;
+        $this->touchState();
+    }
+
+    /**
+     * Every grid file's source as the map now holds it: terminal and event
+     * layers, and tile layers, keyed by path.
+     *
+     * @return array<string, string>
+     */
+    public function getGridSources(): array
+    {
+        return $this->layers->getSources();
+    }
+
+    /**
      * Updates a nested event field.
      *
      * @param string $marker The event marker.

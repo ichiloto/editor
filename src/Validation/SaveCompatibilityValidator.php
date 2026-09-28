@@ -8,7 +8,9 @@ use Ichiloto\Editor\Database\InventoryCatalog;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
+use Ichiloto\Engine\Exceptions\InvalidSaveCompatibilityManifestException;
 use Ichiloto\Engine\IO\SaveCompatibility\ContentReferenceCategory;
+use Ichiloto\Engine\IO\SaveCompatibility\MapShift;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
 use Throwable;
@@ -272,7 +274,12 @@ final class SaveCompatibilityValidator
                 $issues[] = Issue::error($where, sprintf('Migration step %d to %d is in an impossible order.', $from, $to));
             }
 
-            if ($class === '') {
+            if (array_key_exists('class', $entry) === array_key_exists('mapShifts', $entry)) {
+                $issues[] = Issue::error($where, 'A migration must declare exactly one of class or mapShifts.',
+                    'Use a class for a project migration, or mapShifts for rows and columns inserted into maps.');
+            } elseif (array_key_exists('mapShifts', $entry)) {
+                $issues = [...$issues, ...$this->checkMapShifts($entry['mapShifts'], $where)];
+            } elseif ($class === '') {
                 $issues[] = Issue::error($where, 'Migration class must be a non-empty class name.');
             }
 
@@ -298,6 +305,31 @@ final class SaveCompatibilityValidator
                         sprintf('Migration step %d to %d is beyond current contentVersion %d.', $from, $from + 1, $version)
                     );
                 }
+            }
+        }
+
+        return $issues;
+    }
+
+    /**
+     * Checks a declarative map shift step exactly as the Engine reads it.
+     *
+     * @return Issue[]
+     */
+    private function checkMapShifts(mixed $rawShifts, string $where): array
+    {
+        if (! is_array($rawShifts) || $rawShifts === [] || ! array_is_list($rawShifts)) {
+            return [Issue::error($where, 'mapShifts must be a non-empty list.')];
+        }
+
+        $issues = [];
+
+        foreach ($rawShifts as $index => $shift) {
+            try {
+                MapShift::fromArray($shift, sprintf('mapShifts[%d]', $index));
+            } catch (InvalidSaveCompatibilityManifestException $exception) {
+                $issues[] = Issue::error($where, $exception->getMessage(),
+                    'Each shift names a map, an axis (x or y), the 0-based line it was inserted at, and a count of at least 1.');
             }
         }
 

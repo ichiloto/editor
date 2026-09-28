@@ -227,6 +227,54 @@ force for terminal edits. Untouched layer files are never written; unchanged
 rows retain their authored bytes, and all changed files are saved or rolled
 back together.
 
+### Inserting rows and columns
+
+In Map mode, `Ctrl+P` offers **Map: Insert rows above the cursor** and
+**Map: Insert columns left of the cursor**. Both first refuse while the project
+has unsaved changes: save or undo them first. A prompt asks how many to insert
+(a whole number of at least 1, `1` by default; `Up` / `Down` step it, `Enter`
+plans, `Esc` cancels). Inserting `N` rows at the cursor's row moves everything
+from that row down by `N`; inserting columns moves everything from the cursor's
+column right. The map grows by `N`.
+
+Nothing is written until you confirm. The confirmation lists every file the
+insertion writes, then every coordinate it could not rewrite, as
+`Hand edit: file path` with the reason, then whether saves follow. `Enter` on
+**Write N files now** writes them all at once, not on Save; `Esc` or **Cancel**
+leaves every file unchanged. One `Ctrl+Z` restores every written file byte for
+byte and reloads the workspace; `Ctrl+Y` writes them again.
+
+What moves, when it is in the map's space and at or beyond the line:
+
+- every grid: gameplay and decoration layers, the event layer (so event areas
+  follow) and the tile layers, whose new cells are empty (`0`); styled cells
+  keep their colour and rows that only move keep their bytes;
+- the map's NPC positions and wander areas (an area straddling the line
+  stretches), bed spawn points, legacy trigger areas and explicit event areas;
+- spawn points of transfers into the map from any map, legacy triggers into
+  it, and `startingPositions` in `assets/Data/system.php` that start on it;
+- script coordinates on the map: `move_player`, `move_route` waypoints (only
+  the axes a waypoint names; `steps` and `retrace` are relative), `camera` and
+  `field_animation` position targets, `stage_actor`, and `transfer` into the
+  map. Scripts start on their map; after a `transfer` elsewhere, later commands
+  are in that map's space and stay;
+- reusable scripts in `assets/Events/` started only from this map, and
+  cutscenes whose start map it is (their cast, script and finalizer).
+
+A regional `station` and tile-layer `offset` values are not map cells and never
+move.
+
+What is reported instead of rewritten: a coordinate written as a PHP expression
+or variable, or inside a list built with a spread (such as generated NPCs); a
+file that is not one returned array literal; a coordinate in a reusable script
+or cutscene that may run on this map or another one. The editor never guesses
+or flattens authored PHP; move those by hand after writing.
+
+Saves follow through the project's `assets/Data/save-compatibility.php`: the
+insertion raises `contentVersion` by one and appends a `mapShifts` step, so a
+saved player position on the map moves too. A project without that manifest is
+told that existing saves are not migrated.
+
 ### Pieces
 
 A map offers the pieces of the tileset its data names (see

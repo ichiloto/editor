@@ -35,6 +35,10 @@ enum Modal: string
     case RENAME_CONFIRMATION = 'rename_confirmation';
     case LAYER_EDIT = 'layer_edit';
     /**
+     * The count prompt for inserting rows or columns into the map.
+     */
+    case LINE_INSERT = 'line_insert';
+    /**
      * The Ctrl+P command palette. Opens above the Database screen and the
      * main shell, below the safety modals.
      */
