@@ -37,6 +37,7 @@ use Ichiloto\Editor\Database\ConditionEditor;
 use Ichiloto\Editor\Field\NpcInspector;
 use Ichiloto\Editor\Field\MapBgmVariants;
 use Ichiloto\Editor\Field\MapEncounters;
+use Ichiloto\Editor\Field\NpcCollection;
 use Ichiloto\Editor\Field\NpcReferences;
 use Ichiloto\Editor\Field\ProjectNpc;
 use Ichiloto\Editor\Database\WorldWriteEditor;
@@ -2273,6 +2274,10 @@ final class Editor
         $this->npcInspector->commit();
         $after = $map->getNpcs();
 
+        if ($fieldId === 'name') {
+            $after = $this->followNpcNameWithId($map, $after, $index);
+        }
+
         if ($after->toMapData() === $before->toMapData()) {
             // A same-value edit: no history, no dirt.
             $this->refreshNpcInspector();
@@ -2292,6 +2297,43 @@ final class Editor
                 $this->selectNpc($index);
             },
         ));
+    }
+
+    /**
+     * Gives a renamed NPC the id its new name derives, as long as nothing
+     * refers to it yet: an id something names stays, so doors, routes and
+     * cinematics keep finding the NPC, and the status says what names it.
+     *
+     * @return NpcCollection The map's NPCs after the rename.
+     */
+    private function followNpcNameWithId(ProjectMap $map, NpcCollection $npcs, int $index): NpcCollection
+    {
+        $npc = $npcs->get($index);
+        $id = $npc?->getId();
+
+        if ($npc === null || $id === null || $id === '') {
+            return $npcs;
+        }
+
+        $derived = $npcs->withRemoved($index)->uniqueIdFor($npc->getName());
+
+        if ($derived === $id) {
+            return $npcs;
+        }
+
+        $references = $this->workspace instanceof ProjectWorkspace ? new NpcReferences($this->workspace)->describe($map, $id) : [];
+
+        if ($references !== []) {
+            $this->setStatus(sprintf('Renamed. Its id stays %s: %s names it.', $id, implode(', ', $references)));
+
+            return $npcs;
+        }
+
+        $renamed = $npcs->withReplaced($index, $npc->withId($derived));
+        $map->setNpcs($renamed);
+        $this->setStatus(sprintf('Renamed. Its id is now %s.', $derived), StatusLevel::SUCCESS);
+
+        return $renamed;
     }
 
     /**
@@ -2724,7 +2766,7 @@ final class Editor
             sprintf('New NPC at (%d, %d)', $tile['x'], $tile['y']),
             '',
             sprintf('Name: %s', $this->npcNameBuffer),
-            $preview !== '' ? sprintf('Id:   %s', $preview) : 'Id:   (derived from the name, once)',
+            $preview !== '' ? sprintf('Id:   %s', $preview) : 'Id:   (derived from the name)',
             '',
             '  Enter creates it, Esc cancels.',
         ];

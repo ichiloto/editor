@@ -546,7 +546,7 @@ it('refuses to delete an NPC that a move_route names, and says where', function 
 
 // -- Inspector: every field through the shared pane ----------------------
 
-it('edits name, sprite, coordinates and movement without touching the id, hiding wander bounds while fixed', function () {
+it('edits name, sprite, coordinates and movement, hiding wander bounds while fixed', function () {
     [$root, $path] = npcProject([['id' => 'a', 'name' => 'Ann', 'sprite' => 'A', 'x' => 2, 'y' => 1]]);
     $editor = npcEditor($root);
     $map = npcMap($editor);
@@ -562,7 +562,8 @@ it('edits name, sprite, coordinates and movement without touching the id, hiding
     setNpcField($editor, 'movement', 'wander');
 
     $npc = $map->getNpcs()->get(0);
-    expect($npc?->getId())->toBe('a')
+    // Nothing names Ann, so her id follows her new name.
+    expect($npc?->getId())->toBe('annabel')
         ->and($npc?->getName())->toBe('Annabel')
         ->and($npc?->getSprite())->toBe('<fg=green>a</>')
         ->and($npc?->getX())->toBe(5)
@@ -594,6 +595,51 @@ it('edits name, sprite, coordinates and movement without touching the id, hiding
     setNpcField($editor, 'name', 'Annabel');
     expect(getEditorProperty($editor, 'history')->count())->toBe($before);
 });
+
+it('re-derives an NPC\'s id from its new name while nothing refers to it, in the same undo step', function () {
+    [$root] = npcProject([['id' => 'gate-guard', 'name' => 'Gate Guard', 'sprite' => 'G', 'x' => 6, 'y' => 3]]);
+    $editor = npcEditor($root);
+    $map = npcMap($editor);
+
+    createNpcThroughCanvas($editor, 2, 1, '');
+    expect($map->getNpcs()->get(1)?->getId())->toBe('new-npc');
+    callEditorMethod($editor, 'selectNpc', 1);
+    getEditorProperty($editor, 'toasts')->clear();
+    setNpcField($editor, 'name', 'Old Mara');
+    expect($map->getNpcs()->get(1)?->getId())->toBe('old-mara')
+        ->and(getEditorProperty($editor, 'statusMessage'))->toContain('old-mara');
+
+    // A name another NPC's id already takes is numbered, as at creation.
+    setNpcField($editor, 'name', 'Gate Guard');
+    expect($map->getNpcs()->get(1)?->getId())->toBe('gate-guard-2');
+
+    callEditorMethod($editor, 'performUndo');
+    expect($map->getNpcs()->get(1)?->getId())->toBe('old-mara')
+        ->and($map->getNpcs()->get(1)?->getName())->toBe('Old Mara');
+    callEditorMethod($editor, 'performUndo');
+    expect($map->getNpcs()->get(1)?->getId())->toBe('new-npc');
+});
+
+it('keeps the id of an NPC something already names when it is renamed, and says what', function (array $events, array $scriptOwner, string $names) {
+    [$root] = npcProject([
+        ['id' => 'mara', 'name' => 'Mara', 'sprite' => 'M', 'x' => 2, 'y' => 1],
+        ['id' => 'bob', 'name' => 'Bob', 'sprite' => 'B', 'x' => 6, 'y' => 3, ...$scriptOwner],
+    ], $events);
+    $editor = npcEditor($root);
+    $map = npcMap($editor);
+
+    callEditorMethod($editor, 'selectNpc', 0);
+    setNpcField($editor, 'name', 'Old Mara');
+
+    expect($map->getNpcs()->get(0)?->getId())->toBe('mara')
+        ->and($map->getNpcs()->get(0)?->getName())->toBe('Old Mara')
+        ->and(getEditorProperty($editor, 'statusMessage'))->toContain('Its id stays mara')->toContain($names);
+})->with([
+    'a dialogue event' => [['T' => ['class' => 'Ichiloto\\Engine\\Events\\Triggers\\DialogueEventTrigger', 'data' => ['npcId' => 'mara']]], [], 'test-map event T'],
+    'a camera target nested in a sequence' => [[], ['script' => [['type' => 'sequence', 'commands' => [
+        ['type' => 'camera', 'target' => ['kind' => 'npc', 'id' => 'mara']],
+    ]]]], 'NPC Bob script'],
+]);
 
 it('reads Movement and Sprite as their runtime defaults when unset', function () {
     [$root] = npcProject([['name' => 'Legacy', 'x' => 2, 'y' => 1]]);
@@ -883,7 +929,7 @@ it('places the saved checkpoint in the middle of history and follows it with und
     callEditorMethod($editor, 'dispatchInput', "\033[3~");
     callEditorMethod($editor, 'performUndo');
     callEditorMethod($editor, 'saveSelectedMap');
-    expect(ProjectWorkspace::fromProject($root)->getMapByIndex(0)->getNpcs()->ids())->toBe(['a']);
+    expect(ProjectWorkspace::fromProject($root)->getMapByIndex(0)->getNpcs()->ids())->toBe(['three']);
 });
 
 it('duplicates a map with its NPC collection and internal routes intact', function () {

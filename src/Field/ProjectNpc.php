@@ -17,9 +17,10 @@ namespace Ichiloto\Editor\Field;
  * (directional glyphs, either case of key accepted on load).
  *
  * The payload is kept verbatim: a key this class does not know survives
- * load, edit, save, and reload untouched. Identity is immutable after
- * creation — nothing here renames an id, because doors and routes that name
- * it would not follow.
+ * load, edit, save, and reload untouched. A field edit never changes the id:
+ * the editor gives an NPC a new id only through {@see withId()}, while
+ * nothing refers to it yet, because doors and routes that name an id would
+ * not follow.
  *
  * @package Ichiloto\Editor\Field
  */
@@ -397,6 +398,21 @@ final class ProjectNpc
      * @param string $id The new id.
      * @return self The copy.
      */
+    /**
+     * Returns a copy under another id, in the id's place, for an NPC whose
+     * name changed while nothing refers to it yet.
+     *
+     * @param string $id The new id.
+     * @return self The NPC under that id.
+     */
+    public function withId(string $id): self
+    {
+        $payload = $this->payload;
+        $payload['id'] = $id;
+
+        return new self($payload);
+    }
+
     public function asCopyWithId(string $id): self
     {
         $payload = $this->payload;

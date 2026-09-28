@@ -506,10 +506,13 @@ with a hint rather than painted under an NPC.
 
 `Enter` on an empty tile asks for the NPC's name first, and derives its stable
 `id` from that name - `Gate Guard` becomes `gate-guard`, numbered if the map
-already has one - because the id is what `move_route` and script diagnostics
-name, and it is **immutable after creation**: renaming the NPC, moving it, or
-changing its sprite never touches it. Duplicating assigns a fresh id from the
-name. An NPC authored without an id loads and edits normally, shows a
+already has one - because the id is what routes, dialogue events, cinematics
+and script diagnostics name. Renaming the NPC re-derives its id from the new
+name **while nothing refers to it**, so an NPC created as `New NPC` and named
+later gets the id its name suggests. Once an event, script, route or cinematic
+starting on the map names the id, it stays: a rename keeps it and the status
+says what names it. Moving the NPC or changing its sprite never touches it.
+Duplicating assigns a fresh id from the name. An NPC authored without an id loads and edits normally, shows a
 `! No stable id` row (`Enter` there assigns one from its name, the one time an
 id is ever written after creation, since nothing can yet name it), and
 validates with a warning that scripted movement cannot target it. Changing an
