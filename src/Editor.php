@@ -1106,7 +1106,7 @@ final class Editor
         $this->clampCursor();
         $this->clampCanvasOffsets();
         $this->clampInspectorSelection();
-        $this->setStatus(sprintf('Undid %s.', self::asPhrase($command->label)), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Undid %s.', self::asPhrase($command->label)), StatusLevel::INFO);
         $this->requestFullRender();
     }
 
@@ -1133,7 +1133,7 @@ final class Editor
         $this->clampCursor();
         $this->clampCanvasOffsets();
         $this->clampInspectorSelection();
-        $this->setStatus(sprintf('Redid %s.', self::asPhrase($command->label)), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Redid %s.', self::asPhrase($command->label)), StatusLevel::INFO);
         $this->requestFullRender();
     }
 
@@ -2331,7 +2331,7 @@ final class Editor
 
         $renamed = $npcs->withReplaced($index, $npc->withId($derived));
         $map->setNpcs($renamed);
-        $this->setStatus(sprintf('Renamed. Its id is now %s.', $derived), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Renamed. Its id is now %s.', $derived), StatusLevel::INFO);
 
         return $renamed;
     }
@@ -2486,7 +2486,7 @@ final class Editor
         $id = $before->uniqueIdFor($npc->getName());
         $map->setNpcs($before->withReplaced($index, $npc->asCopyWithId($id)));
         $this->recordNpcCollectionChange($map, $index, $before, sprintf('Assign NPC id %s', $id));
-        $this->setStatus(sprintf('Assigned the stable id "%s" to %s.', $id, $npc->getName()), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Assigned the stable id "%s" to %s.', $id, $npc->getName()), StatusLevel::INFO);
     }
 
     /**
@@ -2808,7 +2808,7 @@ final class Editor
                 $this->selectNpc(null);
             },
         ));
-        $this->setStatus(sprintf('Created %s. Its id is %s.', $name, $id), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Created %s. Its id is %s.', $name, $id), StatusLevel::INFO);
         $this->focusedPane = self::FOCUS_INSPECTOR;
         $this->requestFullRender();
     }
@@ -2906,7 +2906,7 @@ final class Editor
                 $this->selectNpc($index);
             },
         ));
-        $this->setStatus(sprintf('Moved %s to %d,%d.', $npc->getName(), $x, $y), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Moved %s to %d,%d.', $npc->getName(), $x, $y), StatusLevel::INFO);
         $this->requestFullRender();
     }
 
@@ -2953,7 +2953,7 @@ final class Editor
                 $this->selectNpc(null);
             },
         ));
-        $this->setStatus(sprintf('Duplicated as %s (id %s).', $copy->getName(), $id), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Duplicated as %s (id %s).', $copy->getName(), $id), StatusLevel::INFO);
         $this->requestFullRender();
     }
 
@@ -3008,7 +3008,7 @@ final class Editor
                 $this->selectNpc($index);
             },
         ));
-        $this->setStatus(sprintf('Deleted %s.', $npc->getName()), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Deleted %s.', $npc->getName()), StatusLevel::INFO);
         $this->requestFullRender();
     }
 
@@ -5546,7 +5546,7 @@ final class Editor
 
             $this->setStatus(
                 sprintf('Playtest finished (%s at %d,%d).', $selectedMap->mapId, $this->cursorX, $this->cursorY),
-                StatusLevel::SUCCESS,
+                StatusLevel::INFO,
             );
         } catch (Throwable $throwable) {
             $this->setErrorStatus($throwable, 'Playtest');
@@ -5610,7 +5610,7 @@ final class Editor
         $this->canvasToolAnchor = null;
         $this->canvasSelection = null;
         $this->piecePlacement = null;
-        $this->setStatus('Workspace refreshed.', StatusLevel::SUCCESS);
+        $this->setStatus('Workspace refreshed.', StatusLevel::INFO);
         $this->requestFullRender();
     }
 
@@ -6682,7 +6682,7 @@ final class Editor
         $this->databaseSelectedClassIndex = $classIndex;
         $this->databaseFocus = self::DATABASE_FOCUS_LIST;
         $this->databaseSelectedSettingIndex = 0;
-        $this->setStatus(sprintf('Went to class %s (Ctrl+B goes back).', $className), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Went to class %s (Ctrl+B goes back).', $className), StatusLevel::INFO);
         $this->renderDatabaseArea(includeRoot: true);
     }
 
@@ -6737,7 +6737,7 @@ final class Editor
         $this->databaseSelectedAnimationIndex = $animationIndex;
         $this->databaseFocus = self::DATABASE_FOCUS_LIST;
         $this->databaseSelectedSettingIndex = 0;
-        $this->setStatus(sprintf('Went to animation %s (Ctrl+B goes back).', $matchedName), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Went to animation %s (Ctrl+B goes back).', $matchedName), StatusLevel::INFO);
         $this->renderDatabaseArea(includeRoot: true);
     }
 
@@ -6789,7 +6789,7 @@ final class Editor
         $this->clampCursor();
         $this->syncViewportToCursor();
         $this->clampInspectorSelection();
-        $this->setStatus(sprintf('Went to %s (Ctrl+B goes back).', $destination), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Went to %s (Ctrl+B goes back).', $destination), StatusLevel::INFO);
         $this->renderSelectionDependentArea();
     }
 
@@ -8783,7 +8783,7 @@ final class Editor
             $this->clampCursor();
             $this->clampCanvasOffsets();
             $this->clampInspectorSelection();
-            $this->setStatus(sprintf('%s updated.', $field['label'] ?? 'Field'), StatusLevel::SUCCESS);
+            $this->setStatus(sprintf('%s updated.', $field['label'] ?? 'Field'), StatusLevel::INFO);
         } catch (Throwable $throwable) {
             $this->setErrorStatus($throwable, sprintf('%s edit', $field['label'] ?? 'Field'));
         }
@@ -8951,7 +8951,7 @@ final class Editor
             $this->clampCursor();
             $this->clampCanvasOffsets();
             $this->clampInspectorSelection();
-            $this->setStatus(sprintf('%s updated.', $field['label'] ?? 'Field'), StatusLevel::SUCCESS);
+            $this->setStatus(sprintf('%s updated.', $field['label'] ?? 'Field'), StatusLevel::INFO);
         } catch (Throwable $throwable) {
             $this->setErrorStatus($throwable, sprintf('%s edit', $field['label'] ?? 'Field'));
         }
@@ -9290,7 +9290,7 @@ final class Editor
         $this->setSelectedRecordIndex($index);
         $this->databaseSelectedSettingIndex = 0;
         $this->databaseFocus = self::DATABASE_FOCUS_SETTINGS;
-        $this->setStatus(sprintf('Created a new %s.', $database->schema->entryNoun), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Created a new %s.', $database->schema->entryNoun), StatusLevel::INFO);
         $this->renderDatabaseArea();
         if ($database->schema->key === 'skits') {
             $this->selectNewSkitActor(0);
@@ -9341,7 +9341,7 @@ final class Editor
         }
 
         $this->setSelectedRecordIndex($copyIndex);
-        $this->setStatus(sprintf('Duplicated the %s.', $database->schema->entryNoun), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Duplicated the %s.', $database->schema->entryNoun), StatusLevel::INFO);
         $this->renderDatabaseArea();
     }
 
@@ -9394,7 +9394,7 @@ final class Editor
             'Moved the %s %s.',
             $database->schema->entryNoun,
             $step < 0 ? 'up' : 'down',
-        ), StatusLevel::SUCCESS);
+        ), StatusLevel::INFO);
         $this->renderDatabaseArea();
     }
 
@@ -9434,7 +9434,7 @@ final class Editor
                 static fn() => $database->removeChoiceOption($recordIndex, $framePath, $commandIndex, $optionIndex),
             ));
             $this->selectDatabaseFieldById(sprintf('%s%dOption%dText', $subList->prefix, $commandIndex, $optionIndex));
-            $this->setStatus(sprintf('Added option %d.', $optionIndex + 1), StatusLevel::SUCCESS);
+            $this->setStatus(sprintf('Added option %d.', $optionIndex + 1), StatusLevel::INFO);
             $this->renderDatabaseArea();
             $this->beginDatabaseEdit();
 
@@ -9455,7 +9455,7 @@ final class Editor
             static fn() => $database->removeFrameCommand($recordIndex, $framePath, $commandIndex),
         ));
         $this->selectDatabaseFieldById(sprintf('%s%dType', $subList->prefix, $commandIndex));
-        $this->setStatus(sprintf('Added %s %d.', $subList->singular, $commandIndex + 1), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Added %s %d.', $subList->singular, $commandIndex + 1), StatusLevel::INFO);
         $this->renderDatabaseArea();
     }
 
@@ -9494,7 +9494,7 @@ final class Editor
                 $armCount > 0
                     ? sprintf('Removed option %d and its %d commands.', $optionIndex + 1, $armCount)
                     : sprintf('Removed option %d.', $optionIndex + 1),
-                StatusLevel::SUCCESS,
+                StatusLevel::INFO,
             );
             $this->renderDatabaseArea();
 
@@ -9517,7 +9517,7 @@ final class Editor
             static fn() => $database->removeFrameCommand($recordIndex, $framePath, $commandIndex),
             static fn() => $database->insertFrameCommand($recordIndex, $framePath, $commandIndex, $removed),
         ));
-        $this->setStatus(sprintf('Removed %s %d.', $subList->singular, $commandIndex + 1), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Removed %s %d.', $subList->singular, $commandIndex + 1), StatusLevel::INFO);
         $this->renderDatabaseArea();
     }
 
@@ -9679,7 +9679,7 @@ final class Editor
             static fn() => $database->removeSubItem($recordIndex, $entryIndex),
         ));
 
-        $this->setStatus(sprintf('Added %s %d.', $subList->singular, $entryIndex + 1), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Added %s %d.', $subList->singular, $entryIndex + 1), StatusLevel::INFO);
         $this->renderDatabaseArea();
         if ($database->schema->key === 'skits') {
             $this->selectNewSkitActor($entryIndex);
@@ -9745,7 +9745,7 @@ final class Editor
         ));
 
         $this->databaseSelectedSettingIndex = 0;
-        $this->setStatus(sprintf('Removed %s %d.', $subList->singular, $entryIndex + 1), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Removed %s %d.', $subList->singular, $entryIndex + 1), StatusLevel::INFO);
         $this->renderDatabaseArea();
     }
 
@@ -9797,7 +9797,7 @@ final class Editor
         ));
         $this->setStatus(
             sprintf('Added %s %d.', $context['list']->singular, $nestedIndex + 1),
-            StatusLevel::SUCCESS,
+            StatusLevel::INFO,
         );
         $this->renderDatabaseArea();
     }
@@ -9840,7 +9840,7 @@ final class Editor
         );
         $this->setStatus(
             sprintf('Removed %s %d.', $context['list']->singular, $nestedIndex + 1),
-            StatusLevel::SUCCESS,
+            StatusLevel::INFO,
         );
         $this->renderDatabaseArea();
     }
@@ -10124,7 +10124,7 @@ final class Editor
             }
         }
 
-        $this->setStatus(sprintf('Reward item %d added.', $slot + 1), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Reward item %d added.', $slot + 1), StatusLevel::INFO);
         $this->renderDatabasePanes(['list', 'settings', 'cue', 'frames', 'preview']);
         $this->beginDatabaseEdit();
     }
@@ -10159,7 +10159,7 @@ final class Editor
             static fn() => $questDatabase->removeRewardItem($questIndex, $slot),
             static fn() => $questDatabase->insertRewardItem($questIndex, $slot, $removed),
         ));
-        $this->setStatus(sprintf('Reward item %d removed (%s).', $slot + 1, $removed), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Reward item %d removed (%s).', $slot + 1, $removed), StatusLevel::INFO);
         $this->renderDatabasePanes(['list', 'settings', 'cue', 'frames', 'preview']);
     }
 
@@ -10189,7 +10189,7 @@ final class Editor
             static fn() => $questDatabase->insertObjective($questIndex, $objectiveIndex, $objective),
             static fn() => $questDatabase->removeObjective($questIndex, $objectiveIndex),
         ));
-        $this->setStatus(sprintf('Objective %d added.', $objectiveIndex + 1), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Objective %d added.', $objectiveIndex + 1), StatusLevel::INFO);
         $this->renderDatabasePanes(['list', 'settings', 'cue', 'frames', 'preview']);
     }
 
@@ -10246,7 +10246,7 @@ final class Editor
             static fn() => $questDatabase->removeObjective($questIndex, $objectiveIndex),
             static fn() => $questDatabase->insertObjective($questIndex, $objectiveIndex, $removed),
         ));
-        $this->setStatus(sprintf('Objective %d removed.', $objectiveIndex + 1), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Objective %d removed.', $objectiveIndex + 1), StatusLevel::INFO);
         $this->renderDatabasePanes(['list', 'settings', 'cue', 'frames', 'preview']);
     }
 
@@ -11517,7 +11517,7 @@ final class Editor
         ));
 
         if (is_string($newId)) {
-            $this->setStatus(sprintf('Renamed. Its id is now %s.', $newId), StatusLevel::SUCCESS);
+            $this->setStatus(sprintf('Renamed. Its id is now %s.', $newId), StatusLevel::INFO);
 
             return;
         }
@@ -11716,7 +11716,7 @@ final class Editor
 
         try {
             $this->applyDatabaseFieldValueRecorded($field, $encoded);
-            $this->setStatus(sprintf('%s updated.', $label), StatusLevel::SUCCESS);
+            $this->setStatus(sprintf('%s updated.', $label), StatusLevel::INFO);
         } catch (Throwable $throwable) {
             $this->setErrorStatus($throwable, sprintf('%s edit', $label));
         }
@@ -11866,7 +11866,7 @@ final class Editor
 
         try {
             $this->applyDatabaseFieldValueRecorded($field, $encoded);
-            $this->setStatus(sprintf('%s updated.', $label), StatusLevel::SUCCESS);
+            $this->setStatus(sprintf('%s updated.', $label), StatusLevel::INFO);
         } catch (Throwable $throwable) {
             $this->setErrorStatus($throwable, sprintf('%s edit', $label));
         }
@@ -12028,7 +12028,7 @@ final class Editor
 
         try {
             $this->applyDatabaseFieldValueRecorded($field, $encoded);
-            $this->setStatus(sprintf('%s updated.', $label), StatusLevel::SUCCESS);
+            $this->setStatus(sprintf('%s updated.', $label), StatusLevel::INFO);
         } catch (Throwable $throwable) {
             $this->setErrorStatus($throwable, sprintf('%s edit', $label));
         }
@@ -12234,7 +12234,7 @@ final class Editor
 
             if ($selectedMap instanceof ProjectMap) {
                 $this->applyMapBgmVariantValue($selectedMap, $field, ConditionCodec::decodeAll($encoded));
-                $this->setStatus(sprintf('%s updated.', $label), StatusLevel::SUCCESS);
+                $this->setStatus(sprintf('%s updated.', $label), StatusLevel::INFO);
             }
 
             $this->renderSelectionDependentArea();
@@ -12261,7 +12261,7 @@ final class Editor
 
         try {
             $this->applyDatabaseFieldValueRecorded($field, $encoded);
-            $this->setStatus(sprintf('%s updated.', $label), StatusLevel::SUCCESS);
+            $this->setStatus(sprintf('%s updated.', $label), StatusLevel::INFO);
         } catch (Throwable $throwable) {
             $this->setErrorStatus($throwable, sprintf('%s edit', $label));
         }
@@ -12548,7 +12548,7 @@ final class Editor
                 $this->applyDatabaseFieldValueRecorded($field, implode(', ', $members));
                 $this->setStatus(
                     $position === false ? sprintf('%s: added %s.', $label, $selected) : sprintf('%s: removed %s.', $label, $selected),
-                    StatusLevel::SUCCESS,
+                    StatusLevel::INFO,
                 );
                 $this->renderDatabasePanes(['list', 'settings', 'cue', 'frames', 'preview']);
 
@@ -12561,7 +12561,7 @@ final class Editor
                 $selected === (string) ($field['noneLabel'] ?? '(None)')
                     ? sprintf('%s cleared.', $label)
                     : sprintf('%s set to %s.', $label, $selected),
-                StatusLevel::SUCCESS,
+                StatusLevel::INFO,
             );
         } catch (Throwable $throwable) {
             $this->setErrorStatus($throwable, sprintf('%s selection', $label));
@@ -12590,7 +12590,7 @@ final class Editor
 
         try {
             $this->applyDatabaseFieldValueRecorded($field, $this->databaseEditBuffer);
-            $this->setStatus(sprintf('%s updated.', $field['label'] ?? 'Field'), StatusLevel::SUCCESS);
+            $this->setStatus(sprintf('%s updated.', $field['label'] ?? 'Field'), StatusLevel::INFO);
         } catch (Throwable $throwable) {
             $this->setErrorStatus($throwable, sprintf('%s edit', $field['label'] ?? 'Field'));
         }
@@ -13532,7 +13532,7 @@ final class Editor
         }
 
         $this->applyMapDataValue($context['map'], [MapBgmVariants::KEY], $variants->withVariantAdded(), 'Music variant add');
-        $this->setStatus(sprintf('Added variant %d. Pick its track; it stays inactive until one is chosen.', $variants->count() + 1), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Added variant %d. Pick its track; it stays inactive until one is chosen.', $variants->count() + 1), StatusLevel::INFO);
         $this->clampInspectorSelection();
         $this->renderSelectionDependentArea();
 
@@ -13570,7 +13570,7 @@ final class Editor
         }
 
         $this->applyMapDataValue($context['map'], [MapBgmVariants::KEY], $variants->withVariantRemovedAt($context['index']), 'Music variant remove');
-        $this->setStatus(sprintf('Removed variant %d.', $context['index'] + 1), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Removed variant %d.', $context['index'] + 1), StatusLevel::INFO);
         $this->clampInspectorSelection();
         $this->renderSelectionDependentArea();
 
@@ -13619,7 +13619,7 @@ final class Editor
             }
         }
 
-        $this->setStatus(sprintf('Moved variant %s. The first matching variant wins.', $step < 0 ? 'up' : 'down'), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Moved variant %s. The first matching variant wins.', $step < 0 ? 'up' : 'down'), StatusLevel::INFO);
         $this->renderSelectionDependentArea();
     }
 
@@ -15273,7 +15273,7 @@ final class Editor
         }
 
         $this->applyMapDataValue($context['map'], [MapEncounters::KEY], $block, 'Encounter troop add');
-        $this->setStatus(sprintf('Added %s to the encounter table.', $available[0]), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Added %s to the encounter table.', $available[0]), StatusLevel::INFO);
         $this->clampInspectorSelection();
         $this->renderSelectionDependentArea();
 
@@ -15319,7 +15319,7 @@ final class Editor
             $block === null
                 ? sprintf('Removed %s; this map no longer has random encounters.', $removed)
                 : sprintf('Removed %s from the encounter table.', $removed),
-            StatusLevel::SUCCESS,
+            StatusLevel::INFO,
         );
         $this->clampInspectorSelection();
         $this->renderSelectionDependentArea();
@@ -15440,7 +15440,7 @@ final class Editor
         array_splice($entries, $position, 0, [self::blankLike($template)]);
 
         $this->applyInspectorListChange($selectedMap, $marker, $list['path'], $entries, 'Add list entry');
-        $this->setStatus(sprintf('Added %s %d.', $this->describeListPath($list['path']), $position + 1), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Added %s %d.', $this->describeListPath($list['path']), $position + 1), StatusLevel::INFO);
     }
 
     /**
@@ -15479,7 +15479,7 @@ final class Editor
 
         $this->applyInspectorListChange($selectedMap, $marker, $list['path'], $entries, 'Remove list entry');
         $this->clampInspectorSelection();
-        $this->setStatus(sprintf('Removed %s %d.', $this->describeListPath($list['path']), $list['index'] + 1), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Removed %s %d.', $this->describeListPath($list['path']), $list['index'] + 1), StatusLevel::INFO);
     }
 
     /**
@@ -17824,7 +17824,8 @@ final class Editor
      */
     private function renderFooterStatusColor(): void
     {
-        if ($this->statusLevel === StatusLevel::INFO) {
+        // The idle message stays plain; every message shown takes its level's colour.
+        if ($this->toasts->current() === null) {
             return;
         }
 

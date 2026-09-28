@@ -79,6 +79,12 @@ is what the code draws rather than a sketch of it:
   and, on its second line, the cursor, the viewport, and the most recent
   message.
 
+A message's colour says what happened: blue for an update, including every
+edit, which stays in memory until you save; green only when something reached
+disk (a save, or a command that writes files at once) or a check passed;
+yellow for a warning; red for an error. Edits never show green, so green
+always means saved, and the header's `*` shows what is still unsaved.
+
 Each panel writes its own keys into its bottom border, and shortens them on a
 narrow terminal rather than cutting one in half - so what a panel offers is
 always on the panel. `?` lists everything at any width.
