@@ -320,7 +320,15 @@ A map may name a tileset in its data file (`'tileset' => 'home'`, read from
 cell, so each of its rows is exactly as wide as the map's row in terminal
 columns. The TUI never displays tiles or paints single tiles; painting them
 belongs to the GUI editor. It writes tiles only when it stamps a
-[piece](#pieces), and otherwise keeps them intact:
+[piece](#pieces) or moves glyphs the tiles move with, and otherwise keeps them
+intact:
+
+- Each tile layer moves with one gameplay layer: the one the map data names
+  (`'tileLayers' => ['floor' => ['movesWith' => 'buildings']]`), or else the
+  one whose tileset pieces write it, when only one does. Copying, cutting and
+  pasting a block on that gameplay layer carries its tiles cell for cell, in
+  the same undo step, so a moved chest or room keeps its art. Other tile
+  layers, and blocks on the event layer, leave tiles where they are.
 
 - Resizing the map crops or pads every tile layer with empty tiles (`0`) in the
   same undo step and save as the terminal layers. A resized tile layer is
@@ -608,7 +616,8 @@ a cut, and a paste each undo in a single `Ctrl+Z`. Repeated pastes are separate
 steps, so you can stamp freely.
 
 The clipboard is layer-tagged: a block lifted from the event layer refuses to
-land on tiles.
+land on tiles. A block lifted from a gameplay layer carries the graphical
+tiles that move with that layer, and a paste replaces the tiles under it.
 
 Current limit: the canvas draws no on-screen preview of a pending line,
 rectangle, or selection rectangle. The footer reports the anchor and selection

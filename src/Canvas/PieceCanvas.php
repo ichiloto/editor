@@ -282,18 +282,19 @@ trait PieceCanvas
             $this->renderCanvasArea();
             return;
         }
-        $this->recordPieceCommand('Piece stamp', $map, $stroke, $tilesBefore, $tilesAfter);
+        $this->recordStrokeWithTiles('Piece stamp', $map, $stroke, $tilesBefore, $tilesAfter);
         $this->setStatus(sprintf('Stamped %s at (%d, %d). Enter stamps again; Esc when done.', $piece->name, $x, $y));
         $this->renderCanvasArea();
     }
 
     /**
-     * Records a piece's glyph stroke and tile layer change as one undo step.
+     * Records a glyph stroke and the tile layer change made with it, such as
+     * a stamped piece or a pasted block, as one undo step.
      *
      * @param array<string, string> $tilesBefore Tile layer sources before the change.
      * @param array<string, string> $tilesAfter Tile layer sources after it.
      */
-    private function recordPieceCommand(string $label, ProjectMap $map, PaintStrokeCommand $stroke, array $tilesBefore, array $tilesAfter): void
+    private function recordStrokeWithTiles(string $label, ProjectMap $map, PaintStrokeCommand $stroke, array $tilesBefore, array $tilesAfter): void
     {
         $this->recordCommand(new GenericCommand($label,
             static function () use ($stroke, $map, $tilesAfter): void {
@@ -413,7 +414,7 @@ trait PieceCanvas
         if (! $stroke->hasChanges() && $tilesAfter === $tilesBefore) {
             return false;
         }
-        $this->recordPieceCommand($label, $map, $stroke, $tilesBefore, $tilesAfter);
+        $this->recordStrokeWithTiles($label, $map, $stroke, $tilesBefore, $tilesAfter);
 
         return true;
     }

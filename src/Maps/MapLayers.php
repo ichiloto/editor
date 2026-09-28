@@ -293,6 +293,56 @@ final class MapLayers
         $this->tileSources = $sources;
     }
 
+    /**
+     * The names of the map's tile layers, in order.
+     *
+     * @return list<string>
+     */
+    public function getTileLayerNames(): array
+    {
+        $names = [];
+        foreach (array_keys($this->tileSources) as $path) {
+            if (preg_match(MapGraphics::FILENAME_PATTERN, basename($path), $matches) === 1) {
+                $names[] = $matches['name'];
+            }
+        }
+
+        return $names;
+    }
+
+    /**
+     * Reads the entries of the named tile layers over a rectangle, by row,
+     * so they can move with the glyphs above them. A layer the map does not
+     * have is left out; a cell past the map's edge reads `0`.
+     *
+     * @param list<string> $names Tile layer names.
+     * @return array<string, list<list<string>>> Entries by row, keyed by tile layer name.
+     * @throws MapSourceRefusal When a layer cannot be read or does not match the map.
+     */
+    public function readTileEntries(array $names, int $x, int $y, int $width, int $height): array
+    {
+        $set = $this->getLayerSet();
+        $read = [];
+        foreach ($names as $name) {
+            $path = $this->findTileLayerPath($name, $this->tileSources);
+            if ($path === null) {
+                continue;
+            }
+            $entries = TileLayerSource::readEntries($this->tileSources[$path], $this->getDisplayPath($path), $set, 'moving its tiles');
+            $rows = [];
+            for ($row = 0; $row < $height; $row++) {
+                $cells = [];
+                for ($column = 0; $column < $width; $column++) {
+                    $cells[] = $entries[$y + $row][$x + $column] ?? (string) TileId::EMPTY;
+                }
+                $rows[] = $cells;
+            }
+            $read[$name] = $rows;
+        }
+
+        return $read;
+    }
+
     /** @param array<string, string> $tileSources Tile layer sources by path, as {@see getTileSources()} returns them. */
     public function restoreTileSources(array $tileSources): void
     {

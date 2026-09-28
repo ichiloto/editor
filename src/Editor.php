@@ -99,6 +99,7 @@ use Ichiloto\Engine\Entities\Roles\ParameterCurveGenerator;
 use Ichiloto\Engine\Events\Enumerations\ChestType;
 use Ichiloto\Engine\Events\Enumerations\LootType;
 use Ichiloto\Engine\Quests\QuestObjectiveType;
+use Ichiloto\Engine\Rendering\Tilesets\TileId;
 use RuntimeException;
 if (! class_exists(__NAMESPACE__ . chr(92) . 'Animation', false)) { class_alias('Ichiloto' . chr(92) . 'Engine' . chr(92) . 'Animations' . chr(92) . 'Animation', __NAMESPACE__ . chr(92) . 'Animation'); }
 if (! class_exists(__NAMESPACE__ . chr(92) . 'AnimationCue', false)) { class_alias('Ichiloto' . chr(92) . 'Engine' . chr(92) . 'Animations' . chr(92) . 'AnimationCue', __NAMESPACE__ . chr(92) . 'AnimationCue'); }
@@ -4844,6 +4845,41 @@ final class Editor
     }
 
     /**
+     * Writes cells onto the active layer and the tile cells that move with
+     * them as one undo step. A tile layer that cannot take its cells refuses
+     * the whole change.
+     *
+     * @param array<int, array{x: int, y: int, symbol: string, color?: string|null, style?: array{prefix: string, suffix: string}}> $writes The cells to write.
+     * @param array<string, list<array{x: int, y: int, entry: string}>> $tiles The tile entry for each cell, keyed by tile layer name.
+     * @return int|null The number of glyph cells that changed, or null when nothing was changed.
+     */
+    private function applyCanvasWritesWithTiles(ProjectMap $map, array $writes, array $tiles, string $label): ?int
+    {
+        if ($tiles === []) {
+            return $this->applyCanvasWrites($map, $writes, $label);
+        }
+
+        $this->finalizeActiveStroke();
+        $tilesBefore = $map->getTileLayerSources();
+
+        try {
+            $map->writeTileCells($tiles);
+        } catch (MapSourceRefusal $refusal) {
+            $this->setStatus($refusal->getMessage(), StatusLevel::WARN);
+            return null;
+        }
+
+        $tilesAfter = $map->getTileLayerSources();
+        [$stroke, $changed] = $this->writeCanvasCells($map, $this->getActiveCanvasLayer(), $writes, $label);
+
+        if ($stroke->hasChanges() || $tilesAfter !== $tilesBefore) {
+            $this->recordStrokeWithTiles($label, $map, $stroke, $tilesBefore, $tilesAfter);
+        }
+
+        return $changed;
+    }
+
+    /**
      * Writes cells onto one layer and returns the stroke that undoes them,
      * unrecorded, so a caller can record it alone or as part of a larger
      * step. Cells outside the layer are skipped.
@@ -5267,7 +5303,28 @@ final class Editor
             $selection['x'] + $selection['width'] - 1,
             $selection['y'] + $selection['height'] - 1,
         );
-        $changed = $this->paintCanvasCells($selectedMap, $cells, ' ', 'cut selection');
+        // The tiles that moved into the clipboard with the glyphs leave too.
+        $clears = array_map(
+            static fn(array $tiles): array => array_map(
+                static fn(array $cell): array => ['entry' => (string) TileId::EMPTY] + $cell,
+                $tiles,
+            ),
+            $this->clipboard->projectTiles($selection['x'], $selection['y'], $selectedMap->getWidth(), $selectedMap->getHeight()),
+        );
+        $changed = $this->applyCanvasWritesWithTiles(
+            $selectedMap,
+            array_map(
+                fn(array $cell): array => ['x' => $cell['x'], 'y' => $cell['y'], 'symbol' => ' ', 'color' => $this->selectedPaintColor],
+                $cells,
+            ),
+            $clears,
+            'cut selection',
+        );
+
+        if ($changed === null) {
+            $this->renderCanvasArea();
+            return;
+        }
         $this->setStatus(sprintf(
             'Cut %d x %d (%d cell%s cleared).',
             $this->clipboard->getWidth(),
@@ -5315,7 +5372,22 @@ final class Editor
             $styles[] = $styleRow;
         }
 
-        $this->clipboard->store($rows, $this->getActiveCanvasLayer(), $styles);
+        // The tiles that move with this layer's glyphs travel with the block.
+        try {
+            $tiles = $this->editingMode === self::MODE_NPC ? [] : $selectedMap->readTileEntries(
+                $selectedMap->getTileLayersMovingWith($this->getActiveCanvasLayer()),
+                $selection['x'],
+                $selection['y'],
+                $selection['width'],
+                $selection['height'],
+            );
+        } catch (MapSourceRefusal $refusal) {
+            $this->setStatus($refusal->getMessage(), StatusLevel::WARN);
+            $this->renderFooter();
+            return 0;
+        }
+
+        $this->clipboard->store($rows, $this->getActiveCanvasLayer(), $styles, $tiles);
 
         return $selection['width'] * $selection['height'];
     }
@@ -5359,7 +5431,17 @@ final class Editor
             $selectedMap->getWidth(),
             $selectedMap->getHeight(),
         );
-        $changed = $this->applyCanvasWrites($selectedMap, $writes, 'pasted selection');
+        // Tiles land only on the layers that move with this map's layer.
+        $tiles = array_intersect_key(
+            $this->clipboard->projectTiles($this->cursorX, $this->cursorY, $selectedMap->getWidth(), $selectedMap->getHeight()),
+            array_flip($selectedMap->getTileLayersMovingWith($this->getActiveCanvasLayer())),
+        );
+        $changed = $this->applyCanvasWritesWithTiles($selectedMap, $writes, $tiles, 'pasted selection');
+
+        if ($changed === null) {
+            $this->renderCanvasArea();
+            return;
+        }
         $this->setStatus(sprintf(
             'Stamped %d x %d at (%d, %d): %d cell%s changed.',
             $this->clipboard->getWidth(),

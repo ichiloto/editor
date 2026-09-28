@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Validation;
 
+use Ichiloto\Editor\Maps\MapLayers;
 use Ichiloto\Editor\Maps\TileLayerSource;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Engine\Field\MapGraphics;
@@ -77,12 +78,14 @@ final class MapGraphicsValidator
         }
 
         try {
-            MapGraphics::readLayerOffsets($map->getMapDataField([MapGraphics::SETTINGS_KEY]), $names, $map->mapId);
+            MapGraphics::readLayersMovingWith($map->getMapDataField([MapGraphics::SETTINGS_KEY]), $names,
+                array_column(array_filter($map->getLayers(), static fn(array $layer): bool =>
+                    $layer['id'] !== MapLayers::EVENT && ! $layer['decoration']), 'name'), $map->mapId);
         } catch (InvalidArgumentException $error) {
             $issues[] = Issue::error(
                 $map->mapId,
                 $error->getMessage(),
-                sprintf("Name a tile layer in graphics/ and give it 'offset' => [across, down]. %s", self::GLYPH_FALLBACK),
+                sprintf("Name a tile layer in graphics/ and give it 'offset' => [across, down] or 'movesWith' => a gameplay layer. %s", self::GLYPH_FALLBACK),
             );
         }
     }

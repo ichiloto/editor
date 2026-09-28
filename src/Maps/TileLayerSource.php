@@ -144,6 +144,18 @@ final class TileLayerSource
     }
 
     /**
+     * Reads a tile layer's entries by row, as a layer that must match the map.
+     *
+     * @param MapLayerSet $layers The map's terminal layers.
+     * @return list<list<string>>
+     * @throws MapSourceRefusal When it cannot be read or does not match the map.
+     */
+    public static function readEntries(string $source, string $displayPath, MapLayerSet $layers, string $action): array
+    {
+        return self::readMatchingLayer($source, $displayPath, $layers, $action)->getEntries();
+    }
+
+    /**
      * Reads a tile layer that must match the map before it changes.
      *
      * @throws MapSourceRefusal When it cannot be read or does not match the map.

@@ -494,6 +494,56 @@ final class ProjectMap
     }
 
     /**
+     * The tile layers whose tiles move with a gameplay layer's glyphs: those
+     * the map data names it for (`'tileLayers' => ['floor' => ['movesWith' =>
+     * 'buildings']]`), and otherwise those that only this layer's tileset
+     * pieces write. The event layer moves no tiles, and neither does any
+     * layer while the settings are invalid, which validation reports.
+     *
+     * @return list<string> Tile layer names.
+     */
+    public function getTileLayersMovingWith(string $layerId): array
+    {
+        $layer = $this->layers->getLayer($layerId);
+        $names = $this->layers->getTileLayerNames();
+        if ($layer['id'] === MapLayers::EVENT || $layer['decoration'] || $names === []) {
+            return [];
+        }
+        $gameplay = array_column(array_filter($this->layers->getLayers(), static fn(array $candidate): bool =>
+            $candidate['id'] !== MapLayers::EVENT && ! $candidate['decoration']), 'name');
+        try {
+            $named = MapGraphics::readLayersMovingWith($this->getMapDataField([MapGraphics::SETTINGS_KEY]), $names, $gameplay, $this->mapId);
+        } catch (InvalidArgumentException) {
+            return [];
+        }
+        $writers = [];
+        try {
+            foreach ($this->loadTileset()?->pieces ?? [] as $piece) {
+                foreach (array_keys($piece->connects === null ? $piece->tiles : $piece->shapeTiles) as $name) {
+                    $writers[$name][$piece->layer] = true;
+                }
+            }
+        } catch (InvalidArgumentException | RuntimeException) {
+            // A tileset that cannot load says nothing about its pieces.
+        }
+
+        return array_values(array_filter($names, static fn(string $name): bool =>
+            ($named[$name] ?? (count($writers[$name] ?? []) === 1 ? array_key_first($writers[$name]) : null)) === $layer['name']));
+    }
+
+    /**
+     * Reads the entries of the named tile layers over a rectangle, by row.
+     *
+     * @param list<string> $names Tile layer names.
+     * @return array<string, list<list<string>>> Entries by row, keyed by tile layer name.
+     * @throws MapSourceRefusal When a layer cannot be read or does not match the map.
+     */
+    public function readTileEntries(array $names, int $x, int $y, int $width, int $height): array
+    {
+        return $this->layers->readTileEntries($names, $x, $y, $width, $height);
+    }
+
+    /**
      * Restores the tile layers {@see getTileLayerSources()} returned, for
      * undo and redo.
      *
