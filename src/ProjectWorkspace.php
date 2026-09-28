@@ -293,6 +293,7 @@ final readonly class ProjectWorkspace
      * @param int $offsetX The horizontal preview offset.
      * @param int $offsetY The vertical preview offset.
      * @param bool $showEventOverlay Whether event markers should be rendered.
+     * @param array<int, array<int, string|null>> $stampPreview A stamp's footprint, as ProjectMap::renderPreview() takes it.
      * @return string[]
      */
     public function getCanvasLines(
@@ -310,6 +311,7 @@ final readonly class ProjectWorkspace
         ?string $activeLayer = null,
         bool $terminalPreview = false,
         bool $dimInactive = false,
+        array $stampPreview = [],
     ): array
     {
         $selectedMap = $this->getMapByIndex($selectedMapIndex);
@@ -331,7 +333,7 @@ final readonly class ProjectWorkspace
         }
 
         $previewHeight = max(0, $height - self::CANVAS_HEADER_ROWS);
-        $previewLines = $selectedMap->renderPreview($width, $previewHeight, $offsetX, $offsetY, $showEventOverlay, $showNpcOverlay, $selectedNpcIndex, $selectedNpcSprite, $layerVisibility, $activeLayer, $terminalPreview, $dimInactive);
+        $previewLines = $selectedMap->renderPreview($width, $previewHeight, $offsetX, $offsetY, $showEventOverlay, $showNpcOverlay, $selectedNpcIndex, $selectedNpcSprite, $layerVisibility, $activeLayer, $terminalPreview, $dimInactive, $stampPreview);
 
         return [
             sprintf('Preview: %s', $selectedMap->mapId),

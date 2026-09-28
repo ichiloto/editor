@@ -148,7 +148,8 @@ exist.
 `Esc` backs out exactly one level, everywhere:
 
 - a field edit returns to the pane
-- a pending canvas anchor is dropped, then a selection is cleared
+- piece placement ends, a pending canvas anchor is dropped, then a selection
+  is cleared
 - a filter query is cleared before its list closes
 - an overlay or dialog closes
 - the Database screen closes
@@ -219,14 +220,60 @@ force for terminal edits. Untouched layer files are never written; unchanged
 rows retain their authored bytes, and all changed files are saved or rolled
 back together.
 
+### Pieces
+
+A map offers the pieces of the tileset its data names (see
+[Map Graphics](#map-graphics)): whole items such as a bed or a table, so a map
+is built from items instead of single glyphs. In Normal mode on the canvas, `P`
+opens the piece picker, one entry per piece with its footprint in cells, the
+gameplay layer its glyphs go on and the tile layers it writes, for example
+`1 x 2 · fixtures · tiles: furniture`. Move with the arrows or `j` / `k`, press
+`/` to filter by name, `Enter` to choose and `Esc` to cancel. The command
+palette offers the same picker as `Pieces: Choose a piece to place`. When the
+map names no tileset, its tileset has no pieces, or the tileset cannot be
+loaded, the status line says so and nothing opens.
+
+Choosing a piece starts placing it, in Map mode. The canvas previews the
+piece's glyphs in reverse video with its top-left cell at the cursor, and the
+canvas border shows `PIECE <name>  Enter:Stamp  Esc:Done`. The arrows move the
+piece; a Normal-mode click moves the cursor, and the piece with it, to the
+clicked cell. `Enter` stamps the piece and keeps it for the next stamp; `Esc`
+ends placement. Entering Paint mode, choosing a tool or a layer, switching to
+Event or NPC mode and selecting another map also end it.
+
+A stamp is one undo step. It writes the piece's glyphs on the gameplay layer
+the piece names, whichever layer the canvas is editing, in the brush colour as
+painting does, and its tiles on the tile layers it names. A space glyph and a
+`0` tile leave their cells as they are; tile halves such as `42L` are written
+as authored. A tile layer the map does not have yet is created as
+`graphics/NN.name.tiles.php`, ordered after the map's tile layers and empty
+elsewhere. The terminal never shows the tiles, but a map built from pieces
+draws correctly graphically without a second pass. A stamp that cannot be made
+whole changes nothing: the map has no gameplay layer with the piece's name,
+the footprint does not fit inside the map at the cursor (ragged rows
+included), or a tile layer it names cannot be read or does not match the map.
+Undo and redo restore glyphs and tiles exactly. `Ctrl+S` saves the changed
+terminal and tile layer files in the map's one transaction; untouched files
+are not written, and a changed tile layer is rewritten as a literal nowdoc
+that keeps its leading comment.
+
+A project adds pieces to its tileset (`assets/Data/Tilesets/<id>.php`) under
+`pieces`, keyed by id, each with a `name`, the gameplay `layer` for its
+`glyphs` (rows of one-cell characters) and optional `tiles` keyed by tile
+layer name, with rows over the same footprint:
+`'bed' => ['name' => 'Bed', 'layer' => 'fixtures', 'glyphs' => ['=', '='], 'tiles' => ['furniture' => ['32', '40']]]`.
+The Engine's `docs/graphical-field.md` (Pieces) holds the contract. Every
+stamp reads the tileset again, so the tileset stays the one source of pieces.
+
 ### Map Graphics
 
 A map may name a tileset in its data file (`'tileset' => 'home'`, read from
 `assets/Data/Tilesets/home.php`) and keep RPG Maker tile layers in
 `graphics/NN.name.tiles.php`. A tile layer holds one tile identity per map
 cell, so each of its rows is exactly as wide as the map's row in terminal
-columns. The TUI never paints or displays tiles; painting them belongs to the
-GUI editor. It keeps them intact:
+columns. The TUI never displays tiles or paints single tiles; painting them
+belongs to the GUI editor. It writes tiles only when it stamps a
+[piece](#pieces), and otherwise keeps them intact:
 
 - Resizing the map crops or pads every tile layer with empty tiles (`0`) in the
   same undo step and save as the terminal layers. A resized tile layer is
@@ -305,6 +352,7 @@ and the GUI itself are not delivered by this TUI boundary correction. See the
 | `e` | Switch to Event mode (paint event markers) |
 | `n` / `F3` | Toggle NPC mode (place and edit the map's NPCs) |
 | `c` | Open the character map |
+| `P` | Choose a tileset piece to place (see [Pieces](#pieces)) |
 | `o` | Open the brush colour picker (see [Colour](#colour)) |
 | `b` / `l` / `r` / `R` / `s` | Choose a tool: Brush, Line, Rectangle, Filled Rectangle, Select |
 | `f` | Flood fill from the cursor (same as `Ctrl+F`) |
@@ -316,8 +364,8 @@ and the GUI itself are not delivered by this TUI boundary correction. See the
 | `u` / `U` | Undo / redo (same as `Ctrl+Z` / `Ctrl+Y`) |
 | `?` | Open the help overlay |
 | `Arrows` | Move the cursor |
-| `Enter` | Apply the active tool |
-| `Esc` | Pop one canvas level: a pending tool anchor, then the selection |
+| `Enter` | Apply the active tool, or stamp the piece being placed |
+| `Esc` | Pop one canvas level: piece placement, a pending tool anchor, then the selection |
 
 Typing an unassigned printable key in Normal mode paints nothing; the status
 line points to `i` instead.

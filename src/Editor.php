@@ -110,6 +110,7 @@ use Throwable;
 final class Editor
 {
     use \Ichiloto\Editor\Canvas\LayerCanvas;
+    use \Ichiloto\Editor\Canvas\PieceCanvas;
     use CutscenesWorkspace;
     use CutsceneOutlinePane;
     use CutscenePreviewPane;
@@ -1370,6 +1371,7 @@ final class Editor
             // other panes' typing untouched.
             KeyBinding::when($this->isNormalModeCommand('i'), $this->enterPaintMode(...), 'i', 'Canvas: enter Paint mode (every key paints; Esc returns to Normal)'),
             KeyBinding::when($this->isNormalModeCommand('L'), fn() => $this->openCanvasLayerPicker(), 'L', 'Canvas: choose the layer to edit'),
+            KeyBinding::when($this->isNormalModeCommand('P'), fn() => $this->openPiecePicker(), 'P', 'Canvas: choose a tileset piece to place (Enter stamps it, Esc when done)'),
             KeyBinding::when($this->isNormalModeCommand(']'), fn() => $this->cycleCanvasLayer(), ']', 'Canvas: next layer'),
             KeyBinding::when($this->isNormalModeCommand('['), fn() => $this->cycleCanvasLayer(-1), '[', 'Canvas: previous layer'),
             KeyBinding::when($this->isNormalModeCommand('v'), fn() => $this->toggleCanvasLayerVisibility(), 'v', 'Canvas: toggle selected layer visibility'),
@@ -1760,6 +1762,11 @@ final class Editor
             // returns to the Map layer.
             if ($this->inputMode === self::INPUT_PAINT) {
                 $this->leavePaintMode();
+                return;
+            }
+
+            if ($this->getActivePiecePlacement() !== null) {
+                $this->endPiecePlacement('Piece placement ended.');
                 return;
             }
 
@@ -3774,6 +3781,8 @@ final class Editor
             return;
         }
 
+        $this->piecePlacement = null;
+
         $this->selectedAssetIndex = $selectedIndex;
         $this->cursorX = 0;
         $this->cursorY = 0;
@@ -3818,7 +3827,9 @@ final class Editor
         $this->cursorY = $nextCursorY;
         $this->syncViewportToCursor();
 
-        if ($previousOffsetX !== $this->canvasOffsetX || $previousOffsetY !== $this->canvasOffsetY) {
+        // A piece's preview follows the cursor, so the canvas repaints.
+        if ($previousOffsetX !== $this->canvasOffsetX || $previousOffsetY !== $this->canvasOffsetY
+            || $this->getActivePiecePlacement() !== null) {
             $this->renderCanvasArea();
             return;
         }
@@ -3849,6 +3860,9 @@ final class Editor
     {
         $this->finalizeActiveStroke();
         $this->facadeBrush = null;
+        if ($mode !== self::MODE_MAP) {
+            $this->piecePlacement = null;
+        }
         $this->editingMode = $mode;
         $this->showEventOverlay = $mode === self::MODE_EVENT;
 
@@ -4687,6 +4701,7 @@ final class Editor
             return;
         }
 
+        $this->piecePlacement = null;
         $this->inputMode = self::INPUT_PAINT;
         $this->statusMessage = 'Paint mode: every key paints its glyph. Esc returns to Normal.';
         $this->renderFocusDependentArea();
@@ -4718,6 +4733,7 @@ final class Editor
     private function selectCanvasTool(CanvasTool $tool): void
     {
         $this->facadeBrush = null;
+        $this->piecePlacement = null;
         $this->canvasTool = $tool;
         $this->canvasToolAnchor = null;
 
@@ -4793,17 +4809,39 @@ final class Editor
         }
 
         $this->finalizeActiveStroke();
-        $stroke = new PaintStrokeCommand($map, $this->getActiveCanvasLayer(), $label);
+        [$stroke, $changed] = $this->writeCanvasCells($map, $this->getActiveCanvasLayer(), $writes, $label);
+
+        if ($stroke->hasChanges()) {
+            $this->recordCommand($stroke);
+        }
+
+        return $changed;
+    }
+
+    /**
+     * Writes cells onto one layer and returns the stroke that undoes them,
+     * unrecorded, so a caller can record it alone or as part of a larger
+     * step. Cells outside the layer are skipped.
+     *
+     * @param ProjectMap $map The target map.
+     * @param string $layer The layer id to write.
+     * @param array<int, array{x: int, y: int, symbol: string, color?: string|null, style?: array{prefix: string, suffix: string}}> $writes The cells to write.
+     * @param string $label The undo/status label.
+     * @return array{0: PaintStrokeCommand, 1: int} The stroke and the number of cells that actually changed.
+     */
+    private function writeCanvasCells(ProjectMap $map, string $layer, array $writes, string $label): array
+    {
+        $stroke = new PaintStrokeCommand($map, $layer, $label);
         $changed = 0;
 
         foreach ($writes as $write) {
-            if (! $map->hasLayerCell($this->getActiveCanvasLayer(), $write['x'], $write['y'])) {
+            if (! $map->hasLayerCell($layer, $write['x'], $write['y'])) {
                 continue;
             }
 
-            $oldSymbol = $this->readCanvasSymbol($map, $write['x'], $write['y']);
+            $oldSymbol = $map->getLayerSymbol($layer, $write['x'], $write['y']);
 
-            $oldStyle = $map->getLayerCellStyle($this->getActiveCanvasLayer(), $write['x'], $write['y']);
+            $oldStyle = $map->getLayerCellStyle($layer, $write['x'], $write['y']);
             [$newPrefix, $newSuffix] = isset($write['style'])
                 ? [$write['style']['prefix'], $write['style']['suffix']]
                 : $this->resolvePaintStyle(
@@ -4811,8 +4849,8 @@ final class Editor
                     $write['color'] ?? null,
                     $oldStyle,
                 );
-            $map->setLayerCell($this->getActiveCanvasLayer(), $write['x'], $write['y'], $write['symbol'], $newPrefix, $newSuffix);
-            $newSymbol = $this->readCanvasSymbol($map, $write['x'], $write['y']);
+            $map->setLayerCell($layer, $write['x'], $write['y'], $write['symbol'], $newPrefix, $newSuffix);
+            $newSymbol = $map->getLayerSymbol($layer, $write['x'], $write['y']);
             $stroke->appendCell(
                 $write['x'],
                 $write['y'],
@@ -4829,11 +4867,7 @@ final class Editor
             }
         }
 
-        if ($stroke->hasChanges()) {
-            $this->recordCommand($stroke);
-        }
-
-        return $changed;
+        return [$stroke, $changed];
     }
 
     /**
@@ -4899,6 +4933,7 @@ final class Editor
      */
     private function cycleCanvasTool(int $step): void
     {
+        $this->piecePlacement = null;
         $this->canvasTool = $this->canvasTool->cycle($step);
         $this->canvasToolAnchor = null;
 
@@ -4976,6 +5011,11 @@ final class Editor
      */
     private function applyCanvasToolAtCursor(): void
     {
+        if ($this->getActivePiecePlacement() !== null) {
+            $this->stampPiece();
+            return;
+        }
+
         if ($this->facadeBrush !== null) {
             $this->stampFacadeBrush();
             return;
@@ -5415,6 +5455,7 @@ final class Editor
         $this->clipboard->clear();
         $this->canvasToolAnchor = null;
         $this->canvasSelection = null;
+        $this->piecePlacement = null;
         $this->setStatus('Workspace refreshed.', StatusLevel::SUCCESS);
         $this->requestFullRender();
     }
@@ -5767,6 +5808,7 @@ final class Editor
     {
         $items = [
             ...$this->buildLayerPaletteItems(),
+            ...$this->buildPiecePaletteItems(),
             new PaletteItem('Save Map', 'Ctrl+S', fn() => $this->saveSelectedMap()),
             new PaletteItem('Move Map to Derived Path', '', fn() => $this->beginExplicitMapMove()),
             new PaletteItem('Save All', 'Ctrl+A', fn() => $this->saveAllAssets()),
@@ -7774,6 +7816,12 @@ final class Editor
                 $this->selectCanvasLayer((string) $selectedEntry['value']);
                 $this->setStatus(sprintf('Editing the %s layer.', $selectedEntry['label']));
                 $this->renderCanvasArea();
+                return;
+            }
+
+            if (($field['canvasPiece'] ?? false) === true) {
+                $this->closeEventOptionDialog();
+                $this->choosePiece((string) $selectedEntry['value']);
                 return;
             }
 
@@ -18212,9 +18260,12 @@ final class Editor
                     'PAINT: every key paints its glyph  Esc:Normal',
                     'PAINT  Esc:Normal',
                 ),
+                $this->getActivePiecePlacement() !== null => $this->getPiecePlacementHelp($layout['centerWidth']) ?? '',
                 default => $this->fitHelp(
                     $layout['centerWidth'],
-                    'i:Paint L:Layer v:Hide d:Dim o:Colour ?:Help',
+                    'i:Paint L:Layer P:Piece v:Hide d:Dim o:Colour ?:Help',
+                    'i:Paint L:Layer P:Piece v:Hide d:Dim',
+                    'i:Paint L:Layer P:Piece ?:Help',
                     'i:Paint L:Layer v:Hide d:Dim',
                     'i:Paint L:Layer ?:Help',
                     'i:Paint  m:Map  e:Event  n:NPC  c:Chars  o:Colour  ?:Help',
@@ -18242,6 +18293,7 @@ final class Editor
                     $this->getActiveCanvasLayer(),
                     false,
                     $this->getCanvasLayerState()['dim'],
+                    $this->getPiecePreviewCells(),
                 ) ?? [],
                 $contentWidth,
                 $contentHeight

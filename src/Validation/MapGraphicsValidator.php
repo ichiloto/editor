@@ -132,7 +132,7 @@ final class MapGraphicsValidator
      */
     private static function readLayers(ProjectMap $map, array $sources, array &$issues): array
     {
-        $hint = 'Repair the file by hand or in the GUI editor; the TUI never paints tiles. ' . self::GLYPH_FALLBACK;
+        $hint = 'Repair the file by hand or in the GUI editor; the TUI does not repair tile layers. ' . self::GLYPH_FALLBACK;
 
         if (count($sources) > MapGraphics::MAX_LAYERS) {
             $issues[] = Issue::error($map->mapId, sprintf('It has more than %d tile layers.', MapGraphics::MAX_LAYERS), $hint);

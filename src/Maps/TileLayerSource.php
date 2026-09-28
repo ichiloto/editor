@@ -15,9 +15,10 @@ use InvalidArgumentException;
 /**
  * A map's graphical tile layer files in `graphics/`, as the TUI keeps them.
  *
- * The TUI never paints or displays tiles; painting belongs to the GUI
- * editor. It carries these files with their map and changes one only when
- * the map's dimensions change, reading it exactly as the Engine does.
+ * The TUI never displays tiles or paints single tiles; painting belongs to
+ * the GUI editor. It carries these files with their map and changes one only
+ * when the map's dimensions change or a tileset piece is stamped, reading it
+ * exactly as the Engine does.
  */
 final class TileLayerSource
 {
@@ -66,15 +67,7 @@ final class TileLayerSource
      */
     public static function resize(string $source, string $displayPath, MapLayerSet $layers, int $width, int $height, ?string $baseline = null): string
     {
-        try {
-            $layer = self::readLayer($source, $displayPath);
-            $layer->assertMatches($layers);
-        } catch (InvalidArgumentException $error) {
-            throw new MapSourceRefusal(sprintf(
-                '%s Repair it before resizing the map; nothing was changed.',
-                rtrim($error->getMessage(), '.') . '.',
-            ), previous: $error);
-        }
+        $layer = self::readMatchingLayer($source, $displayPath, $layers, 'resizing the map');
 
         $empty = (string)TileId::EMPTY;
         $entries = $layer->getEntries();
@@ -85,6 +78,87 @@ final class TileLayerSource
         unset($row);
         $rows = array_pad($rows, $height, array_fill(0, $width, $empty));
 
+        return self::rewrite($rows, $entries, $source, $displayPath, $baseline);
+    }
+
+    /**
+     * Writes a piece's tile entries into a tile layer with its top-left cell
+     * at (x, y). A `0` entry leaves its cell as it was; every other entry,
+     * a named tile half included, replaces the cell's entry. The result is
+     * rewritten as {@see resize()} rewrites a layer.
+     *
+     * @param list<list<string>> $rows Tile entries by row, as a piece holds them.
+     * @param MapLayerSet $layers The map's terminal layers.
+     * @throws MapSourceRefusal When the layer cannot be read, does not match the map, or the entries fall outside it; nothing is changed.
+     */
+    public static function writeEntries(string $source, string $displayPath, MapLayerSet $layers, int $x, int $y, array $rows, ?string $baseline = null): string
+    {
+        $layer = self::readMatchingLayer($source, $displayPath, $layers, 'stamping a piece');
+
+        $entries = $layer->getEntries();
+        $written = $entries;
+        foreach ($rows as $row => $cells) {
+            foreach ($cells as $column => $entry) {
+                if (! isset($entries[$y + $row][$x + $column])) {
+                    throw new MapSourceRefusal(sprintf('%s has no cell at (%d, %d); nothing was changed.', $displayPath, $x + $column, $y + $row));
+                }
+                if ($entry !== (string)TileId::EMPTY) {
+                    $written[$y + $row][$x + $column] = $entry;
+                }
+            }
+        }
+
+        return self::rewrite($written, $entries, $source, $displayPath, $baseline);
+    }
+
+    /**
+     * Reads a tile layer that must match the map before it changes.
+     *
+     * @throws MapSourceRefusal When it cannot be read or does not match the map.
+     */
+    private static function readMatchingLayer(string $source, string $displayPath, MapLayerSet $layers, string $action): MapTileLayer
+    {
+        try {
+            $layer = self::readLayer($source, $displayPath);
+            $layer->assertMatches($layers);
+        } catch (InvalidArgumentException $error) {
+            throw new MapSourceRefusal(sprintf(
+                '%s Repair it before %s; nothing was changed.',
+                rtrim($error->getMessage(), '.') . '.',
+                $action,
+            ), previous: $error);
+        }
+
+        return $layer;
+    }
+
+    /**
+     * A new tile layer for the map: every cell empty (`0`), each row as wide
+     * as the map's row.
+     *
+     * @param MapLayerSet $layers The map's terminal layers.
+     */
+    public static function createEmpty(MapLayerSet $layers): string
+    {
+        $body = implode("\n", array_map(
+            static fn(array $row): string => implode(' ', array_fill(0, count($row), (string)TileId::EMPTY)),
+            $layers->getComposedGrid(),
+        ));
+
+        return MapGridSource::buildSource($body, self::PREFERRED_MARKER);
+    }
+
+    /**
+     * The source for a layer's new entries. Unchanged entries keep the
+     * source's bytes and entries that read back as the baseline keep the
+     * baseline's; otherwise the layer is rewritten as a canonical literal
+     * nowdoc, keeping its leading comment and marker.
+     *
+     * @param list<list<string>> $rows The entries the layer should hold.
+     * @param list<list<string>> $entries The entries the source holds.
+     */
+    private static function rewrite(array $rows, array $entries, string $source, string $displayPath, ?string $baseline): string
+    {
         if ($rows === $entries) {
             return $source;
         }

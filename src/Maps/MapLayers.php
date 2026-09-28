@@ -15,7 +15,8 @@ use Ichiloto\Engine\Field\MapLayer;
 /**
  * Editable layers and their file-set boundary. Layer ids survive renaming.
  * The map's graphical tile layers share the boundary: the TUI never paints
- * them, but resizes, relocates and removes them with the map.
+ * single tiles, but writes a stamped piece's tiles and resizes, relocates and
+ * removes them with the map.
  */
 final class MapLayers
 {
@@ -221,6 +222,84 @@ final class MapLayers
             $layer['grid']->resize($width, $height);
         }
         $this->tileSources = $tileSources;
+    }
+
+    /**
+     * Writes tile entries into the named tile layers with their top-left
+     * cell at (x, y), as one stamped piece: a `0` entry leaves its cell as it
+     * was. A layer the map does not have yet is created in `graphics/` with
+     * the next order after its tile layers, every cell empty. Every layer is
+     * written before anything changes, so one that cannot take the entries
+     * refuses them all.
+     *
+     * @param array<string, list<list<string>>> $tiles Entries by row, keyed by tile layer name.
+     * @throws MapSourceRefusal When a layer cannot be read, does not match the map, cannot be created, or the entries fall outside it.
+     */
+    public function writeTileEntries(array $tiles, int $x, int $y): void
+    {
+        if ($tiles === []) {
+            return;
+        }
+        $set = $this->getLayerSet();
+        $sources = $this->tileSources;
+        foreach ($tiles as $name => $rows) {
+            $path = $this->findTileLayerPath((string) $name, $sources) ?? $this->buildTileLayerPath((string) $name, $sources);
+            $sources[$path] = TileLayerSource::writeEntries($sources[$path] ?? TileLayerSource::createEmpty($set),
+                $this->getDisplayPath($path), $set, $x, $y, $rows, $this->baselineSources[$path] ?? null);
+        }
+        ksort($sources, SORT_STRING);
+        $this->tileSources = $sources;
+    }
+
+    /** @param array<string, string> $tileSources Tile layer sources by path, as {@see getTileSources()} returns them. */
+    public function restoreTileSources(array $tileSources): void
+    {
+        $this->tileSources = $tileSources;
+    }
+
+    /**
+     * The path of the tile layer with this name, or null when there is none.
+     *
+     * @param array<string, string> $sources Tile layer sources by path.
+     * @throws MapSourceRefusal When more than one tile layer has the name.
+     */
+    private function findTileLayerPath(string $name, array $sources): ?string
+    {
+        $paths = array_values(array_filter(array_keys($sources), static fn(string $path): bool =>
+            preg_match(MapGraphics::FILENAME_PATTERN, basename($path), $matches) === 1 && $matches['name'] === $name));
+        if (count($paths) > 1) {
+            throw new MapSourceRefusal(sprintf('Tile layers %s share the name %s; rename one so a piece can name it. Nothing was changed.',
+                implode(' and ', array_map($this->getDisplayPath(...), $paths)), $name));
+        }
+
+        return $paths[0] ?? null;
+    }
+
+    /**
+     * The path for a new tile layer, ordered after the map's tile layers.
+     *
+     * @param array<string, string> $sources Tile layer sources by path.
+     * @throws MapSourceRefusal When the map cannot take another tile layer.
+     */
+    private function buildTileLayerPath(string $name, array $sources): string
+    {
+        $orders = [];
+        foreach (array_keys($sources) as $path) {
+            if (preg_match(MapGraphics::FILENAME_PATTERN, basename($path), $matches) === 1) {
+                $orders[] = (int) $matches['order'];
+            }
+        }
+        $order = $orders === [] ? 0 : max($orders) + 1;
+        if (count($sources) >= MapGraphics::MAX_LAYERS || $order > 99) {
+            throw new MapSourceRefusal(sprintf('Tile layer %s cannot be added: a map holds up to %d tile layers, ordered 00 to 99. Nothing was changed.',
+                $name, MapGraphics::MAX_LAYERS));
+        }
+        $path = sprintf('%s/%s/%02d.%s.tiles.php', $this->directory, MapGraphics::DIRECTORY, $order, $name);
+        if (preg_match(MapGraphics::FILENAME_PATTERN, basename($path)) !== 1) {
+            throw new MapSourceRefusal("'{$name}' is not a tile layer name. Nothing was changed.");
+        }
+
+        return $path;
     }
 
     /** A tile layer path relative to its map, as refusals name it. */

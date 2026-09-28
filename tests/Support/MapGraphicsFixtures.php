@@ -25,11 +25,12 @@ function writeTilesetTestPng(string $path, int $width, int $height): void
 
 /**
  * Writes tileset `home` with an A2 sheet (16 x 12 tiles) and a B sheet
- * (16 x 16 tiles) at 2 pixels per tile.
+ * (16 x 16 tiles) at 2 pixels per tile, and any pieces given.
  *
  * @param array<string, string> $sheets Asset-relative PNG paths by sheet name.
+ * @param array<string, array<string, mixed>> $pieces Pieces by id, as a tileset file lists them.
  */
-function writeTestTileset(string $root, string $id = 'home', ?array $sheets = null): void
+function writeTestTileset(string $root, string $id = 'home', ?array $sheets = null, array $pieces = []): void
 {
     $sheets ??= ['A2' => 'Graphics/Tilesets/Home_A2.png', 'B' => 'Graphics/Tilesets/Home_B.png'];
     writeTilesetTestPng($root . '/assets/Graphics/Tilesets/Home_A2.png', 32, 24);
@@ -37,7 +38,8 @@ function writeTestTileset(string $root, string $id = 'home', ?array $sheets = nu
     if (! is_dir($root . '/assets/Data/Tilesets')) {
         mkdir($root . '/assets/Data/Tilesets', 0o777, true);
     }
-    file_put_contents($root . "/assets/Data/Tilesets/{$id}.php", "<?php\n\nreturn " . var_export(['name' => ucfirst($id), 'sheets' => $sheets], true) . ";\n");
+    $data = ['name' => ucfirst($id), 'sheets' => $sheets] + ($pieces === [] ? [] : ['pieces' => $pieces]);
+    file_put_contents($root . "/assets/Data/Tilesets/{$id}.php", "<?php\n\nreturn " . var_export($data, true) . ";\n");
 }
 
 /** Writes one tile layer in graphics/ as an authored literal nowdoc. */

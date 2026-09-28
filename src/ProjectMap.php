@@ -24,6 +24,7 @@ use Ichiloto\Engine\Field\MapLayerSet;
 use Ichiloto\Engine\Field\MapCollisionResolver;
 use Ichiloto\Engine\IO\Console\TerminalText;
 use Ichiloto\Engine\IO\Console\SgrStyleState;
+use Ichiloto\Engine\Rendering\Tilesets\Tileset;
 use Ichiloto\Editor\Maps\EditableGrid;
 use Ichiloto\Editor\Maps\MapLayers;
 use InvalidArgumentException;
@@ -452,14 +453,60 @@ final class ProjectMap
     }
 
     /**
-     * The map's graphical tile layers in `graphics/`, unsaved resizes
-     * included. The TUI keeps them intact and never paints them.
+     * The map's graphical tile layers in `graphics/`, unsaved resizes and
+     * stamped pieces included. The TUI never paints single tiles.
      *
      * @return array<string, string> Source bytes by path.
      */
     public function getTileLayerSources(): array
     {
         return $this->layers->getTileSources();
+    }
+
+    /**
+     * Writes a stamped piece's tile entries into the named tile layers with
+     * their top-left cell at (x, y), creating a tile layer the map does not
+     * have yet. A `0` entry leaves its cell as it was.
+     *
+     * @param array<string, list<list<string>>> $tiles Entries by row, keyed by tile layer name.
+     * @throws MapSourceRefusal When a layer cannot take the entries; nothing is changed.
+     */
+    public function writeTileEntries(array $tiles, int $x, int $y): void
+    {
+        $this->assertEditable();
+        $this->layers->writeTileEntries($tiles, $x, $y);
+        $this->touchState();
+    }
+
+    /**
+     * Restores the tile layers {@see getTileLayerSources()} returned, for
+     * undo and redo.
+     *
+     * @param array<string, string> $sources Source bytes by path.
+     */
+    public function restoreTileLayerSources(array $sources): void
+    {
+        $this->assertEditable();
+        $this->layers->restoreTileSources($sources);
+        $this->touchState();
+    }
+
+    /**
+     * Loads the tileset the map data names, or null when it names none.
+     *
+     * @throws InvalidArgumentException When the named tileset cannot be loaded.
+     */
+    public function loadTileset(): ?Tileset
+    {
+        $id = $this->getMapDataField(['tileset']);
+        if ($id === null) {
+            return null;
+        }
+        if (! is_string($id)) {
+            throw new InvalidArgumentException(sprintf('Its tileset is %s, not a tileset id.', get_debug_type($id)));
+        }
+
+        return Tileset::load($this->getAssetRoot(), $id);
     }
 
     /** The project's asset root, where tilesets and their sheets live. */
@@ -522,6 +569,9 @@ final class ProjectMap
      * @param int $offsetX The horizontal preview offset.
      * @param int $offsetY The vertical preview offset.
      * @param bool $showEventOverlay Whether event markers should be rendered.
+     * @param array<int, array<int, string|null>> $stampPreview A stamp's footprint by row and column,
+     *   drawn highlighted over the map and never painted: the glyph it would write, or null where it
+     *   leaves the map's cell as it is.
      * @return string[]
      */
     public function renderPreview(
@@ -537,6 +587,7 @@ final class ProjectMap
         ?string $activeLayer = null,
         bool $terminalPreview = false,
         bool $dimInactive = false,
+        array $stampPreview = [],
     ): array
     {
         if ($width < 1 || $height < 1) {
@@ -580,10 +631,19 @@ final class ProjectMap
                     continue;
                 }
 
+                if (isset($stampPreview[$row][$column])) {
+                    // A stamp's footprint shows what it would write, in
+                    // reverse video, over whatever the map holds there.
+                    $mergedSymbols[] = "\033[7m" . $stampPreview[$row][$column] . "\033[0m";
+                    continue;
+                }
+
                 $tileCell = $tileRow[$column] ?? null;
                 $tileSymbol = is_array($tileCell) ? $tileCell['symbol'] : ' ';
-                // A selected map-owned NPC marks the existing cell, never a replacement sprite.
-                $anchorHighlight = array_key_exists($column, $npcCells[$row] ?? []) ? "\033[7m" : '';
+                // A selected map-owned NPC, and a stamp's cell that keeps the map's
+                // glyph, mark the existing cell, never a replacement.
+                $anchorHighlight = array_key_exists($column, $npcCells[$row] ?? []) || array_key_exists($column, $stampPreview[$row] ?? [])
+                    ? "\033[7m" : '';
                 if (! $this->layers->legacy && is_array($tileCell)) {
                     $styled = TerminalText::formatStyles($tileCell['prefix'] . $anchorHighlight . $tileSymbol . $tileCell['suffix']);
                     $styled = ($tileCell['dim'] ?? false) ? "\033[2m" . $styled . "\033[0m" : $styled;

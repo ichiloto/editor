@@ -65,6 +65,7 @@ trait LayerCanvas
         $this->canvasToolAnchor = null;
         $this->canvasSelection = null;
         $this->facadeBrush = null;
+        $this->piecePlacement = null;
         $this->setCanvasLayerState('selected', $id);
         $this->setEditingMode($id === MapLayers::EVENT ? self::MODE_EVENT : self::MODE_MAP);
     }

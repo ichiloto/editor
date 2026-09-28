@@ -16,8 +16,9 @@ use Ichiloto\Engine\Field\MapGridSource;
 
 /**
  * A map's graphics/ tile layers belong to the GUI editor: the TUI never
- * paints or displays them, but carries them intact through resize,
- * duplicate, move and delete, and validates them as the Engine reads them.
+ * displays them or paints single tiles (it writes them only by stamping a
+ * tileset piece), but carries them intact through resize, duplicate, move
+ * and delete, and validates them as the Engine reads them.
  */
 
 /** @return list<string> The graphics issues reported for the test map. */
