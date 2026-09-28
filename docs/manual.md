@@ -187,7 +187,8 @@ gameplay (`NN.name.map.php`) layers and Events, with NPC overlays in their
 authoring context. Graphical decoration (`NN.name.deco.php`) never appears on
 the terminal canvas or in its layer selection, palette or inspector. In Normal
 mode, `L` opens the layer picker: the map's gameplay layers and Events, each
-marked visible or hidden and the one being edited. Type to filter, move with the
+marked visible or hidden and the one being edited, and last NPCs, which enters
+NPC mode. Type to filter, move with the
 arrows or `j` / `k`, and press `Enter` to edit that layer (`Esc` keeps the
 current one). The canvas title shows the layer being edited, and only that
 layer is painted. `[` and `]` still step to the previous or next layer, `v`

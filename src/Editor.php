@@ -138,6 +138,8 @@ final class Editor
     private const string MODE_MAP = 'map';
     private const string MODE_EVENT = 'event';
     private const string MODE_NPC = 'npc';
+    /** The layer picker's NPCs entry, which enters NPC mode. */
+    private const string NPC_LAYER_ENTRY = 'npcs';
     private const string DATABASE_CATEGORY_ACTORS = 'actors';
     private const string DATABASE_CATEGORY_CLASSES = 'classes';
     private const string DATABASE_CATEGORY_SKILLS = 'skills';
@@ -7841,6 +7843,10 @@ final class Editor
 
             if (($field['canvasLayer'] ?? false) === true) {
                 $this->closeEventOptionDialog();
+                if ($selectedEntry['value'] === self::NPC_LAYER_ENTRY) {
+                    $this->setEditingMode(self::MODE_NPC);
+                    return;
+                }
                 $this->selectCanvasLayer((string) $selectedEntry['value']);
                 $this->setStatus(sprintf('Editing the %s layer.', $selectedEntry['label']));
                 $this->renderCanvasArea();

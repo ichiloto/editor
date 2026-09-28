@@ -26,12 +26,30 @@ it('cycles only gameplay and event layers without stealing printable Paint-mode 
     }
 });
 
+it('offers NPCs in the layer picker, entering NPC mode', function () {
+    [$editor] = layeredCanvasEditor();
+    callEditorMethod($editor, 'dispatchInput', 'L');
+    $entries = getEditorProperty($editor, 'eventOptionDialogEntries');
+    expect(end($entries))->toMatchArray(['label' => 'NPCs', 'value' => 'npcs']);
+    callEditorMethod($editor, 'dispatchInput', '/');
+    foreach (['N', 'P', 'C', "\n", "\n"] as $key) {
+        callEditorMethod($editor, 'dispatchInput', $key);
+    }
+    expect(getEditorProperty($editor, 'editingMode'))->toBe('npc')
+        ->and(callEditorMethod($editor, 'getCanvasLayerTitle'))->toBe(' [NPCs]');
+    // Choosing a layer again leaves NPC mode.
+    callEditorMethod($editor, 'dispatchInput', "\033");
+    callEditorMethod($editor, 'dispatchInput', 'L');
+    callEditorMethod($editor, 'dispatchInput', "\n");
+    expect(getEditorProperty($editor, 'editingMode'))->not->toBe('npc');
+});
+
 it('chooses the layer to edit from its own picker with L, and L still paints in Paint mode', function () {
     [$editor, $map] = layeredCanvasEditor();
     callEditorMethod($editor, 'dispatchInput', 'L');
     $entries = getEditorProperty($editor, 'eventOptionDialogEntries');
     expect(getEditorProperty($editor, 'eventOptionDialogTitle'))->toBe('Layer')
-        ->and(array_column($entries, 'value'))->toBe(array_column(callEditorMethod($editor, 'getTerminalCanvasLayers'), 'id'))
+        ->and(array_column($entries, 'value'))->toBe([...array_column(callEditorMethod($editor, 'getTerminalCanvasLayers'), 'id'), 'npcs'])
         ->and(array_column($entries, 'label'))->toContain('Events')
         ->and($entries[0]['description'])->toContain('editing');
     // Down to the next layer, then Enter edits it.

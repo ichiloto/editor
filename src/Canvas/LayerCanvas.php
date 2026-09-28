@@ -36,8 +36,11 @@ trait LayerCanvas
     private function getCanvasLayerTitle(): string
     {
         $map = $this->getSelectedMap();
-        if ($map === null || $map->isLegacyMap() || $this->editingMode === self::MODE_NPC) {
+        if ($map === null || $map->isLegacyMap()) {
             return '';
+        }
+        if ($this->editingMode === self::MODE_NPC) {
+            return ' [NPCs]';
         }
         foreach ($this->getTerminalCanvasLayers() as $layer) {
             if ($layer['id'] === $this->getActiveCanvasLayer()) {
@@ -71,9 +74,10 @@ trait LayerCanvas
     }
 
     /**
-     * Opens the layer picker: the map's gameplay layers and Events, filterable
-     * by name, with the active layer selected. Enter makes the highlighted
-     * layer the one the canvas edits.
+     * Opens the layer picker: the map's gameplay layers, Events and NPCs,
+     * filterable by name, with what the canvas edits selected. Enter edits
+     * the highlighted layer, or enters NPC mode for NPCs, which are placed on
+     * the map like a layer though they are stored as the map's NPC list.
      */
     private function openCanvasLayerPicker(): void
     {
@@ -92,6 +96,18 @@ trait LayerCanvas
                 $layer['id'] === $active ? 'editing' : null,
             ])),
         ], $layers);
+        $npcs = $this->getSelectedMap()?->getNpcs()->count() ?? 0;
+        $entries[] = [
+            'label' => 'NPCs',
+            'value' => self::NPC_LAYER_ENTRY,
+            'description' => implode(' · ', array_filter([
+                sprintf('%d placed', $npcs),
+                $this->editingMode === self::MODE_NPC ? 'editing' : null,
+            ])),
+        ];
+        if ($this->editingMode === self::MODE_NPC) {
+            $active = self::NPC_LAYER_ENTRY;
+        }
         $this->finalizeActiveStroke();
         $this->optionDialogField = ['canvasLayer' => true];
         $this->eventOptionDialogMarker = null;
