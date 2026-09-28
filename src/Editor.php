@@ -4702,8 +4702,19 @@ final class Editor
         }
 
         $this->piecePlacement = null;
+        // Paint mode paints. Selecting is a Normal-mode job, so a Select tool
+        // left active from Normal mode must not turn typed glyphs into
+        // silent brush changes.
+        if ($this->canvasTool === CanvasTool::SELECT) {
+            $this->canvasTool = CanvasTool::BRUSH;
+            $this->canvasToolAnchor = null;
+            $this->canvasSelection = null;
+        }
         $this->inputMode = self::INPUT_PAINT;
-        $this->statusMessage = 'Paint mode: every key paints its glyph. Esc returns to Normal.';
+        $this->statusMessage = $this->canvasTool === CanvasTool::BRUSH
+            ? 'Paint mode: every key paints its glyph. Esc returns to Normal.'
+            : sprintf('Paint mode, %s tool: keys choose the glyph. %s Esc returns to Normal.',
+                $this->canvasTool->label(), $this->describeCanvasToolUsage());
         $this->renderFocusDependentArea();
     }
 
@@ -4739,6 +4750,9 @@ final class Editor
 
         if ($tool !== CanvasTool::SELECT) {
             $this->canvasSelection = null;
+        } elseif ($this->inputMode === self::INPUT_PAINT) {
+            // Selecting happens in Normal mode, where keys are commands.
+            $this->leavePaintMode();
         }
 
         $this->setStatus(sprintf('%s tool. %s', $tool->label(), $this->describeCanvasToolUsage()));
@@ -18257,8 +18271,10 @@ final class Editor
                 ),
                 $this->inputMode === self::INPUT_PAINT => $this->fitHelp(
                     $layout['centerWidth'],
-                    'PAINT: every key paints its glyph  Esc:Normal',
-                    'PAINT  Esc:Normal',
+                    ...($this->canvasTool === CanvasTool::BRUSH
+                        ? ['PAINT: every key paints its glyph  Esc:Normal', 'PAINT  Esc:Normal']
+                        : [sprintf('PAINT %s: keys choose the glyph  Enter:Anchor, then Draw  Esc:Normal', $this->canvasTool->label()),
+                            sprintf('PAINT %s  Enter:Anchor/Draw  Esc:Normal', $this->canvasTool->label()), 'PAINT  Esc:Normal']),
                 ),
                 $this->getActivePiecePlacement() !== null => $this->getPiecePlacementHelp($layout['centerWidth']) ?? '',
                 default => $this->fitHelp(

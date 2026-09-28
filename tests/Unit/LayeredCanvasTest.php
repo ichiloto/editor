@@ -58,6 +58,33 @@ it('offers one layer picker entry in the command palette instead of an entry per
         ->and(array_filter($labels, static fn(string $label): bool => str_starts_with($label, 'Layer: ') || str_starts_with($label, 'Visibility: ')))->toBe([]);
 });
 
+it('paints typed glyphs after entering Paint mode with the Select tool left active', function () {
+    [$editor, $map] = layeredCanvasEditor();
+    callEditorMethod($editor, 'selectCanvasLayer', 'map:4');
+    // s picks Select in Normal mode; entering Paint mode must still paint,
+    // not silently change the brush symbol.
+    callEditorMethod($editor, 'dispatchInput', 's');
+    callEditorMethod($editor, 'dispatchInput', 'i');
+    callEditorMethod($editor, 'dispatchInput', '-');
+    expect($map->getLayerSymbol('map:4', 0, 0))->toBe('-')
+        ->and(getEditorProperty($editor, 'canvasTool'))->toBe(CanvasTool::BRUSH)
+        ->and(renderEditorPlainFrame($editor, 160, 45))->toContain('PAINT: every key paints its glyph');
+});
+
+it('says what typing does in Paint mode under a shape tool, and leaves Paint mode for Select', function () {
+    [$editor, $map] = layeredCanvasEditor();
+    callEditorMethod($editor, 'selectCanvasLayer', 'map:4');
+    callEditorMethod($editor, 'dispatchInput', 'l');
+    callEditorMethod($editor, 'dispatchInput', 'i');
+    $before = $map->getLayerSymbol('map:4', 0, 0);
+    callEditorMethod($editor, 'dispatchInput', '-');
+    expect($map->getLayerSymbol('map:4', 0, 0))->toBe($before)
+        ->and(getEditorProperty($editor, 'selectedPaintSymbol'))->toBe('-')
+        ->and(renderEditorPlainFrame($editor, 160, 45))->toContain('PAINT Line: keys choose the glyph');
+    callEditorMethod($editor, 'selectCanvasTool', CanvasTool::SELECT);
+    expect(getEditorProperty($editor, 'inputMode'))->toBe('normal');
+});
+
 it('uses colour selection clipboard shapes fill eyedropper and undo on gameplay and event layers', function (string $id) {
     [$editor, $map] = layeredCanvasEditor();
     callEditorMethod($editor, 'selectCanvasLayer', $id);

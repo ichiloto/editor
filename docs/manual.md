@@ -372,10 +372,12 @@ line points to `i` instead.
 
 ### Paint mode
 
-Every printable key paints its glyph at the cursor with the brush tool, or
-loads it into the brush under a shape or select tool. `Arrows` move,
-`Enter` applies the active tool, erase keys erase, and `Esc` returns to
-Normal mode. Entering NPC mode or moving focus off the canvas also returns
+Every printable key paints its glyph at the cursor with the brush tool. Under
+the Line or Rectangle tools a key chooses the glyph instead, and `Enter` sets
+the anchor and then draws; the canvas border says which. Selecting is a Normal
+mode job: entering Paint mode with the Select tool active switches to the
+brush, and choosing Select returns to Normal mode. `Arrows` move, `Enter`
+applies the active tool, erase keys erase, and `Esc` returns to Normal mode. Entering NPC mode or moving focus off the canvas also returns
 to Normal.
 
 ### Mouse
