@@ -65,7 +65,7 @@ is what the code draws rather than a sketch of it:
  │                              │ │                            │ │     Background Music: (None)   │
  │                              │ │                            │ │     Music Variants · None      │
  │                              │ │                            │ │   Encounters · off             │
- └─/:Filter  Del:Delete─────────┘ └─i:Paint []:Layer ?:Help────┘ └─Enter:Edit─────────────────────┘
+ └─/:Filter  Del:Delete─────────┘ └─i:Paint L:Layer ?:Help─────┘ └─Enter:Edit─────────────────────┘
  ┌─Status─────────────────────────────────────────────────────────────────────────────────────────┐
  │ Selected map: test-map | Focus: Assets | Mode: Map | Tool: Brush 1                             │
  │ Cursor: (0, 0) | Viewport: (0, 0) | Ready.                                                     │
@@ -185,16 +185,21 @@ The TUI edits the terminal experience. Maps with `layers/` show numbered
 gameplay (`NN.name.map.php`) layers and Events, with NPC overlays in their
 authoring context. Graphical decoration (`NN.name.deco.php`) never appears on
 the terminal canvas or in its layer selection, palette or inspector. In Normal
-mode, `[` and `]` cycle gameplay and event layers, `v` toggles the selected
-layer's visibility, and `d` dims inactive layers. Spaces above the base show
-through. Visibility and dimming are session settings, not map data.
+mode, `L` opens the layer picker: the map's gameplay layers and Events, each
+marked visible or hidden and the one being edited. Type to filter, move with the
+arrows or `j` / `k`, and press `Enter` to edit that layer (`Esc` keeps the
+current one). The canvas title shows the layer being edited, and only that
+layer is painted. `[` and `]` still step to the previous or next layer, `v`
+toggles the selected layer's visibility, and `d` dims inactive layers. Spaces
+above the base show through. Visibility and dimming are session settings, not
+map data.
 
 The normal canvas is editable immediately: press `i` and paint terminal glyphs.
 The separate read-only terminal-preview toggle has been removed; there is no
 graphical-marker view to switch away from.
 
-Use `Ctrl+P` and select a gameplay or event layer by name, or choose a Layers
-action to create, rename or remove a gameplay layer. The TUI cannot create,
+Use `Ctrl+P` and choose a Layers action to create, rename or remove a gameplay
+layer. The TUI cannot create,
 select, rename or remove graphical decoration layers. New gameplay layers
 preserve each row's width, including ragged
 maps. Renaming retains its numeric order. If the actual resolved collisions would
@@ -267,8 +272,9 @@ A readable notice or interactive fixture needs its gameplay glyph and
 interaction, not a graphical decoration marker. Graphical representations
 must not drive or change the terminal editing experience.
 
-1. Focus the canvas and choose a gameplay or event layer with `[` / `]` or
-   `Ctrl+P`. Press `i` to paint; `Esc` returns to Normal mode. Brackets and
+1. Focus the canvas and choose a gameplay or event layer with `L`, or step
+   through them with `[` / `]`. Press `i` to paint; `Esc` returns to Normal
+   mode. `L`, brackets and
    other printable characters remain paintable while in Paint mode.
 2. Use the existing glyph tools, colours, selections, clipboard and mouse
    strokes. Continue authoring events and NPCs in their existing modes.

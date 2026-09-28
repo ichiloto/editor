@@ -69,6 +69,40 @@ trait LayerCanvas
         $this->setEditingMode($id === MapLayers::EVENT ? self::MODE_EVENT : self::MODE_MAP);
     }
 
+    /**
+     * Opens the layer picker: the map's gameplay layers and Events, filterable
+     * by name, with the active layer selected. Enter makes the highlighted
+     * layer the one the canvas edits.
+     */
+    private function openCanvasLayerPicker(): void
+    {
+        $layers = $this->getTerminalCanvasLayers();
+        if ($layers === []) {
+            return;
+        }
+        $visibility = $this->getCanvasLayerState()['visibility'];
+        $active = $this->getActiveCanvasLayer();
+        $entries = array_map(fn(array $layer): array => [
+            'label' => $layer['id'] === MapLayers::EVENT ? 'Events' : $layer['name'],
+            'value' => $layer['id'],
+            'description' => implode(' · ', array_filter([
+                $layer['id'] === MapLayers::EVENT ? 'event markers' : 'gameplay',
+                ($visibility[$layer['id']] ?? true) ? 'visible' : 'hidden',
+                $layer['id'] === $active ? 'editing' : null,
+            ])),
+        ], $layers);
+        $this->finalizeActiveStroke();
+        $this->optionDialogField = ['canvasLayer' => true];
+        $this->eventOptionDialogMarker = null;
+        $this->eventOptionDialogPath = null;
+        $this->eventOptionDialogTitle = 'Layer';
+        $this->eventOptionDialogEntries = $entries;
+        $this->selectedEventOptionIndex = $this->resolveEventOptionSelectionIndex($active);
+        $this->isEventOptionDialogOpen = true;
+        $this->statusMessage = 'Choose the layer to edit.';
+        $this->renderSelectionDependentArea();
+    }
+
     private function cycleCanvasLayer(int $step = 1): void
     {
         $ids = array_column($this->getTerminalCanvasLayers(), 'id');
@@ -106,18 +140,15 @@ trait LayerCanvas
         if ($map === null || $map->getGridSourceIssue() !== null) {
             return [];
         }
+        // Choosing a layer has its own picker (L); the palette keeps one entry
+        // for it instead of a Layer and a Visibility entry per layer.
         $items = [
+            new PaletteItem('Layers: Choose the layer to edit', 'L', fn() => $this->openCanvasLayerPicker()),
             new PaletteItem('Layers: Create gameplay layer', '', fn() => $this->openLayerPrompt('create')),
             new PaletteItem('Layers: Rename selected layer', '', fn() => $this->openLayerPrompt('rename')),
             new PaletteItem('Layers: Remove selected layer', '', fn() => $this->openLayerPrompt('remove')),
             new PaletteItem('Layers: Dim inactive layers', 'd', fn() => $this->toggleCanvasLayerOption('dim')),
         ];
-        foreach ($this->getTerminalCanvasLayers() as $layer) {
-            $label = sprintf('%s %s (%s)', $layer['order'] === null ? '--' : sprintf('%02d', $layer['order']),
-                $layer['name'], $layer['id'] === MapLayers::EVENT ? 'events' : 'gameplay');
-            $items[] = new PaletteItem('Layer: ' . $label, '', fn() => $this->selectCanvasLayer($layer['id']));
-            $items[] = new PaletteItem('Visibility: ' . $label, '', fn() => $this->toggleCanvasLayerVisibility($layer['id']));
-        }
         foreach (FacadeCatalogue::discover($this->workspace->projectRoot) as $path) {
             try {
                 foreach (FacadeCatalogue::load($path) as $index => $rows) {

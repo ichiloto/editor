@@ -1369,6 +1369,7 @@ final class Editor
             // glyph. The predicates keep NPC mode's own letters and the
             // other panes' typing untouched.
             KeyBinding::when($this->isNormalModeCommand('i'), $this->enterPaintMode(...), 'i', 'Canvas: enter Paint mode (every key paints; Esc returns to Normal)'),
+            KeyBinding::when($this->isNormalModeCommand('L'), fn() => $this->openCanvasLayerPicker(), 'L', 'Canvas: choose the layer to edit'),
             KeyBinding::when($this->isNormalModeCommand(']'), fn() => $this->cycleCanvasLayer(), ']', 'Canvas: next layer'),
             KeyBinding::when($this->isNormalModeCommand('['), fn() => $this->cycleCanvasLayer(-1), '[', 'Canvas: previous layer'),
             KeyBinding::when($this->isNormalModeCommand('v'), fn() => $this->toggleCanvasLayerVisibility(), 'v', 'Canvas: toggle selected layer visibility'),
@@ -7767,6 +7768,14 @@ final class Editor
         if (is_array($this->optionDialogField) && is_array($selectedEntry)) {
             $field = $this->optionDialogField;
             $title = $this->eventOptionDialogTitle;
+
+            if (($field['canvasLayer'] ?? false) === true) {
+                $this->closeEventOptionDialog();
+                $this->selectCanvasLayer((string) $selectedEntry['value']);
+                $this->setStatus(sprintf('Editing the %s layer.', $selectedEntry['label']));
+                $this->renderCanvasArea();
+                return;
+            }
 
             if (($field['actorReferenceMigration'] ?? null) instanceof ActorIdentityMigrationPlan) {
                 if ($selectedEntry['value'] === 'preview') { return; }
@@ -18205,9 +18214,9 @@ final class Editor
                 ),
                 default => $this->fitHelp(
                     $layout['centerWidth'],
-                    'i:Paint []:Layer v:Hide d:Dim o:Colour Ctrl+P:Layers',
-                    'i:Paint []:Layer v:Hide Ctrl+P:Layers',
-                    'i:Paint []:Layer ?:Help',
+                    'i:Paint L:Layer v:Hide d:Dim o:Colour ?:Help',
+                    'i:Paint L:Layer v:Hide d:Dim',
+                    'i:Paint L:Layer ?:Help',
                     'i:Paint  m:Map  e:Event  n:NPC  c:Chars  o:Colour  ?:Help',
                     'i:Paint m:Map e:Event n:NPC c:Chars o:Colour',
                     'i:Paint  m:Map  e:Event',

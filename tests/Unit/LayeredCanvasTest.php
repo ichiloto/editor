@@ -26,6 +26,38 @@ it('cycles only gameplay and event layers without stealing printable Paint-mode 
     }
 });
 
+it('chooses the layer to edit from its own picker with L, and L still paints in Paint mode', function () {
+    [$editor, $map] = layeredCanvasEditor();
+    callEditorMethod($editor, 'dispatchInput', 'L');
+    $entries = getEditorProperty($editor, 'eventOptionDialogEntries');
+    expect(getEditorProperty($editor, 'eventOptionDialogTitle'))->toBe('Layer')
+        ->and(array_column($entries, 'value'))->toBe(array_column(callEditorMethod($editor, 'getTerminalCanvasLayers'), 'id'))
+        ->and(array_column($entries, 'label'))->toContain('Events')
+        ->and($entries[0]['description'])->toContain('editing');
+    // Down to the next layer, then Enter edits it.
+    callEditorMethod($editor, 'dispatchInput', "\033[B");
+    callEditorMethod($editor, 'dispatchInput', "\n");
+    expect(callEditorMethod($editor, 'getActiveCanvasLayer'))->toBe($entries[1]['value'])
+        ->and(getEditorProperty($editor, 'eventOptionDialogEntries'))->toBe([]);
+    // Esc leaves the active layer alone.
+    callEditorMethod($editor, 'dispatchInput', 'L');
+    callEditorMethod($editor, 'dispatchInput', "\033[B");
+    callEditorMethod($editor, 'dispatchInput', "\033");
+    expect(callEditorMethod($editor, 'getActiveCanvasLayer'))->toBe($entries[1]['value']);
+    callEditorMethod($editor, 'selectCanvasLayer', 'map:4');
+    callEditorMethod($editor, 'dispatchInput', 'i');
+    callEditorMethod($editor, 'dispatchInput', 'L');
+    expect($map->getLayerSymbol('map:4', 0, 0))->toBe('L')
+        ->and(getEditorProperty($editor, 'eventOptionDialogEntries'))->toBe([]);
+});
+
+it('offers one layer picker entry in the command palette instead of an entry per layer', function () {
+    [$editor] = layeredCanvasEditor();
+    $labels = array_map(static fn($item): string => $item->label, callEditorMethod($editor, 'buildLayerPaletteItems'));
+    expect($labels)->toContain('Layers: Choose the layer to edit')
+        ->and(array_filter($labels, static fn(string $label): bool => str_starts_with($label, 'Layer: ') || str_starts_with($label, 'Visibility: ')))->toBe([]);
+});
+
 it('uses colour selection clipboard shapes fill eyedropper and undo on gameplay and event layers', function (string $id) {
     [$editor, $map] = layeredCanvasEditor();
     callEditorMethod($editor, 'selectCanvasLayer', $id);
@@ -152,8 +184,13 @@ it('excludes graphical layers and Tile art from the shell palette and inspector'
     [$editor, $map] = layeredCanvasEditor();
     $before = $map->captureLayerSnapshot();
     $labels = implode('\n', array_map(static fn($item): string => $item->label, callEditorMethod($editor, 'buildLayerPaletteItems')));
-    expect($labels)->toContain('terrain', 'buildings', 'Events', 'Create gameplay layer')
+    expect($labels)->toContain('Create gameplay layer')
         ->not->toContain('detail', 'decoration', 'Tile art', 'Terminal preview');
+    // Layers are chosen in their own picker, which offers no graphical layer either.
+    callEditorMethod($editor, 'openCanvasLayerPicker');
+    $picked = implode('\n', array_column(getEditorProperty($editor, 'eventOptionDialogEntries'), 'label'));
+    expect($picked)->toContain('terrain', 'buildings', 'Events')->not->toContain('detail', 'decoration');
+    callEditorMethod($editor, 'dispatchInput', "\033");
     foreach (['map:1', 'map:4', 'event'] as $id) {
         callEditorMethod($editor, 'selectCanvasLayer', $id);
         $fields = json_encode(callEditorMethod($editor, 'getInspectorFields'));
