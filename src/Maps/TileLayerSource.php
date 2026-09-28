@@ -17,8 +17,8 @@ use InvalidArgumentException;
  *
  * The TUI never displays tiles or paints single tiles; painting belongs to
  * the GUI editor. It carries these files with their map and changes one only
- * when the map's dimensions change or a tileset piece is stamped, reading it
- * exactly as the Engine does.
+ * when the map's dimensions change or a tileset piece is stamped or drawn,
+ * reading it exactly as the Engine does.
  */
 final class TileLayerSource
 {
@@ -93,18 +93,50 @@ final class TileLayerSource
      */
     public static function writeEntries(string $source, string $displayPath, MapLayerSet $layers, int $x, int $y, array $rows, ?string $baseline = null): string
     {
-        $layer = self::readMatchingLayer($source, $displayPath, $layers, 'stamping a piece');
+        $cells = [];
+        foreach ($rows as $row => $entries) {
+            foreach ($entries as $column => $entry) {
+                $cells[] = ['x' => $x + $column, 'y' => $y + $row, 'entry' => $entry];
+            }
+        }
+
+        return self::writeCellEntries($source, $displayPath, $layers, $cells, 'stamping a piece', $baseline, keepsEmptyCells: true);
+    }
+
+    /**
+     * Sets each listed cell's entry, `0` included, so a connected piece can
+     * give every cell it draws or reshapes its shape's tile and clear the
+     * cells it erases. The result is rewritten as {@see resize()} rewrites a
+     * layer.
+     *
+     * @param list<array{x: int, y: int, entry: string}> $cells The entry for each cell.
+     * @param MapLayerSet $layers The map's terminal layers.
+     * @throws MapSourceRefusal When the layer cannot be read, does not match the map, or a cell falls outside it; nothing is changed.
+     */
+    public static function setCellEntries(string $source, string $displayPath, MapLayerSet $layers, array $cells, ?string $baseline = null): string
+    {
+        return self::writeCellEntries($source, $displayPath, $layers, $cells, 'drawing a piece', $baseline, keepsEmptyCells: false);
+    }
+
+    /**
+     * Writes entries into a layer's cells, refusing them all when one cell
+     * is outside the layer.
+     *
+     * @param list<array{x: int, y: int, entry: string}> $cells The entry for each cell.
+     * @param bool $keepsEmptyCells Whether a `0` entry leaves its cell as it was instead of emptying it.
+     */
+    private static function writeCellEntries(string $source, string $displayPath, MapLayerSet $layers, array $cells, string $action, ?string $baseline, bool $keepsEmptyCells): string
+    {
+        $layer = self::readMatchingLayer($source, $displayPath, $layers, $action);
 
         $entries = $layer->getEntries();
         $written = $entries;
-        foreach ($rows as $row => $cells) {
-            foreach ($cells as $column => $entry) {
-                if (! isset($entries[$y + $row][$x + $column])) {
-                    throw new MapSourceRefusal(sprintf('%s has no cell at (%d, %d); nothing was changed.', $displayPath, $x + $column, $y + $row));
-                }
-                if ($entry !== (string)TileId::EMPTY) {
-                    $written[$y + $row][$x + $column] = $entry;
-                }
+        foreach ($cells as $cell) {
+            if (! isset($entries[$cell['y']][$cell['x']])) {
+                throw new MapSourceRefusal(sprintf('%s has no cell at (%d, %d); nothing was changed.', $displayPath, $cell['x'], $cell['y']));
+            }
+            if (! $keepsEmptyCells || $cell['entry'] !== (string)TileId::EMPTY) {
+                $written[$cell['y']][$cell['x']] = $cell['entry'];
             }
         }
 

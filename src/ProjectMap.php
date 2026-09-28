@@ -479,6 +479,21 @@ final class ProjectMap
     }
 
     /**
+     * Sets tile entries cell by cell in the named tile layers, `0` included,
+     * for a drawn or erased connected piece, creating a tile layer the map
+     * does not have yet when it gets a tile.
+     *
+     * @param array<string, list<array{x: int, y: int, entry: string}>> $cells The entry for each cell, keyed by tile layer name.
+     * @throws MapSourceRefusal When a layer cannot take the entries; nothing is changed.
+     */
+    public function writeTileCells(array $cells): void
+    {
+        $this->assertEditable();
+        $this->layers->writeTileCells($cells);
+        $this->touchState();
+    }
+
+    /**
      * Restores the tile layers {@see getTileLayerSources()} returned, for
      * undo and redo.
      *

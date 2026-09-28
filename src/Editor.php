@@ -1371,7 +1371,7 @@ final class Editor
             // other panes' typing untouched.
             KeyBinding::when($this->isNormalModeCommand('i'), $this->enterPaintMode(...), 'i', 'Canvas: enter Paint mode (every key paints; Esc returns to Normal)'),
             KeyBinding::when($this->isNormalModeCommand('L'), fn() => $this->openCanvasLayerPicker(), 'L', 'Canvas: choose the layer to edit'),
-            KeyBinding::when($this->isNormalModeCommand('P'), fn() => $this->openPiecePicker(), 'P', 'Canvas: choose a tileset piece to place (Enter stamps it, Esc when done)'),
+            KeyBinding::when($this->isNormalModeCommand('P'), fn() => $this->openPiecePicker(), 'P', 'Canvas: choose a tileset piece to place (Enter stamps or draws it, Esc when done)'),
             KeyBinding::when($this->isNormalModeCommand(']'), fn() => $this->cycleCanvasLayer(), ']', 'Canvas: next layer'),
             KeyBinding::when($this->isNormalModeCommand('['), fn() => $this->cycleCanvasLayer(-1), '[', 'Canvas: previous layer'),
             KeyBinding::when($this->isNormalModeCommand('v'), fn() => $this->toggleCanvasLayerVisibility(), 'v', 'Canvas: toggle selected layer visibility'),
@@ -1766,7 +1766,7 @@ final class Editor
             }
 
             if ($this->getActivePiecePlacement() !== null) {
-                $this->endPiecePlacement('Piece placement ended.');
+                $this->backOutOfPiecePlacement();
                 return;
             }
 
@@ -4247,6 +4247,14 @@ final class Editor
      */
     private function handleEraseInput(string $input): bool
     {
+        // A connected piece being drawn erases its own cell, reshaping the
+        // cells beside it; its hint names the key Del, so Delete works too.
+        if (($this->getActivePiecePlacement()['piece']->connects ?? null) !== null
+            && in_array($input, ["\177", "\010", "\033[3~"], true)) {
+            $this->eraseConnectedPieceCell();
+            return true;
+        }
+
         if ($input === "\177" || $input === "\010") {
             $this->adoptPaintSymbol(' ');
             return true;
@@ -5026,7 +5034,7 @@ final class Editor
     private function applyCanvasToolAtCursor(): void
     {
         if ($this->getActivePiecePlacement() !== null) {
-            $this->stampPiece();
+            $this->applyPieceAtCursor();
             return;
         }
 

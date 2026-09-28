@@ -11,12 +11,13 @@ use Ichiloto\Engine\Field\MapGridSource;
 use Ichiloto\Engine\Field\MapLayerSource;
 use Ichiloto\Engine\Field\MapLayerSet;
 use Ichiloto\Engine\Field\MapLayer;
+use Ichiloto\Engine\Rendering\Tilesets\TileId;
 
 /**
  * Editable layers and their file-set boundary. Layer ids survive renaming.
  * The map's graphical tile layers share the boundary: the TUI never paints
- * single tiles, but writes a stamped piece's tiles and resizes, relocates and
- * removes them with the map.
+ * single tiles, but writes the tiles of stamped and drawn pieces and resizes,
+ * relocates and removes them with the map.
  */
 final class MapLayers
 {
@@ -246,6 +247,36 @@ final class MapLayers
             $path = $this->findTileLayerPath((string) $name, $sources) ?? $this->buildTileLayerPath((string) $name, $sources);
             $sources[$path] = TileLayerSource::writeEntries($sources[$path] ?? TileLayerSource::createEmpty($set),
                 $this->getDisplayPath($path), $set, $x, $y, $rows, $this->baselineSources[$path] ?? null);
+        }
+        ksort($sources, SORT_STRING);
+        $this->tileSources = $sources;
+    }
+
+    /**
+     * Sets tile entries cell by cell in the named tile layers, `0` included,
+     * for a drawn or erased connected piece. A layer the map does not have
+     * yet is created as {@see writeTileEntries()} creates one, unless every
+     * entry for it is `0`, which an empty layer already holds. Every layer is
+     * written before anything changes, so one that cannot take its entries
+     * refuses them all.
+     *
+     * @param array<string, list<array{x: int, y: int, entry: string}>> $cells The entry for each cell, keyed by tile layer name.
+     * @throws MapSourceRefusal When a layer cannot be read, does not match the map, cannot be created, or a cell falls outside it.
+     */
+    public function writeTileCells(array $cells): void
+    {
+        $set = $this->getLayerSet();
+        $sources = $this->tileSources;
+        foreach ($cells as $name => $entries) {
+            $path = $this->findTileLayerPath((string) $name, $sources);
+            if ($path === null) {
+                if (array_filter($entries, static fn(array $cell): bool => $cell['entry'] !== (string)TileId::EMPTY) === []) {
+                    continue;
+                }
+                $path = $this->buildTileLayerPath((string) $name, $sources);
+            }
+            $sources[$path] = TileLayerSource::setCellEntries($sources[$path] ?? TileLayerSource::createEmpty($set),
+                $this->getDisplayPath($path), $set, $entries, $this->baselineSources[$path] ?? null);
         }
         ksort($sources, SORT_STRING);
         $this->tileSources = $sources;

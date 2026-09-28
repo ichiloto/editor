@@ -148,8 +148,8 @@ exist.
 `Esc` backs out exactly one level, everywhere:
 
 - a field edit returns to the pane
-- piece placement ends, a pending canvas anchor is dropped, then a selection
-  is cleared
+- a connected piece's anchor is dropped, then piece placement ends, a pending
+  canvas anchor is dropped, then a selection is cleared
 - a filter query is cleared before its list closes
 - an overlay or dialog closes
 - the Database screen closes
@@ -227,8 +227,10 @@ A map offers the pieces of the tileset its data names (see
 is built from items instead of single glyphs. In Normal mode on the canvas, `P`
 opens the piece picker, one entry per piece with its footprint in cells, the
 gameplay layer its glyphs go on and the tile layers it writes, for example
-`1 x 2 · fixtures · tiles: furniture`. Move with the arrows or `j` / `k`, press
-`/` to filter by name, `Enter` to choose and `Esc` to cancel. The command
+`1 x 2 · fixtures · tiles: furniture`, or `connected` in place of the
+footprint for a [connected piece](#connected-pieces) such as a wall
+(`connected · buildings · tiles: walls`). Move with the arrows or `j` / `k`,
+press `/` to filter by name, `Enter` to choose and `Esc` to cancel. The command
 palette offers the same picker as `Pieces: Choose a piece to place`. When the
 map names no tileset, its tileset has no pieces, or the tileset cannot be
 loaded, the status line says so and nothing opens.
@@ -264,6 +266,50 @@ layer name, with rows over the same footprint:
 `'bed' => ['name' => 'Bed', 'layer' => 'fixtures', 'glyphs' => ['=', '='], 'tiles' => ['furniture' => ['32', '40']]]`.
 The Engine's `docs/graphical-field.md` (Pieces) holds the contract. Every
 stamp reads the tileset again, so the tileset stays the one source of pieces.
+
+#### Connected pieces
+
+A connected piece (`'connects' => 'lines'`), such as a wall or a fence, is
+drawn rather than stamped, one cell per map cell, and joins the cells of the
+same piece beside it. A cell belongs to the piece when its glyph on the
+piece's gameplay layer is one of the piece's shape glyphs, so walls typed by
+hand join too, while other glyphs (a `_`, say) are left alone and do not join.
+Each cell takes a shape from the member cells beside it: joined only across it
+is `horizontal`, only down it is `vertical`, and anything else (a corner, a
+junction, a lone post) is a `corner`. A line's end cells are joined on one
+side only, so a wall drawn across reads `----`, not `+--+`.
+
+While a connected piece is placed, the canvas border shows
+`PIECE <name>  Enter:Draw  Del:Erase  Esc:Done`, and `Esc:Unanchor` while an
+anchor is set.
+
+- `Enter` with no anchor draws the cell at the cursor and anchors there.
+- `Enter` with an anchor draws from the anchor to the cursor: a straight line
+  when they share a row or a column, otherwise the outline of the rectangle
+  with the anchor and the cursor as opposite corners, which is a room. The
+  anchor then moves to the cursor, so the next `Enter` carries on from there.
+- The erase keys (`Backspace`, and `Delete`) erase the piece's cell under the
+  cursor. A cell that is not part of the piece is left alone, and the status
+  line says so.
+- `Esc` drops the anchor when one is set; otherwise it ends placement.
+
+The canvas previews the cells `Enter` would draw, each with the glyph it would
+take, in reverse video. Every draw or erase is one undo step. It writes the
+drawn cells, then reshapes every drawn cell and every member cell beside a
+drawn or erased cell: its glyph becomes its shape's glyph and its entry on each
+of the piece's tile layers becomes that shape's tile. So drawing a wall that
+meets another turns the meeting cell into a corner, and erasing a cell
+straightens the corners beside it. Drawn cells take the brush colour; reshaped
+cells keep theirs. An erased cell becomes a space on the gameplay layer and
+`0` on the piece's tile layers. A draw that reaches a cell beyond the map
+(ragged rows included) changes nothing, and neither does a piece whose
+gameplay layer the map lacks. A missing tile layer is created as for a stamp,
+and undo, redo and `Ctrl+S` work exactly as they do for stamps. The tileset
+lists a connected piece with one glyph per shape and one tile entry per tile
+layer, or one per shape:
+`'wall' => ['name' => 'Wall', 'layer' => 'buildings', 'connects' => 'lines', 'glyphs' => ['horizontal' => '-', 'vertical' => '|', 'corner' => '+'], 'tiles' => ['walls' => '5888']]`.
+An A4 wall top can be the one entry for every shape, since the autotile shapes
+its own edges.
 
 ### Map Graphics
 
@@ -364,8 +410,8 @@ and the GUI itself are not delivered by this TUI boundary correction. See the
 | `u` / `U` | Undo / redo (same as `Ctrl+Z` / `Ctrl+Y`) |
 | `?` | Open the help overlay |
 | `Arrows` | Move the cursor |
-| `Enter` | Apply the active tool, or stamp the piece being placed |
-| `Esc` | Pop one canvas level: piece placement, a pending tool anchor, then the selection |
+| `Enter` | Apply the active tool, or stamp or draw the piece being placed |
+| `Esc` | Pop one canvas level: a connected piece's anchor, piece placement, a pending tool anchor, then the selection |
 
 Typing an unassigned printable key in Normal mode paints nothing; the status
 line points to `i` instead.
