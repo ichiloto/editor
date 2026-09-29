@@ -495,10 +495,11 @@ final class ProjectMap
 
     /**
      * The tile layers whose tiles move with a gameplay layer's glyphs: those
-     * the map data names it for (`'tileLayers' => ['floor' => ['movesWith' =>
-     * 'buildings']]`), and otherwise those that only this layer's tileset
-     * pieces write. The event layer moves no tiles, and neither does any
-     * layer while the settings are invalid, which validation reports.
+     * that belong to it ({@see MapGraphics::resolveLayerOwners()}), named by
+     * the map data (`'tileLayers' => ['floor' => ['movesWith' =>
+     * 'buildings']]`) or otherwise written only by this layer's tileset
+     * pieces. The event layer moves no tiles, and neither does any layer
+     * while the settings are invalid, which validation reports.
      *
      * @return list<string> Tile layer names.
      */
@@ -512,23 +513,19 @@ final class ProjectMap
         $gameplay = array_column(array_filter($this->layers->getLayers(), static fn(array $candidate): bool =>
             $candidate['id'] !== MapLayers::EVENT && ! $candidate['decoration']), 'name');
         try {
-            $named = MapGraphics::readLayersMovingWith($this->getMapDataField([MapGraphics::SETTINGS_KEY]), $names, $gameplay, $this->mapId);
+            $tileset = $this->loadTileset();
+        } catch (InvalidArgumentException | RuntimeException) {
+            // A tileset that cannot load says nothing about its pieces.
+            $tileset = null;
+        }
+        try {
+            $owners = MapGraphics::resolveLayerOwners($this->getMapDataField([MapGraphics::SETTINGS_KEY]), $names, $gameplay,
+                $tileset, $this->mapId);
         } catch (InvalidArgumentException) {
             return [];
         }
-        $writers = [];
-        try {
-            foreach ($this->loadTileset()?->pieces ?? [] as $piece) {
-                foreach (array_keys($piece->connects === null ? $piece->tiles : $piece->shapeTiles) as $name) {
-                    $writers[$name][$piece->layer] = true;
-                }
-            }
-        } catch (InvalidArgumentException | RuntimeException) {
-            // A tileset that cannot load says nothing about its pieces.
-        }
 
-        return array_values(array_filter($names, static fn(string $name): bool =>
-            ($named[$name] ?? (count($writers[$name] ?? []) === 1 ? array_key_first($writers[$name]) : null)) === $layer['name']));
+        return array_keys(array_filter($owners, static fn(?string $owner): bool => $owner === $layer['name']));
     }
 
     /**
