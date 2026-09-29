@@ -116,6 +116,7 @@ final class Editor
     use \Ichiloto\Editor\Canvas\LayerCanvas;
     use \Ichiloto\Editor\Canvas\PieceCanvas;
     use \Ichiloto\Editor\Canvas\LineInsertCanvas;
+    use \Ichiloto\Editor\Canvas\GlyphTileCanvas;
     use CutscenesWorkspace;
     use CutsceneOutlinePane;
     use CutscenePreviewPane;
@@ -1165,16 +1166,28 @@ final class Editor
     }
 
     /**
-     * Records the in-flight mouse stroke as one undoable command.
+     * Records the in-flight mouse stroke as one undoable command, with the
+     * tiles that followed its glyphs.
      *
      * @return void
      */
     private function finalizeActiveStroke(): void
     {
         $stroke = $this->activeStrokeCommand;
+        $tiles = $this->activeStrokeTiles;
         $this->activeStrokeCommand = null;
+        $this->activeStrokeTiles = null;
 
-        if ($stroke instanceof PaintStrokeCommand && $stroke->hasChanges()) {
+        if (! $stroke instanceof PaintStrokeCommand) {
+            return;
+        }
+
+        if ($tiles !== null && $stroke->targets($tiles['map']) && $tiles['map']->getTileLayerSources() !== $tiles['sources']) {
+            $this->recordStrokeWithTiles($stroke->label, $tiles['map'], $stroke, $tiles['sources'], $tiles['map']->getTileLayerSources());
+            return;
+        }
+
+        if ($stroke->hasChanges()) {
             $this->recordCommand($stroke);
         }
     }
@@ -4048,6 +4061,7 @@ final class Editor
             return;
         }
 
+        $this->paintPieceRole = null;
         $this->selectedPaintSymbol = $symbol;
         $this->replaceCurrentSymbol($symbol);
         $this->isCharacterMapOpen = false;
@@ -4272,6 +4286,8 @@ final class Editor
      */
     private function adoptPaintSymbol(string $symbol): void
     {
+        // A typed glyph is chosen afresh, so it asks again which piece it is.
+        $this->paintPieceRole = null;
         $this->selectedPaintSymbol = $symbol;
 
         if ($this->canvasTool !== CanvasTool::BRUSH) {
@@ -4316,9 +4332,10 @@ final class Editor
      * Replaces the current symbol on the active editing layer.
      *
      * @param string $symbol The replacement symbol.
+     * @param array<string, ?string>|null $choices The pieces chosen for the glyph; null for the brush's own answer.
      * @return void
      */
-    private function replaceCurrentSymbol(string $symbol): void
+    private function replaceCurrentSymbol(string $symbol, ?array $choices = null): void
     {
         if (! $this->workspace instanceof ProjectWorkspace) {
             return;
@@ -4334,12 +4351,21 @@ final class Editor
 
         // The brush footprint commits as one stroke, so a wide dab is still
         // a single undo step (width 1 is byte-for-byte the historic path).
-        $this->paintCanvasCells(
+        $changed = $this->paintCanvasCells(
             $selectedMap,
             ToolGeometry::brush($this->cursorX, $this->cursorY, $this->canvasBrushSize),
             $symbol,
             $isEventLayer ? 'Event edit' : 'Tile edit',
+            function (array $choices) use ($symbol): void {
+                $this->replaceCurrentSymbol($symbol, $choices);
+                $this->renderCanvasArea();
+            },
+            $choices,
         );
+
+        if ($changed === null) {
+            return;
+        }
 
         $this->statusMessage = sprintf(
             '%s mode updated (%d, %d).',
@@ -4649,6 +4675,22 @@ final class Editor
             $this->interpolatePoints($start['x'], $start['y'], $targetX, $targetY),
             $this->canvasBrushSize,
         );
+        $retry = function (array $choices) use ($selectedMap, $symbol, $targetX, $targetY, $button, $paintEvents): void {
+            $this->rememberPaintPieceRole($symbol, $choices);
+            $this->activeMousePaintButton = null;
+            $this->lastMousePaintPoint = null;
+            $this->paintCanvasStroke($selectedMap, $symbol, $targetX, $targetY, $button, $paintEvents);
+            $this->renderCanvasArea();
+        };
+
+        if (! $this->followStrokeWithTiles($selectedMap, array_map(
+            static fn(array $point): array => ['x' => $point['x'], 'y' => $point['y'], 'symbol' => $symbol],
+            $points,
+        ), $retry)) {
+            $this->activeMousePaintButton = null;
+            $this->lastMousePaintPoint = null;
+            return;
+        }
 
         foreach ($points as $point) {
             if (! $selectedMap->hasLayerCell($this->getActiveCanvasLayer(), $point['x'], $point['y'])) {
@@ -4866,62 +4908,20 @@ final class Editor
      *
      * This is the single commit path behind every canvas tool: a brush dab,
      * a line, a rectangle, a flood fill, a cut, and a paste all land as one
-     * PaintStrokeCommand, so each undoes in exactly one Ctrl+Z.
+     * undo step with the tiles that follow their glyphs, so each undoes in
+     * exactly one Ctrl+Z.
      *
      * @param ProjectMap $map The target map.
      * @param array<int, array{x: int, y: int, symbol: string, color?: string|null, style?: array{prefix: string, suffix: string}}> $writes The cells to write.
      * @param string $label The undo/status label.
-     * @return int The number of cells that actually changed.
+     * @param (Closure(array<string, ?string>): void)|null $retry Runs the edit again once the author chooses a glyph's piece.
+     * @param array<string, ?string> $choices The pieces already chosen for glyphs.
+     * @return int|null The number of cells that actually changed, or null when nothing changed: refused, or waiting on a choice.
      */
-    private function applyCanvasWrites(ProjectMap $map, array $writes, string $label): int
+    private function applyCanvasWrites(ProjectMap $map, array $writes, string $label, ?Closure $retry = null, array $choices = []): ?int
     {
-        if ($writes === []) {
-            return 0;
-        }
-
-        $this->finalizeActiveStroke();
-        [$stroke, $changed] = $this->writeCanvasCells($map, $this->getActiveCanvasLayer(), $writes, $label);
-
-        if ($stroke->hasChanges()) {
-            $this->recordCommand($stroke);
-        }
-
-        return $changed;
-    }
-
-    /**
-     * Writes cells onto the active layer and the tile cells that move with
-     * them as one undo step. A tile layer that cannot take its cells refuses
-     * the whole change.
-     *
-     * @param array<int, array{x: int, y: int, symbol: string, color?: string|null, style?: array{prefix: string, suffix: string}}> $writes The cells to write.
-     * @param array<string, list<array{x: int, y: int, entry: string}>> $tiles The tile entry for each cell, keyed by tile layer name.
-     * @return int|null The number of glyph cells that changed, or null when nothing was changed.
-     */
-    private function applyCanvasWritesWithTiles(ProjectMap $map, array $writes, array $tiles, string $label): ?int
-    {
-        if ($tiles === []) {
-            return $this->applyCanvasWrites($map, $writes, $label);
-        }
-
-        $this->finalizeActiveStroke();
-        $tilesBefore = $map->getTileLayerSources();
-
-        try {
-            $map->writeTileCells($tiles);
-        } catch (MapSourceRefusal $refusal) {
-            $this->setStatus($refusal->getMessage(), StatusLevel::WARN);
-            return null;
-        }
-
-        $tilesAfter = $map->getTileLayerSources();
-        [$stroke, $changed] = $this->writeCanvasCells($map, $this->getActiveCanvasLayer(), $writes, $label);
-
-        if ($stroke->hasChanges() || $tilesAfter !== $tilesBefore) {
-            $this->recordStrokeWithTiles($label, $map, $stroke, $tilesBefore, $tilesAfter);
-        }
-
-        return $changed;
+        // Tiles follow the glyphs (GlyphTileCanvas), in the same undo step.
+        return $this->commitCanvasWrites($map, $writes, $label, retry: $retry, choices: $choices);
     }
 
     /**
@@ -5013,21 +5013,31 @@ final class Editor
      * @param array<int, array{x: int, y: int}> $cells The cells to paint.
      * @param string $symbol The symbol to paint.
      * @param string $label The undo/status label.
-     * @return int The number of cells that actually changed.
+     * @param (Closure(array<string, ?string>): void)|null $retry Paints again once the author chooses the glyph's piece.
+     * @param array<string, ?string>|null $choices The pieces chosen for glyphs; null for the brush's own answer.
+     * @return int|null The number of cells that actually changed, or null when nothing changed: refused, or waiting on a choice.
      */
-    private function paintCanvasCells(ProjectMap $map, array $cells, string $symbol, string $label): int
+    private function paintCanvasCells(ProjectMap $map, array $cells, string $symbol, string $label, ?Closure $retry = null,
+        ?array $choices = null): ?int
     {
         // Glyph paints carry the brush colour; the space rule and the event
-        // layer's lack of styling are resolved at the commit path.
+        // layer's lack of styling are resolved at the commit path. A glyph
+        // painted over itself may draw another piece, so it repaints.
         $color = $this->selectedPaintColor;
 
-        return $this->applyCanvasWrites(
+        return $this->commitCanvasWrites(
             $map,
             array_map(
                 static fn(array $cell): array => ['x' => $cell['x'], 'y' => $cell['y'], 'symbol' => $symbol, 'color' => $color],
                 $cells,
             ),
             $label,
+            retry: $retry === null ? null : function (array $choices) use ($symbol, $retry): void {
+                $this->rememberPaintPieceRole($symbol, $choices);
+                $retry($choices);
+            },
+            choices: $choices ?? $this->getPaintPieceChoices($symbol),
+            repaint: true,
         );
     }
 
@@ -5170,21 +5180,25 @@ final class Editor
             $cells = ToolGeometry::expandByBrush($cells, $this->canvasBrushSize);
         }
 
-        $changed = $this->paintCanvasCells(
-            $selectedMap,
-            $cells,
-            $this->selectedPaintSymbol,
-            $this->canvasTool->commandLabel(),
-        );
+        $tool = $this->canvasTool;
+        $paint = function (?array $choices = null) use ($selectedMap, $cells, $tool, &$paint): void {
+            $changed = $this->paintCanvasCells($selectedMap, $cells, $this->selectedPaintSymbol, $tool->commandLabel(), $paint, $choices);
 
-        $this->setStatus(sprintf(
-            '%s: %d cell%s painted with %s.',
-            $this->canvasTool->label(),
-            $changed,
-            $changed === 1 ? '' : 's',
-            $this->selectedPaintSymbol === ' ' ? 'space' : $this->selectedPaintSymbol,
-        ));
-        $this->renderCanvasArea();
+            if ($changed === null) {
+                $this->renderCanvasArea();
+                return;
+            }
+
+            $this->setStatus(sprintf(
+                '%s: %d cell%s painted with %s.',
+                $tool->label(),
+                $changed,
+                $changed === 1 ? '' : 's',
+                $this->selectedPaintSymbol === ' ' ? 'space' : $this->selectedPaintSymbol,
+            ));
+            $this->renderCanvasArea();
+        };
+        $paint();
     }
 
     /**
@@ -5264,14 +5278,23 @@ final class Editor
             $this->cursorX,
             $this->cursorY,
         );
-        $changed = $this->paintCanvasCells($selectedMap, $cells, $this->selectedPaintSymbol, 'flood fill');
-        $this->setStatus(sprintf(
-            'Flood filled %d cell%s with %s.',
-            $changed,
-            $changed === 1 ? '' : 's',
-            $this->selectedPaintSymbol === ' ' ? 'space' : $this->selectedPaintSymbol,
-        ));
-        $this->renderCanvasArea();
+        $fill = function (?array $choices = null) use ($selectedMap, $cells, &$fill): void {
+            $changed = $this->paintCanvasCells($selectedMap, $cells, $this->selectedPaintSymbol, 'flood fill', $fill, $choices);
+
+            if ($changed === null) {
+                $this->renderCanvasArea();
+                return;
+            }
+
+            $this->setStatus(sprintf(
+                'Flood filled %d cell%s with %s.',
+                $changed,
+                $changed === 1 ? '' : 's',
+                $this->selectedPaintSymbol === ' ' ? 'space' : $this->selectedPaintSymbol,
+            ));
+            $this->renderCanvasArea();
+        };
+        $fill();
     }
 
     /**
@@ -5291,17 +5314,22 @@ final class Editor
 
         // On the tile layer the eyedropper picks the colour with the glyph:
         // an uncoloured cell loads an uncoloured brush.
+        // It picks up the piece the glyph draws there too, so painting it
+        // again draws the same piece.
         $pickedColor = null;
+        $pickedPiece = '';
+        $this->paintPieceRole = null;
 
         if ($this->editingMode !== self::MODE_NPC) {
             $pickedColor = $selectedMap->getLayerColor($this->getActiveCanvasLayer(), $this->cursorX, $this->cursorY);
             $this->selectedPaintColor = $pickedColor ?? '';
+            $pickedPiece = $this->pickPaintPieceRole($selectedMap, $this->cursorX, $this->cursorY);
         }
 
         $this->setStatus(sprintf(
             'Picked up %s%s from (%d, %d).',
             $this->selectedPaintSymbol === ' ' ? 'space' : $this->selectedPaintSymbol,
-            $pickedColor === null ? '' : ' (' . $pickedColor . ')',
+            implode('', array_map(static fn(string $detail): string => " ({$detail})", array_filter([$pickedPiece, $pickedColor ?? '']))),
             $this->cursorX,
             $this->cursorY,
         ));
@@ -5356,14 +5384,14 @@ final class Editor
             ),
             $this->clipboard->projectTiles($selection['x'], $selection['y'], $selectedMap->getWidth(), $selectedMap->getHeight()),
         );
-        $changed = $this->applyCanvasWritesWithTiles(
+        $changed = $this->commitCanvasWrites(
             $selectedMap,
             array_map(
                 fn(array $cell): array => ['x' => $cell['x'], 'y' => $cell['y'], 'symbol' => ' ', 'color' => $this->selectedPaintColor],
                 $cells,
             ),
-            $clears,
             'cut selection',
+            $clears,
         );
 
         if ($changed === null) {
@@ -5440,9 +5468,10 @@ final class Editor
     /**
      * Stamps the clipboard at the cursor as one undoable stroke.
      *
+     * @param array<string, ?string> $choices The pieces the author chose for glyphs the block could draw several ways.
      * @return void
      */
-    private function pasteCanvasClipboard(): void
+    private function pasteCanvasClipboard(array $choices = []): void
     {
         $selectedMap = $this->getSelectedMap();
 
@@ -5481,7 +5510,8 @@ final class Editor
             $this->clipboard->projectTiles($this->cursorX, $this->cursorY, $selectedMap->getWidth(), $selectedMap->getHeight()),
             array_flip($selectedMap->getTileLayersMovingWith($this->getActiveCanvasLayer())),
         );
-        $changed = $this->applyCanvasWritesWithTiles($selectedMap, $writes, $tiles, 'pasted selection');
+        $changed = $this->commitCanvasWrites($selectedMap, $writes, 'pasted selection', $tiles,
+            $this->pasteCanvasClipboard(...), $choices);
 
         if ($changed === null) {
             $this->renderCanvasArea();
@@ -7925,7 +7955,8 @@ final class Editor
         }
 
         if ($input === chr(27)) {
-            $this->closeEventOptionDialog('Selection cancelled.');
+            $this->closeEventOptionDialog(is_array($this->optionDialogField['glyphPiece'] ?? null)
+                ? 'Nothing was painted; the map is as it was.' : 'Selection cancelled.');
             return;
         }
 
@@ -7984,6 +8015,11 @@ final class Editor
             if (($field['canvasPiece'] ?? false) === true) {
                 $this->closeEventOptionDialog();
                 $this->choosePiece((string) $selectedEntry['value']);
+                return;
+            }
+
+            if (is_array($field['glyphPiece'] ?? null)) {
+                $this->chooseGlyphPiece($field['glyphPiece'], (string) $selectedEntry['value']);
                 return;
             }
 

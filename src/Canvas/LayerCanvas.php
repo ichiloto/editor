@@ -291,7 +291,8 @@ trait LayerCanvas
         $this->setStatus('Create a gameplay buildings layer before selecting a facade brush.', StatusLevel::WARN);
     }
 
-    private function stampFacadeBrush(): void
+    /** @param array<string, ?string> $choices The pieces the author chose for glyphs the facade could draw several ways. */
+    private function stampFacadeBrush(array $choices = []): void
     {
         if ($this->facadeBrush === null) {
             return;
@@ -317,7 +318,7 @@ trait LayerCanvas
                         'symbol' => $cell['symbol'], 'style' => ['prefix' => $cell['prefix'], 'suffix' => $cell['suffix']]];
                 }
             }
-            $this->applyCanvasWrites($map, $writes, 'Facade stamp');
+            $this->applyCanvasWrites($map, $writes, 'Facade stamp', $this->stampFacadeBrush(...), $choices);
             $this->renderCanvasArea();
         } catch (\Throwable $error) {
             $this->setStatus($error->getMessage(), StatusLevel::WARN);

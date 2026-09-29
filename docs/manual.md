@@ -377,8 +377,21 @@ A map may name a tileset in its data file (`'tileset' => 'home'`, read from
 cell, so each of its rows is exactly as wide as the map's row in terminal
 columns. The TUI never displays tiles or paints single tiles; painting them
 belongs to the GUI editor. It writes tiles only when it stamps a
-[piece](#pieces) or moves glyphs the tiles move with, and otherwise keeps them
+[piece](#pieces) or edits glyphs the tiles follow, and otherwise keeps them
 intact:
+
+- Tiles follow a gameplay layer's glyphs however they are edited: typing,
+  painting, erasing, the line, rectangle and fill tools, the mouse, cutting and
+  pasting. A glyph that leaves a cell takes the tiles of the piece it drew
+  there; a glyph that arrives draws its piece's tiles, in the same undo step.
+  A piece's tiles over blank cells, such as a sofa's back over its seat, go
+  with the glyph nearest them. When a glyph belongs to several pieces (`-` for
+  a chair facing north or south), the neighbours decide when they hold the
+  rest of one piece, such as the left half of a table beside the right;
+  otherwise the editor asks which piece it is, or No tiles, and Esc leaves the
+  map as it was. The brush remembers the answer for its glyph until a glyph is
+  typed again, and the eyedropper picks up the piece a glyph draws. Tiles no
+  piece accounts for, such as a floor under a wall, stay where they are.
 
 - Each tile layer moves with one gameplay layer: the one the map data names
   (`'tileLayers' => ['floor' => ['movesWith' => 'buildings']]`), or else the
@@ -525,8 +538,8 @@ styling authored by hand.
   with a selection active (`s`), every cell in the selection; otherwise,
   under the brush tool, the cell at the cursor. Spaces stay uncoloured.
 
-The eyedropper (`k` / `Ctrl+K`) picks up a cell's colour along with its
-glyph; an uncoloured cell loads an uncoloured brush. A painted space is
+The eyedropper (`k` / `Ctrl+K`) picks up a cell's colour and the piece it
+draws along with its glyph; an uncoloured cell loads an uncoloured brush. A painted space is
 always uncoloured, so erasing never leaves invisible styling behind. Event
 markers remain authoring geometry, but can now carry colour through the same
 picker and undo workflow. The Status pane shows the brush colour beside the tool.
