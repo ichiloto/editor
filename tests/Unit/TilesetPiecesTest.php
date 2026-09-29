@@ -19,7 +19,7 @@ function buildTestPieces(): array
 {
     return [
         'bed' => ['name' => 'Bed', 'layer' => 'buildings', 'glyphs' => ['= ', '=H'],
-            'tiles' => ['decor' => ['5L 5R', '6 0'], 'furniture' => ['7 0', '0 8R']]],
+            'tiles' => ['decor' => ['5 5', '6 0'], 'furniture' => ['7 0', '0 8']]],
         'lamp' => ['name' => 'Lamp', 'layer' => 'fixtures', 'glyphs' => ['i']],
         'rug' => ['name' => 'Rug', 'layer' => 'terrain', 'glyphs' => ['~~'], 'tiles' => ['floor' => ['2816 2816']]],
         'wall' => ['name' => 'Wall', 'layer' => 'buildings', 'connects' => 'lines',
@@ -92,6 +92,10 @@ it('says why a map has no pieces and opens nothing', function (string $case, str
     if ($case === 'broken tileset') {
         file_put_contents($root . '/assets/Data/Tilesets/home.php', "<?php\n\nreturn ['name' => 'Home'];\n");
     }
+    if ($case === 'half-tile piece') {
+        writeTestTileset($root, pieces: ['bed' => ['name' => 'Bed', 'layer' => 'buildings', 'glyphs' => ['=='],
+            'tiles' => ['decor' => ['5L 5R']]]]);
+    }
     [$editor, $map] = layeredCanvasEditor($root);
     callEditorMethod($editor, 'dispatchInput', 'P');
 
@@ -103,6 +107,8 @@ it('says why a map has no pieces and opens nothing', function (string $case, str
     'no tileset' => ['no tileset', 'names no tileset'],
     'no pieces' => ['no pieces', 'Tileset home has no pieces'],
     'broken tileset' => ['broken tileset', 'Pieces are unavailable: Tileset home needs at least one sheet.'],
+    // A field cell holds one whole tile, so a piece naming half a tile is refused, not reinterpreted.
+    'half-tile piece' => ['half-tile piece', "'5L' names half of tile 5, but each field cell holds one whole tile; use whole tiles, such as '5'."],
 ]);
 
 it('previews the piece\'s footprint at the cursor while placing it', function () {
@@ -169,8 +175,8 @@ it('stamps glyphs on the piece\'s layer and its tiles in one undo step', functio
         ->and(callEditorMethod($editor, 'getActiveCanvasLayer'))->toBe('map:1')
         ->and($map->isDirty())->toBeTrue();
     $tiles = $map->getTileLayerSources();
-    expect(readTileEntries($tiles[$graphics . '/02.decor.tiles.php']))->toBe([['0', '5', '5L', '5R'], ['0', '0', '6', '5']])
-        ->and(readTileEntries($tiles[$graphics . '/03.furniture.tiles.php']))->toBe([['0', '0', '7', '0'], ['0', '0', '0', '8R']])
+    expect(readTileEntries($tiles[$graphics . '/02.decor.tiles.php']))->toBe([['0', '5', '5', '5'], ['0', '0', '6', '5']])
+        ->and(readTileEntries($tiles[$graphics . '/03.furniture.tiles.php']))->toBe([['0', '0', '7', '0'], ['0', '0', '0', '8']])
         ->and($tiles[$graphics . '/01.floor.tiles.php'])->toBe($tilesBefore[$graphics . '/01.floor.tiles.php']);
 
     // Placement stays for the next stamp; one undo takes the whole stamp back.
@@ -188,8 +194,8 @@ it('stamps glyphs on the piece\'s layer and its tiles in one undo step', functio
     expect(array_keys(array_diff_assoc(sourceHashTree($map->directory), $disk)))->toBe([
         'graphics/02.decor.tiles.php', 'graphics/03.furniture.tiles.php', 'layers/04.buildings.map.php',
     ])
-        ->and(file_get_contents($graphics . '/02.decor.tiles.php'))->toBe("<?php\n\nreturn <<<'TILES'\n0 5 5L 5R\n0 0 6 5\nTILES;\n")
-        ->and(file_get_contents($graphics . '/03.furniture.tiles.php'))->toBe("<?php\n\nreturn <<<'TILES'\n0 0 7 0\n0 0 0 8R\nTILES;\n")
+        ->and(file_get_contents($graphics . '/02.decor.tiles.php'))->toBe("<?php\n\nreturn <<<'TILES'\n0 5 5 5\n0 0 6 5\nTILES;\n")
+        ->and(file_get_contents($graphics . '/03.furniture.tiles.php'))->toBe("<?php\n\nreturn <<<'TILES'\n0 0 7 0\n0 0 0 8\nTILES;\n")
         ->and(array_map(static fn($layer): string => $layer->name, MapGraphics::loadFromDirectory(
             $map->directory, 'test-map', 'home', loadLayeredMap($root)->getLayerSet(), $root . '/assets')->layers))
         ->toBe(['floor', 'decor', 'furniture']);
@@ -221,8 +227,8 @@ it('creates graphics/ for a map whose tileset pieces name tile layers it lacks',
 
 it('refuses a stamp that cannot be made whole and changes nothing', function (string $case, string $message) {
     [$editor, $map, $root] = createPieceCanvasEditor($case === 'ragged');
-    if ($case === 'unreadable tile layer') {
-        writeTileLayer($map->directory, '02.decor.tiles.php', "0 5 0 0\n0 0 0 x");
+    if ($case === 'unreadable tile layer' || $case === 'half-tile layer') {
+        writeTileLayer($map->directory, '02.decor.tiles.php', $case === 'half-tile layer' ? "0 5L 5R 0\n0 0 0 5" : "0 5 0 0\n0 0 0 x");
         [$editor, $map] = layeredCanvasEditor($root);
     }
     $before = $map->captureLayerSnapshot();
@@ -245,6 +251,7 @@ it('refuses a stamp that cannot be made whole and changes nothing', function (st
     'off the edge' => ['off the edge', 'Bed (2 x 2) does not fit at (3, 0): the map has no cell at (4, 0).'],
     'ragged' => ['ragged', 'Bed (2 x 2) does not fit at (1, 0): the map has no cell at (2, 1).'],
     'unreadable tile layer' => ['unreadable tile layer', "'x' is not an RPG Maker tile identity"],
+    'half-tile layer' => ['half-tile layer', "'5L' names half of tile 5, but each field cell holds one whole tile"],
 ]);
 
 it('ends placement when the mode, map, layer or tool changes', function (string $key) {

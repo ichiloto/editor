@@ -57,10 +57,10 @@ final class TileLayerSource
 
     /**
      * Resizes a tile layer with its map: cells and rows beyond the new size
-     * are cropped and new cells are empty (`0`); kept cells keep their entry,
-     * including a named tile half (`42L`). A layer that reads back as
-     * its baseline keeps the baseline's bytes; otherwise it is rewritten as a
-     * canonical literal nowdoc, keeping its leading comment and marker.
+     * are cropped and new cells are empty (`0`); kept cells keep their entry.
+     * A layer that reads back as its baseline keeps the baseline's bytes;
+     * otherwise it is rewritten as a canonical literal nowdoc, keeping its
+     * leading comment and marker.
      *
      * @param MapLayerSet $layers The map's terminal layers before the resize.
      * @throws MapSourceRefusal When the layer cannot be read or does not match the map; nothing is changed.
@@ -114,8 +114,8 @@ final class TileLayerSource
 
     /**
      * Writes a piece's tile entries into a tile layer with its top-left cell
-     * at (x, y). A `0` entry leaves its cell as it was; every other entry,
-     * a named tile half included, replaces the cell's entry. The result is
+     * at (x, y). A `0` entry leaves its cell as it was; every other entry
+     * replaces the cell's entry with that whole tile. The result is
      * rewritten as {@see resize()} rewrites a layer.
      *
      * @param list<list<string>> $rows Tile entries by row, as a piece holds them.

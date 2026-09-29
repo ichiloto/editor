@@ -69,18 +69,6 @@ it('validates tile layer offsets in the map data as the Engine reads them', func
     expect(graphicsIssueLines($root, Severity::ERROR))->toBe(["Map test-map tileLayers names 'rugs', which is not one of its tile layers."]);
 });
 
-it('keeps named tile halves when a resize rewrites a tile layer', function () {
-    $root = mapGraphicsProject();
-    $map = loadLayeredMap($root);
-    $furniture = writeTileLayer($map->directory, '03.furniture.tiles.php', "0 5L 5R 0\n5 0 0 0");
-    $map = loadLayeredMap($root);
-
-    $map->resize(5, 1);
-    $map->save();
-
-    expect(file_get_contents($furniture))->toContain("0 5L 5R 0 0\nTILES;");
-});
-
 it('resizes a ragged map\'s tile rows to the widths its terminal rows take', function () {
     $root = mapGraphicsProject(ragged: true);
     $map = loadLayeredMap($root);
@@ -144,6 +132,8 @@ it('refuses a resize while a tile layer cannot be read, changing nothing', funct
     'invalid identity' => ["0 5 0 abc\n0 0 0 5"],
     'short row' => ["0 5 0\n0 0 0 5"],
     'missing row' => ['0 5 0 0'],
+    // A field cell holds one whole tile; half-tile entries are refused, not reinterpreted.
+    'half tile' => ["0 5L 5R 0\n0 0 0 5"],
 ]);
 
 it('carries graphics untouched through ordinary edits, and never lets an unreadable one block a save', function () {
@@ -306,6 +296,13 @@ it('reports graphics the Engine refuses as errors', function (Closure $breakGrap
     'invalid identity' => [function (string $root, string $directory): void {
         writeTileLayer($directory, '02.decor.tiles.php', "0 0 0 0\n0 0 0 9999");
     }, "Tile layer test-map/graphics/02.decor.tiles.php row 1, cell 3: '9999' is not an RPG Maker tile identity."],
+    'half tile' => [function (string $root, string $directory): void {
+        writeTileLayer($directory, '02.decor.tiles.php', "0 5L 5R 0\n0 0 0 0");
+    }, "Tile layer test-map/graphics/02.decor.tiles.php row 0, cell 1: '5L' names half of tile 5, but each field cell holds one whole tile; use whole tiles, such as '5'."],
+    'piece with a half tile' => [function (string $root): void {
+        writeTestTileset($root, pieces: ['bed' => ['name' => 'Bed', 'layer' => 'buildings', 'glyphs' => ['=='],
+            'tiles' => ['decor' => ['5L 5R']]]]);
+    }, "'5L' names half of tile 5, but each field cell holds one whole tile; use whole tiles, such as '5'."],
     'executable source' => [function (string $root, string $directory): void {
         file_put_contents($directory . '/graphics/02.decor.tiles.php', "<?php\n\nreturn strtoupper('x');\n");
     }, 'must return one literal nowdoc string without executable code'],

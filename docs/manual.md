@@ -301,8 +301,11 @@ Event or NPC mode and selecting another map also end it.
 A stamp is one undo step. It writes the piece's glyphs on the gameplay layer
 the piece names, whichever layer the canvas is editing, in the brush colour as
 painting does, and its tiles on the tile layers it names. A space glyph and a
-`0` tile leave their cells as they are; tile halves such as `42L` are written
-as authored. A tile layer the map does not have yet is created as
+`0` tile leave their cells as they are, and every other cell takes the piece's
+whole tile. A field cell holds one whole RPG Maker tile, so an entry naming
+half a tile (`42L`) is refused: in a tileset piece the canvas offers no pieces
+and says which entry, in a tile layer the stamp changes nothing, and
+validation reports both. A tile layer the map does not have yet is created as
 `graphics/NN.name.tiles.php`, ordered after the map's tile layers and empty
 elsewhere. The terminal never shows the tiles, but a map built from pieces
 draws correctly graphically without a second pass. A stamp that cannot be made
