@@ -371,8 +371,8 @@ its own edges.
 
 ### Map Graphics
 
-A map may name a tileset in its data file (`'tileset' => 'home'`, read from
-`assets/Data/Tilesets/home.php`) and keep RPG Maker tile layers in
+A map may name a tileset in its data file (`'tileset' => 'interior'`, read from
+`assets/Data/Tilesets/interior.php`) and keep RPG Maker tile layers in
 `graphics/NN.name.tiles.php`. A tile layer holds one tile identity per map
 cell, so each of its rows is exactly as wide as the map's row in terminal
 columns. The TUI never displays tiles or paints single tiles; painting them
