@@ -1871,15 +1871,17 @@ final class ProjectMap
      * @param int $height The map height.
      * @return void
      */
-    public static function createBlank(string $directory, string $baseName, string $displayName, int $width = 48, int $height = 18, ?FileSetOperations $files = null): void
+    public static function createBlank(string $directory, string $baseName, string $displayName, int $width = 48, int $height = 18, ?FileSetOperations $files = null, ?string $kind = null): void
     {
         $blankTileLine = str_repeat(' ', $width);
         $blankEventLine = str_repeat(' ', $width);
         $tileText = implode(PHP_EOL, array_fill(0, $height, $blankTileLine));
         $eventText = implode(PHP_EOL, array_fill(0, $height, $blankEventLine));
+        // A map is born with its kind, the tileset its tiles and pieces come from.
         $data = [
             'name' => $displayName,
             'region' => '',
+            ...($kind === null ? [] : ['tileset' => $kind]),
             'description' => '',
             'triggers' => [],
             'events' => [],

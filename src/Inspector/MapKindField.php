@@ -17,10 +17,36 @@ use Throwable;
  * on the map comes from. The kind is stored as the map data's `tileset`.
  * Changing it on a map that has tiles clears them, on confirmation, since
  * tile ids name places on one tileset's sheets and would show the wrong art
- * on another's.
+ * on another's. A new map is asked its kind before it is created.
  */
 trait MapKindField
 {
+    /**
+     * Asks the kind of the map about to be created; Esc creates nothing. A
+     * project without tilesets has no kinds to offer, so its map is created
+     * without one.
+     */
+    private function openNewMapKindPicker(): void
+    {
+        $kinds = $this->referenceCatalog()->labelsFor('tilesets');
+        if ($kinds === []) {
+            $this->createNewMap();
+            return;
+        }
+        $this->optionDialogField = ['newMapKind' => true];
+        $this->eventOptionDialogMarker = null;
+        $this->eventOptionDialogPath = null;
+        $this->eventOptionDialogTitle = 'New map kind';
+        $this->eventOptionDialogEntries = array_map(static fn(string $id, string $name): array =>
+            ['label' => $name, 'value' => $id, 'description' => sprintf('Draws from assets/%s/%s.php.', Tileset::DIRECTORY, $id)],
+            array_keys($kinds), $kinds);
+        $this->selectedEventOptionIndex = 0;
+        $this->dialogFilter->clear();
+        $this->isEventOptionDialogOpen = true;
+        $this->statusMessage = 'Choose the kind of map to create. Its tiles and pieces come from it.';
+        $this->renderSelectionDependentArea();
+    }
+
     /** @return array<string, mixed> The Kind row for the Inspector. */
     private function buildMapKindField(ProjectMap $map): array
     {

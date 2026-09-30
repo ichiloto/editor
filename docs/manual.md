@@ -170,8 +170,8 @@ carries a trailing `*`.
 Controls:
 
 - `Up` / `Down`: move the selection
-- `Shift+A`: create a new map
-- `Shift+D`: duplicate the selected map
+- `Shift+A`: create a new map, asking its [kind](#map-kind) first
+- `Shift+D`: duplicate the selected map, kind included
 - `Delete`: delete the selected map (destructive confirmation)
 - `/`: filter the list incrementally
 - `Enter`: focus the canvas on the selected map
@@ -748,6 +748,9 @@ Exterior, World or Dungeon. Every tile and [piece](#pieces) on the map comes
 from its kind, so the tiles a map offers change only when its kind does.
 Enter opens the picker; the kind is stored as the map data's `tileset`.
 
+- A new map is asked its kind before it is created (`Shift+A` in the Assets
+  panel); `Esc` creates nothing. A duplicate keeps its original's kind. In a
+  project with no tilesets, a new map is created without a kind.
 - A map without a kind shows `Not set`, and `P` offers no pieces until it
   has one. Choosing a kind keeps any tiles the map already has.
 - Changing one kind to another on a map with tiles asks first, since its

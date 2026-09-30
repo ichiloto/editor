@@ -102,6 +102,7 @@ use Ichiloto\Engine\Events\Enumerations\ChestType;
 use Ichiloto\Engine\Events\Enumerations\LootType;
 use Ichiloto\Engine\Quests\QuestObjectiveType;
 use Ichiloto\Engine\Rendering\Tilesets\TileId;
+use Ichiloto\Engine\Rendering\Tilesets\Tileset;
 use RuntimeException;
 if (! class_exists(__NAMESPACE__ . chr(92) . 'Animation', false)) { class_alias('Ichiloto' . chr(92) . 'Engine' . chr(92) . 'Animations' . chr(92) . 'Animation', __NAMESPACE__ . chr(92) . 'Animation'); }
 if (! class_exists(__NAMESPACE__ . chr(92) . 'AnimationCue', false)) { class_alias('Ichiloto' . chr(92) . 'Engine' . chr(92) . 'Animations' . chr(92) . 'AnimationCue', __NAMESPACE__ . chr(92) . 'AnimationCue'); }
@@ -1543,7 +1544,7 @@ final class Editor
     private function handleAssetsPaneInput(string $input, string $normalizedInput): void
     {
         if ($this->isShiftLetterShortcut($input, 'A')) {
-            $this->createNewMap();
+            $this->openNewMapKindPicker();
             return;
         }
 
@@ -7414,17 +7415,19 @@ final class Editor
      *
      * @return void
      */
-    private function createNewMap(): void
+    private function createNewMap(?string $kind = null, ?string $kindLabel = null): void
     {
         if (! $this->workspace instanceof ProjectWorkspace) {
             return;
         }
 
         try {
-            $mapId = $this->workspace->createMap();
+            $mapId = $this->workspace->createMap(kind: $kind);
             $this->reloadWorkspaceSelectingMap($mapId);
             $this->selectedInspectorFieldIndex = 0;
-            $this->setStatus(sprintf('Created %s.', $mapId), StatusLevel::SUCCESS);
+            $this->setStatus($kind === null
+                ? sprintf('Created %s. It has no kind: the project has no tilesets in assets/%s/.', $mapId, Tileset::DIRECTORY)
+                : sprintf('Created %s; its kind is %s.', $mapId, $kindLabel ?? $kind), StatusLevel::SUCCESS);
             $this->setFocusedPane(self::FOCUS_INSPECTOR);
             $this->beginInspectorEdit();
         } catch (Throwable $throwable) {
@@ -8017,6 +8020,12 @@ final class Editor
             if (($field['canvasPiece'] ?? false) === true) {
                 $this->closeEventOptionDialog();
                 $this->choosePiece((string) $selectedEntry['value']);
+                return;
+            }
+
+            if (($field['newMapKind'] ?? false) === true) {
+                $this->closeEventOptionDialog();
+                $this->createNewMap((string) $selectedEntry['value'], (string) $selectedEntry['label']);
                 return;
             }
 

@@ -124,3 +124,50 @@ it('keeps a kind the project no longer has visible and diagnosable', function ()
     expect(inspectorValueOf($editor, 'Kind'))->toBe('home · not in assets/Data/Tilesets')
         ->and($map->isDirty())->toBeFalse();
 });
+
+it('asks a new map\'s kind before creating it, and Esc creates nothing', function () {
+    $root = layeredMapProject();
+    writeTestTileset($root, 'interior');
+    writeTestTileset($root, 'exterior');
+    [$editor] = layeredCanvasEditor($root);
+    setEditorProperty($editor, 'focusedPane', 'assets');
+
+    callEditorMethod($editor, 'dispatchInput', 'A');
+    expect(getEditorProperty($editor, 'eventOptionDialogTitle'))->toBe('New map kind')
+        ->and(array_column(getEditorProperty($editor, 'eventOptionDialogEntries'), 'label', 'value'))
+        ->toBe(['exterior' => 'Exterior', 'interior' => 'Interior'])
+        ->and(is_dir($root . '/assets/Maps/new-map'))->toBeFalse();
+
+    callEditorMethod($editor, 'dispatchInput', "\033");
+    expect(getEditorProperty($editor, 'isEventOptionDialogOpen'))->toBeFalse()
+        ->and(is_dir($root . '/assets/Maps/new-map'))->toBeFalse();
+
+    callEditorMethod($editor, 'dispatchInput', 'A');
+    callEditorMethod($editor, 'dispatchInput', "\033[B");
+    callEditorMethod($editor, 'dispatchInput', "\n");
+    $data = require $root . '/assets/Maps/new-map/new-map.data.php';
+    expect($data['tileset'])->toBe('interior')
+        ->and(kindToast($editor)?->level)->toBe(StatusLevel::SUCCESS)
+        ->and(kindToast($editor)?->message)->toBe('Created new-map; its kind is Interior.')
+        ->and(callEditorMethod($editor, 'getSelectedMap')->mapId)->toBe('new-map')
+        ->and(callEditorMethod($editor, 'getSelectedMap')->isDirty())->toBeFalse();
+});
+
+it('creates a map without a kind at once in a project that has no tilesets', function () {
+    $root = layeredMapProject();
+    [$editor] = layeredCanvasEditor($root);
+    setEditorProperty($editor, 'focusedPane', 'assets');
+
+    callEditorMethod($editor, 'dispatchInput', 'A');
+    $data = require $root . '/assets/Maps/new-map/new-map.data.php';
+    expect($data)->not->toHaveKey('tileset')
+        ->and(kindToast($editor)?->message)->toBe('Created new-map. It has no kind: the project has no tilesets in assets/Data/Tilesets/.');
+});
+
+it('keeps the kind of a duplicated map', function () {
+    $root = mapGraphicsProject();
+    $workspace = Ichiloto\Editor\ProjectWorkspace::fromProject($root);
+    $copy = $workspace->duplicateMap(0);
+
+    expect((require $root . "/assets/Maps/{$copy}/" . basename($copy) . '.data.php')['tileset'])->toBe('home');
+});

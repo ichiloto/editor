@@ -368,12 +368,12 @@ final readonly class ProjectWorkspace
      * @param string|null $baseName The preferred base name.
      * @return string The created map id.
      */
-    public function createMap(?string $baseName = null, ?FileSetOperations $files = null): string
+    public function createMap(?string $baseName = null, ?FileSetOperations $files = null, ?string $kind = null): string
     {
         $mapsRoot = $this->getMapsRoot();
         $baseName = $this->getNextAvailableBaseName($baseName ?? 'new-map');
         $directory = $mapsRoot . DIRECTORY_SEPARATOR . $baseName;
-        ProjectMap::createBlank($directory, $baseName, self::humanizeBaseName($baseName), files: $files);
+        ProjectMap::createBlank($directory, $baseName, self::humanizeBaseName($baseName), files: $files, kind: $kind);
 
         return $baseName;
     }
