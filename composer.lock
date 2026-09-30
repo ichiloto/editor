@@ -260,12 +260,12 @@
             "source": {
                 "type": "git",
                 "url": "https://github.com/ichiloto/engine.git",
-                "reference": "9011d7e2c07bc991cf523ec2da6e20072d88efe1"
+                "reference": "2e32b6f68bcfe441b639f57b5098147fe3a224dc"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/ichiloto/engine/zipball/9011d7e2c07bc991cf523ec2da6e20072d88efe1",
-                "reference": "9011d7e2c07bc991cf523ec2da6e20072d88efe1",
+                "url": "https://api.github.com/repos/ichiloto/engine/zipball/2e32b6f68bcfe441b639f57b5098147fe3a224dc",
+                "reference": "2e32b6f68bcfe441b639f57b5098147fe3a224dc",
                 "shasum": ""
             },
             "require": {
