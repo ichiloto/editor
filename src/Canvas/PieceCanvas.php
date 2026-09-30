@@ -37,8 +37,10 @@ trait PieceCanvas
 
     /**
      * Opens the piece picker: one entry per piece of the selected map's
-     * tileset, filterable by name. Enter starts placing the highlighted
-     * piece. Nothing opens when the map has no pieces to offer.
+     * tileset that goes on the layer being edited, filterable by name. Enter
+     * starts placing the highlighted piece. A map that names no tileset
+     * opens the tileset chooser instead; nothing opens when the layer has no
+     * pieces to offer, and the status says which layers do.
      */
     private function openPiecePicker(): void
     {
@@ -46,15 +48,29 @@ trait PieceCanvas
         if (! $map instanceof ProjectMap || $map->getGridSourceIssue() !== null) {
             return;
         }
+        if ($map->getMapDataField(['tileset']) === null) {
+            $this->openTilesetChooser($map);
+            return;
+        }
         $pieces = $this->loadCanvasPieces($map);
         if ($pieces === null) {
+            return;
+        }
+        $layer = $this->findPieceCanvasLayer($map);
+        $offered = array_filter($pieces, static fn(TilesetPiece $piece): bool => $piece->layer === ($layer['name'] ?? null));
+        if ($offered === []) {
+            $layers = array_values(array_unique(array_map(static fn(TilesetPiece $piece): string => MapLayers::formatLabel($piece->layer), $pieces)));
+            $this->setStatus(sprintf('%s has no pieces for the %s layer. It has pieces for %s; press L to switch layers.',
+                $map->loadTileset()?->name ?? 'The tileset', $layer === null ? 'current' : MapLayers::formatLabel($layer['name']),
+                implode(', ', $layers)), StatusLevel::WARN);
+            $this->renderFooter();
             return;
         }
         $this->finalizeActiveStroke();
         $this->optionDialogField = ['canvasPiece' => true];
         $this->eventOptionDialogMarker = null;
         $this->eventOptionDialogPath = null;
-        $this->eventOptionDialogTitle = 'Piece';
+        $this->eventOptionDialogTitle = sprintf('%s piece', MapLayers::formatLabel($layer['name']));
         $this->eventOptionDialogEntries = array_map(static function (TilesetPiece $piece): array {
             $tileLayers = array_keys($piece->connects === null ? $piece->tiles : $piece->shapeTiles);
             return [
@@ -62,15 +78,82 @@ trait PieceCanvas
                 'value' => $piece->id,
                 'description' => implode(' · ', array_filter([
                     $piece->connects === null ? sprintf('%d x %d', $piece->width, $piece->height) : 'connected',
-                    MapLayers::formatLabel($piece->layer),
                     $tileLayers === [] ? null : 'tiles: ' . implode(', ', $tileLayers),
                 ])),
             ];
-        }, array_values($pieces));
+        }, array_values($offered));
         $this->selectedEventOptionIndex = $this->resolveEventOptionSelectionIndex($this->piecePlacement['piece']->id ?? '');
         $this->isEventOptionDialogOpen = true;
         $this->statusMessage = 'Choose a piece to place.';
         $this->renderSelectionDependentArea();
+    }
+
+    /**
+     * The gameplay layer pieces go on: the layer Map mode edits, even from
+     * Event mode, so choosing a piece there returns to it. Null for a
+     * decoration layer, which takes no pieces.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function findPieceCanvasLayer(ProjectMap $map): ?array
+    {
+        $selected = $this->getCanvasLayerState()['selected'];
+        $layers = array_values(array_filter($map->getLayers(), static fn(array $layer): bool => $layer['id'] !== MapLayers::EVENT));
+        $layer = array_find($layers, static fn(array $candidate): bool => $candidate['id'] === $selected)
+            ?? array_find($layers, static fn(array $candidate): bool => $candidate['id'] === $map->getBaseLayerId());
+
+        return $layer === null || $layer['decoration'] ? null : $layer;
+    }
+
+    /**
+     * Offers the project's tilesets for a map that names none. Choosing one
+     * names it in the map's data (saved with the map, undoable) and opens
+     * its pieces.
+     */
+    private function openTilesetChooser(ProjectMap $map): void
+    {
+        $tilesets = [];
+        foreach (glob($map->getAssetRoot() . '/' . Tileset::DIRECTORY . '/*.php') ?: [] as $file) {
+            $id = basename($file, '.php');
+            try {
+                $tileset = Tileset::load($map->getAssetRoot(), $id);
+            } catch (\Throwable) {
+                continue;
+            }
+            $count = count($tileset->pieces);
+            $tilesets[] = ['label' => $tileset->name, 'value' => $id,
+                'description' => sprintf('%s · %d %s', $id, $count, $count === 1 ? 'piece' : 'pieces')];
+        }
+        if ($tilesets === []) {
+            $this->setStatus(sprintf('This map names no tileset, and the project has none to choose. Add one to assets/%s/.', Tileset::DIRECTORY), StatusLevel::WARN);
+            $this->renderFooter();
+            return;
+        }
+        $this->finalizeActiveStroke();
+        $this->optionDialogField = ['canvasTileset' => true];
+        $this->eventOptionDialogMarker = null;
+        $this->eventOptionDialogPath = null;
+        $this->eventOptionDialogTitle = 'Tileset';
+        $this->eventOptionDialogEntries = $tilesets;
+        $this->selectedEventOptionIndex = 0;
+        $this->isEventOptionDialogOpen = true;
+        $this->setStatus('This map names no tileset. Choose the one it draws from; its pieces then open.');
+        $this->renderSelectionDependentArea();
+    }
+
+    /** Names the chosen tileset in the map's data, then opens its pieces. */
+    private function chooseMapTileset(string $id): void
+    {
+        $map = $this->getSelectedMap();
+        if (! $map instanceof ProjectMap) {
+            return;
+        }
+        $this->applyMapDataValue($map, ['tileset'], $id, 'Tileset');
+        $this->openPiecePicker();
+        if ($this->isEventOptionDialogOpen) {
+            $this->setStatus(sprintf('This map now draws from the %s tileset; save to keep it. Choose a piece to place.',
+                $map->loadTileset()?->name ?? $id), StatusLevel::INFO);
+        }
     }
 
     /**

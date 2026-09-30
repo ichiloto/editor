@@ -46,25 +46,34 @@ function getCurrentToast(Editor $editor): ?Ichiloto\Editor\Status\Toast
     return getEditorProperty($editor, 'toasts')->current();
 }
 
-function choosePieceByKeys(Editor $editor, int $downs = 0): void
+/** Selects the layer a test piece goes on, as L does. */
+function selectPieceLayer(Editor $editor, string $layerName): void
 {
+    $layer = array_find(callEditorMethod($editor, 'getSelectedMap')->getLayers(), static fn(array $layer): bool => $layer['name'] === $layerName);
+    callEditorMethod($editor, 'selectCanvasLayer', $layer['id']);
+}
+
+/** Chooses a piece with the keys: its layer, P, down to its entry and Enter. */
+function choosePieceByKeys(Editor $editor, string $id = 'bed'): void
+{
+    selectPieceLayer($editor, buildTestPieces()[$id]['layer']);
     callEditorMethod($editor, 'dispatchInput', 'P');
+    $downs = array_search($id, array_column(getEditorProperty($editor, 'eventOptionDialogEntries'), 'value'), true);
     for ($i = 0; $i < $downs; $i++) {
         callEditorMethod($editor, 'dispatchInput', "\033[B");
     }
     callEditorMethod($editor, 'dispatchInput', "\n");
 }
 
-it('lists the pieces of the map\'s tileset in the shared picker with P', function () {
+it('lists the pieces for the layer being edited in the shared picker with P', function () {
     [$editor] = createPieceCanvasEditor();
+    selectPieceLayer($editor, 'buildings');
     callEditorMethod($editor, 'dispatchInput', 'P');
 
-    expect(getEditorProperty($editor, 'eventOptionDialogTitle'))->toBe('Piece')
+    expect(getEditorProperty($editor, 'eventOptionDialogTitle'))->toBe('Buildings piece')
         ->and(getEditorProperty($editor, 'eventOptionDialogEntries'))->toBe([
-            ['label' => 'Bed', 'value' => 'bed', 'description' => '2 x 2 · Buildings · tiles: decor, furniture'],
-            ['label' => 'Lamp', 'value' => 'lamp', 'description' => '1 x 1 · Fixtures'],
-            ['label' => 'Rug', 'value' => 'rug', 'description' => '2 x 1 · Terrain · tiles: floor'],
-            ['label' => 'Wall', 'value' => 'wall', 'description' => 'connected · Buildings · tiles: walls'],
+            ['label' => 'Bed', 'value' => 'bed', 'description' => '2 x 2 · tiles: decor, furniture'],
+            ['label' => 'Wall', 'value' => 'wall', 'description' => 'connected · tiles: walls'],
         ]);
 
     // Esc cancels without placing anything.
@@ -73,10 +82,56 @@ it('lists the pieces of the map\'s tileset in the shared picker with P', functio
         ->and(getEditorProperty($editor, 'piecePlacement'))->toBeNull();
 
     // A filter narrows the list; Enter chooses the match.
-    foreach (['P', '/', 'L', 'a', "\n", "\n"] as $key) {
+    foreach (['P', '/', 'W', 'a', "\n", "\n"] as $key) {
         callEditorMethod($editor, 'dispatchInput', $key);
     }
-    expect(getEditorProperty($editor, 'piecePlacement')['piece']->id)->toBe('lamp');
+    expect(getEditorProperty($editor, 'piecePlacement')['piece']->id)->toBe('wall');
+
+    // Another layer offers only its own pieces.
+    callEditorMethod($editor, 'dispatchInput', "\033");
+    selectPieceLayer($editor, 'terrain');
+    callEditorMethod($editor, 'dispatchInput', 'P');
+    expect(array_column(getEditorProperty($editor, 'eventOptionDialogEntries'), 'value'))->toBe(['rug']);
+});
+
+it('says which layers have pieces when the layer being edited has none', function () {
+    [$editor, $map] = createPieceCanvasEditor();
+    writeTestTileset(getEditorProperty($editor, 'projectRoot'), pieces: ['wall' => buildTestPieces()['wall']]);
+    selectPieceLayer($editor, 'terrain');
+    callEditorMethod($editor, 'dispatchInput', 'P');
+
+    expect(getEditorProperty($editor, 'isEventOptionDialogOpen'))->toBeFalse()
+        ->and(getCurrentToast($editor)?->level)->toBe(StatusLevel::WARN)
+        ->and(getCurrentToast($editor)?->message)->toBe('Home has no pieces for the Terrain layer. It has pieces for Buildings; press L to switch layers.')
+        ->and($map->isDirty())->toBeFalse();
+});
+
+it('offers the project\'s tilesets for a map that names none, then its pieces', function () {
+    $root = layeredMapProject();
+    writeTestTileset($root, pieces: buildTestPieces());
+    writeTestTileset($root, 'cave', pieces: []);
+    [$editor, $map] = layeredCanvasEditor($root);
+    selectPieceLayer($editor, 'buildings');
+    callEditorMethod($editor, 'dispatchInput', 'P');
+
+    expect(getEditorProperty($editor, 'eventOptionDialogTitle'))->toBe('Tileset')
+        ->and(getEditorProperty($editor, 'eventOptionDialogEntries'))->toBe([
+            ['label' => 'Cave', 'value' => 'cave', 'description' => 'cave · 0 pieces'],
+            ['label' => 'Home', 'value' => 'home', 'description' => 'home · 4 pieces'],
+        ])
+        ->and($map->isDirty())->toBeFalse();
+
+    // Choosing names it in the map's data, unsaved and undoable, and opens its pieces for the layer.
+    callEditorMethod($editor, 'dispatchInput', "\033[B");
+    callEditorMethod($editor, 'dispatchInput', "\n");
+    expect($map->getMapDataField(['tileset']))->toBe('home')
+        ->and($map->isDirty())->toBeTrue()
+        ->and(getEditorProperty($editor, 'eventOptionDialogTitle'))->toBe('Buildings piece')
+        ->and(getCurrentToast($editor)?->level)->toBe(StatusLevel::INFO);
+
+    callEditorMethod($editor, 'dispatchInput', "\033");
+    callEditorMethod($editor, 'dispatchInput', "\x1a");
+    expect($map->getMapDataField(['tileset']))->toBeNull();
 });
 
 it('offers one piece entry in the command palette', function () {
@@ -164,15 +219,15 @@ it('stamps glyphs on the piece\'s layer and its tiles in one undo step', functio
     setEditorProperty($editor, 'cursorX', 2);
     callEditorMethod($editor, 'dispatchInput', "\n");
 
-    // The glyphs land on buildings, not the terrain layer being edited; a
-    // space glyph and a 0 tile leave their cells alone.
+    // The glyphs land on buildings, the layer being edited, and leave the
+    // terrain alone; a space glyph and a 0 tile leave their cells alone.
     expect($map->getLayerSymbol('map:4', 2, 0))->toBe('=')
         ->and($map->getLayerSymbol('map:4', 3, 0))->toBe(' ')
         ->and($map->getLayerSymbol('map:4', 2, 1))->toBe('=')
         ->and($map->getLayerSymbol('map:4', 3, 1))->toBe('H')
         ->and($map->getLayerColor('map:4', 3, 1))->toBe('cyan')
         ->and($map->getLayerSymbol('map:1', 2, 0))->toBe('.')
-        ->and(callEditorMethod($editor, 'getActiveCanvasLayer'))->toBe('map:1')
+        ->and(callEditorMethod($editor, 'getActiveCanvasLayer'))->toBe('map:4')
         ->and($map->isDirty())->toBeTrue();
     $tiles = $map->getTileLayerSources();
     expect(readTileEntries($tiles[$graphics . '/02.decor.tiles.php']))->toBe([['0', '5', '5', '5'], ['0', '0', '6', '5']])
@@ -213,7 +268,7 @@ it('creates graphics/ for a map whose tileset pieces name tile layers it lacks',
     file_put_contents($data, str_replace("'events' => [],", "'events' => [], 'tileset' => 'home',", (string) file_get_contents($data)));
     [$editor, $map] = layeredCanvasEditor($root);
 
-    choosePieceByKeys($editor, 2);
+    choosePieceByKeys($editor, 'rug');
     callEditorMethod($editor, 'dispatchInput', "\033[B");
     callEditorMethod($editor, 'dispatchInput', "\n");
     callEditorMethod($editor, 'dispatchInput', "\x13");
@@ -233,7 +288,11 @@ it('refuses a stamp that cannot be made whole and changes nothing', function (st
     }
     $before = $map->captureLayerSnapshot();
     $tiles = $map->getTileLayerSources();
-    choosePieceByKeys($editor, $case === 'missing layer' ? 1 : 0);
+    if ($case === 'missing layer') {
+        callEditorMethod($editor, 'choosePiece', 'lamp');
+    } else {
+        choosePieceByKeys($editor);
+    }
     setEditorProperty($editor, 'cursorX', match ($case) { 'off the edge' => 3, 'ragged' => 1, default => 0 });
     getEditorProperty($editor, 'toasts')->clear();
     callEditorMethod($editor, 'dispatchInput', "\n");
@@ -335,7 +394,7 @@ function createWallCanvasEditor(?array $buildings = null, bool $ragged = false, 
 /** Starts drawing the wall, the fourth piece in the picker. */
 function chooseWallByKeys(Editor $editor): void
 {
-    choosePieceByKeys($editor, 3);
+    choosePieceByKeys($editor, 'wall');
 }
 
 /** Walks the canvas cursor to a cell with the arrow keys. */
@@ -558,12 +617,13 @@ it('refuses a wall draw or erase that cannot be made whole and changes nothing',
         ->and($map->getTileLayerSources())->toBe($tiles)
         ->and(getEditorProperty($editor, 'piecePlacement')['anchor'])->toBe(['x' => 0, 'y' => 3]);
 
-    // A wall whose gameplay layer the map lacks is refused as a stamp is.
+    // A wall whose gameplay layer the map lacks is never offered; placed
+    // some other way, it is refused as a stamp is.
     $pieces = buildTestPieces();
     $pieces['wall']['layer'] = 'fixtures';
     [$editor, $map] = createWallCanvasEditor(pieces: $pieces);
     $layers = $map->captureLayerSnapshot();
-    chooseWallByKeys($editor);
+    callEditorMethod($editor, 'choosePiece', 'wall');
     foreach (["\n", "\177"] as $key) {
         getEditorProperty($editor, 'toasts')->clear();
         callEditorMethod($editor, 'dispatchInput', $key);
@@ -641,7 +701,7 @@ it('keeps the erase keys erasing with the brush while an item piece is placed', 
     setEditorProperty($editor, 'cursorX', 1);
     callEditorMethod($editor, 'dispatchInput', "\177");
 
-    expect($map->getLayerSymbol('map:1', 1, 0))->toBe(' ')
+    expect($map->getLayerSymbol('map:4', 1, 0))->toBe(' ')
         ->and(getEditorProperty($editor, 'piecePlacement')['piece']->id)->toBe('bed');
 });
 

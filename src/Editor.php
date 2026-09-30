@@ -8012,6 +8012,12 @@ final class Editor
                 return;
             }
 
+            if (($field['canvasTileset'] ?? false) === true) {
+                $this->closeEventOptionDialog();
+                $this->chooseMapTileset((string) $selectedEntry['value']);
+                return;
+            }
+
             if (($field['canvasPiece'] ?? false) === true) {
                 $this->closeEventOptionDialog();
                 $this->choosePiece((string) $selectedEntry['value']);

@@ -280,15 +280,23 @@ told that existing saves are not migrated.
 A map offers the pieces of the tileset its data names (see
 [Map Graphics](#map-graphics)): whole items such as a bed or a table, so a map
 is built from items instead of single glyphs. In Normal mode on the canvas, `P`
-opens the piece picker, one entry per piece with its footprint in cells, the
-gameplay layer its glyphs go on and the tile layers it writes, for example
-`1 x 2 · fixtures · tiles: furniture`, or `connected` in place of the
-footprint for a [connected piece](#connected-pieces) such as a wall
-(`connected · buildings · tiles: walls`). Move with the arrows or `j` / `k`,
-press `/` to filter by name, `Enter` to choose and `Esc` to cancel. The command
-palette offers the same picker as `Pieces: Choose a piece to place`. When the
-map names no tileset, its tileset has no pieces, or the tileset cannot be
-loaded, the status line says so and nothing opens.
+opens the piece picker for the layer being edited: only the pieces whose glyphs
+go on that layer, titled after it (`Fixtures piece`), one entry per piece with
+its footprint in cells and the tile layers it writes, for example
+`1 x 2 · tiles: furniture`, or `connected` in place of the footprint for a
+[connected piece](#connected-pieces) such as a wall (`connected · tiles:
+walls`). In Event mode it offers the pieces of the layer Map mode edits, and
+choosing one returns to Map mode. Move with the arrows or `j` / `k`, press `/`
+to filter by name, `Enter` to choose and `Esc` to cancel. The command palette
+offers the same picker as `Pieces: Choose a piece to place`.
+
+When the map names no tileset, `P` opens the tileset chooser instead: one
+entry per tileset in `assets/Data/Tilesets/`, with its id and how many pieces
+it has. Choosing one names it in the map's data (`'tileset' => 'interior'`),
+unsaved and undoable like any edit, and opens its pieces for the layer. When
+the layer being edited has no pieces, the status line names the layers that
+do; when the tileset has no pieces or cannot be loaded, or the project has no
+tilesets, it says so and nothing opens.
 
 Choosing a piece starts placing it, in Map mode. The canvas previews the
 piece's glyphs in reverse video with its top-left cell at the cursor, and the
