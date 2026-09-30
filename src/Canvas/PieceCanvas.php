@@ -38,18 +38,14 @@ trait PieceCanvas
     /**
      * Opens the piece picker: one entry per piece of the selected map's
      * tileset that goes on the layer being edited, filterable by name. Enter
-     * starts placing the highlighted piece. A map that names no tileset
-     * opens the tileset chooser instead; nothing opens when the layer has no
-     * pieces to offer, and the status says which layers do.
+     * starts placing the highlighted piece. Nothing opens when the map names
+     * no tileset or the layer has no pieces to offer, and the status says
+     * why, naming the layers that have pieces.
      */
     private function openPiecePicker(): void
     {
         $map = $this->getSelectedMap();
         if (! $map instanceof ProjectMap || $map->getGridSourceIssue() !== null) {
-            return;
-        }
-        if ($map->getMapDataField(['tileset']) === null) {
-            $this->openTilesetChooser($map);
             return;
         }
         $pieces = $this->loadCanvasPieces($map);
@@ -103,57 +99,6 @@ trait PieceCanvas
             ?? array_find($layers, static fn(array $candidate): bool => $candidate['id'] === $map->getBaseLayerId());
 
         return $layer === null || $layer['decoration'] ? null : $layer;
-    }
-
-    /**
-     * Offers the project's tilesets for a map that names none. Choosing one
-     * names it in the map's data (saved with the map, undoable) and opens
-     * its pieces.
-     */
-    private function openTilesetChooser(ProjectMap $map): void
-    {
-        $tilesets = [];
-        foreach (glob($map->getAssetRoot() . '/' . Tileset::DIRECTORY . '/*.php') ?: [] as $file) {
-            $id = basename($file, '.php');
-            try {
-                $tileset = Tileset::load($map->getAssetRoot(), $id);
-            } catch (\Throwable) {
-                continue;
-            }
-            $count = count($tileset->pieces);
-            $tilesets[] = ['label' => $tileset->name, 'value' => $id,
-                'description' => sprintf('%s · %d %s', $id, $count, $count === 1 ? 'piece' : 'pieces')];
-        }
-        if ($tilesets === []) {
-            $this->setStatus(sprintf('This map names no tileset, and the project has none to choose. Add one to assets/%s/.', Tileset::DIRECTORY), StatusLevel::WARN);
-            $this->renderFooter();
-            return;
-        }
-        $this->finalizeActiveStroke();
-        $this->optionDialogField = ['canvasTileset' => true];
-        $this->eventOptionDialogMarker = null;
-        $this->eventOptionDialogPath = null;
-        $this->eventOptionDialogTitle = 'Tileset';
-        $this->eventOptionDialogEntries = $tilesets;
-        $this->selectedEventOptionIndex = 0;
-        $this->isEventOptionDialogOpen = true;
-        $this->setStatus('This map names no tileset. Choose the one it draws from; its pieces then open.');
-        $this->renderSelectionDependentArea();
-    }
-
-    /** Names the chosen tileset in the map's data, then opens its pieces. */
-    private function chooseMapTileset(string $id): void
-    {
-        $map = $this->getSelectedMap();
-        if (! $map instanceof ProjectMap) {
-            return;
-        }
-        $this->applyMapDataValue($map, ['tileset'], $id, 'Tileset');
-        $this->openPiecePicker();
-        if ($this->isEventOptionDialogOpen) {
-            $this->setStatus(sprintf('This map now draws from the %s tileset; save to keep it. Choose a piece to place.',
-                $map->loadTileset()?->name ?? $id), StatusLevel::INFO);
-        }
     }
 
     /**

@@ -290,13 +290,10 @@ choosing one returns to Map mode. Move with the arrows or `j` / `k`, press `/`
 to filter by name, `Enter` to choose and `Esc` to cancel. The command palette
 offers the same picker as `Pieces: Choose a piece to place`.
 
-When the map names no tileset, `P` opens the tileset chooser instead: one
-entry per tileset in `assets/Data/Tilesets/`, with its id and how many pieces
-it has. Choosing one names it in the map's data (`'tileset' => 'interior'`),
-unsaved and undoable like any edit, and opens its pieces for the layer. When
-the layer being edited has no pieces, the status line names the layers that
-do; when the tileset has no pieces or cannot be loaded, or the project has no
-tilesets, it says so and nothing opens.
+When the layer being edited has no pieces, the status line names the layers
+that do. When the map names no tileset, or its tileset has no pieces or cannot
+be loaded, it says so and nothing opens. Placing a piece never chooses a map's
+tileset: the tileset belongs to the map.
 
 Choosing a piece starts placing it, in Map mode. The canvas previews the
 piece's glyphs in reverse video with its top-left cell at the cursor, and the

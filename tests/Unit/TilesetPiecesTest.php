@@ -106,34 +106,6 @@ it('says which layers have pieces when the layer being edited has none', functio
         ->and($map->isDirty())->toBeFalse();
 });
 
-it('offers the project\'s tilesets for a map that names none, then its pieces', function () {
-    $root = layeredMapProject();
-    writeTestTileset($root, pieces: buildTestPieces());
-    writeTestTileset($root, 'cave', pieces: []);
-    [$editor, $map] = layeredCanvasEditor($root);
-    selectPieceLayer($editor, 'buildings');
-    callEditorMethod($editor, 'dispatchInput', 'P');
-
-    expect(getEditorProperty($editor, 'eventOptionDialogTitle'))->toBe('Tileset')
-        ->and(getEditorProperty($editor, 'eventOptionDialogEntries'))->toBe([
-            ['label' => 'Cave', 'value' => 'cave', 'description' => 'cave · 0 pieces'],
-            ['label' => 'Home', 'value' => 'home', 'description' => 'home · 4 pieces'],
-        ])
-        ->and($map->isDirty())->toBeFalse();
-
-    // Choosing names it in the map's data, unsaved and undoable, and opens its pieces for the layer.
-    callEditorMethod($editor, 'dispatchInput', "\033[B");
-    callEditorMethod($editor, 'dispatchInput', "\n");
-    expect($map->getMapDataField(['tileset']))->toBe('home')
-        ->and($map->isDirty())->toBeTrue()
-        ->and(getEditorProperty($editor, 'eventOptionDialogTitle'))->toBe('Buildings piece')
-        ->and(getCurrentToast($editor)?->level)->toBe(StatusLevel::INFO);
-
-    callEditorMethod($editor, 'dispatchInput', "\033");
-    callEditorMethod($editor, 'dispatchInput', "\x1a");
-    expect($map->getMapDataField(['tileset']))->toBeNull();
-});
-
 it('offers one piece entry in the command palette', function () {
     [$editor] = createPieceCanvasEditor();
     $labels = array_map(static fn($item): string => $item->label . ' ' . $item->hint, callEditorMethod($editor, 'buildPaletteItems'));
@@ -144,6 +116,9 @@ it('offers one piece entry in the command palette', function () {
 
 it('says why a map has no pieces and opens nothing', function (string $case, string $message) {
     $root = $case === 'no tileset' ? layeredMapProject() : mapGraphicsProject();
+    if ($case === 'no tileset') {
+        writeTestTileset($root, pieces: buildTestPieces());
+    }
     if ($case === 'broken tileset') {
         file_put_contents($root . '/assets/Data/Tilesets/home.php', "<?php\n\nreturn ['name' => 'Home'];\n");
     }
