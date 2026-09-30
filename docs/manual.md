@@ -54,17 +54,17 @@ is what the code draws rather than a sketch of it:
  ┌─Assets [Focus]───────────────┐ ┌─Canvas─────────────────────┐ ┌─Inspector──────────────────────┐
  │ Maps                         │ │ Preview: test-map          │ │   Name: Test Map               │
  │ > test-map                   │ │ Test Map |  | 12 x 5 | vie │ │   Region:                      │
- │                              │ │ ############               │ │   Description: A tiny fixture  │
- │                              │ │ #  ~~~     #               │ │                map.            │
+ │                              │ │ ############               │ │   Kind: Not set                │
+ │                              │ │ #  ~~~     #               │ │   Description: A tiny fixture  │
+ │                              │ │ #          #               │ │                map.            │
  │                              │ │ #          #               │ │   Size                         │
- │                              │ │ #          #               │ │     X: 12                      │
- │                              │ │ ############               │ │     Y: 5                       │
+ │                              │ │ ############               │ │     X: 12                      │
+ │                              │ │                            │ │     Y: 5                       │
  │                              │ │                            │ │   Events · 1                   │
  │                              │ │                            │ │   Triggers · 0                 │
  │                              │ │                            │ │   Audio                        │
  │                              │ │                            │ │     Background Music: (None)   │
  │                              │ │                            │ │     Music Variants · None      │
- │                              │ │                            │ │   Encounters · off             │
  └─/:Filter  Del:Delete─────────┘ └─i:Paint L:Layer ?:Help─────┘ └─Enter:Edit─────────────────────┘
  ┌─Status─────────────────────────────────────────────────────────────────────────────────────────┐
  │ Selected map: test-map | Focus: Assets | Mode: Map | Tool: Brush 1                             │
@@ -277,7 +277,7 @@ told that existing saves are not migrated.
 
 ### Pieces
 
-A map offers the pieces of the tileset its data names (see
+A map offers the pieces of its [kind](#map-kind)'s tileset (see
 [Map Graphics](#map-graphics)): whole items such as a bed or a table, so a map
 is built from items instead of single glyphs. In Normal mode on the canvas, `P`
 opens the piece picker for the layer being edited: only the pieces whose glyphs
@@ -291,9 +291,9 @@ to filter by name, `Enter` to choose and `Esc` to cancel. The command palette
 offers the same picker as `Pieces: Choose a piece to place`.
 
 When the layer being edited has no pieces, the status line names the layers
-that do. When the map names no tileset, or its tileset has no pieces or cannot
+that do. When the map has no kind yet, or its tileset has no pieces or cannot
 be loaded, it says so and nothing opens. Placing a piece never chooses a map's
-tileset: the tileset belongs to the map.
+tileset: it comes from the map's kind, set in the Inspector.
 
 Choosing a piece starts placing it, in Map mode. The canvas previews the
 piece's glyphs in reverse video with its top-left cell at the cursor, and the
@@ -376,8 +376,9 @@ its own edges.
 
 ### Map Graphics
 
-A map may name a tileset in its data file (`'tileset' => 'interior'`, read from
-`assets/Data/Tilesets/interior.php`) and keep RPG Maker tile layers in
+A map's [kind](#map-kind) names its tileset in its data file
+(`'tileset' => 'interior'`, read from `assets/Data/Tilesets/interior.php`),
+and the map may keep RPG Maker tile layers in
 `graphics/NN.name.tiles.php`. A tile layer holds one tile identity per map
 cell, so each of its rows is exactly as wide as the map's row in terminal
 columns. The TUI never displays tiles or paints single tiles; painting them
@@ -738,6 +739,27 @@ being edited stays on one line and scrolls sideways around the caret. The pane
 scrolls by rows, keeping the selected row's first line in view.
 
 The Destination row on an event is a reference: `Ctrl+G` follows it.
+
+### Map kind
+
+`Kind`, under `Region`, is the setting the map draws: one of the project's
+tilesets in `assets/Data/Tilesets/`, shown by name, such as Interior,
+Exterior, World or Dungeon. Every tile and [piece](#pieces) on the map comes
+from its kind, so the tiles a map offers change only when its kind does.
+Enter opens the picker; the kind is stored as the map data's `tileset`.
+
+- A map without a kind shows `Not set`, and `P` offers no pieces until it
+  has one. Choosing a kind keeps any tiles the map already has.
+- Changing one kind to another on a map with tiles asks first, since its
+  tiles name places on the old kind's sheets and would show the wrong art.
+  `Cancel`, the default, keeps everything; `Clear N tile layers and change`
+  clears its tile layers and their `tileLayers` settings. Glyphs, collision
+  and events stay.
+- A map without tiles changes kind at once.
+- Each change is one undo step and is written on save; saving a cleared map
+  removes its `graphics/` tile layer files.
+- A kind the project no longer has stays visible as
+  `id · not in assets/Data/Tilesets`.
 
 ### Map audio and encounters
 

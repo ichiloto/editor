@@ -116,7 +116,7 @@ trait PieceCanvas
             return null;
         }
         if ($tileset === null) {
-            $this->setStatus("This map names no tileset, so it has no pieces. Name one in its data file ('tileset' => '<id>').", StatusLevel::WARN);
+            $this->setStatus('This map has no kind yet, so it has no pieces. Set its Kind in the Inspector.', StatusLevel::WARN);
             return null;
         }
         if ($tileset->pieces === []) {

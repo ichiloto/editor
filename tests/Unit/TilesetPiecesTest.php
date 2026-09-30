@@ -134,7 +134,7 @@ it('says why a map has no pieces and opens nothing', function (string $case, str
         ->and(getCurrentToast($editor)?->message)->toContain($message)
         ->and($map->isDirty())->toBeFalse();
 })->with([
-    'no tileset' => ['no tileset', 'names no tileset'],
+    'no tileset' => ['no tileset', 'This map has no kind yet, so it has no pieces. Set its Kind in the Inspector.'],
     'no pieces' => ['no pieces', 'Tileset home has no pieces'],
     'broken tileset' => ['broken tileset', 'Pieces are unavailable: Tileset home needs at least one sheet.'],
     // A field cell holds one whole tile, so a piece naming half a tile is refused, not reinterpreted.

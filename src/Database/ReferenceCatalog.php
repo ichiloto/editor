@@ -13,6 +13,7 @@ use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\Cutscenes\CutsceneAsset;
 use Ichiloto\Editor\Cutscenes\CutsceneType;
 use Ichiloto\Editor\ProjectWorkspace;
+use Ichiloto\Engine\Rendering\Tilesets\Tileset;
 
 /**
  * What a field pointing at another resource may point at.
@@ -69,6 +70,7 @@ final class ReferenceCatalog
         'cinematic_checkpoints',
         'summon_cues',
         'event_markers',
+        'tilesets',
     ];
 
     /**
@@ -186,6 +188,8 @@ final class ReferenceCatalog
             'cinematic_checkpoints' => $this->checkpointIds(),
             'summon_cues' => $this->summonCueIds(),
             'event_markers' => $this->currentMap?->getEventMarkers() ?? [],
+            // A map's kind is one of the project's tilesets, by file stem.
+            'tilesets' => array_keys($this->loadTilesetNames()),
             default => $this->recordValues($category),
         };
     }
@@ -335,6 +339,10 @@ final class ReferenceCatalog
      */
     public function labelsFor(string $category): array
     {
+        if ($category === 'tilesets') {
+            return $this->loadTilesetNames();
+        }
+
         if ($category === 'animation_ids') {
             $labels = [];
             foreach ($this->workspace->animationDatabase->getAnimations() as $animation) {
@@ -641,6 +649,28 @@ final class ReferenceCatalog
 
         $names = array_values(array_unique($names));
         sort($names);
+
+        return $names;
+    }
+
+    /**
+     * The name of every tileset in assets/Data/Tilesets that loads, by id. One
+     * that cannot load is not offered; validation reports it.
+     *
+     * @return array<string, string>
+     */
+    private function loadTilesetNames(): array
+    {
+        $assetRoot = rtrim($this->workspace->projectRoot, '/') . '/assets';
+        $names = [];
+        foreach (glob($assetRoot . '/' . Tileset::DIRECTORY . '/*.php') ?: [] as $file) {
+            $id = basename($file, '.php');
+            try {
+                $names[$id] = Tileset::load($assetRoot, $id)->name;
+            } catch (\Throwable) {
+                continue;
+            }
+        }
 
         return $names;
     }

@@ -117,6 +117,7 @@ final class Editor
     use \Ichiloto\Editor\Canvas\PieceCanvas;
     use \Ichiloto\Editor\Canvas\LineInsertCanvas;
     use \Ichiloto\Editor\Canvas\GlyphTileCanvas;
+    use \Ichiloto\Editor\Inspector\MapKindField;
     use CutscenesWorkspace;
     use CutsceneOutlinePane;
     use CutscenePreviewPane;
@@ -536,6 +537,7 @@ final class Editor
      * The picker row that clears a map's background music.
      */
     private const string MAP_BGM_NONE = '(None)';
+    private const string MAP_KIND_NONE = 'Not set';
 
     /**
      * The row that chooses which kind of slot the Optimize preview fills.
@@ -8018,6 +8020,17 @@ final class Editor
                 return;
             }
 
+            if (($field['target'] ?? null) === 'map-kind') {
+                $this->closeEventOptionDialog();
+                $this->chooseMapKind((string) $selectedEntry['value'], (string) $selectedEntry['label']);
+                return;
+            }
+
+            if (is_array($field['mapKindChange'] ?? null)) {
+                $this->confirmMapKindChange($field['mapKindChange'], $selectedEntry['value'] === 'clear');
+                return;
+            }
+
             if (is_array($field['glyphPiece'] ?? null)) {
                 $this->chooseGlyphPiece($field['glyphPiece'], (string) $selectedEntry['value']);
                 return;
@@ -13736,6 +13749,7 @@ final class Editor
                 'target' => 'map',
                 'field' => 'region',
             ],
+            $this->buildMapKindField($selectedMap),
             [
                 'label' => 'Description',
                 'value' => $selectedMap->getDescription(),
@@ -15698,7 +15712,7 @@ final class Editor
         $category = (string) ($field['reference'] ?? '');
         $target = (string) ($field['target'] ?? '');
 
-        if ($category === '' || ! in_array($target, ['map-data', 'map-encounters', 'map-bgm-variants'], true)) {
+        if ($category === '' || ! in_array($target, ['map-data', 'map-kind', 'map-encounters', 'map-bgm-variants'], true)) {
             return false;
         }
 
@@ -15745,7 +15759,7 @@ final class Editor
         $this->eventOptionDialogPath = null;
         $this->eventOptionDialogTitle = $title;
         $this->eventOptionDialogEntries = $entries;
-        $this->selectedEventOptionIndex = $this->resolveEventOptionSelectionIndex((string) ($field['value'] ?? ''));
+        $this->selectedEventOptionIndex = $this->resolveEventOptionSelectionIndex((string) ($field['selectedValue'] ?? $field['value'] ?? ''));
         $this->isEventOptionDialogOpen = true;
         $this->statusMessage = sprintf('Choose %s.', mb_strtolower($title));
         $this->renderSelectionDependentArea();
