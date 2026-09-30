@@ -1903,8 +1903,10 @@ class ProjectValidator
    * `NpcManager::configure()` skips an entry silently when it is not an
    * array, has no name, or has no coordinates; ignores a wander area or
    * directional map that is not an array; treats any movement but `wander`
-   * as fixed; clamps wander dimensions to 1; and throws on a duplicate id.
-   * `Player::interact()` talks to the NPC on the faced tile, and
+   * as fixed; reads `directionFix` as set only when it is exactly true;
+   * clamps wander dimensions to 1; and throws on a duplicate id.
+   * `Player::interact()` turns the NPC on the faced tile toward the player
+   * unless its direction is fixed, then talks to it, and
    * `MapManager::canMoveTo()` refuses a tile an NPC stands on. Every check
    * here follows from one of those, with an error where the authored
    * content cannot happen and a warning where it can but probably not as
@@ -2102,8 +2104,9 @@ class ProjectValidator
   }
 
   /**
-   * Checks the movement mode and the wander area against how the game
-   * wanders: only into tiles inside the area, never off the map.
+   * Checks the movement mode, the direction fix and the wander area against
+   * how the game moves: wandering only into tiles inside the area, never off
+   * the map, and turning to the player unless the heading is fixed.
    *
    * @param array<string, mixed> $entry The NPC entry.
    * @param string $where Where it lives.
@@ -2132,6 +2135,14 @@ class ProjectValidator
     }
 
     $wanders = $movement === 'wander';
+
+    if (array_key_exists('directionFix', $entry) && ! is_bool($entry['directionFix'])) {
+      $issues[] = Issue::error(
+        $where,
+        sprintf('Its directionFix is %s, not true or false.', get_debug_type($entry['directionFix'])),
+        'The game keeps its heading only for exactly true, so it turns to face the player. Write true or false.'
+      );
+    }
 
     if (! array_key_exists('wanderArea', $entry)) {
       return $issues;

@@ -599,13 +599,13 @@ category uses - pickers, condition lines, world-write rows, command frames,
 | Identity | `Id` (read-only), `Name` |
 | Placement | `X`, `Y` (the canvas moves it too) |
 | Appearance | `Sprite`, `Facing North/South/East/West`, `Graphical Sprites` |
-| Movement | `Movement` (`fixed` / `wander`), and while wandering `Wander X/Y/Width/Height` |
+| Movement | `Movement` (`fixed` / `wander`), `Direction Fix` (`false` / `true`), and while wandering `Wander X/Y/Width/Height` |
 | Visibility | `Visible When` - a condition line |
 | Interaction | `Script` (a command frame), then one `Dialogue variant N` heading per variant with its rows `When`, `Then Set`, `Script Commands`, `Line 1 Speaker`, `Line 1 Text`, … |
 | Completion Writes | `After Talking` - world-write rows |
 
 Rows read as the game will read them: an unset `Movement` shows `fixed`, an
-unset `Sprite` shows `@`. Fields the game does not read are listed in a
+unset `Direction Fix` shows `false`, an unset `Sprite` shows `@`. Fields the game does not read are listed in a
 `Preserved fields` row and written back untouched. Each dialogue variant is a
 heading (`Dialogue variant 2 · when switch:gate_open` once it has a
 condition) with short row labels under it, and long lines wrap, so what a
@@ -624,6 +624,14 @@ character says is read in the pane rather than in the edit buffer.
   NPC. Omitting every bound leaves the game's unbounded wander. Patrol routes,
   pathfinding and followers are not engine features, so the editor does not
   offer them; scripted movement is a `move_route` command in an event script.
+- **Direction fix.** When the player talks to an NPC, the game turns it to
+  face the player before it speaks, and it stays that way until something
+  else turns it. `Direction Fix` (RPG Maker's option of the same name) set to
+  `true` keeps its heading instead, for a clerk behind a counter or a guard
+  watching a gate. It stores `'directionFix' => true`; setting it back to
+  `false` removes the key, the game's default. It affects only the talk turn:
+  wandering and `move_route` still turn the NPC. The validator reports a
+  `directionFix` that is not `true` or `false`.
 - **Directional sprites.** Optional glyphs shown when the NPC turns; the base
   sprite covers a heading you leave blank. Resting the Inspector cursor on a
   `Facing …` row previews that glyph on the canvas in the NPC's place.

@@ -1154,6 +1154,8 @@ final class RecordSchemaCatalog
                 new RecordField('sprites.west', 'Facing West', removeWhenEmpty: true),
                 // Movement
                 new RecordField('movement', 'Movement', options: ProjectNpc::MOVEMENTS, displayDefault: 'fixed'),
+                // RPG Maker's Direction Fix: false (the default) is not written.
+                RecordField::boolean('directionFix', 'Direction Fix', displayDefault: 'false'),
                 new RecordField('wanderArea.x', 'Wander X', InputControlType::INTEGER, removeWhenEmpty: true),
                 new RecordField('wanderArea.y', 'Wander Y', InputControlType::INTEGER, removeWhenEmpty: true),
                 new RecordField('wanderArea.width', 'Wander Width', InputControlType::INTEGER, removeWhenEmpty: true),

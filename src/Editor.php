@@ -2155,7 +2155,7 @@ final class Editor
             'Identity' => ['id', 'name'],
             'Placement' => ['x', 'y'],
             'Appearance' => ['sprite', 'sprites.north', 'sprites.south', 'sprites.east', 'sprites.west'],
-            'Movement' => ['movement', 'wanderArea.x', 'wanderArea.y', 'wanderArea.width', 'wanderArea.height'],
+            'Movement' => ['movement', 'directionFix', 'wanderArea.x', 'wanderArea.y', 'wanderArea.width', 'wanderArea.height'],
             'Visibility' => ['conditions'],
             'Interaction' => ['commandListScript'],
             'Completion Writes' => ['sets'],

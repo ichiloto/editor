@@ -596,6 +596,87 @@ it('edits name, sprite, coordinates and movement, hiding wander bounds while fix
     expect(getEditorProperty($editor, 'history')->count())->toBe($before);
 });
 
+it('shows Direction Fix beside Movement, round-trips it source-preserved, and undoes it', function () {
+    $entry = ['id' => 'clerk', 'name' => 'Clerk', 'sprite' => 'C', 'x' => 3, 'y' => 2, 'movement' => 'fixed', 'dialogue' => [['text' => 'Welcome.']], 'authorNote' => 'keep'];
+    [$root, $path] = npcProject([$entry]);
+    $source = file_get_contents($path);
+    $editor = npcEditor($root);
+    $map = npcMap($editor);
+    callEditorMethod($editor, 'selectNpc', 0);
+
+    // Grouped under Movement, right after the movement mode, and read as the game's default.
+    $rows = callEditorMethod($editor, 'getInspectorFields');
+    $ids = array_map(static fn(array $f): string => (string) ($f['field'] ?? ''), $rows);
+    $labels = array_map(static fn(array $f): string => trim((string) ($f['label'] ?? '')), $rows);
+    $movement = array_search('movement', $ids, true);
+    expect($ids[$movement + 1])->toBe('directionFix')
+        ->and(array_slice($labels, 0, $movement))->toContain('Movement')
+        ->and(npcField($editor, 'directionFix')['label'])->toContain('Direction Fix')
+        ->and(npcField($editor, 'directionFix')['value'])->toBe('false')
+        ->and(npcField($editor, 'directionFix')['editable'] ?? true)->toBeTrue();
+
+    // Right cycles the option in place, as every Database boolean does.
+    setEditorProperty($editor, 'focusedPane', 'inspector');
+    restNpcCursorOn($editor, 'directionFix');
+    callEditorMethod($editor, 'dispatchInput', "\033[C");
+    expect($map->getNpcs()->get(0)?->toArray()['directionFix'] ?? null)->toBeTrue()
+        ->and(npcField($editor, 'directionFix')['value'])->toBe('true')
+        ->and($map->getNpcs()->get(0)?->getUnknownFields())->toBe(['authorNote']);
+
+    callEditorMethod($editor, 'saveSelectedMap');
+    $edited = file_get_contents($path);
+    expect(npcsOnDisk($path)[0])->toBe($entry + ['directionFix' => true])
+        ->and($edited)->toContain("'directionFix' => true");
+
+    // A fresh editor reads it back, and the engine loads it as direction-fixed.
+    $reloaded = npcEditor($root);
+    callEditorMethod($reloaded, 'selectNpc', 0);
+    expect(npcField($reloaded, 'directionFix')['value'])->toBe('true');
+    $scene = new class extends \Ichiloto\Engine\Scenes\Game\GameScene {
+        public function __construct()
+        {
+            $this->currentMapId = 'test-map';
+            $this->gameState = new \Ichiloto\Engine\Core\GameState();
+            $this->party = new \Ichiloto\Engine\Entities\Party();
+        }
+    };
+    $manager = new \Ichiloto\Engine\Field\NpcManager($scene);
+    $manager->configure(npcsOnDisk($path));
+    expect($manager->findById('clerk')?->directionFix)->toBeTrue();
+
+    // Undo restores the file byte for byte; redo brings the flag back.
+    callEditorMethod($editor, 'performUndo');
+    callEditorMethod($editor, 'saveSelectedMap');
+    expect(file_get_contents($path))->toBe($source);
+    callEditorMethod($editor, 'performRedo');
+    callEditorMethod($editor, 'saveSelectedMap');
+    expect(file_get_contents($path))->toBe($edited);
+
+    // False is the game's default, so it removes the key rather than writing false.
+    setNpcField($editor, 'directionFix', 'false');
+    expect($map->getNpcs()->get(0)?->toArray())->not->toHaveKey('directionFix');
+    callEditorMethod($editor, 'saveSelectedMap');
+    expect(file_get_contents($path))->toBe($source);
+});
+
+it('reports a directionFix that is not a bool, and accepts true and false', function () {
+    [$root] = npcProject([
+        ['id' => 'word', 'name' => 'Word', 'x' => 1, 'y' => 1, 'directionFix' => 'yes'],
+        ['id' => 'number', 'name' => 'Number', 'x' => 2, 'y' => 1, 'directionFix' => 1],
+        ['id' => 'fixed', 'name' => 'Fixed', 'x' => 3, 'y' => 1, 'directionFix' => true],
+        ['id' => 'turns', 'name' => 'Turns', 'x' => 4, 'y' => 1, 'directionFix' => false],
+    ]);
+
+    $errors = implode("\n", npcIssueLines($root, Severity::ERROR));
+    $all = implode("\n", npcIssueLines($root));
+
+    expect($errors)->toContain('NPC Word: Its directionFix is string, not true or false.')
+        ->toContain('NPC Number: Its directionFix is int, not true or false.')
+        ->and($all)->not->toContain('NPC Fixed')
+        ->and($all)->not->toContain('NPC Turns')
+        ->and($all)->not->toContain('directionFix, which the game does not read');
+});
+
 it('re-derives an NPC\'s id from its new name while nothing refers to it, in the same undo step', function () {
     [$root] = npcProject([['id' => 'gate-guard', 'name' => 'Gate Guard', 'sprite' => 'G', 'x' => 6, 'y' => 3]]);
     $editor = npcEditor($root);
