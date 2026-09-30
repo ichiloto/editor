@@ -763,6 +763,8 @@ Enter opens the picker; the kind is stored as the map data's `tileset`.
   removes its `graphics/` tile layer files.
 - A kind the project no longer has stays visible as
   `id · not in assets/Data/Tilesets`.
+- In a project with tilesets, validation and the pre-save checks warn about a
+  map without a kind. A project without tilesets is not warned.
 
 ### Map audio and encounters
 

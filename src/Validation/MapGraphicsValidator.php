@@ -19,8 +19,10 @@ use RuntimeException;
 use Throwable;
 
 /**
- * Checks a map's graphics as the Engine reads them: its tileset and the tile
- * layers in `graphics/`, unsaved resizes included.
+ * Checks a map's graphics as the Engine reads them: its kind (the tileset it
+ * names) and the tile layers in `graphics/`, unsaved resizes included. In a
+ * project with tilesets every map should have a kind, so one without is
+ * warned about.
  *
  * Unusable graphics never stop a map loading; the game shows its terminal
  * glyphs instead. Every file is checked, so one report names every problem
@@ -35,7 +37,8 @@ final class MapGraphicsValidator
     }
 
     /**
-     * @return list<Issue> The issues found; empty for a map without graphics.
+     * @return list<Issue> The issues found; empty for a map without graphics
+     *     in a project without tilesets.
      */
     public static function validate(ProjectMap $map): array
     {
@@ -43,7 +46,11 @@ final class MapGraphicsValidator
         $tilesetId = $map->getMapDataField(['tileset']);
 
         if ($tilesetId === null && $sources === [] && ! is_dir($map->directory . '/' . MapGraphics::DIRECTORY)) {
-            return [];
+            return glob($map->getAssetRoot() . '/' . Tileset::DIRECTORY . '/*.php') === [] ? [] : [Issue::warning(
+                $map->mapId,
+                'It has no kind, so it has no tiles or pieces.',
+                sprintf('Set its Kind in the Inspector, one of the tilesets in assets/%s. %s', Tileset::DIRECTORY, self::GLYPH_FALLBACK),
+            )];
         }
 
         $issues = [];
@@ -96,8 +103,8 @@ final class MapGraphicsValidator
         if ($tilesetId === null) {
             $issues[] = Issue::error(
                 $map->mapId,
-                'It has graphics/ but names no tileset.',
-                sprintf("Name one in the map data ('tileset' => '<id>', from assets/%s/<id>.php), or remove graphics/. %s", Tileset::DIRECTORY, self::GLYPH_FALLBACK),
+                'It has graphics/ but no kind.',
+                sprintf('Set its Kind in the Inspector, one of the tilesets in assets/%s, or remove graphics/. %s', Tileset::DIRECTORY, self::GLYPH_FALLBACK),
             );
 
             return null;

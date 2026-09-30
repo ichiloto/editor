@@ -280,7 +280,7 @@ it('reports graphics the Engine refuses as errors', function (Closure $breakGrap
     'graphics without a tileset' => [function (string $root, string $directory): void {
         $data = $directory . '/test-map.data.php';
         file_put_contents($data, str_replace(" 'tileset' => 'home',", '', (string) file_get_contents($data)));
-    }, 'It has graphics/ but names no tileset.'],
+    }, 'It has graphics/ but no kind.'],
     'badly named file' => [function (string $root, string $directory): void {
         writeTileLayer($directory, 'floor.tiles.php', "0 0 0 0\n0 0 0 0");
     }, 'Tile layer test-map/graphics/floor.tiles.php must be named NN.name.tiles.php.'],
@@ -333,6 +333,21 @@ it('includes graphics problems in the pre-save map warnings, unsaved resizes inc
     $map->setMapDataField(['tileset'], 'home');
     $map->resize(6, 3);
     expect(MapGraphicsValidator::validate($map))->toBe([]);
+});
+
+it('warns about a map without a kind only in a project that has tilesets', function () {
+    $root = layeredMapProject();
+    expect(MapGraphicsValidator::validate(loadLayeredMap($root)))->toBe([]);
+
+    writeTestTileset($root, 'interior');
+    $issues = MapGraphicsValidator::validate(loadLayeredMap($root));
+    expect($issues)->toHaveCount(1)
+        ->and($issues[0]->severity)->toBe(Severity::WARNING)
+        ->and($issues[0]->message)->toBe('It has no kind, so it has no tiles or pieces.')
+        ->and($issues[0]->hint)->toStartWith('Set its Kind in the Inspector, one of the tilesets in assets/Data/Tilesets.');
+
+    editTestMapData($root, static fn(string $source): string => str_replace("'events' => [],", "'events' => [], 'tileset' => 'interior',", $source));
+    expect(MapGraphicsValidator::validate(loadLayeredMap($root)))->toBe([]);
 });
 
 it('reports graphics through project validation, as ichiloto validate runs it', function () {
