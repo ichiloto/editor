@@ -20,7 +20,7 @@ final class ReferencePicker
      */
     private array $values = [];
     /**
-     * @var array<string, string> How to show a value, when what is stored and
+     * @var array<string|int, string> How to show a value, when what is stored and
      * what an author recognises are not the same string. An inventory
      * reference stores a stable id and reads as its display name.
      */
@@ -46,7 +46,7 @@ final class ReferencePicker
      * @param string $category The kind of reference.
      * @param string[] $values What it may be set to.
      * @param string $current What it is set to now, which is where the cursor starts.
-     * @param array<string, string> $labels How to show a value, keyed by the value stored.
+     * @param array<string|int, string> $labels How to show a value, keyed by the value stored.
      * @return bool True when there was something to choose from.
      */
     public function open(string $fieldId, string $label, string $category, array $values, string $current = '', array $labels = []): bool

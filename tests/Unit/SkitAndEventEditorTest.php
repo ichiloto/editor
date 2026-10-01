@@ -70,13 +70,94 @@ it('adds and removes skit beats', function (): void {
     $database->save();
 
     $payload = require $root . '/assets/Data/Skits/breakfast-banter.php';
-    expect($payload['beats'][2])->toBe(['speaker' => 'Drazek', 'text' => 'I have seen her with a wooden spoon.']);
+    expect($payload['beats'][2])->toEqual(['speaker' => 'Drazek', 'text' => 'I have seen her with a wooden spoon.']);
 
     $removed = $database->removeSubItem(0, 2);
     expect($removed['speaker'])->toBe('Drazek');
     expect($database->countSubItems(0))->toBe(2);
 
     removeDirectoryRecursively($root);
+});
+
+it('selects stable skit actors and keeps non-actor speaker text mutually exclusive', function (): void {
+    $root = makeTemporaryProject();
+    $editor = deletionEditor($root);
+    openDatabaseCategory($editor, 'skits');
+    $workspace = getEditorProperty($editor, 'workspace');
+    $database = $workspace->getRecordDatabase('skits');
+    $fields = array_column($database->getSettingsFields(0), null, 'field');
+    $actor = $workspace->actorDatabase->getActors()[0];
+    expect($fields['beat0Actor']['reference'])->toBe('actor_ids')
+        ->and(isset($fields['beat0Actor']['control']))->toBeFalse()
+        ->and(isset($fields['beat0Speaker']['reference']))->toBeFalse();
+    callEditorMethod($editor, 'applyDatabaseFieldValueRecorded', $fields['beat0Actor'], $actor->getDefinitionId());
+    $database->save();
+    $path = $root . '/assets/Data/Skits/breakfast-banter.php';
+    $beat = (require $path)['beats'][0];
+    expect($beat['actor'])->toBe($actor->getDefinitionId())->and($beat)->not->toHaveKey('speaker');
+    callEditorMethod($editor, 'performUndo');
+    expect($database->getRecords()[0]->toArray()['beats'][0]['speaker'])->toBe('Liora');
+    callEditorMethod($editor, 'performRedo');
+    expect($database->getRecords()[0]->toArray()['beats'][0]['actor'])->toBe($actor->getDefinitionId());
+    $database->setField(0, 'beat0Speaker', 'Innkeeper');
+    $database->save();
+    $beat = (require $path)['beats'][0];
+    expect($beat['speaker'])->toBe('Innkeeper')->and($beat)->not->toHaveKey('actor');
+});
+
+it('validates skit actor identity with the shared runtime resolver and warns on legacy speaker ids', function (): void {
+    $root = makeTemporaryProject();
+    $workspace = \Ichiloto\Editor\ProjectWorkspace::fromProject($root);
+    $actor = $workspace->actorDatabase->getActors()[0];
+    $database = $workspace->getRecordDatabase('skits');
+    $record = $database->getRecords()[0];
+    $record->setSubList('beats', [
+        ['actor' => $actor->getDefinitionId(), 'text' => 'Canonical'],
+        ['speaker' => $actor->getDefinitionId(), 'text' => 'Legacy'],
+        ['actor' => 'not-an-actor', 'text' => 'Invalid'],
+        ['actor' => $actor->getDefinitionId(), 'speaker' => 'Innkeeper', 'text' => 'Conflict'],
+        ['speaker' => 'Innkeeper', 'text' => 'Plain text'],
+    ]);
+    $validator = new \Ichiloto\Editor\Validation\ProjectValidator();
+    $method = new ReflectionMethod($validator, 'checkSkitReferences');
+    $issues = $method->invoke($validator, $workspace, ['maps' => ['happyville/town-center'], 'quests' => ['breakfast-duty']]);
+    $speakers = array_values(array_filter($issues, static fn($issue): bool => str_contains($issue->where, ' beat ')));
+    expect($speakers)->toHaveCount(3)
+        ->and($speakers[0]->message)->toContain('Deprecated')
+        ->and($speakers[1]->message)->toContain('stable actor id')
+        ->and($speakers[2]->message)->toContain('not both');
+    expect($speakers[1]->hint)->toContain('existing actor')->not->toContain('not both');
+});
+
+it('uses unsaved and renamed actors consistently in the skit picker and validator', function (): void {
+    $root = makeTemporaryProject();
+    $workspace = \Ichiloto\Editor\ProjectWorkspace::fromProject($root);
+    $index = $workspace->actorDatabase->addActor('Liora');
+    $workspace->actorDatabase->setField($index, 'name', 'Liora Vey');
+    $catalog = new \Ichiloto\Editor\Database\ReferenceCatalog($workspace);
+    expect($catalog->valuesFor('actor_ids'))->toContain('Liora')
+        ->and($catalog->labelsFor('actor_ids')['Liora'])->toBe('Liora Vey (Liora)')
+        ->and(is_file($root . '/assets/Data/Actors/Liora.php'))->toBeFalse();
+    $workspace->getRecordDatabase('skits')->getRecords()[0]->setSubList('beats', [['actor' => 'Liora', 'text' => 'Hello.']]);
+    $validator = new \Ichiloto\Editor\Validation\ProjectValidator();
+    $issues = new ReflectionMethod($validator, 'checkSkitReferences')->invoke($validator, $workspace,
+        ['maps' => ['happyville/town-center'], 'quests' => ['breakfast-duty']]);
+    expect($issues)->toBeEmpty();
+});
+
+it('opens the Actor picker when adding a beat or creating a skit instead of inventing a speaker', function (): void {
+    $root = makeTemporaryProject();
+    $editor = deletionEditor($root);
+    openDatabaseCategory($editor, 'skits');
+    callEditorMethod($editor, 'addDatabaseRecordSubItem');
+    $picker = getEditorProperty($editor, 'referencePicker');
+    expect($picker->isOpen())->toBeTrue();
+    $database = getEditorProperty($editor, 'workspace')->getRecordDatabase('skits');
+    expect($database->getRecords()[0]->toArray()['beats'][2])->toBe(['actor' => '', 'text' => 'Say something.']);
+    $picker->close();
+    callEditorMethod($editor, 'createDatabaseRecord');
+    expect($picker->isOpen())->toBeTrue()
+        ->and($database->getRecords()[1]->toArray()['beats'][0])->toBe(['actor' => '', 'text' => 'Say something.']);
 });
 
 it('creates a new skit as its own file', function (): void {

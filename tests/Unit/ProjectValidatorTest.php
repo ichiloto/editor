@@ -409,11 +409,7 @@ it('catches a marker that is not one solid rectangle', function () {
     $root = makeTemporaryProject();
     $path = $root . '/assets/Maps/test-map/test-map.event.php';
 
-    file_put_contents($path, <<<'PHP'
-    <?php
-
-    return " A  \nAAA \n    \n    ";
-    PHP);
+    file_put_contents($path, "<?php\n\nreturn <<<'ICHILOTO_EVENT_MAP'\n A  \nAAA \n    \n    \nICHILOTO_EVENT_MAP;\n");
 
     editTestMapData($root, static fn(string $source): string => str_replace(
         "'events' => [",
@@ -727,4 +723,19 @@ it('detects duplicate migration steps and impossible registration order', functi
     expect(issuesMentioning($issues, 'registered more than once'))->toHaveCount(1)
         ->and(issuesMentioning($issues, 'impossible order'))->toHaveCount(2)
         ->and(issuesMentioning($issues, 'Content migration step 2 to 3 is missing'))->toHaveCount(1);
+});
+
+it('warns that a tiles2d crop table is no longer read', function () {
+    $root = makeTemporaryProject();
+    editTestMapData($root, static fn(string $source): string => str_replace(
+        "'triggers' => [],",
+        "'triggers' => [],\n  'tiles2d' => ['asset' => 'Graphics/Tilesets/shared.png', 'symbols' => []],",
+        $source,
+    ));
+
+    $issues = issuesMentioning(validateProject($root), 'tiles2d');
+
+    expect($issues)->toHaveCount(1)
+        ->and($issues[0]->severity)->toBe(Severity::WARNING)
+        ->and($issues[0]->message)->toBe('Its tiles2d crop table is no longer read.');
 });

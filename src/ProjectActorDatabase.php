@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor;
 
+use Ichiloto\Engine\Entities\Actors\ActorDefinition;
+use Ichiloto\Engine\Util\Stores\ActorStore;
 use Throwable;
 
 use RuntimeException;
@@ -70,6 +72,15 @@ final class ProjectActorDatabase
     public function getActors(): array
     {
         return array_values($this->actors);
+    }
+
+    /** Builds the runtime registry from the same current records used by pickers. */
+    public function createActorStore(): ActorStore
+    {
+        return new ActorStore(definitions: array_map(
+            static fn(ProjectActor $actor): ActorDefinition => ActorDefinition::fromArray($actor->getData(), $actor->path),
+            $this->getActors(),
+        ));
     }
 
     /**
@@ -256,8 +267,10 @@ final class ProjectActorDatabase
         $candidate = $baseId;
         $suffix = 2;
         $existingIds = array_map(static fn(ProjectActor $actor): string => $actor->id, $this->actors);
+        $existingIds = array_map('strtolower', [...$existingIds,
+            ...array_map(static fn(ProjectActor $actor): string => $actor->getDefinitionId(), $this->actors)]);
 
-        while (in_array($candidate, $existingIds, true)) {
+        while (in_array(strtolower($candidate), $existingIds, true)) {
             $candidate = $baseId . $suffix;
             $suffix++;
         }

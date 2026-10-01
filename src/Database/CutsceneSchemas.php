@@ -7,6 +7,7 @@ namespace Ichiloto\Editor\Database;
 use Ichiloto\Editor\Cutscenes\CutsceneAsset;
 use Ichiloto\Editor\Inspector\InputControlType;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicCommandSchema;
+use Ichiloto\Engine\Cutscenes\Summons\SummonEffectTiming;
 
 /**
  * How a cinematic and a summon are edited: the fields, sub-lists and
@@ -141,7 +142,7 @@ final class CutsceneSchemas
                 new RecordField('transitionOut.type', 'Transition Out', options: ['fadeFromBlack', 'fadeToBlack', 'none'], removeWhenEmpty: true, displayDefault: 'fadeFromBlack'),
                 new RecordField('transitionOut.durationMs', 'Transition Out Ms', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '0'),
                 new RecordField('transitionOut.color', 'Transition Out Color', removeWhenEmpty: true),
-                new RecordField('effectTiming.mode', 'Effect Timing', options: ['end', 'cue', 'frame'], removeWhenEmpty: true, displayDefault: 'end'),
+                new RecordField('effectTiming.mode', 'Effect Timing', options: SummonEffectTiming::AUTHORING_MODES, removeWhenEmpty: true, displayDefault: SummonEffectTiming::DEFAULT_MODE),
                 RecordField::reference('effectTiming.cueId', 'Effect Cue', 'summon_cues', allowsNone: true, noneLabel: '(none)'),
                 new RecordField('effectTiming.frame', 'Effect Frame', InputControlType::INTEGER, removeWhenEmpty: true),
                 new RecordField('targetPresentation.mode', 'Target Presentation', options: ['full_screen', 'inline'], removeWhenEmpty: true, displayDefault: 'full_screen'),

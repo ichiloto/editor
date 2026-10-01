@@ -32,6 +32,8 @@ final class MapValidator
             ...self::findNonRectangularMarkers($map),
             ...self::findDanglingDestinations($map, $mapsById),
             ...self::findOutOfRangeSpawnPoints($map, $mapsById),
+            ...self::findRetiredData($map),
+            ...array_map(static fn(Issue $issue): string => $issue->message, MapGraphicsValidator::validate($map)),
         ];
     }
 
@@ -51,6 +53,18 @@ final class MapValidator
         }
 
         return $warnings;
+    }
+
+    /**
+     * Finds map data the engine no longer reads.
+     *
+     * @return string[]
+     */
+    private static function findRetiredData(ProjectMap $map): array
+    {
+        return array_key_exists('tiles2d', $map->getEditableData())
+            ? ['tiles2d is no longer read; the map shows its terminal glyphs until it has a tileset.']
+            : [];
     }
 
     /**

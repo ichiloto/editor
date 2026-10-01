@@ -252,7 +252,7 @@ trait CutscenePreviewPane
                     $origin['mapId'] !== null ? sprintf(' on %s at %d,%d', $origin['mapId'], $origin['x'], $origin['y']) : ' without a map',
                     $play ? 'playing' : 'paused',
                 ),
-            $failure !== null ? StatusLevel::ERROR : StatusLevel::SUCCESS,
+            $failure !== null ? StatusLevel::ERROR : StatusLevel::INFO,
         );
         $this->renderDatabasePanes(['preview', 'tree']);
     }
@@ -329,7 +329,7 @@ trait CutscenePreviewPane
         }
 
         if ($preview->skip()) {
-            $this->setStatus('Skip accepted: the finalizer is running.', StatusLevel::SUCCESS);
+            $this->setStatus('Skip accepted: the finalizer is running.', StatusLevel::INFO);
             $preview->play();
             $this->cutscenePreviewLastTickAt = microtime(true);
         } else {
@@ -525,7 +525,7 @@ trait CutscenePreviewPane
                 $failure !== null
                     ? sprintf('Preview failed: %s (J jumps to it)', $failure['message'])
                     : sprintf('Preview %s after %.1fs.', $preview->status(), $preview->elapsed()),
-                $failure !== null ? StatusLevel::ERROR : StatusLevel::SUCCESS,
+                $failure !== null ? StatusLevel::ERROR : StatusLevel::INFO,
             );
         }
     }
@@ -668,7 +668,7 @@ trait CutscenePreviewPane
             $this->summonPreview->totalFrames(),
             $this->summonPreview->fps(),
             $play ? 'playing' : 'paused',
-        ), StatusLevel::SUCCESS);
+        ), StatusLevel::INFO);
         $this->renderDatabasePanes(['preview', 'tree']);
     }
 
@@ -692,7 +692,7 @@ trait CutscenePreviewPane
         $this->renderDatabasePanes(['preview', 'tree']);
 
         if ($preview->isCompleted()) {
-            $this->setStatus(sprintf('Summon preview finished: %d frames, %d cue%s fired.', $preview->totalFrames(), count($preview->cueLog()), count($preview->cueLog()) === 1 ? '' : 's'), StatusLevel::SUCCESS);
+            $this->setStatus(sprintf('Summon preview finished: %d frames, %d cue%s fired.', $preview->totalFrames(), count($preview->cueLog()), count($preview->cueLog()) === 1 ? '' : 's'), StatusLevel::INFO);
         }
     }
 
@@ -802,7 +802,7 @@ trait CutscenePreviewPane
                 $this->terminal->resumeAfterChildProcess($this->lastTerminalSize);
             }
 
-            $this->setStatus(sprintf('Playtest finished (%s on %s at %d,%d).', $asset->id, $origin['mapId'], $origin['x'], $origin['y']), StatusLevel::SUCCESS);
+            $this->setStatus(sprintf('Playtest finished (%s on %s at %d,%d).', $asset->id, $origin['mapId'], $origin['x'], $origin['y']), StatusLevel::INFO);
         } catch (Throwable $throwable) {
             $this->setErrorStatus($throwable, 'Cinematic playtest');
         } finally {

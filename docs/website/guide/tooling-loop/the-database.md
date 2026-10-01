@@ -10,6 +10,33 @@ readTime: 4
 
 Every field edit, entry creation, and deletion is undoable. Undo is identity-pinned, so `Ctrl+Z` applies to the entry you edited even after you have moved on to another one.
 
+## Animation references
+
+Skills and Items have an **Animation** resource picker. It shows each
+animation's name and numeric id and stores the id, so renaming an animation
+does not break the reference. Skill `Ctrl+G` follows that id to the animation.
+The edit participates in the existing undo/redo and safe-save paths; an
+unsupported source form is refused rather than flattened. Skill saves now patch
+only changed constructor arguments, preserving effects, weapon requirements,
+comments and other authored expressions. This replaces the old skill exporter,
+which incorrectly regenerated non-damage effects as damage effects. Changing a
+skill's class or regenerating effects without their original source is refused
+before writing; edit those expressions in source instead.
+
+An unsupported skill expression is read-only, not a reason to block other
+skills in the same file. Refusals identify the skill. The form omits Type
+and any fields the selected constructor cannot save, including Effect Type
+on non-magic skills. Leading documentation and same-line trailing comments
+travel with a skill when it is moved, deleted or restored.
+
+Choose **(Legacy fallback)** for a skill or **(None)** for an item to clear
+the reference, removing the authored argument rather than writing a null
+placeholder. Skills then retain their
+deprecated name-based selection, which project validation reports as a
+warning when it matches. Items without a reference retain their existing
+no-animation behavior. A missing explicit id omits the animation, not the
+gameplay effect, and does not silently substitute a name-matched animation.
+
 ## Repeating fields
 
 Quest objectives, skit beats, troop members, and event commands are all *sub-lists*, flattened into the field pane as numbered rows. Two keys manage them everywhere:

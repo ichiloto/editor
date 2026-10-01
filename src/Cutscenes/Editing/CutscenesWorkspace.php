@@ -1189,7 +1189,7 @@ trait CutscenesWorkspace
                 $this->renderCutscenesArea();
             },
         ));
-        $this->setStatus(sprintf('Renamed to "%s"; the folder takes this name on save.', $newId), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Renamed to "%s"; the folder takes this name on save.', $newId), StatusLevel::INFO);
         $this->renderCutscenesArea(includeRoot: true);
     }
 
@@ -1297,7 +1297,7 @@ trait CutscenesWorkspace
         }
 
         $this->cutsceneFocus = CutscenesScreen::PANE_SETTINGS;
-        $this->setStatus('Added.', StatusLevel::SUCCESS);
+        $this->setStatus('Added.', StatusLevel::INFO);
         $this->renderCutscenesArea();
     }
 
@@ -1388,7 +1388,7 @@ trait CutscenesWorkspace
         }
 
         $this->clampDatabaseSettingSelection();
-        $this->setStatus('Removed. Ctrl+Z restores it.', StatusLevel::SUCCESS);
+        $this->setStatus('Removed. Ctrl+Z restores it.', StatusLevel::INFO);
         $this->renderCutscenesArea();
     }
 
@@ -1434,7 +1434,7 @@ trait CutscenesWorkspace
         $this->databaseSelectedSettingIndex = 0;
         $this->databaseCommandFramePath = [];
         $this->cutsceneFocus = CutscenesScreen::PANE_SETTINGS;
-        $this->setStatus(sprintf('Created %s "%s". It reaches disk on save.', $type->noun(), $id), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Created %s "%s". It reaches disk on save.', $type->noun(), $id), StatusLevel::INFO);
         $this->renderCutscenesArea(includeRoot: true);
     }
 
@@ -1473,7 +1473,7 @@ trait CutscenesWorkspace
         $this->selectCutsceneById($newId);
         $this->databaseSelectedSettingIndex = 0;
         $this->databaseCommandFramePath = [];
-        $this->setStatus(sprintf('Duplicated as "%s". It reaches disk on save.', $newId), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Duplicated as "%s". It reaches disk on save.', $newId), StatusLevel::INFO);
         $this->renderCutscenesArea(includeRoot: true);
     }
 
@@ -1557,7 +1557,7 @@ trait CutscenesWorkspace
             $this->clampCutsceneSelection();
             $this->databaseSelectedSettingIndex = 0;
             $this->databaseCommandFramePath = [];
-            $this->setStatus(sprintf('Deleted %s. Ctrl+Z restores it; the folder is removed on save.', $asset->name()), StatusLevel::SUCCESS);
+            $this->setStatus(sprintf('Deleted %s. Ctrl+Z restores it; the folder is removed on save.', $asset->name()), StatusLevel::INFO);
         }
 
         $this->renderCutscenesArea(includeRoot: true);
@@ -1584,7 +1584,7 @@ trait CutscenesWorkspace
                 $written
                     ? sprintf('%s "%s" saved.', ucfirst($asset->type->noun()), $asset->id)
                     : sprintf('%s "%s" is clean; nothing written.', ucfirst($asset->type->noun()), $asset->id),
-                StatusLevel::SUCCESS,
+                $written ? StatusLevel::SUCCESS : StatusLevel::INFO,
             );
         } catch (Throwable $throwable) {
             $this->setErrorStatus($throwable, sprintf('%s save', ucfirst($asset->type->noun())));
@@ -1685,7 +1685,7 @@ trait CutscenesWorkspace
                 if (is_array($field)) {
                     try {
                         $this->applyDatabaseFieldValueRecorded($field, $text);
-                        $this->setStatus(sprintf('%s applied.', $label), StatusLevel::SUCCESS);
+                        $this->setStatus(sprintf('%s applied.', $label), StatusLevel::INFO);
                     } catch (Throwable $throwable) {
                         $this->setErrorStatus($throwable, $label);
                     }

@@ -67,8 +67,26 @@ final class ArraySourceWriter
      *   instance when nothing differs.
      * @throws SourcePreservationRefusal When a change cannot be expressed in the source.
      */
-    public static function rewrite(PhpArraySourceDocument $document, array $old, array $new): PhpArraySourceDocument
+    public static function rewrite(PhpArraySourceDocument $document, array $old, array $new, array $keyRenames = []): PhpArraySourceDocument
     {
+        foreach ($keyRenames as $rename) {
+            $path = $rename['path'];
+            $oldKey = array_pop($path);
+            $parent = &$old;
+            foreach ($path as $step) {
+                $parent = &$parent[$step];
+            }
+            if (! is_array($parent) || ! array_key_exists($oldKey, $parent) || array_key_exists($rename['key'], $parent)) {
+                throw new SourcePreservationRefusal('The key rename does not match the loaded data.');
+            }
+            $document = $document->withEdits([$document->renameKeyEdit($rename['path'], $rename['key'])]);
+            $renamed = [];
+            foreach ($parent as $key => $value) {
+                $renamed[$key === $oldKey ? $rename['key'] : $key] = $value;
+            }
+            $parent = $renamed;
+            unset($parent);
+        }
         if ($old === $new) {
             return $document;
         }
@@ -135,7 +153,7 @@ final class ArraySourceWriter
 
         if ($node->hasOpaqueKey) {
             throw new SourcePreservationRefusal(sprintf(
-                'The array at %s has a key the editor cannot read, so it will not rewrite the array.',
+                'The array at %s has a key or spread the editor cannot read, so it will not rewrite the array.',
                 PhpArraySourceDocument::describePath($path),
             ));
         }
@@ -321,6 +339,12 @@ final class ArraySourceWriter
             $previousNew = $anchorNew;
         }
 
+        $this->emitListMatches($node, $old, $new, $path, $matchedOld, $matchedNew);
+    }
+
+    /** Emit aligned entries through the same source/comment ownership rules for every list. */
+    private function emitListMatches(SourceNode $node, array $old, array $new, array $path, array $matchedOld, array $matchedNew): void
+    {
         // 6. Which matched entries stay in place: the longest run of them
         //    whose old order agrees with their new order. The rest move.
         ksort($matchedNew);
@@ -354,22 +378,19 @@ final class ArraySourceWriter
             }
         }
 
+        $anchor = null;
+        $anchors = [];
+        for ($j = count($new) - 1; $j >= 0; $j--) {
+            $anchors[$j] = $anchor;
+            if (isset($kept[$j])) { $anchor = $kept[$j]; }
+        }
+        $inline = self::prefersInline($node);
         foreach ($new as $j => $item) {
             if (isset($kept[$j])) {
                 continue;
             }
 
-            $anchor = null;
-
-            for ($next = $j + 1; $next < $newCount; $next++) {
-                if (isset($kept[$next])) {
-                    $anchor = $kept[$next];
-
-                    break;
-                }
-            }
-
-            $position = $anchor ?? count($node->entries);
+            $position = $anchors[$j] ?? count($node->entries);
 
             if (isset($moved[$j])) {
                 $this->emitMove($node, $moved[$j], $old[$moved[$j]], $item, $path, $position);
@@ -378,7 +399,7 @@ final class ArraySourceWriter
             }
 
             if ($position >= count($node->entries)) {
-                $this->queueAppend($node, null, $this->literalFor($item, [...$path, $j], self::prefersInline($node)));
+                $this->queueAppend($node, null, $this->literalFor($item, [...$path, $j], $inline));
 
                 continue;
             }
@@ -387,7 +408,7 @@ final class ArraySourceWriter
                 $path,
                 $position,
                 null,
-                $this->literalFor($item, [...$path, $j], self::prefersInline($node)),
+                $this->literalFor($item, [...$path, $j], $inline),
             );
         }
     }
@@ -434,17 +455,8 @@ final class ArraySourceWriter
 
             if ($append['inline'] !== []) {
                 // After the last entry this rewrite keeps; right at the body
-                // start when it keeps none. The comma belongs to whichever
-                // entry the appended items now follow.
-                if ($lastSurviving !== null) {
-                    $anchor = $lastSurviving->separatorEnd;
-                    $prefix = $lastSurviving->separatorEnd === $lastSurviving->end ? ', ' : ' ';
-                } else {
-                    $anchor = (int) $node->bodyStart;
-                    $prefix = '';
-                }
-
-                $this->edits[] = [$anchor, $anchor, $prefix . implode(', ', $append['inline'])];
+                // start when it keeps none.
+                $this->edits[] = $this->document->planInlineAppend($node, $append['inline'], $lastSurviving);
             }
 
             if ($append['lines'] === []) {

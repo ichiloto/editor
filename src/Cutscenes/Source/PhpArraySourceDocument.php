@@ -278,7 +278,8 @@ final class PhpArraySourceDocument
 
     /**
      * Returns the indentation the entries of an array are written at, or
-     * what they would be written at if it has none yet.
+     * what they would be written at if it has none yet: one indentation
+     * step deeper than the line the array opens on.
      */
     public function entryIndent(SourceNode $array): string
     {
@@ -290,9 +291,71 @@ final class PhpArraySourceDocument
             }
         }
 
-        $ownIndent = $this->lineIndentBefore($array->start) ?? '';
+        return $this->getLineIndent($array->start) . $this->getIndentStep($array);
+    }
 
-        return $ownIndent . '  ';
+    /**
+     * Returns the whitespace that starts the line holding an offset, whatever
+     * else precedes the offset on that line: the indentation of `'key' => [`
+     * for the `[` of that line.
+     */
+    private function getLineIndent(int $offset): string
+    {
+        $lineStart = $this->lineStartOf($offset);
+        $lead = substr($this->source, $lineStart, $offset - $lineStart);
+
+        return substr($lead, 0, strlen($lead) - strlen(ltrim($lead, " \t")));
+    }
+
+    /**
+     * Returns the indentation step the file uses around an array: how much
+     * deeper the nearest enclosing array writes its entries than the line it
+     * opens on. Two spaces when no enclosing array shows one.
+     */
+    private function getIndentStep(SourceNode $array): string
+    {
+        foreach (array_reverse($this->findAncestors($this->root, $array) ?? []) as $ancestor) {
+            $opening = $this->getLineIndent($ancestor->start);
+
+            foreach ($ancestor->entries as $entry) {
+                $indent = $this->lineIndentBefore($entry->start);
+
+                if ($indent === null) {
+                    continue;
+                }
+
+                if (strlen($indent) > strlen($opening) && str_starts_with($indent, $opening)) {
+                    return substr($indent, strlen($opening));
+                }
+
+                break;
+            }
+        }
+
+        return '  ';
+    }
+
+    /**
+     * Returns the arrays enclosing a node, outermost first, or null when the
+     * node is not below the one searched.
+     *
+     * @return array<int, SourceNode>|null
+     */
+    private function findAncestors(SourceNode $node, SourceNode $target): ?array
+    {
+        foreach ($node->entries as $entry) {
+            if ($entry->value === $target) {
+                return [$node];
+            }
+
+            $below = $this->findAncestors($entry->value, $target);
+
+            if ($below !== null) {
+                return [$node, ...$below];
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -365,7 +428,28 @@ final class PhpArraySourceDocument
             $start = $previousStart;
         }
 
-        return [$start, $this->lineEndAfter(max($entry->end, $entry->separatorEnd) - 1)];
+        $end = $this->lineEndAfter(max($entry->end, $entry->separatorEnd) - 1);
+        // An indented first entry may still share its line with siblings or
+        // closing syntax. Its heading belongs to it; those later bytes do not.
+        if (! $this->holdsOnlyTrivia($entry->separatorEnd, $end)) {
+            return [$start, $entry->separatorEnd];
+        }
+        return [$start, $end];
+    }
+
+    /**
+     * Returns whether the bytes between two offsets are only whitespace and
+     * comments.
+     */
+    private function holdsOnlyTrivia(int $start, int $end): bool
+    {
+        foreach (PhpToken::tokenize('<?php ' . substr($this->source, $start, $end - $start)) as $token) {
+            if (! $token->is([T_OPEN_TAG, T_WHITESPACE, T_COMMENT, T_DOC_COMMENT])) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     // -- Planning edits ------------------------------------------------------
@@ -388,6 +472,33 @@ final class PhpArraySourceDocument
         return [$entry->value->start, $entry->value->end, self::reindent($literal, $this->lineIndentBefore($entry->start) ?? '')];
     }
 
+    /** Renames only a literal key; its value, comments and position survive. */
+    public function renameKeyEdit(array $path, string $newKey): array
+    {
+        $entry = $this->entryAt($path);
+        $parent = $this->nodeAt(array_slice($path, 0, -1));
+        if ($entry === null || $entry->keyIsOpaque || $parent === null || $parent->hasOpaqueKey
+            || $parent->entryFor($newKey) !== null) {
+            throw new SourcePreservationRefusal('The requested key rename cannot be preserved at ' . self::describePath($path));
+        }
+        $end = $entry->start;
+        foreach (PhpToken::tokenize($this->source) as $token) {
+            if ($token->pos < $entry->start) {
+                continue;
+            }
+            if ($token->is(T_DOUBLE_ARROW)) {
+                return [$entry->start, $end, var_export($newKey, true)];
+            }
+            if (! $token->is([T_WHITESPACE, T_COMMENT, T_DOC_COMMENT])) {
+                $end = $token->pos + strlen($token->text);
+            }
+            if ($end > $entry->value->start) {
+                break;
+            }
+        }
+        throw new SourcePreservationRefusal('No literal key at ' . self::describePath($path));
+    }
+
     /**
      * Plans inserting an entry into an array: ahead of the entry now at a
      * position, or after the last one.
@@ -406,29 +517,38 @@ final class PhpArraySourceDocument
             throw new RuntimeException(sprintf('No array at %s to insert into.', self::describePath($parentPath)));
         }
 
-        $indent = $this->entryIndent($array);
-        $keyText = $key === null ? '' : var_export($key, true) . ' => ';
-        $line = $indent . $keyText . self::reindent($literal, $indent) . ",\n";
+        $line = $this->renderEntryLine($array, $key, $literal);
         $entries = $array->entries;
 
         if ($entries === []) {
-            // Empty array: `[]` becomes a multi-line array holding the entry,
-            // closing at the array's own indentation.
-            $closing = $this->lineIndentBefore($array->start) ?? '';
-            $inner = substr($this->source, $array->bodyStart, $array->bodyEnd - $array->bodyStart);
+            $expansion = $this->planEmptyArrayExpansion($array, $line);
 
-            if (trim($inner) === '') {
-                return [$array->bodyStart, $array->bodyEnd, "\n" . $line . $closing];
+            if ($expansion !== null) {
+                return $expansion;
             }
+
+            // Only comments inside: the entry follows them, on a line of its
+            // own when the closing bracket has one.
+            if ($this->lineIndentBefore($array->bodyEnd) !== null) {
+                $at = $this->lineStartOf($array->bodyEnd);
+
+                return [$at, $at, $line];
+            }
+
+            $gap = ctype_space($this->source[$array->bodyEnd - 1]) ? '' : ' ';
+
+            return [$array->bodyEnd, $array->bodyEnd, $gap . $this->renderInlineEntry($key, $literal, $array->bodyEnd)];
         }
 
         if ($position < count($entries)) {
-            [$blockStart] = $this->blockSpan($entries[$position]);
+            $neighbour = $entries[$position];
 
-            if ($this->lineIndentBefore($entries[$position]->start) === null) {
+            if ($this->lineIndentBefore($neighbour->start) === null) {
                 // The neighbour shares its line: go ahead of it on that line.
-                return [$entries[$position]->start, $entries[$position]->start, trim($line, "\n") . ' '];
+                return [$neighbour->start, $neighbour->start, $this->renderInlineEntry($key, $literal, $neighbour->start) . ', '];
             }
+
+            [$blockStart] = $this->blockSpan($neighbour);
 
             return [$blockStart, $blockStart, $line];
         }
@@ -438,9 +558,13 @@ final class PhpArraySourceDocument
         $needsComma = $last->separatorEnd === $last->end;
         $afterLast = $this->lineEndAfter(max($last->end, $last->separatorEnd) - 1);
 
-        if ($this->lineIndentBefore($last->start) === null || $afterLast <= $last->separatorEnd) {
-            // Entries share lines: append inline after the last one.
-            return [$last->separatorEnd, $last->separatorEnd, ($needsComma ? ',' : '') . ' ' . trim($line, "\n")];
+        if ($this->lineIndentBefore($last->start) === null
+            || $afterLast <= $last->separatorEnd
+            || ! $this->holdsOnlyTrivia($last->separatorEnd, $afterLast)
+        ) {
+            // The last entry shares its line with a sibling or the closing
+            // bracket: append inline after it.
+            return $this->planInlineAppend($array, [$this->renderInlineEntry($key, $literal, $last->start)], $last);
         }
 
         // The rest of the last entry's line -- its comma, a comment, the
@@ -457,9 +581,79 @@ final class PhpArraySourceDocument
     public function renderEntryLine(SourceNode $array, int|string|null $key, string $literal): string
     {
         $indent = $this->entryIndent($array);
-        $keyText = $key === null ? '' : var_export($key, true) . ' => ';
 
-        return $indent . $keyText . self::reindent($literal, $indent) . ",\n";
+        return $indent . self::renderEntry($key, self::reindent($literal, $indent)) . ",\n";
+    }
+
+    /**
+     * Renders one entry for a line it shares with others: no indentation of
+     * its own and no separator, continuation lines under the line it joins.
+     */
+    private function renderInlineEntry(int|string|null $key, string $literal, int $at): string
+    {
+        return self::renderEntry($key, self::reindent($literal, $this->getLineIndent($at)));
+    }
+
+    /**
+     * Renders an entry's key and value, `key => value` or the value alone.
+     */
+    private static function renderEntry(int|string|null $key, string $value): string
+    {
+        return ($key === null ? '' : var_export($key, true) . ' => ') . $value;
+    }
+
+    /**
+     * Plans appending entries to an array whose entries share their lines,
+     * joined the way such an array joins its own: after the entry they
+     * follow, one space after each comma, and a trailing comma only when the
+     * array's last entry is written with one.
+     *
+     * @param SourceNode $array The array node.
+     * @param array<int, string> $entries The entries, each `key => value` or a value.
+     * @param SourceEntry|null $lastSurviving The entry that will precede the
+     *   appended ones, or null when none survives and they start the body.
+     * @return array{0: int, 1: int, 2: string} The edit.
+     */
+    public function planInlineAppend(SourceNode $array, array $entries, ?SourceEntry $lastSurviving): array
+    {
+        if ($array->bodyStart === null) {
+            throw new RuntimeException('Only an array node takes appended entries.');
+        }
+
+        $last = $array->entries === [] ? null : $array->entries[count($array->entries) - 1];
+        $trailingComma = $last !== null && $last->separatorEnd !== $last->end;
+        $text = implode(', ', $entries) . ($trailingComma ? ',' : '');
+
+        if ($lastSurviving === null) {
+            return [$array->bodyStart, $array->bodyStart, $text];
+        }
+
+        if ($lastSurviving->separatorEnd === $lastSurviving->end) {
+            // It had no comma because it was last; it needs one now.
+            return [$lastSurviving->end, $lastSurviving->end, ', ' . $text];
+        }
+
+        return [$lastSurviving->separatorEnd, $lastSurviving->separatorEnd, ' ' . $text];
+    }
+
+    /**
+     * Plans writing entry lines into an array whose body is only whitespace:
+     * `[]` opens onto lines of their own and closes at the indentation of
+     * the line the array starts on. Null when the body holds anything else.
+     *
+     * @return array{0: int, 1: int, 2: string}|null The edit.
+     */
+    private function planEmptyArrayExpansion(SourceNode $array, string $lines): ?array
+    {
+        if ($array->entries !== [] || $array->bodyStart === null || $array->bodyEnd === null) {
+            return null;
+        }
+
+        if (trim(substr($this->source, $array->bodyStart, $array->bodyEnd - $array->bodyStart)) !== '') {
+            return null;
+        }
+
+        return [$array->bodyStart, $array->bodyEnd, "\n" . $lines . $this->getLineIndent($array->start)];
     }
 
     /**
@@ -485,16 +679,10 @@ final class PhpArraySourceDocument
             throw new RuntimeException('Only an array node takes appended entries.');
         }
 
-        if ($array->entries === []) {
-            $inner = substr($this->source, $array->bodyStart, $array->bodyEnd - $array->bodyStart);
+        $expansion = $this->planEmptyArrayExpansion($array, $lines);
 
-            if (trim($inner) === '') {
-                // `[]` becomes a multi-line array holding the entries,
-                // closing at the array's own indentation.
-                $closing = $this->lineIndentBefore($array->start) ?? '';
-
-                return [[$array->bodyStart, $array->bodyEnd, "\n" . $lines . $closing]];
-            }
+        if ($expansion !== null) {
+            return [$expansion];
         }
 
         $edits = [];
@@ -951,6 +1139,13 @@ final class PhpArraySourceDocument
                 }
             } else {
                 $sawImplicit = true;
+
+                if ($tokens[$cursor]->is(T_ELLIPSIS)) {
+                    // A spread adds entries only PHP can count, so no later
+                    // position or key in this array is the file's to address.
+                    $keyIsOpaque = true;
+                    $hasOpaqueKey = true;
+                }
             }
 
             $value = self::readValue($tokens, $valueAt, $source, [',']);

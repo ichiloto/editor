@@ -33,6 +33,11 @@ enum Modal: string
      * The folder-move confirmation raised by a renaming save.
      */
     case RENAME_CONFIRMATION = 'rename_confirmation';
+    case LAYER_EDIT = 'layer_edit';
+    /**
+     * The count prompt for inserting rows or columns into the map.
+     */
+    case LINE_INSERT = 'line_insert';
     /**
      * The Ctrl+P command palette. Opens above the Database screen and the
      * main shell, below the safety modals.
@@ -42,6 +47,8 @@ enum Modal: string
      * The `?` help overlay generated from the input binding tables.
      */
     case HELP = 'help';
+    /** Shared option and confirmation pickers can open above the Database. */
+    case EVENT_OPTION_DIALOG = 'event_option_dialog';
     /**
      * The Database screen. Consumes all input while open (below the safety
      * modals and the global Ctrl+E shortcut).
@@ -64,10 +71,6 @@ enum Modal: string
      * The loot picker dialog.
      */
     case LOOT_DIALOG = 'loot_dialog';
-    /**
-     * The generic event-option picker dialog.
-     */
-    case EVENT_OPTION_DIALOG = 'event_option_dialog';
     /** The brush colour picker owns mouse input above the shared interceptor. */
     case COLOR_PICKER = 'color_picker';
     /**

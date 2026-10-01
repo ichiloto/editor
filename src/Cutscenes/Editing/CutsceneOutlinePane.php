@@ -207,7 +207,7 @@ trait CutsceneOutlinePane
             $delta < 0 ? 'Move up' : 'Move down',
             static fn(array $payload): array => CutsceneOutline::withValueAt($payload, $entry['listPath'], $list),
         )) {
-            $this->setStatus(sprintf('Moved %s.', $delta < 0 ? 'up' : 'down'), StatusLevel::SUCCESS);
+            $this->setStatus(sprintf('Moved %s.', $delta < 0 ? 'up' : 'down'), StatusLevel::INFO);
             $this->focusCutsceneTreeKey($targetKey);
         }
     }
@@ -245,7 +245,7 @@ trait CutsceneOutlinePane
             'Add ' . $entry['row']['kind'],
             static fn(array $payload): array => CutsceneOutline::withValueAt($payload, $entry['listPath'], $list),
         )) {
-            $this->setStatus(sprintf('Added a %s after the selected one.', $entry['row']['kind']), StatusLevel::SUCCESS);
+            $this->setStatus(sprintf('Added a %s after the selected one.', $entry['row']['kind']), StatusLevel::INFO);
             $this->focusCutsceneTreeKey($targetKey);
         }
     }
@@ -283,7 +283,7 @@ trait CutsceneOutlinePane
             'Duplicate ' . $entry['row']['kind'],
             static fn(array $payload): array => CutsceneOutline::withValueAt($payload, $entry['listPath'], $list),
         )) {
-            $this->setStatus(sprintf('Duplicated the %s.', $entry['row']['kind']), StatusLevel::SUCCESS);
+            $this->setStatus(sprintf('Duplicated the %s.', $entry['row']['kind']), StatusLevel::INFO);
             $this->focusCutsceneTreeKey($targetKey);
         }
     }
@@ -314,7 +314,7 @@ trait CutsceneOutlinePane
             'Remove ' . $kind,
             static fn(array $payload): array => CutsceneOutline::withValueAt($payload, $entry['listPath'], $list),
         )) {
-            $this->setStatus(sprintf('Removed the %s (Ctrl+Z restores it).', $kind), StatusLevel::SUCCESS);
+            $this->setStatus(sprintf('Removed the %s (Ctrl+Z restores it).', $kind), StatusLevel::INFO);
             $this->cutsceneTreeCursor = max(0, min($this->cutsceneTreeCursor, count($this->visibleCutsceneTreeRows()) - 1));
             $this->renderCutscenesArea();
         }
@@ -370,7 +370,7 @@ trait CutsceneOutlinePane
 
             return CutsceneOutline::withValueAt($payload, $target, $targetList);
         })) {
-            $this->setStatus(sprintf('Nested into the %s above.', strval($previous['type'] ?? 'block')), StatusLevel::SUCCESS);
+            $this->setStatus(sprintf('Nested into the %s above.', strval($previous['type'] ?? 'block')), StatusLevel::INFO);
             $this->focusCutsceneTreeKey($this->keyForPath([...$target, (int) $targetKey]));
         }
     }
@@ -438,7 +438,7 @@ trait CutsceneOutlinePane
 
             return CutsceneOutline::withValueAt($payload, $ownerList, $parent);
         })) {
-            $this->setStatus('Moved out of its block.', StatusLevel::SUCCESS);
+            $this->setStatus('Moved out of its block.', StatusLevel::INFO);
             $this->focusCutsceneTreeKey($this->keyForPath([...$ownerList, $ownerIndex + 1]));
         }
     }
@@ -476,7 +476,7 @@ trait CutsceneOutlinePane
             'Nudge frame',
             static fn(array $payload): array => CutsceneOutline::withValueAt($payload, $path, $next),
         )) {
-            $this->setStatus(sprintf('Frame %d.', $next), StatusLevel::SUCCESS);
+            $this->setStatus(sprintf('Frame %d.', $next), StatusLevel::INFO);
             $this->renderCutscenesArea();
         }
 

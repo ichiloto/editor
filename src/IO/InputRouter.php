@@ -207,7 +207,7 @@ final class InputRouter
         $active = $this->modals->active();
 
         // 1. Safety modals consume everything, including global shortcuts.
-        if ($active !== null && $active->priority() <= Modal::RENAME_CONFIRMATION->priority()) {
+        if ($active !== null && $active->priority() <= Modal::LAYER_EDIT->priority()) {
             $this->dispatchModal($active, $input, $normalized);
             return;
         }

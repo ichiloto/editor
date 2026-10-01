@@ -1001,7 +1001,7 @@ final class CinematicPreviewSession
             'ui' => ['hud' => ['location' => false]],
             // The engine records what a cinematic asked for either way; with
             // music off it never starts a player process for it.
-            'audio' => ['music' => false, 'sfx' => false],
+            'audio' => ['music' => false, 'sfx' => false, 'voice' => false],
         ]));
         ConfigStore::put(PlaySettings::class, new PreviewConfig([
             'screen' => ['width' => $width, 'height' => $height],

@@ -13,6 +13,7 @@ use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\Cutscenes\CutsceneAsset;
 use Ichiloto\Editor\Cutscenes\CutsceneType;
 use Ichiloto\Editor\ProjectWorkspace;
+use Ichiloto\Engine\Rendering\Tilesets\Tileset;
 
 /**
  * What a field pointing at another resource may point at.
@@ -43,12 +44,14 @@ final class ReferenceCatalog
         'troops',
         'states',
         'animations',
+        'animation_ids',
         'skits',
         'common_events',
         'inventory',
         'bgm',
         'sfx',
         'enemy_sprites',
+        'png_assets',
         'elements',
         'map_npcs',
         'knowledge_subjects',
@@ -67,6 +70,7 @@ final class ReferenceCatalog
         'cinematic_checkpoints',
         'summon_cues',
         'event_markers',
+        'tilesets',
     ];
 
     /**
@@ -116,7 +120,8 @@ final class ReferenceCatalog
             // definition id, which is the one thing a rename never changes.
             'actor_ids' => array_map(
                 static fn(ProjectActor $actor): string => $actor->getDefinitionId(),
-                $this->workspace->actorDatabase->getActors()
+                array_values(array_filter($this->workspace->actorDatabase->getActors(),
+                    static fn(ProjectActor $actor): bool => $actor->hasDefinitionId()))
             ),
             'classes' => array_map(
                 static fn(ProjectClass $class): string => $class->getName(),
@@ -146,6 +151,7 @@ final class ReferenceCatalog
             // Graphics/Enemies/<value>.txt, appending the extension itself,
             // so the file stems are the values.
             'enemy_sprites' => $this->fileValues('assets/Graphics/Enemies'),
+            'png_assets' => self::getPngAssets($this->workspace->projectRoot),
             'elements' => $this->elementValues(),
             // An Optimize weight may apply to one element or to whichever
             // element an outcome happened to be, which the runtime spells
@@ -167,6 +173,10 @@ final class ReferenceCatalog
                 static fn(object $animation): string => $animation->name ?? '',
                 $this->workspace->animationDatabase->getAnimations()
             ),
+            'animation_ids' => array_map(
+                static fn(object $animation): string => (string) $animation->id,
+                $this->workspace->animationDatabase->getAnimations()
+            ),
             // Cutscenes are folders, so the stable id is the folder name.
             'cinematics' => $this->workspace->cutscenes?->ids(CutsceneType::CINEMATIC) ?? [],
             'summons' => $this->workspace->cutscenes?->ids(CutsceneType::SUMMON) ?? [],
@@ -178,6 +188,8 @@ final class ReferenceCatalog
             'cinematic_checkpoints' => $this->checkpointIds(),
             'summon_cues' => $this->summonCueIds(),
             'event_markers' => $this->currentMap?->getEventMarkers() ?? [],
+            // A map's kind is one of the project's tilesets, by file stem.
+            'tilesets' => array_keys($this->loadTilesetNames()),
             default => $this->recordValues($category),
         };
     }
@@ -323,10 +335,22 @@ final class ReferenceCatalog
      * identity that will actually be written.
      *
      * @param string $category The kind of reference.
-     * @return array<string, string> Labels keyed by stored value.
+     * @return array<string|int, string> Labels keyed by stored value; PHP converts numeric ids to integer keys.
      */
     public function labelsFor(string $category): array
     {
+        if ($category === 'tilesets') {
+            return $this->loadTilesetNames();
+        }
+
+        if ($category === 'animation_ids') {
+            $labels = [];
+            foreach ($this->workspace->animationDatabase->getAnimations() as $animation) {
+                $labels[(string) $animation->id] = sprintf('%s (%d)', $animation->name, $animation->id);
+            }
+            return $labels;
+        }
+
         if ($category === 'elements_or_any') {
             return ['*' => '* (whichever element it was)'];
         }
@@ -337,6 +361,7 @@ final class ReferenceCatalog
             foreach ($this->workspace->actorDatabase->getActors() as $actor) {
                 $id = $actor->getDefinitionId();
                 $name = $actor->getName();
+                if ($id === '') { continue; }
 
                 if ($name !== '' && $name !== $id) {
                     $labels[$id] = sprintf('%s (%s)', $name, $id);
@@ -626,6 +651,48 @@ final class ReferenceCatalog
         sort($names);
 
         return $names;
+    }
+
+    /**
+     * The name of every tileset in assets/Data/Tilesets that loads, by id. One
+     * that cannot load is not offered; validation reports it.
+     *
+     * @return array<string, string>
+     */
+    private function loadTilesetNames(): array
+    {
+        $assetRoot = rtrim($this->workspace->projectRoot, '/') . '/assets';
+        $names = [];
+        foreach (glob($assetRoot . '/' . Tileset::DIRECTORY . '/*.php') ?: [] as $file) {
+            $id = basename($file, '.php');
+            try {
+                $names[$id] = Tileset::load($assetRoot, $id)->name;
+            } catch (\Throwable) {
+                continue;
+            }
+        }
+
+        return $names;
+    }
+
+    /** Returns asset-root-relative PNG choices without following paths outside the asset root. */
+    public static function getPngAssets(string $projectRoot): array
+    {
+        $root = realpath(rtrim($projectRoot, '/') . '/assets');
+        if ($root === false) {
+            return [];
+        }
+        $paths = [];
+        $files = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($root, \FilesystemIterator::SKIP_DOTS));
+        foreach ($files as $file) {
+            $resolved = $file->getRealPath();
+            if ($file->isFile() && strtolower($file->getExtension()) === 'png' && $resolved !== false
+                && str_starts_with($resolved, $root . DIRECTORY_SEPARATOR)) {
+                $paths[] = str_replace(DIRECTORY_SEPARATOR, '/', substr($file->getPathname(), strlen($root) + 1));
+            }
+        }
+        sort($paths);
+        return $paths;
     }
 
     /**

@@ -8,7 +8,6 @@ use Ichiloto\Editor\Cutscenes\Source\ArraySourceWriter;
 use Ichiloto\Editor\Cutscenes\Source\PhpArraySourceDocument;
 use Ichiloto\Editor\Cutscenes\Source\SourcePreservationRefusal;
 use Ichiloto\Editor\Cutscenes\Source\SourceUnreadable;
-use Ichiloto\Editor\Database\IsolatedPhpEvaluationFailure;
 use Ichiloto\Editor\Database\PhpDataFile;
 use Ichiloto\Editor\Field\NpcCollection;
 use Ichiloto\Editor\Field\ProjectNpc;
@@ -17,6 +16,18 @@ use Ichiloto\Editor\Storage\FileSetOperations;
 use Ichiloto\Editor\Storage\FileSetTransactionFailure;
 use Ichiloto\Editor\Storage\FilesystemFileSetOperations;
 use Ichiloto\Editor\Storage\FileSetTransaction;
+use Ichiloto\Engine\Field\MapGraphics;
+use Ichiloto\Engine\Field\MapGridSource;
+use Ichiloto\Engine\Field\MapLayer;
+use Ichiloto\Engine\Field\MapLayerSource;
+use Ichiloto\Engine\Field\MapLayerSet;
+use Ichiloto\Engine\Field\MapCollisionResolver;
+use Ichiloto\Engine\IO\Console\TerminalText;
+use Ichiloto\Engine\IO\Console\SgrStyleState;
+use Ichiloto\Engine\Rendering\Tilesets\Tileset;
+use Ichiloto\Editor\Maps\EditableGrid;
+use Ichiloto\Editor\Maps\MapLayers;
+use InvalidArgumentException;
 use RuntimeException;
 
 /**
@@ -24,16 +35,11 @@ use RuntimeException;
  */
 final class ProjectMap
 {
+    use \Ichiloto\Editor\Field\NpcSpriteArt;
     use TracksPersistedState;
 
-    /**
-     * @var array<int, array<int, array{symbol: string, prefix: string, suffix: string}>>
-     */
-    private array $tileCells;
-    /**
-     * @var array<int, array<int, string>>
-     */
-    private array $eventCells;
+    private MapLayers $layers;
+
     /**
      * @var array<string, mixed>
      */
@@ -68,6 +74,7 @@ final class ProjectMap
      * what the file held at load, or at the last successful save.
      */
     private array $loadedData;
+    private string $baselineDataSource;
 
     /**
      * The tile payload as of the last load or save, so a save can tell a
@@ -96,12 +103,17 @@ final class ProjectMap
         public readonly array $tileLines,
         public readonly array $eventLines,
         ?string $dataSource = null,
+        private readonly ?string $gridSourceIssue = null,
+        ?MapLayers $layers = null,
     ) {
         $this->editableData = $data;
-        $this->tileCells = self::parseStyledLines($tileLines);
-        $this->eventCells = self::parsePlainLines($eventLines);
+        $this->layers = $layers ?? new MapLayers($directory, true, [[
+            'id' => MapLayers::BASE, 'name' => 'terrain', 'order' => 0, 'decoration' => false,
+            'path' => $mapPath, 'grid' => new EditableGrid(implode("\n", $tileLines), legacyTags: true),
+        ]], new EditableGrid(implode("\n", $eventLines)), $eventPath);
         $this->loadedData = $data;
         $this->adoptDataSource($dataSource ?? "<?php\n\nreturn " . self::exportPhpValue($data) . ";\n");
+        $this->baselineDataSource = $this->dataDocument?->source ?? (string) $this->unparsedDataSource;
         $this->baselineMapPayload = $this->buildMapPayload();
         $this->baselineEventPayload = $this->buildEventPayload();
     }
@@ -140,22 +152,33 @@ final class ProjectMap
         $mapPath = $directory . DIRECTORY_SEPARATOR . $baseName . '.map.php';
         $eventPath = $directory . DIRECTORY_SEPARATOR . $baseName . '.event.php';
 
-        if (! is_file($dataPath) || ! is_file($mapPath) || ! is_file($eventPath)) {
+        if (! is_file($dataPath) || (! is_file($mapPath) && ! is_dir($directory . '/layers')) || ! is_file($eventPath)) {
             throw new RuntimeException("Map files are incomplete in {$directory}.");
         }
 
-        $data = require $dataPath;
-        $mapText = require $mapPath;
-        $eventText = require $eventPath;
+        $relativeDirectory = substr($directory, strlen($mapsRoot) + 1);
+        $mapId = str_replace(DIRECTORY_SEPARATOR, '/', $relativeDirectory);
 
-        if (! is_array($data) || ! is_string($mapText) || ! is_string($eventText)) {
+        // Grid PHP is data, not executable map-building code. Refuse it before
+        // evaluating even the separate data member of an incomplete map.
+        try {
+            $set = MapLayerSource::loadFromDirectory($directory, $mapId);
+            $eventText = self::readGridSource($eventPath, $mapId);
+            if (! $set->legacy) {
+                $set->assertMatchingGrid(MapLayer::parseGrid($eventText), $mapId . '/' . basename($eventPath));
+            }
+        } catch (InvalidArgumentException $error) {
+            throw new MapSourceRefusal($error->getMessage(), previous: $error);
+        }
+        $mapText = $set->layers[0]->text;
+        $data = require $dataPath;
+
+        if (! is_array($data)) {
             throw new RuntimeException("Map files could not be parsed in {$directory}.");
         }
 
-        $relativeDirectory = substr($directory, strlen($mapsRoot) + 1);
-
         return new self(
-            mapId: str_replace(DIRECTORY_SEPARATOR, '/', $relativeDirectory),
+            mapId: $mapId,
             directory: $directory,
             dataPath: $dataPath,
             mapPath: $mapPath,
@@ -164,7 +187,62 @@ final class ProjectMap
             tileLines: self::splitMapText($mapText),
             eventLines: self::splitMapText($eventText),
             dataSource: (string) file_get_contents($dataPath),
+            layers: MapLayers::createFromSource($directory, $set, $eventPath, $eventText),
         )->withLoadedBaseline();
+    }
+
+    /** Keeps an invalid map discoverable without evaluating or rewriting its files. */
+    public static function createReadOnlyFromDirectory(string $mapsRoot, string $directory, string $issue): self
+    {
+        $baseName = basename($directory);
+        $mapId = str_replace(DIRECTORY_SEPARATOR, '/', substr($directory, strlen($mapsRoot) + 1));
+
+        return new self(
+            mapId: $mapId,
+            directory: $directory,
+            dataPath: $directory . DIRECTORY_SEPARATOR . $baseName . '.data.php',
+            mapPath: $directory . DIRECTORY_SEPARATOR . $baseName . '.map.php',
+            eventPath: $directory . DIRECTORY_SEPARATOR . $baseName . '.event.php',
+            data: [],
+            tileLines: [],
+            eventLines: [],
+            gridSourceIssue: $issue,
+        )->withLoadedBaseline();
+    }
+
+    public function getGridSourceIssue(): ?string
+    {
+        return $this->gridSourceIssue;
+    }
+
+    private function assertEditable(): void
+    {
+        if ($this->gridSourceIssue !== null) {
+            throw new MapSourceRefusal("{$this->mapId} is read-only: {$this->gridSourceIssue}");
+        }
+    }
+
+    /** Reads one canonical grid, refusing executable or generated source. */
+    private static function readGridSource(string $path, string $mapId): string
+    {
+        try {
+            return MapGridSource::readFile($path, $mapId . '/' . basename($path));
+        } catch (InvalidArgumentException $error) {
+            throw new MapSourceRefusal(sprintf(
+                '%s The map cannot be loaded or saved. Repair it as a literal nowdoc, then retry; nothing was changed.',
+                $error->getMessage(),
+            ), previous: $error);
+        }
+    }
+
+    /** Refuses a source changed on disk after this map was opened. */
+    private function assertGridSourcesCanonical(): void
+    {
+        try {
+            $this->layers->assertSourcesUnchanged();
+        } catch (InvalidArgumentException $error) {
+            throw new MapSourceRefusal($error->getMessage() . ' Nothing was written.', previous: $error);
+        }
     }
 
     /**
@@ -216,7 +294,7 @@ final class ProjectMap
      */
     public function getHeight(): int
     {
-        return count($this->tileCells);
+        return count($this->layers->getBaseGrid()->cells);
     }
 
     /**
@@ -232,7 +310,7 @@ final class ProjectMap
 
         $width = 0;
 
-        foreach ($this->tileCells as $row) {
+        foreach ($this->layers->getBaseGrid()->cells as $row) {
             $width = max($width, count($row));
         }
 
@@ -280,6 +358,305 @@ final class ProjectMap
         return $this->editableData;
     }
 
+    public function getLayers(): array
+    {
+        return array_map(static function (array $layer): array {
+            unset($layer['grid']);
+            return $layer;
+        }, $this->layers->getLayers());
+    }
+
+    public function getBaseLayerId(): string
+    {
+        return $this->layers->getBaseId();
+    }
+
+    public function isLegacyMap(): bool
+    {
+        return $this->layers->legacy;
+    }
+
+    public function getLayerSymbol(string $layer, int $x, int $y): string
+    {
+        return $this->layers->getGrid($layer)->cells[$y][$x]['symbol'] ?? ' ';
+    }
+
+    public function hasLayerCell(string $layer, int $x, int $y): bool
+    {
+        return isset($this->layers->getGrid($layer)->cells[$y][$x]);
+    }
+
+    public function getLayerCellStyle(string $layer, int $x, int $y): array
+    {
+        $cell = $this->layers->getGrid($layer)->cells[$y][$x] ?? [];
+        return ['prefix' => $cell['prefix'] ?? '', 'suffix' => $cell['suffix'] ?? ''];
+    }
+
+    public function getLayerColor(string $layer, int $x, int $y): ?string
+    {
+        return self::getInnermostForeground($this->getLayerCellStyle($layer, $x, $y)['prefix']);
+    }
+
+    public function setLayerCell(string $layer, int $x, int $y, string $symbol, string $prefix = '', string $suffix = ''): void
+    {
+        $this->assertEditable();
+        $grid = $this->layers->getGrid($layer);
+        if (isset($grid->cells[$y][$x])) {
+            $grid->cells[$y][$x] = ['symbol' => self::normalizeSymbol($symbol), 'prefix' => $prefix, 'suffix' => $suffix];
+            $this->touchState();
+        }
+    }
+
+    public function createLayer(string $name, bool $decoration = false, ?int $order = null): string
+    {
+        $this->assertEditable();
+        $before = $this->layers->captureSnapshot();
+        try {
+            $id = $this->layers->createLayer($name, $decoration, $order);
+            $this->layers->assertDimensions();
+        } catch (\Throwable $error) {
+            $this->layers->restoreSnapshot($before);
+            throw $error;
+        }
+        $this->cachedWidth = null;
+        $this->touchState();
+        return $id;
+    }
+
+    public function renameLayer(string $id, string $name, bool $confirmCollisionChange = false): void
+    {
+        $this->assertEditable();
+        if (! $confirmCollisionChange && $this->getLayerRenameCollisionChange($id, $name) !== null) {
+            throw new MapSourceRefusal('Renaming this layer changes resolved collisions. Explicit confirmation is required.');
+        }
+        $this->layers->renameLayer($id, $name);
+        $this->touchState();
+    }
+
+    public function removeLayer(string $id): void
+    {
+        $this->assertEditable();
+        $this->layers->removeLayer($id);
+        $this->cachedWidth = null;
+        $this->touchState();
+    }
+
+    public function getLayerSet(): MapLayerSet
+    {
+        return $this->layers->getLayerSet();
+    }
+
+    public function getStoredGridPaths(): array
+    {
+        $this->assertGridSourcesCanonical();
+        return $this->layers->getStoredPaths();
+    }
+
+    /**
+     * The map's graphical tile layers in `graphics/`, unsaved resizes and
+     * stamped pieces included. The TUI never paints single tiles.
+     *
+     * @return array<string, string> Source bytes by path.
+     */
+    public function getTileLayerSources(): array
+    {
+        return $this->layers->getTileSources();
+    }
+
+    /**
+     * Writes a stamped piece's tile entries into the named tile layers with
+     * their top-left cell at (x, y), creating a tile layer the map does not
+     * have yet. A `0` entry leaves its cell as it was.
+     *
+     * @param array<string, list<list<string>>> $tiles Entries by row, keyed by tile layer name.
+     * @throws MapSourceRefusal When a layer cannot take the entries; nothing is changed.
+     */
+    public function writeTileEntries(array $tiles, int $x, int $y): void
+    {
+        $this->assertEditable();
+        $this->layers->writeTileEntries($tiles, $x, $y, $this->findNewTileLayerPlace(...));
+        $this->touchState();
+    }
+
+    /**
+     * Sets tile entries cell by cell in the named tile layers, `0` included,
+     * for a drawn or erased connected piece, creating a tile layer the map
+     * does not have yet when it gets a tile.
+     *
+     * @param array<string, list<array{x: int, y: int, entry: string}>> $cells The entry for each cell, keyed by tile layer name.
+     * @throws MapSourceRefusal When a layer cannot take the entries; nothing is changed.
+     */
+    public function writeTileCells(array $cells): void
+    {
+        $this->assertEditable();
+        $this->layers->writeTileCells($cells, $this->findNewTileLayerPlace(...));
+        $this->touchState();
+    }
+
+    /**
+     * Where a new tile layer goes among the map's tile layers: before the
+     * first that belongs to a gameplay layer drawn above the new layer's
+     * own, so terrain tiles draw under building tiles and those under
+     * fixtures. A layer whose owner is unknown goes last.
+     *
+     * @param list<string> $names The map's tile layer names, in order.
+     * @return string|null The tile layer to place it before, or null for last.
+     */
+    private function findNewTileLayerPlace(string $name, array $names): ?string
+    {
+        $gameplay = array_values(array_filter($this->layers->getLayers(), static fn(array $layer): bool =>
+            $layer['id'] !== MapLayers::EVENT && ! $layer['decoration']));
+        $rank = array_flip(array_column($gameplay, 'name'));
+        try {
+            $owners = MapGraphics::resolveLayerOwners($this->getMapDataField([MapGraphics::SETTINGS_KEY]), [...$names, $name],
+                array_keys($rank), $this->loadTileset(), $this->mapId);
+        } catch (InvalidArgumentException | RuntimeException) {
+            return null;
+        }
+        if (($owners[$name] ?? null) === null) {
+            return null;
+        }
+        $own = $rank[$owners[$name]];
+        foreach ($names as $existing) {
+            $owner = $owners[$existing] ?? null;
+            if ($owner !== null && $rank[$owner] > $own) {
+                return $existing;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * The tile layers whose tiles move with a gameplay layer's glyphs: those
+     * that belong to it ({@see MapGraphics::resolveLayerOwners()}), named by
+     * the map data (`'tileLayers' => ['floor' => ['movesWith' =>
+     * 'buildings']]`) or otherwise written only by this layer's tileset
+     * pieces. The event layer moves no tiles, and neither does any layer
+     * while the settings are invalid, which validation reports.
+     *
+     * @return list<string> Tile layer names.
+     */
+    public function getTileLayersMovingWith(string $layerId): array
+    {
+        $layer = $this->layers->getLayer($layerId);
+        $names = $this->layers->getTileLayerNames();
+        if ($layer['id'] === MapLayers::EVENT || $layer['decoration'] || $names === []) {
+            return [];
+        }
+        $gameplay = array_column(array_filter($this->layers->getLayers(), static fn(array $candidate): bool =>
+            $candidate['id'] !== MapLayers::EVENT && ! $candidate['decoration']), 'name');
+        try {
+            $tileset = $this->loadTileset();
+        } catch (InvalidArgumentException | RuntimeException) {
+            // A tileset that cannot load says nothing about its pieces.
+            $tileset = null;
+        }
+        try {
+            $owners = MapGraphics::resolveLayerOwners($this->getMapDataField([MapGraphics::SETTINGS_KEY]), $names, $gameplay,
+                $tileset, $this->mapId);
+        } catch (InvalidArgumentException) {
+            return [];
+        }
+
+        return array_keys(array_filter($owners, static fn(?string $owner): bool => $owner === $layer['name']));
+    }
+
+    /**
+     * Reads the entries of the named tile layers over a rectangle, by row.
+     *
+     * @param list<string> $names Tile layer names.
+     * @return array<string, list<list<string>>> Entries by row, keyed by tile layer name.
+     * @throws MapSourceRefusal When a layer cannot be read or does not match the map.
+     */
+    public function readTileEntries(array $names, int $x, int $y, int $width, int $height): array
+    {
+        return $this->layers->readTileEntries($names, $x, $y, $width, $height);
+    }
+
+    /**
+     * Restores the tile layers {@see getTileLayerSources()} returned, for
+     * undo and redo.
+     *
+     * @param array<string, string> $sources Source bytes by path.
+     */
+    public function restoreTileLayerSources(array $sources): void
+    {
+        $this->assertEditable();
+        $this->layers->restoreTileSources($sources);
+        $this->touchState();
+    }
+
+    /**
+     * Loads the tileset the map data names, or null when it names none.
+     *
+     * @throws InvalidArgumentException When the named tileset cannot be loaded.
+     */
+    public function loadTileset(): ?Tileset
+    {
+        $id = $this->getMapDataField(['tileset']);
+        if ($id === null) {
+            return null;
+        }
+        if (! is_string($id)) {
+            throw new InvalidArgumentException(sprintf('Its tileset is %s, not a tileset id.', get_debug_type($id)));
+        }
+
+        return Tileset::load($this->getAssetRoot(), $id);
+    }
+
+    /** The project's asset root, where tilesets and their sheets live. */
+    public function getAssetRoot(): string
+    {
+        return dirname($this->getMapsRoot());
+    }
+
+    /** Proves the layers compose and resolve collisions as the engine will load them. */
+    public function validateLayerContracts(): void
+    {
+        $this->assertGridsAgree();
+        $set = $this->layers->getLayerSet();
+        $path = $this->getMapsRoot() . '/collisions.php';
+        $dictionary = is_file($path) ? (static fn(string $path): mixed => require $path)($path) : [];
+        if (! is_array($dictionary)) {
+            throw new MapSourceRefusal('The collision dictionary must return an array.');
+        }
+        MapCollisionResolver::resolveLayers($set, $dictionary);
+    }
+
+    public function getLayerRenameCollisionChange(string $id, string $name): ?string
+    {
+        $dictionaryPath = $this->getMapsRoot() . '/collisions.php';
+        $dictionary = is_file($dictionaryPath) ? (static fn(string $path): mixed => require $path)($dictionaryPath) : [];
+        if (! is_array($dictionary)) {
+            throw new MapSourceRefusal('The collision dictionary must return an array.');
+        }
+        $before = MapCollisionResolver::resolveLayers($this->layers->getLayerSet(), $dictionary);
+        $after = MapCollisionResolver::resolveLayers($this->layers->getLayerSet($id, $name), $dictionary);
+        $changed = 0;
+        foreach ($before as $y => $row) {
+            foreach ($row as $x => $type) {
+                $changed += $type !== $after[$y][$x] ? 1 : 0;
+            }
+        }
+        return $changed === 0 ? null : sprintf('Rename %s to %s changes collision at %d cell(s). Shared collisions.php stays unchanged.',
+            $this->layers->getLayer($id)['name'], $name, $changed);
+    }
+
+    public function captureLayerSnapshot(): array
+    {
+        return ['grid' => $this->captureGridSnapshot(), 'data' => $this->editableData,
+            'source' => $this->dataDocument === null ? $this->unparsedDataSource : $this->proposedDataSource()];
+    }
+
+    public function restoreLayerSnapshot(array $snapshot): void
+    {
+        $this->restoreGridSnapshot($snapshot['grid']);
+        $this->editableData = $this->loadedData = $snapshot['data'];
+        $this->adoptDataSource($snapshot['source']);
+        $this->touchState();
+    }
+
     /**
      * Builds a merged preview where event markers override map tiles.
      *
@@ -288,6 +665,9 @@ final class ProjectMap
      * @param int $offsetX The horizontal preview offset.
      * @param int $offsetY The vertical preview offset.
      * @param bool $showEventOverlay Whether event markers should be rendered.
+     * @param array<int, array<int, string|null>> $stampPreview A stamp's footprint by row and column,
+     *   drawn highlighted over the map and never painted: the glyph it would write, or null where it
+     *   leaves the map's cell as it is.
      * @return string[]
      */
     public function renderPreview(
@@ -299,6 +679,11 @@ final class ProjectMap
         bool $showNpcOverlay = false,
         ?int $selectedNpcIndex = null,
         ?string $selectedNpcSprite = null,
+        array $layerVisibility = [],
+        ?string $activeLayer = null,
+        bool $terminalPreview = false,
+        bool $dimInactive = false,
+        array $stampPreview = [],
     ): array
     {
         if ($width < 1 || $height < 1) {
@@ -308,12 +693,30 @@ final class ProjectMap
         $lines = [];
         $offsetX = max(0, $offsetX);
         $offsetY = max(0, $offsetY);
-        $rowLimit = min($offsetY + $height, max(count($this->tileCells), count($this->eventCells)));
+        if ($terminalPreview) {
+            $rows = array_slice($this->getLayerSet()->getComposedGrid(), $offsetY, $height);
+            return array_pad(array_map(static fn(array $row): string => rtrim(implode('', array_slice($row, $offsetX, $width))), $rows), $height, '');
+        }
+        $rowLimit = min($offsetY + $height, max(count($this->layers->getBaseGrid()->cells), count($this->layers->getEventGrid()->getSymbols())));
         $npcCells = $showNpcOverlay ? $this->npcOverlayCells($selectedNpcIndex, $selectedNpcSprite) : [];
+        $baseLayerId = $this->layers->getBaseId();
 
         for ($row = $offsetY; $row < $rowLimit; $row++) {
-            $tileRow = $this->tileCells[$row] ?? [];
-            $eventSymbols = $showEventOverlay ? ($this->eventCells[$row] ?? []) : [];
+            $tileRow = [];
+            foreach ($this->layers->getLayers() as $layer) {
+                if ($layer['decoration']) {
+                    continue;
+                }
+                if (($layerVisibility[$layer['id']] ?? true) === false
+                    || ($layer['id'] === MapLayers::EVENT && ! $showEventOverlay)) {
+                    continue;
+                }
+                foreach ($layer['grid']->cells[$row] ?? [] as $x => $cell) {
+                    if ($cell['symbol'] !== ' ' || $layer['id'] === $baseLayerId) {
+                        $tileRow[$x] = [...$cell, 'dim' => $dimInactive && $activeLayer !== $layer['id']];
+                    }
+                }
+            }
             $mergedSymbols = [];
 
             for ($column = $offsetX; $column < $offsetX + $width; $column++) {
@@ -324,21 +727,30 @@ final class ProjectMap
                     continue;
                 }
 
-                $eventSymbol = $eventSymbols[$column] ?? ' ';
-
-                if (trim($eventSymbol) !== '') {
-                    // Event markers are authoring geometry: they stay plain
-                    // so they read as markers over any terrain colour.
-                    $mergedSymbols[] = $eventSymbol;
+                if (isset($stampPreview[$row][$column])) {
+                    // A stamp's footprint shows what it would write, in
+                    // reverse video, over whatever the map holds there.
+                    $mergedSymbols[] = "\033[7m" . $stampPreview[$row][$column] . "\033[0m";
                     continue;
                 }
 
                 $tileCell = $tileRow[$column] ?? null;
                 $tileSymbol = is_array($tileCell) ? $tileCell['symbol'] : ' ';
+                // A selected map-owned NPC, and a stamp's cell that keeps the map's
+                // glyph, mark the existing cell, never a replacement.
+                $anchorHighlight = array_key_exists($column, $npcCells[$row] ?? []) || array_key_exists($column, $stampPreview[$row] ?? [])
+                    ? "\033[7m" : '';
+                if (! $this->layers->legacy && is_array($tileCell)) {
+                    $styled = TerminalText::formatStyles($tileCell['prefix'] . $anchorHighlight . $tileSymbol . $tileCell['suffix']);
+                    $styled = ($tileCell['dim'] ?? false) ? "\033[2m" . $styled . "\033[0m" : $styled;
+                    $mergedSymbols[] = $anchorHighlight === '' ? $styled : $styled . "\033[0m";
+                    continue;
+                }
                 $ansiOpen = is_array($tileCell)
                     ? self::ansiOpenForPrefix((string) ($tileCell['prefix'] ?? ''))
                     : null;
-                $mergedSymbols[] = $ansiOpen === null ? $tileSymbol : $ansiOpen . $tileSymbol . "\033[0m";
+                $dim = (($tileCell['dim'] ?? false) ? "\033[2m" : '') . $anchorHighlight;
+                $mergedSymbols[] = $ansiOpen === null && $dim === '' ? $tileSymbol : $dim . $ansiOpen . $tileSymbol . "\033[0m";
             }
 
             $lines[] = rtrim(implode('', $mergedSymbols));
@@ -351,6 +763,8 @@ final class ProjectMap
      * The 4-bit ANSI foreground codes for the formatter's colour names.
      * `gray` is the formatter's name for bright black.
      */
+    private const string STYLE_CLOSE_TAG = '</>';
+
     private const array ANSI_FOREGROUNDS = [
         'black' => 30, 'red' => 31, 'green' => 32, 'yellow' => 33,
         'blue' => 34, 'magenta' => 35, 'cyan' => 36, 'white' => 37,
@@ -371,11 +785,11 @@ final class ProjectMap
      */
     private static function ansiOpenForPrefix(string $prefix): ?string
     {
-        if ($prefix === '' || preg_match('/<fg=([^;>]+)[^>]*>/', $prefix, $matches) !== 1) {
+        $value = self::getInnermostForeground($prefix);
+
+        if ($value === null) {
             return null;
         }
-
-        $value = $matches[1];
 
         if (isset(self::ANSI_FOREGROUNDS[$value])) {
             return sprintf("\033[%dm", self::ANSI_FOREGROUNDS[$value]);
@@ -402,13 +816,15 @@ final class ProjectMap
      * cell holds an empty string, so the terminal draws the wide glyph in
      * the space it needs rather than a symbol shoved half under it. The
      * selected NPC is drawn with brackets around a one-column sprite, or as
-     * itself when wide, since brackets would misalign the row.
+     * itself when wide, since brackets would misalign the row. An explicitly
+     * empty sprite contributes only a selected anchor (null), highlighting
+     * the underlying map cell without replacing its glyph or neighbours.
      *
      * @param int|null $selectedNpcIndex The NPC to mark selected.
      * @param string|null $selectedNpcSprite A glyph to draw for the selected
      *   NPC in place of its base sprite -- a directional sprite being
      *   previewed -- as authored; it is shown as the terminal would show it.
-     * @return array<int, array<int, string>> The cells.
+     * @return array<int, array<int, string|null>> The cells, or selected map-owned anchors.
      */
     private function npcOverlayCells(?int $selectedNpcIndex, ?string $selectedNpcSprite = null): array
     {
@@ -423,6 +839,13 @@ final class ProjectMap
             if ($index === $selectedNpcIndex && $selectedNpcSprite !== null && trim($selectedNpcSprite) !== '') {
                 $sprite = ProjectNpc::visibleGlyph($selectedNpcSprite);
                 $columns = max(1, mb_strwidth($sprite));
+            }
+
+            if ($sprite === '') {
+                if ($index === $selectedNpcIndex) {
+                    $cells[$y][$x] = null;
+                }
+                continue;
             }
 
             if ($index === $selectedNpcIndex && $columns === 1) {
@@ -450,7 +873,7 @@ final class ProjectMap
      */
     public function getTileSymbol(int $x, int $y): string
     {
-        return $this->tileCells[$y][$x]['symbol'] ?? ' ';
+        return $this->layers->getBaseGrid()->cells[$y][$x]['symbol'] ?? ' ';
     }
 
     /**
@@ -462,7 +885,7 @@ final class ProjectMap
      */
     public function getEventSymbol(int $x, int $y): string
     {
-        return $this->eventCells[$y][$x] ?? ' ';
+        return $this->getLayerSymbol(MapLayers::EVENT, $x, $y);
     }
 
     /**
@@ -475,11 +898,12 @@ final class ProjectMap
      */
     public function setTileSymbol(int $x, int $y, string $symbol): void
     {
-        if (! isset($this->tileCells[$y][$x])) {
+        $this->assertEditable();
+        if (! isset($this->layers->getBaseGrid()->cells[$y][$x])) {
             return;
         }
 
-        $this->tileCells[$y][$x]['symbol'] = self::normalizeSymbol($symbol);
+        $this->layers->getBaseGrid()->cells[$y][$x]['symbol'] = self::normalizeSymbol($symbol);
         $this->touchState();
     }
 
@@ -495,7 +919,7 @@ final class ProjectMap
      */
     public function getTileCellStyle(int $x, int $y): array
     {
-        $cell = $this->tileCells[$y][$x] ?? null;
+        $cell = $this->layers->getBaseGrid()->cells[$y][$x] ?? null;
 
         return [
             'prefix' => is_array($cell) ? (string) ($cell['prefix'] ?? '') : '',
@@ -512,13 +936,52 @@ final class ProjectMap
      */
     public function getTileColor(int $x, int $y): ?string
     {
-        $style = $this->getTileCellStyle($x, $y);
+        return self::getInnermostForeground($this->getTileCellStyle($x, $y)['prefix']);
+    }
 
-        if (preg_match('/<fg=([^;>]+)[^>]*>/', $style['prefix'], $matches) === 1) {
-            return $matches[1];
+    /**
+     * Returns the `fg=` value a styling prefix renders in. Nested tags
+     * override outer ones, so the last declared foreground wins.
+     *
+     * @param string $prefix The cell's styling prefix bytes.
+     * @return string|null The `fg=` value, or null when none is declared.
+     */
+    private static function getInnermostForeground(string $prefix): ?string
+    {
+        $state = new SgrStyleState();
+        preg_match_all('/\x1b\[[0-9;]*m/', $prefix, $sequences);
+        foreach ($sequences[0] as $sequence) {
+            $state->apply($sequence);
+        }
+        $ansi = $state->prefix();
+        if (preg_match('/\x1b\[38;2;(\d+);(\d+);(\d+)m/', $ansi, $rgb) === 1) {
+            return sprintf('#%02x%02x%02x', (int) $rgb[1], (int) $rgb[2], (int) $rgb[3]);
+        }
+        foreach (self::ANSI_FOREGROUNDS as $name => $code) {
+            if (str_contains($ansi, "\033[{$code}m")) {
+                return $name;
+            }
+        }
+        if (preg_match('/\x1b\[38;5;(\d+)m/', $ansi, $indexed) === 1) {
+            $index = (int) $indexed[1];
+            if ($index < 16) {
+                return array_keys(self::ANSI_FOREGROUNDS)[$index];
+            }
+            if ($index <= 255) {
+                if ($index >= 232) {
+                    $shade = 8 + ($index - 232) * 10;
+                    return sprintf('#%02x%02x%02x', $shade, $shade, $shade);
+                }
+                $cube = [0, 95, 135, 175, 215, 255];
+                $index -= 16;
+                return sprintf('#%02x%02x%02x', $cube[intdiv($index, 36)], $cube[intdiv($index % 36, 6)], $cube[$index % 6]);
+            }
+        }
+        if (preg_match_all('/<[^>]*\bfg=([^;>]+)[^>]*>/', $prefix, $matches) < 1) {
+            return null;
         }
 
-        return null;
+        return $matches[1][array_key_last($matches[1])];
     }
 
     /**
@@ -533,13 +996,14 @@ final class ProjectMap
      */
     public function setTileCell(int $x, int $y, string $symbol, string $prefix, string $suffix): void
     {
-        if (! isset($this->tileCells[$y][$x])) {
+        $this->assertEditable();
+        if (! isset($this->layers->getBaseGrid()->cells[$y][$x])) {
             return;
         }
 
-        $this->tileCells[$y][$x]['symbol'] = self::normalizeSymbol($symbol);
-        $this->tileCells[$y][$x]['prefix'] = $prefix;
-        $this->tileCells[$y][$x]['suffix'] = $suffix;
+        $this->layers->getBaseGrid()->cells[$y][$x]['symbol'] = self::normalizeSymbol($symbol);
+        $this->layers->getBaseGrid()->cells[$y][$x]['prefix'] = $prefix;
+        $this->layers->getBaseGrid()->cells[$y][$x]['suffix'] = $suffix;
         $this->touchState();
     }
 
@@ -553,11 +1017,12 @@ final class ProjectMap
      */
     public function setEventSymbol(int $x, int $y, string $symbol): void
     {
-        if (! isset($this->eventCells[$y][$x])) {
+        $this->assertEditable();
+        if (! $this->hasLayerCell(MapLayers::EVENT, $x, $y)) {
             return;
         }
 
-        $this->eventCells[$y][$x] = self::normalizeSymbol($symbol);
+        $this->layers->getEventGrid()->cells[$y][$x]['symbol'] = self::normalizeSymbol($symbol);
         $this->touchState();
     }
 
@@ -570,7 +1035,7 @@ final class ProjectMap
     {
         $markers = [];
 
-        foreach ($this->eventCells as $row) {
+        foreach ($this->layers->getEventGrid()->getSymbols() as $row) {
             foreach ($row as $symbol) {
                 if (trim($symbol) !== '') {
                     $markers[$symbol] = $symbol;
@@ -585,26 +1050,27 @@ final class ProjectMap
      * Captures the editable grid state for undoable whole-grid mutations
      * (resize, event bounds rewrites).
      *
-     * @return array{tiles: array<int, array<int, array{symbol: string, prefix: string, suffix: string}>>, events: array<int, array<int, string>>}
+     * @return array{tiles: array, events: array, layers: array}
      */
     public function captureGridSnapshot(): array
     {
         return [
-            'tiles' => $this->tileCells,
-            'events' => $this->eventCells,
+            'tiles' => $this->layers->getBaseGrid()->cells,
+            'events' => $this->layers->getEventGrid()->getSymbols(),
+            'layers' => $this->layers->captureSnapshot(),
         ];
     }
 
     /**
      * Restores a previously captured grid snapshot.
      *
-     * @param array{tiles: array<int, array<int, array{symbol: string, prefix: string, suffix: string}>>, events: array<int, array<int, string>>} $snapshot The captured state.
+     * @param array{tiles: array, events: array, layers: array} $snapshot The captured state.
      * @return void
      */
     public function restoreGridSnapshot(array $snapshot): void
     {
-        $this->tileCells = $snapshot['tiles'];
-        $this->eventCells = $snapshot['events'];
+        $this->assertEditable();
+        $this->layers->restoreSnapshot($snapshot['layers']);
         $this->cachedWidth = null;
         $this->touchState();
     }
@@ -699,6 +1165,7 @@ final class ProjectMap
      */
     public function setNpcs(NpcCollection $npcs): void
     {
+        $this->assertEditable();
         $entries = $npcs->toMapData();
 
         if (($this->editableData['npcs'] ?? null) === $entries) {
@@ -852,6 +1319,7 @@ final class ProjectMap
      */
     public function setMapDataField(array $path, mixed $value): void
     {
+        $this->assertEditable();
         if ($path === []) {
             return;
         }
@@ -980,7 +1448,7 @@ final class ProjectMap
     {
         $positions = [];
 
-        foreach ($this->eventCells as $rowIndex => $row) {
+        foreach ($this->layers->getEventGrid()->getSymbols() as $rowIndex => $row) {
             foreach ($row as $columnIndex => $symbol) {
                 if ($symbol === $marker) {
                     $positions[] = [$columnIndex, $rowIndex];
@@ -1043,13 +1511,16 @@ final class ProjectMap
      */
     public function setMapField(string $field, mixed $value): void
     {
+        $this->assertEditable();
         $next = $this->editableData;
         $next[$field] = $value;
         $this->writeData($next);
     }
 
     /**
-     * Resizes the map and its event overlay while preserving existing content.
+     * Resizes the map, its event overlay and its graphical tile layers while
+     * preserving existing content. A tile layer the Engine cannot read
+     * refuses the resize before anything changes.
      *
      * @param int $width The new map width.
      * @param int $height The new map height.
@@ -1057,6 +1528,7 @@ final class ProjectMap
      */
     public function resize(int $width, int $height): void
     {
+        $this->assertEditable();
         $width = max(1, $width);
         $height = max(1, $height);
 
@@ -1064,35 +1536,49 @@ final class ProjectMap
             return;
         }
 
-        foreach ($this->tileCells as $rowIndex => $row) {
-            $this->tileCells[$rowIndex] = array_slice($row, 0, $width);
-
-            while (count($this->tileCells[$rowIndex]) < $width) {
-                $this->tileCells[$rowIndex][] = self::createBlankTileCell();
-            }
-        }
-
-        foreach ($this->eventCells as $rowIndex => $row) {
-            $this->eventCells[$rowIndex] = array_slice($row, 0, $width);
-
-            while (count($this->eventCells[$rowIndex]) < $width) {
-                $this->eventCells[$rowIndex][] = ' ';
-            }
-        }
-
-        $this->tileCells = array_slice($this->tileCells, 0, $height);
-        $this->eventCells = array_slice($this->eventCells, 0, $height);
-
-        while (count($this->tileCells) < $height) {
-            $this->tileCells[] = self::createBlankTileRow($width);
-        }
-
-        while (count($this->eventCells) < $height) {
-            $this->eventCells[] = array_fill(0, $width, ' ');
-        }
+        $this->layers->resize($width, $height);
 
         $this->cachedWidth = null;
         $this->touchState();
+    }
+
+    /**
+     * Inserts `$count` blank rows before row `$at` (axis `y`) or blank
+     * columns before column `$at` (axis `x`) into every grid the map has:
+     * its terminal layers, its event layer and its tile layers. Only the
+     * grids change; the coordinates stored in data files move through the
+     * project-wide insertion plan.
+     *
+     * @throws MapSourceRefusal When the line is outside the map or a tile layer cannot take it; nothing is changed.
+     */
+    public function insertLines(string $axis, int $at, int $count): void
+    {
+        $this->assertEditable();
+        $size = match ($axis) {
+            'x' => $this->getWidth(),
+            'y' => $this->getHeight(),
+            default => throw new MapSourceRefusal("Insert rows (y) or columns (x), not '{$axis}'."),
+        };
+        if ($count < 1 || $at < 0 || $at > $size) {
+            throw new MapSourceRefusal(sprintf('%s cannot take %d %s at %d; nothing was changed.',
+                $this->mapId, $count, $axis === 'y' ? 'rows' : 'columns', $at));
+        }
+
+        $this->layers->insertLines($axis, $at, $count);
+
+        $this->cachedWidth = null;
+        $this->touchState();
+    }
+
+    /**
+     * Every grid file's source as the map now holds it: terminal and event
+     * layers, and tile layers, keyed by path.
+     *
+     * @return array<string, string>
+     */
+    public function getGridSources(): array
+    {
+        return $this->layers->getSources();
     }
 
     /**
@@ -1105,6 +1591,7 @@ final class ProjectMap
      */
     public function setEventField(string $marker, array $path, mixed $value): void
     {
+        $this->assertEditable();
         if ($path === []) {
             return;
         }
@@ -1141,6 +1628,7 @@ final class ProjectMap
      */
     public function setEventDefinition(string $marker, array $definition): void
     {
+        $this->assertEditable();
         $next = $this->editableData;
 
         if (! isset($next['events']) || ! is_array($next['events'])) {
@@ -1160,6 +1648,7 @@ final class ProjectMap
      */
     public function removeEventDefinition(string $marker): void
     {
+        $this->assertEditable();
         if (! isset($this->editableData['events'][$marker])) {
             return;
         }
@@ -1181,10 +1670,11 @@ final class ProjectMap
      */
     public function setEventBounds(string $marker, int $x, int $y, int $width, int $height): void
     {
-        foreach ($this->eventCells as $rowIndex => $row) {
+        $this->assertEditable();
+        foreach ($this->layers->getEventGrid()->getSymbols() as $rowIndex => $row) {
             foreach ($row as $columnIndex => $symbol) {
                 if ($symbol === $marker) {
-                    $this->eventCells[$rowIndex][$columnIndex] = ' ';
+                    $this->layers->getEventGrid()->cells[$rowIndex][$columnIndex]['symbol'] = ' ';
                 }
             }
         }
@@ -1194,8 +1684,8 @@ final class ProjectMap
 
         for ($row = max(0, $y); $row <= $maxY; $row++) {
             for ($column = max(0, $x); $column <= $maxX; $column++) {
-                if (isset($this->eventCells[$row][$column])) {
-                    $this->eventCells[$row][$column] = $marker;
+                if ($this->hasLayerCell(MapLayers::EVENT, $column, $row)) {
+                    $this->layers->getEventGrid()->cells[$row][$column]['symbol'] = $marker;
                 }
             }
         }
@@ -1232,11 +1722,13 @@ final class ProjectMap
      */
     public function save(?callable $backup = null, ?FileSetOperations $files = null): string
     {
+        $this->assertEditable();
         $target = $this->resolveSaveTarget();
         $moving = $target['directory'] !== $this->directory;
+        $this->assertGridSourcesCanonical();
 
         $tripletExists = is_file($this->dataPath)
-            && is_file($this->mapPath)
+            && count($this->layers->getSources()) > 0
             && is_file($this->eventPath);
 
         if (! $this->isDirty() && ! $moving && is_dir($this->directory) && $tripletExists) {
@@ -1245,20 +1737,20 @@ final class ProjectMap
             return $target['mapId'];
         }
 
-        $this->assertGridsAgree();
+        $this->validateLayerContracts();
 
         // Which members actually changed. The tile and event files compare
         // against the grids as of the last save, never against the bytes on
-        // disk, so a file an author keeps in another form -- a tile map
-        // built by a helper class -- is rewritten only when its grid is.
+        // disk. Existing grid sources have already passed the literal-nowdoc
+        // check, so an edited grid cannot silently flatten authored PHP.
         // A data file the parser cannot hold never reaches the writer unless
         // the on-disk member disappeared: its edits were refused, so its
         // cached source bytes are its own and are restored unchanged.
         $dataSource = $this->dataDocument === null ? (string) $this->unparsedDataSource : $this->proposedDataSource();
         $writeData = ! is_file($this->dataPath)
-            || ($this->dataDocument !== null && $dataSource !== $this->dataDocument->source);
+            || $dataSource !== $this->baselineDataSource;
         $mapPayload = $this->buildMapPayload();
-        $writeMap = $mapPayload !== $this->baselineMapPayload || ! is_file($this->mapPath);
+        $writeMap = $this->isDirty();
         $eventPayload = $this->buildEventPayload();
         $writeEvent = $eventPayload !== $this->baselineEventPayload || ! is_file($this->eventPath);
 
@@ -1272,27 +1764,12 @@ final class ProjectMap
 
         $transaction = new FileSetTransaction($target['directory'], $files ?? new FilesystemFileSetOperations());
 
-        if ($moving) {
-            // A move installs the complete triplet at the new path and takes
-            // the old one away, as one operation.
+        if ($writeData || $moving) {
             $transaction->write($target['dataPath'], $dataSource);
-            $transaction->write($target['mapPath'], $mapPayload);
-            $transaction->write($target['eventPath'], $eventPayload);
+        }
+        $this->layers->stageChanges($transaction, $moving ? $target['directory'] : null, $moving ? basename($target['directory']) : null, $moving);
+        if ($moving) {
             $transaction->remove($this->dataPath);
-            $transaction->remove($this->mapPath);
-            $transaction->remove($this->eventPath);
-        } else {
-            if ($writeData) {
-                $transaction->write($target['dataPath'], $dataSource);
-            }
-
-            if ($writeMap) {
-                $transaction->write($target['mapPath'], $mapPayload);
-            }
-
-            if ($writeEvent) {
-                $transaction->write($target['eventPath'], $eventPayload);
-            }
         }
 
         // Stage everything beside its destination, then prove the staged
@@ -1328,6 +1805,11 @@ final class ProjectMap
 
         $transaction->commit($backup);
 
+        if ($this->layers->legacy && is_dir($target['directory'] . '/layers')
+            && array_diff(scandir($target['directory'] . '/layers') ?: [], ['.', '..']) === []) {
+            @rmdir($target['directory'] . '/layers');
+        }
+
         if ($moving) {
             // The transaction removed the triplet; the folder follows only
             // when nothing else of the author's lives in it.
@@ -1349,9 +1831,11 @@ final class ProjectMap
     private function adoptWritten(string $dataSource, string $mapPayload, string $eventPayload): void
     {
         $this->adoptDataSource($dataSource);
+        $this->baselineDataSource = $dataSource;
         $this->loadedData = $this->editableData;
         $this->baselineMapPayload = $mapPayload;
         $this->baselineEventPayload = $eventPayload;
+        $this->layers->captureBaseline();
         $this->captureBaseline();
     }
 
@@ -1360,12 +1844,16 @@ final class ProjectMap
      */
     private function assertGridsAgree(): void
     {
-        if (count($this->eventCells) !== count($this->tileCells)) {
+        if (! $this->layers->legacy) {
+            $this->layers->assertDimensions();
+            return;
+        }
+        if (count($this->layers->getEventGrid()->getSymbols()) !== count($this->layers->getBaseGrid()->cells)) {
             throw new RuntimeException(sprintf(
                 '%s: the event layer is %d rows but the map is %d; nothing was written.',
                 $this->mapId,
-                count($this->eventCells),
-                count($this->tileCells),
+                count($this->layers->getEventGrid()->getSymbols()),
+                count($this->layers->getBaseGrid()->cells),
             ));
         }
     }
@@ -1417,15 +1905,17 @@ final class ProjectMap
      * @param int $height The map height.
      * @return void
      */
-    public static function createBlank(string $directory, string $baseName, string $displayName, int $width = 48, int $height = 18, ?FileSetOperations $files = null): void
+    public static function createBlank(string $directory, string $baseName, string $displayName, int $width = 48, int $height = 18, ?FileSetOperations $files = null, ?string $kind = null): void
     {
         $blankTileLine = str_repeat(' ', $width);
         $blankEventLine = str_repeat(' ', $width);
         $tileText = implode(PHP_EOL, array_fill(0, $height, $blankTileLine));
         $eventText = implode(PHP_EOL, array_fill(0, $height, $blankEventLine));
+        // A map is born with its kind, the tileset its tiles and pieces come from.
         $data = [
             'name' => $displayName,
             'region' => '',
+            ...($kind === null ? [] : ['tileset' => $kind]),
             'description' => '',
             'triggers' => [],
             'events' => [],
@@ -1442,11 +1932,11 @@ final class ProjectMap
         );
         $transaction->write(
             $directory . DIRECTORY_SEPARATOR . $baseName . '.map.php',
-            "<?php\n\nreturn <<<'ICHILOTO_MAP'\n{$tileText}\nICHILOTO_MAP;\n",
+            MapGridSource::buildSource($tileText, 'ICHILOTO_MAP'),
         );
         $transaction->write(
             $directory . DIRECTORY_SEPARATOR . $baseName . '.event.php',
-            "<?php\n\nreturn <<<'ICHILOTO_EVENT_MAP'\n{$eventText}\nICHILOTO_EVENT_MAP;\n",
+            MapGridSource::buildSource($eventText, 'ICHILOTO_EVENT_MAP'),
         );
         $transaction->commit();
     }
@@ -1461,6 +1951,8 @@ final class ProjectMap
      */
     public function duplicateTo(string $directory, string $baseName, string $displayName, ?FileSetOperations $files = null): void
     {
+        $this->assertEditable();
+        $this->assertGridSourcesCanonical();
         // The copy keeps everything the original authored -- comments,
         // expressions, formatting -- with only the display name rewritten.
         // A source the editor cannot rewrite reversibly refuses the
@@ -1493,18 +1985,8 @@ final class ProjectMap
         $transaction = new FileSetTransaction($directory, $files ?? new FilesystemFileSetOperations());
         $duplicatedDataPath = $directory . DIRECTORY_SEPARATOR . $baseName . '.data.php';
         $transaction->write($duplicatedDataPath, $dataSource);
-        $transaction->write(
-            $directory . DIRECTORY_SEPARATOR . $baseName . '.map.php',
-            $this->buildMapPayload() === $this->baselineMapPayload && is_file($this->mapPath)
-                ? (string) file_get_contents($this->mapPath)
-                : $this->buildMapPayload(),
-        );
-        $transaction->write(
-            $directory . DIRECTORY_SEPARATOR . $baseName . '.event.php',
-            $this->buildEventPayload() === $this->baselineEventPayload && is_file($this->eventPath)
-                ? (string) file_get_contents($this->eventPath)
-                : $this->buildEventPayload(),
-        );
+        $this->validateLayerContracts();
+        $this->layers->stageChanges($transaction, $directory, $baseName);
 
         // The staged copy must evaluate to exactly the duplicate's content
         // where it will live, before anything is installed.
@@ -1541,11 +2023,11 @@ final class ProjectMap
      *
      * @return string[]
      */
-    public function getCharacterPalette(): array
+    public function getCharacterPalette(?string $layer = null): array
     {
         $symbols = [];
 
-        foreach ($this->tileCells as $row) {
+        foreach (($layer === null ? $this->layers->getBaseGrid() : $this->layers->getGrid($layer))->cells as $row) {
             foreach ($row as $cell) {
                 $symbol = $cell['symbol'];
 
@@ -1557,7 +2039,7 @@ final class ProjectMap
             }
         }
 
-        foreach ($this->eventCells as $row) {
+        foreach ($this->layers->getEventGrid()->getSymbols() as $row) {
             foreach ($row as $symbol) {
                 if (trim($symbol) === '') {
                     continue;
@@ -1583,70 +2065,6 @@ final class ProjectMap
     private static function splitMapText(string $text): array
     {
         return preg_split('/\R/u', rtrim($text, "\r\n")) ?: [];
-    }
-
-    /**
-     * Parses formatted tile-map lines into editable cells.
-     *
-     * @param string[] $lines The raw tile-map lines.
-     * @return array<int, array<int, array{symbol: string, prefix: string, suffix: string}>>
-     */
-    private static function parseStyledLines(array $lines): array
-    {
-        return array_map(static function (string $line): array {
-            preg_match_all('/<[^>]+>|[^<]+/u', $line, $matches);
-            $segments = $matches[0] ?? [];
-            $cells = [];
-            $activePrefix = '';
-
-            foreach ($segments as $segment) {
-                if (preg_match('/^<[^\/][^>]*>$/u', $segment) === 1) {
-                    $activePrefix .= $segment;
-                    continue;
-                }
-
-                if (preg_match('/^<\/[^>]*>$/u', $segment) === 1 || $segment === '</>') {
-                    if ($cells !== []) {
-                        $cells[array_key_last($cells)]['suffix'] .= $segment;
-                    }
-
-                    $activePrefix = '';
-                    continue;
-                }
-
-                foreach (self::toSymbols($segment) as $index => $symbol) {
-                    $cells[] = [
-                        'symbol' => $symbol,
-                        'prefix' => $index === 0 ? $activePrefix : '',
-                        'suffix' => '',
-                    ];
-                }
-            }
-
-            return $cells;
-        }, $lines);
-    }
-
-    /**
-     * Parses plain event-map lines into editable symbols.
-     *
-     * @param string[] $lines The raw event-map lines.
-     * @return array<int, array<int, string>>
-     */
-    private static function parsePlainLines(array $lines): array
-    {
-        return array_map(static fn(string $line): array => self::toSymbols($line), $lines);
-    }
-
-    /**
-     * Strips text-formatting tags from a map line.
-     *
-     * @param string $line The formatted line.
-     * @return string
-     */
-    private static function stripFormatting(string $line): string
-    {
-        return preg_replace('/<[^>]+>/', '', $line) ?? $line;
     }
 
     /**
@@ -1680,52 +2098,14 @@ final class ProjectMap
     }
 
     /**
-     * Rebuilds a formatted tile row from editable cells.
-     *
-     * @param array<int, array{symbol: string, prefix: string, suffix: string}> $cells The tile cells.
-     * @return string
-     */
-    private function buildStyledLine(array $cells): string
-    {
-        $line = '';
-
-        foreach ($cells as $cell) {
-            $line .= $cell['prefix'] . $cell['symbol'] . $cell['suffix'];
-        }
-
-        return $line;
-    }
-
-    /**
-     * Rebuilds a plain row from editable symbols.
-     *
-     * @param array<int, string> $cells The plain symbols.
-     * @return string
-     */
-    private function buildPlainLine(array $cells): string
-    {
-        return implode('', $cells);
-    }
-
-    /**
-     * The content fingerprint compares canonical exports, deliberately not
-     * the source writer's output: what makes a map dirty is its content,
-     * and a map whose authored source cannot even be parsed must still
-     * fingerprint cleanly so its grids stay saveable.
-     */
-
-    /**
      * The tile file the current grid should be saved as.
      *
-     * The tile and event files are the editor's own format -- a heredoc
-     * grid -- so a *changed* grid is written canonically; an untouched grid
-     * is never written at all, whatever form its author kept it in.
+     * A changed grid is written as a nowdoc; an untouched canonical source
+     * keeps its exact bytes.
      */
     private function buildMapPayload(): string
     {
-        return "<?php\n\nreturn <<<'ICHILOTO_MAP'\n"
-            . implode(PHP_EOL, array_map($this->buildStyledLine(...), $this->tileCells))
-            . "\nICHILOTO_MAP;\n";
+        return $this->layers->getBaseGrid()->getSource();
     }
 
     /**
@@ -1733,9 +2113,7 @@ final class ProjectMap
      */
     private function buildEventPayload(): string
     {
-        return "<?php\n\nreturn <<<'ICHILOTO_EVENT_MAP'\n"
-            . implode(PHP_EOL, array_map($this->buildPlainLine(...), $this->eventCells))
-            . "\nICHILOTO_EVENT_MAP;\n";
+        return $this->layers->getEventGrid()->getSource();
     }
 
     /**
@@ -1747,8 +2125,7 @@ final class ProjectMap
         // its old self even when every cell matches.
         return $this->mapId
             . "\0" . self::exportPhpValue($this->editableData)
-            . "\0" . $this->buildMapPayload()
-            . $this->buildEventPayload();
+            . "\0" . serialize($this->layers->getSources());
     }
 
     /**
@@ -1768,6 +2145,7 @@ final class ProjectMap
      */
     public function moveTo(string $newRelativeId): self
     {
+        $this->assertEditable();
         $newRelativeId = trim(str_replace('\\', '/', $newRelativeId), '/ ');
 
         if ($newRelativeId === '') {
@@ -1777,6 +2155,8 @@ final class ProjectMap
         if ($newRelativeId === $this->mapId) {
             return $this;
         }
+
+        $this->assertGridSourcesCanonical();
 
         $mapsRoot = $this->getMapsRoot();
         $directory = $mapsRoot . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $newRelativeId);
@@ -1802,28 +2182,17 @@ final class ProjectMap
                 $movedDataPath,
                 $this->dataDocument === null ? (string) $this->unparsedDataSource : $this->proposedDataSource(),
             );
-            $transaction->write(
-                $movedMapPath,
-                $this->buildMapPayload() === $this->baselineMapPayload && is_file($this->mapPath)
-                    ? (string) file_get_contents($this->mapPath)
-                    : $this->buildMapPayload(),
-            );
-            $transaction->write(
-                $movedEventPath,
-                $this->buildEventPayload() === $this->baselineEventPayload && is_file($this->eventPath)
-                    ? (string) file_get_contents($this->eventPath)
-                    : $this->buildEventPayload(),
-            );
+            $this->validateLayerContracts();
+            $this->layers->stageChanges($transaction, $directory, $baseName, true);
             $transaction->remove($this->dataPath);
-            $transaction->remove($this->mapPath);
-            $transaction->remove($this->eventPath);
-
-            $destinationPaths = [$movedDataPath, $movedMapPath, $movedEventPath];
-            $expectedGrids = [
-                $movedMapPath => array_map($this->buildStyledLine(...), $this->tileCells),
-                $movedEventPath => array_map($this->buildPlainLine(...), $this->eventCells),
-            ];
+            $expectedGrids = $this->layers->getSources($directory, $baseName);
             $sourceDirectoryMetadata = self::captureDirectoryMetadata($previousDirectory);
+            $memberDirectoryMetadata = [];
+            foreach (['layers', MapGraphics::DIRECTORY] as $member) {
+                if (is_dir($previousDirectory . '/' . $member)) {
+                    $memberDirectoryMetadata[] = self::captureDirectoryMetadata($previousDirectory . '/' . $member);
+                }
+            }
             $removedSourceDirectories = [];
             $directoryRestorationFailures = [];
 
@@ -1832,49 +2201,37 @@ final class ProjectMap
             // the state the game will load: no preview copies, temporary
             // neighbours, or old member can make an invalid move look valid.
             $transaction->commit(validate: function () use (
-                $destinationPaths,
                 $movedDataPath,
-                $movedMapPath,
                 $movedEventPath,
                 $expectedGrids,
                 $newRelativeId,
-                $previousDirectory,
                 $mapsRoot,
                 $sourceDirectoryMetadata,
+                $memberDirectoryMetadata,
                 &$removedSourceDirectories,
                 &$directoryRestorationFailures,
             ): void {
-                $removedSourceDirectories = self::removeEmptyDirectoryChain(
-                    $previousDirectory,
+                $removedSourceDirectories = self::removeEmptySourceDirectories(
+                    $memberDirectoryMetadata,
                     $mapsRoot,
                     $sourceDirectoryMetadata,
                 );
 
                 try {
                     try {
-                        $evaluatedFingerprints = [];
-                        [$evaluated, $evaluatedMap, $evaluatedEvent] = $this->evaluateFiles($destinationPaths, $evaluatedFingerprints);
+                        $evaluatedFingerprint = null;
+                        $evaluated = $this->evaluateFile($movedDataPath, $evaluatedFingerprint);
                     } catch (\Throwable $evaluationFailure) {
-                        $failedPath = $movedDataPath;
-
-                        if ($evaluationFailure instanceof IsolatedPhpEvaluationFailure) {
-                            $failedIndex = array_search($evaluationFailure->path, $destinationPaths, true);
-
-                            if (is_int($failedIndex)) {
-                                $failedPath = $destinationPaths[$failedIndex];
-                            }
-                        }
-
                         throw new RuntimeException(sprintf(
-                            '%s does not evaluate at %s (%s) — an expression written against the old folder depth, such as a relative require, must be adjusted in the file first.',
-                            basename($failedPath),
+                            '%s does not evaluate at %s (%s) - an expression written against the old folder depth, such as a relative require, must be adjusted in the file first.',
+                            basename($movedDataPath),
                             $newRelativeId,
                             $evaluationFailure->getMessage(),
                         ), previous: $evaluationFailure);
                     }
 
                     if (! is_array($evaluated)
-                        || ($evaluatedFingerprints[0] ?? null) !== PhpDataFile::valueFingerprint($this->editableData)
+                        || $evaluatedFingerprint !== PhpDataFile::valueFingerprint($this->editableData)
                     ) {
                         throw new RuntimeException(sprintf(
                             '%s would not read back as this map at %s.',
@@ -1883,21 +2240,19 @@ final class ProjectMap
                         ));
                     }
 
-                    $evaluatedGrids = [
-                        $movedMapPath => $evaluatedMap,
-                        $movedEventPath => $evaluatedEvent,
-                    ];
-
-                    foreach ($expectedGrids as $path => $expectedLines) {
-                        $evaluatedGrid = $evaluatedGrids[$path];
-
-                        if (! is_string($evaluatedGrid) || self::splitMapText($evaluatedGrid) !== $expectedLines) {
-                            throw new RuntimeException(sprintf(
-                                '%s would not read back as this map at %s.',
-                                basename($path),
-                                $newRelativeId,
-                            ));
+                    // Terminal grids must read back as literal grids; tile
+                    // layers are carried as bytes, readable or not, so they
+                    // must hold exactly the bytes that were moved.
+                    foreach ($expectedGrids as $path => $expectedSource) {
+                        if (dirname($path) === dirname($movedDataPath) . '/' . MapGraphics::DIRECTORY
+                            ? @file_get_contents($path) !== $expectedSource
+                            : MapGridSource::readFile($path) !== MapGridSource::parseSource($expectedSource, $path)) {
+                            throw new RuntimeException(basename($path) . ' would not read back as this map at ' . $newRelativeId);
                         }
+                    }
+                    $set = MapLayerSource::loadFromDirectory(dirname($movedDataPath), $newRelativeId);
+                    if (! $set->legacy) {
+                        $set->assertMatchingGrid(MapLayer::parseGrid(MapGridSource::readFile($movedEventPath)), $movedEventPath);
                     }
                 } catch (\Throwable $validationFailure) {
                     // The file rollback needs the old directories in place.
@@ -1949,16 +2304,12 @@ final class ProjectMap
             ), previous: $throwable);
         }
 
-        return new self(
-            mapId: $newRelativeId,
-            directory: $directory,
-            dataPath: $movedDataPath,
-            mapPath: $movedMapPath,
-            eventPath: $movedEventPath,
-            data: $this->editableData,
-            tileLines: $expectedGrids[$movedMapPath],
-            eventLines: $expectedGrids[$movedEventPath],
-            dataSource: (string) file_get_contents($movedDataPath),
+        $set = MapLayerSource::loadFromDirectory($directory, $newRelativeId);
+        $eventText = MapGridSource::readFile($movedEventPath);
+        return new self($newRelativeId, $directory, $movedDataPath, $movedMapPath, $movedEventPath,
+            $this->editableData, self::splitMapText($set->layers[0]->text), self::splitMapText($eventText),
+            (string) file_get_contents($movedDataPath),
+            layers: MapLayers::createFromSource($directory, $set, $movedEventPath, $eventText),
         )->withLoadedBaseline();
     }
 
@@ -2046,6 +2397,33 @@ final class ProjectMap
 
             $directory = dirname($directory);
         }
+    }
+
+    /**
+     * Removes a moved map's emptied member directories (`layers/`,
+     * `graphics/`), then its source directory and empty parents.
+     *
+     * @param list<array{path: string, mode: int, owner: int, group: int, modifiedAt: int, accessedAt: int, device: int, inode: int}> $memberDirectoryMetadata Metadata captured before source members are removed.
+     * @param array{path: string, mode: int, owner: int, group: int, modifiedAt: int, accessedAt: int, device: int, inode: int} $sourceDirectoryMetadata
+     * @return list<array{path: string, mode: int, owner: int, group: int, modifiedAt: int, accessedAt: int, device: int, inode: int}> The removed directories, leaf first.
+     */
+    private static function removeEmptySourceDirectories(array $memberDirectoryMetadata, string $mapsRoot, array $sourceDirectoryMetadata): array
+    {
+        $removed = [];
+
+        foreach ($memberDirectoryMetadata as $metadata) {
+            $entries = is_dir($metadata['path']) ? scandir($metadata['path']) : false;
+
+            // A member directory holding anything else is its author's.
+            if (is_array($entries) && array_diff($entries, ['.', '..']) === [] && @rmdir($metadata['path'])) {
+                $removed[] = $metadata;
+            }
+        }
+
+        return [
+            ...$removed,
+            ...self::removeEmptyDirectoryChain($sourceDirectoryMetadata['path'], $mapsRoot, $sourceDirectoryMetadata),
+        ];
     }
 
     /**

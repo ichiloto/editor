@@ -10,6 +10,8 @@ use Atatusoft\Termutil\IO\Console\Console;
 use Atatusoft\Termutil\IO\Enumerations\Color;
 use Atatusoft\Termutil\IO\Mouse\Enumerations\MouseButton;
 use Ichiloto\Editor\Backup\BackupSettings;
+use Ichiloto\Editor\Actors\ActorIdentityMigration;
+use Ichiloto\Editor\Actors\ActorIdentityMigrationPlan;
 use Ichiloto\Editor\Backup\BackupWriter;
 use Ichiloto\Editor\Canvas\CanvasTool;
 use Ichiloto\Editor\Canvas\Clipboard;
@@ -34,6 +36,7 @@ use Ichiloto\Editor\Database\ConditionEditor;
 use Ichiloto\Editor\Field\NpcInspector;
 use Ichiloto\Editor\Field\MapBgmVariants;
 use Ichiloto\Editor\Field\MapEncounters;
+use Ichiloto\Editor\Field\NpcCollection;
 use Ichiloto\Editor\Field\NpcReferences;
 use Ichiloto\Editor\Field\ProjectNpc;
 use Ichiloto\Editor\Database\WorldWriteEditor;
@@ -46,11 +49,14 @@ use Ichiloto\Editor\Database\SummonAssignmentDiagnostics;
 use Ichiloto\Editor\Database\RecordSubList;
 use Ichiloto\Editor\Database\ReferencePicker;
 use Ichiloto\Editor\Debug\Debug;
+use Ichiloto\Editor\Maps\LineInsertionPlan;
+use Ichiloto\Editor\Maps\MapLayers;
 use Ichiloto\Editor\Events\EventTypeCatalog;
 use Ichiloto\Editor\History\Command;
 use Ichiloto\Editor\History\CommandHistory;
 use Ichiloto\Editor\History\GenericCommand;
 use Ichiloto\Editor\History\PaintStrokeCommand;
+use Ichiloto\Editor\History\SourceSetCommand;
 use Ichiloto\Editor\Inspector\InputControl;
 use Ichiloto\Editor\Inspector\InputControlType;
 use Ichiloto\Editor\IO\InputDecoder;
@@ -95,6 +101,8 @@ use Ichiloto\Engine\Entities\Roles\ParameterCurveGenerator;
 use Ichiloto\Engine\Events\Enumerations\ChestType;
 use Ichiloto\Engine\Events\Enumerations\LootType;
 use Ichiloto\Engine\Quests\QuestObjectiveType;
+use Ichiloto\Engine\Rendering\Tilesets\TileId;
+use Ichiloto\Engine\Rendering\Tilesets\Tileset;
 use RuntimeException;
 if (! class_exists(__NAMESPACE__ . chr(92) . 'Animation', false)) { class_alias('Ichiloto' . chr(92) . 'Engine' . chr(92) . 'Animations' . chr(92) . 'Animation', __NAMESPACE__ . chr(92) . 'Animation'); }
 if (! class_exists(__NAMESPACE__ . chr(92) . 'AnimationCue', false)) { class_alias('Ichiloto' . chr(92) . 'Engine' . chr(92) . 'Animations' . chr(92) . 'AnimationCue', __NAMESPACE__ . chr(92) . 'AnimationCue'); }
@@ -106,6 +114,11 @@ use Throwable;
  */
 final class Editor
 {
+    use \Ichiloto\Editor\Canvas\LayerCanvas;
+    use \Ichiloto\Editor\Canvas\PieceCanvas;
+    use \Ichiloto\Editor\Canvas\LineInsertCanvas;
+    use \Ichiloto\Editor\Canvas\GlyphTileCanvas;
+    use \Ichiloto\Editor\Inspector\MapKindField;
     use CutscenesWorkspace;
     use CutsceneOutlinePane;
     use CutscenePreviewPane;
@@ -132,6 +145,8 @@ final class Editor
     private const string MODE_MAP = 'map';
     private const string MODE_EVENT = 'event';
     private const string MODE_NPC = 'npc';
+    /** The layer picker's NPCs entry, which enters NPC mode. */
+    private const string NPC_LAYER_ENTRY = 'npcs';
     private const string DATABASE_CATEGORY_ACTORS = 'actors';
     private const string DATABASE_CATEGORY_CLASSES = 'classes';
     private const string DATABASE_CATEGORY_SKILLS = 'skills';
@@ -149,6 +164,8 @@ final class Editor
     /** Rows or columns one wheel tick scrolls the canvas viewport. */
     private const int WHEEL_SCROLL_ROWS = 3;
     private const int WINDOW_HORIZONTAL_PADDING = 1;
+    /** Top and bottom borders surrounding window content. */
+    private const int WINDOW_BORDER_ROWS = 2;
     private const string GUARD_ACTION_QUIT = 'quit';
     private const string GUARD_ACTION_RELOAD = 'reload';
     /**
@@ -378,6 +395,11 @@ final class Editor
     }
     private ?MouseButton $activeMousePaintButton = null;
     /**
+     * @var array{start: array{x: int, y: int}, symbol: string}|null A line, rectangle or selection being dragged out
+     *     with the mouse: the cell it started on and the symbol it draws (a space erases).
+     */
+    private ?array $mouseToolDrag = null;
+    /**
      * @var array{x: int, y: int}|null
      */
     private ?array $lastMousePaintPoint = null;
@@ -521,6 +543,7 @@ final class Editor
      * The picker row that clears a map's background music.
      */
     private const string MAP_BGM_NONE = '(None)';
+    private const string MAP_KIND_NONE = 'Not set';
 
     /**
      * The row that chooses which kind of slot the Optimize preview fills.
@@ -939,6 +962,7 @@ final class Editor
         $this->isHelpOpen = false;
         $this->isCommandPaletteOpen = false;
         $this->commandPalette->close();
+        $this->reportRefusedMapsAtBoot();
         $this->terminal->enterRawMode();
         $this->inputDecoder = new InputDecoder();
         $this->inputDecoder->attach();
@@ -950,6 +974,25 @@ final class Editor
         $this->lastTerminalSize = $size;
         $this->isRunning = true;
         $this->requestFullRender();
+    }
+
+    /** Warns about maps whose authored grids cannot be safely loaded. */
+    private function reportRefusedMapsAtBoot(): void
+    {
+        $refusals = [];
+        foreach ($this->workspace->maps as $map) {
+            if (($issue = $map->getGridSourceIssue()) !== null) {
+                $refusals[] = $issue;
+            }
+        }
+
+        if ($refusals !== []) {
+            $this->setStatus(
+                sprintf('%d map(s) are read-only (Ctrl+E for details).', count($refusals)),
+                StatusLevel::WARN,
+                $refusals,
+            );
+        }
     }
 
     /**
@@ -1058,7 +1101,12 @@ final class Editor
     private function performUndo(): void
     {
         $this->finalizeActiveStroke();
-        $command = $this->history->undo();
+        try {
+            $command = $this->history->undo();
+        } catch (Throwable $failure) {
+            $this->setErrorStatus($failure, 'Undo');
+            return;
+        }
 
         if (! $command instanceof Command) {
             $this->setStatus('Nothing to undo.');
@@ -1069,7 +1117,7 @@ final class Editor
         $this->clampCursor();
         $this->clampCanvasOffsets();
         $this->clampInspectorSelection();
-        $this->setStatus(sprintf('Undid %s.', self::asPhrase($command->label)), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Undid %s.', self::asPhrase($command->label)), StatusLevel::INFO);
         $this->requestFullRender();
     }
 
@@ -1080,7 +1128,12 @@ final class Editor
      */
     private function performRedo(): void
     {
-        $command = $this->history->redo();
+        try {
+            $command = $this->history->redo();
+        } catch (Throwable $failure) {
+            $this->setErrorStatus($failure, 'Redo');
+            return;
+        }
 
         if (! $command instanceof Command) {
             $this->setStatus('Nothing to redo.');
@@ -1091,7 +1144,7 @@ final class Editor
         $this->clampCursor();
         $this->clampCanvasOffsets();
         $this->clampInspectorSelection();
-        $this->setStatus(sprintf('Redid %s.', self::asPhrase($command->label)), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Redid %s.', self::asPhrase($command->label)), StatusLevel::INFO);
         $this->requestFullRender();
     }
 
@@ -1121,16 +1174,28 @@ final class Editor
     }
 
     /**
-     * Records the in-flight mouse stroke as one undoable command.
+     * Records the in-flight mouse stroke as one undoable command, with the
+     * tiles that followed its glyphs.
      *
      * @return void
      */
     private function finalizeActiveStroke(): void
     {
         $stroke = $this->activeStrokeCommand;
+        $tiles = $this->activeStrokeTiles;
         $this->activeStrokeCommand = null;
+        $this->activeStrokeTiles = null;
 
-        if ($stroke instanceof PaintStrokeCommand && $stroke->hasChanges()) {
+        if (! $stroke instanceof PaintStrokeCommand) {
+            return;
+        }
+
+        if ($tiles !== null && $stroke->targets($tiles['map']) && $tiles['map']->getTileLayerSources() !== $tiles['sources']) {
+            $this->recordStrokeWithTiles($stroke->label, $tiles['map'], $stroke, $tiles['sources'], $tiles['map']->getTileLayerSources());
+            return;
+        }
+
+        if ($stroke->hasChanges()) {
             $this->recordCommand($stroke);
         }
     }
@@ -1217,6 +1282,8 @@ final class Editor
         $router->bindModal(Modal::UNSAVED_CHANGES_GUARD, $this->handleUnsavedChangesGuardInput(...));
         $router->bindModal(Modal::DATABASE_ENTRY_DELETE_CONFIRMATION, $this->handleDatabaseEntryDeleteConfirmationInput(...));
         $router->bindModal(Modal::RENAME_CONFIRMATION, $this->handleRenameConfirmationInput(...));
+        $router->bindModal(Modal::LAYER_EDIT, $this->handleLayerPromptInput(...));
+        $router->bindModal(Modal::LINE_INSERT, $this->handleLineInsertPromptInput(...));
         $router->bindModal(Modal::COMMAND_PALETTE, $this->handleCommandPaletteInput(...));
         $router->bindModal(Modal::HELP, $this->handleHelpInput(...));
         $router->bindModal(Modal::DATABASE, $this->handleDatabaseInput(...));
@@ -1332,6 +1399,13 @@ final class Editor
             // glyph. The predicates keep NPC mode's own letters and the
             // other panes' typing untouched.
             KeyBinding::when($this->isNormalModeCommand('i'), $this->enterPaintMode(...), 'i', 'Canvas: enter Paint mode (every key paints; Esc returns to Normal)'),
+            KeyBinding::when($this->isNormalModeCommand('L'), fn() => $this->openCanvasLayerPicker(), 'L', 'Canvas: choose the layer to edit'),
+            KeyBinding::when($this->isNormalModeCommand('P'), fn() => $this->openPiecePicker(), 'P', 'Canvas: choose a tileset piece to place (Enter stamps or draws it, Esc when done)'),
+            KeyBinding::when($this->isNormalModeCommand('T'), fn() => $this->drawTilesForLayerGlyphs(), 'T', 'Canvas: draw the tiles for the glyphs already on this layer'),
+            KeyBinding::when($this->isNormalModeCommand(']'), fn() => $this->cycleCanvasLayer(), ']', 'Canvas: next layer'),
+            KeyBinding::when($this->isNormalModeCommand('['), fn() => $this->cycleCanvasLayer(-1), '[', 'Canvas: previous layer'),
+            KeyBinding::when($this->isNormalModeCommand('v'), fn() => $this->toggleCanvasLayerVisibility(), 'v', 'Canvas: toggle selected layer visibility'),
+            KeyBinding::when($this->isNormalModeCommand('d'), fn() => $this->toggleCanvasLayerOption('dim'), 'd', 'Canvas: dim inactive layers'),
             KeyBinding::when($this->isNormalModeCommand('m'), fn() => $this->setEditingMode(self::MODE_MAP), 'm', 'Canvas: Map mode (paint tiles)'),
             KeyBinding::when($this->isNormalModeCommand('e'), fn() => $this->setEditingMode(self::MODE_EVENT), 'e', 'Canvas: Event mode (paint event markers)'),
             KeyBinding::when($this->isNormalModeCommand('n'), fn() => $this->setEditingMode(self::MODE_NPC), 'n', 'Canvas: NPC mode (place and edit the map\'s NPCs)'),
@@ -1476,7 +1550,7 @@ final class Editor
     private function handleAssetsPaneInput(string $input, string $normalizedInput): void
     {
         if ($this->isShiftLetterShortcut($input, 'A')) {
-            $this->createNewMap();
+            $this->openNewMapKindPicker();
             return;
         }
 
@@ -1718,6 +1792,11 @@ final class Editor
             // returns to the Map layer.
             if ($this->inputMode === self::INPUT_PAINT) {
                 $this->leavePaintMode();
+                return;
+            }
+
+            if ($this->getActivePiecePlacement() !== null) {
+                $this->backOutOfPiecePlacement();
                 return;
             }
 
@@ -2085,7 +2164,7 @@ final class Editor
             'Identity' => ['id', 'name'],
             'Placement' => ['x', 'y'],
             'Appearance' => ['sprite', 'sprites.north', 'sprites.south', 'sprites.east', 'sprites.west'],
-            'Movement' => ['movement', 'wanderArea.x', 'wanderArea.y', 'wanderArea.width', 'wanderArea.height'],
+            'Movement' => ['movement', 'directionFix', 'wanderArea.x', 'wanderArea.y', 'wanderArea.width', 'wanderArea.height'],
             'Visibility' => ['conditions'],
             'Interaction' => ['commandListScript'],
             'Completion Writes' => ['sets'],
@@ -2220,6 +2299,10 @@ final class Editor
         $this->npcInspector->commit();
         $after = $map->getNpcs();
 
+        if ($fieldId === 'name') {
+            $after = $this->followNpcNameWithId($map, $after, $index);
+        }
+
         if ($after->toMapData() === $before->toMapData()) {
             // A same-value edit: no history, no dirt.
             $this->refreshNpcInspector();
@@ -2239,6 +2322,43 @@ final class Editor
                 $this->selectNpc($index);
             },
         ));
+    }
+
+    /**
+     * Gives a renamed NPC the id its new name derives, as long as nothing
+     * refers to it yet: an id something names stays, so doors, routes and
+     * cinematics keep finding the NPC, and the status says what names it.
+     *
+     * @return NpcCollection The map's NPCs after the rename.
+     */
+    private function followNpcNameWithId(ProjectMap $map, NpcCollection $npcs, int $index): NpcCollection
+    {
+        $npc = $npcs->get($index);
+        $id = $npc?->getId();
+
+        if ($npc === null || $id === null || $id === '') {
+            return $npcs;
+        }
+
+        $derived = $npcs->withRemoved($index)->uniqueIdFor($npc->getName());
+
+        if ($derived === $id) {
+            return $npcs;
+        }
+
+        $references = $this->workspace instanceof ProjectWorkspace ? new NpcReferences($this->workspace)->describe($map, $id) : [];
+
+        if ($references !== []) {
+            $this->setStatus(sprintf('Renamed. Its id stays %s: %s names it.', $id, implode(', ', $references)));
+
+            return $npcs;
+        }
+
+        $renamed = $npcs->withReplaced($index, $npc->withId($derived));
+        $map->setNpcs($renamed);
+        $this->setStatus(sprintf('Renamed. Its id is now %s.', $derived), StatusLevel::INFO);
+
+        return $renamed;
     }
 
     /**
@@ -2391,7 +2511,7 @@ final class Editor
         $id = $before->uniqueIdFor($npc->getName());
         $map->setNpcs($before->withReplaced($index, $npc->asCopyWithId($id)));
         $this->recordNpcCollectionChange($map, $index, $before, sprintf('Assign NPC id %s', $id));
-        $this->setStatus(sprintf('Assigned the stable id "%s" to %s.', $id, $npc->getName()), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Assigned the stable id "%s" to %s.', $id, $npc->getName()), StatusLevel::INFO);
     }
 
     /**
@@ -2671,7 +2791,7 @@ final class Editor
             sprintf('New NPC at (%d, %d)', $tile['x'], $tile['y']),
             '',
             sprintf('Name: %s', $this->npcNameBuffer),
-            $preview !== '' ? sprintf('Id:   %s', $preview) : 'Id:   (derived from the name, once)',
+            $preview !== '' ? sprintf('Id:   %s', $preview) : 'Id:   (derived from the name)',
             '',
             '  Enter creates it, Esc cancels.',
         ];
@@ -2713,7 +2833,7 @@ final class Editor
                 $this->selectNpc(null);
             },
         ));
-        $this->setStatus(sprintf('Created %s. Its id is %s.', $name, $id), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Created %s. Its id is %s.', $name, $id), StatusLevel::INFO);
         $this->focusedPane = self::FOCUS_INSPECTOR;
         $this->requestFullRender();
     }
@@ -2811,7 +2931,7 @@ final class Editor
                 $this->selectNpc($index);
             },
         ));
-        $this->setStatus(sprintf('Moved %s to %d,%d.', $npc->getName(), $x, $y), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Moved %s to %d,%d.', $npc->getName(), $x, $y), StatusLevel::INFO);
         $this->requestFullRender();
     }
 
@@ -2858,7 +2978,7 @@ final class Editor
                 $this->selectNpc(null);
             },
         ));
-        $this->setStatus(sprintf('Duplicated as %s (id %s).', $copy->getName(), $id), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Duplicated as %s (id %s).', $copy->getName(), $id), StatusLevel::INFO);
         $this->requestFullRender();
     }
 
@@ -2913,7 +3033,7 @@ final class Editor
                 $this->selectNpc($index);
             },
         ));
-        $this->setStatus(sprintf('Deleted %s.', $npc->getName()), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Deleted %s.', $npc->getName()), StatusLevel::INFO);
         $this->requestFullRender();
     }
 
@@ -3727,9 +3847,12 @@ final class Editor
      */
     private function selectAsset(int $selectedIndex): void
     {
+        $this->facadeBrush = null;
         if (! $this->workspace instanceof ProjectWorkspace || $selectedIndex === $this->selectedAssetIndex) {
             return;
         }
+
+        $this->piecePlacement = null;
 
         $this->selectedAssetIndex = $selectedIndex;
         $this->cursorX = 0;
@@ -3775,7 +3898,9 @@ final class Editor
         $this->cursorY = $nextCursorY;
         $this->syncViewportToCursor();
 
-        if ($previousOffsetX !== $this->canvasOffsetX || $previousOffsetY !== $this->canvasOffsetY) {
+        // A piece's preview follows the cursor, so the canvas repaints.
+        if ($previousOffsetX !== $this->canvasOffsetX || $previousOffsetY !== $this->canvasOffsetY
+            || $this->getActivePiecePlacement() !== null) {
             $this->renderCanvasArea();
             return;
         }
@@ -3804,6 +3929,11 @@ final class Editor
      */
     private function setEditingMode(string $mode): void
     {
+        $this->finalizeActiveStroke();
+        $this->facadeBrush = null;
+        if ($mode !== self::MODE_MAP) {
+            $this->piecePlacement = null;
+        }
         $this->editingMode = $mode;
         $this->showEventOverlay = $mode === self::MODE_EVENT;
 
@@ -3940,6 +4070,7 @@ final class Editor
             return;
         }
 
+        $this->paintPieceRole = null;
         $this->selectedPaintSymbol = $symbol;
         $this->replaceCurrentSymbol($symbol);
         $this->isCharacterMapOpen = false;
@@ -3968,12 +4099,6 @@ final class Editor
     private function openColorPicker(): void
     {
         if (! $this->getSelectedMap() instanceof ProjectMap) {
-            return;
-        }
-
-        if ($this->editingMode === self::MODE_EVENT) {
-            $this->statusMessage = 'Colour applies to the Map layer; event markers are authoring geometry.';
-            $this->renderFooter();
             return;
         }
 
@@ -4055,6 +4180,25 @@ final class Editor
     }
 
     /**
+     * Lists the cells a canvas selection covers, row by row.
+     *
+     * @param array{x: int, y: int, width: int, height: int} $selection The selection.
+     * @return array<int, array{x: int, y: int}>
+     */
+    private function getSelectionCells(array $selection): array
+    {
+        $cells = [];
+
+        for ($y = $selection['y']; $y < $selection['y'] + $selection['height']; $y++) {
+            for ($x = $selection['x']; $x < $selection['x'] + $selection['width']; $x++) {
+                $cells[] = ['x' => $x, 'y' => $y];
+            }
+        }
+
+        return $cells;
+    }
+
+    /**
      * Applies the selected palette colour to the brush, and under the brush
      * tool recolours the cell under the cursor in place.
      *
@@ -4077,17 +4221,27 @@ final class Editor
 
         if (
             $entry['value'] !== null
-            && $this->canvasTool === CanvasTool::BRUSH
             && $selectedMap instanceof ProjectMap
-            && $this->editingMode !== self::MODE_EVENT
+            && $this->editingMode !== self::MODE_NPC
         ) {
-            // Recolour in place: the cell keeps its glyph and takes the
-            // brush colour, as one undoable stroke.
-            $symbol = $selectedMap->getTileSymbol($this->cursorX, $this->cursorY);
-            $this->paintCanvasCells(
+            // Recolour in place: cells keep their glyphs and take the brush
+            // colour, as one undoable stroke. A selection recolours every
+            // cell in it; otherwise the brush recolours the cursor cell.
+            $cells = $this->canvasSelection !== null
+                ? $this->getSelectionCells($this->canvasSelection)
+                : ($this->canvasTool === CanvasTool::BRUSH ? [['x' => $this->cursorX, 'y' => $this->cursorY]] : []);
+
+            $this->applyCanvasWrites(
                 $selectedMap,
-                [['x' => $this->cursorX, 'y' => $this->cursorY]],
-                $symbol,
+                array_map(
+                    fn(array $cell): array => [
+                        'x' => $cell['x'],
+                        'y' => $cell['y'],
+                        'symbol' => $this->readCanvasSymbol($selectedMap, $cell['x'], $cell['y']),
+                        'color' => $this->selectedPaintColor,
+                    ],
+                    $cells,
+                ),
                 'Recolour',
             );
         }
@@ -4141,6 +4295,8 @@ final class Editor
      */
     private function adoptPaintSymbol(string $symbol): void
     {
+        // A typed glyph is chosen afresh, so it asks again which piece it is.
+        $this->paintPieceRole = null;
         $this->selectedPaintSymbol = $symbol;
 
         if ($this->canvasTool !== CanvasTool::BRUSH) {
@@ -4165,6 +4321,14 @@ final class Editor
      */
     private function handleEraseInput(string $input): bool
     {
+        // A connected piece being drawn erases its own cell, reshaping the
+        // cells beside it; its hint names the key Del, so Delete works too.
+        if (($this->getActivePiecePlacement()['piece']->connects ?? null) !== null
+            && in_array($input, ["\177", "\010", "\033[3~"], true)) {
+            $this->eraseConnectedPieceCell();
+            return true;
+        }
+
         if ($input === "\177" || $input === "\010") {
             $this->adoptPaintSymbol(' ');
             return true;
@@ -4177,9 +4341,10 @@ final class Editor
      * Replaces the current symbol on the active editing layer.
      *
      * @param string $symbol The replacement symbol.
+     * @param array<string, ?string>|null $choices The pieces chosen for the glyph; null for the brush's own answer.
      * @return void
      */
-    private function replaceCurrentSymbol(string $symbol): void
+    private function replaceCurrentSymbol(string $symbol, ?array $choices = null): void
     {
         if (! $this->workspace instanceof ProjectWorkspace) {
             return;
@@ -4195,12 +4360,21 @@ final class Editor
 
         // The brush footprint commits as one stroke, so a wide dab is still
         // a single undo step (width 1 is byte-for-byte the historic path).
-        $this->paintCanvasCells(
+        $changed = $this->paintCanvasCells(
             $selectedMap,
             ToolGeometry::brush($this->cursorX, $this->cursorY, $this->canvasBrushSize),
             $symbol,
             $isEventLayer ? 'Event edit' : 'Tile edit',
+            function (array $choices) use ($symbol): void {
+                $this->replaceCurrentSymbol($symbol, $choices);
+                $this->renderCanvasArea();
+            },
+            $choices,
         );
+
+        if ($changed === null) {
+            return;
+        }
 
         $this->statusMessage = sprintf(
             '%s mode updated (%d, %d).',
@@ -4254,6 +4428,12 @@ final class Editor
             $this->finalizeActiveStroke();
             $this->activeMousePaintButton = null;
             $this->lastMousePaintPoint = null;
+            $this->mouseToolDrag = null;
+            return true;
+        }
+
+        if ($event->isRelease && $this->mouseToolDrag !== null) {
+            $this->completeMouseToolDrag($event);
             return true;
         }
 
@@ -4313,8 +4493,8 @@ final class Editor
             return true;
         }
 
-        $viewportWidth = $bounds['right'] - $bounds['left'] + 1;
-        $viewportHeight = $bounds['bottom'] - $bounds['top'] + 1;
+        $viewportWidth = $bounds['width'];
+        $viewportHeight = $bounds['height'];
         $maxOffsetX = max(0, $selectedMap->getWidth() - $viewportWidth);
         $maxOffsetY = max(0, $selectedMap->getHeight() - $viewportHeight);
         $nextOffsetX = max(0, min($maxOffsetX, $this->canvasOffsetX + $deltaX));
@@ -4331,22 +4511,61 @@ final class Editor
         return true;
     }
 
-    /** @return array{left: int, top: int, right: int, bottom: int} */
-    private function getCanvasPreviewBounds(): array
+    /**
+     * Shared geometry for rendering, cursor visibility, hit testing and scrolling.
+     * @return array{left: int, top: int, right: int, bottom: int, width: int, height: int}
+     */
+    private function getCanvasPreviewBounds(?array $layout = null): array
     {
-        $layout = $this->resolveLayout();
+        $layout ??= $this->resolveLayout();
         $contentWidth = $this->getWindowContentWidth($layout['centerWidth']);
-        $previewHeight = max(1, $layout['contentHeight'] - 4);
+        $previewHeight = max(1, $layout['contentHeight'] - self::WINDOW_BORDER_ROWS - ProjectWorkspace::CANVAS_HEADER_ROWS);
         $canvasLeft = 2 + $layout['leftWidth'] + $layout['gutter'];
         $canvasTop = 5;
         $mapLeft = $canvasLeft + 1 + self::WINDOW_HORIZONTAL_PADDING;
-        $mapTop = $canvasTop + 3;
+        $mapTop = $canvasTop + 1 + ProjectWorkspace::CANVAS_HEADER_ROWS;
         return [
             'left' => $mapLeft,
             'top' => $mapTop,
             'right' => $mapLeft + $contentWidth - 1,
             'bottom' => $mapTop + $previewHeight - 1,
+            'width' => $contentWidth,
+            'height' => $previewHeight,
         ];
+    }
+
+    /**
+     * Ends a mouse drag of a line, rectangle or selection where the button
+     * was released (or at the last cell the drag reached, when released off
+     * the map). A selection that never left its first cell is a click: it
+     * moves the cursor there, as a Normal-mode click does.
+     */
+    private function completeMouseToolDrag(MouseEvent $event): void
+    {
+        $drag = $this->mouseToolDrag;
+        $this->mouseToolDrag = null;
+        $bounds = $this->getCanvasPreviewBounds();
+        $selectedMap = $this->getSelectedMap();
+        if ($selectedMap instanceof ProjectMap && $event->x >= $bounds['left'] && $event->x <= $bounds['right']
+            && $event->y >= $bounds['top'] && $event->y <= $bounds['bottom']) {
+            $this->cursorX = max(0, min($selectedMap->getWidth() - 1, $this->canvasOffsetX + ($event->x - $bounds['left'])));
+            $this->cursorY = max(0, min($selectedMap->getHeight() - 1, $this->canvasOffsetY + ($event->y - $bounds['top'])));
+        }
+        $anchor = $this->canvasToolAnchor ?? $drag['start'];
+        $this->canvasToolAnchor = null;
+        if (! $selectedMap instanceof ProjectMap) {
+            return;
+        }
+        if ($this->canvasTool === CanvasTool::SELECT) {
+            if ($anchor === ['x' => $this->cursorX, 'y' => $this->cursorY]) {
+                $this->statusMessage = sprintf('Cursor at (%d, %d).', $this->cursorX, $this->cursorY);
+                $this->renderCanvasArea();
+                return;
+            }
+            $this->completeCanvasSelection($anchor);
+            return;
+        }
+        $this->drawCanvasToolShape($selectedMap, $anchor, $drag['symbol']);
     }
 
     /** Handles mouse editing over the canvas preview. */
@@ -4377,6 +4596,37 @@ final class Editor
 
         $focusChanged = $this->focusedPane !== self::FOCUS_CANVAS;
         $this->setFocusedPane(self::FOCUS_CANVAS, false);
+
+        if ($this->facadeBrush !== null && $this->inputMode === self::INPUT_PAINT
+            && $event->button === MouseButton::LEFT_BUTTON) {
+            $this->cursorX = $targetX;
+            $this->cursorY = $targetY;
+            $this->stampFacadeBrush();
+            return true;
+        }
+
+        // A tool that spans an anchor and a corner follows a mouse drag: the
+        // press anchors it, the drag moves the corner with a live preview,
+        // and the release draws (or selects). The right button erases.
+        $dragsShape = $this->editingMode === self::MODE_MAP && $this->getActivePiecePlacement() === null && match ($this->inputMode) {
+            self::INPUT_PAINT => in_array($this->canvasTool, [CanvasTool::LINE, CanvasTool::RECTANGLE, CanvasTool::FILLED_RECTANGLE], true),
+            self::INPUT_NORMAL => $this->canvasTool === CanvasTool::SELECT && $event->button === MouseButton::LEFT_BUTTON,
+            default => false,
+        };
+        if ($dragsShape) {
+            if (! $event->isMotion || $this->mouseToolDrag === null) {
+                $this->mouseToolDrag = ['start' => ['x' => $targetX, 'y' => $targetY],
+                    'symbol' => $event->button === MouseButton::RIGHT_BUTTON ? ' ' : $this->selectedPaintSymbol];
+                $this->canvasToolAnchor = ['x' => $targetX, 'y' => $targetY];
+            }
+            $this->cursorX = $targetX;
+            $this->cursorY = $targetY;
+            $this->statusMessage = sprintf('%s from (%d, %d) to (%d, %d). Release to %s.', $this->canvasTool->label(),
+                $this->canvasToolAnchor['x'], $this->canvasToolAnchor['y'], $targetX, $targetY,
+                $this->canvasTool === CanvasTool::SELECT ? 'select' : 'draw');
+            $focusChanged ? $this->renderFocusDependentArea() : $this->renderCanvasArea();
+            return true;
+        }
 
         if ($this->editingMode === self::MODE_MAP && $this->inputMode === self::INPUT_NORMAL) {
             // The mouse honors the canvas's modality: in Normal mode a click
@@ -4488,7 +4738,7 @@ final class Editor
             $this->finalizeActiveStroke();
             $this->activeStrokeCommand = new PaintStrokeCommand(
                 $selectedMap,
-                $paintEvents ? PaintStrokeCommand::LAYER_EVENT : PaintStrokeCommand::LAYER_TILE,
+                $this->getActiveCanvasLayer(),
                 $paintEvents ? 'Event stroke' : 'Paint stroke',
             );
         }
@@ -4497,30 +4747,33 @@ final class Editor
             $this->interpolatePoints($start['x'], $start['y'], $targetX, $targetY),
             $this->canvasBrushSize,
         );
+        $retry = function (array $choices) use ($selectedMap, $symbol, $targetX, $targetY, $button, $paintEvents): void {
+            $this->rememberPaintPieceRole($symbol, $choices);
+            $this->activeMousePaintButton = null;
+            $this->lastMousePaintPoint = null;
+            $this->paintCanvasStroke($selectedMap, $symbol, $targetX, $targetY, $button, $paintEvents);
+            $this->renderCanvasArea();
+        };
+
+        if (! $this->followStrokeWithTiles($selectedMap, array_map(
+            static fn(array $point): array => ['x' => $point['x'], 'y' => $point['y'], 'symbol' => $symbol],
+            $points,
+        ), $retry)) {
+            $this->activeMousePaintButton = null;
+            $this->lastMousePaintPoint = null;
+            return;
+        }
 
         foreach ($points as $point) {
-            if (
-                $point['x'] < 0 ||
-                $point['y'] < 0 ||
-                $point['x'] >= $selectedMap->getWidth() ||
-                $point['y'] >= $selectedMap->getHeight()
-            ) {
+            if (! $selectedMap->hasLayerCell($this->getActiveCanvasLayer(), $point['x'], $point['y'])) {
                 continue;
             }
 
-            if ($paintEvents) {
-                $oldSymbol = $selectedMap->getEventSymbol($point['x'], $point['y']);
-                $selectedMap->setEventSymbol($point['x'], $point['y'], $symbol);
-                $newSymbol = $selectedMap->getEventSymbol($point['x'], $point['y']);
-                $this->activeStrokeCommand->appendCell($point['x'], $point['y'], $oldSymbol, $newSymbol);
-                continue;
-            }
-
-            $oldSymbol = $selectedMap->getTileSymbol($point['x'], $point['y']);
-            $oldStyle = $selectedMap->getTileCellStyle($point['x'], $point['y']);
+            $oldSymbol = $selectedMap->getLayerSymbol($this->getActiveCanvasLayer(), $point['x'], $point['y']);
+            $oldStyle = $selectedMap->getLayerCellStyle($this->getActiveCanvasLayer(), $point['x'], $point['y']);
             [$newPrefix, $newSuffix] = $this->resolvePaintStyle($symbol, $this->selectedPaintColor, $oldStyle);
-            $selectedMap->setTileCell($point['x'], $point['y'], $symbol, $newPrefix, $newSuffix);
-            $newSymbol = $selectedMap->getTileSymbol($point['x'], $point['y']);
+            $selectedMap->setLayerCell($this->getActiveCanvasLayer(), $point['x'], $point['y'], $symbol, $newPrefix, $newSuffix);
+            $newSymbol = $selectedMap->getLayerSymbol($this->getActiveCanvasLayer(), $point['x'], $point['y']);
             $this->activeStrokeCommand->appendCell(
                 $point['x'],
                 $point['y'],
@@ -4619,8 +4872,20 @@ final class Editor
             return;
         }
 
+        $this->piecePlacement = null;
+        // Paint mode paints. Selecting is a Normal-mode job, so a Select tool
+        // left active from Normal mode must not turn typed glyphs into
+        // silent brush changes.
+        if ($this->canvasTool === CanvasTool::SELECT) {
+            $this->canvasTool = CanvasTool::BRUSH;
+            $this->canvasToolAnchor = null;
+            $this->canvasSelection = null;
+        }
         $this->inputMode = self::INPUT_PAINT;
-        $this->statusMessage = 'Paint mode: every key paints its glyph. Esc returns to Normal.';
+        $this->statusMessage = $this->canvasTool === CanvasTool::BRUSH
+            ? 'Paint mode: every key paints its glyph. Esc returns to Normal.'
+            : sprintf('Paint mode, %s tool: keys choose the glyph. %s Esc returns to Normal.',
+                $this->canvasTool->label(), $this->describeCanvasToolUsage());
         $this->renderFocusDependentArea();
     }
 
@@ -4649,11 +4914,16 @@ final class Editor
      */
     private function selectCanvasTool(CanvasTool $tool): void
     {
+        $this->facadeBrush = null;
+        $this->piecePlacement = null;
         $this->canvasTool = $tool;
         $this->canvasToolAnchor = null;
 
         if ($tool !== CanvasTool::SELECT) {
             $this->canvasSelection = null;
+        } elseif ($this->inputMode === self::INPUT_PAINT) {
+            // Selecting happens in Normal mode, where keys are commands.
+            $this->leavePaintMode();
         }
 
         $this->setStatus(sprintf('%s tool. %s', $tool->label(), $this->describeCanvasToolUsage()));
@@ -4667,9 +4937,14 @@ final class Editor
      */
     private function getActiveCanvasLayer(): string
     {
-        return $this->editingMode === self::MODE_EVENT
-            ? PaintStrokeCommand::LAYER_EVENT
-            : PaintStrokeCommand::LAYER_TILE;
+        if ($this->editingMode === self::MODE_EVENT) {
+            return PaintStrokeCommand::LAYER_EVENT;
+        }
+        $map = $this->getSelectedMap();
+        $selected = $this->getCanvasLayerState()['selected'];
+        $ids = array_column($this->getTerminalCanvasLayers(), 'id');
+        return $selected !== PaintStrokeCommand::LAYER_EVENT && in_array($selected, $ids, true)
+            ? $selected : ($map?->getBaseLayerId() ?? PaintStrokeCommand::LAYER_TILE);
     }
 
     /**
@@ -4682,9 +4957,7 @@ final class Editor
      */
     private function readCanvasSymbol(ProjectMap $map, int $x, int $y): string
     {
-        return $this->editingMode === self::MODE_EVENT
-            ? $map->getEventSymbol($x, $y)
-            : $map->getTileSymbol($x, $y);
+        return $map->getLayerSymbol($this->getActiveCanvasLayer(), $x, $y);
     }
 
     /**
@@ -4698,12 +4971,8 @@ final class Editor
      */
     private function writeCanvasSymbol(ProjectMap $map, int $x, int $y, string $symbol): void
     {
-        if ($this->editingMode === self::MODE_EVENT) {
-            $map->setEventSymbol($x, $y, $symbol);
-            return;
-        }
-
-        $map->setTileSymbol($x, $y, $symbol);
+        $style = $map->getLayerCellStyle($this->getActiveCanvasLayer(), $x, $y);
+        $map->setLayerCell($this->getActiveCanvasLayer(), $x, $y, $symbol, $style['prefix'], $style['suffix']);
     }
 
     /**
@@ -4711,74 +4980,72 @@ final class Editor
      *
      * This is the single commit path behind every canvas tool: a brush dab,
      * a line, a rectangle, a flood fill, a cut, and a paste all land as one
-     * PaintStrokeCommand, so each undoes in exactly one Ctrl+Z.
+     * undo step with the tiles that follow their glyphs, so each undoes in
+     * exactly one Ctrl+Z.
      *
      * @param ProjectMap $map The target map.
      * @param array<int, array{x: int, y: int, symbol: string, color?: string|null, style?: array{prefix: string, suffix: string}}> $writes The cells to write.
      * @param string $label The undo/status label.
-     * @return int The number of cells that actually changed.
+     * @param (Closure(array<string, ?string>): void)|null $retry Runs the edit again once the author chooses a glyph's piece.
+     * @param array<string, ?string> $choices The pieces already chosen for glyphs.
+     * @return int|null The number of cells that actually changed, or null when nothing changed: refused, or waiting on a choice.
      */
-    private function applyCanvasWrites(ProjectMap $map, array $writes, string $label): int
+    private function applyCanvasWrites(ProjectMap $map, array $writes, string $label, ?Closure $retry = null, array $choices = []): ?int
     {
-        if ($writes === []) {
-            return 0;
-        }
+        // Tiles follow the glyphs (GlyphTileCanvas), in the same undo step.
+        return $this->commitCanvasWrites($map, $writes, $label, retry: $retry, choices: $choices);
+    }
 
-        $this->finalizeActiveStroke();
-        $isTileLayer = $this->getActiveCanvasLayer() === PaintStrokeCommand::LAYER_TILE;
-        $stroke = new PaintStrokeCommand($map, $this->getActiveCanvasLayer(), $label);
+    /**
+     * Writes cells onto one layer and returns the stroke that undoes them,
+     * unrecorded, so a caller can record it alone or as part of a larger
+     * step. Cells outside the layer are skipped.
+     *
+     * @param ProjectMap $map The target map.
+     * @param string $layer The layer id to write.
+     * @param array<int, array{x: int, y: int, symbol: string, color?: string|null, style?: array{prefix: string, suffix: string}}> $writes The cells to write.
+     * @param string $label The undo/status label.
+     * @return array{0: PaintStrokeCommand, 1: int} The stroke and the number of cells that actually changed.
+     */
+    private function writeCanvasCells(ProjectMap $map, string $layer, array $writes, string $label): array
+    {
+        $stroke = new PaintStrokeCommand($map, $layer, $label);
         $changed = 0;
 
         foreach ($writes as $write) {
-            if ($write['x'] < 0 || $write['y'] < 0 || $write['x'] >= $map->getWidth() || $write['y'] >= $map->getHeight()) {
+            if (! $map->hasLayerCell($layer, $write['x'], $write['y'])) {
                 continue;
             }
 
-            $oldSymbol = $this->readCanvasSymbol($map, $write['x'], $write['y']);
+            $oldSymbol = $map->getLayerSymbol($layer, $write['x'], $write['y']);
 
-            if ($isTileLayer) {
-                $oldStyle = $map->getTileCellStyle($write['x'], $write['y']);
-                [$newPrefix, $newSuffix] = isset($write['style'])
-                    ? [$write['style']['prefix'], $write['style']['suffix']]
-                    : $this->resolvePaintStyle(
-                        $write['symbol'],
-                        $write['color'] ?? null,
-                        $oldStyle,
-                    );
-                $map->setTileCell($write['x'], $write['y'], $write['symbol'], $newPrefix, $newSuffix);
-                $newSymbol = $this->readCanvasSymbol($map, $write['x'], $write['y']);
-                $stroke->appendCell(
-                    $write['x'],
-                    $write['y'],
-                    $oldSymbol,
-                    $newSymbol,
-                    $oldStyle['prefix'],
-                    $oldStyle['suffix'],
-                    $newPrefix,
-                    $newSuffix,
+            $oldStyle = $map->getLayerCellStyle($layer, $write['x'], $write['y']);
+            [$newPrefix, $newSuffix] = isset($write['style'])
+                ? [$write['style']['prefix'], $write['style']['suffix']]
+                : $this->resolvePaintStyle(
+                    $write['symbol'],
+                    $write['color'] ?? null,
+                    $oldStyle,
                 );
+            $map->setLayerCell($layer, $write['x'], $write['y'], $write['symbol'], $newPrefix, $newSuffix);
+            $newSymbol = $map->getLayerSymbol($layer, $write['x'], $write['y']);
+            $stroke->appendCell(
+                $write['x'],
+                $write['y'],
+                $oldSymbol,
+                $newSymbol,
+                $oldStyle['prefix'],
+                $oldStyle['suffix'],
+                $newPrefix,
+                $newSuffix,
+            );
 
-                if ($oldSymbol !== $newSymbol || $oldStyle['prefix'] !== $newPrefix || $oldStyle['suffix'] !== $newSuffix) {
-                    $changed++;
-                }
-
-                continue;
-            }
-
-            $this->writeCanvasSymbol($map, $write['x'], $write['y'], $write['symbol']);
-            $newSymbol = $this->readCanvasSymbol($map, $write['x'], $write['y']);
-            $stroke->appendCell($write['x'], $write['y'], $oldSymbol, $newSymbol);
-
-            if ($oldSymbol !== $newSymbol) {
+            if ($oldSymbol !== $newSymbol || $oldStyle['prefix'] !== $newPrefix || $oldStyle['suffix'] !== $newSuffix) {
                 $changed++;
             }
         }
 
-        if ($stroke->hasChanges()) {
-            $this->recordCommand($stroke);
-        }
-
-        return $changed;
+        return [$stroke, $changed];
     }
 
     /**
@@ -4818,21 +5085,31 @@ final class Editor
      * @param array<int, array{x: int, y: int}> $cells The cells to paint.
      * @param string $symbol The symbol to paint.
      * @param string $label The undo/status label.
-     * @return int The number of cells that actually changed.
+     * @param (Closure(array<string, ?string>): void)|null $retry Paints again once the author chooses the glyph's piece.
+     * @param array<string, ?string>|null $choices The pieces chosen for glyphs; null for the brush's own answer.
+     * @return int|null The number of cells that actually changed, or null when nothing changed: refused, or waiting on a choice.
      */
-    private function paintCanvasCells(ProjectMap $map, array $cells, string $symbol, string $label): int
+    private function paintCanvasCells(ProjectMap $map, array $cells, string $symbol, string $label, ?Closure $retry = null,
+        ?array $choices = null): ?int
     {
         // Glyph paints carry the brush colour; the space rule and the event
-        // layer's lack of styling are resolved at the commit path.
+        // layer's lack of styling are resolved at the commit path. A glyph
+        // painted over itself may draw another piece, so it repaints.
         $color = $this->selectedPaintColor;
 
-        return $this->applyCanvasWrites(
+        return $this->commitCanvasWrites(
             $map,
             array_map(
                 static fn(array $cell): array => ['x' => $cell['x'], 'y' => $cell['y'], 'symbol' => $symbol, 'color' => $color],
                 $cells,
             ),
             $label,
+            retry: $retry === null ? null : function (array $choices) use ($symbol, $retry): void {
+                $this->rememberPaintPieceRole($symbol, $choices);
+                $retry($choices);
+            },
+            choices: $choices ?? $this->getPaintPieceChoices($symbol),
+            repaint: true,
         );
     }
 
@@ -4844,6 +5121,7 @@ final class Editor
      */
     private function cycleCanvasTool(int $step): void
     {
+        $this->piecePlacement = null;
         $this->canvasTool = $this->canvasTool->cycle($step);
         $this->canvasToolAnchor = null;
 
@@ -4921,6 +5199,15 @@ final class Editor
      */
     private function applyCanvasToolAtCursor(): void
     {
+        if ($this->getActivePiecePlacement() !== null) {
+            $this->applyPieceAtCursor();
+            return;
+        }
+
+        if ($this->facadeBrush !== null) {
+            $this->stampFacadeBrush();
+            return;
+        }
         $selectedMap = $this->getSelectedMap();
 
         if (! $selectedMap instanceof ProjectMap) {
@@ -4952,6 +5239,18 @@ final class Editor
             return;
         }
 
+        $this->drawCanvasToolShape($selectedMap, $anchor, $this->selectedPaintSymbol);
+    }
+
+    /**
+     * The cells the active line or rectangle tool covers from an anchor to
+     * the cursor, widened by the brush except for a filled rectangle.
+     *
+     * @param array{x: int, y: int} $anchor
+     * @return array<int, array{x: int, y: int}>
+     */
+    private function getCanvasToolShapeCells(array $anchor): array
+    {
         $cells = match ($this->canvasTool) {
             CanvasTool::LINE => ToolGeometry::line($anchor['x'], $anchor['y'], $this->cursorX, $this->cursorY),
             CanvasTool::RECTANGLE => ToolGeometry::rectangleOutline($anchor['x'], $anchor['y'], $this->cursorX, $this->cursorY),
@@ -4961,25 +5260,58 @@ final class Editor
 
         // The brush thickens outlines and lines; a filled rectangle is
         // already solid, so widening it would only spill past the corners.
-        if ($this->canvasTool !== CanvasTool::FILLED_RECTANGLE) {
-            $cells = ToolGeometry::expandByBrush($cells, $this->canvasBrushSize);
+        return $this->canvasTool === CanvasTool::FILLED_RECTANGLE ? $cells : ToolGeometry::expandByBrush($cells, $this->canvasBrushSize);
+    }
+
+    /**
+     * What the canvas previews over the map: the piece being placed, or the
+     * shape a line or rectangle tool will draw from its anchor to the cursor.
+     *
+     * @return array<int, array<int, ?string>> Symbols by row and column.
+     */
+    private function getCanvasPreviewCells(): array
+    {
+        $cells = $this->getPiecePreviewCells();
+        if ($cells !== [] || ! is_array($this->canvasToolAnchor)
+            || ! in_array($this->canvasTool, [CanvasTool::LINE, CanvasTool::RECTANGLE, CanvasTool::FILLED_RECTANGLE], true)) {
+            return $cells;
+        }
+        $symbol = $this->mouseToolDrag['symbol'] ?? $this->selectedPaintSymbol;
+        foreach ($this->getCanvasToolShapeCells($this->canvasToolAnchor) as $cell) {
+            $cells[$cell['y']][$cell['x']] = $symbol;
         }
 
-        $changed = $this->paintCanvasCells(
-            $selectedMap,
-            $cells,
-            $this->selectedPaintSymbol,
-            $this->canvasTool->commandLabel(),
-        );
+        return $cells;
+    }
 
-        $this->setStatus(sprintf(
-            '%s: %d cell%s painted with %s.',
-            $this->canvasTool->label(),
-            $changed,
-            $changed === 1 ? '' : 's',
-            $this->selectedPaintSymbol === ' ' ? 'space' : $this->selectedPaintSymbol,
-        ));
-        $this->renderCanvasArea();
+    /**
+     * Draws the active line or rectangle tool's shape from an anchor to the
+     * cursor in one undo step, painting the symbol (a space erases).
+     *
+     * @param array{x: int, y: int} $anchor
+     */
+    private function drawCanvasToolShape(ProjectMap $selectedMap, array $anchor, string $symbol): void
+    {
+        $cells = $this->getCanvasToolShapeCells($anchor);
+        $tool = $this->canvasTool;
+        $paint = function (?array $choices = null) use ($selectedMap, $cells, $tool, $symbol, &$paint): void {
+            $changed = $this->paintCanvasCells($selectedMap, $cells, $symbol, $tool->commandLabel(), $paint, $choices);
+
+            if ($changed === null) {
+                $this->renderCanvasArea();
+                return;
+            }
+
+            $this->setStatus(sprintf(
+                '%s: %d cell%s painted with %s.',
+                $tool->label(),
+                $changed,
+                $changed === 1 ? '' : 's',
+                $symbol === ' ' ? 'space' : $symbol,
+            ));
+            $this->renderCanvasArea();
+        };
+        $paint();
     }
 
     /**
@@ -5059,14 +5391,23 @@ final class Editor
             $this->cursorX,
             $this->cursorY,
         );
-        $changed = $this->paintCanvasCells($selectedMap, $cells, $this->selectedPaintSymbol, 'flood fill');
-        $this->setStatus(sprintf(
-            'Flood filled %d cell%s with %s.',
-            $changed,
-            $changed === 1 ? '' : 's',
-            $this->selectedPaintSymbol === ' ' ? 'space' : $this->selectedPaintSymbol,
-        ));
-        $this->renderCanvasArea();
+        $fill = function (?array $choices = null) use ($selectedMap, $cells, &$fill): void {
+            $changed = $this->paintCanvasCells($selectedMap, $cells, $this->selectedPaintSymbol, 'flood fill', $fill, $choices);
+
+            if ($changed === null) {
+                $this->renderCanvasArea();
+                return;
+            }
+
+            $this->setStatus(sprintf(
+                'Flood filled %d cell%s with %s.',
+                $changed,
+                $changed === 1 ? '' : 's',
+                $this->selectedPaintSymbol === ' ' ? 'space' : $this->selectedPaintSymbol,
+            ));
+            $this->renderCanvasArea();
+        };
+        $fill();
     }
 
     /**
@@ -5086,17 +5427,22 @@ final class Editor
 
         // On the tile layer the eyedropper picks the colour with the glyph:
         // an uncoloured cell loads an uncoloured brush.
+        // It picks up the piece the glyph draws there too, so painting it
+        // again draws the same piece.
         $pickedColor = null;
+        $pickedPiece = '';
+        $this->paintPieceRole = null;
 
-        if ($this->editingMode !== self::MODE_EVENT) {
-            $pickedColor = $selectedMap->getTileColor($this->cursorX, $this->cursorY);
+        if ($this->editingMode !== self::MODE_NPC) {
+            $pickedColor = $selectedMap->getLayerColor($this->getActiveCanvasLayer(), $this->cursorX, $this->cursorY);
             $this->selectedPaintColor = $pickedColor ?? '';
+            $pickedPiece = $this->pickPaintPieceRole($selectedMap, $this->cursorX, $this->cursorY);
         }
 
         $this->setStatus(sprintf(
             'Picked up %s%s from (%d, %d).',
             $this->selectedPaintSymbol === ' ' ? 'space' : $this->selectedPaintSymbol,
-            $pickedColor === null ? '' : ' (' . $pickedColor . ')',
+            implode('', array_map(static fn(string $detail): string => " ({$detail})", array_filter([$pickedPiece, $pickedColor ?? '']))),
             $this->cursorX,
             $this->cursorY,
         ));
@@ -5143,7 +5489,28 @@ final class Editor
             $selection['x'] + $selection['width'] - 1,
             $selection['y'] + $selection['height'] - 1,
         );
-        $changed = $this->paintCanvasCells($selectedMap, $cells, ' ', 'cut selection');
+        // The tiles that moved into the clipboard with the glyphs leave too.
+        $clears = array_map(
+            static fn(array $tiles): array => array_map(
+                static fn(array $cell): array => ['entry' => (string) TileId::EMPTY] + $cell,
+                $tiles,
+            ),
+            $this->clipboard->projectTiles($selection['x'], $selection['y'], $selectedMap->getWidth(), $selectedMap->getHeight()),
+        );
+        $changed = $this->commitCanvasWrites(
+            $selectedMap,
+            array_map(
+                fn(array $cell): array => ['x' => $cell['x'], 'y' => $cell['y'], 'symbol' => ' ', 'color' => $this->selectedPaintColor],
+                $cells,
+            ),
+            'cut selection',
+            $clears,
+        );
+
+        if ($changed === null) {
+            $this->renderCanvasArea();
+            return;
+        }
         $this->setStatus(sprintf(
             'Cut %d x %d (%d cell%s cleared).',
             $this->clipboard->getWidth(),
@@ -5184,16 +5551,29 @@ final class Editor
             for ($columnIndex = 0; $columnIndex < $selection['width']; $columnIndex++) {
                 $row[] = $this->readCanvasSymbol($selectedMap, $selection['x'] + $columnIndex, $selection['y'] + $rowIndex);
 
-                if ($this->getActiveCanvasLayer() === PaintStrokeCommand::LAYER_TILE) {
-                    $styleRow[] = $selectedMap->getTileCellStyle($selection['x'] + $columnIndex, $selection['y'] + $rowIndex);
-                }
+                $styleRow[] = $selectedMap->getLayerCellStyle($this->getActiveCanvasLayer(), $selection['x'] + $columnIndex, $selection['y'] + $rowIndex);
             }
 
             $rows[] = $row;
             $styles[] = $styleRow;
         }
 
-        $this->clipboard->store($rows, $this->getActiveCanvasLayer(), $styles);
+        // The tiles that move with this layer's glyphs travel with the block.
+        try {
+            $tiles = $this->editingMode === self::MODE_NPC ? [] : $selectedMap->readTileEntries(
+                $selectedMap->getTileLayersMovingWith($this->getActiveCanvasLayer()),
+                $selection['x'],
+                $selection['y'],
+                $selection['width'],
+                $selection['height'],
+            );
+        } catch (MapSourceRefusal $refusal) {
+            $this->setStatus($refusal->getMessage(), StatusLevel::WARN);
+            $this->renderFooter();
+            return 0;
+        }
+
+        $this->clipboard->store($rows, $this->getActiveCanvasLayer(), $styles, $tiles);
 
         return $selection['width'] * $selection['height'];
     }
@@ -5201,9 +5581,10 @@ final class Editor
     /**
      * Stamps the clipboard at the cursor as one undoable stroke.
      *
+     * @param array<string, ?string> $choices The pieces the author chose for glyphs the block could draw several ways.
      * @return void
      */
-    private function pasteCanvasClipboard(): void
+    private function pasteCanvasClipboard(array $choices = []): void
     {
         $selectedMap = $this->getSelectedMap();
 
@@ -5218,8 +5599,13 @@ final class Editor
         }
 
         if ($this->clipboard->layer !== $this->getActiveCanvasLayer()) {
+            $source = array_find($this->getSelectedMap()?->getLayers() ?? [],
+                fn(array $layer): bool => $layer['id'] === $this->clipboard->layer);
             $this->setStatus(
-                sprintf('The clipboard holds a %s-layer block; switch layers before pasting.', $this->clipboard->layer),
+                $source === null
+                    ? 'The clipboard holds a block from another layer; switch layers before pasting.'
+                    : sprintf('The clipboard holds a block from the %s layer; switch to it before pasting.',
+                        MapLayers::formatLabel($source['name'])),
                 StatusLevel::WARN,
             );
             $this->renderFooter();
@@ -5232,7 +5618,18 @@ final class Editor
             $selectedMap->getWidth(),
             $selectedMap->getHeight(),
         );
-        $changed = $this->applyCanvasWrites($selectedMap, $writes, 'pasted selection');
+        // Tiles land only on the layers that move with this map's layer.
+        $tiles = array_intersect_key(
+            $this->clipboard->projectTiles($this->cursorX, $this->cursorY, $selectedMap->getWidth(), $selectedMap->getHeight()),
+            array_flip($selectedMap->getTileLayersMovingWith($this->getActiveCanvasLayer())),
+        );
+        $changed = $this->commitCanvasWrites($selectedMap, $writes, 'pasted selection', $tiles,
+            $this->pasteCanvasClipboard(...), $choices);
+
+        if ($changed === null) {
+            $this->renderCanvasArea();
+            return;
+        }
         $this->setStatus(sprintf(
             'Stamped %d x %d at (%d, %d): %d cell%s changed.',
             $this->clipboard->getWidth(),
@@ -5295,7 +5692,7 @@ final class Editor
 
             $this->setStatus(
                 sprintf('Playtest finished (%s at %d,%d).', $selectedMap->mapId, $this->cursorX, $this->cursorY),
-                StatusLevel::SUCCESS,
+                StatusLevel::INFO,
             );
         } catch (Throwable $throwable) {
             $this->setErrorStatus($throwable, 'Playtest');
@@ -5358,7 +5755,8 @@ final class Editor
         $this->clipboard->clear();
         $this->canvasToolAnchor = null;
         $this->canvasSelection = null;
-        $this->setStatus('Workspace refreshed.', StatusLevel::SUCCESS);
+        $this->piecePlacement = null;
+        $this->setStatus('Workspace refreshed.', StatusLevel::INFO);
         $this->requestFullRender();
     }
 
@@ -5709,6 +6107,9 @@ final class Editor
     private function buildPaletteItems(): array
     {
         $items = [
+            ...$this->buildLayerPaletteItems(),
+            ...$this->buildPiecePaletteItems(),
+            ...$this->buildLineInsertPaletteItems(),
             new PaletteItem('Save Map', 'Ctrl+S', fn() => $this->saveSelectedMap()),
             new PaletteItem('Move Map to Derived Path', '', fn() => $this->beginExplicitMapMove()),
             new PaletteItem('Save All', 'Ctrl+A', fn() => $this->saveAllAssets()),
@@ -5716,6 +6117,7 @@ final class Editor
             new PaletteItem('Redo', 'Ctrl+Y', fn() => $this->performRedo()),
             new PaletteItem('Playtest Selected Map', 'Ctrl+T', fn() => $this->startPlaytest()),
             new PaletteItem('Reload Workspace', 'Ctrl+R', fn() => $this->requestReload()),
+            new PaletteItem('Repair Actor Identities and References', '', fn() => $this->openActorReferenceMigration()),
             new PaletteItem('Tool: Map Mode', 'm', function (): void {
                 $this->closeDatabaseIfOpen();
                 $this->setEditingMode(self::MODE_MAP);
@@ -6145,6 +6547,15 @@ final class Editor
             return;
         }
 
+        if ($this->getSelectedDatabaseCategoryDefinition()->key === self::DATABASE_CATEGORY_SKILLS) {
+            $reason = $this->workspace->skillDatabase->getReadOnlyReason($index);
+            if ($reason !== null) {
+                $this->setStatus($reason, StatusLevel::WARN);
+                $this->renderFooter();
+                return;
+            }
+        }
+
         $this->pendingDatabaseDeletion = [
             'category' => $this->getSelectedDatabaseCategoryDefinition()->key,
             'index' => $index,
@@ -6418,16 +6829,12 @@ final class Editor
         $this->databaseSelectedClassIndex = $classIndex;
         $this->databaseFocus = self::DATABASE_FOCUS_LIST;
         $this->databaseSelectedSettingIndex = 0;
-        $this->setStatus(sprintf('Went to class %s (Ctrl+B goes back).', $className), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Went to class %s (Ctrl+B goes back).', $className), StatusLevel::INFO);
         $this->renderDatabaseArea(includeRoot: true);
     }
 
     /**
-     * Jumps from the selected skill to the animation sharing its name.
-     *
-     * Skills carry no explicit animation id yet (the engine models a magic
-     * *effect type*, not a database reference), so the hop resolves by name:
-     * the skill name first, then its effect type.
+     * Jumps to the selected skill's animation, preferring its stable id.
      *
      * @return void
      */
@@ -6443,18 +6850,28 @@ final class Editor
         $animationIndex = null;
         $matchedName = '';
 
-        foreach ($candidates as $candidate) {
-            $animationIndex = $this->findDatabaseAnimationIndex($candidate);
+        if ($skill->animationId !== null) {
+            foreach ($this->workspace?->animationDatabase->getAnimations() ?? [] as $index => $animation) {
+                if ($animation->id === $skill->animationId) {
+                    $animationIndex = $index;
+                    $matchedName = $animation->name;
+                    break;
+                }
+            }
+        } else {
+            foreach ($candidates as $candidate) {
+                $animationIndex = $this->findDatabaseAnimationIndex($candidate);
 
-            if ($animationIndex !== null) {
-                $matchedName = $candidate;
-                break;
+                if ($animationIndex !== null) {
+                    $matchedName = $candidate;
+                    break;
+                }
             }
         }
 
         if ($animationIndex === null) {
             $this->setStatus(
-                sprintf('No animation named "%s" - skills carry no animation reference yet.', $skill->getName()),
+                sprintf('No animation found for "%s". Choose its Animation in the settings picker.', $skill->getName()),
                 StatusLevel::WARN,
             );
             $this->renderFooter();
@@ -6467,7 +6884,7 @@ final class Editor
         $this->databaseSelectedAnimationIndex = $animationIndex;
         $this->databaseFocus = self::DATABASE_FOCUS_LIST;
         $this->databaseSelectedSettingIndex = 0;
-        $this->setStatus(sprintf('Went to animation %s (Ctrl+B goes back).', $matchedName), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Went to animation %s (Ctrl+B goes back).', $matchedName), StatusLevel::INFO);
         $this->renderDatabaseArea(includeRoot: true);
     }
 
@@ -6519,7 +6936,7 @@ final class Editor
         $this->clampCursor();
         $this->syncViewportToCursor();
         $this->clampInspectorSelection();
-        $this->setStatus(sprintf('Went to %s (Ctrl+B goes back).', $destination), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Went to %s (Ctrl+B goes back).', $destination), StatusLevel::INFO);
         $this->renderSelectionDependentArea();
     }
 
@@ -6879,6 +7296,7 @@ final class Editor
             'Animations' => $this->workspace->animationDatabase,
             'System' => $this->workspace->systemDatabase,
         ];
+        if ($this->workspace->config !== null) { $databases['Project configuration'] = $this->workspace->config; }
 
         // Read-only categories never join Save All: they hold no edits, and
         // asking them to save would raise instead of no-op.
@@ -7107,17 +7525,19 @@ final class Editor
      *
      * @return void
      */
-    private function createNewMap(): void
+    private function createNewMap(?string $kind = null, ?string $kindLabel = null): void
     {
         if (! $this->workspace instanceof ProjectWorkspace) {
             return;
         }
 
         try {
-            $mapId = $this->workspace->createMap();
+            $mapId = $this->workspace->createMap(kind: $kind);
             $this->reloadWorkspaceSelectingMap($mapId);
             $this->selectedInspectorFieldIndex = 0;
-            $this->setStatus(sprintf('Created %s.', $mapId), StatusLevel::SUCCESS);
+            $this->setStatus($kind === null
+                ? sprintf('Created %s. It has no kind: the project has no tilesets in assets/%s/.', $mapId, Tileset::DIRECTORY)
+                : sprintf('Created %s; its kind is %s.', $mapId, $kindLabel ?? $kind), StatusLevel::SUCCESS);
             $this->setFocusedPane(self::FOCUS_INSPECTOR);
             $this->beginInspectorEdit();
         } catch (Throwable $throwable) {
@@ -7650,7 +8070,8 @@ final class Editor
         }
 
         if ($input === chr(27)) {
-            $this->closeEventOptionDialog('Selection cancelled.');
+            $this->closeEventOptionDialog(is_array($this->optionDialogField['glyphPiece'] ?? null)
+                ? 'Nothing was painted; the map is as it was.' : 'Selection cancelled.');
             return;
         }
 
@@ -7693,6 +8114,63 @@ final class Editor
         if (is_array($this->optionDialogField) && is_array($selectedEntry)) {
             $field = $this->optionDialogField;
             $title = $this->eventOptionDialogTitle;
+
+            if (($field['canvasLayer'] ?? false) === true) {
+                $this->closeEventOptionDialog();
+                if ($selectedEntry['value'] === self::NPC_LAYER_ENTRY) {
+                    $this->setEditingMode(self::MODE_NPC);
+                    return;
+                }
+                $this->selectCanvasLayer((string) $selectedEntry['value']);
+                $this->setStatus(sprintf('Editing the %s layer.', $selectedEntry['label']));
+                $this->renderCanvasArea();
+                return;
+            }
+
+            if (($field['canvasPiece'] ?? false) === true) {
+                $this->closeEventOptionDialog();
+                $this->choosePiece((string) $selectedEntry['value']);
+                return;
+            }
+
+            if (($field['newMapKind'] ?? false) === true) {
+                $this->closeEventOptionDialog();
+                $this->createNewMap((string) $selectedEntry['value'], (string) $selectedEntry['label']);
+                return;
+            }
+
+            if (($field['target'] ?? null) === 'map-kind') {
+                $this->closeEventOptionDialog();
+                $this->chooseMapKind((string) $selectedEntry['value'], (string) $selectedEntry['label']);
+                return;
+            }
+
+            if (is_array($field['mapKindChange'] ?? null)) {
+                $this->confirmMapKindChange($field['mapKindChange'], $selectedEntry['value'] === 'clear');
+                return;
+            }
+
+            if (is_array($field['glyphPiece'] ?? null)) {
+                $this->chooseGlyphPiece($field['glyphPiece'], (string) $selectedEntry['value']);
+                return;
+            }
+
+            if (($field['lineInsertion'] ?? null) instanceof LineInsertionPlan) {
+                if ($selectedEntry['value'] === 'preview') { return; }
+                $this->confirmLineInsertion($field['lineInsertion'], $selectedEntry['value'] === 'insert');
+                return;
+            }
+
+            if (($field['actorReferenceMigration'] ?? null) instanceof ActorIdentityMigrationPlan) {
+                if ($selectedEntry['value'] === 'preview') { return; }
+                $this->confirmActorReferenceMigration($field['actorReferenceMigration'], $selectedEntry['value'] === 'migrate');
+                return;
+            }
+
+            if (($field['actorIdentityMigration'] ?? null) instanceof ProjectActor) {
+                $this->confirmActorIdentityMigration($field['actorIdentityMigration'], $selectedEntry['value'] === 'freeze');
+                return;
+            }
 
             try {
                 $this->applyInspectorFieldValue($field, (string) $selectedEntry['value']);
@@ -8483,7 +8961,7 @@ final class Editor
             $this->clampCursor();
             $this->clampCanvasOffsets();
             $this->clampInspectorSelection();
-            $this->setStatus(sprintf('%s updated.', $field['label'] ?? 'Field'), StatusLevel::SUCCESS);
+            $this->setStatus(sprintf('%s updated.', $field['label'] ?? 'Field'), StatusLevel::INFO);
         } catch (Throwable $throwable) {
             $this->setErrorStatus($throwable, sprintf('%s edit', $field['label'] ?? 'Field'));
         }
@@ -8651,7 +9129,7 @@ final class Editor
             $this->clampCursor();
             $this->clampCanvasOffsets();
             $this->clampInspectorSelection();
-            $this->setStatus(sprintf('%s updated.', $field['label'] ?? 'Field'), StatusLevel::SUCCESS);
+            $this->setStatus(sprintf('%s updated.', $field['label'] ?? 'Field'), StatusLevel::INFO);
         } catch (Throwable $throwable) {
             $this->setErrorStatus($throwable, sprintf('%s edit', $field['label'] ?? 'Field'));
         }
@@ -8990,8 +9468,12 @@ final class Editor
         $this->setSelectedRecordIndex($index);
         $this->databaseSelectedSettingIndex = 0;
         $this->databaseFocus = self::DATABASE_FOCUS_SETTINGS;
-        $this->setStatus(sprintf('Created a new %s.', $database->schema->entryNoun), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Created a new %s.', $database->schema->entryNoun), StatusLevel::INFO);
         $this->renderDatabaseArea();
+        if ($database->schema->key === 'skits') {
+            $this->selectNewSkitActor(0);
+            return;
+        }
         $this->beginDatabaseEdit();
     }
 
@@ -9037,7 +9519,7 @@ final class Editor
         }
 
         $this->setSelectedRecordIndex($copyIndex);
-        $this->setStatus(sprintf('Duplicated the %s.', $database->schema->entryNoun), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Duplicated the %s.', $database->schema->entryNoun), StatusLevel::INFO);
         $this->renderDatabaseArea();
     }
 
@@ -9090,7 +9572,7 @@ final class Editor
             'Moved the %s %s.',
             $database->schema->entryNoun,
             $step < 0 ? 'up' : 'down',
-        ), StatusLevel::SUCCESS);
+        ), StatusLevel::INFO);
         $this->renderDatabaseArea();
     }
 
@@ -9130,7 +9612,7 @@ final class Editor
                 static fn() => $database->removeChoiceOption($recordIndex, $framePath, $commandIndex, $optionIndex),
             ));
             $this->selectDatabaseFieldById(sprintf('%s%dOption%dText', $subList->prefix, $commandIndex, $optionIndex));
-            $this->setStatus(sprintf('Added option %d.', $optionIndex + 1), StatusLevel::SUCCESS);
+            $this->setStatus(sprintf('Added option %d.', $optionIndex + 1), StatusLevel::INFO);
             $this->renderDatabaseArea();
             $this->beginDatabaseEdit();
 
@@ -9151,7 +9633,7 @@ final class Editor
             static fn() => $database->removeFrameCommand($recordIndex, $framePath, $commandIndex),
         ));
         $this->selectDatabaseFieldById(sprintf('%s%dType', $subList->prefix, $commandIndex));
-        $this->setStatus(sprintf('Added %s %d.', $subList->singular, $commandIndex + 1), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Added %s %d.', $subList->singular, $commandIndex + 1), StatusLevel::INFO);
         $this->renderDatabaseArea();
     }
 
@@ -9190,7 +9672,7 @@ final class Editor
                 $armCount > 0
                     ? sprintf('Removed option %d and its %d commands.', $optionIndex + 1, $armCount)
                     : sprintf('Removed option %d.', $optionIndex + 1),
-                StatusLevel::SUCCESS,
+                StatusLevel::INFO,
             );
             $this->renderDatabaseArea();
 
@@ -9213,7 +9695,7 @@ final class Editor
             static fn() => $database->removeFrameCommand($recordIndex, $framePath, $commandIndex),
             static fn() => $database->insertFrameCommand($recordIndex, $framePath, $commandIndex, $removed),
         ));
-        $this->setStatus(sprintf('Removed %s %d.', $subList->singular, $commandIndex + 1), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Removed %s %d.', $subList->singular, $commandIndex + 1), StatusLevel::INFO);
         $this->renderDatabaseArea();
     }
 
@@ -9375,8 +9857,23 @@ final class Editor
             static fn() => $database->removeSubItem($recordIndex, $entryIndex),
         ));
 
-        $this->setStatus(sprintf('Added %s %d.', $subList->singular, $entryIndex + 1), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Added %s %d.', $subList->singular, $entryIndex + 1), StatusLevel::INFO);
         $this->renderDatabaseArea();
+        if ($database->schema->key === 'skits') {
+            $this->selectNewSkitActor($entryIndex);
+        }
+    }
+
+    /** New beats start with a resource choice, never an invented speaker. */
+    private function selectNewSkitActor(int $entryIndex): void
+    {
+        foreach ($this->getDatabaseSettingsFields() as $index => $field) {
+            if (($field['field'] ?? '') !== sprintf('beat%dActor', $entryIndex)) { continue; }
+            $this->databaseSelectedSettingIndex = $index;
+            $this->databaseFocus = self::DATABASE_FOCUS_SETTINGS;
+            $this->openReferencePicker($field);
+            return;
+        }
     }
 
     /**
@@ -9426,7 +9923,7 @@ final class Editor
         ));
 
         $this->databaseSelectedSettingIndex = 0;
-        $this->setStatus(sprintf('Removed %s %d.', $subList->singular, $entryIndex + 1), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Removed %s %d.', $subList->singular, $entryIndex + 1), StatusLevel::INFO);
         $this->renderDatabaseArea();
     }
 
@@ -9478,7 +9975,7 @@ final class Editor
         ));
         $this->setStatus(
             sprintf('Added %s %d.', $context['list']->singular, $nestedIndex + 1),
-            StatusLevel::SUCCESS,
+            StatusLevel::INFO,
         );
         $this->renderDatabaseArea();
     }
@@ -9521,7 +10018,7 @@ final class Editor
         );
         $this->setStatus(
             sprintf('Removed %s %d.', $context['list']->singular, $nestedIndex + 1),
-            StatusLevel::SUCCESS,
+            StatusLevel::INFO,
         );
         $this->renderDatabaseArea();
     }
@@ -9805,7 +10302,7 @@ final class Editor
             }
         }
 
-        $this->setStatus(sprintf('Reward item %d added.', $slot + 1), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Reward item %d added.', $slot + 1), StatusLevel::INFO);
         $this->renderDatabasePanes(['list', 'settings', 'cue', 'frames', 'preview']);
         $this->beginDatabaseEdit();
     }
@@ -9840,7 +10337,7 @@ final class Editor
             static fn() => $questDatabase->removeRewardItem($questIndex, $slot),
             static fn() => $questDatabase->insertRewardItem($questIndex, $slot, $removed),
         ));
-        $this->setStatus(sprintf('Reward item %d removed (%s).', $slot + 1, $removed), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Reward item %d removed (%s).', $slot + 1, $removed), StatusLevel::INFO);
         $this->renderDatabasePanes(['list', 'settings', 'cue', 'frames', 'preview']);
     }
 
@@ -9870,7 +10367,7 @@ final class Editor
             static fn() => $questDatabase->insertObjective($questIndex, $objectiveIndex, $objective),
             static fn() => $questDatabase->removeObjective($questIndex, $objectiveIndex),
         ));
-        $this->setStatus(sprintf('Objective %d added.', $objectiveIndex + 1), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Objective %d added.', $objectiveIndex + 1), StatusLevel::INFO);
         $this->renderDatabasePanes(['list', 'settings', 'cue', 'frames', 'preview']);
     }
 
@@ -9927,7 +10424,7 @@ final class Editor
             static fn() => $questDatabase->removeObjective($questIndex, $objectiveIndex),
             static fn() => $questDatabase->insertObjective($questIndex, $objectiveIndex, $removed),
         ));
-        $this->setStatus(sprintf('Objective %d removed.', $objectiveIndex + 1), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Objective %d removed.', $objectiveIndex + 1), StatusLevel::INFO);
         $this->renderDatabasePanes(['list', 'settings', 'cue', 'frames', 'preview']);
     }
 
@@ -9985,6 +10482,10 @@ final class Editor
                 $this->workspace->animationDatabase->save();
                 $this->setStatus('Animation database saved.', StatusLevel::SUCCESS);
             } elseif ($this->isSystemDatabaseSelected()) {
+                if ($this->workspace->config?->isDirty()) {
+                    $this->backupBeforeSave($this->workspace->config->path);
+                    $this->workspace->config->save();
+                }
                 $this->backupBeforeSave(...$this->getDatabaseBackupPaths($this->workspace->systemDatabase));
                 $this->workspace->systemDatabase->save();
                 $this->setStatus('System database saved.', StatusLevel::SUCCESS);
@@ -10151,18 +10652,20 @@ final class Editor
      * @param ProjectActor $actor The actor.
      * @return array<int, array<string, mixed>> The rows.
      */
-    private function actorIdentityFields(ProjectActor $actor): array
+    private function getActorIdentityFields(ProjectActor $actor): array
     {
+        $missingId = ! array_key_exists('id', $actor->getData());
         return [
             ['label' => 'Identity', 'value' => '', 'editable' => false, 'field' => ''],
             [
                 'label' => 'Definition Id',
                 'value' => $actor->hasDefinitionId() ? $actor->getDefinitionId() : '',
-                'control' => new InputControl(InputControlType::TEXT, $actor->hasDefinitionId() ? $actor->getDefinitionId() : ''),
+                'editable' => $missingId,
+                'actorIdentityMigration' => $missingId ? $actor : null,
                 'field' => 'id',
-                // A project that declares no id is resolved by name, which is
-                // what strands a save when the actor is renamed.
-                'displayDefault' => sprintf('%s (the name; declare an id so a rename keeps saves)', $actor->getName()),
+                'displayDefault' => $missingId
+                    ? sprintf('Enter to freeze the current name (%s) as its permanent id', $actor->getName())
+                    : 'Malformed explicit id: correct the authored actor file; automatic replacement is not allowed.',
             ],
         ];
     }
@@ -10479,11 +10982,12 @@ final class Editor
         }
 
         return [
-            ...$this->actorIdentityFields($actor),
+            ...$this->getActorIdentityFields($actor),
             [
                 'label' => 'Name',
                 'value' => $actor->getName(),
                 'control' => new InputControl(InputControlType::TEXT, $actor->getName()),
+                'editable' => $actor->hasDefinitionId(),
                 'field' => 'name',
             ],
             [
@@ -10694,10 +11198,9 @@ final class Editor
         $scope = $skill->getScope();
         $invocation = $skill->getInvocation();
 
-        return [
+        $fields = [
             ['label' => 'Name', 'value' => $skill->getName(), 'control' => new InputControl(InputControlType::TEXT, $skill->getName()), 'field' => 'name'],
             ['label' => 'Description', 'value' => $skill->getDescription(), 'control' => new InputControl(InputControlType::TEXT, $skill->getDescription()), 'field' => 'description'],
-            ['label' => 'Type', 'value' => $skill->getType(), 'options' => ['basic', 'special', 'magic'], 'field' => 'type'],
             ['label' => 'Icon', 'value' => $skill->getIcon(), 'control' => new InputControl(InputControlType::TEXT, $skill->getIcon()), 'field' => 'icon'],
             ['label' => 'Cost', 'value' => (string) $skill->getCost(), 'control' => new InputControl(InputControlType::INTEGER, (string) $skill->getCost()), 'field' => 'cost'],
             ['label' => 'Cooldown', 'value' => (string) $skill->getCooldown(), 'control' => new InputControl(InputControlType::INTEGER, (string) $skill->getCooldown()), 'field' => 'cooldown'],
@@ -10712,7 +11215,27 @@ final class Editor
             ['label' => 'Repeat', 'value' => (string) ($invocation['repeat'] ?? 1), 'control' => new InputControl(InputControlType::INTEGER, (string) ($invocation['repeat'] ?? 1)), 'field' => 'invocationRepeat'],
             ['label' => 'AP Gain', 'value' => (string) ($invocation['apGain'] ?? 10), 'control' => new InputControl(InputControlType::INTEGER, (string) ($invocation['apGain'] ?? 10)), 'field' => 'invocationApGain'],
             ['label' => 'Effect Type', 'value' => $skill->getEffectType() ?? MagicEffectType::DESTRUCTIVE->value, 'options' => array_map(static fn(MagicEffectType $effectType): string => $effectType->value, MagicEffectType::cases()), 'field' => 'effectType'],
+            [
+                'label' => 'Animation',
+                'value' => $skill->animationId === null ? '(Legacy fallback)' : (string) $skill->animationId,
+                'field' => 'animationId',
+                'reference' => 'animation_ids',
+                'allowsNone' => true,
+                'noneLabel' => '(Legacy fallback)',
+            ],
         ];
+        $database = $this->workspace->skillDatabase;
+        $fields = array_values(array_filter($fields, fn(array $field): bool =>
+            $database->supportsField($this->databaseSelectedSkillIndex, $field['field'])));
+        $reason = $database->getReadOnlyReason($this->databaseSelectedSkillIndex);
+        if ($reason !== null) {
+            foreach ($fields as &$field) {
+                $field['editable'] = false;
+            }
+            unset($field);
+            array_unshift($fields, ['label' => 'Read-only', 'value' => $reason, 'editable' => false]);
+        }
+        return $fields;
     }
     /**
      * Returns the editable settings fields for the selected quest.
@@ -10856,6 +11379,7 @@ final class Editor
      */
     private function getDatabaseFieldControl(array $field): ?InputControl
     {
+        if (($field['editable'] ?? null) === false) { return null; }
         $control = $field['control'] ?? null;
 
         return $control instanceof InputControl ? $control : null;
@@ -10872,6 +11396,15 @@ final class Editor
         $field = $fields[$this->databaseSelectedSettingIndex] ?? null;
 
         if (! is_array($field)) {
+            return;
+        }
+
+        if (($field['editable'] ?? null) === false && ! isset($field['frame'])) {
+            return;
+        }
+
+        if (($field['actorIdentityMigration'] ?? null) instanceof ProjectActor) {
+            $this->openActorIdentityMigration($field['actorIdentityMigration']);
             return;
         }
 
@@ -10928,6 +11461,116 @@ final class Editor
         $this->databaseEditCursorIndex = mb_strlen($this->databaseEditBuffer);
         $this->statusMessage = sprintf('Editing %s.', $field['label'] ?? 'field');
         $this->renderDatabasePanes(['settings']);
+    }
+
+    private function openActorIdentityMigration(ProjectActor $actor): void
+    {
+        try {
+            $plan = ActorIdentityMigration::planProject($this->projectRoot);
+            if ($plan->getChangedPaths() !== [$actor->path]) {
+                $this->openActorReferenceMigration($plan);
+                return;
+            }
+        } catch (Throwable $failure) {
+            $this->setErrorStatus($failure, 'Actor identity migration');
+            return;
+        }
+        $this->optionDialogField = ['actorIdentityMigration' => $actor];
+        $this->eventOptionDialogMarker = null;
+        $this->eventOptionDialogPath = null;
+        $this->eventOptionDialogTitle = 'Freeze actor identity';
+        $this->eventOptionDialogEntries = [
+            ['label' => 'Cancel', 'value' => 'cancel', 'description' => 'Leave the actor unchanged.'],
+            ['label' => sprintf('Freeze "%s" as the permanent id', $actor->getName()), 'value' => 'freeze',
+                'description' => 'Later display-name changes will keep this identity. Save the project to write it.'],
+        ];
+        $this->selectedEventOptionIndex = 0;
+        $this->dialogFilter->clear();
+        $this->isEventOptionDialogOpen = true;
+        $this->statusMessage = 'Confirm the one-time actor identity migration.';
+        $this->renderSelectionDependentArea();
+    }
+
+    private function confirmActorIdentityMigration(ProjectActor $actor, bool $confirmed): void
+    {
+        if (! $confirmed) {
+            $this->closeEventOptionDialog('Actor identity migration cancelled.');
+            return;
+        }
+        try {
+            $before = $actor->getData();
+            ActorIdentityMigration::freezeCurrentName($this->workspace->actorDatabase, $actor);
+            $after = $actor->getData();
+            $this->recordCommand(new GenericCommand(
+                'Freeze actor identity',
+                static fn() => $actor->restoreData($after),
+                static fn() => $actor->restoreData($before),
+            ));
+            $this->closeEventOptionDialog('Actor identity frozen. Save the project to write it.');
+        } catch (Throwable $failure) {
+            $this->closeEventOptionDialog('');
+            $this->setErrorStatus($failure, 'Actor identity migration');
+        }
+        $this->renderDatabasePanes(['list', 'settings']);
+    }
+
+    private function openActorReferenceMigration(?ActorIdentityMigrationPlan $plan = null): void
+    {
+        if (! $this->workspace instanceof ProjectWorkspace) { return; }
+        if ($this->workspace->hasUnsavedChanges()) {
+            $this->setStatus('Save or undo pending edits before repairing actor references. No files were changed.', StatusLevel::WARN);
+            return;
+        }
+        try {
+            $plan ??= ActorIdentityMigration::planProject($this->projectRoot);
+            $paths = $plan->getChangedPaths();
+            if ($paths === []) {
+                $this->setStatus('Actor identities and references need no repair.');
+                return;
+            }
+            $relativePaths = array_map(fn(string $path): string => substr($path, strlen($this->projectRoot) + 1), $paths);
+            $this->optionDialogField = ['actorReferenceMigration' => $plan];
+            $this->eventOptionDialogMarker = null;
+            $this->eventOptionDialogPath = null;
+            $this->eventOptionDialogTitle = 'Repair actor identities and references';
+            $this->eventOptionDialogEntries = [
+                ['label' => 'Cancel', 'value' => 'cancel', 'description' => 'Leave all files unchanged.'],
+                ['label' => sprintf('Write %d repaired files now', count($paths)), 'value' => 'migrate',
+                    'description' => 'Writes now, not on Save. Ctrl+Z restores files.'],
+                ...array_map(static fn(string $path): array => [
+                    'label' => $path, 'value' => 'preview',
+                    'description' => 'Repair preview only. Select Write to apply all files.',
+                ], $relativePaths),
+            ];
+            $this->selectedEventOptionIndex = 0;
+            $this->dialogFilter->clear();
+            $this->isEventOptionDialogOpen = true;
+            $this->statusMessage = 'Confirm source-preserving actor reference repair.';
+            $this->renderSelectionDependentArea();
+        } catch (Throwable $failure) {
+            $this->setErrorStatus($failure, 'Actor reference migration');
+        }
+    }
+
+    private function confirmActorReferenceMigration(ActorIdentityMigrationPlan $plan, bool $confirmed): void
+    {
+        if (! $confirmed || ! $this->workspace instanceof ProjectWorkspace) {
+            $this->closeEventOptionDialog('Actor reference migration cancelled.');
+            return;
+        }
+        try {
+            $command = new SourceSetCommand('Migrate actor identities and references', 'this actor migration', $plan->getSourceSet(), $this->workspace,
+                fn(): ?ProjectWorkspace => $this->workspace,
+                function (ProjectWorkspace $workspace): void { $this->workspace = $workspace; },
+            );
+            $command->execute();
+            $this->recordCommand($command);
+            $this->closeEventOptionDialog('Actor identities and references repaired. Ctrl+Z restores the original files.');
+            $this->requestFullRender();
+        } catch (Throwable $failure) {
+            $this->closeEventOptionDialog('');
+            $this->setErrorStatus($failure, 'Actor reference migration');
+        }
     }
 
     /**
@@ -11052,7 +11695,7 @@ final class Editor
         ));
 
         if (is_string($newId)) {
-            $this->setStatus(sprintf('Renamed. Its id is now %s.', $newId), StatusLevel::SUCCESS);
+            $this->setStatus(sprintf('Renamed. Its id is now %s.', $newId), StatusLevel::INFO);
 
             return;
         }
@@ -11251,7 +11894,7 @@ final class Editor
 
         try {
             $this->applyDatabaseFieldValueRecorded($field, $encoded);
-            $this->setStatus(sprintf('%s updated.', $label), StatusLevel::SUCCESS);
+            $this->setStatus(sprintf('%s updated.', $label), StatusLevel::INFO);
         } catch (Throwable $throwable) {
             $this->setErrorStatus($throwable, sprintf('%s edit', $label));
         }
@@ -11401,7 +12044,7 @@ final class Editor
 
         try {
             $this->applyDatabaseFieldValueRecorded($field, $encoded);
-            $this->setStatus(sprintf('%s updated.', $label), StatusLevel::SUCCESS);
+            $this->setStatus(sprintf('%s updated.', $label), StatusLevel::INFO);
         } catch (Throwable $throwable) {
             $this->setErrorStatus($throwable, sprintf('%s edit', $label));
         }
@@ -11563,7 +12206,7 @@ final class Editor
 
         try {
             $this->applyDatabaseFieldValueRecorded($field, $encoded);
-            $this->setStatus(sprintf('%s updated.', $label), StatusLevel::SUCCESS);
+            $this->setStatus(sprintf('%s updated.', $label), StatusLevel::INFO);
         } catch (Throwable $throwable) {
             $this->setErrorStatus($throwable, sprintf('%s edit', $label));
         }
@@ -11769,7 +12412,7 @@ final class Editor
 
             if ($selectedMap instanceof ProjectMap) {
                 $this->applyMapBgmVariantValue($selectedMap, $field, ConditionCodec::decodeAll($encoded));
-                $this->setStatus(sprintf('%s updated.', $label), StatusLevel::SUCCESS);
+                $this->setStatus(sprintf('%s updated.', $label), StatusLevel::INFO);
             }
 
             $this->renderSelectionDependentArea();
@@ -11796,7 +12439,7 @@ final class Editor
 
         try {
             $this->applyDatabaseFieldValueRecorded($field, $encoded);
-            $this->setStatus(sprintf('%s updated.', $label), StatusLevel::SUCCESS);
+            $this->setStatus(sprintf('%s updated.', $label), StatusLevel::INFO);
         } catch (Throwable $throwable) {
             $this->setErrorStatus($throwable, sprintf('%s edit', $label));
         }
@@ -12083,7 +12726,7 @@ final class Editor
                 $this->applyDatabaseFieldValueRecorded($field, implode(', ', $members));
                 $this->setStatus(
                     $position === false ? sprintf('%s: added %s.', $label, $selected) : sprintf('%s: removed %s.', $label, $selected),
-                    StatusLevel::SUCCESS,
+                    StatusLevel::INFO,
                 );
                 $this->renderDatabasePanes(['list', 'settings', 'cue', 'frames', 'preview']);
 
@@ -12096,7 +12739,7 @@ final class Editor
                 $selected === (string) ($field['noneLabel'] ?? '(None)')
                     ? sprintf('%s cleared.', $label)
                     : sprintf('%s set to %s.', $label, $selected),
-                StatusLevel::SUCCESS,
+                StatusLevel::INFO,
             );
         } catch (Throwable $throwable) {
             $this->setErrorStatus($throwable, sprintf('%s selection', $label));
@@ -12125,7 +12768,7 @@ final class Editor
 
         try {
             $this->applyDatabaseFieldValueRecorded($field, $this->databaseEditBuffer);
-            $this->setStatus(sprintf('%s updated.', $field['label'] ?? 'Field'), StatusLevel::SUCCESS);
+            $this->setStatus(sprintf('%s updated.', $field['label'] ?? 'Field'), StatusLevel::INFO);
         } catch (Throwable $throwable) {
             $this->setErrorStatus($throwable, sprintf('%s edit', $field['label'] ?? 'Field'));
         }
@@ -12148,6 +12791,15 @@ final class Editor
         }
 
         $system = $this->workspace->systemDatabase;
+        $config = $this->workspace->config;
+        $zoomIssue = $config?->getFieldIssue(ProjectConfig::FIELD_ZOOM);
+        $zoom = $config === null ? [] : [[
+            'label' => 'Field Zoom (GPUI only)',
+            'value' => ProjectRecord::stringify($config->getFieldZoom()),
+            'field' => ProjectConfig::FIELD_ZOOM,
+            ...($zoomIssue === null ? ['control' => new InputControl(InputControlType::FLOAT, ProjectRecord::stringify($config->getFieldZoom()))] : []),
+        ], ['label' => $zoomIssue === null ? 'Field Zoom Range' : 'Read-only',
+            'value' => $zoomIssue ?? '1 to 8; default 1. Terminal and UI size stay unchanged.', 'editable' => false]];
 
         return [
             [
@@ -12174,6 +12826,7 @@ final class Editor
                 'control' => new InputControl(InputControlType::INTEGER, (string) $system->getAtbSpeedFactorPercent()),
                 'field' => 'atbSpeedFactorPercent',
             ],
+            ...$zoom,
         ];
     }
 
@@ -12214,6 +12867,9 @@ final class Editor
         $oldRawValue = $control instanceof InputControl
             ? $control->rawValue
             : (string) ($field['value'] ?? '');
+        if (($field['allowsNone'] ?? false) === true && $oldRawValue === (string) ($field['noneLabel'] ?? '(None)')) {
+            $oldRawValue = '';
+        }
         $identity = [
             'category' => $this->databaseCategoryIndex,
             'actor' => $this->databaseSelectedActorIndex,
@@ -12225,7 +12881,38 @@ final class Editor
             'records' => $this->databaseSelectedRecordIndexes,
         ];
 
+        $record = $this->getSelectedRecordDatabase()?->getRecordByIndex($this->getSelectedRecordIndex());
+        if ($this->isSystemDatabaseSelected() && $fieldId === ProjectConfig::FIELD_ZOOM) {
+            $record = $this->workspace?->config?->getRecord(ProjectConfig::FIELD_ZOOM);
+        }
+        $before = $record?->toArray();
+        $actor = $this->isActorsDatabaseSelected() ? $this->getSelectedActor() : null;
+        $actorBefore = $actor?->getData();
         $this->applyDatabaseFieldValue($fieldId, $rawValue);
+
+        if ($actor !== null && $actorBefore !== null) {
+            $actorAfter = $actor->getData();
+            if ($actorBefore !== $actorAfter) {
+                $this->recordCommand(new GenericCommand(
+                    sprintf('%s edit', $field['label'] ?? 'Actor field'),
+                    static fn() => $actor->restoreData($actorAfter),
+                    static fn() => $actor->restoreData($actorBefore),
+                ));
+            }
+            return;
+        }
+
+        if ($record !== null && $before !== null) {
+            $after = $record->toArray();
+            if ($before !== $after) {
+                $this->recordCommand(new GenericCommand(
+                    sprintf('%s edit', $field['label'] ?? 'Database field'),
+                    static fn() => $record->restorePayload($after),
+                    static fn() => $record->restorePayload($before),
+                ));
+            }
+            return;
+        }
 
         if (in_array($fieldId, ['brushSymbol', 'brushColor'], true) || $oldRawValue === $rawValue) {
             return;
@@ -12394,6 +13081,10 @@ final class Editor
         }
 
         if ($this->isSystemDatabaseSelected()) {
+            if ($field === ProjectConfig::FIELD_ZOOM) {
+                $this->workspace->config?->setFieldZoom($rawValue);
+                return;
+            }
             $value = in_array($field, ['battleEngine', 'atbMode'], true)
                 ? trim($rawValue)
                 : max(0, intval($rawValue));
@@ -12499,7 +13190,7 @@ final class Editor
         $fields = $this->getDatabaseSettingsFields();
         $field = $fields[$this->databaseSelectedSettingIndex] ?? null;
 
-        if (! is_array($field)) {
+        if (! is_array($field) || ($field['editable'] ?? null) === false) {
             return;
         }
 
@@ -13019,7 +13710,7 @@ final class Editor
         }
 
         $this->applyMapDataValue($context['map'], [MapBgmVariants::KEY], $variants->withVariantAdded(), 'Music variant add');
-        $this->setStatus(sprintf('Added variant %d. Pick its track; it stays inactive until one is chosen.', $variants->count() + 1), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Added variant %d. Pick its track; it stays inactive until one is chosen.', $variants->count() + 1), StatusLevel::INFO);
         $this->clampInspectorSelection();
         $this->renderSelectionDependentArea();
 
@@ -13057,7 +13748,7 @@ final class Editor
         }
 
         $this->applyMapDataValue($context['map'], [MapBgmVariants::KEY], $variants->withVariantRemovedAt($context['index']), 'Music variant remove');
-        $this->setStatus(sprintf('Removed variant %d.', $context['index'] + 1), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Removed variant %d.', $context['index'] + 1), StatusLevel::INFO);
         $this->clampInspectorSelection();
         $this->renderSelectionDependentArea();
 
@@ -13106,7 +13797,7 @@ final class Editor
             }
         }
 
-        $this->setStatus(sprintf('Moved variant %s. The first matching variant wins.', $step < 0 ? 'up' : 'down'), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Moved variant %s. The first matching variant wins.', $step < 0 ? 'up' : 'down'), StatusLevel::INFO);
         $this->renderSelectionDependentArea();
     }
 
@@ -13177,6 +13868,7 @@ final class Editor
                 'target' => 'map',
                 'field' => 'region',
             ],
+            $this->buildMapKindField($selectedMap),
             [
                 'label' => 'Description',
                 'value' => $selectedMap->getDescription(),
@@ -13214,6 +13906,7 @@ final class Editor
                 'editable' => false,
             ],
             ...$this->mapRuntimeFields($selectedMap),
+            ...$this->getLayerInspectorFields(),
         ];
 
         if ($this->editingMode !== self::MODE_EVENT) {
@@ -13777,9 +14470,9 @@ final class Editor
             return;
         }
 
-        $layout = $this->resolveLayout();
-        $viewportWidth = max(1, $layout['centerWidth'] - 2);
-        $viewportHeight = max(1, $layout['contentHeight'] - 4);
+        $bounds = $this->getCanvasPreviewBounds();
+        $viewportWidth = $bounds['width'];
+        $viewportHeight = $bounds['height'];
         $this->canvasOffsetX = max(0, min(max(0, $selectedMap->getWidth() - $viewportWidth), $this->canvasOffsetX));
         $this->canvasOffsetY = max(0, min(max(0, $selectedMap->getHeight() - $viewportHeight), $this->canvasOffsetY));
     }
@@ -13816,9 +14509,9 @@ final class Editor
      */
     private function syncViewportToCursor(): void
     {
-        $layout = $this->resolveLayout();
-        $viewportWidth = max(1, $layout['centerWidth'] - 2);
-        $viewportHeight = max(1, $layout['contentHeight'] - 4);
+        $bounds = $this->getCanvasPreviewBounds();
+        $viewportWidth = $bounds['width'];
+        $viewportHeight = $bounds['height'];
 
         if ($this->cursorX < $this->canvasOffsetX) {
             $this->canvasOffsetX = $this->cursorX;
@@ -13966,20 +14659,19 @@ final class Editor
 
         $previewRow = $this->cursorY - $this->canvasOffsetY;
         $previewColumn = $this->cursorX - $this->canvasOffsetX;
-        $previewHeight = max(1, $layout['contentHeight'] - 4);
-        $previewWidth = $this->getWindowContentWidth($layout['centerWidth']);
+        $bounds = $this->getCanvasPreviewBounds($layout);
+        $previewHeight = $bounds['height'];
+        $previewWidth = $bounds['width'];
 
         if ($previewRow < 0 || $previewRow >= $previewHeight || $previewColumn < 0 || $previewColumn >= $previewWidth) {
             Console::cursor()->hide();
             return;
         }
 
-        $canvasLeft = 2 + $layout['leftWidth'] + $layout['gutter'];
-        $canvasTop = 5;
         Console::cursor()->show();
         Console::cursor()->moveTo(
-            $canvasLeft + 1 + self::WINDOW_HORIZONTAL_PADDING + $previewColumn,
-            $canvasTop + 3 + $previewRow
+            $bounds['left'] + $previewColumn,
+            $bounds['top'] + $previewRow
         );
     }
 
@@ -14760,7 +15452,7 @@ final class Editor
         }
 
         $this->applyMapDataValue($context['map'], [MapEncounters::KEY], $block, 'Encounter troop add');
-        $this->setStatus(sprintf('Added %s to the encounter table.', $available[0]), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Added %s to the encounter table.', $available[0]), StatusLevel::INFO);
         $this->clampInspectorSelection();
         $this->renderSelectionDependentArea();
 
@@ -14806,7 +15498,7 @@ final class Editor
             $block === null
                 ? sprintf('Removed %s; this map no longer has random encounters.', $removed)
                 : sprintf('Removed %s from the encounter table.', $removed),
-            StatusLevel::SUCCESS,
+            StatusLevel::INFO,
         );
         $this->clampInspectorSelection();
         $this->renderSelectionDependentArea();
@@ -14927,7 +15619,7 @@ final class Editor
         array_splice($entries, $position, 0, [self::blankLike($template)]);
 
         $this->applyInspectorListChange($selectedMap, $marker, $list['path'], $entries, 'Add list entry');
-        $this->setStatus(sprintf('Added %s %d.', $this->describeListPath($list['path']), $position + 1), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Added %s %d.', $this->describeListPath($list['path']), $position + 1), StatusLevel::INFO);
     }
 
     /**
@@ -14966,7 +15658,7 @@ final class Editor
 
         $this->applyInspectorListChange($selectedMap, $marker, $list['path'], $entries, 'Remove list entry');
         $this->clampInspectorSelection();
-        $this->setStatus(sprintf('Removed %s %d.', $this->describeListPath($list['path']), $list['index'] + 1), StatusLevel::SUCCESS);
+        $this->setStatus(sprintf('Removed %s %d.', $this->describeListPath($list['path']), $list['index'] + 1), StatusLevel::INFO);
     }
 
     /**
@@ -15139,7 +15831,7 @@ final class Editor
         $category = (string) ($field['reference'] ?? '');
         $target = (string) ($field['target'] ?? '');
 
-        if ($category === '' || ! in_array($target, ['map-data', 'map-encounters', 'map-bgm-variants'], true)) {
+        if ($category === '' || ! in_array($target, ['map-data', 'map-kind', 'map-encounters', 'map-bgm-variants'], true)) {
             return false;
         }
 
@@ -15186,7 +15878,7 @@ final class Editor
         $this->eventOptionDialogPath = null;
         $this->eventOptionDialogTitle = $title;
         $this->eventOptionDialogEntries = $entries;
-        $this->selectedEventOptionIndex = $this->resolveEventOptionSelectionIndex((string) ($field['value'] ?? ''));
+        $this->selectedEventOptionIndex = $this->resolveEventOptionSelectionIndex((string) ($field['selectedValue'] ?? $field['value'] ?? ''));
         $this->isEventOptionDialogOpen = true;
         $this->statusMessage = sprintf('Choose %s.', mb_strtolower($title));
         $this->renderSelectionDependentArea();
@@ -16268,7 +16960,7 @@ final class Editor
      */
     private function getDatabaseSystemListLines(): array
     {
-        $dirty = $this->workspace?->systemDatabase->isDirty() === true ? ' *' : '';
+        $dirty = $this->workspace?->systemDatabase->isDirty() === true || $this->workspace?->config?->isDirty() === true ? ' *' : '';
 
         return [sprintf('> Project System%s', $dirty)];
     }
@@ -17074,7 +17766,7 @@ final class Editor
             self::DATABASE_CATEGORY_CLASSES => $this->workspace->classDatabase->isDirty(),
             self::DATABASE_CATEGORY_SKILLS => $this->workspace->skillDatabase->isDirty(),
             self::DATABASE_CATEGORY_ANIMATIONS => $this->workspace->animationDatabase->isDirty(),
-            self::DATABASE_CATEGORY_SYSTEM => $this->workspace->systemDatabase->isDirty(),
+            self::DATABASE_CATEGORY_SYSTEM => $this->workspace->systemDatabase->isDirty() || ($this->workspace->config?->isDirty() ?? false),
             self::DATABASE_CATEGORY_QUESTS => $this->workspace->questDatabase->isDirty(),
             default => false,
         };
@@ -17132,11 +17824,12 @@ final class Editor
         // Erasing a glyph's last use can therefore never make it unpaintable.
         $palette = [];
 
-        foreach ($selectedMap->getCharacterPalette() as $symbol) {
+        foreach ($selectedMap->getCharacterPalette($this->getActiveCanvasLayer()) as $symbol) {
             $palette[$symbol] = $symbol;
         }
 
-        foreach ($this->workspace->getCollisionGlyphs() as $symbol) {
+        $layerName = array_values(array_filter($this->getTerminalCanvasLayers(), fn(array $layer): bool => $layer['id'] === $this->getActiveCanvasLayer()))[0]['name'] ?? null;
+        foreach ($this->workspace->getCollisionGlyphs($layerName) as $symbol) {
             $palette[$symbol] = $symbol;
         }
 
@@ -17230,6 +17923,7 @@ final class Editor
      */
     private function isInspectorFieldInteractive(array $field): bool
     {
+        if (($field['editable'] ?? null) === false) { return isset($field['frame']); }
         return $this->getInspectorFieldControl($field) instanceof InputControl
             || ($field['editable'] ?? null) === true
             || ! empty($field['options'])
@@ -17248,6 +17942,7 @@ final class Editor
      */
     private function getInspectorFieldControl(array $field): ?InputControl
     {
+        if (($field['editable'] ?? null) === false) { return null; }
         $control = $field['control'] ?? null;
 
         return $control instanceof InputControl ? $control : null;
@@ -17308,7 +18003,8 @@ final class Editor
      */
     private function renderFooterStatusColor(): void
     {
-        if ($this->statusLevel === StatusLevel::INFO) {
+        // The idle message stays plain; every message shown takes its level's colour.
+        if ($this->toasts->current() === null) {
             return;
         }
 
@@ -17416,6 +18112,16 @@ final class Editor
             return true;
         }
 
+        if ($this->modals->has(Modal::LAYER_EDIT)) {
+            $this->renderLayerPrompt($layout);
+            return true;
+        }
+
+        if ($this->modals->has(Modal::LINE_INSERT)) {
+            $this->renderLineInsertPrompt($layout);
+            return true;
+        }
+
         if ($this->isCommandPaletteOpen) {
             $this->renderCommandPaletteOverlay($layout);
             return true;
@@ -17423,6 +18129,11 @@ final class Editor
 
         if ($this->isHelpOpen) {
             $this->renderHelpOverlay($layout);
+            return true;
+        }
+
+        if ($this->isEventOptionDialogOpen) {
+            $this->renderEventOptionDialogOverlay($layout);
             return true;
         }
 
@@ -17713,11 +18424,6 @@ final class Editor
             return;
         }
 
-        if ($this->isEventOptionDialogOpen) {
-            $this->renderEventOptionDialogOverlay($layout);
-            return;
-        }
-
         if ($this->isDestinationSpawnConfirmationOpen) {
             $this->renderDestinationSpawnConfirmationOverlay($layout);
             return;
@@ -17873,10 +18579,13 @@ final class Editor
     private function createCanvasWindow(): EditorWindow
     {
         $layout = $this->resolveLayout();
-        $contentWidth = $this->getWindowContentWidth($layout['centerWidth']);
+        $bounds = $this->getCanvasPreviewBounds($layout);
+        $contentWidth = $bounds['width'];
+        $contentHeight = $bounds['height'] + ProjectWorkspace::CANVAS_HEADER_ROWS;
 
         return new EditorWindow(
-            title: $this->focusedPane === self::FOCUS_CANVAS ? 'Canvas [Focus]' : 'Canvas',
+            title: ($this->focusedPane === self::FOCUS_CANVAS ? 'Canvas [Focus]' : 'Canvas')
+                . $this->getCanvasLayerTitle(),
             help: match (true) {
                 $this->isDestinationSpawnConfirmationOpen => 'Enter:Apply  Esc:Back',
                 $this->isDestinationSpawnSelectionOpen => 'Arrows:Move  Enter:Select Spawn  Esc:Cancel',
@@ -17891,11 +18600,23 @@ final class Editor
                 ),
                 $this->inputMode === self::INPUT_PAINT => $this->fitHelp(
                     $layout['centerWidth'],
-                    'PAINT: every key paints its glyph  Esc:Normal',
-                    'PAINT  Esc:Normal',
+                    ...($this->canvasTool === CanvasTool::BRUSH
+                        ? ['PAINT: every key paints its glyph  Esc:Normal', 'PAINT  Esc:Normal']
+                        : [sprintf('PAINT %s: keys choose the glyph  Enter:Anchor, then Draw  Esc:Normal', $this->canvasTool->label()),
+                            sprintf('PAINT %s  Enter:Anchor/Draw  Esc:Normal', $this->canvasTool->label()), 'PAINT  Esc:Normal']),
                 ),
+                $this->getActivePiecePlacement() !== null => $this->getPiecePlacementHelp($layout['centerWidth']) ?? '',
                 default => $this->fitHelp(
                     $layout['centerWidth'],
+                    'i:Paint b/l/r/R/s:Tool L:Layer P:Piece o:Colour v:Hide d:Dim ?:Help',
+                    'i:Paint b/l/r/R/s:Tool L:Layer P:Piece o:Colour ?:Help',
+                    'i:Paint b/l/r/R/s:Tool L:Layer P:Piece ?:Help',
+                    'i:Paint b/l/r/R/s:Tool L:Layer ?:Help',
+                    'i:Paint L:Layer P:Piece v:Hide d:Dim o:Colour ?:Help',
+                    'i:Paint L:Layer P:Piece v:Hide d:Dim',
+                    'i:Paint L:Layer P:Piece ?:Help',
+                    'i:Paint L:Layer v:Hide d:Dim',
+                    'i:Paint L:Layer ?:Help',
                     'i:Paint  m:Map  e:Event  n:NPC  c:Chars  o:Colour  ?:Help',
                     'i:Paint m:Map e:Event n:NPC c:Chars o:Colour',
                     'i:Paint  m:Map  e:Event',
@@ -17909,7 +18630,7 @@ final class Editor
                 $this->workspace?->getCanvasLines(
                     $this->selectedAssetIndex,
                     $contentWidth,
-                    max(1, $layout['contentHeight'] - 2),
+                    $contentHeight,
                     $this->canvasOffsetX,
                     $this->canvasOffsetY,
                     $this->showEventOverlay,
@@ -17917,9 +18638,14 @@ final class Editor
                     $this->selectedNpcIndex,
                     $this->previewedNpcSprite(),
                     ['x' => $this->cursorX, 'y' => $this->cursorY],
+                    $this->getCanvasLayerState()['visibility'],
+                    $this->getActiveCanvasLayer(),
+                    false,
+                    $this->getCanvasLayerState()['dim'],
+                    $this->getCanvasPreviewCells(),
                 ) ?? [],
                 $contentWidth,
-                $layout['contentHeight'] - 2
+                $contentHeight
             ),
         );
     }

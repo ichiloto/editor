@@ -95,6 +95,11 @@ Editor development currently tracks Engine `dev-develop` for the shared
 cinematic route-validation API. `composer.lock` pins the published Engine
 revision used by local tests and CI.
 
+`dev-develop` is for unreleased integration. Before publishing an Editor
+release, require a compatible released Engine version, refresh the lockfile,
+and verify a clean Console installation with Composer's default stable
+dependency settings.
+
 Install and verify from the `editor` repo:
 
 ```bash
@@ -106,6 +111,14 @@ composer analyse
 Set `ICHILOTO_GAME_SRC=/path/to/game` to include a game project in the
 production-verification tests. `docs/manual.md` is covered by
 `tests/Unit/ManualCoverageTest.php`; registered keybindings must be documented.
+
+For layered-map integration tests against an unpublished sibling Engine,
+set `ICHILOTO_ENGINE_SRC=/path/to/engine`. The test bootstrap prepends that
+checkout's source directory, including in isolated data-evaluation children;
+it does not modify `vendor`, dependency versions or the lockfile.
+Use `vendor/bin/phpstan analyse -c tests/phpstan-engine.php
+--autoload-file=tests/bootstrap.php` with the same environment to analyse
+against that checkout instead of the installed Engine sources.
 
 ## Project Links
 

@@ -10,7 +10,7 @@ use Ichiloto\Editor\Database\RecordSchemaCatalog;
  * Copies the real project's authored items.php into a throwaway project.
  *
  * The point of these tests is the actual authored source -- named arguments,
- * fully qualified classes, nested constructors, emoji icons -- not a
+ * imported or fully qualified classes, nested constructors, emoji icons -- not a
  * simplified stand-in, so the file is copied rather than written.
  *
  * @return array{0: string, 1: string}|null The project root and items path.
@@ -63,15 +63,20 @@ it('changes one authored value and leaves every other byte alone', function () {
         }
     }
 
+    preg_match('/\bnew[ \t]+[^\s(]+[ \t]*\(/', $before, $authoredItemConstructor);
+    preg_match('/equipmentType:[^\r\n]+/', $before, $authoredEquipmentType);
+    expect($authoredItemConstructor)->not->toBe([])
+        ->and($authoredEquipmentType)->not->toBe([]);
+
     // Exactly one line differs, and it is the one asked for.
     expect($afterLines)->toHaveCount(count($beforeLines))
         ->and($changed)->toHaveCount(1)
         ->and(trim($changed[0]))->toBe('price: 55,')
         // The authored spelling of everything else survives.
-        ->and($after)->toContain("new \\Ichiloto\\Engine\\Entities\\Inventory\\Items\\Item(")
+        ->and($after)->toContain($authoredItemConstructor[0])
         ->and($after)->toContain("id: 'item.s-potion',")
         ->and($after)->toContain('use Ichiloto\Engine\Entities\Effects\HPRecoveryEffect;')
-        ->and($after)->toContain('equipmentType: \Ichiloto\Engine\Entities\Enumerations\WeaponType::SWORD,')
+        ->and($after)->toContain($authoredEquipmentType[0])
         // The file is still PHP, and still the same list of definitions.
         ->and(PhpSourceDocument::parse($after)->entryCount())->toBe(PhpSourceDocument::parse($before)->entryCount());
 
@@ -131,10 +136,13 @@ it('edits a weapon inside its nested constructor without touching the others', f
         static fn(?string $line): bool => $line !== null,
     ));
 
+    preg_match('/parameterChanges:[ \t]*new[ \t]+[^\s(]+[ \t]*\(/', $before, $authoredParameterConstructor);
+    expect($authoredParameterConstructor)->not->toBe([]);
+
     expect($changed)->toHaveCount(1)
         ->and(trim($changed[0]))->toBe('attack: 9,')
         // The nested constructor itself is untouched, not rebuilt.
-        ->and($after)->toContain('parameterChanges: new \Ichiloto\Engine\Entities\ParameterChanges(');
+        ->and($after)->toContain($authoredParameterConstructor[0]);
 
     $reloaded = inventoryDatabase($root, 'weapons');
     expect($reloaded->getRecordByIndex(0)?->get('parameterChanges.attack'))->toBe(9);
@@ -223,6 +231,8 @@ it('reads, replaces, adds and removes one argument at a time', function () {
     // A single-line call takes an argument inline.
     $inline = $document->withArgument(1, 'sellable', 'false');
     expect($inline->argumentSource(1, 'sellable'))->toBe('false')
+        ->and($inline->source)->toContain('new Item(')
+        ->and($inline->source)->toContain('new \Ichiloto\Engine\Entities\Inventory\Items\Item(')
         ->and($inline->source)->toContain("price: 80, sellable: false)");
 });
 

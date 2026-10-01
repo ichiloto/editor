@@ -11,6 +11,7 @@ use Throwable;
 
 use Ichiloto\Editor\History\TracksPersistedState;
 use Ichiloto\Editor\ProjectDirectoryContext;
+use Ichiloto\Editor\ProjectConfig;
 use Ichiloto\Editor\Inspector\InputControl;
 use Ichiloto\Editor\Inspector\InputControlType;
 use RuntimeException;
@@ -30,7 +31,7 @@ use RuntimeException;
  */
 final class ProjectRecordDatabase
 {
-    use TracksPersistedState;
+    use TracksPersistedState { isDirty as private isRecordStateDirty; }
 
     /**
      * @param RecordSchema $schema The category schema.
@@ -39,7 +40,6 @@ final class ProjectRecordDatabase
      * @param PhpDataFile|null $file The backing file, for single-file categories.
      * @param bool $isDirty Whether structural changes are unsaved.
      * @param string|null $readOnlyReason Why the category cannot be written.
-     * @param mixed $rootPayload The whole config payload, for CONFIG_SUBTREE storage.
      * @param string[] $stagedDeletions Record files to unlink on the next save.
      */
     private function __construct(
@@ -49,10 +49,10 @@ final class ProjectRecordDatabase
         private ?PhpDataFile $file = null,
         bool $isDirty = false,
         private ?string $readOnlyReason = null,
-        private mixed $rootPayload = null,
         private array $stagedDeletions = [],
         private ?\Closure $writeBack = null,
         private ?string $projectRoot = null,
+        private ?ProjectConfig $config = null,
     ) {
         if ($schema->storage === RecordStorage::LIST_FILE && $schema->projection === null) {
             // What the file declares for each record -- the identity it is
@@ -256,7 +256,7 @@ final class ProjectRecordDatabase
      * @param RecordSchema $schema The category schema.
      * @return self
      */
-    public static function fromProject(string $projectRoot, RecordSchema $schema): self
+    public static function fromProject(string $projectRoot, RecordSchema $schema, ?ProjectConfig $config = null): self
     {
         // The categories evaluate authored files that construct engine
         // objects, and creating an entry constructs them too. The runtime
@@ -269,7 +269,7 @@ final class ProjectRecordDatabase
         return match ($schema->storage) {
             RecordStorage::LIST_FILE => self::loadListFile($path, $schema, $projectRoot),
             RecordStorage::DIRECTORY => self::loadDirectory($path, $schema, $projectRoot),
-            RecordStorage::CONFIG_SUBTREE => self::loadConfigSubtree($path, $schema, $projectRoot),
+            RecordStorage::CONFIG_SUBTREE => self::loadConfigSubtree($path, $schema, $projectRoot, $config),
             RecordStorage::FILE_LISTING => self::loadFileListing($path, $schema),
             RecordStorage::MAP_OWNED => throw new RuntimeException('Map-owned records are built over their owner, not loaded from a path.'),
         };
@@ -321,6 +321,17 @@ final class ProjectRecordDatabase
     public function isEditable(): bool
     {
         return $this->readOnlyReason === null;
+    }
+
+    public function isDirty(): bool
+    {
+        if ($this->config !== null) {
+            foreach ($this->records as $record) {
+                if ($record->isDirty()) { return true; }
+            }
+            return false;
+        }
+        return $this->isRecordStateDirty();
     }
 
     /**
@@ -435,11 +446,14 @@ final class ProjectRecordDatabase
         }
 
         $isEditable = $this->isEditable() && $record->isEditable();
+        $configIssue = $this->config?->getFieldIssue($record->getDisplayValue('path'));
+        $isEditable = $isEditable && $configIssue === null;
         $fields = [];
 
         foreach ($this->schema->fieldsFor($record->toArray()) as $field) {
             $fields[] = self::describeField($field, self::displayValue($field, $record->get($field->key)), $field->key, $isEditable);
         }
+        if ($configIssue !== null) { $fields[] = ['label' => 'Read-only', 'value' => $configIssue, 'editable' => false]; }
 
         foreach ($this->schema->commandLists as $listKey => $commandList) {
             // A record-level command list (an NPC's inline script) is a
@@ -617,6 +631,9 @@ final class ProjectRecordDatabase
 
         if (! $record instanceof ProjectRecord || ! $this->isEditable() || ! $record->isEditable()) {
             return;
+        }
+        if ($this->config !== null && ($issue = $this->config->getFieldIssue($record->getDisplayValue('path'))) !== null) {
+            throw new \Ichiloto\Editor\Cutscenes\Source\SourcePreservationRefusal($issue);
         }
 
         $subList = $this->schema->subList;
@@ -1157,6 +1174,10 @@ final class ProjectRecordDatabase
         if (! $this->isEditable()) {
             throw new RuntimeException(sprintf('%s is read-only: %s.', $this->schema->entryNoun, $this->readOnlyReason));
         }
+        if ($this->config !== null) {
+            $this->config->save();
+            return;
+        }
 
         if (! $this->isDirty()) {
             // Nothing diverges from the last save; writing would only
@@ -1174,7 +1195,7 @@ final class ProjectRecordDatabase
 
         match ($this->schema->storage) {
             RecordStorage::DIRECTORY => $this->saveDirectory(),
-            RecordStorage::CONFIG_SUBTREE => $this->saveConfigSubtree(),
+            RecordStorage::CONFIG_SUBTREE => null,
             RecordStorage::FILE_LISTING => null,
             RecordStorage::MAP_OWNED => $this->writeBack !== null
                 ? ($this->writeBack)(array_map(static fn(ProjectRecord $record): array|object => $record->toArray(), $this->getRecords()))
@@ -1275,29 +1296,11 @@ final class ProjectRecordDatabase
      * @param RecordSchema $schema The category schema.
      * @return self
      */
-    private static function loadConfigSubtree(string $path, RecordSchema $schema, ?string $projectRoot = null): self
+    private static function loadConfigSubtree(string $path, RecordSchema $schema, ?string $projectRoot = null, ?ProjectConfig $config = null): self
     {
-        $file = PhpDataFile::load($path, $projectRoot);
-        $payload = is_array($file->payload) ? $file->payload : [];
-        $records = [];
-
-        foreach ($schema->configPath as $root) {
-            if (! is_array($payload[$root] ?? null)) {
-                continue;
-            }
-
-            foreach (self::flattenLeaves($payload[$root], $root) as $leafPath => $value) {
-                $records[] = new ProjectRecord(['path' => $leafPath, 'value' => $value]);
-            }
-        }
-
-        $reason = $schema->isAlwaysReadOnly ? $schema->readOnlyNote : $file->readOnlyReason;
-
-        if ($reason === null && ! $file->exists) {
-            $reason = sprintf('%s does not exist in this project', basename($path));
-        }
-
-        return new self($schema, $path, $records, $file, readOnlyReason: $reason, rootPayload: $payload);
+        $config ??= new ProjectConfig($projectRoot ?? dirname($path));
+        return new self($schema, $path, $config->getTermRecords($schema->configPath),
+            readOnlyReason: $schema->isAlwaysReadOnly ? $schema->readOnlyNote : $config->getReadOnlyReason(), config: $config);
     }
 
     /**
@@ -1425,35 +1428,6 @@ final class ProjectRecordDatabase
         }
 
         return $normalized;
-    }
-
-    /**
-     * Flattens a nested config subtree into dotted leaf paths.
-     *
-     * @param array<string, mixed> $tree The subtree.
-     * @param string $prefix The path prefix.
-     * @return array<string, mixed> Leaf values keyed by dotted path.
-     */
-    private static function flattenLeaves(array $tree, string $prefix): array
-    {
-        $leaves = [];
-
-        foreach ($tree as $key => $value) {
-            $path = $prefix . '.' . $key;
-
-            if (is_array($value) && $value !== []) {
-                $leaves += self::flattenLeaves($value, $path);
-                continue;
-            }
-
-            if (is_array($value) || is_object($value)) {
-                continue;
-            }
-
-            $leaves[$path] = $value;
-        }
-
-        return $leaves;
     }
 
     /**
@@ -2304,33 +2278,6 @@ final class ProjectRecordDatabase
     }
 
     /**
-     * Writes edited terms back into the project config file.
-     *
-     * @return void
-     */
-    private function saveConfigSubtree(): void
-    {
-        if (! $this->file instanceof PhpDataFile) {
-            throw new RuntimeException('No backing config file to save.');
-        }
-
-        $payload = is_array($this->rootPayload) ? $this->rootPayload : [];
-
-        foreach ($this->records as $record) {
-            $path = $record->getDisplayValue('path');
-
-            if ($path === '') {
-                continue;
-            }
-
-            $payload = self::writeNested($payload, explode('.', $path), $record->get('value'));
-        }
-
-        $this->file->save($payload);
-        $this->rootPayload = $payload;
-    }
-
-    /**
      * Applies one sub-list field edit.
      *
      * @param ProjectRecord $record The owning record.
@@ -2358,6 +2305,7 @@ final class ProjectRecordDatabase
                 explode('.', $field->key),
                 self::coerce($field, $rawValue),
             );
+            $entries[$entryIndex] = $subList->removeConflictingFields($entries[$entryIndex], $field->key);
             $record->setSubList($subList->key, $entries);
             $this->touchState();
 
@@ -3686,6 +3634,7 @@ final class ProjectRecordDatabase
             }
 
             $written = self::writeNested($entry, explode('.', $field->key), self::coerce($field, $rawValue));
+            $written = $subList->removeConflictingFields($written, $field->key);
 
             if ($field->key === $subList->variantKey && $written !== null) {
                 $written = self::withoutStaleVariantFields($subList, $entry, $written);

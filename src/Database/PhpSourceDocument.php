@@ -188,6 +188,72 @@ final class PhpSourceDocument
     }
 
     /**
+     * Edits a constructor with an explicitly known signature, including positional arguments.
+     * Unknown calls and argument unpacking are refused rather than assigned guessed positions.
+     *
+     * @param list<string> $parameters Constructor parameter names in declaration order.
+     */
+    public function getWithConstructorArgument(int $entryIndex, string $name, string $literal, array $parameters): self
+    {
+        return $this->getMappedConstructor($entryIndex, $name, $parameters)->withArgument($entryIndex, $name, $literal);
+    }
+
+    /** Reads a named or positional argument using a known constructor signature. @param list<string> $parameters */
+    public function getConstructorArgumentSource(int $entryIndex, string $name, array $parameters): ?string
+    {
+        return $this->getMappedConstructor($entryIndex, $name, $parameters)->argumentSource($entryIndex, $name);
+    }
+
+    /** Removes an optional argument without shifting any later positional arguments. @param list<string> $parameters */
+    public function getWithoutConstructorArgument(int $entryIndex, string $name, array $parameters): self
+    {
+        $document = $this->getMappedConstructor($entryIndex, $name, $parameters);
+        $entry = $document->entries[$entryIndex];
+        $removed = $entry['arguments'][$name] ?? null;
+        if ($removed === null) { return $this; }
+        $source = $this->source;
+        foreach (array_reverse($entry['arguments'], true) as $parameter => $span) {
+            if ($span['start'] <= $removed['start'] || ($span['nameStart'] ?? null) !== $span['start']) { continue; }
+            $source = substr($source, 0, $span['start']) . $parameter . ': ' . substr($source, $span['start']);
+        }
+        return self::parse($source)->getMappedConstructor($entryIndex, $name, $parameters)->withoutArgument($entryIndex, $name);
+    }
+
+    /** @param list<string> $parameters */
+    private function getMappedConstructor(int $entryIndex, string $name, array $parameters): self
+    {
+        if (! $this->isConstructorEntry($entryIndex) || ! in_array($name, $parameters, true)) {
+            throw new RuntimeException('Cannot edit an unknown constructor or parameter.');
+        }
+
+        $entries = $this->entries;
+        $entry = $entries[$entryIndex];
+        $tokens = self::tokenize($this->source);
+        $open = $close = null;
+        foreach ($tokens as $index => $token) {
+            if ($token['offset'] === $entry['open']) { $open = $index; }
+            if ($token['offset'] === $entry['close']) { $close = $index; }
+        }
+        if ($open === null || $close === null) {
+            throw new RuntimeException('Cannot locate the authored constructor.');
+        }
+
+        $arguments = self::readArguments($tokens, $open, $close);
+        foreach ($arguments['positions'] as $position => $span) {
+            $parameter = $parameters[$position] ?? null;
+            if ($parameter === null || isset($arguments['named'][$parameter]) || $span['unpacked']) {
+                throw new RuntimeException('Cannot safely map positional constructor arguments.');
+            }
+            unset($span['unpacked']);
+            $entry['arguments'][$parameter] = $span;
+        }
+        $entry['positional'] = false;
+        $entries[$entryIndex] = $entry;
+
+        return new self($this->source, $entries, $this->arrayClose);
+    }
+
+    /**
      * @var string The literal an insertion is writing, while it is writing it.
      */
     private string $pendingLiteral = '';
@@ -211,6 +277,21 @@ final class PhpSourceDocument
         $start = $span['start'];
         $end = $span['end'];
         $source = $this->source;
+
+        // A comment may separate the value from its comma. Keep the comment,
+        // but remove the separator as well as the argument it belonged to.
+        $hasComment = false;
+        foreach (self::tokenize($source) as $token) {
+            if ($token['offset'] < $end) { continue; }
+            if (in_array($token['id'], [T_COMMENT, T_DOC_COMMENT], true)) { $hasComment = true; }
+            if (self::isSkippable($token)) { continue; }
+            if ($hasComment && $token['text'] === ',') {
+                return self::parse(substr($source, 0, $start)
+                    . substr($source, $end, $token['offset'] - $end)
+                    . substr($source, $token['offset'] + 1));
+            }
+            break;
+        }
 
         // Take the separator and the blank line the argument occupied with
         // it, so removing one never leaves a stray comma or an empty line.
@@ -268,18 +349,49 @@ final class PhpSourceDocument
             $lines[] = sprintf('%s%s: %s,', $inner, $name, $literal);
         }
 
-        $lines[] = $indent . '),';
-        $block = implode("\n", $lines) . "\n";
+        $lines[] = $indent . ')';
+
+        return $this->getWithEntrySource(ltrim(implode("\n", $lines)), $before);
+    }
+
+    /** Inserts a previously preserved or newly authored constructor without re-exporting its values. */
+    public function getWithEntrySource(string $source, ?int $before = null): self
+    {
+        return $this->getWithEntryBlockSource($this->entryIndent() . $source . ",\n", $before);
+    }
+
+    /** Inserts a preserved entry together with its leading and same-line trailing comments. */
+    public function getWithEntryBlockSource(string $block, ?int $before = null): self
+    {
+        if ($this->arrayClose === null) {
+            throw new RuntimeException('This file does not return an array to add an entry to.');
+        }
+        $candidate = self::parse("<?php return [\n" . $block . "\n];\n");
+        if ($candidate->entryCount() !== 1 || ! $candidate->isConstructorEntry(0)) {
+            throw new RuntimeException('Only a complete constructor entry can be inserted.');
+        }
+        $entry = $candidate->entries[0];
+        $hasComma = false;
+        foreach (self::tokenize('<?php ' . substr($candidate->source, $entry['close'] + 1)) as $token) {
+            if (self::isSkippable($token) || $token['id'] === T_OPEN_TAG) { continue; }
+            $hasComma = $token['text'] === ',';
+            break;
+        }
+        if (! $hasComma) {
+            $offset = $entry['close'] + 1 - strlen("<?php return [\n");
+            $block = substr($block, 0, $offset) . ',' . substr($block, $offset);
+        }
+        if (! str_ends_with($block, "\n")) { $block .= "\n"; }
 
         if ($before !== null) {
-            if (! $this->isConstructorEntry($before)) {
+            if (! isset($this->entries[$before])) {
                 throw new RuntimeException(sprintf(
                     'Cannot place an entry before %s: it is not a constructor call this editor can position against.',
                     $this->describeEntry($before),
                 ));
             }
 
-            $start = $this->entries[$before]['start'];
+            $start = $this->getEntryBounds($before)['start'];
             $lineBreak = strrpos(substr($this->source, 0, $start), "\n");
             $lineStart = $lineBreak === false ? 0 : $lineBreak + 1;
 
@@ -292,17 +404,26 @@ final class PhpSourceDocument
             // The neighbour shares a line with something before it. The new
             // entry still goes ahead of it, and the neighbour continues on a
             // fresh line at the entries' indentation.
-            return self::parse(substr($this->source, 0, $start) . ltrim($block) . $indent . substr($this->source, $start));
+            return self::parse(substr($this->source, 0, $start) . ltrim($block) . $this->entryIndent() . substr($this->source, $start));
         }
 
         $beforeClose = substr($this->source, 0, $this->arrayClose);
+        if ($this->entries !== []) {
+            foreach (array_reverse(self::tokenize($beforeClose)) as $token) {
+                if (self::isSkippable($token)) { continue; }
+                if ($token['text'] !== ',') {
+                    $offset = $token['offset'] + strlen($token['text']);
+                    $beforeClose = substr($beforeClose, 0, $offset) . ',' . substr($beforeClose, $offset);
+                }
+                break;
+            }
+        }
         $after = substr($this->source, $this->arrayClose);
         $trimmed = rtrim($beforeClose);
-        $needsComma = ! str_ends_with($trimmed, ',') && ! str_ends_with($trimmed, '[');
         $closingIndent = substr($beforeClose, strrpos($beforeClose, "\n") === false ? 0 : strrpos($beforeClose, "\n") + 1);
 
         return self::parse(
-            $trimmed . ($needsComma ? ',' : '') . "\n" . $block . (trim($closingIndent) === '' ? $closingIndent : '') . $after,
+            $trimmed . "\n" . $block . (trim($closingIndent) === '' ? $closingIndent : '') . $after,
         );
     }
 
@@ -328,28 +449,48 @@ final class PhpSourceDocument
             ));
         }
 
+        $bounds = $this->getEntryBounds($entryIndex);
+        return self::parse(substr($this->source, 0, $bounds['start']) . substr($this->source, $bounds['end']));
+    }
+
+    public function getEntryBlockSource(int $entryIndex): ?string
+    {
+        if (! $this->isConstructorEntry($entryIndex)) { return null; }
+        $bounds = $this->getEntryBounds($entryIndex);
+        return substr($this->source, $bounds['start'], $bounds['end'] - $bounds['start']);
+    }
+
+    /** @return array{start: int, end: int} */
+    private function getEntryBounds(int $entryIndex): array
+    {
         $entry = $this->entries[$entryIndex];
+        $tokens = self::tokenize($this->source);
         $start = $entry['start'];
+        foreach (array_reverse($tokens) as $token) {
+            if ($token['offset'] >= $entry['start']) { continue; }
+            if ($token['id'] === T_WHITESPACE) { continue; }
+            if (! in_array($token['id'], [T_COMMENT, T_DOC_COMMENT], true)) { break; }
+            $lineStart = strrpos(substr($this->source, 0, $token['offset']), "\n");
+            $lineStart = $lineStart === false ? 0 : $lineStart + 1;
+            if (trim(substr($this->source, $lineStart, $token['offset'] - $lineStart)) !== '') { break; }
+            $start = $token['offset'];
+        }
+        $lineStart = strrpos(substr($this->source, 0, $start), "\n");
+        $lineStart = $lineStart === false ? 0 : $lineStart + 1;
+        if (trim(substr($this->source, $lineStart, $start - $lineStart)) === '') { $start = $lineStart; }
+
         $end = $entry['close'] + 1;
-        $source = $this->source;
-
-        while ($end < strlen($source) && ($source[$end] === ' ' || $source[$end] === "\t")) {
-            $end++;
+        foreach ($tokens as $token) {
+            if ($token['offset'] < $end) { continue; }
+            if ($token['id'] === T_WHITESPACE) {
+                $newline = strpos($token['text'], "\n");
+                $end = $token['offset'] + ($newline === false ? strlen($token['text']) : $newline + 1);
+                if ($newline !== false) { break; }
+            } elseif ($token['text'] === ',' || in_array($token['id'], [T_COMMENT, T_DOC_COMMENT], true)) {
+                $end = $token['offset'] + strlen($token['text']);
+            } else { break; }
         }
-
-        if ($end < strlen($source) && $source[$end] === ',') {
-            $end++;
-        }
-
-        if ($end < strlen($source) && $source[$end] === "\n") {
-            $end++;
-
-            while ($start > 0 && ($source[$start - 1] === ' ' || $source[$start - 1] === "\t")) {
-                $start--;
-            }
-        }
-
-        return self::parse(substr($source, 0, $start) . substr($source, $end));
+        return ['start' => $start, 'end' => $end];
     }
 
     /**
@@ -424,6 +565,16 @@ final class PhpSourceDocument
         $indent = $this->argumentIndent($entry);
         $before = substr($this->source, 0, $close);
         $after = substr($this->source, $close);
+        if ($entry['arguments'] !== []) {
+            $lastEnd = max(array_column($entry['arguments'], 'end'));
+            $hasComma = false;
+            foreach (self::tokenize('<?php ' . substr($this->source, $lastEnd, $close - $lastEnd)) as $token) {
+                if ($token['text'] === ',') { $hasComma = true; }
+            }
+            if (! $hasComma) {
+                $before = substr($before, 0, $lastEnd) . ',' . substr($before, $lastEnd);
+            }
+        }
         $trimmed = rtrim($before);
         $isMultiline = str_contains(substr($this->source, $entry['open'], $close - $entry['open']), "\n");
 
@@ -433,13 +584,10 @@ final class PhpSourceDocument
         }
 
         if (! $isMultiline) {
-            return $trimmed . sprintf(', %s: %s', $name, $literal) . $after;
+            return $trimmed . sprintf(' %s: %s', $name, $literal) . $after;
         }
 
-        $needsComma = ! str_ends_with($trimmed, ',') && ! str_ends_with($trimmed, '(');
-
         return $trimmed
-            . ($needsComma ? ',' : '')
             . "\n" . $indent . sprintf('%s: %s,', $name, $literal) . "\n"
             . $this->closingIndent($entry)
             . $after;
@@ -776,12 +924,13 @@ final class PhpSourceDocument
      * @param array<int, array{id: int, text: string, offset: int}> $tokens The tokens.
      * @param int $open The opening parenthesis token index.
      * @param int $close The closing parenthesis token index.
-     * @return array{named: array<string, array{start: int, end: int, nameStart: int}>, positional: bool}
+     * @return array{named: array<string, array{start: int, end: int, nameStart: int}>, positional: bool, positions: list<array{start: int, end: int, nameStart: int, unpacked: bool}>}
      */
     private static function readArguments(array $tokens, int $open, int $close): array
     {
         $named = [];
         $positional = false;
+        $positions = [];
         $index = $open + 1;
 
         while ($index < $close) {
@@ -826,12 +975,19 @@ final class PhpSourceDocument
                     'end' => self::trimmedEnd($tokens, $index, $end, $valueEnd),
                     'nameStart' => $tokens[$nameIndex]['offset'],
                 ];
+            } else {
+                $positions[] = [
+                    'start' => $valueStart,
+                    'end' => self::trimmedEnd($tokens, $index, $end, $valueEnd),
+                    'nameStart' => $tokens[$nameIndex]['offset'],
+                    'unpacked' => $tokens[$index]['id'] === T_ELLIPSIS,
+                ];
             }
 
             $index = $end;
         }
 
-        return ['named' => $named, 'positional' => $positional];
+        return ['named' => $named, 'positional' => $positional, 'positions' => $positions];
     }
 
     /**

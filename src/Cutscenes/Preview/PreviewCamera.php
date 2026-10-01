@@ -6,6 +6,7 @@ namespace Ichiloto\Editor\Cutscenes\Preview;
 
 use Ichiloto\Engine\Core\Rect;
 use Ichiloto\Engine\Core\Vector2;
+use Ichiloto\Engine\Field\MapLayerSet;
 use Ichiloto\Engine\IO\Console\TerminalText;
 use Ichiloto\Engine\Rendering\Camera;
 
@@ -81,6 +82,11 @@ final class PreviewCamera extends Camera
 
             $this->draw(TerminalText::padRight($content, $visibleWidth), (int) $renderOffset->x, (int) $renderOffset->y + $row);
         }
+    }
+
+    public function renderLayeredMap(MapLayerSet $layers): void
+    {
+        $this->renderMap();
     }
 
     public function draw(iterable|string $content, int $x = 0, int $y = 0): void

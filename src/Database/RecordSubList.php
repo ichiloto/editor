@@ -35,6 +35,7 @@ final readonly class RecordSubList
      * @param array<string, array<string, string>> $variantArms Command lists
      * only some variants carry, variant => (key => label): a cinematic
      * `sequence` owns its `commands`, a `choice` its `cancel` arm.
+     * @param list<list<string>> $exclusiveFields Field groups where authoring one removes the others.
      */
     public function __construct(
         public string $key,
@@ -47,7 +48,21 @@ final readonly class RecordSubList
         public array $nestedLists = [],
         public array $commandArms = [],
         public array $variantArms = [],
+        public array $exclusiveFields = [],
     ) {
+    }
+
+    /** @param array<string, mixed> $entry @return array<string, mixed> */
+    public function removeConflictingFields(array $entry, string $editedField): array
+    {
+        if (! array_key_exists($editedField, $entry)) { return $entry; }
+        foreach ($this->exclusiveFields as $fields) {
+            if (! in_array($editedField, $fields, true)) { continue; }
+            foreach ($fields as $field) {
+                if ($field !== $editedField) { unset($entry[$field]); }
+            }
+        }
+        return $entry;
     }
 
     /**

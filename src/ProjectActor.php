@@ -5,7 +5,12 @@ declare(strict_types=1);
 namespace Ichiloto\Editor;
 
 use Ichiloto\Editor\History\TracksPersistedState;
-use Ichiloto\Editor\IO\AtomicFile;
+use Ichiloto\Editor\Cutscenes\Source\ArraySourceWriter;
+use Ichiloto\Editor\Cutscenes\Source\PhpArraySourceDocument;
+use Ichiloto\Editor\Cutscenes\Source\SourceNode;
+use Ichiloto\Editor\Cutscenes\Source\SourcePreservationRefusal;
+use Ichiloto\Editor\Database\PhpDataFile;
+use Ichiloto\Editor\Storage\FileSetTransaction;
 
 use RuntimeException;
 
@@ -15,6 +20,13 @@ use RuntimeException;
 final class ProjectActor
 {
     use TracksPersistedState;
+
+    private ?string $establishedDefinitionId;
+    private readonly bool $loadedWithoutDefinitionId;
+    private ?string $originalSource = null;
+    private ?string $writtenSource = null;
+    /** @var array<string, mixed> */
+    private readonly array $originalPayload;
 
     /**
      * The sentinel option meaning "no class reference" in the editor picker.
@@ -30,6 +42,10 @@ final class ProjectActor
         private array $payload,
         bool $isDirty = false,
     ) {
+        $id = $this->getDefinitionId();
+        $this->establishedDefinitionId = $id === '' ? null : $id;
+        $this->loadedWithoutDefinitionId = ! array_key_exists('id', $this->getData());
+        $this->originalPayload = $payload;
         if (! $isDirty) {
             // Loaded from disk: the current content is the saved content.
             $this->captureBaseline();
@@ -50,11 +66,16 @@ final class ProjectActor
             throw new RuntimeException("Unable to parse {$path}.");
         }
 
-        return new self(
+        $actor = new self(
             id: pathinfo($path, PATHINFO_FILENAME),
             path: $path,
             payload: $payload,
         );
+        $source = file_get_contents($path);
+        if ($source === false) { throw new RuntimeException("Unable to read {$path}."); }
+        $actor->originalSource = $source;
+        $actor->writtenSource = $source;
+        return $actor;
     }
 
     /**
@@ -73,6 +94,7 @@ final class ProjectActor
             payload: [
                 'class' => 'Ichiloto\\Engine\\Entities\\Character',
                 'data' => [
+                    'id' => $id,
                     'name' => $name,
                     'description' => '',
                     'level' => 1,
@@ -251,16 +273,12 @@ final class ProjectActor
     /**
      * Returns the durable definition id a save resolves this actor by.
      *
-     * The engine falls back to the display name when a project has not
-     * declared one, which is why renaming an actor used to strand a save.
-     *
-     * @return string The id, or the name when none is declared.
+     * @return string The explicit id, or an empty string for an invalid legacy asset.
      */
     public function getDefinitionId(): string
     {
-        $id = trim(strval($this->getData()['id'] ?? ''));
-
-        return $id === '' ? $this->getName() : $id;
+        $id = $this->getData()['id'] ?? null;
+        return is_string($id) ? trim($id) : '';
     }
 
     /**
@@ -270,7 +288,7 @@ final class ProjectActor
      */
     public function hasDefinitionId(): bool
     {
-        return trim(strval($this->getData()['id'] ?? '')) !== '';
+        return $this->getDefinitionId() !== '';
     }
 
     /**
@@ -496,6 +514,21 @@ final class ProjectActor
      */
     public function setField(string $field, mixed $value): void
     {
+        if ($field === 'id') {
+            $identity = trim((string) $value);
+            if ($identity === $this->getDefinitionId()) { return; }
+            if (($this->establishedDefinitionId !== null && $identity !== $this->establishedDefinitionId) || $identity === '') {
+                throw new RuntimeException('An actor id is permanent. Change the display name, not its identity.');
+            }
+            if ($this->establishedDefinitionId === null
+                && (! $this->loadedWithoutDefinitionId || $identity !== trim($this->getName()))) {
+                throw new RuntimeException('A legacy actor repair must freeze its current name as its permanent id.');
+            }
+            $this->establishedDefinitionId = $identity;
+        }
+        if ($field === 'name' && ! $this->hasDefinitionId()) {
+            throw new RuntimeException('Declare the existing actor identity before renaming this actor so references and saves remain valid.');
+        }
         if (! isset($this->payload['data']) || ! is_array($this->payload['data'])) {
             $this->payload['data'] = [];
         }
@@ -606,14 +639,64 @@ final class ProjectActor
      */
     public function save(): void
     {
-        $directory = dirname($this->path);
-
-        if (! is_dir($directory) && ! mkdir($directory, 0777, true) && ! is_dir($directory)) {
-            throw new RuntimeException("Unable to create {$directory}.");
+        $source = $this->getProposedSource();
+        $transaction = new FileSetTransaction(dirname($this->path));
+        $transaction->write($this->path, $source);
+        try {
+            $staged = $transaction->stage();
+            $this->validateStagedSource($staged[$this->path]);
+            $transaction->commit();
+        } catch (\Throwable $failure) {
+            $transaction->rollBack();
+            throw $failure;
         }
-
-        AtomicFile::write($this->path, $this->buildPersistedPayload());
+        $this->writtenSource = $source;
         $this->captureBaseline();
+    }
+
+    /** Preflights edits without writing or flattening authored PHP.
+     * @param array<string, mixed>|null $data Optional candidate for migration preflight.
+     */
+    public function getProposedSource(?array $data = null): string
+    {
+        $current = $this->payload;
+        if ($data !== null) { $current['data'] = $data; }
+        $disk = is_file($this->path) ? file_get_contents($this->path) : null;
+        if ($disk !== null && $disk !== $this->writtenSource) {
+            throw new RuntimeException("{$this->path} changed outside the editor; reload before saving.");
+        }
+        if ($this->originalSource !== null) {
+            $document = PhpArraySourceDocument::parse($this->originalSource);
+            if ($current !== $this->originalPayload && $document->nodeAt(['data'])?->kind !== SourceNode::ARRAY) {
+                throw new SourcePreservationRefusal("{$this->path}: Actor data is not an editable array literal; refusing to flatten its source.");
+            }
+            return ArraySourceWriter::rewrite($document, $this->originalPayload, $current)->source;
+        }
+        return "<?php\n\nreturn " . self::exportPhpValue($current) . ";\n";
+    }
+
+    /** Verifies the exact proposed file before a transaction installs it. */
+    public function validateStagedSource(string $path): void
+    {
+        $root = basename(dirname($this->path)) === 'Actors' ? dirname($this->path, 4) : dirname($this->path);
+        $evaluated = PhpDataFile::evaluateIsolated($path, $root);
+        if (PhpDataFile::valueFingerprint($evaluated) !== PhpDataFile::valueFingerprint($this->payload)) {
+            throw new RuntimeException("{$this->path} would not read back as the edited actor; nothing was written.");
+        }
+    }
+
+    /** Restores an authoring snapshot for undo/redo without allowing identity retargeting.
+     * @param array<string, mixed> $data
+     */
+    public function restoreData(array $data): void
+    {
+        $id = $data['id'] ?? null;
+        $isLegacyUndo = $this->loadedWithoutDefinitionId && ! array_key_exists('id', $data);
+        if (! $isLegacyUndo && $id !== $this->establishedDefinitionId) {
+            throw new RuntimeException('An actor id is permanent. Undo cannot retarget its identity.');
+        }
+        $this->payload['data'] = $data;
+        $this->touchState();
     }
 
     /**
@@ -621,10 +704,9 @@ final class ProjectActor
      */
     protected function buildPersistedPayload(): string
     {
-        return "<?php\n\nuse Ichiloto\\Engine\\Entities\\Character;\n\nreturn [\n"
-            . "  'class' => Character::class,\n"
-            . "  'data' => " . self::exportPhpValue($this->getData(), 1) . ",\n"
-            . "];\n";
+        // Fingerprint the editable state, including unsupported source shapes.
+        // Source-preservation refusals belong to preflight/save, not dirty checks.
+        return serialize($this->payload);
     }
 
     /**
@@ -632,7 +714,7 @@ final class ProjectActor
      *
      * @return array<string, mixed>
      */
-    private function getData(): array
+    public function getData(): array
     {
         $data = $this->payload['data'] ?? [];
 

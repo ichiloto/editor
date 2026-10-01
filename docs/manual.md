@@ -54,18 +54,18 @@ is what the code draws rather than a sketch of it:
  ┌─Assets [Focus]───────────────┐ ┌─Canvas─────────────────────┐ ┌─Inspector──────────────────────┐
  │ Maps                         │ │ Preview: test-map          │ │   Name: Test Map               │
  │ > test-map                   │ │ Test Map |  | 12 x 5 | vie │ │   Region:                      │
- │                              │ │ ############               │ │   Description: A tiny fixture  │
- │                              │ │ #  ~~~     #               │ │                map.            │
+ │                              │ │ ############               │ │   Kind: Not set                │
+ │                              │ │ #  ~~~     #               │ │   Description: A tiny fixture  │
+ │                              │ │ #          #               │ │                map.            │
  │                              │ │ #          #               │ │   Size                         │
- │                              │ │ #          #               │ │     X: 12                      │
- │                              │ │ ############               │ │     Y: 5                       │
+ │                              │ │ ############               │ │     X: 12                      │
+ │                              │ │                            │ │     Y: 5                       │
  │                              │ │                            │ │   Events · 1                   │
  │                              │ │                            │ │   Triggers · 0                 │
  │                              │ │                            │ │   Audio                        │
  │                              │ │                            │ │     Background Music: (None)   │
  │                              │ │                            │ │     Music Variants · None      │
- │                              │ │                            │ │   Encounters · off             │
- └─/:Filter  Del:Delete─────────┘ └─i:Paint  m:Map  e:Event────┘ └─Enter:Edit─────────────────────┘
+ └─/:Filter  Del:Delete─────────┘ └─i:Paint L:Layer ?:Help─────┘ └─Enter:Edit─────────────────────┘
  ┌─Status─────────────────────────────────────────────────────────────────────────────────────────┐
  │ Selected map: test-map | Focus: Assets | Mode: Map | Tool: Brush 1                             │
  │ Cursor: (0, 0) | Viewport: (0, 0) | Ready.                                                     │
@@ -78,6 +78,12 @@ is what the code draws rather than a sketch of it:
 - The `Status` footer carries the current selection, mode, active canvas tool,
   and, on its second line, the cursor, the viewport, and the most recent
   message.
+
+A message's colour says what happened: blue for an update, including every
+edit, which stays in memory until you save; green only when something reached
+disk (a save, or a command that writes files at once) or a check passed;
+yellow for a warning; red for an error. Edits never show green, so green
+always means saved, and the header's `*` shows what is still unsaved.
 
 Each panel writes its own keys into its bottom border, and shortens them on a
 narrow terminal rather than cutting one in half - so what a panel offers is
@@ -148,7 +154,8 @@ exist.
 `Esc` backs out exactly one level, everywhere:
 
 - a field edit returns to the pane
-- a pending canvas anchor is dropped, then a selection is cleared
+- a connected piece's anchor is dropped, then piece placement ends, a pending
+  canvas anchor is dropped, then a selection is cleared
 - a filter query is cleared before its list closes
 - an overlay or dialog closes
 - the Database screen closes
@@ -163,8 +170,8 @@ carries a trailing `*`.
 Controls:
 
 - `Up` / `Down`: move the selection
-- `Shift+A`: create a new map
-- `Shift+D`: duplicate the selected map
+- `Shift+A`: create a new map, asking its [kind](#map-kind) first
+- `Shift+D`: duplicate the selected map, kind included
 - `Delete`: delete the selected map (destructive confirmation)
 - `/`: filter the list incrementally
 - `Enter`: focus the canvas on the selected map
@@ -179,6 +186,265 @@ asks first and defaults to Cancel.
 
 ## Canvas Panel
 
+### Authored Layers
+
+The TUI edits the terminal experience. Maps with `layers/` show numbered
+gameplay (`NN.name.map.php`) layers and Events, with NPC overlays in their
+authoring context. Graphical decoration (`NN.name.deco.php`) never appears on
+the terminal canvas or in its layer selection, palette or inspector. In Normal
+mode, `L` opens the layer picker: the map's gameplay layers and Events, each
+marked visible or hidden and the one being edited, and last NPCs, which enters
+NPC mode. Type to filter, move with the
+arrows or `j` / `k`, and press `Enter` to edit that layer (`Esc` keeps the
+current one). The canvas title shows the layer being edited, and only that
+layer is painted. `[` and `]` still step to the previous or next layer, `v`
+toggles the selected layer's visibility, and `d` dims inactive layers. Spaces
+above the base show through. Visibility and dimming are session settings, not
+map data.
+
+The normal canvas is editable immediately: press `i` and paint terminal glyphs.
+The separate read-only terminal-preview toggle has been removed; there is no
+graphical-marker view to switch away from.
+
+Use `Ctrl+P` and choose a Layers action to create, rename or remove a gameplay
+layer. The TUI cannot create,
+select, rename or remove graphical decoration layers. New gameplay layers
+preserve each row's width, including ragged
+maps. Renaming retains its numeric order. If the actual resolved collisions would
+change, the rename dialog names the change and requires `y` confirmation;
+shared `collisions.php` is never changed. Removal is confirmed and undoable.
+Creating a layer on a legacy map explicitly moves its terrain into
+`layers/00.terrain.map.php` in the same save transaction; ordinary legacy
+saves keep the original layout.
+
+Gameplay and event layers use the same Paint/Normal modes, tools, mouse strokes,
+selection, colour, clipboard and undo. The layer inspector lists terminal layer
+visibility only. Ordinary glyph edits do not rewrite graphical decoration.
+Glyph-keyed crop tables (`tiles2d`) are no longer read by the Engine or edited
+here; a map that still has one keeps its bytes, and validation warns that it is
+no longer read. Canonical source safety, collision and grid checks remain in
+force for terminal edits. Untouched layer files are never written; unchanged
+rows retain their authored bytes, and all changed files are saved or rolled
+back together.
+
+### Inserting rows and columns
+
+In Map mode, `Ctrl+P` offers **Map: Insert rows above the cursor** and
+**Map: Insert columns left of the cursor**. Both first refuse while the project
+has unsaved changes: save or undo them first. A prompt asks how many to insert
+(a whole number of at least 1, `1` by default; `Up` / `Down` step it, `Enter`
+plans, `Esc` cancels). Inserting `N` rows at the cursor's row moves everything
+from that row down by `N`; inserting columns moves everything from the cursor's
+column right. The map grows by `N`.
+
+Nothing is written until you confirm. The confirmation lists every file the
+insertion writes, then every coordinate it could not rewrite, as
+`Hand edit: file path` with the reason, then whether saves follow. `Enter` on
+**Write N files now** writes them all at once, not on Save; `Esc` or **Cancel**
+leaves every file unchanged. One `Ctrl+Z` restores every written file byte for
+byte and reloads the workspace; `Ctrl+Y` writes them again.
+
+What moves, when it is in the map's space and at or beyond the line:
+
+- every grid: gameplay and decoration layers, the event layer (so event areas
+  follow) and the tile layers, whose new cells are empty (`0`); styled cells
+  keep their colour and rows that only move keep their bytes;
+- the map's NPC positions and wander areas (an area straddling the line
+  stretches), bed spawn points, legacy trigger areas and explicit event areas;
+- spawn points of transfers into the map from any map, legacy triggers into
+  it, and `startingPositions` in `assets/Data/system.php` that start on it;
+- script coordinates on the map: `move_player`, `move_route` waypoints (only
+  the axes a waypoint names; `steps` and `retrace` are relative), `camera` and
+  `field_animation` position targets, `stage_actor`, and `transfer` into the
+  map. Scripts start on their map; after a `transfer` elsewhere, later commands
+  are in that map's space and stay;
+- reusable scripts in `assets/Events/` started only from this map, and
+  cutscenes whose start map it is (their cast, script and finalizer).
+
+A regional `station` and tile-layer `offset` values are not map cells and never
+move.
+
+What is reported instead of rewritten: a coordinate written as a PHP expression
+or variable, or inside a list built with a spread (such as generated NPCs); a
+file that is not one returned array literal; a coordinate in a reusable script
+or cutscene that may run on this map or another one. The editor never guesses
+or flattens authored PHP; move those by hand after writing.
+
+Saves follow through the project's `assets/Data/save-compatibility.php`: the
+insertion raises `contentVersion` by one and appends a `mapShifts` step, so a
+saved player position on the map moves too. A project without that manifest is
+told that existing saves are not migrated.
+
+### Pieces
+
+A map offers the pieces of its [kind](#map-kind)'s tileset (see
+[Map Graphics](#map-graphics)): whole items such as a bed or a table, so a map
+is built from items instead of single glyphs. In Normal mode on the canvas, `P`
+opens the piece picker for the layer being edited: only the pieces whose glyphs
+go on that layer, titled after it (`Fixtures piece`), one entry per piece with
+its footprint in cells and the tile layers it writes, for example
+`1 x 2 · tiles: furniture`, or `connected` in place of the footprint for a
+[connected piece](#connected-pieces) such as a wall (`connected · tiles:
+walls`). In Event mode it offers the pieces of the layer Map mode edits, and
+choosing one returns to Map mode. Move with the arrows or `j` / `k`, press `/`
+to filter by name, `Enter` to choose and `Esc` to cancel. The command palette
+offers the same picker as `Pieces: Choose a piece to place`.
+
+`T` in Normal mode (or `Pieces: Draw tiles for this layer's glyphs` in the
+command palette) draws the tiles for the glyphs already on the layer being
+edited, as if each were painted again: every glyph a piece draws gets that
+piece's tiles, so a map authored before its pieces existed, or before it had
+a kind, draws correctly graphically without a per-map script. A glyph that
+could be several pieces asks which, as painting does, and the answer applies
+wherever its neighbours do not decide. The glyphs themselves, and glyphs no
+piece draws, are left as they are. It is one undo step, saved with the map.
+
+When the layer being edited has no pieces, the status line names the layers
+that do. When the map has no kind yet, or its tileset has no pieces or cannot
+be loaded, it says so and nothing opens. Placing a piece never chooses a map's
+tileset: it comes from the map's kind, set in the Inspector.
+
+Choosing a piece starts placing it, in Map mode. The canvas previews the
+piece's glyphs in reverse video with its top-left cell at the cursor, and the
+canvas border shows `PIECE <name>  Enter:Stamp  Esc:Done`. The arrows move the
+piece; a Normal-mode click moves the cursor, and the piece with it, to the
+clicked cell. `Enter` stamps the piece and keeps it for the next stamp; `Esc`
+ends placement. Entering Paint mode, choosing a tool or a layer, switching to
+Event or NPC mode and selecting another map also end it.
+
+A stamp is one undo step. It writes the piece's glyphs on the gameplay layer
+the piece names, whichever layer the canvas is editing, in the brush colour as
+painting does, and its tiles on the tile layers it names. A space glyph and a
+`0` tile leave their cells as they are, and every other cell takes the piece's
+whole tile. A field cell holds one whole RPG Maker tile, so an entry naming
+half a tile (`42L`) is refused: in a tileset piece the canvas offers no pieces
+and says which entry, in a tile layer the stamp changes nothing, and
+validation reports both. A tile layer the map does not have yet is created as
+`graphics/NN.name.tiles.php`, empty elsewhere, in the order of the gameplay
+layer it belongs to: before the first tile layer of a gameplay layer drawn
+above its own, so terrain tiles draw under building tiles and those under
+fixtures, and otherwise after them all. It takes the free order just below
+that layer; when there is none, that layer and every later one move up one
+order, and saving writes their new files and removes the old ones. The terminal never shows the tiles, but a map built from pieces
+draws correctly graphically without a second pass. A stamp that cannot be made
+whole changes nothing: the map has no gameplay layer with the piece's name,
+the footprint does not fit inside the map at the cursor (ragged rows
+included), or a tile layer it names cannot be read or does not match the map.
+Undo and redo restore glyphs and tiles exactly. `Ctrl+S` saves the changed
+terminal and tile layer files in the map's one transaction; untouched files
+are not written, and a changed tile layer is rewritten as a literal nowdoc
+that keeps its leading comment.
+
+A project adds pieces to its tileset (`assets/Data/Tilesets/<id>.php`) under
+`pieces`, keyed by id, each with a `name`, the gameplay `layer` for its
+`glyphs` (rows of one-cell characters) and optional `tiles` keyed by tile
+layer name, with rows over the same footprint:
+`'bed' => ['name' => 'Bed', 'layer' => 'fixtures', 'glyphs' => ['=', '='], 'tiles' => ['furniture' => ['32', '40']]]`.
+The Engine's `docs/graphical-field.md` (Pieces) holds the contract. Every
+stamp reads the tileset again, so the tileset stays the one source of pieces.
+
+#### Connected pieces
+
+A connected piece (`'connects' => 'lines'`), such as a wall or a fence, is
+drawn rather than stamped, one cell per map cell, and joins the cells of the
+same piece beside it. A cell belongs to the piece when its glyph on the
+piece's gameplay layer is one of the piece's shape glyphs, so walls typed by
+hand join too, while other glyphs (a `_`, say) are left alone and do not join.
+Each cell takes a shape from the member cells beside it: joined only across it
+is `horizontal`, only down it is `vertical`, and anything else (a corner, a
+junction, a lone post) is a `corner`. A line's end cells are joined on one
+side only, so a wall drawn across reads `----`, not `+--+`.
+
+While a connected piece is placed, the canvas border shows
+`PIECE <name>  Enter:Draw  Del:Erase  Esc:Done`, and `Esc:Unanchor` while an
+anchor is set.
+
+- `Enter` with no anchor draws the cell at the cursor and anchors there.
+- `Enter` with an anchor draws from the anchor to the cursor: a straight line
+  when they share a row or a column, otherwise the outline of the rectangle
+  with the anchor and the cursor as opposite corners, which is a room. The
+  anchor then moves to the cursor, so the next `Enter` carries on from there.
+- The erase keys (`Backspace`, and `Delete`) erase the piece's cell under the
+  cursor. A cell that is not part of the piece is left alone, and the status
+  line says so.
+- `Esc` drops the anchor when one is set; otherwise it ends placement.
+
+The canvas previews the cells `Enter` would draw, each with the glyph it would
+take, in reverse video. Every draw or erase is one undo step. It writes the
+drawn cells, then reshapes every drawn cell and every member cell beside a
+drawn or erased cell: its glyph becomes its shape's glyph and its entry on each
+of the piece's tile layers becomes that shape's tile. So drawing a wall that
+meets another turns the meeting cell into a corner, and erasing a cell
+straightens the corners beside it. Drawn cells take the brush colour; reshaped
+cells keep theirs. An erased cell becomes a space on the gameplay layer and
+`0` on the piece's tile layers. A draw that reaches a cell beyond the map
+(ragged rows included) changes nothing, and neither does a piece whose
+gameplay layer the map lacks. A missing tile layer is created as for a stamp,
+and undo, redo and `Ctrl+S` work exactly as they do for stamps. The tileset
+lists a connected piece with one glyph per shape and one tile entry per tile
+layer, or one per shape:
+`'wall' => ['name' => 'Wall', 'layer' => 'buildings', 'connects' => 'lines', 'glyphs' => ['horizontal' => '-', 'vertical' => '|', 'corner' => '+'], 'tiles' => ['walls' => '5888']]`.
+An A4 wall top can be the one entry for every shape, since the autotile shapes
+its own edges.
+
+### Map Graphics
+
+A map's [kind](#map-kind) names its tileset in its data file
+(`'tileset' => 'interior'`, read from `assets/Data/Tilesets/interior.php`),
+and the map may keep RPG Maker tile layers in
+`graphics/NN.name.tiles.php`. A tile layer holds one tile identity per map
+cell, so each of its rows is exactly as wide as the map's row in terminal
+columns. The TUI never displays tiles or paints single tiles; painting them
+belongs to the GUI editor. It writes tiles only when it stamps a
+[piece](#pieces) or edits glyphs the tiles follow, and otherwise keeps them
+intact:
+
+- Tiles follow a gameplay layer's glyphs however they are edited: typing,
+  painting, erasing, the line, rectangle and fill tools, the mouse, cutting and
+  pasting. A glyph that leaves a cell takes the tiles of the piece it drew
+  there; a glyph that arrives draws its piece's tiles, in the same undo step.
+  A piece's tiles over blank cells, such as a sofa's back over its seat, go
+  with the glyph nearest them. When a glyph belongs to several pieces (`-` for
+  a chair facing north or south), the neighbours decide when they hold the
+  rest of one piece, such as the left half of a table beside the right;
+  otherwise the editor asks which piece it is, or No tiles, and Esc leaves the
+  map as it was. The brush remembers the answer for its glyph until a glyph is
+  typed again, and the eyedropper picks up the piece a glyph draws. Tiles no
+  piece accounts for, such as a floor under a wall, stay where they are.
+
+- Each tile layer moves with one gameplay layer: the one the map data names
+  (`'tileLayers' => ['floor' => ['movesWith' => 'buildings']]`), or else the
+  one whose tileset pieces write it, when only one does. Copying, cutting and
+  pasting a block on that gameplay layer carries its tiles cell for cell, in
+  the same undo step, so a moved chest or room keeps its art. Other tile
+  layers, and blocks on the event layer, leave tiles where they are.
+
+- Resizing the map crops or pads every tile layer with empty tiles (`0`) in the
+  same undo step and save as the terminal layers. A resized tile layer is
+  rewritten as a literal nowdoc that keeps its leading comment; an unchanged
+  one keeps its bytes. A resize is refused, changing nothing, while a tile
+  layer cannot be read or does not match the map.
+- Duplicating, moving and deleting a map take `graphics/` with it, in the same
+  transaction and rollback. Other files in `graphics/` are the author's and
+  stay.
+- A tile layer changed or added on disk after opening refuses the save, as
+  terminal layers do.
+
+Validation (`Ctrl+E`, or `ichiloto validate`) reads graphics as the Engine does.
+A missing or invalid tileset, graphics without a tileset, misnamed or
+duplicate-order tile layers, rows or cells that do not match the map, and
+invalid tile identities are errors. Unusable sheets and tiles from a sheet the
+tileset does not provide are warnings. The game shows terminal glyphs for
+anything it cannot draw.
+
+Text catalogues in `assets/Graphics/Tilesets/*.txt` appear as Facade brushes in
+`Ctrl+P`. Separate multi-row shapes with blank lines. Select a brush to target
+the gameplay `buildings` layer, then press `Enter` to stamp it as one undo
+step. In Paint mode (`i`), a left click also stamps; Normal-mode clicks only
+move the cursor. Mode and map changes clear the stamp brush; `b` returns to a
+glyph brush. Every stamp rereads its catalogue, so
+the catalogue remains the single source of shapes. Clipping never grows rows.
+
 The canvas previews the selected map and is where you paint. It is modal, in
 the vim tradition: in **Normal mode** letters are commands, and in **Paint
 mode** every printable key is a glyph. This is what guarantees that no
@@ -190,6 +456,37 @@ Normal. While painting, the Status pane shows `[PAINT]` beside the mode.
 Control-byte and function-key shortcuts (`Ctrl+S`, `F3`, ...) work in both
 modes, since they are not glyphs.
 
+### Terminal Editing and Pending Graphical GUI
+
+Keep walkable floors and solid walls readable as terminal gameplay glyphs.
+A readable notice or interactive fixture needs its gameplay glyph and
+interaction, not a graphical decoration marker. Graphical representations
+must not drive or change the terminal editing experience.
+
+1. Focus the canvas and choose a gameplay or event layer with `L`, or step
+   through them with `[` / `]`. Press `i` to paint; `Esc` returns to Normal
+   mode. `L`, brackets and
+   other printable characters remain paintable while in Paint mode.
+2. Use the existing glyph tools, colours, selections, clipboard and mouse
+   strokes. Continue authoring events and NPCs in their existing modes.
+3. Use `Ctrl+Z` / `Ctrl+Y` to undo/redo, including after changing layers.
+   `Ctrl+S` saves; `Ctrl+R` reloads the saved workspace and clears history.
+   Existing graphical source data remains preserved during ordinary glyph edits.
+
+**Removed TUI workflows:** painting decoration markers, choosing graphical
+layers, inspecting graphical crop tables and editing selected-cell crops are
+no longer terminal authoring features. Decoration data is not deleted, and
+its low-level APIs and source-preserving round trips remain available for the
+graphical editor. Glyph-keyed crop authoring (`tiles2d` and its cell
+overrides) has been removed along with the Engine's support for it; tilesets
+replace it.
+
+**Pending, not implemented:** richer renderers will use a separate,
+RPG Maker-like GUI editor for graphical materials, atlases and crop authoring.
+The planned `ichiloto edit` entry point will offer a TUI/GUI choice; that choice
+and the GUI itself are not delivered by this TUI boundary correction. See the
+[GUI editor plan](../../gui-editor/README.md).
+
 ### Normal mode
 
 | Key | Action |
@@ -199,6 +496,8 @@ modes, since they are not glyphs.
 | `e` | Switch to Event mode (paint event markers) |
 | `n` / `F3` | Toggle NPC mode (place and edit the map's NPCs) |
 | `c` | Open the character map |
+| `P` | Choose a tileset piece to place (see [Pieces](#pieces)) |
+| `T` | Draw the tiles for the glyphs already on this layer (see [Pieces](#pieces)) |
 | `o` | Open the brush colour picker (see [Colour](#colour)) |
 | `b` / `l` / `r` / `R` / `s` | Choose a tool: Brush, Line, Rectangle, Filled Rectangle, Select |
 | `f` | Flood fill from the cursor (same as `Ctrl+F`) |
@@ -210,18 +509,20 @@ modes, since they are not glyphs.
 | `u` / `U` | Undo / redo (same as `Ctrl+Z` / `Ctrl+Y`) |
 | `?` | Open the help overlay |
 | `Arrows` | Move the cursor |
-| `Enter` | Apply the active tool |
-| `Esc` | Pop one canvas level: a pending tool anchor, then the selection |
+| `Enter` | Apply the active tool, or stamp or draw the piece being placed |
+| `Esc` | Pop one canvas level: a connected piece's anchor, piece placement, a pending tool anchor, then the selection |
 
 Typing an unassigned printable key in Normal mode paints nothing; the status
 line points to `i` instead.
 
 ### Paint mode
 
-Every printable key paints its glyph at the cursor with the brush tool, or
-loads it into the brush under a shape or select tool. `Arrows` move,
-`Enter` applies the active tool, erase keys erase, and `Esc` returns to
-Normal mode. Entering NPC mode or moving focus off the canvas also returns
+Every printable key paints its glyph at the cursor with the brush tool. Under
+the Line or Rectangle tools a key chooses the glyph instead, and `Enter` sets
+the anchor and then draws; the canvas border says which. Selecting is a Normal
+mode job: entering Paint mode with the Select tool active switches to the
+brush, and choosing Select returns to Normal mode. `Arrows` move, `Enter`
+applies the active tool, erase keys erase, and `Esc` returns to Normal mode. Entering NPC mode or moving focus off the canvas also returns
 to Normal.
 
 ### Mouse
@@ -229,9 +530,19 @@ to Normal.
 The mouse honors the canvas's modality. In Normal mode a click **selects**:
 the cursor jumps to the clicked cell and the status line reads out its
 coordinates - the fastest way to find a tile's position for a spawn point or
-event without walking the cursor there. In Paint mode a left click paints
-the brush symbol and a right click erases, dragging paints a stroke, and in
-Event mode clicks keep their event-editing behavior.
+event without walking the cursor there. With the Select tool, dragging in
+Normal mode selects the rectangle from where the press began to where it is
+released; a click still only moves the cursor. In Paint mode a left click
+paints the brush symbol and a right click erases, dragging paints a stroke,
+and in Event mode clicks keep their event-editing behavior.
+
+The mouse follows the active tool. With Line, Rectangle or Filled Rectangle
+in Paint mode, the press sets the anchor, dragging moves the other end with
+the shape previewed on the canvas, and releasing draws it in one undo step,
+in the brush colour; dragging with the right button erases the shape. The
+same preview shows while a tool anchored with `Enter` waits for its second
+`Enter`. In Normal mode the canvas border names the tool keys
+(`b/l/r/R/s:Tool`).
 
 The wheel scrolls the viewport without moving the cursor - free look for
 surveying a map larger than the canvas (horizontal wheel scrolls sideways).
@@ -245,22 +556,23 @@ beside the viewport offset.
 `o` in Normal mode opens the brush colour picker: the 16 standard 4-bit
 ANSI colours (in the map format's Symfony colour names, where `gray` is
 bright black), rendered as live swatches, plus two brush states above them.
-The brush colour applies to every paint on the Map layer - brush dabs,
+The brush colour applies to every paint on every layer - brush dabs,
 shapes, flood fills - and is written as `<fg=...>` tags, exactly the
 styling authored by hand.
 
 - **Keep cell colour** (the default): painting changes the glyph and leaves
   each cell's existing styling byte-for-byte, authored options included.
 - **No colour**: painting strips styling and writes plain glyphs.
-- **A colour**: painting writes the glyph in that colour. Selecting a
-  colour under the brush tool also recolours the cell at the cursor in
-  place, keeping its glyph, as one undoable stroke.
+- **A colour**: painting writes the glyph in that colour. Choosing a
+  colour recolours in place, keeping the glyphs, as one undoable stroke:
+  with a selection active (`s`), every cell in the selection; otherwise,
+  under the brush tool, the cell at the cursor. Spaces stay uncoloured.
 
-The eyedropper (`k` / `Ctrl+K`) picks up a cell's colour along with its
-glyph; an uncoloured cell loads an uncoloured brush. A painted space is
+The eyedropper (`k` / `Ctrl+K`) picks up a cell's colour and the piece it
+draws along with its glyph; an uncoloured cell loads an uncoloured brush. A painted space is
 always uncoloured, so erasing never leaves invisible styling behind. Event
-markers are authoring geometry and carry no colour; the picker says so on
-the Event layer. The Status pane shows the brush colour beside the tool.
+markers remain authoring geometry, but can now carry colour through the same
+picker and undo workflow. The Status pane shows the brush colour beside the tool.
 
 ### NPC Mode
 
@@ -268,8 +580,10 @@ the Event layer. The Status pane shows the brush colour beside the tool.
 an overlay - sprites at their authored anchor, wide glyphs occupying the two
 columns the game gives them, styled sprites as the plain glyph - and nothing
 you do here paints a tile or an event marker. The selected NPC is shown in
-brackets. NPC mode sits on `n` in Normal mode and on `F3` everywhere, so no paintable
-character is taken from you (and not a control byte, since the terminal driver
+brackets, except an explicitly empty sprite: selection highlights its existing
+map cell without replacing the glyph or neighbouring cells. An unselected empty
+sprite draws no overlay. NPC mode sits on `n` in Normal mode and on `F3`
+everywhere, so no paintable character is taken from you (and not a control byte, since the terminal driver
 reserves the remaining ones).
 
 | Key | Action |
@@ -292,10 +606,13 @@ with a hint rather than painted under an NPC.
 
 `Enter` on an empty tile asks for the NPC's name first, and derives its stable
 `id` from that name - `Gate Guard` becomes `gate-guard`, numbered if the map
-already has one - because the id is what `move_route` and script diagnostics
-name, and it is **immutable after creation**: renaming the NPC, moving it, or
-changing its sprite never touches it. Duplicating assigns a fresh id from the
-name. An NPC authored without an id loads and edits normally, shows a
+already has one - because the id is what routes, dialogue events, cinematics
+and script diagnostics name. Renaming the NPC re-derives its id from the new
+name **while nothing refers to it**, so an NPC created as `New NPC` and named
+later gets the id its name suggests. Once an event, script, route or cinematic
+starting on the map names the id, it stays: a rename keeps it and the status
+says what names it. Moving the NPC or changing its sprite never touches it.
+Duplicating assigns a fresh id from the name. An NPC authored without an id loads and edits normally, shows a
 `! No stable id` row (`Enter` there assigns one from its name, the one time an
 id is ever written after creation, since nothing can yet name it), and
 validates with a warning that scripted movement cannot target it. Changing an
@@ -311,27 +628,53 @@ category uses - pickers, condition lines, world-write rows, command frames,
 | --- | --- |
 | Identity | `Id` (read-only), `Name` |
 | Placement | `X`, `Y` (the canvas moves it too) |
-| Appearance | `Sprite`, `Facing North/South/East/West` |
-| Movement | `Movement` (`fixed` / `wander`), and while wandering `Wander X/Y/Width/Height` |
+| Appearance | `Sprite`, `Facing North/South/East/West`, `Graphical Sprites` |
+| Movement | `Movement` (`fixed` / `wander`), `Direction Fix` (`false` / `true`), and while wandering `Wander X/Y/Width/Height` |
 | Visibility | `Visible When` - a condition line |
 | Interaction | `Script` (a command frame), then one `Dialogue variant N` heading per variant with its rows `When`, `Then Set`, `Script Commands`, `Line 1 Speaker`, `Line 1 Text`, … |
 | Completion Writes | `After Talking` - world-write rows |
 
 Rows read as the game will read them: an unset `Movement` shows `fixed`, an
-unset `Sprite` shows `@`. Fields the game does not read are listed in a
+unset `Direction Fix` shows `false`, an unset `Sprite` shows `@`. Fields the game does not read are listed in a
 `Preserved fields` row and written back untouched. Each dialogue variant is a
 heading (`Dialogue variant 2 · when switch:gate_open` once it has a
 condition) with short row labels under it, and long lines wrap, so what a
 character says is read in the pane rather than in the edit buffer.
 
+- **Map-owned appearance.** For a fixed interaction already drawn on a map
+  layer (such as a mounted notice on `fixtures`), clear the `Sprite` text
+  completely and press `Enter`. This stores `'sprite' => ''`, not a missing
+  field, and removes the duplicate NPC overlay. The NPC retains its stable id,
+  dialogue, conditions and blocking anchor. Select it at that anchor, through
+  `L`, or with `[` / `]`; selection highlights the underlying cell. Omitting
+  `sprite` still defaults to `@`. Whitespace-only or style-only sprite text
+  still warns: use genuinely empty text when the map owns the appearance.
 - **Movement.** `wander` roams one tile at a time; the wander bounds only
   appear while wandering, and loaded bounds are kept (not shown) for a fixed
   NPC. Omitting every bound leaves the game's unbounded wander. Patrol routes,
   pathfinding and followers are not engine features, so the editor does not
   offer them; scripted movement is a `move_route` command in an event script.
+- **Direction fix.** When the player talks to an NPC, the game turns it to
+  face the player before it speaks and turns it back to its previous heading
+  when the conversation ends, unless the conversation's own script turned,
+  moved or staged it. `Direction Fix` (RPG Maker's option of the same name)
+  set to `true` keeps its heading throughout instead, for a clerk behind a
+  counter or a guard watching a gate. It stores `'directionFix' => true`;
+  setting it back to `false` removes the key, the game's default. It affects
+  only the talk turn: wandering and `move_route` still turn the NPC. The
+  validator reports a `directionFix` that is not `true` or `false`.
 - **Directional sprites.** Optional glyphs shown when the NPC turns; the base
   sprite covers a heading you leave blank. Resting the Inspector cursor on a
   `Facing …` row previews that glyph on the canvas in the NPC's place.
+- **Graphical sprites are not edited in the TUI.** The `Graphical Sprites`
+  inspector action and its numeric PNG/crop/sheet dialog have been removed.
+  Existing NPC `sprites2d` data remains preserved when editing terminal glyphs,
+  and its model services and source-preserving validation remain available.
+  Graphical NPC authoring belongs in the pending
+  [GUI editor](../../gui-editor/README.md), not a terminal form. Terminal base
+  and directional glyphs, identity, dialogue, movement and conditions remain
+  editable as before. This correction does not claim that all other actor or
+  database artwork controls have been removed.
 - **Dialogue.** Pages are shown as variants: one variant with lines is written
   back as plain pages; add a second variant, or give one a `When` condition, a
   `Then Set`, or a `Script`, and the whole thing is written as conditional
@@ -385,7 +728,8 @@ a cut, and a paste each undo in a single `Ctrl+Z`. Repeated pastes are separate
 steps, so you can stamp freely.
 
 The clipboard is layer-tagged: a block lifted from the event layer refuses to
-land on tiles.
+land on tiles. A block lifted from a gameplay layer carries the graphical
+tiles that move with that layer, and a paste replaces the tiles under it.
 
 Current limit: the canvas draws no on-screen preview of a pending line,
 rectangle, or selection rectangle. The footer reports the anchor and selection
@@ -419,6 +763,32 @@ being edited stays on one line and scrolls sideways around the caret. The pane
 scrolls by rows, keeping the selected row's first line in view.
 
 The Destination row on an event is a reference: `Ctrl+G` follows it.
+
+### Map kind
+
+`Kind`, under `Region`, is the setting the map draws: one of the project's
+tilesets in `assets/Data/Tilesets/`, shown by name, such as Interior,
+Exterior, World or Dungeon. Every tile and [piece](#pieces) on the map comes
+from its kind, so the tiles a map offers change only when its kind does.
+Enter opens the picker; the kind is stored as the map data's `tileset`.
+
+- A new map is asked its kind before it is created (`Shift+A` in the Assets
+  panel); `Esc` creates nothing. A duplicate keeps its original's kind. In a
+  project with no tilesets, a new map is created without a kind.
+- A map without a kind shows `Not set`, and `P` offers no pieces until it
+  has one. Choosing a kind keeps any tiles the map already has.
+- Changing one kind to another on a map with tiles asks first, since its
+  tiles name places on the old kind's sheets and would show the wrong art.
+  `Cancel`, the default, keeps everything; `Clear N tile layers and change`
+  clears its tile layers and their `tileLayers` settings. Glyphs, collision
+  and events stay.
+- A map without tiles changes kind at once.
+- Each change is one undo step and is written on save; saving a cleared map
+  removes its `graphics/` tile layer files.
+- A kind the project no longer has stays visible as
+  `id · not in assets/Data/Tilesets`.
+- In a project with tilesets, validation and the pre-save checks warn about a
+  map without a kind. A project without tilesets is not warned.
 
 ### Map audio and encounters
 
@@ -617,7 +987,7 @@ status line says exactly why.
 | Optimize Exclusions | `assets/Data/equipment-optimization.php` | Editable |
 | System | `assets/Data/system.php` | Editable |
 | Types | `assets/Data/Types/*.php` | Read-only - PHP enum declarations |
-| Terms | `config.php` (`vocab`, `messages`) | Editable when the config carries no inline comments |
+| Terms | `config.php` (`vocab`, `messages`) | Literal terms editable; comments and unrelated expressions preserved |
 
 Why a category can still turn out read-only: a file the editor cannot
 evaluate, a value it could not write back out, or a comment sitting inside
@@ -779,10 +1149,23 @@ The `vocab` and `messages` trees of the project's `config.php`, flattened to
 one row per term with its dotted path - `vocab.game.new_game`,
 `messages.confirm.quit`, and so on.
 
-Current limit: the category is read-only when `config.php` contains comments
-inside the returned array, because rewriting the file would drop them. Move
-such comments above the `return` statement and the category becomes editable -
-everything before `return` is preserved byte-for-byte on save.
+Terms and System's field zoom share one source-preserving configuration owner.
+Saving either writes all pending configuration edits in one atomic operation.
+Only edited literal values are patched; comments, spacing, enum references and
+unrelated executable expressions remain untouched. An opaque term expression
+is individually read-only, and ambiguous parent arrays or nonliteral returned
+configuration are refused rather than regenerated. A config changed on disk
+must be reloaded before saving, so newer external edits are not overwritten.
+
+### Field Zoom
+
+Open **Database > System > Field Zoom (GPUI only)**. Enter a finite number from
+`1` through `8` (`2.5` is valid); the default is `1`. This writes the game's
+`config.php` at `graphics.field.zoom`, not `system.php` or `ichiloto.json`.
+It magnifies the GPUI field only: terminal maps, menus and UI sizing do not
+change. `Ctrl+S` saves, `Ctrl+Z` undoes, and `Ctrl+Y` redoes. Undoing the first
+edit restores an originally absent setting without leaving a default entry.
+The same pending Terms edits are included when this configuration is saved.
 
 ### Knowledge
 

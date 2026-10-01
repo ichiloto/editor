@@ -90,6 +90,10 @@ it('adds a record without rewriting the entries already in the file', function (
     // bracket is still there, in order: the new entry was inserted, not
     // written by rebuilding the list around it.
     $upToClose = rtrim(substr($before, 0, (int) strrpos($before, '];')));
+    preg_match('/equipmentType:[^\r\n]+/', $before, $authoredEquipmentType);
+    preg_match('/parameterChanges:[ \t]*new[ \t]+[^\s(]+[ \t]*\(/', $before, $authoredParameterConstructor);
+    expect($authoredEquipmentType)->not->toBe([])
+        ->and($authoredParameterConstructor)->not->toBe([]);
 
     expect(PhpSourceDocument::parse($after)->entryCount())->toBe($entriesBefore + 1)
         ->and(str_starts_with($after, $upToClose))->toBeTrue()
@@ -97,8 +101,8 @@ it('adds a record without rewriting the entries already in the file', function (
         // Everything the surgical writer exists to protect.
         ->and($after)->toContain('use Ichiloto\Engine\Entities\Effects\HPRecoveryEffect;')
         ->and($after)->toContain("id: 'item.s-potion',")
-        ->and($after)->toContain('equipmentType: \Ichiloto\Engine\Entities\Enumerations\WeaponType::SWORD,')
-        ->and($after)->toContain('parameterChanges: new \Ichiloto\Engine\Entities\ParameterChanges(');
+        ->and($after)->toContain($authoredEquipmentType[0])
+        ->and($after)->toContain($authoredParameterConstructor[0]);
 
     $reloaded = structuralDatabase($root, 'weapons');
     expect($reloaded->getEntryLabels())->toContain($label);

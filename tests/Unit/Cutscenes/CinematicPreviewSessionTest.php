@@ -5,6 +5,8 @@ declare(strict_types=1);
 use Ichiloto\Editor\Cutscenes\CutsceneHydration;
 use Ichiloto\Editor\Cutscenes\Preview\CinematicPreviewSession;
 use Ichiloto\Editor\ProjectDirectoryContext;
+use Ichiloto\Engine\Util\Config\ConfigStore;
+use Ichiloto\Engine\Util\Config\ProjectConfig;
 
 /**
  * The Engine plays a cinematic inside the editor: the interpreter,
@@ -25,6 +27,9 @@ it('plays the harbour cinematic to completion through the Engine and records its
     $preview = CinematicPreviewSession::start($root, harbourDefinition($root), ['x' => 2, 'y' => 3, 'width' => 40, 'height' => 12]);
 
     try {
+        expect(ConfigStore::get(ProjectConfig::class)->get('audio.music'))->toBeFalse()
+            ->and(ConfigStore::get(ProjectConfig::class)->get('audio.sfx'))->toBeFalse()
+            ->and(ConfigStore::get(ProjectConfig::class)->get('audio.voice'))->toBeFalse();
         expect($preview->status())->toBe(CinematicPreviewSession::STATUS_PAUSED)
             ->and($preview->lanes())->not->toBe([])
             ->and($preview->lanes()[0]['key'])->toBe('commands.0');

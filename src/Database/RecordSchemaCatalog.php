@@ -291,6 +291,14 @@ final class RecordSchemaCatalog
                 // Only a plain item carries a stack limit: the engine's
                 // Equipment constructor does not take one.
                 new RecordField('maxQuantity', 'Max Quantity', InputControlType::INTEGER),
+                new RecordField(
+                    'animationId',
+                    'Animation',
+                    InputControlType::INTEGER,
+                    reference: 'animation_ids',
+                    allowsNone: true,
+                    displayDefault: '(None)',
+                ),
             ],
             labelKey: 'name',
             identityKey: 'id',
@@ -847,7 +855,7 @@ final class RecordSchemaCatalog
                 'id' => 'new-skit',
                 'title' => 'New Skit',
                 'beats' => [
-                    ['speaker' => 'Speaker', 'text' => 'Say something.'],
+                    ['actor' => '', 'text' => 'Say something.'],
                 ],
             ],
             subList: new RecordSubList(
@@ -855,10 +863,12 @@ final class RecordSchemaCatalog
                 prefix: 'beat',
                 singular: 'beat',
                 fields: [
-                    RecordField::reference('speaker', 'Speaker', 'actors'),
+                    RecordField::reference('actor', 'Actor', 'actor_ids', allowsNone: true, noneLabel: '(Non-actor speaker)'),
+                    new RecordField('speaker', 'Non-actor Speaker', removeWhenEmpty: true),
                     new RecordField('text', 'Text'),
                 ],
-                blank: ['speaker' => 'Speaker', 'text' => 'Say something.'],
+                blank: ['actor' => '', 'text' => 'Say something.'],
+                exclusiveFields: [['actor', 'speaker']],
             ),
         );
     }
@@ -899,9 +909,9 @@ final class RecordSchemaCatalog
      * UI vocabulary — the `vocab` and `messages` trees of the project's
      * `config.php`, flattened to one editable row per term.
      *
-     * Editable only when the whole config file round-trips (it holds enum
-     * cases, which export fine; a `new Something()` in there would make the
-     * category read-only, and say so).
+     * ProjectConfig shares these records with System's field zoom and
+     * patches literal leaves only. Unrelated comments and expressions stay
+     * untouched; opaque term values are individually read-only.
      *
      * @return RecordSchema
      */
@@ -1144,6 +1154,8 @@ final class RecordSchemaCatalog
                 new RecordField('sprites.west', 'Facing West', removeWhenEmpty: true),
                 // Movement
                 new RecordField('movement', 'Movement', options: ProjectNpc::MOVEMENTS, displayDefault: 'fixed'),
+                // RPG Maker's Direction Fix: false (the default) is not written.
+                RecordField::boolean('directionFix', 'Direction Fix', displayDefault: 'false'),
                 new RecordField('wanderArea.x', 'Wander X', InputControlType::INTEGER, removeWhenEmpty: true),
                 new RecordField('wanderArea.y', 'Wander Y', InputControlType::INTEGER, removeWhenEmpty: true),
                 new RecordField('wanderArea.width', 'Wander Width', InputControlType::INTEGER, removeWhenEmpty: true),

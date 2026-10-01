@@ -123,3 +123,14 @@ it('collects multiple findings in one pass', function () {
 
   expect($warnings)->toHaveCount(2);
 });
+
+it('warns before a save that a tiles2d crop table is no longer read', function () {
+  $map = validatorMap('town', [
+    'name' => 'Town',
+    'events' => [],
+    'tiles2d' => ['asset' => 'Graphics/Tilesets/shared.png', 'symbols' => []],
+  ]);
+
+  expect(MapValidator::validate($map, ['town' => $map]))
+    ->toBe(['tiles2d is no longer read; the map shows its terminal glyphs until it has a tileset.']);
+});

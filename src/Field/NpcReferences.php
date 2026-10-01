@@ -4,20 +4,25 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Field;
 
+use Ichiloto\Editor\Cutscenes\CutsceneType;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
+use Throwable;
 
 /**
  * Finding what names an NPC's stable id.
  *
- * A `move_route` whose subject is `npc` names it by `npcId`; a script's
- * diagnostics name it too. Knowing what points at an id is what lets the
- * editor refuse to delete an NPC something still expects, and say what.
+ * A `move_route` whose subject is `npc` names it by `npcId`, a camera or
+ * cinematic subject of kind `npc` by `npcId` or `id`, and a dialogue event by
+ * its data's `npcId`. Knowing what points at an id is what lets the editor
+ * refuse to delete an NPC something still expects, and keep the id of one
+ * something already names when it is renamed.
  *
  * NPC ids are map-local, so a reference is only a reference from that map's
- * own context: its map-authored event scripts, its NPCs' inline scripts and
- * variant scripts, and the reusable event scripts those trigger.
+ * own context: its map-authored events and their scripts, its NPCs' inline
+ * scripts and variant scripts, the reusable event scripts those trigger, and
+ * the cinematics that start on the map.
  *
  * @package Ichiloto\Editor\Field
  */
@@ -53,7 +58,7 @@ final class NpcReferences
 
             $data = (array) ($definition['data'] ?? []);
 
-            if ($this->commandsName((array) ($data['script'] ?? []), $npcId)) {
+            if (trim(strval($data['npcId'] ?? '')) === $npcId || $this->commandsName((array) ($data['script'] ?? []), $npcId)) {
                 $found[] = sprintf('%s event %s', $map->mapId, strval($marker));
             }
 
@@ -97,41 +102,51 @@ final class NpcReferences
             }
         }
 
+        // Cinematics that start on this map: their cast and commands.
+        foreach ($this->workspace->cutscenes?->assets(CutsceneType::CINEMATIC) ?? [] as $asset) {
+            try {
+                $data = $asset->data();
+                $commands = $asset->commands();
+            } catch (Throwable) {
+                continue;
+            }
+
+            if (trim(strval($data['startMap'] ?? '')) !== $map->mapId) {
+                continue;
+            }
+
+            if ($this->commandsName([...(array) ($data['cast'] ?? []), ...(array) ($data['finalizer'] ?? []), ...$commands], $npcId)) {
+                $found[] = sprintf('cinematic %s', $asset->id);
+            }
+        }
+
         return array_values(array_unique($found));
     }
 
     /**
-     * Determines whether a command list routes the NPC, however deeply.
+     * Determines whether commands name the NPC, however deeply nested: a
+     * `move_route` for subject `npc`, or any subject, target or cast entry
+     * of kind `npc`, by `npcId` or `id`.
      *
-     * @param array<int, mixed> $commands The commands.
+     * @param array<int|string, mixed> $commands The commands.
      * @param string $npcId The id.
      * @return bool True when one does.
      */
     private function commandsName(array $commands, string $npcId): bool
     {
-        foreach ($commands as $command) {
-            if (! is_array($command)) {
+        foreach ($commands as $node) {
+            if (! is_array($node)) {
                 continue;
             }
 
-            if (
-                strval($command['type'] ?? '') === 'move_route'
-                && strtolower(trim(strval($command['subject'] ?? 'player'))) === 'npc'
-                && trim(strval($command['npcId'] ?? '')) === $npcId
-            ) {
+            $namesNpc = strtolower(trim(strval($node['kind'] ?? $node['subject'] ?? ''))) === 'npc';
+
+            if ($namesNpc && trim(strval($node['npcId'] ?? $node['id'] ?? '')) === $npcId) {
                 return true;
             }
 
-            foreach ((array) ($command['options'] ?? []) as $option) {
-                if (is_array($option) && $this->commandsName((array) ($option['then'] ?? []), $npcId)) {
-                    return true;
-                }
-            }
-
-            foreach (['then', 'else'] as $arm) {
-                if ($this->commandsName((array) ($command[$arm] ?? []), $npcId)) {
-                    return true;
-                }
+            if ($this->commandsName($node, $npcId)) {
+                return true;
             }
         }
 

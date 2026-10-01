@@ -299,6 +299,42 @@ it('refuses to rewrite what it cannot express, and names the place', function ()
     expect(ArraySourceWriter::rewrite($document, $old, $new)->source)->toBe(str_replace("'plain' => 1", "'plain' => 2", $source));
 });
 
+it('retains existing non-tile list identity and comment rules without treating arbitrary coordinates as ids', function () {
+    $source = <<<'PHP'
+<?php
+return ['npcs' => [
+    // The named NPC moves with its source.
+    ['name' => 'Mira', 'column' => 0, 'row' => 0, 'text' => 'first'],
+    // The other NPC.
+    ['name' => 'Tari', 'column' => 1, 'row' => 0, 'text' => 'second'],
+], 'keyframes' => [
+    // This is an edited position, not a new tile identity.
+    ['column' => 0, 'row' => 0, 'duration' => 10],
+    ['column' => 1, 'row' => 0, 'duration' => 20],
+]];
+PHP;
+    $old = evaluateSource($source);
+    $new = $old;
+    $new['npcs'] = [$old['npcs'][1], $old['npcs'][0]];
+    $new['npcs'][1]['text'] = 'edited';
+    $new['npcs'][1]['column'] = 8;
+    $new['keyframes'][0]['column'] = 9;
+    $rewritten = ArraySourceWriter::rewrite(PhpArraySourceDocument::parse($source), $old, $new)->source;
+    expect(evaluateSource($rewritten))->toBe($new)
+        ->and($rewritten)->toContain("// The named NPC moves with its source.\n    ['name' => 'Mira', 'column' => 8, 'row' => 0, 'text' => 'edited']")
+        ->and($rewritten)->toContain("// This is an edited position, not a new tile identity.\n    ['column' => 9");
+});
+
+it('removes only an indented inline entry and its heading in other existing list consumers', function (string $key) {
+    $source = "<?php\nreturn ['$key' => [\n    // Removed entry owns this heading.\n    ['id'=>'first'], ['id'=>'second'], ['id'=>'third']]];\n";
+    $old = evaluateSource($source);
+    $new = $old;
+    array_shift($new[$key]);
+    $rewritten = ArraySourceWriter::rewrite(PhpArraySourceDocument::parse($source), $old, $new)->source;
+    expect(evaluateSource($rewritten))->toBe($new)
+        ->and($rewritten)->toBe(str_replace("    // Removed entry owns this heading.\n    ['id'=>'first'],", '', $source));
+})->with(['npcs', 'tracks', 'cues']);
+
 it('rewrites the real Last Legend summon timelines to themselves and back from any change', function () {
     $game = gameSourceRoot();
 

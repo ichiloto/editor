@@ -420,6 +420,13 @@ final class ProjectRecord
         return $this->payload;
     }
 
+    /** Restores an editor-owned snapshot, including keys removed by a compound field edit. */
+    public function restorePayload(array|object $payload): void
+    {
+        $this->payload = $payload;
+        $this->touchState();
+    }
+
     /**
      * Renders any leaf value as a settings-pane string.
      *

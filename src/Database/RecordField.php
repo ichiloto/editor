@@ -135,9 +135,10 @@ final readonly class RecordField
      * @param string $key The payload key.
      * @param string $label The settings-pane label.
      * @param bool $removeWhenEmpty Whether `false` drops the key (matching engine defaults).
+     * @param string|null $displayDefault What an absent key reads as, such as the engine's `false`.
      * @return self
      */
-    public static function boolean(string $key, string $label, bool $removeWhenEmpty = true): self
+    public static function boolean(string $key, string $label, bool $removeWhenEmpty = true, ?string $displayDefault = null): self
     {
         return new self(
             $key,
@@ -145,6 +146,7 @@ final readonly class RecordField
             InputControlType::BOOLEAN,
             ['false', 'true'],
             $removeWhenEmpty,
+            displayDefault: $displayDefault,
         );
     }
 }

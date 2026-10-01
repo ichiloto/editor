@@ -13,6 +13,8 @@ use Ichiloto\Editor\Database\RecordSchemaCatalog;
 use Ichiloto\Editor\Storage\FileSetOperations;
 use Ichiloto\Editor\Storage\FileSetTransaction;
 use Ichiloto\Editor\Storage\FilesystemFileSetOperations;
+use Ichiloto\Engine\Core\ProjectFormat;
+use Ichiloto\Engine\Field\MapGraphics;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
 use RuntimeException;
@@ -23,6 +25,8 @@ use Throwable;
  */
 final readonly class ProjectWorkspace
 {
+    /** Preview title and map metadata lines preceding the rendered grid. */
+    public const int CANVAS_HEADER_ROWS = 2;
     /**
      * @param ProjectMap[] $maps
      * @param array<string, ProjectRecordDatabase> $recordDatabases Schema-driven categories, keyed by category key.
@@ -43,6 +47,7 @@ final readonly class ProjectWorkspace
         public ProjectQuestDatabase     $questDatabase,
         public array                    $recordDatabases = [],
         public ?CutsceneLibrary         $cutscenes = null,
+        public ?ProjectConfig           $config = null,
     ) {
     }
 
@@ -101,6 +106,10 @@ final readonly class ProjectWorkspace
             throw new RuntimeException("Unable to parse $configPath.");
         }
 
+        // A project in another format places its contents differently; open
+        // nothing rather than misplace it. `ichiloto upgrade` converts it.
+        ProjectFormat::assertSupported($config[ProjectFormat::KEY] ?? null);
+
         $projectName = (string) ($config['name'] ?? basename($projectRoot));
         $projectId = trim((string) ($config['id'] ?? ''));
         $mainFile = (string) ($config['main'] ?? '');
@@ -109,6 +118,7 @@ final readonly class ProjectWorkspace
         // item store; without this the category would report a bootstrap
         // failure instead of the author's enemies.
         EngineDataBootstrap::ensure($projectRoot);
+        $projectConfig = new ProjectConfig($projectRoot);
 
         return new self(
             projectRoot: $projectRoot,
@@ -124,10 +134,11 @@ final readonly class ProjectWorkspace
             systemDatabase: ProjectSystemDatabase::fromProject($projectRoot),
             questDatabase: ProjectQuestDatabase::fromProject($projectRoot),
             recordDatabases: array_map(
-                static fn(RecordSchema $schema): ProjectRecordDatabase => ProjectRecordDatabase::fromProject($projectRoot, $schema),
+                static fn(RecordSchema $schema): ProjectRecordDatabase => ProjectRecordDatabase::fromProject($projectRoot, $schema, $projectConfig),
                 RecordSchemaCatalog::all(),
             ),
             cutscenes: CutsceneLibrary::fromProject($projectRoot),
+            config: $projectConfig,
         );
     }
 
@@ -155,9 +166,13 @@ final readonly class ProjectWorkspace
                 sprintf('Size: %d x %d', $selectedMap->getWidth(), $selectedMap->getHeight()),
                 sprintf('Events: %d', $selectedMap->getEventDefinitionCount()),
                 sprintf('Triggers: %d', $selectedMap->getTriggerCount()),
+                ...($selectedMap->getGridSourceIssue() === null ? [] : [
+                    'Read-only: map source needs repair.',
+                    $selectedMap->getGridSourceIssue(),
+                ]),
                 '',
                 basename($selectedMap->dataPath),
-                basename($selectedMap->mapPath),
+                $selectedMap->isLegacyMap() ? basename($selectedMap->mapPath) : 'layers/ (' . (count($selectedMap->getLayers()) - 1) . ' layers)',
                 basename($selectedMap->eventPath),
             ] : [
                 'No map selected.',
@@ -197,7 +212,8 @@ final readonly class ProjectWorkspace
 
             $prefix = $index === $selectedMapIndex ? '> ' : '  ';
             $dirty = $this->maps[$index]->isDirty() ? ' *' : '';
-            $lines[] = sprintf('%s%s%s', $prefix, $mapId, $dirty);
+            $readOnly = $this->maps[$index]->getGridSourceIssue() === null ? '' : ' [read-only]';
+            $lines[] = sprintf('%s%s%s%s', $prefix, $mapId, $dirty, $readOnly);
         }
 
         return $lines;
@@ -228,6 +244,7 @@ final readonly class ProjectWorkspace
             || $this->animationDatabase->isDirty()
             || $this->systemDatabase->isDirty()
             || $this->questDatabase->isDirty()
+            || ($this->config?->isDirty() ?? false)
             || ($this->cutscenes?->hasUnsavedChanges() ?? false);
     }
 
@@ -263,6 +280,7 @@ final readonly class ProjectWorkspace
             questDatabase: $this->questDatabase,
             recordDatabases: $this->recordDatabases,
             cutscenes: $this->cutscenes,
+            config: $this->config,
         );
     }
 
@@ -275,6 +293,7 @@ final readonly class ProjectWorkspace
      * @param int $offsetX The horizontal preview offset.
      * @param int $offsetY The vertical preview offset.
      * @param bool $showEventOverlay Whether event markers should be rendered.
+     * @param array<int, array<int, string|null>> $stampPreview A stamp's footprint, as ProjectMap::renderPreview() takes it.
      * @return string[]
      */
     public function getCanvasLines(
@@ -288,6 +307,11 @@ final readonly class ProjectWorkspace
         ?int $selectedNpcIndex = null,
         ?string $selectedNpcSprite = null,
         ?array $cursor = null,
+        array $layerVisibility = [],
+        ?string $activeLayer = null,
+        bool $terminalPreview = false,
+        bool $dimInactive = false,
+        array $stampPreview = [],
     ): array
     {
         $selectedMap = $this->getMapByIndex($selectedMapIndex);
@@ -300,8 +324,16 @@ final readonly class ProjectWorkspace
             ];
         }
 
-        $previewHeight = max(0, $height - 2);
-        $previewLines = $selectedMap->renderPreview($width, $previewHeight, $offsetX, $offsetY, $showEventOverlay, $showNpcOverlay, $selectedNpcIndex, $selectedNpcSprite);
+        if ($selectedMap->getGridSourceIssue() !== null) {
+            return [
+                sprintf('Preview: %s', $selectedMap->mapId),
+                'Read-only: repair this map before editing.',
+                $selectedMap->getGridSourceIssue(),
+            ];
+        }
+
+        $previewHeight = max(0, $height - self::CANVAS_HEADER_ROWS);
+        $previewLines = $selectedMap->renderPreview($width, $previewHeight, $offsetX, $offsetY, $showEventOverlay, $showNpcOverlay, $selectedNpcIndex, $selectedNpcSprite, $layerVisibility, $activeLayer, $terminalPreview, $dimInactive, $stampPreview);
 
         return [
             sprintf('Preview: %s', $selectedMap->mapId),
@@ -336,12 +368,12 @@ final readonly class ProjectWorkspace
      * @param string|null $baseName The preferred base name.
      * @return string The created map id.
      */
-    public function createMap(?string $baseName = null, ?FileSetOperations $files = null): string
+    public function createMap(?string $baseName = null, ?FileSetOperations $files = null, ?string $kind = null): string
     {
         $mapsRoot = $this->getMapsRoot();
         $baseName = $this->getNextAvailableBaseName($baseName ?? 'new-map');
         $directory = $mapsRoot . DIRECTORY_SEPARATOR . $baseName;
-        ProjectMap::createBlank($directory, $baseName, self::humanizeBaseName($baseName), files: $files);
+        ProjectMap::createBlank($directory, $baseName, self::humanizeBaseName($baseName), files: $files, kind: $kind);
 
         return $baseName;
     }
@@ -358,6 +390,10 @@ final readonly class ProjectWorkspace
 
         if (! $selectedMap instanceof ProjectMap) {
             return null;
+        }
+
+        if ($selectedMap->getGridSourceIssue() !== null) {
+            throw new MapSourceRefusal("{$selectedMap->mapId} is read-only: {$selectedMap->getGridSourceIssue()}");
         }
 
         $parentDirectory = dirname($selectedMap->directory);
@@ -386,16 +422,28 @@ final readonly class ProjectWorkspace
             return null;
         }
 
-        // Only the split triplet is the map's; deleting a map must not take
-        // an author's own notes or assets in the same folder with it. The
-        // three members go as one transaction -- a failure on any of them
-        // puts the removed ones back, bytes and modification times -- and
-        // the folder goes only once it is empty.
+        if ($selectedMap->getGridSourceIssue() !== null) {
+            throw new MapSourceRefusal("{$selectedMap->mapId} is read-only: {$selectedMap->getGridSourceIssue()}");
+        }
+
+        // Only the split members are the map's -- its data, grid layers and
+        // graphics/ tile layers; deleting a map must not take an author's
+        // own notes or assets in the same folder with it. The members go as
+        // one transaction -- a failure on any of them puts the removed ones
+        // back, bytes and modification times -- and each folder goes only
+        // once it is empty.
         $transaction = new FileSetTransaction($selectedMap->directory, $files ?? new FilesystemFileSetOperations());
         $transaction->remove($selectedMap->dataPath);
-        $transaction->remove($selectedMap->mapPath);
-        $transaction->remove($selectedMap->eventPath);
+        foreach ($selectedMap->getStoredGridPaths() as $path) {
+            $transaction->remove($path);
+        }
         $transaction->commit();
+
+        foreach ([$selectedMap->directory . '/layers', $selectedMap->directory . '/' . MapGraphics::DIRECTORY, $selectedMap->directory] as $directory) {
+            if (is_dir($directory) && array_diff(scandir($directory) ?: [], ['.', '..']) === []) {
+                @rmdir($directory);
+            }
+        }
 
         return $selectedMap->mapId;
     }
@@ -443,10 +491,16 @@ final readonly class ProjectWorkspace
 
         ksort($mapDirectories);
 
-        return array_values(array_map(
-            static fn(string $directory): ProjectMap => ProjectMap::fromDirectory($mapsRoot, $directory),
-            $mapDirectories
-        ));
+        $maps = [];
+        foreach ($mapDirectories as $directory) {
+            try {
+                $maps[] = ProjectMap::fromDirectory($mapsRoot, $directory);
+            } catch (Throwable $error) {
+                $maps[] = ProjectMap::createReadOnlyFromDirectory($mapsRoot, $directory, $error->getMessage());
+            }
+        }
+
+        return $maps;
     }
 
     /**
@@ -511,7 +565,7 @@ final readonly class ProjectWorkspace
      *
      * @return string[]
      */
-    public function getCollisionGlyphs(): array
+    public function getCollisionGlyphs(?string $layerName = null): array
     {
         $dictionaryFile = rtrim($this->projectRoot, DIRECTORY_SEPARATOR)
             . DIRECTORY_SEPARATOR . 'assets' . DIRECTORY_SEPARATOR . 'Maps' . DIRECTORY_SEPARATOR . 'collisions.php';
@@ -532,7 +586,13 @@ final readonly class ProjectWorkspace
 
         $glyphs = [];
 
-        foreach (array_keys($dictionary) as $key) {
+        $entries = array_filter($dictionary, static fn(mixed $value): bool => ! is_array($value));
+        foreach ($dictionary as $name => $section) {
+            if (is_array($section) && ($layerName === null || $name === $layerName)) {
+                $entries = array_replace($entries, $section);
+            }
+        }
+        foreach (array_keys($entries) as $key) {
             // PHP normalizes digit-only string keys such as "8" to integers.
             $glyph = (string) $key;
 
