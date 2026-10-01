@@ -106,12 +106,12 @@ it('says which layers have pieces when the layer being edited has none', functio
         ->and($map->isDirty())->toBeFalse();
 });
 
-it('offers one piece entry in the command palette', function () {
+it('offers choosing a piece and drawing a layer's tiles in the command palette', function () {
     [$editor] = createPieceCanvasEditor();
     $labels = array_map(static fn($item): string => $item->label . ' ' . $item->hint, callEditorMethod($editor, 'buildPaletteItems'));
 
     expect(array_values(array_filter($labels, static fn(string $label): bool => str_starts_with($label, 'Pieces:'))))
-        ->toBe(['Pieces: Choose a piece to place P']);
+        ->toBe(['Pieces: Choose a piece to place P', "Pieces: Draw tiles for this layer's glyphs T"]);
 });
 
 it('says why a map has no pieces and opens nothing', function (string $case, string $message) {

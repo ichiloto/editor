@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Canvas;
 
 use Closure;
+use Ichiloto\Editor\History\GenericCommand;
 use Ichiloto\Editor\MapSourceRefusal;
 use Ichiloto\Editor\Maps\MapLayers;
 use Ichiloto\Editor\ProjectMap;
@@ -165,6 +166,74 @@ trait GlyphTileCanvas
             $choices,
             $repaint,
         );
+    }
+
+    /**
+     * Draws the tiles of the glyphs already on the layer being edited, as if
+     * each were painted again: every glyph a piece draws gets that piece's
+     * tiles, in one undo step, unsaved until the map is saved. A glyph that
+     * could be several pieces asks first, as painting does, and the answer
+     * applies wherever its neighbours do not decide. Glyphs no piece draws,
+     * and the glyphs themselves, are left as they are.
+     *
+     * @param array<string, ?string> $choices The role key chosen for a glyph, or null for no tiles.
+     */
+    private function drawTilesForLayerGlyphs(array $choices = []): void
+    {
+        $map = $this->getSelectedMap();
+        if (! $map instanceof ProjectMap || $map->getGridSourceIssue() !== null) {
+            return;
+        }
+        $layerId = $this->getActiveCanvasLayer();
+        $layer = array_find($map->getLayers(), static fn(array $candidate): bool => $candidate['id'] === $layerId);
+        $label = MapLayers::formatLabel((string) ($layer['name'] ?? $layerId));
+        $writes = [];
+        for ($y = 0; $y < $map->getHeight(); $y++) {
+            for ($x = 0; $x < $map->getWidth(); $x++) {
+                if ($map->hasLayerCell($layerId, $x, $y) && ($symbol = $map->getLayerSymbol($layerId, $x, $y)) !== ' ') {
+                    $writes[] = ['x' => $x, 'y' => $y, 'symbol' => $symbol];
+                }
+            }
+        }
+        try {
+            $plan = $this->planGlyphTiles($map, $layerId, $writes, $choices, true);
+        } catch (MapSourceRefusal | InvalidArgumentException | RuntimeException $refusal) {
+            $this->setStatus('Tiles were not drawn: ' . $refusal->getMessage(), StatusLevel::WARN);
+            $this->renderFooter();
+            return;
+        }
+        if ($plan === null) {
+            $this->setStatus(sprintf('The %s layer has no pieces in this map\'s kind to draw tiles for.', $label), StatusLevel::WARN);
+            $this->renderFooter();
+            return;
+        }
+        if ($plan['unresolved'] !== []) {
+            $glyph = (string) array_key_first($plan['unresolved']);
+            $this->askForGlyphPiece($glyph, $plan['unresolved'][$glyph], $choices,
+                fn(array $chosen) => $this->drawTilesForLayerGlyphs($chosen));
+            return;
+        }
+        $before = $map->getTileLayerSources();
+        try {
+            $map->writeTileCells($plan['tiles']);
+        } catch (MapSourceRefusal $refusal) {
+            $this->setStatus($refusal->getMessage(), StatusLevel::WARN);
+            $this->renderFooter();
+            return;
+        }
+        $after = $map->getTileLayerSources();
+        if ($after === $before) {
+            $this->setStatus(sprintf('Every glyph on the %s layer already has its tiles.', $label));
+            $this->renderFooter();
+            return;
+        }
+        $this->recordCommand(new GenericCommand(sprintf('Draw %s tiles', $label),
+            static fn() => $map->restoreTileLayerSources($after),
+            static fn() => $map->restoreTileLayerSources($before)));
+        $cells = array_sum(array_map(count(...), $plan['tiles']));
+        $this->setStatus(sprintf('Drew %d tile%s for the %s layer\'s glyphs; save to keep them.', $cells, $cells === 1 ? '' : 's', $label),
+            StatusLevel::INFO);
+        $this->renderCanvasArea();
     }
 
     /** The planner for a gameplay layer's pieces, or null when it has none to follow. */

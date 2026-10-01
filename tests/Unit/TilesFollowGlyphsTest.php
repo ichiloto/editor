@@ -173,3 +173,33 @@ it('records a mouse stroke\'s tiles with its glyphs as one undo step', function 
     expect($map->getTileLayerSources())->toBe($sources)
         ->and($map->getLayerSymbol('map:4', 1, 1))->toBe('x');
 });
+
+it('draws the tiles for the glyphs already on a layer with T, asking about a shared glyph, in one undo step', function () {
+    [$editor, $map] = createFollowingTilesEditor();
+    // The buildings layer already holds ` /  ` over ` xx `, authored before
+    // any piece drew tiles for them.
+    writeTestTileset(dirname($map->directory, 3), pieces: [
+        'crate' => ['name' => 'Crate', 'layer' => 'buildings', 'glyphs' => ['x'], 'tiles' => ['furniture' => ['60']]],
+        'banner-red' => ['name' => 'Red banner', 'layer' => 'buildings', 'glyphs' => ['/'], 'tiles' => ['furniture' => ['70']]],
+        'banner-blue' => ['name' => 'Blue banner', 'layer' => 'buildings', 'glyphs' => ['/'], 'tiles' => ['furniture' => ['71']]],
+    ]);
+    $glyphs = [$map->getLayerSymbol('map:4', 1, 0), $map->getLayerSymbol('map:4', 1, 1), $map->getLayerSymbol('map:4', 2, 1)];
+    setEditorProperty($editor, 'focusedPane', 'canvas');
+
+    callEditorMethod($editor, 'dispatchInput', 'T');
+    expect(getEditorProperty($editor, 'eventOptionDialogTitle'))->toBe('Piece for /')
+        ->and(readFurnitureRows($map))->toBe([['0', '0', '0', '0'], ['0', '0', '0', '0']]);
+
+    choosePieceFor($editor, 'Blue banner');
+    expect(readFurnitureRows($map))->toBe([['0', '71', '0', '0'], ['0', '60', '60', '0']])
+        ->and([$map->getLayerSymbol('map:4', 1, 0), $map->getLayerSymbol('map:4', 1, 1), $map->getLayerSymbol('map:4', 2, 1)])->toBe($glyphs)
+        ->and($map->isDirty())->toBeTrue();
+
+    // Drawing again changes nothing.
+    callEditorMethod($editor, 'dispatchInput', 'T');
+    choosePieceFor($editor, 'Blue banner');
+    expect(getEditorProperty($editor, 'toasts')->current()?->message)->toBe('Every glyph on the Buildings layer already has its tiles.');
+
+    callEditorMethod($editor, 'dispatchInput', "\x1a");
+    expect(readFurnitureRows($map))->toBe([['0', '0', '0', '0'], ['0', '0', '0', '0']]);
+});

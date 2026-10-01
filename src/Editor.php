@@ -1401,6 +1401,7 @@ final class Editor
             KeyBinding::when($this->isNormalModeCommand('i'), $this->enterPaintMode(...), 'i', 'Canvas: enter Paint mode (every key paints; Esc returns to Normal)'),
             KeyBinding::when($this->isNormalModeCommand('L'), fn() => $this->openCanvasLayerPicker(), 'L', 'Canvas: choose the layer to edit'),
             KeyBinding::when($this->isNormalModeCommand('P'), fn() => $this->openPiecePicker(), 'P', 'Canvas: choose a tileset piece to place (Enter stamps or draws it, Esc when done)'),
+            KeyBinding::when($this->isNormalModeCommand('T'), fn() => $this->drawTilesForLayerGlyphs(), 'T', 'Canvas: draw the tiles for the glyphs already on this layer'),
             KeyBinding::when($this->isNormalModeCommand(']'), fn() => $this->cycleCanvasLayer(), ']', 'Canvas: next layer'),
             KeyBinding::when($this->isNormalModeCommand('['), fn() => $this->cycleCanvasLayer(-1), '[', 'Canvas: previous layer'),
             KeyBinding::when($this->isNormalModeCommand('v'), fn() => $this->toggleCanvasLayerVisibility(), 'v', 'Canvas: toggle selected layer visibility'),

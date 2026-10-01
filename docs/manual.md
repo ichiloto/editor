@@ -290,6 +290,15 @@ choosing one returns to Map mode. Move with the arrows or `j` / `k`, press `/`
 to filter by name, `Enter` to choose and `Esc` to cancel. The command palette
 offers the same picker as `Pieces: Choose a piece to place`.
 
+`T` in Normal mode (or `Pieces: Draw tiles for this layer's glyphs` in the
+command palette) draws the tiles for the glyphs already on the layer being
+edited, as if each were painted again: every glyph a piece draws gets that
+piece's tiles, so a map authored before its pieces existed, or before it had
+a kind, draws correctly graphically without a per-map script. A glyph that
+could be several pieces asks which, as painting does, and the answer applies
+wherever its neighbours do not decide. The glyphs themselves, and glyphs no
+piece draws, are left as they are. It is one undo step, saved with the map.
+
 When the layer being edited has no pieces, the status line names the layers
 that do. When the map has no kind yet, or its tileset has no pieces or cannot
 be loaded, it says so and nothing opens. Placing a piece never chooses a map's
@@ -488,6 +497,7 @@ and the GUI itself are not delivered by this TUI boundary correction. See the
 | `n` / `F3` | Toggle NPC mode (place and edit the map's NPCs) |
 | `c` | Open the character map |
 | `P` | Choose a tileset piece to place (see [Pieces](#pieces)) |
+| `T` | Draw the tiles for the glyphs already on this layer (see [Pieces](#pieces)) |
 | `o` | Open the brush colour picker (see [Colour](#colour)) |
 | `b` / `l` / `r` / `R` / `s` | Choose a tool: Brush, Line, Rectangle, Filled Rectangle, Select |
 | `f` | Flood fill from the cursor (same as `Ctrl+F`) |

@@ -552,6 +552,9 @@ trait PieceCanvas
         return [new PaletteItem('Pieces: Choose a piece to place', 'P', function (): void {
             $this->closeDatabaseIfOpen();
             $this->openPiecePicker();
+        }), new PaletteItem('Pieces: Draw tiles for this layer\'s glyphs', 'T', function (): void {
+            $this->closeDatabaseIfOpen();
+            $this->drawTilesForLayerGlyphs();
         })];
     }
 }
