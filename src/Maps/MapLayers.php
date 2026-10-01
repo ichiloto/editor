@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Maps;
 
+use Closure;
 use Ichiloto\Editor\MapSourceRefusal;
 use Ichiloto\Editor\Storage\FileSetTransaction;
 use Ichiloto\Engine\Field\MapGraphics;
@@ -272,7 +273,7 @@ final class MapLayers
      * @param array<string, list<list<string>>> $tiles Entries by row, keyed by tile layer name.
      * @throws MapSourceRefusal When a layer cannot be read, does not match the map, cannot be created, or the entries fall outside it.
      */
-    public function writeTileEntries(array $tiles, int $x, int $y): void
+    public function writeTileEntries(array $tiles, int $x, int $y, ?Closure $placeBefore = null): void
     {
         if ($tiles === []) {
             return;
@@ -280,7 +281,7 @@ final class MapLayers
         $set = $this->getLayerSet();
         $sources = $this->tileSources;
         foreach ($tiles as $name => $rows) {
-            $path = $this->findTileLayerPath((string) $name, $sources) ?? $this->buildTileLayerPath((string) $name, $sources);
+            $path = $this->findTileLayerPath((string) $name, $sources) ?? $this->addTileLayerPath((string) $name, $sources, $placeBefore);
             $sources[$path] = TileLayerSource::writeEntries($sources[$path] ?? TileLayerSource::createEmpty($set),
                 $this->getDisplayPath($path), $set, $x, $y, $rows, $this->baselineSources[$path] ?? null);
         }
@@ -299,7 +300,7 @@ final class MapLayers
      * @param array<string, list<array{x: int, y: int, entry: string}>> $cells The entry for each cell, keyed by tile layer name.
      * @throws MapSourceRefusal When a layer cannot be read, does not match the map, cannot be created, or a cell falls outside it.
      */
-    public function writeTileCells(array $cells): void
+    public function writeTileCells(array $cells, ?Closure $placeBefore = null): void
     {
         $set = $this->getLayerSet();
         $sources = $this->tileSources;
@@ -309,7 +310,7 @@ final class MapLayers
                 if (array_filter($entries, static fn(array $cell): bool => $cell['entry'] !== (string)TileId::EMPTY) === []) {
                     continue;
                 }
-                $path = $this->buildTileLayerPath((string) $name, $sources);
+                $path = $this->addTileLayerPath((string) $name, $sources, $placeBefore);
             }
             $sources[$path] = TileLayerSource::setCellEntries($sources[$path] ?? TileLayerSource::createEmpty($set),
                 $this->getDisplayPath($path), $set, $entries, $this->baselineSources[$path] ?? null);
@@ -393,20 +394,48 @@ final class MapLayers
     }
 
     /**
-     * The path for a new tile layer, ordered after the map's tile layers.
+     * Adds the path for a new tile layer: before the tile layer $placeBefore
+     * names, given the new layer's name and the map's tile layer names in
+     * order, or after them all when it names none. The new layer takes the
+     * free order just below that layer; when there is none, that layer and
+     * every later one move up one order to make room.
      *
-     * @param array<string, string> $sources Tile layer sources by path.
+     * @param array<string, string> $sources Tile layer sources by path, renumbered in place when room is made.
+     * @param (Closure(string, list<string>): ?string)|null $placeBefore
      * @throws MapSourceRefusal When the map cannot take another tile layer.
      */
-    private function buildTileLayerPath(string $name, array $sources): string
+    private function addTileLayerPath(string $name, array &$sources, ?Closure $placeBefore): string
     {
         $orders = [];
         foreach (array_keys($sources) as $path) {
             if (preg_match(MapGraphics::FILENAME_PATTERN, basename($path), $matches) === 1) {
-                $orders[] = (int) $matches['order'];
+                $orders[$path] = (int) $matches['order'];
             }
         }
-        $order = $orders === [] ? 0 : max($orders) + 1;
+        asort($orders);
+        $names = array_values(array_map(static fn(string $path): string =>
+            (preg_match(MapGraphics::FILENAME_PATTERN, basename($path), $matches) === 1 ? $matches['name'] : ''), array_keys($orders)));
+        $before = $placeBefore?->__invoke($name, $names);
+        $beforePath = $before === null ? null : $this->findTileLayerPath($before, $sources);
+        if ($beforePath === null) {
+            $order = $orders === [] ? 0 : max($orders) + 1;
+        } else {
+            $order = $orders[$beforePath];
+            if ($order > 0 && !in_array($order - 1, $orders, true)) {
+                $order--;
+            } else {
+                $renamed = [];
+                foreach ($sources as $path => $source) {
+                    $moves = isset($orders[$path]) && $orders[$path] >= $order;
+                    $renamed[$moves ? preg_replace('/\/\d{2}\.(?=[^\/]+$)/', sprintf('/%02d.', $orders[$path] + 1), $path) : $path] = $source;
+                }
+                if (max($orders) + 1 > 99) {
+                    throw new MapSourceRefusal(sprintf('Tile layer %s cannot be added: a map holds up to %d tile layers, ordered 00 to 99. Nothing was changed.',
+                        $name, MapGraphics::MAX_LAYERS));
+                }
+                $sources = $renamed;
+            }
+        }
         if (count($sources) >= MapGraphics::MAX_LAYERS || $order > 99) {
             throw new MapSourceRefusal(sprintf('Tile layer %s cannot be added: a map holds up to %d tile layers, ordered 00 to 99. Nothing was changed.',
                 $name, MapGraphics::MAX_LAYERS));

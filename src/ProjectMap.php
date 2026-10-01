@@ -474,7 +474,7 @@ final class ProjectMap
     public function writeTileEntries(array $tiles, int $x, int $y): void
     {
         $this->assertEditable();
-        $this->layers->writeTileEntries($tiles, $x, $y);
+        $this->layers->writeTileEntries($tiles, $x, $y, $this->findNewTileLayerPlace(...));
         $this->touchState();
     }
 
@@ -489,8 +489,42 @@ final class ProjectMap
     public function writeTileCells(array $cells): void
     {
         $this->assertEditable();
-        $this->layers->writeTileCells($cells);
+        $this->layers->writeTileCells($cells, $this->findNewTileLayerPlace(...));
         $this->touchState();
+    }
+
+    /**
+     * Where a new tile layer goes among the map's tile layers: before the
+     * first that belongs to a gameplay layer drawn above the new layer's
+     * own, so terrain tiles draw under building tiles and those under
+     * fixtures. A layer whose owner is unknown goes last.
+     *
+     * @param list<string> $names The map's tile layer names, in order.
+     * @return string|null The tile layer to place it before, or null for last.
+     */
+    private function findNewTileLayerPlace(string $name, array $names): ?string
+    {
+        $gameplay = array_values(array_filter($this->layers->getLayers(), static fn(array $layer): bool =>
+            $layer['id'] !== MapLayers::EVENT && ! $layer['decoration']));
+        $rank = array_flip(array_column($gameplay, 'name'));
+        try {
+            $owners = MapGraphics::resolveLayerOwners($this->getMapDataField([MapGraphics::SETTINGS_KEY]), [...$names, $name],
+                array_keys($rank), $this->loadTileset(), $this->mapId);
+        } catch (InvalidArgumentException | RuntimeException) {
+            return null;
+        }
+        if (($owners[$name] ?? null) === null) {
+            return null;
+        }
+        $own = $rank[$owners[$name]];
+        foreach ($names as $existing) {
+            $owner = $owners[$existing] ?? null;
+            if ($owner !== null && $rank[$owner] > $own) {
+                return $existing;
+            }
+        }
+
+        return null;
     }
 
     /**
