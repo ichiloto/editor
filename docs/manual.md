@@ -745,9 +745,9 @@ The clipboard is layer-tagged: a block lifted from the event layer refuses to
 land on tiles. A block lifted from a gameplay layer carries the graphical
 tiles that move with that layer, and a paste replaces the tiles under it.
 
-Current limit: the canvas draws no on-screen preview of a pending line,
-rectangle, or selection rectangle. The footer reports the anchor and selection
-size instead.
+A pending line or rectangle is previewed on the canvas in the brush glyph from
+its anchor to the cursor. A pending selection is not drawn; the footer reports
+its anchor and size.
 
 ## Inspector Panel
 
