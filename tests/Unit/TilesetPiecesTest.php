@@ -106,7 +106,7 @@ it('says which layers have pieces when the layer being edited has none', functio
         ->and($map->isDirty())->toBeFalse();
 });
 
-it('offers choosing a piece and drawing a layer's tiles in the command palette', function () {
+it('offers choosing a piece and drawing a layer\'s tiles in the command palette', function () {
     [$editor] = createPieceCanvasEditor();
     $labels = array_map(static fn($item): string => $item->label . ' ' . $item->hint, callEditorMethod($editor, 'buildPaletteItems'));
 
