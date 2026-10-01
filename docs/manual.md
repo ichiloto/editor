@@ -1408,11 +1408,9 @@ the map data. Routes in this phase are sequential and awaited, so `Wait` must
 remain true. Set either seconds-per-step (with an optional per-step override)
 or speed in steps per second.
 
-Current limit: nested arms are shown but not edited. A `choice` command's
-`Options` and a `branch` command's `Then` / `Else` appear as fixed rows, and
-their contents round-trip untouched when you save. Editing a nested arm means
-editing the file directly - flattening a command tree into one settings pane
-would be unreadable, and dropping it on save would be worse.
+A `choice` command's options and a `branch` command's `Then` / `Else` arms
+are not flattened into this list. Each arm opens as its own frame, described
+under [Command Frames](#command-frames).
 
 `start_battle` may occur in the middle of a script. The event suspends until
 the existing battle return path restores the field, then continues with the
@@ -1810,7 +1808,7 @@ fields are preserved and are not errors.
 | --- | --- | --- |
 | Help | `?` | Generated from the binding table; scrolls with arrows |
 | Command palette | `Ctrl+P` | Fuzzy search over actions, tools, maps, categories, and event markers |
-| Character map | `@` | Insert glyphs the keyboard reserves; lists the map's symbols, the project's collision vocabulary, and the reserved glyphs |
+| Character map | `c` in Normal mode, or *Tool: Character Map* in the command palette | Insert glyphs the keyboard reserves; lists the map's symbols, the project's collision vocabulary, and the reserved glyphs |
 | Status detail | `Ctrl+E` | Full text of the last message, and the log file path |
 
 Current limit: the help overlay and command palette cannot open while a picker
