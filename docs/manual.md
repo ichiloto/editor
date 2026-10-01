@@ -449,7 +449,7 @@ which glyphs:
   remove the copy when the NPC is always there.
 
 These are art still to do, not faults: the game plays the same either way,
-so saving a map does not warn about them; `Ctrl+E` and `ichiloto validate` do.
+so saving a map does not warn about them; `ichiloto validate` reports them.
 
 Text catalogues in `assets/Graphics/Tilesets/*.txt` appear as Facade brushes in
 `Ctrl+P`. Separate multi-row shapes with blank lines. Select a brush to target
