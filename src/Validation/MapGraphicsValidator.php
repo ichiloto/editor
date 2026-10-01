@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Validation;
 
+use Ichiloto\Editor\Field\ProjectNpc;
 use Ichiloto\Editor\Maps\MapLayers;
 use Ichiloto\Editor\Maps\TileLayerSource;
 use Ichiloto\Editor\ProjectMap;
@@ -27,10 +28,15 @@ use Throwable;
  * Unusable graphics never stop a map loading; the game shows its terminal
  * glyphs instead. Every file is checked, so one report names every problem
  * rather than only the first the Engine meets.
+ *
+ * {@see validateCoverage()} reports, apart, what a map with a kind still shows
+ * as terminal glyphs in the graphical field.
  */
 final class MapGraphicsValidator
 {
     private const string GLYPH_FALLBACK = 'The game shows this map\'s terminal glyphs instead of its graphics.';
+    /** How many cells a coverage warning names before summing up the rest. */
+    private const int CELLS_NAMED = 3;
 
     private function __construct()
     {
@@ -67,6 +73,108 @@ final class MapGraphicsValidator
         }
 
         return $issues;
+    }
+
+    /**
+     * Warns for what a map with a kind still shows as terminal glyphs in the
+     * graphical field, by the Engine's glyph fallback rule: cells no tile
+     * covers, NPCs without a field sprite, and copies of an NPC's glyph in the
+     * map showing under its sprite. These are art still to do, not faults:
+     * the game plays the same, so project validation reports them and the
+     * pre-save checks do not. Graphics the Engine refuses are
+     * {@see validate()}'s to report; only the readable tile layers count here.
+     *
+     * @return list<Issue>
+     */
+    public static function validateCoverage(ProjectMap $map): array
+    {
+        $ignored = [];
+        $tileset = is_string($tilesetId = $map->getMapDataField(['tileset'])) ? self::loadTileset($map, $tilesetId, $ignored) : null;
+        if ($tileset === null) {
+            return [];
+        }
+        $layers = self::readLayers($map, $map->getTileLayerSources(), $ignored);
+
+        try {
+            $layerSet = $map->getLayerSet();
+            $owners = MapGraphics::resolveLayerOwners($map->getMapDataField([MapGraphics::SETTINGS_KEY]),
+                array_map(static fn(MapTileLayer $layer): string => $layer->name, $layers),
+                array_column(array_filter($map->getLayers(), static fn(array $layer): bool =>
+                    $layer['id'] !== MapLayers::EVENT && ! $layer['decoration']), 'name'), $tileset, $map->mapId);
+        } catch (Throwable) {
+            // The terminal layers' and tile layer settings' own checks report why.
+            return [];
+        }
+
+        $shown = [];
+        foreach (new MapGraphics($tileset, $layers, owners: $owners)->getShownGlyphCells($layerSet, $map->getAssetRoot()) as $cell) {
+            $shown[$cell['y']][$cell['x']] = $cell;
+        }
+
+        $issues = [];
+        foreach ($map->getNpcs()->all() as $npc) {
+            $name = self::formatNpcName($npc);
+            if (! array_key_exists('sprites2d', $npc->toArray())) {
+                // An NPC without a terminal sprite draws nothing; its map glyph, if any, is the cell's.
+                if ($npc->getVisibleSprite() !== '') {
+                    $issues[] = Issue::warning($map->mapId,
+                        sprintf('NPC %s has no field sprite, so its glyph %s shows in the graphical field.', $name, $npc->getVisibleSprite()),
+                        'Give it an RPG Maker character sheet (sprites2d).');
+                }
+
+                continue;
+            }
+
+            // A map glyph copying the NPC's own glyph is drawn twice in the
+            // terminal and shows under the sprite in the graphical field.
+            $cell = $shown[$npc->getY()][$npc->getX()] ?? null;
+            if ($cell !== null && $cell['glyph'] === $npc->getVisibleSprite()) {
+                unset($shown[$npc->getY()][$npc->getX()]);
+                $issues[] = Issue::warning($map->mapId,
+                    sprintf('NPC %s stands on a copy of its glyph %s on the %s layer, which shows under its sprite.',
+                        $name, $cell['glyph'], $cell['layer']),
+                    'Remove the copy from the map if the NPC is always there; otherwise give the cell its tile.');
+            }
+        }
+
+        $cells = array_merge(...array_values(array_map(array_values(...), $shown)) ?: [[]]);
+        if ($cells === []) {
+            return $issues;
+        }
+
+        if ($layers === []) {
+            return [...$issues, Issue::warning($map->mapId,
+                sprintf('It has no tiles yet, so all %d of its glyph cells show in the graphical field.', count($cells)),
+                'Stamp tileset pieces with P, draw the tiles for glyphs already on a layer with T, or paint tiles in the GUI editor.')];
+        }
+
+        $hint = 'Draw them with T on that layer when a tileset piece draws the glyph, or paint them in the GUI editor.';
+
+        $groups = [];
+        foreach ($cells as $cell) {
+            $groups[$cell['layer'] . "\0" . $cell['glyph']][] = $cell;
+        }
+        foreach ($groups as $group) {
+            $named = array_map(static fn(array $cell): string => "({$cell['x']}, {$cell['y']})", array_slice($group, 0, self::CELLS_NAMED));
+            $rest = count($group) - count($named);
+            $issues[] = Issue::warning($map->mapId, sprintf('%d %s of %s on the %s layer %s no tile, so the glyph shows in the graphical field: %s%s.',
+                count($group), count($group) === 1 ? 'cell' : 'cells', $group[0]['glyph'], $group[0]['layer'],
+                count($group) === 1 ? 'has' : 'have', implode(', ', $named), $rest > 0 ? " and {$rest} more" : ''), $hint);
+        }
+
+        return $issues;
+    }
+
+    private static function formatNpcName(ProjectNpc $npc): string
+    {
+        $name = trim($npc->getName());
+        $id = $npc->getId();
+
+        return match (true) {
+            $name === '' => $id ?? 'without a name',
+            $id === null => $name,
+            default => "{$name} ({$id})",
+        };
     }
 
     /**

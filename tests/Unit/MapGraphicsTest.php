@@ -21,11 +21,12 @@ use Ichiloto\Engine\Field\MapGridSource;
  * and delete, and validates them as the Engine reads them.
  */
 
-/** @return list<string> The graphics issues reported for the test map. */
+/** @return list<string> The graphics and coverage issues reported for the test map. */
 function graphicsIssueLines(string $root, ?Severity $severity = null): array
 {
+    $map = loadLayeredMap($root);
     $issues = array_filter(
-        MapGraphicsValidator::validate(loadLayeredMap($root)),
+        [...MapGraphicsValidator::validate($map), ...MapGraphicsValidator::validateCoverage($map)],
         static fn(Issue $issue): bool => $issue->where === 'test-map' && ($severity === null || $issue->severity === $severity),
     );
 
@@ -256,7 +257,8 @@ it('names a tileset through the source-preserving map data path', function () {
 
     expect((string) file_get_contents($map->dataPath))->toContain('// Authored metadata remains authored.')
         ->and(loadLayeredMap($root)->getMapDataField(['tileset']))->toBe('home')
-        ->and(graphicsIssueLines($root))->toBe([]);
+        // Named but not yet painted: every glyph still shows in the graphical field.
+        ->and(graphicsIssueLines($root))->toBe(['It has no tiles yet, so all 8 of its glyph cells show in the graphical field.']);
 });
 
 // -- Validation ---------------------------------------------------------------
@@ -320,7 +322,47 @@ it('warns for unusable sheets and for tiles from sheets the tileset does not pro
         'Tileset home sheet A2 is unusable: Graphics/Tilesets/Home_A2.png is 30x24, which does not fit an A2 sheet of 16 x 12 tiles in one even tile size shared by every sheet (768x576 at 48 pixels).',
         'Tileset home sheet B is unusable: Invalid PNG header: Graphics/Tilesets/Home_B.png',
         'Tile layer test-map/graphics/02.decor.tiles.php uses sheets A5, C, which tileset home does not provide.',
+        // Tiles from unusable sheets draw nothing, so their glyphs show.
+        '5 cells of . on the terrain layer have no tile, so the glyph shows in the graphical field: (0, 0), (2, 0), (3, 0) and 2 more.',
+        '1 cell of / on the buildings layer has no tile, so the glyph shows in the graphical field: (1, 0).',
+        '2 cells of x on the buildings layer have no tile, so the glyph shows in the graphical field: (1, 1), (2, 1).',
     ])->and(graphicsIssueLines($root, Severity::ERROR))->toBe([]);
+});
+
+it('warns for glyphs no tile covers, NPCs without field sprites and copies of an NPC\'s glyph under it', function () {
+    $root = mapGraphicsProject();
+    $directory = $root . '/assets/Maps/test-map';
+    writeTileLayer($directory, '01.floor.tiles.php', "2816 0 2816 2816\n2816 0 0 2816");
+    writeTileLayer($directory, '02.decor.tiles.php', "0 0 0 0\n0 0 0 0");
+    editTestMapData($root, static fn(string $source): string => str_replace("'events' => [],", "'events' => [], 'npcs' => [
+        ['id' => 'guard', 'name' => 'Guard', 'sprite' => '<fg=red>@</>', 'x' => 0, 'y' => 0],
+        ['id' => 'board', 'name' => 'Board', 'sprite' => '', 'x' => 3, 'y' => 0],
+        ['id' => 'sign', 'name' => 'Sign', 'sprite' => 'x', 'sprites2d' => ['sheet' => 'Graphics/Characters/!\$Sign.png'], 'x' => 1, 'y' => 1],
+        ['id' => 'lamp', 'name' => 'Lamp', 'sprite' => 'i', 'sprites2d' => ['sheet' => 'Graphics/Characters/!\$Lamp.png'], 'x' => 3, 'y' => 1],
+        ['id' => 'cat', 'name' => 'Cat', 'sprite' => 'c', 'sprites2d' => ['sheet' => 'Graphics/Characters/\$Cat.png'], 'x' => 2, 'y' => 1],
+    ],", $source));
+
+    // The board draws no glyph, and the lamp stands on a covered cell. The
+    // sign's copy is named once, for the NPC, not again among the x cells;
+    // the cat stands on another glyph, an uncovered cell like any other.
+    expect(graphicsIssueLines($root))->toBe([
+        'NPC Guard (guard) has no field sprite, so its glyph @ shows in the graphical field.',
+        'NPC Sign (sign) stands on a copy of its glyph x on the buildings layer, which shows under its sprite.',
+        '1 cell of / on the buildings layer has no tile, so the glyph shows in the graphical field: (1, 0).',
+        '1 cell of x on the buildings layer has no tile, so the glyph shows in the graphical field: (2, 1).',
+    ])->and(graphicsIssueLines($root, Severity::ERROR))->toBe([]);
+});
+
+it('counts a tile as covering only the glyphs of the gameplay layer it belongs to', function () {
+    $root = mapGraphicsProject();
+    writeTestTileset($root, pieces: ['ground' => ['name' => 'Ground', 'layer' => 'terrain', 'glyphs' => ['.'], 'tiles' => ['floor' => ['2816']]]]);
+    writeTileLayer($root . '/assets/Maps/test-map', '02.decor.tiles.php', "0 0 0 0\n0 0 0 0");
+
+    // The floor belongs to terrain, so the building glyphs above it still show.
+    expect(graphicsIssueLines($root))->toBe([
+        '1 cell of / on the buildings layer has no tile, so the glyph shows in the graphical field: (1, 0).',
+        '2 cells of x on the buildings layer have no tile, so the glyph shows in the graphical field: (1, 1), (2, 1).',
+    ]);
 });
 
 it('includes graphics problems in the pre-save map warnings, unsaved resizes included', function () {
@@ -333,6 +375,13 @@ it('includes graphics problems in the pre-save map warnings, unsaved resizes inc
     $map->setMapDataField(['tileset'], 'home');
     $map->resize(6, 3);
     expect(MapGraphicsValidator::validate($map))->toBe([]);
+
+    // Glyphs without tiles are art still to do, not a save problem.
+    writeTileLayer($root . '/assets/Maps/test-map', '01.floor.tiles.php', "0 0 0 0\n0 0 0 0");
+    $map = loadLayeredMap($root);
+    $coverage = array_map(static fn(Issue $issue): string => $issue->message, MapGraphicsValidator::validateCoverage($map));
+    expect($coverage)->not->toBe([])
+        ->and(array_intersect(MapValidator::validate($map, ['test-map' => $map]), $coverage))->toBe([]);
 });
 
 it('warns about a map without a kind only in a project that has tilesets', function () {
@@ -347,7 +396,22 @@ it('warns about a map without a kind only in a project that has tilesets', funct
         ->and($issues[0]->hint)->toStartWith('Set its Kind in the Inspector, one of the tilesets in assets/Data/Tilesets.');
 
     editTestMapData($root, static fn(string $source): string => str_replace("'events' => [],", "'events' => [], 'tileset' => 'interior',", $source));
-    expect(MapGraphicsValidator::validate(loadLayeredMap($root)))->toBe([]);
+    $map = loadLayeredMap($root);
+    expect(MapGraphicsValidator::validate($map))->toBe([])
+        // Coverage is reported apart: the map has a kind but no tiles yet.
+        ->and(array_map(static fn(Issue $issue): string => $issue->message, MapGraphicsValidator::validateCoverage($map)))
+        ->toBe(['It has no tiles yet, so all 8 of its glyph cells show in the graphical field.']);
+});
+
+it('reports coverage through project validation, as ichiloto validate runs it', function () {
+    $root = mapGraphicsProject();
+    writeTileLayer($root . '/assets/Maps/test-map', '01.floor.tiles.php', "2816 2816 2816 2816\n2816 0 2816 2816");
+
+    $messages = array_map(static fn(Issue $issue): string => $issue->message, array_filter(
+        new ProjectValidator()->validate(ProjectWorkspace::fromProject($root)),
+        static fn(Issue $issue): bool => $issue->where === 'test-map',
+    ));
+    expect($messages)->toContain('1 cell of x on the buildings layer has no tile, so the glyph shows in the graphical field: (1, 1).');
 });
 
 it('reports graphics through project validation, as ichiloto validate runs it', function () {

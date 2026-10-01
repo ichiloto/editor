@@ -437,6 +437,20 @@ invalid tile identities are errors. Unusable sheets and tiles from a sheet the
 tileset does not provide are warnings. The game shows terminal glyphs for
 anything it cannot draw.
 
+For a map with a kind, validation also warns about what the graphical field
+still shows as terminal glyphs, using the Engine's rule for which tiles hide
+which glyphs:
+
+- glyph cells no tile covers, grouped by glyph and layer, or a single warning
+  when the map has no tiles yet;
+- NPCs without a field sprite (`sprites2d`) whose glyph therefore shows; an
+  NPC with an empty sprite draws nothing and is not counted;
+- a copy of an NPC's own glyph in the map, which shows under its sprite;
+  remove the copy when the NPC is always there.
+
+These are art still to do, not faults: the game plays the same either way,
+so saving a map does not warn about them; `Ctrl+E` and `ichiloto validate` do.
+
 Text catalogues in `assets/Graphics/Tilesets/*.txt` appear as Facade brushes in
 `Ctrl+P`. Separate multi-row shapes with blank lines. Select a brush to target
 the gameplay `buildings` layer, then press `Enter` to stamp it as one undo
