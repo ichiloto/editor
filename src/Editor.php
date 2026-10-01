@@ -395,6 +395,11 @@ final class Editor
     }
     private ?MouseButton $activeMousePaintButton = null;
     /**
+     * @var array{start: array{x: int, y: int}, symbol: string}|null A line, rectangle or selection being dragged out
+     *     with the mouse: the cell it started on and the symbol it draws (a space erases).
+     */
+    private ?array $mouseToolDrag = null;
+    /**
      * @var array{x: int, y: int}|null
      */
     private ?array $lastMousePaintPoint = null;
@@ -4422,6 +4427,12 @@ final class Editor
             $this->finalizeActiveStroke();
             $this->activeMousePaintButton = null;
             $this->lastMousePaintPoint = null;
+            $this->mouseToolDrag = null;
+            return true;
+        }
+
+        if ($event->isRelease && $this->mouseToolDrag !== null) {
+            $this->completeMouseToolDrag($event);
             return true;
         }
 
@@ -4522,6 +4533,40 @@ final class Editor
         ];
     }
 
+    /**
+     * Ends a mouse drag of a line, rectangle or selection where the button
+     * was released (or at the last cell the drag reached, when released off
+     * the map). A selection that never left its first cell is a click: it
+     * moves the cursor there, as a Normal-mode click does.
+     */
+    private function completeMouseToolDrag(MouseEvent $event): void
+    {
+        $drag = $this->mouseToolDrag;
+        $this->mouseToolDrag = null;
+        $bounds = $this->getCanvasPreviewBounds();
+        $selectedMap = $this->getSelectedMap();
+        if ($selectedMap instanceof ProjectMap && $event->x >= $bounds['left'] && $event->x <= $bounds['right']
+            && $event->y >= $bounds['top'] && $event->y <= $bounds['bottom']) {
+            $this->cursorX = max(0, min($selectedMap->getWidth() - 1, $this->canvasOffsetX + ($event->x - $bounds['left'])));
+            $this->cursorY = max(0, min($selectedMap->getHeight() - 1, $this->canvasOffsetY + ($event->y - $bounds['top'])));
+        }
+        $anchor = $this->canvasToolAnchor ?? $drag['start'];
+        $this->canvasToolAnchor = null;
+        if (! $selectedMap instanceof ProjectMap) {
+            return;
+        }
+        if ($this->canvasTool === CanvasTool::SELECT) {
+            if ($anchor === ['x' => $this->cursorX, 'y' => $this->cursorY]) {
+                $this->statusMessage = sprintf('Cursor at (%d, %d).', $this->cursorX, $this->cursorY);
+                $this->renderCanvasArea();
+                return;
+            }
+            $this->completeCanvasSelection($anchor);
+            return;
+        }
+        $this->drawCanvasToolShape($selectedMap, $anchor, $drag['symbol']);
+    }
+
     /** Handles mouse editing over the canvas preview. */
     private function handleCanvasMouseEdit(MouseEvent $event): bool
     {
@@ -4556,6 +4601,29 @@ final class Editor
             $this->cursorX = $targetX;
             $this->cursorY = $targetY;
             $this->stampFacadeBrush();
+            return true;
+        }
+
+        // A tool that spans an anchor and a corner follows a mouse drag: the
+        // press anchors it, the drag moves the corner with a live preview,
+        // and the release draws (or selects). The right button erases.
+        $dragsShape = $this->editingMode === self::MODE_MAP && $this->getActivePiecePlacement() === null && match ($this->inputMode) {
+            self::INPUT_PAINT => in_array($this->canvasTool, [CanvasTool::LINE, CanvasTool::RECTANGLE, CanvasTool::FILLED_RECTANGLE], true),
+            self::INPUT_NORMAL => $this->canvasTool === CanvasTool::SELECT && $event->button === MouseButton::LEFT_BUTTON,
+            default => false,
+        };
+        if ($dragsShape) {
+            if (! $event->isMotion || $this->mouseToolDrag === null) {
+                $this->mouseToolDrag = ['start' => ['x' => $targetX, 'y' => $targetY],
+                    'symbol' => $event->button === MouseButton::RIGHT_BUTTON ? ' ' : $this->selectedPaintSymbol];
+                $this->canvasToolAnchor = ['x' => $targetX, 'y' => $targetY];
+            }
+            $this->cursorX = $targetX;
+            $this->cursorY = $targetY;
+            $this->statusMessage = sprintf('%s from (%d, %d) to (%d, %d). Release to %s.', $this->canvasTool->label(),
+                $this->canvasToolAnchor['x'], $this->canvasToolAnchor['y'], $targetX, $targetY,
+                $this->canvasTool === CanvasTool::SELECT ? 'select' : 'draw');
+            $focusChanged ? $this->renderFocusDependentArea() : $this->renderCanvasArea();
             return true;
         }
 
@@ -5170,6 +5238,18 @@ final class Editor
             return;
         }
 
+        $this->drawCanvasToolShape($selectedMap, $anchor, $this->selectedPaintSymbol);
+    }
+
+    /**
+     * The cells the active line or rectangle tool covers from an anchor to
+     * the cursor, widened by the brush except for a filled rectangle.
+     *
+     * @param array{x: int, y: int} $anchor
+     * @return array<int, array{x: int, y: int}>
+     */
+    private function getCanvasToolShapeCells(array $anchor): array
+    {
         $cells = match ($this->canvasTool) {
             CanvasTool::LINE => ToolGeometry::line($anchor['x'], $anchor['y'], $this->cursorX, $this->cursorY),
             CanvasTool::RECTANGLE => ToolGeometry::rectangleOutline($anchor['x'], $anchor['y'], $this->cursorX, $this->cursorY),
@@ -5179,13 +5259,42 @@ final class Editor
 
         // The brush thickens outlines and lines; a filled rectangle is
         // already solid, so widening it would only spill past the corners.
-        if ($this->canvasTool !== CanvasTool::FILLED_RECTANGLE) {
-            $cells = ToolGeometry::expandByBrush($cells, $this->canvasBrushSize);
+        return $this->canvasTool === CanvasTool::FILLED_RECTANGLE ? $cells : ToolGeometry::expandByBrush($cells, $this->canvasBrushSize);
+    }
+
+    /**
+     * What the canvas previews over the map: the piece being placed, or the
+     * shape a line or rectangle tool will draw from its anchor to the cursor.
+     *
+     * @return array<int, array<int, ?string>> Symbols by row and column.
+     */
+    private function getCanvasPreviewCells(): array
+    {
+        $cells = $this->getPiecePreviewCells();
+        if ($cells !== [] || ! is_array($this->canvasToolAnchor)
+            || ! in_array($this->canvasTool, [CanvasTool::LINE, CanvasTool::RECTANGLE, CanvasTool::FILLED_RECTANGLE], true)) {
+            return $cells;
+        }
+        $symbol = $this->mouseToolDrag['symbol'] ?? $this->selectedPaintSymbol;
+        foreach ($this->getCanvasToolShapeCells($this->canvasToolAnchor) as $cell) {
+            $cells[$cell['y']][$cell['x']] = $symbol;
         }
 
+        return $cells;
+    }
+
+    /**
+     * Draws the active line or rectangle tool's shape from an anchor to the
+     * cursor in one undo step, painting the symbol (a space erases).
+     *
+     * @param array{x: int, y: int} $anchor
+     */
+    private function drawCanvasToolShape(ProjectMap $selectedMap, array $anchor, string $symbol): void
+    {
+        $cells = $this->getCanvasToolShapeCells($anchor);
         $tool = $this->canvasTool;
-        $paint = function (?array $choices = null) use ($selectedMap, $cells, $tool, &$paint): void {
-            $changed = $this->paintCanvasCells($selectedMap, $cells, $this->selectedPaintSymbol, $tool->commandLabel(), $paint, $choices);
+        $paint = function (?array $choices = null) use ($selectedMap, $cells, $tool, $symbol, &$paint): void {
+            $changed = $this->paintCanvasCells($selectedMap, $cells, $symbol, $tool->commandLabel(), $paint, $choices);
 
             if ($changed === null) {
                 $this->renderCanvasArea();
@@ -5197,7 +5306,7 @@ final class Editor
                 $tool->label(),
                 $changed,
                 $changed === 1 ? '' : 's',
-                $this->selectedPaintSymbol === ' ' ? 'space' : $this->selectedPaintSymbol,
+                $symbol === ' ' ? 'space' : $symbol,
             ));
             $this->renderCanvasArea();
         };
@@ -18498,6 +18607,10 @@ final class Editor
                 $this->getActivePiecePlacement() !== null => $this->getPiecePlacementHelp($layout['centerWidth']) ?? '',
                 default => $this->fitHelp(
                     $layout['centerWidth'],
+                    'i:Paint b/l/r/R/s:Tool L:Layer P:Piece o:Colour v:Hide d:Dim ?:Help',
+                    'i:Paint b/l/r/R/s:Tool L:Layer P:Piece o:Colour ?:Help',
+                    'i:Paint b/l/r/R/s:Tool L:Layer P:Piece ?:Help',
+                    'i:Paint b/l/r/R/s:Tool L:Layer ?:Help',
                     'i:Paint L:Layer P:Piece v:Hide d:Dim o:Colour ?:Help',
                     'i:Paint L:Layer P:Piece v:Hide d:Dim',
                     'i:Paint L:Layer P:Piece ?:Help',
@@ -18528,7 +18641,7 @@ final class Editor
                     $this->getActiveCanvasLayer(),
                     false,
                     $this->getCanvasLayerState()['dim'],
-                    $this->getPiecePreviewCells(),
+                    $this->getCanvasPreviewCells(),
                 ) ?? [],
                 $contentWidth,
                 $contentHeight

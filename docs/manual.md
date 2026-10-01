@@ -311,8 +311,12 @@ whole tile. A field cell holds one whole RPG Maker tile, so an entry naming
 half a tile (`42L`) is refused: in a tileset piece the canvas offers no pieces
 and says which entry, in a tile layer the stamp changes nothing, and
 validation reports both. A tile layer the map does not have yet is created as
-`graphics/NN.name.tiles.php`, ordered after the map's tile layers and empty
-elsewhere. The terminal never shows the tiles, but a map built from pieces
+`graphics/NN.name.tiles.php`, empty elsewhere, in the order of the gameplay
+layer it belongs to: before the first tile layer of a gameplay layer drawn
+above its own, so terrain tiles draw under building tiles and those under
+fixtures, and otherwise after them all. It takes the free order just below
+that layer; when there is none, that layer and every later one move up one
+order, and saving writes their new files and removes the old ones. The terminal never shows the tiles, but a map built from pieces
 draws correctly graphically without a second pass. A stamp that cannot be made
 whole changes nothing: the map has no gameplay layer with the piece's name,
 the footprint does not fit inside the map at the cursor (ragged rows
@@ -516,9 +520,19 @@ to Normal.
 The mouse honors the canvas's modality. In Normal mode a click **selects**:
 the cursor jumps to the clicked cell and the status line reads out its
 coordinates - the fastest way to find a tile's position for a spawn point or
-event without walking the cursor there. In Paint mode a left click paints
-the brush symbol and a right click erases, dragging paints a stroke, and in
-Event mode clicks keep their event-editing behavior.
+event without walking the cursor there. With the Select tool, dragging in
+Normal mode selects the rectangle from where the press began to where it is
+released; a click still only moves the cursor. In Paint mode a left click
+paints the brush symbol and a right click erases, dragging paints a stroke,
+and in Event mode clicks keep their event-editing behavior.
+
+The mouse follows the active tool. With Line, Rectangle or Filled Rectangle
+in Paint mode, the press sets the anchor, dragging moves the other end with
+the shape previewed on the canvas, and releasing draws it in one undo step,
+in the brush colour; dragging with the right button erases the shape. The
+same preview shows while a tool anchored with `Enter` waits for its second
+`Enter`. In Normal mode the canvas border names the tool keys
+(`b/l/r/R/s:Tool`).
 
 The wheel scrolls the viewport without moving the cursor - free look for
 surveying a map larger than the canvas (horizontal wheel scrolls sideways).

@@ -178,7 +178,7 @@ it('fits the placement hint to narrow canvases and shows P:Piece in Normal mode'
         ->and(callEditorMethod($editor, 'getPiecePlacementHelp', 24))->toBe('Enter:Stamp Esc:Done')
         ->and(callEditorMethod($editor, 'getPiecePlacementHelp', 12))->toBe('Esc:Done');
     callEditorMethod($editor, 'dispatchInput', "\033");
-    expect(renderEditorPlainFrame($editor, 200, 45))->toContain('i:Paint L:Layer P:Piece');
+    expect(renderEditorPlainFrame($editor, 200, 45))->toContain('i:Paint b/l/r/R/s:Tool L:Layer P:Piece');
 });
 
 it('stamps glyphs on the piece\'s layer and its tiles in one undo step', function () {
@@ -253,6 +253,52 @@ it('creates graphics/ for a map whose tileset pieces name tile layers it lacks',
         ->toBe("<?php\n\nreturn <<<'TILES'\n0 0 0 0\n2816 2816 0 0\nTILES;\n")
         ->and(MapGraphics::loadFromDirectory($map->directory, 'test-map', 'home', loadLayeredMap($root)->getLayerSet(), $root . '/assets'))
         ->not->toBeNull();
+});
+
+it('orders a new tile layer by the gameplay layer it belongs to', function () {
+    [$editor, $map, $root] = createPieceCanvasEditor();
+    // floor belongs to Terrain (the rug writes it) and decor to Buildings (the bed).
+    writeTestTileset($root, pieces: [...buildTestPieces(),
+        'grass' => ['name' => 'Grass', 'layer' => 'terrain', 'glyphs' => [';'], 'tiles' => ['ground' => ['2864']]]]);
+    $graphics = $map->directory . '/graphics';
+
+    // A Terrain layer goes under Buildings' decor; with no free order below
+    // decor, decor and every later layer move up one.
+    callEditorMethod($editor, 'choosePiece', 'grass');
+    callEditorMethod($editor, 'dispatchInput', "\n");
+    expect(array_map(basename(...), array_keys($map->getTileLayerSources())))
+        ->toBe(['01.floor.tiles.php', '02.ground.tiles.php', '03.decor.tiles.php']);
+
+    // A Buildings layer goes after every layer of Buildings and below.
+    callEditorMethod($editor, 'dispatchInput', "\033");
+    callEditorMethod($editor, 'choosePiece', 'bed');
+    callEditorMethod($editor, 'dispatchInput', "\033[C");
+    callEditorMethod($editor, 'dispatchInput', "\033[C");
+    callEditorMethod($editor, 'dispatchInput', "\n");
+    expect(array_map(basename(...), array_keys($map->getTileLayerSources())))
+        ->toBe(['01.floor.tiles.php', '02.ground.tiles.php', '03.decor.tiles.php', '04.furniture.tiles.php']);
+
+    // Saving writes the renumbered layer and removes its old file; undo restores the order.
+    callEditorMethod($editor, 'dispatchInput', "\x13");
+    expect(array_map(basename(...), glob($graphics . '/*.tiles.php')))
+        ->toBe(['01.floor.tiles.php', '02.ground.tiles.php', '03.decor.tiles.php', '04.furniture.tiles.php']);
+    callEditorMethod($editor, 'dispatchInput', "\x1a");
+    callEditorMethod($editor, 'dispatchInput', "\x1a");
+    expect(array_map(basename(...), array_keys($map->getTileLayerSources())))->toBe(['01.floor.tiles.php', '02.decor.tiles.php']);
+});
+
+it('puts a new layer in the free order just below a higher layer without renumbering', function () {
+    [$editor, $map, $root] = createPieceCanvasEditor();
+    rename($map->directory . '/graphics/01.floor.tiles.php', $map->directory . '/graphics/00.floor.tiles.php');
+    rename($map->directory . '/graphics/02.decor.tiles.php', $map->directory . '/graphics/05.decor.tiles.php');
+    writeTestTileset($root, pieces: [...buildTestPieces(),
+        'grass' => ['name' => 'Grass', 'layer' => 'terrain', 'glyphs' => [';'], 'tiles' => ['ground' => ['2864']]]]);
+    [$editor, $map] = layeredCanvasEditor($root);
+
+    callEditorMethod($editor, 'choosePiece', 'grass');
+    callEditorMethod($editor, 'dispatchInput', "\n");
+    expect(array_map(basename(...), array_keys($map->getTileLayerSources())))
+        ->toBe(['00.floor.tiles.php', '04.ground.tiles.php', '05.decor.tiles.php']);
 });
 
 it('refuses a stamp that cannot be made whole and changes nothing', function (string $case, string $message) {
