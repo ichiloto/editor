@@ -203,3 +203,27 @@ it('saves a record category through the editor and backs the file up first', fun
         removeDirectoryRecursively($root);
     }
 });
+
+it("chooses a state's disposition from the Engine's, and writes nothing while it is the default", function (): void {
+    $root = makeTemporaryProject();
+
+    try {
+        $database = ProjectWorkspace::fromProject($root)->getRecordDatabase('states');
+        $field = array_values(array_filter($database->schema->fields,
+            static fn($field): bool => $field->key === 'disposition'))[0] ?? null;
+
+        expect($field?->options)->toBe(['harmful', 'beneficial', 'neutral'])
+            ->and($field?->displayDefault)->toBe('harmful');
+
+        $database->setField(1, 'disposition', 'neutral');
+        $database->save();
+        $saved = require $root . '/assets/Data/states.php';
+
+        expect($saved[1]['disposition'])->toBe('neutral')
+            ->and($saved[0])->not->toHaveKey('disposition')
+            ->and(\Ichiloto\Engine\Entities\States\State::fromArray($saved[1])->disposition)
+            ->toBe(\Ichiloto\Engine\Entities\States\StateDisposition::NEUTRAL);
+    } finally {
+        removeDirectoryRecursively($root);
+    }
+});

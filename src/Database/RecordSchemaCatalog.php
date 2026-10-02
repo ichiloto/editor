@@ -18,6 +18,7 @@ use Ichiloto\Editor\EquipmentOptimizationPolicy;
 use Ichiloto\Editor\Field\ProjectNpc;
 use Ichiloto\Editor\Inspector\InputControlType;
 use Ichiloto\Editor\PermanentGrowthCatalog;
+use Ichiloto\Engine\Entities\States\StateDisposition;
 use Ichiloto\Engine\Events\Interpreter\EventInterpreter;
 use Ichiloto\Engine\Entities\Enemies\Enemy;
 use Ichiloto\Engine\Entities\Enumerations\ItemUserType;
@@ -126,6 +127,10 @@ final class RecordSchemaCatalog
                 new RecordField('tickFormula', 'Tick Formula', removeWhenEmpty: true),
                 RecordField::boolean('preventsAction', 'Prevents Action'),
                 RecordField::boolean('persistsAfterBattle', 'Persists After Battle'),
+                // Whether it harms, enhances or is neutral to its bearer; battle poses follow it.
+                new RecordField('disposition', 'Disposition',
+                    options: array_map(static fn(StateDisposition $disposition): string => $disposition->value, StateDisposition::cases()),
+                    removeWhenEmpty: true, displayDefault: StateDisposition::HARMFUL->value),
             ],
             labelKey: 'name',
             identityKey: 'id',

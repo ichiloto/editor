@@ -1082,7 +1082,9 @@ pairs, and the line reads back exactly what was written:
 Status effects, read by the engine's `StateRegistry`.
 
 Fields: `Id`, `Name`, `Icon`, `Description`, `Duration Turns`, `Tick Formula`,
-`Prevents Action`, `Persists After Battle`.
+`Prevents Action`, `Persists After Battle`, `Disposition` (`harmful`, the
+default, `beneficial` or `neutral`: whether it harms or enhances its bearer,
+which battle poses follow).
 
 `Id` is the only field the engine requires. Optional fields disappear from the
 file when you clear them, so a state with no duration lasts until it is cured
