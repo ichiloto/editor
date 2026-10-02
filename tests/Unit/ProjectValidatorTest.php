@@ -815,3 +815,62 @@ it('offers skills from every skill file as references', function () {
 
     expect(ProjectWorkspace::fromProject($root)->getSkillNames())->toBe(['Attack', 'Cleanse', 'Ward', 'Burn I']);
 });
+
+/** Writes a transitions catalogue whose one treatment draws the given image. */
+function writeTransitionCatalog(string $root, string $asset, string $battle = 'sweep'): void
+{
+    @mkdir($root . '/assets/Data/Presentation', 0777, true);
+    file_put_contents($root . '/assets/Data/Presentation/transitions.php', <<<PHP
+    <?php
+    use Ichiloto\Engine\Rendering\Presentation\PresentationColor;
+    use Ichiloto\Engine\Rendering\ScreenTransitionCatalog;
+    use Ichiloto\Engine\Rendering\ScreenTransitionTreatment;
+
+    \$bounds = ['x' => 0, 'y' => 0, 'width' => 160, 'height' => 90];
+    \$brush = ['type' => 'solid', 'color' => PresentationColor::rgb(0, 0, 0)->toArray()];
+    \$sweep = new ScreenTransitionTreatment(['id' => 'sweep', 'width' => 160, 'height' => 90,
+      'timings' => ['gather' => 0, 'cover' => 100, 'hold' => 0, 'reveal' => 100],
+      'coverBrush' => \$brush, 'phases' => [
+        'gather' => [],
+        'cover' => [['operation' => ['type' => 'image', 'asset' => '$asset', 'destination' => \$bounds]]],
+        'reveal' => [['operation' => ['type' => 'fill', 'destination' => \$bounds, 'brush' => \$brush]]],
+      ]]);
+
+    return new ScreenTransitionCatalog(['sweep' => \$sweep], battle: '$battle');
+    PHP);
+}
+
+it('accepts transitions the Engine can play', function () {
+    $root = makeTemporaryProject();
+    writeConsistentQuests($root);
+    writeConsistentSkits($root);
+    @mkdir($root . '/assets/Graphics/System', 0777, true);
+    $image = imagecreatetruecolor(4, 4);
+    imagepng($image, $root . '/assets/Graphics/System/Sweep.png');
+    writeTransitionCatalog($root, 'Graphics/System/Sweep.png');
+
+    expect(validateProject($root))->toBe([]);
+});
+
+it('reports transitions the Engine refuses, naming the direct cut it falls back to', function (string $asset, string $battle, ?string $source, string $expected) {
+    $root = makeTemporaryProject();
+    writeTransitionCatalog($root, $asset, $battle);
+
+    if ($source !== null) {
+        file_put_contents($root . '/assets/Data/Presentation/transitions.php', $source);
+    }
+
+    $issues = array_values(array_filter(
+        validateProject($root),
+        static fn(Issue $issue): bool => $issue->where === 'assets/Data/Presentation/transitions.php',
+    ));
+
+    expect($issues)->toHaveCount(1)
+        ->and($issues[0]->severity)->toBe(Severity::ERROR)
+        ->and($issues[0]->message)->toContain($expected)
+        ->and($issues[0]->hint)->toContain('direct cut');
+})->with([
+    'a missing image' => ['Graphics/System/Missing.png', 'sweep', null, 'Transition sweep:'],
+    'an unknown battle choice' => ['Graphics/System/Missing.png', 'gilded', null, 'Unknown battle transition treatment.'],
+    'the wrong return value' => ['Graphics/System/Missing.png', 'sweep', "<?php\nreturn [];\n", 'must return a ScreenTransitionCatalog'],
+]);

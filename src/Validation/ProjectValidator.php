@@ -130,6 +130,7 @@ class ProjectValidator
       ...$this->checkPermanentGrowth($workspace),
       ...$this->checkOptimizationPolicy($workspace),
       ...new SaveCompatibilityValidator()->validate($workspace),
+      ...new ScreenTransitionValidator()->validate($workspace),
     ];
 
     usort(

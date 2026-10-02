@@ -1944,6 +1944,18 @@ spawn points outside the map. The warnings appear in the status footer;
 `Ctrl+E` shows the full text. The project-wide pass (`ichiloto validate`) also
 covers every NPC field, as described under [NPC Mode](#npc-mode).
 
+Skills are read as one catalogue across `skills.php`, `abilities.php` and
+`magic.php`, as the game reads them: a skill name defined twice, an entry that
+is not a skill, or a key that differs from its skill's name is an error, and
+save aliases for spells must point at spells and those for abilities at
+abilities.
+
+Screen transitions in `assets/Data/Presentation/transitions.php` are checked
+as the Engine plays them, including treatments nothing selects yet: a file the
+Engine refuses, a battle choice naming no treatment, or an image that is
+missing or cannot be loaded is an error. Until it is fixed the graphical
+renderers enter battle with a direct cut; the terminal intro is unaffected.
+
 An inventory id two definitions claim is reported once, naming every
 claimant with the category it was authored in, the aliases it brought, and
 its entry in `items.php` - the game refuses the whole catalogue until one
