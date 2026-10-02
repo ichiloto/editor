@@ -175,6 +175,21 @@ This scope does not replace the map source-integrity work or authorize a new GUI
 implementation. Keep runtime availability and TUI authoring completion separate
 until both have been verified.
 
+### Registered command lists (planned)
+
+The Engine lets a registered script command declare any number of `list`
+fields. The TUI record editor gives each command entry one nested list, so it
+edits a command's first list field as entries and shows any further list
+read-only, kept as written. This remains an implementation gap for project
+commands with more than one list; the Engine's `shop` and `inn` have at most
+one.
+
+Acceptance criteria:
+
+- Edit every declared list of a registered command through the existing
+  source-preserving sub-list path, each with its own add, remove and undo.
+- Keep the settings ids unambiguous when several lists share an entry.
+
 ### Spell and ability authoring (planned)
 
 The Engine reads a project's skills from one catalogue spread across

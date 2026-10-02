@@ -203,7 +203,7 @@ it('lists event scripts and exposes per-command-type fields', function (): void 
     expect($byField)->not->toHaveKey('command0Amount');
 });
 
-it('offers every interpreter command type as a cycleable option', function (): void {
+it('offers every built-in and registered command type as a cycleable option', function (): void {
     $root = makeTemporaryProject();
     $database = loadRecordDatabase($root, 'common_events');
 
@@ -216,7 +216,8 @@ it('offers every interpreter command type as a cycleable option', function (): v
     }
 
     expect($typeRow)->not->toBeNull();
-    expect($typeRow['options'])->toBe(RecordSchemaCatalog::EVENT_COMMAND_TYPES);
+    // The interpreter's own commands, then the Engine's registered services.
+    expect($typeRow['options'])->toBe([...RecordSchemaCatalog::EVENT_COMMAND_TYPES, 'shop', 'inn']);
 
     removeDirectoryRecursively($root);
 });

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Database;
 
 use Closure;
+use LogicException;
 
 use Ichiloto\Editor\ActorStatPreview;
 use Ichiloto\Editor\Database\Projections\KeyedListProjection;
@@ -19,6 +20,11 @@ use Ichiloto\Editor\Field\ProjectNpc;
 use Ichiloto\Editor\Inspector\InputControlType;
 use Ichiloto\Editor\PermanentGrowthCatalog;
 use Ichiloto\Engine\Entities\States\StateDisposition;
+use Ichiloto\Editor\Events\ProjectScriptCommands;
+use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandDefinition;
+use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandField;
+use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandFieldKind;
+use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandRegistry;
 use Ichiloto\Engine\Events\Interpreter\EventInterpreter;
 use Ichiloto\Engine\Entities\Enemies\Enemy;
 use Ichiloto\Engine\Entities\Enumerations\ItemUserType;
@@ -48,10 +54,11 @@ use Ichiloto\Engine\Battle\BattleRewards;
 final class RecordSchemaCatalog
 {
     /**
-     * The event-script command types the engine's interpreter understands.
+     * The event-script command types built into the engine's interpreter.
      *
      * Imported from the runtime so the editor cannot drift into a duplicate
-     * command registry.
+     * command vocabulary. Registered commands join them through
+     * getEventCommandTypes().
      */
     public const array EVENT_COMMAND_TYPES = EventInterpreter::COMMAND_TYPES;
 
@@ -1239,13 +1246,14 @@ final class RecordSchemaCatalog
             prefix: 'command',
             singular: 'command',
             fields: [
-                new RecordField('type', 'Type', options: self::EVENT_COMMAND_TYPES),
+                new RecordField('type', 'Type', options: self::getEventCommandTypes()),
             ],
             blank: ['type' => 'text', 'name' => '', 'text' => 'Something happens.'],
             variants: self::eventCommandVariants(),
             variantKey: 'type',
             nestedLists: [
                 'move_route' => self::routeStepList(),
+                ...self::getRegisteredCommandLists(),
             ],
         );
     }
@@ -1392,6 +1400,154 @@ final class RecordSchemaCatalog
                 new RecordField('conditions', 'Conditions', codec: RecordFieldCodec::CONDITIONS),
                 // The arms become frames; see describeSubEntryFields.
             ],
+            ...self::getRegisteredCommandVariants(),
         ];
+    }
+
+    /**
+     * Returns every command type a script may hold: the interpreter's
+     * built-in vocabulary, then the commands the Engine and the open project
+     * register.
+     *
+     * @return list<string>
+     */
+    public static function getEventCommandTypes(): array
+    {
+        return [...self::EVENT_COMMAND_TYPES, ...ScriptCommandRegistry::getCatalog()->types];
+    }
+
+    /**
+     * Returns the field sets of the registered commands, read from their
+     * declarations.
+     *
+     * A command's first list field is edited as its entries, like a route's
+     * steps; any further list field is shown read-only and kept as written.
+     *
+     * @return array<string, RecordField[]>
+     */
+    public static function getRegisteredCommandVariants(): array
+    {
+        $variants = [];
+
+        foreach (ScriptCommandRegistry::getCatalog()->definitions as $type => $definition) {
+            $fields = [];
+            $listField = self::findRegisteredListField($definition);
+
+            foreach ($definition->fields as $field) {
+                if ($field === $listField) {
+                    continue;
+                }
+
+                array_push($fields, ...($field->kind === ScriptCommandFieldKind::LIST
+                    ? [new RecordField($field->key, $field->label, isReadOnly: true)]
+                    : self::describeRegisteredField($field)));
+            }
+
+            $variants[$type] = $fields;
+        }
+
+        return $variants;
+    }
+
+    /**
+     * Returns the entries list of each registered command that has one.
+     *
+     * @return array<string, RecordSubList>
+     */
+    public static function getRegisteredCommandLists(): array
+    {
+        $lists = [];
+
+        foreach (ScriptCommandRegistry::getCatalog()->definitions as $type => $definition) {
+            $listField = self::findRegisteredListField($definition);
+
+            if ($listField === null) {
+                continue;
+            }
+
+            $lists[$type] = new RecordSubList(
+                key: $listField->key,
+                // Settings ids read the prefix up to the entry number, so it
+                // holds letters alone.
+                prefix: lcfirst(implode('', array_map(ucfirst(...), preg_split('/[^A-Za-z]+/', $listField->key, flags: PREG_SPLIT_NO_EMPTY) ?: ['entry']))),
+                singular: strtolower($listField->label) . ' entry',
+                fields: array_merge(...array_map(self::describeRegisteredField(...), $listField->fields)),
+                blank: self::getRegisteredBlankEntry($listField->fields[0]),
+            );
+        }
+
+        return $lists;
+    }
+
+    /** The list field a registered command's entries are edited from: its first. */
+    private static function findRegisteredListField(ScriptCommandDefinition $definition): ?ScriptCommandField
+    {
+        foreach ($definition->fields as $field) {
+            if ($field->kind === ScriptCommandFieldKind::LIST) {
+                return $field;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Describes one declared field as the settings it is edited through. An
+     * optional text or reference drops out when cleared; numbers and flags
+     * keep what the author sets, since a project's handler decides what an
+     * absent one means.
+     *
+     * @return RecordField[]
+     */
+    private static function describeRegisteredField(ScriptCommandField $field): array
+    {
+        return match ($field->kind) {
+            ScriptCommandFieldKind::TEXT => [new RecordField($field->key, $field->label, removeWhenEmpty: ! $field->required)],
+            ScriptCommandFieldKind::INTEGER => [new RecordField($field->key, $field->label, InputControlType::INTEGER)],
+            ScriptCommandFieldKind::NUMBER => [new RecordField($field->key, $field->label, InputControlType::FLOAT)],
+            ScriptCommandFieldKind::BOOLEAN => [RecordField::boolean($field->key, $field->label, removeWhenEmpty: false)],
+            ScriptCommandFieldKind::OPTION => [new RecordField($field->key, $field->label, options: $field->options, removeWhenEmpty: ! $field->required)],
+            ScriptCommandFieldKind::REFERENCE => [RecordField::reference(
+                $field->key,
+                $field->label,
+                ProjectScriptCommands::getReferenceCategory($field->reference
+                    ?? throw new LogicException("Reference field {$field->key} names no resource.")),
+                allowsNone: ! $field->required,
+            )],
+            ScriptCommandFieldKind::POSITION => [
+                new RecordField("{$field->key}.x", "{$field->label} X", InputControlType::INTEGER),
+                new RecordField("{$field->key}.y", "{$field->label} Y", InputControlType::INTEGER),
+            ],
+            ScriptCommandFieldKind::LIST => [new RecordField($field->key, $field->label, isReadOnly: true)],
+        };
+    }
+
+    /**
+     * Returns a fresh list entry: its first field, empty, so the entry is a
+     * keyed record from the start and validation names what it still needs.
+     *
+     * @return array<string, mixed>
+     */
+    private static function getRegisteredBlankEntry(ScriptCommandField $field): array
+    {
+        $value = match ($field->kind) {
+            ScriptCommandFieldKind::INTEGER => 0,
+            ScriptCommandFieldKind::NUMBER => 0.0,
+            ScriptCommandFieldKind::BOOLEAN => false,
+            ScriptCommandFieldKind::OPTION => $field->options[0] ?? '',
+            ScriptCommandFieldKind::POSITION => ['x' => 0, 'y' => 0],
+            default => '',
+        };
+        $entry = [];
+        $target = &$entry;
+
+        foreach (explode('.', $field->key) as $segment) {
+            $target[$segment] = [];
+            $target = &$target[$segment];
+        }
+
+        $target = $value;
+
+        return $entry;
     }
 }

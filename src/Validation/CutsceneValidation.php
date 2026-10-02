@@ -11,6 +11,7 @@ use Ichiloto\Editor\Cutscenes\CutsceneType;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicCommandSchema;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicScriptValidator;
+use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandRegistry;
 use Throwable;
 
 /**
@@ -201,7 +202,15 @@ trait CutsceneValidation
             $type = strval($command['type'] ?? '');
 
             if (! in_array($type, CinematicCommandSchema::COMMAND_TYPES, true)) {
-                continue; // The Engine already refused the tree.
+                // The Engine already refused an unknown or malformed command;
+                // what is left to check of a registered one is what it names.
+                $registered = ScriptCommandRegistry::getCatalog()->findDefinition($type);
+
+                if ($registered !== null) {
+                    $issues = [...$issues, ...$this->checkRegisteredReferences($registered, $command, $where, $known)];
+                }
+
+                continue;
             }
 
             $issues = [...$issues, ...$this->checkSharedCommandSemantics(
