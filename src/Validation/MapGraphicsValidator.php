@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Validation;
 
+use Ichiloto\Editor\Canvas\GlyphTilePlanner;
+use Ichiloto\Editor\Canvas\PieceRole;
 use Ichiloto\Editor\Field\ProjectNpc;
 use Ichiloto\Editor\Maps\MapLayers;
 use Ichiloto\Editor\Maps\TileLayerSource;
@@ -78,8 +80,9 @@ final class MapGraphicsValidator
     /**
      * Warns for what a map with a kind still shows as terminal glyphs in the
      * graphical field, by the Engine's glyph fallback rule: cells no tile
-     * covers, NPCs without a field sprite, and copies of an NPC's glyph in the
-     * map showing under its sprite. These are art still to do, not faults:
+     * covers, NPCs without a field sprite, copies of an NPC's glyph in the
+     * map showing under its sprite, and tiles a tileset piece draws whose
+     * glyph is no longer there. These are art still to do, not faults:
      * the game plays the same, so project validation reports them and the
      * pre-save checks do not. Graphics the Engine refuses are
      * {@see validate()}'s to report; only the readable tile layers count here.
@@ -111,7 +114,7 @@ final class MapGraphicsValidator
             $shown[$cell['y']][$cell['x']] = $cell;
         }
 
-        $issues = [];
+        $issues = self::checkStalePieceTiles($map, $tileset, $layers);
         foreach ($map->getNpcs()->all() as $npc) {
             $name = self::formatNpcName($npc);
             if (! array_key_exists('sprites2d', $npc->toArray())) {
@@ -160,6 +163,79 @@ final class MapGraphicsValidator
             $issues[] = Issue::warning($map->mapId, sprintf('%d %s of %s on the %s layer %s no tile, so the glyph shows in the graphical field: %s%s.',
                 count($group), count($group) === 1 ? 'cell' : 'cells', $group[0]['glyph'], $group[0]['layer'],
                 count($group) === 1 ? 'has' : 'have', implode(', ', $named), $rest > 0 ? " and {$rest} more" : ''), $hint);
+        }
+
+        return $issues;
+    }
+
+    /**
+     * Warns for tiles a tileset piece draws that no glyph on the map accounts
+     * for, left behind when their glyph went without them (an edit outside the
+     * editor, or before the tileset had the piece). The graphical field then
+     * shows what the terminal no longer does. Tiles no piece draws, such as a
+     * house's walls over blank cells, are not judged.
+     *
+     * @param list<MapTileLayer> $layers The readable tile layers.
+     * @return list<Issue>
+     */
+    private static function checkStalePieceTiles(ProjectMap $map, Tileset $tileset, array $layers): array
+    {
+        $drawn = [];
+        foreach ($tileset->pieces as $piece) {
+            foreach (PieceRole::readPiece($piece) as $roles) {
+                foreach ($roles as $role) {
+                    foreach ($role->tiles as $tileLayer => $cells) {
+                        foreach ($cells as $cell) {
+                            $drawn[$tileLayer][(int) $cell['entry']] = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Every role a glyph on the map could play accounts for its tiles,
+        // including those of a piece's blank cells beside it.
+        $explained = [];
+        foreach ($map->getLayers() as $layer) {
+            if ($layer['id'] === MapLayers::EVENT || $layer['decoration']) {
+                continue;
+            }
+            $planner = GlyphTilePlanner::fromPieces($tileset->pieces, $layer['name']);
+            for ($y = 0; $y < $map->getHeight(); $y++) {
+                for ($x = 0; $x < $map->getWidth(); $x++) {
+                    if (! $map->hasLayerCell($layer['id'], $x, $y) || ($glyph = $map->getLayerSymbol($layer['id'], $x, $y)) === ' ') {
+                        continue;
+                    }
+                    foreach ($planner->getRoles($glyph) as $role) {
+                        foreach ($role->tiles as $tileLayer => $cells) {
+                            foreach ($cells as $cell) {
+                                $explained[$tileLayer][$y + $cell['dy']][$x + $cell['dx']][(int) $cell['entry']] = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        $issues = [];
+        foreach ($layers as $layer) {
+            $stale = [];
+            foreach ($layer->tiles as $y => $row) {
+                foreach ($row as $x => $id) {
+                    if (isset($drawn[$layer->name][$id]) && ! isset($explained[$layer->name][$y][$x][$id])) {
+                        $stale[] = "({$x}, {$y})";
+                    }
+                }
+            }
+            if ($stale !== []) {
+                $named = array_slice($stale, 0, self::CELLS_NAMED);
+                $rest = count($stale) - count($named);
+                $issues[] = Issue::warning($map->mapId,
+                    sprintf('%d %s on the %s tile layer %s drawn by a tileset piece whose glyph is no longer there: %s%s.',
+                        count($stale), count($stale) === 1 ? 'tile' : 'tiles', $layer->name, count($stale) === 1 ? 'is' : 'are',
+                        implode(', ', $named), $rest > 0 ? " and {$rest} more" : ''),
+                    'Paint the piece\'s glyph back and erase it, so its tiles go with it, or remove the tiles in the GUI editor.');
+            }
         }
 
         return $issues;

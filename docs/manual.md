@@ -447,6 +447,9 @@ which glyphs:
   NPC with an empty sprite draws nothing and is not counted;
 - a copy of an NPC's own glyph in the map, which shows under its sprite;
   remove the copy when the NPC is always there.
+- tiles a tileset piece draws whose glyph is no longer there, such as a
+  window's tile left after its `x` was removed outside the editor. Tiles no
+  piece draws, such as a house's walls over blank cells, are not judged.
 
 These are art still to do, not faults: the game plays the same either way,
 so saving a map does not warn about them; `ichiloto validate` reports them.

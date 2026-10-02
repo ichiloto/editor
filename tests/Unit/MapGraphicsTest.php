@@ -353,6 +353,25 @@ it('warns for glyphs no tile covers, NPCs without field sprites and copies of an
     ])->and(graphicsIssueLines($root, Severity::ERROR))->toBe([]);
 });
 
+it('warns for tiles a piece draws whose glyph is no longer there, and only those', function () {
+    $root = mapGraphicsProject();
+    writeTestTileset($root, pieces: [
+        'window' => ['name' => 'Window', 'layer' => 'buildings', 'glyphs' => ['x'], 'tiles' => ['decor' => ['5']]],
+        'board' => ['name' => 'Board', 'layer' => 'buildings', 'glyphs' => ['/ '], 'tiles' => ['decor' => ['7 6']]],
+    ]);
+    // Buildings: " /  " over " xx ". The windows at (1, 1) and (2, 1), and
+    // the board's / at (1, 0) with its blank cell beside it at (2, 0), are
+    // accounted for; a window tile at (3, 1) has no x, and a board tile at
+    // (3, 0) has no / beside it. The floor's 2816 is drawn by no piece, so
+    // it is never judged.
+    writeTileLayer($root . '/assets/Maps/test-map', '02.decor.tiles.php', "0 0 0 6\n0 5 5 5");
+    $stale = array_values(array_filter(graphicsIssueLines($root), static fn(string $line): bool => str_contains($line, 'no longer there')));
+    expect($stale)->toBe(['2 tiles on the decor tile layer are drawn by a tileset piece whose glyph is no longer there: (3, 0), (3, 1).']);
+
+    writeTileLayer($root . '/assets/Maps/test-map', '02.decor.tiles.php', "0 7 6 0\n0 5 5 0");
+    expect(array_filter(graphicsIssueLines($root), static fn(string $line): bool => str_contains($line, 'no longer there')))->toBe([]);
+});
+
 it('counts a tile as covering only the glyphs of the gameplay layer it belongs to', function () {
     $root = mapGraphicsProject();
     writeTestTileset($root, pieces: ['ground' => ['name' => 'Ground', 'layer' => 'terrain', 'glyphs' => ['.'], 'tiles' => ['floor' => ['2816']]]]);
