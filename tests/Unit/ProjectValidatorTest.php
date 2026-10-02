@@ -939,3 +939,68 @@ it('notes a map nothing reaches yet as a warning, and checks edge trigger destin
         'warning: vestige: Nothing the player can reach from the start brings them onto it yet.',
     ])->and(issuesMentioning($issues, 'Edge trigger 1 leads to "nowhere", which is not a map in this project.'))->toHaveCount(1);
 });
+
+/** Writes a field effect drawing one image cell from a 3 x 4 sheet. */
+function writeFieldEffect(string $root, string $id, string $asset): void
+{
+    @mkdir($root . "/assets/Animations/{$id}", 0777, true);
+    file_put_contents($root . "/assets/Animations/{$id}/{$id}.timeline.php", '<?php return ' . var_export([
+        'fps' => 5, 'lengthFrames' => 2, 'playback' => 'loop', 'restFrame' => 0,
+        'tracks' => [[
+            'id' => 'cue', 'type' => 'image', 'asset' => $asset, 'sheet' => ['columns' => 3, 'rows' => 4],
+            'cells' => ['width' => 1, 'height' => 1], 'depth' => 'front',
+            'keyframes' => [['frame' => 0, 'sourceFrame' => 0], ['frame' => 1, 'sourceFrame' => 1]],
+        ]],
+    ], true) . ';');
+}
+
+/** @return list<string> */
+function effectIssueLines(string $root): array
+{
+    return array_map(
+        static fn(Issue $issue): string => $issue->where . ': ' . $issue->message,
+        array_values(array_filter(validateProject($root), static fn(Issue $issue): bool =>
+            str_contains($issue->message, 'Effect ') || str_contains($issue->message, 'fieldEffects')
+            || str_contains($issue->message, 'field presentation'))),
+    );
+}
+
+it('checks every effect a consumer uses, as that consumer plays it, in both presentations', function () {
+    $root = makeTemporaryProject();
+    writeConsistentQuests($root);
+    writeConsistentSkits($root);
+    @mkdir($root . '/assets/Graphics/System', 0777, true);
+    $image = imagecreatetruecolor(9, 8);
+    imagepng($image, $root . '/assets/Graphics/System/Cue.png');
+    writeFieldEffect($root, 'cue-ok', 'Graphics/System/Cue.png');
+    writeFieldEffect($root, 'cue-missing-art', 'Graphics/System/Missing.png');
+    @mkdir($root . '/assets/Data/Presentation', 0777, true);
+    file_put_contents($root . '/assets/Data/Presentation/field.php', '<?php return ' . var_export([
+        'cues' => ['blue' => ['effect' => 'cue-ok'], 'yellow' => ['effect' => 'cue-missing-art']],
+        'actionPrompt' => ['effect' => 'no-such-effect'],
+    ], true) . ';');
+    $animations = require $root . '/assets/Data/animations.php';
+    $animations[0]['targetEffect'] = 'cue-ok';
+    file_put_contents($root . '/assets/Data/animations.php', '<?php return ' . var_export($animations, true) . ';');
+
+    $lines = effectIssueLines($root);
+
+    expect(array_filter($lines, static fn(string $line): bool => str_contains($line, 'cue-ok')))->toBe([])
+        ->and(implode("\n", $lines))
+        ->toContain('assets/Data/Presentation/field.php: yellow cue: Effect cue-missing-art cannot be played in field for the graphical presentation')
+        ->toContain('assets/Data/Presentation/field.php: action prompt: Effect no-such-effect cannot be played in field for the terminal presentation')
+        // A field image effect without terminal tracks still plays in the terminal: it keeps its glyph.
+        ->not->toContain('cue-missing-art cannot be played in field for the terminal presentation');
+});
+
+it('reports map field effects it cannot read', function () {
+    $root = makeTemporaryProject();
+    $path = $root . '/assets/Maps/test-map/test-map.data.php';
+    $data = require $path;
+    $data['fieldEffects'] = 'not a list';
+    file_put_contents($path, '<?php return ' . var_export($data, true) . ';');
+
+    expect(effectIssueLines($root))->toBe([
+        'test-map: Its fieldEffects cannot be read: fieldEffects must be a list of at most 256 map-owned effects.',
+    ]);
+});

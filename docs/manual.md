@@ -1965,6 +1965,13 @@ wall, is an error; a talkable NPC with no reachable cell beside it, and a map
 nothing reachable leads to yet, are warnings. Doors and edge triggers that
 name a map the project does not have are errors of their own.
 
+Effect timelines in `assets/Animations` are checked as each consumer plays
+them: an animation's `sourceEffect` and `targetEffect` in battle, and the field
+presentation's cue and action prompt effects, maps' `fieldEffects` and tileset
+pieces' effects on the field. Each is compiled for the terminal and for the
+graphical presentation, so an effect only one renderer would refuse is still
+an error; until it is fixed that presentation keeps its fallback.
+
 Screen transitions in `assets/Data/Presentation/transitions.php` are checked
 as the Engine plays them, including treatments nothing selects yet: a file the
 Engine refuses, a battle choice naming no treatment, or an image that is

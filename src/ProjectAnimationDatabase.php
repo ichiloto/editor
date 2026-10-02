@@ -112,6 +112,19 @@ final class ProjectAnimationDatabase
     }
 
     /**
+     * Returns an animation's entry as authored, with the fields the editor
+     * edits as they now stand, or null for one the database does not hold.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function getAuthoredEntry(Animation $animation): ?array
+    {
+        $index = array_search($animation, $this->getAnimations(), true);
+
+        return $index === false ? null : $this->getPersistedEntries()[$index];
+    }
+
+    /**
      * Returns the entries to write: each authored entry with the fields the
      * editor edits replaced, so nothing else it holds is lost.
      *
