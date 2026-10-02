@@ -2419,6 +2419,29 @@ class ProjectValidator
   }
 
   /**
+   * Returns each event marker's tiles on a map, keyed "x,y".
+   *
+   * @param ProjectMap $map The map.
+   * @return array<string, array<string, true>> Tiles keyed by marker.
+   */
+  protected function eventAreaCells(ProjectMap $map): array
+  {
+    $cells = [];
+
+    for ($y = 0; $y < $map->getHeight(); $y++) {
+      for ($x = 0; $x < $map->getWidth(); $x++) {
+        $marker = $map->getEventSymbol($x, $y);
+
+        if (trim($marker) !== '') {
+          $cells[$marker]["{$x},{$y}"] = true;
+        }
+      }
+    }
+
+    return $cells;
+  }
+
+  /**
    * Reports fields the runtime does not read. They are preserved by the
    * editor, so this is a warning, not a loss.
    *
@@ -2448,10 +2471,13 @@ class ProjectValidator
    * Checks where NPCs stand against each other, against event tiles and
    * spawn tiles.
    *
-   * The game refuses to move onto a tile an NPC stands on, so a fixed NPC
-   * on an event tile makes that event unreachable; a wanderer only blocks
-   * it while there. Two NPCs on one tile: `npcAt` finds the first, so the
-   * second can never be spoken to while both stand still.
+   * The game refuses to move onto a tile an NPC stands on. An NPC on one
+   * tile of an event's area is fine while the area has another tile to step
+   * onto (a shopkeeper behind the counter of a shop area, a guest inside a
+   * celebration area). Only when fixed NPCs cover every tile of the area can
+   * the event never fire; a wanderer only blocks it while there. Two NPCs on
+   * one tile: `npcAt` finds the first, so the second can never be spoken to
+   * while both stand still.
    *
    * @param ProjectMap $map The map.
    * @param ProjectWorkspace $workspace The project.
@@ -2463,6 +2489,18 @@ class ProjectValidator
     $issues = [];
     $definitions = (array) ($map->data['events'] ?? []);
     $spawns = $this->spawnTilesOn($map, $workspace);
+    $occupiedBy = ['fixed' => [], 'any' => []];
+
+    foreach ($anchors as $anchor) {
+      $cell = $anchor['x'] . ',' . $anchor['y'];
+      $occupiedBy['any'][$cell] = true;
+
+      if (! $anchor['wanders']) {
+        $occupiedBy['fixed'][$cell] = true;
+      }
+    }
+
+    $areaCells = $this->eventAreaCells($map);
 
     foreach ($anchors as $index => $anchor) {
       foreach ($anchors as $otherIndex => $other) {
@@ -2498,19 +2536,21 @@ class ProjectValidator
 
       $marker = $map->getEventSymbol($anchor['x'], $anchor['y']);
 
-      if (trim($marker) !== '' && isset($definitions[$marker])) {
+      $isAreaCovered = static fn(array $occupied): bool => array_diff_key($areaCells[$marker] ?? [], $occupied) === [];
+
+      if (trim($marker) !== '' && isset($definitions[$marker]) && $isAreaCovered($occupiedBy['any'])) {
         $class = is_array($definitions[$marker]) ? strval($definitions[$marker]['class'] ?? '') : '';
         $classLabel = $class !== '' ? sprintf(' (%s)', basename(str_replace('\\', '/', $class))) : '';
-        $issues[] = $anchor['wanders']
+        $issues[] = ! $isAreaCovered($occupiedBy['fixed'])
           ? Issue::warning(
             $anchor['where'],
-            sprintf('It starts on event marker %s%s at (%d, %d).', $marker, $classLabel, $anchor['x'], $anchor['y']),
-            'The player cannot step onto that tile while the NPC stands there, so the event cannot fire until it wanders off.'
+            sprintf('It starts on event marker %s%s at (%d, %d), and NPCs cover every tile of that event.', $marker, $classLabel, $anchor['x'], $anchor['y']),
+            'The player cannot step onto the event while they stand there, so it cannot fire until a wanderer moves off.'
           )
           : Issue::error(
             $anchor['where'],
-            sprintf('It stands on event marker %s%s at (%d, %d).', $marker, $classLabel, $anchor['x'], $anchor['y']),
-            'The player can never step onto that tile, so the event never fires. Move the NPC or the marker.'
+            sprintf('It stands on event marker %s%s at (%d, %d), and NPCs cover every tile of that event.', $marker, $classLabel, $anchor['x'], $anchor['y']),
+            'The player can never step onto the event, so it never fires. Move the NPC, or give the event a free tile.'
           );
       }
 

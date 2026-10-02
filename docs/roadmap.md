@@ -147,6 +147,30 @@ Acceptance criteria for the presentation-authoring slice:
   stable IDs, same-path replacement PNGs, missing/invalid/out-of-root assets,
   unsupported PHP and failed writes. Unrelated data must remain unchanged.
 
+Effect timelines (planned, follows the Engine's effect presentation contract in
+its docs/effect-animation.md): an effect is either one flat sequence, still
+supported, or `presentations` with two complete, independent sequences,
+`terminal` and `graphical`. Each owns its own fps, length, rest frame, tracks and
+cues; both are required, never nested, merged or partially overridden. Within a
+sequence each track carries `presentation` (`all` by default, `terminal` or
+`graphical`; image tracks are inherently graphical), so a terminal glyph track
+and its PNG counterpart coexist without hiding glyphs wherever an image exists;
+narrative text is never suppressed by an image.
+
+Authoring requirements:
+- Both sequences and every track's `presentation` round-trip source-preserving
+  through the existing database and timeline editing paths; an effect authored
+  flat stays flat unless the author converts it.
+- Validation checks BOTH choices through the Engine's own load and compile for
+  each presentation: the terminal sequence without depending on any PNG, the
+  graphical one with its resources required and diagnosed when missing.
+- Rest-frame validity belongs to each image sequence: one image covers rest and
+  later independently timed tracks may be dormant (a second slash), so
+  validation never requires every image track to cover rest.
+- The TUI edits these as ordinary fields and keeps its terminal editing
+  behaviour; it gains no graphical workflow. Rich graphical sequence authoring
+  (previews, image track timing) belongs to the GUI editor.
+
 This scope does not replace the map source-integrity work or authorize a new GUI
 implementation. Keep runtime availability and TUI authoring completion separate
 until both have been verified.

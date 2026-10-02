@@ -1433,3 +1433,26 @@ it('wraps a long dialogue line in the hosted Inspector, keeps the edited row sin
         ->and($editedLine)->toEndWith(mb_substr($long, -10));
     callEditorMethod($editor, 'dispatchInput', "\033");
 });
+
+it('allows an NPC on an event while the event keeps a free tile, and reports one that covers it', function () {
+    [$root] = npcProject([
+        ['id' => 'keeper', 'name' => 'Keeper', 'x' => 5, 'y' => 1],
+    ]);
+    // A three-tile area, the way a shop counter or a gathering spot is drawn.
+    file_put_contents($root . '/assets/Maps/test-map/test-map.event.php', "<?php\n\nreturn <<<'ICHILOTO_EVENT_MAP'\n            \n    EEE     \n            \n            \n            \nICHILOTO_EVENT_MAP;\n");
+
+    expect(implode("\n", npcIssueLines($root)))->not->toContain('Keeper');
+
+    // Fixed NPCs on every tile of it leave the player nowhere to stand.
+    [$covered] = npcProject([
+        ['id' => 'keeper', 'name' => 'Keeper', 'x' => 5, 'y' => 1],
+        ['id' => 'left', 'name' => 'Left', 'x' => 4, 'y' => 1],
+        ['id' => 'right', 'name' => 'Right', 'x' => 6, 'y' => 1, 'movement' => 'wander'],
+    ]);
+    file_put_contents($covered . '/assets/Maps/test-map/test-map.event.php', "<?php\n\nreturn <<<'ICHILOTO_EVENT_MAP'\n            \n    EEE     \n            \n            \n            \nICHILOTO_EVENT_MAP;\n");
+
+    // A wanderer covering the last free tile blocks it only while there.
+    expect(implode("\n", npcIssueLines($covered, Severity::WARNING)))
+        ->toContain('NPC Keeper: It starts on event marker E (ChestEventTrigger) at (5, 1), and NPCs cover every tile of that event')
+        ->and(implode("\n", npcIssueLines($covered, Severity::ERROR)))->not->toContain('event marker');
+});
