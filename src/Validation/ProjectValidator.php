@@ -117,6 +117,7 @@ class ProjectValidator
       ...$this->checkQuests($workspace),
       ...$this->checkTroops($workspace),
       ...$this->checkBattleEntryRules($workspace),
+      ...$this->checkSkillCatalog($workspace),
       ...$this->checkSummons($workspace),
       ...$this->checkCutscenes($workspace),
       ...$this->checkReferences($workspace),
@@ -1297,6 +1298,24 @@ class ProjectValidator
   }
 
   /**
+   * Reports what the Engine's skill catalogue cannot identify: a skill the
+   * runtime would skip, or one whose name another skill already uses.
+   *
+   * @return Issue[]
+   */
+  protected function checkSkillCatalog(ProjectWorkspace $workspace): array
+  {
+    return array_map(
+      static fn(string $problem): Issue => Issue::error(
+        'assets/Data skill catalogue',
+        $problem,
+        'A skill is found by its name across skills.php, abilities.php and magic.php, so each name must be unique.',
+      ),
+      $workspace->loadSkillCatalog()->getProblems(),
+    );
+  }
+
+  /**
    * Checks authored summon gates, wielder policies, linked actions, and
    * actor starting assignments without imposing any game-specific names.
    *
@@ -1320,10 +1339,8 @@ class ProjectValidator
       static fn(\Ichiloto\Editor\ProjectActor $actor): string => $actor->getName(),
       $workspace->actorDatabase->getActors(),
     );
-    $skillNames = array_map(
-      static fn(\Ichiloto\Editor\ProjectSkill $skill): string => $skill->getName(),
-      $workspace->skillDatabase->getSkills(),
-    );
+    $skillNames = $workspace->getSkillNames();
+
     $definitions = [];
     $issues = [];
 
@@ -1361,7 +1378,7 @@ class ProjectValidator
         $issues[] = Issue::error(
           $where,
           sprintf('It links to action "%s", which does not exist.', $linkedAction),
-          'Choose an action from assets/Data/skills.php.',
+          'Choose a skill from assets/Data/skills.php, abilities.php or magic.php.',
         );
       }
 

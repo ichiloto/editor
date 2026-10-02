@@ -8,6 +8,7 @@ use Ichiloto\Editor\Database\InventoryCatalog;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
+use Ichiloto\Engine\Entities\Skills\SkillCatalog;
 use Ichiloto\Engine\Exceptions\InvalidSaveCompatibilityManifestException;
 use Ichiloto\Engine\IO\SaveCompatibility\ContentReferenceCategory;
 use Ichiloto\Engine\IO\SaveCompatibility\MapShift;
@@ -24,6 +25,7 @@ final class SaveCompatibilityValidator
      * @var InventoryCatalog|null The project's inventory identity, read once.
      */
     private ?InventoryCatalog $inventoryCatalog = null;
+    private ?SkillCatalog $skillCatalog = null;
 
     /** @return Issue[] */
     public function validate(ProjectWorkspace $workspace): array
@@ -358,10 +360,11 @@ final class SaveCompatibilityValidator
             // label, so the catalogue of ids is what it has to be in.
             ContentReferenceCategory::ITEM => $this->inventoryCatalog($workspace)->idsIn('items'),
             ContentReferenceCategory::EQUIPMENT => $this->inventoryCatalog($workspace)->idsIn('weapons', 'armors'),
-            ContentReferenceCategory::ABILITY, ContentReferenceCategory::SPELL => array_map(
-                static fn(object $skill): string => $skill->getName(),
-                $workspace->skillDatabase->getSkills()
-            ),
+            // A save keeps abilities and spells in separate books, and the
+            // runtime restores each book from its own kind of skill,
+            // wherever the catalogue authors it.
+            ContentReferenceCategory::ABILITY => array_keys($this->skillCatalog($workspace)->getAbilities()),
+            ContentReferenceCategory::SPELL => array_keys($this->skillCatalog($workspace)->getSpells()),
             ContentReferenceCategory::STATE => $this->recordIdentities($workspace, 'states'),
             ContentReferenceCategory::ENEMY => $this->recordLabels($workspace, ['enemies']),
             ContentReferenceCategory::ACHIEVEMENT => $this->phpListIdentities(
@@ -381,6 +384,17 @@ final class SaveCompatibilityValidator
     private function inventoryCatalog(ProjectWorkspace $workspace): InventoryCatalog
     {
         return $this->inventoryCatalog ??= InventoryCatalog::fromWorkspace($workspace);
+    }
+
+    /**
+     * Returns the project's skill catalogue, read once per validation.
+     *
+     * @param ProjectWorkspace $workspace The project.
+     * @return SkillCatalog The catalogue.
+     */
+    private function skillCatalog(ProjectWorkspace $workspace): SkillCatalog
+    {
+        return $this->skillCatalog ??= $workspace->loadSkillCatalog();
     }
 
     /** @param string[] $categories @return string[] */

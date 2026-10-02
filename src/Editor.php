@@ -98,6 +98,7 @@ use Ichiloto\Engine\Entities\Inventory\Weapons\Weapon;
 use Ichiloto\Engine\Entities\Magic\MagicEffectType;
 use Ichiloto\Engine\Entities\Roles\ExperienceCurveGenerator;
 use Ichiloto\Engine\Entities\Roles\ParameterCurveGenerator;
+use Ichiloto\Engine\Entities\Skills\SkillCatalog;
 use Ichiloto\Engine\Events\Enumerations\ChestType;
 use Ichiloto\Engine\Events\Enumerations\LootType;
 use Ichiloto\Engine\Quests\QuestObjectiveType;
@@ -15163,8 +15164,8 @@ final class Editor
             LootType::WEAPON,
             LootType::ARMOR,
             LootType::ACCESSORY => $this->loadInventoryLootDialogEntries($lootType),
-            LootType::SKILL => $this->loadSkillLootDialogEntries(),
-            LootType::SPELL => $this->loadSpellLootDialogEntries(),
+            LootType::SKILL,
+            LootType::SPELL => $this->loadSkillLootDialogEntries($lootType),
             default => [],
         };
     }
@@ -15215,75 +15216,24 @@ final class Editor
     }
 
     /**
-     * Loads skill-based loot entries.
+     * Loads ability or spell loot entries from the project's skill catalogue,
+     * wherever each skill is authored.
      *
+     * @param LootType $lootType The loot type being edited: abilities for skills, spells for spells.
      * @return array<int, array{name: string, description: string, icon: string, type: string}>
      */
-    private function loadSkillLootDialogEntries(): array
+    private function loadSkillLootDialogEntries(LootType $lootType): array
     {
-        $skillsPath = $this->projectRoot . '/assets/Data/skills.php';
-
-        if (! is_file($skillsPath)) {
-            return [];
-        }
-
-        $skills = require $skillsPath;
-
-        if (! is_array($skills)) {
-            return [];
-        }
-
+        $catalog = SkillCatalog::load($this->projectRoot . '/assets');
+        $skills = $lootType === LootType::SPELL ? $catalog->getSpells() : $catalog->getAbilities();
         $entries = [];
 
         foreach ($skills as $skill) {
-            if (! is_object($skill) || ! isset($skill->name)) {
-                continue;
-            }
-
             $entries[] = [
-                'name' => (string) $skill->name,
-                'description' => (string) ($skill->description ?? ''),
-                'icon' => trim((string) ($skill->icon ?? '')),
-                'type' => 'Skill',
-            ];
-        }
-
-        usort($entries, static fn(array $left, array $right): int => strcmp($left['name'], $right['name']));
-
-        return $entries;
-    }
-
-    /**
-     * Loads magic/spell loot entries.
-     *
-     * @return array<int, array{name: string, description: string, icon: string, type: string}>
-     */
-    private function loadSpellLootDialogEntries(): array
-    {
-        $magicPath = $this->projectRoot . '/assets/Data/magic.php';
-
-        if (! is_file($magicPath)) {
-            return [];
-        }
-
-        $spells = require $magicPath;
-
-        if (! is_array($spells)) {
-            return [];
-        }
-
-        $entries = [];
-
-        foreach ($spells as $spell) {
-            if (! is_object($spell) || ! isset($spell->name)) {
-                continue;
-            }
-
-            $entries[] = [
-                'name' => (string) $spell->name,
-                'description' => (string) ($spell->description ?? ''),
-                'icon' => trim((string) ($spell->icon ?? '')),
-                'type' => 'Spell',
+                'name' => $skill->name,
+                'description' => $skill->description,
+                'icon' => trim($skill->icon),
+                'type' => $lootType === LootType::SPELL ? 'Spell' : 'Skill',
             ];
         }
 

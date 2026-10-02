@@ -8,7 +8,6 @@ use Ichiloto\Editor\PermanentGrowthCatalog;
 use Ichiloto\Editor\ProjectActor;
 use Ichiloto\Editor\ProjectClass;
 use Ichiloto\Editor\ProjectQuest;
-use Ichiloto\Editor\ProjectSkill;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\Cutscenes\CutsceneAsset;
 use Ichiloto\Editor\Cutscenes\CutsceneType;
@@ -127,10 +126,9 @@ final class ReferenceCatalog
                 static fn(ProjectClass $class): string => $class->getName(),
                 $this->workspace->classDatabase->getClasses()
             ),
-            'skills' => array_map(
-                static fn(ProjectSkill $skill): string => $skill->getName(),
-                $this->workspace->skillDatabase->getSkills()
-            ),
+            // Spells and abilities may be authored in any of the Engine's
+            // skill files; a reference names the skill wherever it lives.
+            'skills' => $this->workspace->getSkillNames(),
             'quests' => array_map(
                 static fn(ProjectQuest $quest): string => $quest->getId(),
                 $this->workspace->questDatabase->getQuests()

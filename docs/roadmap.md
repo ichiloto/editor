@@ -151,6 +151,25 @@ This scope does not replace the map source-integrity work or authorize a new GUI
 implementation. Keep runtime availability and TUI authoring completion separate
 until both have been verified.
 
+### Spell and ability authoring (planned)
+
+The Engine reads a project's skills from one catalogue spread across
+`assets/Data/skills.php`, `abilities.php` and `magic.php`: a skill is found by
+its name in any of them, and its kind comes from its class. The Editor's
+validation and reference pickers read that same catalogue, but the Skills
+database edits `skills.php` only. Spells and abilities authored in `magic.php`
+or `abilities.php` can be referenced and validated, not yet edited. This
+remains an implementation gap.
+
+Acceptance criteria:
+
+- Browse and edit every skill in the catalogue, whichever file authors it,
+  through the existing source-preserving database path. A new skill is written
+  to the file its kind belongs in by the project's convention, never duplicated.
+- Keep names unique across the three files; refuse a save that would define a
+  name twice, as validation already reports it.
+- Round-trip comments, expressions and unknown fields in all three files, and
+  refuse unsupported source rather than flattening it.
 ### Phase 1 — The responsiveness sprint (quick wins, no redesign) ✅ *shipped 2026-08*
 > Status: implemented. `InputDecoder` (src/IO/InputDecoder.php, unit-tested)
 > replaces the blocking reader: non-blocking drained stdin, offline escape

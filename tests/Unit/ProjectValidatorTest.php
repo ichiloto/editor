@@ -739,3 +739,79 @@ it('warns that a tiles2d crop table is no longer read', function () {
         ->and($issues[0]->severity)->toBe(Severity::WARNING)
         ->and($issues[0]->message)->toBe('Its tiles2d crop table is no longer read.');
 });
+
+/** Writes skills spread across all three of the Engine's skill files. */
+function writeSpreadSkillCatalog(string $root, string $extraMagic = ''): void
+{
+    $header = "<?php\nuse Ichiloto\\Engine\\Entities\\Skills\\BasicSkill;\n"
+        . "use Ichiloto\\Engine\\Entities\\Skills\\MagicSkill;\n"
+        . "use Ichiloto\\Engine\\Entities\\Skills\\SpecialSkill;\n";
+
+    file_put_contents($root . '/assets/Data/skills.php', $header . "return [\n"
+        . "  new BasicSkill('Attack', 'Strikes.', '', 0, 0),\n"
+        . "  new MagicSkill('Cleanse', 'Lifts a poison.', '', 3, 0),\n"
+        . "];\n");
+    file_put_contents($root . '/assets/Data/abilities.php', $header . "return [\n"
+        . "  'Ward' => new SpecialSkill('Ward', 'Guards.', '', 2, 0),\n"
+        . "];\n");
+    file_put_contents($root . '/assets/Data/magic.php', $header . "return [\n"
+        . "  'Burn I' => new MagicSkill('Burn I', 'Burns.', '', 5, 0),\n"
+        . $extraMagic
+        . "];\n");
+}
+
+it('checks ability and spell alias targets against their own kind across every skill file', function () {
+    $root = makeTemporaryProject();
+    writeConsistentQuests($root);
+    writeConsistentSkits($root);
+    writeSpreadSkillCatalog($root);
+    writeSaveCompatibilityManifest($root, <<<'PHP'
+    <?php
+
+    return [
+      'contentVersion' => 0,
+      'migrations' => [],
+      'aliases' => [
+        'spells' => [
+          ['from' => 'Fire', 'to' => 'Burn I'],
+          ['from' => 'Purify', 'to' => 'Cleanse'],
+          ['from' => 'Guard', 'to' => 'Ward'],
+        ],
+        'abilities' => [
+          ['from' => 'Shield', 'to' => 'Ward'],
+          ['from' => 'Blaze', 'to' => 'Burn I'],
+        ],
+      ],
+      'tombstones' => [],
+    ];
+    PHP);
+
+    $missing = array_map(
+        static fn(Issue $issue): string => $issue->message,
+        issuesMentioning(validateProject($root), 'is not defined in the current'),
+    );
+
+    expect($missing)->toEqualCanonicalizing([
+        'Alias target "Ward" is not defined in the current spells catalog.',
+        'Alias target "Burn I" is not defined in the current abilities catalog.',
+    ]);
+});
+
+it('reports a skill name the catalogue defines twice', function () {
+    $root = makeTemporaryProject();
+    writeConsistentQuests($root);
+    writeConsistentSkits($root);
+    writeSpreadSkillCatalog($root, "  'Cleanse' => new MagicSkill('Cleanse', 'Again.', '', 3, 0),\n");
+
+    $issues = issuesMentioning(validateProject($root), '"Cleanse" is defined in both skills.php and magic.php');
+
+    expect($issues)->toHaveCount(1)
+        ->and($issues[0]->severity)->toBe(Severity::ERROR);
+});
+
+it('offers skills from every skill file as references', function () {
+    $root = makeTemporaryProject();
+    writeSpreadSkillCatalog($root);
+
+    expect(ProjectWorkspace::fromProject($root)->getSkillNames())->toBe(['Attack', 'Cleanse', 'Ward', 'Burn I']);
+});

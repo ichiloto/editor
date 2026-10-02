@@ -14,6 +14,7 @@ use Ichiloto\Editor\Storage\FileSetOperations;
 use Ichiloto\Editor\Storage\FileSetTransaction;
 use Ichiloto\Editor\Storage\FilesystemFileSetOperations;
 use Ichiloto\Engine\Core\ProjectFormat;
+use Ichiloto\Engine\Entities\Skills\SkillCatalog;
 use Ichiloto\Engine\Field\MapGraphics;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
@@ -60,6 +61,41 @@ final readonly class ProjectWorkspace
     public function getRecordDatabase(string $categoryKey): ?ProjectRecordDatabase
     {
         return $this->recordDatabases[$categoryKey] ?? null;
+    }
+
+    /**
+     * Reads the project's skill catalogue as saved: every skill across the
+     * Engine's skill data files, identified and classified as the runtime
+     * finds them.
+     *
+     * @return SkillCatalog
+     */
+    public function loadSkillCatalog(): SkillCatalog
+    {
+        return SkillCatalog::load($this->projectRoot . DIRECTORY_SEPARATOR . 'assets');
+    }
+
+    /**
+     * Returns every skill name a reference may use: the skills.php entries as
+     * currently edited, then the skills the catalogue's other files author.
+     *
+     * @return string[]
+     */
+    public function getSkillNames(): array
+    {
+        $names = array_map(
+            static fn(ProjectSkill $skill): string => $skill->getName(),
+            $this->skillDatabase->getSkills()
+        );
+        $catalog = $this->loadSkillCatalog();
+
+        foreach (array_keys($catalog->getSkills()) as $name) {
+            if ($catalog->getSourceFile($name) !== basename($this->skillDatabase->path)) {
+                $names[] = $name;
+            }
+        }
+
+        return array_values(array_unique($names));
     }
 
     /**
