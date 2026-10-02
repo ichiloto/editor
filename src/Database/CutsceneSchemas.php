@@ -6,6 +6,7 @@ namespace Ichiloto\Editor\Database;
 
 use Ichiloto\Editor\Cutscenes\CutsceneAsset;
 use Ichiloto\Editor\Inspector\InputControlType;
+use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicCommandSchema;
 use Ichiloto\Engine\Cutscenes\Summons\SummonEffectTiming;
 
@@ -426,6 +427,10 @@ final class CutsceneSchemas
             fields: [
                 new RecordField('id', 'Id'),
                 new RecordField('type', 'Type', options: ['glyph', 'text', 'flash', 'shake'], removeWhenEmpty: true, displayDefault: 'glyph'),
+                // Which renderers draw the track: every one, or only the terminal or the graphical.
+                new RecordField('presentation', 'Presentation',
+                    options: ['all', ...array_map(static fn(EffectPresentation $presentation): string => $presentation->value, EffectPresentation::cases())],
+                    removeWhenEmpty: true, displayDefault: 'all'),
             ],
             blank: ['type' => 'glyph', 'id' => 'track', 'keyframes' => []],
             nestedLists: ['*' => self::keyframeList()],

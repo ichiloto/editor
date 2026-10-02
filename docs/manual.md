@@ -1721,7 +1721,8 @@ is the engine's business, and this manual claims nothing more.
 #### Tracks, keyframes and cues
 
 Open `Tracks` and each track is a row (`Id`, `Type`: `glyph`, `text`,
-`flash`, `shake`) followed by its keyframes: frame, duration, position,
+`flash`, `shake`; `Presentation`: `all`, `terminal` or `graphical`, the
+renderers that draw it) followed by its keyframes: frame, duration, position,
 content, asset id, color, visible, z-index, blend mode, easing and a
 free-form payload. `Content` opens the **multiline editor** (`Enter` on the
 row), which keeps every space, backslash, blank line, tab and wide glyph

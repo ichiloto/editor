@@ -700,3 +700,27 @@ it('reorders and duplicates summon tracks, keyframes and cues from the timeline 
     expect($timeline)->toContain("\$wisp = <<<'ART'")
         ->and($timeline)->toContain("'id' => 'flare-2'");
 });
+
+it('offers each summon track the Engine presentations and keeps the choice through a save', function () {
+    $field = array_values(array_filter(
+        \Ichiloto\Editor\Database\CutsceneSchemas::trackList()->fields,
+        static fn($field): bool => $field->key === 'presentation',
+    ))[0] ?? null;
+
+    expect($field?->options)->toBe(['all', 'terminal', 'graphical'])
+        ->and($field?->displayDefault)->toBe('all');
+
+    $root = cutsceneProject();
+    $editor = cutscenesEditor($root, 160, 50);
+    $asset = libraryOf($editor)->find(CutsceneType::SUMMON, 'lantern-wisp');
+    $payload = $asset->payload();
+    $payload['tracks'][0]['presentation'] = 'terminal';
+    $asset->apply($payload);
+    $asset->save();
+
+    $timeline = require $root . '/assets/Cutscenes/Summons/lantern-wisp/lantern-wisp.timeline.php';
+    expect($timeline['tracks'][0]['presentation'])->toBe('terminal')
+        ->and(file_get_contents($root . '/assets/Cutscenes/Summons/lantern-wisp/lantern-wisp.timeline.php'))->toContain("\$wisp = <<<'ART'")
+        // The Engine compiles the saved choice as authored.
+        ->and($asset->compiledSummon())->not->toBeNull();
+});
