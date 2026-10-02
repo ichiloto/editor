@@ -131,6 +131,7 @@ class ProjectValidator
       ...$this->checkOptimizationPolicy($workspace),
       ...new SaveCompatibilityValidator()->validate($workspace),
       ...new ScreenTransitionValidator()->validate($workspace),
+      ...new ReachabilityValidator()->validate($workspace),
     ];
 
     usort(
@@ -1732,6 +1733,22 @@ class ProjectValidator
           $map->mapId,
           sprintf('Marker "%s" leads to "%s", which is not a map in this project.', $marker, $destination),
           'Walking through this door crashes the game. Check the map id.'
+        );
+      }
+    }
+
+    // Edge triggers lead off the map the same way doors do.
+    foreach (array_values((array) ($map->data['triggers'] ?? [])) as $index => $trigger) {
+      $destination = is_array($trigger) ? trim(strval($trigger['destinationMap'] ?? '')) : '';
+
+      if ($destination === '') {
+        $issues[] = Issue::error($map->mapId, sprintf('Edge trigger %d names no destinationMap.', $index + 1),
+          'Add destinationMap, or remove the trigger.');
+      } elseif (! in_array($destination, $mapIds, true)) {
+        $issues[] = Issue::error(
+          $map->mapId,
+          sprintf('Edge trigger %d leads to "%s", which is not a map in this project.', $index + 1, $destination),
+          'Walking off this edge crashes the game. Check the map id.'
         );
       }
     }

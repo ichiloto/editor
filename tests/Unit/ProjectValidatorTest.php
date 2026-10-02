@@ -874,3 +874,68 @@ it('reports transitions the Engine refuses, naming the direct cut it falls back 
     'an unknown battle choice' => ['Graphics/System/Missing.png', 'gilded', null, 'Unknown battle transition treatment.'],
     'the wrong return value' => ['Graphics/System/Missing.png', 'sweep', "<?php\nreturn [];\n", 'must return a ScreenTransitionCatalog'],
 ]);
+
+/** Gives the disposable project what the game needs to walk its maps. */
+function writeReachableProject(string $root, string $grid, string $events, array $startAt = [1, 2]): void
+{
+    file_put_contents($root . '/assets/Maps/collisions.php', "<?php\nuse Ichiloto\\Engine\\Events\\Enumerations\\CollisionType;\n"
+        . "return ['#' => CollisionType::SOLID, ' ' => CollisionType::NONE, '~' => CollisionType::NONE];\n");
+    file_put_contents($root . '/assets/Data/system.php', '<?php return ' . var_export(['startingPositions' => ['player' => [
+        'destinationMap' => 'test-map', 'spawnPoint' => ['x' => $startAt[0], 'y' => $startAt[1]], 'spawnSprite' => ['South'],
+    ]]], true) . ';');
+    file_put_contents($root . '/assets/Maps/test-map/test-map.map.php', "<?php\n\nreturn <<<'ICHILOTO_MAP'\n{$grid}\nICHILOTO_MAP;\n");
+    file_put_contents($root . '/assets/Maps/test-map/test-map.event.php', "<?php\n\nreturn <<<'ICHILOTO_EVENT_MAP'\n{$events}\nICHILOTO_EVENT_MAP;\n");
+}
+
+/** @return list<string> */
+function reachabilityIssueLines(string $root): array
+{
+    return array_map(
+        static fn(Issue $issue): string => $issue->severity->value . ': ' . $issue->where . ': ' . $issue->message,
+        array_values(array_filter(validateProject($root), static fn(Issue $issue): bool =>
+            str_contains($issue->message, 'reach') || str_contains($issue->message, 'arrives')
+            || str_contains($issue->message, 'brings them onto'))),
+    );
+}
+
+it('reports an event the player can never reach, not where content stands', function () {
+    $root = makeTemporaryProject();
+    writeConsistentQuests($root);
+    writeConsistentSkits($root);
+    // The chest E sits in a sealed pocket.
+    writeReachableProject($root,
+        "############\n#  ~~~ ### #\n#      #E# #\n#      ### #\n############",
+        "            \n            \n        E   \n            \n            ");
+
+    expect(reachabilityIssueLines($root))->toBe([
+        'error: test-map: No cell of event E (ChestEventTrigger) at (8, 2) can be reached, so it never fires.',
+    ]);
+
+    // Moving the chest anywhere open is simply fine.
+    writeReachableProject($root,
+        "############\n#  ~~~ ### #\n#      # # #\n#      ### #\n############",
+        "            \n     E      \n            \n            \n            ");
+    expect(reachabilityIssueLines($root))->toBe([]);
+});
+
+it('notes a map nothing reaches yet as a warning, and checks edge trigger destinations', function () {
+    $root = makeTemporaryProject();
+    writeConsistentQuests($root);
+    writeConsistentSkits($root);
+    writeReachableProject($root,
+        "############\n#  ~~~     #\n#          #\n#          #\n############",
+        "            \n     E      \n            \n            \n            ");
+    mkdir($root . '/assets/Maps/vestige', 0777, true);
+    file_put_contents($root . '/assets/Maps/vestige/vestige.map.php', "<?php\n\nreturn <<<'ICHILOTO_MAP'\n   \nICHILOTO_MAP;\n");
+    file_put_contents($root . '/assets/Maps/vestige/vestige.event.php', "<?php\n\nreturn <<<'ICHILOTO_EVENT_MAP'\n   \nICHILOTO_EVENT_MAP;\n");
+    file_put_contents($root . '/assets/Maps/vestige/vestige.data.php', '<?php return ' . var_export(['name' => 'Vestige', 'triggers' => [
+        ['destinationMap' => 'nowhere', 'trigger_area' => ['x' => 0, 'y' => 0, 'width' => 1, 'height' => 1],
+            'spawn_point' => ['x' => 0, 'y' => 0]],
+    ]], true) . ';');
+
+    $issues = validateProject($root);
+
+    expect(reachabilityIssueLines($root))->toBe([
+        'warning: vestige: Nothing the player can reach from the start brings them onto it yet.',
+    ])->and(issuesMentioning($issues, 'Edge trigger 1 leads to "nowhere", which is not a map in this project.'))->toHaveCount(1);
+});

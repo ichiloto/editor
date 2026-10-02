@@ -1957,6 +1957,14 @@ cells, and a landing that is not one of them). A malformed step is an error.
 Relocations are written by hand when an NPC or furniture moves onto open
 floor; add them to a new step, never to an earlier one.
 
+Reachability is checked as the game moves the player, from where the game
+starts and every way onto each map it can reach, never from where content
+stands: moving an NPC or rebuilding a room is fine unless it traps something.
+An event no reachable cell lies in, or an arrival outside the map or on a
+wall, is an error; a talkable NPC with no reachable cell beside it, and a map
+nothing reachable leads to yet, are warnings. Doors and edge triggers that
+name a map the project does not have are errors of their own.
+
 Screen transitions in `assets/Data/Presentation/transitions.php` are checked
 as the Engine plays them, including treatments nothing selects yet: a file the
 Engine refuses, a battle choice naming no treatment, or an image that is
