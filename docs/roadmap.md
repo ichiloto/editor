@@ -171,6 +171,20 @@ Authoring requirements:
   behaviour; it gains no graphical workflow. Rich graphical sequence authoring
   (previews, image track timing) belongs to the GUI editor.
 
+Status, 2026-10: validation and references are in place; standalone authoring
+is not. Validation compiles every effect a project uses (battle animations,
+field presentation, map field effects, tileset pieces, and the effect a
+`field_animation` names) through the Engine for both presentations, and
+reports an effect a waiting `field_animation` plays that loops. Cinematic
+`field_animation` commands pick an effect by its stable id, from the
+timelines the Engine lists. Summon timelines choose each track's
+`presentation`. There is still no TUI surface to create, edit or preview a
+standalone effect timeline under `assets/Animations`; that remains the gap.
+It must reuse the summon editor's timeline editing, the shared Engine
+compiler and playhead, and the existing source-preserving paths, add no
+second timeline format, and refuse unsupported source before writing. It is
+not started: it waits on Andrew's go.
+
 This scope does not replace the map source-integrity work or authorize a new GUI
 implementation. Keep runtime availability and TUI authoring completion separate
 until both have been verified.
