@@ -147,6 +147,16 @@ Acceptance criteria for the presentation-authoring slice:
   stable IDs, same-path replacement PNGs, missing/invalid/out-of-root assets,
   unsupported PHP and failed writes. Unrelated data must remain unchanged.
 
+Effect timelines (planned, follows the Engine's shared compiled track contract):
+each track declares which presentation it belongs to (all, terminal or
+graphical), so a terminal glyph track and its PNG counterpart coexist without
+the Engine hiding glyphs wherever an image exists; narrative text stays its
+own kind. Authoring is a constrained choice per track, edited in the TUI as a
+field like any other (no graphical workflow), round-tripped source-preserving,
+and validated through the Engine's contract. Rest-frame validity belongs to the
+whole sequence, so a track that is dormant at rest (a later second slash) is
+valid; validation must not require every image track to cover the rest frame.
+
 This scope does not replace the map source-integrity work or authorize a new GUI
 implementation. Keep runtime availability and TUI authoring completion separate
 until both have been verified.
