@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor;
 
+use Ichiloto\Editor\Database\PhpDataFile;
 use Ichiloto\Editor\History\TracksPersistedState;
 use Ichiloto\Editor\IO\AtomicFile;
 
@@ -18,6 +19,20 @@ use RuntimeException;
 final class ProjectAnimationDatabase
 {
     use TracksPersistedState;
+
+    /**
+     * The fields the editor edits. Every other field of an authored entry
+     * (effect bindings, roles, anything the Engine adds) is kept as written.
+     */
+    private const array EDITED_FIELDS = ['id', 'name', 'position', 'maxFrames', 'frames', 'cues'];
+
+    /**
+     * @var array<int, array<string, mixed>> Each loaded animation's authored entry, keyed by object id.
+     */
+    private array $authoredEntries = [];
+
+    /** The file as read, so its header is kept and an unsafe file is refused. */
+    private ?PhpDataFile $file = null;
 
     /**
      * @param Animation[] $animations
@@ -52,19 +67,25 @@ final class ProjectAnimationDatabase
             return new self($path, []);
         }
 
-        $payload = require $path;
+        $file = PhpDataFile::load($path, $projectRoot);
+        $payload = $file->payload;
 
         if (! is_array($payload)) {
             throw new RuntimeException("Unable to parse {$path}.");
         }
 
-        return new self(
-            $path,
-            array_map(
-                static fn(array $animation): Animation => Animation::fromArray($animation),
-                array_values(array_filter($payload, 'is_array'))
-            ),
-        );
+        $entries = array_values(array_filter($payload, 'is_array'));
+        $animations = array_map(static fn(array $entry): Animation => Animation::fromArray($entry), $entries);
+        $database = new self($path, $animations, isDirty: true);
+        $database->file = $file;
+
+        foreach ($animations as $index => $animation) {
+            $database->authoredEntries[spl_object_id($animation)] = $entries[$index];
+        }
+
+        $database->captureBaseline();
+
+        return $database;
     }
 
     /**
@@ -87,10 +108,29 @@ final class ProjectAnimationDatabase
      */
     protected function buildPersistedPayload(): string
     {
-        return "<?php\n\nreturn " . self::exportPhpValue(array_map(
-            static fn(Animation $animation): array => $animation->toArray(),
-            $this->getAnimations()
-        )) . ";\n";
+        return "<?php\n\nreturn " . self::exportPhpValue($this->getPersistedEntries()) . ";\n";
+    }
+
+    /**
+     * Returns the entries to write: each authored entry with the fields the
+     * editor edits replaced, so nothing else it holds is lost.
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function getPersistedEntries(): array
+    {
+        return array_map(function (Animation $animation): array {
+            $edited = $animation->toArray();
+            $entry = $this->authoredEntries[spl_object_id($animation)] ?? $edited;
+
+            foreach (self::EDITED_FIELDS as $field) {
+                if (array_key_exists($field, $edited)) {
+                    $entry[$field] = $edited[$field];
+                }
+            }
+
+            return $entry;
+        }, $this->getAnimations());
     }
 
     /**
@@ -275,7 +315,18 @@ final class ProjectAnimationDatabase
             return;
         }
 
-        AtomicFile::write($this->path, $this->buildPersistedPayload());
+        $entries = $this->getPersistedEntries();
+
+        if ($this->file !== null) {
+            $this->file->save($entries);
+        } else {
+            AtomicFile::write($this->path, $this->buildPersistedPayload());
+        }
+
+        foreach ($this->getAnimations() as $index => $animation) {
+            $this->authoredEntries[spl_object_id($animation)] = $entries[$index];
+        }
+
         $this->captureBaseline();
     }
 
