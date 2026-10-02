@@ -81,8 +81,9 @@ final class MapGraphicsValidator
      * Warns for what a map with a kind still shows as terminal glyphs in the
      * graphical field, by the Engine's glyph fallback rule: cells no tile
      * covers, NPCs without a field sprite, copies of an NPC's glyph in the
-     * map showing under its sprite, and tiles a tileset piece draws whose
-     * glyph is no longer there. These are art still to do, not faults:
+     * map showing under its sprite, tiles a tileset piece draws whose glyph
+     * is no longer there, and cells showing the tileset's missing-art
+     * placeholder. These are art still to do, not faults:
      * the game plays the same, so project validation reports them and the
      * pre-save checks do not. Graphics the Engine refuses are
      * {@see validate()}'s to report; only the readable tile layers count here.
@@ -114,7 +115,7 @@ final class MapGraphicsValidator
             $shown[$cell['y']][$cell['x']] = $cell;
         }
 
-        $issues = self::checkStalePieceTiles($map, $tileset, $layers);
+        $issues = [...self::checkStalePieceTiles($map, $tileset, $layers), ...self::checkMissingArtTiles($map, $tileset, $layers)];
         foreach ($map->getNpcs()->all() as $npc) {
             $name = self::formatNpcName($npc);
             if (! array_key_exists('sprites2d', $npc->toArray())) {
@@ -235,6 +236,42 @@ final class MapGraphicsValidator
                         count($stale), count($stale) === 1 ? 'tile' : 'tiles', $layer->name, count($stale) === 1 ? 'is' : 'are',
                         implode(', ', $named), $rest > 0 ? " and {$rest} more" : ''),
                     'Paint the piece\'s glyph back and erase it, so its tiles go with it, or remove the tiles in the GUI editor.');
+            }
+        }
+
+        return $issues;
+    }
+
+    /**
+     * Lists, by tile layer, the cells showing the tileset's missing-art
+     * placeholder: covered, but with art still to make.
+     *
+     * @param list<MapTileLayer> $layers The readable tile layers.
+     * @return list<Issue>
+     */
+    private static function checkMissingArtTiles(ProjectMap $map, Tileset $tileset, array $layers): array
+    {
+        if ($tileset->missingArt === null) {
+            return [];
+        }
+        $issues = [];
+        foreach ($layers as $layer) {
+            $cells = [];
+            foreach ($layer->tiles as $y => $row) {
+                foreach ($row as $x => $id) {
+                    if ($id === $tileset->missingArt) {
+                        $cells[] = "({$x}, {$y})";
+                    }
+                }
+            }
+            if ($cells !== []) {
+                $named = array_slice($cells, 0, self::CELLS_NAMED);
+                $rest = count($cells) - count($named);
+                $issues[] = Issue::warning($map->mapId,
+                    sprintf('%d %s on the %s tile layer %s the missing-art placeholder: %s%s.',
+                        count($cells), count($cells) === 1 ? 'cell' : 'cells', $layer->name, count($cells) === 1 ? 'shows' : 'show',
+                        implode(', ', $named), $rest > 0 ? " and {$rest} more" : ''),
+                    'Replace it with the art that belongs there once it is known.');
             }
         }
 

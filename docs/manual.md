@@ -449,7 +449,9 @@ which glyphs:
   remove the copy when the NPC is always there.
 - tiles a tileset piece draws whose glyph is no longer there, such as a
   window's tile left after its `x` was removed outside the editor. Tiles no
-  piece draws, such as a house's walls over blank cells, are not judged.
+  piece draws, such as a house's walls over blank cells, are not judged;
+- cells showing the tileset's missing-art placeholder (its `missingArt`
+  tile), which mark art nobody could yet infer.
 
 These are art still to do, not faults: the game plays the same either way,
 so saving a map does not warn about them; `ichiloto validate` reports them.

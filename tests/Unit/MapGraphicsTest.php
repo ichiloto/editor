@@ -372,6 +372,19 @@ it('warns for tiles a piece draws whose glyph is no longer there, and only those
     expect(array_filter(graphicsIssueLines($root), static fn(string $line): bool => str_contains($line, 'no longer there')))->toBe([]);
 });
 
+it('lists the cells showing the tileset\'s missing-art placeholder', function () {
+    $root = mapGraphicsProject();
+    writeTestTileset($root, missingArt: 255);
+    writeTileLayer($root . '/assets/Maps/test-map', '02.decor.tiles.php', "0 255 0 0\n0 0 255 255");
+    $placeholder = static fn(): array => array_values(array_filter(graphicsIssueLines($root), static fn(string $line): bool =>
+        str_contains($line, 'missing-art placeholder')));
+    expect($placeholder())->toBe(['3 cells on the decor tile layer show the missing-art placeholder: (1, 0), (2, 1), (3, 1).']);
+
+    // A tileset that names none has no placeholder to report.
+    writeTestTileset($root);
+    expect($placeholder())->toBe([]);
+});
+
 it('counts a tile as covering only the glyphs of the gameplay layer it belongs to', function () {
     $root = mapGraphicsProject();
     writeTestTileset($root, pieces: ['ground' => ['name' => 'Ground', 'layer' => 'terrain', 'glyphs' => ['.'], 'tiles' => ['floor' => ['2816']]]]);
