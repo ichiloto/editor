@@ -10,6 +10,7 @@ use Ichiloto\Editor\Database\EngineDataBootstrap;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Database\RecordSchema;
 use Ichiloto\Editor\Database\RecordSchemaCatalog;
+use Ichiloto\Editor\Events\ProjectScriptCommands;
 use Ichiloto\Editor\Storage\FileSetOperations;
 use Ichiloto\Editor\Storage\FileSetTransaction;
 use Ichiloto\Editor\Storage\FilesystemFileSetOperations;
@@ -49,6 +50,7 @@ final readonly class ProjectWorkspace
         public array                    $recordDatabases = [],
         public ?CutsceneLibrary         $cutscenes = null,
         public ?ProjectConfig           $config = null,
+        public ?ProjectScriptCommands   $scriptCommands = null,
     ) {
     }
 
@@ -155,6 +157,10 @@ final readonly class ProjectWorkspace
         // failure instead of the author's enemies.
         EngineDataBootstrap::ensure($projectRoot);
         $projectConfig = new ProjectConfig($projectRoot);
+        // Before any schema is built: the command editor offers, and Engine
+        // validation accepts, exactly this project's registered commands.
+        $scriptCommands = ProjectScriptCommands::fromProject($projectRoot);
+        $scriptCommands->activate();
 
         return new self(
             projectRoot: $projectRoot,
@@ -175,6 +181,7 @@ final readonly class ProjectWorkspace
             ),
             cutscenes: CutsceneLibrary::fromProject($projectRoot),
             config: $projectConfig,
+            scriptCommands: $scriptCommands,
         );
     }
 

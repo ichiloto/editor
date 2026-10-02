@@ -1383,6 +1383,25 @@ Supported command types, matching the engine's interpreter:
 | `recover_party` | None |
 | `branch` | Conditions, Then (fixed), Else (fixed) |
 
+Registered commands follow the built-in ones in the `Type` options: the
+Engine's `shop` and `inn`, then any the project declares in
+`assets/Data/script-commands.php` (see the Engine's story events guide). Their
+rows come from their declarations:
+
+| Type | Fields |
+| --- | --- |
+| `shop` | Buy Rate, Sell Rate, Merchandise (Item, Price) |
+| `inn` | Question, Speaker, Cost, Wake At X / Y, Rest Music, Result Variable |
+
+A command's first list, such as a shop's merchandise, is edited like a
+route's steps: with the settings cursor on one of its entry rows, `Shift+O`
+adds an entry and `Shift+X` removes one. A further list in a project command is shown
+read-only and kept as written. The Editor reads the declarations without
+running the project's handler code; the game checks the handlers when it
+starts. Validation reports a malformed declaration file, a registered command
+missing what its declaration requires, and any resource it names that the
+project does not have.
+
 A `knowledge` command records what the party has learned. `Operation` is
 chosen from the vocabulary the runtime itself defines, and each operation
 reads only the fields it needs, so the others are left empty and are not

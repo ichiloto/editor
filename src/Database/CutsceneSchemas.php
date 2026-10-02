@@ -8,6 +8,7 @@ use Ichiloto\Editor\Cutscenes\CutsceneAsset;
 use Ichiloto\Editor\Inspector\InputControlType;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicCommandSchema;
+use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandRegistry;
 use Ichiloto\Engine\Cutscenes\Summons\SummonEffectTiming;
 
 /**
@@ -232,7 +233,7 @@ final class CutsceneSchemas
             prefix: 'command',
             singular: 'command',
             fields: [
-                new RecordField('type', 'Type', options: CinematicCommandSchema::COMMAND_TYPES),
+                new RecordField('type', 'Type', options: [...CinematicCommandSchema::COMMAND_TYPES, ...ScriptCommandRegistry::getCatalog()->types]),
             ],
             blank: ['type' => 'wait', 'seconds' => 0.5],
             variants: self::cinematicCommandVariants(),
@@ -241,6 +242,7 @@ final class CutsceneSchemas
                 'move_route' => RecordSchemaCatalog::routeStepList(),
                 'parallel' => self::laneList(),
                 'camera' => static fn(array $entry): ?RecordSubList => strtolower(strval($entry['operation'] ?? '')) === 'route' ? self::cameraPointList() : null,
+                ...RecordSchemaCatalog::getRegisteredCommandLists(),
             ],
             variantArms: [
                 'sequence' => ['commands' => 'Sequence'],

@@ -13,6 +13,7 @@ use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\Database\SummonAssignmentDiagnostics;
 use Ichiloto\Editor\Events\CommandMapContext;
+use Ichiloto\Editor\Events\ProjectScriptCommands;
 use Ichiloto\Editor\Field\MapEncounters;
 use Ichiloto\Editor\Field\ProjectNpc;
 use Ichiloto\Editor\ActorStatPreview;
@@ -26,6 +27,10 @@ use Ichiloto\Engine\Animations\Timelines\EffectTimelineLibrary;
 use Ichiloto\Engine\Core\WorldConditionType;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicScriptValidator;
 use Ichiloto\Engine\Field\SkitSpeaker;
+use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandDefinition;
+use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandField;
+use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandFieldKind;
+use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandRegistry;
 use Ichiloto\Engine\Events\Interpreter\EventInterpreter;
 use Ichiloto\Engine\Events\Interpreter\MovementRouteRunner;
 use Ichiloto\Engine\IO\Console\TerminalText;
@@ -119,6 +124,7 @@ class ProjectValidator
     }
 
     $issues = [
+      ...$this->checkScriptCommandDeclarations($workspace),
       ...$this->checkMaps($workspace),
       ...$this->checkQuests($workspace),
       ...$this->checkTroops($workspace),
@@ -3096,6 +3102,7 @@ class ProjectValidator
       'cinematics' => $catalog->valuesFor('cinematics'),
       'animations' => $catalog->valuesFor('animations'),
       'effects' => $catalog->valuesFor('effects'),
+      'actors' => $catalog->valuesFor('actors'),
     ];
 
     return [
@@ -3302,11 +3309,15 @@ class ProjectValidator
 
       $type = strval($command['type'] ?? '');
 
-      if (! in_array($type, EventInterpreter::COMMAND_TYPES, true)) {
+      $registered = ScriptCommandRegistry::getCatalog()->findDefinition($type);
+
+      if ($registered !== null) {
+        $issues = [...$issues, ...$this->checkRegisteredCommand($registered, $command, $where, $known)];
+      } elseif (! in_array($type, EventInterpreter::COMMAND_TYPES, true)) {
         $issues[] = Issue::error(
           $where,
           sprintf('It uses the unknown event command type "%s".', $type !== '' ? $type : '(empty)'),
-          'Choose a command supported by the runtime EventInterpreter.'
+          'Choose a command built into the runtime, or one the Engine or the project registers.'
         );
       }
 
@@ -4350,6 +4361,86 @@ class ProjectValidator
     }
 
     return $this->effectLibrary === null ? [] : EffectValidator::checkOneShotFieldEffect($this->effectLibrary, $effect, $where);
+  }
+
+  /**
+   * Reports a project's command declarations the game would refuse to start
+   * with.
+   *
+   * @param ProjectWorkspace $workspace The project.
+   * @return Issue[] The issues found.
+   */
+  protected function checkScriptCommandDeclarations(ProjectWorkspace $workspace): array
+  {
+    $problem = $workspace->scriptCommands?->declarationProblem;
+
+    return $problem === null ? [] : [Issue::error(
+      'assets/' . ScriptCommandRegistry::PROJECT_FILE,
+      sprintf('The project\'s script commands could not be read: %s', $problem),
+      'The game will not start until it is fixed, and scripts using these commands are reported as unknown.'
+    )];
+  }
+
+  /**
+   * Checks a registered command against its declaration: everything the
+   * runtime would refuse it for, and every resource it names.
+   *
+   * @param array<string, mixed> $command The authored command.
+   * @param array<string, string[]> $known What the project defines.
+   * @return Issue[] The issues found.
+   */
+  protected function checkRegisteredCommand(ScriptCommandDefinition $definition, array $command, string $where, array $known): array
+  {
+    $issues = array_map(
+      static fn(string $problem): Issue => Issue::error(
+        $where,
+        sprintf('Its %s command cannot run: %s', $definition->type, $problem),
+        'The runtime stops the script at this command.'
+      ),
+      $definition->findProblems($command),
+    );
+
+    return [...$issues, ...$this->checkRegisteredReferences($definition, $command, $where, $known)];
+  }
+
+  /**
+   * Checks every resource a registered command names, in its list entries
+   * too.
+   *
+   * @param array<string, mixed> $command The authored command.
+   * @param array<string, string[]> $known What the project defines.
+   * @return Issue[] The issues found.
+   */
+  protected function checkRegisteredReferences(ScriptCommandDefinition $definition, array $command, string $where, array $known): array
+  {
+    $check = function (ScriptCommandField $field, array $data) use (&$check, $where, $known): array {
+      $value = ScriptCommandField::readPath($data, $field->key);
+
+      if ($field->kind === ScriptCommandFieldKind::REFERENCE && $field->reference !== null && is_string($value)) {
+        return $this->checkReference($value, ProjectScriptCommands::getReferenceCategory($field->reference), strtolower($field->label), $where, $known);
+      }
+
+      if ($field->kind !== ScriptCommandFieldKind::LIST || ! is_array($value)) {
+        return [];
+      }
+
+      $issues = [];
+
+      foreach (array_filter($value, is_array(...)) as $entry) {
+        foreach ($field->fields as $entryField) {
+          $issues = [...$issues, ...$check($entryField, $entry)];
+        }
+      }
+
+      return $issues;
+    };
+    $issues = [];
+
+    foreach ($definition->fields as $field) {
+      $issues = [...$issues, ...$check($field, $command)];
+    }
+
+    return $issues;
   }
 
   protected function checkReference(string $value, string $category, string $noun, string $where, array $known): array
