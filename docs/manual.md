@@ -1950,6 +1950,13 @@ is not a skill, or a key that differs from its skill's name is an error, and
 save aliases for spells must point at spells and those for abilities at
 abilities.
 
+Save migration steps are read as the Engine reads them: each declares a
+project class, or declared position edits, `mapShifts` for inserted rows and
+columns and `relocations` for cells authored content now occupies (map,
+cells, and a landing that is not one of them). A malformed step is an error.
+Relocations are written by hand when an NPC or furniture moves onto open
+floor; add them to a new step, never to an earlier one.
+
 Screen transitions in `assets/Data/Presentation/transitions.php` are checked
 as the Engine plays them, including treatments nothing selects yet: a file the
 Engine refuses, a battle choice naming no treatment, or an image that is

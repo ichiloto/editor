@@ -280,7 +280,7 @@ it('raises the save content version with a declarative map shift step', function
         'tombstones' => [],
     ])
         ->and(Ichiloto\Engine\IO\SaveCompatibility\SaveCompatibilityManifest::fromProjectRoot($root)->createMigrationFrom(0))
-        ->toBeInstanceOf(Ichiloto\Engine\IO\SaveCompatibility\MapShiftContentMigration::class)
+        ->toBeInstanceOf(Ichiloto\Engine\IO\SaveCompatibility\DeclaredPositionContentMigration::class)
         ->and(describeSaveCompatibilityIssues($root))->toBe([]);
 });
 
@@ -429,5 +429,31 @@ it('validates declarative map shift steps as the Engine reads them', function ()
     $messages = describeSaveCompatibilityIssues($root);
 
     expect(implode("\n", $messages))->toContain('axis must be "x" or "y"')
-        ->and(implode("\n", $messages))->toContain('exactly one of class or mapShifts');
+        ->and(implode("\n", $messages))->toContain('must declare either a class or declared position edits');
+});
+
+it('validates declarative relocation steps as the Engine reads them', function () {
+    $root = lineInsertionProject();
+    $write = static fn(array $migrations, int $version) => file_put_contents($root . '/assets/Data/save-compatibility.php', "<?php\n\nreturn " . var_export([
+        'contentVersion' => $version,
+        'migrations' => $migrations,
+        'aliases' => [],
+        'tombstones' => [],
+    ], true) . ";\n");
+
+    $write([
+        ['from' => 0, 'to' => 1, 'mapShifts' => [['map' => 'home', 'axis' => 'y', 'at' => 2, 'by' => 1]],
+            'relocations' => [['map' => 'home', 'cells' => [[3, 4]], 'to' => [3, 5]]]],
+        ['from' => 1, 'to' => 2, 'relocations' => [['map' => 'home', 'cells' => [[1, 1]], 'to' => [1, 2]]]],
+    ], 2);
+    expect(describeSaveCompatibilityIssues($root))->toBe([]);
+
+    $write([
+        ['from' => 0, 'to' => 1, 'relocations' => [['map' => 'home', 'cells' => [[3, 4]], 'to' => [3, 4]]]],
+        ['from' => 1, 'to' => 2, 'class' => 'Game\\Save\\Step', 'relocations' => [['map' => 'home', 'cells' => [[1, 1]], 'to' => [1, 2]]]],
+    ], 2);
+    $messages = implode("\n", describeSaveCompatibilityIssues($root));
+
+    expect($messages)->toContain('is one of the cells it moves players off')
+        ->and($messages)->toContain('must declare either a class or declared position edits');
 });

@@ -11,7 +11,7 @@ use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Engine\Entities\Skills\SkillCatalog;
 use Ichiloto\Engine\Exceptions\InvalidSaveCompatibilityManifestException;
 use Ichiloto\Engine\IO\SaveCompatibility\ContentReferenceCategory;
-use Ichiloto\Engine\IO\SaveCompatibility\MapShift;
+use Ichiloto\Engine\IO\SaveCompatibility\SaveCompatibilityManifest;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
 use Throwable;
@@ -20,6 +20,7 @@ use Throwable;
 final class SaveCompatibilityValidator
 {
     private const string WHERE = 'assets/Data/save-compatibility.php';
+    private const string DECLARED_EDITS_HINT = 'Use a class for a project migration, or declared position edits: mapShifts (map, axis x or y, the 0-based line inserted at, a count of at least 1) for inserted rows and columns, relocations (map, cells, to) for cells authored content now occupies.';
 
     /**
      * @var InventoryCatalog|null The project's inventory identity, read once.
@@ -276,12 +277,14 @@ final class SaveCompatibilityValidator
                 $issues[] = Issue::error($where, sprintf('Migration step %d to %d is in an impossible order.', $from, $to));
             }
 
-            if (array_key_exists('class', $entry) === array_key_exists('mapShifts', $entry)) {
-                $issues[] = Issue::error($where, 'A migration must declare exactly one of class or mapShifts.',
-                    'Use a class for a project migration, or mapShifts for rows and columns inserted into maps.');
-            } elseif (array_key_exists('mapShifts', $entry)) {
-                $issues = [...$issues, ...$this->checkMapShifts($entry['mapShifts'], $where)];
-            } elseif ($class === '') {
+            try {
+                $edits = SaveCompatibilityManifest::readDeclaredPositionEdits($entry, 'This migration');
+            } catch (InvalidSaveCompatibilityManifestException $exception) {
+                $issues[] = Issue::error($where, $exception->getMessage(), self::DECLARED_EDITS_HINT);
+                $edits = [];
+            }
+
+            if ($edits === null && $class === '') {
                 $issues[] = Issue::error($where, 'Migration class must be a non-empty class name.');
             }
 
@@ -307,31 +310,6 @@ final class SaveCompatibilityValidator
                         sprintf('Migration step %d to %d is beyond current contentVersion %d.', $from, $from + 1, $version)
                     );
                 }
-            }
-        }
-
-        return $issues;
-    }
-
-    /**
-     * Checks a declarative map shift step exactly as the Engine reads it.
-     *
-     * @return Issue[]
-     */
-    private function checkMapShifts(mixed $rawShifts, string $where): array
-    {
-        if (! is_array($rawShifts) || $rawShifts === [] || ! array_is_list($rawShifts)) {
-            return [Issue::error($where, 'mapShifts must be a non-empty list.')];
-        }
-
-        $issues = [];
-
-        foreach ($rawShifts as $index => $shift) {
-            try {
-                MapShift::fromArray($shift, sprintf('mapShifts[%d]', $index));
-            } catch (InvalidSaveCompatibilityManifestException $exception) {
-                $issues[] = Issue::error($where, $exception->getMessage(),
-                    'Each shift names a map, an axis (x or y), the 0-based line it was inserted at, and a count of at least 1.');
             }
         }
 
