@@ -441,7 +441,7 @@ final class CutsceneOutline
             'camera' => self::cameraSummary($command),
             'stage_actor' => strval((is_array($command['actor'] ?? null) ? $command['actor'] : $command)['id'] ?? '') . self::at(is_array($command['actor'] ?? null) ? $command['actor'] : $command),
             'show_actor', 'hide_actor', 'remove_actor' => strval($command['actorId'] ?? $command['id'] ?? ''),
-            'field_animation' => strval($command['animation'] ?? $command['id'] ?? '') . self::target($command['target'] ?? null),
+            'field_animation' => (is_scalar($command['effect'] ?? null) ? 'effect ' . strval($command['effect']) : strval($command['animation'] ?? $command['id'] ?? '')) . self::target($command['target'] ?? null),
             'transition' => strval($command['style'] ?? 'fade') . ' ' . strval($command['direction'] ?? 'out') . self::seconds($command, 'seconds'),
             'cinematic_music' => strval($command['track'] ?? $command['music'] ?? '') . (($command['loop'] ?? false) ? ' (loop)' : ''),
             default => '',

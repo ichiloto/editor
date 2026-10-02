@@ -246,6 +246,7 @@ final class CutsceneSchemas
                 'sequence' => ['commands' => 'Sequence'],
                 'choice' => ['cancel' => 'Cancel'],
             ],
+            exclusiveFields: [['effect', 'animation'], ['effect', 'id'], ['effect', 'secondsPerFrame']],
         );
     }
 
@@ -347,11 +348,20 @@ final class CutsceneSchemas
             'show_actor' => [new RecordField('actorId', 'Actor', reference: 'cinematic_cast')],
             'hide_actor' => [new RecordField('actorId', 'Actor', reference: 'cinematic_cast')],
             'remove_actor' => [new RecordField('actorId', 'Actor', reference: 'cinematic_cast')],
-            'field_animation' => [
-                RecordField::reference('animation', 'Animation', 'animations'),
-                ...$subject('target', 'Target', true),
-                new RecordField('secondsPerFrame', 'Seconds Per Frame', InputControlType::FLOAT, removeWhenEmpty: true, displayDefault: '0.12'),
-            ],
+            // An effect timeline owns its frame rate, so a command names
+            // either an effect or a legacy animation and its pace, never
+            // both; choosing one removes the other (see exclusiveFields).
+            'field_animation' => static fn(array $entry): array => array_key_exists('effect', $entry)
+                ? [
+                    new RecordField('effect', 'Effect', reference: 'effects', removeWhenEmpty: true, allowsNone: true, displayDefault: '(legacy animation)'),
+                    ...$subject('target', 'Target', true),
+                ]
+                : [
+                    new RecordField('effect', 'Effect', reference: 'effects', removeWhenEmpty: true, allowsNone: true, displayDefault: '(legacy animation)'),
+                    RecordField::reference('animation', 'Animation', 'animations'),
+                    ...$subject('target', 'Target', true),
+                    new RecordField('secondsPerFrame', 'Seconds Per Frame', InputControlType::FLOAT, removeWhenEmpty: true, displayDefault: '0.12'),
+                ],
             'title_card' => [
                 new RecordField('title', 'Title', removeWhenEmpty: true),
                 new RecordField('text', 'Text', InputControlType::MULTILINE, removeWhenEmpty: true),

@@ -1597,12 +1597,20 @@ Lane 2`). `Esc` pops exactly one frame.
 | `camera` | Operation (`detach`, `attach`, `reset`, `focus`, `pan`, `route`, `track`, `shake`, `restore`), Target (kind, id or x/y), Seconds, Magnitude; a `route` owns Points |
 | `stage_actor` | the staged-actor fields |
 | `show_actor`, `hide_actor`, `remove_actor` | Actor (from the cast) |
-| `field_animation` | Animation, Target (kind, id or x/y), Seconds Per Frame |
+| `field_animation` | Effect (picker), or Animation and Seconds Per Frame; Target (kind, id or x/y) |
 | `title_card`, `narration` | Title, Text (multiline), Seconds |
 | `transition` | Style (`fade`, `wipe`, `none`), Direction (`in`, `out`), Seconds |
 | `clear_presentation` | none |
 | `cinematic_music` | Track, Loop, Fade In, Fade Out, On Completion (`continue`, `stop`, `restore_previous`) |
 | `move_route` | Subject (`player`, `npc`, `staged_actor`), NPC Id or Staged Actor, Seconds Per Step or Speed, Wait, Steps |
+
+A `field_animation` plays either an effect timeline from `assets/Animations`,
+chosen by its stable id, or a legacy animation from the Animations database.
+The effect owns its frame rate, so choosing an Effect removes the Animation
+and Seconds Per Frame rows and their values; clearing the Effect brings them
+back. Validation plays the effect through the Engine for both presentations
+and reports one that is missing, cannot be read, or loops: the command waits
+for its effect to end, and loops belong to a map's own field effects.
 
 Every other type from the Common Events table is available too, with the
 same rows. `Shift+O` adds: on a route, lane or point row, another step, lane
@@ -1626,7 +1634,9 @@ where a field is unset (a wait of 0.5s, a route step of 0.15s, a narration
 of 2.5s, a transition of 0.24s). A parallel block is as long as its longest
 lane; a branch or choice as its longest arm. Dialogue, choices, battles and
 common events cannot be timed from the asset and are marked `+input`,
-`+battle` and `+?` instead of guessed. `Up` / `Down` move over the rows and
+`+battle` and `+?` instead of guessed. A field effect is as long as its
+timeline, the longer of its two presentations, and is marked `+?` when its
+timeline cannot be read. `Up` / `Down` move over the rows and
 `Enter` opens the row's command in the tree; a running preview marks the
 rows it is on.
 

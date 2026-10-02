@@ -22,7 +22,9 @@ use Ichiloto\Editor\ProjectDirectoryContext;
 use Ichiloto\Editor\ProjectQuest;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
+use Ichiloto\Engine\Animations\Timelines\EffectTimelineLibrary;
 use Ichiloto\Engine\Core\WorldConditionType;
+use Ichiloto\Engine\Cutscenes\Cinematics\CinematicScriptValidator;
 use Ichiloto\Engine\Field\SkitSpeaker;
 use Ichiloto\Engine\Events\Interpreter\EventInterpreter;
 use Ichiloto\Engine\Events\Interpreter\MovementRouteRunner;
@@ -76,6 +78,9 @@ class ProjectValidator
    */
   protected ?string $projectRootForKnowledge = null;
 
+  /** The project's effect timelines, read once per validation. */
+  protected ?EffectTimelineLibrary $effectLibrary = null;
+
   protected const string TRANSFER_TRIGGER = 'TransferPlayerTrigger';
   protected const string SCRIPT_TRIGGER = 'ScriptEventTrigger';
 
@@ -88,6 +93,7 @@ class ProjectValidator
   public function validate(ProjectWorkspace $workspace): array
   {
     $this->projectRootForKnowledge = $workspace->projectRoot;
+    $this->effectLibrary = new EffectTimelineLibrary($workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets');
     $this->knowledgeCatalogData = null;
     $this->commonEventScripts = $this->eventScriptsById($workspace);
     $this->cinematicCommonEventIds = [];
@@ -3088,6 +3094,8 @@ class ProjectValidator
       'sfx' => $catalog->valuesFor('sfx'),
       'common_events' => $catalog->valuesFor('common_events'),
       'cinematics' => $catalog->valuesFor('cinematics'),
+      'animations' => $catalog->valuesFor('animations'),
+      'effects' => $catalog->valuesFor('effects'),
     ];
 
     return [
@@ -3320,6 +3328,17 @@ class ProjectValidator
           ...$issues,
           ...$this->checkReference(strval($command[$key] ?? ''), $category, $noun, $where, $known),
         ];
+      }
+
+      if ($type === 'field_animation') {
+        // An event script runs the same command a cinematic does, and the
+        // runtime holds it to the same contract.
+        try {
+          CinematicScriptValidator::validateFieldAnimation($command, $where, 'command');
+          $issues = [...$issues, ...$this->checkFieldAnimationReference($command, $where, $known)];
+        } catch (InvalidArgumentException $exception) {
+          $issues[] = Issue::error($where, $exception->getMessage(), 'The runtime stops the script at this command.');
+        }
       }
 
       if ($type === 'common_event') {
@@ -4309,6 +4328,30 @@ class ProjectValidator
    * @param array<string, string[]> $known What the project defines.
    * @return Issue[] The issue, if there is one.
    */
+  /**
+   * Checks what a `field_animation` command plays: a legacy animation by
+   * name, or an effect timeline that exists and plays once on the field.
+   *
+   * @param array<string, mixed> $command The command.
+   * @param array<string, string[]> $known What the project defines.
+   * @return Issue[] The issues found.
+   */
+  protected function checkFieldAnimationReference(array $command, string $where, array $known): array
+  {
+    if (! array_key_exists('effect', $command)) {
+      return $this->checkReference(strval($command['animation'] ?? ''), 'animations', 'animation', $where, $known);
+    }
+
+    $effect = is_string($command['effect']) ? $command['effect'] : '';
+    $issues = $this->checkReference($effect, 'effects', 'effect', $where, $known);
+
+    if ($issues !== [] || $effect === '') {
+      return $issues;
+    }
+
+    return $this->effectLibrary === null ? [] : EffectValidator::checkOneShotFieldEffect($this->effectLibrary, $effect, $where);
+  }
+
   protected function checkReference(string $value, string $category, string $noun, string $where, array $known): array
   {
     $value = trim($value);

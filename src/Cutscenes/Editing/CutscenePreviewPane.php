@@ -17,6 +17,7 @@ use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Editor\Status\StatusLevel;
 use Ichiloto\Editor\UI\CutscenesScreen;
+use Ichiloto\Engine\Animations\Timelines\EffectTimelineLibrary;
 use Throwable;
 
 /**
@@ -46,6 +47,8 @@ trait CutscenePreviewPane
     private int $cutscenePreviewScroll = 0;
     /** The row under the cursor in the duration overview. */
     private int $cutsceneOverviewCursor = 0;
+    /** The open project's effect timelines, read once, so the overview can time field effects. */
+    private ?EffectTimelineLibrary $cutsceneEffectLibrary = null;
     /** The asset payload the running preview was built from. */
     private string $cinematicPreviewFingerprint = '';
 
@@ -1203,6 +1206,24 @@ trait CutscenePreviewPane
     }
 
     /**
+     * Returns the open project's effect timelines, or null with no project.
+     */
+    private function getEffectLibrary(): ?EffectTimelineLibrary
+    {
+        if (! $this->workspace instanceof ProjectWorkspace) {
+            return null;
+        }
+
+        $assetRoot = $this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets';
+
+        if ($this->cutsceneEffectLibrary?->assetRoot !== $assetRoot) {
+            $this->cutsceneEffectLibrary = new EffectTimelineLibrary($assetRoot);
+        }
+
+        return $this->cutsceneEffectLibrary;
+    }
+
+    /**
      * The overview rows of the selected cinematic: commands, then finalizer.
      *
      * @return array<int, array{depth: int, key: string, label: string, seconds: float, marks: string[], kind: string}>
@@ -1220,8 +1241,8 @@ trait CutscenePreviewPane
         $finalizer = is_array($payload['finalizer'] ?? null) ? $payload['finalizer'] : [];
 
         return [
-            ...CutsceneLaneOverview::of($commands)->rows,
-            ...CutsceneLaneOverview::of($finalizer, 'finalizer')->rows,
+            ...CutsceneLaneOverview::of($commands, effects: $this->getEffectLibrary())->rows,
+            ...CutsceneLaneOverview::of($finalizer, 'finalizer', $this->getEffectLibrary())->rows,
         ];
     }
 
@@ -1236,9 +1257,9 @@ trait CutscenePreviewPane
     {
         $payload = $asset->payload();
         $commands = is_array($payload[CutsceneAsset::COMMANDS_KEY] ?? null) ? $payload[CutsceneAsset::COMMANDS_KEY] : [];
-        $overview = CutsceneLaneOverview::of($commands);
+        $overview = CutsceneLaneOverview::of($commands, effects: $this->getEffectLibrary());
         $finalizer = is_array($payload['finalizer'] ?? null) ? $payload['finalizer'] : [];
-        $finalizerOverview = CutsceneLaneOverview::of($finalizer, 'finalizer');
+        $finalizerOverview = CutsceneLaneOverview::of($finalizer, 'finalizer', $this->getEffectLibrary());
         $preview = $this->cinematicPreview;
         $activeKeys = $preview !== null && ! $preview->isFinished() ? $preview->activeKeys() : [];
         $lines = [sprintf(

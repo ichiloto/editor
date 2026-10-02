@@ -217,13 +217,17 @@ trait CutsceneValidation
                 'transfer' => ['maps', 'map', 'map'],
                 'start_battle' => ['troops', 'troop', 'troop'],
                 'common_event' => ['common_events', 'id', 'common event'],
-                'show_animation', 'field_animation' => ['animations', 'animation', 'animation'],
+                'show_animation' => ['animations', 'animation', 'animation'],
                 default => null,
             };
 
             if (is_array($named)) {
                 [$category, $key, $noun] = $named;
                 $issues = [...$issues, ...$this->checkReference(strval($command[$key] ?? ''), $category, $noun, $where, $known)];
+            }
+
+            if ($type === 'field_animation') {
+                $issues = [...$issues, ...$this->checkFieldAnimationReference($command, $where, $known)];
             }
 
             if ($type === 'checkpoint') {
@@ -457,7 +461,7 @@ trait CutsceneValidation
         $catalog = new \Ichiloto\Editor\Database\ReferenceCatalog($workspace);
         $known = [];
 
-        foreach (['quests', 'maps', 'troops', 'inventory', 'bgm', 'sfx', 'common_events', 'animations', 'cinematics', 'summons'] as $category) {
+        foreach (['quests', 'maps', 'troops', 'inventory', 'bgm', 'sfx', 'common_events', 'animations', 'effects', 'cinematics', 'summons'] as $category) {
             try {
                 $known[$category] = $catalog->valuesFor($category);
             } catch (Throwable) {

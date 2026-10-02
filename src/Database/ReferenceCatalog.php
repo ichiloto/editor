@@ -12,6 +12,7 @@ use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\Cutscenes\CutsceneAsset;
 use Ichiloto\Editor\Cutscenes\CutsceneType;
 use Ichiloto\Editor\ProjectWorkspace;
+use Ichiloto\Engine\Animations\Timelines\EffectTimelineLibrary;
 use Ichiloto\Engine\Rendering\Tilesets\Tileset;
 
 /**
@@ -70,6 +71,7 @@ final class ReferenceCatalog
         'summon_cues',
         'event_markers',
         'tilesets',
+        'effects',
     ];
 
     /**
@@ -188,6 +190,8 @@ final class ReferenceCatalog
             'event_markers' => $this->currentMap?->getEventMarkers() ?? [],
             // A map's kind is one of the project's tilesets, by file stem.
             'tilesets' => array_keys($this->loadTilesetNames()),
+            // Effect timelines are folders the Engine lists by stable id.
+            'effects' => new EffectTimelineLibrary($this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets')->findTimelineIds(),
             default => $this->recordValues($category),
         };
     }

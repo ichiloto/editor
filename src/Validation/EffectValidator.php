@@ -108,4 +108,38 @@ final class EffectValidator
 
         return $issues;
     }
+
+    /**
+     * Checks an effect a `field_animation` command plays and waits for, as
+     * the Engine plays it on the field for each presentation: it must load,
+     * and it must play once, since loops belong to a map's own effects.
+     *
+     * @param EffectTimelineLibrary $library The project's timelines.
+     * @param string $effect The effect's stable id.
+     * @param string $where Where the command is.
+     * @return Issue[]
+     */
+    public static function checkOneShotFieldEffect(EffectTimelineLibrary $library, string $effect, string $where): array
+    {
+        $issues = [];
+
+        foreach (EffectPresentation::cases() as $presentation) {
+            try {
+                $timeline = $library->load($effect, false, $presentation);
+            } catch (Throwable $failure) {
+                $issues[] = Issue::error($where, sprintf('Its effect %s cannot be played on the field for the %s presentation: %s',
+                    $effect, $presentation->value, $failure->getMessage()),
+                    sprintf('Fix assets/Animations/%s. The runtime stops the script at this command.', $effect));
+                continue;
+            }
+
+            if ($timeline->defaults['playback']['loop'] ?? false) {
+                $issues[] = Issue::error($where, sprintf('Its effect %s loops in the %s presentation, and a field_animation waits for its effect to end.',
+                    $effect, $presentation->value),
+                    'Play a looping effect from the map\'s field effects instead, or give this timeline once playback.');
+            }
+        }
+
+        return $issues;
+    }
 }
