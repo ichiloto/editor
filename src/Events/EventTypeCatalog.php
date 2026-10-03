@@ -173,4 +173,24 @@ final class EventTypeCatalog
 
         return 0;
     }
+
+    /**
+     * Returns the label an event of this trigger class is shown by: Unset for
+     * none, its catalog label, or the class's short name for one the catalog
+     * does not list.
+     */
+    public static function describeClass(?string $className): string
+    {
+        if ($className === null || $className === '') {
+            return 'Unset';
+        }
+
+        foreach (self::all() as $definition) {
+            if ($definition->className === $className) {
+                return $definition->label;
+            }
+        }
+
+        return basename(str_replace('\\', '/', $className));
+    }
 }

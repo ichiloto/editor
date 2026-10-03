@@ -13,6 +13,7 @@ use Ichiloto\Editor\Backup\BackupSettings;
 use Ichiloto\Editor\Actors\ActorIdentityMigration;
 use Ichiloto\Editor\Actors\ActorIdentityMigrationPlan;
 use Ichiloto\Editor\Backup\BackupWriter;
+use Ichiloto\Editor\Canvas\CanvasEditor;
 use Ichiloto\Editor\Canvas\CanvasTool;
 use Ichiloto\Editor\Canvas\Clipboard;
 use Ichiloto\Editor\Canvas\ToolGeometry;
@@ -4773,7 +4774,7 @@ final class Editor
 
             $oldSymbol = $selectedMap->getLayerSymbol($this->getActiveCanvasLayer(), $point['x'], $point['y']);
             $oldStyle = $selectedMap->getLayerCellStyle($this->getActiveCanvasLayer(), $point['x'], $point['y']);
-            [$newPrefix, $newSuffix] = $this->resolvePaintStyle($symbol, $this->selectedPaintColor, $oldStyle);
+            [$newPrefix, $newSuffix] = CanvasEditor::resolvePaintStyle($symbol, $this->selectedPaintColor, $oldStyle);
             $selectedMap->setLayerCell($this->getActiveCanvasLayer(), $point['x'], $point['y'], $symbol, $newPrefix, $newSuffix);
             $newSymbol = $selectedMap->getLayerSymbol($this->getActiveCanvasLayer(), $point['x'], $point['y']);
             $this->activeStrokeCommand->appendCell(
@@ -4996,88 +4997,6 @@ final class Editor
     {
         // Tiles follow the glyphs (GlyphTileCanvas), in the same undo step.
         return $this->commitCanvasWrites($map, $writes, $label, retry: $retry, choices: $choices);
-    }
-
-    /**
-     * Writes cells onto one layer and returns the stroke that undoes them,
-     * unrecorded, so a caller can record it alone or as part of a larger
-     * step. Cells outside the layer are skipped.
-     *
-     * @param ProjectMap $map The target map.
-     * @param string $layer The layer id to write.
-     * @param array<int, array{x: int, y: int, symbol: string, color?: string|null, style?: array{prefix: string, suffix: string}}> $writes The cells to write.
-     * @param string $label The undo/status label.
-     * @return array{0: PaintStrokeCommand, 1: int} The stroke and the number of cells that actually changed.
-     */
-    private function writeCanvasCells(ProjectMap $map, string $layer, array $writes, string $label): array
-    {
-        $stroke = new PaintStrokeCommand($map, $layer, $label);
-        $changed = 0;
-
-        foreach ($writes as $write) {
-            if (! $map->hasLayerCell($layer, $write['x'], $write['y'])) {
-                continue;
-            }
-
-            $oldSymbol = $map->getLayerSymbol($layer, $write['x'], $write['y']);
-
-            $oldStyle = $map->getLayerCellStyle($layer, $write['x'], $write['y']);
-            [$newPrefix, $newSuffix] = isset($write['style'])
-                ? [$write['style']['prefix'], $write['style']['suffix']]
-                : $this->resolvePaintStyle(
-                    $write['symbol'],
-                    $write['color'] ?? null,
-                    $oldStyle,
-                );
-            $map->setLayerCell($layer, $write['x'], $write['y'], $write['symbol'], $newPrefix, $newSuffix);
-            $newSymbol = $map->getLayerSymbol($layer, $write['x'], $write['y']);
-            $stroke->appendCell(
-                $write['x'],
-                $write['y'],
-                $oldSymbol,
-                $newSymbol,
-                $oldStyle['prefix'],
-                $oldStyle['suffix'],
-                $newPrefix,
-                $newSuffix,
-            );
-
-            if ($oldSymbol !== $newSymbol || $oldStyle['prefix'] !== $newPrefix || $oldStyle['suffix'] !== $newSuffix) {
-                $changed++;
-            }
-        }
-
-        return [$stroke, $changed];
-    }
-
-    /**
-     * Resolves the styling bytes a tile paint writes.
-     *
-     * The colour directive follows the brush contract: null keeps the
-     * cell's existing styling byte-for-byte, an empty string paints without
-     * colour, and any other value becomes an `fg=` tag. A space is always
-     * uncoloured, so erasing never leaves invisible styling behind.
-     *
-     * @param string $symbol The symbol being painted.
-     * @param string|null $colorDirective The brush colour directive.
-     * @param array{prefix: string, suffix: string} $oldStyle The cell's current styling.
-     * @return array{0: string, 1: string} The prefix and suffix to write.
-     */
-    private function resolvePaintStyle(string $symbol, ?string $colorDirective, array $oldStyle): array
-    {
-        if ($symbol === ' ') {
-            return ['', ''];
-        }
-
-        if ($colorDirective === null) {
-            return [$oldStyle['prefix'], $oldStyle['suffix']];
-        }
-
-        if ($colorDirective === '') {
-            return ['', ''];
-        }
-
-        return [sprintf('<fg=%s>', $colorDirective), '</>'];
     }
 
     /**
@@ -16090,17 +16009,7 @@ final class Editor
      */
     private function resolveEventTypeLabel(?string $className): string
     {
-        if ($className === null || $className === '') {
-            return 'Unset';
-        }
-
-        foreach (EventTypeCatalog::all() as $definition) {
-            if ($definition->className === $className) {
-                return $definition->label;
-            }
-        }
-
-        return basename(str_replace('\\', '/', $className));
+        return EventTypeCatalog::describeClass($className);
     }
 
     /**
