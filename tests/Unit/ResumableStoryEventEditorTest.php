@@ -44,7 +44,7 @@ it('creates ScriptEventTrigger through the active event type catalog and inspect
         ->and($definition)->toHaveKeys(['conditions', 'sets', 'whenBlocked', 'cue'])
         ->and($definition['cue'])->toBe(['symbol' => '', 'color' => 'bright-yellow']);
 
-    $fields = callEditorMethod($editor, 'buildEventDataFields', 'E', $definition);
+    $fields = callEditorMethod($editor, 'createMapInspector')->buildEventDataFields('E', $definition);
     $byPath = [];
 
     foreach ($fields as $field) {
@@ -74,7 +74,7 @@ it('exposes event cues on legacy definitions without changing them on inspection
         'class' => ScriptEventTrigger::class,
         'data' => ['scriptId' => 'dresser-note', 'mode' => 'action', 'reusable' => false],
     ];
-    $fields = callEditorMethod($editor, 'buildEventDataFields', 'E', $definition);
+    $fields = callEditorMethod($editor, 'createMapInspector')->buildEventDataFields('E', $definition);
     $paths = array_map(static fn(array $field): string => implode('.', (array) ($field['path'] ?? [])), $fields);
 
     expect($paths)->toContain('cue.symbol', 'cue.color')

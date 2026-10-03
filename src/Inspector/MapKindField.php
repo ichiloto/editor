@@ -50,22 +50,7 @@ trait MapKindField
     /** @return array<string, mixed> The Kind row for the Inspector. */
     private function buildMapKindField(ProjectMap $map): array
     {
-        $id = $map->getMapDataField(['tileset']);
-        $labels = $this->referenceCatalog()->labelsFor('tilesets');
-
-        return [
-            'label' => 'Kind',
-            'value' => match (true) {
-                $id === null => self::MAP_KIND_NONE,
-                ! is_string($id) => sprintf('%s · not a tileset id', get_debug_type($id)),
-                ! isset($labels[$id]) => sprintf('%s · not in assets/%s', $id, Tileset::DIRECTORY),
-                default => $labels[$id],
-            },
-            'selectedValue' => is_string($id) ? $id : '',
-            'reference' => 'tilesets',
-            'target' => 'map-kind',
-            'field' => 'tileset',
-        ];
+        return $this->createMapInspector()->buildMapKindField($map);
     }
 
     /**

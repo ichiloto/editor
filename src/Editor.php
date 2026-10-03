@@ -59,6 +59,8 @@ use Ichiloto\Editor\History\GenericCommand;
 use Ichiloto\Editor\History\PaintStrokeCommand;
 use Ichiloto\Editor\History\SourceSetCommand;
 use Ichiloto\Editor\Inspector\InputControl;
+use Ichiloto\Editor\Inspector\InspectorRefusal;
+use Ichiloto\Editor\Inspector\MapInspector;
 use Ichiloto\Editor\Inspector\InputControlType;
 use Ichiloto\Editor\IO\InputDecoder;
 use Ichiloto\Editor\IO\InputRouter;
@@ -545,8 +547,6 @@ final class Editor
     /**
      * The picker row that clears a map's background music.
      */
-    private const string MAP_BGM_NONE = '(None)';
-    private const string MAP_KIND_NONE = 'Not set';
 
     /**
      * The row that chooses which kind of slot the Optimize preview fills.
@@ -9077,135 +9077,17 @@ final class Editor
             return;
         }
 
-        $control = $this->getInspectorFieldControl($field);
-        $type = $control?->type ?? InputControlType::TEXT;
-        $value = match ($type) {
-            InputControlType::INTEGER => (int) trim($rawValue),
-            InputControlType::FLOAT => (float) trim($rawValue),
-            InputControlType::BOOLEAN => InputControl::parseBoolean($rawValue),
-            default => $rawValue,
-        };
-        $target = (string) ($field['target'] ?? 'map');
-
-        if ($target === 'map') {
-            $fieldName = (string) $field['field'];
-            $oldValue = $selectedMap->getMapField($fieldName);
-            $selectedMap->setMapField($fieldName, $value);
-            $this->recordCommand(new GenericCommand(
-                sprintf('%s edit', $field['label'] ?? 'Field'),
-                static fn() => $selectedMap->setMapField($fieldName, $value),
-                static fn() => $selectedMap->setMapField($fieldName, $oldValue),
-            ));
+        try {
+            $command = $this->createMapInspector()->apply($selectedMap, $field, $rawValue);
+        } catch (InspectorRefusal $refusal) {
+            $this->setStatus($refusal->getMessage(), $refusal->details === [] ? StatusLevel::WARN : StatusLevel::ERROR, $refusal->details);
             return;
         }
 
-        if ($target === 'map-data') {
-            $path = array_values((array) ($field['path'] ?? []));
-
-            if ($path === []) {
-                return;
-            }
-
-            $this->applyMapDataValue($selectedMap, $path, $value === '' ? null : $value, (string) ($field['label'] ?? 'Field'));
-
-            return;
-        }
-
-        if ($target === 'map-encounters') {
-            $this->applyMapEncounterValue($selectedMap, $field, $value);
-
-            return;
-        }
-
-        if ($target === 'map-bgm-variants') {
-            $this->applyMapBgmVariantValue($selectedMap, $field, $value);
-
-            return;
-        }
-
-        if ($target === 'map-size') {
-            $newWidth = (string) ($field['field'] ?? '') === 'width' ? max(1, (int) $value) : $selectedMap->getWidth();
-            $newHeight = (string) ($field['field'] ?? '') === 'height' ? max(1, (int) $value) : $selectedMap->getHeight();
-            $stranded = $selectedMap->describeNpcsStrandedBy($newWidth, $newHeight);
-
-            if ($stranded !== []) {
-                // Refuse rather than clamp, delete, or truncate: the author
-                // moves, resizes or removes the NPC, then shrinks.
-                $this->setStatus(
-                    sprintf('Cannot shrink to %dx%d: %d NPC%s would be stranded (Ctrl+E lists them).', $newWidth, $newHeight, count($stranded), count($stranded) === 1 ? '' : 's'),
-                    StatusLevel::ERROR,
-                    array_map(static fn(string $line): string => '- ' . $line, $stranded),
-                );
-
-                return;
-            }
-
-            $snapshotBefore = $selectedMap->captureGridSnapshot();
-            $selectedMap->resize($newWidth, $newHeight);
-            $snapshotAfter = $selectedMap->captureGridSnapshot();
-            $this->recordCommand(new GenericCommand(
-                'Map resize',
-                static fn() => $selectedMap->restoreGridSnapshot($snapshotAfter),
-                static fn() => $selectedMap->restoreGridSnapshot($snapshotBefore),
-            ));
-            return;
-        }
-
-        if ($target === 'event') {
-            $marker = (string) $field['marker'];
-            $path = (array) ($field['path'] ?? []);
-            $oldValue = $selectedMap->getEventField($marker, $path);
-            $selectedMap->setEventField($marker, $path, $value);
-            $this->recordCommand(new GenericCommand(
-                sprintf('%s edit', $field['label'] ?? 'Event field'),
-                static fn() => $selectedMap->setEventField($marker, $path, $value),
-                static fn() => $selectedMap->setEventField($marker, $path, $oldValue),
-            ));
-            return;
-        }
-
-        if ($target === 'event-bounds') {
-            $marker = (string) $field['marker'];
-            $area = $selectedMap->getEventArea($marker);
-
-            if ($area === null) {
-                return;
-            }
-
-            $bounds = $selectedMap->getEventBounds($marker);
-            $snapshotBefore = $selectedMap->captureGridSnapshot();
-
-            if (! $area->isRectangle) {
-                // A marker painted in any other shape keeps its shape: Position
-                // moves every cell; its cells are reshaped by painting them.
-                $axis = (string) $field['field'];
-
-                if (! in_array($axis, ['x', 'y'], true)) {
-                    $this->setStatus(sprintf('Marker %s is painted in its own shape; paint or erase its cells to reshape it.', $marker), StatusLevel::WARN);
-                    return;
-                }
-
-                $delta = max(0, (int) $value) - $bounds[$axis];
-                $refusal = $selectedMap->moveEventCells($marker, $axis === 'x' ? $delta : 0, $axis === 'y' ? $delta : 0);
-
-                if ($refusal !== null) {
-                    $this->setStatus($refusal, StatusLevel::WARN);
-                    return;
-                }
-            } else {
-                $bounds[(string) $field['field']] = max(0, (int) $value);
-                $selectedMap->setEventBounds($marker, $bounds['x'], $bounds['y'], $bounds['width'], $bounds['height']);
-            }
-
-            $snapshotAfter = $selectedMap->captureGridSnapshot();
-            $this->recordCommand(new GenericCommand(
-                'Event bounds edit',
-                static fn() => $selectedMap->restoreGridSnapshot($snapshotAfter),
-                static fn() => $selectedMap->restoreGridSnapshot($snapshotBefore),
-            ));
+        if ($command !== null) {
+            $this->recordCommand($command);
         }
     }
-
     /**
      * Returns the currently selected database category label.
      *
@@ -13454,222 +13336,24 @@ final class Editor
     }
 
     /**
-     * Builds the map's runtime metadata rows: the music it plays and the
-     * random encounters it offers.
-     *
-     * Both are read from what the map actually holds. An absent rate or tile
-     * mode is shown as the engine's default in parentheses and is not
-     * written until an author sets one, so opening a map never puts a
-     * default into a file.
-     *
-     * @return array<int, array<string, mixed>>
-     */
-    private function mapRuntimeFields(ProjectMap $map): array
-    {
-        $bgm = $map->getMapDataField(['bgm']);
-        $bgm = is_string($bgm) ? $bgm : '';
-        $known = $this->referenceCatalog()->valuesFor('bgm');
-        $missing = $bgm !== '' && ! in_array($bgm, $known, true);
-        $fields = [
-            [
-                'label' => 'Audio',
-                'value' => '',
-                'editable' => false,
-            ],
-            [
-                // A track is chosen from what the project has, never spelled.
-                // A track the project no longer has stays visible and says
-                // so, rather than being quietly swapped for a valid one.
-                'label' => '  Background Music',
-                'value' => match (true) {
-                    $bgm === '' => self::MAP_BGM_NONE,
-                    $missing => $bgm . ' · not in assets/Audio/BGM',
-                    default => $bgm,
-                },
-                'reference' => 'bgm',
-                'target' => 'map-data',
-                'path' => ['bgm'],
-                'field' => 'bgm',
-            ],
-        ];
-
-        $fields = [...$fields, ...$this->mapBgmVariantFields($map, $known)];
-
-        $encounters = MapEncounters::fromMap($map);
-        $fields[] = [
-            'label' => 'Encounters',
-            'value' => $encounters->summary(),
-            'editable' => false,
-        ];
-
-        if (! $encounters->isSupported()) {
-            $fields[] = [
-                'label' => '  ! Read-only',
-                'value' => (string) $encounters->unsupportedReason(),
-                'editable' => false,
-            ];
-
-            return $fields;
-        }
-
-        $rows = $encounters->rows();
-        $fields[] = [
-            // The Inspector's own list heading, so Shift+O and Del mean here
-            // what they mean on every other list in the pane.
-            'label' => sprintf('  Troops · %d', count($rows)),
-            'value' => '',
-            'editable' => false,
-            'target' => 'map-encounters',
-            'encounterList' => ['index' => max(0, count($rows) - 1)],
-        ];
-
-        foreach ($rows as $index => $row) {
-            $weight = $row['weight'];
-            $fields[] = [
-                'label' => '    Troop',
-                'value' => $row['name'],
-                'reference' => 'troops',
-                'target' => 'map-encounters',
-                'field' => 'troop',
-                'index' => $index,
-                'encounterList' => ['index' => $index],
-            ];
-            $usable = is_numeric($weight) && (int) $weight >= 1;
-            $fields[] = [
-                'label' => '    Weight',
-                'value' => (is_scalar($weight) ? (string) $weight : '') . ($usable ? '' : ' · the engine drops a troop it cannot weigh'),
-                'control' => new InputControl(InputControlType::INTEGER, $usable ? (string) (int) $weight : '1'),
-                'target' => 'map-encounters',
-                'field' => 'weight',
-                'index' => $index,
-                'encounterList' => ['index' => $index],
-            ];
-        }
-
-        if ($rows === []) {
-            return $fields;
-        }
-
-        $rate = $encounters->authoredRate();
-        $fields[] = [
-            'label' => '  Rate',
-            'value' => $rate === null ? sprintf('(engine default: %d)', MapEncounters::DEFAULT_RATE) : (string) $rate,
-            'control' => new InputControl(InputControlType::INTEGER, (string) ($rate ?? MapEncounters::DEFAULT_RATE)),
-            'target' => 'map-encounters',
-            'field' => 'rate',
-        ];
-        $tiles = $encounters->authoredTiles();
-        $fields[] = [
-            'label' => '  Tiles',
-            'value' => $tiles === null ? sprintf('(engine default: %s)', MapEncounters::DEFAULT_TILES) : $tiles,
-            'options' => MapEncounters::TILE_MODES,
-            'target' => 'map-encounters',
-            'field' => 'tiles',
-        ];
-
-        return $fields;
-    }
-
-    /**
-     * Builds the ordered Music Variants rows: the map's conditional music,
-     * evaluated by the engine in declaration order, first match wins.
-     *
-     * @param string[] $known The project's BGM tracks.
-     * @return array<int, array<string, mixed>>
-     */
-    private function mapBgmVariantFields(ProjectMap $map, array $known): array
-    {
-        $variants = MapBgmVariants::fromMap($map);
-        $fields = [
-            [
-                'label' => '  Music Variants',
-                'value' => $variants->summary(),
-                'editable' => false,
-                'target' => 'map-bgm-variants',
-                'bgmVariantList' => ['index' => max(0, $variants->count() - 1)],
-            ],
-        ];
-
-        if (! $variants->isSupported()) {
-            $fields[] = [
-                'label' => '  ! Read-only',
-                'value' => (string) $variants->unsupportedReason(),
-                'editable' => false,
-            ];
-
-            return $fields;
-        }
-
-        foreach ($variants->rows() as $index => $row) {
-            $track = $variants->trackAt($index);
-            $raw = $variants->rawTrackAt($index);
-            $fields[] = [
-                'label' => sprintf('    Variant %d Track', $index + 1),
-                'value' => match (true) {
-                    $track === null && $raw !== null => var_export($raw, true) . ' · not a track name',
-                    $track === null || $track === '' => '(no track yet)',
-                    ! in_array($track, $known, true) => $track . ' · not in assets/Audio/BGM',
-                    default => $track,
-                },
-                'reference' => 'bgm',
-                'target' => 'map-bgm-variants',
-                'field' => 'track',
-                'index' => $index,
-                'bgmVariantList' => ['index' => $index],
-            ];
-
-            $issue = $variants->conditionsIssueAt($index);
-            $conditions = $variants->conditionsAt($index);
-            $fields[] = [
-                'label' => sprintf('    Variant %d When', $index + 1),
-                'value' => $issue !== null
-                    ? '! ' . $issue
-                    : ($conditions === [] ? '(always · shadows later variants)' : ConditionCodec::encodeAll($conditions)),
-                'target' => 'map-bgm-variants',
-                'field' => 'conditions',
-                'index' => $index,
-                'bgmVariantList' => ['index' => $index],
-                'editable' => $issue === null,
-                'mapConditions' => $issue === null,
-            ];
-        }
-
-        return $fields;
-    }
-
-    /**
-     * Writes one variant field through the variants model, which owns the
-     * list's shape and preserves every key it does not edit.
+     * Writes one music variant row as one undo step (see
+     * {@see MapInspector::applyMapBgmVariantValue()}).
      *
      * @param array<string, mixed> $field The inspector field descriptor.
      */
     private function applyMapBgmVariantValue(ProjectMap $map, array $field, mixed $value): void
     {
-        $variants = MapBgmVariants::fromMap($map);
-
-        if (! $variants->isSupported()) {
-            $this->setStatus(
-                sprintf('Music variants are read-only here: %s.', $variants->unsupportedReason()),
-                StatusLevel::WARN,
-            );
-
+        try {
+            $command = $this->createMapInspector()->applyMapBgmVariantValue($map, $field, $value);
+        } catch (InspectorRefusal $refusal) {
+            $this->setStatus($refusal->getMessage(), StatusLevel::WARN);
             return;
         }
 
-        $index = (int) ($field['index'] ?? 0);
-        $block = match ((string) ($field['field'] ?? '')) {
-            'track' => $variants->withTrackAt($index, (string) $value),
-            'conditions' => is_array($value) ? $variants->withConditionsAt($index, $value) : null,
-            default => null,
-        };
-
-        if ($block === null) {
-            return;
+        if ($command !== null) {
+            $this->recordCommand($command);
         }
-
-        $this->applyMapDataValue($map, [MapBgmVariants::KEY], $block, sprintf('Music variant %d', $index + 1));
     }
-
     /**
      * Returns the variant row the inspector cursor is inside, or null.
      *
@@ -13861,59 +13545,9 @@ final class Editor
             return $this->getDatabaseSettingsFields();
         }
 
+        $inspector = $this->createMapInspector();
         $fields = [
-            [
-                'label' => 'Name',
-                'value' => $selectedMap->getDisplayName(),
-                'control' => new InputControl(InputControlType::TEXT, $selectedMap->getDisplayName()),
-                'target' => 'map',
-                'field' => 'name',
-            ],
-            [
-                'label' => 'Region',
-                'value' => $selectedMap->getRegion(),
-                'control' => new InputControl(InputControlType::TEXT, $selectedMap->getRegion()),
-                'target' => 'map',
-                'field' => 'region',
-            ],
-            $this->buildMapKindField($selectedMap),
-            [
-                'label' => 'Description',
-                'value' => $selectedMap->getDescription(),
-                'control' => new InputControl(InputControlType::TEXT, $selectedMap->getDescription()),
-                'target' => 'map',
-                'field' => 'description',
-            ],
-            [
-                'label' => 'Size',
-                'value' => '',
-                'editable' => false,
-            ],
-            [
-                'label' => '  X',
-                'value' => (string) $selectedMap->getWidth(),
-                'control' => new InputControl(InputControlType::INTEGER, (string) $selectedMap->getWidth()),
-                'target' => 'map-size',
-                'field' => 'width',
-            ],
-            [
-                'label' => '  Y',
-                'value' => (string) $selectedMap->getHeight(),
-                'control' => new InputControl(InputControlType::INTEGER, (string) $selectedMap->getHeight()),
-                'target' => 'map-size',
-                'field' => 'height',
-            ],
-            [
-                'label' => 'Events',
-                'value' => (string) $selectedMap->getEventDefinitionCount(),
-                'editable' => false,
-            ],
-            [
-                'label' => 'Triggers',
-                'value' => (string) $selectedMap->getTriggerCount(),
-                'editable' => false,
-            ],
-            ...$this->mapRuntimeFields($selectedMap),
+            ...$inspector->getMapFields($selectedMap),
             ...$this->getLayerInspectorFields(),
         ];
 
@@ -13932,333 +13566,14 @@ final class Editor
             return $fields;
         }
 
-        $definition = $selectedMap->getEventDefinition($marker);
-        $bounds = $selectedMap->getEventBounds($marker);
-        $area = $selectedMap->getEventArea($marker);
-
-        $fields[] = [
-            'label' => 'Event',
-            'value' => $marker,
-            'editable' => false,
-        ];
-
-        $fields[] = [
-            'label' => 'Type',
-            'value' => $this->resolveEventTypeLabel(
-                is_array($definition) && is_string($definition['class'] ?? null)
-                    ? $definition['class']
-                    : null,
-            ),
-            'editable' => true,
-            'target' => 'event-type',
-            'marker' => $marker,
-        ];
-
-        if ($bounds !== null) {
-            $fields[] = [
-                'label' => 'Position',
-                'value' => '',
-                'editable' => false,
-            ];
-            $fields[] = [
-                'label' => '  X',
-                'value' => (string) $bounds['x'],
-                'control' => new InputControl(InputControlType::INTEGER, (string) $bounds['x']),
-                'target' => 'event-bounds',
-                'marker' => $marker,
-                'field' => 'x',
-            ];
-            $fields[] = [
-                'label' => '  Y',
-                'value' => (string) $bounds['y'],
-                'control' => new InputControl(InputControlType::INTEGER, (string) $bounds['y']),
-                'target' => 'event-bounds',
-                'marker' => $marker,
-                'field' => 'y',
-            ];
-            if ($area?->isRectangle ?? true) {
-                $fields[] = [
-                    'label' => 'Size',
-                    'value' => '',
-                    'editable' => false,
-                ];
-                $fields[] = [
-                    'label' => '  X',
-                    'value' => (string) $bounds['width'],
-                    'control' => new InputControl(InputControlType::INTEGER, (string) $bounds['width']),
-                    'target' => 'event-bounds',
-                    'marker' => $marker,
-                    'field' => 'width',
-                ];
-                $fields[] = [
-                    'label' => '  Y',
-                    'value' => (string) $bounds['height'],
-                    'control' => new InputControl(InputControlType::INTEGER, (string) $bounds['height']),
-                    'target' => 'event-bounds',
-                    'marker' => $marker,
-                    'field' => 'height',
-                ];
-            } else {
-                // Painted in its own shape: the event triggers on exactly these cells.
-                $pieces = count($area->findPieces());
-                $fields[] = [
-                    'label' => 'Cells',
-                    'value' => sprintf('%d in %d %s', count($area->cells), $pieces, $pieces === 1 ? 'shape' : 'places'),
-                    'editable' => false,
-                ];
-            }
-        }
-
-        if ($definition !== null) {
-            $fields = [...$fields, ...$this->buildEventDataFields($marker, $definition)];
-        }
-
-        return $fields;
+        return [...$fields, ...$inspector->getEventFields($selectedMap, $marker)];
     }
 
-    /**
-     * Builds editable inspector fields for event data.
-     *
-     * @param string $marker The event marker.
-     * @param array<string, mixed> $definition The event definition.
-     * @return array<int, array<string, mixed>>
-     */
-    private function buildEventDataFields(string $marker, array $definition): array
+    /** The map inspector over the project's references as the selected map sees them. */
+    private function createMapInspector(): MapInspector
     {
-        $fields = [];
-        $eventData = $definition['data'] ?? [];
-
-        if (is_array($eventData)) {
-            $fields = $this->decorateEventInspectorFields(
-                $marker,
-                $this->flattenInspectorFields($eventData, ['data']),
-            );
-        }
-
-        $rootFields = array_diff_key($definition, ['class' => true, 'data' => true]);
-        // Cue is a generic trigger capability, including for definitions
-        // created before the field existed. Supplying an empty editor-only
-        // default exposes the opt-in without changing the stored event until
-        // the author actually edits it.
-        $rootFields['cue'] ??= ['symbol' => '', 'color' => 'bright-yellow'];
-
-        return [
-            ...$fields,
-            ...$this->decorateEventInspectorFields(
-                $marker,
-                $this->flattenInspectorFields($rootFields, []),
-            ),
-        ];
+        return new MapInspector($this->referenceCatalog());
     }
-
-    /**
-     * Adds event context, pickers, and enum controls to flattened fields.
-     *
-     * @param array<int, array<string, mixed>> $fields The raw fields.
-     * @return array<int, array<string, mixed>>
-     */
-    private function decorateEventInspectorFields(string $marker, array $fields): array
-    {
-        $decorated = [];
-
-        foreach ($fields as $field) {
-            $field['marker'] = $marker;
-            $field['target'] = 'event';
-
-            $path = array_values((array) ($field['path'] ?? []));
-
-            if ($path === ['data', 'mode']) {
-                $field['options'] = ['action', 'auto'];
-                unset($field['control']);
-            }
-
-            $reference = $this->resolveEventReferenceField($field);
-
-            if (is_array($reference)) {
-                // A reference is chosen, never spelled: dropping the control
-                // is what stops the field being typed into, leaving the
-                // picker as the only way to set it.
-                $field['reference'] = $reference['category'];
-                unset($field['control']);
-            }
-
-            $decorated[] = $field;
-        }
-
-        return $decorated;
-    }
-
-    /**
-     * Flattens nested scalar data into editable inspector fields.
-     *
-     * @param array<string|int, mixed> $data The data to flatten.
-     * @param array<int, string> $path The current path.
-     * @return array<int, array<string, mixed>>
-     */
-    private function flattenInspectorFields(array $data, array $path, ?array $list = null): array
-    {
-        $fields = [];
-
-        foreach ($data as $key => $value) {
-            $segment = (string) $key;
-            $nextPath = [...$path, $segment];
-
-            if (is_array($value)) {
-                // A list of entries -- a shop's stock, an event's dialogue --
-                // is something an author adds to and removes from, so every
-                // field inside one remembers which list it belongs to.
-                if ($this->isInspectorListValue($nextPath, $value)) {
-                    $label = implode(' ', array_map(
-                        static fn(string $part): string => ucwords(str_replace(['_', '-'], ' ', $part)),
-                        ($nextPath[0] ?? null) === 'data' ? array_slice($nextPath, 1) : $nextPath
-                    ));
-                    $fields[] = [
-                        'label' => sprintf('%s · %d', $label, count($value)),
-                        'value' => '',
-                        'editable' => false,
-                        'list' => [
-                            'path' => $nextPath,
-                            'index' => max(0, count($value) - 1),
-                            'blank' => $this->blankInspectorListEntry($nextPath),
-                        ],
-                    ];
-
-                    foreach ($value as $index => $entry) {
-                        $entryPath = [...$nextPath, (string) $index];
-                        $entryList = ['path' => $nextPath, 'index' => (int) $index];
-
-                        $fields = [
-                            ...$fields,
-                            ...(is_array($entry)
-                                ? $this->flattenInspectorFields($entry, $entryPath, $entryList)
-                                : $this->flattenInspectorFields([(string) $index => $entry], $nextPath, $entryList)),
-                        ];
-                    }
-
-                    continue;
-                }
-
-                if (array_key_exists('x', $value) && array_key_exists('y', $value) && is_scalar($value['x']) && is_scalar($value['y'])) {
-                    $label = implode(' ', array_map(
-                        static fn(string $part): string => ucwords(str_replace(['_', '-'], ' ', $part)),
-                        ($nextPath[0] ?? null) === 'data' ? array_slice($nextPath, 1) : $nextPath
-                    ));
-                    $fields[] = [
-                        'label' => $label,
-                        'value' => '',
-                        'editable' => false,
-                    ];
-                    $fields[] = [
-                        'label' => '  X',
-                        'value' => (string) $value['x'],
-                        'control' => new InputControl(
-                            is_int($value['x']) ? InputControlType::INTEGER : InputControlType::TEXT,
-                            (string) $value['x'],
-                        ),
-                        'path' => [...$nextPath, 'x'],
-                    ];
-                    $fields[] = [
-                        'label' => '  Y',
-                        'value' => (string) $value['y'],
-                        'control' => new InputControl(
-                            is_int($value['y']) ? InputControlType::INTEGER : InputControlType::TEXT,
-                            (string) $value['y'],
-                        ),
-                        'path' => [...$nextPath, 'y'],
-                    ];
-                    continue;
-                }
-
-                $fields = [...$fields, ...$this->flattenInspectorFields($value, $nextPath, $list)];
-                continue;
-            }
-
-            if (! is_scalar($value) && $value !== null) {
-                continue;
-            }
-
-            $displayPath = ($nextPath[0] ?? null) === 'data'
-                ? array_slice($nextPath, 1)
-                : $nextPath;
-            $label = implode(' ', array_map(
-                static fn(string $part): string => ctype_digit($part)
-                    ? '#' . ((int) $part + 1)
-                    : ucwords(str_replace(['_', '-'], ' ', $part)),
-                $displayPath
-            ));
-            $stringValue = match (true) {
-                is_bool($value) => $value ? 'true' : 'false',
-                is_float($value) => InputControl::formatFloat($value),
-                default => (string) $value,
-            };
-            $controlType = match (true) {
-                is_bool($value) => InputControlType::BOOLEAN,
-                is_int($value) => InputControlType::INTEGER,
-                is_float($value) => InputControlType::FLOAT,
-                default => InputControlType::TEXT,
-            };
-            $leaf = [
-                'label' => $label,
-                'value' => $stringValue,
-                'control' => new InputControl($controlType, $stringValue),
-                'path' => $nextPath,
-            ];
-
-            if (is_array($list)) {
-                $leaf['list'] = $list;
-            }
-
-            $fields[] = $leaf;
-        }
-
-        return $fields;
-    }
-
-    /**
-     * Distinguishes authored lists from associative configuration blocks.
-     *
-     * Empty arrays need an explicit known-list name because PHP cannot tell
-     * an empty list from an empty map.
-     *
-     * @param array<int, string> $path The candidate path.
-     * @param array<mixed> $value The candidate value.
-     */
-    private function isInspectorListValue(array $path, array $value): bool
-    {
-        if (! array_is_list($value) || array_key_exists('x', $value)) {
-            return false;
-        }
-
-        if ($value !== []) {
-            return true;
-        }
-
-        return in_array(
-            (string) ($path[array_key_last($path)] ?? ''),
-            ['conditions', 'sets', 'dialogue', 'items', 'script', 'steps', 'options'],
-            true,
-        );
-    }
-
-    /**
-     * Returns the structured first row for an empty inspector list.
-     *
-     * @param array<int, string> $path The list path.
-     * @return array<string, mixed>
-     */
-    private function blankInspectorListEntry(array $path): array
-    {
-        return match ((string) ($path[array_key_last($path)] ?? '')) {
-            'conditions' => ['type' => 'switch', 'name' => '', 'value' => true],
-            'sets' => ['type' => 'switch', 'name' => '', 'value' => true],
-            'script' => ['type' => 'text', 'name' => '', 'text' => ''],
-            'steps' => ['direction' => 'down', 'count' => 1, 'faceOnly' => false],
-            'options' => ['text' => '', 'then' => []],
-            'items' => ['item' => '', 'price' => 0],
-            default => ['name' => '', 'text' => ''],
-        };
-    }
-
     /**
      * Draws the editor shell.
      *
@@ -15475,62 +14790,20 @@ final class Editor
     }
 
     /**
-     * Writes one nested map-data value, recording it for undo.
+     * Writes one value into the map's data as one undo step (see
+     * {@see MapInspector::writeMapData()}); nothing is recorded when the data
+     * already held it.
      *
-     * @param array<int, string> $path The nested data path.
+     * @param list<string> $path
      */
     private function applyMapDataValue(ProjectMap $map, array $path, mixed $value, string $label): void
     {
-        $hadValue = $map->hasMapDataField($path);
-        $oldValue = $map->getMapDataField($path);
-        $map->setMapDataField($path, $value);
+        $command = $this->createMapInspector()->writeMapData($map, $path, $value, $label);
 
-        if ($map->getMapDataField($path) === $oldValue && $map->hasMapDataField($path) === $hadValue) {
-            return;
+        if ($command !== null) {
+            $this->recordCommand($command);
         }
-
-        $this->recordCommand(new GenericCommand(
-            sprintf('%s edit', $label),
-            static fn() => $map->setMapDataField($path, $value),
-            static fn() => $map->setMapDataField($path, $hadValue ? $oldValue : null),
-        ));
     }
-
-    /**
-     * Writes one encounter field through the encounters model, which owns
-     * the block's shape, its defaults and its duplicate rule.
-     *
-     * @param array<string, mixed> $field The inspector field descriptor.
-     */
-    private function applyMapEncounterValue(ProjectMap $map, array $field, mixed $value): void
-    {
-        $encounters = MapEncounters::fromMap($map);
-
-        if (! $encounters->isSupported()) {
-            $this->setStatus(
-                sprintf('Encounters are read-only here: %s.', $encounters->unsupportedReason()),
-                StatusLevel::WARN,
-            );
-
-            return;
-        }
-
-        $index = (int) ($field['index'] ?? 0);
-        $block = match ((string) ($field['field'] ?? '')) {
-            'rate' => $encounters->withRate((int) $value),
-            'tiles' => $encounters->withTiles((string) $value),
-            'weight' => $encounters->withWeightAt($index, (int) $value),
-            'troop' => $encounters->withTroopAt($index, (string) $value),
-            default => null,
-        };
-
-        if ($block === null && ! $encounters->isDeclared()) {
-            return;
-        }
-
-        $this->applyMapDataValue($map, [MapEncounters::KEY], $block, 'Encounters');
-    }
-
     /**
      * Returns the list the inspector cursor is inside, if any.
      *
@@ -15701,44 +14974,16 @@ final class Editor
     }
 
     /**
-     * Determines whether an event field names another resource.
+     * The picker an event data row is chosen from (see
+     * {@see MapInspector::findEventReference()}).
      *
-     * A door's destination and a chest's loot have flows of their own; this
-     * covers the rest, so a track, a sound, or a shop's stock is chosen from
-     * what the project actually has rather than spelled from memory.
-     *
-     * @param array<string, mixed> $field The inspector field descriptor.
-     * @return array{category: string, title: string}|null The kind of
-     *   reference and what to call the picker, or null when the field names
-     *   nothing.
+     * @param array<string, mixed> $field
+     * @return array{category: string, title: string}|null
      */
     private function resolveEventReferenceField(array $field): ?array
     {
-        if (($field['target'] ?? null) !== 'event') {
-            return null;
-        }
-
-        $path = array_values((array) ($field['path'] ?? []));
-
-        if (($path[0] ?? null) !== 'data' || count($path) < 2) {
-            return null;
-        }
-
-        $leaf = (string) $path[array_key_last($path)];
-
-        return match (true) {
-            $path === ['data', 'scriptId'] => ['category' => 'common_events', 'title' => 'Event Script'],
-            $path === ['data', 'cinematicId'] => ['category' => 'cinematics', 'title' => 'Cinematic'],
-            $leaf === 'bgm' => ['category' => 'bgm', 'title' => 'Music'],
-            $leaf === 'sfx' => ['category' => 'sfx', 'title' => 'Sound Effect'],
-            // A shop's stock is data.items.N.item. The leaf alone would also
-            // match an unrelated event that happened to call a field "item".
-            $leaf === 'item' && ($path[1] ?? null) === 'items'
-                => ['category' => 'inventory', 'title' => 'Item'],
-            default => null,
-        };
+        return MapInspector::findEventReference($field);
     }
-
     /**
      * Opens the picker for an event field that names another resource.
      *
@@ -15825,7 +15070,7 @@ final class Editor
             // track is a skipped variant, not silence, so the variant picker
             // offers only real tracks and removal un-authors the variant.
             array_unshift($entries, [
-                'label' => self::MAP_BGM_NONE,
+                'label' => MapInspector::MAP_BGM_NONE,
                 'value' => '',
                 'description' => 'The map plays whatever was already playing.',
             ]);
@@ -17893,19 +17138,14 @@ final class Editor
     }
 
     /**
-     * Returns the input control for an inspector field if it is editable.
+     * The input a row is typed into (see {@see MapInspector::findControl()}).
      *
-     * @param array<string, mixed> $field The inspector field descriptor.
-     * @return InputControl|null
+     * @param array<string, mixed> $field
      */
     private function getInspectorFieldControl(array $field): ?InputControl
     {
-        if (($field['editable'] ?? null) === false) { return null; }
-        $control = $field['control'] ?? null;
-
-        return $control instanceof InputControl ? $control : null;
+        return MapInspector::findControl($field);
     }
-
     /**
      * Re-renders the canvas section without clearing the full shell.
      *
