@@ -11,7 +11,10 @@ use Ichiloto\Editor\Canvas\PieceRole;
 use Ichiloto\Editor\Database\DatabaseCatalog;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Database\ReferenceCatalog;
+use Ichiloto\Editor\Events\EventAuthoring;
+use Ichiloto\Editor\Events\EventRefusal;
 use Ichiloto\Editor\Events\EventTypeCatalog;
+use Ichiloto\Editor\Events\EventTypeDefinition;
 use Ichiloto\Editor\Field\NpcAuthoring;
 use Ichiloto\Editor\Field\NpcChange;
 use Ichiloto\Editor\Field\NpcInspector;
@@ -19,6 +22,7 @@ use Ichiloto\Editor\Field\NpcRefusal;
 use Ichiloto\Editor\History\Command;
 use Ichiloto\Editor\History\CommandHistory;
 use Ichiloto\Editor\Inspector\InputControlType;
+use Ichiloto\Editor\Inspector\InspectorListEdit;
 use Ichiloto\Editor\Inspector\InspectorRefusal;
 use Ichiloto\Editor\Inspector\MapInspector;
 use Ichiloto\Editor\MapSourceRefusal;
@@ -213,12 +217,17 @@ final class EditorSession
             ];
         }
 
+        // Every event the map holds: defined ones in their data order, then
+        // markers painted without a definition, which the engine refuses to
+        // load until they are given a type or cleared.
         $events = [];
-        foreach ($map->getEventDefinitions() as $marker => $definition) {
-            $area = $map->getEventArea((string) $marker);
+        foreach (array_unique([...$map->getEventMarkers(), ...$map->getPlacedEventMarkers()]) as $marker) {
+            $definition = $map->getEventDefinition($marker);
+            $area = $map->getEventArea($marker);
             $events[] = [
-                'marker' => (string) $marker,
-                'type' => EventTypeCatalog::describeClass(is_array($definition) && is_string($definition['class'] ?? null) ? $definition['class'] : null),
+                'marker' => $marker,
+                'type' => EventTypeCatalog::describeClass(is_string($definition['class'] ?? null) ? $definition['class'] : null),
+                'defined' => $definition !== null,
                 'cells' => $area === null ? [] : array_map(static fn(array $cell): array => [$cell[0], $cell[1]], $area->cells),
             ];
         }
@@ -602,10 +611,15 @@ final class EditorSession
      * edited (`kind`) and carries the `key` an edit names it by.
      *
      * Kinds: `text`, `integer`, `float`, `boolean`, `options` (one of
-     * `options`), `reference` (one of `references.list` for its
-     * `reference`), or `info` for a row that is only read here: headings,
-     * counts, and the rows the terminal edits through flows of its own (the
-     * map's kind, an event's type, music variant conditions).
+     * `options`, read as the matching `optionLabels` when it has them),
+     * `reference` (one of `references.list` for its `reference`),
+     * `conditions` (the condition line, `type:name[:extras]` joined by `;`),
+     * `destination` (a map from `references.list` for `maps` and a spawn
+     * point on it, set together through `setEventDestination`), or `info`
+     * for a row that is only read here: headings and counts. A typed row's
+     * `raw` is the value its edit starts from. A row inside a list an author
+     * adds to and removes from carries `list` (its entry's index), and
+     * `addInspectorListEntry`/`removeInspectorListEntry` apply to it.
      *
      * @return array{map: string, revision: int, event: ?string, rows: list<array<string, mixed>>}
      * @throws SessionRefusal When the map or event is unknown.
@@ -630,34 +644,265 @@ final class EditorSession
      * again by its key among the map's current rows, so the edit applies
      * exactly as that row would in any interface.
      *
+     * Changing the map's kind when it has tiles from its current kind asks
+     * first: nothing changes until the edit is made again with `$answer`
+     * `clear` (clear its tile layers and change) or `cancel`.
+     *
      * @param array<string, mixed> $key The row's key, as `readInspector` gave it.
-     * @return array{revision: int, changed: bool}
+     * @return array{status: 'applied', revision: int, changed: bool}|array{status: 'question', question: string, answers: list<array{key: string, label: string, description: string}>}
      * @throws SessionRefusal When the map is unknown or stale, the row is gone or read-only, or the edit is refused.
      */
-    public function applyInspector(string $mapId, int $revision, array $key, string $value): array
+    public function applyInspector(string $mapId, int $revision, array $key, string $value, ?string $answer = null): array
     {
         $map = $this->requireCurrentMap($mapId, $revision);
-        $marker = is_string($key['marker'] ?? null) ? $key['marker'] : null;
-        $field = array_find($this->collectInspectorFields($map, $marker),
-            static fn(array $candidate): bool => self::describeKey($candidate) === $key);
+        $field = $this->requireInspectorField($map, $key);
+        $kind = self::describeRow($field)['kind'];
 
-        if ($field === null) {
-            throw new SessionRefusal('That row is no longer in the inspector; read it again.');
-        }
-        if (self::describeRow($field)['kind'] === 'info') {
+        if ($kind === 'info') {
             throw new SessionRefusal(sprintf('%s cannot be edited here.', trim((string) ($field['label'] ?? 'That row'))));
         }
 
+        $inspector = $this->createMapInspector($map);
+        $cleared = 0;
+        if (($field['target'] ?? null) === 'map-kind') {
+            try {
+                $cleared = $inspector->countTileLayersClearedBy($map, $value);
+            } catch (InspectorRefusal $refusal) {
+                throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+            }
+            if ($cleared > 0 && $answer === null) {
+                return $this->describeMapKindQuestion($map, $value, $cleared);
+            }
+            if ($answer !== null && ! in_array($answer, ['clear', 'cancel'], true)) {
+                throw new SessionRefusal(sprintf('Answer clear or cancel, not %s.', $answer));
+            }
+            if ($answer === 'cancel') {
+                return ['status' => 'applied', 'revision' => $map->stateVersion(), 'changed' => false];
+            }
+        }
+
+        $command = $this->runEdit(static fn(): ?Command => ($field['target'] ?? null) === 'map-kind'
+            ? $inspector->changeMapKind($map, $value, $cleared > 0 && $answer === 'clear')
+            : $inspector->apply($map, $field, $value));
+
+        return ['status' => 'applied', 'revision' => $map->stateVersion(), 'changed' => $command !== null];
+    }
+
+    /**
+     * The event types an event can be, as `createEvent` and an event's Type
+     * row name them: by label.
+     *
+     * @return list<array{index: int, label: string, description: string, class: string}>
+     */
+    public function listEventTypes(): array
+    {
+        return array_map(static fn(int $index, EventTypeDefinition $type): array => [
+            'index' => $index,
+            'label' => $type->label,
+            'description' => $type->description,
+            'class' => $type->className,
+        ], array_keys(EventTypeCatalog::all()), EventTypeCatalog::all());
+    }
+
+    /**
+     * Places a new event of a type on cells as one undo step: its marker
+     * painted there and its definition written ({@see EventAuthoring}).
+     *
+     * @param list<array{0: int, 1: int}> $cells The cells it triggers on, as [x, y].
+     * @param string $type The type's label, as `listEventTypes` gives it.
+     * @param string|null $marker The marker to give it; null takes the first free one.
+     * @return array{marker: string, revision: int}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, or the cells, type or marker cannot be used.
+     */
+    public function createEvent(string $mapId, int $revision, array $cells, string $type, ?string $marker = null): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        $definition = EventTypeCatalog::findByLabel($type) ?? throw new SessionRefusal(sprintf('There is no event type %s.', $type));
+        $created = null;
+        $this->runEdit(static function () use ($map, $cells, $definition, $marker, &$created): Command {
+            $created = EventAuthoring::createEvent($map, $cells, $definition, $marker);
+
+            return $created['command'];
+        });
+
+        return ['marker' => $created['marker'], 'revision' => $map->stateVersion()];
+    }
+
+    /**
+     * Deletes an event, its cells and its definition together, as one undo
+     * step.
+     *
+     * @return array{revision: int}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, or has no such event.
+     */
+    public function deleteEvent(string $mapId, int $revision, string $marker): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        $this->runEdit(static fn(): Command => EventAuthoring::deleteEvent($map, $marker));
+
+        return ['revision' => $map->stateVersion()];
+    }
+
+    /**
+     * Moves every cell of an event by an offset, keeping its shape.
+     *
+     * @return array{revision: int, changed: bool}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, or a cell would leave the map or cover another event.
+     */
+    public function moveEvent(string $mapId, int $revision, string $marker, int $deltaX, int $deltaY): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        $command = $this->runEdit(static fn(): ?Command => EventAuthoring::moveEvent($map, $marker, $deltaX, $deltaY));
+
+        return ['revision' => $map->stateVersion(), 'changed' => $command !== null];
+    }
+
+    /**
+     * Repaints an event as exactly a rectangle.
+     *
+     * @return array{revision: int, changed: bool}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, or the rectangle is empty, leaves the map or covers another event.
+     */
+    public function setEventBounds(string $mapId, int $revision, string $marker, int $x, int $y, int $width, int $height): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        $command = $this->runEdit(static fn(): ?Command => EventAuthoring::setEventBounds($map, $marker, $x, $y, $width, $height));
+
+        return ['revision' => $map->stateVersion(), 'changed' => $command !== null];
+    }
+
+    /**
+     * Sets a transfer event's destination map and the spawn point on it as
+     * one undo step.
+     *
+     * @return array{revision: int, changed: bool}
+     * @throws SessionRefusal When either map is unknown, the map is stale or read-only, the event has no destination, or the spawn point is off the destination.
+     */
+    public function setEventDestination(string $mapId, int $revision, string $marker, string $destinationMapId, int $x, int $y): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        $destination = $this->requireMap($destinationMapId);
+        $command = $this->runEdit(fn(): ?Command => $this->createMapInspector($map)->setTransferDestination($map, $marker, $destination, $x, $y));
+
+        return ['revision' => $map->stateVersion(), 'changed' => $command !== null];
+    }
+
+    /**
+     * Adds an entry to the list an inspector row belongs to (a row with
+     * `list`), after that row's entry, as one undo step.
+     *
+     * @param array<string, mixed> $key The row's key, as `readInspector` gave it.
+     * @return array{revision: int, changed: bool, message: string}
+     * @throws SessionRefusal When the map is unknown or stale, the row is gone or in no list, or the list cannot take an entry.
+     */
+    public function addInspectorListEntry(string $mapId, int $revision, array $key): array
+    {
+        return $this->editInspectorList($mapId, $revision, $key,
+            static fn(MapInspector $inspector, ProjectMap $map, array $field): ?InspectorListEdit => $inspector->addListEntry($map, $field));
+    }
+
+    /**
+     * Removes the entry an inspector row belongs to, as one undo step.
+     *
+     * @param array<string, mixed> $key The row's key, as `readInspector` gave it.
+     * @return array{revision: int, changed: bool, message: string}
+     * @throws SessionRefusal When the map is unknown or stale, the row is gone or in no list, or the list cannot lose the entry.
+     */
+    public function removeInspectorListEntry(string $mapId, int $revision, array $key): array
+    {
+        return $this->editInspectorList($mapId, $revision, $key,
+            static fn(MapInspector $inspector, ProjectMap $map, array $field): ?InspectorListEdit => $inspector->removeListEntry($map, $field));
+    }
+
+    /**
+     * @param array<string, mixed> $key
+     * @param Closure(MapInspector, ProjectMap, array<string, mixed>): ?InspectorListEdit $edit
+     * @return array{revision: int, changed: bool, message: string}
+     */
+    private function editInspectorList(string $mapId, int $revision, array $key, Closure $edit): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        $field = $this->requireInspectorField($map, $key);
+        $inspector = $this->createMapInspector($map);
+        $result = null;
+        $this->runEdit(static function () use ($edit, $inspector, $map, $field, &$result): ?Command {
+            $result = $edit($inspector, $map, $field);
+
+            return $result?->command;
+        });
+
+        return ['revision' => $map->stateVersion(), 'changed' => $result?->command !== null, 'message' => $result?->summary ?? 'Nothing changed.'];
+    }
+
+    /**
+     * Runs one edit, records the command it returns, and turns any refusal
+     * into the session's.
+     *
+     * @param callable(): ?Command $edit
+     * @throws SessionRefusal
+     */
+    private function runEdit(callable $edit): ?Command
+    {
         try {
-            $command = $this->createMapInspector($map)->apply($map, $field, $value);
+            $command = $edit();
         } catch (InspectorRefusal $refusal) {
             throw new SessionRefusal(implode("\n", [$refusal->getMessage(), ...$refusal->details]), previous: $refusal);
+        } catch (EventRefusal|MapSourceRefusal $refusal) {
+            throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
         }
         if ($command !== null) {
             $this->history->record($command);
         }
 
-        return ['revision' => $map->stateVersion(), 'changed' => $command !== null];
+        return $command;
+    }
+
+    /**
+     * The inspector row a key names, among the map's current rows.
+     *
+     * @param array<string, mixed> $key
+     * @return array<string, mixed>
+     * @throws SessionRefusal When no current row has the key.
+     */
+    private function requireInspectorField(ProjectMap $map, array $key): array
+    {
+        $marker = is_string($key['marker'] ?? null) ? $key['marker'] : null;
+
+        // A key comes back as the interface stored it, which may not keep
+        // its members in the order they were given.
+        ksort($key);
+
+        return array_find($this->collectInspectorFields($map, $marker), static function (array $candidate) use ($key): bool {
+            $candidateKey = self::describeKey($candidate);
+            if ($candidateKey !== null) {
+                ksort($candidateKey);
+            }
+
+            return $candidateKey === $key;
+        }) ?? throw new SessionRefusal('That row is no longer in the inspector; read it again.');
+    }
+
+    /**
+     * What to ask before a kind change clears a map's tiles.
+     *
+     * @return array{status: 'question', question: string, answers: list<array{key: string, label: string, description: string}>}
+     */
+    private function describeMapKindQuestion(ProjectMap $map, string $tilesetId, int $layers): array
+    {
+        $labels = new ReferenceCatalog($this->workspace, $map)->labelsFor('tilesets');
+        $current = (string) $map->getMapDataField(['tileset']);
+        $currentLabel = $labels[$current] ?? $current;
+        $label = $labels[$tilesetId] ?? $tilesetId;
+
+        return [
+            'status' => 'question',
+            'question' => sprintf('Change %s\'s kind to %s?', $map->getDisplayName(), $label),
+            'answers' => [
+                ['key' => 'cancel', 'label' => 'Cancel', 'description' => sprintf('Keep its kind, %s, and its tiles.', $currentLabel)],
+                ['key' => 'clear', 'label' => sprintf('Clear %d tile %s and change', $layers, $layers === 1 ? 'layer' : 'layers'),
+                    'description' => sprintf('Its tiles come from %s and would show the wrong art as %s. Glyphs stay. Undo restores them.', $currentLabel, $label)],
+            ],
+        ];
     }
 
     /**
@@ -1088,12 +1333,13 @@ final class EditorSession
     {
         $target = $field['target'] ?? null;
         $control = MapInspector::findControl($field);
+        $choices = MapInspector::findChoiceValues($field);
         $kind = match (true) {
-            ($field['editable'] ?? true) === false, $target === null,
-            in_array($target, ['map-kind', 'event-type'], true),
-            ($field['mapConditions'] ?? false) === true => 'info',
+            ($field['editable'] ?? true) === false, $target === null => 'info',
+            ($field['mapConditions'] ?? false) === true => 'conditions',
+            ($field['destination'] ?? false) === true => 'destination',
             is_string($field['reference'] ?? null) => 'reference',
-            is_array($field['options'] ?? null) => 'options',
+            $choices !== null => 'options',
             $control !== null => match ($control->type) {
                 InputControlType::INTEGER => 'integer',
                 InputControlType::FLOAT => 'float',
@@ -1102,13 +1348,26 @@ final class EditorSession
             },
             default => 'info',
         };
+        $list = $field['list'] ?? $field['encounterList'] ?? $field['bgmVariantList'] ?? null;
 
         return array_filter([
             'label' => (string) ($field['label'] ?? ''),
             'value' => (string) ($field['value'] ?? ''),
+            'raw' => match ($kind) {
+                'conditions' => is_string($field['encoded'] ?? null) ? $field['encoded'] : null,
+                'text', 'integer', 'float', 'boolean' => $control?->rawValue,
+                default => null,
+            },
             'kind' => $kind,
-            'options' => $kind === 'options' ? array_values(array_map('strval', $field['options'])) : null,
-            'reference' => $kind === 'reference' ? $field['reference'] : null,
+            'options' => $kind === 'options' ? $choices : null,
+            'optionLabels' => $kind === 'options' && is_array($field['choices'] ?? null)
+                ? array_values(array_map(static fn(array $choice): string => (string) $choice['label'], $field['choices'])) : null,
+            'reference' => match ($kind) {
+                'reference' => $field['reference'],
+                'destination' => 'maps',
+                default => null,
+            },
+            'list' => is_array($list) && $target !== null ? ['index' => (int) ($list['index'] ?? 0)] : null,
             'key' => self::describeKey($field),
         ], static fn(mixed $value): bool => $value !== null);
     }
@@ -1132,6 +1391,8 @@ final class EditorSession
             'path' => isset($field['path']) ? array_values(array_map('strval', (array) $field['path'])) : null,
             'marker' => isset($field['marker']) ? (string) $field['marker'] : null,
             'index' => isset($field['index']) ? (int) $field['index'] : null,
+            // A list heading has no path of its own; its list's names it.
+            'list' => is_array($field['list']['path'] ?? null) ? array_values(array_map('strval', $field['list']['path'])) : null,
         ], static fn(mixed $value): bool => $value !== null);
     }
 

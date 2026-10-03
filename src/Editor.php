@@ -52,6 +52,8 @@ use Ichiloto\Editor\Database\ReferencePicker;
 use Ichiloto\Editor\Debug\Debug;
 use Ichiloto\Editor\Maps\LineInsertionPlan;
 use Ichiloto\Editor\Maps\MapLayers;
+use Ichiloto\Editor\Events\EventAuthoring;
+use Ichiloto\Editor\Events\EventRefusal;
 use Ichiloto\Editor\Events\EventTypeCatalog;
 use Ichiloto\Editor\History\Command;
 use Ichiloto\Editor\History\CommandHistory;
@@ -59,6 +61,7 @@ use Ichiloto\Editor\History\GenericCommand;
 use Ichiloto\Editor\History\PaintStrokeCommand;
 use Ichiloto\Editor\History\SourceSetCommand;
 use Ichiloto\Editor\Inspector\InputControl;
+use Ichiloto\Editor\Inspector\InspectorListEdit;
 use Ichiloto\Editor\Inspector\InspectorRefusal;
 use Ichiloto\Editor\Inspector\MapInspector;
 use Ichiloto\Editor\Inspector\InputControlType;
@@ -8025,27 +8028,24 @@ final class Editor
             return;
         }
 
-        $marker = $context['marker'];
-        $destinationPath = $context['path'];
-        $newDestination = $context['destinationMapId'];
-        $newSpawnX = $this->cursorX;
-        $newSpawnY = $this->cursorY;
-        $oldDestination = $sourceMap->getEventField($marker, $destinationPath);
-        $oldSpawnX = $sourceMap->getEventField($marker, ['data', 'spawnPoint', 'x']);
-        $oldSpawnY = $sourceMap->getEventField($marker, ['data', 'spawnPoint', 'y']);
+        $destinationIndex = array_search($context['destinationMapId'], $this->workspace->mapIds, true);
+        $destinationMap = is_int($destinationIndex) ? $this->workspace->getMapByIndex($destinationIndex) : null;
 
-        $applyDestination = static function (mixed $destination, mixed $spawnX, mixed $spawnY) use ($sourceMap, $marker, $destinationPath): void {
-            $sourceMap->setEventField($marker, $destinationPath, $destination);
-            $sourceMap->setEventField($marker, ['data', 'spawnPoint', 'x'], $spawnX);
-            $sourceMap->setEventField($marker, ['data', 'spawnPoint', 'y'], $spawnY);
-        };
+        if (! $destinationMap instanceof ProjectMap) {
+            $this->restoreDestinationSelectionContext('Unable to save destination selection.');
+            return;
+        }
 
-        $applyDestination($newDestination, $newSpawnX, $newSpawnY);
-        $this->recordCommand(new GenericCommand(
-            'Destination change',
-            static fn() => $applyDestination($newDestination, $newSpawnX, $newSpawnY),
-            static fn() => $applyDestination($oldDestination, $oldSpawnX, $oldSpawnY),
-        ));
+        try {
+            $command = $this->createMapInspector()->setTransferDestination($sourceMap, $context['marker'], $destinationMap, $this->cursorX, $this->cursorY);
+        } catch (InspectorRefusal $refusal) {
+            $this->restoreDestinationSelectionContext($refusal->getMessage());
+            return;
+        }
+
+        if ($command !== null) {
+            $this->recordCommand($command);
+        }
 
         $this->restoreDestinationSelectionContext(
             sprintf(
@@ -8191,35 +8191,18 @@ final class Editor
         }
 
         $definition = EventTypeCatalog::at($this->selectedEventTypeIndex);
-        $currentDefinition = $selectedMap->getEventDefinition($marker);
-        $currentClassName = is_array($currentDefinition) ? (string) ($currentDefinition['class'] ?? '') : '';
-        $newDefinition = $currentClassName === $definition->className && is_array($currentDefinition)
-            ? array_replace_recursive(
-                [
-                    'class' => $definition->className,
-                    'data' => $definition->defaultData,
-                    ...$definition->defaultDefinitionFields,
-                ],
-                $currentDefinition,
-            )
-            : [
-                'class' => $definition->className,
-                'data' => $definition->defaultData,
-                ...$definition->defaultDefinitionFields,
-            ];
-        $selectedMap->setEventDefinition($marker, $newDefinition);
-        $this->recordCommand(new GenericCommand(
-            'Event type change',
-            static fn() => $selectedMap->setEventDefinition($marker, $newDefinition),
-            static function () use ($selectedMap, $marker, $currentDefinition): void {
-                if (is_array($currentDefinition)) {
-                    $selectedMap->setEventDefinition($marker, $currentDefinition);
-                    return;
-                }
 
-                $selectedMap->removeEventDefinition($marker);
-            },
-        ));
+        try {
+            $command = EventAuthoring::setEventType($selectedMap, $marker, $definition);
+        } catch (EventRefusal $refusal) {
+            $this->closeEventTypeDialog($refusal->getMessage());
+            return;
+        }
+
+        if ($command !== null) {
+            $this->recordCommand($command);
+        }
+
         $this->clampInspectorSelection();
         $this->closeEventTypeDialog(sprintf('%s is now a %s event.', $marker, $definition->label));
     }
@@ -13115,75 +13098,6 @@ final class Editor
     }
 
     /**
-     * Appends a visibly incomplete music variant, when the cursor is on the
-     * variants list.
-     *
-     * @return bool True when the key meant this list.
-     */
-    private function addMapBgmVariant(): bool
-    {
-        $context = $this->selectedMapBgmVariantRow();
-
-        if ($context === null) {
-            return false;
-        }
-
-        $variants = $context['variants'];
-
-        if (! $variants->isSupported()) {
-            $this->setStatus(sprintf('Music variants are read-only here: %s.', $variants->unsupportedReason()), StatusLevel::WARN);
-            $this->renderInspectorArea();
-
-            return true;
-        }
-
-        $this->applyMapDataValue($context['map'], [MapBgmVariants::KEY], $variants->withVariantAdded(), 'Music variant add');
-        $this->setStatus(sprintf('Added variant %d. Pick its track; it stays inactive until one is chosen.', $variants->count() + 1), StatusLevel::INFO);
-        $this->clampInspectorSelection();
-        $this->renderSelectionDependentArea();
-
-        return true;
-    }
-
-    /**
-     * Removes the music variant the cursor is inside; removing the last one
-     * takes the bgmVariants key with it.
-     *
-     * @return bool True when the key meant this list.
-     */
-    private function removeMapBgmVariant(): bool
-    {
-        $context = $this->selectedMapBgmVariantRow();
-
-        if ($context === null) {
-            return false;
-        }
-
-        $variants = $context['variants'];
-
-        if (! $variants->isSupported()) {
-            $this->setStatus(sprintf('Music variants are read-only here: %s.', $variants->unsupportedReason()), StatusLevel::WARN);
-            $this->renderInspectorArea();
-
-            return true;
-        }
-
-        if ($variants->count() === 0) {
-            $this->setStatus('There is no music variant here to remove.', StatusLevel::WARN);
-            $this->renderInspectorArea();
-
-            return true;
-        }
-
-        $this->applyMapDataValue($context['map'], [MapBgmVariants::KEY], $variants->withVariantRemovedAt($context['index']), 'Music variant remove');
-        $this->setStatus(sprintf('Removed variant %d.', $context['index'] + 1), StatusLevel::INFO);
-        $this->clampInspectorSelection();
-        $this->renderSelectionDependentArea();
-
-        return true;
-    }
-
-    /**
      * Moves the music variant the cursor is inside up or down, because
      * declaration order is runtime behavior: the first match wins.
      */
@@ -14398,134 +14312,6 @@ final class Editor
 
 
     /**
-     * The encounter row the inspector cursor is on, if any.
-     *
-     * @return array{map: ProjectMap, encounters: MapEncounters, index: int}|null
-     */
-    private function selectedMapEncounterRow(): ?array
-    {
-        $map = $this->getSelectedMap();
-        $field = $this->getInspectorFields()[$this->selectedInspectorFieldIndex] ?? null;
-
-        if (! $map instanceof ProjectMap || ! is_array($field) || ($field['target'] ?? null) !== 'map-encounters') {
-            return null;
-        }
-
-        $list = $field['encounterList'] ?? null;
-
-        if (! is_array($list)) {
-            return null;
-        }
-
-        return ['map' => $map, 'encounters' => MapEncounters::fromMap($map), 'index' => (int) $list['index']];
-    }
-
-    /**
-     * Adds a troop row to the map's encounter table, enabling encounters
-     * when it is the first one.
-     *
-     * The new row names a troop the table does not already use, because a
-     * blank row would be a troop the engine reads as unnamed and a duplicate
-     * would collapse into one key.
-     *
-     * @return bool Whether the cursor was on the encounter list.
-     */
-    private function addMapEncounterTroop(): bool
-    {
-        $context = $this->selectedMapEncounterRow();
-
-        if ($context === null) {
-            return false;
-        }
-
-        $encounters = $context['encounters'];
-
-        if (! $encounters->isSupported()) {
-            $this->setStatus(sprintf('Encounters are read-only here: %s.', $encounters->unsupportedReason()), StatusLevel::WARN);
-            $this->renderInspectorArea();
-
-            return true;
-        }
-
-        $available = array_values(array_diff($this->referenceCatalog()->valuesFor('troops'), $encounters->troopNames()));
-
-        if ($available === []) {
-            $this->setStatus(
-                $this->referenceCatalog()->valuesFor('troops') === []
-                    ? 'This project defines no troops to encounter.'
-                    : 'Every troop this project defines is already in this table.',
-                StatusLevel::WARN,
-            );
-            $this->renderInspectorArea();
-
-            return true;
-        }
-
-        try {
-            $block = $encounters->withTroopAdded($available[0], $context['index']);
-        } catch (Throwable $throwable) {
-            $this->setErrorStatus($throwable, 'Encounter troop');
-            $this->renderInspectorArea();
-
-            return true;
-        }
-
-        $this->applyMapDataValue($context['map'], [MapEncounters::KEY], $block, 'Encounter troop add');
-        $this->setStatus(sprintf('Added %s to the encounter table.', $available[0]), StatusLevel::INFO);
-        $this->clampInspectorSelection();
-        $this->renderSelectionDependentArea();
-
-        return true;
-    }
-
-    /**
-     * Removes the troop row the cursor is on. Removing the last one disables
-     * encounters and takes the empty block with it.
-     *
-     * @return bool Whether the cursor was on the encounter list.
-     */
-    private function removeMapEncounterTroop(): bool
-    {
-        $context = $this->selectedMapEncounterRow();
-
-        if ($context === null) {
-            return false;
-        }
-
-        $encounters = $context['encounters'];
-
-        if (! $encounters->isSupported()) {
-            $this->setStatus(sprintf('Encounters are read-only here: %s.', $encounters->unsupportedReason()), StatusLevel::WARN);
-            $this->renderInspectorArea();
-
-            return true;
-        }
-
-        $rows = $encounters->rows();
-
-        if (! array_key_exists($context['index'], $rows)) {
-            $this->setStatus('No encounter troop to remove.', StatusLevel::WARN);
-            $this->renderInspectorArea();
-
-            return true;
-        }
-
-        $removed = $rows[$context['index']]['name'];
-        $block = $encounters->withTroopRemovedAt($context['index']);
-        $this->applyMapDataValue($context['map'], [MapEncounters::KEY], $block, 'Encounter troop remove');
-        $this->setStatus(
-            $block === null
-                ? sprintf('Removed %s; this map no longer has random encounters.', $removed)
-                : sprintf('Removed %s from the encounter table.', $removed),
-            StatusLevel::INFO,
-        );
-        $this->clampInspectorSelection();
-        $this->renderSelectionDependentArea();
-
-        return true;
-    }
-
-    /**
      * Writes one value into the map's data as one undo step (see
      * {@see MapInspector::writeMapData()}); nothing is recorded when the data
      * already held it.
@@ -14541,174 +14327,78 @@ final class Editor
         }
     }
     /**
-     * Returns the list the inspector cursor is inside, if any.
-     *
-     * @return array{path: array<int, string>, index: int}|null The list.
-     */
-    private function selectedInspectorList(): ?array
-    {
-        $fields = $this->getInspectorFields();
-        $field = $fields[$this->selectedInspectorFieldIndex] ?? null;
-
-        if (! is_array($field) || ($field['target'] ?? null) !== 'event') {
-            return null;
-        }
-
-        $list = $field['list'] ?? null;
-
-        return is_array($list) ? $list : null;
-    }
-
-    /**
-     * Adds an entry to the list the inspector cursor is inside.
-     *
-     * The new entry is shaped like the one it follows -- the same keys, their
-     * values cleared -- because an author adding a second shop line means
-     * another line like the first, not an empty hole they have to describe.
+     * Adds an entry to the list the inspector cursor is inside
+     * ({@see MapInspector::addListEntry()}).
      *
      * @return void
      */
     private function addInspectorListItem(): void
     {
-        if ($this->addMapEncounterTroop()) {
-            return;
-        }
-
-        if ($this->addMapBgmVariant()) {
-            return;
-        }
-
-        $selectedMap = $this->getSelectedMap();
-        $list = $this->selectedInspectorList();
-        $marker = $this->selectedEventMarkerForList();
-
-        if (! $selectedMap instanceof ProjectMap || $list === null || $marker === '') {
-            $this->setStatus('Nothing here is a list to add to.', StatusLevel::WARN);
-
-            return;
-        }
-
-        $entries = $selectedMap->getEventField($marker, $list['path']);
-        $entries = is_array($entries) ? array_values($entries) : [];
-        $template = $entries[$list['index']] ?? ($list['blank'] ?? ($entries === [] ? '' : end($entries)));
-        $position = min(count($entries), $list['index'] + 1);
-
-        array_splice($entries, $position, 0, [self::blankLike($template)]);
-
-        $this->applyInspectorListChange($selectedMap, $marker, $list['path'], $entries, 'Add list entry');
-        $this->setStatus(sprintf('Added %s %d.', $this->describeListPath($list['path']), $position + 1), StatusLevel::INFO);
+        $this->editInspectorList(
+            static fn(MapInspector $inspector, ProjectMap $map, array $field): ?InspectorListEdit => $inspector->addListEntry($map, $field),
+            'Nothing here is a list to add to.',
+        );
     }
 
     /**
-     * Removes the entry the inspector cursor is inside.
+     * Removes the entry the inspector cursor is inside
+     * ({@see MapInspector::removeListEntry()}).
      *
      * @return void
      */
     private function removeInspectorListItem(): void
     {
-        if ($this->removeMapEncounterTroop()) {
-            return;
-        }
-
-        if ($this->removeMapBgmVariant()) {
-            return;
-        }
-
-        $selectedMap = $this->getSelectedMap();
-        $list = $this->selectedInspectorList();
-        $marker = $this->selectedEventMarkerForList();
-
-        if (! $selectedMap instanceof ProjectMap || $list === null || $marker === '') {
-            $this->setStatus('Nothing here is a list entry to remove.', StatusLevel::WARN);
-
-            return;
-        }
-
-        $entries = $selectedMap->getEventField($marker, $list['path']);
-        $entries = is_array($entries) ? array_values($entries) : [];
-
-        if (! array_key_exists($list['index'], $entries)) {
-            return;
-        }
-
-        array_splice($entries, $list['index'], 1);
-
-        $this->applyInspectorListChange($selectedMap, $marker, $list['path'], $entries, 'Remove list entry');
-        $this->clampInspectorSelection();
-        $this->setStatus(sprintf('Removed %s %d.', $this->describeListPath($list['path']), $list['index'] + 1), StatusLevel::INFO);
+        $this->editInspectorList(
+            static fn(MapInspector $inspector, ProjectMap $map, array $field): ?InspectorListEdit => $inspector->removeListEntry($map, $field),
+            'Nothing here is a list entry to remove.',
+        );
     }
 
     /**
-     * Writes a changed list back, recording it so it can be undone.
+     * Applies a list edit to the row the inspector cursor is on, recording
+     * it and saying what changed.
      *
-     * @param ProjectMap $map The map.
-     * @param string $marker The event marker.
-     * @param array<int, string> $path The list's path.
-     * @param array<int, mixed> $entries The list as it should be.
-     * @param string $label What to call the change.
+     * @param Closure(MapInspector, ProjectMap, array<string, mixed>): ?InspectorListEdit $edit
+     * @param string $nothingHere What to say when there is no row to edit.
      * @return void
      */
-    private function applyInspectorListChange(ProjectMap $map, string $marker, array $path, array $entries, string $label): void
+    private function editInspectorList(Closure $edit, string $nothingHere): void
     {
-        $previous = $map->getEventField($marker, $path);
-        $previous = is_array($previous) ? array_values($previous) : [];
+        $selectedMap = $this->getSelectedMap();
+        $field = $this->getInspectorFields()[$this->selectedInspectorFieldIndex] ?? null;
 
-        $map->setEventField($marker, $path, $entries);
-        $this->recordCommand(new GenericCommand(
-            $label,
-            static fn() => $map->setEventField($marker, $path, $entries),
-            static fn() => $map->setEventField($marker, $path, $previous),
-        ));
-        $this->renderSelectionDependentArea();
-    }
+        if (! $selectedMap instanceof ProjectMap || ! is_array($field)) {
+            $this->setStatus($nothingHere, StatusLevel::WARN);
 
-    /**
-     * Returns the marker of the event the inspector cursor is in.
-     *
-     * @return string The marker, or an empty string.
-     */
-    private function selectedEventMarkerForList(): string
-    {
-        $fields = $this->getInspectorFields();
-        $field = $fields[$this->selectedInspectorFieldIndex] ?? null;
-
-        return is_array($field) ? (string) ($field['marker'] ?? '') : '';
-    }
-
-    /**
-     * Returns an entry shaped like the given one with nothing filled in.
-     *
-     * @param mixed $template The entry to copy the shape of.
-     * @return mixed The blank entry.
-     */
-    private static function blankLike(mixed $template): mixed
-    {
-        if (is_array($template)) {
-            return array_map(self::blankLike(...), $template);
+            return;
         }
 
-        return match (true) {
-            is_int($template) => 0,
-            is_float($template) => 0.0,
-            is_bool($template) => false,
-            default => '',
-        };
+        try {
+            $result = $edit($this->createMapInspector(), $selectedMap, $field);
+        } catch (InspectorRefusal $refusal) {
+            $this->setStatus($refusal->getMessage(), StatusLevel::WARN);
+            $this->renderInspectorArea();
+
+            return;
+        } catch (Throwable $throwable) {
+            $this->setErrorStatus($throwable, 'List edit');
+            $this->renderInspectorArea();
+
+            return;
+        }
+
+        if ($result === null) {
+            return;
+        }
+
+        if ($result->command !== null) {
+            $this->recordCommand($result->command);
+        }
+
+        $this->setStatus($result->summary, StatusLevel::INFO);
+        $this->clampInspectorSelection();
+        $this->renderSelectionDependentArea();
     }
-
-    /**
-     * Names a list for a status message.
-     *
-     * @param array<int, string> $path The list's path.
-     * @return string The name, in the singular.
-     */
-    private static function describeListPath(array $path): string
-    {
-        $leaf = (string) ($path[array_key_last($path)] ?? 'entry');
-        $leaf = str_replace(['_', '-'], ' ', $leaf);
-
-        return mb_strtolower(rtrim($leaf, 's'));
-    }
-
     /**
      * The picker an event data row is chosen from (see
      * {@see MapInspector::findEventReference()}).
@@ -14849,30 +14539,8 @@ final class Editor
 
     private function getChestTypeOptionEntries(): array
     {
-        return [
-            [
-                'label' => 'Common',
-                'value' => ChestType::COMMON->value,
-                'description' => 'Standard chest presentation for ordinary treasure.',
-            ],
-            [
-                'label' => 'Rare',
-                'value' => ChestType::RARE->value,
-                'description' => 'Highlights a chest that should feel less common.',
-            ],
-            [
-                'label' => 'Epic',
-                'value' => ChestType::EPIC->value,
-                'description' => 'Marks a chest carrying high-value treasure.',
-            ],
-            [
-                'label' => 'Legendary',
-                'value' => ChestType::LEGENDARY->value,
-                'description' => 'Reserved for the most special chest rewards.',
-            ],
-        ];
+        return MapInspector::CHEST_TYPE_CHOICES;
     }
-
     /**
      * Returns the editor-facing label for a loot type.
      *
@@ -14896,50 +14564,8 @@ final class Editor
 
     private function getLootTypeOptionEntries(): array
     {
-        return [
-            [
-                'label' => 'Item',
-                'value' => LootType::ITEM->value,
-                'description' => 'Rewards an item from the project item database.',
-            ],
-            [
-                'label' => 'Gold',
-                'value' => LootType::GOLD->value,
-                'description' => 'Awards currency directly when the chest is opened.',
-            ],
-            [
-                'label' => 'Experience',
-                'value' => LootType::EXPERIENCE->value,
-                'description' => 'Awards experience directly when claimed.',
-            ],
-            [
-                'label' => 'Skill',
-                'value' => LootType::SKILL->value,
-                'description' => 'Rewards a learnable skill identifier.',
-            ],
-            [
-                'label' => 'Spell',
-                'value' => LootType::SPELL->value,
-                'description' => 'Rewards a spell identifier.',
-            ],
-            [
-                'label' => 'Weapon',
-                'value' => LootType::WEAPON->value,
-                'description' => 'Rewards a weapon identifier.',
-            ],
-            [
-                'label' => 'Armor',
-                'value' => LootType::ARMOR->value,
-                'description' => 'Rewards an armor identifier.',
-            ],
-            [
-                'label' => 'Accessory',
-                'value' => LootType::ACCESSORY->value,
-                'description' => 'Rewards an accessory identifier.',
-            ],
-        ];
+        return MapInspector::LOOT_TYPE_CHOICES;
     }
-
     private function resolveEventOptionSelectionIndex(string $currentValue): int
     {
         foreach ($this->eventOptionDialogEntries as $index => $entry) {
@@ -17603,7 +17229,7 @@ final class Editor
                 $this->isInspectorEditing => 'Enter:Apply  Esc:Cancel',
                 // Only where there is a list to act on: a hint for keys that
                 // would answer "nothing here is a list" is worse than none.
-                $this->selectedInspectorList() !== null => $this->fitHelp(
+                MapInspector::findEventList($this->getInspectorFields()[$this->selectedInspectorFieldIndex] ?? []) !== null => $this->fitHelp(
                     $layout['rightWidth'],
                     'Enter:Edit  Shift+O:Add  Shift+X/Del:Remove',
                     'Enter:Edit  Shift+O:Add  Del:Remove',

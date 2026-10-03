@@ -140,7 +140,7 @@ it('lists a map\'s inspector rows with how each is edited and the key that names
     expect(inspectorRow($inspector, 'Name'))->toMatchArray(['kind' => 'text', 'key' => ['target' => 'map', 'field' => 'name']])
         ->and(inspectorRow($inspector, 'X', 'Size')['kind'])->toBe('integer')
         ->and(inspectorRow($inspector, 'Events')['kind'])->toBe('info')
-        ->and(inspectorRow($inspector, 'Kind')['kind'])->toBe('info')
+        ->and(inspectorRow($inspector, 'Kind'))->toMatchArray(['kind' => 'reference', 'reference' => 'tilesets'])
         ->and(inspectorRow($inspector, 'Background Music'))->toMatchArray(['kind' => 'reference', 'reference' => 'bgm'])
         ->and($inspector['revision'])->toBe($session->readMap('test-map')['revision']);
 });
@@ -171,7 +171,7 @@ it('moves an event through its position row and lists the choices of a reference
     $x = inspectorRow($event, 'X', 'Position');
     $before = (int) $x['value'];
 
-    expect(inspectorRow($event, 'Type')['kind'])->toBe('info')
+    expect(inspectorRow($event, 'Type')['kind'])->toBe('options')
         ->and($x['key'])->toBe(['target' => 'event-bounds', 'field' => 'x', 'marker' => 'E']);
 
     $session->applyInspector('test-map', $event['revision'], $x['key'], (string) ($before + 1));
