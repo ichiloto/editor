@@ -28,6 +28,8 @@ use Ichiloto\Engine\IO\Console\SgrStyleState;
 use Ichiloto\Engine\Rendering\Tilesets\Tileset;
 use Ichiloto\Editor\Maps\EditableGrid;
 use Ichiloto\Editor\Maps\MapLayers;
+use Ichiloto\Editor\Maps\TileLayerSettings;
+use Closure;
 use InvalidArgumentException;
 use RuntimeException;
 
@@ -410,34 +412,97 @@ final class ProjectMap
 
     public function createLayer(string $name, bool $decoration = false, ?int $order = null): string
     {
-        $this->assertEditable();
-        $before = $this->layers->captureSnapshot();
-        try {
-            $id = $this->layers->createLayer($name, $decoration, $order);
-            $this->layers->assertDimensions();
-        } catch (\Throwable $error) {
-            $this->layers->restoreSnapshot($before);
-            throw $error;
-        }
-        $this->cachedWidth = null;
-        $this->touchState();
+        $id = '';
+        $this->changeLayers(static function (MapLayers $layers) use ($name, $decoration, $order, &$id): void {
+            $id = $layers->createLayer($name, $decoration, $order);
+            $layers->assertDimensions();
+        });
+
         return $id;
     }
 
+    /**
+     * Renames a layer. The tile layers that move with a gameplay layer keep
+     * moving with it under its new name.
+     *
+     * @throws MapSourceRefusal When the rename is refused, or changes collisions unconfirmed.
+     */
     public function renameLayer(string $id, string $name, bool $confirmCollisionChange = false): void
     {
-        $this->assertEditable();
-        if (! $confirmCollisionChange && $this->getLayerRenameCollisionChange($id, $name) !== null) {
-            throw new MapSourceRefusal('Renaming this layer changes resolved collisions. Explicit confirmation is required.');
+        if (! $confirmCollisionChange) {
+            $this->assertCollisionsUnchanged($this->countRenameCollisionChanges($id, $name), 'Renaming');
         }
-        $this->layers->renameLayer($id, $name);
-        $this->touchState();
+        $layer = $this->layers->getLayer($id);
+        $this->changeLayers(static fn(MapLayers $layers) => $layers->renameLayer($id, $name),
+            static fn(mixed $settings): mixed => $layer['decoration'] ? $settings : TileLayerSettings::renameOwner($settings, $layer['name'], $name));
     }
 
+    /**
+     * Moves a layer to another order; a layer holding that order takes this
+     * layer's order. Gameplay order decides which glyph sets collision.
+     *
+     * @throws MapSourceRefusal When the move is refused, or changes collisions unconfirmed.
+     */
+    public function moveLayer(string $id, int $order, bool $confirmCollisionChange = false): void
+    {
+        if (! $confirmCollisionChange) {
+            $this->assertCollisionsUnchanged($this->countMoveCollisionChanges($id, $order), 'Moving');
+        }
+        $this->changeLayers(static fn(MapLayers $layers) => $layers->moveLayer($id, $order));
+    }
+
+    /**
+     * Makes a layer decoration, drawn without collision, or gameplay. Tile
+     * layers that moved with a layer made decoration move with none.
+     *
+     * @throws MapSourceRefusal When the change is refused, or changes collisions unconfirmed.
+     */
+    public function setLayerDecoration(string $id, bool $decoration, bool $confirmCollisionChange = false): void
+    {
+        if (! $confirmCollisionChange) {
+            $this->assertCollisionsUnchanged($this->countDecorationCollisionChanges($id, $decoration), 'Changing');
+        }
+        $layer = $this->layers->getLayer($id);
+        $this->changeLayers(static fn(MapLayers $layers) => $layers->setLayerDecoration($id, $decoration),
+            static fn(mixed $settings): mixed => $decoration && ! $layer['decoration'] ? TileLayerSettings::removeOwner($settings, $layer['name']) : $settings);
+    }
+
+    /**
+     * Removes a layer and its cells. Tile layers that moved with a removed
+     * gameplay layer move with none.
+     *
+     * @throws MapSourceRefusal When the removal is refused.
+     */
     public function removeLayer(string $id): void
     {
+        $layer = $this->layers->getLayer($id);
+        $this->changeLayers(static fn(MapLayers $layers) => $layers->removeLayer($id),
+            static fn(mixed $settings): mixed => $layer['decoration'] ? $settings : TileLayerSettings::removeOwner($settings, $layer['name']));
+    }
+
+    /**
+     * Applies a change to the layers, and to the tile layer settings that
+     * name them, as one change: it is made on a copy of the layers that is
+     * adopted only once the settings are written, so a refusal from either
+     * leaves the map exactly as it was.
+     *
+     * @param Closure(MapLayers): mixed $change
+     * @param (Closure(mixed): mixed)|null $adjustSettings The tile layer settings the change leaves, given the current ones.
+     * @throws MapSourceRefusal When the change or the settings are refused.
+     */
+    private function changeLayers(Closure $change, ?Closure $adjustSettings = null): void
+    {
         $this->assertEditable();
-        $this->layers->removeLayer($id);
+        $layers = clone $this->layers;
+        $change($layers);
+        if ($adjustSettings !== null) {
+            $settings = $this->getMapDataField([MapGraphics::SETTINGS_KEY]);
+            $next = $adjustSettings($settings);
+            if ($next !== $settings) {
+                $this->setMapDataField([MapGraphics::SETTINGS_KEY], $next);
+            }
+        }
+        $this->layers = $layers;
         $this->cachedWidth = null;
         $this->touchState();
     }
@@ -564,6 +629,16 @@ final class ProjectMap
     }
 
     /**
+     * The names of the map's tile layers, in drawing order.
+     *
+     * @return list<string>
+     */
+    public function getTileLayerNames(): array
+    {
+        return $this->layers->getTileLayerNames();
+    }
+
+    /**
      * Reads the entries of the named tile layers over a rectangle, by row.
      *
      * @param list<string> $names Tile layer names.
@@ -589,6 +664,126 @@ final class ProjectMap
     }
 
     /**
+     * The map's tile layers in drawing order, as an editor lists them: each
+     * one's name, order, file in the map's folder, and its settings as the
+     * Engine reads them: its offset across and down in field cells, the
+     * gameplay layer its settings name it `movesWith`, and the gameplay layer
+     * it belongs to ({@see MapGraphics::resolveLayerOwners()}). When the
+     * settings cannot be read, `issue` says why and no layer has settings.
+     *
+     * @return array{layers: list<array{name: string, order: int, file: string, offset: ?array{float, float}, movesWith: ?string, owner: ?string}>, issue: ?string}
+     */
+    public function describeTileLayers(): array
+    {
+        $layers = $this->layers->getTileLayers();
+        $names = array_column($layers, 'name');
+        $settings = $this->getMapDataField([MapGraphics::SETTINGS_KEY]);
+        $gameplay = $this->getGameplayLayerNames();
+        try {
+            $tileset = $this->loadTileset();
+        } catch (InvalidArgumentException | RuntimeException) {
+            // A tileset that cannot load says nothing about its pieces.
+            $tileset = null;
+        }
+        $issue = null;
+        try {
+            $offsets = MapGraphics::readLayerOffsets($settings, $names, $this->mapId);
+            $movesWith = MapGraphics::readLayersMovingWith($settings, $names, $gameplay, $this->mapId);
+            $owners = MapGraphics::resolveLayerOwners($settings, $names, $gameplay, $tileset, $this->mapId);
+        } catch (InvalidArgumentException $error) {
+            $offsets = $movesWith = $owners = [];
+            $issue = $error->getMessage();
+        }
+
+        return ['layers' => array_map(static fn(array $layer): array => [
+            'name' => $layer['name'],
+            'order' => $layer['order'],
+            'file' => MapGraphics::DIRECTORY . '/' . basename($layer['path']),
+            'offset' => $issue === null ? ($offsets[$layer['name']] ?? [0.0, 0.0]) : null,
+            'movesWith' => $movesWith[$layer['name']] ?? null,
+            'owner' => $owners[$layer['name']] ?? null,
+        ], $layers), 'issue' => $issue];
+    }
+
+    /**
+     * Adds an empty tile layer, placed among the tile layers as a tile layer
+     * a piece names is.
+     *
+     * @throws MapSourceRefusal When the name is taken or invalid, or the map cannot take another tile layer.
+     */
+    public function createTileLayer(string $name): void
+    {
+        $this->changeLayers(fn(MapLayers $layers) => $layers->createTileLayer($name, $this->findNewTileLayerPlace(...)));
+    }
+
+    /**
+     * Renames a tile layer and its settings.
+     *
+     * @throws MapSourceRefusal When there is no such layer, or the new name is taken or invalid.
+     */
+    public function renameTileLayer(string $name, string $newName): void
+    {
+        $this->changeLayers(static fn(MapLayers $layers) => $layers->renameTileLayer($name, $newName),
+            static fn(mixed $settings): mixed => TileLayerSettings::renameLayer($settings, $name, $newName));
+    }
+
+    /**
+     * Moves a tile layer to another drawing order; a tile layer holding that
+     * order takes this layer's order.
+     *
+     * @throws MapSourceRefusal When there is no such layer or the order is not 00-99.
+     */
+    public function moveTileLayer(string $name, int $order): void
+    {
+        $this->changeLayers(static fn(MapLayers $layers) => $layers->moveTileLayer($name, $order));
+    }
+
+    /**
+     * Removes a tile layer, its tiles and its settings.
+     *
+     * @throws MapSourceRefusal When there is no such layer.
+     */
+    public function removeTileLayer(string $name): void
+    {
+        $this->changeLayers(static fn(MapLayers $layers) => $layers->removeTileLayer($name),
+            static fn(mixed $settings): mixed => TileLayerSettings::removeLayer($settings, $name));
+    }
+
+    /**
+     * Sets a tile layer's offset across and down, in field cells, and the
+     * gameplay layer its tiles move with, or none. The map's settings must
+     * read as the Engine reads them once set.
+     *
+     * @param array<int, mixed> $offset Across and down, each one of {@see MapGraphics::OFFSET_STEPS}.
+     * @throws MapSourceRefusal When there is no such layer, or the Engine would refuse the settings.
+     */
+    public function setTileLayerSettings(string $name, array $offset, ?string $movesWith): void
+    {
+        $this->assertEditable();
+        $names = array_column($this->layers->getTileLayers(), 'name');
+        if (! in_array($name, $names, true)) {
+            throw new MapSourceRefusal("There is no tile layer {$name}. Nothing was changed.");
+        }
+        $settings = $this->getMapDataField([MapGraphics::SETTINGS_KEY]);
+        $next = TileLayerSettings::setLayer($settings, $name, $offset, $movesWith);
+        try {
+            MapGraphics::readLayersMovingWith($next, $names, $this->getGameplayLayerNames(), $this->mapId);
+        } catch (InvalidArgumentException $error) {
+            throw new MapSourceRefusal(rtrim($error->getMessage(), '.') . '. Nothing was changed.', previous: $error);
+        }
+        if ($next !== $settings) {
+            $this->setMapDataField([MapGraphics::SETTINGS_KEY], $next);
+        }
+    }
+
+    /** @return list<string> The names of the map's gameplay layers, in order. */
+    private function getGameplayLayerNames(): array
+    {
+        return array_values(array_column(array_filter($this->layers->getLayers(), static fn(array $layer): bool =>
+            $layer['id'] !== MapLayers::EVENT && ! $layer['decoration']), 'name'));
+    }
+
+    /**
      * Loads the tileset the map data names, or null when it names none.
      *
      * @throws InvalidArgumentException When the named tileset cannot be loaded.
@@ -606,6 +801,17 @@ final class ProjectMap
         return Tileset::load($this->getAssetRoot(), $id);
     }
 
+    /**
+     * The map's graphics as the game loads them, from its current tile
+     * layers, unsaved edits included, or null when it has none.
+     *
+     * @throws InvalidArgumentException When the game would refuse them.
+     */
+    public function loadGraphics(): ?MapGraphics
+    {
+        return MapGraphics::fromSources($this->getTileLayerSources(), $this->mapId, $this->getMapDataField(['tileset']),
+            $this->getLayerSet(), $this->getAssetRoot(), $this->getMapDataField([MapGraphics::SETTINGS_KEY]));
+    }
     /** The project's asset root, where tilesets and their sheets live. */
     public function getAssetRoot(): string
     {
@@ -616,32 +822,104 @@ final class ProjectMap
     public function validateLayerContracts(): void
     {
         $this->assertGridsAgree();
-        $set = $this->layers->getLayerSet();
+        MapCollisionResolver::resolveLayers($this->layers->getLayerSet(), $this->loadCollisionDictionary());
+    }
+
+    /**
+     * How many cells would resolve to another collision if the layer were
+     * renamed: collision lookup uses the layer name ({@see MapCollisionResolver}).
+     *
+     * @throws MapSourceRefusal When the rename is refused, or collisions cannot be resolved after it.
+     */
+    public function countRenameCollisionChanges(string $id, string $name): int
+    {
+        return $this->countCollisionChanges(static fn(MapLayers $layers) => $layers->renameLayer($id, $name));
+    }
+
+    /**
+     * How many cells would resolve to another collision if the layer moved
+     * to the order: the topmost gameplay glyph sets a cell's collision.
+     *
+     * @throws MapSourceRefusal When the move is refused, or collisions cannot be resolved after it.
+     */
+    public function countMoveCollisionChanges(string $id, int $order): int
+    {
+        return $this->countCollisionChanges(static fn(MapLayers $layers) => $layers->moveLayer($id, $order));
+    }
+
+    /**
+     * How many cells would resolve to another collision if the layer became
+     * decoration, which has none, or gameplay.
+     *
+     * @throws MapSourceRefusal When the change is refused, or collisions cannot be resolved after it.
+     */
+    public function countDecorationCollisionChanges(string $id, bool $decoration): int
+    {
+        return $this->countCollisionChanges(static fn(MapLayers $layers) => $layers->setLayerDecoration($id, $decoration));
+    }
+
+    /**
+     * How many cells would resolve to another collision if the layer were removed.
+     *
+     * @throws MapSourceRefusal When the removal is refused, or collisions cannot be resolved after it.
+     */
+    public function countRemovalCollisionChanges(string $id): int
+    {
+        return $this->countCollisionChanges(static fn(MapLayers $layers) => $layers->removeLayer($id));
+    }
+
+    /**
+     * Resolves collisions before and after a change tried on a copy of the
+     * layers, and counts the cells that differ. Nothing changes.
+     *
+     * @param Closure(MapLayers): mixed $change
+     * @throws MapSourceRefusal When the change is refused, or collisions cannot be resolved.
+     */
+    private function countCollisionChanges(Closure $change): int
+    {
+        $this->assertEditable();
+        $trial = clone $this->layers;
+        $change($trial);
+        $dictionary = $this->loadCollisionDictionary();
+        try {
+            $before = MapCollisionResolver::resolveLayers($this->layers->getLayerSet(), $dictionary);
+            $after = MapCollisionResolver::resolveLayers($trial->getLayerSet(), $dictionary);
+        } catch (InvalidArgumentException $error) {
+            throw new MapSourceRefusal(rtrim($error->getMessage(), '.') . '. Nothing was changed.', previous: $error);
+        }
+        $changed = 0;
+        foreach ($before as $y => $row) {
+            foreach ($row as $x => $type) {
+                $changed += $type !== ($after[$y][$x] ?? null) ? 1 : 0;
+            }
+        }
+
+        return $changed;
+    }
+
+    /** @throws MapSourceRefusal When an unconfirmed change changes collisions. */
+    private function assertCollisionsUnchanged(int $changed, string $action): void
+    {
+        if ($changed > 0) {
+            throw new MapSourceRefusal("{$action} this layer changes resolved collisions. Explicit confirmation is required.");
+        }
+    }
+
+    /**
+     * The project's shared collision dictionary, or none.
+     *
+     * @return array<int|string, mixed>
+     * @throws MapSourceRefusal When it does not return an array.
+     */
+    private function loadCollisionDictionary(): array
+    {
         $path = $this->getMapsRoot() . '/collisions.php';
         $dictionary = is_file($path) ? (static fn(string $path): mixed => require $path)($path) : [];
         if (! is_array($dictionary)) {
             throw new MapSourceRefusal('The collision dictionary must return an array.');
         }
-        MapCollisionResolver::resolveLayers($set, $dictionary);
-    }
 
-    public function getLayerRenameCollisionChange(string $id, string $name): ?string
-    {
-        $dictionaryPath = $this->getMapsRoot() . '/collisions.php';
-        $dictionary = is_file($dictionaryPath) ? (static fn(string $path): mixed => require $path)($dictionaryPath) : [];
-        if (! is_array($dictionary)) {
-            throw new MapSourceRefusal('The collision dictionary must return an array.');
-        }
-        $before = MapCollisionResolver::resolveLayers($this->layers->getLayerSet(), $dictionary);
-        $after = MapCollisionResolver::resolveLayers($this->layers->getLayerSet($id, $name), $dictionary);
-        $changed = 0;
-        foreach ($before as $y => $row) {
-            foreach ($row as $x => $type) {
-                $changed += $type !== $after[$y][$x] ? 1 : 0;
-            }
-        }
-        return $changed === 0 ? null : sprintf('Rename %s to %s changes collision at %d cell(s). Shared collisions.php stays unchanged.',
-            $this->layers->getLayer($id)['name'], $name, $changed);
+        return $dictionary;
     }
 
     public function captureLayerSnapshot(): array
@@ -1683,18 +1961,42 @@ final class ProjectMap
     }
 
     /**
-     * Updates the rectangular bounds of an event marker.
+     * Repaints an event marker as exactly the given rectangle.
+     *
+     * Refused, leaving the grid unchanged, when the rectangle is empty,
+     * leaves the event layer or covers another marker's cell: the bounds an
+     * author asks for are the bounds the event gets, never a clamped or
+     * overwriting approximation of them.
      *
      * @param string $marker The event marker.
      * @param int $x The left coordinate.
      * @param int $y The top coordinate.
      * @param int $width The marker width.
      * @param int $height The marker height.
-     * @return void
+     * @return string|null Why the change was refused, or null when it was made.
      */
-    public function setEventBounds(string $marker, int $x, int $y, int $width, int $height): void
+    public function setEventBounds(string $marker, int $x, int $y, int $width, int $height): ?string
     {
         $this->assertEditable();
+
+        if ($width < 1 || $height < 1) {
+            return sprintf('Marker %s needs a size of at least 1x1, not %dx%d.', $marker, $width, $height);
+        }
+
+        for ($row = $y; $row < $y + $height; $row++) {
+            for ($column = $x; $column < $x + $width; $column++) {
+                if (! $this->hasLayerCell(MapLayers::EVENT, $column, $row)) {
+                    return sprintf('Marker %s would leave the map at (%d, %d).', $marker, $column, $row);
+                }
+
+                $occupant = $this->getEventSymbol($column, $row);
+
+                if ($occupant !== $marker && trim($occupant) !== '') {
+                    return sprintf('Marker %s would cover marker %s at (%d, %d).', $marker, $occupant, $column, $row);
+                }
+            }
+        }
+
         foreach ($this->layers->getEventGrid()->getSymbols() as $rowIndex => $row) {
             foreach ($row as $columnIndex => $symbol) {
                 if ($symbol === $marker) {
@@ -1703,18 +2005,15 @@ final class ProjectMap
             }
         }
 
-        $maxX = max(0, min($this->getWidth() - 1, $x + max(1, $width) - 1));
-        $maxY = max(0, min($this->getHeight() - 1, $y + max(1, $height) - 1));
-
-        for ($row = max(0, $y); $row <= $maxY; $row++) {
-            for ($column = max(0, $x); $column <= $maxX; $column++) {
-                if ($this->hasLayerCell(MapLayers::EVENT, $column, $row)) {
-                    $this->layers->getEventGrid()->cells[$row][$column]['symbol'] = $marker;
-                }
+        for ($row = $y; $row < $y + $height; $row++) {
+            for ($column = $x; $column < $x + $width; $column++) {
+                $this->layers->getEventGrid()->cells[$row][$column]['symbol'] = $marker;
             }
         }
 
         $this->touchState();
+
+        return null;
     }
 
     /**
@@ -2670,7 +2969,7 @@ final class ProjectMap
      * @param string $fallback The fallback slug.
      * @return string
      */
-    private static function slugify(string $value, string $fallback = 'new-map'): string
+    public static function slugify(string $value, string $fallback = 'new-map'): string
     {
         $value = strtolower(trim($value));
         $value = preg_replace('/[^a-z0-9]+/i', '-', $value) ?? '';

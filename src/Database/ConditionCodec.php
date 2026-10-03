@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Database;
 
 use Ichiloto\Engine\Core\WorldConditionType;
+use InvalidArgumentException;
 
 /**
  * Encodes and decodes the engine's world-condition arrays as a single
@@ -105,6 +106,34 @@ final class ConditionCodec
             if ($condition !== null) {
                 $conditions[] = $condition;
             }
+        }
+
+        return $conditions;
+    }
+
+    /**
+     * Decodes the one-line form, refusing it whole when any segment cannot
+     * be read: for an interface that submits the line as typed, where a
+     * dropped segment would be a condition lost without a word.
+     *
+     * @param string $value The encoded conditions.
+     * @return array<int, array<string, mixed>>
+     * @throws InvalidArgumentException Naming the first unreadable segment.
+     */
+    public static function decodeAllStrictly(string $value): array
+    {
+        $conditions = [];
+
+        foreach (explode(';', $value) as $segment) {
+            if (trim($segment) === '') {
+                continue;
+            }
+
+            $conditions[] = self::decode($segment) ?? throw new InvalidArgumentException(sprintf(
+                'Condition "%s" cannot be read: write [!]type:name[:extras] with a type of %s.',
+                trim($segment),
+                implode(', ', self::types()),
+            ));
         }
 
         return $conditions;

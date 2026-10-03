@@ -308,4 +308,14 @@ final class ProjectActorDatabase
 
         return trim(str_replace(['_', '-'], ' ', $label));
     }
+
+    /**
+     * Returns the files a save of this database would overwrite: one per actor.
+     *
+     * @return string[]
+     */
+    public function getBackupPaths(): array
+    {
+        return array_map(static fn(ProjectActor $actor): string => $actor->path, $this->getActors());
+    }
 }

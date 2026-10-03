@@ -34,10 +34,52 @@ final class ConditionEditor
         'key_item' => ['Key Item', 'inventory'],
     ];
 
+    /** The quest statuses a condition can require; the first is the default. */
+    public const array QUEST_STATUSES = ['completed', 'active'];
+
+    /** How a variable condition compares; the first is the default. */
+    public const array VARIABLE_OPERATIONS = ['==', '!=', '>', '>=', '<', '<='];
+
     /**
      * @var array<int, array<string, mixed>> The conditions being edited.
      */
     private array $conditions = [];
+
+    /**
+     * The condition vocabulary for an interface that builds conditions a
+     * part at a time without this editor's cursor: each type, what its name
+     * is called and which reference category lists names (null for a name
+     * the author invents), and the extras it carries, each with its choices
+     * or kind and its default. Every condition can be negated.
+     *
+     * @return list<array{type: string, label: string, nameCategory: ?string, negatable: bool, extras: list<array<string, mixed>>}>
+     */
+    public static function getGrammar(): array
+    {
+        $choices = static fn(array $values, array $labels): array => array_map(
+            static fn(mixed $value, string $label): array => ['value' => $value, 'label' => $label], $values, $labels);
+        $extras = [
+            'quest' => [['key' => 'status', 'label' => 'Status', 'kind' => 'options', 'default' => self::QUEST_STATUSES[0],
+                'options' => $choices(self::QUEST_STATUSES, ['is completed', 'is active'])]],
+            'switch' => [['key' => 'value', 'label' => 'Is', 'kind' => 'options', 'default' => true,
+                'options' => $choices([true, false], ['on', 'off'])]],
+            'variable' => [
+                ['key' => 'op', 'label' => 'Compare', 'kind' => 'options', 'default' => self::VARIABLE_OPERATIONS[0],
+                    'options' => $choices(self::VARIABLE_OPERATIONS, self::VARIABLE_OPERATIONS)],
+                ['key' => 'value', 'label' => 'Value', 'kind' => 'text', 'default' => 0],
+            ],
+            'item' => [['key' => 'quantity', 'label' => 'Quantity', 'kind' => 'integer', 'default' => 1]],
+            'key_item' => [['key' => 'quantity', 'label' => 'Quantity', 'kind' => 'integer', 'default' => 1]],
+        ];
+
+        return array_map(static fn(string $type): array => [
+            'type' => $type,
+            'label' => self::NAMES[$type][0] ?? ucfirst($type),
+            'nameCategory' => self::NAMES[$type][1] ?? null,
+            'negatable' => true,
+            'extras' => $extras[$type] ?? [],
+        ], ConditionCodec::types());
+    }
     private bool $isOpen = false;
     private string $fieldId = '';
     private string $label = '';
@@ -243,9 +285,9 @@ final class ConditionEditor
 
         switch (strval($condition['type'] ?? '')) {
             case 'quest':
-                $statuses = ['completed', 'active'];
-                $index = array_search(strval($condition['status'] ?? 'completed'), $statuses, true);
-                $condition['status'] = $statuses[(((is_int($index) ? $index : 0) + $step) % 2 + 2) % 2];
+                $statuses = self::QUEST_STATUSES;
+                $index = array_search(strval($condition['status'] ?? $statuses[0]), $statuses, true);
+                $condition['status'] = $statuses[(((is_int($index) ? $index : 0) + $step) % count($statuses) + count($statuses)) % count($statuses)];
                 break;
             case 'switch':
                 $condition['value'] = ($condition['value'] ?? true) === false;
@@ -267,7 +309,7 @@ final class ConditionEditor
 
                 break;
             case 'variable':
-                $operations = ['==', '!=', '>', '>=', '<', '<='];
+                $operations = self::VARIABLE_OPERATIONS;
                 $index = array_search(strval($condition['op'] ?? '=='), $operations, true);
                 $index = is_int($index) ? $index : 0;
                 $condition['op'] = $operations[(($index + $step) % count($operations) + count($operations)) % count($operations)];

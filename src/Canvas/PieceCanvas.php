@@ -304,7 +304,7 @@ trait PieceCanvas
                 }
             }
         }
-        [$stroke] = $this->writeCanvasCells($map, $layer, $writes, 'Piece stamp');
+        [$stroke] = CanvasEditor::writeCells($map, $layer, $writes, 'Piece stamp');
         if (! $stroke->hasChanges() && $tilesAfter === $tilesBefore) {
             $this->setStatus(sprintf('%s is already at (%d, %d).', $piece->name, $x, $y));
             $this->renderCanvasArea();
@@ -324,18 +324,8 @@ trait PieceCanvas
      */
     private function recordStrokeWithTiles(string $label, ProjectMap $map, PaintStrokeCommand $stroke, array $tilesBefore, array $tilesAfter): void
     {
-        $this->recordCommand(new GenericCommand($label,
-            static function () use ($stroke, $map, $tilesAfter): void {
-                $stroke->execute();
-                $map->restoreTileLayerSources($tilesAfter);
-            },
-            static function () use ($stroke, $map, $tilesBefore): void {
-                $stroke->undo();
-                $map->restoreTileLayerSources($tilesBefore);
-            },
-        ));
+        $this->recordCommand(CanvasEditor::combineStrokeWithTiles($label, $map, $stroke, $tilesBefore, $tilesAfter));
     }
-
     /**
      * Draws a connected piece: the cell at the cursor without an anchor,
      * otherwise the line or room outline from the anchor to the cursor. The
@@ -438,7 +428,7 @@ trait PieceCanvas
             'symbol' => $cell['shape'] === null ? ' ' : $piece->shapes[$cell['shape']],
             'color' => isset($drawnKeys["{$cell['x']},{$cell['y']}"]) ? $this->selectedPaintColor : null,
         ], $cells);
-        [$stroke] = $this->writeCanvasCells($map, $layer, $writes, $label);
+        [$stroke] = CanvasEditor::writeCells($map, $layer, $writes, $label);
         if (! $stroke->hasChanges() && $tilesAfter === $tilesBefore) {
             return false;
         }

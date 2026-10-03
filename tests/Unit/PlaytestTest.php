@@ -211,3 +211,95 @@ it('says where it looked when there is no console to find', function (): void {
     expect($message)->toContain('ICHILOTO_CONSOLE_BIN')
         ->and($message)->toContain('/nowhere/vendor/bin/ichiloto');
 });
+
+/**
+ * A stand-in console: it records its arguments, starts a child that would
+ * outlive it, and either keeps running or exits with the code given.
+ */
+function writeFakeConsole(string $directory, ?int $exitCode = null): string
+{
+    $path = $directory . '/fake-console.php';
+    file_put_contents($path, '<?php echo implode(" ", array_slice($argv, 1)), "\n"; '
+        . ($exitCode === null
+            ? '$child = proc_open(["sleep", "60"], [], $pipes); sleep(60);'
+            : sprintf('fwrite(STDERR, "renderer missing\n"); exit(%d);', $exitCode)));
+
+    return $path;
+}
+
+function playtestProject(): string
+{
+    $root = makeTemporaryProject();
+    file_put_contents($root . '/assets/Data/system.php', "<?php\n\nreturn ['startingPositions' => ['player' => []]];\n");
+
+    return $root;
+}
+
+it('carries the player settings into the playtest and leaves the saves behind', function (): void {
+    $root = playtestProject();
+    mkdir($root . '/.data/saves', 0777, true);
+    file_put_contents($root . '/.data/player-settings.json', '{"audio":{"music":false,"sfx":false}}');
+    file_put_contents($root . '/.data/saves/slot-1.json', '{}');
+    $overlay = PlaytestOverlay::create($root, 'test-map', 1, 1);
+
+    try {
+        // A copy, so a playtest's own changes never reach the project.
+        expect(file_get_contents($overlay->root . '/.data/player-settings.json'))->toBe('{"audio":{"music":false,"sfx":false}}')
+            ->and(is_link($overlay->root . '/.data/player-settings.json'))->toBeFalse()
+            ->and(is_dir($overlay->root . '/.data/saves'))->toBeFalse();
+    } finally {
+        $overlay->destroy();
+    }
+
+    removeDirectoryRecursively($root);
+});
+
+it('runs a playtest in the background with its renderer and stops the whole game', function (): void {
+    $root = playtestProject();
+    $scratch = sys_get_temp_dir() . '/' . uniqid('ichiloto-playtest-run-', true);
+    mkdir($scratch);
+    $overlay = PlaytestOverlay::create($root, 'test-map', 2, 3);
+    $run = (new PlaytestLauncher(writeFakeConsole($scratch)))->start($overlay, 'gpui', $scratch . '/play.log');
+
+    $deadline = microtime(true) + 5;
+    while (! str_contains((string) @file_get_contents($scratch . '/play.log'), 'play') && microtime(true) < $deadline) {
+        usleep(20000);
+    }
+    $pid = $run->getProcessId();
+    $children = trim((string) shell_exec('pgrep -P ' . $pid));
+
+    expect($run->isRunning())->toBeTrue()
+        ->and(file_get_contents($scratch . '/play.log'))->toContain('play --no-tmux --no-interaction --renderer=gpui -d ' . $overlay->root)
+        ->and($children)->not->toBe('');
+
+    $run->stop();
+    usleep(100000);
+    expect($run->isRunning())->toBeFalse()
+        ->and($run->wasStopped())->toBeTrue()
+        ->and(is_dir($overlay->root))->toBeFalse()
+        // The child the play command started went with it.
+        ->and(trim((string) shell_exec('ps -p ' . (int) $children . ' -o pid=')))->toBe('');
+
+    removeDirectoryRecursively($root);
+    removeDirectoryRecursively($scratch);
+});
+
+it('reports how a failed playtest ended and removes its overlay', function (): void {
+    $root = playtestProject();
+    $scratch = sys_get_temp_dir() . '/' . uniqid('ichiloto-playtest-run-', true);
+    mkdir($scratch);
+    $overlay = PlaytestOverlay::create($root, 'test-map', 0, 0);
+    $run = (new PlaytestLauncher(writeFakeConsole($scratch, 3)))->start($overlay, 'gpui', $scratch . '/play.log');
+
+    $deadline = microtime(true) + 5;
+    while ($run->isRunning() && microtime(true) < $deadline) {
+        usleep(20000);
+    }
+
+    expect($run->getExitCode())->toBe(3)
+        ->and($run->readLogTail())->toContain('renderer missing')
+        ->and(is_dir($overlay->root))->toBeFalse();
+
+    removeDirectoryRecursively($root);
+    removeDirectoryRecursively($scratch);
+});

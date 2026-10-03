@@ -151,7 +151,8 @@ final class TileLayerSource
 
     /**
      * Writes entries into a layer's cells, refusing them all when one cell
-     * is outside the layer.
+     * is outside the layer or one entry is not a tile identity the Engine
+     * reads.
      *
      * @param list<array{x: int, y: int, entry: string}> $cells The entry for each cell.
      * @param bool $keepsEmptyCells Whether a `0` entry leaves its cell as it was instead of emptying it.
@@ -165,6 +166,11 @@ final class TileLayerSource
         foreach ($cells as $cell) {
             if (! isset($entries[$cell['y']][$cell['x']])) {
                 throw new MapSourceRefusal(sprintf('%s has no cell at (%d, %d); nothing was changed.', $displayPath, $cell['x'], $cell['y']));
+            }
+            if (preg_match('/\A\d+\z/', $cell['entry']) !== 1
+                || ((int) $cell['entry'] !== TileId::EMPTY && ! TileId::isValid((int) $cell['entry']))) {
+                throw new MapSourceRefusal(sprintf("'%s' is not an RPG Maker tile identity, so %s cannot take it at (%d, %d); nothing was changed.",
+                    $cell['entry'], $displayPath, $cell['x'], $cell['y']));
             }
             if (! $keepsEmptyCells || $cell['entry'] !== (string)TileId::EMPTY) {
                 $written[$cell['y']][$cell['x']] = $cell['entry'];

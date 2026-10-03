@@ -13,6 +13,7 @@ use Ichiloto\Editor\Backup\BackupSettings;
 use Ichiloto\Editor\Actors\ActorIdentityMigration;
 use Ichiloto\Editor\Actors\ActorIdentityMigrationPlan;
 use Ichiloto\Editor\Backup\BackupWriter;
+use Ichiloto\Editor\Canvas\CanvasEditor;
 use Ichiloto\Editor\Canvas\CanvasTool;
 use Ichiloto\Editor\Canvas\Clipboard;
 use Ichiloto\Editor\Canvas\ToolGeometry;
@@ -23,11 +24,12 @@ use Ichiloto\Editor\Cutscenes\Editing\CutscenesWorkspace;
 use Ichiloto\Editor\Database\DatabaseCatalog;
 use Ichiloto\Editor\Database\DatabaseCategoryDefinition;
 use Ichiloto\Editor\Database\InventoryCatalog;
-use Ichiloto\Editor\Database\ParameterMapCodec;
-use Ichiloto\Editor\Database\ParameterMapSyntaxError;
-use Ichiloto\Editor\Database\RecordFieldCodec;
 use Ichiloto\Editor\Database\ProjectRecord;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
+use Ichiloto\Editor\Database\RecordAuthoring;
+use Ichiloto\Editor\Database\RecordChange;
+use Ichiloto\Editor\Database\RecordItem;
+use Ichiloto\Editor\Database\RecordRefusal;
 use Ichiloto\Editor\Database\SharedFileTransaction;
 use Ichiloto\Editor\Database\ConditionCodec;
 use Ichiloto\Editor\Database\QuestReferences;
@@ -36,9 +38,9 @@ use Ichiloto\Editor\Database\ConditionEditor;
 use Ichiloto\Editor\Field\NpcInspector;
 use Ichiloto\Editor\Field\MapBgmVariants;
 use Ichiloto\Editor\Field\MapEncounters;
-use Ichiloto\Editor\Field\NpcCollection;
-use Ichiloto\Editor\Field\NpcReferences;
-use Ichiloto\Editor\Field\ProjectNpc;
+use Ichiloto\Editor\Field\NpcAuthoring;
+use Ichiloto\Editor\Field\NpcChange;
+use Ichiloto\Editor\Field\NpcRefusal;
 use Ichiloto\Editor\Database\WorldWriteEditor;
 use Ichiloto\Editor\Database\WorldWriteCodec;
 use Ichiloto\Editor\Database\BattleEntryPredicateCodec;
@@ -51,6 +53,8 @@ use Ichiloto\Editor\Database\ReferencePicker;
 use Ichiloto\Editor\Debug\Debug;
 use Ichiloto\Editor\Maps\LineInsertionPlan;
 use Ichiloto\Editor\Maps\MapLayers;
+use Ichiloto\Editor\Events\EventAuthoring;
+use Ichiloto\Editor\Events\EventRefusal;
 use Ichiloto\Editor\Events\EventTypeCatalog;
 use Ichiloto\Editor\History\Command;
 use Ichiloto\Editor\History\CommandHistory;
@@ -58,6 +62,9 @@ use Ichiloto\Editor\History\GenericCommand;
 use Ichiloto\Editor\History\PaintStrokeCommand;
 use Ichiloto\Editor\History\SourceSetCommand;
 use Ichiloto\Editor\Inspector\InputControl;
+use Ichiloto\Editor\Inspector\InspectorListEdit;
+use Ichiloto\Editor\Inspector\InspectorRefusal;
+use Ichiloto\Editor\Inspector\MapInspector;
 use Ichiloto\Editor\Inspector\InputControlType;
 use Ichiloto\Editor\IO\InputDecoder;
 use Ichiloto\Editor\IO\InputRouter;
@@ -85,6 +92,7 @@ use Ichiloto\Editor\UI\ScrollWindow;
 use Ichiloto\Editor\UI\SettingsPaneLayout;
 use Ichiloto\Editor\UI\TextFieldEditor;
 use Ichiloto\Editor\UI\TextFieldKeyResult;
+use Ichiloto\Editor\Storage\WorkspaceSave;
 use Ichiloto\Editor\Validation\MapValidator;
 use Ichiloto\Engine\Animations\ActionAnimationResolver;
 use Ichiloto\Engine\Animations\AnimationTargetPosition;
@@ -544,8 +552,6 @@ final class Editor
     /**
      * The picker row that clears a map's background music.
      */
-    private const string MAP_BGM_NONE = '(None)';
-    private const string MAP_KIND_NONE = 'Not set';
 
     /**
      * The row that chooses which kind of slot the Optimize preview fills.
@@ -576,7 +582,7 @@ final class Editor
      * The Inspector row that assigns a stable id to an NPC authored without
      * one; the only time an id is ever written after creation.
      */
-    private const string NPC_ASSIGN_ID_FIELD = '__npc_assign_id';
+    private const string NPC_ASSIGN_ID_FIELD = NpcInspector::ASSIGN_ID_FIELD;
     private bool $isConditionNaming = false;
     private string $conditionNameBuffer = '';
     /**
@@ -1992,35 +1998,7 @@ final class Editor
      */
     private function addDatabaseNpcSubItem(): void
     {
-        $map = $this->getSelectedMap();
-        $index = $this->selectedNpcIndex;
-
-        if (! $map instanceof ProjectMap || $index === null || $this->npcInspector === null) {
-            return;
-        }
-
-        $records = $this->npcInspector->records();
-        $before = $map->getNpcs();
-        $selectedId = (string) ($this->getDatabaseSettingsFields()[$this->databaseSelectedSettingIndex]['field'] ?? '');
-
-        $nested = $this->databaseCommandFramePath !== []
-            ? $records->frameNestedContext($index, $this->databaseCommandFramePath, $selectedId)
-            : null;
-
-        if ($nested !== null) {
-            // A route step under a command in the frame.
-            $records->addFrameNestedItem($index, $this->databaseCommandFramePath, $nested['parentIndex']);
-        } elseif ($this->databaseCommandFramePath !== []) {
-            $after = preg_match('/^command(\\d+)/', $selectedId, $m) === 1 ? intval($m[1]) : null;
-            $records->addFrameCommand($index, $this->databaseCommandFramePath, $after);
-        } elseif (preg_match('/^variant(\\d+)Line/', $selectedId, $m) === 1) {
-            $records->addNestedSubItem($index, intval($m[1]));
-        } else {
-            $records->addSubItem($index);
-        }
-
-        $this->npcInspector->commit();
-        $this->recordNpcCollectionChange($map, $index, $before, 'NPC add');
+        $this->changeNpcSubItem(true);
     }
 
     /**
@@ -2030,74 +2008,97 @@ final class Editor
      */
     private function removeDatabaseNpcSubItem(): void
     {
-        $map = $this->getSelectedMap();
-        $index = $this->selectedNpcIndex;
-
-        if (! $map instanceof ProjectMap || $index === null || $this->npcInspector === null) {
-            return;
-        }
-
-        $records = $this->npcInspector->records();
-        $before = $map->getNpcs();
-        $selectedId = (string) ($this->getDatabaseSettingsFields()[$this->databaseSelectedSettingIndex]['field'] ?? '');
-
-        $nested = $this->databaseCommandFramePath !== []
-            ? $records->frameNestedContext($index, $this->databaseCommandFramePath, $selectedId)
-            : null;
-
-        if ($nested !== null && $nested['nestedIndex'] !== null) {
-            // The step under the cursor; a command row removes the command.
-            $records->removeFrameNestedItem($index, $this->databaseCommandFramePath, $nested['parentIndex'], $nested['nestedIndex']);
-        } elseif ($this->databaseCommandFramePath !== []) {
-            if (preg_match('/^command(\\d+)/', $selectedId, $m) === 1) {
-                $records->removeFrameCommand($index, $this->databaseCommandFramePath, intval($m[1]));
-            }
-        } elseif (preg_match('/^variant(\\d+)Line(\\d+)/', $selectedId, $m) === 1) {
-            $records->removeNestedSubItem($index, intval($m[1]), intval($m[2]));
-        } elseif (preg_match('/^variant(\\d+)/', $selectedId, $m) === 1) {
-            $records->removeSubItem($index, intval($m[1]));
-        } else {
-            return;
-        }
-
-        $this->npcInspector->commit();
-        $this->recordNpcCollectionChange($map, $index, $before, 'NPC remove');
+        $this->changeNpcSubItem(false);
     }
 
     /**
-     * Records a structural NPC change as one undo step, when it changed
-     * anything.
+     * Adds or removes the sub-item at the Inspector cursor through the
+     * shared NPC authoring rules ({@see NpcAuthoring::addSubItem()}), as
+     * one undo step.
      *
-     * @param ProjectMap $map The map.
-     * @param int $index The NPC.
-     * @param \Ichiloto\Editor\Field\NpcCollection $before The collection before.
-     * @param string $label The history label.
+     * @param bool $add True to add, false to remove.
      * @return void
      */
-    private function recordNpcCollectionChange(ProjectMap $map, int $index, \Ichiloto\Editor\Field\NpcCollection $before, string $label): void
+    private function changeNpcSubItem(bool $add): void
     {
-        $after = $map->getNpcs();
+        $authoring = $this->createNpcAuthoring();
+        $index = $this->selectedNpcIndex;
+
+        if (! $authoring instanceof NpcAuthoring || $index === null || $this->npcInspector === null) {
+            return;
+        }
+
+        $fieldId = (string) ($this->getDatabaseSettingsFields()[$this->databaseSelectedSettingIndex]['field'] ?? '');
+
+        try {
+            $change = $add
+                ? $authoring->addSubItem($this->npcInspector, $index, $this->databaseCommandFramePath, $fieldId)
+                : $authoring->removeSubItem($this->npcInspector, $index, $this->databaseCommandFramePath, $fieldId);
+        } catch (NpcRefusal $refusal) {
+            $this->reportNpcRefusal($refusal);
+
+            return;
+        }
+
+        $this->recordNpcChange($change, $index, $index);
+        $this->clampDatabaseSettingSelection();
+        $this->requestFullRender();
+    }
+
+    /**
+     * Returns the shared NPC authoring rules over the open project.
+     *
+     * @return NpcAuthoring|null The rules, or null with no project open.
+     */
+    private function createNpcAuthoring(): ?NpcAuthoring
+    {
+        return $this->workspace instanceof ProjectWorkspace ? new NpcAuthoring($this->workspace) : null;
+    }
+
+    /**
+     * Records an NPC change as one undo step, when it changed anything.
+     *
+     * The change's own command restores the map's NPCs; the shell adds
+     * only what it shows, selecting the NPC the step lands on.
+     *
+     * @param NpcChange $change The applied change.
+     * @param int|null $redoSelection The NPC to select after a redo.
+     * @param int|null $undoSelection The NPC to select after an undo.
+     * @return void
+     */
+    private function recordNpcChange(NpcChange $change, ?int $redoSelection, ?int $undoSelection): void
+    {
         $this->refreshNpcInspector();
+        $command = $change->command;
 
-        if ($after->toMapData() === $before->toMapData()) {
-            $this->requestFullRender();
-
+        if ($command === null) {
             return;
         }
 
         $this->recordCommand(new GenericCommand(
-            $label,
-            function () use ($map, $after, $index): void {
-                $map->setNpcs($after);
-                $this->selectNpc($index);
+            $command->label,
+            function () use ($command, $redoSelection): void {
+                $command->execute();
+                $this->selectNpc($redoSelection);
             },
-            function () use ($map, $before, $index): void {
-                $map->setNpcs($before);
-                $this->selectNpc($index);
+            function () use ($command, $undoSelection): void {
+                $command->undo();
+                $this->selectNpc($undoSelection);
             },
         ));
-        $this->clampDatabaseSettingSelection();
-        $this->requestFullRender();
+    }
+
+    /**
+     * Shows why an NPC change was refused: a warning, or an error listing
+     * what stands in the way when the refusal names it.
+     *
+     * @param NpcRefusal $refusal The refusal.
+     * @return void
+     */
+    private function reportNpcRefusal(NpcRefusal $refusal): void
+    {
+        $this->setStatus($refusal->getMessage(), $refusal->details === [] ? StatusLevel::WARN : StatusLevel::ERROR, $refusal->details);
+        $this->renderFooter();
     }
 
     /**
@@ -2111,7 +2112,9 @@ final class Editor
     }
 
     /**
-     * Returns the selected NPC's record-pane fields, grouped and framed.
+     * Returns the selected NPC's rows, grouped and framed
+     * ({@see NpcInspector::getFields()}). A frame that no longer resolves
+     * is left for the NPC's own rows; an empty one still resolves.
      *
      * @return array<int, array<string, mixed>> The field descriptors.
      */
@@ -2121,166 +2124,21 @@ final class Editor
             return [];
         }
 
-        $records = $this->npcInspector->records();
-        $fields = $records->getFrameSettingsFields($this->selectedNpcIndex, $this->databaseCommandFramePath);
+        $fields = $this->npcInspector->getFields($this->selectedNpcIndex, $this->databaseCommandFramePath);
 
-        if (
-            $this->databaseCommandFramePath !== []
-            && $records->getFrameCommands($this->selectedNpcIndex, $this->databaseCommandFramePath) === null
-        ) {
-            // The frame no longer resolves; an empty one still does.
+        if ($fields === null) {
             $this->databaseCommandFramePath = [];
-            $fields = $records->getFrameSettingsFields($this->selectedNpcIndex, []);
+            $fields = $this->npcInspector->getFields($this->selectedNpcIndex) ?? [];
         }
 
-        if ($this->databaseCommandFramePath !== []) {
-            return $fields;
-        }
-
-        // Group headings and honest notes, without changing any field id.
-        $npc = $this->getSelectedMap()?->getNpcs()->get($this->selectedNpcIndex);
-        $grouped = [];
-        $group = static fn(string $title): array => ['label' => $title, 'value' => '', 'editable' => false];
-        $notes = [];
-
-        if ($npc !== null && $npc->getId() === null) {
-            // Legacy entry: nothing can name an id it never had, so giving
-            // it one is the one identity write that is safe after creation.
-            $notes[] = [
-                'label' => '  ! No stable id',
-                'value' => 'move_route cannot target it; Enter assigns one from the name',
-                'editable' => true,
-                'field' => self::NPC_ASSIGN_ID_FIELD,
-            ];
-        }
-
-        if ($npc !== null && $npc->scriptShadowsDialogue()) {
-            $notes[] = ['label' => '  ! Script replaces dialogue', 'value' => 'the game runs the script', 'editable' => false];
-        }
-
-        if ($npc !== null && $npc->getUnknownFields() !== []) {
-            $notes[] = ['label' => '  Preserved fields', 'value' => implode(', ', $npc->getUnknownFields()), 'editable' => false];
-        }
-
-        $sections = [
-            'Identity' => ['id', 'name'],
-            'Placement' => ['x', 'y'],
-            'Appearance' => ['sprite', 'sprites.north', 'sprites.south', 'sprites.east', 'sprites.west'],
-            'Movement' => ['movement', 'directionFix', 'wanderArea.x', 'wanderArea.y', 'wanderArea.width', 'wanderArea.height'],
-            'Visibility' => ['conditions'],
-            'Interaction' => ['commandListScript'],
-            'Completion Writes' => ['sets'],
-        ];
-        $byId = [];
-
-        foreach ($fields as $field) {
-            $byId[(string) ($field['field'] ?? '')][] = $field;
-        }
-
-        foreach ($sections as $title => $ids) {
-            $rows = [];
-
-            foreach ($ids as $id) {
-                foreach ($byId[$id] ?? [] as $field) {
-                    // Wander bounds only matter while wandering; loaded
-                    // values are kept, just not shown for a fixed NPC.
-                    if (! (str_starts_with($id, 'wanderArea.') && $npc !== null && ! $npc->wanders())) {
-                        $rows[] = $field;
-                    }
-                }
-
-                unset($byId[$id]);
-            }
-
-            if ($rows !== []) {
-                $grouped[] = $group($title);
-                $grouped = [...$grouped, ...$rows];
-            }
-
-            if ($title === 'Identity') {
-                $grouped = [...$grouped, ...$notes];
-            }
-
-            if ($title === 'Interaction') {
-                // Everything left is dialogue: variants, their lines, and
-                // their frames, each variant under its own heading.
-                [$variantRows, $byId] = $this->groupNpcVariantRows($byId);
-                $grouped = [...$grouped, ...$variantRows];
-            }
-        }
-
-        foreach ($byId as $rest) {
-            $grouped = [...$grouped, ...$rest];
-        }
-
-        return $grouped;
+        return $fields;
     }
 
     /**
-     * Turns the record pane's variant rows into headed groups: one
-     * `Dialogue variant N` heading per variant (with its condition line
-     * when it has one), then that variant's rows under short labels --
-     * `When`, `Then Set`, `Script Commands`, `Line 1 Speaker`, `Line 1
-     * Text` -- so the label no longer eats the pane before the value
-     * starts. Field ids are untouched; this is the grouped view's
-     * presentation of the record layer's own rows.
-     *
-     * @param array<string, array<int, array<string, mixed>>> $byId The remaining rows, keyed by field id.
-     * @return array{0: array<int, array<string, mixed>>, 1: array<string, array<int, array<string, mixed>>>} The headed rows, and what was left.
-     */
-    private function groupNpcVariantRows(array $byId): array
-    {
-        $singular = ucfirst(\Ichiloto\Editor\Database\RecordSchemaCatalog::mapNpcs()->subList?->singular ?? 'dialogue variant');
-        $variants = [];
-
-        foreach ($byId as $id => $rows) {
-            if (preg_match('/^variant(\d+)/', $id, $matches) !== 1) {
-                continue;
-            }
-
-            $variants[intval($matches[1])] = [...($variants[intval($matches[1])] ?? []), ...$rows];
-            unset($byId[$id]);
-        }
-
-        ksort($variants);
-        $headed = [];
-
-        foreach ($variants as $number => $rows) {
-            $prefix = sprintf('%s %d ', $singular, $number + 1);
-            $when = '';
-
-            foreach ($rows as $row) {
-                if (($row['field'] ?? null) === sprintf('variant%dConditions', $number)) {
-                    $when = trim((string) ($row['value'] ?? ''));
-                }
-            }
-
-            // The condition line rides as the heading's value, so it reads
-            // "Dialogue variant 2 · when …" and wraps rather than clips.
-            $headed[] = [
-                'label' => sprintf('%s %d', $singular, $number + 1),
-                'value' => $when === '' ? '' : 'when ' . $when,
-                'editable' => false,
-            ];
-
-            foreach ($rows as $row) {
-                $label = (string) ($row['label'] ?? '');
-
-                if (str_starts_with($label, $prefix)) {
-                    $row['label'] = substr($label, strlen($prefix));
-                }
-
-                $headed[] = $row;
-            }
-        }
-
-        return [$headed, $byId];
-    }
-
-    /**
-     * Applies an NPC field edit through the record pane and the map, and
-     * records it: the undo restores the whole previous collection, so list
-     * position and every other field come back exactly.
+     * Applies an NPC field edit through the shared authoring rules
+     * ({@see NpcAuthoring::applyField()}) and records it: the undo restores
+     * the whole previous collection, so list position and every other field
+     * come back exactly. A rename says what became of the id.
      *
      * @param array<string, mixed> $field The field descriptor.
      * @param string $rawValue The raw value.
@@ -2288,79 +2146,28 @@ final class Editor
      */
     private function applyNpcFieldValueRecorded(array $field, string $rawValue): void
     {
-        $map = $this->getSelectedMap();
+        $authoring = $this->createNpcAuthoring();
         $index = $this->selectedNpcIndex;
 
-        if (! $map instanceof ProjectMap || $index === null || $this->npcInspector === null) {
+        if (! $authoring instanceof NpcAuthoring || $index === null || $this->npcInspector === null) {
             return;
         }
 
-        $before = $map->getNpcs();
-        $fieldId = (string) ($field['field'] ?? '');
-        $this->npcInspector->records()->setFrameField($index, $this->databaseCommandFramePath, $fieldId, $rawValue);
-        $this->npcInspector->commit();
-        $after = $map->getNpcs();
-
-        if ($fieldId === 'name') {
-            $after = $this->followNpcNameWithId($map, $after, $index);
-        }
-
-        if ($after->toMapData() === $before->toMapData()) {
-            // A same-value edit: no history, no dirt.
-            $this->refreshNpcInspector();
+        try {
+            $change = $authoring->applyField($this->npcInspector, $index, $this->databaseCommandFramePath, $field, $rawValue);
+        } catch (NpcRefusal $refusal) {
+            $this->reportNpcRefusal($refusal);
 
             return;
         }
 
-        $this->refreshNpcInspector();
-        $this->recordCommand(new GenericCommand(
-            sprintf('NPC %s edit', $field['label'] ?? 'field'),
-            function () use ($map, $after, $index): void {
-                $map->setNpcs($after);
-                $this->selectNpc($index);
-            },
-            function () use ($map, $before, $index): void {
-                $map->setNpcs($before);
-                $this->selectNpc($index);
-            },
-        ));
-    }
-
-    /**
-     * Gives a renamed NPC the id its new name derives, as long as nothing
-     * refers to it yet: an id something names stays, so doors, routes and
-     * cinematics keep finding the NPC, and the status says what names it.
-     *
-     * @return NpcCollection The map's NPCs after the rename.
-     */
-    private function followNpcNameWithId(ProjectMap $map, NpcCollection $npcs, int $index): NpcCollection
-    {
-        $npc = $npcs->get($index);
-        $id = $npc?->getId();
-
-        if ($npc === null || $id === null || $id === '') {
-            return $npcs;
+        if ($change->followedId !== null) {
+            $this->setStatus(sprintf('Renamed. Its id is now %s.', $change->followedId), StatusLevel::INFO);
+        } elseif ($change->idReferences !== []) {
+            $this->setStatus(sprintf('Renamed. Its id stays %s: %s names it.', $change->npc?->getId() ?? '', implode(', ', $change->idReferences)));
         }
 
-        $derived = $npcs->withRemoved($index)->uniqueIdFor($npc->getName());
-
-        if ($derived === $id) {
-            return $npcs;
-        }
-
-        $references = $this->workspace instanceof ProjectWorkspace ? new NpcReferences($this->workspace)->describe($map, $id) : [];
-
-        if ($references !== []) {
-            $this->setStatus(sprintf('Renamed. Its id stays %s: %s names it.', $id, implode(', ', $references)));
-
-            return $npcs;
-        }
-
-        $renamed = $npcs->withReplaced($index, $npc->withId($derived));
-        $map->setNpcs($renamed);
-        $this->setStatus(sprintf('Renamed. Its id is now %s.', $derived), StatusLevel::INFO);
-
-        return $renamed;
+        $this->recordNpcChange($change, $index, $index);
     }
 
     /**
@@ -2496,24 +2303,24 @@ final class Editor
     {
         $map = $this->getSelectedMap();
         $index = $this->selectedNpcIndex;
-        $npc = $index !== null ? $map?->getNpcs()->get($index) : null;
+        $authoring = $this->createNpcAuthoring();
 
-        if (! $map instanceof ProjectMap || $index === null || $npc === null) {
+        if (! $map instanceof ProjectMap || ! $authoring instanceof NpcAuthoring || $index === null || $map->getNpcs()->get($index) === null) {
             return;
         }
 
-        if ($npc->getId() !== null) {
-            $this->setStatus(sprintf('%s already has the stable id "%s"; ids do not change.', $npc->getName(), $npc->getId()), StatusLevel::WARN);
-            $this->renderFooter();
+        try {
+            $change = $authoring->assignId($map, $index);
+        } catch (NpcRefusal $refusal) {
+            $this->reportNpcRefusal($refusal);
 
             return;
         }
 
-        $before = $map->getNpcs();
-        $id = $before->uniqueIdFor($npc->getName());
-        $map->setNpcs($before->withReplaced($index, $npc->asCopyWithId($id)));
-        $this->recordNpcCollectionChange($map, $index, $before, sprintf('Assign NPC id %s', $id));
-        $this->setStatus(sprintf('Assigned the stable id "%s" to %s.', $id, $npc->getName()), StatusLevel::INFO);
+        $this->recordNpcChange($change, $index, $index);
+        $this->clampDatabaseSettingSelection();
+        $this->requestFullRender();
+        $this->setStatus(sprintf('Assigned the stable id "%s" to %s.', $change->npc?->getId() ?? '', $change->npc?->getName() ?? ''), StatusLevel::INFO);
     }
 
     /**
@@ -2757,7 +2564,8 @@ final class Editor
             $this->npcNameBuffer = '';
 
             if ($tile !== null) {
-                $this->createNpcAt($tile['x'], $tile['y'], $name !== '' ? $name : 'New NPC');
+                // A blank name takes the shared placeholder rather than refusing.
+                $this->createNpcAt($tile['x'], $tile['y'], $name);
             }
 
             return;
@@ -2800,42 +2608,34 @@ final class Editor
     }
 
     /**
-     * Creates a fixed NPC at a tile under a stable id derived from its name.
+     * Creates a fixed NPC at a tile under a stable id derived from its name
+     * ({@see NpcAuthoring::create()}).
      *
      * @param int $x The anchor column.
      * @param int $y The anchor row.
-     * @param string $name The display name.
+     * @param string $name The display name; blank takes the placeholder.
      * @return void
      */
     private function createNpcAt(int $x, int $y, string $name): void
     {
         $map = $this->getSelectedMap();
+        $authoring = $this->createNpcAuthoring();
 
-        if (! $map instanceof ProjectMap) {
+        if (! $map instanceof ProjectMap || ! $authoring instanceof NpcAuthoring) {
             return;
         }
 
-        $collection = $map->getNpcs();
-        $id = $collection->uniqueIdFor($name);
-        $npc = ProjectNpc::createAt($id, $name, $x, $y);
-        $index = $collection->count();
-        $before = $collection;
-        $after = $collection->withAdded($npc);
+        try {
+            $change = $authoring->create($map, $x, $y, $name);
+        } catch (NpcRefusal $refusal) {
+            $this->reportNpcRefusal($refusal);
 
-        $map->setNpcs($after);
-        $this->selectNpc($index);
-        $this->recordCommand(new GenericCommand(
-            'NPC create',
-            function () use ($map, $after, $index): void {
-                $map->setNpcs($after);
-                $this->selectNpc($index);
-            },
-            function () use ($map, $before): void {
-                $map->setNpcs($before);
-                $this->selectNpc(null);
-            },
-        ));
-        $this->setStatus(sprintf('Created %s. Its id is %s.', $name, $id), StatusLevel::INFO);
+            return;
+        }
+
+        $this->selectNpc($change->index);
+        $this->recordNpcChange($change, $change->index, null);
+        $this->setStatus(sprintf('Created %s. Its id is %s.', $change->npc?->getName() ?? '', $change->npc?->getId() ?? ''), StatusLevel::INFO);
         $this->focusedPane = self::FOCUS_INSPECTOR;
         $this->requestFullRender();
     }
@@ -2878,7 +2678,7 @@ final class Editor
     }
 
     /**
-     * Moves an NPC to a tile, recorded for undo.
+     * Moves an NPC to a tile, recorded for undo ({@see NpcAuthoring::move()}).
      *
      * @param int $index The NPC's position.
      * @param int $x The destination column.
@@ -2888,154 +2688,96 @@ final class Editor
     private function moveNpc(int $index, int $x, int $y): void
     {
         $map = $this->getSelectedMap();
-        $collection = $map?->getNpcs();
-        $npc = $collection?->get($index);
+        $authoring = $this->createNpcAuthoring();
 
-        if (! $map instanceof ProjectMap || $collection === null || $npc === null) {
+        if (! $map instanceof ProjectMap || ! $authoring instanceof NpcAuthoring || $map->getNpcs()->get($index) === null) {
             return;
         }
 
-        if ($x < 0 || $y < 0 || $x >= $map->getWidth() || $y >= $map->getHeight()) {
-            $this->setStatus(sprintf('%d,%d is outside the map.', $x, $y), StatusLevel::WARN);
-            $this->renderFooter();
+        try {
+            $change = $authoring->move($map, $index, $x, $y);
+        } catch (NpcRefusal $refusal) {
+            $this->reportNpcRefusal($refusal);
 
             return;
         }
 
-        if ($npc->getX() === $x && $npc->getY() === $y) {
+        if ($change->command === null) {
             $this->setStatus('Already there.');
             $this->renderFooter();
 
             return;
         }
 
-        $occupant = $collection->indexAt($x, $y);
-
-        if ($occupant !== null && $occupant !== $index) {
-            $this->setStatus(sprintf('%s already stands at %d,%d.', $collection->get($occupant)?->getName() ?? 'An NPC', $x, $y), StatusLevel::WARN);
-            $this->renderFooter();
-
-            return;
-        }
-
-        $before = $collection;
-        $after = $collection->withReplaced($index, $npc->movedTo($x, $y));
-        $map->setNpcs($after);
-        $this->refreshNpcInspector();
-        $this->recordCommand(new GenericCommand(
-            'NPC move',
-            function () use ($map, $after, $index): void {
-                $map->setNpcs($after);
-                $this->selectNpc($index);
-            },
-            function () use ($map, $before, $index): void {
-                $map->setNpcs($before);
-                $this->selectNpc($index);
-            },
-        ));
-        $this->setStatus(sprintf('Moved %s to %d,%d.', $npc->getName(), $x, $y), StatusLevel::INFO);
+        $this->recordNpcChange($change, $index, $index);
+        $this->setStatus(sprintf('Moved %s to %d,%d.', $change->npc?->getName() ?? '', $x, $y), StatusLevel::INFO);
         $this->requestFullRender();
     }
 
     /**
      * Duplicates the selected NPC under a fresh unique id, one tile to the
-     * right when that tile is free.
+     * right when that tile is free ({@see NpcAuthoring::duplicate()}).
      *
      * @return void
      */
     private function duplicateSelectedNpc(): void
     {
         $map = $this->getSelectedMap();
-        $collection = $map?->getNpcs();
-        $npc = $this->selectedNpcIndex !== null ? $collection?->get($this->selectedNpcIndex) : null;
+        $authoring = $this->createNpcAuthoring();
+        $index = $this->selectedNpcIndex;
 
-        if (! $map instanceof ProjectMap || $collection === null || $npc === null) {
+        if (! $map instanceof ProjectMap || ! $authoring instanceof NpcAuthoring || $index === null || $map->getNpcs()->get($index) === null) {
             $this->setStatus('Select an NPC first (Enter on it).', StatusLevel::WARN);
             $this->renderFooter();
 
             return;
         }
 
-        $id = $collection->uniqueIdFor($npc->getName());
-        $copy = $npc->asCopyWithId($id);
-        $x = $npc->getX() + $npc->getSpriteWidth();
+        try {
+            $change = $authoring->duplicate($map, $index);
+        } catch (NpcRefusal $refusal) {
+            $this->reportNpcRefusal($refusal);
 
-        if ($x < $map->getWidth() && $collection->indexAt($x, $npc->getY()) === null) {
-            $copy = $copy->movedTo($x, $npc->getY());
+            return;
         }
 
-        $index = $collection->count();
-        $before = $collection;
-        $after = $collection->withAdded($copy);
-        $map->setNpcs($after);
-        $this->selectNpc($index);
-        $this->recordCommand(new GenericCommand(
-            'NPC duplicate',
-            function () use ($map, $after, $index): void {
-                $map->setNpcs($after);
-                $this->selectNpc($index);
-            },
-            function () use ($map, $before): void {
-                $map->setNpcs($before);
-                $this->selectNpc(null);
-            },
-        ));
-        $this->setStatus(sprintf('Duplicated as %s (id %s).', $copy->getName(), $id), StatusLevel::INFO);
+        $this->selectNpc($change->index);
+        $this->recordNpcChange($change, $change->index, null);
+        $this->setStatus(sprintf('Duplicated as %s (id %s).', $change->npc?->getName() ?? '', $change->npc?->getId() ?? ''), StatusLevel::INFO);
         $this->requestFullRender();
     }
 
     /**
-     * Deletes the selected NPC, refusing while anything names its id.
+     * Deletes the selected NPC, refusing while anything names its id
+     * ({@see NpcAuthoring::delete()}).
      *
      * @return void
      */
     private function deleteSelectedNpc(): void
     {
         $map = $this->getSelectedMap();
-        $collection = $map?->getNpcs();
+        $authoring = $this->createNpcAuthoring();
         $index = $this->selectedNpcIndex;
-        $npc = $index !== null ? $collection?->get($index) : null;
 
-        if (! $map instanceof ProjectMap || $collection === null || $index === null || $npc === null || ! $this->workspace instanceof ProjectWorkspace) {
+        if (! $map instanceof ProjectMap || ! $authoring instanceof NpcAuthoring || $index === null || $map->getNpcs()->get($index) === null) {
             $this->setStatus('Select an NPC first (Enter on it).', StatusLevel::WARN);
             $this->renderFooter();
 
             return;
         }
 
-        $references = $npc->getId() !== null
-            ? new NpcReferences($this->workspace)->describe($map, $npc->getId())
-            : [];
-
-        if ($references !== []) {
-            // Refusing beats a route or script that silently stops
-            // resolving. The list is what the author needs to go fix.
-            $this->setStatus(
-                sprintf('%s is named by %s - resolve those before deleting.', $npc->getName(), implode(', ', $references)),
-                StatusLevel::ERROR,
-                array_map(static fn(string $reference): string => '- ' . $reference, $references),
-            );
-            $this->renderFooter();
+        try {
+            $change = $authoring->delete($map, $index);
+        } catch (NpcRefusal $refusal) {
+            // The refusal lists what names the NPC: what the author goes to fix.
+            $this->reportNpcRefusal($refusal);
 
             return;
         }
 
-        $before = $collection;
-        $after = $collection->withRemoved($index);
-        $map->setNpcs($after);
         $this->selectNpc(null);
-        $this->recordCommand(new GenericCommand(
-            'NPC delete',
-            function () use ($map, $after): void {
-                $map->setNpcs($after);
-                $this->selectNpc(null);
-            },
-            function () use ($map, $before, $index): void {
-                $map->setNpcs($before);
-                $this->selectNpc($index);
-            },
-        ));
-        $this->setStatus(sprintf('Deleted %s.', $npc->getName()), StatusLevel::INFO);
+        $this->recordNpcChange($change, null, $index);
+        $this->setStatus(sprintf('Deleted %s.', $change->npc?->getName() ?? ''), StatusLevel::INFO);
         $this->requestFullRender();
     }
 
@@ -4773,7 +4515,7 @@ final class Editor
 
             $oldSymbol = $selectedMap->getLayerSymbol($this->getActiveCanvasLayer(), $point['x'], $point['y']);
             $oldStyle = $selectedMap->getLayerCellStyle($this->getActiveCanvasLayer(), $point['x'], $point['y']);
-            [$newPrefix, $newSuffix] = $this->resolvePaintStyle($symbol, $this->selectedPaintColor, $oldStyle);
+            [$newPrefix, $newSuffix] = CanvasEditor::resolvePaintStyle($symbol, $this->selectedPaintColor, $oldStyle);
             $selectedMap->setLayerCell($this->getActiveCanvasLayer(), $point['x'], $point['y'], $symbol, $newPrefix, $newSuffix);
             $newSymbol = $selectedMap->getLayerSymbol($this->getActiveCanvasLayer(), $point['x'], $point['y']);
             $this->activeStrokeCommand->appendCell(
@@ -4996,88 +4738,6 @@ final class Editor
     {
         // Tiles follow the glyphs (GlyphTileCanvas), in the same undo step.
         return $this->commitCanvasWrites($map, $writes, $label, retry: $retry, choices: $choices);
-    }
-
-    /**
-     * Writes cells onto one layer and returns the stroke that undoes them,
-     * unrecorded, so a caller can record it alone or as part of a larger
-     * step. Cells outside the layer are skipped.
-     *
-     * @param ProjectMap $map The target map.
-     * @param string $layer The layer id to write.
-     * @param array<int, array{x: int, y: int, symbol: string, color?: string|null, style?: array{prefix: string, suffix: string}}> $writes The cells to write.
-     * @param string $label The undo/status label.
-     * @return array{0: PaintStrokeCommand, 1: int} The stroke and the number of cells that actually changed.
-     */
-    private function writeCanvasCells(ProjectMap $map, string $layer, array $writes, string $label): array
-    {
-        $stroke = new PaintStrokeCommand($map, $layer, $label);
-        $changed = 0;
-
-        foreach ($writes as $write) {
-            if (! $map->hasLayerCell($layer, $write['x'], $write['y'])) {
-                continue;
-            }
-
-            $oldSymbol = $map->getLayerSymbol($layer, $write['x'], $write['y']);
-
-            $oldStyle = $map->getLayerCellStyle($layer, $write['x'], $write['y']);
-            [$newPrefix, $newSuffix] = isset($write['style'])
-                ? [$write['style']['prefix'], $write['style']['suffix']]
-                : $this->resolvePaintStyle(
-                    $write['symbol'],
-                    $write['color'] ?? null,
-                    $oldStyle,
-                );
-            $map->setLayerCell($layer, $write['x'], $write['y'], $write['symbol'], $newPrefix, $newSuffix);
-            $newSymbol = $map->getLayerSymbol($layer, $write['x'], $write['y']);
-            $stroke->appendCell(
-                $write['x'],
-                $write['y'],
-                $oldSymbol,
-                $newSymbol,
-                $oldStyle['prefix'],
-                $oldStyle['suffix'],
-                $newPrefix,
-                $newSuffix,
-            );
-
-            if ($oldSymbol !== $newSymbol || $oldStyle['prefix'] !== $newPrefix || $oldStyle['suffix'] !== $newSuffix) {
-                $changed++;
-            }
-        }
-
-        return [$stroke, $changed];
-    }
-
-    /**
-     * Resolves the styling bytes a tile paint writes.
-     *
-     * The colour directive follows the brush contract: null keeps the
-     * cell's existing styling byte-for-byte, an empty string paints without
-     * colour, and any other value becomes an `fg=` tag. A space is always
-     * uncoloured, so erasing never leaves invisible styling behind.
-     *
-     * @param string $symbol The symbol being painted.
-     * @param string|null $colorDirective The brush colour directive.
-     * @param array{prefix: string, suffix: string} $oldStyle The cell's current styling.
-     * @return array{0: string, 1: string} The prefix and suffix to write.
-     */
-    private function resolvePaintStyle(string $symbol, ?string $colorDirective, array $oldStyle): array
-    {
-        if ($symbol === ' ') {
-            return ['', ''];
-        }
-
-        if ($colorDirective === null) {
-            return [$oldStyle['prefix'], $oldStyle['suffix']];
-        }
-
-        if ($colorDirective === '') {
-            return ['', ''];
-        }
-
-        return [sprintf('<fg=%s>', $colorDirective), '</>'];
     }
 
     /**
@@ -6651,7 +6311,7 @@ final class Editor
                 fn(): ?object => $workspace->animationDatabase->removeAnimation($index),
                 static fn(object $entry) => $workspace->animationDatabase->insertAnimation($index, $entry),
             ),
-            default => $this->buildRecordDeletionCommand($pending['category'], $index, $label),
+            default => $this->buildRecordDeletionCommand($pending['category'], $index),
         };
 
         if (! $command instanceof Command) {
@@ -6669,26 +6329,27 @@ final class Editor
     }
 
     /**
-     * Builds the deletion command for a schema-driven category.
+     * Deletes an entry of a schema-driven category through the shared
+     * record rules ({@see RecordAuthoring::deleteRecord()}).
      *
      * @param string $categoryKey The category key.
      * @param int $index The entry index.
-     * @param string $label The entry label.
-     * @return Command|null
+     * @return Command|null The deletion's command, or null when it was refused.
      */
-    private function buildRecordDeletionCommand(string $categoryKey, int $index, string $label): ?Command
+    private function buildRecordDeletionCommand(string $categoryKey, int $index): ?Command
     {
         $database = $this->workspace?->getRecordDatabase($categoryKey);
 
-        if (! $database instanceof ProjectRecordDatabase || ! $database->isEditable()) {
+        if (! $database instanceof ProjectRecordDatabase) {
             return null;
         }
 
-        return $this->buildDatabaseDeletionCommand(
-            sprintf('Delete %s %s', $database->schema->entryNoun, $label),
-            static fn(): ?object => $database->removeRecord($index),
-            static fn(object $entry) => $database->insertRecord($index, $entry),
-        );
+        try {
+            return (new RecordAuthoring())->deleteRecord($database, $index)->command;
+        } catch (RecordRefusal) {
+            // describeUndeletableCategory() says why.
+            return null;
+        }
     }
 
     /**
@@ -7097,7 +6758,8 @@ final class Editor
     }
 
     /**
-     * Saves every dirty map and database in one pass.
+     * Saves every dirty map, database and cutscene in one pass, through the
+     * workspace save both editors share.
      *
      * Maps whose save would move their folder are skipped - the rename flow
      * requires its own explicit confirmation via Ctrl+S on that map.
@@ -7110,119 +6772,42 @@ final class Editor
             return;
         }
 
-        $savedMaps = 0;
-        $savedDatabases = 0;
-        $skippedRenames = [];
-        $failures = [];
-        $validationWarnings = [];
-        $mapsById = $this->getMapsById();
+        $result = WorkspaceSave::saveAll($this->workspace, $this->backups);
+        $this->showSavedCutscenes();
 
-        foreach ($this->workspace->maps as $map) {
-            if (! $map->isDirty()) {
-                continue;
-            }
-
-            if ($map->willMoveOnSave()) {
-                $skippedRenames[] = $map->mapId;
-                continue;
-            }
-
-            foreach (MapValidator::validate($map, $mapsById) as $warning) {
-                $validationWarnings[] = sprintf('%s: %s', $map->mapId, $warning);
-            }
-
-            try {
-                $map->save($this->backupBeforeSave(...));
-                $savedMaps++;
-            } catch (Throwable $throwable) {
-                Debug::error(sprintf('Save all (%s): %s', $map->mapId, $throwable->getMessage()));
-                $failures[] = sprintf('%s: %s', $map->mapId, $throwable->getMessage());
-            }
+        foreach ($result->failures as $failure) {
+            Debug::error(sprintf('Save all (%s)', $failure));
         }
 
-        // Categories sharing one file are saved together, so the file is
-        // written once with every dirty part folded in rather than once per
-        // category, each rewriting what the last just wrote.
-        foreach (SharedFileTransaction::groupByPath($this->getSaveableDatabases()) as $group) {
-            $dirty = array_filter($group, static fn(object $database): bool => $database->isDirty());
-
-            if ($dirty === []) {
-                continue;
-            }
-
-            $label = implode(', ', array_keys($dirty));
-
-            try {
-                $backed = [];
-
-                foreach ($dirty as $database) {
-                    foreach ($this->getDatabaseBackupPaths($database) as $backupPath) {
-                        // One file, one backup, however many categories of
-                        // it are being written.
-                        $backed[$backupPath] = $backupPath;
-                    }
-                }
-
-                $this->backupBeforeSave(...array_values($backed));
-
-                $shared = reset($dirty);
-
-                if ($shared instanceof ProjectRecordDatabase && $shared->sharesBackingFile()) {
-                    // One write for the file, with every dirty category's
-                    // edits composed against one snapshot of it first.
-                    SharedFileTransaction::commit(array_values($dirty));
-                } else {
-                    foreach ($dirty as $database) {
-                        $database->save();
-                    }
-                }
-
-                $savedDatabases += count($dirty);
-            } catch (Throwable $throwable) {
-                Debug::error(sprintf('Save all (%s): %s', $label, $throwable->getMessage()));
-                $failures[] = sprintf('%s: %s', $label, $throwable->getMessage());
-            }
+        if ($result->backupFailures !== []) {
+            Debug::error(sprintf('Backup failed for: %s', implode(', ', $result->backupFailures)));
         }
 
-        // Cutscenes: each dirty asset as its own paired transaction.
-        $cutscenes = $this->saveAllCutscenes();
-        $savedCutscenes = count($cutscenes['saved']);
-
-        foreach ($cutscenes['failed'] as $asset => $reason) {
-            Debug::error(sprintf('Save all (%s): %s', $asset, $reason));
-            $failures[] = sprintf('%s: %s', $asset, $reason);
-        }
-
-        $summary = sprintf(
-            'Saved %d map%s, %d database%s and %d cutscene%s.',
-            $savedMaps,
-            $savedMaps === 1 ? '' : 's',
-            $savedDatabases,
-            $savedDatabases === 1 ? '' : 's',
-            $savedCutscenes,
-            $savedCutscenes === 1 ? '' : 's',
-        );
         $detailLines = [];
 
-        if ($skippedRenames !== []) {
+        if ($result->skippedRenames !== []) {
             $detailLines[] = 'Skipped - saving would move the map folder (use Ctrl+S on the map to confirm):';
-            $detailLines = [...$detailLines, ...array_map(static fn(string $mapId): string => '  ' . $mapId, $skippedRenames), ''];
+            $detailLines = [...$detailLines, ...array_map(static fn(string $mapId): string => '  ' . $mapId, $result->skippedRenames), ''];
         }
 
-        if ($failures !== []) {
-            $detailLines = [...$detailLines, 'Failed:', ...array_map(static fn(string $failure): string => '  ' . $failure, $failures), ''];
+        if ($result->failures !== []) {
+            $detailLines = [...$detailLines, 'Failed:', ...array_map(static fn(string $failure): string => '  ' . $failure, $result->failures), ''];
         }
 
-        if ($validationWarnings !== []) {
-            $detailLines = [...$detailLines, 'Validation warnings:', ...array_map(static fn(string $warning): string => '  ' . $warning, $validationWarnings)];
+        if ($result->backupFailures !== []) {
+            $detailLines = [...$detailLines, 'Backups failed (the save still ran):', ...array_map(static fn(string $path): string => '  ' . $path, $result->backupFailures), ''];
         }
 
-        if ($failures !== []) {
-            $this->setStatus($summary . sprintf(' %d failed (Ctrl+E for details).', count($failures)), StatusLevel::ERROR, $detailLines);
-        } elseif ($skippedRenames !== [] || $validationWarnings !== []) {
-            $this->setStatus($summary . ' See Ctrl+E for skipped saves and warnings.', StatusLevel::WARN, $detailLines);
+        if ($result->warnings !== []) {
+            $detailLines = [...$detailLines, 'Validation warnings:', ...array_map(static fn(string $warning): string => '  ' . $warning, $result->warnings)];
+        }
+
+        if ($result->failures !== []) {
+            $this->setStatus($result->summary . sprintf(' %d failed (Ctrl+E for details).', count($result->failures)), StatusLevel::ERROR, $detailLines);
+        } elseif ($result->skippedRenames !== [] || $result->warnings !== [] || $result->backupFailures !== []) {
+            $this->setStatus($result->summary . ' See Ctrl+E for skipped saves and warnings.', StatusLevel::WARN, $detailLines);
         } else {
-            $this->setStatus($summary, StatusLevel::SUCCESS);
+            $this->setStatus($result->summary, StatusLevel::SUCCESS);
         }
 
         $this->renderSelectionDependentArea();
@@ -7257,60 +6842,6 @@ final class Editor
         );
     }
 
-
-    /**
-     * Returns the files a database save overwrites.
-     *
-     * @param object $database The database about to be saved.
-     * @return string[]
-     */
-    private function getDatabaseBackupPaths(object $database): array
-    {
-        if ($database instanceof ProjectActorDatabase) {
-            return array_map(
-                static fn(ProjectActor $actor): string => $actor->path,
-                $database->getActors(),
-            );
-        }
-
-        if ($database instanceof ProjectRecordDatabase) {
-            return $database->getBackupPaths();
-        }
-
-        return property_exists($database, 'path') ? [(string) $database->path] : [];
-    }
-
-    /**
-     * Returns every saveable database keyed by display label.
-     *
-     * @return array<string, ProjectActorDatabase|ProjectClassDatabase|ProjectSkillDatabase|ProjectAnimationDatabase|ProjectSystemDatabase|ProjectQuestDatabase>
-     */
-    private function getSaveableDatabases(): array
-    {
-        if (! $this->workspace instanceof ProjectWorkspace) {
-            return [];
-        }
-
-        $databases = [
-            'Actors' => $this->workspace->actorDatabase,
-            'Classes' => $this->workspace->classDatabase,
-            'Skills' => $this->workspace->skillDatabase,
-            'Quests' => $this->workspace->questDatabase,
-            'Animations' => $this->workspace->animationDatabase,
-            'System' => $this->workspace->systemDatabase,
-        ];
-        if ($this->workspace->config !== null) { $databases['Project configuration'] = $this->workspace->config; }
-
-        // Read-only categories never join Save All: they hold no edits, and
-        // asking them to save would raise instead of no-op.
-        foreach ($this->workspace->recordDatabases as $categoryKey => $recordDatabase) {
-            if ($recordDatabase->isEditable()) {
-                $databases[DatabaseCatalog::at(DatabaseCatalog::indexOf($categoryKey))->label] = $recordDatabase;
-            }
-        }
-
-        return $databases;
-    }
 
     /**
      * Returns the workspace maps keyed by map id for validation lookups.
@@ -7536,7 +7067,7 @@ final class Editor
 
         try {
             $mapId = $this->workspace->createMap(kind: $kind);
-            $this->reloadWorkspaceSelectingMap($mapId);
+            $this->addWorkspaceMapSelecting($mapId);
             $this->selectedInspectorFieldIndex = 0;
             $this->setStatus($kind === null
                 ? sprintf('Created %s. It has no kind: the project has no tilesets in assets/%s/.', $mapId, Tileset::DIRECTORY)
@@ -7567,7 +7098,7 @@ final class Editor
                 return;
             }
 
-            $this->reloadWorkspaceSelectingMap($mapId);
+            $this->addWorkspaceMapSelecting($mapId);
             $this->setStatus(sprintf('Duplicated %s.', $mapId), StatusLevel::SUCCESS);
             $this->renderSelectionDependentArea();
         } catch (Throwable $throwable) {
@@ -8370,27 +7901,24 @@ final class Editor
             return;
         }
 
-        $marker = $context['marker'];
-        $destinationPath = $context['path'];
-        $newDestination = $context['destinationMapId'];
-        $newSpawnX = $this->cursorX;
-        $newSpawnY = $this->cursorY;
-        $oldDestination = $sourceMap->getEventField($marker, $destinationPath);
-        $oldSpawnX = $sourceMap->getEventField($marker, ['data', 'spawnPoint', 'x']);
-        $oldSpawnY = $sourceMap->getEventField($marker, ['data', 'spawnPoint', 'y']);
+        $destinationIndex = array_search($context['destinationMapId'], $this->workspace->mapIds, true);
+        $destinationMap = is_int($destinationIndex) ? $this->workspace->getMapByIndex($destinationIndex) : null;
 
-        $applyDestination = static function (mixed $destination, mixed $spawnX, mixed $spawnY) use ($sourceMap, $marker, $destinationPath): void {
-            $sourceMap->setEventField($marker, $destinationPath, $destination);
-            $sourceMap->setEventField($marker, ['data', 'spawnPoint', 'x'], $spawnX);
-            $sourceMap->setEventField($marker, ['data', 'spawnPoint', 'y'], $spawnY);
-        };
+        if (! $destinationMap instanceof ProjectMap) {
+            $this->restoreDestinationSelectionContext('Unable to save destination selection.');
+            return;
+        }
 
-        $applyDestination($newDestination, $newSpawnX, $newSpawnY);
-        $this->recordCommand(new GenericCommand(
-            'Destination change',
-            static fn() => $applyDestination($newDestination, $newSpawnX, $newSpawnY),
-            static fn() => $applyDestination($oldDestination, $oldSpawnX, $oldSpawnY),
-        ));
+        try {
+            $command = $this->createMapInspector()->setTransferDestination($sourceMap, $context['marker'], $destinationMap, $this->cursorX, $this->cursorY);
+        } catch (InspectorRefusal $refusal) {
+            $this->restoreDestinationSelectionContext($refusal->getMessage());
+            return;
+        }
+
+        if ($command !== null) {
+            $this->recordCommand($command);
+        }
 
         $this->restoreDestinationSelectionContext(
             sprintf(
@@ -8536,35 +8064,18 @@ final class Editor
         }
 
         $definition = EventTypeCatalog::at($this->selectedEventTypeIndex);
-        $currentDefinition = $selectedMap->getEventDefinition($marker);
-        $currentClassName = is_array($currentDefinition) ? (string) ($currentDefinition['class'] ?? '') : '';
-        $newDefinition = $currentClassName === $definition->className && is_array($currentDefinition)
-            ? array_replace_recursive(
-                [
-                    'class' => $definition->className,
-                    'data' => $definition->defaultData,
-                    ...$definition->defaultDefinitionFields,
-                ],
-                $currentDefinition,
-            )
-            : [
-                'class' => $definition->className,
-                'data' => $definition->defaultData,
-                ...$definition->defaultDefinitionFields,
-            ];
-        $selectedMap->setEventDefinition($marker, $newDefinition);
-        $this->recordCommand(new GenericCommand(
-            'Event type change',
-            static fn() => $selectedMap->setEventDefinition($marker, $newDefinition),
-            static function () use ($selectedMap, $marker, $currentDefinition): void {
-                if (is_array($currentDefinition)) {
-                    $selectedMap->setEventDefinition($marker, $currentDefinition);
-                    return;
-                }
 
-                $selectedMap->removeEventDefinition($marker);
-            },
-        ));
+        try {
+            $command = EventAuthoring::setEventType($selectedMap, $marker, $definition);
+        } catch (EventRefusal $refusal) {
+            $this->closeEventTypeDialog($refusal->getMessage());
+            return;
+        }
+
+        if ($command !== null) {
+            $this->recordCommand($command);
+        }
+
         $this->clampInspectorSelection();
         $this->closeEventTypeDialog(sprintf('%s is now a %s event.', $marker, $definition->label));
     }
@@ -8632,9 +8143,10 @@ final class Editor
                 return;
             }
 
+            // Undo steps may name the deleted map; every other map keeps its unsaved changes.
             $this->history->clear();
             $this->activeStrokeCommand = null;
-            $this->workspace = ProjectWorkspace::fromProject($this->projectRoot);
+            $this->workspace = $this->workspace->withoutMap($deletedMapId);
             $this->selectedAssetIndex = $this->clampSelection(min($currentIndex, max(0, count($this->workspace->mapIds) - 1)));
             $this->cursorX = 0;
             $this->cursorY = 0;
@@ -8654,18 +8166,17 @@ final class Editor
     }
 
     /**
-     * Reloads the workspace and selects the requested map id.
+     * Adds a map just written to disk to the workspace and selects it.
      *
-     * @param string $mapId The map id to select after reload.
+     * @param string $mapId The created or duplicated map's id.
      * @return void
      */
-    private function reloadWorkspaceSelectingMap(string $mapId): void
+    private function addWorkspaceMapSelecting(string $mapId): void
     {
-        // A full rescan replaces every loaded map object, so retained undo
-        // commands would mutate stale instances - drop them.
-        $this->history->clear();
+        // Only the new map is read, so every other map keeps its unsaved
+        // changes and the undo history stays valid.
         $this->activeStrokeCommand = null;
-        $this->workspace = ProjectWorkspace::fromProject($this->projectRoot);
+        $this->workspace = $this->workspace->withLoadedMap($mapId);
         $selectedIndex = array_search($mapId, $this->workspace->mapIds, true);
         $this->selectedAssetIndex = is_int($selectedIndex) ? $selectedIndex : 0;
         $this->cursorX = 0;
@@ -9158,135 +8669,17 @@ final class Editor
             return;
         }
 
-        $control = $this->getInspectorFieldControl($field);
-        $type = $control?->type ?? InputControlType::TEXT;
-        $value = match ($type) {
-            InputControlType::INTEGER => (int) trim($rawValue),
-            InputControlType::FLOAT => (float) trim($rawValue),
-            InputControlType::BOOLEAN => InputControl::parseBoolean($rawValue),
-            default => $rawValue,
-        };
-        $target = (string) ($field['target'] ?? 'map');
-
-        if ($target === 'map') {
-            $fieldName = (string) $field['field'];
-            $oldValue = $selectedMap->getMapField($fieldName);
-            $selectedMap->setMapField($fieldName, $value);
-            $this->recordCommand(new GenericCommand(
-                sprintf('%s edit', $field['label'] ?? 'Field'),
-                static fn() => $selectedMap->setMapField($fieldName, $value),
-                static fn() => $selectedMap->setMapField($fieldName, $oldValue),
-            ));
+        try {
+            $command = $this->createMapInspector()->apply($selectedMap, $field, $rawValue);
+        } catch (InspectorRefusal $refusal) {
+            $this->setStatus($refusal->getMessage(), $refusal->details === [] ? StatusLevel::WARN : StatusLevel::ERROR, $refusal->details);
             return;
         }
 
-        if ($target === 'map-data') {
-            $path = array_values((array) ($field['path'] ?? []));
-
-            if ($path === []) {
-                return;
-            }
-
-            $this->applyMapDataValue($selectedMap, $path, $value === '' ? null : $value, (string) ($field['label'] ?? 'Field'));
-
-            return;
-        }
-
-        if ($target === 'map-encounters') {
-            $this->applyMapEncounterValue($selectedMap, $field, $value);
-
-            return;
-        }
-
-        if ($target === 'map-bgm-variants') {
-            $this->applyMapBgmVariantValue($selectedMap, $field, $value);
-
-            return;
-        }
-
-        if ($target === 'map-size') {
-            $newWidth = (string) ($field['field'] ?? '') === 'width' ? max(1, (int) $value) : $selectedMap->getWidth();
-            $newHeight = (string) ($field['field'] ?? '') === 'height' ? max(1, (int) $value) : $selectedMap->getHeight();
-            $stranded = $selectedMap->describeNpcsStrandedBy($newWidth, $newHeight);
-
-            if ($stranded !== []) {
-                // Refuse rather than clamp, delete, or truncate: the author
-                // moves, resizes or removes the NPC, then shrinks.
-                $this->setStatus(
-                    sprintf('Cannot shrink to %dx%d: %d NPC%s would be stranded (Ctrl+E lists them).', $newWidth, $newHeight, count($stranded), count($stranded) === 1 ? '' : 's'),
-                    StatusLevel::ERROR,
-                    array_map(static fn(string $line): string => '- ' . $line, $stranded),
-                );
-
-                return;
-            }
-
-            $snapshotBefore = $selectedMap->captureGridSnapshot();
-            $selectedMap->resize($newWidth, $newHeight);
-            $snapshotAfter = $selectedMap->captureGridSnapshot();
-            $this->recordCommand(new GenericCommand(
-                'Map resize',
-                static fn() => $selectedMap->restoreGridSnapshot($snapshotAfter),
-                static fn() => $selectedMap->restoreGridSnapshot($snapshotBefore),
-            ));
-            return;
-        }
-
-        if ($target === 'event') {
-            $marker = (string) $field['marker'];
-            $path = (array) ($field['path'] ?? []);
-            $oldValue = $selectedMap->getEventField($marker, $path);
-            $selectedMap->setEventField($marker, $path, $value);
-            $this->recordCommand(new GenericCommand(
-                sprintf('%s edit', $field['label'] ?? 'Event field'),
-                static fn() => $selectedMap->setEventField($marker, $path, $value),
-                static fn() => $selectedMap->setEventField($marker, $path, $oldValue),
-            ));
-            return;
-        }
-
-        if ($target === 'event-bounds') {
-            $marker = (string) $field['marker'];
-            $area = $selectedMap->getEventArea($marker);
-
-            if ($area === null) {
-                return;
-            }
-
-            $bounds = $selectedMap->getEventBounds($marker);
-            $snapshotBefore = $selectedMap->captureGridSnapshot();
-
-            if (! $area->isRectangle) {
-                // A marker painted in any other shape keeps its shape: Position
-                // moves every cell; its cells are reshaped by painting them.
-                $axis = (string) $field['field'];
-
-                if (! in_array($axis, ['x', 'y'], true)) {
-                    $this->setStatus(sprintf('Marker %s is painted in its own shape; paint or erase its cells to reshape it.', $marker), StatusLevel::WARN);
-                    return;
-                }
-
-                $delta = max(0, (int) $value) - $bounds[$axis];
-                $refusal = $selectedMap->moveEventCells($marker, $axis === 'x' ? $delta : 0, $axis === 'y' ? $delta : 0);
-
-                if ($refusal !== null) {
-                    $this->setStatus($refusal, StatusLevel::WARN);
-                    return;
-                }
-            } else {
-                $bounds[(string) $field['field']] = max(0, (int) $value);
-                $selectedMap->setEventBounds($marker, $bounds['x'], $bounds['y'], $bounds['width'], $bounds['height']);
-            }
-
-            $snapshotAfter = $selectedMap->captureGridSnapshot();
-            $this->recordCommand(new GenericCommand(
-                'Event bounds edit',
-                static fn() => $selectedMap->restoreGridSnapshot($snapshotAfter),
-                static fn() => $selectedMap->restoreGridSnapshot($snapshotBefore),
-            ));
+        if ($command !== null) {
+            $this->recordCommand($command);
         }
     }
-
     /**
      * Returns the currently selected database category label.
      *
@@ -9474,18 +8867,13 @@ final class Editor
             return;
         }
 
-        $index = $database->addRecord();
+        $change = $this->applyRecordChange(static fn(RecordAuthoring $authoring): RecordChange => $authoring->createRecord($database));
 
-        if ($index === null) {
-            $this->setStatus(
-                sprintf('%s entries cannot be created from the editor.', ucfirst($database->schema->entryNoun)),
-                StatusLevel::WARN,
-            );
-            $this->renderDatabaseArea();
+        if ($change === null) {
             return;
         }
 
-        $this->setSelectedRecordIndex($index);
+        $this->setSelectedRecordIndex((int) $change->index);
         $this->databaseSelectedSettingIndex = 0;
         $this->databaseFocus = self::DATABASE_FOCUS_SETTINGS;
         $this->setStatus(sprintf('Created a new %s.', $database->schema->entryNoun), StatusLevel::INFO);
@@ -9517,28 +8905,13 @@ final class Editor
         }
 
         $index = $this->getSelectedRecordIndex();
-        $copyIndex = $database->duplicateRecord($index);
+        $change = $this->applyRecordChange(static fn(RecordAuthoring $authoring): RecordChange => $authoring->duplicateRecord($database, $index));
 
-        if ($copyIndex === null) {
-            $this->setStatus(
-                sprintf('This %s cannot be duplicated.', $database->schema->entryNoun),
-                StatusLevel::WARN,
-            );
-            $this->renderDatabaseArea();
+        if ($change === null) {
             return;
         }
 
-        $copy = $database->getRecordByIndex($copyIndex);
-
-        if ($copy instanceof ProjectRecord) {
-            $this->recordCommand(new GenericCommand(
-                sprintf('%s duplicate', ucfirst($database->schema->entryNoun)),
-                static fn() => $database->insertRecord($copyIndex, $copy),
-                static fn() => $database->removeRecord($copyIndex),
-            ));
-        }
-
-        $this->setSelectedRecordIndex($copyIndex);
+        $this->setSelectedRecordIndex((int) $change->index);
         $this->setStatus(sprintf('Duplicated the %s.', $database->schema->entryNoun), StatusLevel::INFO);
         $this->renderDatabaseArea();
     }
@@ -9566,28 +8939,15 @@ final class Editor
             return;
         }
 
-        if (! $database->supportsDurableReorder()) {
-            // Refusing beats a reorder the file cannot keep: nothing moves,
-            // nothing dirties, and the author learns why.
-            $this->setStatus((string) $database->reorderRefusalReason(), StatusLevel::WARN);
-            $this->renderDatabaseArea();
-            return;
-        }
-
+        // A category whose file would not keep the order refuses, and says why.
         $from = $this->getSelectedRecordIndex();
-        $to = $from + $step;
+        $change = $this->applyRecordChange(static fn(RecordAuthoring $authoring): RecordChange => $authoring->moveRecord($database, $from, $step));
 
-        if (! $database->moveRecord($from, $to)) {
+        if ($change?->command === null) {
             return;
         }
 
-        $this->recordCommand(new GenericCommand(
-            sprintf('%s move', ucfirst($database->schema->entryNoun)),
-            static fn() => $database->moveRecord($from, $to),
-            static fn() => $database->moveRecord($to, $from),
-        ));
-
-        $this->setSelectedRecordIndex($to);
+        $this->setSelectedRecordIndex((int) $change->index);
         $this->setStatus(sprintf(
             'Moved the %s %s.',
             $database->schema->entryNoun,
@@ -9615,23 +8975,20 @@ final class Editor
         $recordIndex = $this->getSelectedRecordIndex();
         $framePath = $this->databaseCommandFramePath;
         $selectedId = (string) ($this->getDatabaseSettingsFields()[$this->databaseSelectedSettingIndex]['field'] ?? '');
-        $prefix = preg_quote($subList->prefix, '/');
+        // The frame's own list names its rows and the commands added to it.
+        $list = $database->getFrameSubList($framePath) ?? $subList;
+        $item = $database->locateItem($recordIndex, $framePath, $selectedId);
 
-        if (preg_match('/^' . $prefix . '(\\d+)Option(\\d+)/', $selectedId, $matches) === 1) {
-            $commandIndex = intval($matches[1]);
-            $optionIndex = $database->addChoiceOption($recordIndex, $framePath, $commandIndex);
+        if ($item?->kind === RecordItem::OPTION) {
+            $commandIndex = $item->entryIndex;
+            $change = $this->applyRecordChange(static fn(RecordAuthoring $authoring): RecordChange => $authoring->addOption($database, $recordIndex, $framePath, $commandIndex));
 
-            if ($optionIndex === null) {
+            if ($change?->command === null) {
                 return;
             }
 
-            $option = ['text' => 'New option', 'then' => []];
-            $this->recordCommand(new GenericCommand(
-                'Option add',
-                static fn() => $database->insertChoiceOption($recordIndex, $framePath, $commandIndex, $optionIndex, $option),
-                static fn() => $database->removeChoiceOption($recordIndex, $framePath, $commandIndex, $optionIndex),
-            ));
-            $this->selectDatabaseFieldById(sprintf('%s%dOption%dText', $subList->prefix, $commandIndex, $optionIndex));
+            $optionIndex = (int) $change->index;
+            $this->selectDatabaseFieldById(sprintf('%s%dOption%dText', $list->prefix, $commandIndex, $optionIndex));
             $this->setStatus(sprintf('Added option %d.', $optionIndex + 1), StatusLevel::INFO);
             $this->renderDatabaseArea();
             $this->beginDatabaseEdit();
@@ -9639,21 +8996,16 @@ final class Editor
             return;
         }
 
-        $afterIndex = preg_match('/^' . $prefix . '(\\d+)/', $selectedId, $matches) === 1 ? intval($matches[1]) : null;
-        $commandIndex = $database->addFrameCommand($recordIndex, $framePath, $afterIndex);
+        $afterIndex = $item?->entryIndex;
+        $change = $this->applyRecordChange(static fn(RecordAuthoring $authoring): RecordChange => $authoring->addEntry($database, $recordIndex, $framePath, $afterIndex));
 
-        if ($commandIndex === null) {
+        if ($change?->command === null) {
             return;
         }
 
-        $blank = $subList->blank;
-        $this->recordCommand(new GenericCommand(
-            sprintf('%s add', ucfirst($subList->singular)),
-            static fn() => $database->insertFrameCommand($recordIndex, $framePath, $commandIndex, $blank),
-            static fn() => $database->removeFrameCommand($recordIndex, $framePath, $commandIndex),
-        ));
-        $this->selectDatabaseFieldById(sprintf('%s%dType', $subList->prefix, $commandIndex));
-        $this->setStatus(sprintf('Added %s %d.', $subList->singular, $commandIndex + 1), StatusLevel::INFO);
+        $commandIndex = (int) $change->index;
+        $this->selectDatabaseFieldById(sprintf('%s%dType', $list->prefix, $commandIndex));
+        $this->setStatus(sprintf('Added %s %d.', $list->singular, $commandIndex + 1), StatusLevel::INFO);
         $this->renderDatabaseArea();
     }
 
@@ -9670,24 +9022,19 @@ final class Editor
         $recordIndex = $this->getSelectedRecordIndex();
         $framePath = $this->databaseCommandFramePath;
         $selectedId = (string) ($this->getDatabaseSettingsFields()[$this->databaseSelectedSettingIndex]['field'] ?? '');
-        $prefix = preg_quote($subList->prefix, '/');
+        $list = $database->getFrameSubList($framePath) ?? $subList;
+        $item = $database->locateItem($recordIndex, $framePath, $selectedId);
 
-        if (preg_match('/^' . $prefix . '(\\d+)Option(\\d+)/', $selectedId, $matches) === 1) {
-            $commandIndex = intval($matches[1]);
-            $optionIndex = intval($matches[2]);
-            $removed = $database->removeChoiceOption($recordIndex, $framePath, $commandIndex, $optionIndex);
+        if ($item?->kind === RecordItem::OPTION) {
+            $optionIndex = (int) $item->childIndex;
+            $change = $this->applyRecordChange(static fn(RecordAuthoring $authoring): RecordChange => $authoring->removeOption($database, $recordIndex, $framePath, $item->entryIndex, $optionIndex));
 
-            if ($removed === null) {
+            if ($change?->command === null) {
                 return;
             }
 
-            $armCount = count((array) ($removed['then'] ?? []));
+            $armCount = count((array) ($change->removed['then'] ?? []));
             $this->clampDatabaseSettingSelection();
-            $this->recordCommand(new GenericCommand(
-                'Option remove',
-                static fn() => $database->removeChoiceOption($recordIndex, $framePath, $commandIndex, $optionIndex),
-                static fn() => $database->insertChoiceOption($recordIndex, $framePath, $commandIndex, $optionIndex, $removed),
-            ));
             $this->setStatus(
                 $armCount > 0
                     ? sprintf('Removed option %d and its %d commands.', $optionIndex + 1, $armCount)
@@ -9699,23 +9046,21 @@ final class Editor
             return;
         }
 
-        $commands = $database->getFrameCommands($recordIndex, $framePath) ?? [];
-        $commandIndex = preg_match('/^' . $prefix . '(\\d+)/', $selectedId, $matches) === 1
-            ? intval($matches[1])
-            : count($commands) - 1;
-        $removed = $database->removeFrameCommand($recordIndex, $framePath, $commandIndex);
+        // With the cursor on no command, the last one goes.
+        $commandIndex = $item?->entryIndex ?? count($database->getFrameCommands($recordIndex, $framePath) ?? []) - 1;
 
-        if ($removed === null) {
+        if ($commandIndex < 0) {
+            return;
+        }
+
+        $change = $this->applyRecordChange(static fn(RecordAuthoring $authoring): RecordChange => $authoring->removeEntry($database, $recordIndex, $framePath, $commandIndex));
+
+        if ($change?->command === null) {
             return;
         }
 
         $this->clampDatabaseSettingSelection();
-        $this->recordCommand(new GenericCommand(
-            sprintf('%s remove', ucfirst($subList->singular)),
-            static fn() => $database->removeFrameCommand($recordIndex, $framePath, $commandIndex),
-            static fn() => $database->insertFrameCommand($recordIndex, $framePath, $commandIndex, $removed),
-        ));
-        $this->setStatus(sprintf('Removed %s %d.', $subList->singular, $commandIndex + 1), StatusLevel::INFO);
+        $this->setStatus(sprintf('Removed %s %d.', $list->singular, $commandIndex + 1), StatusLevel::INFO);
         $this->renderDatabaseArea();
     }
 
@@ -9863,20 +9208,13 @@ final class Editor
         }
 
         $recordIndex = $this->getSelectedRecordIndex();
-        $entryIndex = $database->addSubItem($recordIndex);
+        $change = $this->applyRecordChange(static fn(RecordAuthoring $authoring): RecordChange => $authoring->addEntry($database, $recordIndex, []));
 
-        if ($entryIndex === null) {
+        if ($change?->command === null) {
             return;
         }
 
-        $entry = $database->getRecordByIndex($recordIndex)?->getSubList($subList->key)[$entryIndex] ?? [];
-
-        $this->recordCommand(new GenericCommand(
-            sprintf('%s add', ucfirst($subList->singular)),
-            static fn() => $database->insertSubItem($recordIndex, $entryIndex, $entry),
-            static fn() => $database->removeSubItem($recordIndex, $entryIndex),
-        ));
-
+        $entryIndex = (int) $change->index;
         $this->setStatus(sprintf('Added %s %d.', $subList->singular, $entryIndex + 1), StatusLevel::INFO);
         $this->renderDatabaseArea();
         if ($database->schema->key === 'skits') {
@@ -9930,17 +9268,11 @@ final class Editor
             return;
         }
 
-        $removed = $database->removeSubItem($recordIndex, $entryIndex);
+        $change = $this->applyRecordChange(static fn(RecordAuthoring $authoring): RecordChange => $authoring->removeEntry($database, $recordIndex, [], $entryIndex));
 
-        if ($removed === null) {
+        if ($change?->command === null) {
             return;
         }
-
-        $this->recordCommand(new GenericCommand(
-            sprintf('%s remove', ucfirst($subList->singular)),
-            static fn() => $database->removeSubItem($recordIndex, $entryIndex),
-            static fn() => $database->insertSubItem($recordIndex, $entryIndex, $removed),
-        ));
 
         $this->databaseSelectedSettingIndex = 0;
         $this->setStatus(sprintf('Removed %s %d.', $subList->singular, $entryIndex + 1), StatusLevel::INFO);
@@ -9980,19 +9312,13 @@ final class Editor
         $recordIndex = $this->getSelectedRecordIndex();
         $framePath = $this->databaseCommandFramePath;
         $parentIndex = $context['parentIndex'];
-        $nestedIndex = $database->addFrameNestedItem($recordIndex, $framePath, $parentIndex);
+        $change = $this->applyRecordChange(static fn(RecordAuthoring $authoring): RecordChange => $authoring->addNestedItem($database, $recordIndex, $framePath, $parentIndex));
 
-        if ($nestedIndex === null) {
+        if ($change?->command === null) {
             return;
         }
 
-        $entry = $context['list']->blank;
-
-        $this->recordCommand(new GenericCommand(
-            sprintf('%s add', ucfirst($context['list']->singular)),
-            static fn() => $database->addFrameNestedItem($recordIndex, $framePath, $parentIndex, $entry, $nestedIndex),
-            static fn() => $database->removeFrameNestedItem($recordIndex, $framePath, $parentIndex, $nestedIndex),
-        ));
+        $nestedIndex = (int) $change->index;
         $this->setStatus(
             sprintf('Added %s %d.', $context['list']->singular, $nestedIndex + 1),
             StatusLevel::INFO,
@@ -10021,17 +9347,12 @@ final class Editor
             return;
         }
 
-        $removed = $database->removeFrameNestedItem($recordIndex, $framePath, $parentIndex, $nestedIndex);
+        $change = $this->applyRecordChange(static fn(RecordAuthoring $authoring): RecordChange => $authoring->removeNestedItem($database, $recordIndex, $framePath, $parentIndex, $nestedIndex));
 
-        if ($removed === null) {
+        if ($change?->command === null) {
             return;
         }
 
-        $this->recordCommand(new GenericCommand(
-            sprintf('%s remove', ucfirst($context['list']->singular)),
-            static fn() => $database->removeFrameNestedItem($recordIndex, $framePath, $parentIndex, $nestedIndex),
-            static fn() => $database->addFrameNestedItem($recordIndex, $framePath, $parentIndex, $removed, $nestedIndex),
-        ));
         $this->databaseSelectedSettingIndex = min(
             $this->databaseSelectedSettingIndex,
             max(0, count($this->getDatabaseSettingsFields()) - 1),
@@ -10041,6 +9362,31 @@ final class Editor
             StatusLevel::INFO,
         );
         $this->renderDatabaseArea();
+    }
+
+    /**
+     * Makes one record change through the shared record rules and records
+     * it, reporting a refusal on the status line instead.
+     *
+     * @param Closure(RecordAuthoring): RecordChange $change The change.
+     * @return RecordChange|null What it did, or null when it was refused.
+     */
+    private function applyRecordChange(Closure $change): ?RecordChange
+    {
+        try {
+            $applied = $change(new RecordAuthoring());
+        } catch (RecordRefusal $refusal) {
+            $this->setStatus($refusal->getMessage(), StatusLevel::WARN);
+            $this->renderDatabaseArea();
+
+            return null;
+        }
+
+        if ($applied->command !== null) {
+            $this->recordCommand($applied->command);
+        }
+
+        return $applied;
     }
 
     /**
@@ -10482,23 +9828,23 @@ final class Editor
 
         try {
             if ($this->isActorsDatabaseSelected()) {
-                $this->backupBeforeSave(...$this->getDatabaseBackupPaths($this->workspace->actorDatabase));
+                $this->backupBeforeSave(...$this->workspace->actorDatabase->getBackupPaths());
                 $this->workspace->actorDatabase->save();
                 $this->setStatus('Actor database saved.', StatusLevel::SUCCESS);
             } elseif ($this->isClassesDatabaseSelected()) {
-                $this->backupBeforeSave(...$this->getDatabaseBackupPaths($this->workspace->classDatabase));
+                $this->backupBeforeSave(...$this->workspace->classDatabase->getBackupPaths());
                 $this->workspace->classDatabase->save();
                 $this->setStatus('Class database saved.', StatusLevel::SUCCESS);
             } elseif ($this->isSkillsDatabaseSelected()) {
-                $this->backupBeforeSave(...$this->getDatabaseBackupPaths($this->workspace->skillDatabase));
+                $this->backupBeforeSave(...$this->workspace->skillDatabase->getBackupPaths());
                 $this->workspace->skillDatabase->save();
                 $this->setStatus('Skill database saved.', StatusLevel::SUCCESS);
             } elseif ($this->isQuestsDatabaseSelected()) {
-                $this->backupBeforeSave(...$this->getDatabaseBackupPaths($this->workspace->questDatabase));
+                $this->backupBeforeSave(...$this->workspace->questDatabase->getBackupPaths());
                 $this->workspace->questDatabase->save();
                 $this->setStatus('Quest database saved.', StatusLevel::SUCCESS);
             } elseif ($this->isAnimationsDatabaseSelected()) {
-                $this->backupBeforeSave(...$this->getDatabaseBackupPaths($this->workspace->animationDatabase));
+                $this->backupBeforeSave(...$this->workspace->animationDatabase->getBackupPaths());
                 $this->workspace->animationDatabase->save();
                 $this->setStatus('Animation database saved.', StatusLevel::SUCCESS);
             } elseif ($this->isSystemDatabaseSelected()) {
@@ -10506,14 +9852,14 @@ final class Editor
                     $this->backupBeforeSave($this->workspace->config->path);
                     $this->workspace->config->save();
                 }
-                $this->backupBeforeSave(...$this->getDatabaseBackupPaths($this->workspace->systemDatabase));
+                $this->backupBeforeSave(...$this->workspace->systemDatabase->getBackupPaths());
                 $this->workspace->systemDatabase->save();
                 $this->setStatus('System database saved.', StatusLevel::SUCCESS);
             } elseif (($recordDatabase = $this->getSelectedRecordDatabase()) instanceof ProjectRecordDatabase) {
                 if (! $recordDatabase->isEditable()) {
                     $this->setStatus($this->describeRecordReadOnly($recordDatabase), StatusLevel::WARN);
                 } else {
-                    $this->backupBeforeSave(...$this->getDatabaseBackupPaths($recordDatabase));
+                    $this->backupBeforeSave(...$recordDatabase->getBackupPaths());
                     $recordDatabase->save();
                     $this->setStatus(
                         sprintf('%s database saved.', $this->getSelectedDatabaseCategoryDefinition()->label),
@@ -10881,48 +10227,6 @@ final class Editor
         }
 
         return [...$rows, ...$this->actorOptimizeFields($actor)];
-    }
-
-    /**
-     * Reports a field value the editor will not guess at, leaving the record
-     * untouched.
-     *
-     * A project-owned parameter line has an explicit grammar, and repairing
-     * a malformed one silently is how an author loses a value without being
-     * told. The status line says what is wrong with it instead.
-     *
-     * @param string $field The field being edited.
-     * @param string $rawValue The value typed.
-     * @return bool True when the value was rejected.
-     */
-    private function isDatabaseFieldRejected(string $field, string $rawValue): bool
-    {
-        if (! $this->workspace instanceof ProjectWorkspace) {
-            return false;
-        }
-
-        $database = $this->getSelectedRecordDatabase();
-        $schema = $database?->schema;
-
-        if ($schema === null) {
-            return false;
-        }
-
-        foreach ($schema->fields as $declared) {
-            if ($declared->key !== $field || $declared->codec !== RecordFieldCodec::KEY_VALUES) {
-                continue;
-            }
-
-            try {
-                ParameterMapCodec::decode($rawValue);
-            } catch (ParameterMapSyntaxError $error) {
-                $this->setStatus($error->getMessage(), StatusLevel::ERROR);
-
-                return true;
-            }
-        }
-
-        return false;
     }
 
     /**
@@ -12920,6 +12224,21 @@ final class Editor
         }
 
         $fieldId = (string) ($field['field'] ?? '');
+        $recordDatabase = $this->getSelectedRecordDatabase();
+
+        if ($recordDatabase instanceof ProjectRecordDatabase) {
+            // The shared record rules apply the edit and say how to undo it:
+            // the record's whole payload, pinned to the record itself, so an
+            // undo after the selection moved still edits the right one.
+            $change = $this->applyRecordFieldValue($recordDatabase, $fieldId, $rawValue, (string) ($field['label'] ?? 'Database field'));
+
+            if ($change?->command !== null) {
+                $this->recordCommand($change->command);
+            }
+
+            return;
+        }
+
         $control = $this->getDatabaseFieldControl($field);
         // Option values keep their authored case (the actor class picker
         // writes `Vanguard`); matching them is case-insensitive instead.
@@ -12940,10 +12259,9 @@ final class Editor
             'records' => $this->databaseSelectedRecordIndexes,
         ];
 
-        $record = $this->getSelectedRecordDatabase()?->getRecordByIndex($this->getSelectedRecordIndex());
-        if ($this->isSystemDatabaseSelected() && $fieldId === ProjectConfig::FIELD_ZOOM) {
-            $record = $this->workspace?->config?->getRecord(ProjectConfig::FIELD_ZOOM);
-        }
+        $record = $this->isSystemDatabaseSelected() && $fieldId === ProjectConfig::FIELD_ZOOM
+            ? $this->workspace?->config?->getRecord(ProjectConfig::FIELD_ZOOM)
+            : null;
         $before = $record?->toArray();
         $actor = $this->isActorsDatabaseSelected() ? $this->getSelectedActor() : null;
         $actorBefore = $actor?->getData();
@@ -12991,6 +12309,37 @@ final class Editor
             fn() => $this->applyDatabaseFieldValueAt($identity, $fieldId, $rawValue),
             fn() => $this->applyDatabaseFieldValueAt($identity, $fieldId, $oldRawValue),
         ));
+    }
+
+    /**
+     * Applies one row of a schema-driven record through the shared record
+     * rules ({@see RecordAuthoring::applyField()}), at the selected record
+     * and open frame. A value the field cannot take - a parameter line it
+     * cannot read, a coordinate pair that is not two numbers - is reported
+     * on the status line, and the record is left as it was.
+     *
+     * @param ProjectRecordDatabase $database The category.
+     * @param string $fieldId The row's field id.
+     * @param string $rawValue The raw edited value.
+     * @param string $label The row's label, which names the undo step.
+     * @return RecordChange|null What it did, or null when it was refused.
+     */
+    private function applyRecordFieldValue(ProjectRecordDatabase $database, string $fieldId, string $rawValue, string $label): ?RecordChange
+    {
+        try {
+            return (new RecordAuthoring())->applyField(
+                $database,
+                $this->getSelectedRecordIndex(),
+                $this->databaseCommandFramePath,
+                $fieldId,
+                $rawValue,
+                $label,
+            );
+        } catch (RecordRefusal $refusal) {
+            $this->setStatus($refusal->getMessage(), StatusLevel::ERROR);
+
+            return null;
+        }
     }
 
     /**
@@ -13102,10 +12451,6 @@ final class Editor
             return;
         }
 
-        if ($this->isDatabaseFieldRejected($field, $rawValue)) {
-            return;
-        }
-
         if ($this->isActorsDatabaseSelected()) {
             $this->workspace->actorDatabase->setField(
                 $this->databaseSelectedActorIndex,
@@ -13164,19 +12509,8 @@ final class Editor
 
         if ($recordDatabase instanceof ProjectRecordDatabase) {
             // The schema owns coercion, so no per-category intval/trim rules
-            // are needed here.
-            if ($recordDatabase->hasCommandFrames()) {
-                $recordDatabase->setFrameField(
-                    $this->getSelectedRecordIndex(),
-                    $this->databaseCommandFramePath,
-                    $field,
-                    $rawValue,
-                );
-
-                return;
-            }
-
-            $recordDatabase->setField($this->getSelectedRecordIndex(), $field, $rawValue);
+            // are needed here. This path keeps no undo step.
+            $this->applyRecordFieldValue($recordDatabase, $field, $rawValue, $field);
             return;
         }
 
@@ -13535,222 +12869,24 @@ final class Editor
     }
 
     /**
-     * Builds the map's runtime metadata rows: the music it plays and the
-     * random encounters it offers.
-     *
-     * Both are read from what the map actually holds. An absent rate or tile
-     * mode is shown as the engine's default in parentheses and is not
-     * written until an author sets one, so opening a map never puts a
-     * default into a file.
-     *
-     * @return array<int, array<string, mixed>>
-     */
-    private function mapRuntimeFields(ProjectMap $map): array
-    {
-        $bgm = $map->getMapDataField(['bgm']);
-        $bgm = is_string($bgm) ? $bgm : '';
-        $known = $this->referenceCatalog()->valuesFor('bgm');
-        $missing = $bgm !== '' && ! in_array($bgm, $known, true);
-        $fields = [
-            [
-                'label' => 'Audio',
-                'value' => '',
-                'editable' => false,
-            ],
-            [
-                // A track is chosen from what the project has, never spelled.
-                // A track the project no longer has stays visible and says
-                // so, rather than being quietly swapped for a valid one.
-                'label' => '  Background Music',
-                'value' => match (true) {
-                    $bgm === '' => self::MAP_BGM_NONE,
-                    $missing => $bgm . ' · not in assets/Audio/BGM',
-                    default => $bgm,
-                },
-                'reference' => 'bgm',
-                'target' => 'map-data',
-                'path' => ['bgm'],
-                'field' => 'bgm',
-            ],
-        ];
-
-        $fields = [...$fields, ...$this->mapBgmVariantFields($map, $known)];
-
-        $encounters = MapEncounters::fromMap($map);
-        $fields[] = [
-            'label' => 'Encounters',
-            'value' => $encounters->summary(),
-            'editable' => false,
-        ];
-
-        if (! $encounters->isSupported()) {
-            $fields[] = [
-                'label' => '  ! Read-only',
-                'value' => (string) $encounters->unsupportedReason(),
-                'editable' => false,
-            ];
-
-            return $fields;
-        }
-
-        $rows = $encounters->rows();
-        $fields[] = [
-            // The Inspector's own list heading, so Shift+O and Del mean here
-            // what they mean on every other list in the pane.
-            'label' => sprintf('  Troops · %d', count($rows)),
-            'value' => '',
-            'editable' => false,
-            'target' => 'map-encounters',
-            'encounterList' => ['index' => max(0, count($rows) - 1)],
-        ];
-
-        foreach ($rows as $index => $row) {
-            $weight = $row['weight'];
-            $fields[] = [
-                'label' => '    Troop',
-                'value' => $row['name'],
-                'reference' => 'troops',
-                'target' => 'map-encounters',
-                'field' => 'troop',
-                'index' => $index,
-                'encounterList' => ['index' => $index],
-            ];
-            $usable = is_numeric($weight) && (int) $weight >= 1;
-            $fields[] = [
-                'label' => '    Weight',
-                'value' => (is_scalar($weight) ? (string) $weight : '') . ($usable ? '' : ' · the engine drops a troop it cannot weigh'),
-                'control' => new InputControl(InputControlType::INTEGER, $usable ? (string) (int) $weight : '1'),
-                'target' => 'map-encounters',
-                'field' => 'weight',
-                'index' => $index,
-                'encounterList' => ['index' => $index],
-            ];
-        }
-
-        if ($rows === []) {
-            return $fields;
-        }
-
-        $rate = $encounters->authoredRate();
-        $fields[] = [
-            'label' => '  Rate',
-            'value' => $rate === null ? sprintf('(engine default: %d)', MapEncounters::DEFAULT_RATE) : (string) $rate,
-            'control' => new InputControl(InputControlType::INTEGER, (string) ($rate ?? MapEncounters::DEFAULT_RATE)),
-            'target' => 'map-encounters',
-            'field' => 'rate',
-        ];
-        $tiles = $encounters->authoredTiles();
-        $fields[] = [
-            'label' => '  Tiles',
-            'value' => $tiles === null ? sprintf('(engine default: %s)', MapEncounters::DEFAULT_TILES) : $tiles,
-            'options' => MapEncounters::TILE_MODES,
-            'target' => 'map-encounters',
-            'field' => 'tiles',
-        ];
-
-        return $fields;
-    }
-
-    /**
-     * Builds the ordered Music Variants rows: the map's conditional music,
-     * evaluated by the engine in declaration order, first match wins.
-     *
-     * @param string[] $known The project's BGM tracks.
-     * @return array<int, array<string, mixed>>
-     */
-    private function mapBgmVariantFields(ProjectMap $map, array $known): array
-    {
-        $variants = MapBgmVariants::fromMap($map);
-        $fields = [
-            [
-                'label' => '  Music Variants',
-                'value' => $variants->summary(),
-                'editable' => false,
-                'target' => 'map-bgm-variants',
-                'bgmVariantList' => ['index' => max(0, $variants->count() - 1)],
-            ],
-        ];
-
-        if (! $variants->isSupported()) {
-            $fields[] = [
-                'label' => '  ! Read-only',
-                'value' => (string) $variants->unsupportedReason(),
-                'editable' => false,
-            ];
-
-            return $fields;
-        }
-
-        foreach ($variants->rows() as $index => $row) {
-            $track = $variants->trackAt($index);
-            $raw = $variants->rawTrackAt($index);
-            $fields[] = [
-                'label' => sprintf('    Variant %d Track', $index + 1),
-                'value' => match (true) {
-                    $track === null && $raw !== null => var_export($raw, true) . ' · not a track name',
-                    $track === null || $track === '' => '(no track yet)',
-                    ! in_array($track, $known, true) => $track . ' · not in assets/Audio/BGM',
-                    default => $track,
-                },
-                'reference' => 'bgm',
-                'target' => 'map-bgm-variants',
-                'field' => 'track',
-                'index' => $index,
-                'bgmVariantList' => ['index' => $index],
-            ];
-
-            $issue = $variants->conditionsIssueAt($index);
-            $conditions = $variants->conditionsAt($index);
-            $fields[] = [
-                'label' => sprintf('    Variant %d When', $index + 1),
-                'value' => $issue !== null
-                    ? '! ' . $issue
-                    : ($conditions === [] ? '(always · shadows later variants)' : ConditionCodec::encodeAll($conditions)),
-                'target' => 'map-bgm-variants',
-                'field' => 'conditions',
-                'index' => $index,
-                'bgmVariantList' => ['index' => $index],
-                'editable' => $issue === null,
-                'mapConditions' => $issue === null,
-            ];
-        }
-
-        return $fields;
-    }
-
-    /**
-     * Writes one variant field through the variants model, which owns the
-     * list's shape and preserves every key it does not edit.
+     * Writes one music variant row as one undo step (see
+     * {@see MapInspector::applyMapBgmVariantValue()}).
      *
      * @param array<string, mixed> $field The inspector field descriptor.
      */
     private function applyMapBgmVariantValue(ProjectMap $map, array $field, mixed $value): void
     {
-        $variants = MapBgmVariants::fromMap($map);
-
-        if (! $variants->isSupported()) {
-            $this->setStatus(
-                sprintf('Music variants are read-only here: %s.', $variants->unsupportedReason()),
-                StatusLevel::WARN,
-            );
-
+        try {
+            $command = $this->createMapInspector()->applyMapBgmVariantValue($map, $field, $value);
+        } catch (InspectorRefusal $refusal) {
+            $this->setStatus($refusal->getMessage(), StatusLevel::WARN);
             return;
         }
 
-        $index = (int) ($field['index'] ?? 0);
-        $block = match ((string) ($field['field'] ?? '')) {
-            'track' => $variants->withTrackAt($index, (string) $value),
-            'conditions' => is_array($value) ? $variants->withConditionsAt($index, $value) : null,
-            default => null,
-        };
-
-        if ($block === null) {
-            return;
+        if ($command !== null) {
+            $this->recordCommand($command);
         }
-
-        $this->applyMapDataValue($map, [MapBgmVariants::KEY], $block, sprintf('Music variant %d', $index + 1));
     }
-
     /**
      * Returns the variant row the inspector cursor is inside, or null.
      *
@@ -13773,75 +12909,6 @@ final class Editor
             'variants' => MapBgmVariants::fromMap($selectedMap),
             'index' => (int) ($field['bgmVariantList']['index'] ?? 0),
         ];
-    }
-
-    /**
-     * Appends a visibly incomplete music variant, when the cursor is on the
-     * variants list.
-     *
-     * @return bool True when the key meant this list.
-     */
-    private function addMapBgmVariant(): bool
-    {
-        $context = $this->selectedMapBgmVariantRow();
-
-        if ($context === null) {
-            return false;
-        }
-
-        $variants = $context['variants'];
-
-        if (! $variants->isSupported()) {
-            $this->setStatus(sprintf('Music variants are read-only here: %s.', $variants->unsupportedReason()), StatusLevel::WARN);
-            $this->renderInspectorArea();
-
-            return true;
-        }
-
-        $this->applyMapDataValue($context['map'], [MapBgmVariants::KEY], $variants->withVariantAdded(), 'Music variant add');
-        $this->setStatus(sprintf('Added variant %d. Pick its track; it stays inactive until one is chosen.', $variants->count() + 1), StatusLevel::INFO);
-        $this->clampInspectorSelection();
-        $this->renderSelectionDependentArea();
-
-        return true;
-    }
-
-    /**
-     * Removes the music variant the cursor is inside; removing the last one
-     * takes the bgmVariants key with it.
-     *
-     * @return bool True when the key meant this list.
-     */
-    private function removeMapBgmVariant(): bool
-    {
-        $context = $this->selectedMapBgmVariantRow();
-
-        if ($context === null) {
-            return false;
-        }
-
-        $variants = $context['variants'];
-
-        if (! $variants->isSupported()) {
-            $this->setStatus(sprintf('Music variants are read-only here: %s.', $variants->unsupportedReason()), StatusLevel::WARN);
-            $this->renderInspectorArea();
-
-            return true;
-        }
-
-        if ($variants->count() === 0) {
-            $this->setStatus('There is no music variant here to remove.', StatusLevel::WARN);
-            $this->renderInspectorArea();
-
-            return true;
-        }
-
-        $this->applyMapDataValue($context['map'], [MapBgmVariants::KEY], $variants->withVariantRemovedAt($context['index']), 'Music variant remove');
-        $this->setStatus(sprintf('Removed variant %d.', $context['index'] + 1), StatusLevel::INFO);
-        $this->clampInspectorSelection();
-        $this->renderSelectionDependentArea();
-
-        return true;
     }
 
     /**
@@ -13942,59 +13009,9 @@ final class Editor
             return $this->getDatabaseSettingsFields();
         }
 
+        $inspector = $this->createMapInspector();
         $fields = [
-            [
-                'label' => 'Name',
-                'value' => $selectedMap->getDisplayName(),
-                'control' => new InputControl(InputControlType::TEXT, $selectedMap->getDisplayName()),
-                'target' => 'map',
-                'field' => 'name',
-            ],
-            [
-                'label' => 'Region',
-                'value' => $selectedMap->getRegion(),
-                'control' => new InputControl(InputControlType::TEXT, $selectedMap->getRegion()),
-                'target' => 'map',
-                'field' => 'region',
-            ],
-            $this->buildMapKindField($selectedMap),
-            [
-                'label' => 'Description',
-                'value' => $selectedMap->getDescription(),
-                'control' => new InputControl(InputControlType::TEXT, $selectedMap->getDescription()),
-                'target' => 'map',
-                'field' => 'description',
-            ],
-            [
-                'label' => 'Size',
-                'value' => '',
-                'editable' => false,
-            ],
-            [
-                'label' => '  X',
-                'value' => (string) $selectedMap->getWidth(),
-                'control' => new InputControl(InputControlType::INTEGER, (string) $selectedMap->getWidth()),
-                'target' => 'map-size',
-                'field' => 'width',
-            ],
-            [
-                'label' => '  Y',
-                'value' => (string) $selectedMap->getHeight(),
-                'control' => new InputControl(InputControlType::INTEGER, (string) $selectedMap->getHeight()),
-                'target' => 'map-size',
-                'field' => 'height',
-            ],
-            [
-                'label' => 'Events',
-                'value' => (string) $selectedMap->getEventDefinitionCount(),
-                'editable' => false,
-            ],
-            [
-                'label' => 'Triggers',
-                'value' => (string) $selectedMap->getTriggerCount(),
-                'editable' => false,
-            ],
-            ...$this->mapRuntimeFields($selectedMap),
+            ...$inspector->getMapFields($selectedMap),
             ...$this->getLayerInspectorFields(),
         ];
 
@@ -14013,333 +13030,14 @@ final class Editor
             return $fields;
         }
 
-        $definition = $selectedMap->getEventDefinition($marker);
-        $bounds = $selectedMap->getEventBounds($marker);
-        $area = $selectedMap->getEventArea($marker);
-
-        $fields[] = [
-            'label' => 'Event',
-            'value' => $marker,
-            'editable' => false,
-        ];
-
-        $fields[] = [
-            'label' => 'Type',
-            'value' => $this->resolveEventTypeLabel(
-                is_array($definition) && is_string($definition['class'] ?? null)
-                    ? $definition['class']
-                    : null,
-            ),
-            'editable' => true,
-            'target' => 'event-type',
-            'marker' => $marker,
-        ];
-
-        if ($bounds !== null) {
-            $fields[] = [
-                'label' => 'Position',
-                'value' => '',
-                'editable' => false,
-            ];
-            $fields[] = [
-                'label' => '  X',
-                'value' => (string) $bounds['x'],
-                'control' => new InputControl(InputControlType::INTEGER, (string) $bounds['x']),
-                'target' => 'event-bounds',
-                'marker' => $marker,
-                'field' => 'x',
-            ];
-            $fields[] = [
-                'label' => '  Y',
-                'value' => (string) $bounds['y'],
-                'control' => new InputControl(InputControlType::INTEGER, (string) $bounds['y']),
-                'target' => 'event-bounds',
-                'marker' => $marker,
-                'field' => 'y',
-            ];
-            if ($area?->isRectangle ?? true) {
-                $fields[] = [
-                    'label' => 'Size',
-                    'value' => '',
-                    'editable' => false,
-                ];
-                $fields[] = [
-                    'label' => '  X',
-                    'value' => (string) $bounds['width'],
-                    'control' => new InputControl(InputControlType::INTEGER, (string) $bounds['width']),
-                    'target' => 'event-bounds',
-                    'marker' => $marker,
-                    'field' => 'width',
-                ];
-                $fields[] = [
-                    'label' => '  Y',
-                    'value' => (string) $bounds['height'],
-                    'control' => new InputControl(InputControlType::INTEGER, (string) $bounds['height']),
-                    'target' => 'event-bounds',
-                    'marker' => $marker,
-                    'field' => 'height',
-                ];
-            } else {
-                // Painted in its own shape: the event triggers on exactly these cells.
-                $pieces = count($area->findPieces());
-                $fields[] = [
-                    'label' => 'Cells',
-                    'value' => sprintf('%d in %d %s', count($area->cells), $pieces, $pieces === 1 ? 'shape' : 'places'),
-                    'editable' => false,
-                ];
-            }
-        }
-
-        if ($definition !== null) {
-            $fields = [...$fields, ...$this->buildEventDataFields($marker, $definition)];
-        }
-
-        return $fields;
+        return [...$fields, ...$inspector->getEventFields($selectedMap, $marker)];
     }
 
-    /**
-     * Builds editable inspector fields for event data.
-     *
-     * @param string $marker The event marker.
-     * @param array<string, mixed> $definition The event definition.
-     * @return array<int, array<string, mixed>>
-     */
-    private function buildEventDataFields(string $marker, array $definition): array
+    /** The map inspector over the project's references as the selected map sees them. */
+    private function createMapInspector(): MapInspector
     {
-        $fields = [];
-        $eventData = $definition['data'] ?? [];
-
-        if (is_array($eventData)) {
-            $fields = $this->decorateEventInspectorFields(
-                $marker,
-                $this->flattenInspectorFields($eventData, ['data']),
-            );
-        }
-
-        $rootFields = array_diff_key($definition, ['class' => true, 'data' => true]);
-        // Cue is a generic trigger capability, including for definitions
-        // created before the field existed. Supplying an empty editor-only
-        // default exposes the opt-in without changing the stored event until
-        // the author actually edits it.
-        $rootFields['cue'] ??= ['symbol' => '', 'color' => 'bright-yellow'];
-
-        return [
-            ...$fields,
-            ...$this->decorateEventInspectorFields(
-                $marker,
-                $this->flattenInspectorFields($rootFields, []),
-            ),
-        ];
+        return new MapInspector($this->referenceCatalog());
     }
-
-    /**
-     * Adds event context, pickers, and enum controls to flattened fields.
-     *
-     * @param array<int, array<string, mixed>> $fields The raw fields.
-     * @return array<int, array<string, mixed>>
-     */
-    private function decorateEventInspectorFields(string $marker, array $fields): array
-    {
-        $decorated = [];
-
-        foreach ($fields as $field) {
-            $field['marker'] = $marker;
-            $field['target'] = 'event';
-
-            $path = array_values((array) ($field['path'] ?? []));
-
-            if ($path === ['data', 'mode']) {
-                $field['options'] = ['action', 'auto'];
-                unset($field['control']);
-            }
-
-            $reference = $this->resolveEventReferenceField($field);
-
-            if (is_array($reference)) {
-                // A reference is chosen, never spelled: dropping the control
-                // is what stops the field being typed into, leaving the
-                // picker as the only way to set it.
-                $field['reference'] = $reference['category'];
-                unset($field['control']);
-            }
-
-            $decorated[] = $field;
-        }
-
-        return $decorated;
-    }
-
-    /**
-     * Flattens nested scalar data into editable inspector fields.
-     *
-     * @param array<string|int, mixed> $data The data to flatten.
-     * @param array<int, string> $path The current path.
-     * @return array<int, array<string, mixed>>
-     */
-    private function flattenInspectorFields(array $data, array $path, ?array $list = null): array
-    {
-        $fields = [];
-
-        foreach ($data as $key => $value) {
-            $segment = (string) $key;
-            $nextPath = [...$path, $segment];
-
-            if (is_array($value)) {
-                // A list of entries -- a shop's stock, an event's dialogue --
-                // is something an author adds to and removes from, so every
-                // field inside one remembers which list it belongs to.
-                if ($this->isInspectorListValue($nextPath, $value)) {
-                    $label = implode(' ', array_map(
-                        static fn(string $part): string => ucwords(str_replace(['_', '-'], ' ', $part)),
-                        ($nextPath[0] ?? null) === 'data' ? array_slice($nextPath, 1) : $nextPath
-                    ));
-                    $fields[] = [
-                        'label' => sprintf('%s · %d', $label, count($value)),
-                        'value' => '',
-                        'editable' => false,
-                        'list' => [
-                            'path' => $nextPath,
-                            'index' => max(0, count($value) - 1),
-                            'blank' => $this->blankInspectorListEntry($nextPath),
-                        ],
-                    ];
-
-                    foreach ($value as $index => $entry) {
-                        $entryPath = [...$nextPath, (string) $index];
-                        $entryList = ['path' => $nextPath, 'index' => (int) $index];
-
-                        $fields = [
-                            ...$fields,
-                            ...(is_array($entry)
-                                ? $this->flattenInspectorFields($entry, $entryPath, $entryList)
-                                : $this->flattenInspectorFields([(string) $index => $entry], $nextPath, $entryList)),
-                        ];
-                    }
-
-                    continue;
-                }
-
-                if (array_key_exists('x', $value) && array_key_exists('y', $value) && is_scalar($value['x']) && is_scalar($value['y'])) {
-                    $label = implode(' ', array_map(
-                        static fn(string $part): string => ucwords(str_replace(['_', '-'], ' ', $part)),
-                        ($nextPath[0] ?? null) === 'data' ? array_slice($nextPath, 1) : $nextPath
-                    ));
-                    $fields[] = [
-                        'label' => $label,
-                        'value' => '',
-                        'editable' => false,
-                    ];
-                    $fields[] = [
-                        'label' => '  X',
-                        'value' => (string) $value['x'],
-                        'control' => new InputControl(
-                            is_int($value['x']) ? InputControlType::INTEGER : InputControlType::TEXT,
-                            (string) $value['x'],
-                        ),
-                        'path' => [...$nextPath, 'x'],
-                    ];
-                    $fields[] = [
-                        'label' => '  Y',
-                        'value' => (string) $value['y'],
-                        'control' => new InputControl(
-                            is_int($value['y']) ? InputControlType::INTEGER : InputControlType::TEXT,
-                            (string) $value['y'],
-                        ),
-                        'path' => [...$nextPath, 'y'],
-                    ];
-                    continue;
-                }
-
-                $fields = [...$fields, ...$this->flattenInspectorFields($value, $nextPath, $list)];
-                continue;
-            }
-
-            if (! is_scalar($value) && $value !== null) {
-                continue;
-            }
-
-            $displayPath = ($nextPath[0] ?? null) === 'data'
-                ? array_slice($nextPath, 1)
-                : $nextPath;
-            $label = implode(' ', array_map(
-                static fn(string $part): string => ctype_digit($part)
-                    ? '#' . ((int) $part + 1)
-                    : ucwords(str_replace(['_', '-'], ' ', $part)),
-                $displayPath
-            ));
-            $stringValue = match (true) {
-                is_bool($value) => $value ? 'true' : 'false',
-                is_float($value) => InputControl::formatFloat($value),
-                default => (string) $value,
-            };
-            $controlType = match (true) {
-                is_bool($value) => InputControlType::BOOLEAN,
-                is_int($value) => InputControlType::INTEGER,
-                is_float($value) => InputControlType::FLOAT,
-                default => InputControlType::TEXT,
-            };
-            $leaf = [
-                'label' => $label,
-                'value' => $stringValue,
-                'control' => new InputControl($controlType, $stringValue),
-                'path' => $nextPath,
-            ];
-
-            if (is_array($list)) {
-                $leaf['list'] = $list;
-            }
-
-            $fields[] = $leaf;
-        }
-
-        return $fields;
-    }
-
-    /**
-     * Distinguishes authored lists from associative configuration blocks.
-     *
-     * Empty arrays need an explicit known-list name because PHP cannot tell
-     * an empty list from an empty map.
-     *
-     * @param array<int, string> $path The candidate path.
-     * @param array<mixed> $value The candidate value.
-     */
-    private function isInspectorListValue(array $path, array $value): bool
-    {
-        if (! array_is_list($value) || array_key_exists('x', $value)) {
-            return false;
-        }
-
-        if ($value !== []) {
-            return true;
-        }
-
-        return in_array(
-            (string) ($path[array_key_last($path)] ?? ''),
-            ['conditions', 'sets', 'dialogue', 'items', 'script', 'steps', 'options'],
-            true,
-        );
-    }
-
-    /**
-     * Returns the structured first row for an empty inspector list.
-     *
-     * @param array<int, string> $path The list path.
-     * @return array<string, mixed>
-     */
-    private function blankInspectorListEntry(array $path): array
-    {
-        return match ((string) ($path[array_key_last($path)] ?? '')) {
-            'conditions' => ['type' => 'switch', 'name' => '', 'value' => true],
-            'sets' => ['type' => 'switch', 'name' => '', 'value' => true],
-            'script' => ['type' => 'text', 'name' => '', 'text' => ''],
-            'steps' => ['direction' => 'down', 'count' => 1, 'faceOnly' => false],
-            'options' => ['text' => '', 'then' => []],
-            'items' => ['item' => '', 'price' => 0],
-            default => ['name' => '', 'text' => ''],
-        };
-    }
-
     /**
      * Draws the editor shell.
      *
@@ -15428,398 +14126,104 @@ final class Editor
 
 
     /**
-     * The encounter row the inspector cursor is on, if any.
+     * Writes one value into the map's data as one undo step (see
+     * {@see MapInspector::writeMapData()}); nothing is recorded when the data
+     * already held it.
      *
-     * @return array{map: ProjectMap, encounters: MapEncounters, index: int}|null
-     */
-    private function selectedMapEncounterRow(): ?array
-    {
-        $map = $this->getSelectedMap();
-        $field = $this->getInspectorFields()[$this->selectedInspectorFieldIndex] ?? null;
-
-        if (! $map instanceof ProjectMap || ! is_array($field) || ($field['target'] ?? null) !== 'map-encounters') {
-            return null;
-        }
-
-        $list = $field['encounterList'] ?? null;
-
-        if (! is_array($list)) {
-            return null;
-        }
-
-        return ['map' => $map, 'encounters' => MapEncounters::fromMap($map), 'index' => (int) $list['index']];
-    }
-
-    /**
-     * Adds a troop row to the map's encounter table, enabling encounters
-     * when it is the first one.
-     *
-     * The new row names a troop the table does not already use, because a
-     * blank row would be a troop the engine reads as unnamed and a duplicate
-     * would collapse into one key.
-     *
-     * @return bool Whether the cursor was on the encounter list.
-     */
-    private function addMapEncounterTroop(): bool
-    {
-        $context = $this->selectedMapEncounterRow();
-
-        if ($context === null) {
-            return false;
-        }
-
-        $encounters = $context['encounters'];
-
-        if (! $encounters->isSupported()) {
-            $this->setStatus(sprintf('Encounters are read-only here: %s.', $encounters->unsupportedReason()), StatusLevel::WARN);
-            $this->renderInspectorArea();
-
-            return true;
-        }
-
-        $available = array_values(array_diff($this->referenceCatalog()->valuesFor('troops'), $encounters->troopNames()));
-
-        if ($available === []) {
-            $this->setStatus(
-                $this->referenceCatalog()->valuesFor('troops') === []
-                    ? 'This project defines no troops to encounter.'
-                    : 'Every troop this project defines is already in this table.',
-                StatusLevel::WARN,
-            );
-            $this->renderInspectorArea();
-
-            return true;
-        }
-
-        try {
-            $block = $encounters->withTroopAdded($available[0], $context['index']);
-        } catch (Throwable $throwable) {
-            $this->setErrorStatus($throwable, 'Encounter troop');
-            $this->renderInspectorArea();
-
-            return true;
-        }
-
-        $this->applyMapDataValue($context['map'], [MapEncounters::KEY], $block, 'Encounter troop add');
-        $this->setStatus(sprintf('Added %s to the encounter table.', $available[0]), StatusLevel::INFO);
-        $this->clampInspectorSelection();
-        $this->renderSelectionDependentArea();
-
-        return true;
-    }
-
-    /**
-     * Removes the troop row the cursor is on. Removing the last one disables
-     * encounters and takes the empty block with it.
-     *
-     * @return bool Whether the cursor was on the encounter list.
-     */
-    private function removeMapEncounterTroop(): bool
-    {
-        $context = $this->selectedMapEncounterRow();
-
-        if ($context === null) {
-            return false;
-        }
-
-        $encounters = $context['encounters'];
-
-        if (! $encounters->isSupported()) {
-            $this->setStatus(sprintf('Encounters are read-only here: %s.', $encounters->unsupportedReason()), StatusLevel::WARN);
-            $this->renderInspectorArea();
-
-            return true;
-        }
-
-        $rows = $encounters->rows();
-
-        if (! array_key_exists($context['index'], $rows)) {
-            $this->setStatus('No encounter troop to remove.', StatusLevel::WARN);
-            $this->renderInspectorArea();
-
-            return true;
-        }
-
-        $removed = $rows[$context['index']]['name'];
-        $block = $encounters->withTroopRemovedAt($context['index']);
-        $this->applyMapDataValue($context['map'], [MapEncounters::KEY], $block, 'Encounter troop remove');
-        $this->setStatus(
-            $block === null
-                ? sprintf('Removed %s; this map no longer has random encounters.', $removed)
-                : sprintf('Removed %s from the encounter table.', $removed),
-            StatusLevel::INFO,
-        );
-        $this->clampInspectorSelection();
-        $this->renderSelectionDependentArea();
-
-        return true;
-    }
-
-    /**
-     * Writes one nested map-data value, recording it for undo.
-     *
-     * @param array<int, string> $path The nested data path.
+     * @param list<string> $path
      */
     private function applyMapDataValue(ProjectMap $map, array $path, mixed $value, string $label): void
     {
-        $hadValue = $map->hasMapDataField($path);
-        $oldValue = $map->getMapDataField($path);
-        $map->setMapDataField($path, $value);
+        $command = $this->createMapInspector()->writeMapData($map, $path, $value, $label);
 
-        if ($map->getMapDataField($path) === $oldValue && $map->hasMapDataField($path) === $hadValue) {
-            return;
+        if ($command !== null) {
+            $this->recordCommand($command);
         }
-
-        $this->recordCommand(new GenericCommand(
-            sprintf('%s edit', $label),
-            static fn() => $map->setMapDataField($path, $value),
-            static fn() => $map->setMapDataField($path, $hadValue ? $oldValue : null),
-        ));
     }
-
     /**
-     * Writes one encounter field through the encounters model, which owns
-     * the block's shape, its defaults and its duplicate rule.
-     *
-     * @param array<string, mixed> $field The inspector field descriptor.
-     */
-    private function applyMapEncounterValue(ProjectMap $map, array $field, mixed $value): void
-    {
-        $encounters = MapEncounters::fromMap($map);
-
-        if (! $encounters->isSupported()) {
-            $this->setStatus(
-                sprintf('Encounters are read-only here: %s.', $encounters->unsupportedReason()),
-                StatusLevel::WARN,
-            );
-
-            return;
-        }
-
-        $index = (int) ($field['index'] ?? 0);
-        $block = match ((string) ($field['field'] ?? '')) {
-            'rate' => $encounters->withRate((int) $value),
-            'tiles' => $encounters->withTiles((string) $value),
-            'weight' => $encounters->withWeightAt($index, (int) $value),
-            'troop' => $encounters->withTroopAt($index, (string) $value),
-            default => null,
-        };
-
-        if ($block === null && ! $encounters->isDeclared()) {
-            return;
-        }
-
-        $this->applyMapDataValue($map, [MapEncounters::KEY], $block, 'Encounters');
-    }
-
-    /**
-     * Returns the list the inspector cursor is inside, if any.
-     *
-     * @return array{path: array<int, string>, index: int}|null The list.
-     */
-    private function selectedInspectorList(): ?array
-    {
-        $fields = $this->getInspectorFields();
-        $field = $fields[$this->selectedInspectorFieldIndex] ?? null;
-
-        if (! is_array($field) || ($field['target'] ?? null) !== 'event') {
-            return null;
-        }
-
-        $list = $field['list'] ?? null;
-
-        return is_array($list) ? $list : null;
-    }
-
-    /**
-     * Adds an entry to the list the inspector cursor is inside.
-     *
-     * The new entry is shaped like the one it follows -- the same keys, their
-     * values cleared -- because an author adding a second shop line means
-     * another line like the first, not an empty hole they have to describe.
+     * Adds an entry to the list the inspector cursor is inside
+     * ({@see MapInspector::addListEntry()}).
      *
      * @return void
      */
     private function addInspectorListItem(): void
     {
-        if ($this->addMapEncounterTroop()) {
-            return;
-        }
-
-        if ($this->addMapBgmVariant()) {
-            return;
-        }
-
-        $selectedMap = $this->getSelectedMap();
-        $list = $this->selectedInspectorList();
-        $marker = $this->selectedEventMarkerForList();
-
-        if (! $selectedMap instanceof ProjectMap || $list === null || $marker === '') {
-            $this->setStatus('Nothing here is a list to add to.', StatusLevel::WARN);
-
-            return;
-        }
-
-        $entries = $selectedMap->getEventField($marker, $list['path']);
-        $entries = is_array($entries) ? array_values($entries) : [];
-        $template = $entries[$list['index']] ?? ($list['blank'] ?? ($entries === [] ? '' : end($entries)));
-        $position = min(count($entries), $list['index'] + 1);
-
-        array_splice($entries, $position, 0, [self::blankLike($template)]);
-
-        $this->applyInspectorListChange($selectedMap, $marker, $list['path'], $entries, 'Add list entry');
-        $this->setStatus(sprintf('Added %s %d.', $this->describeListPath($list['path']), $position + 1), StatusLevel::INFO);
+        $this->editInspectorList(
+            static fn(MapInspector $inspector, ProjectMap $map, array $field): ?InspectorListEdit => $inspector->addListEntry($map, $field),
+            'Nothing here is a list to add to.',
+        );
     }
 
     /**
-     * Removes the entry the inspector cursor is inside.
+     * Removes the entry the inspector cursor is inside
+     * ({@see MapInspector::removeListEntry()}).
      *
      * @return void
      */
     private function removeInspectorListItem(): void
     {
-        if ($this->removeMapEncounterTroop()) {
-            return;
-        }
-
-        if ($this->removeMapBgmVariant()) {
-            return;
-        }
-
-        $selectedMap = $this->getSelectedMap();
-        $list = $this->selectedInspectorList();
-        $marker = $this->selectedEventMarkerForList();
-
-        if (! $selectedMap instanceof ProjectMap || $list === null || $marker === '') {
-            $this->setStatus('Nothing here is a list entry to remove.', StatusLevel::WARN);
-
-            return;
-        }
-
-        $entries = $selectedMap->getEventField($marker, $list['path']);
-        $entries = is_array($entries) ? array_values($entries) : [];
-
-        if (! array_key_exists($list['index'], $entries)) {
-            return;
-        }
-
-        array_splice($entries, $list['index'], 1);
-
-        $this->applyInspectorListChange($selectedMap, $marker, $list['path'], $entries, 'Remove list entry');
-        $this->clampInspectorSelection();
-        $this->setStatus(sprintf('Removed %s %d.', $this->describeListPath($list['path']), $list['index'] + 1), StatusLevel::INFO);
+        $this->editInspectorList(
+            static fn(MapInspector $inspector, ProjectMap $map, array $field): ?InspectorListEdit => $inspector->removeListEntry($map, $field),
+            'Nothing here is a list entry to remove.',
+        );
     }
 
     /**
-     * Writes a changed list back, recording it so it can be undone.
+     * Applies a list edit to the row the inspector cursor is on, recording
+     * it and saying what changed.
      *
-     * @param ProjectMap $map The map.
-     * @param string $marker The event marker.
-     * @param array<int, string> $path The list's path.
-     * @param array<int, mixed> $entries The list as it should be.
-     * @param string $label What to call the change.
+     * @param Closure(MapInspector, ProjectMap, array<string, mixed>): ?InspectorListEdit $edit
+     * @param string $nothingHere What to say when there is no row to edit.
      * @return void
      */
-    private function applyInspectorListChange(ProjectMap $map, string $marker, array $path, array $entries, string $label): void
+    private function editInspectorList(Closure $edit, string $nothingHere): void
     {
-        $previous = $map->getEventField($marker, $path);
-        $previous = is_array($previous) ? array_values($previous) : [];
+        $selectedMap = $this->getSelectedMap();
+        $field = $this->getInspectorFields()[$this->selectedInspectorFieldIndex] ?? null;
 
-        $map->setEventField($marker, $path, $entries);
-        $this->recordCommand(new GenericCommand(
-            $label,
-            static fn() => $map->setEventField($marker, $path, $entries),
-            static fn() => $map->setEventField($marker, $path, $previous),
-        ));
-        $this->renderSelectionDependentArea();
-    }
+        if (! $selectedMap instanceof ProjectMap || ! is_array($field)) {
+            $this->setStatus($nothingHere, StatusLevel::WARN);
 
-    /**
-     * Returns the marker of the event the inspector cursor is in.
-     *
-     * @return string The marker, or an empty string.
-     */
-    private function selectedEventMarkerForList(): string
-    {
-        $fields = $this->getInspectorFields();
-        $field = $fields[$this->selectedInspectorFieldIndex] ?? null;
-
-        return is_array($field) ? (string) ($field['marker'] ?? '') : '';
-    }
-
-    /**
-     * Returns an entry shaped like the given one with nothing filled in.
-     *
-     * @param mixed $template The entry to copy the shape of.
-     * @return mixed The blank entry.
-     */
-    private static function blankLike(mixed $template): mixed
-    {
-        if (is_array($template)) {
-            return array_map(self::blankLike(...), $template);
+            return;
         }
 
-        return match (true) {
-            is_int($template) => 0,
-            is_float($template) => 0.0,
-            is_bool($template) => false,
-            default => '',
-        };
+        try {
+            $result = $edit($this->createMapInspector(), $selectedMap, $field);
+        } catch (InspectorRefusal $refusal) {
+            $this->setStatus($refusal->getMessage(), StatusLevel::WARN);
+            $this->renderInspectorArea();
+
+            return;
+        } catch (Throwable $throwable) {
+            $this->setErrorStatus($throwable, 'List edit');
+            $this->renderInspectorArea();
+
+            return;
+        }
+
+        if ($result === null) {
+            return;
+        }
+
+        if ($result->command !== null) {
+            $this->recordCommand($result->command);
+        }
+
+        $this->setStatus($result->summary, StatusLevel::INFO);
+        $this->clampInspectorSelection();
+        $this->renderSelectionDependentArea();
     }
-
     /**
-     * Names a list for a status message.
+     * The picker an event data row is chosen from (see
+     * {@see MapInspector::findEventReference()}).
      *
-     * @param array<int, string> $path The list's path.
-     * @return string The name, in the singular.
-     */
-    private static function describeListPath(array $path): string
-    {
-        $leaf = (string) ($path[array_key_last($path)] ?? 'entry');
-        $leaf = str_replace(['_', '-'], ' ', $leaf);
-
-        return mb_strtolower(rtrim($leaf, 's'));
-    }
-
-    /**
-     * Determines whether an event field names another resource.
-     *
-     * A door's destination and a chest's loot have flows of their own; this
-     * covers the rest, so a track, a sound, or a shop's stock is chosen from
-     * what the project actually has rather than spelled from memory.
-     *
-     * @param array<string, mixed> $field The inspector field descriptor.
-     * @return array{category: string, title: string}|null The kind of
-     *   reference and what to call the picker, or null when the field names
-     *   nothing.
+     * @param array<string, mixed> $field
+     * @return array{category: string, title: string}|null
      */
     private function resolveEventReferenceField(array $field): ?array
     {
-        if (($field['target'] ?? null) !== 'event') {
-            return null;
-        }
-
-        $path = array_values((array) ($field['path'] ?? []));
-
-        if (($path[0] ?? null) !== 'data' || count($path) < 2) {
-            return null;
-        }
-
-        $leaf = (string) $path[array_key_last($path)];
-
-        return match (true) {
-            $path === ['data', 'scriptId'] => ['category' => 'common_events', 'title' => 'Event Script'],
-            $path === ['data', 'cinematicId'] => ['category' => 'cinematics', 'title' => 'Cinematic'],
-            $leaf === 'bgm' => ['category' => 'bgm', 'title' => 'Music'],
-            $leaf === 'sfx' => ['category' => 'sfx', 'title' => 'Sound Effect'],
-            // A shop's stock is data.items.N.item. The leaf alone would also
-            // match an unrelated event that happened to call a field "item".
-            $leaf === 'item' && ($path[1] ?? null) === 'items'
-                => ['category' => 'inventory', 'title' => 'Item'],
-            default => null,
-        };
+        return MapInspector::findEventReference($field);
     }
-
     /**
      * Opens the picker for an event field that names another resource.
      *
@@ -15906,7 +14310,7 @@ final class Editor
             // track is a skipped variant, not silence, so the variant picker
             // offers only real tracks and removal un-authors the variant.
             array_unshift($entries, [
-                'label' => self::MAP_BGM_NONE,
+                'label' => MapInspector::MAP_BGM_NONE,
                 'value' => '',
                 'description' => 'The map plays whatever was already playing.',
             ]);
@@ -15949,30 +14353,8 @@ final class Editor
 
     private function getChestTypeOptionEntries(): array
     {
-        return [
-            [
-                'label' => 'Common',
-                'value' => ChestType::COMMON->value,
-                'description' => 'Standard chest presentation for ordinary treasure.',
-            ],
-            [
-                'label' => 'Rare',
-                'value' => ChestType::RARE->value,
-                'description' => 'Highlights a chest that should feel less common.',
-            ],
-            [
-                'label' => 'Epic',
-                'value' => ChestType::EPIC->value,
-                'description' => 'Marks a chest carrying high-value treasure.',
-            ],
-            [
-                'label' => 'Legendary',
-                'value' => ChestType::LEGENDARY->value,
-                'description' => 'Reserved for the most special chest rewards.',
-            ],
-        ];
+        return MapInspector::CHEST_TYPE_CHOICES;
     }
-
     /**
      * Returns the editor-facing label for a loot type.
      *
@@ -15996,50 +14378,8 @@ final class Editor
 
     private function getLootTypeOptionEntries(): array
     {
-        return [
-            [
-                'label' => 'Item',
-                'value' => LootType::ITEM->value,
-                'description' => 'Rewards an item from the project item database.',
-            ],
-            [
-                'label' => 'Gold',
-                'value' => LootType::GOLD->value,
-                'description' => 'Awards currency directly when the chest is opened.',
-            ],
-            [
-                'label' => 'Experience',
-                'value' => LootType::EXPERIENCE->value,
-                'description' => 'Awards experience directly when claimed.',
-            ],
-            [
-                'label' => 'Skill',
-                'value' => LootType::SKILL->value,
-                'description' => 'Rewards a learnable skill identifier.',
-            ],
-            [
-                'label' => 'Spell',
-                'value' => LootType::SPELL->value,
-                'description' => 'Rewards a spell identifier.',
-            ],
-            [
-                'label' => 'Weapon',
-                'value' => LootType::WEAPON->value,
-                'description' => 'Rewards a weapon identifier.',
-            ],
-            [
-                'label' => 'Armor',
-                'value' => LootType::ARMOR->value,
-                'description' => 'Rewards an armor identifier.',
-            ],
-            [
-                'label' => 'Accessory',
-                'value' => LootType::ACCESSORY->value,
-                'description' => 'Rewards an accessory identifier.',
-            ],
-        ];
+        return MapInspector::LOOT_TYPE_CHOICES;
     }
-
     private function resolveEventOptionSelectionIndex(string $currentValue): int
     {
         foreach ($this->eventOptionDialogEntries as $index => $entry) {
@@ -16090,17 +14430,7 @@ final class Editor
      */
     private function resolveEventTypeLabel(?string $className): string
     {
-        if ($className === null || $className === '') {
-            return 'Unset';
-        }
-
-        foreach (EventTypeCatalog::all() as $definition) {
-            if ($definition->className === $className) {
-                return $definition->label;
-            }
-        }
-
-        return basename(str_replace('\\', '/', $className));
+        return EventTypeCatalog::describeClass($className);
     }
 
     /**
@@ -17984,19 +16314,14 @@ final class Editor
     }
 
     /**
-     * Returns the input control for an inspector field if it is editable.
+     * The input a row is typed into (see {@see MapInspector::findControl()}).
      *
-     * @param array<string, mixed> $field The inspector field descriptor.
-     * @return InputControl|null
+     * @param array<string, mixed> $field
      */
     private function getInspectorFieldControl(array $field): ?InputControl
     {
-        if (($field['editable'] ?? null) === false) { return null; }
-        $control = $field['control'] ?? null;
-
-        return $control instanceof InputControl ? $control : null;
+        return MapInspector::findControl($field);
     }
-
     /**
      * Re-renders the canvas section without clearing the full shell.
      *
@@ -18323,26 +16648,12 @@ final class Editor
     private function renderUnsavedChangesGuardOverlay(array $layout): void
     {
         $actionLabel = $this->pendingGuardAction === self::GUARD_ACTION_QUIT ? 'quit' : 'reload the workspace';
-        $dirtyMaps = [];
-
-        foreach ($this->workspace?->maps ?? [] as $map) {
-            if ($map->isDirty()) {
-                $dirtyMaps[] = '  ' . $map->mapId;
-            }
-        }
-
-        $dirtyDatabases = [];
-
-        foreach ($this->getSaveableDatabases() as $label => $database) {
-            if ($database->isDirty()) {
-                $dirtyDatabases[] = '  ' . $label . ' database';
-            }
-        }
+        $unsaved = array_map(static fn(string $document): string => '  ' . $document, $this->workspace?->listUnsavedChanges() ?? []);
 
         $rows = [
             sprintf('You have unsaved changes. %s anyway?', ucfirst($actionLabel)),
             '',
-            ...array_slice([...$dirtyMaps, ...$dirtyDatabases], 0, 8),
+            ...array_slice($unsaved, 0, 8),
             '',
             'Y: Discard changes and continue',
             'S: Save everything first, then continue',
@@ -18718,7 +17029,7 @@ final class Editor
                 $this->isInspectorEditing => 'Enter:Apply  Esc:Cancel',
                 // Only where there is a list to act on: a hint for keys that
                 // would answer "nothing here is a list" is worse than none.
-                $this->selectedInspectorList() !== null => $this->fitHelp(
+                MapInspector::findEventList($this->getInspectorFields()[$this->selectedInspectorFieldIndex] ?? []) !== null => $this->fitHelp(
                     $layout['rightWidth'],
                     'Enter:Edit  Shift+O:Add  Shift+X/Del:Remove',
                     'Enter:Edit  Shift+O:Add  Del:Remove',

@@ -35,6 +35,40 @@ final class WorldWriteEditor
      * @var array<int, array<string, mixed>> The writes being edited.
      */
     private array $sets = [];
+
+    /**
+     * The write vocabulary for an interface that builds writes a part at a
+     * time without this editor's cursor: each type, what its name is called
+     * and which reference category lists names (null for a name the author
+     * invents), and the extras it carries with their choices or kind and
+     * default. Restricted to `$types` where the runtime allows only some.
+     *
+     * @param list<string>|null $types The write types a surface may author; null for all.
+     * @return list<array{type: string, label: string, nameCategory: ?string, negatable: bool, extras: list<array<string, mixed>>}>
+     */
+    public static function getGrammar(?array $types = null): array
+    {
+        $choice = static fn(mixed $value, string $label): array => ['value' => $value, 'label' => $label];
+        $extras = [
+            'switch' => [['key' => 'value', 'label' => 'Turn', 'kind' => 'options', 'default' => true,
+                'options' => [$choice(true, 'on'), $choice(false, 'off')]]],
+            'variable' => [
+                ['key' => 'op', 'label' => 'Change', 'kind' => 'options', 'default' => 'set',
+                    'options' => [$choice('set', 'set to'), $choice('add', 'add')]],
+                ['key' => 'value', 'label' => 'Value', 'kind' => 'text', 'default' => 0],
+            ],
+            'quest' => [['key' => 'confirm', 'label' => 'How', 'kind' => 'options', 'default' => true,
+                'options' => [$choice(true, 'offer'), $choice(false, 'grant')]]],
+        ];
+
+        return array_values(array_map(static fn(string $type): array => [
+            'type' => $type,
+            'label' => self::NAMES[$type][0] ?? ucfirst($type),
+            'nameCategory' => self::NAMES[$type][1] ?? null,
+            'negatable' => false,
+            'extras' => $extras[$type] ?? [],
+        ], array_values(array_intersect(WorldWriteCodec::TYPES, $types ?? WorldWriteCodec::TYPES))));
+    }
     private bool $isOpen = false;
     private string $fieldId = '';
     private string $label = '';

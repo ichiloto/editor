@@ -158,6 +158,15 @@ final class EventTypeCatalog
     }
 
     /**
+     * Returns the type an author names by its label, or null when no type
+     * has that label.
+     */
+    public static function findByLabel(string $label): ?EventTypeDefinition
+    {
+        return array_find(self::all(), static fn(EventTypeDefinition $definition): bool => $definition->label === $label);
+    }
+
+    /**
      * Returns the index for the given trigger class.
      *
      * @param string|null $className The stored trigger class name.
@@ -172,5 +181,25 @@ final class EventTypeCatalog
         }
 
         return 0;
+    }
+
+    /**
+     * Returns the label an event of this trigger class is shown by: Unset for
+     * none, its catalog label, or the class's short name for one the catalog
+     * does not list.
+     */
+    public static function describeClass(?string $className): string
+    {
+        if ($className === null || $className === '') {
+            return 'Unset';
+        }
+
+        foreach (self::all() as $definition) {
+            if ($definition->className === $className) {
+                return $definition->label;
+            }
+        }
+
+        return basename(str_replace('\\', '/', $className));
     }
 }

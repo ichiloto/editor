@@ -6,6 +6,7 @@ namespace Ichiloto\Editor;
 
 use FilesystemIterator;
 use Ichiloto\Editor\Cutscenes\CutsceneLibrary;
+use Ichiloto\Editor\Database\DatabaseCatalog;
 use Ichiloto\Editor\Database\EngineDataBootstrap;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Database\RecordSchema;
@@ -292,6 +293,66 @@ final readonly class ProjectWorkspace
     }
 
     /**
+     * Names every document holding unsaved changes: maps by id, then
+     * databases, then cutscenes, so a guard can say what would be lost.
+     *
+     * @return list<string>
+     */
+    public function listUnsavedChanges(): array
+    {
+        $unsaved = [];
+
+        foreach ($this->maps as $map) {
+            if ($map->isDirty()) {
+                $unsaved[] = $map->mapId;
+            }
+        }
+
+        foreach ($this->listSaveableDatabases() as $label => $database) {
+            if ($database->isDirty()) {
+                $unsaved[] = $label . ' database';
+            }
+        }
+
+        foreach ($this->cutscenes?->dirtyAssets() ?? [] as $asset) {
+            $unsaved[] = $asset->type->noun() . ' ' . $asset->id;
+        }
+
+        return $unsaved;
+    }
+
+    /**
+     * Returns every database a save can write, keyed by display label.
+     * Read-only record categories are left out: they hold no edits, and
+     * asking them to save would raise instead of doing nothing.
+     *
+     * @return array<string, ProjectActorDatabase|ProjectClassDatabase|ProjectSkillDatabase|ProjectQuestDatabase|ProjectAnimationDatabase|ProjectSystemDatabase|ProjectConfig|ProjectRecordDatabase>
+     */
+    public function listSaveableDatabases(): array
+    {
+        $databases = [
+            'Actors' => $this->actorDatabase,
+            'Classes' => $this->classDatabase,
+            'Skills' => $this->skillDatabase,
+            'Quests' => $this->questDatabase,
+            'Animations' => $this->animationDatabase,
+            'System' => $this->systemDatabase,
+        ];
+
+        if ($this->config !== null) {
+            $databases['Project configuration'] = $this->config;
+        }
+
+        foreach ($this->recordDatabases as $categoryKey => $recordDatabase) {
+            if ($recordDatabase->isEditable()) {
+                $databases[DatabaseCatalog::at(DatabaseCatalog::indexOf($categoryKey))->label] = $recordDatabase;
+            }
+        }
+
+        return $databases;
+    }
+
+    /**
      * Returns a workspace with one map swapped for a fresh instance, keeping
      * every other loaded object intact (no whole-workspace reload).
      *
@@ -306,6 +367,43 @@ final readonly class ProjectWorkspace
     {
         $maps = $this->maps;
         $maps[$index] = $map;
+
+        return $this->withMaps($maps);
+    }
+
+    /**
+     * Returns a workspace that also holds a map just written to disk, such
+     * as a created or duplicated one, keeping every loaded object and its
+     * unsaved changes. A map that cannot be read joins read-only, as a full
+     * rescan would add it.
+     */
+    public function withLoadedMap(string $mapId): self
+    {
+        $directory = $this->getMapsRoot() . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $mapId);
+        try {
+            $map = ProjectMap::fromDirectory($this->getMapsRoot(), $directory);
+        } catch (Throwable $error) {
+            $map = ProjectMap::createReadOnlyFromDirectory($this->getMapsRoot(), $directory, $error->getMessage());
+        }
+        $maps = array_values(array_filter($this->maps, static fn(ProjectMap $loaded): bool => $loaded->mapId !== $map->mapId));
+
+        return $this->withMaps([...$maps, $map]);
+    }
+
+    /** Returns a workspace without a deleted map, keeping every other loaded object. */
+    public function withoutMap(string $mapId): self
+    {
+        return $this->withMaps(array_values(array_filter($this->maps, static fn(ProjectMap $map): bool => $map->mapId !== $mapId)));
+    }
+
+    /**
+     * The same project with another map list, in map id order as a full
+     * rescan lists them.
+     *
+     * @param list<ProjectMap> $maps
+     */
+    private function withMaps(array $maps): self
+    {
         usort($maps, static fn(ProjectMap $left, ProjectMap $right): int => strcmp($left->mapId, $right->mapId));
 
         return new self(
@@ -324,6 +422,7 @@ final readonly class ProjectWorkspace
             recordDatabases: $this->recordDatabases,
             cutscenes: $this->cutscenes,
             config: $this->config,
+            scriptCommands: $this->scriptCommands,
         );
     }
 
@@ -411,12 +510,16 @@ final readonly class ProjectWorkspace
      * @param string|null $baseName The preferred base name.
      * @return string The created map id.
      */
-    public function createMap(?string $baseName = null, ?FileSetOperations $files = null, ?string $kind = null): string
+    public function createMap(?string $baseName = null, ?FileSetOperations $files = null, ?string $kind = null, int $width = 48,
+        int $height = 18): string
     {
+        if ($width < 1 || $height < 1) {
+            throw new MapSourceRefusal(sprintf('A map is at least 1 x 1 cells, not %d x %d.', $width, $height));
+        }
         $mapsRoot = $this->getMapsRoot();
         $baseName = $this->getNextAvailableBaseName($baseName ?? 'new-map');
         $directory = $mapsRoot . DIRECTORY_SEPARATOR . $baseName;
-        ProjectMap::createBlank($directory, $baseName, self::humanizeBaseName($baseName), files: $files, kind: $kind);
+        ProjectMap::createBlank($directory, $baseName, self::humanizeBaseName($baseName), $width, $height, $files, $kind);
 
         return $baseName;
     }

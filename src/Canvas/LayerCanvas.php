@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Canvas;
 
 use Ichiloto\Editor\EditorWindow;
-use Ichiloto\Editor\History\GenericCommand;
+use Ichiloto\Editor\Maps\LayerEditor;
 use Ichiloto\Editor\MapSourceRefusal;
 use Ichiloto\Editor\Maps\MapLayers;
 use Ichiloto\Editor\UI\Modal;
@@ -216,30 +216,22 @@ trait LayerCanvas
                 if ($map === null || ! in_array($prompt['id'], array_column($this->getTerminalCanvasLayers(), 'id'), true)) {
                     throw new MapSourceRefusal('This layer is not available in the terminal canvas. Cancel and select a gameplay layer.');
                 }
-                $before = $map->captureLayerSnapshot();
-                if ($prompt['action'] === 'rename' && ! isset($prompt['confirmation'])) {
-                    $change = $map->getLayerRenameCollisionChange($prompt['id'], $prompt['name']);
-                    if ($change !== null) {
-                        $this->layerPrompt['confirmation'] = $change;
-                        $this->requestFullRender();
-                        return;
-                    }
-                }
-                $id = match ($prompt['action']) {
-                    'create' => $map->createLayer($prompt['name']),
-                    'rename' => (function () use ($map, $prompt): string {
-                        $map->renameLayer($prompt['id'], $prompt['name'], isset($prompt['confirmation']));
-                        return $prompt['id'];
-                    })(),
-                    'remove' => (function () use ($map, $prompt): string {
-                        $map->removeLayer($prompt['id']);
-                        return $map->getBaseLayerId();
-                    })(),
+                // Removal is confirmed by its own prompt; a rename that
+                // changes collisions asks again before anything changes.
+                $edit = match ($prompt['action']) {
+                    'create' => LayerEditor::createLayer($map, $prompt['name']),
+                    'rename' => LayerEditor::renameLayer($map, $prompt['id'], $prompt['name'], isset($prompt['confirmation'])),
+                    'remove' => LayerEditor::removeLayer($map, $prompt['id'], true),
                 };
-                $after = $map->captureLayerSnapshot();
-                $this->recordCommand(new GenericCommand('Layer ' . $prompt['action'],
-                    fn() => $map->restoreLayerSnapshot($after), fn() => $map->restoreLayerSnapshot($before)));
-                $this->selectCanvasLayer($id);
+                if ($edit['question'] !== null) {
+                    $this->layerPrompt['confirmation'] = $edit['question'];
+                    $this->requestFullRender();
+                    return;
+                }
+                if ($edit['command'] !== null) {
+                    $this->recordCommand($edit['command']);
+                }
+                $this->selectCanvasLayer((string) $edit['layer']);
                 $this->layerPrompt = null;
                 $this->modals->remove(Modal::LAYER_EDIT);
                 $this->setStatus('Layer change staged. Ctrl+S saves the complete file set.');

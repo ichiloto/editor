@@ -10,7 +10,6 @@ use Ichiloto\Editor\MapSourceRefusal;
 use Ichiloto\Editor\Maps\MapLayers;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\Status\StatusLevel;
-use Ichiloto\Engine\Rendering\Tilesets\TileId;
 use InvalidArgumentException;
 use RuntimeException;
 
@@ -66,27 +65,17 @@ trait GlyphTileCanvas
         $tiles = [...($plan['tiles'] ?? []), ...$tiles];
 
         $this->finalizeActiveStroke();
-        if ($tiles === []) {
-            [$stroke, $changed] = $this->writeCanvasCells($map, $layer, $writes, $label);
-            if ($stroke->hasChanges()) {
-                $this->recordCommand($stroke);
-            }
-            return $changed;
-        }
-        $tilesBefore = $map->getTileLayerSources();
         try {
-            $map->writeTileCells($tiles);
+            $applied = CanvasEditor::apply($map, $layer, $writes, $label, $tiles);
         } catch (MapSourceRefusal $refusal) {
             $this->setStatus($refusal->getMessage(), StatusLevel::WARN);
             return null;
         }
-        $tilesAfter = $map->getTileLayerSources();
-        [$stroke, $changed] = $this->writeCanvasCells($map, $layer, $writes, $label);
-        if ($stroke->hasChanges() || $tilesAfter !== $tilesBefore) {
-            $this->recordStrokeWithTiles($label, $map, $stroke, $tilesBefore, $tilesAfter);
+        if ($applied['command'] !== null) {
+            $this->recordCommand($applied['command']);
         }
 
-        return $changed;
+        return $applied['changed'];
     }
 
     /**
@@ -147,27 +136,8 @@ trait GlyphTileCanvas
     private function planGlyphTiles(ProjectMap $map, string $layerId, array $writes, array $choices, bool $repaint,
         array $excludedLayers = []): ?array
     {
-        $planner = $this->loadGlyphTilePlanner($map, $layerId, $excludedLayers);
-        if ($planner === null) {
-            return null;
-        }
-        $changes = [];
-        foreach ($writes as $write) {
-            if ($map->hasLayerCell($layerId, $write['x'], $write['y'])) {
-                $changes[] = ['x' => $write['x'], 'y' => $write['y'],
-                    'old' => $map->getLayerSymbol($layerId, $write['x'], $write['y']), 'new' => $write['symbol']];
-            }
-        }
-
-        return $planner->plan(
-            $changes,
-            static fn(int $x, int $y): ?string => $map->hasLayerCell($layerId, $x, $y) ? $map->getLayerSymbol($layerId, $x, $y) : null,
-            $this->createTileReader($map),
-            $choices,
-            $repaint,
-        );
+        return CanvasEditor::plan($map, $layerId, $writes, $choices, $repaint, $excludedLayers);
     }
-
     /**
      * Draws the tiles of the glyphs already on the layer being edited, as if
      * each were painted again: every glyph a piece draws gets that piece's
@@ -234,39 +204,6 @@ trait GlyphTileCanvas
         $this->setStatus(sprintf('Drew %d tile%s for the %s layer\'s glyphs; save to keep them.', $cells, $cells === 1 ? '' : 's', $label),
             StatusLevel::INFO);
         $this->renderCanvasArea();
-    }
-
-    /** The planner for a gameplay layer's pieces, or null when it has none to follow. */
-    private function loadGlyphTilePlanner(ProjectMap $map, string $layerId, array $excludedLayers = []): ?GlyphTilePlanner
-    {
-        $layer = array_find($map->getLayers(), static fn(array $candidate): bool => $candidate['id'] === $layerId);
-        if ($layer === null || $layer['id'] === MapLayers::EVENT || $layer['decoration']) {
-            return null;
-        }
-        try {
-            $pieces = $map->loadTileset()?->pieces ?? [];
-        } catch (InvalidArgumentException | RuntimeException) {
-            return null;
-        }
-
-        return $pieces === [] ? null : GlyphTilePlanner::fromPieces($pieces, $layer['name'], $excludedLayers);
-    }
-
-    /**
-     * Reads tile entries cell by cell, each layer once: `0` where a layer
-     * has no tile, or the map has no such layer.
-     *
-     * @return Closure(string, int, int): string
-     */
-    private function createTileReader(ProjectMap $map): Closure
-    {
-        $layers = [];
-
-        return static function (string $layer, int $x, int $y) use ($map, &$layers): string {
-            $layers[$layer] ??= $map->readTileEntries([$layer], 0, 0, $map->getWidth(), $map->getHeight())[$layer] ?? [];
-
-            return $layers[$layer][$y][$x] ?? (string) TileId::EMPTY;
-        };
     }
 
     /**
@@ -347,13 +284,13 @@ trait GlyphTileCanvas
     {
         $this->paintPieceRole = null;
         $layerId = $this->getActiveCanvasLayer();
-        $planner = $this->loadGlyphTilePlanner($map, $layerId);
+        $planner = CanvasEditor::loadGlyphTilePlanner($map, $layerId);
         if ($planner === null || ! $map->hasLayerCell($layerId, $x, $y)) {
             return '';
         }
         $symbol = $map->getLayerSymbol($layerId, $x, $y);
         try {
-            $role = $planner->findPlayedRole($symbol, $x, $y, $this->createTileReader($map));
+            $role = $planner->findPlayedRole($symbol, $x, $y, CanvasEditor::createTileReader($map));
         } catch (MapSourceRefusal) {
             return '';
         }

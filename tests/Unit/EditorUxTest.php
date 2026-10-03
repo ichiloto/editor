@@ -249,7 +249,7 @@ it('steps integer inspector fields with the Left/Right idiom and records undo', 
 
 it('builds boolean and float controls for event data values', function () {
   $editor = uxEditor();
-  $fields = callEditorMethod($editor, 'flattenInspectorFields', ['locked' => true, 'rate' => 1.5], ['data']);
+  $fields = callEditorMethod($editor, 'createMapInspector')->buildEventDataFields('A', ['data' => ['locked' => true, 'rate' => 1.5]]);
   $byLabel = array_column($fields, null, 'label');
 
   expect($byLabel['Locked']['control']->type)->toBe(InputControlType::BOOLEAN)

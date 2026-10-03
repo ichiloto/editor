@@ -15,9 +15,11 @@ use Ichiloto\Editor\ProjectWorkspace;
  */
 function eventDataFieldFor(array $data, array $path): array
 {
-    $editor = createEditorForTesting(makeTemporaryProject());
+    $root = makeTemporaryProject();
+    $editor = createEditorForTesting($root);
+    setEditorProperty($editor, 'workspace', ProjectWorkspace::fromProject($root));
 
-    foreach (callEditorMethod($editor, 'buildEventDataFields', 'A', ['data' => $data]) as $field) {
+    foreach (callEditorMethod($editor, 'createMapInspector')->buildEventDataFields('A', ['data' => $data]) as $field) {
         if (($field['path'] ?? null) === $path) {
             return $field;
         }
