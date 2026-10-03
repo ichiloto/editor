@@ -937,6 +937,14 @@ what a save resolves the actor by. A project that declares none is resolved
 by display name, so the row says so, and renaming such an actor strands
 every save that named it.
 
+**Attack Style** is the character's own weapon: the weapon type they fight
+with when no weapon is equipped, part of who they are and with no stats
+(`Unarmed`, the default, writes nothing). A battle's basic attack plays the
+animation bound to the equipped weapon's type, else to this style, else to
+`attack-unarmed`; equipment stays the stat-bearing upgrade. The row offers
+the Engine's weapon types, writes them as the Engine spells them, and
+validation reports a written style the Engine does not know.
+
 **Nature** is what this actor is, as distinct from the class it shares with
 others: an adjustment per canonical stat, applied on top of the class
 baseline. Adjustments keep their sign, because being slower than the

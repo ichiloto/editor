@@ -19,6 +19,7 @@ use Ichiloto\Editor\Field\ProjectNpc;
 use Ichiloto\Editor\ActorStatPreview;
 use Ichiloto\Editor\EquipmentOptimizationPolicy;
 use Ichiloto\Editor\PermanentGrowthCatalog;
+use Ichiloto\Editor\ProjectActor;
 use Ichiloto\Editor\ProjectDirectoryContext;
 use Ichiloto\Editor\ProjectQuest;
 use Ichiloto\Editor\ProjectMap;
@@ -298,6 +299,14 @@ class ProjectValidator
       if (! $actor->hasDefinitionId()) {
         $issues[] = Issue::error($where, 'Actor has no explicit stable id.',
           'For an absent id, use Freeze current name as ID in the actor editor or the CLI validation migration before renaming. Malformed explicit ids require manual correction; no file is repaired automatically.');
+      }
+
+      if ($actor->getAttackStyle() !== '' && ProjectActor::findAttackStyleType($actor->getAttackStyle()) === null) {
+        $issues[] = Issue::error(
+          $where,
+          sprintf('Its attack style "%s" is not a weapon type the Engine knows.', $actor->getAttackStyle()),
+          'Choose one on the Attack Style row, or remove it to fight unarmed.'
+        );
       }
 
       $variants = $actor->getNaturalVariants();

@@ -12,6 +12,8 @@ use Ichiloto\Editor\Cutscenes\Source\SourcePreservationRefusal;
 use Ichiloto\Editor\Database\PhpDataFile;
 use Ichiloto\Editor\Storage\FileSetTransaction;
 
+use Ichiloto\Engine\Entities\Enumerations\WeaponType;
+use InvalidArgumentException;
 use RuntimeException;
 
 /**
@@ -32,6 +34,8 @@ final class ProjectActor
      * The sentinel option meaning "no class reference" in the editor picker.
      */
     public const string CLASS_NONE = 'none';
+    /** The attack style of a character with no weapon of their own: the key is absent. */
+    public const string ATTACK_STYLE_UNARMED = 'unarmed';
 
     /**
      * @param array<string, mixed> $payload
@@ -174,6 +178,33 @@ final class ProjectActor
         $className = $this->getData()['class'] ?? $this->getData()['role'] ?? '';
 
         return is_string($className) ? $className : '';
+    }
+
+    /**
+     * Returns the actor's own attack style as written: the weapon type the
+     * character fights with when no weapon is equipped (their own weapon,
+     * part of who they are, with no stats), from `data.attackStyle`.
+     *
+     * @return string The authored value, or an empty string when they fight unarmed.
+     */
+    public function getAttackStyle(): string
+    {
+        $style = $this->getData()['attackStyle'] ?? '';
+
+        return is_string($style) ? $style : '';
+    }
+
+    /**
+     * Returns the Engine weapon type an attack style names, read by the
+     * Engine's own rule, or null when it names none.
+     */
+    public static function findAttackStyleType(string $style): ?WeaponType
+    {
+        try {
+            return WeaponType::require($style);
+        } catch (InvalidArgumentException) {
+            return null;
+        }
     }
 
     /**
@@ -542,6 +573,24 @@ final class ProjectActor
                 unset($this->payload['data']['class']);
             } else {
                 $this->payload['data']['class'] = $className;
+            }
+
+            $this->touchState();
+            return;
+        }
+
+        if ($field === 'attackStyle') {
+            $style = trim((string) $value);
+
+            // Unarmed is the absence of a style, so it removes the key; any
+            // other value is written as the Engine's own spelling, and one
+            // the Engine does not know is refused before anything changes.
+            if ($style === '' || strtolower($style) === self::ATTACK_STYLE_UNARMED) {
+                unset($this->payload['data']['attackStyle']);
+            } else {
+                $type = self::findAttackStyleType($style)
+                    ?? throw new RuntimeException(sprintf('The Engine has no weapon type "%s".', $style));
+                $this->payload['data']['attackStyle'] = $type->value;
             }
 
             $this->touchState();
