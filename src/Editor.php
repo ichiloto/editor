@@ -7455,7 +7455,7 @@ final class Editor
 
         try {
             $mapId = $this->workspace->createMap(kind: $kind);
-            $this->reloadWorkspaceSelectingMap($mapId);
+            $this->addWorkspaceMapSelecting($mapId);
             $this->selectedInspectorFieldIndex = 0;
             $this->setStatus($kind === null
                 ? sprintf('Created %s. It has no kind: the project has no tilesets in assets/%s/.', $mapId, Tileset::DIRECTORY)
@@ -7486,7 +7486,7 @@ final class Editor
                 return;
             }
 
-            $this->reloadWorkspaceSelectingMap($mapId);
+            $this->addWorkspaceMapSelecting($mapId);
             $this->setStatus(sprintf('Duplicated %s.', $mapId), StatusLevel::SUCCESS);
             $this->renderSelectionDependentArea();
         } catch (Throwable $throwable) {
@@ -8551,9 +8551,10 @@ final class Editor
                 return;
             }
 
+            // Undo steps may name the deleted map; every other map keeps its unsaved changes.
             $this->history->clear();
             $this->activeStrokeCommand = null;
-            $this->workspace = ProjectWorkspace::fromProject($this->projectRoot);
+            $this->workspace = $this->workspace->withoutMap($deletedMapId);
             $this->selectedAssetIndex = $this->clampSelection(min($currentIndex, max(0, count($this->workspace->mapIds) - 1)));
             $this->cursorX = 0;
             $this->cursorY = 0;
@@ -8573,18 +8574,17 @@ final class Editor
     }
 
     /**
-     * Reloads the workspace and selects the requested map id.
+     * Adds a map just written to disk to the workspace and selects it.
      *
-     * @param string $mapId The map id to select after reload.
+     * @param string $mapId The created or duplicated map's id.
      * @return void
      */
-    private function reloadWorkspaceSelectingMap(string $mapId): void
+    private function addWorkspaceMapSelecting(string $mapId): void
     {
-        // A full rescan replaces every loaded map object, so retained undo
-        // commands would mutate stale instances - drop them.
-        $this->history->clear();
+        // Only the new map is read, so every other map keeps its unsaved
+        // changes and the undo history stays valid.
         $this->activeStrokeCommand = null;
-        $this->workspace = ProjectWorkspace::fromProject($this->projectRoot);
+        $this->workspace = $this->workspace->withLoadedMap($mapId);
         $selectedIndex = array_search($mapId, $this->workspace->mapIds, true);
         $this->selectedAssetIndex = is_int($selectedIndex) ? $selectedIndex : 0;
         $this->cursorX = 0;

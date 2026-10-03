@@ -19,6 +19,7 @@ use Ichiloto\Editor\Inspector\InspectorRefusal;
 use Ichiloto\Editor\Inspector\MapInspector;
 use Ichiloto\Editor\MapSourceRefusal;
 use Ichiloto\Editor\Maps\MapLayers;
+use Ichiloto\Editor\Maps\MapReferences;
 use Ichiloto\Editor\Maps\TilePalette;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
@@ -26,6 +27,7 @@ use Ichiloto\Editor\Validation\MapValidator;
 use Ichiloto\Engine\Rendering\Presentation\PresentationLayerPolicy;
 use Ichiloto\Engine\Rendering\Presentation\PresentationWorld;
 use InvalidArgumentException;
+use RuntimeException;
 
 /**
  * One open project as every editor interface edits it: its documents, the
@@ -94,6 +96,76 @@ final class EditorSession
             'revision' => $map->stateVersion(),
         ], $this->workspace->maps);
     }
+
+    /**
+     * The kinds a new map can have: the project's tilesets, which its tiles
+     * and pieces come from.
+     *
+     * @return list<array{value: string, label: string}>
+     */
+    public function listMapKinds(): array
+    {
+        $kinds = new ReferenceCatalog($this->workspace)->labelsFor('tilesets');
+
+        return array_map(static fn(string $id, string $name): array => ['value' => $id, 'label' => $name], array_keys($kinds), $kinds);
+    }
+
+    /**
+     * Creates a blank map at the maps root, written to disk at once as the
+     * terminal editor creates one, named after `$name` (`new-map` when
+     * empty) with a numbered suffix when that is taken. Every open map keeps
+     * its unsaved changes and the undo history stays.
+     *
+     * @return array{map: string, maps: list<array<string, mixed>>}
+     * @throws SessionRefusal When the kind is unknown, the size is not a size, or the files cannot be written.
+     */
+    public function createMap(?string $name, ?string $kind, int $width, int $height): array
+    {
+        if ($kind !== null && ! in_array($kind, array_column($this->listMapKinds(), 'value'), true)) {
+            throw new SessionRefusal(sprintf('There is no map kind %s.', $kind));
+        }
+        $baseName = $name === null || trim($name) === '' ? null : ProjectMap::slugify($name, '');
+        if ($baseName === '') {
+            throw new SessionRefusal(sprintf('"%s" has no letters or digits to name a map with.', $name));
+        }
+        try {
+            $mapId = $this->workspace->createMap($baseName, kind: $kind, width: $width, height: $height);
+        } catch (MapSourceRefusal|RuntimeException $error) {
+            throw new SessionRefusal(sprintf('The map was not created: %s', $error->getMessage()), previous: $error);
+        }
+        $this->workspace = $this->workspace->withLoadedMap($mapId);
+
+        return ['map' => $mapId, 'maps' => $this->describeMaps()];
+    }
+
+    /**
+     * Deletes a map's files from disk at once, as the terminal editor does.
+     * While something still sends the player there ({@see MapReferences}),
+     * nothing is deleted until the author confirms: the answer is a question
+     * listing them. The undo history is cleared, since its steps may name
+     * the deleted map; every other map keeps its unsaved changes.
+     *
+     * @return array{status: 'deleted', map: string, maps: list<array<string, mixed>>}|array{status: 'question', map: string, references: list<string>}
+     * @throws SessionRefusal When the map is unknown or read-only, or its files cannot be removed.
+     */
+    public function deleteMap(string $mapId, bool $confirmed = false): array
+    {
+        $this->requireMap($mapId);
+        $references = new MapReferences($this->workspace)->describe($mapId);
+        if ($references !== [] && ! $confirmed) {
+            return ['status' => 'question', 'map' => $mapId, 'references' => $references];
+        }
+        try {
+            $this->workspace->deleteMap((int) array_search($mapId, $this->workspace->mapIds, true));
+        } catch (MapSourceRefusal|RuntimeException $error) {
+            throw new SessionRefusal(sprintf('%s was not deleted: %s', $mapId, $error->getMessage()), previous: $error);
+        }
+        $this->workspace = $this->workspace->withoutMap($mapId);
+        $this->history->clear();
+
+        return ['status' => 'deleted', 'map' => $mapId, 'maps' => $this->describeMaps()];
+    }
+
 
     /**
      * A map as an interface draws it: its layers' glyphs and colours, its

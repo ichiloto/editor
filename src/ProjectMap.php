@@ -2691,7 +2691,7 @@ final class ProjectMap
      * @param string $fallback The fallback slug.
      * @return string
      */
-    private static function slugify(string $value, string $fallback = 'new-map'): string
+    public static function slugify(string $value, string $fallback = 'new-map'): string
     {
         $value = strtolower(trim($value));
         $value = preg_replace('/[^a-z0-9]+/i', '-', $value) ?? '';

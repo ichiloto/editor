@@ -96,6 +96,14 @@ final class SessionHost
 
         return match ($method) {
             'maps.list' => $session->describeMaps(),
+            'maps.kinds' => $session->listMapKinds(),
+            'map.create' => $session->createMap(
+                is_string($params['name'] ?? null) ? $params['name'] : null,
+                is_string($params['kind'] ?? null) ? $params['kind'] : null,
+                self::requireInt($params, 'width'),
+                self::requireInt($params, 'height'),
+            ),
+            'map.delete' => $session->deleteMap(self::requireString($params, 'map'), ($params['confirm'] ?? false) === true),
             'map.read' => $session->readMap(self::requireString($params, 'map')),
             'map.world' => $session->readWorld(self::requireString($params, 'map')),
             'tiles.palette' => $session->readTilePalette(self::requireString($params, 'map')),

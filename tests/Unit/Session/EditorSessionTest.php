@@ -282,3 +282,50 @@ it('saves placed tiles into the tile layer file the Engine reads', function () {
 
     expect(readTileRows($root . '/assets/Maps/test-map/graphics/02.decor.tiles.php'))->toBe([[0, 5, 0, 0], [7, 0, 0, 5]]);
 });
+
+it('creates a map named and sized by the author, keeping every open map\'s unsaved changes and undo', function () {
+    $root = mapGraphicsProject();
+    $session = EditorSession::open($root);
+    $map = $session->readMap('test-map');
+    $session->paintTiles('test-map', $map['revision'], 'floor', [[0, 0]], 5);
+
+    $created = $session->createMap('Old Mill', 'home', 6, 4);
+    $mill = $session->readMap('old-mill');
+
+    expect($created['map'])->toBe('old-mill')
+        ->and(array_column($created['maps'], 'id'))->toContain('old-mill', 'test-map')
+        ->and([$mill['name'], $mill['width'], $mill['height']])->toBe(['Old Mill', 6, 4])
+        ->and($session->listMapKinds())->toBe([['value' => 'home', 'label' => 'Home']])
+        ->and($session->readMap('test-map')['dirty'])->toBeTrue()
+        ->and($session->undo()['label'])->toBe('Place tiles')
+        ->and($session->createMap('Old Mill', null, 2, 2)['map'])->toBe('old-mill-2')
+        ->and(fn() => $session->createMap('!!!', null, 2, 2))->toThrow(SessionRefusal::class, 'no letters or digits')
+        ->and(fn() => $session->createMap(null, 'castle', 2, 2))->toThrow(SessionRefusal::class, 'no map kind castle')
+        ->and(fn() => $session->createMap(null, null, 0, 2))->toThrow(SessionRefusal::class, 'at least 1 x 1');
+});
+
+it('asks before deleting a map something still transfers to, then deletes it and keeps other unsaved work', function () {
+    $root = mapGraphicsProject();
+    $session = EditorSession::open($root);
+    $session->createMap('Cellar', null, 3, 3);
+    $session->createMap('Attic', null, 3, 3);
+    $session->paintTiles('test-map', $session->readMap('test-map')['revision'], 'floor', [[1, 1]], 5);
+    $data = $root . '/assets/Maps/test-map/test-map.data.php';
+    file_put_contents($data, str_replace("'events' => [],", "'events' => ['D' => ['class' => 'Door', 'data' => ['destinationMap' => 'cellar']]],",
+        (string) file_get_contents($data)));
+    $session = EditorSession::open($root);
+    $session->paintTiles('test-map', $session->readMap('test-map')['revision'], 'floor', [[1, 1]], 5);
+
+    $asked = $session->deleteMap('cellar');
+    expect($asked)->toBe(['status' => 'question', 'map' => 'cellar', 'references' => ['event D on test-map']])
+        ->and(is_dir($root . '/assets/Maps/cellar'))->toBeTrue()
+        ->and($session->deleteMap('attic')['status'])->toBe('deleted')
+        ->and(is_dir($root . '/assets/Maps/attic'))->toBeFalse();
+
+    $deleted = $session->deleteMap('cellar', confirmed: true);
+    expect($deleted['status'])->toBe('deleted')
+        ->and(array_column($deleted['maps'], 'id'))->not->toContain('cellar')
+        ->and(is_dir($root . '/assets/Maps/cellar'))->toBeFalse()
+        ->and($session->readMap('test-map')['dirty'])->toBeTrue()
+        ->and(fn() => $session->deleteMap('cellar'))->toThrow(SessionRefusal::class);
+});
