@@ -19,6 +19,10 @@ use Ichiloto\Engine\Rendering\Tilesets\TileId;
  * The map's graphical tile layers share the boundary: the TUI never paints
  * single tiles, but writes the tiles of stamped and drawn pieces and resizes,
  * relocates and removes them with the map.
+ *
+ * Changing the layers themselves (creating, renaming, reordering, toggling
+ * decoration, removing) replaces layer entries and never changes a grid in
+ * place, so a clone can try a change without touching this set.
  */
 final class MapLayers
 {
@@ -142,7 +146,12 @@ final class MapLayers
             $this->layers[self::BASE]['path'] = $this->buildPath(0, 'terrain', false);
             $this->legacy = false;
         }
+        // Ids name a layer for a session and survive reordering, so the id
+        // its order would give at load may already be taken.
         $id = 'map:' . $order;
+        for ($copy = 2; isset($this->layers[$id]); $copy++) {
+            $id = sprintf('map:%d:%d', $order, $copy);
+        }
         $grid = new EditableGrid(implode("\n", array_map(
             static fn(array $row): string => str_repeat(' ', count($row)), $this->getBaseGrid()->cells,
         )));
@@ -163,13 +172,67 @@ final class MapLayers
         $this->layers[$layer['id']]['path'] = $this->buildPath($layer['order'], $name, $layer['decoration']);
     }
 
+    /**
+     * Moves a layer to another order, renaming its file's prefix. When
+     * another layer holds that order the two exchange orders.
+     *
+     * @throws MapSourceRefusal When the layer cannot move or the order is not 00-99.
+     */
+    public function moveLayer(string $id, int $order): void
+    {
+        $layer = $this->getLayer($id);
+        $this->assertManagedLayer($layer);
+        if ($order < MapLayer::MIN_ORDER || $order > MapLayer::MAX_ORDER) {
+            throw new MapSourceRefusal('Layer order must be a two-digit number (00-99).');
+        }
+        if ($layer['order'] === $order) {
+            return;
+        }
+        foreach ($this->layers as $other) {
+            if ($other['id'] !== self::EVENT && $other['order'] === $order) {
+                $this->setLayerEntry($other['id'], $other['name'], $layer['order'], $other['decoration']);
+            }
+        }
+        $this->setLayerEntry($layer['id'], $layer['name'], $order, $layer['decoration']);
+    }
+
+    /**
+     * Makes a layer decoration, drawn without collision, or gameplay,
+     * renaming its file's kind. A map keeps at least one gameplay layer.
+     *
+     * @throws MapSourceRefusal When the layer cannot change or is the last gameplay layer.
+     */
+    public function setLayerDecoration(string $id, bool $decoration): void
+    {
+        $layer = $this->getLayer($id);
+        $this->assertManagedLayer($layer);
+        if ($layer['decoration'] === $decoration) {
+            return;
+        }
+        if ($decoration && $this->isLastGameplayLayer($layer)) {
+            throw new MapSourceRefusal('The last gameplay layer cannot become decoration.');
+        }
+        $this->setLayerEntry($layer['id'], $layer['name'], $layer['order'], $decoration);
+    }
+
+    private function setLayerEntry(string $id, string $name, int $order, bool $decoration): void
+    {
+        $this->layers[$id] = [...$this->layers[$id], 'name' => $name, 'order' => $order, 'decoration' => $decoration,
+            'path' => $this->buildPath($order, $name, $decoration)];
+    }
+
+    private function isLastGameplayLayer(array $layer): bool
+    {
+        return ! $layer['decoration'] && count(array_filter($this->layers,
+            static fn(array $entry): bool => $entry['id'] !== self::EVENT && ! $entry['decoration'],
+        )) === 1;
+    }
+
     public function removeLayer(string $id): void
     {
         $layer = $this->getLayer($id);
         $this->assertManagedLayer($layer);
-        if (! $layer['decoration'] && count(array_filter($this->layers,
-            static fn(array $entry): bool => $entry['id'] !== self::EVENT && ! $entry['decoration'],
-        )) === 1) {
+        if ($this->isLastGameplayLayer($layer)) {
             throw new MapSourceRefusal('The last gameplay layer cannot be removed.');
         }
         unset($this->layers[$layer['id']]);
@@ -178,7 +241,7 @@ final class MapLayers
     private function assertManagedLayer(array $layer): void
     {
         if ($this->legacy || $layer['id'] === self::EVENT) {
-            throw new MapSourceRefusal('Only authored layers in layers/ can be renamed or removed.');
+            throw new MapSourceRefusal('Only authored layers in layers/ can be renamed, reordered, made decoration or removed.');
         }
     }
 
@@ -369,6 +432,131 @@ final class MapLayers
         return $read;
     }
 
+    /**
+     * The map's tile layers in drawing order: each one's name, order and path.
+     *
+     * @return list<array{name: string, order: int, path: string}>
+     */
+    public function getTileLayers(): array
+    {
+        $layers = [];
+        foreach (array_keys($this->tileSources) as $path) {
+            if (preg_match(MapGraphics::FILENAME_PATTERN, basename($path), $matches) === 1) {
+                $layers[] = ['name' => $matches['name'], 'order' => (int) $matches['order'], 'path' => $path];
+            }
+        }
+        usort($layers, static fn(array $a, array $b): int => $a['order'] <=> $b['order']);
+
+        return $layers;
+    }
+
+    /**
+     * Adds an empty tile layer, every cell `0`, placed among the tile layers
+     * as a layer a piece names is ({@see writeTileEntries()}).
+     *
+     * @param (Closure(string, list<string>): ?string)|null $placeBefore
+     * @throws MapSourceRefusal When the name is taken or not a tile layer name, or the map cannot take another tile layer.
+     */
+    public function createTileLayer(string $name, ?Closure $placeBefore = null): void
+    {
+        $sources = $this->tileSources;
+        if ($this->findTileLayerPath($name, $sources) !== null) {
+            throw new MapSourceRefusal("Tile layer {$name} already exists. Nothing was changed.");
+        }
+        $path = $this->addTileLayerPath($name, $sources, $placeBefore);
+        $sources[$path] = TileLayerSource::createEmpty($this->getLayerSet());
+        ksort($sources, SORT_STRING);
+        $this->tileSources = $sources;
+    }
+
+    /**
+     * Renames a tile layer, keeping its order and its tiles.
+     *
+     * @throws MapSourceRefusal When there is no such layer, or the new name is taken or not a tile layer name.
+     */
+    public function renameTileLayer(string $name, string $newName): void
+    {
+        $layer = $this->requireTileLayer($name);
+        if ($newName === $name) {
+            return;
+        }
+        if ($this->findTileLayerPath($newName, $this->tileSources) !== null) {
+            throw new MapSourceRefusal("Tile layer {$newName} already exists. Nothing was changed.");
+        }
+        $this->setTileLayerPaths([$layer['path'] => $this->buildTileLayerPath($layer['order'], $newName)]);
+    }
+
+    /**
+     * Moves a tile layer to another order, renaming its file's prefix. When
+     * another tile layer holds that order the two exchange orders.
+     *
+     * @throws MapSourceRefusal When there is no such layer or the order is not 00-99.
+     */
+    public function moveTileLayer(string $name, int $order): void
+    {
+        $layer = $this->requireTileLayer($name);
+        if ($order < MapLayer::MIN_ORDER || $order > MapLayer::MAX_ORDER) {
+            throw new MapSourceRefusal('Tile layer order must be a two-digit number (00-99). Nothing was changed.');
+        }
+        $paths = [];
+        foreach ($this->getTileLayers() as $other) {
+            if ($other['order'] === $order && $other['path'] !== $layer['path']) {
+                $paths[$other['path']] = $this->buildTileLayerPath($layer['order'], $other['name']);
+            }
+        }
+        $paths[$layer['path']] = $this->buildTileLayerPath($order, $name);
+        $this->setTileLayerPaths($paths);
+    }
+
+    /**
+     * Removes a tile layer and its tiles.
+     *
+     * @throws MapSourceRefusal When there is no such layer.
+     */
+    public function removeTileLayer(string $name): void
+    {
+        unset($this->tileSources[$this->requireTileLayer($name)['path']]);
+    }
+
+    /**
+     * @return array{name: string, order: int, path: string}
+     * @throws MapSourceRefusal When the map has no tile layer with the name.
+     */
+    private function requireTileLayer(string $name): array
+    {
+        $path = $this->findTileLayerPath($name, $this->tileSources);
+
+        return array_find($this->getTileLayers(), static fn(array $layer): bool => $layer['path'] === $path)
+            ?? throw new MapSourceRefusal("There is no tile layer {$name}. Nothing was changed.");
+    }
+
+    /** @throws MapSourceRefusal When the name is not a tile layer name. */
+    private function buildTileLayerPath(int $order, string $name): string
+    {
+        $path = sprintf('%s/%s/%02d.%s.tiles.php', $this->directory, MapGraphics::DIRECTORY, $order, $name);
+        if (preg_match(MapGraphics::FILENAME_PATTERN, basename($path)) !== 1) {
+            throw new MapSourceRefusal("'{$name}' is not a tile layer name. Nothing was changed.");
+        }
+
+        return $path;
+    }
+
+    /**
+     * Moves tile layer sources to new paths, so a save writes them there and
+     * removes the files they leave.
+     *
+     * @param array<string, string> $paths New paths by current path.
+     */
+    private function setTileLayerPaths(array $paths): void
+    {
+        $sources = [];
+        foreach ($this->tileSources as $path => $source) {
+            $sources[$paths[$path] ?? $path] = $source;
+        }
+        ksort($sources, SORT_STRING);
+        $this->tileSources = $sources;
+    }
+
     /** @param array<string, string> $tileSources Tile layer sources by path, as {@see getTileSources()} returns them. */
     public function restoreTileSources(array $tileSources): void
     {
@@ -440,12 +628,7 @@ final class MapLayers
             throw new MapSourceRefusal(sprintf('Tile layer %s cannot be added: a map holds up to %d tile layers, ordered 00 to 99. Nothing was changed.',
                 $name, MapGraphics::MAX_LAYERS));
         }
-        $path = sprintf('%s/%s/%02d.%s.tiles.php', $this->directory, MapGraphics::DIRECTORY, $order, $name);
-        if (preg_match(MapGraphics::FILENAME_PATTERN, basename($path)) !== 1) {
-            throw new MapSourceRefusal("'{$name}' is not a tile layer name. Nothing was changed.");
-        }
-
-        return $path;
+        return $this->buildTileLayerPath($order, $name);
     }
 
     /** A tile layer path relative to its map, as refusals name it. */
@@ -459,13 +642,12 @@ final class MapLayers
         $this->getLayerSet()->assertMatchingGrid($this->getEventGrid()->getSymbols(), $this->layers[self::EVENT]['path']);
     }
 
-    public function getLayerSet(?string $renamedId = null, ?string $newName = null): MapLayerSet
+    public function getLayerSet(): MapLayerSet
     {
         $layers = [];
         foreach ($this->getLayers() as $layer) {
             if ($layer['id'] !== self::EVENT) {
-                $layers[] = new MapLayer($layer['id'] === $renamedId ? $newName : $layer['name'],
-                    $layer['order'], $layer['decoration'], $layer['path'],
+                $layers[] = new MapLayer($layer['name'], $layer['order'], $layer['decoration'], $layer['path'],
                     MapGridSource::parseSource($layer['grid']->getSource(), $layer['path']));
             }
         }
