@@ -126,6 +126,73 @@ final class SessionHost
                 self::readChoices($params),
                 is_string($params['label'] ?? null) ? $params['label'] : 'Paint',
             ),
+            'layer.create' => $session->createLayer(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireString($params, 'name'),
+                is_bool($params['decoration'] ?? false) ? ($params['decoration'] ?? false) : throw new InvalidRequest('"decoration" must be a boolean.'),
+            ),
+            'layer.rename' => $session->renameLayer(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireString($params, 'layer'),
+                self::requireString($params, 'name'),
+                is_bool($params['confirm'] ?? false) ? ($params['confirm'] ?? false) : throw new InvalidRequest('"confirm" must be a boolean.'),
+            ),
+            'layer.remove' => $session->removeLayer(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireString($params, 'layer'),
+                is_bool($params['confirm'] ?? false) ? ($params['confirm'] ?? false) : throw new InvalidRequest('"confirm" must be a boolean.'),
+            ),
+            'layer.reorder' => $session->moveLayer(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireString($params, 'layer'),
+                is_int($params['order'] ?? null) || ! isset($params['order']) ? ($params['order'] ?? null) : throw new InvalidRequest('"order" must be an integer.'),
+                is_string($params['direction'] ?? null) || ! isset($params['direction']) ? ($params['direction'] ?? null) : throw new InvalidRequest('"direction" must be "above" or "below".'),
+                is_bool($params['confirm'] ?? false) ? ($params['confirm'] ?? false) : throw new InvalidRequest('"confirm" must be a boolean.'),
+            ),
+            'layer.decoration' => $session->setLayerDecoration(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireString($params, 'layer'),
+                is_bool($params['decoration'] ?? null) ? $params['decoration'] : throw new InvalidRequest('"decoration" must be a boolean.'),
+                is_bool($params['confirm'] ?? false) ? ($params['confirm'] ?? false) : throw new InvalidRequest('"confirm" must be a boolean.'),
+            ),
+            'tileLayer.create' => $session->createTileLayer(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireString($params, 'name'),
+            ),
+            'tileLayer.rename' => $session->renameTileLayer(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireString($params, 'name'),
+                self::requireString($params, 'newName'),
+            ),
+            'tileLayer.remove' => $session->removeTileLayer(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireString($params, 'name'),
+            ),
+            'tileLayer.reorder' => $session->moveTileLayer(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireString($params, 'name'),
+                is_int($params['order'] ?? null) || ! isset($params['order']) ? ($params['order'] ?? null) : throw new InvalidRequest('"order" must be an integer.'),
+                is_string($params['direction'] ?? null) || ! isset($params['direction']) ? ($params['direction'] ?? null) : throw new InvalidRequest('"direction" must be "above" or "below".'),
+            ),
+            'tileLayer.settings' => $session->setTileLayerSettings(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireString($params, 'name'),
+                is_array($params['offset'] ?? null) && array_is_list($params['offset']) && count($params['offset']) === 2
+                    && array_all($params['offset'], static fn(mixed $value): bool => is_int($value) || is_float($value))
+                    ? $params['offset'] : throw new InvalidRequest('"offset" must be two numbers, across and down.'),
+                array_key_exists('movesWith', $params) && (is_string($params['movesWith']) || $params['movesWith'] === null)
+                    ? $params['movesWith'] : throw new InvalidRequest('"movesWith" must be a gameplay layer name or null.'),
+            ),
             'map.save' => $session->saveMap(self::requireString($params, 'map')),
             'inspector.read' => $session->readInspector(
                 self::requireString($params, 'map'),

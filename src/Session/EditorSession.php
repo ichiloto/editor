@@ -18,6 +18,7 @@ use Ichiloto\Editor\Inspector\InputControlType;
 use Ichiloto\Editor\Inspector\InspectorRefusal;
 use Ichiloto\Editor\Inspector\MapInspector;
 use Ichiloto\Editor\MapSourceRefusal;
+use Ichiloto\Editor\Maps\LayerEditor;
 use Ichiloto\Editor\Maps\MapLayers;
 use Ichiloto\Editor\Maps\MapReferences;
 use Ichiloto\Editor\Maps\TilePalette;
@@ -26,6 +27,7 @@ use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Editor\Validation\MapValidator;
 use Ichiloto\Engine\Rendering\Presentation\PresentationLayerPolicy;
 use Ichiloto\Engine\Rendering\Presentation\PresentationWorld;
+use Closure;
 use InvalidArgumentException;
 use RuntimeException;
 
@@ -241,6 +243,7 @@ final class EditorSession
             'layers' => $layers,
             'events' => $events,
             'npcs' => $npcs,
+            'tileLayers' => $map->describeTileLayers(),
         ];
     }
 
@@ -406,6 +409,187 @@ final class EditorSession
         }
 
         return ['status' => 'applied', 'changed' => $applied['changed'], 'revision' => $map->stateVersion()];
+    }
+
+    /**
+     * Adds an empty glyph layer, gameplay or decoration, at the next order,
+     * as one undo step. Layer edits answer as {@see editLayers()} describes.
+     *
+     * @return array{status: 'applied', revision: int, changed: bool, layer: ?string}
+     * @throws SessionRefusal When the map is unknown, stale or refuses the layer.
+     */
+    public function createLayer(string $mapId, int $revision, string $name, bool $decoration = false): array
+    {
+        return $this->editLayers($mapId, $revision, static fn(ProjectMap $map): array => LayerEditor::createLayer($map, $name, $decoration));
+    }
+
+    /**
+     * Renames a glyph layer as one undo step. A rename that changes the
+     * map's collisions is asked about; it is made when asked again confirmed.
+     *
+     * @return array{status: 'applied', revision: int, changed: bool, layer: ?string}|array{status: 'question', question: string}
+     * @throws SessionRefusal When the map is unknown, stale or refuses the rename.
+     */
+    public function renameLayer(string $mapId, int $revision, string $layerId, string $name, bool $confirm = false): array
+    {
+        return $this->editLayers($mapId, $revision, static fn(ProjectMap $map): array =>
+            LayerEditor::renameLayer($map, $layerId, $name, $confirm));
+    }
+
+    /**
+     * Removes a glyph layer and its cells as one undo step. A removal that
+     * changes the map's collisions is asked about first. The layer left is
+     * the map's base layer.
+     *
+     * @return array{status: 'applied', revision: int, changed: bool, layer: ?string}|array{status: 'question', question: string}
+     * @throws SessionRefusal When the map is unknown, stale or refuses the removal.
+     */
+    public function removeLayer(string $mapId, int $revision, string $layerId, bool $confirm = false): array
+    {
+        return $this->editLayers($mapId, $revision, static fn(ProjectMap $map): array =>
+            LayerEditor::removeLayer($map, $layerId, $confirm));
+    }
+
+    /**
+     * Moves a glyph layer to an order (00-99), or one step `above` or
+     * `below` among the layers, as one undo step; a layer holding that order
+     * takes this one's. A move that changes the map's collisions is asked
+     * about first.
+     *
+     * @return array{status: 'applied', revision: int, changed: bool, layer: ?string}|array{status: 'question', question: string}
+     * @throws SessionRefusal When the map is unknown, stale or refuses the move, or not exactly one of order and direction is given.
+     */
+    public function moveLayer(string $mapId, int $revision, string $layerId, ?int $order, ?string $direction = null, bool $confirm = false): array
+    {
+        return $this->editLayers($mapId, $revision, static fn(ProjectMap $map): array => LayerEditor::moveLayer($map, $layerId,
+            self::resolveOrder($order, $direction, static fn(string $step): int => LayerEditor::findAdjacentLayerOrder($map, $layerId, $step)),
+            $confirm));
+    }
+
+    /**
+     * Makes a glyph layer decoration, drawn without collision, or gameplay,
+     * as one undo step. A change that changes the map's collisions is asked
+     * about first.
+     *
+     * @return array{status: 'applied', revision: int, changed: bool, layer: ?string}|array{status: 'question', question: string}
+     * @throws SessionRefusal When the map is unknown, stale or refuses the change.
+     */
+    public function setLayerDecoration(string $mapId, int $revision, string $layerId, bool $decoration, bool $confirm = false): array
+    {
+        return $this->editLayers($mapId, $revision, static fn(ProjectMap $map): array =>
+            LayerEditor::setLayerDecoration($map, $layerId, $decoration, $confirm));
+    }
+
+    /**
+     * Adds an empty tile layer as one undo step, placed among the tile
+     * layers as one a tileset piece names is. `layer` is its name.
+     *
+     * @return array{status: 'applied', revision: int, changed: bool, layer: ?string}
+     * @throws SessionRefusal When the map is unknown, stale or refuses the layer.
+     */
+    public function createTileLayer(string $mapId, int $revision, string $name): array
+    {
+        return $this->editLayers($mapId, $revision, static fn(ProjectMap $map): array => LayerEditor::createTileLayer($map, $name));
+    }
+
+    /**
+     * Renames a tile layer and its settings as one undo step.
+     *
+     * @return array{status: 'applied', revision: int, changed: bool, layer: ?string}
+     * @throws SessionRefusal When the map is unknown, stale or refuses the rename.
+     */
+    public function renameTileLayer(string $mapId, int $revision, string $name, string $newName): array
+    {
+        return $this->editLayers($mapId, $revision, static fn(ProjectMap $map): array =>
+            LayerEditor::renameTileLayer($map, $name, $newName));
+    }
+
+    /**
+     * Removes a tile layer, its tiles and its settings as one undo step.
+     *
+     * @return array{status: 'applied', revision: int, changed: bool, layer: ?string}
+     * @throws SessionRefusal When the map is unknown, stale or has no such tile layer.
+     */
+    public function removeTileLayer(string $mapId, int $revision, string $name): array
+    {
+        return $this->editLayers($mapId, $revision, static fn(ProjectMap $map): array => LayerEditor::removeTileLayer($map, $name));
+    }
+
+    /**
+     * Moves a tile layer to a drawing order (00-99), or one step `above` or
+     * `below` among the tile layers, as one undo step; a tile layer holding
+     * that order takes this one's.
+     *
+     * @return array{status: 'applied', revision: int, changed: bool, layer: ?string}
+     * @throws SessionRefusal When the map is unknown, stale or refuses the move, or not exactly one of order and direction is given.
+     */
+    public function moveTileLayer(string $mapId, int $revision, string $name, ?int $order, ?string $direction = null): array
+    {
+        return $this->editLayers($mapId, $revision, static fn(ProjectMap $map): array => LayerEditor::moveTileLayer($map, $name,
+            self::resolveOrder($order, $direction, static fn(string $step): int => LayerEditor::findAdjacentTileLayerOrder($map, $name, $step))));
+    }
+
+    /**
+     * Sets a tile layer's offset across and down in field cells (each -0.5,
+     * 0 or 0.5) and the gameplay layer its tiles move with, or none, as one
+     * undo step, validated as the Engine reads them.
+     *
+     * @param array<int, mixed> $offset
+     * @return array{status: 'applied', revision: int, changed: bool, layer: ?string}
+     * @throws SessionRefusal When the map is unknown, stale or the Engine would refuse the settings.
+     */
+    public function setTileLayerSettings(string $mapId, int $revision, string $name, array $offset, ?string $movesWith): array
+    {
+        return $this->editLayers($mapId, $revision, static fn(ProjectMap $map): array =>
+            LayerEditor::setTileLayerSettings($map, $name, $offset, $movesWith));
+    }
+
+    /**
+     * Makes one layer edit on a map at its current revision and records it.
+     * It answers `applied` with the map's new revision, whether anything
+     * changed and the layer to work on (a glyph layer's id or a tile layer's
+     * name; null after removing a tile layer), or `question` when the edit
+     * would change the map's collisions: nothing changed then, and the edit
+     * is made by asking again confirmed.
+     *
+     * @param Closure(ProjectMap): array{command: ?Command, layer: ?string, question: ?string} $edit
+     * @return array{status: 'applied', revision: int, changed: bool, layer: ?string}|array{status: 'question', question: string}
+     * @throws SessionRefusal When the map is unknown or stale, or the edit is refused.
+     */
+    private function editLayers(string $mapId, int $revision, Closure $edit): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        try {
+            $result = $edit($map);
+        } catch (MapSourceRefusal $refusal) {
+            throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+        }
+        if ($result['question'] !== null) {
+            return ['status' => 'question', 'question' => $result['question']];
+        }
+        if ($result['command'] !== null) {
+            $this->history->record($result['command']);
+        }
+
+        return ['status' => 'applied', 'revision' => $map->stateVersion(), 'changed' => $result['command'] !== null,
+            'layer' => $result['layer']];
+    }
+
+    /**
+     * The order a move names: the order itself, or the order one step in a
+     * direction.
+     *
+     * @param Closure(string): int $findAdjacentOrder
+     * @throws SessionRefusal When not exactly one of order and direction is given.
+     */
+    private static function resolveOrder(?int $order, ?string $direction, Closure $findAdjacentOrder): int
+    {
+        if (($order === null) === ($direction === null)) {
+            throw new SessionRefusal(sprintf("Move a layer to an order, or '%s' or '%s', not both or neither.",
+                LayerEditor::ABOVE, LayerEditor::BELOW));
+        }
+
+        return $order ?? $findAdjacentOrder($direction);
     }
 
     /**
