@@ -108,6 +108,17 @@ final class SessionHost
                 is_string($params['label'] ?? null) ? $params['label'] : 'Paint',
             ),
             'map.save' => $session->saveMap(self::requireString($params, 'map')),
+            'inspector.read' => $session->readInspector(
+                self::requireString($params, 'map'),
+                is_string($params['event'] ?? null) ? $params['event'] : null,
+            ),
+            'inspector.apply' => $session->applyInspector(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                is_array($params['key'] ?? null) ? $params['key'] : throw new InvalidRequest('"key" must be the row key the inspector gave.'),
+                is_scalar($params['value'] ?? null) ? (string) $params['value'] : throw new InvalidRequest('"value" must be a string, number or boolean.'),
+            ),
+            'references.list' => $session->listReferences(self::requireString($params, 'map'), self::requireString($params, 'category')),
             'history.undo' => $session->undo(),
             'history.redo' => $session->redo(),
             'project.dirty' => ['dirty' => $session->hasUnsavedChanges()],

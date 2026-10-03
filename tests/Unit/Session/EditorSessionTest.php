@@ -118,3 +118,67 @@ it('serves the session over its line protocol, answering refusals and bad reques
         ->and($request(8, 'no.such')['error']['message'])->toBe('Unknown method "no.such".')
         ->and($request(9, 'history.undo')['result']['maps'])->toBe(['test-map']);
 });
+
+/** The inspector row with a label, the first when several share it. */
+function inspectorRow(array $inspector, string $label, ?string $after = null): array
+{
+    $rows = $inspector['rows'];
+    $start = $after === null ? 0 : array_search($after, array_column($rows, 'label'), true) + 1;
+    foreach (array_slice($rows, $start) as $row) {
+        if (trim($row['label']) === $label) {
+            return $row;
+        }
+    }
+
+    throw new RuntimeException("No inspector row {$label}.");
+}
+
+it('lists a map\'s inspector rows with how each is edited and the key that names it', function () {
+    $session = EditorSession::open(makeTemporaryProject());
+    $inspector = $session->readInspector('test-map');
+
+    expect(inspectorRow($inspector, 'Name'))->toMatchArray(['kind' => 'text', 'key' => ['target' => 'map', 'field' => 'name']])
+        ->and(inspectorRow($inspector, 'X', 'Size')['kind'])->toBe('integer')
+        ->and(inspectorRow($inspector, 'Events')['kind'])->toBe('info')
+        ->and(inspectorRow($inspector, 'Kind')['kind'])->toBe('info')
+        ->and(inspectorRow($inspector, 'Background Music'))->toMatchArray(['kind' => 'reference', 'reference' => 'bgm'])
+        ->and($inspector['revision'])->toBe($session->readMap('test-map')['revision']);
+});
+
+it('applies an inspector edit as one undo step and refuses a stale or read-only row', function () {
+    $session = EditorSession::open(makeTemporaryProject());
+    $inspector = $session->readInspector('test-map');
+    $name = inspectorRow($inspector, 'Name');
+
+    $applied = $session->applyInspector('test-map', $inspector['revision'], $name['key'], 'Renamed Map');
+
+    expect($applied['changed'])->toBeTrue()
+        ->and($session->readMap('test-map')['name'])->toBe('Renamed Map')
+        ->and(fn() => $session->applyInspector('test-map', $inspector['revision'], $name['key'], 'Again'))
+            ->toThrow(SessionRefusal::class, 'changed since revision');
+
+    expect($session->undo()['maps'])->toBe(['test-map'])
+        ->and($session->readMap('test-map')['name'])->toBe($name['value']);
+
+    $fresh = $session->readInspector('test-map');
+    expect(fn() => $session->applyInspector('test-map', $fresh['revision'], ['target' => 'map', 'field' => 'nope'], 'x'))
+        ->toThrow(SessionRefusal::class, 'no longer in the inspector');
+});
+
+it('moves an event through its position row and lists the choices of a reference row', function () {
+    $session = EditorSession::open(makeTemporaryProject());
+    $event = $session->readInspector('test-map', 'E');
+    $x = inspectorRow($event, 'X', 'Position');
+    $before = (int) $x['value'];
+
+    expect(inspectorRow($event, 'Type')['kind'])->toBe('info')
+        ->and($x['key'])->toBe(['target' => 'event-bounds', 'field' => 'x', 'marker' => 'E']);
+
+    $session->applyInspector('test-map', $event['revision'], $x['key'], (string) ($before + 1));
+    $moved = array_find($session->readMap('test-map')['events'], static fn(array $candidate): bool => $candidate['marker'] === 'E');
+
+    expect($moved['cells'][0][0])->toBe($before + 1)
+        ->and(fn() => $session->readInspector('test-map', 'Q'))->toThrow(SessionRefusal::class, 'test-map has no event Q.')
+        ->and(array_column($session->listReferences('test-map', 'bgm'), 'value'))->toBeArray()
+        ->and(fn() => $session->listReferences('test-map', 'no-such-category'))->toThrow(SessionRefusal::class);
+});

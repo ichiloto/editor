@@ -9,9 +9,13 @@ use Ichiloto\Editor\Backup\BackupWriter;
 use Ichiloto\Editor\Canvas\CanvasEditor;
 use Ichiloto\Editor\Canvas\PieceRole;
 use Ichiloto\Editor\Database\DatabaseCatalog;
+use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\Events\EventTypeCatalog;
 use Ichiloto\Editor\History\Command;
 use Ichiloto\Editor\History\CommandHistory;
+use Ichiloto\Editor\Inspector\InputControlType;
+use Ichiloto\Editor\Inspector\InspectorRefusal;
+use Ichiloto\Editor\Inspector\MapInspector;
 use Ichiloto\Editor\MapSourceRefusal;
 use Ichiloto\Editor\Maps\MapLayers;
 use Ichiloto\Editor\ProjectMap;
@@ -210,6 +214,90 @@ final class EditorSession
     }
 
     /**
+     * The inspector rows of a map, and of one of its events when one is
+     * named, as an interface lists and edits them. Each row says how it is
+     * edited (`kind`) and carries the `key` an edit names it by.
+     *
+     * Kinds: `text`, `integer`, `float`, `boolean`, `options` (one of
+     * `options`), `reference` (one of `references.list` for its
+     * `reference`), or `info` for a row that is only read here: headings,
+     * counts, and the rows the terminal edits through flows of its own (the
+     * map's kind, an event's type, music variant conditions).
+     *
+     * @return array{map: string, revision: int, event: ?string, rows: list<array<string, mixed>>}
+     * @throws SessionRefusal When the map or event is unknown.
+     */
+    public function readInspector(string $mapId, ?string $marker = null): array
+    {
+        $map = $this->requireMap($mapId);
+        if ($marker !== null && $map->getEventDefinition($marker) === null && $map->getEventArea($marker) === null) {
+            throw new SessionRefusal(sprintf('%s has no event %s.', $mapId, $marker));
+        }
+
+        return [
+            'map' => $mapId,
+            'revision' => $map->stateVersion(),
+            'event' => $marker,
+            'rows' => array_map(self::describeRow(...), $this->collectInspectorFields($map, $marker)),
+        ];
+    }
+
+    /**
+     * Applies one inspector row's edit as one undo step. The row is found
+     * again by its key among the map's current rows, so the edit applies
+     * exactly as that row would in any interface.
+     *
+     * @param array<string, mixed> $key The row's key, as `readInspector` gave it.
+     * @return array{revision: int, changed: bool}
+     * @throws SessionRefusal When the map is unknown or stale, the row is gone or read-only, or the edit is refused.
+     */
+    public function applyInspector(string $mapId, int $revision, array $key, string $value): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        $marker = is_string($key['marker'] ?? null) ? $key['marker'] : null;
+        $field = array_find($this->collectInspectorFields($map, $marker),
+            static fn(array $candidate): bool => self::describeKey($candidate) === $key);
+
+        if ($field === null) {
+            throw new SessionRefusal('That row is no longer in the inspector; read it again.');
+        }
+        if (self::describeRow($field)['kind'] === 'info') {
+            throw new SessionRefusal(sprintf('%s cannot be edited here.', trim((string) ($field['label'] ?? 'That row'))));
+        }
+
+        try {
+            $command = $this->createMapInspector($map)->apply($map, $field, $value);
+        } catch (InspectorRefusal $refusal) {
+            throw new SessionRefusal(implode("\n", [$refusal->getMessage(), ...$refusal->details]), previous: $refusal);
+        }
+        if ($command !== null) {
+            $this->history->record($command);
+        }
+
+        return ['revision' => $map->stateVersion(), 'changed' => $command !== null];
+    }
+
+    /**
+     * The values a reference row is chosen from, with how each reads.
+     *
+     * @return list<array{value: string, label: string}>
+     * @throws SessionRefusal When the map is unknown or the category is not a reference.
+     */
+    public function listReferences(string $mapId, string $category): array
+    {
+        if (! ReferenceCatalog::knows($category)) {
+            throw new SessionRefusal(sprintf('There is no reference category %s.', $category));
+        }
+        $catalog = new ReferenceCatalog($this->workspace, $this->requireMap($mapId));
+        $labels = $catalog->labelsFor($category);
+
+        return array_map(static fn(mixed $value): array => [
+            'value' => (string) $value,
+            'label' => (string) ($labels[$value] ?? $value),
+        ], array_values($catalog->valuesFor($category)));
+    }
+
+    /**
      * Undoes the last change, wherever it was made.
      *
      * @return array{label: ?string, maps: list<string>} What was undone and the maps it changed.
@@ -279,6 +367,76 @@ final class EditorSession
         }
 
         return ['label' => $command?->label, 'maps' => $changed];
+    }
+
+    /** @return array<int, array<string, mixed>> */
+    private function collectInspectorFields(ProjectMap $map, ?string $marker): array
+    {
+        $inspector = $this->createMapInspector($map);
+
+        return [...$inspector->getMapFields($map), ...($marker === null ? [] : $inspector->getEventFields($map, $marker))];
+    }
+
+    private function createMapInspector(ProjectMap $map): MapInspector
+    {
+        return new MapInspector(new ReferenceCatalog($this->workspace, $map));
+    }
+
+    /**
+     * One inspector row as plain data.
+     *
+     * @param array<string, mixed> $field
+     * @return array<string, mixed>
+     */
+    private static function describeRow(array $field): array
+    {
+        $target = $field['target'] ?? null;
+        $control = MapInspector::findControl($field);
+        $kind = match (true) {
+            ($field['editable'] ?? true) === false, $target === null,
+            in_array($target, ['map-kind', 'event-type'], true),
+            ($field['mapConditions'] ?? false) === true => 'info',
+            is_string($field['reference'] ?? null) => 'reference',
+            is_array($field['options'] ?? null) => 'options',
+            $control !== null => match ($control->type) {
+                InputControlType::INTEGER => 'integer',
+                InputControlType::FLOAT => 'float',
+                InputControlType::BOOLEAN => 'boolean',
+                default => 'text',
+            },
+            default => 'info',
+        };
+
+        return array_filter([
+            'label' => (string) ($field['label'] ?? ''),
+            'value' => (string) ($field['value'] ?? ''),
+            'kind' => $kind,
+            'options' => $kind === 'options' ? array_values(array_map('strval', $field['options'])) : null,
+            'reference' => $kind === 'reference' ? $field['reference'] : null,
+            'key' => self::describeKey($field),
+        ], static fn(mixed $value): bool => $value !== null);
+    }
+
+    /**
+     * What names a row for an edit: its target and the field, path, marker
+     * and index it edits. Null for a row no edit applies through.
+     *
+     * @param array<string, mixed> $field
+     * @return array<string, mixed>|null
+     */
+    private static function describeKey(array $field): ?array
+    {
+        if (! is_string($field['target'] ?? null)) {
+            return null;
+        }
+
+        return array_filter([
+            'target' => $field['target'],
+            'field' => isset($field['field']) ? (string) $field['field'] : null,
+            'path' => isset($field['path']) ? array_values(array_map('strval', (array) $field['path'])) : null,
+            'marker' => isset($field['marker']) ? (string) $field['marker'] : null,
+            'index' => isset($field['index']) ? (int) $field['index'] : null,
+        ], static fn(mixed $value): bool => $value !== null);
     }
 
     /** @return array<string, ProjectMap> */
