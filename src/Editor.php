@@ -37,9 +37,9 @@ use Ichiloto\Editor\Database\ConditionEditor;
 use Ichiloto\Editor\Field\NpcInspector;
 use Ichiloto\Editor\Field\MapBgmVariants;
 use Ichiloto\Editor\Field\MapEncounters;
-use Ichiloto\Editor\Field\NpcCollection;
-use Ichiloto\Editor\Field\NpcReferences;
-use Ichiloto\Editor\Field\ProjectNpc;
+use Ichiloto\Editor\Field\NpcAuthoring;
+use Ichiloto\Editor\Field\NpcChange;
+use Ichiloto\Editor\Field\NpcRefusal;
 use Ichiloto\Editor\Database\WorldWriteEditor;
 use Ichiloto\Editor\Database\WorldWriteCodec;
 use Ichiloto\Editor\Database\BattleEntryPredicateCodec;
@@ -577,7 +577,7 @@ final class Editor
      * The Inspector row that assigns a stable id to an NPC authored without
      * one; the only time an id is ever written after creation.
      */
-    private const string NPC_ASSIGN_ID_FIELD = '__npc_assign_id';
+    private const string NPC_ASSIGN_ID_FIELD = NpcInspector::ASSIGN_ID_FIELD;
     private bool $isConditionNaming = false;
     private string $conditionNameBuffer = '';
     /**
@@ -1993,35 +1993,7 @@ final class Editor
      */
     private function addDatabaseNpcSubItem(): void
     {
-        $map = $this->getSelectedMap();
-        $index = $this->selectedNpcIndex;
-
-        if (! $map instanceof ProjectMap || $index === null || $this->npcInspector === null) {
-            return;
-        }
-
-        $records = $this->npcInspector->records();
-        $before = $map->getNpcs();
-        $selectedId = (string) ($this->getDatabaseSettingsFields()[$this->databaseSelectedSettingIndex]['field'] ?? '');
-
-        $nested = $this->databaseCommandFramePath !== []
-            ? $records->frameNestedContext($index, $this->databaseCommandFramePath, $selectedId)
-            : null;
-
-        if ($nested !== null) {
-            // A route step under a command in the frame.
-            $records->addFrameNestedItem($index, $this->databaseCommandFramePath, $nested['parentIndex']);
-        } elseif ($this->databaseCommandFramePath !== []) {
-            $after = preg_match('/^command(\\d+)/', $selectedId, $m) === 1 ? intval($m[1]) : null;
-            $records->addFrameCommand($index, $this->databaseCommandFramePath, $after);
-        } elseif (preg_match('/^variant(\\d+)Line/', $selectedId, $m) === 1) {
-            $records->addNestedSubItem($index, intval($m[1]));
-        } else {
-            $records->addSubItem($index);
-        }
-
-        $this->npcInspector->commit();
-        $this->recordNpcCollectionChange($map, $index, $before, 'NPC add');
+        $this->changeNpcSubItem(true);
     }
 
     /**
@@ -2031,74 +2003,97 @@ final class Editor
      */
     private function removeDatabaseNpcSubItem(): void
     {
-        $map = $this->getSelectedMap();
-        $index = $this->selectedNpcIndex;
-
-        if (! $map instanceof ProjectMap || $index === null || $this->npcInspector === null) {
-            return;
-        }
-
-        $records = $this->npcInspector->records();
-        $before = $map->getNpcs();
-        $selectedId = (string) ($this->getDatabaseSettingsFields()[$this->databaseSelectedSettingIndex]['field'] ?? '');
-
-        $nested = $this->databaseCommandFramePath !== []
-            ? $records->frameNestedContext($index, $this->databaseCommandFramePath, $selectedId)
-            : null;
-
-        if ($nested !== null && $nested['nestedIndex'] !== null) {
-            // The step under the cursor; a command row removes the command.
-            $records->removeFrameNestedItem($index, $this->databaseCommandFramePath, $nested['parentIndex'], $nested['nestedIndex']);
-        } elseif ($this->databaseCommandFramePath !== []) {
-            if (preg_match('/^command(\\d+)/', $selectedId, $m) === 1) {
-                $records->removeFrameCommand($index, $this->databaseCommandFramePath, intval($m[1]));
-            }
-        } elseif (preg_match('/^variant(\\d+)Line(\\d+)/', $selectedId, $m) === 1) {
-            $records->removeNestedSubItem($index, intval($m[1]), intval($m[2]));
-        } elseif (preg_match('/^variant(\\d+)/', $selectedId, $m) === 1) {
-            $records->removeSubItem($index, intval($m[1]));
-        } else {
-            return;
-        }
-
-        $this->npcInspector->commit();
-        $this->recordNpcCollectionChange($map, $index, $before, 'NPC remove');
+        $this->changeNpcSubItem(false);
     }
 
     /**
-     * Records a structural NPC change as one undo step, when it changed
-     * anything.
+     * Adds or removes the sub-item at the Inspector cursor through the
+     * shared NPC authoring rules ({@see NpcAuthoring::addSubItem()}), as
+     * one undo step.
      *
-     * @param ProjectMap $map The map.
-     * @param int $index The NPC.
-     * @param \Ichiloto\Editor\Field\NpcCollection $before The collection before.
-     * @param string $label The history label.
+     * @param bool $add True to add, false to remove.
      * @return void
      */
-    private function recordNpcCollectionChange(ProjectMap $map, int $index, \Ichiloto\Editor\Field\NpcCollection $before, string $label): void
+    private function changeNpcSubItem(bool $add): void
     {
-        $after = $map->getNpcs();
+        $authoring = $this->createNpcAuthoring();
+        $index = $this->selectedNpcIndex;
+
+        if (! $authoring instanceof NpcAuthoring || $index === null || $this->npcInspector === null) {
+            return;
+        }
+
+        $fieldId = (string) ($this->getDatabaseSettingsFields()[$this->databaseSelectedSettingIndex]['field'] ?? '');
+
+        try {
+            $change = $add
+                ? $authoring->addSubItem($this->npcInspector, $index, $this->databaseCommandFramePath, $fieldId)
+                : $authoring->removeSubItem($this->npcInspector, $index, $this->databaseCommandFramePath, $fieldId);
+        } catch (NpcRefusal $refusal) {
+            $this->reportNpcRefusal($refusal);
+
+            return;
+        }
+
+        $this->recordNpcChange($change, $index, $index);
+        $this->clampDatabaseSettingSelection();
+        $this->requestFullRender();
+    }
+
+    /**
+     * Returns the shared NPC authoring rules over the open project.
+     *
+     * @return NpcAuthoring|null The rules, or null with no project open.
+     */
+    private function createNpcAuthoring(): ?NpcAuthoring
+    {
+        return $this->workspace instanceof ProjectWorkspace ? new NpcAuthoring($this->workspace) : null;
+    }
+
+    /**
+     * Records an NPC change as one undo step, when it changed anything.
+     *
+     * The change's own command restores the map's NPCs; the shell adds
+     * only what it shows, selecting the NPC the step lands on.
+     *
+     * @param NpcChange $change The applied change.
+     * @param int|null $redoSelection The NPC to select after a redo.
+     * @param int|null $undoSelection The NPC to select after an undo.
+     * @return void
+     */
+    private function recordNpcChange(NpcChange $change, ?int $redoSelection, ?int $undoSelection): void
+    {
         $this->refreshNpcInspector();
+        $command = $change->command;
 
-        if ($after->toMapData() === $before->toMapData()) {
-            $this->requestFullRender();
-
+        if ($command === null) {
             return;
         }
 
         $this->recordCommand(new GenericCommand(
-            $label,
-            function () use ($map, $after, $index): void {
-                $map->setNpcs($after);
-                $this->selectNpc($index);
+            $command->label,
+            function () use ($command, $redoSelection): void {
+                $command->execute();
+                $this->selectNpc($redoSelection);
             },
-            function () use ($map, $before, $index): void {
-                $map->setNpcs($before);
-                $this->selectNpc($index);
+            function () use ($command, $undoSelection): void {
+                $command->undo();
+                $this->selectNpc($undoSelection);
             },
         ));
-        $this->clampDatabaseSettingSelection();
-        $this->requestFullRender();
+    }
+
+    /**
+     * Shows why an NPC change was refused: a warning, or an error listing
+     * what stands in the way when the refusal names it.
+     *
+     * @param NpcRefusal $refusal The refusal.
+     * @return void
+     */
+    private function reportNpcRefusal(NpcRefusal $refusal): void
+    {
+        $this->setStatus($refusal->getMessage(), $refusal->details === [] ? StatusLevel::WARN : StatusLevel::ERROR, $refusal->details);
+        $this->renderFooter();
     }
 
     /**
@@ -2112,7 +2107,9 @@ final class Editor
     }
 
     /**
-     * Returns the selected NPC's record-pane fields, grouped and framed.
+     * Returns the selected NPC's rows, grouped and framed
+     * ({@see NpcInspector::getFields()}). A frame that no longer resolves
+     * is left for the NPC's own rows; an empty one still resolves.
      *
      * @return array<int, array<string, mixed>> The field descriptors.
      */
@@ -2122,166 +2119,21 @@ final class Editor
             return [];
         }
 
-        $records = $this->npcInspector->records();
-        $fields = $records->getFrameSettingsFields($this->selectedNpcIndex, $this->databaseCommandFramePath);
+        $fields = $this->npcInspector->getFields($this->selectedNpcIndex, $this->databaseCommandFramePath);
 
-        if (
-            $this->databaseCommandFramePath !== []
-            && $records->getFrameCommands($this->selectedNpcIndex, $this->databaseCommandFramePath) === null
-        ) {
-            // The frame no longer resolves; an empty one still does.
+        if ($fields === null) {
             $this->databaseCommandFramePath = [];
-            $fields = $records->getFrameSettingsFields($this->selectedNpcIndex, []);
+            $fields = $this->npcInspector->getFields($this->selectedNpcIndex) ?? [];
         }
 
-        if ($this->databaseCommandFramePath !== []) {
-            return $fields;
-        }
-
-        // Group headings and honest notes, without changing any field id.
-        $npc = $this->getSelectedMap()?->getNpcs()->get($this->selectedNpcIndex);
-        $grouped = [];
-        $group = static fn(string $title): array => ['label' => $title, 'value' => '', 'editable' => false];
-        $notes = [];
-
-        if ($npc !== null && $npc->getId() === null) {
-            // Legacy entry: nothing can name an id it never had, so giving
-            // it one is the one identity write that is safe after creation.
-            $notes[] = [
-                'label' => '  ! No stable id',
-                'value' => 'move_route cannot target it; Enter assigns one from the name',
-                'editable' => true,
-                'field' => self::NPC_ASSIGN_ID_FIELD,
-            ];
-        }
-
-        if ($npc !== null && $npc->scriptShadowsDialogue()) {
-            $notes[] = ['label' => '  ! Script replaces dialogue', 'value' => 'the game runs the script', 'editable' => false];
-        }
-
-        if ($npc !== null && $npc->getUnknownFields() !== []) {
-            $notes[] = ['label' => '  Preserved fields', 'value' => implode(', ', $npc->getUnknownFields()), 'editable' => false];
-        }
-
-        $sections = [
-            'Identity' => ['id', 'name'],
-            'Placement' => ['x', 'y'],
-            'Appearance' => ['sprite', 'sprites.north', 'sprites.south', 'sprites.east', 'sprites.west'],
-            'Movement' => ['movement', 'directionFix', 'wanderArea.x', 'wanderArea.y', 'wanderArea.width', 'wanderArea.height'],
-            'Visibility' => ['conditions'],
-            'Interaction' => ['commandListScript'],
-            'Completion Writes' => ['sets'],
-        ];
-        $byId = [];
-
-        foreach ($fields as $field) {
-            $byId[(string) ($field['field'] ?? '')][] = $field;
-        }
-
-        foreach ($sections as $title => $ids) {
-            $rows = [];
-
-            foreach ($ids as $id) {
-                foreach ($byId[$id] ?? [] as $field) {
-                    // Wander bounds only matter while wandering; loaded
-                    // values are kept, just not shown for a fixed NPC.
-                    if (! (str_starts_with($id, 'wanderArea.') && $npc !== null && ! $npc->wanders())) {
-                        $rows[] = $field;
-                    }
-                }
-
-                unset($byId[$id]);
-            }
-
-            if ($rows !== []) {
-                $grouped[] = $group($title);
-                $grouped = [...$grouped, ...$rows];
-            }
-
-            if ($title === 'Identity') {
-                $grouped = [...$grouped, ...$notes];
-            }
-
-            if ($title === 'Interaction') {
-                // Everything left is dialogue: variants, their lines, and
-                // their frames, each variant under its own heading.
-                [$variantRows, $byId] = $this->groupNpcVariantRows($byId);
-                $grouped = [...$grouped, ...$variantRows];
-            }
-        }
-
-        foreach ($byId as $rest) {
-            $grouped = [...$grouped, ...$rest];
-        }
-
-        return $grouped;
+        return $fields;
     }
 
     /**
-     * Turns the record pane's variant rows into headed groups: one
-     * `Dialogue variant N` heading per variant (with its condition line
-     * when it has one), then that variant's rows under short labels --
-     * `When`, `Then Set`, `Script Commands`, `Line 1 Speaker`, `Line 1
-     * Text` -- so the label no longer eats the pane before the value
-     * starts. Field ids are untouched; this is the grouped view's
-     * presentation of the record layer's own rows.
-     *
-     * @param array<string, array<int, array<string, mixed>>> $byId The remaining rows, keyed by field id.
-     * @return array{0: array<int, array<string, mixed>>, 1: array<string, array<int, array<string, mixed>>>} The headed rows, and what was left.
-     */
-    private function groupNpcVariantRows(array $byId): array
-    {
-        $singular = ucfirst(\Ichiloto\Editor\Database\RecordSchemaCatalog::mapNpcs()->subList?->singular ?? 'dialogue variant');
-        $variants = [];
-
-        foreach ($byId as $id => $rows) {
-            if (preg_match('/^variant(\d+)/', $id, $matches) !== 1) {
-                continue;
-            }
-
-            $variants[intval($matches[1])] = [...($variants[intval($matches[1])] ?? []), ...$rows];
-            unset($byId[$id]);
-        }
-
-        ksort($variants);
-        $headed = [];
-
-        foreach ($variants as $number => $rows) {
-            $prefix = sprintf('%s %d ', $singular, $number + 1);
-            $when = '';
-
-            foreach ($rows as $row) {
-                if (($row['field'] ?? null) === sprintf('variant%dConditions', $number)) {
-                    $when = trim((string) ($row['value'] ?? ''));
-                }
-            }
-
-            // The condition line rides as the heading's value, so it reads
-            // "Dialogue variant 2 · when …" and wraps rather than clips.
-            $headed[] = [
-                'label' => sprintf('%s %d', $singular, $number + 1),
-                'value' => $when === '' ? '' : 'when ' . $when,
-                'editable' => false,
-            ];
-
-            foreach ($rows as $row) {
-                $label = (string) ($row['label'] ?? '');
-
-                if (str_starts_with($label, $prefix)) {
-                    $row['label'] = substr($label, strlen($prefix));
-                }
-
-                $headed[] = $row;
-            }
-        }
-
-        return [$headed, $byId];
-    }
-
-    /**
-     * Applies an NPC field edit through the record pane and the map, and
-     * records it: the undo restores the whole previous collection, so list
-     * position and every other field come back exactly.
+     * Applies an NPC field edit through the shared authoring rules
+     * ({@see NpcAuthoring::applyField()}) and records it: the undo restores
+     * the whole previous collection, so list position and every other field
+     * come back exactly. A rename says what became of the id.
      *
      * @param array<string, mixed> $field The field descriptor.
      * @param string $rawValue The raw value.
@@ -2289,79 +2141,28 @@ final class Editor
      */
     private function applyNpcFieldValueRecorded(array $field, string $rawValue): void
     {
-        $map = $this->getSelectedMap();
+        $authoring = $this->createNpcAuthoring();
         $index = $this->selectedNpcIndex;
 
-        if (! $map instanceof ProjectMap || $index === null || $this->npcInspector === null) {
+        if (! $authoring instanceof NpcAuthoring || $index === null || $this->npcInspector === null) {
             return;
         }
 
-        $before = $map->getNpcs();
-        $fieldId = (string) ($field['field'] ?? '');
-        $this->npcInspector->records()->setFrameField($index, $this->databaseCommandFramePath, $fieldId, $rawValue);
-        $this->npcInspector->commit();
-        $after = $map->getNpcs();
-
-        if ($fieldId === 'name') {
-            $after = $this->followNpcNameWithId($map, $after, $index);
-        }
-
-        if ($after->toMapData() === $before->toMapData()) {
-            // A same-value edit: no history, no dirt.
-            $this->refreshNpcInspector();
+        try {
+            $change = $authoring->applyField($this->npcInspector, $index, $this->databaseCommandFramePath, $field, $rawValue);
+        } catch (NpcRefusal $refusal) {
+            $this->reportNpcRefusal($refusal);
 
             return;
         }
 
-        $this->refreshNpcInspector();
-        $this->recordCommand(new GenericCommand(
-            sprintf('NPC %s edit', $field['label'] ?? 'field'),
-            function () use ($map, $after, $index): void {
-                $map->setNpcs($after);
-                $this->selectNpc($index);
-            },
-            function () use ($map, $before, $index): void {
-                $map->setNpcs($before);
-                $this->selectNpc($index);
-            },
-        ));
-    }
-
-    /**
-     * Gives a renamed NPC the id its new name derives, as long as nothing
-     * refers to it yet: an id something names stays, so doors, routes and
-     * cinematics keep finding the NPC, and the status says what names it.
-     *
-     * @return NpcCollection The map's NPCs after the rename.
-     */
-    private function followNpcNameWithId(ProjectMap $map, NpcCollection $npcs, int $index): NpcCollection
-    {
-        $npc = $npcs->get($index);
-        $id = $npc?->getId();
-
-        if ($npc === null || $id === null || $id === '') {
-            return $npcs;
+        if ($change->followedId !== null) {
+            $this->setStatus(sprintf('Renamed. Its id is now %s.', $change->followedId), StatusLevel::INFO);
+        } elseif ($change->idReferences !== []) {
+            $this->setStatus(sprintf('Renamed. Its id stays %s: %s names it.', $change->npc?->getId() ?? '', implode(', ', $change->idReferences)));
         }
 
-        $derived = $npcs->withRemoved($index)->uniqueIdFor($npc->getName());
-
-        if ($derived === $id) {
-            return $npcs;
-        }
-
-        $references = $this->workspace instanceof ProjectWorkspace ? new NpcReferences($this->workspace)->describe($map, $id) : [];
-
-        if ($references !== []) {
-            $this->setStatus(sprintf('Renamed. Its id stays %s: %s names it.', $id, implode(', ', $references)));
-
-            return $npcs;
-        }
-
-        $renamed = $npcs->withReplaced($index, $npc->withId($derived));
-        $map->setNpcs($renamed);
-        $this->setStatus(sprintf('Renamed. Its id is now %s.', $derived), StatusLevel::INFO);
-
-        return $renamed;
+        $this->recordNpcChange($change, $index, $index);
     }
 
     /**
@@ -2497,24 +2298,24 @@ final class Editor
     {
         $map = $this->getSelectedMap();
         $index = $this->selectedNpcIndex;
-        $npc = $index !== null ? $map?->getNpcs()->get($index) : null;
+        $authoring = $this->createNpcAuthoring();
 
-        if (! $map instanceof ProjectMap || $index === null || $npc === null) {
+        if (! $map instanceof ProjectMap || ! $authoring instanceof NpcAuthoring || $index === null || $map->getNpcs()->get($index) === null) {
             return;
         }
 
-        if ($npc->getId() !== null) {
-            $this->setStatus(sprintf('%s already has the stable id "%s"; ids do not change.', $npc->getName(), $npc->getId()), StatusLevel::WARN);
-            $this->renderFooter();
+        try {
+            $change = $authoring->assignId($map, $index);
+        } catch (NpcRefusal $refusal) {
+            $this->reportNpcRefusal($refusal);
 
             return;
         }
 
-        $before = $map->getNpcs();
-        $id = $before->uniqueIdFor($npc->getName());
-        $map->setNpcs($before->withReplaced($index, $npc->asCopyWithId($id)));
-        $this->recordNpcCollectionChange($map, $index, $before, sprintf('Assign NPC id %s', $id));
-        $this->setStatus(sprintf('Assigned the stable id "%s" to %s.', $id, $npc->getName()), StatusLevel::INFO);
+        $this->recordNpcChange($change, $index, $index);
+        $this->clampDatabaseSettingSelection();
+        $this->requestFullRender();
+        $this->setStatus(sprintf('Assigned the stable id "%s" to %s.', $change->npc?->getId() ?? '', $change->npc?->getName() ?? ''), StatusLevel::INFO);
     }
 
     /**
@@ -2758,7 +2559,8 @@ final class Editor
             $this->npcNameBuffer = '';
 
             if ($tile !== null) {
-                $this->createNpcAt($tile['x'], $tile['y'], $name !== '' ? $name : 'New NPC');
+                // A blank name takes the shared placeholder rather than refusing.
+                $this->createNpcAt($tile['x'], $tile['y'], $name);
             }
 
             return;
@@ -2801,42 +2603,34 @@ final class Editor
     }
 
     /**
-     * Creates a fixed NPC at a tile under a stable id derived from its name.
+     * Creates a fixed NPC at a tile under a stable id derived from its name
+     * ({@see NpcAuthoring::create()}).
      *
      * @param int $x The anchor column.
      * @param int $y The anchor row.
-     * @param string $name The display name.
+     * @param string $name The display name; blank takes the placeholder.
      * @return void
      */
     private function createNpcAt(int $x, int $y, string $name): void
     {
         $map = $this->getSelectedMap();
+        $authoring = $this->createNpcAuthoring();
 
-        if (! $map instanceof ProjectMap) {
+        if (! $map instanceof ProjectMap || ! $authoring instanceof NpcAuthoring) {
             return;
         }
 
-        $collection = $map->getNpcs();
-        $id = $collection->uniqueIdFor($name);
-        $npc = ProjectNpc::createAt($id, $name, $x, $y);
-        $index = $collection->count();
-        $before = $collection;
-        $after = $collection->withAdded($npc);
+        try {
+            $change = $authoring->create($map, $x, $y, $name);
+        } catch (NpcRefusal $refusal) {
+            $this->reportNpcRefusal($refusal);
 
-        $map->setNpcs($after);
-        $this->selectNpc($index);
-        $this->recordCommand(new GenericCommand(
-            'NPC create',
-            function () use ($map, $after, $index): void {
-                $map->setNpcs($after);
-                $this->selectNpc($index);
-            },
-            function () use ($map, $before): void {
-                $map->setNpcs($before);
-                $this->selectNpc(null);
-            },
-        ));
-        $this->setStatus(sprintf('Created %s. Its id is %s.', $name, $id), StatusLevel::INFO);
+            return;
+        }
+
+        $this->selectNpc($change->index);
+        $this->recordNpcChange($change, $change->index, null);
+        $this->setStatus(sprintf('Created %s. Its id is %s.', $change->npc?->getName() ?? '', $change->npc?->getId() ?? ''), StatusLevel::INFO);
         $this->focusedPane = self::FOCUS_INSPECTOR;
         $this->requestFullRender();
     }
@@ -2879,7 +2673,7 @@ final class Editor
     }
 
     /**
-     * Moves an NPC to a tile, recorded for undo.
+     * Moves an NPC to a tile, recorded for undo ({@see NpcAuthoring::move()}).
      *
      * @param int $index The NPC's position.
      * @param int $x The destination column.
@@ -2889,154 +2683,96 @@ final class Editor
     private function moveNpc(int $index, int $x, int $y): void
     {
         $map = $this->getSelectedMap();
-        $collection = $map?->getNpcs();
-        $npc = $collection?->get($index);
+        $authoring = $this->createNpcAuthoring();
 
-        if (! $map instanceof ProjectMap || $collection === null || $npc === null) {
+        if (! $map instanceof ProjectMap || ! $authoring instanceof NpcAuthoring || $map->getNpcs()->get($index) === null) {
             return;
         }
 
-        if ($x < 0 || $y < 0 || $x >= $map->getWidth() || $y >= $map->getHeight()) {
-            $this->setStatus(sprintf('%d,%d is outside the map.', $x, $y), StatusLevel::WARN);
-            $this->renderFooter();
+        try {
+            $change = $authoring->move($map, $index, $x, $y);
+        } catch (NpcRefusal $refusal) {
+            $this->reportNpcRefusal($refusal);
 
             return;
         }
 
-        if ($npc->getX() === $x && $npc->getY() === $y) {
+        if ($change->command === null) {
             $this->setStatus('Already there.');
             $this->renderFooter();
 
             return;
         }
 
-        $occupant = $collection->indexAt($x, $y);
-
-        if ($occupant !== null && $occupant !== $index) {
-            $this->setStatus(sprintf('%s already stands at %d,%d.', $collection->get($occupant)?->getName() ?? 'An NPC', $x, $y), StatusLevel::WARN);
-            $this->renderFooter();
-
-            return;
-        }
-
-        $before = $collection;
-        $after = $collection->withReplaced($index, $npc->movedTo($x, $y));
-        $map->setNpcs($after);
-        $this->refreshNpcInspector();
-        $this->recordCommand(new GenericCommand(
-            'NPC move',
-            function () use ($map, $after, $index): void {
-                $map->setNpcs($after);
-                $this->selectNpc($index);
-            },
-            function () use ($map, $before, $index): void {
-                $map->setNpcs($before);
-                $this->selectNpc($index);
-            },
-        ));
-        $this->setStatus(sprintf('Moved %s to %d,%d.', $npc->getName(), $x, $y), StatusLevel::INFO);
+        $this->recordNpcChange($change, $index, $index);
+        $this->setStatus(sprintf('Moved %s to %d,%d.', $change->npc?->getName() ?? '', $x, $y), StatusLevel::INFO);
         $this->requestFullRender();
     }
 
     /**
      * Duplicates the selected NPC under a fresh unique id, one tile to the
-     * right when that tile is free.
+     * right when that tile is free ({@see NpcAuthoring::duplicate()}).
      *
      * @return void
      */
     private function duplicateSelectedNpc(): void
     {
         $map = $this->getSelectedMap();
-        $collection = $map?->getNpcs();
-        $npc = $this->selectedNpcIndex !== null ? $collection?->get($this->selectedNpcIndex) : null;
+        $authoring = $this->createNpcAuthoring();
+        $index = $this->selectedNpcIndex;
 
-        if (! $map instanceof ProjectMap || $collection === null || $npc === null) {
+        if (! $map instanceof ProjectMap || ! $authoring instanceof NpcAuthoring || $index === null || $map->getNpcs()->get($index) === null) {
             $this->setStatus('Select an NPC first (Enter on it).', StatusLevel::WARN);
             $this->renderFooter();
 
             return;
         }
 
-        $id = $collection->uniqueIdFor($npc->getName());
-        $copy = $npc->asCopyWithId($id);
-        $x = $npc->getX() + $npc->getSpriteWidth();
+        try {
+            $change = $authoring->duplicate($map, $index);
+        } catch (NpcRefusal $refusal) {
+            $this->reportNpcRefusal($refusal);
 
-        if ($x < $map->getWidth() && $collection->indexAt($x, $npc->getY()) === null) {
-            $copy = $copy->movedTo($x, $npc->getY());
+            return;
         }
 
-        $index = $collection->count();
-        $before = $collection;
-        $after = $collection->withAdded($copy);
-        $map->setNpcs($after);
-        $this->selectNpc($index);
-        $this->recordCommand(new GenericCommand(
-            'NPC duplicate',
-            function () use ($map, $after, $index): void {
-                $map->setNpcs($after);
-                $this->selectNpc($index);
-            },
-            function () use ($map, $before): void {
-                $map->setNpcs($before);
-                $this->selectNpc(null);
-            },
-        ));
-        $this->setStatus(sprintf('Duplicated as %s (id %s).', $copy->getName(), $id), StatusLevel::INFO);
+        $this->selectNpc($change->index);
+        $this->recordNpcChange($change, $change->index, null);
+        $this->setStatus(sprintf('Duplicated as %s (id %s).', $change->npc?->getName() ?? '', $change->npc?->getId() ?? ''), StatusLevel::INFO);
         $this->requestFullRender();
     }
 
     /**
-     * Deletes the selected NPC, refusing while anything names its id.
+     * Deletes the selected NPC, refusing while anything names its id
+     * ({@see NpcAuthoring::delete()}).
      *
      * @return void
      */
     private function deleteSelectedNpc(): void
     {
         $map = $this->getSelectedMap();
-        $collection = $map?->getNpcs();
+        $authoring = $this->createNpcAuthoring();
         $index = $this->selectedNpcIndex;
-        $npc = $index !== null ? $collection?->get($index) : null;
 
-        if (! $map instanceof ProjectMap || $collection === null || $index === null || $npc === null || ! $this->workspace instanceof ProjectWorkspace) {
+        if (! $map instanceof ProjectMap || ! $authoring instanceof NpcAuthoring || $index === null || $map->getNpcs()->get($index) === null) {
             $this->setStatus('Select an NPC first (Enter on it).', StatusLevel::WARN);
             $this->renderFooter();
 
             return;
         }
 
-        $references = $npc->getId() !== null
-            ? new NpcReferences($this->workspace)->describe($map, $npc->getId())
-            : [];
-
-        if ($references !== []) {
-            // Refusing beats a route or script that silently stops
-            // resolving. The list is what the author needs to go fix.
-            $this->setStatus(
-                sprintf('%s is named by %s - resolve those before deleting.', $npc->getName(), implode(', ', $references)),
-                StatusLevel::ERROR,
-                array_map(static fn(string $reference): string => '- ' . $reference, $references),
-            );
-            $this->renderFooter();
+        try {
+            $change = $authoring->delete($map, $index);
+        } catch (NpcRefusal $refusal) {
+            // The refusal lists what names the NPC: what the author goes to fix.
+            $this->reportNpcRefusal($refusal);
 
             return;
         }
 
-        $before = $collection;
-        $after = $collection->withRemoved($index);
-        $map->setNpcs($after);
         $this->selectNpc(null);
-        $this->recordCommand(new GenericCommand(
-            'NPC delete',
-            function () use ($map, $after): void {
-                $map->setNpcs($after);
-                $this->selectNpc(null);
-            },
-            function () use ($map, $before, $index): void {
-                $map->setNpcs($before);
-                $this->selectNpc($index);
-            },
-        ));
-        $this->setStatus(sprintf('Deleted %s.', $npc->getName()), StatusLevel::INFO);
+        $this->recordNpcChange($change, null, $index);
+        $this->setStatus(sprintf('Deleted %s.', $change->npc?->getName() ?? ''), StatusLevel::INFO);
         $this->requestFullRender();
     }
 

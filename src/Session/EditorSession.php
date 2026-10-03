@@ -12,6 +12,10 @@ use Ichiloto\Editor\Database\DatabaseCatalog;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\Events\EventTypeCatalog;
+use Ichiloto\Editor\Field\NpcAuthoring;
+use Ichiloto\Editor\Field\NpcChange;
+use Ichiloto\Editor\Field\NpcInspector;
+use Ichiloto\Editor\Field\NpcRefusal;
 use Ichiloto\Editor\History\Command;
 use Ichiloto\Editor\History\CommandHistory;
 use Ichiloto\Editor\Inspector\InputControlType;
@@ -718,6 +722,275 @@ final class EditorSession
                 'target' => isset($field['field']) && ($field['editable'] ?? true) !== false ? 'record' : null,
             ]), $database->getSettingsFields($index)),
         ];
+    }
+
+    /**
+     * Creates an NPC at a tile ({@see NpcAuthoring::create()}): fixed, its
+     * stable id derived from its name, a blank name taking the placeholder.
+     *
+     * @return array{revision: int, changed: bool, index: ?int, id: ?string, followedId: ?string, idReferences: list<string>}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, or the tile is outside it or taken.
+     */
+    public function createNpc(string $mapId, int $revision, int $x, int $y, string $name): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+
+        return $this->applyNpcChange($map, fn(NpcAuthoring $authoring): NpcChange => $authoring->create($map, $x, $y, $name));
+    }
+
+    /**
+     * Moves an NPC's anchor to a tile; a move to where it stands changes nothing.
+     *
+     * @return array{revision: int, changed: bool, index: ?int, id: ?string, followedId: ?string, idReferences: list<string>}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, the NPC is unknown, or the tile is outside the map or taken.
+     */
+    public function moveNpc(string $mapId, int $revision, int $index, int $x, int $y): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+
+        return $this->applyNpcChange($map, fn(NpcAuthoring $authoring): NpcChange => $authoring->move($map, $index, $x, $y));
+    }
+
+    /**
+     * Duplicates an NPC under a fresh id, appended; `index` is the copy's.
+     *
+     * @return array{revision: int, changed: bool, index: ?int, id: ?string, followedId: ?string, idReferences: list<string>}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, or the NPC is unknown.
+     */
+    public function duplicateNpc(string $mapId, int $revision, int $index): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+
+        return $this->applyNpcChange($map, fn(NpcAuthoring $authoring): NpcChange => $authoring->duplicate($map, $index));
+    }
+
+    /**
+     * Deletes an NPC nothing names; `index` is null afterwards and `id` the deleted NPC's.
+     *
+     * @return array{revision: int, changed: bool, index: ?int, id: ?string, followedId: ?string, idReferences: list<string>}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, the NPC is unknown, or something names it (each on a line of its own).
+     */
+    public function deleteNpc(string $mapId, int $revision, int $index): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+
+        return $this->applyNpcChange($map, fn(NpcAuthoring $authoring): NpcChange => $authoring->delete($map, $index));
+    }
+
+    /**
+     * Gives an NPC authored without a stable id one, from its name.
+     *
+     * @return array{revision: int, changed: bool, index: ?int, id: ?string, followedId: ?string, idReferences: list<string>}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, the NPC is unknown, or it already has an id.
+     */
+    public function assignNpcId(string $mapId, int $revision, int $index): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+
+        return $this->applyNpcChange($map, fn(NpcAuthoring $authoring): NpcChange => $authoring->assignId($map, $index));
+    }
+
+    /**
+     * One NPC's rows in a frame of its commands, described as the
+     * inspector's are ({@see readInspector()}), with the `key` an edit names
+     * a row by. At the root (`frame` []) the rows are its fields under
+     * headings, with its identity notes and dialogue variants; a row that
+     * opens a script frame carries that `frame`, read again with it to edit
+     * the commands inside. Multi-line text carries `multiline` and its exact
+     * text as `value`. Visibility conditions and completion writes are
+     * `info` here: they are built in the terminal's own editors for now.
+     *
+     * @param array<int|string, mixed> $frame The frame; [] for the NPC itself.
+     * @return array{map: string, revision: int, index: int, frame: list<int|string>, frameLabel: ?string, npc: array<string, mixed>, rows: list<array<string, mixed>>}
+     * @throws SessionRefusal When the map, NPC or frame is unknown.
+     */
+    public function readNpc(string $mapId, int $index, array $frame = []): array
+    {
+        $frame = self::requireNpcFrame($frame);
+        $map = $this->requireMap($mapId);
+        $inspector = new NpcInspector($map);
+        $npc = $map->getNpcs()->get($index) ?? throw new SessionRefusal(sprintf('%s has no NPC %d.', $mapId, $index));
+        $fields = $this->collectNpcFields($inspector, $index, $frame);
+
+        return [
+            'map' => $mapId,
+            'revision' => $map->stateVersion(),
+            'index' => $index,
+            'frame' => $frame,
+            'frameLabel' => $frame === [] ? null : $inspector->records()->describeFramePath($frame),
+            'npc' => [
+                'index' => $index,
+                'id' => $npc->getId(),
+                'name' => $npc->getName(),
+                'x' => $npc->getX(),
+                'y' => $npc->getY(),
+                'sprite' => $npc->getVisibleSprite(),
+            ],
+            'rows' => array_map(static fn(array $field): array => self::describeNpcRow($field, $frame), $fields),
+        ];
+    }
+
+    /**
+     * Applies one NPC row's edit as one undo step. The row is found again by
+     * its key among the NPC's current rows. A rename carries the id along
+     * (`followedId`) unless something names it (`idReferences`).
+     *
+     * @param array<string, mixed> $key The row's key, as `readNpc` gave it.
+     * @return array{revision: int, changed: bool, index: ?int, id: ?string, followedId: ?string, idReferences: list<string>}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, the row is gone or read-only, or the edit is refused.
+     */
+    public function applyNpc(string $mapId, int $revision, int $index, array $key, string $value): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        $inspector = new NpcInspector($map);
+        $frame = self::requireNpcFrame($key['frame'] ?? []);
+        $fieldId = $key['field'] ?? null;
+        // Field ids are unique within a frame, so the field and frame name the row.
+        $field = is_string($fieldId) ? array_find($this->collectNpcFields($inspector, $index, $frame),
+            static fn(array $candidate): bool => ($candidate['field'] ?? null) === $fieldId) : null;
+
+        if ($field === null) {
+            throw new SessionRefusal('That row is no longer on the NPC; read it again.');
+        }
+        if (self::describeNpcRow($field, $frame)['kind'] === 'info') {
+            throw new SessionRefusal(sprintf('%s cannot be edited here.', trim((string) ($field['label'] ?? 'That row'))));
+        }
+
+        return $this->applyNpcChange($map,
+            static fn(NpcAuthoring $authoring): NpcChange => $authoring->applyField($inspector, $index, $frame, $field, $value));
+    }
+
+    /**
+     * Adds an item at an NPC row as one undo step: in a script frame a
+     * command after the row's (at the end when the key names no field) or a
+     * route step under its route; at the root a line in the row's dialogue
+     * variant, or a new variant. The key is a row's, or `{frame}` alone.
+     *
+     * @param array<string, mixed> $key
+     * @return array{revision: int, changed: bool, index: ?int, id: ?string, followedId: ?string, idReferences: list<string>}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, or the NPC or frame is unknown.
+     */
+    public function addNpcItem(string $mapId, int $revision, int $index, array $key): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        $inspector = new NpcInspector($map);
+        $frame = self::requireNpcFrame($key['frame'] ?? []);
+        $fieldId = is_string($key['field'] ?? null) ? $key['field'] : '';
+
+        return $this->applyNpcChange($map,
+            static fn(NpcAuthoring $authoring): NpcChange => $authoring->addSubItem($inspector, $index, $frame, $fieldId));
+    }
+
+    /**
+     * Removes the item an NPC row belongs to (a route step, command,
+     * dialogue line or variant) as one undo step; a row that belongs to none
+     * changes nothing.
+     *
+     * @param array<string, mixed> $key A row's key, as `readNpc` gave it.
+     * @return array{revision: int, changed: bool, index: ?int, id: ?string, followedId: ?string, idReferences: list<string>}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, or the NPC or frame is unknown.
+     */
+    public function removeNpcItem(string $mapId, int $revision, int $index, array $key): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        $inspector = new NpcInspector($map);
+        $frame = self::requireNpcFrame($key['frame'] ?? []);
+        $fieldId = is_string($key['field'] ?? null) ? $key['field'] : '';
+
+        return $this->applyNpcChange($map,
+            static fn(NpcAuthoring $authoring): NpcChange => $authoring->removeSubItem($inspector, $index, $frame, $fieldId));
+    }
+
+    /**
+     * Makes one NPC change, records it, and says what it did.
+     *
+     * @param callable(NpcAuthoring): NpcChange $change
+     * @return array{revision: int, changed: bool, index: ?int, id: ?string, followedId: ?string, idReferences: list<string>}
+     * @throws SessionRefusal When the change is refused or the map's source cannot take it.
+     */
+    private function applyNpcChange(ProjectMap $map, callable $change): array
+    {
+        try {
+            $applied = $change(new NpcAuthoring($this->workspace));
+        } catch (NpcRefusal $refusal) {
+            throw new SessionRefusal(implode("\n", [$refusal->getMessage(), ...$refusal->details]), previous: $refusal);
+        } catch (MapSourceRefusal $refusal) {
+            throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+        }
+        if ($applied->command !== null) {
+            $this->history->record($applied->command);
+        }
+
+        return [
+            'revision' => $map->stateVersion(),
+            'changed' => $applied->command !== null,
+            'index' => $applied->index,
+            'id' => $applied->npc?->getId(),
+            'followedId' => $applied->followedId,
+            'idReferences' => $applied->idReferences,
+        ];
+    }
+
+    /**
+     * An NPC's rows in a frame, refusing an NPC or frame that is gone.
+     *
+     * @param list<int|string> $frame
+     * @return array<int, array<string, mixed>>
+     * @throws SessionRefusal
+     */
+    private function collectNpcFields(NpcInspector $inspector, int $index, array $frame): array
+    {
+        if ($inspector->map->getNpcs()->get($index) === null) {
+            throw new SessionRefusal(sprintf('%s has no NPC %d.', $inspector->map->mapId, $index));
+        }
+
+        return $inspector->getFields($index, $frame)
+            ?? throw new SessionRefusal(sprintf('%s is no longer there; read the NPC again.', $inspector->records()->describeFramePath($frame)));
+    }
+
+    /**
+     * One NPC row as plain data: described as an inspector row, its key
+     * naming the frame it lives in. The id note is read here; assigning an
+     * id is its own request.
+     *
+     * @param array<string, mixed> $field
+     * @param list<int|string> $frame
+     * @return array<string, mixed>
+     */
+    private static function describeNpcRow(array $field, array $frame): array
+    {
+        $fieldId = $field['field'] ?? null;
+        $editable = is_string($fieldId) && $fieldId !== NpcInspector::ASSIGN_ID_FIELD && ($field['editable'] ?? true) !== false;
+        $row = self::describeRow([...$field, 'target' => $editable ? 'npc' : null]);
+
+        if (isset($row['key'])) {
+            $row['key']['frame'] = $frame;
+        }
+        if (is_array($field['frame'] ?? null)) {
+            $row['frame'] = array_values($field['frame']);
+        }
+        $control = MapInspector::findControl($field);
+        if ($control?->type === InputControlType::MULTILINE) {
+            $row['multiline'] = true;
+            $row['value'] = $control->rawValue;
+        }
+
+        return $row;
+    }
+
+    /**
+     * A frame of an NPC's commands, as a request or a row key names it.
+     *
+     * @return list<int|string>
+     * @throws SessionRefusal When the frame is not a list of indexes and keys.
+     */
+    private static function requireNpcFrame(mixed $frame): array
+    {
+        if (! is_array($frame) || ! array_is_list($frame) || ! array_all($frame, static fn(mixed $segment): bool => is_int($segment) || is_string($segment))) {
+            throw new SessionRefusal('A frame must be a list of indexes and keys, as readNpc gave it.');
+        }
+
+        return $frame;
     }
 
     /**
