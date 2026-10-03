@@ -110,7 +110,13 @@ final class SessionHost
             'map.world' => $session->readWorld(self::requireString($params, 'map')),
             'tiles.palette' => $session->readTilePalette(self::requireString($params, 'map')),
             'tiles.read' => $session->readTiles(self::requireString($params, 'map')),
-            'tiles.paint' => $session->paintTiles(
+            'tiles.stamp' => $session->stampTiles(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireString($params, 'layer'),
+                self::requireTileCells($params),
+                is_string($params['label'] ?? null) ? $params['label'] : 'Place tiles',
+            ),            'tiles.paint' => $session->paintTiles(
                 self::requireString($params, 'map'),
                 self::requireInt($params, 'revision'),
                 self::requireString($params, 'layer'),
@@ -360,6 +366,21 @@ final class SessionHost
         if (! is_array($cells) || ! array_is_list($cells) || ! array_all($cells, static fn(mixed $cell): bool =>
             is_array($cell) && count($cell) === 2 && is_int($cell[0] ?? null) && is_int($cell[1] ?? null))) {
             throw new InvalidRequest('"cells" must be a list of [x, y] integer pairs.');
+        }
+
+        return $cells;
+    }
+
+    /**
+     * @param array<string, mixed> $params
+     * @return list<array{0: int, 1: int, 2: int}>
+     */
+    private static function requireTileCells(array $params): array
+    {
+        $cells = $params['cells'] ?? null;
+        if (! is_array($cells) || ! array_is_list($cells) || ! array_all($cells, static fn(mixed $cell): bool => is_array($cell) && count($cell) === 3
+            && is_int($cell[0] ?? null) && is_int($cell[1] ?? null) && is_int($cell[2] ?? null))) {
+            throw new InvalidRequest('"cells" must be a list of [x, y, tile] integer triples.');
         }
 
         return $cells;

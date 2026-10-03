@@ -48,6 +48,9 @@ final class NpcInspector
         'Completion Writes' => ['sets'],
     ];
 
+    /** The rows that are a cell's coordinates, by field, and the axis each is. */
+    private const array AXES = ['x' => 'x', 'y' => 'y'];
+
     private ProjectRecordDatabase $records;
 
     public function __construct(public readonly ProjectMap $map)
@@ -114,7 +117,7 @@ final class NpcInspector
                     // Wander bounds only matter while wandering; loaded
                     // values are kept, just not shown for a fixed NPC.
                     if (! (str_starts_with($id, 'wanderArea.') && $npc !== null && ! $npc->wanders())) {
-                        $rows[] = $field;
+                        $rows[] = isset(self::AXES[$id]) ? [...$field, 'axis' => self::AXES[$id]] : $field;
                     }
                 }
 

@@ -374,12 +374,26 @@ final class EditorSession
      */
     public function paintTiles(string $mapId, int $revision, string $layerName, array $cells, int $tile, string $label = 'Place tiles'): array
     {
+        return $this->stampTiles($mapId, $revision, $layerName, array_map(static fn(array $cell): array => [$cell[0], $cell[1], $tile], $cells), $label);
+    }
+
+    /**
+     * Sets each cell of a tile layer to its own tile as one undo step
+     * ({@see CanvasEditor::stampTiles()}): a block chosen in the palette or
+     * picked from the map, stamped where the author drags.
+     *
+     * @param list<array{0: int, 1: int, 2: int}> $cells Each cell as [x, y, tile].
+     * @return array{changed: int, revision: int}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, or refuses a tile.
+     */
+    public function stampTiles(string $mapId, int $revision, string $layerName, array $cells, string $label = 'Place tiles'): array
+    {
         $map = $this->requireCurrentMap($mapId, $revision);
         if ($map->getGridSourceIssue() !== null) {
             throw new SessionRefusal(sprintf('%s is read-only: %s', $mapId, $map->getGridSourceIssue()));
         }
         try {
-            $applied = CanvasEditor::setTiles($map, $layerName, $cells, $tile, $label);
+            $applied = CanvasEditor::stampTiles($map, $layerName, $cells, $label);
         } catch (MapSourceRefusal $refusal) {
             throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
         }
@@ -1497,8 +1511,16 @@ final class EditorSession
         };
         $list = $field['list'] ?? $field['encounterList'] ?? $field['bgmVariantList'] ?? null;
 
+        // The terminal nests a row by indenting its label; an interface is given the depth instead.
+        $label = (string) ($field['label'] ?? '');
+        $depth = intdiv(strlen($label) - strlen(ltrim($label, ' ')), 2);
+        $key = self::describeKey($field);
+
         return array_filter([
-            'label' => (string) ($field['label'] ?? ''),
+            'label' => trim($label),
+            'depth' => $depth,
+            // A section heading: a row that only names the rows after it.
+            'heading' => $kind === 'info' && (string) ($field['value'] ?? '') === '' && $key === null && $list === null ? true : null,
             'value' => (string) ($field['value'] ?? ''),
             'raw' => match ($kind) {
                 'conditions' => is_string($field['encoded'] ?? null) ? $field['encoded'] : (string) ($field['value'] ?? ''),
@@ -1523,7 +1545,9 @@ final class EditorSession
                 default => null,
             },
             'writeTypes' => $kind === 'writes' && is_array($field['writeTypes'] ?? null) ? array_values($field['writeTypes']) : null,
-            'key' => self::describeKey($field),
+            // One axis of a coordinate pair under the heading before it.
+            'axis' => in_array($field['axis'] ?? null, ['x', 'y'], true) ? $field['axis'] : null,
+            'key' => $key,
         ], static fn(mixed $value): bool => $value !== null);
     }
 

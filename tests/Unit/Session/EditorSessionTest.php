@@ -361,3 +361,29 @@ it('plays a saved map from a cell in the background and refuses an unsaved one',
         putenv('ICHILOTO_CONSOLE_BIN');
     }
 });
+
+it('stamps a block of tiles as one undo step, each cell its own tile', function () {
+    $root = mapGraphicsProject();
+    $session = EditorSession::open($root);
+    $floor = static fn(): array => array_find($session->readTiles('test-map')['layers'], static fn(array $layer): bool => $layer['name'] === 'floor')['rows'];
+
+    $stamped = $session->stampTiles('test-map', $session->readMap('test-map')['revision'], 'floor', [[1, 0, 5], [2, 0, 6], [1, 1, 0], [2, 1, 7]]);
+    expect($stamped['changed'])->toBe(4)
+        ->and($floor())->toBe([[2816, 5, 6, 2816], [2816, 0, 7, 2816]])
+        ->and($session->undo()['label'])->toBe('Place tiles')
+        ->and($floor())->toBe([[2816, 2816, 2816, 2816], [2816, 2816, 2816, 2816]])
+        ->and(fn() => $session->stampTiles('test-map', $session->readMap('test-map')['revision'], 'floor', [[0, 0, 5], [7, 0, 5]]))
+        ->toThrow(SessionRefusal::class, 'no cell at (7, 0)')
+        ->and($floor()[0][0])->toBe(2816);
+});
+
+it('gives an interface each row\'s depth, its section headings and its coordinate pairs', function () {
+    $session = EditorSession::open(makeTemporaryProject());
+    $rows = $session->readInspector('test-map')['rows'];
+    $size = array_search('Size', array_column($rows, 'label'), true);
+
+    expect($rows[$size])->toMatchArray(['heading' => true, 'depth' => 0])
+        ->and([$rows[$size + 1]['label'], $rows[$size + 1]['axis'], $rows[$size + 1]['depth']])->toBe(['X', 'x', 1])
+        ->and([$rows[$size + 2]['label'], $rows[$size + 2]['axis']])->toBe(['Y', 'y'])
+        ->and(array_filter($rows, static fn(array $row): bool => str_starts_with($row['label'], ' ')))->toBe([]);
+});

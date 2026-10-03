@@ -138,19 +138,19 @@ it('retypes an event from its Type row, one of the catalog\'s labels, and picks 
 
     $applied = $session->applyInspector('test-map', $created['revision'], $type['key'], 'Chest');
     $chest = $session->readInspector('test-map', $marker);
-    $chestType = eventSessionRowLabelled($chest, 'ChestType');
+    $chestType = eventSessionRowLabelled($chest, 'Chest Type');
 
     expect($applied)->toMatchArray(['status' => 'applied', 'changed' => true])
         ->and(eventSessionEvent($session->readMap('test-map'), $marker)['type'])->toBe('Chest')
         ->and($chestType['kind'])->toBe('options')
         ->and($chestType['optionLabels'])->toContain('Common', 'Legendary')
-        ->and(eventSessionRowLabelled($chest, 'LootType')['options'])->toContain('item', 'gold')
+        ->and(eventSessionRowLabelled($chest, 'Loot Type')['options'])->toContain('item', 'gold')
         ->and(fn() => $session->applyInspector('test-map', $chest['revision'], $chestType['key'], 'shiny'))
             ->toThrow(SessionRefusal::class, 'choose one of');
 
     $session->applyInspector('test-map', $chest['revision'], $chestType['key'], 'rare');
-    expect(eventSessionRowLabelled($session->readInspector('test-map', $marker), 'ChestType')['value'])->toBe('rare')
-        ->and($session->undo()['label'])->toBe('ChestType edit')
+    expect(eventSessionRowLabelled($session->readInspector('test-map', $marker), 'Chest Type')['value'])->toBe('rare')
+        ->and($session->undo()['label'])->toBe('Chest Type edit')
         ->and($session->undo()['label'])->toBe('Event type change')
         ->and(eventSessionEvent($session->readMap('test-map'), $marker)['type'])->toBe('Dialogue');
 });
@@ -161,7 +161,7 @@ it('sets a transfer\'s destination map and spawn point together, as one undo ste
     $created = $session->createEvent('test-map', $map['revision'], eventSessionFreeCells($map, 1), 'Transfer Player');
     $marker = $created['marker'];
     $inspector = $session->readInspector('test-map', $marker);
-    $destination = eventSessionRowLabelled($inspector, 'DestinationMap');
+    $destination = eventSessionRowLabelled($inspector, 'Destination Map');
 
     expect($destination)->toMatchArray(['kind' => 'destination', 'reference' => 'maps'])
         ->and(fn() => $session->applyInspector('test-map', $created['revision'], $destination['key'], 'test-map'))
@@ -175,14 +175,14 @@ it('sets a transfer\'s destination map and spawn point together, as one undo ste
     $after = $session->readInspector('test-map', $marker);
 
     expect($set['changed'])->toBeTrue()
-        ->and(eventSessionRowLabelled($after, 'DestinationMap')['value'])->toBe('test-map')
-        ->and(eventSessionRowLabelled($after, 'X', 'SpawnPoint')['value'])->toBe((string) ($map['width'] - 1))
-        ->and(eventSessionRowLabelled($after, 'Y', 'SpawnPoint')['value'])->toBe((string) ($map['height'] - 1))
+        ->and(eventSessionRowLabelled($after, 'Destination Map')['value'])->toBe('test-map')
+        ->and(eventSessionRowLabelled($after, 'X', 'Spawn Point')['value'])->toBe((string) ($map['width'] - 1))
+        ->and(eventSessionRowLabelled($after, 'Y', 'Spawn Point')['value'])->toBe((string) ($map['height'] - 1))
         ->and($session->undo()['label'])->toBe('Destination change');
 
     $undone = $session->readInspector('test-map', $marker);
-    expect(eventSessionRowLabelled($undone, 'DestinationMap')['value'])->toBe('')
-        ->and(eventSessionRowLabelled($undone, 'X', 'SpawnPoint')['value'])->toBe('0');
+    expect(eventSessionRowLabelled($undone, 'Destination Map')['value'])->toBe('')
+        ->and(eventSessionRowLabelled($undone, 'X', 'Spawn Point')['value'])->toBe('0');
 });
 
 it('adds and removes entries of an event\'s list, the map\'s encounters and its music variants', function () {

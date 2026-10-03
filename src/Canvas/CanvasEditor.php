@@ -169,8 +169,23 @@ final class CanvasEditor
      */
     public static function setTiles(ProjectMap $map, string $layerName, array $cells, int $tile, string $label): array
     {
+        return self::stampTiles($map, $layerName, array_map(static fn(array $cell): array => [$cell[0], $cell[1], $tile], $cells), $label);
+    }
+
+    /**
+     * Sets each listed cell of a tile layer to its own tile, `0` erasing, as
+     * one undo step: a block of tiles chosen together and stamped, as RPG
+     * Maker places a multi-tile selection. The layer is created when the map
+     * does not have it yet. Glyphs and collision never change.
+     *
+     * @param list<array{0: int, 1: int, 2: int}> $cells Each cell as [x, y, tile].
+     * @return array{command: ?Command, changed: int} No command when nothing changed.
+     * @throws MapSourceRefusal When a tile is not a tile identity, a cell is outside the map or the layer cannot be written; nothing is changed.
+     */
+    public static function stampTiles(ProjectMap $map, string $layerName, array $cells, string $label): array
+    {
         $before = $map->getTileLayerSources();
-        $entries = array_map(static fn(array $cell): array => ['x' => $cell[0], 'y' => $cell[1], 'entry' => (string) $tile], $cells);
+        $entries = array_map(static fn(array $cell): array => ['x' => $cell[0], 'y' => $cell[1], 'entry' => (string) $cell[2]], $cells);
         $previous = $map->readTileEntries([$layerName], 0, 0, $map->getWidth(), $map->getHeight())[$layerName] ?? [];
         $map->writeTileCells([$layerName => $entries]);
         $after = $map->getTileLayerSources();
@@ -178,7 +193,7 @@ final class CanvasEditor
             return ['command' => null, 'changed' => 0];
         }
         $changed = count(array_filter($cells, static fn(array $cell): bool
-            => ($previous[$cell[1]][$cell[0]] ?? (string) TileId::EMPTY) !== (string) $tile));
+            => ($previous[$cell[1]][$cell[0]] ?? (string) TileId::EMPTY) !== (string) $cell[2]));
 
         return ['command' => new GenericCommand($label,
             static fn() => $map->restoreTileLayerSources($after),

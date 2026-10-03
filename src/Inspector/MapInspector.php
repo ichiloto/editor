@@ -106,6 +106,7 @@ final readonly class MapInspector
                 'control' => new InputControl(InputControlType::INTEGER, (string) $map->getWidth()),
                 'target' => 'map-size',
                 'field' => 'width',
+                'axis' => 'x',
             ],
             [
                 'label' => '  Y',
@@ -113,6 +114,7 @@ final readonly class MapInspector
                 'control' => new InputControl(InputControlType::INTEGER, (string) $map->getHeight()),
                 'target' => 'map-size',
                 'field' => 'height',
+                'axis' => 'y',
             ],
             [
                 'label' => 'Events',
@@ -173,6 +175,7 @@ final readonly class MapInspector
                     'target' => 'event-bounds',
                     'marker' => $marker,
                     'field' => $axis,
+                    'axis' => $axis,
                 ];
             }
             if ($area?->isRectangle ?? true) {
@@ -185,6 +188,7 @@ final readonly class MapInspector
                         'target' => 'event-bounds',
                         'marker' => $marker,
                         'field' => $axis,
+                        'axis' => $axis === 'width' ? 'x' : 'y',
                     ];
                 }
             } else {
@@ -1114,6 +1118,15 @@ final readonly class MapInspector
     }
 
     /**
+     * A data key as an author reads it: words split at underscores, hyphens
+     * and camel case, each capitalised (`spawnPoint` reads Spawn Point).
+     */
+    private static function formatFieldLabel(string $part): string
+    {
+        return ucwords(str_replace(['_', '-'], ' ', (string) preg_replace('/(?<=[a-z0-9])(?=[A-Z])/', ' ', $part)));
+    }
+
+    /**
      * Flattens nested scalar data into editable inspector fields.
      *
      * @param array<string|int, mixed> $data The data to flatten.
@@ -1134,7 +1147,7 @@ final readonly class MapInspector
                 // field inside one remembers which list it belongs to.
                 if ($this->isInspectorListValue($nextPath, $value)) {
                     $label = implode(' ', array_map(
-                        static fn(string $part): string => ucwords(str_replace(['_', '-'], ' ', $part)),
+                        self::formatFieldLabel(...),
                         ($nextPath[0] ?? null) === 'data' ? array_slice($nextPath, 1) : $nextPath
                     ));
                     $fields[] = [
@@ -1165,7 +1178,7 @@ final readonly class MapInspector
 
                 if (array_key_exists('x', $value) && array_key_exists('y', $value) && is_scalar($value['x']) && is_scalar($value['y'])) {
                     $label = implode(' ', array_map(
-                        static fn(string $part): string => ucwords(str_replace(['_', '-'], ' ', $part)),
+                        self::formatFieldLabel(...),
                         ($nextPath[0] ?? null) === 'data' ? array_slice($nextPath, 1) : $nextPath
                     ));
                     $fields[] = [
@@ -1181,6 +1194,7 @@ final readonly class MapInspector
                             (string) $value['x'],
                         ),
                         'path' => [...$nextPath, 'x'],
+                        'axis' => 'x',
                     ];
                     $fields[] = [
                         'label' => '  Y',
@@ -1190,6 +1204,7 @@ final readonly class MapInspector
                             (string) $value['y'],
                         ),
                         'path' => [...$nextPath, 'y'],
+                        'axis' => 'y',
                     ];
                     continue;
                 }
@@ -1208,7 +1223,7 @@ final readonly class MapInspector
             $label = implode(' ', array_map(
                 static fn(string $part): string => ctype_digit($part)
                     ? '#' . ((int) $part + 1)
-                    : ucwords(str_replace(['_', '-'], ' ', $part)),
+                    : self::formatFieldLabel($part),
                 $displayPath
             ));
             $stringValue = match (true) {
