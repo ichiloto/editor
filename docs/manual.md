@@ -1051,6 +1051,13 @@ views of `items.php`, and saving one of them, or all of them with `Ctrl+A`,
 reads the file once, composes every dirty category's changes against that
 one reading, and writes it once.
 
+Equipment is shown everywhere, in every renderer, by the one icon of its
+type (one for all swords, one for all daggers), which the game's theme
+binds. A weapon's or armor's own `icon` is legacy compatibility data: the
+Weapons and Armors records show it as a read-only `Legacy Icon` row and keep
+it exactly as written. A consumable item's `Icon` stays its own and
+editable.
+
 Where identity cannot prove the address, nothing is written and the status
 line says why: two entries in the file declaring one id, an entry declaring
 none, or a save that would leave two entries declaring one id. Give each
