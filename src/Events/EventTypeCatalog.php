@@ -158,6 +158,15 @@ final class EventTypeCatalog
     }
 
     /**
+     * Returns the type an author names by its label, or null when no type
+     * has that label.
+     */
+    public static function findByLabel(string $label): ?EventTypeDefinition
+    {
+        return array_find(self::all(), static fn(EventTypeDefinition $definition): bool => $definition->label === $label);
+    }
+
+    /**
      * Returns the index for the given trigger class.
      *
      * @param string|null $className The stored trigger class name.

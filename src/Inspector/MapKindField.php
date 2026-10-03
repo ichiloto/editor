@@ -4,10 +4,8 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Inspector;
 
-use Ichiloto\Editor\History\GenericCommand;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\Status\StatusLevel;
-use Ichiloto\Engine\Field\MapGraphics;
 use Ichiloto\Engine\Rendering\Tilesets\Tileset;
 use Throwable;
 
@@ -70,8 +68,8 @@ trait MapKindField
             $this->renderSelectionDependentArea();
             return;
         }
-        $layers = count($map->getTileLayerSources());
-        if ($current === null || $layers === 0) {
+        $layers = $this->createMapInspector()->countTileLayersClearedBy($map, $id);
+        if ($layers === 0) {
             $this->changeMapKind($map, $id, $label, false);
             return;
         }
@@ -108,34 +106,21 @@ trait MapKindField
 
     /**
      * Sets the map's kind, clearing its tile layers and their settings when
-     * asked, as one undo step.
+     * asked, as one undo step ({@see MapInspector::changeMapKind()}).
      */
     private function changeMapKind(ProjectMap $map, string $id, string $label, bool $clearTiles): void
     {
-        $hadKind = $map->hasMapDataField(['tileset']);
-        $oldKind = $map->getMapDataField(['tileset']);
         $oldSources = $map->getTileLayerSources();
-        $hadSettings = $map->hasMapDataField([MapGraphics::SETTINGS_KEY]);
-        $oldSettings = $map->getMapDataField([MapGraphics::SETTINGS_KEY]);
-        $apply = static function () use ($map, $id, $clearTiles): void {
-            $map->setMapDataField(['tileset'], $id);
-            if ($clearTiles) {
-                $map->restoreTileLayerSources([]);
-                $map->setMapDataField([MapGraphics::SETTINGS_KEY], null);
-            }
-        };
         try {
-            $apply();
+            $command = $this->createMapInspector()->changeMapKind($map, $id, $clearTiles);
         } catch (Throwable $failure) {
             $this->setErrorStatus($failure, 'Kind change');
             $this->renderSelectionDependentArea();
             return;
         }
-        $this->recordCommand(new GenericCommand('Kind change', $apply, static function () use ($map, $hadKind, $oldKind, $oldSources, $hadSettings, $oldSettings): void {
-            $map->setMapDataField(['tileset'], $hadKind ? $oldKind : null);
-            $map->restoreTileLayerSources($oldSources);
-            $map->setMapDataField([MapGraphics::SETTINGS_KEY], $hadSettings ? $oldSettings : null);
-        }));
+        if ($command !== null) {
+            $this->recordCommand($command);
+        }
         $this->setStatus(sprintf('%s\'s kind is now %s%s; save to keep it.', $map->getDisplayName(), $label,
             $clearTiles ? sprintf(', and its %d tile %s cleared', count($oldSources), count($oldSources) === 1 ? 'layer is' : 'layers are') : ''),
             StatusLevel::INFO);

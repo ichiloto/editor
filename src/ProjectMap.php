@@ -1694,18 +1694,42 @@ final class ProjectMap
     }
 
     /**
-     * Updates the rectangular bounds of an event marker.
+     * Repaints an event marker as exactly the given rectangle.
+     *
+     * Refused, leaving the grid unchanged, when the rectangle is empty,
+     * leaves the event layer or covers another marker's cell: the bounds an
+     * author asks for are the bounds the event gets, never a clamped or
+     * overwriting approximation of them.
      *
      * @param string $marker The event marker.
      * @param int $x The left coordinate.
      * @param int $y The top coordinate.
      * @param int $width The marker width.
      * @param int $height The marker height.
-     * @return void
+     * @return string|null Why the change was refused, or null when it was made.
      */
-    public function setEventBounds(string $marker, int $x, int $y, int $width, int $height): void
+    public function setEventBounds(string $marker, int $x, int $y, int $width, int $height): ?string
     {
         $this->assertEditable();
+
+        if ($width < 1 || $height < 1) {
+            return sprintf('Marker %s needs a size of at least 1x1, not %dx%d.', $marker, $width, $height);
+        }
+
+        for ($row = $y; $row < $y + $height; $row++) {
+            for ($column = $x; $column < $x + $width; $column++) {
+                if (! $this->hasLayerCell(MapLayers::EVENT, $column, $row)) {
+                    return sprintf('Marker %s would leave the map at (%d, %d).', $marker, $column, $row);
+                }
+
+                $occupant = $this->getEventSymbol($column, $row);
+
+                if ($occupant !== $marker && trim($occupant) !== '') {
+                    return sprintf('Marker %s would cover marker %s at (%d, %d).', $marker, $occupant, $column, $row);
+                }
+            }
+        }
+
         foreach ($this->layers->getEventGrid()->getSymbols() as $rowIndex => $row) {
             foreach ($row as $columnIndex => $symbol) {
                 if ($symbol === $marker) {
@@ -1714,18 +1738,15 @@ final class ProjectMap
             }
         }
 
-        $maxX = max(0, min($this->getWidth() - 1, $x + max(1, $width) - 1));
-        $maxY = max(0, min($this->getHeight() - 1, $y + max(1, $height) - 1));
-
-        for ($row = max(0, $y); $row <= $maxY; $row++) {
-            for ($column = max(0, $x); $column <= $maxX; $column++) {
-                if ($this->hasLayerCell(MapLayers::EVENT, $column, $row)) {
-                    $this->layers->getEventGrid()->cells[$row][$column]['symbol'] = $marker;
-                }
+        for ($row = $y; $row < $y + $height; $row++) {
+            for ($column = $x; $column < $x + $width; $column++) {
+                $this->layers->getEventGrid()->cells[$row][$column]['symbol'] = $marker;
             }
         }
 
         $this->touchState();
+
+        return null;
     }
 
     /**

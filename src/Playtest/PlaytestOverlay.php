@@ -6,6 +6,7 @@ namespace Ichiloto\Editor\Playtest;
 
 use Ichiloto\Editor\Database\PhpDataFile;
 use Ichiloto\Editor\Database\PhpValueExporter;
+use Ichiloto\Editor\Events\EventMarkers;
 use Ichiloto\Engine\Field\MapGridSource;
 use RuntimeException;
 use Throwable;
@@ -239,22 +240,17 @@ final class PlaytestOverlay
     }
 
     /**
-     * Picks a one-column marker the map does not use yet.
+     * Picks a marker the map does not use yet ({@see EventMarkers}): neither
+     * defined nor painted anywhere on its event layer.
      *
      * @param array<string, mixed> $events
      * @param string[] $lines
      */
     private static function freeEventMarker(array $events, array $lines): ?string
     {
-        $layer = implode('', $lines);
+        preg_match_all('/\X/u', implode('', $lines), $symbols);
 
-        foreach (str_split('@!$%&*+=?^{}|~<>ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789') as $candidate) {
-            if (! array_key_exists($candidate, $events) && ! str_contains($layer, $candidate)) {
-                return $candidate;
-            }
-        }
-
-        return null;
+        return EventMarkers::findFreeMarker([...array_map(strval(...), array_keys($events)), ...$symbols[0]]);
     }
 
     /**
