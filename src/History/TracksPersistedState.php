@@ -85,6 +85,18 @@ trait TracksPersistedState
     }
 
     /**
+     * Returns a key that changes whenever this asset's content may have,
+     * its children's included, so a caller can tell whether a step touched
+     * it without fingerprinting anything.
+     *
+     * @return string The key.
+     */
+    public function getContentVersion(): string
+    {
+        return $this->stateGeneration . '|' . $this->dependencyVersion();
+    }
+
+    /**
      * Returns the combined version of children this asset's payload embeds.
      *
      * An aggregate's bytes change when a child mutates, even though none of
@@ -108,7 +120,7 @@ trait TracksPersistedState
      */
     protected function stateFingerprint(): string
     {
-        $version = $this->stateGeneration . '|' . $this->dependencyVersion();
+        $version = $this->getContentVersion();
 
         if ($this->fingerprintedVersion !== $version) {
             $this->currentFingerprint = sha1($this->buildPersistedPayload());

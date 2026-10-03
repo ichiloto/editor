@@ -8,11 +8,16 @@ use Ichiloto\Editor\Backup\BackupSettings;
 use Ichiloto\Editor\Backup\BackupWriter;
 use Ichiloto\Editor\Canvas\CanvasEditor;
 use Ichiloto\Editor\Canvas\PieceRole;
+use Ichiloto\Editor\Cutscenes\Source\SourcePreservationRefusal;
 use Ichiloto\Editor\Database\ConditionCodec;
 use Ichiloto\Editor\Database\ConditionEditor;
 use Ichiloto\Editor\Database\DatabaseCatalog;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
+use Ichiloto\Editor\Database\RecordAuthoring;
+use Ichiloto\Editor\Database\RecordChange;
+use Ichiloto\Editor\Database\RecordRefusal;
 use Ichiloto\Editor\Database\ReferenceCatalog;
+use Ichiloto\Editor\Database\SourceIdentityConflict;
 use Ichiloto\Editor\Database\WorldWriteCodec;
 use Ichiloto\Editor\Database\WorldWriteEditor;
 use Ichiloto\Editor\Events\EventAuthoring;
@@ -1006,12 +1011,13 @@ final class EditorSession
     }
 
     /**
-     * A database category's records, as its list shows them, and whether
-     * they can be edited. The bespoke categories (actors, classes, skills,
+     * A database category's records, as its list shows them, whether they
+     * can be edited and have unsaved changes, and which record operations
+     * the category takes. The bespoke categories (actors, classes, skills,
      * animations, quests, system) still build their rows in the terminal
      * editor, so they are refused here until those builders are shared.
      *
-     * @return array{category: string, editable: bool, readOnly: ?string, records: list<string>}
+     * @return array{category: string, editable: bool, readOnly: ?string, dirty: bool, canCreate: bool, canDuplicate: bool, canDelete: bool, canReorder: bool, records: list<string>}
      * @throws SessionRefusal When the category is unknown or not yet served.
      */
     public function listDatabaseRecords(string $category): array
@@ -1022,31 +1028,326 @@ final class EditorSession
             'category' => $category,
             'editable' => $database->isEditable(),
             'readOnly' => $database->getReadOnlyReason(),
-            'records' => array_values(array_map('strval', $database->getEntryLabels())),
+            'dirty' => $database->isDirty(),
+            'canCreate' => $database->supportsRecordCreation(),
+            'canDuplicate' => $database->duplicateRecordSupported(),
+            'canDelete' => $database->supportsRecordDeletion(),
+            // Only where the file keeps the order; a move elsewhere is refused with why.
+            'canReorder' => $database->supportsDurableReorder(),
+            'records' => self::listRecordLabels($database),
         ];
     }
 
     /**
-     * One record's rows, described as the inspector's are.
+     * One record's rows in a frame of its commands, described as the
+     * inspector's are, with the `key` an edit names a row by. At the root
+     * (`frame` []) the rows are the record's fields and its list's entries;
+     * a row that opens a command frame carries that `frame`, read again with
+     * it to edit the commands inside. A row of an item the record's lists
+     * hold carries `item` and `itemNoun`, and `childNoun` when the item holds
+     * a list of its own (a route's steps, a choice's options): add and
+     * remove act on it.
      *
-     * @return array{category: string, index: int, rows: list<array<string, mixed>>}
-     * @throws SessionRefusal When the category or record is unknown.
+     * @param array<int|string, mixed> $frame The frame; [] for the record itself.
+     * @return array{category: string, index: int, frame: list<int|string>, frameLabel: ?string, editable: bool, readOnly: ?string, rows: list<array<string, mixed>>}
+     * @throws SessionRefusal When the category, record or frame is unknown.
      */
-    public function readDatabaseRecord(string $category, int $index): array
+    public function readDatabaseRecord(string $category, int $index, array $frame = []): array
     {
         $database = $this->requireRecordDatabase($category);
-        if ($database->getRecordByIndex($index) === null) {
-            throw new SessionRefusal(sprintf('%s has no record %d.', $category, $index));
-        }
+        $frame = self::requireFrame($frame, 'database.record');
+        $fields = $this->collectRecordFields($database, $index, $frame);
 
         return [
             'category' => $category,
             'index' => $index,
-            'rows' => array_map(static fn(array $field): array => self::describeRow([
-                ...$field,
-                'target' => isset($field['field']) && ($field['editable'] ?? true) !== false ? 'record' : null,
-            ]), $database->getSettingsFields($index)),
+            'frame' => $frame,
+            'frameLabel' => $frame === [] ? null : $database->describeFramePath($frame),
+            'editable' => $database->isEditable(),
+            'readOnly' => $database->getReadOnlyReason(),
+            'rows' => array_map(static fn(array $field): array => self::describeRecordRow(
+                $database,
+                $index,
+                $frame,
+                $field,
+                isset($field['field']) && ($field['editable'] ?? true) !== false ? 'record' : null,
+            ), $fields),
         ];
+    }
+
+    /**
+     * Applies one record row's edit as one undo step. The row is found again
+     * by its key among the record's current rows in its frame. A value its
+     * field cannot take is refused with what is wrong with it.
+     *
+     * @param array<string, mixed> $key The row's key, as `database.record` gave it.
+     * @return array{changed: bool, records: list<string>} Whether it changed, and the labels afterwards (a rename shows).
+     * @throws SessionRefusal When the category or record is unknown or read-only, the row is gone or read-only, or the value is refused.
+     */
+    public function applyDatabaseRecord(string $category, int $index, array $key, string $value): array
+    {
+        $database = $this->requireRecordDatabase($category);
+        $frame = self::requireFrame($key['frame'] ?? [], 'database.record');
+        $fieldId = $key['field'] ?? null;
+        // Field ids are unique within a frame, so the field and frame name the row.
+        $field = is_string($fieldId) ? array_find($this->collectRecordFields($database, $index, $frame),
+            static fn(array $candidate): bool => ($candidate['field'] ?? null) === $fieldId) : null;
+
+        if (! is_string($fieldId) || $field === null) {
+            throw new SessionRefusal('That row is no longer in the record; read it again.');
+        }
+        if (($field['editable'] ?? true) === false || self::describeRow([...$field, 'target' => 'record'])['kind'] === 'info') {
+            throw new SessionRefusal(sprintf('%s cannot be edited here.', trim((string) ($field['label'] ?? 'That row'))));
+        }
+
+        $change = $this->changeRecord(static fn(RecordAuthoring $authoring): RecordChange => $authoring->applyField(
+            $database, $index, $frame, $fieldId, $value, (string) ($field['label'] ?? 'Database field'),
+        ));
+
+        return ['changed' => $change->command !== null, 'records' => self::listRecordLabels($database)];
+    }
+
+    /**
+     * Adds an item at a record row as one undo step: after the item the row
+     * belongs to, or with `$child` at the end of what that item holds (a
+     * route's steps, a choice's options). A key of `{frame}` alone adds at
+     * the end of that frame, or of the record's own list.
+     *
+     * @param array<string, mixed> $key A row's key, as `database.record` gave it, or `{frame}` alone.
+     * @return array{changed: bool, records: list<string>}
+     * @throws SessionRefusal When the category, record or frame is unknown or read-only, or the row's item cannot take it.
+     */
+    public function addDatabaseItem(string $category, int $index, array $key, bool $child = false): array
+    {
+        $database = $this->requireRecordDatabase($category);
+        $frame = self::requireFrame($key['frame'] ?? [], 'database.record');
+        $fieldId = $key['field'] ?? null;
+
+        if ($fieldId !== null && ! is_string($fieldId)) {
+            throw new SessionRefusal('A row key names its field as a string, as database.record gave it.');
+        }
+
+        $change = $this->changeRecord(static fn(RecordAuthoring $authoring): RecordChange => $authoring->addItem($database, $index, $frame, $fieldId, $child));
+
+        return ['changed' => $change->command !== null, 'records' => self::listRecordLabels($database)];
+    }
+
+    /**
+     * Removes the item a record row belongs to (an entry or command with
+     * everything under it, a route step, line or lane, a choice's option
+     * with its arm) as one undo step; a row that belongs to none changes
+     * nothing.
+     *
+     * @param array<string, mixed> $key A row's key, as `database.record` gave it.
+     * @return array{changed: bool, records: list<string>}
+     * @throws SessionRefusal When the category, record or frame is unknown or read-only, or the key names no row.
+     */
+    public function removeDatabaseItem(string $category, int $index, array $key): array
+    {
+        $database = $this->requireRecordDatabase($category);
+        $frame = self::requireFrame($key['frame'] ?? [], 'database.record');
+        $fieldId = $key['field'] ?? null;
+
+        if (! is_string($fieldId)) {
+            throw new SessionRefusal('Name the row whose item to remove by its key, as database.record gave it.');
+        }
+
+        $change = $this->changeRecord(static fn(RecordAuthoring $authoring): RecordChange => $authoring->removeItem($database, $index, $frame, $fieldId));
+
+        return ['changed' => $change->command !== null, 'records' => self::listRecordLabels($database)];
+    }
+
+    /**
+     * Creates a blank record at the end of a category, as one undo step.
+     *
+     * @return array{index: int, records: list<string>} The new record's index, and the labels afterwards.
+     * @throws SessionRefusal When the category is unknown, read-only or takes no new records.
+     */
+    public function createDatabaseRecord(string $category): array
+    {
+        $database = $this->requireRecordDatabase($category);
+        $change = $this->changeRecord(static fn(RecordAuthoring $authoring): RecordChange => $authoring->createRecord($database));
+
+        return ['index' => (int) $change->index, 'records' => self::listRecordLabels($database)];
+    }
+
+    /**
+     * Duplicates a record below itself under a fresh identity, as one undo step.
+     *
+     * @return array{index: int, records: list<string>} The copy's index, and the labels afterwards.
+     * @throws SessionRefusal When the category or record is unknown or read-only, or the record cannot be duplicated.
+     */
+    public function duplicateDatabaseRecord(string $category, int $index): array
+    {
+        $database = $this->requireRecordDatabase($category);
+        $change = $this->changeRecord(static fn(RecordAuthoring $authoring): RecordChange => $authoring->duplicateRecord($database, $index));
+
+        return ['index' => (int) $change->index, 'records' => self::listRecordLabels($database)];
+    }
+
+    /**
+     * Deletes a record as one undo step; the file changes on save.
+     *
+     * @return array{index: ?int, records: list<string>} The record to select next (null when none is left), and the labels afterwards.
+     * @throws SessionRefusal When the category or record is unknown or read-only, or the category keeps its entries.
+     */
+    public function deleteDatabaseRecord(string $category, int $index): array
+    {
+        $database = $this->requireRecordDatabase($category);
+        $change = $this->changeRecord(static fn(RecordAuthoring $authoring): RecordChange => $authoring->deleteRecord($database, $index));
+
+        return ['index' => $change->index, 'records' => self::listRecordLabels($database)];
+    }
+
+    /**
+     * Moves a record one place up or down, as one undo step, where the file
+     * keeps the order. A move past either end changes nothing.
+     *
+     * @param string $direction "up" or "down".
+     * @return array{index: int, changed: bool, records: list<string>} Where the record is now, whether it moved, and the labels afterwards.
+     * @throws SessionRefusal When the category or record is unknown or read-only, the direction is neither, or the file would not keep the order (with why).
+     */
+    public function moveDatabaseRecord(string $category, int $index, string $direction): array
+    {
+        $database = $this->requireRecordDatabase($category);
+        $step = match ($direction) {
+            'up' => -1,
+            'down' => 1,
+            default => throw new SessionRefusal(sprintf('A record moves "up" or "down", not "%s".', $direction)),
+        };
+        $change = $this->changeRecord(static fn(RecordAuthoring $authoring): RecordChange => $authoring->moveRecord($database, $index, $step));
+
+        return ['index' => (int) $change->index, 'changed' => $change->command !== null, 'records' => self::listRecordLabels($database)];
+    }
+
+    /**
+     * Saves one database category, backing up the files it overwrites
+     * first, as the terminal editor's save does. A category with nothing
+     * unsaved writes nothing (`saved` false). No database validation runs on
+     * save, so there are no warnings yet.
+     *
+     * @return array{saved: bool, warnings: list<string>, backupFailures: list<string>}
+     * @throws SessionRefusal When the category is unknown or read-only, or its source cannot take the save.
+     */
+    public function saveDatabase(string $category): array
+    {
+        $database = $this->requireRecordDatabase($category);
+        if (! $database->isEditable()) {
+            throw new SessionRefusal(sprintf('Read-only: %s.', $database->getReadOnlyReason() ?? 'this category cannot be written'));
+        }
+        if (! $database->isDirty()) {
+            return ['saved' => false, 'warnings' => [], 'backupFailures' => []];
+        }
+        $paths = $database->getBackupPaths();
+        $failures = $this->backups->isEnabled() && $paths !== [] ? $this->backups->backup(...$paths)['failed'] : [];
+
+        try {
+            $database->save();
+        } catch (SourceIdentityConflict|SourcePreservationRefusal $refusal) {
+            throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+        }
+
+        return ['saved' => true, 'warnings' => [], 'backupFailures' => array_values($failures)];
+    }
+
+    /**
+     * Makes one record change, records it, and turns a refusal into the session's.
+     *
+     * @param callable(RecordAuthoring): RecordChange $change
+     * @throws SessionRefusal
+     */
+    private function changeRecord(callable $change): RecordChange
+    {
+        try {
+            $applied = $change(new RecordAuthoring());
+        } catch (RecordRefusal $refusal) {
+            throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+        }
+        if ($applied->command !== null) {
+            $this->history->record($applied->command);
+        }
+
+        return $applied;
+    }
+
+    /**
+     * A record's rows in a frame, refusing a record or frame that is gone.
+     *
+     * @param list<int|string> $frame
+     * @return array<int, array<string, mixed>>
+     * @throws SessionRefusal
+     */
+    private function collectRecordFields(ProjectRecordDatabase $database, int $index, array $frame): array
+    {
+        if ($database->getRecordByIndex($index) === null) {
+            throw new SessionRefusal(sprintf('%s has no record %d.', $database->schema->key, $index));
+        }
+        if ($frame !== [] && (! $database->hasCommandFrames() || $database->getFrameCommands($index, $frame) === null)) {
+            throw new SessionRefusal(sprintf('%s is no longer there; read the record again.', $database->describeFramePath($frame)));
+        }
+
+        return $database->getFrameSettingsFields($index, $frame);
+    }
+
+    /** @return list<string> A category's record labels, as its list shows them. */
+    private static function listRecordLabels(ProjectRecordDatabase $database): array
+    {
+        return array_values(array_map('strval', $database->getEntryLabels()));
+    }
+
+    /**
+     * One row of a record pane (a database record's or an NPC's) as plain
+     * data: described as an inspector row, its key naming the frame it lives
+     * in, with the frame it opens, its exact multi-line text, and the item
+     * it belongs to as the record's own rules locate it.
+     *
+     * @param array<int, int|string> $frame
+     * @param array<string, mixed> $field
+     * @param string|null $target The key's target, or null for a row no edit applies through.
+     * @return array<string, mixed>
+     */
+    private static function describeRecordRow(ProjectRecordDatabase $records, int $index, array $frame, array $field, ?string $target): array
+    {
+        $row = self::describeRow([...$field, 'target' => $target]);
+
+        if (isset($row['key'])) {
+            $row['key']['frame'] = $frame;
+            $item = $records->locateItem($index, $frame, (string) ($field['field'] ?? ''));
+
+            if ($item !== null) {
+                $row['item'] = true;
+                $row['itemNoun'] = $item->noun;
+                if ($item->childNoun !== null) {
+                    $row['childNoun'] = $item->childNoun;
+                }
+            }
+        }
+        if (is_array($field['frame'] ?? null)) {
+            $row['frame'] = array_values($field['frame']);
+        }
+        $control = MapInspector::findControl($field);
+        if ($control?->type === InputControlType::MULTILINE) {
+            $row['multiline'] = true;
+            $row['value'] = $control->rawValue;
+        }
+
+        return $row;
+    }
+
+    /**
+     * A frame of a record's commands, as a request or a row key names it.
+     *
+     * @param string $reader What gave the frame, for the refusal.
+     * @return list<int|string>
+     * @throws SessionRefusal When the frame is not a list of indexes and keys.
+     */
+    private static function requireFrame(mixed $frame, string $reader): array
+    {
+        if (! is_array($frame) || ! array_is_list($frame) || ! array_all($frame, static fn(mixed $segment): bool => is_int($segment) || is_string($segment))) {
+            throw new SessionRefusal(sprintf('A frame must be a list of indexes and keys, as %s gave it.', $reader));
+        }
+
+        return $frame;
     }
 
     /**
@@ -1151,7 +1452,7 @@ final class EditorSession
                 'y' => $npc->getY(),
                 'sprite' => $npc->getVisibleSprite(),
             ],
-            'rows' => array_map(static fn(array $field): array => self::describeNpcRow($field, $frame), $fields),
+            'rows' => array_map(static fn(array $field): array => self::describeNpcRow($inspector->records(), $index, $field, $frame), $fields),
         ];
     }
 
@@ -1177,7 +1478,7 @@ final class EditorSession
         if ($field === null) {
             throw new SessionRefusal('That row is no longer on the NPC; read it again.');
         }
-        if (self::describeNpcRow($field, $frame)['kind'] === 'info') {
+        if (self::describeNpcRow($inspector->records(), $index, $field, $frame)['kind'] === 'info') {
             throw new SessionRefusal(sprintf('%s cannot be edited here.', trim((string) ($field['label'] ?? 'That row'))));
         }
 
@@ -1274,33 +1575,20 @@ final class EditorSession
     }
 
     /**
-     * One NPC row as plain data: described as an inspector row, its key
-     * naming the frame it lives in. The id note is read here; assigning an
+     * One NPC row as plain data, as any record pane's row is
+     * ({@see describeRecordRow()}). The id note is read here; assigning an
      * id is its own request.
      *
      * @param array<string, mixed> $field
      * @param list<int|string> $frame
      * @return array<string, mixed>
      */
-    private static function describeNpcRow(array $field, array $frame): array
+    private static function describeNpcRow(ProjectRecordDatabase $records, int $index, array $field, array $frame): array
     {
         $fieldId = $field['field'] ?? null;
         $editable = is_string($fieldId) && $fieldId !== NpcInspector::ASSIGN_ID_FIELD && ($field['editable'] ?? true) !== false;
-        $row = self::describeRow([...$field, 'target' => $editable ? 'npc' : null]);
 
-        if (isset($row['key'])) {
-            $row['key']['frame'] = $frame;
-        }
-        if (is_array($field['frame'] ?? null)) {
-            $row['frame'] = array_values($field['frame']);
-        }
-        $control = MapInspector::findControl($field);
-        if ($control?->type === InputControlType::MULTILINE) {
-            $row['multiline'] = true;
-            $row['value'] = $control->rawValue;
-        }
-
-        return $row;
+        return self::describeRecordRow($records, $index, $frame, $field, $editable ? 'npc' : null);
     }
 
     /**
@@ -1311,17 +1599,13 @@ final class EditorSession
      */
     private static function requireNpcFrame(mixed $frame): array
     {
-        if (! is_array($frame) || ! array_is_list($frame) || ! array_all($frame, static fn(mixed $segment): bool => is_int($segment) || is_string($segment))) {
-            throw new SessionRefusal('A frame must be a list of indexes and keys, as readNpc gave it.');
-        }
-
-        return $frame;
+        return self::requireFrame($frame, 'readNpc');
     }
 
     /**
      * Undoes the last change, wherever it was made.
      *
-     * @return array{label: ?string, maps: list<string>, revisions: array<string, int>} What was undone, the maps it changed and their revisions now.
+     * @return array{label: ?string, maps: list<string>, revisions: array<string, int>, databases: list<string>} What was undone, the maps it changed and their revisions now, and the database categories it changed.
      */
     public function undo(): array
     {
@@ -1331,7 +1615,7 @@ final class EditorSession
     /**
      * Redoes the last undone change.
      *
-     * @return array{label: ?string, maps: list<string>}
+     * @return array{label: ?string, maps: list<string>, revisions: array<string, int>, databases: list<string>}
      */
     public function redo(): array
     {
@@ -1450,14 +1734,16 @@ final class EditorSession
     }
 
     /**
-     * Runs one history step and names the maps it changed.
+     * Runs one history step and names the maps and database categories it
+     * changed, so an interface reloads what it shows of them.
      *
      * @param callable(): ?Command $step
-     * @return array{label: ?string, maps: list<string>}
+     * @return array{label: ?string, maps: list<string>, revisions: array<string, int>, databases: list<string>}
      */
     private function traverseHistory(callable $step): array
     {
         $before = array_map(static fn(ProjectMap $map): int => $map->stateVersion(), $this->workspace->maps);
+        $databases = array_map(static fn(ProjectRecordDatabase $database): string => $database->getContentVersion(), $this->workspace->recordDatabases);
         $command = $step();
         $changed = $revisions = [];
         foreach ($this->workspace->maps as $index => $map) {
@@ -1466,8 +1752,10 @@ final class EditorSession
                 $revisions[$map->mapId] = $map->stateVersion();
             }
         }
+        $changedDatabases = array_keys(array_filter($this->workspace->recordDatabases,
+            static fn(ProjectRecordDatabase $database, string $key): bool => $database->getContentVersion() !== $databases[$key], ARRAY_FILTER_USE_BOTH));
 
-        return ['label' => $command?->label, 'maps' => $changed, 'revisions' => $revisions];
+        return ['label' => $command?->label, 'maps' => $changed, 'revisions' => $revisions, 'databases' => array_values(array_map('strval', $changedDatabases))];
     }
 
     /** @return array<int, array<string, mixed>> */

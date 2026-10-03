@@ -261,7 +261,37 @@ final class SessionHost
                 self::requireInt($params, 'y'),
             ),
             'database.records' => $session->listDatabaseRecords(self::requireString($params, 'category')),
-            'database.record' => $session->readDatabaseRecord(self::requireString($params, 'category'), self::requireInt($params, 'index')),
+            'database.record' => $session->readDatabaseRecord(
+                self::requireString($params, 'category'),
+                self::requireInt($params, 'index'),
+                is_array($params['frame'] ?? []) ? ($params['frame'] ?? []) : throw new InvalidRequest('"frame" must be a list of indexes and keys.'),
+            ),
+            'database.apply' => $session->applyDatabaseRecord(
+                self::requireString($params, 'category'),
+                self::requireInt($params, 'index'),
+                is_array($params['key'] ?? null) ? $params['key'] : throw new InvalidRequest('"key" must be the row key database.record gave.'),
+                is_scalar($params['value'] ?? null) ? (string) $params['value'] : throw new InvalidRequest('"value" must be a string, number or boolean.'),
+            ),
+            'database.add' => $session->addDatabaseItem(
+                self::requireString($params, 'category'),
+                self::requireInt($params, 'index'),
+                is_array($params['key'] ?? null) ? $params['key'] : throw new InvalidRequest('"key" must be a row key database.record gave, or {"frame": [...]}.'),
+                is_bool($params['child'] ?? false) ? ($params['child'] ?? false) : throw new InvalidRequest('"child" must be a boolean.'),
+            ),
+            'database.remove' => $session->removeDatabaseItem(
+                self::requireString($params, 'category'),
+                self::requireInt($params, 'index'),
+                is_array($params['key'] ?? null) ? $params['key'] : throw new InvalidRequest('"key" must be the row key database.record gave.'),
+            ),
+            'database.create' => $session->createDatabaseRecord(self::requireString($params, 'category')),
+            'database.duplicate' => $session->duplicateDatabaseRecord(self::requireString($params, 'category'), self::requireInt($params, 'index')),
+            'database.delete' => $session->deleteDatabaseRecord(self::requireString($params, 'category'), self::requireInt($params, 'index')),
+            'database.move' => $session->moveDatabaseRecord(
+                self::requireString($params, 'category'),
+                self::requireInt($params, 'index'),
+                in_array($params['direction'] ?? null, ['up', 'down'], true) ? $params['direction'] : throw new InvalidRequest('"direction" must be "up" or "down".'),
+            ),
+            'database.save' => $session->saveDatabase(self::requireString($params, 'category')),
             'references.list' => $session->listReferences(self::requireString($params, 'map'), self::requireString($params, 'category')),
             'conditions.grammar' => $session->describeWorldStateGrammar(),
             'conditions.encode' => $session->encodeWorldState(
