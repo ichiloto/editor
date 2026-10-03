@@ -128,6 +128,45 @@ it('rewrites event bounds as a filled rectangle', function () {
     ->and($map->getEventMarkerAt(5, 1))->toBeNull();
 });
 
+/** A four-by-two map whose event layer is the given rows. */
+function eventCellsMap(array $eventLines): ProjectMap
+{
+  return new ProjectMap(
+    mapId: 'town',
+    directory: '/virtual/Maps/town',
+    dataPath: '/virtual/Maps/town/town.data.php',
+    mapPath: '/virtual/Maps/town/town.map.php',
+    eventPath: '/virtual/Maps/town/town.event.php',
+    data: ['events' => []],
+    tileLines: ['....', '....'],
+    eventLines: $eventLines,
+  );
+}
+
+it('reads a marker painted in separate places as its exact cells', function () {
+  $map = eventCellsMap(['   D', 'D   ']);
+
+  expect($map->getEventArea('D')?->cells)->toBe([[3, 0], [0, 1]])
+    ->and($map->getEventArea('D')?->isRectangle)->toBeFalse()
+    ->and($map->getEventBounds('D'))->toBe(['x' => 0, 'y' => 0, 'width' => 4, 'height' => 2])
+    ->and($map->getEventArea('Z'))->toBeNull();
+});
+
+it('moves every cell of a marker together and refuses a move off the map or onto another marker', function () {
+  $map = eventCellsMap(['D  D', '   E']);
+  $before = $map->captureGridSnapshot();
+
+  expect($map->moveEventCells('D', 0, 1))->toContain('cover marker E at (3, 1)')
+    ->and($map->moveEventCells('D', 1, 0))->toContain('leave the map at (4, 0)')
+    ->and($map->captureGridSnapshot())->toBe($before);
+
+  $map = eventCellsMap(['D D ', '    ']);
+
+  expect($map->moveEventCells('D', 1, 1))->toBeNull()
+    ->and($map->getEventArea('D')?->cells)->toBe([[1, 1], [3, 1]])
+    ->and($map->getEventMarkerAt(0, 0))->toBeNull();
+});
+
 it('never treats metadata as a rename: the loaded path is identity', function () {
   $map = fixtureMap();
 

@@ -43,19 +43,15 @@ it('warns about event markers without definitions', function () {
     ->and($warnings[0])->toContain('no definition');
 });
 
-it('warns when a marker does not occupy one solid rectangle', function () {
+it('accepts a marker painted in any shape, as the runtime triggers its exact cells', function () {
   $map = validatorMap('town', [
     'name' => 'Town',
     'events' => [
       'E' => ['class' => 'SomeTrigger', 'data' => []],
     ],
-  ], [' E  ', 'EEE ']);
+  ], [' E E', 'EE  ']);
 
-  $warnings = MapValidator::validate($map, ['town' => $map]);
-
-  expect($warnings)->toHaveCount(1)
-    ->and($warnings[0])->toContain('marker E')
-    ->and($warnings[0])->toContain('solid rectangle');
+  expect(MapValidator::validate($map, ['town' => $map]))->toBe([]);
 });
 
 it('warns about dangling transfer destinations', function () {

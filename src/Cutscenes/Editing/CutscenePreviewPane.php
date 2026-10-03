@@ -839,10 +839,11 @@ trait CutscenePreviewPane
                         continue;
                     }
 
-                    $bounds = $map->getEventBounds((string) $marker);
+                    // Where the runtime places the marker: its first cell.
+                    $first = $map->getEventArea((string) $marker)?->firstCell;
 
-                    if ($bounds !== null) {
-                        return ['mapId' => $map->mapId, 'x' => (int) $bounds['x'], 'y' => (int) $bounds['y'], 'marker' => (string) $marker];
+                    if ($first !== null) {
+                        return ['mapId' => $map->mapId, 'x' => (int) $first->x, 'y' => (int) $first->y, 'marker' => (string) $marker];
                     }
                 }
             }

@@ -405,7 +405,7 @@ it('catches a marker placed on a map that defines no such event', function () {
         ->and($issues[0]->hint)->toContain('Unmapped event markers');
 });
 
-it('catches a marker that is not one solid rectangle', function () {
+it('accepts a marker painted in separate places, as the runtime triggers its exact cells', function () {
     $root = makeTemporaryProject();
     $path = $root . '/assets/Maps/test-map/test-map.event.php';
 
@@ -417,11 +417,10 @@ it('catches a marker that is not one solid rectangle', function () {
         $source
     ));
 
-    $issues = issuesMentioning(validateProject($root), 'does not occupy one solid rectangle');
+    $issues = validateProject($root);
 
-    expect($issues)->toHaveCount(1)
-        ->and($issues[0]->severity)->toBe(Severity::ERROR)
-        ->and($issues[0]->hint)->toContain('cross-shaped');
+    expect(issuesMentioning($issues, 'rectangle'))->toBe([])
+        ->and(issuesMentioning($issues, 'could not be read'))->toBe([]);
 });
 
 it('catches an event defined but never placed', function () {

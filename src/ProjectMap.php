@@ -16,6 +16,7 @@ use Ichiloto\Editor\Storage\FileSetOperations;
 use Ichiloto\Editor\Storage\FileSetTransactionFailure;
 use Ichiloto\Editor\Storage\FilesystemFileSetOperations;
 use Ichiloto\Editor\Storage\FileSetTransaction;
+use Ichiloto\Engine\Core\CellArea;
 use Ichiloto\Engine\Field\MapGraphics;
 use Ichiloto\Engine\Field\MapGridSource;
 use Ichiloto\Engine\Field\MapLayer;
@@ -1439,67 +1440,90 @@ final class ProjectMap
     }
 
     /**
-     * Returns the event bounds for a marker as x/y/width/height.
+     * Returns the cells an event marker occupies, as the runtime triggers
+     * it: exactly the painted cells, in any shape, connected or not.
+     *
+     * @param string $marker The event marker.
+     * @return CellArea|null The cells, or null when the marker is not placed.
+     */
+    public function getEventArea(string $marker): ?CellArea
+    {
+        $cells = [];
+
+        foreach ($this->layers->getEventGrid()->getSymbols() as $rowIndex => $row) {
+            foreach ($row as $columnIndex => $symbol) {
+                if ($symbol === $marker) {
+                    $cells[] = [$columnIndex, $rowIndex];
+                }
+            }
+        }
+
+        return $cells === [] ? null : CellArea::fromCells($cells);
+    }
+
+    /**
+     * Returns the bounds of an event marker's cells as x/y/width/height.
      *
      * @param string $marker The event marker.
      * @return array{x: int, y: int, width: int, height: int}|null
      */
     public function getEventBounds(string $marker): ?array
     {
-        $positions = [];
+        $bounds = $this->getEventArea($marker)?->bounds;
 
-        foreach ($this->layers->getEventGrid()->getSymbols() as $rowIndex => $row) {
-            foreach ($row as $columnIndex => $symbol) {
-                if ($symbol === $marker) {
-                    $positions[] = [$columnIndex, $rowIndex];
-                }
-            }
-        }
-
-        if ($positions === []) {
-            return null;
-        }
-
-        $xValues = array_column($positions, 0);
-        $yValues = array_column($positions, 1);
-        $minX = min($xValues);
-        $maxX = max($xValues);
-        $minY = min($yValues);
-        $maxY = max($yValues);
-
-        return [
-            'x' => $minX,
-            'y' => $minY,
-            'width' => ($maxX - $minX) + 1,
-            'height' => ($maxY - $minY) + 1,
+        return $bounds === null ? null : [
+            'x' => $bounds->getX(),
+            'y' => $bounds->getY(),
+            'width' => $bounds->getWidth(),
+            'height' => $bounds->getHeight(),
         ];
     }
 
     /**
-     * Reports whether every cell inside an event marker's bounds contains
-     * that marker. The runtime represents one marker as one rectangular
-     * trigger area and rejects sparse, cross-shaped, or disconnected areas.
+     * Moves every cell of an event marker by an offset, keeping its shape.
+     *
+     * Refused, leaving the grid unchanged, when a moved cell would leave the
+     * event layer or land on another marker's cell.
+     *
+     * @param string $marker The event marker.
+     * @param int $deltaX Columns to move by.
+     * @param int $deltaY Rows to move by.
+     * @return string|null Why the move was refused, or null when it was made.
      */
-    public function isEventMarkerSolidRectangle(string $marker): bool
+    public function moveEventCells(string $marker, int $deltaX, int $deltaY): ?string
     {
-        $bounds = $this->getEventBounds($marker);
+        $this->assertEditable();
+        $area = $this->getEventArea($marker);
 
-        if ($bounds === null) {
-            return false;
+        if ($area === null) {
+            return sprintf('Marker %s is not placed.', $marker);
         }
 
-        $maxX = $bounds['x'] + $bounds['width'];
-        $maxY = $bounds['y'] + $bounds['height'];
+        foreach ($area->cells as [$x, $y]) {
+            [$toX, $toY] = [$x + $deltaX, $y + $deltaY];
 
-        for ($y = $bounds['y']; $y < $maxY; $y++) {
-            for ($x = $bounds['x']; $x < $maxX; $x++) {
-                if ($this->getEventSymbol($x, $y) !== $marker) {
-                    return false;
-                }
+            if (! $this->hasLayerCell(MapLayers::EVENT, $toX, $toY)) {
+                return sprintf('Marker %s would leave the map at (%d, %d).', $marker, $toX, $toY);
+            }
+
+            $occupant = $this->getEventSymbol($toX, $toY);
+
+            if ($occupant !== $marker && trim($occupant) !== '') {
+                return sprintf('Marker %s would cover marker %s at (%d, %d).', $marker, $occupant, $toX, $toY);
             }
         }
 
-        return true;
+        foreach ($area->cells as [$x, $y]) {
+            $this->layers->getEventGrid()->cells[$y][$x]['symbol'] = ' ';
+        }
+
+        foreach ($area->cells as [$x, $y]) {
+            $this->layers->getEventGrid()->cells[$y + $deltaY][$x + $deltaX]['symbol'] = $marker;
+        }
+
+        $this->touchState();
+
+        return null;
     }
 
     /**

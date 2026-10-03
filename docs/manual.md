@@ -894,6 +894,15 @@ Select `Script Id` and use the reference picker to choose an existing Common
 Event; the value is not free-typed. Conditions and completion writes use the
 same structured inspector-list controls as other event types.
 
+An event triggers on exactly the cells painted with its marker, in any shape:
+paint the same marker in two places, such as a town exit on the east edge
+and another on the south side, and they are one event. The cells between
+placements are not part of it. For a marker that fills a rectangle the
+inspector's Position and Size edit that rectangle. For any other shape it
+shows `Cells` (how many, in how many places) instead of Size: Position moves
+every cell together, keeping the shape, and is refused when a cell would
+leave the map or cover another marker; paint or erase cells to reshape it.
+
 ## Database Screen
 
 `Ctrl+D` or `F2` opens the Database screen over the main shell; the same key

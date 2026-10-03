@@ -6197,13 +6197,13 @@ final class Editor
 
         if ($selectedMap instanceof ProjectMap) {
             foreach ($selectedMap->getPlacedEventMarkers() as $marker) {
-                $bounds = $selectedMap->getEventBounds($marker);
+                $first = $selectedMap->getEventArea($marker)?->firstCell;
                 $items[] = new PaletteItem(
                     sprintf(
                         'Event: %s on %s%s',
                         $marker,
                         $selectedMap->mapId,
-                        $bounds === null ? '' : sprintf(' (%d, %d)', $bounds['x'], $bounds['y']),
+                        $first === null ? '' : sprintf(' (%d, %d)', $first->x, $first->y),
                     ),
                     '',
                     fn() => $this->jumpToEventMarker($marker),
@@ -6254,14 +6254,15 @@ final class Editor
             return;
         }
 
-        $bounds = $selectedMap->getEventBounds($marker);
+        // The marker's first cell is always one of its own cells, however it is painted.
+        $first = $selectedMap->getEventArea($marker)?->firstCell;
 
         $this->setEditingMode(self::MODE_EVENT);
         $this->setFocusedPane(self::FOCUS_CANVAS, false);
 
-        if ($bounds !== null) {
-            $this->cursorX = $bounds['x'];
-            $this->cursorY = $bounds['y'];
+        if ($first !== null) {
+            $this->cursorX = (int) $first->x;
+            $this->cursorY = (int) $first->y;
         }
 
         $this->clampCursor();
@@ -9244,21 +9245,38 @@ final class Editor
         }
 
         if ($target === 'event-bounds') {
-            $bounds = $selectedMap->getEventBounds((string) $field['marker']);
+            $marker = (string) $field['marker'];
+            $area = $selectedMap->getEventArea($marker);
 
-            if ($bounds === null) {
+            if ($area === null) {
                 return;
             }
 
+            $bounds = $selectedMap->getEventBounds($marker);
             $snapshotBefore = $selectedMap->captureGridSnapshot();
-            $bounds[(string) $field['field']] = max(0, (int) $value);
-            $selectedMap->setEventBounds(
-                (string) $field['marker'],
-                $bounds['x'],
-                $bounds['y'],
-                $bounds['width'],
-                $bounds['height'],
-            );
+
+            if (! $area->isRectangle) {
+                // A marker painted in any other shape keeps its shape: Position
+                // moves every cell; its cells are reshaped by painting them.
+                $axis = (string) $field['field'];
+
+                if (! in_array($axis, ['x', 'y'], true)) {
+                    $this->setStatus(sprintf('Marker %s is painted in its own shape; paint or erase its cells to reshape it.', $marker), StatusLevel::WARN);
+                    return;
+                }
+
+                $delta = max(0, (int) $value) - $bounds[$axis];
+                $refusal = $selectedMap->moveEventCells($marker, $axis === 'x' ? $delta : 0, $axis === 'y' ? $delta : 0);
+
+                if ($refusal !== null) {
+                    $this->setStatus($refusal, StatusLevel::WARN);
+                    return;
+                }
+            } else {
+                $bounds[(string) $field['field']] = max(0, (int) $value);
+                $selectedMap->setEventBounds($marker, $bounds['x'], $bounds['y'], $bounds['width'], $bounds['height']);
+            }
+
             $snapshotAfter = $selectedMap->captureGridSnapshot();
             $this->recordCommand(new GenericCommand(
                 'Event bounds edit',
@@ -13927,6 +13945,7 @@ final class Editor
 
         $definition = $selectedMap->getEventDefinition($marker);
         $bounds = $selectedMap->getEventBounds($marker);
+        $area = $selectedMap->getEventArea($marker);
 
         $fields[] = [
             'label' => 'Event',
@@ -13968,27 +13987,37 @@ final class Editor
                 'marker' => $marker,
                 'field' => 'y',
             ];
-            $fields[] = [
-                'label' => 'Size',
-                'value' => '',
-                'editable' => false,
-            ];
-            $fields[] = [
-                'label' => '  X',
-                'value' => (string) $bounds['width'],
-                'control' => new InputControl(InputControlType::INTEGER, (string) $bounds['width']),
-                'target' => 'event-bounds',
-                'marker' => $marker,
-                'field' => 'width',
-            ];
-            $fields[] = [
-                'label' => '  Y',
-                'value' => (string) $bounds['height'],
-                'control' => new InputControl(InputControlType::INTEGER, (string) $bounds['height']),
-                'target' => 'event-bounds',
-                'marker' => $marker,
-                'field' => 'height',
-            ];
+            if ($area?->isRectangle ?? true) {
+                $fields[] = [
+                    'label' => 'Size',
+                    'value' => '',
+                    'editable' => false,
+                ];
+                $fields[] = [
+                    'label' => '  X',
+                    'value' => (string) $bounds['width'],
+                    'control' => new InputControl(InputControlType::INTEGER, (string) $bounds['width']),
+                    'target' => 'event-bounds',
+                    'marker' => $marker,
+                    'field' => 'width',
+                ];
+                $fields[] = [
+                    'label' => '  Y',
+                    'value' => (string) $bounds['height'],
+                    'control' => new InputControl(InputControlType::INTEGER, (string) $bounds['height']),
+                    'target' => 'event-bounds',
+                    'marker' => $marker,
+                    'field' => 'height',
+                ];
+            } else {
+                // Painted in its own shape: the event triggers on exactly these cells.
+                $pieces = count($area->findPieces());
+                $fields[] = [
+                    'label' => 'Cells',
+                    'value' => sprintf('%d in %d %s', count($area->cells), $pieces, $pieces === 1 ? 'shape' : 'places'),
+                    'editable' => false,
+                ];
+            }
         }
 
         if ($definition !== null) {

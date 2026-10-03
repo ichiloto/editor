@@ -29,7 +29,6 @@ final class MapValidator
     {
         return [
             ...self::findMarkersWithoutDefinitions($map),
-            ...self::findNonRectangularMarkers($map),
             ...self::findDanglingDestinations($map, $mapsById),
             ...self::findOutOfRangeSpawnPoints($map, $mapsById),
             ...self::findRetiredData($map),
@@ -37,23 +36,6 @@ final class MapValidator
         ];
     }
 
-    /**
-     * Finds marker shapes the runtime cannot turn into one trigger area.
-     *
-     * @return string[]
-     */
-    private static function findNonRectangularMarkers(ProjectMap $map): array
-    {
-        $warnings = [];
-
-        foreach ($map->getPlacedEventMarkers() as $marker) {
-            if (! $map->isEventMarkerSolidRectangle($marker)) {
-                $warnings[] = sprintf('Event marker %s must occupy one solid rectangle.', $marker);
-            }
-        }
-
-        return $warnings;
-    }
 
     /**
      * Finds map data the engine no longer reads.
