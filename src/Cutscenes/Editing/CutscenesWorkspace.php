@@ -1610,26 +1610,14 @@ trait CutscenesWorkspace
     }
 
     /**
-     * Saves every dirty asset of both types, for Save All.
-     *
-     * @return array{saved: string[], failed: array<string, string>}
+     * Shows the cutscenes screen again after a save, when it is open.
      */
-    private function saveAllCutscenes(): array
+    private function showSavedCutscenes(): void
     {
-        $library = $this->cutsceneLibrary();
-
-        if ($library === null) {
-            return ['saved' => [], 'failed' => []];
-        }
-
-        $result = $library->saveAll(fn(string ...$paths) => $this->backupBeforeSave(...$paths));
-
         if ($this->isCutscenesOpen) {
             $this->clampCutsceneSelection();
             $this->renderCutscenesArea(includeRoot: true);
         }
-
-        return $result;
     }
 
     // -- Multiline editing -----------------------------------------------------

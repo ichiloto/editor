@@ -199,4 +199,14 @@ final class ProjectConfig
         foreach (explode('.', $path) as $key) { $value = is_array($value) ? ($value[$key] ?? null) : null; }
         return $value;
     }
+
+    /**
+     * Returns the files a save of this database would overwrite.
+     *
+     * @return string[]
+     */
+    public function getBackupPaths(): array
+    {
+        return [$this->path];
+    }
 }

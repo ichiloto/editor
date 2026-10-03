@@ -341,10 +341,12 @@ final class SessionHost
             ),
             'history.undo' => $session->undo(),
             'history.redo' => $session->redo(),
-            'project.dirty' => ['dirty' => $session->hasUnsavedChanges()],
+            'project.dirty' => ['dirty' => $session->hasUnsavedChanges(), 'unsaved' => $session->listUnsavedChanges()],
+            'project.saveAll' => $session->saveAll(),
             'playtest.start' => $session->startPlaytest(self::requireString($params, 'map'), self::requireInt($params, 'x'), self::requireInt($params, 'y')),
             'playtest.status' => $session->describePlaytest(),
-            'playtest.stop' => $session->stopPlaytest(),            default => throw new InvalidRequest(sprintf('Unknown method "%s".', $method)),
+            'playtest.stop' => $session->stopPlaytest(),
+            default => throw new InvalidRequest(sprintf('Unknown method "%s".', $method)),
         };
     }
 

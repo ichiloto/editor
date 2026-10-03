@@ -275,4 +275,14 @@ final class ProjectSystemDatabase
 
         return implode("\n", $lines);
     }
+
+    /**
+     * Returns the files a save of this database would overwrite.
+     *
+     * @return string[]
+     */
+    public function getBackupPaths(): array
+    {
+        return [$this->path];
+    }
 }

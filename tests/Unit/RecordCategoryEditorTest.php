@@ -152,7 +152,7 @@ it('enrols editable record categories in Save All and leaves read-only ones out'
 
     try {
         $editor = deletionEditor($root);
-        $saveable = callEditorMethod($editor, 'getSaveableDatabases');
+        $saveable = getEditorProperty($editor, 'workspace')->listSaveableDatabases();
 
         expect(array_keys($saveable))->toContain('States', 'Troops', 'Skits', 'Common Events', 'Terms');
         expect(array_keys($saveable))->not->toContain('Items', 'Weapons', 'Armors', 'Enemies', 'Types', 'Tilesets');
@@ -190,7 +190,7 @@ it('saves a record category through the editor and backs the file up first', fun
         $database = getEditorProperty($editor, 'workspace')->getRecordDatabase('troops');
         $database->setField(0, 'name', 'Bat Swarm');
 
-        expect(callEditorMethod($editor, 'getDatabaseBackupPaths', $database))
+        expect($database->getBackupPaths())
             ->toBe([$root . '/assets/Data/troops.php']);
 
         callEditorMethod($editor, 'saveActiveDatabase');

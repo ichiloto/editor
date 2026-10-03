@@ -6,6 +6,7 @@ namespace Ichiloto\Editor;
 
 use FilesystemIterator;
 use Ichiloto\Editor\Cutscenes\CutsceneLibrary;
+use Ichiloto\Editor\Database\DatabaseCatalog;
 use Ichiloto\Editor\Database\EngineDataBootstrap;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Database\RecordSchema;
@@ -289,6 +290,66 @@ final readonly class ProjectWorkspace
             || $this->questDatabase->isDirty()
             || ($this->config?->isDirty() ?? false)
             || ($this->cutscenes?->hasUnsavedChanges() ?? false);
+    }
+
+    /**
+     * Names every document holding unsaved changes: maps by id, then
+     * databases, then cutscenes, so a guard can say what would be lost.
+     *
+     * @return list<string>
+     */
+    public function listUnsavedChanges(): array
+    {
+        $unsaved = [];
+
+        foreach ($this->maps as $map) {
+            if ($map->isDirty()) {
+                $unsaved[] = $map->mapId;
+            }
+        }
+
+        foreach ($this->listSaveableDatabases() as $label => $database) {
+            if ($database->isDirty()) {
+                $unsaved[] = $label . ' database';
+            }
+        }
+
+        foreach ($this->cutscenes?->dirtyAssets() ?? [] as $asset) {
+            $unsaved[] = $asset->type->noun() . ' ' . $asset->id;
+        }
+
+        return $unsaved;
+    }
+
+    /**
+     * Returns every database a save can write, keyed by display label.
+     * Read-only record categories are left out: they hold no edits, and
+     * asking them to save would raise instead of doing nothing.
+     *
+     * @return array<string, ProjectActorDatabase|ProjectClassDatabase|ProjectSkillDatabase|ProjectQuestDatabase|ProjectAnimationDatabase|ProjectSystemDatabase|ProjectConfig|ProjectRecordDatabase>
+     */
+    public function listSaveableDatabases(): array
+    {
+        $databases = [
+            'Actors' => $this->actorDatabase,
+            'Classes' => $this->classDatabase,
+            'Skills' => $this->skillDatabase,
+            'Quests' => $this->questDatabase,
+            'Animations' => $this->animationDatabase,
+            'System' => $this->systemDatabase,
+        ];
+
+        if ($this->config !== null) {
+            $databases['Project configuration'] = $this->config;
+        }
+
+        foreach ($this->recordDatabases as $categoryKey => $recordDatabase) {
+            if ($recordDatabase->isEditable()) {
+                $databases[DatabaseCatalog::at(DatabaseCatalog::indexOf($categoryKey))->label] = $recordDatabase;
+            }
+        }
+
+        return $databases;
     }
 
     /**

@@ -92,6 +92,7 @@ use Ichiloto\Editor\UI\ScrollWindow;
 use Ichiloto\Editor\UI\SettingsPaneLayout;
 use Ichiloto\Editor\UI\TextFieldEditor;
 use Ichiloto\Editor\UI\TextFieldKeyResult;
+use Ichiloto\Editor\Storage\WorkspaceSave;
 use Ichiloto\Editor\Validation\MapValidator;
 use Ichiloto\Engine\Animations\ActionAnimationResolver;
 use Ichiloto\Engine\Animations\AnimationTargetPosition;
@@ -6757,7 +6758,8 @@ final class Editor
     }
 
     /**
-     * Saves every dirty map and database in one pass.
+     * Saves every dirty map, database and cutscene in one pass, through the
+     * workspace save both editors share.
      *
      * Maps whose save would move their folder are skipped - the rename flow
      * requires its own explicit confirmation via Ctrl+S on that map.
@@ -6770,119 +6772,42 @@ final class Editor
             return;
         }
 
-        $savedMaps = 0;
-        $savedDatabases = 0;
-        $skippedRenames = [];
-        $failures = [];
-        $validationWarnings = [];
-        $mapsById = $this->getMapsById();
+        $result = WorkspaceSave::saveAll($this->workspace, $this->backups);
+        $this->showSavedCutscenes();
 
-        foreach ($this->workspace->maps as $map) {
-            if (! $map->isDirty()) {
-                continue;
-            }
-
-            if ($map->willMoveOnSave()) {
-                $skippedRenames[] = $map->mapId;
-                continue;
-            }
-
-            foreach (MapValidator::validate($map, $mapsById) as $warning) {
-                $validationWarnings[] = sprintf('%s: %s', $map->mapId, $warning);
-            }
-
-            try {
-                $map->save($this->backupBeforeSave(...));
-                $savedMaps++;
-            } catch (Throwable $throwable) {
-                Debug::error(sprintf('Save all (%s): %s', $map->mapId, $throwable->getMessage()));
-                $failures[] = sprintf('%s: %s', $map->mapId, $throwable->getMessage());
-            }
+        foreach ($result->failures as $failure) {
+            Debug::error(sprintf('Save all (%s)', $failure));
         }
 
-        // Categories sharing one file are saved together, so the file is
-        // written once with every dirty part folded in rather than once per
-        // category, each rewriting what the last just wrote.
-        foreach (SharedFileTransaction::groupByPath($this->getSaveableDatabases()) as $group) {
-            $dirty = array_filter($group, static fn(object $database): bool => $database->isDirty());
-
-            if ($dirty === []) {
-                continue;
-            }
-
-            $label = implode(', ', array_keys($dirty));
-
-            try {
-                $backed = [];
-
-                foreach ($dirty as $database) {
-                    foreach ($this->getDatabaseBackupPaths($database) as $backupPath) {
-                        // One file, one backup, however many categories of
-                        // it are being written.
-                        $backed[$backupPath] = $backupPath;
-                    }
-                }
-
-                $this->backupBeforeSave(...array_values($backed));
-
-                $shared = reset($dirty);
-
-                if ($shared instanceof ProjectRecordDatabase && $shared->sharesBackingFile()) {
-                    // One write for the file, with every dirty category's
-                    // edits composed against one snapshot of it first.
-                    SharedFileTransaction::commit(array_values($dirty));
-                } else {
-                    foreach ($dirty as $database) {
-                        $database->save();
-                    }
-                }
-
-                $savedDatabases += count($dirty);
-            } catch (Throwable $throwable) {
-                Debug::error(sprintf('Save all (%s): %s', $label, $throwable->getMessage()));
-                $failures[] = sprintf('%s: %s', $label, $throwable->getMessage());
-            }
+        if ($result->backupFailures !== []) {
+            Debug::error(sprintf('Backup failed for: %s', implode(', ', $result->backupFailures)));
         }
 
-        // Cutscenes: each dirty asset as its own paired transaction.
-        $cutscenes = $this->saveAllCutscenes();
-        $savedCutscenes = count($cutscenes['saved']);
-
-        foreach ($cutscenes['failed'] as $asset => $reason) {
-            Debug::error(sprintf('Save all (%s): %s', $asset, $reason));
-            $failures[] = sprintf('%s: %s', $asset, $reason);
-        }
-
-        $summary = sprintf(
-            'Saved %d map%s, %d database%s and %d cutscene%s.',
-            $savedMaps,
-            $savedMaps === 1 ? '' : 's',
-            $savedDatabases,
-            $savedDatabases === 1 ? '' : 's',
-            $savedCutscenes,
-            $savedCutscenes === 1 ? '' : 's',
-        );
         $detailLines = [];
 
-        if ($skippedRenames !== []) {
+        if ($result->skippedRenames !== []) {
             $detailLines[] = 'Skipped - saving would move the map folder (use Ctrl+S on the map to confirm):';
-            $detailLines = [...$detailLines, ...array_map(static fn(string $mapId): string => '  ' . $mapId, $skippedRenames), ''];
+            $detailLines = [...$detailLines, ...array_map(static fn(string $mapId): string => '  ' . $mapId, $result->skippedRenames), ''];
         }
 
-        if ($failures !== []) {
-            $detailLines = [...$detailLines, 'Failed:', ...array_map(static fn(string $failure): string => '  ' . $failure, $failures), ''];
+        if ($result->failures !== []) {
+            $detailLines = [...$detailLines, 'Failed:', ...array_map(static fn(string $failure): string => '  ' . $failure, $result->failures), ''];
         }
 
-        if ($validationWarnings !== []) {
-            $detailLines = [...$detailLines, 'Validation warnings:', ...array_map(static fn(string $warning): string => '  ' . $warning, $validationWarnings)];
+        if ($result->backupFailures !== []) {
+            $detailLines = [...$detailLines, 'Backups failed (the save still ran):', ...array_map(static fn(string $path): string => '  ' . $path, $result->backupFailures), ''];
         }
 
-        if ($failures !== []) {
-            $this->setStatus($summary . sprintf(' %d failed (Ctrl+E for details).', count($failures)), StatusLevel::ERROR, $detailLines);
-        } elseif ($skippedRenames !== [] || $validationWarnings !== []) {
-            $this->setStatus($summary . ' See Ctrl+E for skipped saves and warnings.', StatusLevel::WARN, $detailLines);
+        if ($result->warnings !== []) {
+            $detailLines = [...$detailLines, 'Validation warnings:', ...array_map(static fn(string $warning): string => '  ' . $warning, $result->warnings)];
+        }
+
+        if ($result->failures !== []) {
+            $this->setStatus($result->summary . sprintf(' %d failed (Ctrl+E for details).', count($result->failures)), StatusLevel::ERROR, $detailLines);
+        } elseif ($result->skippedRenames !== [] || $result->warnings !== [] || $result->backupFailures !== []) {
+            $this->setStatus($result->summary . ' See Ctrl+E for skipped saves and warnings.', StatusLevel::WARN, $detailLines);
         } else {
-            $this->setStatus($summary, StatusLevel::SUCCESS);
+            $this->setStatus($result->summary, StatusLevel::SUCCESS);
         }
 
         $this->renderSelectionDependentArea();
@@ -6917,60 +6842,6 @@ final class Editor
         );
     }
 
-
-    /**
-     * Returns the files a database save overwrites.
-     *
-     * @param object $database The database about to be saved.
-     * @return string[]
-     */
-    private function getDatabaseBackupPaths(object $database): array
-    {
-        if ($database instanceof ProjectActorDatabase) {
-            return array_map(
-                static fn(ProjectActor $actor): string => $actor->path,
-                $database->getActors(),
-            );
-        }
-
-        if ($database instanceof ProjectRecordDatabase) {
-            return $database->getBackupPaths();
-        }
-
-        return property_exists($database, 'path') ? [(string) $database->path] : [];
-    }
-
-    /**
-     * Returns every saveable database keyed by display label.
-     *
-     * @return array<string, ProjectActorDatabase|ProjectClassDatabase|ProjectSkillDatabase|ProjectAnimationDatabase|ProjectSystemDatabase|ProjectQuestDatabase>
-     */
-    private function getSaveableDatabases(): array
-    {
-        if (! $this->workspace instanceof ProjectWorkspace) {
-            return [];
-        }
-
-        $databases = [
-            'Actors' => $this->workspace->actorDatabase,
-            'Classes' => $this->workspace->classDatabase,
-            'Skills' => $this->workspace->skillDatabase,
-            'Quests' => $this->workspace->questDatabase,
-            'Animations' => $this->workspace->animationDatabase,
-            'System' => $this->workspace->systemDatabase,
-        ];
-        if ($this->workspace->config !== null) { $databases['Project configuration'] = $this->workspace->config; }
-
-        // Read-only categories never join Save All: they hold no edits, and
-        // asking them to save would raise instead of no-op.
-        foreach ($this->workspace->recordDatabases as $categoryKey => $recordDatabase) {
-            if ($recordDatabase->isEditable()) {
-                $databases[DatabaseCatalog::at(DatabaseCatalog::indexOf($categoryKey))->label] = $recordDatabase;
-            }
-        }
-
-        return $databases;
-    }
 
     /**
      * Returns the workspace maps keyed by map id for validation lookups.
@@ -9957,23 +9828,23 @@ final class Editor
 
         try {
             if ($this->isActorsDatabaseSelected()) {
-                $this->backupBeforeSave(...$this->getDatabaseBackupPaths($this->workspace->actorDatabase));
+                $this->backupBeforeSave(...$this->workspace->actorDatabase->getBackupPaths());
                 $this->workspace->actorDatabase->save();
                 $this->setStatus('Actor database saved.', StatusLevel::SUCCESS);
             } elseif ($this->isClassesDatabaseSelected()) {
-                $this->backupBeforeSave(...$this->getDatabaseBackupPaths($this->workspace->classDatabase));
+                $this->backupBeforeSave(...$this->workspace->classDatabase->getBackupPaths());
                 $this->workspace->classDatabase->save();
                 $this->setStatus('Class database saved.', StatusLevel::SUCCESS);
             } elseif ($this->isSkillsDatabaseSelected()) {
-                $this->backupBeforeSave(...$this->getDatabaseBackupPaths($this->workspace->skillDatabase));
+                $this->backupBeforeSave(...$this->workspace->skillDatabase->getBackupPaths());
                 $this->workspace->skillDatabase->save();
                 $this->setStatus('Skill database saved.', StatusLevel::SUCCESS);
             } elseif ($this->isQuestsDatabaseSelected()) {
-                $this->backupBeforeSave(...$this->getDatabaseBackupPaths($this->workspace->questDatabase));
+                $this->backupBeforeSave(...$this->workspace->questDatabase->getBackupPaths());
                 $this->workspace->questDatabase->save();
                 $this->setStatus('Quest database saved.', StatusLevel::SUCCESS);
             } elseif ($this->isAnimationsDatabaseSelected()) {
-                $this->backupBeforeSave(...$this->getDatabaseBackupPaths($this->workspace->animationDatabase));
+                $this->backupBeforeSave(...$this->workspace->animationDatabase->getBackupPaths());
                 $this->workspace->animationDatabase->save();
                 $this->setStatus('Animation database saved.', StatusLevel::SUCCESS);
             } elseif ($this->isSystemDatabaseSelected()) {
@@ -9981,14 +9852,14 @@ final class Editor
                     $this->backupBeforeSave($this->workspace->config->path);
                     $this->workspace->config->save();
                 }
-                $this->backupBeforeSave(...$this->getDatabaseBackupPaths($this->workspace->systemDatabase));
+                $this->backupBeforeSave(...$this->workspace->systemDatabase->getBackupPaths());
                 $this->workspace->systemDatabase->save();
                 $this->setStatus('System database saved.', StatusLevel::SUCCESS);
             } elseif (($recordDatabase = $this->getSelectedRecordDatabase()) instanceof ProjectRecordDatabase) {
                 if (! $recordDatabase->isEditable()) {
                     $this->setStatus($this->describeRecordReadOnly($recordDatabase), StatusLevel::WARN);
                 } else {
-                    $this->backupBeforeSave(...$this->getDatabaseBackupPaths($recordDatabase));
+                    $this->backupBeforeSave(...$recordDatabase->getBackupPaths());
                     $recordDatabase->save();
                     $this->setStatus(
                         sprintf('%s database saved.', $this->getSelectedDatabaseCategoryDefinition()->label),
@@ -16777,26 +16648,12 @@ final class Editor
     private function renderUnsavedChangesGuardOverlay(array $layout): void
     {
         $actionLabel = $this->pendingGuardAction === self::GUARD_ACTION_QUIT ? 'quit' : 'reload the workspace';
-        $dirtyMaps = [];
-
-        foreach ($this->workspace?->maps ?? [] as $map) {
-            if ($map->isDirty()) {
-                $dirtyMaps[] = '  ' . $map->mapId;
-            }
-        }
-
-        $dirtyDatabases = [];
-
-        foreach ($this->getSaveableDatabases() as $label => $database) {
-            if ($database->isDirty()) {
-                $dirtyDatabases[] = '  ' . $label . ' database';
-            }
-        }
+        $unsaved = array_map(static fn(string $document): string => '  ' . $document, $this->workspace?->listUnsavedChanges() ?? []);
 
         $rows = [
             sprintf('You have unsaved changes. %s anyway?', ucfirst($actionLabel)),
             '',
-            ...array_slice([...$dirtyMaps, ...$dirtyDatabases], 0, 8),
+            ...array_slice($unsaved, 0, 8),
             '',
             'Y: Discard changes and continue',
             'S: Save everything first, then continue',

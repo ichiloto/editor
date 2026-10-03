@@ -2,7 +2,9 @@
 
 declare(strict_types=1);
 
+use Ichiloto\Editor\Database\DatabaseCatalog;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
+use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Editor\Session\EditorSession;
 use Ichiloto\Editor\Session\SessionHost;
 use Ichiloto\Editor\Session\SessionRefusal;
@@ -196,4 +198,28 @@ it('marks the items NPC rows belong to, from the same rules the database rows us
     expect($removed['changed'])->toBeTrue()
         ->and(array_column(array_filter($after['rows'], static fn(array $row): bool => str_ends_with($row['key']['field'] ?? '', 'Text')), 'value'))
         ->toBe(['Yes']);
+});
+
+it('names every unsaved map and database, and saves them all in one request', function () {
+    $root = makeTemporaryProject();
+    $host = new SessionHost(fopen('php://memory', 'r'), fopen('php://memory', 'w'), fopen('php://memory', 'w'));
+    $request = static fn(int $id, string $method, array $params = []): array =>
+        $host->handle(json_encode(['id' => $id, 'method' => $method, 'params' => $params]))['result'];
+    $request(1, 'hello', ['protocol' => SessionHost::PROTOCOL, 'project' => $root]);
+
+    expect($request(2, 'project.dirty'))->toBe(['dirty' => false, 'unsaved' => []]);
+
+    $map = $request(3, 'map.read', ['map' => 'test-map']);
+    $request(4, 'map.paint', ['map' => 'test-map', 'revision' => $map['revision'], 'layer' => $map['baseLayer'], 'cells' => [[1, 1]], 'symbol' => '#']);
+    $request(5, 'database.apply', ['category' => 'states', 'index' => 0, 'key' => ['field' => 'name', 'frame' => []], 'value' => 'Venom']);
+    $states = DatabaseCatalog::at(DatabaseCatalog::indexOf('states'))->label;
+
+    expect($request(6, 'project.dirty'))->toBe(['dirty' => true, 'unsaved' => ['test-map', $states . ' database']]);
+
+    $saved = $request(7, 'project.saveAll');
+
+    expect($saved)->toMatchArray(['summary' => 'Saved 1 map, 1 database and 0 cutscenes.', 'failures' => [], 'skippedRenames' => [], 'unsaved' => []])
+        ->and($request(8, 'project.dirty'))->toBe(['dirty' => false, 'unsaved' => []])
+        ->and(ProjectWorkspace::fromProject($root)->maps[0]->getLayerSymbol($map['baseLayer'], 1, 1))->toBe('#')
+        ->and(loadRecordDatabase($root, 'states')->getEntryLabels())->toBe(['Venom', 'Stun']);
 });

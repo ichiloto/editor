@@ -44,6 +44,7 @@ use Ichiloto\Editor\Maps\MapReferences;
 use Ichiloto\Editor\Maps\TilePalette;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
+use Ichiloto\Editor\Storage\WorkspaceSave;
 use Ichiloto\Editor\Validation\MapValidator;
 use Ichiloto\Engine\Rendering\Presentation\PresentationLayerPolicy;
 use Ichiloto\Engine\Rendering\Presentation\PresentationWorld;
@@ -1731,6 +1732,37 @@ final class EditorSession
     public function hasUnsavedChanges(): bool
     {
         return $this->workspace->hasUnsavedChanges();
+    }
+
+    /**
+     * Names every map, database and cutscene with changes not yet saved.
+     *
+     * @return list<string>
+     */
+    public function listUnsavedChanges(): array
+    {
+        return $this->workspace->listUnsavedChanges();
+    }
+
+    /**
+     * Saves every unsaved map, database and cutscene, as the terminal
+     * editor's Save All does, and names what is still unsaved after it: a
+     * map whose save would move its folder, or a document that failed.
+     *
+     * @return array{summary: string, skippedRenames: list<string>, failures: list<string>, warnings: list<string>, backupFailures: list<string>, unsaved: list<string>}
+     */
+    public function saveAll(): array
+    {
+        $result = WorkspaceSave::saveAll($this->workspace, $this->backups);
+
+        return [
+            'summary' => $result->summary,
+            'skippedRenames' => $result->skippedRenames,
+            'failures' => $result->failures,
+            'warnings' => $result->warnings,
+            'backupFailures' => $result->backupFailures,
+            'unsaved' => $this->workspace->listUnsavedChanges(),
+        ];
     }
 
     /**
