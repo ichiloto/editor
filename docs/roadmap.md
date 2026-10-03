@@ -185,6 +185,25 @@ compiler and playhead, and the existing source-preserving paths, add no
 second timeline format, and refuse unsupported source before writing. It is
 not started: it waits on Andrew's go.
 
+Battle effect orientation and weapon roles (Engine contract in progress,
+2026-10): a battle track may declare `facing` (`east` or `west`), the
+direction its stroke is drawn in; playback mirrors it for an attack the other
+way, while undirected effects such as magic and rings stay fixed. Image
+keyframes may set `flipX` / `flipY` for an authored reverse stroke, such as a
+cross slash's second stroke. A basic attack's animation role follows the
+attacker's equipped weapon type (`attack-sword`, `attack-staff`, and so on;
+`attack-unarmed` with no weapon; neutral `attack` for other battlers), bound
+in the animation database's `roles`. Authoring requirements:
+- `facing`, `flipX` and `flipY` round-trip source-preserving with every other
+  timeline field; validation compiles them through the Engine for both
+  presentations, as it does every effect. The TUI edits them as ordinary
+  fields when standalone timeline authoring exists; no graphical workflow.
+- The animation database offers `roles` from the Engine's supported role
+  list, refuses a role bound twice before saving, and reports a weapon type
+  the project's weapons use that no animation is bound to.
+- Until then, these fields are kept as written: the animation database edits
+  only its own fields and keeps `roles` and effect bindings untouched.
+
 This scope does not replace the map source-integrity work or authorize a new GUI
 implementation. Keep runtime availability and TUI authoring completion separate
 until both have been verified.
