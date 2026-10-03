@@ -119,6 +119,54 @@ final class SessionHost
                 self::requireInt($params, 'revision'),
                 is_array($params['key'] ?? null) ? $params['key'] : throw new InvalidRequest('"key" must be the row key the inspector gave.'),
                 is_scalar($params['value'] ?? null) ? (string) $params['value'] : throw new InvalidRequest('"value" must be a string, number or boolean.'),
+                self::readOptionalString($params, 'answer'),
+            ),
+            'inspector.add' => $session->addInspectorListEntry(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireKey($params),
+            ),
+            'inspector.remove' => $session->removeInspectorListEntry(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireKey($params),
+            ),
+            'event.types' => $session->listEventTypes(),
+            'event.create' => $session->createEvent(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireCells($params),
+                self::requireString($params, 'type'),
+                self::readOptionalString($params, 'marker'),
+            ),
+            'event.delete' => $session->deleteEvent(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireString($params, 'marker'),
+            ),
+            'event.move' => $session->moveEvent(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireString($params, 'marker'),
+                self::requireInt($params, 'dx'),
+                self::requireInt($params, 'dy'),
+            ),
+            'event.bounds' => $session->setEventBounds(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireString($params, 'marker'),
+                self::requireInt($params, 'x'),
+                self::requireInt($params, 'y'),
+                self::requireInt($params, 'width'),
+                self::requireInt($params, 'height'),
+            ),
+            'event.destination' => $session->setEventDestination(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireString($params, 'marker'),
+                self::requireString($params, 'destination'),
+                self::requireInt($params, 'x'),
+                self::requireInt($params, 'y'),
             ),
             'database.records' => $session->listDatabaseRecords(self::requireString($params, 'category')),
             'database.record' => $session->readDatabaseRecord(self::requireString($params, 'category'), self::requireInt($params, 'index')),
@@ -147,6 +195,25 @@ final class SessionHost
     private static function requireInt(array $params, string $key): int
     {
         return is_int($params[$key] ?? null) ? $params[$key] : throw new InvalidRequest(sprintf('"%s" must be an integer.', $key));
+    }
+
+    /** @param array<string, mixed> $params */
+    private static function readOptionalString(array $params, string $key): ?string
+    {
+        return match (true) {
+            ($params[$key] ?? null) === null => null,
+            is_string($params[$key]) => $params[$key],
+            default => throw new InvalidRequest(sprintf('"%s" must be a string when given.', $key)),
+        };
+    }
+
+    /**
+     * @param array<string, mixed> $params
+     * @return array<string, mixed>
+     */
+    private static function requireKey(array $params): array
+    {
+        return is_array($params['key'] ?? null) ? $params['key'] : throw new InvalidRequest('"key" must be the row key the inspector gave.');
     }
 
     /**
