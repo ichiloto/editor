@@ -9,6 +9,7 @@ use Ichiloto\Editor\Backup\BackupWriter;
 use Ichiloto\Editor\Canvas\CanvasEditor;
 use Ichiloto\Editor\Canvas\PieceRole;
 use Ichiloto\Editor\Database\DatabaseCatalog;
+use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\Events\EventTypeCatalog;
 use Ichiloto\Editor\History\Command;
@@ -298,6 +299,50 @@ final class EditorSession
     }
 
     /**
+     * A database category's records, as its list shows them, and whether
+     * they can be edited. The bespoke categories (actors, classes, skills,
+     * animations, quests, system) still build their rows in the terminal
+     * editor, so they are refused here until those builders are shared.
+     *
+     * @return array{category: string, editable: bool, readOnly: ?string, records: list<string>}
+     * @throws SessionRefusal When the category is unknown or not yet served.
+     */
+    public function listDatabaseRecords(string $category): array
+    {
+        $database = $this->requireRecordDatabase($category);
+
+        return [
+            'category' => $category,
+            'editable' => $database->isEditable(),
+            'readOnly' => $database->getReadOnlyReason(),
+            'records' => array_values(array_map('strval', $database->getEntryLabels())),
+        ];
+    }
+
+    /**
+     * One record's rows, described as the inspector's are.
+     *
+     * @return array{category: string, index: int, rows: list<array<string, mixed>>}
+     * @throws SessionRefusal When the category or record is unknown.
+     */
+    public function readDatabaseRecord(string $category, int $index): array
+    {
+        $database = $this->requireRecordDatabase($category);
+        if ($database->getRecordByIndex($index) === null) {
+            throw new SessionRefusal(sprintf('%s has no record %d.', $category, $index));
+        }
+
+        return [
+            'category' => $category,
+            'index' => $index,
+            'rows' => array_map(static fn(array $field): array => self::describeRow([
+                ...$field,
+                'target' => isset($field['field']) && ($field['editable'] ?? true) !== false ? 'record' : null,
+            ]), $database->getSettingsFields($index)),
+        ];
+    }
+
+    /**
      * Undoes the last change, wherever it was made.
      *
      * @return array{label: ?string, maps: list<string>} What was undone and the maps it changed.
@@ -437,6 +482,17 @@ final class EditorSession
             'marker' => isset($field['marker']) ? (string) $field['marker'] : null,
             'index' => isset($field['index']) ? (int) $field['index'] : null,
         ], static fn(mixed $value): bool => $value !== null);
+    }
+
+    /** @throws SessionRefusal */
+    private function requireRecordDatabase(string $category): ProjectRecordDatabase
+    {
+        if (! array_any(DatabaseCatalog::all(), static fn($definition): bool => $definition->key === $category)) {
+            throw new SessionRefusal(sprintf('There is no database category %s.', $category));
+        }
+
+        return $this->workspace->getRecordDatabase($category)
+            ?? throw new SessionRefusal(sprintf('The %s database is edited in the terminal editor for now.', $category));
     }
 
     /** @return array<string, ProjectMap> */

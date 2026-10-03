@@ -182,3 +182,17 @@ it('moves an event through its position row and lists the choices of a reference
         ->and(array_column($session->listReferences('test-map', 'bgm'), 'value'))->toBeArray()
         ->and(fn() => $session->listReferences('test-map', 'no-such-category'))->toThrow(SessionRefusal::class);
 });
+
+it('lists a schema database\'s records and reads one record\'s rows', function () {
+    $session = EditorSession::open(makeTemporaryProject());
+    $items = $session->listDatabaseRecords('items');
+    $record = $session->readDatabaseRecord('items', 0);
+
+    expect($items['records'])->not->toBe([])
+        ->and($items['editable'])->toBeTrue()
+        ->and(array_column($record['rows'], 'label'))->toContain('Name')
+        ->and(array_find($record['rows'], static fn(array $row): bool => $row['label'] === 'Name')['value'])->toBe($items['records'][0])
+        ->and(fn() => $session->readDatabaseRecord('items', 999))->toThrow(SessionRefusal::class, 'items has no record 999.')
+        ->and(fn() => $session->listDatabaseRecords('actors'))->toThrow(SessionRefusal::class, 'edited in the terminal editor for now')
+        ->and(fn() => $session->listDatabaseRecords('nope'))->toThrow(SessionRefusal::class, 'There is no database category nope.');
+});

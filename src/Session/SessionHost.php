@@ -118,6 +118,8 @@ final class SessionHost
                 is_array($params['key'] ?? null) ? $params['key'] : throw new InvalidRequest('"key" must be the row key the inspector gave.'),
                 is_scalar($params['value'] ?? null) ? (string) $params['value'] : throw new InvalidRequest('"value" must be a string, number or boolean.'),
             ),
+            'database.records' => $session->listDatabaseRecords(self::requireString($params, 'category')),
+            'database.record' => $session->readDatabaseRecord(self::requireString($params, 'category'), self::requireInt($params, 'index')),
             'references.list' => $session->listReferences(self::requireString($params, 'map'), self::requireString($params, 'category')),
             'history.undo' => $session->undo(),
             'history.redo' => $session->redo(),
