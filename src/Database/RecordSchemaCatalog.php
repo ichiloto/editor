@@ -1404,6 +1404,8 @@ final class RecordSchemaCatalog
                 new RecordField('resultVariable', 'Result Variable', removeWhenEmpty: true),
                 new RecordField('defeatPolicy', 'Defeat Policy', options: ['game_over', 'continue'], removeWhenEmpty: true),
                 new RecordField('escapePolicy', 'Escape Policy', options: ['allowed', 'forbidden'], removeWhenEmpty: true),
+                // Reserves replace a wiped-out frontline only where an encounter opts in.
+                new RecordField('reservePolicy', 'Reserve Policy', options: ['none', 'replace_after_wipeout'], removeWhenEmpty: true, displayDefault: 'none'),
             ],
             'branch' => [
                 new RecordField('conditions', 'Conditions', codec: RecordFieldCodec::CONDITIONS),

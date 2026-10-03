@@ -3651,6 +3651,18 @@ class ProjectValidator
       );
     }
 
+    if (
+      array_key_exists('reservePolicy', $command)
+      && ! in_array($command['reservePolicy'], ['none', 'replace_after_wipeout'], true)
+    ) {
+      $reservePolicy = $command['reservePolicy'];
+      $issues[] = Issue::error(
+        $where,
+        sprintf('A start_battle command uses invalid reservePolicy "%s".', is_scalar($reservePolicy) ? strval($reservePolicy) : get_debug_type($reservePolicy)),
+        'Choose none or replace_after_wipeout, or remove it: by default a wiped-out frontline loses the battle.'
+      );
+    }
+
     if (array_key_exists('escapePolicy', $command)) {
       $escapePolicy = $command['escapePolicy'];
 
