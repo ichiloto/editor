@@ -2831,6 +2831,12 @@ final class ProjectRecordDatabase
         }
 
         if ($field->options !== []) {
+            // An empty choice of a field that is removed when empty is its
+            // absence, whether or not '' is offered as an option.
+            if ($trimmed === '' && $field->removeWhenEmpty) {
+                return null;
+            }
+
             foreach ($field->options as $option) {
                 if (mb_strtolower(strval($option)) === mb_strtolower($trimmed)) {
                     return self::coerceScalar($field, strval($option));

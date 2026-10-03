@@ -397,6 +397,38 @@ final class CutsceneAsset
     }
 
     /**
+     * Returns everything an edit can change, for undo and redo: both files'
+     * arrays, the sequence being edited and whether the asset is deleted.
+     * The payload alone is not enough: it is one sequence of an effect with
+     * two, and a split leaves it unchanged.
+     *
+     * @return array{data: array<string, mixed>, partner: array<int|string, mixed>, view: EffectPresentation, deleted: bool}
+     */
+    public function captureEditState(): array
+    {
+        return ['data' => $this->data, 'partner' => $this->partner, 'view' => $this->presentationView, 'deleted' => $this->isDeleted];
+    }
+
+    /**
+     * Puts the asset back to a state `captureEditState` returned.
+     *
+     * @param array{data: array<string, mixed>, partner: array<int|string, mixed>, view: EffectPresentation, deleted: bool} $state
+     */
+    public function restoreEditState(array $state): void
+    {
+        $this->presentationView = $state['view'];
+        $this->markDeleted($state['deleted']);
+
+        if ($this->readOnlyReason !== null || ($state['data'] === $this->data && $state['partner'] === $this->partner)) {
+            return;
+        }
+
+        $this->data = $state['data'];
+        $this->partner = $state['partner'];
+        $this->touchState();
+    }
+
+    /**
      * @param array<int|string, mixed> $timeline
      * @return array<string, mixed>
      */

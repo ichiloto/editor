@@ -171,19 +171,24 @@ Authoring requirements:
   behaviour; it gains no graphical workflow. Rich graphical sequence authoring
   (previews, image track timing) belongs to the GUI editor.
 
-Status, 2026-10: validation and references are in place; standalone authoring
-is not. Validation compiles every effect a project uses (battle animations,
-field presentation, map field effects, tileset pieces, and the effect a
+Status, 2026-10: validation, references and TUI authoring are in place.
+Validation compiles every effect a project uses (battle animations, field
+presentation, map field effects, tileset pieces, and the effect a
 `field_animation` names) through the Engine for both presentations, and
 reports an effect a waiting `field_animation` plays that loops. Cinematic
 `field_animation` commands pick an effect by its stable id, from the
 timelines the Engine lists. Summon timelines choose each track's
-`presentation`. There is still no TUI surface to create, edit or preview a
-standalone effect timeline under `assets/Animations`; that remains the gap.
-It must reuse the summon editor's timeline editing, the shared Engine
-compiler and playhead, and the existing source-preserving paths, add no
-second timeline format, and refuse unsupported source before writing. It is
-not started: it waits on Andrew's go.
+`presentation`. The Cutscenes screen's Effect type creates, edits, deletes
+and previews standalone effect timelines under `assets/Animations` (Andrew's
+go, 2026-10-03): the summon editor's record pane, Timeline pane and undo,
+the existing source-preserving writer, no second format, and every save
+compiled by the Engine before it is written. A flat effect stays flat
+unless the author separates it; an effect with `presentations` is edited one
+sequence at a time and the other is kept as written. The preview plays the
+edited sequence through the Engine's shared playhead and composition, as
+battle or the field places it, with the caster on either side. Remaining
+for the GUI editor: drawing image frames, sheet and cell picking by eye, and
+image timing; the TUI only names them.
 
 Battle effect orientation and weapon roles (Engine contract in progress,
 2026-10): a battle track may declare `facing` (`east` or `west`), the
@@ -197,7 +202,8 @@ in the animation database's `roles`. Authoring requirements:
 - `facing`, `flipX` and `flipY` round-trip source-preserving with every other
   timeline field; validation compiles them through the Engine for both
   presentations, as it does every effect. The TUI edits them as ordinary
-  fields when standalone timeline authoring exists; no graphical workflow.
+  fields in effect timeline authoring, and its preview turns a stroke as
+  the battle does; no graphical workflow.
 - The animation database offers `roles` from the Engine's supported role
   list, refuses a role bound twice before saving, and reports a weapon type
   the project's weapons use that no animation is bound to.

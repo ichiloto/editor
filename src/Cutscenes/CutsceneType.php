@@ -85,6 +85,30 @@ enum CutsceneType: string
     }
 
     /**
+     * Returns the one-line description shown with the type's category.
+     */
+    public function describeCategory(): string
+    {
+        return match ($this) {
+            self::CINEMATIC => 'Staged story sequences run by the event interpreter.',
+            self::SUMMON => 'Frame-driven battle presentations built by the summon compiler.',
+            self::EFFECT => 'Effect timelines played by battle animations, the field and cinematics.',
+        };
+    }
+
+    /**
+     * Returns what an asset of this type is, for a type with none yet.
+     */
+    public function describeAsset(): string
+    {
+        return match ($this) {
+            self::CINEMATIC => 'A cinematic is a staged story scene: a command tree the engine runs on the field, with its own cast, camera, skip policy and finalizer.',
+            self::SUMMON => 'A summon is a frame-driven battle presentation: tracks, keyframes and cues the engine compiles and plays.',
+            self::EFFECT => 'An effect is one timeline file under assets/Animations: glyph, text and image tracks, keyframes and cues, played by battle animations, the field and cinematics. It may hold one sequence for every renderer, or separate terminal and graphical sequences.',
+        };
+    }
+
+    /**
      * Whether the asset has an `<id>.data.php` beside its partner file. An
      * effect is its timeline alone, as the Engine reads it.
      */

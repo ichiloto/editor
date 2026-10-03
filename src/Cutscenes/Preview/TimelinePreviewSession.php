@@ -4,22 +4,24 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Cutscenes\Preview;
 
-use Ichiloto\Engine\Cutscenes\Summons\SummonCompiledCutscene;
-use Ichiloto\Engine\Cutscenes\Summons\SummonPlaybackSession;
+use Ichiloto\Engine\Animations\Timelines\CompiledEffectTimeline;
+use Ichiloto\Engine\Animations\Timelines\EffectPlaybackSession;
 use Ichiloto\Engine\IO\Console\TerminalText;
 
 /**
- * A summon timeline played by the Engine's own `SummonPlaybackSession`.
+ * A compiled timeline, a summon's or an effect's, played by the Engine's
+ * shared `EffectPlaybackSession`.
  *
  * The Engine compiles the timeline and owns the playhead, the frame clock,
  * the active segments and the cue schedule; the editor adds a clock it can
- * pause or step, a log of the cues the playhead crossed, and a picture of
- * the frame drawn with the battle field's rules (position, content lines,
- * asset placeholder, visibility) into a buffer the pane can show.
+ * pause or step, a log of the cues the playhead crossed, a ruler, and for a
+ * summon a picture of the frame drawn with the battle field's rules
+ * (position, content lines, asset placeholder, visibility). An effect's
+ * frame is anchored to its subjects; `EffectPreviewStage` draws it.
  */
-final class SummonPreviewSession
+final class TimelinePreviewSession
 {
-    private SummonPlaybackSession $session;
+    private EffectPlaybackSession $session;
     private bool $playing = false;
     private float $elapsed = 0.0;
     private bool $loop = false;
@@ -27,9 +29,13 @@ final class SummonPreviewSession
     /** @var array<int, array{frame: int, id: string, type: string}> */
     private array $cueLog = [];
 
-    public function __construct(public readonly SummonCompiledCutscene $cutscene)
+    /**
+     * @param bool|null $loop Whether playback wraps at the last frame; null plays as the timeline's own playback says.
+     */
+    public function __construct(public readonly CompiledEffectTimeline $timeline, ?bool $loop = false)
     {
-        $this->session = new SummonPlaybackSession($cutscene, loop: false);
+        $this->session = new EffectPlaybackSession($timeline, loop: $loop);
+        $this->loop = $this->session->isLooping;
         $this->session->pause();
     }
 
@@ -87,7 +93,7 @@ final class SummonPreviewSession
     {
         $frame = $this->session->currentFrame;
         $wasPlaying = $this->isPlaying();
-        $this->session = new SummonPlaybackSession($this->cutscene, loop: $this->loop, speed: $this->speed);
+        $this->session = new EffectPlaybackSession($this->timeline, loop: $this->loop, speed: $this->speed);
         $this->session->seek($frame);
 
         if ($wasPlaying) {
@@ -247,7 +253,7 @@ final class SummonPreviewSession
      */
     public function cuesAt(?int $frame = null): array
     {
-        return array_values(array_filter($this->session->cuesAt($frame), is_array(...)));
+        return $this->session->getCuesAt($frame);
     }
 
     /**
@@ -257,7 +263,7 @@ final class SummonPreviewSession
      */
     public function activeSegments(?int $frame = null): array
     {
-        return array_values(array_filter($this->session->activeSegments($frame), is_array(...)));
+        return $this->session->getActiveSegments($frame);
     }
 
     /**
@@ -269,7 +275,7 @@ final class SummonPreviewSession
     {
         $frames = [];
 
-        foreach ($this->cutscene->playbackSegments as $segment) {
+        foreach ($this->timeline->playbackSegments as $segment) {
             if (! is_array($segment)) {
                 continue;
             }
@@ -278,7 +284,7 @@ final class SummonPreviewSession
             $frames[] = intval($segment['endFrame'] ?? 0) + 1;
         }
 
-        foreach ($this->cutscene->cueSchedule as $cue) {
+        foreach ($this->timeline->cueSchedule as $cue) {
             if (is_array($cue)) {
                 $frames[] = intval($cue['frame'] ?? 0);
             }
@@ -291,7 +297,7 @@ final class SummonPreviewSession
     }
 
     /**
-     * The frame as the battle field would compose it, as plain rows.
+     * A summon's frame as the battle field would compose it, as plain rows.
      *
      * @return string[]
      */
@@ -382,7 +388,7 @@ final class SummonPreviewSession
         /** @var array<string, string[]> $tracks */
         $tracks = [];
 
-        foreach ($this->cutscene->playbackSegments as $segment) {
+        foreach ($this->timeline->playbackSegments as $segment) {
             if (! is_array($segment)) {
                 continue;
             }
@@ -406,7 +412,7 @@ final class SummonPreviewSession
         $cues = array_fill(0, $barWidth, ' ');
         $hasCues = false;
 
-        foreach ($this->cutscene->cueSchedule as $cue) {
+        foreach ($this->timeline->cueSchedule as $cue) {
             if (is_array($cue)) {
                 $column = min($barWidth - 1, $scale(intval($cue['frame'] ?? 0)));
                 $cues[$column] = '◆';

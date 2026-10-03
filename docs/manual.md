@@ -1520,10 +1520,11 @@ Unparseable entries are dropped rather than written back as garbage.
 
 `F4` opens the Cutscenes screen over the main shell, the way `Ctrl+D` opens
 the Database; `F4` or `Esc` closes it, `Ctrl+D` from inside goes straight
-across to the Database, and `Ctrl+P` offers `Cutscenes: Cinematic` and
-`Cutscenes: Summon`. Five panes: **Types** (Cinematic or Summon), the asset
-**list**, the **record pane** (the asset's fields, grouped), the **Command
-Tree** (for a summon, the **Timeline**) and the **Preview**. `Tab` and
+across to the Database, and `Ctrl+P` offers `Cutscenes: Cinematic`,
+`Cutscenes: Summon` and `Cutscenes: Effect`. Five panes: **Types**
+(Cinematic, Summon or Effect), the asset **list**, the **record pane** (the
+asset's fields, grouped), the **Command Tree** (for a summon or an effect,
+the **Timeline**) and the **Preview**. `Tab` and
 `Shift+Tab` cycle the panes; `/` filters the list; `Shift+A` creates,
 `Shift+D` duplicates, `Delete` removes (with the places that reference the
 asset named first); `Ctrl+S` saves the selected asset, `Ctrl+A` saves every
@@ -1537,6 +1538,7 @@ Four things look alike and are not. Keep them apart:
 | Common Event | a reusable command list, called by id from maps and cinematics | Database › Common Events |
 | Cinematic Cutscene | a staged story sequence: cast, camera, parallel lanes, skip, finalizer | Cutscenes › Cinematic |
 | Summon Cutscene | a frame-driven battle presentation: tracks, keyframes, cues | Cutscenes › Summon |
+| Effect | an effect timeline battle animations, the field and cinematics play | Cutscenes › Effect |
 | Skit | an optional conversation overlay | Database › Skits |
 | Animation | a reusable visual asset a command plays | Database › Animations |
 
@@ -1549,9 +1551,12 @@ assets/Cutscenes/Cinematics/<id>/<id>.data.php
 assets/Cutscenes/Cinematics/<id>/<id>.script.php
 assets/Cutscenes/Summons/<id>/<id>.data.php
 assets/Cutscenes/Summons/<id>/<id>.timeline.php
+assets/Animations/<id>/<id>.timeline.php
 ```
 
-The stable id *is* the folder name; the display name is a field. A new
+An effect is its timeline file alone, exactly as the engine's effect library
+reads it: no data file, and an id of lowercase letters, digits, `_` and `-`
+(no dots). The stable id *is* the folder name; the display name is a field. A new
 asset's id is yours to choose until its first save makes the folder; after
 that it is read-only (duplicate under the new id and delete the old one to
 migrate). The list shows `*` for unsaved work and a folder the engine cannot
@@ -1814,6 +1819,69 @@ actor must be eligible under its wielder policy (by character, by role, or
 open to all), a story-locked summon cannot be a starting assignment, each
 id appears once, and an exclusive summon has at most one starting holder
 across the cast.
+
+### Effects
+
+An effect is edited like a summon's timeline, over the keys the engine's
+effect library reads and nothing else. The record pane groups **Identity**
+(the id), **Sequence**, **Timing** (FPS, length in frames, playback `once`
+or `loop`, loop from, rest frame), **Impact (battle)** (when a battle
+command's result lands: at the `end`, a `frame` or a `cue`) and
+**Timeline** (the Tracks and Cues frames). Tracks are `glyph`, `text`,
+`image`, `flash` or `shake`, each with its `Presentation` (`all`,
+`terminal` or `graphical`), an anchor (`target`, `caster` or `screen`) and,
+for a battle stroke drawn one way, `Facing` (`west` or `east`; the empty
+choice removes it, and the stroke stays as drawn). An image track names its
+PNG through the asset picker, its sheet columns and rows, its cell size and
+its depth; its keyframes give the sheet frame, the position and, in battle,
+`Flip Horizontally` and `Flip Vertically` for an authored reverse stroke.
+Glyph and text keyframes give frame, duration, position `x` and `y`,
+content (the multiline editor), asset id, color, visibility, z-index and a
+payload. Cues are `playSound` on the field and any battle cue in battle.
+Impact timing, facing, flips, flashes and shakes are battle-only;
+validation names the place that uses an effect where they are refused.
+
+**Sequence** says how the effect is drawn. A flat effect has one sequence
+for the terminal and graphical renderers alike, and stays flat unless you
+choose `separate`, which gives it a terminal and a graphical sequence, each
+a copy of the flat one (undo puts the flat file back). An effect with
+separate sequences is edited one at a time: choose `terminal` or
+`graphical`, and every row, the Timeline pane and the preview are that
+sequence's; the other is kept exactly as written. Undo returns to the
+sequence an edit was made in. The TUI has no graphical workflow: an image is
+chosen by path and its frames by number, and pictures belong to the GUI
+editor.
+
+`Shift+O` on a Timeline row inserts the blank the effect's own lists take:
+an image keyframe after an image keyframe, starting where the selected one
+ends, and a track whose keyframe has a position `x` and `y`. A save is
+compiled by the engine for battle and for the field, for each sequence, and
+refused before anything is written unless every sequence plays in at least
+one of them. `Delete` names everything that plays the effect first: battle
+animations, the field presentation's cues and action prompt, maps' field
+effects, tileset pieces, and the `field_animation` commands of map events,
+event scripts and cinematics.
+
+#### Effect preview
+
+`Space` on the Preview pane compiles the sequence being edited, unsaved,
+and plays it through the engine's shared effect playhead, with the summon
+preview's keys (step, keyframe boundaries, `Home` / `End`, speed, `R`, `L`,
+`X`); `O` loops, and an effect authored to loop starts looping, from its
+loop frame. The frame is drawn as a terminal consumer places it: through the
+engine's composition for that presentation, glyph and text at their anchor,
+`C` marking the caster and `T` the target (`screen` draws from the top
+left). Beside it, the context and what the terminal cannot draw: image
+frames with their flips, flashes and shakes, each with its subject.
+
+| Key (Preview focused, effect) | Action |
+| --- | --- |
+| `B` | Play as battle or as the field compiles it (recompiles; a refusal is reported) |
+| `D` | Put the battle caster on the other side |
+
+The preview starts as battle when a battle animation uses the effect or
+nothing on the field does. In battle a stroke with a facing is turned toward
+its target exactly as the battle turns it, so `D` shows both directions.
 
 ### Validation
 

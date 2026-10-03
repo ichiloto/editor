@@ -25,6 +25,8 @@ use Ichiloto\Editor\UI\ListFilter;
 use Ichiloto\Editor\UI\Modal;
 use Ichiloto\Editor\UI\MultilineTextEditor;
 use Ichiloto\Editor\UI\SettingsPaneLayout;
+use Ichiloto\Editor\Validation\EffectValidator;
+use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Throwable;
 
 /**
@@ -44,6 +46,11 @@ use Throwable;
  */
 trait CutscenesWorkspace
 {
+    /** The row choosing an effect's sequence; no timeline key, so no schema field, has this id. */
+    private const string EFFECT_SEQUENCE_FIELD = '@sequence';
+    private const string EFFECT_SEQUENCE_SHARED = 'shared';
+    private const string EFFECT_SEQUENCE_SEPARATE = 'separate';
+
     /**
      * The type whose assets the screen shows.
      */
@@ -241,11 +248,13 @@ trait CutscenesWorkspace
     private function cutsceneCategoryDefinition(): DatabaseCategoryDefinition
     {
         return new DatabaseCategoryDefinition(
-            $this->cutsceneType === CutsceneType::CINEMATIC ? CutsceneSchemas::CINEMATICS_KEY : CutsceneSchemas::SUMMONS_KEY,
+            match ($this->cutsceneType) {
+                CutsceneType::CINEMATIC => CutsceneSchemas::CINEMATICS_KEY,
+                CutsceneType::SUMMON => CutsceneSchemas::SUMMONS_KEY,
+                CutsceneType::EFFECT => CutsceneSchemas::EFFECTS_KEY,
+            },
             $this->cutsceneType->label(),
-            $this->cutsceneType === CutsceneType::CINEMATIC
-                ? 'Staged story sequences run by the event interpreter.'
-                : 'Frame-driven battle presentations built by the summon compiler.',
+            $this->cutsceneType->describeCategory(),
             true,
         );
     }
@@ -862,22 +871,29 @@ trait CutscenesWorkspace
     private function groupCutsceneFields(CutsceneAsset $asset, array $fields): array
     {
         $heading = static fn(string $title): array => ['label' => $title, 'value' => '', 'editable' => false];
-        $sections = $asset->type === CutsceneType::CINEMATIC
-            ? [
+        $sections = match ($asset->type) {
+            CutsceneType::CINEMATIC => [
                 'Identity' => ['id', 'name', 'description', 'version'],
                 'Staging' => ['startMap', 'presentation.initial', 'presentation.reducedMotion'],
                 'Script' => ['commandListCommands'],
                 'Skip' => ['skip.policy', 'checkpoints', 'commandListFinalizer'],
                 'Metadata' => ['authoring'],
-            ]
-            : [
+            ],
+            CutsceneType::EFFECT => [
+                'Identity' => ['id'],
+                'Timing' => ['fps', 'lengthFrames', 'playback', 'loopFrom', 'restFrame'],
+                'Impact (battle)' => ['effectTiming.mode', 'effectTiming.frame', 'effectTiming.cueId'],
+                'Timeline' => ['commandListTracks', 'commandListCues'],
+            ],
+            CutsceneType::SUMMON => [
                 'Identity' => ['id', 'name', 'description', 'moveName', 'version', 'linkedSummonId', 'linkedActionId', 'tags'],
                 'Lore' => ['lore', 'element', 'strengths', 'weaknesses', 'attributes', 'authoring'],
                 'Availability' => ['availability.conditions'],
                 'Wielders' => ['wielders.mode', 'wielders.roles', 'wielders.characters', 'wielders.tenancy'],
                 'Playback' => ['playback.defaultSpeed', 'playback.allowSkip', 'playback.loopPreview', 'transitionIn.type', 'transitionIn.durationMs', 'transitionIn.color', 'transitionOut.type', 'transitionOut.durationMs', 'transitionOut.color', 'effectTiming.mode', 'effectTiming.cueId', 'effectTiming.frame', 'targetPresentation.mode', 'targetPresentation.showCasterNameBanner'],
                 'Timeline' => ['formatVersion', 'fps', 'lengthFrames', 'editor', 'commandListTracks', 'commandListCues'],
-            ];
+            ],
+        };
         $byId = [];
         $rest = [];
 
@@ -941,6 +957,10 @@ trait CutscenesWorkspace
             }
 
             $grouped = [...$grouped, ...$rows];
+
+            if ($title === 'Identity' && $asset->type === CutsceneType::EFFECT) {
+                $grouped = [...$grouped, ...$this->getEffectSequenceFields($asset)];
+            }
         }
 
         if ($rest !== []) {
@@ -949,6 +969,90 @@ trait CutscenesWorkspace
         }
 
         return $grouped;
+    }
+
+    /**
+     * Returns the row that chooses which of an effect's sequences the pane
+     * edits, and a note on what the other one does. A flat effect's single
+     * sequence plays for every renderer; choosing separate gives it a
+     * terminal and a graphical sequence, each a copy of it, undoably.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private function getEffectSequenceFields(CutsceneAsset $asset): array
+    {
+        $view = $asset->getPresentationView();
+
+        if ($view === null) {
+            return [
+                [
+                    'label' => 'Sequence',
+                    'value' => 'Shared',
+                    'options' => [self::EFFECT_SEQUENCE_SHARED, self::EFFECT_SEQUENCE_SEPARATE],
+                    'field' => self::EFFECT_SEQUENCE_FIELD,
+                    'hint' => 'separate gives the terminal and graphical renderers a sequence each',
+                ],
+                ['label' => '  One sequence plays for the terminal and graphical renderers alike.', 'value' => '', 'editable' => false],
+            ];
+        }
+
+        $other = $view === EffectPresentation::TERMINAL ? EffectPresentation::GRAPHICAL : EffectPresentation::TERMINAL;
+
+        return [
+            [
+                'label' => 'Sequence',
+                'value' => ucfirst($view->value),
+                'options' => array_map(static fn(EffectPresentation $presentation): string => $presentation->value, EffectPresentation::cases()),
+                'field' => self::EFFECT_SEQUENCE_FIELD,
+                'hint' => 'the sequence these rows edit',
+            ],
+            ['label' => sprintf('  Edits apply to the %s sequence; the %s one is kept as written.', $view->value, $other->value), 'value' => '', 'editable' => false],
+        ];
+    }
+
+    /**
+     * Shows another of the selected effect's sequences, or gives a flat
+     * effect separate ones, recorded so undo puts the flat file back.
+     */
+    private function applyEffectSequenceValue(string $rawValue): void
+    {
+        $asset = $this->selectedCutscene();
+        $value = strtolower(trim($rawValue));
+
+        if ($asset === null || $asset->type !== CutsceneType::EFFECT) {
+            return;
+        }
+
+        if (! $asset->hasPresentations()) {
+            if ($value !== self::EFFECT_SEQUENCE_SEPARATE) {
+                return;
+            }
+
+            $this->mutateSelectedCutscene('Separate effect sequences', static function () use ($asset): void {
+                $asset->selectPresentation(EffectPresentation::TERMINAL);
+                $asset->splitIntoPresentations();
+            });
+            $this->setStatus(sprintf('Effect "%s" now has a terminal and a graphical sequence. It reaches disk on save.', $asset->id), StatusLevel::INFO);
+            $this->renderCutscenesArea();
+
+            return;
+        }
+
+        $presentation = EffectPresentation::tryFrom($value);
+
+        if ($presentation === null || $presentation === $asset->getPresentationView()) {
+            return;
+        }
+
+        // Which sequence is shown is the screen's, not the file's: nothing is
+        // written or recorded, and the records are rebuilt from that sequence.
+        $asset->selectPresentation($presentation);
+        $this->cutsceneLibrary()?->refreshRecords($asset->type);
+        // A running preview plays the other sequence; it starts again on this one.
+        $this->disposeCinematicPreview();
+        $this->databaseCommandFramePath = [];
+        $this->setStatus(sprintf('Editing the %s sequence of effect "%s".', $presentation->value, $asset->id), StatusLevel::INFO);
+        $this->renderCutscenesArea();
     }
 
     /**
@@ -1086,17 +1190,17 @@ trait CutscenesWorkspace
     }
 
     /**
-     * @return array{payload: array<string, mixed>, deleted: bool}
+     * @return array{data: array<string, mixed>, partner: array<int|string, mixed>, view: EffectPresentation, deleted: bool}
      */
     private function snapshotCutscene(CutsceneAsset $asset): array
     {
-        return ['payload' => $asset->payload(), 'deleted' => $asset->isDeleted()];
+        return $asset->captureEditState();
     }
 
     /**
      * Puts an asset back to a recorded state, and the screen onto it.
      *
-     * @param array{payload: array<string, mixed>, deleted: bool} $snapshot
+     * @param array{data: array<string, mixed>, partner: array<int|string, mixed>, view: EffectPresentation, deleted: bool} $snapshot
      */
     private function restoreCutsceneSnapshot(CutsceneType $type, string $id, array $snapshot): void
     {
@@ -1107,8 +1211,7 @@ trait CutscenesWorkspace
             return;
         }
 
-        $asset->apply($snapshot['payload']);
-        $asset->markDeleted($snapshot['deleted']);
+        $asset->restoreEditState($snapshot);
         $library->refreshRecords($type);
 
         if ($this->isCutscenesOpen) {
@@ -1138,6 +1241,12 @@ trait CutscenesWorkspace
 
         if ($fieldId === 'id' && $this->databaseCommandFramePath === []) {
             $this->renameNewCutscene(trim($rawValue));
+
+            return;
+        }
+
+        if ($fieldId === self::EFFECT_SEQUENCE_FIELD && $this->databaseCommandFramePath === []) {
+            $this->applyEffectSequenceValue($rawValue);
 
             return;
         }
@@ -1422,10 +1531,11 @@ trait CutscenesWorkspace
             return;
         }
 
+        $state = $created->captureEditState();
         $this->recordCommand(new GenericCommand(
             sprintf('Create %s', $type->noun()),
-            fn() => $this->restoreCutsceneSnapshot($type, $id, ['payload' => $payload, 'deleted' => false]),
-            fn() => $this->restoreCutsceneSnapshot($type, $id, ['payload' => $payload, 'deleted' => true]),
+            fn() => $this->restoreCutsceneSnapshot($type, $id, [...$state, 'deleted' => false]),
+            fn() => $this->restoreCutsceneSnapshot($type, $id, [...$state, 'deleted' => true]),
         ));
 
         $this->leaveCutsceneEditingState();
@@ -1462,11 +1572,11 @@ trait CutscenesWorkspace
             return;
         }
 
-        $payload = $copy->payload();
+        $state = $copy->captureEditState();
         $this->recordCommand(new GenericCommand(
             sprintf('Duplicate %s', $type->noun()),
-            fn() => $this->restoreCutsceneSnapshot($type, $newId, ['payload' => $payload, 'deleted' => false]),
-            fn() => $this->restoreCutsceneSnapshot($type, $newId, ['payload' => $payload, 'deleted' => true]),
+            fn() => $this->restoreCutsceneSnapshot($type, $newId, [...$state, 'deleted' => false]),
+            fn() => $this->restoreCutsceneSnapshot($type, $newId, [...$state, 'deleted' => true]),
         ));
 
         $this->leaveCutsceneEditingState();
@@ -1505,7 +1615,8 @@ trait CutscenesWorkspace
 
     /**
      * Returns who points at an asset: maps whose triggers launch a
-     * cinematic, actors who start with a summon.
+     * cinematic, actors who start with a summon, and everything that plays
+     * an effect.
      *
      * @return string[]
      */
@@ -1520,6 +1631,12 @@ trait CutscenesWorkspace
                         $references[] = sprintf('map %s event %s', $map->mapId, strval($marker));
                     }
                 }
+            }
+        } elseif ($asset->type === CutsceneType::EFFECT) {
+            if ($this->workspace instanceof ProjectWorkspace) {
+                $uses = EffectValidator::findUses($this->workspace)[$asset->id] ?? [];
+                $scripts = EffectValidator::findScriptUses($this->workspace, $this->cutsceneLibrary()?->assets(CutsceneType::CINEMATIC) ?? []);
+                $references = [...($uses['battle'] ?? []), ...($uses['field'] ?? []), ...($scripts[$asset->id] ?? [])];
             }
         } else {
             foreach ($this->workspace?->actorDatabase->getActors() ?? [] as $actor) {
@@ -2020,9 +2137,7 @@ trait CutscenesWorkspace
                     '',
                     'Shift+A in the list creates one.',
                     '',
-                    $this->cutsceneType === CutsceneType::CINEMATIC
-                        ? 'A cinematic is a staged story scene: a command tree the engine runs on the field, with its own cast, camera, skip policy and finalizer.'
-                        : 'A summon is a frame-driven battle presentation: tracks, keyframes and cues the engine compiles and plays.',
+                    $this->cutsceneType->describeAsset(),
                 ];
             }
 

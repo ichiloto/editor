@@ -537,8 +537,8 @@ it('plays a summon through the Engine playback session: frames, keyframe boundar
 
     // Space compiles the summon as it stands and starts the Engine session.
     pressKeys($editor, ' ');
-    $preview = getEditorProperty($editor, 'summonPreview');
-    expect($preview)->toBeInstanceOf(\Ichiloto\Editor\Cutscenes\Preview\SummonPreviewSession::class)
+    $preview = getEditorProperty($editor, 'timelinePreview');
+    expect($preview)->toBeInstanceOf(\Ichiloto\Editor\Cutscenes\Preview\TimelinePreviewSession::class)
         ->and($preview->isPlaying())->toBeTrue()
         ->and($preview->totalFrames())->toBe(24)
         ->and($preview->fps())->toBe(12);
@@ -596,7 +596,7 @@ it('plays a summon through the Engine playback session: frames, keyframe boundar
     pressKeys($editor, 'l');
     expect(renderEditorPlainFrame($editor, 150, 45))->toContain('f12–23');
     pressKeys($editor, 'x');
-    expect(getEditorProperty($editor, 'summonPreview'))->toBeNull();
+    expect(getEditorProperty($editor, 'timelinePreview'))->toBeNull();
 });
 
 it('reorders, nests, un-nests, duplicates and removes commands from the tree, each undoable', function () {

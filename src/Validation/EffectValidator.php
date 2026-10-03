@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Validation;
 
+use Ichiloto\Editor\Cutscenes\CutsceneAsset;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Engine\Animations\Field\FieldEffectManager;
 use Ichiloto\Engine\Animations\Field\FieldPresentationCatalog;
@@ -29,7 +30,74 @@ final class EffectValidator
     {
         $assetRoot = $workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets';
         $issues = [];
-        /** @var array<string, array{battle: list<string>, field: list<string>}> $uses */
+        $uses = self::findUses($workspace, $issues);
+        $library = new EffectTimelineLibrary($assetRoot);
+        ksort($uses);
+
+        foreach ($uses as $effect => $contexts) {
+            foreach ($contexts as $context => $places) {
+                foreach (EffectPresentation::cases() as $presentation) {
+                    try {
+                        $library->load($effect, $context === 'battle', $presentation);
+                    } catch (Throwable $failure) {
+                        $issues[] = Issue::error($places[0], sprintf('Effect %s cannot be played in %s for the %s presentation: %s',
+                            $effect, $context, $presentation->value, $failure->getMessage()),
+                            sprintf('Fix assets/Animations/%s. Until then that presentation keeps its fallback.%s', $effect,
+                                count($places) > 1 ? sprintf(' Also used by %d more.', count($places) - 1) : ''));
+                    }
+                }
+            }
+        }
+
+        return $issues;
+    }
+
+    /**
+     * Checks an effect a `field_animation` command plays and waits for, as
+     * the Engine plays it on the field for each presentation: it must load,
+     * and it must play once, since loops belong to a map's own effects.
+     *
+     * @param EffectTimelineLibrary $library The project's timelines.
+     * @param string $effect The effect's stable id.
+     * @param string $where Where the command is.
+     * @return Issue[]
+     */
+    public static function checkOneShotFieldEffect(EffectTimelineLibrary $library, string $effect, string $where): array
+    {
+        $issues = [];
+
+        foreach (EffectPresentation::cases() as $presentation) {
+            try {
+                $timeline = $library->load($effect, false, $presentation);
+            } catch (Throwable $failure) {
+                $issues[] = Issue::error($where, sprintf('Its effect %s cannot be played on the field for the %s presentation: %s',
+                    $effect, $presentation->value, $failure->getMessage()),
+                    sprintf('Fix assets/Animations/%s. The runtime stops the script at this command.', $effect));
+                continue;
+            }
+
+            if ($timeline->defaults['playback']['loop'] ?? false) {
+                $issues[] = Issue::error($where, sprintf('Its effect %s loops in the %s presentation, and a field_animation waits for its effect to end.',
+                    $effect, $presentation->value),
+                    'Play a looping effect from the map\'s field effects instead, or give this timeline once playback.');
+            }
+        }
+
+        return $issues;
+    }
+
+    /**
+     * Returns where the project plays each effect, by context: battle
+     * animations' source and target effects in battle; the field
+     * presentation's cues and action prompt, maps' field effects and tileset
+     * pieces' effects on the field.
+     *
+     * @param Issue[] $issues Receives what could not be read.
+     * @return array<string, array{battle?: list<string>, field?: list<string>}>
+     */
+    public static function findUses(ProjectWorkspace $workspace, array &$issues = []): array
+    {
+        $assetRoot = $workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets';
         $uses = [];
         $use = static function (string $effect, bool $battle, string $where) use (&$uses): void {
             $uses[$effect][$battle ? 'battle' : 'field'][] = $where;
@@ -88,58 +156,51 @@ final class EffectValidator
             }
         }
 
-        $library = new EffectTimelineLibrary($assetRoot);
-        ksort($uses);
-
-        foreach ($uses as $effect => $contexts) {
-            foreach ($contexts as $context => $places) {
-                foreach (EffectPresentation::cases() as $presentation) {
-                    try {
-                        $library->load($effect, $context === 'battle', $presentation);
-                    } catch (Throwable $failure) {
-                        $issues[] = Issue::error($places[0], sprintf('Effect %s cannot be played in %s for the %s presentation: %s',
-                            $effect, $context, $presentation->value, $failure->getMessage()),
-                            sprintf('Fix assets/Animations/%s. Until then that presentation keeps its fallback.%s', $effect,
-                                count($places) > 1 ? sprintf(' Also used by %d more.', count($places) - 1) : ''));
-                    }
-                }
-            }
-        }
-
-        return $issues;
+        return $uses;
     }
 
     /**
-     * Checks an effect a `field_animation` command plays and waits for, as
-     * the Engine plays it on the field for each presentation: it must load,
-     * and it must play once, since loops belong to a map's own effects.
+     * Returns the scripts whose `field_animation` commands play each effect:
+     * map events, event scripts and cinematics, at any depth of branches,
+     * lanes and choices, since the command is the same wherever it is
+     * nested. What cannot be read names nothing here; validation reports it.
      *
-     * @param EffectTimelineLibrary $library The project's timelines.
-     * @param string $effect The effect's stable id.
-     * @param string $where Where the command is.
-     * @return Issue[]
+     * @param iterable<CutsceneAsset> $cinematics The project's cinematics, as the editor holds them.
+     * @return array<string, list<string>> Effect id to the scripts that play it.
      */
-    public static function checkOneShotFieldEffect(EffectTimelineLibrary $library, string $effect, string $where): array
+    public static function findScriptUses(ProjectWorkspace $workspace, iterable $cinematics): array
     {
-        $issues = [];
-
-        foreach (EffectPresentation::cases() as $presentation) {
-            try {
-                $timeline = $library->load($effect, false, $presentation);
-            } catch (Throwable $failure) {
-                $issues[] = Issue::error($where, sprintf('Its effect %s cannot be played on the field for the %s presentation: %s',
-                    $effect, $presentation->value, $failure->getMessage()),
-                    sprintf('Fix assets/Animations/%s. The runtime stops the script at this command.', $effect));
-                continue;
+        $uses = [];
+        $collect = static function (mixed $value, string $where) use (&$uses, &$collect): void {
+            if (! is_array($value)) {
+                return;
             }
 
-            if ($timeline->defaults['playback']['loop'] ?? false) {
-                $issues[] = Issue::error($where, sprintf('Its effect %s loops in the %s presentation, and a field_animation waits for its effect to end.',
-                    $effect, $presentation->value),
-                    'Play a looping effect from the map\'s field effects instead, or give this timeline once playback.');
+            if (($value['type'] ?? null) === 'field_animation' && is_string($value['effect'] ?? null) && $value['effect'] !== '') {
+                $uses[$value['effect']][] = $where;
+            }
+
+            foreach ($value as $nested) {
+                $collect($nested, $where);
+            }
+        };
+
+        foreach ($workspace->maps as $map) {
+            foreach ((array) ($map->data['events'] ?? []) as $marker => $definition) {
+                $collect($definition, sprintf('map %s event %s', $map->mapId, strval($marker)));
             }
         }
 
-        return $issues;
+        foreach ($workspace->getRecordDatabase('common_events')?->getRecords() ?? [] as $record) {
+            $script = (array) $record->toArray();
+            $scriptId = trim(strval($script['__scriptId'] ?? ''));
+            $collect($script, sprintf('event script %s', $scriptId !== '' ? $scriptId : '(unnamed)'));
+        }
+
+        foreach ($cinematics as $cinematic) {
+            $collect([$cinematic->data(), $cinematic->partner()], sprintf('cinematic %s', $cinematic->id));
+        }
+
+        return array_map(static fn(array $places): array => array_values(array_unique($places)), $uses);
     }
 }
