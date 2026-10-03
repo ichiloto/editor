@@ -1241,7 +1241,7 @@ final class EditorSession
     /**
      * Undoes the last change, wherever it was made.
      *
-     * @return array{label: ?string, maps: list<string>} What was undone and the maps it changed.
+     * @return array{label: ?string, maps: list<string>, revisions: array<string, int>} What was undone, the maps it changed and their revisions now.
      */
     public function undo(): array
     {
@@ -1300,14 +1300,15 @@ final class EditorSession
     {
         $before = array_map(static fn(ProjectMap $map): int => $map->stateVersion(), $this->workspace->maps);
         $command = $step();
-        $changed = [];
+        $changed = $revisions = [];
         foreach ($this->workspace->maps as $index => $map) {
             if ($map->stateVersion() !== $before[$index]) {
                 $changed[] = $map->mapId;
+                $revisions[$map->mapId] = $map->stateVersion();
             }
         }
 
-        return ['label' => $command?->label, 'maps' => $changed];
+        return ['label' => $command?->label, 'maps' => $changed, 'revisions' => $revisions];
     }
 
     /** @return array<int, array<string, mixed>> */

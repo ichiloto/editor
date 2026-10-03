@@ -57,7 +57,7 @@ it('asks before a glyph layer edit that changes collisions, then applies it conf
     expect($applied)->toMatchArray(['status' => 'applied', 'changed' => true, 'layer' => 'map:4'])
         ->and($layer['decoration'])->toBeTrue()
         ->and(fn() => $session->renameLayer('test-map', $revision, 'map:4', 'houses'))->toThrow(SessionRefusal::class, 'changed since revision')
-        ->and($session->undo())->toBe(['label' => 'Layer decoration', 'maps' => ['test-map']]);
+        ->and($session->undo())->toMatchArray(['label' => 'Layer decoration', 'maps' => ['test-map']]);
 });
 
 it('creates, renames, reorders and removes glyph layers, saving the layer files as one set', function () {

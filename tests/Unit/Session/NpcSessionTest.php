@@ -59,7 +59,7 @@ it('creates, moves, duplicates and deletes NPCs, each one undo step against a cu
     expect($deleted)->toMatchArray(['changed' => true, 'index' => null, 'id' => 'ann'])
         ->and(npcSessionIds($session))->toBe(['gate-guard', 'ann-2']);
 
-    expect($session->undo())->toBe(['label' => 'NPC delete', 'maps' => ['test-map']])
+    expect($session->undo())->toMatchArray(['label' => 'NPC delete', 'maps' => ['test-map']])
         ->and(npcSessionIds($session))->toBe(['ann', 'gate-guard', 'ann-2']);
     $session->undo();
     $session->undo();

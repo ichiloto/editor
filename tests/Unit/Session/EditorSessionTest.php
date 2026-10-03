@@ -63,12 +63,15 @@ it('paints as one undo step, undoes and redoes it, and refuses an edit made agai
     expect(fn() => $session->paint('test-map', $map['revision'], $layer, [[4, 2]], '%'))
         ->toThrow(SessionRefusal::class, 'changed since revision');
 
-    expect($session->undo())->toBe(['label' => 'Paint', 'maps' => ['test-map']])
+    expect($session->undo())->toMatchArray(['label' => 'Paint', 'maps' => ['test-map']])
         ->and(sessionCell($session->readMap('test-map'), $layer, 2, 2))->toBe($before);
-    expect($session->redo()['maps'])->toBe(['test-map'])
+    $redone = $session->redo();
+    // Each changed map's revision comes back, so the next edit can name it.
+    expect($redone['maps'])->toBe(['test-map'])
+        ->and($redone['revisions'])->toBe(['test-map' => $session->readMap('test-map')['revision']])
         ->and(sessionCell($session->readMap('test-map'), $layer, 2, 2))->toBe('%');
     expect($session->undo()['label'])->toBe('Paint')
-        ->and($session->undo())->toBe(['label' => null, 'maps' => []]);
+        ->and($session->undo())->toMatchArray(['label' => null, 'maps' => []]);
 });
 
 it('saves a painted map through its transaction, so a fresh load sees the edit', function () {
