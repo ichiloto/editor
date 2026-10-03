@@ -157,6 +157,35 @@ final class CanvasEditor
     }
 
     /**
+     * Sets one tile in each cell of a tile layer, `0` erasing it, as one undo
+     * step, creating the layer when the map does not have it yet. Tiles are
+     * independent of glyphs: nothing here changes a glyph or collision. An
+     * autotile is placed by its kind; the Engine shapes it from its
+     * neighbours.
+     *
+     * @param list<array{0: int, 1: int}> $cells The cells, as [x, y].
+     * @return array{command: ?Command, changed: int} No command when nothing changed.
+     * @throws MapSourceRefusal When the tile is not a tile identity, a cell is outside the map or the layer cannot be written; nothing is changed.
+     */
+    public static function setTiles(ProjectMap $map, string $layerName, array $cells, int $tile, string $label): array
+    {
+        $before = $map->getTileLayerSources();
+        $entries = array_map(static fn(array $cell): array => ['x' => $cell[0], 'y' => $cell[1], 'entry' => (string) $tile], $cells);
+        $previous = $map->readTileEntries([$layerName], 0, 0, $map->getWidth(), $map->getHeight())[$layerName] ?? [];
+        $map->writeTileCells([$layerName => $entries]);
+        $after = $map->getTileLayerSources();
+        if ($after === $before) {
+            return ['command' => null, 'changed' => 0];
+        }
+        $changed = count(array_filter($cells, static fn(array $cell): bool
+            => ($previous[$cell[1]][$cell[0]] ?? (string) TileId::EMPTY) !== (string) $tile));
+
+        return ['command' => new GenericCommand($label,
+            static fn() => $map->restoreTileLayerSources($after),
+            static fn() => $map->restoreTileLayerSources($before)), 'changed' => $changed];
+    }
+
+    /**
      * One undo step for a glyph stroke and the tile layer change made with it,
      * such as a stamped piece or a pasted block.
      *

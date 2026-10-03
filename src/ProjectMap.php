@@ -564,6 +564,16 @@ final class ProjectMap
     }
 
     /**
+     * The names of the map's tile layers, in drawing order.
+     *
+     * @return list<string>
+     */
+    public function getTileLayerNames(): array
+    {
+        return $this->layers->getTileLayerNames();
+    }
+
+    /**
      * Reads the entries of the named tile layers over a rectangle, by row.
      *
      * @param list<string> $names Tile layer names.

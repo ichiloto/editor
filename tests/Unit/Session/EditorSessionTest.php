@@ -241,3 +241,44 @@ it('lays out the tile palette as RPG Maker MZ does, drawn by the same world', fu
         ->and(fn() => EditorSession::open(makeTemporaryProject())->readTilePalette('test-map'))
         ->toThrow(SessionRefusal::class, 'names no tileset');
 });
+
+it('places, erases and undoes tiles as one step each, drawn from the unsaved layer and never touching glyphs', function () {
+    $root = mapGraphicsProject();
+    $session = EditorSession::open($root);
+    $map = $session->readMap('test-map');
+    $floor = static fn(array $tiles): array => array_find($tiles['layers'], static fn(array $layer): bool => $layer['name'] === 'floor')['rows'];
+
+    $placed = $session->paintTiles('test-map', $map['revision'], 'floor', [[0, 0], [1, 0]], 5);
+    expect($placed['changed'])->toBe(2)
+        ->and($floor($session->readTiles('test-map'))[0])->toBe([5, 5, 2816, 2816])
+        ->and($session->readMap('test-map')['layers'])->toBe(array_map(static fn(array $layer): array => $layer, $map['layers']))
+        ->and(array_filter($session->readWorld('test-map')['operations'], static fn(array $operation): bool
+            => $operation['op'] === 'worldTiles' && $operation['layerId'] === 'tiles:floor' && $operation['rows'][0]['row'] === 0))->not->toBe([]);
+
+    // Placing what is already there changes nothing and records no step.
+    $unchanged = $session->paintTiles('test-map', $placed['revision'], 'floor', [[0, 0]], 5);
+    expect($unchanged['changed'])->toBe(0);
+    $erased = $session->paintTiles('test-map', $unchanged['revision'], 'floor', [[0, 0]], 0, 'Erase tiles');
+    expect($floor($session->readTiles('test-map'))[0])->toBe([0, 5, 2816, 2816])
+        ->and($session->undo()['label'])->toBe('Erase tiles')
+        ->and($session->undo()['label'])->toBe('Place tiles')
+        ->and($floor($session->readTiles('test-map'))[0])->toBe([2816, 2816, 2816, 2816])
+        ->and($session->readMap('test-map')['dirty'])->toBeFalse();
+
+    // A new tile layer is created for its first tile; a stale revision, a cell off the map and a non-tile are refused.
+    $current = $session->readMap('test-map')['revision'];
+    $session->paintTiles('test-map', $current, 'rugs', [[3, 1]], 2864);
+    expect(array_column($session->readTiles('test-map')['layers'], 'name'))->toContain('rugs')
+        ->and(fn() => $session->paintTiles('test-map', $erased['revision'], 'floor', [[0, 0]], 5))->toThrow(SessionRefusal::class, 'changed since revision')
+        ->and(fn() => $session->paintTiles('test-map', $session->readMap('test-map')['revision'], 'floor', [[9, 9]], 5))->toThrow(SessionRefusal::class, 'no cell at (9, 9)')
+        ->and(fn() => $session->paintTiles('test-map', $session->readMap('test-map')['revision'], 'floor', [[0, 0]], 9000))->toThrow(SessionRefusal::class, "'9000' is not an RPG Maker tile identity");
+});
+
+it('saves placed tiles into the tile layer file the Engine reads', function () {
+    $root = mapGraphicsProject();
+    $session = EditorSession::open($root);
+    $session->paintTiles('test-map', $session->readMap('test-map')['revision'], 'decor', [[0, 1]], 7);
+    $session->saveMap('test-map');
+
+    expect(readTileRows($root . '/assets/Maps/test-map/graphics/02.decor.tiles.php'))->toBe([[0, 5, 0, 0], [7, 0, 0, 5]]);
+});

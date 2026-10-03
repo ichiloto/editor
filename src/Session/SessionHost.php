@@ -99,6 +99,15 @@ final class SessionHost
             'map.read' => $session->readMap(self::requireString($params, 'map')),
             'map.world' => $session->readWorld(self::requireString($params, 'map')),
             'tiles.palette' => $session->readTilePalette(self::requireString($params, 'map')),
+            'tiles.read' => $session->readTiles(self::requireString($params, 'map')),
+            'tiles.paint' => $session->paintTiles(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireString($params, 'layer'),
+                self::requireCells($params),
+                self::requireInt($params, 'tile'),
+                is_string($params['label'] ?? null) ? $params['label'] : 'Place tiles',
+            ),
             'map.paint' => $session->paint(
                 self::requireString($params, 'map'),
                 self::requireInt($params, 'revision'),

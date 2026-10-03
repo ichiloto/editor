@@ -239,6 +239,58 @@ final class EditorSession
         return ['tileset' => $tileset->id, 'name' => $tileset->name, 'assetRoot' => $map->getAssetRoot(), 'tabs' => $tabs];
     }
     /**
+     * Each tile layer's tile identities by row, unsaved edits included, in
+     * drawing order: what a tile picker reads. A layer that cannot be read
+     * says why instead.
+     *
+     * @return array{map: string, revision: int, layers: list<array{name: string, rows: list<list<int>>, issue: ?string}>}
+     * @throws SessionRefusal When the map is unknown.
+     */
+    public function readTiles(string $mapId): array
+    {
+        $map = $this->requireMap($mapId);
+        $layers = [];
+        foreach ($map->getTileLayerNames() as $name) {
+            try {
+                $rows = $map->readTileEntries([$name], 0, 0, $map->getWidth(), $map->getHeight())[$name] ?? [];
+                $layers[] = ['name' => $name, 'rows' => array_map(static fn(array $row): array => array_map(intval(...), $row), $rows),
+                    'issue' => null];
+            } catch (MapSourceRefusal $refusal) {
+                $layers[] = ['name' => $name, 'rows' => [], 'issue' => $refusal->getMessage()];
+            }
+        }
+
+        return ['map' => $map->mapId, 'revision' => $map->stateVersion(), 'layers' => $layers];
+    }
+
+    /**
+     * Sets one tile in cells of a tile layer, `0` erasing, as one undo step
+     * ({@see CanvasEditor::setTiles()}). A layer the map does not have yet is
+     * created. Tiles never change glyphs or collision.
+     *
+     * @param list<array{0: int, 1: int}> $cells The cells, as [x, y].
+     * @return array{changed: int, revision: int}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, or refuses the tile.
+     */
+    public function paintTiles(string $mapId, int $revision, string $layerName, array $cells, int $tile, string $label = 'Place tiles'): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        if ($map->getGridSourceIssue() !== null) {
+            throw new SessionRefusal(sprintf('%s is read-only: %s', $mapId, $map->getGridSourceIssue()));
+        }
+        try {
+            $applied = CanvasEditor::setTiles($map, $layerName, $cells, $tile, $label);
+        } catch (MapSourceRefusal $refusal) {
+            throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+        }
+        if ($applied['command'] !== null) {
+            $this->history->record($applied['command']);
+        }
+
+        return ['changed' => $applied['changed'], 'revision' => $map->stateVersion()];
+    }
+
+    /**
      * Paints one glyph over cells of a layer, with the tiles that follow it,
      * as one undo step. A glyph that could be several pieces is asked about:
      * nothing changes until the edit is made again with the answer in
