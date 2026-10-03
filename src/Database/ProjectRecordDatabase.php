@@ -2772,7 +2772,7 @@ final class ProjectRecordDatabase
         }
 
         if ($field->codec === RecordFieldCodec::CONDITIONS) {
-            $conditions = ConditionCodec::decodeAll($trimmed);
+            $conditions = ConditionCodec::decodeAllStrictly($trimmed);
 
             return $conditions === [] && $field->removeWhenEmpty ? null : $conditions;
         }
@@ -2784,7 +2784,7 @@ final class ProjectRecordDatabase
         }
 
         if ($field->codec === RecordFieldCodec::WORLD_WRITES) {
-            $sets = WorldWriteCodec::decodeAll($trimmed);
+            $sets = WorldWriteCodec::decodeAllStrictly($trimmed);
 
             return $sets === [] && $field->removeWhenEmpty ? null : $sets;
         }

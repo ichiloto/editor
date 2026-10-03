@@ -8,9 +8,13 @@ use Ichiloto\Editor\Backup\BackupSettings;
 use Ichiloto\Editor\Backup\BackupWriter;
 use Ichiloto\Editor\Canvas\CanvasEditor;
 use Ichiloto\Editor\Canvas\PieceRole;
+use Ichiloto\Editor\Database\ConditionCodec;
+use Ichiloto\Editor\Database\ConditionEditor;
 use Ichiloto\Editor\Database\DatabaseCatalog;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Database\ReferenceCatalog;
+use Ichiloto\Editor\Database\WorldWriteCodec;
+use Ichiloto\Editor\Database\WorldWriteEditor;
 use Ichiloto\Editor\Events\EventAuthoring;
 use Ichiloto\Editor\Events\EventRefusal;
 use Ichiloto\Editor\Events\EventTypeCatalog;
@@ -911,6 +915,60 @@ final class EditorSession
      * @return list<array{value: string, label: string}>
      * @throws SessionRefusal When the map is unknown or the category is not a reference.
      */
+    /**
+     * The vocabulary conditions and world writes are built from, a part at a
+     * time ({@see ConditionEditor::getGrammar()}, {@see WorldWriteEditor::getGrammar()}).
+     *
+     * @return array{conditions: list<array<string, mixed>>, writes: list<array<string, mixed>>}
+     */
+    public function describeWorldStateGrammar(): array
+    {
+        return ['conditions' => ConditionEditor::getGrammar(), 'writes' => WorldWriteEditor::getGrammar()];
+    }
+
+    /**
+     * Writes conditions or world writes built a part at a time as the one
+     * line a conditions or writes row is set to, refusing an entry the
+     * engine could not read rather than dropping it.
+     *
+     * @param 'conditions'|'writes' $codec
+     * @param list<mixed> $entries Each an array as a row's `entries` lists them.
+     * @param list<string>|null $writeTypes The write types the row allows, when it restricts them.
+     * @return array{line: string, descriptions: list<string>}
+     * @throws SessionRefusal When an entry has no name, an unknown type or one the row does not allow.
+     */
+    public function encodeWorldState(string $codec, array $entries, ?array $writeTypes = null): array
+    {
+        $entries = array_values($entries);
+        foreach ($entries as $number => $entry) {
+            if (! is_array($entry) || trim((string) ($entry['name'] ?? '')) === '') {
+                throw new SessionRefusal(sprintf('Entry %d needs a name.', $number + 1));
+            }
+        }
+        try {
+            if ($codec === 'conditions') {
+                $line = ConditionCodec::encodeAll($entries);
+                $decoded = ConditionCodec::decodeAllStrictly($line);
+
+                return ['line' => $line, 'descriptions' => array_map(ConditionEditor::describe(...), $decoded)];
+            }
+            if ($codec === 'writes') {
+                $line = WorldWriteCodec::encodeAll($entries);
+                $decoded = WorldWriteCodec::decodeAllStrictly($line);
+                $refused = array_find($decoded, static fn(array $set): bool => $writeTypes !== null && ! in_array($set['type'], $writeTypes, true));
+                if ($refused !== null) {
+                    throw new SessionRefusal(sprintf('This row cannot write a %s; it allows %s.', $refused['type'], implode(', ', $writeTypes ?? [])));
+                }
+
+                return ['line' => $line, 'descriptions' => array_map(WorldWriteCodec::describe(...), $decoded)];
+            }
+        } catch (InvalidArgumentException $error) {
+            throw new SessionRefusal($error->getMessage(), previous: $error);
+        }
+
+        throw new SessionRefusal(sprintf('There is no %s codec; use conditions or writes.', $codec));
+    }
+
     public function listReferences(string $mapId, string $category): array
     {
         if (! ReferenceCatalog::knows($category)) {
@@ -1337,7 +1395,8 @@ final class EditorSession
         $choices = MapInspector::findChoiceValues($field);
         $kind = match (true) {
             ($field['editable'] ?? true) === false, $target === null => 'info',
-            ($field['mapConditions'] ?? false) === true => 'conditions',
+            ($field['mapConditions'] ?? false) === true, ($field['conditions'] ?? false) === true => 'conditions',
+            ($field['worldWrites'] ?? false) === true => 'writes',
             ($field['destination'] ?? false) === true => 'destination',
             is_string($field['reference'] ?? null) => 'reference',
             $choices !== null => 'options',
@@ -1355,7 +1414,8 @@ final class EditorSession
             'label' => (string) ($field['label'] ?? ''),
             'value' => (string) ($field['value'] ?? ''),
             'raw' => match ($kind) {
-                'conditions' => is_string($field['encoded'] ?? null) ? $field['encoded'] : null,
+                'conditions' => is_string($field['encoded'] ?? null) ? $field['encoded'] : (string) ($field['value'] ?? ''),
+                'writes' => (string) ($field['value'] ?? ''),
                 'text', 'integer', 'float', 'boolean' => $control?->rawValue,
                 default => null,
             },
@@ -1369,6 +1429,13 @@ final class EditorSession
                 default => null,
             },
             'list' => is_array($list) && $target !== null ? ['index' => (int) ($list['index'] ?? 0)] : null,
+            // Conditions and writes are built a part at a time from these.
+            'entries' => match ($kind) {
+                'conditions' => ConditionCodec::decodeAll(is_string($field['encoded'] ?? null) ? $field['encoded'] : (string) ($field['value'] ?? '')),
+                'writes' => WorldWriteCodec::decodeAll((string) ($field['value'] ?? '')),
+                default => null,
+            },
+            'writeTypes' => $kind === 'writes' && is_array($field['writeTypes'] ?? null) ? array_values($field['writeTypes']) : null,
             'key' => self::describeKey($field),
         ], static fn(mixed $value): bool => $value !== null);
     }

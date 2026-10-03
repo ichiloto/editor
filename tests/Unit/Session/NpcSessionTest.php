@@ -174,3 +174,57 @@ it('serves NPC authoring over the line protocol', function () {
         ->and($request(14, 'npc.apply', ['map' => 'test-map', 'revision' => $deleted['revision'], 'index' => 0, 'value' => 'x'])['error']['kind'])
             ->toBe('request');
 });
+
+it('builds an NPC\'s conditions and writes a part at a time and refuses a typo instead of dropping it', function () {
+    $session = EditorSession::open(npcSessionProject([['id' => 'ann', 'name' => 'Ann', 'x' => 2, 'y' => 1,
+        'conditions' => [['type' => 'quest', 'name' => 'breakfast', 'status' => 'active']]]]));
+    $read = $session->readNpc('test-map', 0);
+    $visible = npcSessionRow($read, 'conditions');
+    $after = npcSessionRow($read, 'sets');
+
+    expect([$visible['kind'], $visible['raw'], $visible['entries']])
+        ->toBe(['conditions', 'quest:breakfast:active', [['type' => 'quest', 'name' => 'breakfast', 'status' => 'active']]])
+        ->and([$after['kind'], $after['raw']])->toBe(['writes', '']);
+
+    $conditions = $session->encodeWorldState('conditions', [
+        ['type' => 'quest', 'name' => 'breakfast', 'status' => 'completed'],
+        ['type' => 'variable', 'name' => 'mood', 'op' => '>=', 'value' => 2, 'negate' => true],
+    ]);
+    $writes = $session->encodeWorldState('writes', [['type' => 'switch', 'name' => 'met-ann', 'value' => true]]);
+    expect($conditions['line'])->toBe('quest:breakfast:completed; !variable:mood:>=:2')
+        ->and($conditions['descriptions'][1])->toStartWith('NOT Variable mood');
+
+    $revision = $session->applyNpc('test-map', $read['revision'], 0, $visible['key'], $conditions['line'])['revision'];
+    $revision = $session->applyNpc('test-map', $revision, 0, $after['key'], $writes['line'])['revision'];
+    $reread = $session->readNpc('test-map', 0);
+    expect(npcSessionRow($reread, 'conditions')['entries'])->toBe([
+        ['type' => 'quest', 'name' => 'breakfast', 'status' => 'completed'],
+        ['type' => 'variable', 'name' => 'mood', 'op' => '>=', 'value' => 2, 'negate' => true],
+    ])
+        ->and(npcSessionRow($reread, 'sets')['raw'])->toBe('switch:met-ann:true')
+        // A typed line that cannot be read is refused whole, never stored without its unreadable part.
+        ->and(fn() => $session->applyNpc('test-map', $revision, 0, $visible['key'], 'quest:breakfast; swich:door'))
+        ->toThrow(SessionRefusal::class, 'Condition "swich:door" cannot be read')
+        ->and(fn() => $session->encodeWorldState('conditions', [['type' => 'switch', 'name' => ' ']]))
+        ->toThrow(SessionRefusal::class, 'Entry 1 needs a name.')
+        ->and(fn() => $session->encodeWorldState('writes', [['type' => 'quest', 'name' => 'q']], ['switch']))
+        ->toThrow(SessionRefusal::class, 'cannot write a quest');
+});
+
+it('describes the condition and write vocabulary from the editors that build them', function () {
+    $grammar = EditorSession::open(npcSessionProject([]))->describeWorldStateGrammar();
+    $session = EditorSession::open(npcSessionProject([]));
+
+    expect(array_column($grammar['conditions'], 'type'))->toBe(Ichiloto\Editor\Database\ConditionCodec::types())
+        ->and(array_column($grammar['writes'], 'type'))->toBe(Ichiloto\Editor\Database\WorldWriteCodec::TYPES);
+    // Every type's defaults make an entry the codec writes and reads back.
+    foreach (['conditions', 'writes'] as $codec) {
+        foreach ($grammar[$codec] as $type) {
+            $entry = ['type' => $type['type'], 'name' => 'something'];
+            foreach ($type['extras'] as $extra) {
+                $entry[$extra['key']] = $extra['default'];
+            }
+            expect($session->encodeWorldState($codec, [$entry])['line'])->toStartWith($type['type'] . ':something');
+        }
+    }
+});

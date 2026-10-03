@@ -9,6 +9,7 @@ use Ichiloto\Editor\History\GenericCommand;
 use Ichiloto\Editor\MapSourceRefusal;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
+use InvalidArgumentException;
 use Throwable;
 
 /**
@@ -184,7 +185,12 @@ final readonly class NpcAuthoring
         $idReferences = [];
 
         try {
-            $inspector->records()->setFrameField($index, $framePath, $fieldId, $rawValue);
+            try {
+                $inspector->records()->setFrameField($index, $framePath, $fieldId, $rawValue);
+            } catch (InvalidArgumentException $invalid) {
+                // A value its field cannot take, such as an unreadable condition, is the author's to correct.
+                throw new NpcRefusal($invalid->getMessage(), previous: $invalid);
+            }
             $inspector->commit();
             $after = $map->getNpcs();
             $placed = $after->get($index);
