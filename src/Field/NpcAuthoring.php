@@ -4,6 +4,10 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Field;
 
+use Ichiloto\Editor\Database\RecordAuthoring;
+use Ichiloto\Editor\Database\RecordChange;
+use Ichiloto\Editor\Database\RecordItem;
+use Ichiloto\Editor\Database\RecordRefusal;
 use Ichiloto\Editor\History\Command;
 use Ichiloto\Editor\History\GenericCommand;
 use Ichiloto\Editor\MapSourceRefusal;
@@ -229,9 +233,11 @@ final readonly class NpcAuthoring
 
     /**
      * Adds an item at a row of the NPC's record pane: inside a script frame,
-     * a route step under the route the row belongs to or a command after
-     * the row's command (at the end when the row names none); at the root,
-     * a line in the row's dialogue variant, or a new variant.
+     * a route step under the route the row belongs to, another option on a
+     * choice option's row, or a command after the row's command (at the
+     * end when the row names none); at the root, a line in the row's
+     * dialogue variant, or a new variant. Which item a row belongs to, and
+     * how it is added, are the shared record rules' ({@see RecordAuthoring}).
      *
      * @param array<int, int|string> $framePath The frame the row belongs to.
      * @param string $fieldId The row's field id; '' for none.
@@ -240,36 +246,26 @@ final readonly class NpcAuthoring
      */
     public function addSubItem(NpcInspector $inspector, int $index, array $framePath, string $fieldId): NpcChange
     {
-        $map = $inspector->map;
-        $before = $map->getNpcs();
-        $this->requireFrame($inspector, $before, $index, $framePath);
         $records = $inspector->records();
+        $item = $records->locateItem($index, $framePath, $fieldId);
+        // Inside a frame, any row of a command that owns steps adds a step.
         $nested = $framePath !== [] ? $records->frameNestedContext($index, $framePath, $fieldId) : null;
 
-        try {
-            if ($nested !== null) {
-                $records->addFrameNestedItem($index, $framePath, $nested['parentIndex']);
-            } elseif ($framePath !== []) {
-                $after = preg_match('/^command(\d+)/', $fieldId, $matches) === 1 ? intval($matches[1]) : null;
-                $records->addFrameCommand($index, $framePath, $after);
-            } elseif (preg_match('/^variant(\d+)Line/', $fieldId, $matches) === 1) {
-                $records->addNestedSubItem($index, intval($matches[1]));
-            } else {
-                $records->addSubItem($index);
-            }
-
-            $inspector->commit();
-        } finally {
-            $inspector->refresh();
-        }
-
-        return $this->createRowChange($map, 'NPC add', $before, $index);
+        return $this->changeRows($inspector, $index, $framePath, 'NPC add',
+            static fn(RecordAuthoring $authoring): RecordChange => match (true) {
+                $nested !== null => $authoring->addNestedItem($records, $index, $framePath, $nested['parentIndex']),
+                $item?->kind === RecordItem::OPTION => $authoring->addOption($records, $index, $framePath, $item->entryIndex),
+                $framePath !== [] => $authoring->addEntry($records, $index, $framePath, $item?->entryIndex),
+                $item?->kind === RecordItem::NESTED => $authoring->addNestedItem($records, $index, $framePath, $item->entryIndex),
+                default => $authoring->addEntry($records, $index, $framePath),
+            });
     }
 
     /**
      * Removes the item a row of the NPC's record pane belongs to: a route
-     * step, a command, a dialogue line or a dialogue variant. A row that
-     * belongs to none changes nothing.
+     * step, a choice's option, a command, a dialogue line or a dialogue
+     * variant ({@see RecordAuthoring::removeItem()}). A row that belongs to
+     * none changes nothing.
      *
      * @param array<int, int|string> $framePath The frame the row belongs to.
      * @param string $fieldId The row's field id.
@@ -278,32 +274,39 @@ final readonly class NpcAuthoring
      */
     public function removeSubItem(NpcInspector $inspector, int $index, array $framePath, string $fieldId): NpcChange
     {
+        $records = $inspector->records();
+
+        return $this->changeRows($inspector, $index, $framePath, 'NPC remove',
+            static fn(RecordAuthoring $authoring): RecordChange => $authoring->removeItem($records, $index, $framePath, $fieldId));
+    }
+
+    /**
+     * Makes one item change through the record pane and writes it back to
+     * the map, as one undo step over the map's NPCs.
+     *
+     * @param array<int, int|string> $framePath
+     * @param callable(RecordAuthoring): RecordChange $change
+     * @throws NpcRefusal When there is no such NPC or frame, or the pane refuses the change.
+     * @throws MapSourceRefusal When the map's source cannot take the change.
+     */
+    private function changeRows(NpcInspector $inspector, int $index, array $framePath, string $label, callable $change): NpcChange
+    {
         $map = $inspector->map;
         $before = $map->getNpcs();
         $this->requireFrame($inspector, $before, $index, $framePath);
-        $records = $inspector->records();
-        $nested = $framePath !== [] ? $records->frameNestedContext($index, $framePath, $fieldId) : null;
 
         try {
-            if ($nested !== null && $nested['nestedIndex'] !== null) {
-                // The step under the row; a command row removes the command.
-                $records->removeFrameNestedItem($index, $framePath, $nested['parentIndex'], $nested['nestedIndex']);
-            } elseif ($framePath !== []) {
-                if (preg_match('/^command(\d+)/', $fieldId, $matches) === 1) {
-                    $records->removeFrameCommand($index, $framePath, intval($matches[1]));
-                }
-            } elseif (preg_match('/^variant(\d+)Line(\d+)/', $fieldId, $matches) === 1) {
-                $records->removeNestedSubItem($index, intval($matches[1]), intval($matches[2]));
-            } elseif (preg_match('/^variant(\d+)/', $fieldId, $matches) === 1) {
-                $records->removeSubItem($index, intval($matches[1]));
-            }
-
+            // The pane's own undo step is over its records; the map's NPCs are
+            // what this change's undo restores.
+            $change(new RecordAuthoring());
             $inspector->commit();
+        } catch (RecordRefusal $refusal) {
+            throw new NpcRefusal($refusal->getMessage(), previous: $refusal);
         } finally {
             $inspector->refresh();
         }
 
-        return $this->createRowChange($map, 'NPC remove', $before, $index);
+        return $this->createRowChange($map, $label, $before, $index);
     }
 
     /**

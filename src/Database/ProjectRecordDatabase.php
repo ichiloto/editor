@@ -690,15 +690,38 @@ final class ProjectRecordDatabase
     }
 
     /**
+     * Returns whether this category can take a new record at all. Terms are
+     * the leaves of an existing config tree and listings are informational:
+     * there is no meaningful blank entry to append to either.
+     *
+     * @return bool True when creating a record can do something here.
+     */
+    public function supportsRecordCreation(): bool
+    {
+        return $this->isEditable()
+            && $this->schema->storage !== RecordStorage::CONFIG_SUBTREE
+            && $this->schema->storage !== RecordStorage::FILE_LISTING;
+    }
+
+    /**
+     * Returns whether this category can let a record go. A term is a leaf of
+     * the config tree it belongs to, not an entry of its own.
+     *
+     * @return bool True when deleting a record can do something here.
+     */
+    public function supportsRecordDeletion(): bool
+    {
+        return $this->isEditable() && $this->schema->storage !== RecordStorage::CONFIG_SUBTREE;
+    }
+
+    /**
      * Appends a blank record.
      *
      * @return int|null The new record index, or null when the category is read-only.
      */
     public function addRecord(): ?int
     {
-        if (! $this->isEditable() || $this->schema->storage === RecordStorage::CONFIG_SUBTREE || $this->schema->storage === RecordStorage::FILE_LISTING) {
-            // Terms are the leaves of an existing config tree and listings are
-            // informational: there is no meaningful blank entry to append.
+        if (! $this->supportsRecordCreation()) {
             return null;
         }
 
@@ -776,7 +799,7 @@ final class ProjectRecordDatabase
      */
     public function removeRecord(int $index): ?ProjectRecord
     {
-        if (! $this->isEditable() || $this->schema->storage === RecordStorage::CONFIG_SUBTREE) {
+        if (! $this->supportsRecordDeletion()) {
             return null;
         }
 
@@ -969,13 +992,15 @@ final class ProjectRecordDatabase
     }
 
     /**
-     * Appends a sub-list entry (an objective, beat, member, or command).
+     * Adds a sub-list entry (an objective, beat, member, or command), at the
+     * end or at a position.
      *
      * @param int $index The record index.
      * @param array<string, mixed>|null $entry The entry payload; the schema blank when null.
+     * @param int|null $at Where to insert it, or null for the end.
      * @return int|null The new entry index.
      */
-    public function addSubItem(int $index, ?array $entry = null): ?int
+    public function addSubItem(int $index, ?array $entry = null, ?int $at = null): ?int
     {
         $record = $this->getRecordByIndex($index);
         $subList = $this->schema->subList;
@@ -985,11 +1010,12 @@ final class ProjectRecordDatabase
         }
 
         $entries = $record->getSubList($subList->key);
-        $entries[] = $entry ?? $subList->blank;
+        $position = $at === null ? count($entries) : max(0, min(count($entries), $at));
+        array_splice($entries, $position, 0, [$entry ?? $subList->blank]);
         $record->setSubList($subList->key, $entries);
         $this->touchState();
 
-        return count($entries) - 1;
+        return $position;
     }
 
     /**
@@ -1102,8 +1128,8 @@ final class ProjectRecordDatabase
         return ['parentIndex' => $parentIndex, 'nestedIndex' => $nestedIndex, 'list' => $nestedList];
     }
 
-    /** Appends an entry to a variant-owned nested list. */
-    public function addNestedSubItem(int $index, int $parentIndex, ?array $entry = null): ?int
+    /** Adds an entry to a variant-owned nested list, at the end or at a position. */
+    public function addNestedSubItem(int $index, int $parentIndex, ?array $entry = null, ?int $at = null): ?int
     {
         $context = $this->nestedListForParent($index, $parentIndex);
 
@@ -1112,10 +1138,11 @@ final class ProjectRecordDatabase
         }
 
         $entries = array_values((array) ($context['parent'][$context['list']->key] ?? []));
-        $entries[] = $entry ?? $context['list']->blank;
+        $position = $at === null ? count($entries) : max(0, min(count($entries), $at));
+        array_splice($entries, $position, 0, [$entry ?? $context['list']->blank]);
         $this->writeNestedSubList($context, $entries);
 
-        return count($entries) - 1;
+        return $position;
     }
 
     /** Removes an entry from a variant-owned nested list. */
@@ -2414,7 +2441,7 @@ final class ProjectRecordDatabase
         }
 
         $commands = $this->getFrameCommands($recordIndex, $framePath);
-        $frameList = $this->frameSubList($framePath);
+        $frameList = $this->getFrameSubList($framePath);
 
         if ($commands === null || $frameList === null) {
             return null;
@@ -2447,6 +2474,63 @@ final class ProjectRecordDatabase
     }
 
     /**
+     * Returns the item a settings row belongs to, to add after or remove:
+     * the nested entry (a route step, a dialogue line, a lane) the row
+     * edits, the choice option it names, or else the entry or command it is
+     * part of. The field ids carry the frame list's prefix, as the rows were
+     * made with it. The record's own rows, headings and an empty frame's
+     * placeholder belong to none.
+     *
+     * @param int $recordIndex The record.
+     * @param array<int, int|string> $framePath The frame the row is in; [] for the record's own list.
+     * @param string $fieldId The row's field id.
+     * @return RecordItem|null The item, or null when the row belongs to none.
+     */
+    public function locateItem(int $recordIndex, array $framePath, string $fieldId): ?RecordItem
+    {
+        $list = $this->getFrameSubList($framePath);
+        $entries = $this->getFrameCommands($recordIndex, $framePath);
+
+        if ($list === null || $entries === null || preg_match('/^' . preg_quote($list->prefix, '/') . '(\d+)/', $fieldId, $matches) !== 1) {
+            return null;
+        }
+
+        $entryIndex = intval($matches[1]);
+        $entry = $entries[$entryIndex] ?? null;
+
+        if (! is_array($entry)) {
+            return null;
+        }
+
+        $nested = $this->frameNestedContext($recordIndex, $framePath, $fieldId);
+
+        if ($nested !== null && $nested['nestedIndex'] !== null) {
+            return new RecordItem(RecordItem::NESTED, $framePath, $entryIndex, $nested['nestedIndex'], $nested['list']->singular);
+        }
+
+        if (preg_match('/^' . preg_quote($list->prefix . $entryIndex, '/') . 'Option(\d+)/', $fieldId, $option) === 1) {
+            return new RecordItem(RecordItem::OPTION, $framePath, $entryIndex, intval($option[1]), 'option');
+        }
+
+        $nestedList = $list->nestedListFor($entry);
+        $isChoice = $list->variantKey !== null && strval($entry[$list->variantKey] ?? '') === 'choice';
+
+        return new RecordItem(
+            RecordItem::ENTRY,
+            $framePath,
+            $entryIndex,
+            null,
+            $list->singular,
+            match (true) {
+                $nestedList !== null => RecordItem::NESTED,
+                $isChoice => RecordItem::OPTION,
+                default => null,
+            },
+            $nestedList?->singular ?? ($isChoice ? 'option' : null),
+        );
+    }
+
+    /**
      * Returns how many nested entries a frame command owns.
      *
      * @param int $recordIndex The record.
@@ -2461,7 +2545,7 @@ final class ProjectRecordDatabase
         }
 
         $commands = $this->getFrameCommands($recordIndex, $framePath) ?? [];
-        $frameList = $this->frameSubList($framePath);
+        $frameList = $this->getFrameSubList($framePath);
         $parent = $commands[$parentIndex] ?? null;
         $nestedList = is_array($parent) && $frameList !== null ? $frameList->nestedListFor($parent) : null;
 
@@ -2481,19 +2565,12 @@ final class ProjectRecordDatabase
     public function addFrameNestedItem(int $recordIndex, array $framePath, int $parentIndex, ?array $entry = null, ?int $at = null): ?int
     {
         if ($framePath === []) {
-            if ($at === null) {
-                return $this->addNestedSubItem($recordIndex, $parentIndex, $entry);
-            }
-
-            $blank = $entry ?? $this->nestedListForParent($recordIndex, $parentIndex)['list']->blank ?? [];
-            $this->insertNestedSubItem($recordIndex, $parentIndex, $at, $blank);
-
-            return $at;
+            return $this->addNestedSubItem($recordIndex, $parentIndex, $entry, $at);
         }
 
         $record = $this->getRecordByIndex($recordIndex);
         $commands = $this->getFrameCommands($recordIndex, $framePath);
-        $frameList = $this->frameSubList($framePath);
+        $frameList = $this->getFrameSubList($framePath);
         // Without a root sub-list (a summon's tracks), the frame's list
         // is the one the write goes through.
         $rootList = $this->schema->subList ?? $frameList;
@@ -2530,7 +2607,7 @@ final class ProjectRecordDatabase
 
         $record = $this->getRecordByIndex($recordIndex);
         $commands = $this->getFrameCommands($recordIndex, $framePath);
-        $frameList = $this->frameSubList($framePath);
+        $frameList = $this->getFrameSubList($framePath);
         $rootList = $this->schema->subList ?? $frameList;
         $parent = $commands[$parentIndex] ?? null;
         $nestedList = is_array($parent) && $frameList !== null ? $frameList->nestedListFor($parent) : null;
@@ -3042,7 +3119,7 @@ final class ProjectRecordDatabase
      * @param array<int, int|string> $framePath The frame.
      * @return RecordSubList|null The list.
      */
-    private function frameSubList(array $framePath): ?RecordSubList
+    public function getFrameSubList(array $framePath): ?RecordSubList
     {
         if ($framePath === []) {
             return $this->schema->subList;
@@ -3097,7 +3174,7 @@ final class ProjectRecordDatabase
 
         $record = $this->getRecordByIndex($recordIndex);
         $commands = $this->getFrameCommands($recordIndex, $framePath);
-        $subList = $this->frameSubList($framePath);
+        $subList = $this->getFrameSubList($framePath);
 
         if ($subList === null || ! $record instanceof ProjectRecord || $commands === null) {
             return [];
@@ -3177,7 +3254,7 @@ final class ProjectRecordDatabase
         // command's, however the frame was reached), not the schema's
         // sub-list prefix: an NPC's variants are "variantN…" at the root and
         // its script's commands "commandN…" inside.
-        $frameList = $this->frameSubList($framePath) ?? $subList;
+        $frameList = $this->getFrameSubList($framePath) ?? $subList;
 
         if ($frameList === null || $commands === null) {
             return;
@@ -3252,7 +3329,7 @@ final class ProjectRecordDatabase
         $commands = $this->getFrameCommands($recordIndex, $framePath);
         // A record whose lists are all frames (a summon's tracks and cues)
         // has no root sub-list; the frame's own list is the one to write.
-        $frameList = $this->frameSubList($framePath) ?? $subList;
+        $frameList = $this->getFrameSubList($framePath) ?? $subList;
 
         if ($frameList === null || ! $record instanceof ProjectRecord || $commands === null || ! $this->isEditable()) {
             return null;
@@ -3279,7 +3356,7 @@ final class ProjectRecordDatabase
         $subList = $this->schema->subList;
         $record = $this->getRecordByIndex($recordIndex);
         $commands = $this->getFrameCommands($recordIndex, $framePath);
-        $frameList = $this->frameSubList($framePath) ?? $subList;
+        $frameList = $this->getFrameSubList($framePath) ?? $subList;
 
         if ($frameList === null || ! $record instanceof ProjectRecord || $commands === null) {
             return;
@@ -3302,7 +3379,7 @@ final class ProjectRecordDatabase
         $subList = $this->schema->subList;
         $record = $this->getRecordByIndex($recordIndex);
         $commands = $this->getFrameCommands($recordIndex, $framePath);
-        $frameList = $this->frameSubList($framePath) ?? $subList;
+        $frameList = $this->getFrameSubList($framePath) ?? $subList;
 
         if ($frameList === null || ! $record instanceof ProjectRecord || $commands === null || ! isset($commands[$commandIndex])) {
             return null;
@@ -3315,14 +3392,15 @@ final class ProjectRecordDatabase
     }
 
     /**
-     * Adds an option to a choice command.
+     * Adds an option to a choice command, at the end or at a position.
      *
      * @param int $recordIndex The record.
      * @param array<int, int|string> $framePath The frame the choice sits in.
      * @param int $commandIndex The choice command.
+     * @param int|null $at Where to insert it, or null for the end.
      * @return int|null The new option's index.
      */
-    public function addChoiceOption(int $recordIndex, array $framePath, int $commandIndex): ?int
+    public function addChoiceOption(int $recordIndex, array $framePath, int $commandIndex, ?int $at = null): ?int
     {
         $subList = $this->schema->subList;
         $record = $this->getRecordByIndex($recordIndex);
@@ -3338,11 +3416,12 @@ final class ProjectRecordDatabase
         }
 
         $options = array_values((array) ($entry['options'] ?? []));
-        $options[] = ['text' => 'New option', 'then' => []];
+        $position = $at === null ? count($options) : max(0, min(count($options), $at));
+        array_splice($options, $position, 0, [['text' => 'New option', 'then' => []]]);
         $commands[$commandIndex]['options'] = $options;
         $this->writeFrameCommands($record, $subList, $framePath, $commands);
 
-        return count($options) - 1;
+        return $position;
     }
 
     /**

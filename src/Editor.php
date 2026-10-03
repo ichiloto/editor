@@ -24,11 +24,12 @@ use Ichiloto\Editor\Cutscenes\Editing\CutscenesWorkspace;
 use Ichiloto\Editor\Database\DatabaseCatalog;
 use Ichiloto\Editor\Database\DatabaseCategoryDefinition;
 use Ichiloto\Editor\Database\InventoryCatalog;
-use Ichiloto\Editor\Database\ParameterMapCodec;
-use Ichiloto\Editor\Database\ParameterMapSyntaxError;
-use Ichiloto\Editor\Database\RecordFieldCodec;
 use Ichiloto\Editor\Database\ProjectRecord;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
+use Ichiloto\Editor\Database\RecordAuthoring;
+use Ichiloto\Editor\Database\RecordChange;
+use Ichiloto\Editor\Database\RecordItem;
+use Ichiloto\Editor\Database\RecordRefusal;
 use Ichiloto\Editor\Database\SharedFileTransaction;
 use Ichiloto\Editor\Database\ConditionCodec;
 use Ichiloto\Editor\Database\QuestReferences;
@@ -6309,7 +6310,7 @@ final class Editor
                 fn(): ?object => $workspace->animationDatabase->removeAnimation($index),
                 static fn(object $entry) => $workspace->animationDatabase->insertAnimation($index, $entry),
             ),
-            default => $this->buildRecordDeletionCommand($pending['category'], $index, $label),
+            default => $this->buildRecordDeletionCommand($pending['category'], $index),
         };
 
         if (! $command instanceof Command) {
@@ -6327,26 +6328,27 @@ final class Editor
     }
 
     /**
-     * Builds the deletion command for a schema-driven category.
+     * Deletes an entry of a schema-driven category through the shared
+     * record rules ({@see RecordAuthoring::deleteRecord()}).
      *
      * @param string $categoryKey The category key.
      * @param int $index The entry index.
-     * @param string $label The entry label.
-     * @return Command|null
+     * @return Command|null The deletion's command, or null when it was refused.
      */
-    private function buildRecordDeletionCommand(string $categoryKey, int $index, string $label): ?Command
+    private function buildRecordDeletionCommand(string $categoryKey, int $index): ?Command
     {
         $database = $this->workspace?->getRecordDatabase($categoryKey);
 
-        if (! $database instanceof ProjectRecordDatabase || ! $database->isEditable()) {
+        if (! $database instanceof ProjectRecordDatabase) {
             return null;
         }
 
-        return $this->buildDatabaseDeletionCommand(
-            sprintf('Delete %s %s', $database->schema->entryNoun, $label),
-            static fn(): ?object => $database->removeRecord($index),
-            static fn(object $entry) => $database->insertRecord($index, $entry),
-        );
+        try {
+            return (new RecordAuthoring())->deleteRecord($database, $index)->command;
+        } catch (RecordRefusal) {
+            // describeUndeletableCategory() says why.
+            return null;
+        }
     }
 
     /**
@@ -8994,18 +8996,13 @@ final class Editor
             return;
         }
 
-        $index = $database->addRecord();
+        $change = $this->applyRecordChange(static fn(RecordAuthoring $authoring): RecordChange => $authoring->createRecord($database));
 
-        if ($index === null) {
-            $this->setStatus(
-                sprintf('%s entries cannot be created from the editor.', ucfirst($database->schema->entryNoun)),
-                StatusLevel::WARN,
-            );
-            $this->renderDatabaseArea();
+        if ($change === null) {
             return;
         }
 
-        $this->setSelectedRecordIndex($index);
+        $this->setSelectedRecordIndex((int) $change->index);
         $this->databaseSelectedSettingIndex = 0;
         $this->databaseFocus = self::DATABASE_FOCUS_SETTINGS;
         $this->setStatus(sprintf('Created a new %s.', $database->schema->entryNoun), StatusLevel::INFO);
@@ -9037,28 +9034,13 @@ final class Editor
         }
 
         $index = $this->getSelectedRecordIndex();
-        $copyIndex = $database->duplicateRecord($index);
+        $change = $this->applyRecordChange(static fn(RecordAuthoring $authoring): RecordChange => $authoring->duplicateRecord($database, $index));
 
-        if ($copyIndex === null) {
-            $this->setStatus(
-                sprintf('This %s cannot be duplicated.', $database->schema->entryNoun),
-                StatusLevel::WARN,
-            );
-            $this->renderDatabaseArea();
+        if ($change === null) {
             return;
         }
 
-        $copy = $database->getRecordByIndex($copyIndex);
-
-        if ($copy instanceof ProjectRecord) {
-            $this->recordCommand(new GenericCommand(
-                sprintf('%s duplicate', ucfirst($database->schema->entryNoun)),
-                static fn() => $database->insertRecord($copyIndex, $copy),
-                static fn() => $database->removeRecord($copyIndex),
-            ));
-        }
-
-        $this->setSelectedRecordIndex($copyIndex);
+        $this->setSelectedRecordIndex((int) $change->index);
         $this->setStatus(sprintf('Duplicated the %s.', $database->schema->entryNoun), StatusLevel::INFO);
         $this->renderDatabaseArea();
     }
@@ -9086,28 +9068,15 @@ final class Editor
             return;
         }
 
-        if (! $database->supportsDurableReorder()) {
-            // Refusing beats a reorder the file cannot keep: nothing moves,
-            // nothing dirties, and the author learns why.
-            $this->setStatus((string) $database->reorderRefusalReason(), StatusLevel::WARN);
-            $this->renderDatabaseArea();
-            return;
-        }
-
+        // A category whose file would not keep the order refuses, and says why.
         $from = $this->getSelectedRecordIndex();
-        $to = $from + $step;
+        $change = $this->applyRecordChange(static fn(RecordAuthoring $authoring): RecordChange => $authoring->moveRecord($database, $from, $step));
 
-        if (! $database->moveRecord($from, $to)) {
+        if ($change?->command === null) {
             return;
         }
 
-        $this->recordCommand(new GenericCommand(
-            sprintf('%s move', ucfirst($database->schema->entryNoun)),
-            static fn() => $database->moveRecord($from, $to),
-            static fn() => $database->moveRecord($to, $from),
-        ));
-
-        $this->setSelectedRecordIndex($to);
+        $this->setSelectedRecordIndex((int) $change->index);
         $this->setStatus(sprintf(
             'Moved the %s %s.',
             $database->schema->entryNoun,
@@ -9135,23 +9104,20 @@ final class Editor
         $recordIndex = $this->getSelectedRecordIndex();
         $framePath = $this->databaseCommandFramePath;
         $selectedId = (string) ($this->getDatabaseSettingsFields()[$this->databaseSelectedSettingIndex]['field'] ?? '');
-        $prefix = preg_quote($subList->prefix, '/');
+        // The frame's own list names its rows and the commands added to it.
+        $list = $database->getFrameSubList($framePath) ?? $subList;
+        $item = $database->locateItem($recordIndex, $framePath, $selectedId);
 
-        if (preg_match('/^' . $prefix . '(\\d+)Option(\\d+)/', $selectedId, $matches) === 1) {
-            $commandIndex = intval($matches[1]);
-            $optionIndex = $database->addChoiceOption($recordIndex, $framePath, $commandIndex);
+        if ($item?->kind === RecordItem::OPTION) {
+            $commandIndex = $item->entryIndex;
+            $change = $this->applyRecordChange(static fn(RecordAuthoring $authoring): RecordChange => $authoring->addOption($database, $recordIndex, $framePath, $commandIndex));
 
-            if ($optionIndex === null) {
+            if ($change?->command === null) {
                 return;
             }
 
-            $option = ['text' => 'New option', 'then' => []];
-            $this->recordCommand(new GenericCommand(
-                'Option add',
-                static fn() => $database->insertChoiceOption($recordIndex, $framePath, $commandIndex, $optionIndex, $option),
-                static fn() => $database->removeChoiceOption($recordIndex, $framePath, $commandIndex, $optionIndex),
-            ));
-            $this->selectDatabaseFieldById(sprintf('%s%dOption%dText', $subList->prefix, $commandIndex, $optionIndex));
+            $optionIndex = (int) $change->index;
+            $this->selectDatabaseFieldById(sprintf('%s%dOption%dText', $list->prefix, $commandIndex, $optionIndex));
             $this->setStatus(sprintf('Added option %d.', $optionIndex + 1), StatusLevel::INFO);
             $this->renderDatabaseArea();
             $this->beginDatabaseEdit();
@@ -9159,21 +9125,16 @@ final class Editor
             return;
         }
 
-        $afterIndex = preg_match('/^' . $prefix . '(\\d+)/', $selectedId, $matches) === 1 ? intval($matches[1]) : null;
-        $commandIndex = $database->addFrameCommand($recordIndex, $framePath, $afterIndex);
+        $afterIndex = $item?->entryIndex;
+        $change = $this->applyRecordChange(static fn(RecordAuthoring $authoring): RecordChange => $authoring->addEntry($database, $recordIndex, $framePath, $afterIndex));
 
-        if ($commandIndex === null) {
+        if ($change?->command === null) {
             return;
         }
 
-        $blank = $subList->blank;
-        $this->recordCommand(new GenericCommand(
-            sprintf('%s add', ucfirst($subList->singular)),
-            static fn() => $database->insertFrameCommand($recordIndex, $framePath, $commandIndex, $blank),
-            static fn() => $database->removeFrameCommand($recordIndex, $framePath, $commandIndex),
-        ));
-        $this->selectDatabaseFieldById(sprintf('%s%dType', $subList->prefix, $commandIndex));
-        $this->setStatus(sprintf('Added %s %d.', $subList->singular, $commandIndex + 1), StatusLevel::INFO);
+        $commandIndex = (int) $change->index;
+        $this->selectDatabaseFieldById(sprintf('%s%dType', $list->prefix, $commandIndex));
+        $this->setStatus(sprintf('Added %s %d.', $list->singular, $commandIndex + 1), StatusLevel::INFO);
         $this->renderDatabaseArea();
     }
 
@@ -9190,24 +9151,19 @@ final class Editor
         $recordIndex = $this->getSelectedRecordIndex();
         $framePath = $this->databaseCommandFramePath;
         $selectedId = (string) ($this->getDatabaseSettingsFields()[$this->databaseSelectedSettingIndex]['field'] ?? '');
-        $prefix = preg_quote($subList->prefix, '/');
+        $list = $database->getFrameSubList($framePath) ?? $subList;
+        $item = $database->locateItem($recordIndex, $framePath, $selectedId);
 
-        if (preg_match('/^' . $prefix . '(\\d+)Option(\\d+)/', $selectedId, $matches) === 1) {
-            $commandIndex = intval($matches[1]);
-            $optionIndex = intval($matches[2]);
-            $removed = $database->removeChoiceOption($recordIndex, $framePath, $commandIndex, $optionIndex);
+        if ($item?->kind === RecordItem::OPTION) {
+            $optionIndex = (int) $item->childIndex;
+            $change = $this->applyRecordChange(static fn(RecordAuthoring $authoring): RecordChange => $authoring->removeOption($database, $recordIndex, $framePath, $item->entryIndex, $optionIndex));
 
-            if ($removed === null) {
+            if ($change?->command === null) {
                 return;
             }
 
-            $armCount = count((array) ($removed['then'] ?? []));
+            $armCount = count((array) ($change->removed['then'] ?? []));
             $this->clampDatabaseSettingSelection();
-            $this->recordCommand(new GenericCommand(
-                'Option remove',
-                static fn() => $database->removeChoiceOption($recordIndex, $framePath, $commandIndex, $optionIndex),
-                static fn() => $database->insertChoiceOption($recordIndex, $framePath, $commandIndex, $optionIndex, $removed),
-            ));
             $this->setStatus(
                 $armCount > 0
                     ? sprintf('Removed option %d and its %d commands.', $optionIndex + 1, $armCount)
@@ -9219,23 +9175,21 @@ final class Editor
             return;
         }
 
-        $commands = $database->getFrameCommands($recordIndex, $framePath) ?? [];
-        $commandIndex = preg_match('/^' . $prefix . '(\\d+)/', $selectedId, $matches) === 1
-            ? intval($matches[1])
-            : count($commands) - 1;
-        $removed = $database->removeFrameCommand($recordIndex, $framePath, $commandIndex);
+        // With the cursor on no command, the last one goes.
+        $commandIndex = $item?->entryIndex ?? count($database->getFrameCommands($recordIndex, $framePath) ?? []) - 1;
 
-        if ($removed === null) {
+        if ($commandIndex < 0) {
+            return;
+        }
+
+        $change = $this->applyRecordChange(static fn(RecordAuthoring $authoring): RecordChange => $authoring->removeEntry($database, $recordIndex, $framePath, $commandIndex));
+
+        if ($change?->command === null) {
             return;
         }
 
         $this->clampDatabaseSettingSelection();
-        $this->recordCommand(new GenericCommand(
-            sprintf('%s remove', ucfirst($subList->singular)),
-            static fn() => $database->removeFrameCommand($recordIndex, $framePath, $commandIndex),
-            static fn() => $database->insertFrameCommand($recordIndex, $framePath, $commandIndex, $removed),
-        ));
-        $this->setStatus(sprintf('Removed %s %d.', $subList->singular, $commandIndex + 1), StatusLevel::INFO);
+        $this->setStatus(sprintf('Removed %s %d.', $list->singular, $commandIndex + 1), StatusLevel::INFO);
         $this->renderDatabaseArea();
     }
 
@@ -9383,20 +9337,13 @@ final class Editor
         }
 
         $recordIndex = $this->getSelectedRecordIndex();
-        $entryIndex = $database->addSubItem($recordIndex);
+        $change = $this->applyRecordChange(static fn(RecordAuthoring $authoring): RecordChange => $authoring->addEntry($database, $recordIndex, []));
 
-        if ($entryIndex === null) {
+        if ($change?->command === null) {
             return;
         }
 
-        $entry = $database->getRecordByIndex($recordIndex)?->getSubList($subList->key)[$entryIndex] ?? [];
-
-        $this->recordCommand(new GenericCommand(
-            sprintf('%s add', ucfirst($subList->singular)),
-            static fn() => $database->insertSubItem($recordIndex, $entryIndex, $entry),
-            static fn() => $database->removeSubItem($recordIndex, $entryIndex),
-        ));
-
+        $entryIndex = (int) $change->index;
         $this->setStatus(sprintf('Added %s %d.', $subList->singular, $entryIndex + 1), StatusLevel::INFO);
         $this->renderDatabaseArea();
         if ($database->schema->key === 'skits') {
@@ -9450,17 +9397,11 @@ final class Editor
             return;
         }
 
-        $removed = $database->removeSubItem($recordIndex, $entryIndex);
+        $change = $this->applyRecordChange(static fn(RecordAuthoring $authoring): RecordChange => $authoring->removeEntry($database, $recordIndex, [], $entryIndex));
 
-        if ($removed === null) {
+        if ($change?->command === null) {
             return;
         }
-
-        $this->recordCommand(new GenericCommand(
-            sprintf('%s remove', ucfirst($subList->singular)),
-            static fn() => $database->removeSubItem($recordIndex, $entryIndex),
-            static fn() => $database->insertSubItem($recordIndex, $entryIndex, $removed),
-        ));
 
         $this->databaseSelectedSettingIndex = 0;
         $this->setStatus(sprintf('Removed %s %d.', $subList->singular, $entryIndex + 1), StatusLevel::INFO);
@@ -9500,19 +9441,13 @@ final class Editor
         $recordIndex = $this->getSelectedRecordIndex();
         $framePath = $this->databaseCommandFramePath;
         $parentIndex = $context['parentIndex'];
-        $nestedIndex = $database->addFrameNestedItem($recordIndex, $framePath, $parentIndex);
+        $change = $this->applyRecordChange(static fn(RecordAuthoring $authoring): RecordChange => $authoring->addNestedItem($database, $recordIndex, $framePath, $parentIndex));
 
-        if ($nestedIndex === null) {
+        if ($change?->command === null) {
             return;
         }
 
-        $entry = $context['list']->blank;
-
-        $this->recordCommand(new GenericCommand(
-            sprintf('%s add', ucfirst($context['list']->singular)),
-            static fn() => $database->addFrameNestedItem($recordIndex, $framePath, $parentIndex, $entry, $nestedIndex),
-            static fn() => $database->removeFrameNestedItem($recordIndex, $framePath, $parentIndex, $nestedIndex),
-        ));
+        $nestedIndex = (int) $change->index;
         $this->setStatus(
             sprintf('Added %s %d.', $context['list']->singular, $nestedIndex + 1),
             StatusLevel::INFO,
@@ -9541,17 +9476,12 @@ final class Editor
             return;
         }
 
-        $removed = $database->removeFrameNestedItem($recordIndex, $framePath, $parentIndex, $nestedIndex);
+        $change = $this->applyRecordChange(static fn(RecordAuthoring $authoring): RecordChange => $authoring->removeNestedItem($database, $recordIndex, $framePath, $parentIndex, $nestedIndex));
 
-        if ($removed === null) {
+        if ($change?->command === null) {
             return;
         }
 
-        $this->recordCommand(new GenericCommand(
-            sprintf('%s remove', ucfirst($context['list']->singular)),
-            static fn() => $database->removeFrameNestedItem($recordIndex, $framePath, $parentIndex, $nestedIndex),
-            static fn() => $database->addFrameNestedItem($recordIndex, $framePath, $parentIndex, $removed, $nestedIndex),
-        ));
         $this->databaseSelectedSettingIndex = min(
             $this->databaseSelectedSettingIndex,
             max(0, count($this->getDatabaseSettingsFields()) - 1),
@@ -9561,6 +9491,31 @@ final class Editor
             StatusLevel::INFO,
         );
         $this->renderDatabaseArea();
+    }
+
+    /**
+     * Makes one record change through the shared record rules and records
+     * it, reporting a refusal on the status line instead.
+     *
+     * @param Closure(RecordAuthoring): RecordChange $change The change.
+     * @return RecordChange|null What it did, or null when it was refused.
+     */
+    private function applyRecordChange(Closure $change): ?RecordChange
+    {
+        try {
+            $applied = $change(new RecordAuthoring());
+        } catch (RecordRefusal $refusal) {
+            $this->setStatus($refusal->getMessage(), StatusLevel::WARN);
+            $this->renderDatabaseArea();
+
+            return null;
+        }
+
+        if ($applied->command !== null) {
+            $this->recordCommand($applied->command);
+        }
+
+        return $applied;
     }
 
     /**
@@ -10401,48 +10356,6 @@ final class Editor
         }
 
         return [...$rows, ...$this->actorOptimizeFields($actor)];
-    }
-
-    /**
-     * Reports a field value the editor will not guess at, leaving the record
-     * untouched.
-     *
-     * A project-owned parameter line has an explicit grammar, and repairing
-     * a malformed one silently is how an author loses a value without being
-     * told. The status line says what is wrong with it instead.
-     *
-     * @param string $field The field being edited.
-     * @param string $rawValue The value typed.
-     * @return bool True when the value was rejected.
-     */
-    private function isDatabaseFieldRejected(string $field, string $rawValue): bool
-    {
-        if (! $this->workspace instanceof ProjectWorkspace) {
-            return false;
-        }
-
-        $database = $this->getSelectedRecordDatabase();
-        $schema = $database?->schema;
-
-        if ($schema === null) {
-            return false;
-        }
-
-        foreach ($schema->fields as $declared) {
-            if ($declared->key !== $field || $declared->codec !== RecordFieldCodec::KEY_VALUES) {
-                continue;
-            }
-
-            try {
-                ParameterMapCodec::decode($rawValue);
-            } catch (ParameterMapSyntaxError $error) {
-                $this->setStatus($error->getMessage(), StatusLevel::ERROR);
-
-                return true;
-            }
-        }
-
-        return false;
     }
 
     /**
@@ -12440,6 +12353,21 @@ final class Editor
         }
 
         $fieldId = (string) ($field['field'] ?? '');
+        $recordDatabase = $this->getSelectedRecordDatabase();
+
+        if ($recordDatabase instanceof ProjectRecordDatabase) {
+            // The shared record rules apply the edit and say how to undo it:
+            // the record's whole payload, pinned to the record itself, so an
+            // undo after the selection moved still edits the right one.
+            $change = $this->applyRecordFieldValue($recordDatabase, $fieldId, $rawValue, (string) ($field['label'] ?? 'Database field'));
+
+            if ($change?->command !== null) {
+                $this->recordCommand($change->command);
+            }
+
+            return;
+        }
+
         $control = $this->getDatabaseFieldControl($field);
         // Option values keep their authored case (the actor class picker
         // writes `Vanguard`); matching them is case-insensitive instead.
@@ -12460,10 +12388,9 @@ final class Editor
             'records' => $this->databaseSelectedRecordIndexes,
         ];
 
-        $record = $this->getSelectedRecordDatabase()?->getRecordByIndex($this->getSelectedRecordIndex());
-        if ($this->isSystemDatabaseSelected() && $fieldId === ProjectConfig::FIELD_ZOOM) {
-            $record = $this->workspace?->config?->getRecord(ProjectConfig::FIELD_ZOOM);
-        }
+        $record = $this->isSystemDatabaseSelected() && $fieldId === ProjectConfig::FIELD_ZOOM
+            ? $this->workspace?->config?->getRecord(ProjectConfig::FIELD_ZOOM)
+            : null;
         $before = $record?->toArray();
         $actor = $this->isActorsDatabaseSelected() ? $this->getSelectedActor() : null;
         $actorBefore = $actor?->getData();
@@ -12511,6 +12438,37 @@ final class Editor
             fn() => $this->applyDatabaseFieldValueAt($identity, $fieldId, $rawValue),
             fn() => $this->applyDatabaseFieldValueAt($identity, $fieldId, $oldRawValue),
         ));
+    }
+
+    /**
+     * Applies one row of a schema-driven record through the shared record
+     * rules ({@see RecordAuthoring::applyField()}), at the selected record
+     * and open frame. A value the field cannot take - a parameter line it
+     * cannot read, a coordinate pair that is not two numbers - is reported
+     * on the status line, and the record is left as it was.
+     *
+     * @param ProjectRecordDatabase $database The category.
+     * @param string $fieldId The row's field id.
+     * @param string $rawValue The raw edited value.
+     * @param string $label The row's label, which names the undo step.
+     * @return RecordChange|null What it did, or null when it was refused.
+     */
+    private function applyRecordFieldValue(ProjectRecordDatabase $database, string $fieldId, string $rawValue, string $label): ?RecordChange
+    {
+        try {
+            return (new RecordAuthoring())->applyField(
+                $database,
+                $this->getSelectedRecordIndex(),
+                $this->databaseCommandFramePath,
+                $fieldId,
+                $rawValue,
+                $label,
+            );
+        } catch (RecordRefusal $refusal) {
+            $this->setStatus($refusal->getMessage(), StatusLevel::ERROR);
+
+            return null;
+        }
     }
 
     /**
@@ -12622,10 +12580,6 @@ final class Editor
             return;
         }
 
-        if ($this->isDatabaseFieldRejected($field, $rawValue)) {
-            return;
-        }
-
         if ($this->isActorsDatabaseSelected()) {
             $this->workspace->actorDatabase->setField(
                 $this->databaseSelectedActorIndex,
@@ -12684,19 +12638,8 @@ final class Editor
 
         if ($recordDatabase instanceof ProjectRecordDatabase) {
             // The schema owns coercion, so no per-category intval/trim rules
-            // are needed here.
-            if ($recordDatabase->hasCommandFrames()) {
-                $recordDatabase->setFrameField(
-                    $this->getSelectedRecordIndex(),
-                    $this->databaseCommandFramePath,
-                    $field,
-                    $rawValue,
-                );
-
-                return;
-            }
-
-            $recordDatabase->setField($this->getSelectedRecordIndex(), $field, $rawValue);
+            // are needed here. This path keeps no undo step.
+            $this->applyRecordFieldValue($recordDatabase, $field, $rawValue, $field);
             return;
         }
 
