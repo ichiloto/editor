@@ -207,8 +207,12 @@ in the animation database's `roles`. Authoring requirements:
 - The animation database offers `roles` from the Engine's supported role
   list, refuses a role bound twice before saving, and reports a weapon type
   the project's weapons use that no animation is bound to.
-- Until then, these fields are kept as written: the animation database edits
-  only its own fields and keeps `roles` and effect bindings untouched.
+
+Status, 2026-10: the Editor side of both is in place. Effect timeline
+authoring edits `facing`, `flipX` and `flipY` (above). The animation database
+shows one on/off row per supported role, naming the animation that holds it,
+and writes only `roles` over the authored entry; validation reports an
+unsupported role, a role bound twice and a reached role with no animation.
 
 This scope does not replace the map source-integrity work or authorize a new GUI
 implementation. Keep runtime availability and TUI authoring completion separate
