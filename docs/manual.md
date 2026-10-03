@@ -1100,6 +1100,27 @@ file when you clear them, so a state with no duration lasts until it is cured
 rather than being written as `0`. `Tick Formula` is the same formula language
 skill effects use, with `$target` bound to the afflicted battler.
 
+### Animations
+
+Below an animation's frame and cue rows are its **Roles**: which battle
+actions play it when they name no animation of their own. There is one row
+per role the Engine supports, switched on or off with `Left` / `Right`:
+
+- `attack-sword`, `attack-staff`, `attack-flail` and the other weapon types:
+  a party member's basic attack with that weapon equipped;
+- `attack-unarmed`: a party member's basic attack with no weapon;
+- `attack`: enemy and other basic attacks;
+- `skill` and `restorative`: skills and restorative magic with no animation
+  of their own.
+
+A role plays only when exactly one animation holds it, so a role row held by
+another animation names it, and switching it on here is refused until it is
+switched off there. Changes are undoable and saved with the animation; every
+other field of the entry is kept as written. Validation reports a role the
+Engine does not support (the runtime then skips the whole animation), a role
+held twice, and a role the project's battles reach with no animation: the
+neutral attack, the unarmed attack, and each weapon type its weapons use.
+
 ### Troops
 
 Encounter groups. Each troop has a `Name`, an optional `Escape Policy`, and a

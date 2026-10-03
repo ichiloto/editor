@@ -8,6 +8,7 @@ use Ichiloto\Editor\Database\PhpDataFile;
 use Ichiloto\Editor\History\TracksPersistedState;
 use Ichiloto\Editor\IO\AtomicFile;
 
+use Ichiloto\Engine\Animations\ActionAnimationResolver;
 use Ichiloto\Engine\Animations\Animation;
 use Ichiloto\Engine\Animations\AnimationCue;
 use Ichiloto\Engine\Animations\AnimationTargetPosition;
@@ -30,6 +31,13 @@ final class ProjectAnimationDatabase
      * @var array<int, array<string, mixed>> Each loaded animation's authored entry, keyed by object id.
      */
     private array $authoredEntries = [];
+
+    /**
+     * @var array<int, list<string>> Roles changed since loading, keyed by object id.
+     * The Engine's Animation keeps its roles fixed, so edits live here and are
+     * written over the authored entry's `roles` on save.
+     */
+    private array $editedRoles = [];
 
     /** The file as read, so its header is kept and an unsafe file is refused. */
     private ?PhpDataFile $file = null;
@@ -75,7 +83,10 @@ final class ProjectAnimationDatabase
         }
 
         $entries = array_values(array_filter($payload, 'is_array'));
-        $animations = array_map(static fn(array $entry): Animation => Animation::fromArray($entry), $entries);
+        // Roles are the database's to read and edit (getRoles, setRole); the
+        // Engine object is built without them, so a role the Engine refuses is
+        // reported by validation instead of keeping the database from loading.
+        $animations = array_map(static fn(array $entry): Animation => Animation::fromArray(array_diff_key($entry, ['roles' => true])), $entries);
         $database = new self($path, $animations, isDirty: true);
         $database->file = $file;
 
@@ -142,8 +153,101 @@ final class ProjectAnimationDatabase
                 }
             }
 
+            // Roles the editor changed replace the authored ones; untouched
+            // roles stay as written.
+            $roles = $this->editedRoles[spl_object_id($animation)] ?? null;
+
+            if ($roles !== null) {
+                unset($entry['roles']);
+
+                if ($roles !== []) {
+                    $entry['roles'] = $roles;
+                }
+            }
+
             return $entry;
         }, $this->getAnimations());
+    }
+
+    /**
+     * Returns the roles an animation is bound to: which battle actions play
+     * it when they name no animation of their own.
+     *
+     * @param int $index The animation index.
+     * @return list<string>
+     */
+    public function getRoles(int $index): array
+    {
+        $animation = $this->getAnimationByIndex($index);
+
+        if (! $animation instanceof Animation) {
+            return [];
+        }
+
+        $id = spl_object_id($animation);
+        $authored = $this->authoredEntries[$id]['roles'] ?? [];
+
+        return $this->editedRoles[$id] ?? array_values(array_filter((array) $authored, is_string(...)));
+    }
+
+    /**
+     * Returns the index of the animation a role is bound to, if any.
+     *
+     * @param string $role The role.
+     * @return int|null
+     */
+    public function findRoleOwner(string $role): ?int
+    {
+        foreach (array_keys($this->getAnimations()) as $index) {
+            if (in_array($role, $this->getRoles($index), true)) {
+                return $index;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Binds or unbinds a role on an animation.
+     *
+     * Refused, changing nothing, for a role the Engine does not support or
+     * one already bound to another animation: the runtime plays a role only
+     * when exactly one animation holds it.
+     *
+     * @param int $index The animation index.
+     * @param string $role The role.
+     * @param bool $isBound Whether the animation should hold the role.
+     * @return string|null Why the change was refused, or null when it was made.
+     */
+    public function setRole(int $index, string $role, bool $isBound): ?string
+    {
+        $animation = $this->getAnimationByIndex($index);
+
+        if (! $animation instanceof Animation) {
+            return 'No animation is selected.';
+        }
+
+        if (! in_array($role, ActionAnimationResolver::getSupportedRoles(), true)) {
+            return sprintf('The Engine has no animation role "%s".', $role);
+        }
+
+        $roles = $this->getRoles($index);
+        $owner = $this->findRoleOwner($role);
+
+        if ($isBound && $owner !== null && $owner !== $index) {
+            return sprintf('Role %s is already bound to %s; unbind it there first.', $role, $this->getAnimationByIndex($owner)?->name ?? 'another animation');
+        }
+
+        $next = $isBound
+            ? array_values(array_unique([...$roles, $role]))
+            : array_values(array_diff($roles, [$role]));
+
+        if ($next !== $roles) {
+            $this->editedRoles[spl_object_id($animation)] = $next;
+            $this->touchState();
+        }
+
+        return null;
     }
 
     /**
@@ -340,6 +444,8 @@ final class ProjectAnimationDatabase
             $this->authoredEntries[spl_object_id($animation)] = $entries[$index];
         }
 
+        // The written entries now hold every edited role.
+        $this->editedRoles = [];
         $this->captureBaseline();
     }
 

@@ -86,6 +86,7 @@ use Ichiloto\Editor\UI\SettingsPaneLayout;
 use Ichiloto\Editor\UI\TextFieldEditor;
 use Ichiloto\Editor\UI\TextFieldKeyResult;
 use Ichiloto\Editor\Validation\MapValidator;
+use Ichiloto\Engine\Animations\ActionAnimationResolver;
 use Ichiloto\Engine\Animations\AnimationTargetPosition;
 use Ichiloto\Engine\Entities\Enumerations\ItemScopeNumber;
 use Ichiloto\Engine\Entities\Enumerations\ItemScopeSide;
@@ -10656,7 +10657,46 @@ final class Editor
                 'control' => new InputControl(InputControlType::INTEGER, (string) ($cue?->flashDurationFrames ?? 0)),
                 'field' => 'flashDurationFrames',
             ],
+            ...$this->getAnimationRoleFields(),
         ];
+    }
+
+    /**
+     * Returns the selected animation's role rows: which battle actions play it
+     * when they name no animation of their own. One row per role the Engine
+     * supports, switched on or off; a role bound elsewhere names its holder.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private function getAnimationRoleFields(): array
+    {
+        $database = $this->workspace?->animationDatabase;
+
+        if ($database === null || ! $this->getSelectedAnimation() instanceof Animation) {
+            return [];
+        }
+
+        $roles = $database->getRoles($this->databaseSelectedAnimationIndex);
+        $fields = [[
+            'label' => 'Roles',
+            'value' => $roles === [] ? '(none)' : implode(', ', $roles),
+            'editable' => false,
+            'field' => '',
+        ]];
+
+        foreach (ActionAnimationResolver::getSupportedRoles() as $role) {
+            $owner = $database->findRoleOwner($role);
+            $holder = $owner === null || $owner === $this->databaseSelectedAnimationIndex
+                ? '' : sprintf(' (on %s)', $database->getAnimationByIndex($owner)?->name ?? '?');
+            $fields[] = [
+                'label' => '  ' . $role . $holder,
+                'value' => in_array($role, $roles, true) ? 'Yes' : 'No',
+                'options' => ['no', 'yes'],
+                'field' => 'role:' . $role,
+            ];
+        }
+
+        return $fields;
     }
 
 
@@ -12937,6 +12977,15 @@ final class Editor
             return;
         }
 
+        // A role row shows Yes/No and sends yes/no. Choosing what it already
+        // shows, or a refused change, changes nothing and leaves no undo step.
+        if (str_starts_with($fieldId, 'role:')
+            && (strcasecmp($oldRawValue, $rawValue) === 0
+                || in_array(substr($fieldId, 5), $this->workspace?->animationDatabase->getRoles($this->databaseSelectedAnimationIndex) ?? [], true)
+                    !== (strtolower(trim($rawValue)) === 'yes'))) {
+            return;
+        }
+
         $this->recordCommand(new GenericCommand(
             sprintf('%s edit', $field['label'] ?? 'Database field'),
             fn() => $this->applyDatabaseFieldValueAt($identity, $fieldId, $rawValue),
@@ -13140,7 +13189,7 @@ final class Editor
             'brushSymbol' => $this->databaseSelectedPaintSymbol = $this->normalizeDatabaseSymbol($rawValue),
             'brushColor' => $this->databaseSelectedPaintColor = $this->normalizeDatabaseColor($rawValue),
             'frameSound', 'flashColor', 'flashDurationFrames' => $this->applyDatabaseCueFieldValue($field, $rawValue),
-            default => null,
+            default => str_starts_with($field, 'role:') ? $this->applyAnimationRoleValue(substr($field, 5), $rawValue) : null,
         };
 
         $animation = $this->getSelectedAnimation();
@@ -13151,6 +13200,27 @@ final class Editor
         }
 
         $this->centerDatabasePreviewCursor();
+    }
+
+    /**
+     * Binds or unbinds a role on the selected animation, saying why when the
+     * database refuses.
+     *
+     * @param string $role The role.
+     * @param string $rawValue `yes` to bind, anything else to unbind.
+     * @return void
+     */
+    private function applyAnimationRoleValue(string $role, string $rawValue): void
+    {
+        $refusal = $this->workspace?->animationDatabase->setRole(
+            $this->databaseSelectedAnimationIndex,
+            $role,
+            strtolower(trim($rawValue)) === 'yes',
+        );
+
+        if ($refusal !== null) {
+            $this->setStatus($refusal, StatusLevel::WARN);
+        }
     }
 
     /**
