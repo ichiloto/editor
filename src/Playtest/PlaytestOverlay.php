@@ -22,8 +22,9 @@ use Throwable;
  * to the real project, and exactly two entries are replaced by real ones —
  *
  *  - `assets/Data/system.php`, rewritten with the playtest spawn; and
- *  - `.data/`, a fresh empty directory, so a playtest can never overwrite the
- *    author's save slots.
+ *  - `.data/`, a fresh directory holding only a copy of the player settings,
+ *    so a playtest honours the author's volume and mute but can never
+ *    overwrite their save slots.
  *
  * Because maps, graphics, and every other asset are symlinks, the playtest
  * runs against the author's live files — a map saved in the editor is the map
@@ -31,6 +32,9 @@ use Throwable;
  */
 final class PlaytestOverlay
 {
+    /** The player's own settings in the data directory, as the Engine's PlayerSettings names them. */
+    private const string PLAYER_SETTINGS = 'player-settings.json';
+
     /**
      * @param string $root The overlay project root.
      * @param string $mapId The map the playtest starts on.
@@ -85,6 +89,7 @@ final class PlaytestOverlay
             self::mirrorDirectory($dataSource, $dataTarget, ['system.php']);
 
             mkdir($root . DIRECTORY_SEPARATOR . '.data', 0777, true);
+            self::copyPlayerSettings($projectRoot, $root);
 
             self::writeSystemOverride(
                 $dataSource . DIRECTORY_SEPARATOR . 'system.php',
@@ -264,6 +269,21 @@ final class PlaytestOverlay
     public function destroy(): void
     {
         self::removeTree($this->root);
+    }
+
+    /**
+     * Copies the author's player settings into the overlay's isolated data
+     * directory: volume and mute, controls and other preferences belong to
+     * the player, so a playtest honours them, while the copy keeps any
+     * change made during the playtest out of the project. Saves stay behind.
+     */
+    private static function copyPlayerSettings(string $projectRoot, string $root): void
+    {
+        $source = $projectRoot . DIRECTORY_SEPARATOR . '.data' . DIRECTORY_SEPARATOR . self::PLAYER_SETTINGS;
+
+        if (is_file($source) && ! copy($source, $root . DIRECTORY_SEPARATOR . '.data' . DIRECTORY_SEPARATOR . self::PLAYER_SETTINGS)) {
+            throw new RuntimeException("Unable to copy the player settings into the playtest from {$source}.");
+        }
     }
 
     /**

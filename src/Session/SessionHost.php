@@ -44,6 +44,8 @@ final class SessionHost
             }
             $this->write($this->handle($line));
         }
+        // The editor has gone: nothing it started may outlive it.
+        $this->session?->close();
     }
 
     /**
@@ -304,7 +306,9 @@ final class SessionHost
             'history.undo' => $session->undo(),
             'history.redo' => $session->redo(),
             'project.dirty' => ['dirty' => $session->hasUnsavedChanges()],
-            default => throw new InvalidRequest(sprintf('Unknown method "%s".', $method)),
+            'playtest.start' => $session->startPlaytest(self::requireString($params, 'map'), self::requireInt($params, 'x'), self::requireInt($params, 'y')),
+            'playtest.status' => $session->describePlaytest(),
+            'playtest.stop' => $session->stopPlaytest(),            default => throw new InvalidRequest(sprintf('Unknown method "%s".', $method)),
         };
     }
 

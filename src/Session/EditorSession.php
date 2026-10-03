@@ -30,6 +30,9 @@ use Ichiloto\Editor\Inspector\InspectorListEdit;
 use Ichiloto\Editor\Inspector\InspectorRefusal;
 use Ichiloto\Editor\Inspector\MapInspector;
 use Ichiloto\Editor\MapSourceRefusal;
+use Ichiloto\Editor\Playtest\PlaytestLauncher;
+use Ichiloto\Editor\Playtest\PlaytestOverlay;
+use Ichiloto\Editor\Playtest\PlaytestRun;
 use Ichiloto\Editor\Maps\LayerEditor;
 use Ichiloto\Editor\Maps\MapLayers;
 use Ichiloto\Editor\Maps\MapReferences;
@@ -56,8 +59,13 @@ use RuntimeException;
  */
 final class EditorSession
 {
+    /** The renderer a playtest started from a graphical editor uses: it owns no terminal to hand over. */
+    public const string PLAYTEST_RENDERER = 'gpui';
+
     private ProjectWorkspace $workspace;
 
+    /** The playtest running in the background, or the last one, to report how it ended. */
+    private ?PlaytestRun $playtest = null;
     private function __construct(
         ProjectWorkspace $workspace,
         private readonly CommandHistory $history,
@@ -1340,6 +1348,85 @@ final class EditorSession
         }
 
         return ['saved' => $saved, 'warnings' => array_values($warnings), 'backupFailures' => array_values($failures)];
+    }
+
+    /**
+     * Plays the game from a map and cell in the background, in its own
+     * graphical window, as the terminal editor's playtest does: from a
+     * temporary overlay of the project that writes nothing into it, with
+     * the author's player settings (volume and mute included) and no saves.
+     * The game reads the map from disk, so a map with unsaved changes is
+     * refused until it is saved.
+     *
+     * @return array<string, mixed> The playtest, as {@see describePlaytest()}.
+     * @throws SessionRefusal When the map is unknown or unsaved, a playtest is running, or it cannot start.
+     */
+    public function startPlaytest(string $mapId, int $x, int $y): array
+    {
+        $map = $this->requireMap($mapId);
+        if ($this->playtest?->isRunning() === true) {
+            throw new SessionRefusal('A playtest is already running; stop it or close its window first.');
+        }
+        if ($map->isDirty()) {
+            throw new SessionRefusal(sprintf('Save %s before playtesting it; the game reads the map on disk.', $mapId));
+        }
+        if ($x < 0 || $y < 0 || $x >= $map->getWidth() || $y >= $map->getHeight()) {
+            throw new SessionRefusal(sprintf('%d, %d is outside %s.', $x, $y, $mapId));
+        }
+        $overlay = null;
+        try {
+            $overlay = PlaytestOverlay::create($this->workspace->projectRoot, $mapId, $x, $y);
+            $launcher = PlaytestLauncher::discover(projectRoot: $this->workspace->projectRoot);
+            $log = sys_get_temp_dir() . DIRECTORY_SEPARATOR . uniqid('ichiloto-playtest-', true) . '.log';
+            $this->playtest = $launcher->start($overlay, self::PLAYTEST_RENDERER, $log);
+        } catch (RuntimeException $error) {
+            $overlay?->destroy();
+            throw new SessionRefusal(sprintf('The playtest could not start: %s', $error->getMessage()), previous: $error);
+        }
+
+        return $this->describePlaytest();
+    }
+
+    /**
+     * Whether a playtest is running, where it started, and how the last one
+     * ended: its exit code and, when it failed, the end of its output.
+     *
+     * @return array{running: bool, map: ?string, x: ?int, y: ?int, stopped: bool, exitCode: ?int, log: ?string}
+     */
+    public function describePlaytest(): array
+    {
+        $run = $this->playtest;
+        $running = $run?->isRunning() ?? false;
+        $exitCode = $running ? null : $run?->getExitCode();
+
+        return [
+            'running' => $running,
+            'map' => $run?->overlay->mapId,
+            'x' => $run?->overlay->spawnX,
+            'y' => $run?->overlay->spawnY,
+            'stopped' => $run?->wasStopped() ?? false,
+            'exitCode' => $exitCode,
+            // Only a run that ended on its own with an error says why.
+            'log' => $run !== null && ! $running && ! $run->wasStopped() && $exitCode !== 0 ? $run->readLogTail() : null,
+        ];
+    }
+
+    /**
+     * Ends a running playtest, game window and all.
+     *
+     * @return array<string, mixed> The playtest, as {@see describePlaytest()}.
+     */
+    public function stopPlaytest(): array
+    {
+        $this->playtest?->stop();
+
+        return $this->describePlaytest();
+    }
+
+    /** Ends what the session started that would outlive it: a running playtest. */
+    public function close(): void
+    {
+        $this->playtest?->stop();
     }
 
     /** Whether any map or database has changes not yet saved. */

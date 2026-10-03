@@ -332,3 +332,32 @@ it('asks before deleting a map something still transfers to, then deletes it and
         ->and($session->readMap('test-map')['dirty'])->toBeTrue()
         ->and(fn() => $session->deleteMap('cellar'))->toThrow(SessionRefusal::class);
 });
+
+it('plays a saved map from a cell in the background and refuses an unsaved one', function () {
+    $root = makeTemporaryProject();
+    file_put_contents($root . '/assets/Data/system.php', "<?php\n\nreturn ['startingPositions' => ['player' => []]];\n");
+    $console = $root . '/fake-console.php';
+    file_put_contents($console, '<?php fwrite(STDERR, "no renderer installed\n"); exit(2);');
+    putenv('ICHILOTO_CONSOLE_BIN=' . $console);
+
+    try {
+        $session = EditorSession::open($root);
+        $map = $session->readMap('test-map');
+        $session->paint('test-map', $map['revision'], $map['baseLayer'], [[1, 1]], '%');
+        expect(fn() => $session->startPlaytest('test-map', 1, 1))->toThrow(SessionRefusal::class, 'Save test-map before playtesting')
+            ->and(fn() => $session->startPlaytest('test-map', 999, 1))->toThrow(SessionRefusal::class);
+        $session->saveMap('test-map');
+
+        $started = $session->startPlaytest('test-map', 1, 1);
+        expect($started)->toMatchArray(['map' => 'test-map', 'x' => 1, 'y' => 1]);
+        $deadline = microtime(true) + 5;
+        while ($session->describePlaytest()['running'] && microtime(true) < $deadline) {
+            usleep(20000);
+        }
+        expect($session->describePlaytest())->toMatchArray(['running' => false, 'exitCode' => 2])
+            ->and($session->describePlaytest()['log'])->toContain('no renderer installed')
+            ->and($session->stopPlaytest()['running'])->toBeFalse();
+    } finally {
+        putenv('ICHILOTO_CONSOLE_BIN');
+    }
+});
