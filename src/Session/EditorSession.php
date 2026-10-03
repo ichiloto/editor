@@ -19,9 +19,13 @@ use Ichiloto\Editor\Inspector\InspectorRefusal;
 use Ichiloto\Editor\Inspector\MapInspector;
 use Ichiloto\Editor\MapSourceRefusal;
 use Ichiloto\Editor\Maps\MapLayers;
+use Ichiloto\Editor\Maps\TilePalette;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Editor\Validation\MapValidator;
+use Ichiloto\Engine\Rendering\Presentation\PresentationLayerPolicy;
+use Ichiloto\Engine\Rendering\Presentation\PresentationWorld;
+use InvalidArgumentException;
 
 /**
  * One open project as every editor interface edits it: its documents, the
@@ -168,6 +172,72 @@ final class EditorSession
         ];
     }
 
+    /**
+     * The map's world as the game uploads it to a graphical renderer: its
+     * glyph rows and, when its graphics load, its tileset and tile layers,
+     * unsaved edits included. `layerIds` maps each glyph layer's id to its
+     * world layer id. Graphics never decide whether a map shows: when the
+     * game would refuse them, the world holds glyphs only and
+     * `graphicsIssue` says why.
+     *
+     * @return array{map: string, revision: int, assetRoot: string, operations: list<array<string, mixed>>, layerIds: array<string, string>, animated: bool, graphicsIssue: ?string}
+     * @throws SessionRefusal When the map is unknown or its layers cannot be presented.
+     */
+    public function readWorld(string $mapId): array
+    {
+        $map = $this->requireMap($mapId);
+        $issue = null;
+        try {
+            $graphics = $map->loadGraphics();
+        } catch (InvalidArgumentException|MapSourceRefusal $error) {
+            $graphics = null;
+            $issue = $error->getMessage();
+        }
+        try {
+            $layerSet = $map->getLayerSet();
+            $world = PresentationWorld::getFromLayers($layerSet, 'map', $graphics, $map->getAssetRoot());
+        } catch (InvalidArgumentException|MapSourceRefusal $error) {
+            throw new SessionRefusal(sprintf('%s cannot be drawn: %s', $mapId, $error->getMessage()), previous: $error);
+        }
+        $glyphLayers = array_values(array_filter($map->getLayers(), static fn(array $layer): bool => $layer['id'] !== MapLayers::EVENT));
+        $layerIds = [];
+        foreach ($layerSet->layers as $index => $layer) {
+            $layerIds[(string) $glyphLayers[$index]['id']] = PresentationLayerPolicy::getMapLayerId($layer);
+        }
+
+        return [
+            'map' => $map->mapId,
+            'revision' => $map->stateVersion(),
+            'assetRoot' => $map->getAssetRoot(),
+            'operations' => $world->getOperations(true),
+            'layerIds' => $layerIds,
+            'animated' => $world->animated,
+            'graphicsIssue' => $issue,
+        ];
+    }
+    /**
+     * The tile palette of the map's tileset ({@see TilePalette}): each tab's
+     * grid of tile identities and the world that draws it.
+     *
+     * @return array{tileset: string, name: string, assetRoot: string, tabs: list<array{name: string, ids: list<list<int>>, operations: list<array<string, mixed>>}>}
+     * @throws SessionRefusal When the map is unknown or has no usable tileset.
+     */
+    public function readTilePalette(string $mapId): array
+    {
+        $map = $this->requireMap($mapId);
+        try {
+            $tileset = $map->loadTileset() ?? throw new SessionRefusal(sprintf('%s names no tileset; choose one before placing tiles.', $mapId));
+            $tabs = [];
+            foreach (TilePalette::getTabs($tileset) as $tab) {
+                $world = TilePalette::buildWorld($tileset, $tab['ids'], $map->getAssetRoot(), 'palette:' . $tab['name']);
+                $tabs[] = [...$tab, 'operations' => $world->operations];
+            }
+        } catch (InvalidArgumentException $error) {
+            throw new SessionRefusal(sprintf('%s tileset cannot be used: %s', $mapId, $error->getMessage()), previous: $error);
+        }
+
+        return ['tileset' => $tileset->id, 'name' => $tileset->name, 'assetRoot' => $map->getAssetRoot(), 'tabs' => $tabs];
+    }
     /**
      * Paints one glyph over cells of a layer, with the tiles that follow it,
      * as one undo step. A glyph that could be several pieces is asked about:

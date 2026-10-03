@@ -196,3 +196,48 @@ it('lists a schema database\'s records and reads one record\'s rows', function (
         ->and(fn() => $session->listDatabaseRecords('actors'))->toThrow(SessionRefusal::class, 'edited in the terminal editor for now')
         ->and(fn() => $session->listDatabaseRecords('nope'))->toThrow(SessionRefusal::class, 'There is no database category nope.');
 });
+
+it('reads a map\'s world as the game uploads it, its glyph layers named by the editor\'s layer ids', function () {
+    $root = mapGraphicsProject();
+    $session = EditorSession::open($root);
+    $world = $session->readWorld('test-map');
+    $put = $world['operations'][0];
+
+    expect($put['op'])->toBe('put')
+        ->and($put['value']['tileset']['sheets'])->toBe(['Graphics/Tilesets/Home_A2.png', 'Graphics/Tilesets/Home_B.png'])
+        ->and(array_column($put['value']['layers'], 'id'))->toContain('tiles:floor', 'tiles:decor')
+        ->and(array_values($world['layerIds']))->toBe(array_values(array_filter(array_column($put['value']['layers'], 'id'),
+            static fn(string $id): bool => str_starts_with($id, 'map:'))))
+        ->and(array_keys($world['layerIds']))->toBe(array_values(array_filter(array_column($session->readMap('test-map')['layers'], 'id'),
+            static fn(string $id): bool => $id !== 'event')))
+        ->and($world['assetRoot'])->toBe($root . '/assets')
+        ->and($world['graphicsIssue'])->toBeNull();
+});
+
+it('still draws a map\'s glyphs when the game would refuse its graphics, saying why', function () {
+    $root = mapGraphicsProject();
+    $data = $root . '/assets/Maps/test-map/test-map.data.php';
+    file_put_contents($data, str_replace("'tileset' => 'home'", "'tileset' => 'missing'", (string) file_get_contents($data)));
+    $world = EditorSession::open($root)->readWorld('test-map');
+
+    expect($world['graphicsIssue'])->toContain('missing')
+        ->and($world['operations'][0]['value'])->not->toHaveKey('tileset')
+        ->and(array_column($world['operations'], 'op'))->toContain('worldRows');
+});
+
+it('lays out the tile palette as RPG Maker MZ does, drawn by the same world', function () {
+    $session = EditorSession::open(mapGraphicsProject());
+    $palette = $session->readTilePalette('test-map');
+    [$a, $b] = $palette['tabs'];
+
+    // A2's 32 autotile kinds, one entry each; B tile by tile from the empty tile.
+    expect(array_column($palette['tabs'], 'name'))->toBe(['A', 'B'])
+        ->and($a['ids'][0])->toBe([2816, 2864, 2912, 2960, 3008, 3056, 3104, 3152])
+        ->and(count($a['ids']))->toBe(4)
+        ->and($b['ids'][0])->toBe([0, 1, 2, 3, 4, 5, 6, 7])
+        ->and(count($b['ids']))->toBe(32)
+        ->and($b['operations'][0]['id'])->toBe('palette:B')
+        ->and($b['operations'][0]['value']['columns'])->toBe(8)
+        ->and(fn() => EditorSession::open(makeTemporaryProject())->readTilePalette('test-map'))
+        ->toThrow(SessionRefusal::class, 'names no tileset');
+});

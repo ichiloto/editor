@@ -97,6 +97,8 @@ final class SessionHost
         return match ($method) {
             'maps.list' => $session->describeMaps(),
             'map.read' => $session->readMap(self::requireString($params, 'map')),
+            'map.world' => $session->readWorld(self::requireString($params, 'map')),
+            'tiles.palette' => $session->readTilePalette(self::requireString($params, 'map')),
             'map.paint' => $session->paint(
                 self::requireString($params, 'map'),
                 self::requireInt($params, 'revision'),
