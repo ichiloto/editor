@@ -109,14 +109,14 @@ final class CutsceneLibrary
             $hasData = is_file($dataPath);
             $hasPartner = is_file($partnerPath);
 
-            if (! $hasData || ! $hasPartner) {
+            if (($type->hasDataFile() && ! $hasData) || ! $hasPartner) {
                 $this->reportIncomplete($type, $folder, $entry, $hasData, $hasPartner);
 
                 continue;
             }
 
-            if (preg_match('/^[a-z0-9][a-z0-9._-]*$/', $entry) !== 1) {
-                $this->issues[$type->value][] = ['folder' => $entry, 'message' => sprintf('The folder name "%s" is not a stable id (lowercase letters, digits, ".", "_" and "-").', $entry)];
+            if (preg_match($type->getIdPattern(), $entry) !== 1) {
+                $this->issues[$type->value][] = ['folder' => $entry, 'message' => sprintf('The folder name "%s" is not a stable id (%s).', $entry, $type->describeIdCharacters())];
             }
 
             $lower = strtolower($entry);
@@ -149,7 +149,7 @@ final class CutsceneLibrary
     private function reportIncomplete(CutsceneType $type, string $folder, string $entry, bool $hasData, bool $hasPartner): void
     {
         $files = array_values(array_filter(scandir($folder) ?: [], static fn(string $file): bool => str_ends_with($file, '.php')));
-        $missing = ! $hasData ? $entry . '.data.php' : $entry . $type->partnerSuffix();
+        $missing = $type->hasDataFile() && ! $hasData ? $entry . '.data.php' : $entry . $type->partnerSuffix();
         $misnamed = array_values(array_filter(
             $files,
             static fn(string $file): bool => (str_ends_with($file, '.data.php') || str_ends_with($file, $type->partnerSuffix()))
@@ -168,13 +168,9 @@ final class CutsceneLibrary
             return;
         }
 
-        $this->issues[$type->value][] = ['folder' => $entry, 'message' => sprintf(
-            'Folder "%s" is missing %s; a %s is a data file and a %s together.',
-            $entry,
-            $missing,
-            $type->noun(),
-            $type->partnerNoun(),
-        )];
+        $this->issues[$type->value][] = ['folder' => $entry, 'message' => $type->hasDataFile()
+            ? sprintf('Folder "%s" is missing %s; a %s is a data file and a %s together.', $entry, $missing, $type->noun(), $type->partnerNoun())
+            : sprintf('Folder "%s" is missing %s; an %s is its %s file.', $entry, $missing, $type->noun(), $type->partnerNoun())];
     }
 
     /**
@@ -305,6 +301,7 @@ final class CutsceneLibrary
         return match ($type) {
             CutsceneType::CINEMATIC => RecordSchemaCatalog::cinematics(),
             CutsceneType::SUMMON => RecordSchemaCatalog::summons(),
+            CutsceneType::EFFECT => RecordSchemaCatalog::effects(),
         };
     }
 
@@ -407,8 +404,8 @@ final class CutsceneLibrary
             throw new RuntimeException(sprintf('A %s "%s" already exists.', $type->noun(), $newId));
         }
 
-        if (preg_match('/^[a-z0-9][a-z0-9._-]*$/', $newId) !== 1) {
-            throw new RuntimeException(sprintf('"%s" is not a stable id (lowercase letters, digits, ".", "_" and "-").', $newId));
+        if (preg_match($type->getIdPattern(), $newId) !== 1) {
+            throw new RuntimeException(sprintf('"%s" is not a stable id (%s).', $newId, $type->describeIdCharacters()));
         }
 
         $payload = $source->payload();
@@ -442,8 +439,8 @@ final class CutsceneLibrary
             throw new RuntimeException(sprintf('A %s "%s" already exists.', $type->noun(), $newId));
         }
 
-        if (preg_match('/^[a-z0-9][a-z0-9._-]*$/', $newId) !== 1) {
-            throw new RuntimeException(sprintf('"%s" is not a stable id (lowercase letters, digits, ".", "_" and "-").', $newId));
+        if (preg_match($type->getIdPattern(), $newId) !== 1) {
+            throw new RuntimeException(sprintf('"%s" is not a stable id (%s).', $newId, $type->describeIdCharacters()));
         }
 
         $payload = $source->payload();
@@ -461,7 +458,9 @@ final class CutsceneLibrary
      */
     public function freeId(CutsceneType $type, string $preferred): string
     {
-        $stem = strtolower(trim(preg_replace('/[^a-z0-9._-]+/i', '-', $preferred) ?? '', '-.'));
+        // An effect id holds no dots, as the Engine requires.
+        $allowed = $type === CutsceneType::EFFECT ? '/[^a-z0-9_-]+/i' : '/[^a-z0-9._-]+/i';
+        $stem = strtolower(trim(preg_replace($allowed, '-', $preferred) ?? '', '-.'));
 
         if ($stem === '' || preg_match('/^[a-z0-9]/', $stem) !== 1) {
             $stem = 'new-' . $type->noun();

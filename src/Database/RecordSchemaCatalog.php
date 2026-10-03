@@ -1297,6 +1297,15 @@ final class RecordSchemaCatalog
     }
 
     /**
+     * Returns the effect timeline category the Cutscenes workspace edits.
+     * Not a Database category: it is not listed by all().
+     */
+    public static function effects(): RecordSchema
+    {
+        return CutsceneSchemas::effects();
+    }
+
+    /**
      * Returns the per-type field sets for event-script commands.
      *
      * Nested arms (`choice.options`, `branch.then`/`else`) are shown as

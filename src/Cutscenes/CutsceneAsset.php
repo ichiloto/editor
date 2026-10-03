@@ -13,6 +13,8 @@ use Ichiloto\Editor\Storage\FileSetTransactionFailure;
 use Ichiloto\Editor\Database\PhpValueExporter;
 use Ichiloto\Editor\History\TracksPersistedState;
 use Ichiloto\Editor\ProjectDirectoryContext;
+use Ichiloto\Engine\Animations\Timelines\CompiledEffectTimeline;
+use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicDefinition;
 use Ichiloto\Engine\Cutscenes\Summons\SummonCompiledCutscene;
 use RuntimeException;
@@ -79,6 +81,13 @@ final class CutsceneAsset
 
     private ?PhpArraySourceDocument $dataDocument = null;
     private ?PhpArraySourceDocument $partnerDocument = null;
+
+    /**
+     * The sequence an effect with separate terminal and graphical sequences
+     * is being edited in. The editor shows and edits one at a time; the file
+     * keeps both, each exactly as written unless it is the one edited.
+     */
+    private EffectPresentation $presentationView = EffectPresentation::TERMINAL;
     private ?string $readOnlyReason = null;
     private bool $isNew = false;
     private bool $isDeleted = false;
@@ -114,16 +123,19 @@ final class CutsceneAsset
         $dataPath = $asset->dataPath();
         $partnerPath = $asset->partnerPath();
 
-        if (! is_file($dataPath) || ! is_file($partnerPath)) {
-            throw new RuntimeException(sprintf('%s "%s" is missing %s.', ucfirst($type->noun()), $asset->id, is_file($dataPath) ? basename($partnerPath) : basename($dataPath)));
+        $hasData = $type->hasDataFile();
+
+        if (($hasData && ! is_file($dataPath)) || ! is_file($partnerPath)) {
+            throw new RuntimeException(sprintf('%s "%s" is missing %s.', ucfirst($type->noun()), $asset->id, ! is_file($partnerPath) ? basename($partnerPath) : basename($dataPath)));
         }
 
-        $dataSource = (string) file_get_contents($dataPath);
+        $dataSource = $hasData ? (string) file_get_contents($dataPath) : '';
         $partnerSource = (string) file_get_contents($partnerPath);
         $reasons = [];
 
         try {
-            $data = $asset->evaluate($dataPath);
+            // An effect has no data file; all of it is its timeline.
+            $data = $hasData ? $asset->evaluate($dataPath) : [];
         } catch (Throwable $throwable) {
             $data = [];
             $reasons[] = sprintf('%s could not be evaluated (%s)', basename($dataPath), $throwable->getMessage());
@@ -147,7 +159,7 @@ final class CutsceneAsset
         }
 
         try {
-            $asset->dataDocument = PhpArraySourceDocument::parse($dataSource);
+            $asset->dataDocument = $hasData ? PhpArraySourceDocument::parse($dataSource) : null;
         } catch (SourceUnreadable $unreadable) {
             $reasons[] = sprintf('%s cannot be rewritten in place: %s', basename($dataPath), rtrim($unreadable->getMessage(), '.'));
         }
@@ -197,6 +209,10 @@ final class CutsceneAsset
         $asset = new self($type, $id, rtrim($root, '/') . '/' . $id, $projectRoot);
         $asset->isNew = true;
         $asset->shape = CutscenePairShape::forNewAsset($type);
+
+        if (! $type->hasDataFile()) {
+            unset($payload['id']);
+        }
         [$data, $partner] = $asset->shape->split($payload);
         $asset->shape = CutscenePairShape::of($type, $data, $partner);
         $asset->data = $data;
@@ -233,7 +249,7 @@ final class CutsceneAsset
      */
     public function paths(): array
     {
-        return [$this->dataPath(), $this->partnerPath()];
+        return $this->type->hasDataFile() ? [$this->dataPath(), $this->partnerPath()] : [$this->partnerPath()];
     }
 
     /**
@@ -273,6 +289,7 @@ final class CutsceneAsset
      */
     public function name(): string
     {
+        // An effect is named by its id; its timeline holds no name.
         $name = trim(strval($this->data['name'] ?? ''));
 
         return $name !== '' ? $name : $this->id;
@@ -318,10 +335,76 @@ final class CutsceneAsset
      */
     public function payload(): array
     {
-        $payload = $this->shape->merge($this->data, $this->partner);
+        $payload = $this->hasPresentations()
+            ? $this->getPresentationSequence($this->partner)
+            : $this->shape->merge($this->data, $this->partner);
+
+        if (! $this->type->hasDataFile()) {
+            // An effect's id is its folder, as the Engine finds it; it is
+            // shown and renamed here like any id, and never written.
+            $payload = ['id' => $this->id, ...$payload];
+        }
+
         $payload[self::ORIGIN_KEY] = $this->id;
 
         return $payload;
+    }
+
+    /**
+     * Whether this is an effect with separate terminal and graphical
+     * sequences, edited one at a time.
+     */
+    public function hasPresentations(): bool
+    {
+        return $this->type === CutsceneType::EFFECT && is_array($this->partner['presentations'] ?? null);
+    }
+
+    /** The sequence being edited, for an effect with separate sequences; null otherwise. */
+    public function getPresentationView(): ?EffectPresentation
+    {
+        return $this->hasPresentations() ? $this->presentationView : null;
+    }
+
+    /**
+     * Chooses which of an effect's sequences the editor shows and edits.
+     * Nothing is written; the other sequence stays as it is.
+     */
+    public function selectPresentation(EffectPresentation $presentation): void
+    {
+        $this->presentationView = $presentation;
+    }
+
+    /**
+     * Gives a flat effect separate terminal and graphical sequences, each
+     * starting as a copy of the flat one, so each presentation can then be
+     * authored on its own. A flat effect stays flat unless this is chosen.
+     *
+     * @return bool False when it already has them, is not an effect, or cannot be written.
+     */
+    public function splitIntoPresentations(): bool
+    {
+        if ($this->type !== CutsceneType::EFFECT || $this->hasPresentations() || $this->readOnlyReason !== null) {
+            return false;
+        }
+
+        $this->partner = ['presentations' => [
+            EffectPresentation::TERMINAL->value => $this->partner,
+            EffectPresentation::GRAPHICAL->value => $this->partner,
+        ]];
+        $this->touchState();
+
+        return true;
+    }
+
+    /**
+     * @param array<int|string, mixed> $timeline
+     * @return array<string, mixed>
+     */
+    private function getPresentationSequence(array $timeline): array
+    {
+        $sequence = $timeline['presentations'][$this->presentationView->value] ?? [];
+
+        return is_array($sequence) ? $sequence : [];
     }
 
     /**
@@ -342,7 +425,22 @@ final class CutsceneAsset
             return;
         }
 
-        [$data, $partner] = $this->shape->split($payload);
+        if (! $this->type->hasDataFile()) {
+            unset($payload['id']);
+        }
+
+        if ($this->hasPresentations()) {
+            // The edited sequence goes back into its place; the other
+            // sequence, and the keys of this one, keep their order.
+            unset($payload[self::ORIGIN_KEY]);
+            $old = $this->getPresentationSequence($this->partner);
+            $ordered = array_intersect_key(array_replace(array_flip(array_keys($old)), $payload), $payload);
+            $partner = $this->partner;
+            $partner['presentations'][$this->presentationView->value] = $ordered;
+            $data = $this->data;
+        } else {
+            [$data, $partner] = $this->shape->split($payload);
+        }
 
         if ($data === $this->data && $partner === $this->partner) {
             return;
@@ -400,9 +498,10 @@ final class CutsceneAsset
         }
 
         // 1. Both proposed sources, each touched only where it changed.
-        $dataSource = $this->proposedSource($this->dataDocument, $this->loadedData, $this->data, 'data');
+        $hasData = $this->type->hasDataFile();
+        $dataSource = $hasData ? $this->proposedSource($this->dataDocument, $this->loadedData, $this->data, 'data') : '';
         $partnerSource = $this->proposedSource($this->partnerDocument, $this->loadedPartner, $this->partner, $this->type->partnerNoun());
-        $writeData = $this->isNew || $this->dataDocument === null || $dataSource !== $this->dataDocument->source;
+        $writeData = $hasData && ($this->isNew || $this->dataDocument === null || $dataSource !== $this->dataDocument->source);
         $writePartner = $this->isNew || $this->partnerDocument === null || $partnerSource !== $this->partnerDocument->source;
 
         if (! $writeData && ! $writePartner) {
@@ -428,7 +527,9 @@ final class CutsceneAsset
         $staged = $transaction->stage();
 
         try {
-            $evaluatedData = $this->evaluateSide($staged[$this->dataPath()] ?? $this->dataPath(), $this->data, basename($this->dataPath()), 'data');
+            $evaluatedData = $hasData
+                ? $this->evaluateSide($staged[$this->dataPath()] ?? $this->dataPath(), $this->data, basename($this->dataPath()), 'data')
+                : [];
             $evaluatedPartner = $this->evaluateSide($staged[$this->partnerPath()] ?? $this->partnerPath(), $this->partner, basename($this->partnerPath()), $this->type->partnerNoun());
 
             // 3. Hydrate and compile through the engine.
@@ -486,7 +587,28 @@ final class CutsceneAsset
             return;
         }
 
+        if ($this->type === CutsceneType::EFFECT) {
+            CutsceneHydration::checkEffect($this->id, $partner, $this->projectRoot);
+
+            return;
+        }
+
         CutsceneHydration::compileSummon($data, $partner, $this->projectRoot);
+    }
+
+    /**
+     * Compiles the effect as it stands in memory, unsaved edits included, as
+     * battle or the field plays it in one presentation.
+     *
+     * @throws RuntimeException When the Engine refuses it, or for another type.
+     */
+    public function compiledEffect(EffectPresentation $presentation, bool $forBattle): CompiledEffectTimeline
+    {
+        if ($this->type !== CutsceneType::EFFECT) {
+            throw new RuntimeException(sprintf('%s is a %s, not an effect.', $this->id, $this->type->noun()));
+        }
+
+        return CutsceneHydration::compileEffect($this->id, $this->partner, $presentation, $forBattle, $this->projectRoot);
     }
 
     /**
@@ -576,7 +698,7 @@ final class CutsceneAsset
      */
     private function adoptWritten(string $dataSource, string $partnerSource): void
     {
-        $this->dataDocument = PhpArraySourceDocument::parse($dataSource);
+        $this->dataDocument = $this->type->hasDataFile() ? PhpArraySourceDocument::parse($dataSource) : null;
         $this->partnerDocument = PhpArraySourceDocument::parse($partnerSource);
         $this->loadedData = $this->data;
         $this->loadedPartner = $this->partner;

@@ -64,7 +64,7 @@ final class CutscenePairShape
             $owners[(string) $key] = 'data';
         }
 
-        if ($type === CutsceneType::SUMMON || $scriptIsMap) {
+        if ($type !== CutsceneType::CINEMATIC || $scriptIsMap) {
             foreach (array_keys($partner) as $key) {
                 if (! isset($owners[(string) $key])) {
                     $owners[(string) $key] = 'partner';
@@ -173,8 +173,10 @@ final class CutscenePairShape
         }
 
         foreach ($payload as $key => $value) {
+            // An effect is its timeline alone; a summon's new timeline fields
+            // go to its timeline and anything else to its data file.
             $owner = $this->keyOwners[$key]
-                ?? (in_array($key, CinematicCommandSchema::SUMMON_TIMELINE_FIELDS, true) ? 'partner' : 'data');
+                ?? ($this->type === CutsceneType::EFFECT || in_array($key, CinematicCommandSchema::SUMMON_TIMELINE_FIELDS, true) ? 'partner' : 'data');
 
             if ($owner === 'partner') {
                 $partner[$key] = $value;

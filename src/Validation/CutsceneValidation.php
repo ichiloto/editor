@@ -59,7 +59,9 @@ trait CutsceneValidation
                 $issues[] = Issue::error(
                     sprintf('%s %s', $type->noun(), basename($finding['folder'])),
                     $finding['message'],
-                    sprintf('A %s is one folder holding <id>.data.php and <id>%s, named after its folder.', $type->noun(), $type->partnerSuffix()),
+                    $type->hasDataFile()
+                        ? sprintf('A %s is one folder holding <id>.data.php and <id>%s, named after its folder.', $type->noun(), $type->partnerSuffix())
+                        : sprintf('An %s is one folder holding <id>%s, named after its folder.', $type->noun(), $type->partnerSuffix()),
                 );
             }
 
@@ -87,6 +89,18 @@ trait CutsceneValidation
         $issues = [];
         if ($asset->readOnlyReason() !== null) {
             // The library's discovery findings already say why.
+            return [];
+        }
+
+        if ($asset->type === CutsceneType::EFFECT) {
+            // An effect's id is its folder alone. Where it is used, and so in
+            // which context it must play, the effect validation checks.
+            try {
+                $asset->hydrate();
+            } catch (Throwable $throwable) {
+                return [Issue::error($where, $throwable->getMessage(), 'Fix the timeline until each presentation plays in battle or on the field.')];
+            }
+
             return [];
         }
 

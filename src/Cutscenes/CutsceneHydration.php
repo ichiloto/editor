@@ -5,6 +5,9 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Cutscenes;
 
 use Ichiloto\Editor\ProjectDirectoryContext;
+use Ichiloto\Engine\Animations\Timelines\CompiledEffectTimeline;
+use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
+use Ichiloto\Engine\Animations\Timelines\EffectTimelineLibrary;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicDefinition;
 use Ichiloto\Engine\Cutscenes\Summons\SummonCompiledCutscene;
 use Ichiloto\Engine\Cutscenes\Summons\SummonCutsceneCompiler;
@@ -69,6 +72,67 @@ final class CutsceneHydration
                 SummonCutsceneDefinition::fromArrays($data, $timeline),
             ),
         );
+    }
+
+    /**
+     * Compiles an effect timeline through the Engine's effect library, as
+     * battle or the field plays it in one presentation.
+     *
+     * @param array<string, mixed> $timeline The timeline file's array.
+     */
+    public static function compileEffect(
+        string $id,
+        array $timeline,
+        EffectPresentation $presentation,
+        bool $forBattle,
+        ?string $projectRoot = null,
+    ): CompiledEffectTimeline {
+        return self::inProject(
+            $projectRoot,
+            static fn(): CompiledEffectTimeline => new EffectTimelineLibrary(self::getAssetRoot($projectRoot))
+                ->compile($id, $timeline, $forBattle, $presentation),
+        );
+    }
+
+    /**
+     * Proves an effect timeline can be played: each presentation must
+     * compile for battle or for the field, the two places the Engine plays
+     * effects. Which one a project uses it in is validation's to check.
+     *
+     * @param array<string, mixed> $timeline The timeline file's array.
+     * @throws RuntimeException Naming each presentation neither accepts, with the Engine's reasons.
+     */
+    public static function checkEffect(string $id, array $timeline, ?string $projectRoot = null): void
+    {
+        $failures = [];
+
+        foreach (EffectPresentation::cases() as $presentation) {
+            $reasons = [];
+
+            foreach (['battle' => true, 'field' => false] as $context => $forBattle) {
+                try {
+                    self::compileEffect($id, $timeline, $presentation, $forBattle, $projectRoot);
+                    $reasons = [];
+                    break;
+                } catch (RuntimeException $exception) {
+                    $reasons[] = sprintf('%s: %s', $context, $exception->getMessage());
+                }
+            }
+
+            if ($reasons !== []) {
+                $failures[] = sprintf('the %s presentation plays nowhere (%s)', $presentation->value, implode('; ', $reasons));
+            }
+        }
+
+        if ($failures !== []) {
+            throw new RuntimeException(sprintf('Effect %s cannot be played: %s.', $id, implode('; ', $failures)));
+        }
+    }
+
+    /** The asset root the Engine resolves an effect's images against. */
+    private static function getAssetRoot(?string $projectRoot): string
+    {
+        return rtrim($projectRoot ?? (string) getcwd(), '/') . '/assets';
     }
 
     /**

@@ -465,3 +465,82 @@ function require_pair_data(string $literal): array
 
     return $value;
 }
+
+/**
+ * An original flat field effect: one glyph track and a sound cue, with a
+ * comment the editor must keep.
+ */
+function emberSparkTimeline(): string
+{
+    return <<<'PHP_SOURCE'
+<?php
+
+// Ember Spark: a small flicker over its target.
+return [
+  'fps' => 10,
+  'lengthFrames' => 6,
+  'tracks' => [[
+    'id' => 'spark',
+    'type' => 'glyph',
+    'keyframes' => [
+      ['frame' => 0, 'duration' => 3, 'content' => '*', 'position' => ['x' => 0, 'y' => 0], 'color' => 'yellow'],
+      ['frame' => 3, 'duration' => 3, 'content' => '+', 'position' => ['x' => 1, 'y' => 0], 'color' => 'red'],
+    ],
+  ]],
+  'cues' => [['id' => 'crackle', 'frame' => 0, 'type' => 'playSound', 'payload' => ['sound' => 'crackle']]],
+];
+PHP_SOURCE;
+}
+
+/**
+ * An original battle effect with separate terminal and graphical sequences:
+ * a glyph stroke in the terminal, a two-frame image stroke on screen.
+ */
+function duskSlashTimeline(): string
+{
+    return <<<'PHP_SOURCE'
+<?php
+
+return [
+  'presentations' => [
+    'terminal' => [
+      'fps' => 12,
+      'lengthFrames' => 4,
+      'tracks' => [[
+        'id' => 'stroke',
+        'type' => 'glyph',
+        'facing' => 'west',
+        'keyframes' => [['frame' => 0, 'duration' => 4, 'content' => '/', 'position' => ['x' => 0, 'y' => 0]]],
+      ]],
+    ],
+    'graphical' => [
+      'fps' => 12,
+      'lengthFrames' => 2,
+      'restFrame' => 1,
+      'tracks' => [[
+        'id' => 'stroke-art',
+        'type' => 'image',
+        'asset' => 'Graphics/Effects/dusk-slash.png',
+        'sheet' => ['columns' => 2, 'rows' => 1],
+        'facing' => 'west',
+        'keyframes' => [['frame' => 0, 'sourceFrame' => 0], ['frame' => 1, 'sourceFrame' => 1]],
+      ]],
+    ],
+  ],
+];
+PHP_SOURCE;
+}
+
+/** A project holding the two original effects under assets/Animations. */
+function effectProject(): string
+{
+    $root = cutsceneProject();
+    foreach (['ember-spark' => emberSparkTimeline(), 'dusk-slash' => duskSlashTimeline()] as $id => $source) {
+        @mkdir($root . '/assets/Animations/' . $id, 0o777, true);
+        file_put_contents($root . '/assets/Animations/' . $id . '/' . $id . '.timeline.php', $source);
+    }
+    @mkdir($root . '/assets/Graphics/Effects', 0o777, true);
+    writeTilesetTestPng($root . '/assets/Graphics/Effects/dusk-slash.png', 32, 16);
+
+    return $root;
+}

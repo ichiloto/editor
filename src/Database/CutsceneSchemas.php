@@ -7,6 +7,7 @@ namespace Ichiloto\Editor\Database;
 use Ichiloto\Editor\Cutscenes\CutsceneAsset;
 use Ichiloto\Editor\Inspector\InputControlType;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
+use Ichiloto\Engine\Animations\Timelines\EffectTimelineLibrary;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicCommandSchema;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandRegistry;
 use Ichiloto\Engine\Cutscenes\Summons\SummonEffectTiming;
@@ -35,6 +36,9 @@ final class CutsceneSchemas
      * The Database-style category key of the summon records.
      */
     public const string SUMMONS_KEY = 'summons';
+
+    /** The effect timeline category the Cutscenes workspace edits. */
+    public const string EFFECTS_KEY = 'effects';
 
     /**
      * The payload key a cinematic's finalizer commands are edited under.
@@ -423,6 +427,168 @@ final class CutsceneSchemas
                 new RecordField('seconds', 'Seconds', InputControlType::FLOAT),
             ],
             blank: ['kind' => 'position', 'x' => 0, 'y' => 0, 'seconds' => 0.5],
+        );
+    }
+
+    /**
+     * Returns the effect timeline category: one record per effect, the
+     * sequence being edited as fields, its tracks and cues as lists opened
+     * as frames. Every row is a key the Engine's effect library reads; an
+     * effect with separate terminal and graphical sequences is edited one
+     * sequence at a time. Battle-only keys (impact timing, facing, flips,
+     * flash and shake) are offered for every effect; validation says where
+     * an effect is used that refuses them.
+     */
+    public static function effects(): RecordSchema
+    {
+        return new RecordSchema(
+            key: self::EFFECTS_KEY,
+            entryNoun: 'effect',
+            storage: RecordStorage::MAP_OWNED,
+            relativePath: 'assets/' . EffectTimelineLibrary::DIRECTORY,
+            fields: [
+                new RecordField('id', 'Id', isReadOnly: true),
+                new RecordField('fps', 'FPS', InputControlType::INTEGER),
+                new RecordField('lengthFrames', 'Length (frames)', InputControlType::INTEGER),
+                new RecordField('playback', 'Playback', options: ['once', 'loop'], removeWhenEmpty: true, displayDefault: 'once'),
+                new RecordField('loopFrom', 'Loop From', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '0'),
+                new RecordField('restFrame', 'Rest Frame', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '0'),
+                // Battle only: when the command's result lands.
+                new RecordField('effectTiming.mode', 'Impact Timing', options: ['end', 'frame', 'cue'], removeWhenEmpty: true, displayDefault: '(omitted)'),
+                new RecordField('effectTiming.frame', 'Impact Frame', InputControlType::INTEGER, removeWhenEmpty: true),
+                RecordField::reference('effectTiming.cueId', 'Impact Cue', 'effect_cues', allowsNone: true, noneLabel: '(none)'),
+            ],
+            identityKey: 'id',
+            blank: [
+                'id' => 'new-effect',
+                'fps' => 12,
+                'lengthFrames' => 12,
+                self::TRACKS_KEY => [[
+                    'id' => 'glyph',
+                    'type' => 'glyph',
+                    'keyframes' => [['frame' => 0, 'duration' => 12, 'content' => '*', 'position' => ['x' => 0, 'y' => 0]]],
+                ]],
+                self::CUES_KEY => [],
+            ],
+            commandLists: [
+                self::TRACKS_KEY => self::effectTrackList(),
+                self::CUES_KEY => self::effectCueList(),
+            ],
+        );
+    }
+
+    /**
+     * Returns the track list of an effect timeline: the keys every track
+     * reads, an image track's sheet and cells as its own rows, and each
+     * track's keyframes as a nested list of the keys its type reads.
+     */
+    public static function effectTrackList(): RecordSubList
+    {
+        $keyframes = self::effectKeyframeList();
+
+        return new RecordSubList(
+            key: self::TRACKS_KEY,
+            prefix: 'track',
+            singular: 'track',
+            fields: [
+                new RecordField('id', 'Id'),
+                new RecordField('type', 'Type', options: ['glyph', 'text', 'image', 'flash', 'shake']),
+                new RecordField('presentation', 'Presentation',
+                    options: ['all', ...array_map(static fn(EffectPresentation $presentation): string => $presentation->value, EffectPresentation::cases())],
+                    removeWhenEmpty: true, displayDefault: 'all'),
+                new RecordField('anchor', 'Anchor', options: ['target', 'caster', 'screen'], removeWhenEmpty: true, displayDefault: 'target'),
+                // Battle only: the way the stroke is drawn; the battle mirrors it for an attack the other way.
+                // The empty choice removes it: an undirected track stays as drawn.
+                new RecordField('facing', 'Facing', options: ['', 'west', 'east'], removeWhenEmpty: true, displayDefault: '(undirected)'),
+            ],
+            blank: ['id' => 'track', 'type' => 'glyph', 'keyframes' => [['frame' => 0, 'duration' => 1, 'content' => '*', 'position' => ['x' => 0, 'y' => 0]]]],
+            variants: [
+                'image' => [
+                    RecordField::reference('asset', 'Image', 'png_assets'),
+                    new RecordField('sheet.columns', 'Sheet Columns', InputControlType::INTEGER, displayDefault: '1'),
+                    new RecordField('sheet.rows', 'Sheet Rows', InputControlType::INTEGER, displayDefault: '1'),
+                    new RecordField('cells.width', 'Cell Width', InputControlType::INTEGER, displayDefault: '1'),
+                    new RecordField('cells.height', 'Cell Height', InputControlType::INTEGER, displayDefault: '1'),
+                    new RecordField('depth', 'Depth', options: ['front', 'behind'], removeWhenEmpty: true, displayDefault: 'front'),
+                ],
+            ],
+            variantKey: 'type',
+            nestedLists: [
+                'image' => self::effectImageKeyframeList(),
+                'glyph' => $keyframes,
+                'text' => $keyframes,
+                'flash' => $keyframes,
+                'shake' => $keyframes,
+            ],
+        );
+    }
+
+    /**
+     * Returns the keyframes of an effect's glyph, text, flash or shake
+     * track. A position is `x` and `y`, as the Engine reads it.
+     */
+    public static function effectKeyframeList(): RecordSubList
+    {
+        return new RecordSubList(
+            key: 'keyframes',
+            prefix: 'keyframe',
+            singular: 'keyframe',
+            fields: [
+                new RecordField('frame', 'Frame', InputControlType::INTEGER),
+                new RecordField('duration', 'Duration', InputControlType::INTEGER),
+                new RecordField('position.x', 'Position X', InputControlType::INTEGER),
+                new RecordField('position.y', 'Position Y', InputControlType::INTEGER),
+                new RecordField('content', 'Content', InputControlType::MULTILINE, removeWhenEmpty: true),
+                new RecordField('assetId', 'Asset Id', removeWhenEmpty: true),
+                new RecordField('color', 'Color', removeWhenEmpty: true),
+                RecordField::boolean('visible', 'Visible'),
+                new RecordField('zIndex', 'Z Index', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '0'),
+                new RecordField('payload', 'Payload', codec: RecordFieldCodec::KEY_VALUES, removeWhenEmpty: true),
+            ],
+            blank: ['frame' => 0, 'duration' => 1, 'content' => '*', 'position' => ['x' => 0, 'y' => 0]],
+        );
+    }
+
+    /**
+     * Returns the keyframes of an effect's image track: which sheet frame
+     * shows, where, and (battle only) whether it is flipped.
+     */
+    public static function effectImageKeyframeList(): RecordSubList
+    {
+        return new RecordSubList(
+            key: 'keyframes',
+            prefix: 'keyframe',
+            singular: 'keyframe',
+            fields: [
+                new RecordField('frame', 'Frame', InputControlType::INTEGER),
+                new RecordField('duration', 'Duration', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '1'),
+                new RecordField('sourceFrame', 'Sheet Frame', InputControlType::INTEGER),
+                new RecordField('position.x', 'Position X', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '0'),
+                new RecordField('position.y', 'Position Y', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '0'),
+                RecordField::boolean('flipX', 'Flip Horizontally'),
+                RecordField::boolean('flipY', 'Flip Vertically'),
+            ],
+            blank: ['frame' => 0, 'sourceFrame' => 0],
+        );
+    }
+
+    /**
+     * Returns the cue list of an effect timeline. The field plays only
+     * `playSound`; battle plays every type.
+     */
+    public static function effectCueList(): RecordSubList
+    {
+        return new RecordSubList(
+            key: self::CUES_KEY,
+            prefix: 'cue',
+            singular: 'cue',
+            fields: [
+                new RecordField('id', 'Id'),
+                new RecordField('frame', 'Frame', InputControlType::INTEGER),
+                new RecordField('type', 'Type', options: ['playSound', 'applyEffect', 'showMessage', 'flash', 'shake']),
+                new RecordField('payload', 'Payload', codec: RecordFieldCodec::KEY_VALUES, removeWhenEmpty: true),
+            ],
+            blank: ['id' => 'cue', 'frame' => 0, 'type' => 'playSound', 'payload' => []],
         );
     }
 

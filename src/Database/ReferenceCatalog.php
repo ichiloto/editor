@@ -69,6 +69,7 @@ final class ReferenceCatalog
         'cinematic_subjects',
         'cinematic_checkpoints',
         'summon_cues',
+        'effect_cues',
         'event_markers',
         'tilesets',
         'effects',
@@ -186,7 +187,8 @@ final class ReferenceCatalog
             'cinematic_cast' => $this->castIds(['staged_actor']),
             'cinematic_subjects' => $this->subjectIds(),
             'cinematic_checkpoints' => $this->checkpointIds(),
-            'summon_cues' => $this->summonCueIds(),
+            'summon_cues' => $this->getTimelineCueIds(CutsceneType::SUMMON),
+            'effect_cues' => $this->getTimelineCueIds(CutsceneType::EFFECT),
             'event_markers' => $this->currentMap?->getEventMarkers() ?? [],
             // A map's kind is one of the project's tilesets, by file stem.
             'tilesets' => array_keys($this->loadTilesetNames()),
@@ -305,13 +307,15 @@ final class ReferenceCatalog
     }
 
     /**
-     * Returns the stable cue ids declared by the current summon's timeline.
+     * Returns the stable cue ids the current summon's or effect's timeline declares.
      *
      * @return string[]
      */
-    private function summonCueIds(): array
+    private function getTimelineCueIds(CutsceneType $type): array
     {
-        if ($this->currentCutscene?->type !== CutsceneType::SUMMON) {
+        // An effect's payload is the sequence being edited, so its cues are
+        // that sequence's.
+        if ($this->currentCutscene?->type !== $type) {
             return [];
         }
 
