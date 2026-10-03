@@ -84,7 +84,12 @@ it('uses the engine fallback rules for magic animation diagnostics', function ()
         ProjectSkill::fromSkill(new MagicSkill('Flare', '', '', 0, 0, effectType: MagicEffectType::DESTRUCTIVE), 2),
     ], true);
     $database->save();
-    $issues = new AnimationReferenceValidator()->validate(ProjectWorkspace::fromProject($root));
+    // Only the skills' diagnostics; this project binds no roles, which is
+    // reported separately.
+    $issues = array_values(array_filter(
+        new AnimationReferenceValidator()->validate(ProjectWorkspace::fromProject($root)),
+        static fn($issue): bool => str_starts_with($issue->where, 'assets/Data/skills.php'),
+    ));
     expect($issues)->toHaveCount(1)
         ->and($issues[0]->where)->toContain('Cure');
 });

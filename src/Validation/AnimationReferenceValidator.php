@@ -6,6 +6,7 @@ namespace Ichiloto\Editor\Validation;
 
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Engine\Animations\ActionAnimationResolver;
+use Ichiloto\Engine\Entities\Enumerations\WeaponType;
 use Ichiloto\Engine\Entities\Magic\MagicEffectType;
 
 /** Checks optional presentation references without invalidating gameplay. */
@@ -26,6 +27,12 @@ final class AnimationReferenceValidator
                 continue;
             }
 
+            // A basic skill's effect follows the attacker's weapon role, and a
+            // summon plays its cutscene; neither is chosen by an animation name.
+            if ($skill->getType() === 'basic') {
+                continue;
+            }
+
             $magicEffectType = $skill->getType() === 'magic'
                 ? MagicEffectType::tryFrom($skill->getEffectType() ?? '') : null;
             $candidates = ActionAnimationResolver::getSkillCandidateNames($skill->getName(), $magicEffectType);
@@ -42,6 +49,64 @@ final class AnimationReferenceValidator
             $id = $item->get('animationId');
             if ($id !== null) {
                 array_push($issues, ...$this->checkId($id, $ids, 'assets/Data/items.php: ' . strval($item->get('name'))));
+            }
+        }
+
+        return [...$issues, ...$this->checkRoles($workspace)];
+    }
+
+    /**
+     * Checks animation roles as the runtime reads them: a role it does not
+     * support makes it skip the whole animation, a role held twice plays
+     * neither, and a role the project's battles reach with no animation
+     * bound to it plays no effect.
+     *
+     * @return Issue[]
+     */
+    private function checkRoles(ProjectWorkspace $workspace): array
+    {
+        $where = 'assets/Data/animations.php';
+        $supported = ActionAnimationResolver::getSupportedRoles();
+        $database = $workspace->animationDatabase;
+        $holders = [];
+        $issues = [];
+
+        foreach ($database->getAnimations() as $index => $animation) {
+            foreach ($database->getRoles($index) as $role) {
+                if (! in_array($role, $supported, true)) {
+                    $issues[] = Issue::error("{$where}: {$animation->name}", sprintf('Its role "%s" is not one the Engine supports, so the whole animation is skipped.', $role),
+                        'Choose its roles in the Roles rows, which offer only supported roles.');
+                    continue;
+                }
+                $holders[$role][] = $animation->name;
+            }
+        }
+
+        foreach ($holders as $role => $names) {
+            if (count($names) > 1) {
+                $issues[] = Issue::error($where, sprintf('Role %s is bound to %s, so neither plays for it.', $role, implode(' and ', $names)),
+                    'Keep the role on one animation.');
+            }
+        }
+
+        // Every battle reaches the neutral attack (enemies) and the unarmed one
+        // (a party member with no weapon), and each weapon type the project's
+        // weapons use.
+        $reached = ['attack' => 'enemy and unclassified attacks', 'attack-unarmed' => 'attacks with no weapon equipped'];
+
+        foreach ($workspace->getRecordDatabase('weapons')?->getRecords() ?? [] as $weapon) {
+            $type = $weapon->get('equipmentType');
+            $type = $type instanceof WeaponType ? $type->value : (is_string($type) ? $type : null);
+
+            if ($type !== null && $type !== '') {
+                $reached['attack-' . strtolower($type)] ??= sprintf('attacks with a %s such as %s', strtolower($type), strval($weapon->get('name')));
+            }
+        }
+
+        foreach ($reached as $role => $reason) {
+            if (! isset($holders[$role])) {
+                $issues[] = Issue::warning($where, sprintf('No animation holds role %s, so %s play no effect.', $role, $reason),
+                    'Switch the role on for the animation that should play.');
             }
         }
 
