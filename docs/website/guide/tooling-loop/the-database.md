@@ -60,13 +60,11 @@ The types are `quest`, `switch`, `event`, `item`, `key_item`, and `variable`. Un
 
 Whether a category can be written is *detected*, not assumed. When a category loads, the editor asks two questions about its file: can every value be written back out losslessly, and would a rewrite drop a comment? Only when both answers are safe does the category accept edits.
 
-Editable today: Actors, Classes, Skills, Troops, States, Animations, Quests, Skits, Common Events, System, and Terms.
+Editable today: Actors, Classes, Skills, Items, Weapons, Armors, Enemies, Troops, States, Animations, Quests, Skits, Common Events, System, and Terms.
 
-Browsable but not writable: Items, Weapons, Armors, and Enemies.
+Enemies are one data file each under `assets/Data/Enemies`, and `enemies.php` loads them. An enemy's action patterns name skills from your skill catalogue, so you pick the skill rather than rebuild it.
 
-The reason is worth understanding, because it is a property of your project rather than a missing feature. `items.php` and `enemies.php` are not data files — they are PHP that *builds* data, constructing effect objects inline and sharing skills between enemies through local variables. Regenerating such a file from the values the editor loaded would mean inventing source, and anything the editor did not recognise would be silently lost.
-
-So the editor shows you the values and refuses to write. An enemy displays its level, every stat, its sprite, its battle rewards, and its element affinities — you simply edit the file itself when you want to change them.
+`items.php` is PHP that *builds* data with `new Item(...)`, `new Weapon(...)` and `new Armor(...)` calls. The editor never regenerates it: a change is patched into the argument it belongs to, so your imports, comments and the other entries stay exactly as you wrote them.
 
 Re-author one of those files as a plain array and the editor picks it up as editable automatically. Nothing in the editor needs to change.
 

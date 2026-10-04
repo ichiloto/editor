@@ -47,7 +47,8 @@ enum RecordFieldCodec: string
     case LINES = 'lines';
 
     /**
-     * A point stored as `[x, y]`, shown as `x, y`.
+     * Two whole numbers stored as `[first, second]`, shown as `first, second`:
+     * a staged position's `[x, y]`, or a condition's `[minimum, maximum]`.
      */
     case POINT = 'point';
 

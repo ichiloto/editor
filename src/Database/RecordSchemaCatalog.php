@@ -28,6 +28,8 @@ use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandFieldKind;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandRegistry;
 use Ichiloto\Engine\Events\Interpreter\EventInterpreter;
 use Ichiloto\Engine\Entities\Enemies\Enemy;
+use Ichiloto\Engine\Entities\Enemies\EnemyCatalog;
+use Ichiloto\Engine\Entities\Enumerations\ActionConditionType;
 use Ichiloto\Engine\Entities\Enumerations\ItemUserType;
 use Ichiloto\Engine\Progress\Knowledge\KnowledgeProgressService;
 use Ichiloto\Engine\Entities\Inventory\Accessory;
@@ -39,8 +41,6 @@ use Ichiloto\Engine\Entities\Enumerations\ArmorType;
 use Ichiloto\Engine\Entities\Enumerations\WeaponType;
 use Ichiloto\Engine\Entities\Character;
 use Ichiloto\Engine\Entities\ParameterChanges;
-use Ichiloto\Engine\Entities\Stats;
-use Ichiloto\Engine\Battle\BattleRewards;
 
 /**
  * The schemas behind the Database categories added in Phase 6.
@@ -49,8 +49,8 @@ use Ichiloto\Engine\Battle\BattleRewards;
  * when the file loads (see `PhpDataFile`). What these schemas declare is
  * where records live, what an entry is called, and which fields the settings
  * pane shows. Categories whose authored files are PHP constructor calls
- * (`items.php`, `enemies.php`) still get real field lists, because browsing
- * an enemy's stats is useful even when the editor refuses to rewrite them.
+ * (`items.php`) still get real field lists, because browsing an item is
+ * useful even when the editor refuses to rewrite it.
  */
 final class RecordSchemaCatalog
 {
@@ -820,11 +820,13 @@ final class RecordSchemaCatalog
     }
 
     /**
-     * Enemies — `assets/Data/enemies.php`.
+     * Enemies — one record per file under `assets/Data/Enemies`, the form the
+     * engine's `EnemyRecord` reads. Each file returns
+     * `['class' => Enemy::class, 'data' => [...]]`; `enemies.php` is the
+     * barrel that loads them.
      *
-     * The file builds `new Enemy(...)` objects and shares skill instances
-     * between them through local variables, so it cannot be regenerated from
-     * the loaded values. Edited by rebuilding the entry.
+     * Action patterns name skills in the project's skill catalogue, so a
+     * pattern is edited by picking the skill rather than rebuilding it.
      *
      * @return RecordSchema
      */
@@ -833,32 +835,54 @@ final class RecordSchemaCatalog
         return new RecordSchema(
             key: 'enemies',
             entryNoun: 'enemy',
-            storage: RecordStorage::LIST_FILE,
-            relativePath: 'assets/Data/enemies.php',
+            storage: RecordStorage::DIRECTORY,
+            relativePath: 'assets/Data/' . EnemyCatalog::DIRECTORY,
             fields: [
-                new RecordField('name', 'Name'),
+                new RecordField('name', 'Name', uniqueAcrossRecords: true),
                 new RecordField('level', 'Level', InputControlType::INTEGER),
                 RecordField::reference('imagePath', 'Sprite', 'enemy_sprites'),
-                new RecordField('stats.totalHp', 'HP', InputControlType::INTEGER),
-                new RecordField('stats.totalMp', 'MP', InputControlType::INTEGER),
+                new RecordField('stats.maxHp', 'Max HP', InputControlType::INTEGER),
+                new RecordField('stats.maxMp', 'Max MP', InputControlType::INTEGER),
                 new RecordField('stats.attack', 'Attack', InputControlType::INTEGER),
                 new RecordField('stats.defence', 'Defence', InputControlType::INTEGER),
                 new RecordField('stats.magicAttack', 'Magic Attack', InputControlType::INTEGER),
                 new RecordField('stats.magicDefence', 'Magic Defence', InputControlType::INTEGER),
+                new RecordField('stats.speed', 'Speed', InputControlType::INTEGER),
                 new RecordField('stats.grace', 'Grace', InputControlType::INTEGER),
                 new RecordField('stats.evasion', 'Evasion', InputControlType::INTEGER),
                 new RecordField('rewards.experience', 'Reward EXP', InputControlType::INTEGER),
                 new RecordField('rewards.gold', 'Reward Gold', InputControlType::INTEGER),
-                new RecordField('elementAffinities', 'Element Affinities', codec: RecordFieldCodec::AFFINITIES),
-                new RecordField('actionPatterns', 'Action Patterns', isReadOnly: true),
+                new RecordField('elementAffinities', 'Element Affinities', removeWhenEmpty: true, codec: RecordFieldCodec::AFFINITIES),
+                new RecordField('stateResistances', 'State Resistances', removeWhenEmpty: true, codec: RecordFieldCodec::KEY_VALUES),
+                RecordField::reference('knowledgeSubjectId', 'Knowledge Subject', 'knowledge_subjects', allowsNone: true),
             ],
             labelKey: 'name',
             identityKey: 'name',
-            recordFilter: static fn(mixed $entry): bool => $entry instanceof Enemy,
-            // An Enemy loads its sprite in its constructor, so a blank needs a
-            // real file to point at; a project with no enemy sprites cannot
-            // author an enemy yet, and creation refuses rather than crashing.
-            makeBlank: static function (string $name, string $projectRoot): ?object {
+            subList: new RecordSubList(
+                key: 'actionPatterns',
+                prefix: 'pattern',
+                singular: 'action pattern',
+                fields: [
+                    RecordField::reference('skill', 'Skill', 'skills'),
+                    new RecordField('rating', 'Rating', InputControlType::INTEGER),
+                    new RecordField(
+                        'condition.type',
+                        'Condition',
+                        options: array_map(static fn(ActionConditionType $type): string => $type->value, ActionConditionType::cases()),
+                        removeWhenEmpty: true,
+                        displayDefault: ActionConditionType::ALWAYS->value,
+                    ),
+                    new RecordField('condition.range', 'Range (min, max)', removeWhenEmpty: true, codec: RecordFieldCodec::POINT),
+                    new RecordField('condition.a', 'Condition A', InputControlType::INTEGER, removeWhenEmpty: true),
+                    new RecordField('condition.b', 'Condition B', InputControlType::INTEGER, removeWhenEmpty: true),
+                ],
+                blank: ['skill' => '', 'rating' => 5],
+            ),
+            // A new enemy needs a real sprite to load, so it starts on the
+            // project's first one; a project with no enemy sprites cannot
+            // author an enemy yet, and creation refuses rather than writing a
+            // record the engine would reject.
+            makeBlank: static function (string $name, string $projectRoot): ?array {
                 $spriteDirectory = rtrim($projectRoot, DIRECTORY_SEPARATOR) . '/assets/Graphics/Enemies';
                 $sprites = is_dir($spriteDirectory)
                     ? array_values(array_filter(
@@ -873,17 +897,20 @@ final class RecordSchemaCatalog
                     return null;
                 }
 
-                return new Enemy(
-                    $name,
-                    1,
-                    new Stats(currentHp: 10, attack: 5, defence: 5, speed: 5),
+                return [
+                    'name' => $name,
+                    'level' => 1,
                     // graphics() appends the extension itself, so the stem is
                     // what an imagePath stores.
-                    pathinfo($sprites[0], PATHINFO_FILENAME),
-                    new BattleRewards(1, 1, []),
-                    [],
-                );
+                    'imagePath' => pathinfo($sprites[0], PATHINFO_FILENAME),
+                    'stats' => [
+                        'maxHp' => 10, 'maxMp' => 10, 'attack' => 5, 'defence' => 5, 'magicAttack' => 5,
+                        'magicDefence' => 5, 'speed' => 5, 'grace' => 1, 'evasion' => 0,
+                    ],
+                    'rewards' => ['experience' => 1, 'gold' => 1],
+                ];
             },
+            recordClass: Enemy::class,
         );
     }
 

@@ -44,6 +44,9 @@ final readonly class RecordSchema
      * both exclusions, but they are not picked from the same list.
      * @param Closure(array<string, mixed>): string|null $labelFor The entry
      * label, when a record's name is made of its parts rather than stored.
+     * @param string|null $recordClass For one-file-per-record categories whose
+     * files return `['class' => $recordClass, 'data' => [...]]`: the record is
+     * the data, and saves write it back inside the same envelope.
      */
     public function __construct(
         public string $key,
@@ -65,6 +68,7 @@ final readonly class RecordSchema
         public ?RecordProjection $projection = null,
         public ?Closure $fieldsFor = null,
         public ?Closure $labelFor = null,
+        public ?string $recordClass = null,
     ) {
     }
 

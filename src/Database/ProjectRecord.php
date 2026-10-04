@@ -28,6 +28,7 @@ final class ProjectRecord
      * @param string|null $sourcePath The file backing this record, for one-file-per-record categories.
      * @param string $recordId The record identity, when it comes from the filename rather than the payload.
      * @param PhpDataFile|null $file The loaded source file, for one-file-per-record categories.
+     * @param string|null $loadProblem Why the file could not be read as a record, which leaves it listed but read-only.
      */
     public function __construct(
         private array|object $payload,
@@ -35,6 +36,7 @@ final class ProjectRecord
         public readonly ?string $sourcePath = null,
         public readonly string $recordId = '',
         public readonly ?PhpDataFile $file = null,
+        private readonly ?string $loadProblem = null,
     ) {
         if (! $isDirty) {
             $this->captureBaseline();
@@ -67,7 +69,7 @@ final class ProjectRecord
             );
         }
 
-        return $this->file?->readOnlyReason;
+        return $this->loadProblem ?? $this->file?->readOnlyReason;
     }
 
     /**

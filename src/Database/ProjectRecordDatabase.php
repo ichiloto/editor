@@ -826,7 +826,8 @@ final class ProjectRecordDatabase
                 return null;
             }
 
-            if (! is_object($payload)) {
+            // A data record's blank is its data; a constructor list's, the object.
+            if ($this->schema->recordClass !== null ? ! is_array($payload) : ! is_object($payload)) {
                 return null;
             }
         }
@@ -850,13 +851,7 @@ final class ProjectRecordDatabase
         $file = null;
 
         if ($this->schema->storage === RecordStorage::DIRECTORY) {
-            $recordId = $recordId !== '' ? $recordId : $this->makeUniqueFileStem('new-' . str_replace(' ', '-', $this->schema->entryNoun));
-            $sourcePath = $this->path . DIRECTORY_SEPARATOR . $recordId . '.php';
-            $file = PhpDataFile::load($sourcePath);
-
-            if ($this->schema->listPayloadKey !== null) {
-                $payload['__scriptId'] = $recordId;
-            }
+            [$recordId, $sourcePath, $file, $payload] = $this->prepareRecordFile($recordId, $payload);
         }
 
         // A record the file has never held: it has no authored identity or
@@ -1022,23 +1017,23 @@ final class ProjectRecordDatabase
     public function duplicateRecordSupported(): bool
     {
         return $this->isEditable()
-            && $this->schema->storage === RecordStorage::LIST_FILE
+            && in_array($this->schema->storage, [RecordStorage::LIST_FILE, RecordStorage::DIRECTORY], true)
             && ! $this->isConstructorAuthored();
     }
 
     /**
      * Duplicates a record below itself, with a fresh unique identity.
      *
-     * Only list-file categories duplicate: a per-file or object-backed
-     * record's copy would need its own source decisions, which nothing
-     * requires yet.
+     * List-file and per-file categories duplicate; a per-file copy gets a
+     * file of its own. Object-backed records' copies would need their own
+     * source decisions, which nothing requires yet.
      *
      * @param int $index The record to copy.
      * @return int|null The copy's index, or null when nothing was copied.
      */
     public function duplicateRecord(int $index): ?int
     {
-        if (! $this->isEditable() || $this->schema->storage !== RecordStorage::LIST_FILE) {
+        if (! $this->duplicateRecordSupported()) {
             return null;
         }
 
@@ -1046,7 +1041,7 @@ final class ProjectRecordDatabase
         $source = $records[$index] ?? null;
         $payload = $source?->toArray();
 
-        if (! $source instanceof ProjectRecord || ! is_array($payload)) {
+        if (! $source instanceof ProjectRecord || ! $source->isEditable() || ! is_array($payload)) {
             return null;
         }
         $identityKey = $this->schema->identityKey;
@@ -1066,7 +1061,14 @@ final class ProjectRecordDatabase
 
         // A record the file has never held: no authored identity or values,
         // which is what tells the source writer to insert it.
-        $copy = new ProjectRecord($payload, true, null, $recordId);
+        $sourcePath = null;
+        $file = null;
+
+        if ($this->schema->storage === RecordStorage::DIRECTORY) {
+            [$recordId, $sourcePath, $file, $payload] = $this->prepareRecordFile($recordId !== '' ? $recordId : $source->recordId, $payload);
+        }
+
+        $copy = new ProjectRecord($payload, true, $sourcePath, $recordId, $file);
         array_splice($records, $index + 1, 0, [$copy]);
         $this->records = $records;
         $this->touchState();
@@ -1387,6 +1389,28 @@ final class ProjectRecordDatabase
                     '__scriptId' => $stem,
                     $schema->listPayloadKey => is_array($payload) ? array_values($payload) : [],
                 ];
+            }
+
+            $problem = $payload === null ? $file->readOnlyReason : null;
+
+            if ($problem === null && $schema->recordClass !== null) {
+                if (is_array($payload) && is_array($payload['data'] ?? null)
+                    && ltrim(strval($payload['class'] ?? ''), '\\') === $schema->recordClass) {
+                    $payload = $payload['data'];
+                } else {
+                    $problem = sprintf(
+                        "%s does not return ['class' => %s::class, 'data' => [...]]",
+                        basename($filename),
+                        substr(strrchr('\\' . $schema->recordClass, '\\') ?: '', 1),
+                    );
+                }
+            }
+
+            if ($problem !== null) {
+                // A file that cannot be read as a record stays in the list,
+                // read-only with the reason, rather than vanishing from it.
+                $records[] = new ProjectRecord([$schema->labelKey => $stem], false, $filename, $stem, $file, $problem);
+                continue;
             }
 
             if (! is_array($payload)) {
@@ -2377,6 +2401,10 @@ final class ProjectRecordDatabase
                 $payload = array_values((array) ($payload[$this->schema->listPayloadKey] ?? []));
             }
 
+            if ($this->schema->recordClass !== null) {
+                $payload = ['class' => $this->schema->recordClass, 'data' => $payload];
+            }
+
             $file->save($payload);
         }
 
@@ -2929,7 +2957,7 @@ final class ProjectRecordDatabase
             $parts = array_map(trim(...), explode(',', $trimmed));
 
             if (count($parts) !== 2 || ! is_numeric($parts[0]) || ! is_numeric($parts[1])) {
-                throw new \InvalidArgumentException(sprintf('%s must be two numbers, x and y, separated by a comma.', $field->label));
+                throw new \InvalidArgumentException(sprintf('%s must be two whole numbers separated by a comma.', $field->label));
             }
 
             return [intval($parts[0]), intval($parts[1])];
@@ -4042,6 +4070,28 @@ final class ProjectRecordDatabase
         }
 
         return $candidate;
+    }
+
+    /**
+     * Chooses the file a new per-file record is written to: named after its
+     * identity, or after the category when it has none, and never an existing
+     * file.
+     *
+     * @param string $identity The record's identity, or an empty string.
+     * @param array<string, mixed>|object $payload The record payload.
+     * @return array{0: string, 1: string, 2: PhpDataFile, 3: array<string, mixed>|object} The file stem,
+     *   path, (not yet written) file and payload.
+     */
+    private function prepareRecordFile(string $identity, array|object $payload): array
+    {
+        $stem = $this->makeUniqueFileStem(Slug::of($identity) ?: 'new-' . Slug::of($this->schema->entryNoun));
+        $sourcePath = $this->path . DIRECTORY_SEPARATOR . $stem . '.php';
+
+        if ($this->schema->listPayloadKey !== null && is_array($payload)) {
+            $payload['__scriptId'] = $stem;
+        }
+
+        return [$stem, $sourcePath, PhpDataFile::load($sourcePath), $payload];
     }
 
     /**

@@ -1015,7 +1015,7 @@ status line says exactly why.
 | Items | `assets/Data/items.php` | Editable - authored as `new Item(...)` calls, edited entry by entry |
 | Weapons | `assets/Data/items.php` | Editable - authored as `new Weapon(...)` calls, edited entry by entry |
 | Armors | `assets/Data/items.php` | Editable - authored as `new Armor(...)` calls, edited entry by entry |
-| Enemies | `assets/Data/enemies.php` | Editable - authored as `new Enemy(...)` calls, edited entry by entry |
+| Enemies | `assets/Data/Enemies/*.php` | Editable - one data record per file, which `enemies.php` loads |
 | Troops | `assets/Data/troops.php` | Editable |
 | Battle Entry | `assets/Data/battle-entry-rules.php` | Editable |
 | States | `assets/Data/states.php` | Editable |
@@ -1044,8 +1044,8 @@ its battle rewards, and its element affinities.
 
 ### How A File Of Constructor Calls Is Written
 
-`items.php` and `enemies.php` are not data, they are PHP code that *builds*
-data: `new Item(...)` and `new Enemy(...)` calls with named arguments,
+`items.php` is not data, it is PHP code that *builds* data: `new Item(...)`,
+`new Weapon(...)` and `new Armor(...)` calls with named arguments,
 imports, comments, and enum expressions the author chose. Regenerating such
 a file from loaded values would reorder arguments, spell out defaults nobody
 wrote, and rewrite every entry to change one. So the editor does not
@@ -1062,8 +1062,8 @@ regenerate it. It edits the author's own source, entry by entry:
   ahead of the entry that follows it in the list - so the file reads in the
   order the editor does.
 
-Every entry is found by the identity it declares - an item's stable id, an
-enemy's name - looked up in a fresh reading of the file at the moment of
+Every entry is found by the identity it declares - an item's stable id -
+looked up in a fresh reading of the file at the moment of
 writing, never by where it happened to sit when it was loaded. That is what
 lets three categories share one file: Items, Weapons and Armors are three
 views of `items.php`, and saving one of them, or all of them with `Ctrl+A`,
@@ -1086,6 +1086,20 @@ Files that are data - Troops, States, Permanent Growth - are regenerated as
 data, keeping everything from `<?php` to the top-level `return` byte for
 byte, and a file several categories share is folded from all of them into
 one payload before its one write.
+
+### One Record Per File
+
+An enemy is one file under `assets/Data/Enemies`, returning
+`['class' => Enemy::class, 'data' => [...]]` with plain values: name,
+level, sprite, stats, rewards, element affinities, state resistances, its
+knowledge subject, and action patterns that name a skill from the skill
+catalogue with a rating and an optional condition. `enemies.php` is the
+barrel that loads the folder, so the game and every other reader get the
+same enemies. Editing a value changes only that value in that enemy's file,
+keeping its imports and comments. A new enemy gets a file named after it
+and starts on the project's first enemy sprite; a duplicate gets a file and
+a name of its own. A file in the folder that is not an enemy record stays
+in the list, read-only, saying why.
 
 ### Project-Owned Parameters
 
