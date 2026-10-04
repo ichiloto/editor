@@ -12,6 +12,7 @@ use Throwable;
 use Ichiloto\Editor\History\TracksPersistedState;
 use Ichiloto\Editor\ProjectDirectoryContext;
 use Ichiloto\Editor\ProjectConfig;
+use Ichiloto\Editor\Database\Projections\WholeFileProjection;
 use Ichiloto\Editor\Inspector\InputControl;
 use Ichiloto\Editor\Inspector\InputControlType;
 use RuntimeException;
@@ -705,6 +706,14 @@ final class ProjectRecordDatabase
             }
 
             $value = self::coerce($field, $rawValue);
+            if ($this->schema->storage === RecordStorage::CONFIG_SUBTREE) {
+                $this->config?->assertAcceptableValue(strval($record->get('path')), $value);
+                // A setting the file leaves out already reads as its default:
+                // choosing that default writes nothing.
+                if ($record->get('value') === null && ! $this->config?->holds(strval($record->get('path'))) && $value == $record->get('default')) {
+                    return;
+                }
+            }
             if ($field->uniqueAcrossRecords) {
                 is_array($value)
                     ? $this->assertMembersUnclaimed($record, $field, $value)
@@ -849,8 +858,15 @@ final class ProjectRecordDatabase
     public function supportsRecordCreation(): bool
     {
         return $this->isEditable()
+            && ! $this->holdsOneRecord()
             && $this->schema->storage !== RecordStorage::CONFIG_SUBTREE
             && $this->schema->storage !== RecordStorage::FILE_LISTING;
+    }
+
+    /** Whether the file is the category's one record (system.php), only ever edited. */
+    private function holdsOneRecord(): bool
+    {
+        return $this->schema->projection instanceof WholeFileProjection;
     }
 
     /**
@@ -861,7 +877,7 @@ final class ProjectRecordDatabase
      */
     public function supportsRecordDeletion(): bool
     {
-        return $this->isEditable() && $this->schema->storage !== RecordStorage::CONFIG_SUBTREE;
+        return $this->isEditable() && ! $this->holdsOneRecord() && $this->schema->storage !== RecordStorage::CONFIG_SUBTREE;
     }
 
     /**
@@ -1094,6 +1110,7 @@ final class ProjectRecordDatabase
     public function duplicateRecordSupported(): bool
     {
         return $this->isEditable()
+            && ! $this->holdsOneRecord()
             && in_array($this->schema->storage, [RecordStorage::LIST_FILE, RecordStorage::DIRECTORY], true)
             && ! $this->isConstructorAuthored();
     }
@@ -2471,6 +2488,48 @@ final class ProjectRecordDatabase
      *
      * @return void
      */
+    /**
+     * What a one-file-per-record category writes for a record: its command
+     * list bare for an event script, its data in its envelope for a record
+     * class, the record itself otherwise.
+     */
+    private function composeRecordFilePayload(ProjectRecord $record): mixed
+    {
+        $payload = $record->toArray();
+
+        if ($this->schema->listPayloadKey !== null && is_array($payload)) {
+            $payload = array_values((array) ($payload[$this->schema->listPayloadKey] ?? []));
+        }
+
+        if ($this->schema->recordClass !== null) {
+            $payload = ['class' => $this->schema->recordClass, 'data' => $payload];
+        }
+
+        return $payload;
+    }
+
+    /**
+     * Refuses an edit the record's file could not be saved with - a value
+     * the author wrote as an expression the editor cannot rewrite - by working
+     * out exactly what a save would write, and writing nothing.
+     *
+     * @throws \Ichiloto\Editor\Cutscenes\Source\SourcePreservationRefusal|SourceIdentityConflict|RuntimeException When a save would be refused.
+     */
+    public function assertSourceAccepts(int $index): void
+    {
+        $record = $this->getRecordByIndex($index);
+
+        if (! $record instanceof ProjectRecord || ! $record->isDirty()) {
+            return;
+        }
+
+        match ($this->schema->storage) {
+            RecordStorage::LIST_FILE => SharedFileTransaction::preview([$this]),
+            RecordStorage::DIRECTORY => $record->file?->composeContents($this->composeRecordFilePayload($record)),
+            default => null,
+        };
+    }
+
     private function saveDirectory(): void
     {
         if (! is_dir($this->path) && ! mkdir($this->path, 0777, true) && ! is_dir($this->path)) {
@@ -2486,17 +2545,7 @@ final class ProjectRecordDatabase
                 continue;
             }
 
-            $payload = $record->toArray();
-
-            if ($this->schema->listPayloadKey !== null && is_array($payload)) {
-                $payload = array_values((array) ($payload[$this->schema->listPayloadKey] ?? []));
-            }
-
-            if ($this->schema->recordClass !== null) {
-                $payload = ['class' => $this->schema->recordClass, 'data' => $payload];
-            }
-
-            $file->save($payload);
+            $file->save($this->composeRecordFilePayload($record));
         }
 
         foreach ($this->stagedDeletions as $path) {
@@ -3145,11 +3194,14 @@ final class ProjectRecordDatabase
             return $items === [] && $field->removeWhenEmpty ? null : $items;
         }
 
-        if ($field->enumClass !== null && is_subclass_of($field->enumClass, BackedEnum::class)) {
+        if ($field->enumClass !== null && enum_exists($field->enumClass)) {
             // The stored value is the enum case, not its string: an object
             // rebuild hands it straight back to a typed constructor argument.
+            // A case is chosen by its value or by its name, whichever the
+            // field offers.
             foreach ($field->enumClass::cases() as $case) {
-                if (mb_strtolower(strval($case->value)) === mb_strtolower($trimmed)) {
+                if (($case instanceof BackedEnum && mb_strtolower(strval($case->value)) === mb_strtolower($trimmed))
+                    || mb_strtolower($case->name) === mb_strtolower($trimmed)) {
                     return $case;
                 }
             }
@@ -3189,6 +3241,13 @@ final class ProjectRecordDatabase
      */
     private static function displayValue(RecordField $field, mixed $value): string
     {
+        // An enum case reads as the field offers it: by value, or by name
+        // where the field offers names (a value that is not readable text).
+        if ($value instanceof \UnitEnum && $field->enumClass !== null
+            && (! $value instanceof BackedEnum || ! in_array(strval($value->value), array_map(strval(...), $field->options), true))) {
+            return $value->name;
+        }
+
         // An absent key reads as what the runtime will do with it, and an
         // empty string as what the runtime means by it, when the schema says
         // so -- neither is left as a blank for the author to decode.

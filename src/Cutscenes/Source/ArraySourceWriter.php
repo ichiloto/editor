@@ -113,6 +113,14 @@ final class ArraySourceWriter
             return;
         }
 
+        // An enum case's value, written as `Enum::CASE->value`, stays written
+        // that way: the new value is the matching case of the same enum.
+        if ($node->kind === SourceNode::EXPRESSION && ($literal = $this->findEnumValueExpression($node, $new)) !== null) {
+            $this->edits[] = $this->document->replaceValueEdit($path, $literal);
+
+            return;
+        }
+
         // A scalar or null now sits here.
         match ($node->kind) {
             SourceNode::SCALAR => $this->edits[] = $this->replacementFor($node, $path, $new),
@@ -677,6 +685,52 @@ final class ArraySourceWriter
      * @param array<int, int|string> $path
      * @return array{0: int, 1: int, 2: string}
      */
+    /**
+     * The expression for a new value where the file writes an enum case's
+     * value as `Enum::CASE->value`: the same enum, the case holding the new
+     * value. Null when the expression is anything else, or no case holds it.
+     */
+    private function findEnumValueExpression(SourceNode $node, mixed $new): ?string
+    {
+        $text = trim(substr($this->document->source, $node->start, $node->end - $node->start));
+
+        if ((! is_string($new) && ! is_int($new))
+            || preg_match('/^(\\\\?[A-Za-z_][A-Za-z0-9_\\\\]*)::[A-Za-z_][A-Za-z0-9_]*->value$/', $text, $match) !== 1) {
+            return null;
+        }
+
+        $class = $this->resolveClassName($match[1]);
+
+        if ($class === null || ! is_subclass_of($class, \BackedEnum::class)) {
+            return null;
+        }
+
+        $case = $class::tryFrom($new);
+
+        return $case === null ? null : $match[1] . '::' . $case->name . '->value';
+    }
+
+    /** A class name as the file writes it, resolved through its own imports. */
+    private function resolveClassName(string $name): ?string
+    {
+        if (str_starts_with($name, '\\')) {
+            return ltrim($name, '\\');
+        }
+
+        $first = explode('\\', $name)[0];
+        preg_match_all('/^\s*use\s+([A-Za-z0-9_\\\\]+)(?:\s+as\s+([A-Za-z0-9_]+))?\s*;/m', $this->document->source, $uses, PREG_SET_ORDER);
+
+        foreach ($uses as $use) {
+            $alias = ($use[2] ?? '') !== '' ? $use[2] : substr((string) strrchr('\\' . $use[1], '\\'), 1);
+
+            if ($alias === $first) {
+                return $use[1] . substr($name, strlen($first));
+            }
+        }
+
+        return null;
+    }
+
     private function replacementFor(SourceNode $node, array $path, mixed $value): array
     {
         return $this->document->replaceValueEdit($path, $this->literalFor($value, $path));

@@ -28,7 +28,7 @@ final readonly class MapReferences
     public function describe(string $mapId): array
     {
         $found = [];
-        $positions = $this->workspace->systemDatabase->getField('startingPositions');
+        $positions = $this->workspace->getSystemField('startingPositions');
         if (is_array($positions)) {
             foreach ($positions as $role => $position) {
                 if (is_array($position) && ($position['destinationMap'] ?? null) === $mapId) {

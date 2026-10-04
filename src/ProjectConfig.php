@@ -17,10 +17,16 @@ use Ichiloto\Engine\Rendering\FieldViewport;
 use RuntimeException;
 use Throwable;
 
-/** One source owner for config.php, shared by Terms and System's field zoom. */
+/** One source owner for config.php, shared by Terms and Configuration. */
 final class ProjectConfig
 {
     public const string FIELD_ZOOM = 'graphics.field.zoom';
+
+    /**
+     * Settings the engine reads with a default when the file leaves them
+     * out, by path, with that default.
+     */
+    private const array ENGINE_DEFAULTS = [self::FIELD_ZOOM => FieldViewport::DEFAULT_ZOOM];
     private ?PhpArraySourceDocument $document = null;
     private ?string $issue = null;
     private array $payload = [];
@@ -56,7 +62,11 @@ final class ProjectConfig
         if (! isset($this->records[$path])) {
             $value = self::getValue($this->payload, $path);
             $this->originalValues[$path] = $value;
-            $this->records[$path] = new ProjectRecord(['path' => $path, 'value' => $value]);
+            // A setting the engine knows carries the default it reads when
+            // the file holds none, which is what the setting reads as here.
+            $this->records[$path] = new ProjectRecord(array_key_exists($path, self::ENGINE_DEFAULTS)
+                ? ['path' => $path, 'value' => $value, 'default' => self::ENGINE_DEFAULTS[$path]]
+                : ['path' => $path, 'value' => $value]);
         }
         return $this->records[$path];
     }
@@ -70,7 +80,7 @@ final class ProjectConfig
                 $path = $prefix . '.' . $key;
                 $hasDottedKey = $ambiguous || str_contains((string) $key, '.');
                 if (is_array($value)) { $visit($value, $path, $hasDottedKey); }
-                elseif (! is_object($value)) {
+                elseif (! is_object($value) || $value instanceof \UnitEnum) {
                     if ($hasDottedKey) {
                         $this->fieldIssues[$path] = $path . ' contains a dotted literal key, ambiguous with a nested path; it is preserved read-only.';
                         $records[] = new ProjectRecord(['path' => $path, 'value' => $value]);
@@ -81,12 +91,34 @@ final class ProjectConfig
         foreach ($roots as $root) {
             if (is_array($this->payload[$root] ?? null)) { $visit($this->payload[$root], $root); }
         }
+        // A setting the engine knows is offered even where the file leaves it
+        // out, so it can be set without being typed in by hand.
+        foreach (array_keys(self::ENGINE_DEFAULTS) as $path) {
+            $root = explode('.', $path)[0];
+            if (in_array($root, $roots, true) && self::getValue($this->payload, $path) === null && $this->issue === null) {
+                $records[] = $this->getRecord($path);
+            }
+        }
         return $records;
     }
 
     public function getReadOnlyReason(): ?string
     {
         return $this->issue;
+    }
+
+    /**
+     * Refuses a value the engine would not accept at a path, before anything
+     * changes: a field zoom outside its range.
+     *
+     * @throws \InvalidArgumentException
+     */
+    public function assertAcceptableValue(string $path, mixed $value): void
+    {
+        if ($path === self::FIELD_ZOOM && (! is_int($value) && ! is_float($value)
+            || ! is_finite((float) $value) || $value < FieldViewport::MIN_ZOOM || $value > FieldViewport::MAX_ZOOM)) {
+            throw new \InvalidArgumentException(sprintf('Field zoom must be a finite number from %g to %g.', FieldViewport::MIN_ZOOM, FieldViewport::MAX_ZOOM));
+        }
     }
 
     public function getFieldIssue(string $path): ?string
@@ -100,23 +132,10 @@ final class ProjectConfig
         }
     }
 
-    public function getFieldZoom(): mixed
+    /** Whether the file authors a setting at all, as opposed to leaving it to its default. */
+    public function holds(string $path): bool
     {
-        $value = $this->getRecord(self::FIELD_ZOOM)->get('value');
-        return $value === null && $this->document?->nodeAt(explode('.', self::FIELD_ZOOM)) === null
-            ? FieldViewport::DEFAULT_ZOOM : $value;
-    }
-
-    public function setFieldZoom(string $raw): void
-    {
-        $value = filter_var($raw, FILTER_VALIDATE_FLOAT);
-        if ($value === false || ! is_finite($value) || $value < FieldViewport::MIN_ZOOM || $value > FieldViewport::MAX_ZOOM) {
-            throw new RuntimeException(sprintf('Field zoom must be a finite number from %g to %g.', FieldViewport::MIN_ZOOM, FieldViewport::MAX_ZOOM));
-        }
-        if (($issue = $this->getFieldIssue(self::FIELD_ZOOM)) !== null) { throw new SourcePreservationRefusal($issue); }
-        $current = $this->getFieldZoom();
-        if ((is_int($current) || is_float($current)) && $value == $current) { return; }
-        $this->getRecord(self::FIELD_ZOOM)->set('value', $value);
+        return $this->document?->nodeAt(explode('.', $path)) !== null;
     }
 
     public function isDirty(): bool
@@ -187,7 +206,9 @@ final class ProjectConfig
             $walked[] = $key;
             $node = $entry->value;
         }
-        if ($node->kind !== SourceNode::SCALAR) {
+        // An enum case is written as one: replacing it with another case of
+        // its enum keeps the file reading the same kind of value.
+        if ($node->kind !== SourceNode::SCALAR && ! self::getValue($this->payload, $path) instanceof \UnitEnum) {
             throw new SourcePreservationRefusal($path . ' is an authored expression, not an editable literal.');
         }
         return $document->replaceValueEdit($walked, $literal);

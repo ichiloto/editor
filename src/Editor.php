@@ -9293,14 +9293,6 @@ final class Editor
                 $this->backupBeforeSave(...$this->workspace->skillDatabase->getBackupPaths());
                 $this->workspace->skillDatabase->save();
                 $this->setStatus('Skill database saved.', StatusLevel::SUCCESS);
-            } elseif ($this->isSystemDatabaseSelected()) {
-                if ($this->workspace->config?->isDirty()) {
-                    $this->backupBeforeSave($this->workspace->config->path);
-                    $this->workspace->config->save();
-                }
-                $this->backupBeforeSave(...$this->workspace->systemDatabase->getBackupPaths());
-                $this->workspace->systemDatabase->save();
-                $this->setStatus('System database saved.', StatusLevel::SUCCESS);
             } elseif (($recordDatabase = $this->getSelectedRecordDatabase()) instanceof ProjectRecordDatabase) {
                 if (! $recordDatabase->isEditable()) {
                     $this->setStatus($this->describeRecordReadOnly($recordDatabase), StatusLevel::WARN);
@@ -9346,10 +9338,6 @@ final class Editor
 
         if ($this->isSkillsDatabaseSelected()) {
             return $this->getDatabaseSkillSettingsFields();
-        }
-
-        if ($this->isSystemDatabaseSelected()) {
-            return $this->getDatabaseSystemSettingsFields();
         }
 
         $recordDatabase = $this->getSelectedRecordDatabase();
@@ -11240,57 +11228,6 @@ final class Editor
     }
 
     /**
-     * Returns the editable settings fields for the project system.
-     *
-     * @return array<int, array<string, mixed>>
-     */
-    private function getDatabaseSystemSettingsFields(): array
-    {
-        if (! $this->workspace instanceof ProjectWorkspace) {
-            return [];
-        }
-
-        $system = $this->workspace->systemDatabase;
-        $config = $this->workspace->config;
-        $zoomIssue = $config?->getFieldIssue(ProjectConfig::FIELD_ZOOM);
-        $zoom = $config === null ? [] : [[
-            'label' => 'Field Zoom (GPUI only)',
-            'value' => ProjectRecord::stringify($config->getFieldZoom()),
-            'field' => ProjectConfig::FIELD_ZOOM,
-            ...($zoomIssue === null ? ['control' => new InputControl(InputControlType::FLOAT, ProjectRecord::stringify($config->getFieldZoom()))] : []),
-        ], ['label' => $zoomIssue === null ? 'Field Zoom Range' : 'Read-only',
-            'value' => $zoomIssue ?? '1 to 8; default 1. Terminal and UI size stay unchanged.', 'editable' => false]];
-
-        return [
-            [
-                'label' => 'Battle Engine',
-                'value' => $system->getBattleEngine(),
-                'options' => ['traditional', 'active_time'],
-                'field' => 'battleEngine',
-            ],
-            [
-                'label' => 'ATB Mode',
-                'value' => $system->getAtbMode(),
-                'options' => ['wait'],
-                'field' => 'atbMode',
-            ],
-            [
-                'label' => 'ATB Base Fill Rate',
-                'value' => (string) $system->getAtbBaseFillRate(),
-                'control' => new InputControl(InputControlType::INTEGER, (string) $system->getAtbBaseFillRate()),
-                'field' => 'atbBaseFillRate',
-            ],
-            [
-                'label' => 'ATB Speed Factor %',
-                'value' => (string) $system->getAtbSpeedFactorPercent(),
-                'control' => new InputControl(InputControlType::INTEGER, (string) $system->getAtbSpeedFactorPercent()),
-                'field' => 'atbSpeedFactorPercent',
-            ],
-            ...$zoom,
-        ];
-    }
-
-    /**
      * Applies one database settings value and records it for undo/redo.
      *
      * The command pins the entry identity (category, entry index, frame), so
@@ -11355,15 +11292,11 @@ final class Editor
             'records' => $this->databaseSelectedRecordIndexes,
         ];
 
-        $record = $this->isSystemDatabaseSelected() && $fieldId === ProjectConfig::FIELD_ZOOM
-            ? $this->workspace?->config?->getRecord(ProjectConfig::FIELD_ZOOM)
-            : null;
-        $before = $record?->toArray();
         $actor = $this->isActorsDatabaseSelected() ? $this->getSelectedActor() : null;
         $actorBefore = $actor?->getData();
         // A schema record's edit is one step only when it changed the record:
         // a value the record refused, or the value it already held, leaves none.
-        $schemaRecord = $record === null && $actor === null
+        $schemaRecord = $actor === null
             ? $this->getSelectedRecordDatabase()?->getRecordByIndex($this->getSelectedRecordIndex())
             : null;
         $schemaBefore = $schemaRecord?->toArray();
@@ -11380,18 +11313,6 @@ final class Editor
                     sprintf('%s edit', $field['label'] ?? 'Actor field'),
                     static fn() => $actor->restoreData($actorAfter),
                     static fn() => $actor->restoreData($actorBefore),
-                ));
-            }
-            return;
-        }
-
-        if ($record !== null && $before !== null) {
-            $after = $record->toArray();
-            if ($before !== $after) {
-                $this->recordCommand(new GenericCommand(
-                    sprintf('%s edit', $field['label'] ?? 'Database field'),
-                    static fn() => $record->restorePayload($after),
-                    static fn() => $record->restorePayload($before),
                 ));
             }
             return;
@@ -11551,18 +11472,6 @@ final class Editor
                 ? max(0, intval($rawValue))
                 : ($field === "scopeTargetCount" ? $rawValue : trim($rawValue));
             $this->workspace->skillDatabase->setField($this->databaseSelectedSkillIndex, $field, $value);
-            return;
-        }
-
-        if ($this->isSystemDatabaseSelected()) {
-            if ($field === ProjectConfig::FIELD_ZOOM) {
-                $this->workspace->config?->setFieldZoom($rawValue);
-                return;
-            }
-            $value = in_array($field, ['battleEngine', 'atbMode'], true)
-                ? trim($rawValue)
-                : max(0, intval($rawValue));
-            $this->workspace->systemDatabase->setField($field, $value);
             return;
         }
 
@@ -13777,10 +13686,6 @@ final class Editor
             return $this->getDatabaseSkillListLines();
         }
 
-        if ($this->isSystemDatabaseSelected()) {
-            return $this->getDatabaseSystemListLines();
-        }
-
         if ($this->getSelectedRecordDatabase() instanceof ProjectRecordDatabase) {
             return $this->getDatabaseRecordListLines();
         }
@@ -13918,18 +13823,6 @@ final class Editor
         return $lines;
     }
 
-
-    /**
-     * Returns the system list lines.
-     *
-     * @return string[]
-     */
-    private function getDatabaseSystemListLines(): array
-    {
-        $dirty = $this->workspace?->systemDatabase->isDirty() === true || $this->workspace?->config?->isDirty() === true ? ' *' : '';
-
-        return [sprintf('> Project System%s', $dirty)];
-    }
 
     /**
      * Returns the current Database settings lines.
@@ -14119,6 +14012,26 @@ final class Editor
     }
 
     /**
+     * The project's battle settings as the system record holds them, with
+     * the defaults the engine reads where it holds none.
+     *
+     * @return array{engine: string, mode: string, baseFillRate: int, speedFactorPercent: int}
+     */
+    private function getSystemBattleSettings(): array
+    {
+        $battle = $this->workspace?->getSystemField('battle');
+        $battle = is_array($battle) ? $battle : [];
+        $activeTime = is_array($battle['activeTime'] ?? null) ? $battle['activeTime'] : [];
+
+        return [
+            'engine' => strval($battle['engine'] ?? 'traditional'),
+            'mode' => strval($activeTime['mode'] ?? 'wait'),
+            'baseFillRate' => max(1, intval($activeTime['baseFillRate'] ?? 35)),
+            'speedFactorPercent' => max(0, intval($activeTime['speedFactorPercent'] ?? 35)),
+        ];
+    }
+
+    /**
      * Returns the system battle summary lines.
      *
      * @return string[]
@@ -14129,13 +14042,13 @@ final class Editor
             return ['No system settings loaded.'];
         }
 
-        $system = $this->workspace->systemDatabase;
+        $system = $this->getSystemBattleSettings();
 
         return [
-            sprintf('Engine: %s', $system->getBattleEngine()),
-            sprintf('ATB Mode: %s', $system->getAtbMode()),
-            sprintf('Base Fill Rate: %d', $system->getAtbBaseFillRate()),
-            sprintf('Speed Factor: %d%%', $system->getAtbSpeedFactorPercent()),
+            sprintf('Engine: %s', $system['engine']),
+            sprintf('ATB Mode: %s', $system['mode']),
+            sprintf('Base Fill Rate: %d', $system['baseFillRate']),
+            sprintf('Speed Factor: %d%%', $system['speedFactorPercent']),
         ];
     }
 
@@ -14417,9 +14330,9 @@ final class Editor
             return ['No system settings loaded.'];
         }
 
-        $system = $this->workspace->systemDatabase;
+        $system = $this->getSystemBattleSettings();
 
-        if ($system->getBattleEngine() !== 'active_time') {
+        if ($system['engine'] !== 'active_time') {
             return [
                 'Traditional turn-based battles.',
                 'ATB settings are stored but inactive.',
@@ -14581,17 +14494,17 @@ final class Editor
             return ['No system settings loaded.'];
         }
 
-        $system = $this->workspace->systemDatabase;
-        $engine = $system->getBattleEngine();
+        $system = $this->getSystemBattleSettings();
+        $engine = $system['engine'];
 
         if ($engine === 'active_time') {
             return [
                 'Battle Engine',
                 'Active Time Battle',
                 '',
-                sprintf('Mode: %s', $system->getAtbMode()),
-                sprintf('Base Fill Rate: %d', $system->getAtbBaseFillRate()),
-                sprintf('Speed Factor: %d%%', $system->getAtbSpeedFactorPercent()),
+                sprintf('Mode: %s', $system['mode']),
+                sprintf('Base Fill Rate: %d', $system['baseFillRate']),
+                sprintf('Speed Factor: %d%%', $system['speedFactorPercent']),
                 '',
                 'This engine fills battler gauges',
                 'continuously and resolves actions',
@@ -14677,7 +14590,6 @@ final class Editor
         return match ($categoryKey) {
             self::DATABASE_CATEGORY_ACTORS => $this->workspace->actorDatabase->isDirty(),
             self::DATABASE_CATEGORY_SKILLS => $this->workspace->skillDatabase->isDirty(),
-            self::DATABASE_CATEGORY_SYSTEM => $this->workspace->systemDatabase->isDirty() || ($this->workspace->config?->isDirty() ?? false),
             default => $this->workspace->getRecordDatabase($categoryKey)?->isDirty() ?? false,
         };
     }

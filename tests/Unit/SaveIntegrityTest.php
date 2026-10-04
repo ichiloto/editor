@@ -320,7 +320,6 @@ it('rewrites nothing anywhere when an untouched project is saved wholesale', fun
 
     $workspace->actorDatabase->save();
     $workspace->skillDatabase->save();
-    $workspace->systemDatabase->save();
 
     foreach ($workspace->recordDatabases as $database) {
         if ($database->isEditable()) {

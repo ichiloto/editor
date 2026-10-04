@@ -13,6 +13,25 @@ function createZoomProject(string $graphics = ''): string
     return $root;
 }
 
+/** Sets a setting through the Configuration category, as either editor does. */
+function setConfiguration(ProjectWorkspace $workspace, string $path, string $value): void
+{
+    $database = $workspace->getRecordDatabase('configuration');
+    $index = array_search($path, $database->getEntryLabels(), true);
+
+    if ($index === false) {
+        throw new RuntimeException("No setting {$path}.");
+    }
+
+    $database->setField($index, 'value', $value);
+}
+
+/** The field zoom a project's config.php holds, or null when it leaves it to the default. */
+function savedZoom(string $root): mixed
+{
+    return (require $root . '/config.php')['graphics']['field']['zoom'] ?? null;
+}
+
 it('shares pending Terms and field zoom in one source-preserving atomic config save', function () {
     $root = createZoomProject();
     $original = file_get_contents($root . '/config.php');
@@ -20,10 +39,11 @@ it('shares pending Terms and field zoom in one source-preserving atomic config s
     $config = $workspace->config;
     $terms = $workspace->getRecordDatabase('terms');
     $before = $config->getRecord(ProjectConfig::FIELD_ZOOM)->toArray();
-    expect($config->getFieldZoom())->toBe(1.0)->and($terms->isEditable())->toBeTrue();
-    $config->setFieldZoom('1');
+    expect($before['default'])->toBe(1.0)->and($terms->isEditable())->toBeTrue();
+    // Choosing the default for a setting the file leaves out writes nothing.
+    setConfiguration($workspace, ProjectConfig::FIELD_ZOOM, '1');
     expect($workspace->hasUnsavedChanges())->toBeFalse();
-    $config->setFieldZoom('2.5');
+    setConfiguration($workspace, ProjectConfig::FIELD_ZOOM, '2.5');
     $terms->setField(0, 'value', 'Welcome');
     expect(file_get_contents($config->path))->toBe($original);
     $terms->save();
@@ -39,24 +59,27 @@ it('shares pending Terms and field zoom in one source-preserving atomic config s
 });
 
 it('refuses invalid zoom before mutation instead of clamping', function (string $value) {
-    $config = new ProjectConfig(createZoomProject());
-    expect(fn() => $config->setFieldZoom($value))->toThrow(RuntimeException::class)
-        ->and($config->isDirty())->toBeFalse()->and($config->getFieldZoom())->toBe(1.0);
+    $root = createZoomProject();
+    $workspace = ProjectWorkspace::fromProject($root);
+    expect(fn() => setConfiguration($workspace, ProjectConfig::FIELD_ZOOM, $value))->toThrow(InvalidArgumentException::class)
+        ->and($workspace->config->isDirty())->toBeFalse()->and(savedZoom($root))->toBeNull();
 })->with(['0', '0.5', '-1', '8.01', 'INF', 'NAN', '1e309', 'no', '']);
 
 it('repairs explicit null or string zoom rather than mistaking them for an absent numeric default', function (string $literal) {
-    $config = new ProjectConfig(createZoomProject("  'graphics' => ['field' => ['zoom' => " . $literal . "]],\n"));
-    $config->setFieldZoom('1');
-    expect($config->isDirty())->toBeTrue();
-    $config->save();
-    expect((require $config->path)['graphics']['field']['zoom'])->toBe(1.0);
+    $root = createZoomProject("  'graphics' => ['field' => ['zoom' => " . $literal . "]],\n");
+    $workspace = ProjectWorkspace::fromProject($root);
+    setConfiguration($workspace, ProjectConfig::FIELD_ZOOM, '1');
+    expect($workspace->config->isDirty())->toBeTrue();
+    $workspace->config->save();
+    expect(savedZoom($root))->toBe(1.0);
 })->with(['null', "'1'"]);
 
 it('refuses opaque or ambiguous zoom containers without flattening unrelated config', function (string $graphics) {
-    $config = new ProjectConfig(createZoomProject($graphics));
-    $original = file_get_contents($config->path);
-    expect(fn() => $config->setFieldZoom('3'))->toThrow(RuntimeException::class)
-        ->and(file_get_contents($config->path))->toBe($original)->and($config->isDirty())->toBeFalse();
+    $root = createZoomProject($graphics);
+    $workspace = ProjectWorkspace::fromProject($root);
+    $original = file_get_contents($workspace->config->path);
+    expect(fn() => setConfiguration($workspace, ProjectConfig::FIELD_ZOOM, '3'))->toThrow(RuntimeException::class)
+        ->and(file_get_contents($workspace->config->path))->toBe($original)->and($workspace->config->isDirty())->toBeFalse();
 })->with([
     "  'graphics' => array_merge([], ['field' => ['zoom' => 2]]),\n",
     "  'graphics' => ['field' => ['zoom' => 1 + 1]],\n",
@@ -68,7 +91,7 @@ it('refuses concurrent source changes while retaining all pending config edits',
     $workspace = ProjectWorkspace::fromProject(createZoomProject());
     $config = $workspace->config;
     $workspace->getRecordDatabase('terms')->setField(0, 'value', 'Pending');
-    $config->setFieldZoom('8');
+    setConfiguration($workspace, ProjectConfig::FIELD_ZOOM, '8');
     $newSource = str_replace('Keep header.', 'New user header.', file_get_contents($config->path));
     file_put_contents($config->path, $newSource);
     expect(fn() => $config->save())->toThrow(RuntimeException::class, 'changed on disk')
@@ -81,7 +104,7 @@ it('preserves bytes mtimes and both pending config areas when installation fails
     $config = $workspace->config;
     touch($config->path, 1000000000);
     $source = file_get_contents($config->path);
-    $config->setFieldZoom('8');
+    setConfiguration($workspace, ProjectConfig::FIELD_ZOOM, '8');
     $terms = $workspace->getRecordDatabase('terms');
     $terms->setField(0, 'value', 'Pending');
     expect(fn() => $config->save(new FailingFileSetOperations(failures: ['move' => [$config->path]])))->toThrow(RuntimeException::class)
@@ -100,7 +123,7 @@ it('makes only an opaque term read-only and preserves it through zoom and litera
     expect($terms->getSettingsFields(1)[2]['value'])->toContain('authored expression');
     expect(fn() => $terms->setField(1, 'value', 'Hidden rewrite'))->toThrow(RuntimeException::class);
     $terms->setField(0, 'value', 'Literal edit');
-    $workspace->config->setFieldZoom('2');
+    setConfiguration($workspace, ProjectConfig::FIELD_ZOOM, '2');
     $terms->save();
     expect(file_get_contents($path))->toContain("'bye' => strtoupper('Bye')", "'title' => 'Literal edit'");
 });
@@ -120,12 +143,12 @@ it('refuses ambiguous dotted literal term keys without changing their nested nei
     foreach ([0, 1] as $index) {
         expect(fn() => $terms->setField($index, 'value', 'Wrong target'))->toThrow(RuntimeException::class, 'dotted literal key');
     }
-    $workspace->config->setFieldZoom('2');
+    setConfiguration($workspace, ProjectConfig::FIELD_ZOOM, '2');
     $workspace->config->save();
     expect((require $root . '/config.php')['vocab'])->toBe(['a.b' => 'Literal', 'a' => ['b' => 'Nested']]);
 });
 
-it('authors field zoom through System numeric input and shares Terms undo save and reload', function () {
+it('authors field zoom through the Configuration category and shares Terms undo save and reload', function () {
     $root = createZoomProject();
     $editor = createEditorForTesting($root);
     $workspace = ProjectWorkspace::fromProject($root);
@@ -133,22 +156,55 @@ it('authors field zoom through System numeric input and shares Terms undo save a
     setEditorProperty($editor, 'lastTerminalSize', ['width' => 140, 'height' => 40]);
     setEditorProperty($editor, 'isRunning', true);
     callEditorMethod($editor, 'openDatabaseWindow');
-    setEditorProperty($editor, 'databaseCategoryIndex', DatabaseCatalog::indexOf('system'));
+    setEditorProperty($editor, 'databaseCategoryIndex', DatabaseCatalog::indexOf('configuration'));
+    $zoom = array_search(ProjectConfig::FIELD_ZOOM, $workspace->getRecordDatabase('configuration')->getEntryLabels(), true);
+    setEditorProperty($editor, 'databaseSelectedRecordIndexes', ['configuration' => $zoom]);
     setEditorProperty($editor, 'databaseFocus', 'database_settings');
     foreach (callEditorMethod($editor, 'getDatabaseSettingsFields') as $index => $field) {
-        if (($field['field'] ?? '') === ProjectConfig::FIELD_ZOOM) { setEditorProperty($editor, 'databaseSelectedSettingIndex', $index); }
+        if (($field['field'] ?? '') === 'value') { setEditorProperty($editor, 'databaseSelectedSettingIndex', $index); }
     }
     callEditorMethod($editor, 'dispatchInput', "\r");
     foreach (["\177", '2', '.', '5', "\r"] as $key) { callEditorMethod($editor, 'dispatchInput', $key); }
-    expect($workspace->config->getFieldZoom())->toBe(2.5);
+    expect($workspace->config->getRecord(ProjectConfig::FIELD_ZOOM)->get('value'))->toBe(2.5);
     $workspace->getRecordDatabase('terms')->setField(0, 'value', 'Concurrent term');
     callEditorMethod($editor, 'dispatchInput', "\x13");
-    expect((require $workspace->config->path)['graphics']['field']['zoom'])->toBe(2.5);
+    expect(savedZoom($root))->toBe(2.5);
     callEditorMethod($editor, 'dispatchInput', "\x1a");
     callEditorMethod($editor, 'dispatchInput', "\x13");
     $saved = require $workspace->config->path;
     expect($saved)->not->toHaveKey('graphics')->and($saved['vocab']['title'])->toBe('Concurrent term');
     callEditorMethod($editor, 'dispatchInput', "\x19");
     callEditorMethod($editor, 'dispatchInput', "\x13");
-    expect((new ProjectConfig($root))->getFieldZoom())->toBe(2.5);
+    expect(savedZoom($root))->toBe(2.5);
+});
+
+it('edits an enum setting as a choice of its enum, written back as the enum case', function () {
+    $root = createZoomProject("  'ui' => ['battle' => ['selection_color' => \\Ichiloto\\Engine\\IO\\Enumerations\\Color::LIGHT_BLUE]],\n");
+    $workspace = ProjectWorkspace::fromProject($root);
+    $database = $workspace->getRecordDatabase('configuration');
+    $index = array_search('ui.battle.selection_color', $database->getEntryLabels(), true);
+    $value = array_find($database->getSettingsFields($index), static fn(array $field): bool => ($field['field'] ?? null) === 'value');
+
+    expect($value['options'] ?? [])->toContain('RED')->and($value['value'])->toBe('LIGHT_BLUE');
+
+    $database->setField($index, 'value', 'RED');
+    $workspace->config->save();
+
+    expect((string) file_get_contents($root . '/config.php'))->toContain("'selection_color' => \\Ichiloto\\Engine\\IO\\Enumerations\\Color::RED")
+        ->and((require $root . '/config.php')['ui']['battle']['selection_color'])->toBe(\Ichiloto\Engine\IO\Enumerations\Color::RED);
+});
+
+it('edits a setting authored as a case of an enum with no values, by the case\'s name', function () {
+    $root = createZoomProject("  'ui' => ['dialogue' => ['window' => ['position' => \\Ichiloto\\Engine\\UI\\Windows\\Enumerations\\WindowPosition::TOP]]],\n");
+    $workspace = ProjectWorkspace::fromProject($root);
+    $database = $workspace->getRecordDatabase('configuration');
+    $index = array_search('ui.dialogue.window.position', $database->getEntryLabels(), true);
+
+    expect($index)->not->toBeFalse();
+
+    $database->setField($index, 'value', 'BOTTOM');
+    $workspace->config->save();
+
+    expect((require $root . '/config.php')['ui']['dialogue']['window']['position'])
+        ->toBe(\Ichiloto\Engine\UI\Windows\Enumerations\WindowPosition::BOTTOM);
 });

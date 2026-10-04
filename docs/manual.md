@@ -1032,7 +1032,8 @@ status line says exactly why.
 | Optimize Weights | `assets/Data/equipment-optimization.php` | Editable |
 | Optimize Outcomes | `assets/Data/equipment-optimization.php` | Editable |
 | Optimize Exclusions | `assets/Data/equipment-optimization.php` | Editable |
-| System | `assets/Data/system.php` | Editable |
+| System | `assets/Data/system.php` | Editable - title, starting gold, party, inventory and position, elements, battle engine, openings and ATB settings |
+| Configuration | `config.php` (`save`, `accessibility`, `ui`, `graphics`, `audio`, `inn`) | Editable - one row per setting, typed by what it holds; field zoom is kept from 1 to 8 |
 | Types | `assets/Data/Types/*.php` | Read-only - PHP enum declarations |
 | Terms | `config.php` (`vocab`, `messages`) | Literal terms editable; comments and unrelated expressions preserved |
 
@@ -1252,7 +1253,7 @@ The `vocab` and `messages` trees of the project's `config.php`, flattened to
 one row per term with its dotted path - `vocab.game.new_game`,
 `messages.confirm.quit`, and so on.
 
-Terms and System's field zoom share one source-preserving configuration owner.
+Terms and Configuration share one source-preserving configuration owner.
 Saving either writes all pending configuration edits in one atomic operation.
 Only edited literal values are patched; comments, spacing, enum references and
 unrelated executable expressions remain untouched. An opaque term expression
@@ -1260,13 +1261,23 @@ is individually read-only, and ambiguous parent arrays or nonliteral returned
 configuration are refused rather than regenerated. A config changed on disk
 must be reloaded before saving, so newer external edits are not overwritten.
 
-### Field Zoom
+### Configuration
 
-Open **Database > System > Field Zoom (GPUI only)**. Enter a finite number from
-`1` through `8` (`2.5` is valid); the default is `1`. This writes the game's
-`config.php` at `graphics.field.zoom`, not `system.php` or `ichiloto.json`.
-It magnifies the GPUI field only: terminal maps, menus and UI sizing do not
-change. `Ctrl+S` saves, `Ctrl+Z` undoes, and `Ctrl+Y` redoes. Undoing the first
+The rest of the project's `config.php`: the `save`, `accessibility`, `ui`,
+`graphics`, `audio` and `inn` settings, one row per setting with its dotted
+path. A switch is a switch, a number a number, and a setting authored as an
+enum case (a selection colour, a window position) is a choice of that enum,
+written back as the case. A setting the engine reads with a default is listed
+even where the file leaves it out, showing that default; choosing the default
+writes nothing.
+
+#### Field Zoom
+
+Open **Database > Configuration > graphics.field.zoom**. Enter a finite number
+from `1` through `8` (`2.5` is valid); the default is `1`. This writes the
+game's `config.php` at `graphics.field.zoom`, not `system.php` or
+`ichiloto.json`. It magnifies the GPUI field only: terminal maps, menus and UI
+sizing do not change. `Ctrl+S` saves, `Ctrl+Z` undoes, and `Ctrl+Y` redoes. Undoing the first
 edit restores an originally absent setting without leaving a default entry.
 The same pending Terms edits are included when this configuration is saved.
 

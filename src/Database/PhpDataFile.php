@@ -559,6 +559,31 @@ final class PhpDataFile
      */
     public function save(mixed $payload): void
     {
+        $contents = $this->composeContents($payload, checkDisk: true);
+        $directory = dirname($this->path);
+
+        if (! is_dir($directory) && ! mkdir($directory, 0777, true) && ! is_dir($directory)) {
+            throw new RuntimeException("Unable to create {$directory}.");
+        }
+
+        AtomicFile::write($this->path, $contents);
+        // The file now reads as this payload, so the next save edits from here.
+        $this->payload = $payload;
+        $this->source = $contents;
+    }
+
+    /**
+     * Returns what saving a value would write, refusing what the file's own
+     * source cannot take, without writing anything: an edit can be refused
+     * when it is made rather than when it is saved.
+     *
+     * @param mixed $payload The value to return from the file.
+     * @param bool $checkDisk Whether a file changed outside the editor is refused too, as a save does.
+     * @return string The file's contents.
+     * @throws RuntimeException When the file or the value cannot be written.
+     */
+    public function composeContents(mixed $payload, bool $checkDisk = false): string
+    {
         if (! $this->isEditable()) {
             throw new RuntimeException(sprintf('Refusing to overwrite %s: %s.', $this->path, $this->readOnlyReason));
         }
@@ -575,7 +600,7 @@ final class PhpDataFile
         // (or the constructor-argument edits) their files were written for.
         if ($document !== null && is_array($this->payload) && is_array($payload)
             && ! self::holdsObject($this->payload) && ! self::holdsObject($payload)) {
-            if (@file_get_contents($this->path) !== $this->source) {
+            if ($checkDisk && @file_get_contents($this->path) !== $this->source) {
                 throw new RuntimeException(sprintf(
                     'Refusing to overwrite %s: it changed outside the editor since it was read. Reload it first.',
                     $this->path,
@@ -591,16 +616,7 @@ final class PhpDataFile
             $contents = $this->header . 'return ' . PhpValueExporter::export($payload) . ";\n";
         }
 
-        $directory = dirname($this->path);
-
-        if (! is_dir($directory) && ! mkdir($directory, 0777, true) && ! is_dir($directory)) {
-            throw new RuntimeException("Unable to create {$directory}.");
-        }
-
-        AtomicFile::write($this->path, $contents);
-        // The file now reads as this payload, so the next save edits from here.
-        $this->payload = $payload;
-        $this->source = $contents;
+        return $contents;
     }
 
     /**

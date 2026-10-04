@@ -41,6 +41,7 @@ final class DatabaseCatalog
             new DatabaseCategoryDefinition('optimize_outcomes', 'Optimize Outcomes', 'Weight elemental outcomes and special properties.', true),
             new DatabaseCategoryDefinition('optimize_exclusions', 'Optimize Exclusions', 'Keep gear out of automatic selection.', true),
             new DatabaseCategoryDefinition('system', 'System', 'Configure system-wide project settings.', true),
+            new DatabaseCategoryDefinition('configuration', 'Configuration', 'Adjust saving, accessibility, interface, graphics, audio and inn settings.', true),
             new DatabaseCategoryDefinition('types', 'Types', 'Manage element and weapon-type tables.', true),
             new DatabaseCategoryDefinition('terms', 'Terms', 'Customize UI labels and message terms.', true),
         ];

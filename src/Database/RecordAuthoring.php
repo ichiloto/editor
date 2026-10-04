@@ -8,6 +8,7 @@ use Ichiloto\Editor\Cutscenes\Source\SourcePreservationRefusal;
 use Ichiloto\Editor\History\Command;
 use Ichiloto\Editor\History\GenericCommand;
 use InvalidArgumentException;
+use RuntimeException;
 
 /**
  * Authoring a schema-driven category's records, as every editor interface
@@ -64,6 +65,15 @@ final readonly class RecordAuthoring
 
         if ($before === $after) {
             return new RecordChange(null, $index);
+        }
+
+        try {
+            $database->assertSourceAccepts($index);
+        } catch (SourcePreservationRefusal|SourceIdentityConflict|RuntimeException $refused) {
+            // The file could not be saved with it: refused now, not at save.
+            $record->restorePayload($before);
+
+            throw new RecordRefusal($refused->getMessage(), previous: $refused);
         }
 
         return new RecordChange(new GenericCommand(

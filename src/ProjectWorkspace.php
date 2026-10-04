@@ -46,7 +46,6 @@ final readonly class ProjectWorkspace
         public array                    $mapIds,
         public ProjectActorDatabase     $actorDatabase,
         public ProjectSkillDatabase     $skillDatabase,
-        public ProjectSystemDatabase    $systemDatabase,
         public array                    $recordDatabases = [],
         public ?CutsceneLibrary         $cutscenes = null,
         public ?ProjectConfig           $config = null,
@@ -57,6 +56,15 @@ final readonly class ProjectWorkspace
         $this->getRecordDatabase('quests')?->useIdentityReferences(
             fn(string $questId): bool => new QuestReferences($this)->exist($questId),
         );
+    }
+
+    /**
+     * One setting of `system.php` as the System record holds it, unsaved
+     * edits included: the starting party, the starting positions.
+     */
+    public function getSystemField(string $key): mixed
+    {
+        return $this->getRecordDatabase('system')?->getRecordByIndex(0)?->get($key);
     }
 
     /**
@@ -189,7 +197,6 @@ final readonly class ProjectWorkspace
             mapIds: array_map(static fn(ProjectMap $map): string => $map->mapId, $maps),
             actorDatabase: ProjectActorDatabase::fromProject($projectRoot),
             skillDatabase: ProjectSkillDatabase::fromProject($projectRoot),
-            systemDatabase: ProjectSystemDatabase::fromProject($projectRoot),
             recordDatabases: array_map(
                 static fn(RecordSchema $schema): ProjectRecordDatabase => ProjectRecordDatabase::fromProject($projectRoot, $schema, $projectConfig),
                 RecordSchemaCatalog::all(),
@@ -298,7 +305,6 @@ final readonly class ProjectWorkspace
 
         return $this->actorDatabase->isDirty()
             || $this->skillDatabase->isDirty()
-            || $this->systemDatabase->isDirty()
             || ($this->config?->isDirty() ?? false)
             || ($this->cutscenes?->hasUnsavedChanges() ?? false);
     }
@@ -337,14 +343,13 @@ final readonly class ProjectWorkspace
      * Read-only record categories are left out: they hold no edits, and
      * asking them to save would raise instead of doing nothing.
      *
-     * @return array<string, ProjectActorDatabase|ProjectSkillDatabase|ProjectSystemDatabase|ProjectConfig|ProjectRecordDatabase>
+     * @return array<string, ProjectActorDatabase|ProjectSkillDatabase|ProjectConfig|ProjectRecordDatabase>
      */
     public function listSaveableDatabases(): array
     {
         $databases = [
             'Actors' => $this->actorDatabase,
             'Skills' => $this->skillDatabase,
-            'System' => $this->systemDatabase,
         ];
 
         if ($this->config !== null) {
@@ -423,7 +428,6 @@ final readonly class ProjectWorkspace
             mapIds: array_map(static fn(ProjectMap $workspaceMap): string => $workspaceMap->mapId, $maps),
             actorDatabase: $this->actorDatabase,
             skillDatabase: $this->skillDatabase,
-            systemDatabase: $this->systemDatabase,
             recordDatabases: $this->recordDatabases,
             cutscenes: $this->cutscenes,
             config: $this->config,

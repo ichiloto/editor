@@ -30,6 +30,9 @@ use Ichiloto\Engine\Events\Interpreter\EventInterpreter;
 use Ichiloto\Engine\Entities\Enemies\Enemy;
 use Ichiloto\Engine\Entities\Enemies\EnemyCatalog;
 use Ichiloto\Engine\Quests\QuestObjectiveType;
+use Ichiloto\Engine\Battle\Enumerations\BattleEngineType;
+use Ichiloto\Engine\Core\Enumerations\MovementHeading;
+use Ichiloto\Editor\Database\Projections\WholeFileProjection;
 use Ichiloto\Engine\Entities\Enumerations\ActionConditionType;
 use Ichiloto\Engine\Entities\Enumerations\ItemUserType;
 use Ichiloto\Engine\Progress\Knowledge\KnowledgeProgressService;
@@ -83,6 +86,7 @@ final class RecordSchemaCatalog
         $schemas = [
             self::classes(),
             self::quests(),
+            self::system(),
             self::states(),
             self::troops(),
             self::animations(),
@@ -102,6 +106,7 @@ final class RecordSchemaCatalog
             self::optimizeExclusions(),
             self::commonEvents(),
             self::terms(),
+            self::configuration(),
             self::types(),
             self::tilesets(),
         ];
@@ -832,6 +837,75 @@ final class RecordSchemaCatalog
     }
 
     /**
+     * System — `assets/Data/system.php`, one map the engine reads at start:
+     * the title, starting gold, party, inventory and position, the project's
+     * elements, and battle settings. The file is the category's one record,
+     * only ever edited. The starting party and inventory are lists of their
+     * own; a party member is a bare actor id, as the file authors it.
+     *
+     * @return RecordSchema
+     */
+    private static function system(): RecordSchema
+    {
+        return new RecordSchema(
+            key: 'system',
+            entryNoun: 'system settings',
+            storage: RecordStorage::LIST_FILE,
+            relativePath: 'assets/Data/system.php',
+            fields: [
+                new RecordField('title', 'Title'),
+                new RecordField('currency.amount', 'Starting Gold', InputControlType::INTEGER),
+                RecordField::reference('startingPositions.player.destinationMap', 'Start Map', 'maps'),
+                new RecordField('startingPositions.player.spawnPoint.x', 'Start X', InputControlType::INTEGER),
+                new RecordField('startingPositions.player.spawnPoint.y', 'Start Y', InputControlType::INTEGER),
+                new RecordField(
+                    'startingPositions.player.spawnSprite.0',
+                    'Start Facing',
+                    options: array_map(static fn(MovementHeading $heading): string => $heading->value, MovementHeading::cases()),
+                ),
+                new RecordField('elements', 'Elements', codec: RecordFieldCodec::CSV_LIST),
+                new RecordField(
+                    'battle.engine',
+                    'Battle Engine',
+                    options: array_map(static fn(BattleEngineType $engine): string => $engine->value, BattleEngineType::cases()),
+                ),
+                new RecordField('battle.opening.preemptiveChancePercent', 'Preemptive Chance %', InputControlType::INTEGER, removeWhenEmpty: true),
+                new RecordField('battle.opening.ambushChancePercent', 'Ambush Chance %', InputControlType::INTEGER, removeWhenEmpty: true),
+                new RecordField('battle.activeTime.mode', 'ATB Mode', options: ['wait']),
+                new RecordField('battle.activeTime.baseFillRate', 'ATB Base Fill Rate', InputControlType::INTEGER),
+                new RecordField('battle.activeTime.speedFactorPercent', 'ATB Speed Factor %', InputControlType::INTEGER),
+                new RecordField('battle.activeTime.openingVariance', 'ATB Opening Variance', InputControlType::INTEGER, removeWhenEmpty: true),
+                new RecordField('battle.activeTime.openingSpeedFactorPercent', 'ATB Opening Speed %', InputControlType::INTEGER, removeWhenEmpty: true),
+            ],
+            labelKey: 'title',
+            identityKey: null,
+            projection: new WholeFileProjection(),
+            subLists: [
+                new RecordSubList(
+                    key: 'startingParty',
+                    prefix: 'member',
+                    singular: 'party member',
+                    fields: [RecordField::reference('actor', 'Actor', 'actor_ids')],
+                    blank: ['actor' => ''],
+                    heading: 'Starting Party',
+                    scalarKey: 'actor',
+                ),
+                new RecordSubList(
+                    key: 'startingInventory',
+                    prefix: 'stock',
+                    singular: 'starting item',
+                    fields: [
+                        RecordField::reference('item', 'Item', 'inventory'),
+                        new RecordField('quantity', 'Quantity', InputControlType::INTEGER),
+                    ],
+                    blank: ['item' => '', 'quantity' => 1],
+                    heading: 'Starting Inventory',
+                ),
+            ],
+        );
+    }
+
+    /**
      * Quests — `assets/Data/quests.php`, as the engine's `Quest::fromArray`
      * reads it. A quest's id is its name's slug and follows a rename while
      * nothing refers to it (the workspace knows what does). Objectives are
@@ -1173,10 +1247,63 @@ final class RecordSchemaCatalog
     }
 
     /**
+     * Configuration — the settings in the project's `config.php` that are not
+     * UI vocabulary: saving, accessibility, interface, graphics, audio and
+     * the inn. One row per setting, typed by what it holds (a switch, a
+     * number, a choice of the enum it is authored as). A setting the engine
+     * reads with a default is offered even where the file leaves it out.
+     * ProjectConfig owns the file and the rules a value must meet, such as
+     * the field zoom's range; Terms shares the same owner.
+     *
+     * @return RecordSchema
+     */
+    private static function configuration(): RecordSchema
+    {
+        return new RecordSchema(
+            key: 'configuration',
+            entryNoun: 'setting',
+            storage: RecordStorage::CONFIG_SUBTREE,
+            relativePath: 'config.php',
+            fields: [
+                new RecordField('path', 'Setting', isReadOnly: true),
+                new RecordField('value', 'Value'),
+            ],
+            labelKey: 'path',
+            identityKey: 'path',
+            configPath: ['save', 'accessibility', 'ui', 'graphics', 'audio', 'inn'],
+            fieldsFor: static function (array $row): array {
+                // A setting the engine knows is the type of its default, so an
+                // authored value of another type is repaired on edit.
+                $value = array_key_exists('default', $row) ? $row['default'] : ($row['value'] ?? null);
+                $default = array_key_exists('default', $row) ? ProjectRecord::stringify($row['default']) : null;
+
+                return [
+                    new RecordField('path', 'Setting', isReadOnly: true),
+                    match (true) {
+                        // An enum setting is a choice of its cases by name: some
+                        // enums' values (a colour's terminal code) are not text
+                        // an author can read.
+                        $value instanceof \UnitEnum => new RecordField(
+                            'value',
+                            'Value',
+                            options: array_map(static fn(\UnitEnum $case): string => $case->name, $value::cases()),
+                            enumClass: $value::class,
+                        ),
+                        is_bool($value) => RecordField::boolean('value', 'Value', removeWhenEmpty: false, displayDefault: $default),
+                        is_int($value) => new RecordField('value', 'Value', InputControlType::INTEGER, displayDefault: $default),
+                        is_float($value) => new RecordField('value', 'Value', InputControlType::FLOAT, displayDefault: $default),
+                        default => new RecordField('value', 'Value', displayDefault: $default),
+                    },
+                ];
+            },
+        );
+    }
+
+    /**
      * UI vocabulary — the `vocab` and `messages` trees of the project's
      * `config.php`, flattened to one editable row per term.
      *
-     * ProjectConfig shares these records with System's field zoom and
+     * ProjectConfig shares these records with Configuration's settings and
      * patches literal leaves only. Unrelated comments and expressions stay
      * untouched; opaque term values are individually read-only.
      *

@@ -2624,7 +2624,7 @@ class ProjectValidator
   protected function spawnTilesOn(ProjectMap $map, ProjectWorkspace $workspace): array
   {
     $spawns = [];
-    $positions = $workspace->systemDatabase->getField('startingPositions');
+    $positions = $workspace->getSystemField('startingPositions');
     $start = is_array($positions) ? ($positions['player'] ?? null) : null;
 
     if (

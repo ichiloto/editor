@@ -20,7 +20,7 @@ final class ActorReferenceValidator
         foreach ($workspace->actorDatabase->getActors() as $actor) {
             if ($actor->hasDefinitionId()) { $ids[] = $actor->getDefinitionId(); }
         }
-        $payloads = ['assets/Data/system.php' => ['startingParty' => $workspace->systemDatabase->getField('startingParty') ?? []]];
+        $payloads = ['assets/Data/system.php' => ['startingParty' => $workspace->getSystemField('startingParty') ?? []]];
         foreach (['skits', 'troops', 'common_events', 'battle_entry_rules'] as $category) {
             $database = $workspace->getRecordDatabase($category);
             if ($database === null) { continue; }

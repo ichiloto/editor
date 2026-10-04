@@ -1153,7 +1153,7 @@ final class EditorSession
         foreach ($this->workspace->actorDatabase->getActors() as $actor) {
             $names[$actor->getDefinitionId()] = $actor->getName();
         }
-        $starting = $this->workspace->systemDatabase->getField('startingParty');
+        $starting = $this->workspace->getSystemField('startingParty');
         $partyIds = array_values(array_slice(array_filter(is_array($starting) ? $starting : [], is_string(...)), 0, count($catalog->ui->partySlots)));
 
         try {
