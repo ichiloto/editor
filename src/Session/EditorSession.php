@@ -1068,12 +1068,14 @@ final class EditorSession
             'frameLabel' => $frame === [] ? null : $database->describeFramePath($frame),
             'editable' => $database->isEditable(),
             'readOnly' => $database->getReadOnlyReason(),
+            // A row that names a field keeps its key whether or not it can be
+            // edited; a read-only one is an `info` row the edit refuses.
             'rows' => array_map(static fn(array $field): array => self::describeRecordRow(
                 $database,
                 $index,
                 $frame,
                 $field,
-                isset($field['field']) && ($field['editable'] ?? true) !== false ? 'record' : null,
+                isset($field['field']) ? 'record' : null,
             ), $fields),
         ];
     }
@@ -1589,9 +1591,10 @@ final class EditorSession
     private static function describeNpcRow(ProjectRecordDatabase $records, int $index, array $field, array $frame): array
     {
         $fieldId = $field['field'] ?? null;
-        $editable = is_string($fieldId) && $fieldId !== NpcInspector::ASSIGN_ID_FIELD && ($field['editable'] ?? true) !== false;
+        // Keyed whether or not it can be edited; a read-only row is `info`.
+        $named = is_string($fieldId) && $fieldId !== NpcInspector::ASSIGN_ID_FIELD;
 
-        return self::describeRecordRow($records, $index, $frame, $field, $editable ? 'npc' : null);
+        return self::describeRecordRow($records, $index, $frame, $field, $named ? 'npc' : null);
     }
 
     /**

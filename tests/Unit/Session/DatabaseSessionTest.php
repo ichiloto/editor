@@ -35,6 +35,7 @@ it('lists a category with what it can do, and reads a frame\'s rows with the ite
         ->and($types)->toMatchArray(['editable' => false, 'canCreate' => false, 'canDelete' => false])
         ->and($root)->toMatchArray(['frame' => [], 'frameLabel' => null, 'editable' => true, 'readOnly' => null])
         ->and(databaseSessionRow($root, '__scriptId'))->not->toHaveKey('item')
+        ->and(databaseSessionRow($root, '__scriptId')['kind'])->toBe('info')
         ->and(databaseSessionRow($root, 'command3Then'))->toMatchArray(['frame' => [3, 'then'], 'item' => true, 'itemNoun' => 'command'])
         ->and($then['frameLabel'])->toBe('Commands › Branch 4 › Then')
         ->and(databaseSessionRow($then, 'command0Text'))->toMatchArray([
