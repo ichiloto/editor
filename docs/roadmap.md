@@ -289,8 +289,10 @@ Order of work, each a complete slice before the next:
    and `Armors`, with `items.php` as their barrel (done). No catalogued
    category stores `new Class(...)` entries any more, so the object-entry
    write path (constructor-call entries in `ProjectRecordDatabase` and
-   `SharedFileTransaction`) serves no category; removing it, while keeping
-   the `PhpSourceDocument` reading `ActorReferenceSource` uses, is open.
+   `SharedFileTransaction`, with their identity addressing and refusals)
+   serves no category; removing it, while keeping the `PhpSourceDocument`
+   reading `ActorReferenceSource` uses, is open. Shared array lists keep
+   their synthetic coverage in `SharedListFoldTest`.
 4. Tilesets are done in both editors: sheets, missing art, above and table
    tiles, shadows, and pieces keyed by id, stamped or connected, with their
    tile layers. Tile identities are typed in both editors; picking them on a

@@ -64,6 +64,8 @@ final class ProjectRecordDatabase
         private ?ProjectConfig $config = null,
         private ?\Closure $identityReferences = null,
     ) {
+        $this->learnKeyOrder();
+
         if ($schema->storage === RecordStorage::LIST_FILE && $schema->projection === null) {
             // What the file declares for each record -- the identity it is
             // addressed by and the values it was authored with -- so a save
@@ -78,6 +80,15 @@ final class ProjectRecordDatabase
             $this->captureBaseline();
         }
     }
+
+    /**
+     * The top-level keys of a projected file in the order the file first
+     * held each: a key this category's fold adds back (its records gone and
+     * returned, say by an undo after a save) goes back where it was.
+     *
+     * @var list<array-key>
+     */
+    private array $authoredKeyOrder = [];
 
     /**
      * @var array<int, array{record: ProjectRecord, identity: string|null, values: array<string, mixed>}>
@@ -965,12 +976,30 @@ final class ProjectRecordDatabase
     /**
      * Appends a blank record.
      *
-     * @return int|null The new record index, or null when the category is read-only.
+     * @return int|null The new record index, or null when no record can be made here.
      */
     public function addRecord(): ?int
     {
-        if (! $this->supportsRecordCreation()) {
+        try {
+            return $this->requireNewRecord();
+        } catch (RecordRefusal) {
             return null;
+        }
+    }
+
+    /**
+     * Appends a blank record, or says why none can be made: the category
+     * takes no new records, or the project lacks what a new one needs.
+     *
+     * @return int The new record index.
+     * @throws RecordRefusal With the reason an author reads.
+     */
+    public function requireNewRecord(): int
+    {
+        $cannot = sprintf('%s entries cannot be created from the editor.', ucfirst($this->schema->entryNoun));
+
+        if (! $this->supportsRecordCreation()) {
+            throw new RecordRefusal($cannot);
         }
 
         $payload = $this->schema->blank;
@@ -997,13 +1026,16 @@ final class ProjectRecordDatabase
                         $projectRoot,
                         fn(string $root): mixed => ($this->schema->makeBlank)($name, $root),
                     );
-            } catch (Throwable) {
-                return null;
+            } catch (RecordRefusal $refusal) {
+                // The factory's own reason, such as what the project lacks.
+                throw $refusal;
+            } catch (Throwable $failure) {
+                throw new RecordRefusal(sprintf('A new %s could not be made: %s', $this->schema->entryNoun, $failure->getMessage()), previous: $failure);
             }
 
             // A data record's blank is its data; a constructor list's, the object.
             if ($this->schema->recordClass !== null ? ! is_array($payload) : ! is_object($payload)) {
-                return null;
+                throw new RecordRefusal($cannot);
             }
         }
 
@@ -1019,7 +1051,7 @@ final class ProjectRecordDatabase
             // Never append what the save merge would drop: a blank that is not
             // a member of its own category vanishes on save, after the editor
             // said it was created.
-            return null;
+            throw new RecordRefusal($cannot);
         }
 
         $sourcePath = null;
@@ -1728,6 +1760,31 @@ final class ProjectRecordDatabase
         }
 
         $this->file = PhpDataFile::load($this->file->path, $this->projectRoot);
+        $this->learnKeyOrder();
+    }
+
+    /**
+     * Learns where a projected file holds its top-level keys: a key seen for
+     * the first time goes ahead of the next key the file holds after it that
+     * is already known, and a known key keeps the place it was first seen in.
+     */
+    private function learnKeyOrder(): void
+    {
+        if ($this->schema->projection === null || ! is_array($this->file?->payload)) {
+            return;
+        }
+
+        $keys = array_keys($this->file->payload);
+
+        foreach ($keys as $position => $key) {
+            if (in_array($key, $this->authoredKeyOrder, true)) {
+                continue;
+            }
+
+            $anchor = array_find(array_slice($keys, $position + 1), fn(int|string $next): bool => in_array($next, $this->authoredKeyOrder, true));
+            $at = $anchor === null ? count($this->authoredKeyOrder) : (int) array_search($anchor, $this->authoredKeyOrder, true);
+            array_splice($this->authoredKeyOrder, $at, 0, [$key]);
+        }
     }
 
     /**
@@ -1769,6 +1826,46 @@ final class ProjectRecordDatabase
     }
 
     /**
+     * Puts each top-level key a fold added back where the file had it when
+     * first read: ahead of the next key it preceded then that the payload
+     * still holds. Keys the payload already held keep their order, and a key
+     * the file never had stays where the fold put it.
+     *
+     * @param array<array-key, mixed> $before The payload before the fold.
+     * @param array<array-key, mixed> $folded The payload after it.
+     * @return array<array-key, mixed>
+     */
+    private function placeReturningKeys(array $before, array $folded): array
+    {
+        $added = array_diff_key($folded, $before);
+
+        if ($added === [] || $this->authoredKeyOrder === []) {
+            return $folded;
+        }
+
+        $placed = array_diff_key($folded, $added);
+
+        foreach ($added as $key => $value) {
+            $position = array_search($key, $this->authoredKeyOrder, true);
+            $anchor = $position === false ? null : array_find(
+                array_slice($this->authoredKeyOrder, $position + 1),
+                static fn(int|string $next): bool => array_key_exists($next, $placed),
+            );
+
+            if ($anchor === null) {
+                $placed[$key] = $value;
+
+                continue;
+            }
+
+            $at = (int) array_search($anchor, array_keys($placed), true);
+            $placed = array_slice($placed, 0, $at, true) + [$key => $value] + array_slice($placed, $at, null, true);
+        }
+
+        return $placed;
+    }
+
+    /**
      * Folds this category's records into a payload without writing.
      *
      * This is how several categories combine into one write: each is asked
@@ -1791,10 +1888,10 @@ final class ProjectRecordDatabase
     public function foldInto(array $whole): array
     {
         if ($this->schema->projection !== null) {
-            return $this->schema->projection->write($whole, array_map(
+            return $this->placeReturningKeys($whole, $this->schema->projection->write($whole, array_map(
                 static fn(ProjectRecord $record): array => (array) $record->toArray(),
                 $this->getRecords(),
-            ));
+            )));
         }
 
         $records = $this->getRecords();

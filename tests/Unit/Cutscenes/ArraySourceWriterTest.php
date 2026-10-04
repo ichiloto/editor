@@ -379,3 +379,45 @@ it('rewrites the real Last Legend summon timelines to themselves and back from a
 
     expect($seen)->toBeGreaterThan(0);
 })->group('engine');
+
+it('puts a keyed entry back where the new value orders it, so a removal and its undo leave the bytes', function () {
+    $source = "<?php\n\nreturn [\n  'kind' => 'armor',\n  // The armor's type.\n  'equipmentType' => 'Shield',\n  'price' => 10,\n  'inline' => ['type' => 'text', 'name' => '', 'text' => 'A note.'],\n];\n";
+    $full = evaluateSource($source);
+    $without = $full;
+    unset($without['equipmentType'], $without['inline']['name']);
+
+    $removed = ArraySourceWriter::rewrite(PhpArraySourceDocument::parse($source), $full, $without);
+    $restored = ArraySourceWriter::rewrite($removed, $without, $full);
+
+    expect($removed->source)->toBe("<?php\n\nreturn [\n  'kind' => 'armor',\n  'price' => 10,\n  'inline' => ['type' => 'text', 'text' => 'A note.'],\n];\n")
+        ->and(evaluateSource($restored->source))->toBe($full)
+        // The comment went with its entry, so only that is not back.
+        ->and($restored->source)->toBe(str_replace("  // The armor's type.\n", '', $source));
+});
+
+it('cuts the entries of an array written on one line with the separators that joined them', function (array $remove, string $expected, bool $restoresBytes) {
+    $source = "<?php\n\nreturn [['type' => 'text', 'name' => '', 'text' => 'A note.']];\n";
+    $old = evaluateSource($source);
+    $new = $old;
+
+    foreach ($remove as $key) {
+        unset($new[0][$key]);
+    }
+
+    $rewritten = ArraySourceWriter::rewrite(PhpArraySourceDocument::parse($source), $old, $new);
+
+    expect($rewritten->source)->toBe("<?php\n\nreturn [{$expected}];\n")
+        ->and(evaluateSource($rewritten->source))->toBe($new);
+
+    // Put back, the line reads as it did; an array left empty has no line
+    // to follow, so it opens onto lines of its own.
+    $restored = ArraySourceWriter::rewrite($rewritten, $new, $old)->source;
+
+    expect(evaluateSource($restored))->toBe($old)
+        ->and($restored === $source)->toBe($restoresBytes);
+})->with([
+    'the first' => [['type'], "['name' => '', 'text' => 'A note.']", true],
+    'one between' => [['name'], "['type' => 'text', 'text' => 'A note.']", true],
+    'the last two' => [['name', 'text'], "['type' => 'text']", true],
+    'every one' => [['type', 'name', 'text'], '[]', false],
+]);

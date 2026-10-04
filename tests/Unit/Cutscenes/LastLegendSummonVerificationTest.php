@@ -109,7 +109,7 @@ it('authors a new summon in a disposable Last Legend copy end to end, with unrel
     $workspace = getEditorProperty($editor, 'workspace');
     $actor = $workspace->actorDatabase->getActors()[0];
     $actorName = $actor->getName();
-    $skill = $workspace->skillDatabase->getSkills()[0]->getName();
+    $skill = $workspace->getSkillNames()[0];
 
     // 1.–2. Create, name, link a real battle action.
     setEditorProperty($editor, 'cutsceneFocus', CutscenesScreen::PANE_LIST);

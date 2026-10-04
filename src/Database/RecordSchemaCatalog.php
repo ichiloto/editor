@@ -1192,9 +1192,9 @@ final class RecordSchemaCatalog
             ],
             // A new enemy needs a real sprite to load, so it starts on the
             // project's first one; a project with no enemy sprites cannot
-            // author an enemy yet, and creation refuses rather than writing a
-            // record the engine would reject.
-            makeBlank: static function (string $name, string $projectRoot): ?array {
+            // author an enemy yet, and creation refuses, saying so, rather
+            // than writing a record the engine would reject.
+            makeBlank: static function (string $name, string $projectRoot): array {
                 $spriteDirectory = rtrim($projectRoot, DIRECTORY_SEPARATOR) . '/assets/Graphics/Enemies';
                 $sprites = is_dir($spriteDirectory)
                     ? array_values(array_filter(
@@ -1206,7 +1206,7 @@ final class RecordSchemaCatalog
                     : [];
 
                 if ($sprites === []) {
-                    return null;
+                    throw new RecordRefusal('A new enemy starts on the project\'s first enemy sprite. Add one under assets/Graphics/Enemies first.');
                 }
 
                 return [

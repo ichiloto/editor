@@ -500,6 +500,95 @@ final class PhpArraySourceDocument
     }
 
     /**
+     * Plans inserting entries, in order, ahead of an entry the array holds:
+     * on lines of their own above its block, or ahead of it on its line when
+     * it shares one.
+     *
+     * @param list<array{key: int|string|null, literal: string}> $entries
+     * @return array{0: int, 1: int, 2: string} The edit.
+     */
+    public function insertEntriesBeforeEdit(SourceNode $array, SourceEntry $anchor, array $entries): array
+    {
+        if ($this->lineIndentBefore($anchor->start) === null) {
+            $inline = array_map(fn(array $entry): string => $this->renderInlineEntry($entry['key'], $entry['literal'], $anchor->start), $entries);
+
+            return [$anchor->start, $anchor->start, implode(', ', $inline) . ', '];
+        }
+
+        [$blockStart] = $this->blockSpan($anchor);
+        $lines = array_map(fn(array $entry): string => $this->renderEntryLine($array, $entry['key'], $entry['literal']), $entries);
+
+        return [$blockStart, $blockStart, implode('', $lines)];
+    }
+
+    /**
+     * Returns whether every entry of an array shares its line with what
+     * precedes it, as `['type' => 'text', 'name' => '']` does.
+     */
+    public function sharesLines(SourceNode $array): bool
+    {
+        if ($array->entries === []) {
+            return false;
+        }
+
+        foreach ($array->entries as $entry) {
+            if ($this->lineIndentBefore($entry->start) !== null) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Plans removing entries of an array whose entries share their lines,
+     * each run of removed entries with the separators that joined it, so the
+     * survivors read as if written without them: a run cut ahead of the
+     * entry after it, a run at the end cut after the entry before it, and an
+     * array left empty written `[]`.
+     *
+     * @param list<int> $removed The indexes of the entries removed, ascending.
+     * @return array{edits: list<array{0: int, 1: int, 2: string}>, separatorCut: bool} The edits, and
+     *   whether the last surviving entry's comma went with a run after it.
+     */
+    public function removeSharedLineEntriesEdits(SourceNode $array, array $removed): array
+    {
+        $entries = $array->entries;
+        $count = count($entries);
+        $isRemoved = array_fill_keys($removed, true);
+
+        if (count($isRemoved) === $count && $array->bodyStart !== null && $array->bodyEnd !== null) {
+            return ['edits' => [[$array->bodyStart, $array->bodyEnd, '']], 'separatorCut' => false];
+        }
+
+        $edits = [];
+        $separatorCut = false;
+
+        for ($i = 0; $i < $count; $i++) {
+            if (! isset($isRemoved[$i])) {
+                continue;
+            }
+
+            $j = $i;
+
+            while (isset($isRemoved[$j + 1])) {
+                $j++;
+            }
+
+            if ($j + 1 < $count) {
+                $edits[] = [$entries[$i]->start, $entries[$j + 1]->start, ''];
+            } else {
+                $edits[] = [$entries[$i - 1]->end, $entries[$j]->end, ''];
+                $separatorCut = true;
+            }
+
+            $i = $j;
+        }
+
+        return ['edits' => $edits, 'separatorCut' => $separatorCut];
+    }
+
+    /**
      * Plans inserting an entry into an array: ahead of the entry now at a
      * position, or after the last one.
      *
@@ -612,12 +701,19 @@ final class PhpArraySourceDocument
      * @param array<int, string> $entries The entries, each `key => value` or a value.
      * @param SourceEntry|null $lastSurviving The entry that will precede the
      *   appended ones, or null when none survives and they start the body.
+     * @param bool $separatorCut Whether the entries after it are cut with its
+     *   comma ({@see removeSharedLineEntriesEdits}): the appended ones then
+     *   join right after its value, ahead of any trailing comma left behind.
      * @return array{0: int, 1: int, 2: string} The edit.
      */
-    public function planInlineAppend(SourceNode $array, array $entries, ?SourceEntry $lastSurviving): array
+    public function planInlineAppend(SourceNode $array, array $entries, ?SourceEntry $lastSurviving, bool $separatorCut = false): array
     {
         if ($array->bodyStart === null) {
             throw new RuntimeException('Only an array node takes appended entries.');
+        }
+
+        if ($lastSurviving !== null && $separatorCut) {
+            return [$lastSurviving->end, $lastSurviving->end, ', ' . implode(', ', $entries)];
         }
 
         $last = $array->entries === [] ? null : $array->entries[count($array->entries) - 1];

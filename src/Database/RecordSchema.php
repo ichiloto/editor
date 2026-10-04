@@ -31,8 +31,8 @@ final readonly class RecordSchema
      * @param string|null $listPayloadKey When set, the file returns the sub-list bare (event scripts).
      * @param string[] $configPath The config.php subtree roots, for CONFIG_SUBTREE storage.
      * @param Closure(mixed): bool|null $recordFilter Selects which of a shared file's entries belong here.
-     */
-    /**
+     * @param Closure(string, string): mixed|null $makeBlank Makes a new record from its name and the project root;
+     *   it throws a RecordRefusal saying what the project lacks when it cannot.
      * @param RecordProjection|null $projection How this category's records are
      * read out of, and folded back into, a file that is not simply a list of
      * them -- one list inside a catalogue that holds several, or the nested
