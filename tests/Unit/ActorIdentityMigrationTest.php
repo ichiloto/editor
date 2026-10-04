@@ -320,3 +320,35 @@ PHP);
     }
     expect(sourceHashTree($root))->toBe($before);
 });
+
+it('repairs the battle scale reference actor and actor profiles while preserving enemies and calibration', function () {
+    [$root, $actorPath] = createLegacyActorProject();
+    file_put_contents($actorPath, "<?php return ['data' => ['id' => 'hero', 'name' => 'Kaelion']];");
+    mkdir($root . '/assets/Data/Presentation');
+    $battle = <<<'PHP'
+<?php
+use Ichiloto\Engine\Battle\Presentation\BattlePresentationCatalog;
+use Ichiloto\Engine\Battle\Presentation\BattlerArtwork;
+use Ichiloto\Engine\Battle\Presentation\BattleScale;
+use Ichiloto\Engine\Battle\Presentation\BattlerScale;
+return new BattlePresentationCatalog(
+    arenas: [],
+    actors: ['Kaelion' => new BattlerArtwork('hero.png', 1, 1, 0, 0)],
+    enemies: ['Kaelion' => new BattlerArtwork('shade.png', 1, 1, 0, 0)],
+    scale: new BattleScale(
+        // The party lead is the body every battler is sized against.
+        referenceActorId: 'Kaelion',
+        referenceHeight: 210.0,
+        actors: ['Kaelion' => new BattlerScale(1.0, 0.82)],
+        enemies: ['Kaelion' => new BattlerScale(0.4, 0.6, horizontal: true)],
+    ),
+);
+PHP;
+    file_put_contents($root . '/assets/Data/Presentation/battle.php', $battle);
+    ActorIdentityMigration::migrateProject($root);
+    expect(file_get_contents($root . '/assets/Data/Presentation/battle.php'))->toBe(str_replace(
+        ["actors: ['Kaelion' => new BattlerArtwork", "referenceActorId: 'Kaelion'", "actors: ['Kaelion' => new BattlerScale"],
+        ["actors: ['hero' => new BattlerArtwork", "referenceActorId: 'hero'", "actors: ['hero' => new BattlerScale"], $battle))
+        ->and(ActorIdentityMigration::planProject($root)->getChangedPaths())->toBe([])
+        ->and(new \Ichiloto\Editor\Validation\ActorReferenceValidator()->validate(\Ichiloto\Editor\ProjectWorkspace::fromProject($root)))->toBe([]);
+});

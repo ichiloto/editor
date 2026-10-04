@@ -30,6 +30,16 @@ final class ActorReferenceInventory
             foreach (array_keys((array) ($payload['results']['portraits'] ?? [])) as $id) {
                 $references[] = ['path' => ['results', 'portraits', $id], 'reference' => $id, 'kind' => 'key'];
             }
+            // Battle scale: its reference body and party profiles; enemy profiles are enemy identities.
+            $scale = $payload['scale'] ?? null;
+            if (is_array($scale)) {
+                if (array_key_exists('referenceActorId', $scale)) {
+                    $references[] = ['path' => ['scale', 'referenceActorId'], 'reference' => $scale['referenceActorId'], 'kind' => 'value'];
+                }
+                foreach (array_keys((array) ($scale['actors'] ?? [])) as $id) {
+                    $references[] = ['path' => ['scale', 'actors', $id], 'reference' => $id, 'kind' => 'key'];
+                }
+            }
             // Speaker labels bind to an actor or to a non-actor artwork resource.
             $resources = (array) ($payload['resources'] ?? []);
             foreach ((array) ($payload['speakers'] ?? []) as $label => $identity) {
