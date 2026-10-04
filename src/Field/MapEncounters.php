@@ -112,9 +112,11 @@ final class MapEncounters
             return new self($block, [], sprintf('the encounters troops are %s, not troop weights', get_debug_type($troops)));
         }
 
+        // An arena is a key or absent: a null written for one is no arena
+        // the engine can draw, and the editor will not quietly drop it.
         $mapArena = $block[self::ARENA_KEY] ?? null;
 
-        if ($mapArena !== null && ! is_string($mapArena)) {
+        if (array_key_exists(self::ARENA_KEY, $block) && ! is_string($mapArena)) {
             return new self($block, [], sprintf('the map\'s battleArena is %s, not an arena key', get_debug_type($mapArena)));
         }
 
@@ -135,7 +137,7 @@ final class MapEncounters
                 return new self($block, [], sprintf('the troop "%s" has a weight that is %s', $name, get_debug_type($weight)));
             }
 
-            if ($arena !== null && ! is_string($arena)) {
+            if ($structured && array_key_exists(self::ARENA_KEY, $entry) && ! is_string($arena)) {
                 return new self($block, [], sprintf('the troop "%s" has a battleArena that is %s, not an arena key', $name, get_debug_type($arena)));
             }
 

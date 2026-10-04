@@ -79,6 +79,8 @@ it('refuses an arena it cannot hold, saying where', function (array $block, stri
     'an entry\'s arena' => [['troops' => ['Rats' => ['weight' => 5, 'battleArena' => 7]]], 'the troop "Rats" has a battleArena that is int'],
     'the map\'s arena' => [['troops' => ['Rats' => 5], 'battleArena' => ['x']], 'the map\'s battleArena is array'],
     'an entry\'s weight' => [['troops' => ['Rats' => ['weight' => [5]]]], 'the troop "Rats" has a weight that is array'],
+    'an entry\'s null arena' => [['troops' => ['Rats' => ['weight' => 5, 'battleArena' => null]]], 'the troop "Rats" has a battleArena that is null'],
+    'the map\'s null arena' => [['troops' => ['Rats' => 5], 'battleArena' => null], 'the map\'s battleArena is null'],
 ]);
 
 it('offers the arenas in a graphical editor, writing only what changed', function () {
