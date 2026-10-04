@@ -43,27 +43,35 @@ return [
     ],
 ];
 PHP);
+    file_put_contents($root . '/assets/Data/system.php', "<?php return ['startingParty' => ['Kaelion']];");
+    writeTilesetTestPng($root . '/assets/Graphics/Battlebacks/Cave.png', 8, 8);
 
     return $root;
 }
 
-it('reads a troop formation over a previewed arena, the party in its slots and each member placed or not yet placed', function () {
+it('reads a troop formation as the Engine composes it over a previewed arena, the party in its slots', function () {
     $session = EditorSession::open(troopFormationProject());
     $formation = $session->readTroopFormation(0);
+    $leader = $formation['members'][0];
 
     expect($formation['canvas'])->toBe(['width' => 1350, 'height' => 720])
         ->and($formation['arenas'])->toBe([['id' => 'arena.road', 'name' => 'Road'], ['id' => 'arena.cave', 'name' => 'Cave']])
         ->and($formation['arena'])->toBe('arena.cave')
-        ->and($formation['background'])->toMatchArray(['asset' => 'Graphics/Battlebacks/Cave.png', 'width' => 1350.0, 'height' => 720.0])
-        ->and(array_map(static fn(array $slot): array => [$slot['x'], $slot['y']], $formation['party']))->toBe([[1050.0, 420.0], [1180.0, 560.0]])
-        ->and($formation['members'])->toBe([
-            ['enemy' => 'Regular Bat', 'placement' => ['x' => 260, 'y' => 300, 'width' => 275, 'height' => 190]],
-            ['enemy' => 'Regular Bat', 'placement' => null],
-        ])
-        // The arena is only previewed: choosing another writes nothing.
-        ->and($session->readTroopFormation(0, 'arena.road')['background']['asset'])->toBe('Graphics/Battlebacks/Road.png')
+        ->and($formation['backgrounds'])->toHaveCount(1)
+        ->and($formation['backgrounds'][0])->toMatchArray(['asset' => 'Graphics/Battlebacks/Cave.png'])
+        // The party stands where the battle's slots put it, named for the starting party.
+        ->and($formation['party'])->toHaveCount(1)
+        ->and($formation['party'][0])->toMatchArray(['name' => 'Kaelion', 'ground' => ['x' => 1050.0, 'y' => 420.0]])
+        // A placed member stands on its placement's ground point; without art it is drawn by its bounds alone.
+        ->and($leader['placement'])->toBe(['x' => 260, 'y' => 300, 'width' => 275, 'height' => 190])
+        ->and($leader['battler'])->toMatchArray(['ground' => ['x' => 260.0, 'y' => 300.0], 'image' => null, 'bodySpan' => null])
+        ->and($leader['battler']['diagnostics'])->toBe(['Base battler artwork unavailable: Regular Bat'])
+        ->and($formation['members'][1])->toBe(['enemy' => 'Regular Bat', 'placement' => null, 'battler' => null])
+        // The arena is only previewed: choosing another writes nothing; a background with no file is left out.
+        ->and($session->readTroopFormation(0, 'arena.road')['backgrounds'])->toBe([])
+        ->and($session->readTroopFormation(0, 'arena.road')['arena'])->toBe('arena.road')
         ->and($session->listUnsavedChanges())->toBe([])
-        ->and(fn() => $session->readTroopFormation(0, 'arena.moon'))->toThrow(SessionRefusal::class, 'no battle arena arena.moon');
+        ->and(fn() => $session->readTroopFormation(0, 'arena.moon'))->toThrow(SessionRefusal::class, 'arena.moon');
 });
 
 it('moves a member by its battle placement as one undo step, keeping the troop file\'s comments and the terminal position', function () {

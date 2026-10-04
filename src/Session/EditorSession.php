@@ -49,6 +49,9 @@ use Ichiloto\Editor\Validation\MapValidator;
 use Ichiloto\Engine\Rendering\Presentation\PresentationLayerPolicy;
 use Ichiloto\Engine\Rendering\Presentation\PresentationWorld;
 use Ichiloto\Engine\Battle\Presentation\BattlePresentationCatalog;
+use Ichiloto\Engine\Battle\Presentation\BattleFormationBattler;
+use Ichiloto\Engine\Battle\Presentation\BattleFormationLayout;
+use Ichiloto\Engine\Battle\Presentation\BattlerSlot;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasImage;
 use Closure;
 use InvalidArgumentException;
@@ -1016,14 +1019,16 @@ final class EditorSession
     }
 
     /**
-     * A troop's graphical formation as an arranger draws it: the battle
-     * canvas, the project's arenas with the one previewed and its background,
-     * the party's slots with the starting party's names, and each member's
-     * enemy and placement (null where the troop has none yet). The arena is a
-     * preview only, as in RPG Maker's Troops tab: a troop is placed once for
-     * every arena, and choosing one writes nothing.
+     * A troop's graphical formation as an arranger draws it, composed by the
+     * Engine's BattleFormationLayout, the placement the battle itself uses:
+     * the battle canvas, the project's arenas with the one previewed and its
+     * backgrounds, the starting party in its slots, and each member's enemy,
+     * battle placement and (once placed) where its feet stand, the bounds its
+     * idle art is drawn in, that art, and its body span at battle scale. The
+     * arena is a preview only, as in RPG Maker's Troops tab: a troop is placed
+     * once for every arena, and choosing one writes nothing.
      *
-     * @return array{assetRoot: string, canvas: array{width: int, height: int}, arenas: list<array{id: string, name: string}>, arena: ?string, background: ?array<string, mixed>, party: list<array{name: string, x: float, y: float}>, members: list<array{enemy: string, placement: ?array<string, int|float>}>}
+     * @return array<string, mixed>
      * @throws SessionRefusal When the troop is unknown or the project has no graphical battle.
      */
     public function readTroopFormation(int $index, ?string $arena = null): array
@@ -1036,39 +1041,73 @@ final class EditorSession
         } catch (\Throwable $error) {
             throw new SessionRefusal('The battle presentation cannot be read: ' . $error->getMessage(), previous: $error);
         }
-        $layout = $catalog?->ui ?? throw new SessionRefusal('This project has no graphical battle layout to arrange troops on.');
-        $arenas = [];
-        foreach ($catalog->arenas as $id => $definition) {
-            $arenas[] = ['id' => (string) $id, 'name' => $definition->name];
+        if ($catalog?->ui === null) {
+            throw new SessionRefusal('This project has no graphical battle layout to arrange troops on.');
         }
-        $arena ??= $catalog->defaultArena ?? array_key_first($catalog->arenas);
-        if ($arena !== null && ! isset($catalog->arenas[$arena])) {
-            throw new SessionRefusal(sprintf('There is no battle arena %s.', $arena));
+
+        $members = $placed = $placedMembers = [];
+        foreach ($record->getSubList('enemies') as $memberIndex => $entry) {
+            $enemy = is_array($entry) ? (string) ($entry['enemy'] ?? '') : '';
+            $placement = is_array($entry) && is_array($entry['graphicalPlacement'] ?? null) ? $entry['graphicalPlacement'] : null;
+            $members[$memberIndex] = ['enemy' => $enemy, 'placement' => $placement, 'battler' => null];
+            if ($placement === null) {
+                continue;
+            }
+            try {
+                $placed[] = ['enemyId' => $enemy, 'slot' => BattlerSlot::fromArray($placement, 'Battle Placement')];
+                $placedMembers[] = $memberIndex;
+            } catch (\InvalidArgumentException $error) {
+                $members[$memberIndex]['issue'] = $error->getMessage();
+            }
         }
-        $party = [];
-        $starting = $this->workspace->systemDatabase->getField('startingParty');
         $names = [];
         foreach ($this->workspace->actorDatabase->getActors() as $actor) {
             $names[$actor->getDefinitionId()] = $actor->getName();
         }
-        foreach ($layout->partySlots as $slotIndex => $slot) {
-            $member = is_array($starting) ? ($starting[$slotIndex] ?? null) : null;
-            $party[] = ['name' => is_string($member) ? ($names[$member] ?? $member) : '', 'x' => $slot->x, 'y' => $slot->y];
+        $starting = $this->workspace->systemDatabase->getField('startingParty');
+        $partyIds = array_values(array_slice(array_filter(is_array($starting) ? $starting : [], is_string(...)), 0, count($catalog->ui->partySlots)));
+
+        try {
+            $formation = BattleFormationLayout::compose($catalog, $arena, $placed, $partyIds, $assetRoot);
+        } catch (\InvalidArgumentException|\RuntimeException $error) {
+            throw new SessionRefusal('The formation cannot be composed: ' . $error->getMessage(), previous: $error);
         }
-        $members = [];
-        foreach ($record->getSubList('enemies') as $entry) {
-            $placement = is_array($entry) ? ($entry['graphicalPlacement'] ?? null) : null;
-            $members[] = ['enemy' => is_array($entry) ? (string) ($entry['enemy'] ?? '') : '', 'placement' => is_array($placement) ? $placement : null];
+        foreach ($formation->enemies as $position => $battler) {
+            $members[$placedMembers[$position]]['battler'] = self::describeFormationBattler($battler);
         }
+        $party = [];
+        foreach ($formation->party as $position => $battler) {
+            $party[] = ['name' => $names[$partyIds[$position]] ?? $partyIds[$position], ...self::describeFormationBattler($battler)];
+        }
+        $arenas = [];
+        foreach ($formation->arenaChoices as $id => $name) {
+            $arenas[] = ['id' => (string) $id, 'name' => $name];
+        }
+        $chosen = $formation->arena === null ? false : array_search($formation->arena, $catalog->arenas, true);
 
         return [
             'assetRoot' => $assetRoot,
-            'canvas' => ['width' => $layout->width, 'height' => $layout->height],
+            'canvas' => ['width' => $formation->layout->width, 'height' => $formation->layout->height],
             'arenas' => $arenas,
-            'arena' => $arena,
-            'background' => $arena === null ? null : self::describeCanvasImage($catalog->arenas[$arena]->background),
+            'arena' => $chosen === false ? null : (string) $chosen,
+            'backgrounds' => array_map(self::describeCanvasImage(...), $formation->backgrounds),
             'party' => $party,
-            'members' => $members,
+            'members' => array_values($members),
+        ];
+    }
+
+    /** @return array<string, mixed> Where a battler stands and is drawn, its art and its body at battle scale. */
+    private static function describeFormationBattler(BattleFormationBattler $battler): array
+    {
+        $bounds = $battler->bounds;
+
+        return [
+            'ground' => ['x' => $battler->ground->x, 'y' => $battler->ground->y],
+            'bounds' => ['x' => $bounds->x, 'y' => $bounds->y, 'width' => $bounds->width, 'height' => $bounds->height],
+            'image' => $battler->image === null ? null : self::describeCanvasImage($battler->image),
+            'bodySpan' => $battler->bodySpan,
+            'horizontal' => $battler->horizontal,
+            'diagnostics' => array_values(array_map(strval(...), $battler->diagnostics)),
         ];
     }
 
