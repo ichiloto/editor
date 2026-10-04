@@ -290,7 +290,7 @@ Order of work, each a complete slice before the next:
    shadows); the "no tileset system" note is stale. Types is done: it edits
    the elements `system.php` declares, which the element pickers now read
    (they read an unused enum under `assets/Data/Types` before).
-5. The manual's category table gains a GUI column and states each category's
+5. The manual's category table has a GUI column (done) and states each category's
    real coverage.
 
 Acceptance criteria:

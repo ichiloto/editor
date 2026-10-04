@@ -1007,35 +1007,41 @@ changed on disk since it was read is refused rather than overwritten. A category
 is editable only when both answers are safe. Anything else is browsable, and the
 status line says exactly why.
 
-| Category | Backing file | Status |
-| --- | --- | --- |
-| Actors | `assets/Data/Actors/*.php` | Editable |
-| Classes | `assets/Data/classes.php` | Editable - levels, the experience curve, every stat curve, equipment types and skills learned |
-| Skills | `assets/Data/Skills/*.php` | Editable - one data record per numbered file, attacks, abilities and spells alike, with their effects; `skills.php` loads them |
-| Items | `assets/Data/items.php` | Editable - authored as `new Item(...)` calls, edited entry by entry |
-| Weapons | `assets/Data/items.php` | Editable - authored as `new Weapon(...)` calls, edited entry by entry |
-| Armors | `assets/Data/items.php` | Editable - authored as `new Armor(...)` calls, edited entry by entry |
-| Enemies | `assets/Data/Enemies/*.php` | Editable - one data record per file, which `enemies.php` loads |
-| Troops | `assets/Data/troops.php` | Editable |
-| Battle Entry | `assets/Data/battle-entry-rules.php` | Editable |
-| States | `assets/Data/states.php` | Editable |
-| Animations | `assets/Data/animations.php` | Editable |
-| Tilesets | - | Read-only - the engine has no tileset system |
-| Common Events | `assets/Events/*.php` | Editable |
-| Quests | `assets/Data/quests.php` | Editable - objectives (the target picked by type), reward items with quantities, prerequisites, optional; the id follows the name until something refers to it |
-| Skits | `assets/Data/Skits/*.php` | Editable |
-| Knowledge | `assets/Data/knowledge.php` | Editable |
-| Knowledge Reports | `assets/Data/knowledge.php` | Editable |
-| Knowledge Types | `assets/Data/knowledge.php` | Editable |
-| Knowledge Enemies | `assets/Data/knowledge.php` | Editable |
-| Permanent Growth | `assets/Data/permanent-growth.php` | Editable |
-| Optimize Weights | `assets/Data/equipment-optimization.php` | Editable |
-| Optimize Outcomes | `assets/Data/equipment-optimization.php` | Editable |
-| Optimize Exclusions | `assets/Data/equipment-optimization.php` | Editable |
-| System | `assets/Data/system.php` | Editable - title, starting gold, party, inventory and position, battle engine, openings and ATB settings |
-| Configuration | `config.php` (`save`, `accessibility`, `ui`, `graphics`, `audio`, `inn`) | Editable - one row per setting, typed by what it holds; field zoom is kept from 1 to 8 |
-| Types | `assets/Data/system.php` | Editable - the project's elements, one per row; an empty list means the Engine's defaults. Weapon, armor and equipment types are the Engine's own |
-| Terms | `config.php` (`vocab`, `messages`) | Literal terms editable; comments and unrelated expressions preserved |
+Both editors edit every category through the same service, so a value
+changed in one reads the same in the other, and both save it the same
+source-preserving way. The GUI shows a record's rows as the terminal does,
+with the summaries the terminal keeps in its side panes (a class's curves, a
+skill's effects, a quest's rewards) listed under them.
+
+| Category | Backing file | Terminal editor | GUI editor |
+| --- | --- | --- | --- |
+| Actors | `assets/Data/Actors/*.php` | Editable | Same; an identity freeze that needs other files repaired at once is made in the terminal |
+| Classes | `assets/Data/classes.php` | Editable - levels, the experience curve, every stat curve, equipment types and skills learned | Same |
+| Skills | `assets/Data/Skills/*.php` | Editable - one data record per numbered file, attacks, abilities and spells alike, with their effects; `skills.php` loads them | Same |
+| Items | `assets/Data/items.php` | Editable - authored as `new Item(...)` calls, edited entry by entry | Same |
+| Weapons | `assets/Data/items.php` | Editable - authored as `new Weapon(...)` calls, edited entry by entry | Same |
+| Armors | `assets/Data/items.php` | Editable - authored as `new Armor(...)` calls, edited entry by entry | Same |
+| Enemies | `assets/Data/Enemies/*.php` | Editable - one data record per file, which `enemies.php` loads | Same |
+| Troops | `assets/Data/troops.php` | Editable | Same |
+| Battle Entry | `assets/Data/battle-entry-rules.php` | Editable | Same |
+| States | `assets/Data/states.php` | Editable | Same |
+| Animations | `assets/Data/animations.php` | Editable | Same |
+| Tilesets | - | Read-only - the engine has no tileset system | Same (read-only) |
+| Common Events | `assets/Events/*.php` | Editable | Same |
+| Quests | `assets/Data/quests.php` | Editable - objectives (the target picked by type), reward items with quantities, prerequisites, optional; the id follows the name until something refers to it | Same |
+| Skits | `assets/Data/Skits/*.php` | Editable | Same |
+| Knowledge | `assets/Data/knowledge.php` | Editable | Same |
+| Knowledge Reports | `assets/Data/knowledge.php` | Editable | Same |
+| Knowledge Types | `assets/Data/knowledge.php` | Editable | Same |
+| Knowledge Enemies | `assets/Data/knowledge.php` | Editable | Same |
+| Permanent Growth | `assets/Data/permanent-growth.php` | Editable | Same |
+| Optimize Weights | `assets/Data/equipment-optimization.php` | Editable | Same |
+| Optimize Outcomes | `assets/Data/equipment-optimization.php` | Editable | Same |
+| Optimize Exclusions | `assets/Data/equipment-optimization.php` | Editable | Same |
+| System | `assets/Data/system.php` | Editable - title, starting gold, party, inventory and position, battle engine, openings and ATB settings | Same |
+| Configuration | `config.php` (`save`, `accessibility`, `ui`, `graphics`, `audio`, `inn`) | Editable - one row per setting, typed by what it holds; field zoom is kept from 1 to 8 | Same |
+| Types | `assets/Data/system.php` | Editable - the project's elements, one per row; an empty list means the Engine's defaults. Weapon, armor and equipment types are the Engine's own | Same |
+| Terms | `config.php` (`vocab`, `messages`) | Literal terms editable; comments and unrelated expressions preserved | Same |
 
 Why a category can still turn out read-only: a file the editor cannot
 evaluate, a value it could not write back out, or a comment inside returned
