@@ -48,6 +48,8 @@ use Ichiloto\Editor\Storage\WorkspaceSave;
 use Ichiloto\Editor\Validation\MapValidator;
 use Ichiloto\Engine\Rendering\Presentation\PresentationLayerPolicy;
 use Ichiloto\Engine\Rendering\Presentation\PresentationWorld;
+use Ichiloto\Engine\Battle\Presentation\BattlePresentationCatalog;
+use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasImage;
 use Closure;
 use InvalidArgumentException;
 use RuntimeException;
@@ -1011,6 +1013,80 @@ final class EditorSession
             'value' => (string) $value,
             'label' => (string) ($labels[$value] ?? $value),
         ], array_values($catalog->valuesFor($category)));
+    }
+
+    /**
+     * A troop's graphical formation as an arranger draws it: the battle
+     * canvas, the project's arenas with the one previewed and its background,
+     * the party's slots with the starting party's names, and each member's
+     * enemy and placement (null where the troop has none yet). The arena is a
+     * preview only, as in RPG Maker's Troops tab: a troop is placed once for
+     * every arena, and choosing one writes nothing.
+     *
+     * @return array{assetRoot: string, canvas: array{width: int, height: int}, arenas: list<array{id: string, name: string}>, arena: ?string, background: ?array<string, mixed>, party: list<array{name: string, x: float, y: float}>, members: list<array{enemy: string, placement: ?array<string, int|float>}>}
+     * @throws SessionRefusal When the troop is unknown or the project has no graphical battle.
+     */
+    public function readTroopFormation(int $index, ?string $arena = null): array
+    {
+        $record = $this->requireRecordDatabase('troops')->getRecordByIndex($index)
+            ?? throw new SessionRefusal(sprintf('troops has no record %d.', $index));
+        $assetRoot = $this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets';
+        try {
+            $catalog = BattlePresentationCatalog::load($assetRoot);
+        } catch (\Throwable $error) {
+            throw new SessionRefusal('The battle presentation cannot be read: ' . $error->getMessage(), previous: $error);
+        }
+        $layout = $catalog?->ui ?? throw new SessionRefusal('This project has no graphical battle layout to arrange troops on.');
+        $arenas = [];
+        foreach ($catalog->arenas as $id => $definition) {
+            $arenas[] = ['id' => (string) $id, 'name' => $definition->name];
+        }
+        $arena ??= $catalog->defaultArena ?? array_key_first($catalog->arenas);
+        if ($arena !== null && ! isset($catalog->arenas[$arena])) {
+            throw new SessionRefusal(sprintf('There is no battle arena %s.', $arena));
+        }
+        $party = [];
+        $starting = $this->workspace->systemDatabase->getField('startingParty');
+        $names = [];
+        foreach ($this->workspace->actorDatabase->getActors() as $actor) {
+            $names[$actor->getDefinitionId()] = $actor->getName();
+        }
+        foreach ($layout->partySlots as $slotIndex => $slot) {
+            $member = is_array($starting) ? ($starting[$slotIndex] ?? null) : null;
+            $party[] = ['name' => is_string($member) ? ($names[$member] ?? $member) : '', 'x' => $slot->x, 'y' => $slot->y];
+        }
+        $members = [];
+        foreach ($record->getSubList('enemies') as $entry) {
+            $placement = is_array($entry) ? ($entry['graphicalPlacement'] ?? null) : null;
+            $members[] = ['enemy' => is_array($entry) ? (string) ($entry['enemy'] ?? '') : '', 'placement' => is_array($placement) ? $placement : null];
+        }
+
+        return [
+            'assetRoot' => $assetRoot,
+            'canvas' => ['width' => $layout->width, 'height' => $layout->height],
+            'arenas' => $arenas,
+            'arena' => $arena,
+            'background' => $arena === null ? null : self::describeCanvasImage($catalog->arenas[$arena]->background),
+            'party' => $party,
+            'members' => $members,
+        ];
+    }
+
+    /** @return array<string, mixed> An image's asset, where it is drawn and the part of the asset it shows. */
+    private static function describeCanvasImage(CanvasImage $image): array
+    {
+        $destination = $image->destination;
+
+        return array_filter([
+            'asset' => $image->asset,
+            'x' => $destination->x, 'y' => $destination->y, 'width' => $destination->width, 'height' => $destination->height,
+            'source' => $image->sourceRect === null ? null : [
+                'x' => $image->sourceRect->x, 'y' => $image->sourceRect->y,
+                'width' => $image->sourceRect->width, 'height' => $image->sourceRect->height,
+            ],
+            'flipX' => $image->flipX ?: null,
+            'flipY' => $image->flipY ?: null,
+        ], static fn(mixed $value): bool => $value !== null);
     }
 
     /**

@@ -2852,6 +2852,23 @@ final class ProjectRecordDatabase
             return [intval($parts[0]), intval($parts[1])];
         }
 
+        if ($field->codec === RecordFieldCodec::RECT) {
+            if ($trimmed === '' && $field->removeWhenEmpty) {
+                return null;
+            }
+
+            $parts = array_map(trim(...), explode(',', $trimmed));
+
+            if (count($parts) !== 4 || array_filter($parts, static fn(string $part): bool => ! is_numeric($part)) !== []) {
+                throw new \InvalidArgumentException(sprintf('%s must be four numbers: x, y, width and height.', $field->label));
+            }
+
+            // Whole numbers stay integers, as an author writes them.
+            $numbers = array_map(static fn(string $part): int|float => floor((float) $part) === (float) $part ? (int) $part : (float) $part, $parts);
+
+            return array_combine(['x', 'y', 'width', 'height'], $numbers);
+        }
+
         if ($field->codec === RecordFieldCodec::NORMALIZED_POINT) {
             if ($trimmed === '' && $field->removeWhenEmpty) {
                 return null;
@@ -2982,6 +2999,9 @@ final class ProjectRecordDatabase
                 : ProjectRecord::stringify($value),
             RecordFieldCodec::POINT => is_array($value)
                 ? implode(', ', array_map(strval(...), array_values($value)))
+                : ProjectRecord::stringify($value),
+            RecordFieldCodec::RECT => is_array($value)
+                ? implode(', ', array_map(static fn(string $key): string => ProjectRecord::stringify($value[$key] ?? ''), ['x', 'y', 'width', 'height']))
                 : ProjectRecord::stringify($value),
             RecordFieldCodec::NORMALIZED_POINT => is_array($value)
                 ? sprintf('%s, %s', ProjectRecord::stringify($value['x'] ?? ''), ProjectRecord::stringify($value['y'] ?? ''))

@@ -56,4 +56,11 @@ enum RecordFieldCodec: string
      * from 0 to 1, shown as `x, y`: an image's pivot. Both or neither.
      */
     case NORMALIZED_POINT = 'normalized_point';
+
+    /**
+     * A rectangle stored as `['x' => x, 'y' => y, 'width' => w, 'height' => h]`,
+     * shown as `x, y, width, height`: a battler's graphical placement. Whole
+     * or not at all, so one edit moves it as one step.
+     */
+    case RECT = 'rect';
 }
