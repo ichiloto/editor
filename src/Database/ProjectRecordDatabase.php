@@ -2848,6 +2848,21 @@ final class ProjectRecordDatabase
             return [intval($parts[0]), intval($parts[1])];
         }
 
+        if ($field->codec === RecordFieldCodec::NORMALIZED_POINT) {
+            if ($trimmed === '' && $field->removeWhenEmpty) {
+                return null;
+            }
+
+            $parts = array_map(trim(...), explode(',', $trimmed));
+
+            if (count($parts) !== 2 || ! is_numeric($parts[0]) || ! is_numeric($parts[1])
+                || min(floatval($parts[0]), floatval($parts[1])) < 0.0 || max(floatval($parts[0]), floatval($parts[1])) > 1.0) {
+                throw new \InvalidArgumentException(sprintf('%s must be two numbers from 0 to 1, x and y, separated by a comma.', $field->label));
+            }
+
+            return ['x' => floatval($parts[0]), 'y' => floatval($parts[1])];
+        }
+
         if ($field->codec === RecordFieldCodec::CONDITIONS) {
             $conditions = ConditionCodec::decodeAllStrictly($trimmed);
 
@@ -2963,6 +2978,9 @@ final class ProjectRecordDatabase
                 : ProjectRecord::stringify($value),
             RecordFieldCodec::POINT => is_array($value)
                 ? implode(', ', array_map(strval(...), array_values($value)))
+                : ProjectRecord::stringify($value),
+            RecordFieldCodec::NORMALIZED_POINT => is_array($value)
+                ? sprintf('%s, %s', ProjectRecord::stringify($value['x'] ?? ''), ProjectRecord::stringify($value['y'] ?? ''))
                 : ProjectRecord::stringify($value),
             RecordFieldCodec::NONE => ProjectRecord::stringify($value),
         };

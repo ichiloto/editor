@@ -8,6 +8,7 @@ use Ichiloto\Editor\Cutscenes\CutsceneAsset;
 use Ichiloto\Editor\Inspector\InputControlType;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Engine\Animations\Timelines\EffectCadence;
+use Ichiloto\Engine\Animations\Timelines\EffectImageAttachment;
 use Ichiloto\Engine\Animations\Timelines\EffectTimelineLibrary;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicCommandSchema;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandRegistry;
@@ -436,8 +437,9 @@ final class CutsceneSchemas
      * sequence being edited as fields, its tracks and cues as lists opened
      * as frames. Every row is a key the Engine's effect library reads; an
      * effect with separate terminal and graphical sequences is edited one
-     * sequence at a time. Battle-only keys (impact timing, facing, flips,
-     * flash and shake) are offered for every effect; validation says where
+     * sequence at a time. Battle-only keys (impact timing, facing, image
+     * attachment and pivot, flips, flash and shake) are offered for every
+     * effect; validation says where
      * an effect is used that refuses them.
      */
     public static function effects(): RecordSchema
@@ -520,6 +522,13 @@ final class CutsceneSchemas
                     new RecordField('cells.width', 'Cell Width', InputControlType::INTEGER, displayDefault: '1'),
                     new RecordField('cells.height', 'Cell Height', InputControlType::INTEGER, displayDefault: '1'),
                     new RecordField('depth', 'Depth', options: ['front', 'behind'], removeWhenEmpty: true, displayDefault: 'front'),
+                    // Battle only: the battler point the image is placed on (the empty
+                    // choice removes it: its centre), and the point of the sheet cell that
+                    // sits there, x and y from 0 to 1 (removed: the cell's middle).
+                    new RecordField('attachment', 'Attachment',
+                        options: ['', ...array_map(static fn(EffectImageAttachment $attachment): string => $attachment->value, EffectImageAttachment::cases())],
+                        removeWhenEmpty: true, displayDefault: '(center)'),
+                    new RecordField('pivot', 'Pivot', codec: RecordFieldCodec::NORMALIZED_POINT, removeWhenEmpty: true, displayDefault: '0.5, 0.5'),
                 ],
             ],
             variantKey: 'type',

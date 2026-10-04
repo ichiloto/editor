@@ -1853,13 +1853,18 @@ command's result lands: at the `end`, a `frame` or a `cue`) and
 `terminal` or `graphical`), an anchor (`target`, `caster` or `screen`) and,
 for a battle stroke drawn one way, `Facing` (`west` or `east`; the empty
 choice removes it, and the stroke stays as drawn). An image track names its
-PNG through the asset picker, its sheet columns and rows, its cell size and
-its depth; its keyframes give the sheet frame, the position and, in battle,
+PNG through the asset picker, its sheet columns and rows, its cell size, its
+depth and, in battle, its `Attachment` (`center`, `head` or `ground` on the
+battler; the empty choice removes it, so the image is centred) and `Pivot`
+(the point of the sheet cell that sits there, `x, y` from 0 to 1, such as
+`0.5, 0.92` for a ring at the cell's foot; empty removes it, so the cell's
+middle sits there); its keyframes give the sheet frame, the position and, in battle,
 `Flip Horizontally` and `Flip Vertically` for an authored reverse stroke.
 Glyph and text keyframes give frame, duration, position `x` and `y`,
 content (the multiline editor), asset id, color, visibility, z-index and a
 payload. Cues are `playSound` on the field and any battle cue in battle.
-Impact timing, facing, flips, flashes and shakes are battle-only;
+Impact timing, facing, image attachment and pivot, flips, flashes and shakes
+are battle-only;
 validation names the place that uses an effect where they are refused.
 
 **Sequence** says how the effect is drawn. A flat effect has one sequence

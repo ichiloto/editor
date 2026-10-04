@@ -50,4 +50,10 @@ enum RecordFieldCodec: string
      * A point stored as `[x, y]`, shown as `x, y`.
      */
     case POINT = 'point';
+
+    /**
+     * A point within a whole, stored as `['x' => x, 'y' => y]` with each
+     * from 0 to 1, shown as `x, y`: an image's pivot. Both or neither.
+     */
+    case NORMALIZED_POINT = 'normalized_point';
 }

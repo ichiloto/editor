@@ -7,6 +7,7 @@ use Ichiloto\Editor\Cutscenes\Preview\EffectPreviewStage;
 use Ichiloto\Editor\Editor;
 use Ichiloto\Editor\UI\CutscenesScreen;
 use Ichiloto\Engine\Animations\Timelines\EffectCadence;
+use Ichiloto\Engine\Animations\Timelines\EffectImageAttachment;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Engine\Animations\Timelines\EffectTimelineLibrary;
 use Ichiloto\Engine\Battle\BattleTurnTimings;
@@ -109,6 +110,43 @@ it("sets and removes a track's battle facing as an ordinary field, and the Engin
 
     setCutsceneField($editor, $facing, '');
     expect($asset->payload()['tracks'][0])->not->toHaveKey('facing')
+        ->and($asset->isDirty())->toBeFalse();
+});
+
+it("sets and removes a battle image's attachment and pivot as whole fields, and the Engine still plays it", function () {
+    $root = effectProject();
+    $editor = effectsEditor($root);
+    selectEffect($editor, 'dusk-slash');
+    $asset = libraryOf($editor)->find(CutsceneType::EFFECT, 'dusk-slash');
+    setCutsceneField($editor, '@sequence', 'graphical');
+    $track = static fn(): array => $asset->partner()['presentations']['graphical']['tracks'][0];
+
+    selectCutsceneField($editor, 'commandListTracks');
+    pressKeys($editor, "\n");
+    $find = static fn(string $suffix): string => array_values(array_filter(cutsceneFieldIds($editor),
+        static fn(string $id): bool => str_ends_with(strtolower($id), $suffix)))[0];
+    [$attachment, $pivot] = [$find('attachment'), $find('pivot')];
+
+    expect(cutsceneField($editor, $attachment)['options'])
+        ->toBe(['', ...array_map(static fn(EffectImageAttachment $case): string => $case->value, EffectImageAttachment::cases())]);
+
+    // The ring at the cell's foot sits on the ground beneath the battler.
+    setCutsceneField($editor, $attachment, 'ground');
+    setCutsceneField($editor, $pivot, '0.5, 0.92');
+    expect($track()['attachment'])->toBe('ground')
+        ->and($track()['pivot'])->toBe(['x' => 0.5, 'y' => 0.92])
+        ->and(cutsceneField($editor, $pivot)['value'])->toBe('0.5, 0.92')
+        ->and($asset->compiledEffect(EffectPresentation::GRAPHICAL, true))->not->toBeNull();
+
+    // A pivot outside the cell, or half of one, is refused and nothing changes.
+    foreach (['1.2, 0.5', '0.5', 'left, top'] as $invalid) {
+        setCutsceneField($editor, $pivot, $invalid);
+        expect($track()['pivot'])->toBe(['x' => 0.5, 'y' => 0.92]);
+    }
+
+    setCutsceneField($editor, $pivot, '');
+    setCutsceneField($editor, $attachment, '');
+    expect($track())->not->toHaveKey('pivot')->not->toHaveKey('attachment')
         ->and($asset->isDirty())->toBeFalse();
 });
 
