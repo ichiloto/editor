@@ -100,6 +100,7 @@ use Ichiloto\Engine\Entities\Enumerations\ItemScopeNumber;
 use Ichiloto\Engine\Entities\Enumerations\ItemScopeSide;
 use Ichiloto\Engine\Entities\Enumerations\ItemScopeStatus;
 use Ichiloto\Engine\Entities\Enumerations\Occasion;
+use Ichiloto\Engine\Entities\Enumerations\WeaponType;
 use Ichiloto\Engine\Entities\Inventory\Accessory;
 use Ichiloto\Engine\Entities\Inventory\Armor;
 use Ichiloto\Engine\Entities\Inventory\Items\Item;
@@ -10370,6 +10371,17 @@ final class Editor
                 'options' => $this->getActorClassOptions(),
                 'field' => 'class',
             ],
+            [
+                // The character's own weapon, part of who they are and with
+                // no stats: what their attack looks like when no weapon is
+                // equipped. An equipped weapon's type takes its place.
+                'label' => 'Attack Style',
+                'value' => $actor->getAttackStyle() === '' ? 'Unarmed' : $actor->getAttackStyle(),
+                'options' => [ProjectActor::ATTACK_STYLE_UNARMED, ...array_map(
+                    static fn(WeaponType $type): string => $type->value, WeaponType::cases())],
+                'field' => 'attackStyle',
+                'hint' => 'own weapon when none is equipped; no stats',
+            ],
             ...$this->actorSummonFields($actor),
             [
                 'label' => 'Level',
@@ -12401,7 +12413,7 @@ final class Editor
      */
     private function coerceActorFieldValue(string $field, string $rawValue): string|int
     {
-        if (in_array($field, ['name', 'description', 'class', 'id', 'defaultNaturalVariantId', 'summons'], true)) {
+        if (in_array($field, ['name', 'description', 'class', 'attackStyle', 'id', 'defaultNaturalVariantId', 'summons'], true)) {
             return trim($rawValue);
         }
 
