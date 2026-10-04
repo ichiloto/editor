@@ -31,10 +31,14 @@ final class TimelinePreviewSession
 
     /**
      * @param bool|null $loop Whether playback wraps at the last frame; null plays as the timeline's own playback says.
+     * @param float|null $phaseDurationSeconds For an effect paced by the battle, the seconds its battle phase lasts; its frames spread over them.
      */
-    public function __construct(public readonly CompiledEffectTimeline $timeline, ?bool $loop = false)
-    {
-        $this->session = new EffectPlaybackSession($timeline, loop: $loop);
+    public function __construct(
+        public readonly CompiledEffectTimeline $timeline,
+        ?bool $loop = false,
+        public readonly ?float $phaseDurationSeconds = null,
+    ) {
+        $this->session = new EffectPlaybackSession($timeline, loop: $loop, phaseDurationSeconds: $phaseDurationSeconds);
         $this->loop = $this->session->isLooping;
         $this->session->pause();
     }
@@ -93,7 +97,7 @@ final class TimelinePreviewSession
     {
         $frame = $this->session->currentFrame;
         $wasPlaying = $this->isPlaying();
-        $this->session = new EffectPlaybackSession($this->timeline, loop: $this->loop, speed: $this->speed);
+        $this->session = new EffectPlaybackSession($this->timeline, loop: $this->loop, speed: $this->speed, phaseDurationSeconds: $this->phaseDurationSeconds);
         $this->session->seek($frame);
 
         if ($wasPlaying) {

@@ -7,6 +7,7 @@ namespace Ichiloto\Editor\Database;
 use Ichiloto\Editor\Cutscenes\CutsceneAsset;
 use Ichiloto\Editor\Inspector\InputControlType;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
+use Ichiloto\Engine\Animations\Timelines\EffectCadence;
 use Ichiloto\Engine\Animations\Timelines\EffectTimelineLibrary;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicCommandSchema;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandRegistry;
@@ -453,6 +454,15 @@ final class CutsceneSchemas
                 new RecordField('playback', 'Playback', options: ['once', 'loop'], removeWhenEmpty: true, displayDefault: 'once'),
                 new RecordField('loopFrom', 'Loop From', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '0'),
                 new RecordField('restFrame', 'Rest Frame', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '0'),
+                // Battle only: fixed plays at its FPS; battle_phase spreads its frames
+                // over the battle phase it plays in, as the battle's pace sets it.
+                new RecordField(
+                    'cadence',
+                    'Cadence',
+                    options: array_map(static fn(EffectCadence $cadence): string => $cadence->value, EffectCadence::cases()),
+                    removeWhenEmpty: true,
+                    displayDefault: EffectCadence::FIXED->value,
+                ),
                 // Battle only: when the command's result lands.
                 new RecordField('effectTiming.mode', 'Impact Timing', options: ['end', 'frame', 'cue'], removeWhenEmpty: true, displayDefault: '(omitted)'),
                 new RecordField('effectTiming.frame', 'Impact Frame', InputControlType::INTEGER, removeWhenEmpty: true),

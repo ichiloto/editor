@@ -6,7 +6,12 @@ use Ichiloto\Editor\Cutscenes\CutsceneType;
 use Ichiloto\Editor\Cutscenes\Preview\EffectPreviewStage;
 use Ichiloto\Editor\Editor;
 use Ichiloto\Editor\UI\CutscenesScreen;
+use Ichiloto\Engine\Animations\Timelines\EffectCadence;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
+use Ichiloto\Engine\Animations\Timelines\EffectTimelineLibrary;
+use Ichiloto\Engine\Battle\BattleTurnTimings;
+use Ichiloto\Engine\Battle\Enumerations\BattleActionCategory;
+use Ichiloto\Engine\Battle\Enumerations\BattlePace;
 
 /**
  * Standalone effect timelines on the Cutscenes screen: grouped rows over
@@ -206,6 +211,80 @@ it('previews an effect through the Engine playhead, anchored to caster and targe
         ->and(callEditorMethod($editor, 'createEffectPreviewStage', $asset)->describeUndrawn(getEditorProperty($editor, 'timelinePreview')->activeSegments()))
             ->toBe(['dusk-slash.png frame 0 flipX on target'])
         ->and(renderEditorPlainFrame($editor, 160, 50))->toContain('dusk-slash.png frame 0');
+});
+
+it('puts a sequence\'s FPS aside while the battle paces it, and gives it back for fixed cadence', function () {
+    $root = effectProject();
+    $editor = effectsEditor($root);
+    selectEffect($editor, 'ember-spark');
+    $asset = libraryOf($editor)->find(CutsceneType::EFFECT, 'ember-spark');
+
+    // Paced by the battle, the sequence has no FPS: the Engine refuses one, so its row goes too.
+    setCutsceneField($editor, 'cadence', 'battle_phase');
+    expect($asset->partner())->not->toHaveKey('fps')
+        ->and($asset->partner()['cadence'])->toBe('battle_phase')
+        ->and(cutsceneFieldIds($editor))->not->toContain('fps')
+        ->and($asset->compiledEffect(EffectPresentation::TERMINAL, true)->cadence)->toBe(EffectCadence::BATTLE_PHASE);
+
+    // Fixed again, the FPS the author wrote comes back.
+    setCutsceneField($editor, 'cadence', 'fixed');
+    expect($asset->partner()['fps'])->toBe(10)
+        ->and(cutsceneFieldIds($editor))->toContain('fps');
+
+    // Undo walks back through both, and the file was never left without one or the other.
+    callEditorMethod($editor, 'performUndo');
+    expect($asset->partner())->not->toHaveKey('fps');
+    callEditorMethod($editor, 'performUndo');
+    expect($asset->partner()['fps'])->toBe(10)
+        ->and($asset->partner())->not->toHaveKey('cadence')
+        ->and($asset->isDirty())->toBeFalse();
+
+    // Saved paced, the file holds no FPS and the Engine loads it for battle.
+    callEditorMethod($editor, 'performRedo');
+    expect($asset->save())->toBeTrue();
+    $saved = require $root . '/assets/Animations/ember-spark/ember-spark.timeline.php';
+    expect($saved)->not->toHaveKey('fps')
+        ->and((new EffectTimelineLibrary($root . '/assets'))->load('ember-spark', true, EffectPresentation::TERMINAL)->cadence)->toBe(EffectCadence::BATTLE_PHASE);
+});
+
+it('previews a battle-paced effect over the phase the Engine times for its command, pace and stage', function () {
+    $root = effectProject();
+    file_put_contents($root . '/config.php', "<?php\n\nreturn ['ui' => ['battle' => ['animation_pace' => 'fast']]];\n");
+    @mkdir($root . '/assets/Animations/paced-burst', 0o777, true);
+    file_put_contents($root . '/assets/Animations/paced-burst/paced-burst.timeline.php', "<?php\n\nreturn [\n  'lengthFrames' => 4,\n  'cadence' => 'battle_phase',\n  'tracks' => [['id' => 'burst', 'type' => 'glyph', 'keyframes' => [['frame' => 0, 'duration' => 4, 'content' => '*']]]],\n];\n");
+    $phase = static fn(BattleActionCategory $action, BattlePace $pace): BattleTurnTimings =>
+        BattleTurnTimings::fromTotalDuration($action->totalDurationSeconds($pace));
+    $editor = effectsEditor($root);
+    selectEffect($editor, 'paced-burst');
+
+    // Cadence is a choice of the Engine's cadences, read from the file.
+    expect(cutsceneField($editor, 'cadence')['value'])->toBe('battle_phase')
+        ->and(cutsceneField($editor, 'cadence')['options'])->toBe(array_map(static fn(EffectCadence $cadence): string => $cadence->value, EffectCadence::cases()));
+
+    // It starts as the target of a physical attack at the project's own pace.
+    setEditorProperty($editor, 'cutsceneFocus', CutscenesScreen::PANE_PREVIEW);
+    pressKeys($editor, ' ', ' ');
+    expect(getEditorProperty($editor, 'timelinePreview')->phaseDurationSeconds)
+        ->toBe($phase(BattleActionCategory::PHYSICAL_ATTACK, BattlePace::FAST)->effectAnimation);
+
+    // S plays it as the source stage, A as the next kind of command, P at the next pace.
+    pressKeys($editor, 's');
+    expect(getEditorProperty($editor, 'timelinePreview')->phaseDurationSeconds)
+        ->toBe($phase(BattleActionCategory::PHYSICAL_ATTACK, BattlePace::FAST)->actionAnimation);
+    pressKeys($editor, 'a');
+    expect(getEditorProperty($editor, 'timelinePreview')->phaseDurationSeconds)
+        ->toBe($phase(BattleActionCategory::cases()[1], BattlePace::FAST)->actionAnimation);
+    $next = BattlePace::cases()[(array_search(BattlePace::FAST, BattlePace::cases(), true) + 1) % count(BattlePace::cases())];
+    pressKeys($editor, 'p');
+    expect(getEditorProperty($editor, 'timelinePreview')->phaseDurationSeconds)
+        ->toBe($phase(BattleActionCategory::cases()[1], $next)->actionAnimation)
+        ->and(getEditorProperty($editor, 'statusMessage'))->toContain('over ');
+
+    // A fixed effect plays at its own fps, whatever the battle's pace.
+    selectEffect($editor, 'ember-spark');
+    callEditorMethod($editor, 'startTimelinePreview', false);
+    expect(getEditorProperty($editor, 'timelinePreview')->timeline->sourceId)->toBe('ember-spark')
+        ->and(getEditorProperty($editor, 'timelinePreview')->phaseDurationSeconds)->toBeNull();
 });
 
 it('draws a flat field effect around its target, leaving image tracks to the graphical renderer', function () {

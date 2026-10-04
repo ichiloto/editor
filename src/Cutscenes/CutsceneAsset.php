@@ -14,6 +14,7 @@ use Ichiloto\Editor\Database\PhpValueExporter;
 use Ichiloto\Editor\History\TracksPersistedState;
 use Ichiloto\Editor\ProjectDirectoryContext;
 use Ichiloto\Engine\Animations\Timelines\CompiledEffectTimeline;
+use Ichiloto\Engine\Animations\Timelines\EffectCadence;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicDefinition;
 use Ichiloto\Engine\Cutscenes\Summons\SummonCompiledCutscene;
@@ -88,6 +89,12 @@ final class CutsceneAsset
      * keeps both, each exactly as written unless it is the one edited.
      */
     private EffectPresentation $presentationView = EffectPresentation::TERMINAL;
+    /**
+     * @var array<string, mixed> An effect sequence's own FPS while the battle
+     * paces it, by sequence ('flat', 'terminal' or 'graphical'), so choosing
+     * fixed cadence again gives it back.
+     */
+    private array $pacedFps = [];
     private ?string $readOnlyReason = null;
     private bool $isNew = false;
     private bool $isDeleted = false;
@@ -402,21 +409,22 @@ final class CutsceneAsset
      * The payload alone is not enough: it is one sequence of an effect with
      * two, and a split leaves it unchanged.
      *
-     * @return array{data: array<string, mixed>, partner: array<int|string, mixed>, view: EffectPresentation, deleted: bool}
+     * @return array{data: array<string, mixed>, partner: array<int|string, mixed>, view: EffectPresentation, deleted: bool, pacedFps: array<string, mixed>}
      */
     public function captureEditState(): array
     {
-        return ['data' => $this->data, 'partner' => $this->partner, 'view' => $this->presentationView, 'deleted' => $this->isDeleted];
+        return ['data' => $this->data, 'partner' => $this->partner, 'view' => $this->presentationView, 'deleted' => $this->isDeleted, 'pacedFps' => $this->pacedFps];
     }
 
     /**
      * Puts the asset back to a state `captureEditState` returned.
      *
-     * @param array{data: array<string, mixed>, partner: array<int|string, mixed>, view: EffectPresentation, deleted: bool} $state
+     * @param array{data: array<string, mixed>, partner: array<int|string, mixed>, view: EffectPresentation, deleted: bool, pacedFps?: array<string, mixed>} $state
      */
     public function restoreEditState(array $state): void
     {
         $this->presentationView = $state['view'];
+        $this->pacedFps = $state['pacedFps'] ?? [];
         $this->markDeleted($state['deleted']);
 
         if ($this->readOnlyReason !== null || ($state['data'] === $this->data && $state['partner'] === $this->partner)) {
@@ -426,6 +434,32 @@ final class CutsceneAsset
         $this->data = $state['data'];
         $this->partner = $state['partner'];
         $this->touchState();
+    }
+
+    /**
+     * A sequence the battle paces has no FPS of its own: the battle phase it
+     * plays in sets its timing, and the Engine refuses one. Choosing
+     * battle_phase cadence takes the sequence's FPS out and keeps it;
+     * choosing fixed again puts it back, first, as sequences write it.
+     *
+     * @param array<string, mixed> $payload
+     * @return array<string, mixed>
+     */
+    private function settleEffectCadence(array $payload): array
+    {
+        $sequence = $this->hasPresentations() ? $this->presentationView->value : 'flat';
+
+        if (($payload['cadence'] ?? null) === EffectCadence::BATTLE_PHASE->value) {
+            if (array_key_exists('fps', $payload)) {
+                $this->pacedFps[$sequence] = $payload['fps'];
+                unset($payload['fps']);
+            }
+        } elseif (! array_key_exists('fps', $payload) && array_key_exists($sequence, $this->pacedFps)) {
+            $payload = ['fps' => $this->pacedFps[$sequence], ...$payload];
+            unset($this->pacedFps[$sequence]);
+        }
+
+        return $payload;
     }
 
     /**
@@ -459,6 +493,10 @@ final class CutsceneAsset
 
         if (! $this->type->hasDataFile()) {
             unset($payload['id']);
+        }
+
+        if ($this->type === CutsceneType::EFFECT) {
+            $payload = $this->settleEffectCadence($payload);
         }
 
         if ($this->hasPresentations()) {

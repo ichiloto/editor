@@ -19,8 +19,13 @@ use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Editor\Status\StatusLevel;
 use Ichiloto\Editor\UI\CutscenesScreen;
 use Ichiloto\Editor\Validation\EffectValidator;
+use Ichiloto\Engine\Animations\Timelines\EffectCadence;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Engine\Animations\Timelines\EffectTimelineLibrary;
+use Ichiloto\Engine\Battle\BattlePacing;
+use Ichiloto\Engine\Battle\BattleTurnTimings;
+use Ichiloto\Engine\Battle\Enumerations\BattleActionCategory;
+use Ichiloto\Engine\Battle\Enumerations\BattlePace;
 use Throwable;
 
 /**
@@ -58,6 +63,12 @@ trait CutscenePreviewPane
     private array $effectPreviewInBattle = [];
     /** Which side the caster stands on in an effect's battle preview. */
     private bool $isEffectPreviewCasterOnLeft = true;
+    /** The kind of command a battle-paced effect is previewed inside, which sets how long its phase lasts. */
+    private BattleActionCategory $effectPreviewAction = BattleActionCategory::PHYSICAL_ATTACK;
+    /** The battle pace a battle-paced effect is previewed at; the project's own until the author changes it. */
+    private ?BattlePace $effectPreviewPace = null;
+    /** @var array<string, bool> Effect id => previewed as a command's source stage (else its target), once the author chose. */
+    private array $effectPreviewAsSource = [];
 
     /**
      * Whether the preview pane is taller than its resting strip: while a
@@ -560,6 +571,19 @@ trait CutscenePreviewPane
         $lower = strtolower($input);
         $asset = $this->selectedCutscene();
 
+        if ($asset?->type === CutsceneType::EFFECT && in_array($lower, ['a', 'p', 's'], true) && $this->isEffectPreviewInBattle($asset)) {
+            // The battle command a battle-paced effect plays inside: its kind,
+            // the battle's pace and the stage, which together set its phase.
+            match ($lower) {
+                'a' => $this->effectPreviewAction = self::cycleCase(BattleActionCategory::cases(), $this->effectPreviewAction),
+                'p' => $this->effectPreviewPace = self::cycleCase(BattlePace::cases(), $this->getEffectPreviewPace()),
+                's' => $this->effectPreviewAsSource[$asset->id] = ! $this->isEffectPreviewSource($asset),
+            };
+            $this->startTimelinePreview(play: $preview?->isPlaying() ?? false);
+
+            return true;
+        }
+
         if ($asset?->type === CutsceneType::EFFECT && ($input === 'b' || $input === 'd')) {
             if ($input === 'b') {
                 $this->effectPreviewInBattle[$asset->id] = ! $this->isEffectPreviewInBattle($asset);
@@ -693,7 +717,11 @@ trait CutscenePreviewPane
             return;
         }
 
-        $this->timelinePreview = new TimelinePreviewSession($compiled, $asset->type === CutsceneType::EFFECT ? null : false);
+        // A battle-paced sequence spreads its frames over the phase it plays in.
+        $phaseSeconds = $asset->type === CutsceneType::EFFECT && $compiled->cadence === EffectCadence::BATTLE_PHASE
+            ? $this->getEffectPreviewPhaseSeconds($asset)
+            : null;
+        $this->timelinePreview = new TimelinePreviewSession($compiled, $asset->type === CutsceneType::EFFECT ? null : false, $phaseSeconds);
         $this->cinematicPreviewFingerprint = $this->cutscenePayloadFingerprint($asset);
         $this->cutscenePreviewLastTickAt = microtime(true);
         $this->cutscenePreviewScroll = 0;
@@ -703,10 +731,12 @@ trait CutscenePreviewPane
         }
 
         $this->setStatus(sprintf(
-            'Previewing %s: %d frames at %d fps (%s)%s.',
+            'Previewing %s: %d frames %s (%s)%s.',
             $asset->id,
             $this->timelinePreview->totalFrames(),
-            $this->timelinePreview->fps(),
+            $phaseSeconds === null
+                ? sprintf('at %d fps', $this->timelinePreview->fps())
+                : sprintf('over %.2fs, %s (A, P, S change it)', $phaseSeconds, $this->describeEffectPreviewPacing($asset)),
             $play ? 'playing' : 'paused',
             $asset->type === CutsceneType::EFFECT ? sprintf(', as %s plays it', $this->isEffectPreviewInBattle($asset) ? 'battle' : 'the field') : '',
         ), StatusLevel::INFO);
@@ -754,6 +784,69 @@ trait CutscenePreviewPane
             : [];
 
         return $this->effectPreviewInBattle[$asset->id] = isset($uses['battle']) || (! isset($uses['field']) && $fieldScripts === []);
+    }
+
+    /**
+     * Whether the selected effect is previewed as a command's source stage:
+     * as the author last chose, else when every battle animation using it
+     * plays it as its source effect.
+     */
+    private function isEffectPreviewSource(CutsceneAsset $asset): bool
+    {
+        if (isset($this->effectPreviewAsSource[$asset->id])) {
+            return $this->effectPreviewAsSource[$asset->id];
+        }
+
+        $battleUses = $this->workspace instanceof ProjectWorkspace ? (EffectValidator::findUses($this->workspace)[$asset->id]['battle'] ?? []) : [];
+
+        return $this->effectPreviewAsSource[$asset->id] = $battleUses !== []
+            && array_all($battleUses, static fn(string $use): bool => str_ends_with($use, ' sourceEffect'));
+    }
+
+    /** The battle pace a paced effect is previewed at: the author's choice, else the project's. */
+    private function getEffectPreviewPace(): BattlePace
+    {
+        $battleUi = $this->workspace?->config?->getRecord('ui.battle')->get('value');
+
+        return $this->effectPreviewPace ??= BattlePacing::fromBattleUiConfig(is_array($battleUi) ? $battleUi : [])->getAnimationPace();
+    }
+
+    /**
+     * The seconds the battle phase lasts that a paced effect plays in, from
+     * the Engine's own turn timings: the action animation for a source
+     * stage, the effect animation for a target stage.
+     */
+    private function getEffectPreviewPhaseSeconds(CutsceneAsset $asset): float
+    {
+        $timings = BattleTurnTimings::fromTotalDuration($this->effectPreviewAction->totalDurationSeconds($this->getEffectPreviewPace()));
+
+        return $this->isEffectPreviewSource($asset) ? $timings->actionAnimation : $timings->effectAnimation;
+    }
+
+    /** The battle command a paced effect is previewed inside, as the author reads it. */
+    private function describeEffectPreviewPacing(CutsceneAsset $asset): string
+    {
+        return sprintf(
+            'the %s of a %s at %s pace',
+            $this->isEffectPreviewSource($asset) ? 'source' : 'target',
+            str_replace('_', ' ', $this->effectPreviewAction->value),
+            $this->getEffectPreviewPace()->value,
+        );
+    }
+
+    /**
+     * The case after the given one, wrapping to the first.
+     *
+     * @template T of \UnitEnum
+     * @param list<T> $cases
+     * @param T $current
+     * @return T
+     */
+    private static function cycleCase(array $cases, \UnitEnum $current): \UnitEnum
+    {
+        $index = array_search($current, $cases, true);
+
+        return $cases[(($index === false ? -1 : $index) + 1) % count($cases)];
     }
 
     /**
@@ -1455,6 +1548,12 @@ trait CutscenePreviewPane
 
             if ($stage !== null) {
                 $info[] = sprintf(' %s · %s sequence', $stage->forBattle ? sprintf('battle, caster %s', $stage->isCasterOnLeft ? 'left' : 'right') : 'field', $stage->presentation->value);
+
+                if ($preview->phaseDurationSeconds !== null) {
+                    $info[] = sprintf(' paced over %.2fs:', $preview->phaseDurationSeconds);
+                    $info[] = '   ' . $this->describeEffectPreviewPacing($asset);
+                    $info[] = '   A action · P pace · S stage';
+                }
                 $info[] = ' Not drawn here:';
 
                 foreach ($stage->describeUndrawn($preview->activeSegments()) ?: ['(nothing)'] as $undrawn) {

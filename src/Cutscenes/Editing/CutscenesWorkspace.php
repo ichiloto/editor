@@ -26,6 +26,7 @@ use Ichiloto\Editor\UI\Modal;
 use Ichiloto\Editor\UI\MultilineTextEditor;
 use Ichiloto\Editor\UI\SettingsPaneLayout;
 use Ichiloto\Editor\Validation\EffectValidator;
+use Ichiloto\Engine\Animations\Timelines\EffectCadence;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Throwable;
 
@@ -881,7 +882,7 @@ trait CutscenesWorkspace
             ],
             CutsceneType::EFFECT => [
                 'Identity' => ['id'],
-                'Timing' => ['fps', 'lengthFrames', 'playback', 'loopFrom', 'restFrame'],
+                'Timing' => ['fps', 'lengthFrames', 'playback', 'cadence', 'loopFrom', 'restFrame'],
                 'Impact (battle)' => ['effectTiming.mode', 'effectTiming.frame', 'effectTiming.cueId'],
                 'Timeline' => ['commandListTracks', 'commandListCues'],
             ],
@@ -896,6 +897,11 @@ trait CutscenesWorkspace
         };
         $byId = [];
         $rest = [];
+
+        if ($asset->type === CutsceneType::EFFECT && ($asset->payload()['cadence'] ?? null) === EffectCadence::BATTLE_PHASE->value) {
+            // A sequence the battle paces has no FPS: the phase it plays in sets its timing.
+            $fields = array_values(array_filter($fields, static fn(array $field): bool => ($field['field'] ?? null) !== 'fps'));
+        }
 
         foreach ($fields as $field) {
             $id = (string) ($field['field'] ?? '');
