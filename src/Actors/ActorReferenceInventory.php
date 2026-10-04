@@ -40,6 +40,12 @@ final class ActorReferenceInventory
                     $references[] = ['path' => ['scale', 'actors', $id], 'reference' => $id, 'kind' => 'key'];
                 }
             }
+            // Battler bindings (battlers.php) key actors under `actors`, read
+            // above, and name the scale reference actor; enemies are enemy identities.
+            $reference = $payload['reference'] ?? null;
+            if (is_array($reference) && array_key_exists('actor', $reference)) {
+                $references[] = ['path' => ['reference', 'actor'], 'reference' => $reference['actor'], 'kind' => 'value'];
+            }
             // Speaker labels bind to an actor or to a non-actor artwork resource.
             $resources = (array) ($payload['resources'] ?? []);
             foreach ((array) ($payload['speakers'] ?? []) as $label => $identity) {
@@ -88,7 +94,8 @@ final class ActorReferenceInventory
     {
         $paths = [];
         foreach (['assets/Data/system.php', 'assets/Data/battle-entry-rules.php', 'assets/Data/troops.php',
-            'assets/Data/Presentation/battle.php', 'assets/Data/Presentation/dialogue.php', 'assets/Data/Presentation/menus.php'] as $relative) {
+            'assets/Data/Presentation/battle.php', 'assets/Data/Presentation/battlers.php', 'assets/Data/Presentation/dialogue.php',
+            'assets/Data/Presentation/menus.php'] as $relative) {
             if (is_file($root . '/' . $relative)) { $paths[] = $root . '/' . $relative; }
         }
         foreach (['assets/Data/Skits', 'assets/Events', 'assets/Maps'] as $directory) {

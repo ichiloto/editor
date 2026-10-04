@@ -352,3 +352,29 @@ PHP;
         ->and(ActorIdentityMigration::planProject($root)->getChangedPaths())->toBe([])
         ->and(new \Ichiloto\Editor\Validation\ActorReferenceValidator()->validate(\Ichiloto\Editor\ProjectWorkspace::fromProject($root)))->toBe([]);
 });
+
+it('repairs battle art bound as data: actor keys and the scale reference, never enemies or image paths', function () {
+    [$root, $actorPath] = createLegacyActorProject();
+    file_put_contents($actorPath, "<?php return ['data' => ['id' => 'hero', 'name' => 'Kaelion']];");
+    mkdir($root . '/assets/Data/Presentation');
+    $battlers = <<<'SOURCE'
+<?php
+return [
+    // The party lead is the body every battler is sized against.
+    'reference' => ['actor' => 'Kaelion', 'height' => 150],
+    'actors' => [
+        'Kaelion' => ['artwork' => ['image' => 'Graphics/Kaelion/Idle.png'], 'scale' => ['relativeSize' => 1, 'sourceSpan' => 0.7]],
+    ],
+    'enemies' => [
+        'Kaelion' => ['artwork' => ['image' => 'Graphics/Kaelion/Shade.png']],
+    ],
+];
+SOURCE;
+    file_put_contents($root . '/assets/Data/Presentation/battlers.php', $battlers);
+    ActorIdentityMigration::migrateProject($root);
+
+    expect(file_get_contents($root . '/assets/Data/Presentation/battlers.php'))->toBe(str_replace(
+        ["'actor' => 'Kaelion'", "        'Kaelion' => ['artwork' => ['image' => 'Graphics/Kaelion/Idle.png']"],
+        ["'actor' => 'hero'", "        'hero' => ['artwork' => ['image' => 'Graphics/Kaelion/Idle.png']"], $battlers))
+        ->and(ActorIdentityMigration::planProject($root)->getChangedPaths())->toBe([]);
+});
