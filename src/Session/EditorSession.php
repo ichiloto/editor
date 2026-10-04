@@ -284,12 +284,14 @@ final class EditorSession
      * unsaved edits included. `layerIds` maps each glyph layer's id to its
      * world layer id. Graphics never decide whether a map shows: when the
      * game would refuse them, the world holds glyphs only and
-     * `graphicsIssue` says why.
+     * `graphicsIssue` says why. Wall shadows come only to an interface whose
+     * renderer paints them and asks with `$tileShadows`, as a game renderer
+     * negotiates `tile_shadows`; any other receives the world without them.
      *
      * @return array{map: string, revision: int, assetRoot: string, operations: list<array<string, mixed>>, layerIds: array<string, string>, animated: bool, graphicsIssue: ?string}
      * @throws SessionRefusal When the map is unknown or its layers cannot be presented.
      */
-    public function readWorld(string $mapId): array
+    public function readWorld(string $mapId, bool $tileShadows = false): array
     {
         $map = $this->requireMap($mapId);
         $issue = null;
@@ -315,7 +317,7 @@ final class EditorSession
             'map' => $map->mapId,
             'revision' => $map->stateVersion(),
             'assetRoot' => $map->getAssetRoot(),
-            'operations' => $world->getOperations(true, true),
+            'operations' => $world->getOperations(true, $tileShadows),
             'layerIds' => $layerIds,
             'animated' => $world->animated,
             'graphicsIssue' => $issue,

@@ -107,7 +107,8 @@ final class SessionHost
             ),
             'map.delete' => $session->deleteMap(self::requireString($params, 'map'), ($params['confirm'] ?? false) === true),
             'map.read' => $session->readMap(self::requireString($params, 'map')),
-            'map.world' => $session->readWorld(self::requireString($params, 'map')),
+            'map.world' => $session->readWorld(self::requireString($params, 'map'),
+                is_bool($params['tileShadows'] ?? false) ? ($params['tileShadows'] ?? false) : throw new InvalidRequest('"tileShadows" must be a boolean.')),
             'tiles.palette' => $session->readTilePalette(self::requireString($params, 'map')),
             'tiles.read' => $session->readTiles(self::requireString($params, 'map')),
             'tiles.stamp' => $session->stampTiles(

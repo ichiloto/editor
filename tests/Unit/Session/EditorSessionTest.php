@@ -283,7 +283,7 @@ it('redraws wall shadows from the tiles after every stroke, with no shadow data 
     $session = EditorSession::open($root);
     $shadows = static function () use ($session): array {
         $cells = [];
-        foreach ($session->readWorld('test-map')['operations'] as $operation) {
+        foreach ($session->readWorld('test-map', tileShadows: true)['operations'] as $operation) {
             if ($operation['op'] === 'worldTiles' && str_ends_with($operation['layerId'], ':shadows')) {
                 $cells[$operation['rows'][0]['row']] = array_column($operation['rows'][0]['cells'], 'column');
             }
@@ -293,7 +293,9 @@ it('redraws wall shadows from the tiles after every stroke, with no shadow data 
     };
 
     // Decor casters at (1, 0) and (3, 1): the first shades the floor to its right; the second stands at the map edge.
-    expect($shadows())->toBe([0 => [2]]);
+    expect($shadows())->toBe([0 => [2]])
+        // An interface whose renderer does not paint shadows never receives them.
+        ->and(json_encode($session->readWorld('test-map')))->not->toContain('shadows');
     $extended = $session->paintTiles('test-map', $session->readMap('test-map')['revision'], 'decor', [[2, 0]], 5);
     expect($shadows())->toBe([0 => [3]]);
     $session->paintTiles('test-map', $extended['revision'], 'decor', [[1, 0], [2, 0]], 0, 'Erase tiles');
@@ -301,6 +303,20 @@ it('redraws wall shadows from the tiles after every stroke, with no shadow data 
         ->and($session->undo()['label'])->toBe('Erase tiles')
         ->and($shadows())->toBe([0 => [3]])
         ->and(json_encode($session->readTilePalette('test-map')))->not->toContain('shadows');
+});
+
+it('asks for wall shadows over the line protocol only by an explicit boolean', function () {
+    $root = mapGraphicsProject();
+    writeTestTileset($root, shadows: ['casters' => [5], 'width' => 0.5, 'opacity' => 0.4]);
+    $host = new SessionHost(fopen('php://memory', 'r'), fopen('php://memory', 'w'), fopen('php://memory', 'w'));
+    $request = static fn(int $id, string $method, array $params = []): array =>
+        $host->handle(json_encode(['id' => $id, 'method' => $method, 'params' => $params]));
+    $request(1, 'hello', ['protocol' => SessionHost::PROTOCOL, 'project' => $root]);
+
+    expect(json_encode($request(2, 'map.world', ['map' => 'test-map'])['result']))->not->toContain('shadows')
+        ->and(json_encode($request(3, 'map.world', ['map' => 'test-map', 'tileShadows' => true])['result']))->toContain('tiles:decor:shadows')
+        ->and($request(4, 'map.world', ['map' => 'test-map', 'tileShadows' => 'yes'])['error'])
+        ->toBe(['kind' => 'request', 'message' => '"tileShadows" must be a boolean.']);
 });
 
 it('saves placed tiles into the tile layer file the Engine reads', function () {
