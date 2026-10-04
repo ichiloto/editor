@@ -4,23 +4,6 @@ declare(strict_types=1);
 
 use Ichiloto\Editor\Session\EditorSession;
 
-/** The troop formation project with one enemy record and two terminal sprites. */
-function enemyPreviewProject(): string
-{
-    $root = troopFormationProject();
-    @mkdir($root . '/assets/Data/Enemies', 0o777, true);
-    @mkdir($root . '/assets/Graphics/Enemies', 0o777, true);
-    file_put_contents($root . '/assets/Graphics/Enemies/bat.txt', "/\\o/\\\n ' '\n");
-    file_put_contents($root . '/assets/Graphics/Enemies/wisp.txt', "~*~\n");
-    file_put_contents($root . '/assets/secret.txt', "not a sprite\n");
-    file_put_contents($root . '/assets/Data/Enemies/regular-bat.php', "<?php\n\nuse Ichiloto\\Engine\\Entities\\Enemies\\Enemy;\n\nreturn ['class' => Enemy::class, 'data' => "
-        . var_export(['name' => 'Regular Bat', 'level' => 2, 'imagePath' => 'bat', 'rewards' => ['experience' => 1, 'gold' => 1], 'stats' => [
-            'maxHp' => 10, 'maxMp' => 0, 'attack' => 3, 'defence' => 2, 'magicAttack' => 1, 'magicDefence' => 1, 'speed' => 2, 'grace' => 1, 'evasion' => 1,
-        ]], true) . "];\n");
-
-    return $root;
-}
-
 /** Sets the open enemy's sprite through its row, as an author would, without saving. */
 function chooseEnemySprite(EditorSession $session, string $sprite): void
 {
@@ -64,4 +47,24 @@ it('still shows the sprite when the project has no graphical battle, saying why 
     expect($preview['sprite'])->toBe(['lines' => ['/\\o/\\', " ' '"]])
         ->and($preview['formation'])->toBeNull()
         ->and($preview['formationIssue'])->toBe('This project has no graphical battle layout to preview enemies at battle scale on.');
+});
+
+it('stands an enemy too tall for the lead party member\'s ground line opposite the next member it fits beside', function () {
+    $root = enemyPreviewProject();
+    writeTilesetTestPng($root . '/assets/Graphics/Actors/Kaelion.png', 10, 10);
+    writeTilesetTestPng($root . '/assets/Graphics/Enemies/Bat.png', 4, 10);
+    $battle = (string) file_get_contents($root . '/assets/Data/Presentation/battle.php');
+    $battle = str_replace(['use Ichiloto\Engine\Battle\Presentation\BattlerSlot;', "    actors: [],\n    enemies: [],"], [
+        "use Ichiloto\\Engine\\Battle\\Presentation\\BattlerSlot;\nuse Ichiloto\\Engine\\Battle\\Presentation\\{BattlerArtwork, BattleScale, BattlerScale};",
+        // At three times the party's height the bat stands 450 tall: above the canvas from the lead's ground line at 420, whole from the next at 560.
+        "    actors: ['Kaelion' => new BattlerArtwork('Graphics/Actors/Kaelion.png', 10, 10, 5, 10)],\n"
+        . "    enemies: ['Regular Bat' => new BattlerArtwork('Graphics/Enemies/Bat.png', 4, 10, 2, 10)],\n"
+        . "    scale: new BattleScale('Kaelion', 150, actors: ['Kaelion' => new BattlerScale(1, 1)], enemies: ['Regular Bat' => new BattlerScale(3, 1)]),",
+    ], $battle);
+    file_put_contents($root . '/assets/Data/Presentation/battle.php', $battle);
+
+    $preview = EditorSession::open($root)->readEnemyPreview(0);
+
+    expect($preview['formationIssue'])->toBeNull()
+        ->and($preview['formation']['members'][0]['battler']['ground'])->toBe(['x' => 170.0, 'y' => 560.0]);
 });

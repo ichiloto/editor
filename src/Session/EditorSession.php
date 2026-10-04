@@ -12,6 +12,7 @@ use Ichiloto\Editor\Canvas\PieceRole;
 use Ichiloto\Editor\Database\ConditionCodec;
 use Ichiloto\Editor\Database\ConditionEditor;
 use Ichiloto\Editor\Database\DatabaseCatalog;
+use Ichiloto\Editor\Database\ElementAffinityCodec;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Database\RecordItem;
 use Ichiloto\Editor\Database\RecordChange;
@@ -1089,6 +1090,68 @@ final class EditorSession
         throw new SessionRefusal(sprintf('There is no %s codec; use conditions or writes.', $codec));
     }
 
+    /**
+     * What an elemental affinity row is built from: the elements the game
+     * knows, and the named effects with their multipliers, which the
+     * terminal cycles and a graphical editor offers beside a typed one.
+     *
+     * @return array{elements: list<string>, effects: list<array{label: string, multiplier: float}>}
+     * @throws SessionRefusal When the project's element list cannot be read.
+     */
+    public function describeAffinityVocabulary(): array
+    {
+        try {
+            $elements = $this->workspace->getElementIdentities();
+        } catch (InvalidArgumentException $error) {
+            throw new SessionRefusal($error->getMessage(), previous: $error);
+        }
+        $effects = [];
+        foreach (ElementAffinityCodec::EFFECTS as $label => $multiplier) {
+            $effects[] = ['label' => $label, 'multiplier' => $multiplier];
+        }
+
+        return ['elements' => $elements, 'effects' => $effects];
+    }
+
+    /**
+     * Writes elemental affinities built a row at a time as the one line an
+     * affinity row is set to, refusing an element the game does not know,
+     * one named twice, or a multiplier that is not a number.
+     *
+     * @param list<mixed> $entries Each `{element, multiplier}`.
+     * @return array{line: string, descriptions: list<string>}
+     * @throws SessionRefusal When an entry cannot be stored as the Engine reads it.
+     */
+    public function encodeAffinities(array $entries): array
+    {
+        $elements = $this->describeAffinityVocabulary()['elements'];
+        $affinities = [];
+        foreach (array_values($entries) as $number => $entry) {
+            $element = is_array($entry) && is_string($entry['element'] ?? null) ? trim($entry['element']) : '';
+            $multiplier = is_array($entry) ? ($entry['multiplier'] ?? null) : null;
+            if (! in_array($element, $elements, true)) {
+                throw new SessionRefusal(sprintf('Entry %d needs an element the game knows: %s.', $number + 1, implode(', ', $elements)));
+            }
+            if (array_key_exists($element, $affinities)) {
+                throw new SessionRefusal(sprintf('%s is listed twice; keep one multiplier for it.', $element));
+            }
+            if (! is_int($multiplier) && ! is_float($multiplier) || ! is_finite((float) $multiplier)) {
+                throw new SessionRefusal(sprintf('%s needs a multiplier: 2 weak, 0.5 resist, 0 null, -1 absorb, or any number between.', $element));
+            }
+            $affinities[$element] = (float) $multiplier;
+        }
+        $line = ElementAffinityCodec::encodeAll($affinities);
+
+        return [
+            'line' => $line,
+            'descriptions' => array_map(
+                static fn(string $element, float $multiplier): string => sprintf('%s: %s', $element, ElementAffinityCodec::describe($multiplier)),
+                array_keys($affinities),
+                array_values($affinities),
+            ),
+        ];
+    }
+
     public function listReferences(string $mapId, string $category): array
     {
         if (! ReferenceCatalog::knows($category)) {
@@ -1150,10 +1213,13 @@ final class EditorSession
      * way the game reads it, and its battle art composed by the Engine's
      * BattleFormationLayout at battle scale beside the starting party. Battle
      * layouts define where the party stands, not enemies (troops place those),
-     * so the enemy stands opposite the lead party member, its slot mirrored
-     * across the canvas: a size comparison, not a battle position. Both read
-     * the record as it is now, unsaved edits included. A project without a
-     * graphical battle still gets the sprite, with the reason there is no art.
+     * so the enemy stands opposite a party member, its slot mirrored across
+     * the canvas: a size comparison, not a battle position. It stands opposite
+     * the lead when its art fits on the canvas there, else opposite the next
+     * member it fits beside, so a creature taller than the lead's ground line
+     * is still shown whole. Both read the record as it is now, unsaved edits
+     * included. A project without a graphical battle still gets the sprite,
+     * with the reason there is no art.
      *
      * @return array<string, mixed>
      * @throws SessionRefusal When the enemy is unknown.
@@ -1167,9 +1233,23 @@ final class EditorSession
 
         try {
             $catalog = $this->requireBattleLayoutCatalog('preview enemies at battle scale on');
-            $lead = $catalog->ui->partySlots[0] ?? throw new SessionRefusal('The battle layout has no party slot to stand an enemy beside.');
-            $slot = new BattlerSlot($catalog->ui->width - $lead->x, $lead->y, $lead->width, $lead->height);
-            [$formation, $view] = $this->composeFormation($catalog, $arena, [['enemyId' => $name, 'slot' => $slot]]);
+            if ($catalog->ui->partySlots === []) {
+                throw new SessionRefusal('The battle layout has no party slot to stand an enemy beside.');
+            }
+            $composed = $firstRefusal = null;
+            foreach ($catalog->ui->partySlots as $party) {
+                $slot = new BattlerSlot($catalog->ui->width - $party->x, $party->y, $party->width, $party->height);
+                try {
+                    $composed = $this->composeFormation($catalog, $arena, [['enemyId' => $name, 'slot' => $slot]]);
+                    break;
+                } catch (SessionRefusal $refusal) {
+                    $firstRefusal ??= $refusal;
+                }
+            }
+            if ($composed === null) {
+                throw $firstRefusal;
+            }
+            [$formation, $view] = $composed;
             $preview['formation'] = [...$view, 'members' => [[
                 'enemy' => $name,
                 'placement' => null,
@@ -2180,6 +2260,7 @@ final class EditorSession
             is_string($field['action'] ?? null) => 'action',
             ($field['mapConditions'] ?? false) === true, ($field['conditions'] ?? false) === true => 'conditions',
             ($field['worldWrites'] ?? false) === true => 'writes',
+            ($field['affinities'] ?? false) === true => 'affinities',
             ($field['destination'] ?? false) === true => 'destination',
             is_string($field['reference'] ?? null) => 'reference',
             $choices !== null => 'options',
@@ -2206,7 +2287,7 @@ final class EditorSession
             'value' => (string) ($field['value'] ?? ''),
             'raw' => match ($kind) {
                 'conditions' => is_string($field['encoded'] ?? null) ? $field['encoded'] : (string) ($field['value'] ?? ''),
-                'writes' => (string) ($field['value'] ?? ''),
+                'writes', 'affinities' => (string) ($field['value'] ?? ''),
                 'text', 'integer', 'float', 'boolean' => $control?->rawValue,
                 default => null,
             },
@@ -2229,6 +2310,8 @@ final class EditorSession
             'entries' => match ($kind) {
                 'conditions' => ConditionCodec::decodeAll(is_string($field['encoded'] ?? null) ? $field['encoded'] : (string) ($field['value'] ?? '')),
                 'writes' => WorldWriteCodec::decodeAll((string) ($field['value'] ?? '')),
+                // Affinities are built a row at a time: an element and its multiplier.
+                'affinities' => self::describeAffinityEntries((string) ($field['value'] ?? '')),
                 default => null,
             },
             'writeTypes' => $kind === 'writes' && is_array($field['writeTypes'] ?? null) ? array_values($field['writeTypes']) : null,
@@ -2236,6 +2319,21 @@ final class EditorSession
             'axis' => in_array($field['axis'] ?? null, ['x', 'y'], true) ? $field['axis'] : null,
             'key' => $key,
         ], static fn(mixed $value): bool => $value !== null);
+    }
+
+    /**
+     * An affinity line as the rows it is built from.
+     *
+     * @return list<array{element: string, multiplier: float}>
+     */
+    private static function describeAffinityEntries(string $line): array
+    {
+        $entries = [];
+        foreach (ElementAffinityCodec::decodeAll($line) as $element => $multiplier) {
+            $entries[] = ['element' => $element, 'multiplier' => $multiplier];
+        }
+
+        return $entries;
     }
 
     /**

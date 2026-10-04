@@ -45,3 +45,20 @@ PHP);
 
     return $root;
 }
+
+/** The troop formation project with one enemy record and two terminal sprites. */
+function enemyPreviewProject(): string
+{
+    $root = troopFormationProject();
+    @mkdir($root . '/assets/Data/Enemies', 0o777, true);
+    @mkdir($root . '/assets/Graphics/Enemies', 0o777, true);
+    file_put_contents($root . '/assets/Graphics/Enemies/bat.txt', "/\\o/\\\n ' '\n");
+    file_put_contents($root . '/assets/Graphics/Enemies/wisp.txt', "~*~\n");
+    file_put_contents($root . '/assets/secret.txt', "not a sprite\n");
+    file_put_contents($root . '/assets/Data/Enemies/regular-bat.php', "<?php\n\nuse Ichiloto\\Engine\\Entities\\Enemies\\Enemy;\n\nreturn ['class' => Enemy::class, 'data' => "
+        . var_export(['name' => 'Regular Bat', 'level' => 2, 'imagePath' => 'bat', 'rewards' => ['experience' => 1, 'gold' => 1], 'stats' => [
+            'maxHp' => 10, 'maxMp' => 0, 'attack' => 3, 'defence' => 2, 'magicAttack' => 1, 'magicDefence' => 1, 'speed' => 2, 'grace' => 1, 'evasion' => 1,
+        ]], true) . "];\n");
+
+    return $root;
+}

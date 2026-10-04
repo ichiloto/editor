@@ -323,7 +323,12 @@ final class SessionHost
                 self::requireString($params, 'codec'),
                 is_array($params['entries'] ?? null) ? $params['entries'] : throw new InvalidRequest('"entries" must be a list.'),
                 is_array($params['writeTypes'] ?? null) ? array_values(array_filter($params['writeTypes'], is_string(...))) : null,
-            ),            'npc.create' => $session->createNpc(
+            ),
+            'affinities.vocabulary' => $session->describeAffinityVocabulary(),
+            'affinities.encode' => $session->encodeAffinities(
+                is_array($params['entries'] ?? null) ? $params['entries'] : throw new InvalidRequest('"entries" must be a list.'),
+            ),
+            'npc.create' => $session->createNpc(
                 self::requireString($params, 'map'),
                 self::requireInt($params, 'revision'),
                 self::requireInt($params, 'x'),
