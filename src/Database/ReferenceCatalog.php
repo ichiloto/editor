@@ -12,6 +12,7 @@ use Ichiloto\Editor\Cutscenes\CutsceneAsset;
 use Ichiloto\Editor\Cutscenes\CutsceneType;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Engine\Animations\Timelines\EffectTimelineLibrary;
+use Ichiloto\Engine\Battle\Presentation\BattlePresentationCatalog;
 use Ichiloto\Engine\Rendering\Tilesets\Tileset;
 use Ichiloto\Engine\Entities\Enumerations\ArmorType;
 use Ichiloto\Engine\Entities\Enumerations\Occasion;
@@ -90,6 +91,7 @@ final class ReferenceCatalog
         'effects',
         'map_regions',
         'animation_roles',
+        'battle_arenas',
     ];
 
     /**
@@ -109,6 +111,9 @@ final class ReferenceCatalog
      * @var InventoryCatalog|null The project's inventory identity, read once.
      */
     private ?InventoryCatalog $inventoryCatalog = null;
+
+    /** @var array<string, string>|null The battle presentation's arenas, read once. */
+    private ?array $arenaNames = null;
 
     public function __construct(
         private readonly ProjectWorkspace $workspace,
@@ -216,6 +221,9 @@ final class ReferenceCatalog
             'event_markers' => $this->currentMap?->getEventMarkers() ?? [],
             // A map's kind is one of the project's tilesets, by file stem.
             'tilesets' => array_keys($this->loadTilesetNames()),
+            // The scenes a graphical battle can take place in, by the key a
+            // map's encounters or a start_battle command name one with.
+            'battle_arenas' => array_map(strval(...), array_keys($this->loadArenaNames())),
             // A region is the display name the game shows for where the party
             // is; choosing from the names the maps already use keeps one
             // region spelled one way.
@@ -413,6 +421,10 @@ final class ReferenceCatalog
     {
         if ($category === 'tilesets') {
             return $this->loadTilesetNames();
+        }
+
+        if ($category === 'battle_arenas') {
+            return $this->loadArenaNames();
         }
 
         if ($category === 'animation_ids') {
@@ -746,6 +758,22 @@ final class ReferenceCatalog
         }
 
         return $names;
+    }
+
+    /**
+     * Returns the arenas the project's battle presentation declares, key =>
+     * display name, in authored order: none for a project without one, or
+     * whose presentation cannot be read, which validation reports.
+     *
+     * @return array<string, string>
+     */
+    private function loadArenaNames(): array
+    {
+        try {
+            return $this->arenaNames ??= BattlePresentationCatalog::load(rtrim($this->workspace->projectRoot, '/') . '/assets')?->getArenaChoices() ?? [];
+        } catch (\Throwable) {
+            return $this->arenaNames = [];
+        }
     }
 
     /** Returns asset-root-relative PNG choices without following paths outside the asset root. */

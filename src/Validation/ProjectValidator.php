@@ -25,6 +25,7 @@ use Ichiloto\Editor\ProjectQuest;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Engine\Animations\Timelines\EffectTimelineLibrary;
+use Ichiloto\Engine\Battle\Presentation\BattlePresentationCatalog;
 use Ichiloto\Engine\Rendering\Tilesets\Tileset;
 use Ichiloto\Engine\Core\WorldConditionType;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicScriptValidator;
@@ -88,6 +89,18 @@ class ProjectValidator
   /** The project's effect timelines, read once per validation. */
   protected ?EffectTimelineLibrary $effectLibrary = null;
 
+  /**
+   * The arena keys the project's battle presentation declares, read once per
+   * validation; null when it declares no battle presentation, or one that
+   * cannot be read ({@see $arenaCatalogProblem}).
+   *
+   * @var list<string>|null
+   */
+  protected ?array $arenaKeys = null;
+
+  /** Why the battle presentation cannot be read, or null. */
+  protected ?string $arenaCatalogProblem = null;
+
   protected const string TRANSFER_TRIGGER = 'TransferPlayerTrigger';
   protected const string SCRIPT_TRIGGER = 'ScriptEventTrigger';
 
@@ -101,6 +114,7 @@ class ProjectValidator
   {
     $this->projectRootForKnowledge = $workspace->projectRoot;
     $this->effectLibrary = new EffectTimelineLibrary($workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets');
+    $this->readArenaKeys($workspace);
     $this->knowledgeCatalogData = null;
     $this->commonEventScripts = $this->eventScriptsById($workspace);
     $this->cinematicCommonEventIds = [];
@@ -1883,7 +1897,65 @@ class ProjectValidator
       }
     }
 
+    $issues = [...$issues, ...$this->checkBattleArena($encounters->mapArena(), $map->mapId, 'The encounters')];
+
+    foreach ($rows as $row) {
+      $issues = [...$issues, ...$this->checkBattleArena($row['arena'], $map->mapId, sprintf('The encounter with "%s"', $row['name']))];
+    }
+
     return [...$issues, ...$this->checkEncounterRate($map, $encounters), ...$this->checkEncounterTiles($map, $encounters), ...$this->checkEncounterTroopDuplicates($map)];
+  }
+
+  /**
+   * Reads the arena keys a battle may name, once per validation.
+   */
+  protected function readArenaKeys(ProjectWorkspace $workspace): void
+  {
+    $this->arenaKeys = null;
+    $this->arenaCatalogProblem = null;
+
+    try {
+      $catalog = BattlePresentationCatalog::load($workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets');
+      $this->arenaKeys = $catalog === null ? null : array_map(strval(...), array_keys($catalog->getArenaChoices()));
+    } catch (Throwable $problem) {
+      $this->arenaCatalogProblem = $problem->getMessage();
+    }
+  }
+
+  /**
+   * Checks an arena a battle names: graphical presentation only, so it is
+   * checked against what the battle presentation declares, and a battle
+   * that names none takes the presentation's default.
+   *
+   * @return Issue[] The issues found.
+   */
+  protected function checkBattleArena(mixed $arena, string $where, string $subject): array
+  {
+    if ($arena === null) {
+      return [];
+    }
+
+    if (! is_string($arena) || trim($arena) === '') {
+      return [Issue::error($where, sprintf('%s names a battleArena that is not an arena key.', $subject),
+        'Name one of the battle presentation\'s arenas, or remove it to use the default arena.')];
+    }
+
+    if ($this->arenaCatalogProblem !== null) {
+      return [Issue::error($where, sprintf('%s names the arena "%s", but the battle presentation cannot be read: %s', $subject, $arena, $this->arenaCatalogProblem),
+        sprintf('Correct assets/%s.', BattlePresentationCatalog::FILE))];
+    }
+
+    if ($this->arenaKeys === null) {
+      return [Issue::error($where, sprintf('%s names the arena "%s", but the project declares no battle presentation to draw it in.', $subject, $arena),
+        sprintf('Remove the battleArena, or declare arenas in assets/%s.', BattlePresentationCatalog::FILE))];
+    }
+
+    if (! in_array($arena, $this->arenaKeys, true)) {
+      return [Issue::error($where, sprintf('%s names the arena "%s", which the battle presentation does not declare.', $subject, $arena),
+        'Choose one of its arenas, or remove the battleArena to use the default arena.')];
+    }
+
+    return [];
   }
 
   /**
@@ -3668,6 +3740,10 @@ class ProjectValidator
 
     if (trim(strval($command['troop'] ?? '')) === '') {
       $issues[] = Issue::error($where, 'A start_battle command names no troop.', 'Choose a configured troop.');
+    }
+
+    if (array_key_exists(MapEncounters::ARENA_KEY, $command)) {
+      $issues = [...$issues, ...$this->checkBattleArena($command[MapEncounters::ARENA_KEY] ?? '', $where, 'A start_battle command')];
     }
 
     if (

@@ -2093,7 +2093,9 @@ final class EditorSession
 
     private function createMapInspector(ProjectMap $map): MapInspector
     {
-        return new MapInspector(new ReferenceCatalog($this->workspace, $map));
+        // A session serves graphical editors, which also author what only a
+        // graphical renderer shows.
+        return new MapInspector(new ReferenceCatalog($this->workspace, $map), graphical: true);
     }
 
     /**

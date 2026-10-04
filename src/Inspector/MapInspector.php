@@ -35,11 +35,18 @@ use Throwable;
  * cursor, a selection or a pane: the caller names the map and the event,
  * applies an edit through {@see apply()}, records the command it returns,
  * and shows an {@see InspectorRefusal}'s reason.
+ *
+ * An inspector for a graphical editor also offers what only a graphical
+ * renderer shows (the arena an encounter's battle takes place in). The
+ * terminal editor's inspector does not: those values are kept exactly as
+ * authored, never offered there.
  */
 final readonly class MapInspector
 {
     public const string MAP_BGM_NONE = '(None)';
     public const string MAP_KIND_NONE = 'Not set';
+    public const string MAP_ARENA_NONE = '(default arena)';
+    public const string ENCOUNTER_ARENA_NONE = '(map arena)';
 
     /** A chest event's presentations, as an author picks one. */
     public const array CHEST_TYPE_CHOICES = [
@@ -61,7 +68,11 @@ final readonly class MapInspector
         ['label' => 'Accessory', 'value' => LootType::ACCESSORY->value, 'description' => 'Rewards an accessory identifier.'],
     ];
 
-    public function __construct(private ReferenceCatalog $references)
+    /**
+     * @param ReferenceCatalog $references The project's references as the map sees them.
+     * @param bool $graphical Whether the editor shows graphical presentation, and so offers it.
+     */
+    public function __construct(private ReferenceCatalog $references, private bool $graphical = false)
     {
     }
 
@@ -796,6 +807,26 @@ final readonly class MapInspector
         return mb_strtolower(rtrim($leaf, 's'));
     }
 
+    /**
+     * Reads a picked arena: one the battle presentation declares, or none.
+     *
+     * @throws InspectorRefusal When it names an arena the presentation does not declare.
+     */
+    private function requireArena(string $value, string $none): ?string
+    {
+        $value = trim($value);
+
+        if ($value === '' || $value === $none) {
+            return null;
+        }
+
+        if (! in_array($value, $this->references->valuesFor('battle_arenas'), true)) {
+            throw new InspectorRefusal(sprintf('"%s" is not an arena the battle presentation declares.', $value));
+        }
+
+        return $value;
+    }
+
     /** @throws InspectorRefusal When the map's encounters cannot be edited here. */
     private function requireEditableEncounters(ProjectMap $map): MapEncounters
     {
@@ -835,6 +866,8 @@ final readonly class MapInspector
             'tiles' => $encounters->withTiles((string) $value),
             'weight' => $encounters->withWeightAt($index, (int) $value),
             'troop' => $encounters->withTroopAt($index, (string) $value),
+            'arena' => $encounters->withArenaAt($index, $this->requireArena((string) $value, self::ENCOUNTER_ARENA_NONE)),
+            'mapArena' => $encounters->withMapArena($this->requireArena((string) $value, self::MAP_ARENA_NONE)),
             default => null,
         };
 
@@ -935,6 +968,19 @@ final readonly class MapInspector
                 'index' => $index,
                 'encounterList' => ['index' => $index],
             ];
+
+            if ($this->graphical) {
+                $fields[] = [
+                    'label' => '    Arena',
+                    'value' => $this->describeArena($row['arena'], self::ENCOUNTER_ARENA_NONE),
+                    'reference' => 'battle_arenas',
+                    'noneLabel' => self::ENCOUNTER_ARENA_NONE,
+                    'target' => 'map-encounters',
+                    'field' => 'arena',
+                    'index' => $index,
+                    'encounterList' => ['index' => $index],
+                ];
+            }
         }
 
         if ($rows === []) {
@@ -958,7 +1004,33 @@ final readonly class MapInspector
             'field' => 'tiles',
         ];
 
+        if ($this->graphical) {
+            $fields[] = [
+                'label' => '  Arena',
+                'value' => $this->describeArena($encounters->mapArena(), self::MAP_ARENA_NONE),
+                'reference' => 'battle_arenas',
+                'noneLabel' => self::MAP_ARENA_NONE,
+                'target' => 'map-encounters',
+                'field' => 'mapArena',
+            ];
+        }
+
         return $fields;
+    }
+
+    /**
+     * How an arena reads on a row: its name, what applies when none is set,
+     * or a key the battle presentation does not declare, kept and said so.
+     */
+    private function describeArena(?string $arena, string $none): string
+    {
+        if ($arena === null) {
+            return $none;
+        }
+
+        $name = $this->references->labelsFor('battle_arenas')[$arena] ?? null;
+
+        return $name === null ? $arena . ' · not an arena the battle presentation declares' : sprintf('%s (%s)', $name, $arena);
     }
 
     /**

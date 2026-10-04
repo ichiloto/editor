@@ -886,12 +886,23 @@ rows beneath it edit the engine's own `encounters` block:
   `;` glyphs) or `any` (every step, with danger tiles counting double).
   Its default, `encounter`, is likewise shown in parentheses and never
   written by browsing.
+- In the GUI editor, `Arena` picks the battle presentation's arena a graphical
+  fight here takes place in, `(default arena)` leaving it to the
+  presentation's default, and each troop row has an `Arena` of its own that
+  outranks the map's, `(map arena)` leaving it to the map. A troop with an
+  arena is written `'Loch Ness' => ['weight' => 1, 'battleArena' =>
+  'arena.secret-lake']`. Arenas are graphical presentation only: they change
+  no weight, no fight and nothing the terminal shows, so the terminal editor
+  keeps them exactly as written without offering them.
 
-A key inside the block the editor does not own - a field a later engine will
-read - is preserved untouched, and keeps the block alive even when the last
-troop is removed. A block shaped in a way the editor cannot hold exactly
-(troops keyed by number, a weight that is an array) is shown read-only with
-the shape named, and no edit anywhere rewrites it.
+A key inside the block or a troop's entry the editor does not own - a field a
+later engine will read - is preserved untouched, and keeps the block alive
+even when the last troop is removed; an entry written as a map stays one. A
+block shaped in a way the editor cannot hold exactly (troops keyed by number,
+a weight that is an array, an arena that is not a key) is shown read-only
+with the shape named, and no edit anywhere rewrites it. Validation reports an
+arena, in an encounter or a `start_battle` command, that the battle
+presentation does not declare, or that a project without one names.
 
 In Event mode, painting or selecting a marker with no definition opens the
 Event Type picker. **Story Script** creates the engine's
