@@ -1094,7 +1094,10 @@ An enemy is one file under `assets/Data/Enemies`, returning
 `['class' => Enemy::class, 'data' => [...]]` with plain values: name,
 level, sprite, stats, rewards, element affinities, state resistances, its
 knowledge subject, and action patterns that name a skill from the skill
-catalogue with a rating and an optional condition. `enemies.php` is the
+catalogue with a rating and an optional condition. Its drops are a list
+under the Drops heading: each picks an item, weapon or armor and gives its
+chance from 0 to 1. Validation reports a drop that names no item or one the
+project does not define, as it does for any record's references. `enemies.php` is the
 barrel that loads the folder, so the game and every other reader get the
 same enemies. Editing a value changes only that value in that enemy's file,
 keeping its imports and comments. A new enemy gets a file named after it

@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
+use Ichiloto\Editor\Database\RecordAuthoring;
 use Ichiloto\Editor\Database\RecordSchemaCatalog;
 use Ichiloto\Engine\Entities\Enemies\EnemyCatalog;
 use Ichiloto\Engine\Entities\Enumerations\ActionConditionType;
@@ -189,4 +190,23 @@ it('keeps a file that is not an enemy record listed, read-only with the reason',
         ->and($stray->isEditable())->toBeFalse()
         ->and($stray->getReadOnlyReason())->toBe("stray.php does not return ['class' => Enemy::class, 'data' => [...]]")
         ->and($database->duplicateRecord(1))->toBeNull();
+});
+
+it('authors drops as item ids with their chance, and drops the list with its last entry', function () {
+    $root = enemyRecordProject(['blob.php' => blobRecordFile()]);
+    $database = enemiesDatabase($root);
+    $authoring = new RecordAuthoring();
+    $rewards = static fn(): array => (require $root . '/assets/Data/Enemies/blob.php')['data']['rewards'];
+
+    $added = $authoring->addItem($database, 0, [], 'dropList');
+    $database->setField(0, ProjectRecordDatabase::subFieldId('drop', (int) $added->index, 'item'), 'item.tonic');
+    $database->setField(0, ProjectRecordDatabase::subFieldId('drop', (int) $added->index, 'rate'), '0.25');
+    $database->save();
+
+    expect($rewards())->toBe(['experience' => 12, 'gold' => 30, 'items' => [['item' => 'item.tonic', 'rate' => 0.25]]]);
+
+    $authoring->removeItem($database, 0, [], ProjectRecordDatabase::subFieldId('drop', 0, 'item'));
+    $database->save();
+
+    expect($rewards())->toBe(['experience' => 12, 'gold' => 30]);
 });

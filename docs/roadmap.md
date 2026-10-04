@@ -276,9 +276,12 @@ Order of work, each a complete slice before the next:
    service. The terminal keeps its workflow and every field and preview it has
    now (experience and stat curves, actor stats); the GUI gains the category.
 2. Data the record files hold but no editor reaches: item and skill effects,
-   skill kind, enemy drops, battle animation, the rest of `system.php` (title,
-   currency, elements, starting party, inventory and positions, battle
-   opening).
+   skill kind (both after step 3's per-record move). Enemy drops are done,
+   and every schema record's references, list entries included, are now
+   validated. Enemy `position` and `battleAnimation` are not authored: troops
+   own battle positions (`Troop` overwrites the enemy's), and no runtime code
+   reads an enemy's `battleAnimation`; attacks animate through their skills.
+   The rest of `system.php` is done (System and Configuration).
 3. Skills become one declarative record per file, as enemies are, so spells
    and abilities in `magic.php` and `abilities.php` are edited too (the
    section above). Items, weapons and armors follow.

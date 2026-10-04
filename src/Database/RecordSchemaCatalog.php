@@ -1131,6 +1131,22 @@ final class RecordSchemaCatalog
                 ],
                 blank: ['skill' => '', 'rating' => 5],
             ),
+            subLists: [
+                // What the enemy may drop when defeated, each with its chance
+                // (0 to 1). The Engine resolves the item by its definition id.
+                new RecordSubList(
+                    key: 'rewards.items',
+                    prefix: 'drop',
+                    singular: 'drop',
+                    fields: [
+                        RecordField::reference('item', 'Item', 'inventory'),
+                        new RecordField('rate', 'Drop Rate', InputControlType::FLOAT),
+                    ],
+                    blank: ['item' => '', 'rate' => 0.1],
+                    heading: 'Drops',
+                    removeWhenEmpty: true,
+                ),
+            ],
             // A new enemy needs a real sprite to load, so it starts on the
             // project's first one; a project with no enemy sprites cannot
             // author an enemy yet, and creation refuses rather than writing a

@@ -61,6 +61,38 @@ function writeConsistentSkits(string $root): void
     PHP);
 }
 
+/**
+ * Defines the enemies the temporary project's troops field.
+ *
+ * Same story again: the fixture's troops name a bigger project's enemies,
+ * and a troop whose enemy is not defined cannot load.
+ *
+ * @param string $root The project root.
+ * @return void
+ */
+function writeConsistentEnemies(string $root): void
+{
+    is_dir($root . '/assets/Data/Enemies') || mkdir($root . '/assets/Data/Enemies', 0777, true);
+
+    foreach (['regular-bat' => 'Regular Bat', 'sewer-rat' => 'Sewer Rat'] as $file => $name) {
+        file_put_contents($root . '/assets/Data/Enemies/' . $file . '.php', <<<PHP
+        <?php
+
+        return [
+          'class' => \\Ichiloto\\Engine\\Entities\\Enemies\\Enemy::class,
+          'data' => [
+            'name' => '{$name}',
+            'level' => 1,
+            'imagePath' => '{$file}',
+            'stats' => ['maxHp' => 10, 'maxMp' => 0, 'attack' => 3, 'defence' => 2, 'magicAttack' => 1, 'magicDefence' => 1, 'speed' => 4, 'grace' => 1, 'evasion' => 0],
+            'rewards' => ['experience' => 1, 'gold' => 1],
+          ],
+        ];
+
+        PHP);
+    }
+}
+
 /** Writes a save compatibility manifest into a disposable project. */
 function writeSaveCompatibilityManifest(string $root, string $source): void
 {
@@ -102,6 +134,7 @@ it('passes a project with nothing wrong with it', function () {
     $root = makeTemporaryProject();
     writeConsistentQuests($root);
     writeConsistentSkits($root);
+    writeConsistentEnemies($root);
 
     expect(validateProject($root))->toBe([]);
 });
@@ -110,6 +143,7 @@ it('accepts conditional event cues from the shared runtime contract', function (
     $root = makeTemporaryProject();
     writeConsistentQuests($root);
     writeConsistentSkits($root);
+    writeConsistentEnemies($root);
     editTestMapData(
         $root,
         static fn(string $source): string => str_replace(
@@ -126,6 +160,7 @@ it('validates conditional event cues with the shared condition vocabulary', func
     $root = makeTemporaryProject();
     writeConsistentQuests($root);
     writeConsistentSkits($root);
+    writeConsistentEnemies($root);
     editTestMapData(
         $root,
         static fn(string $source): string => str_replace(
@@ -148,10 +183,12 @@ it('finds the dangling references in the shipped sample project', function () {
     $issues = validateProject(fixturePath('sample-project'));
 
     // The map is named twice: a quest objective goes there, and the skit
-    // plays there.
+    // plays there. The rat is named twice too: a quest objective defeats it,
+    // and a troop fields it, as another troop fields the bat.
     expect(issuesMentioning($issues, 'happyville/town-center'))->toHaveCount(2)
         ->and(issuesMentioning($issues, 'S-Mana'))->toHaveCount(1)
-        ->and(issuesMentioning($issues, 'Sewer Rat'))->toHaveCount(1)
+        ->and(issuesMentioning($issues, 'Sewer Rat'))->toHaveCount(2)
+        ->and(issuesMentioning($issues, 'Regular Bat'))->toHaveCount(2)
         // The skit's own condition waits on a quest the fixture does define,
         // and a reference that resolves is not a finding.
         ->and(issuesMentioning($issues, 'breakfast-duty'))->toHaveCount(0);
@@ -216,6 +253,7 @@ it('validates generic summon availability, policies, identities, and linked acti
     $root = makeTemporaryProject();
     writeConsistentQuests($root);
     writeConsistentSkits($root);
+    writeConsistentEnemies($root);
     writeValidatorSummon($root, 'unsafe-summon', [
         'id' => 'unsafe-summon',
         'name' => 'Unsafe Summon',
@@ -242,6 +280,7 @@ it('rejects invalid summon starting assignments and duplicate exclusive holders'
     $root = makeTemporaryProject();
     writeConsistentQuests($root);
     writeConsistentSkits($root);
+    writeConsistentEnemies($root);
     writeValidatorSummon($root, 'bound-summon', [
         'id' => 'bound-summon',
         'name' => 'Bound Summon',
@@ -268,6 +307,7 @@ it('reports malformed availability and actor assignment payloads', function () {
     $root = makeTemporaryProject();
     writeConsistentQuests($root);
     writeConsistentSkits($root);
+    writeConsistentEnemies($root);
     writeValidatorSummon($root, 'malformed-summon', [
         'id' => 'malformed-summon',
         'name' => 'Malformed Summon',
@@ -287,6 +327,7 @@ it('reports malformed declared summon policy and condition fields without coerci
     $root = makeTemporaryProject();
     writeConsistentQuests($root);
     writeConsistentSkits($root);
+    writeConsistentEnemies($root);
     writeValidatorSummon($root, 'malformed-fields', [
         'id' => 'malformed-fields',
         'name' => 'Malformed Fields',
@@ -307,6 +348,7 @@ it('matches actor summon assignments to definition ids case-insensitively like r
     $root = makeTemporaryProject();
     writeConsistentQuests($root);
     writeConsistentSkits($root);
+    writeConsistentEnemies($root);
     writeValidatorSummon($root, 'signature-summon', [
         'id' => 'Signature-Summon',
         'name' => 'Signature Summon',
@@ -322,6 +364,7 @@ it('rejects non-list and duplicate actor summon assignments', function () {
     $root = makeTemporaryProject();
     writeConsistentQuests($root);
     writeConsistentSkits($root);
+    writeConsistentEnemies($root);
     writeValidatorSummon($root, 'shared-summon', [
         'id' => 'shared-summon',
         'name' => 'Shared Summon',
@@ -581,6 +624,7 @@ it('accepts a complete sequential compatibility manifest with catalog-backed tar
     $root = makeTemporaryProject();
     writeConsistentQuests($root);
     writeConsistentSkits($root);
+    writeConsistentEnemies($root);
     writeSaveCompatibilityManifest($root, <<<'PHP'
     <?php
 
@@ -763,6 +807,7 @@ it('checks ability and spell alias targets against their own kind across every s
     $root = makeTemporaryProject();
     writeConsistentQuests($root);
     writeConsistentSkits($root);
+    writeConsistentEnemies($root);
     writeSpreadSkillCatalog($root);
     writeSaveCompatibilityManifest($root, <<<'PHP'
     <?php
@@ -800,6 +845,7 @@ it('reports a skill name the catalogue defines twice', function () {
     $root = makeTemporaryProject();
     writeConsistentQuests($root);
     writeConsistentSkits($root);
+    writeConsistentEnemies($root);
     writeSpreadSkillCatalog($root, "  'Cleanse' => new MagicSkill('Cleanse', 'Again.', '', 3, 0),\n");
 
     $issues = issuesMentioning(validateProject($root), '"Cleanse" is defined in both skills.php and magic.php');
@@ -843,6 +889,7 @@ it('accepts transitions the Engine can play', function () {
     $root = makeTemporaryProject();
     writeConsistentQuests($root);
     writeConsistentSkits($root);
+    writeConsistentEnemies($root);
     @mkdir($root . '/assets/Graphics/System', 0777, true);
     $image = imagecreatetruecolor(4, 4);
     imagepng($image, $root . '/assets/Graphics/System/Sweep.png');
@@ -901,6 +948,7 @@ it('reports an event the player can never reach, not where content stands', func
     $root = makeTemporaryProject();
     writeConsistentQuests($root);
     writeConsistentSkits($root);
+    writeConsistentEnemies($root);
     // The chest E sits in a sealed pocket.
     writeReachableProject($root,
         "############\n#  ~~~ ### #\n#      #E# #\n#      ### #\n############",
@@ -921,6 +969,7 @@ it('notes a map nothing reaches yet as a warning, and checks edge trigger destin
     $root = makeTemporaryProject();
     writeConsistentQuests($root);
     writeConsistentSkits($root);
+    writeConsistentEnemies($root);
     writeReachableProject($root,
         "############\n#  ~~~     #\n#          #\n#          #\n############",
         "            \n     E      \n            \n            \n            ");
@@ -968,6 +1017,7 @@ it('checks every effect a consumer uses, as that consumer plays it, in both pres
     $root = makeTemporaryProject();
     writeConsistentQuests($root);
     writeConsistentSkits($root);
+    writeConsistentEnemies($root);
     @mkdir($root . '/assets/Graphics/System', 0777, true);
     $image = imagecreatetruecolor(9, 8);
     imagepng($image, $root . '/assets/Graphics/System/Cue.png');
@@ -1001,5 +1051,25 @@ it('reports map field effects it cannot read', function () {
 
     expect(effectIssueLines($root))->toBe([
         'test-map: Its fieldEffects cannot be read: fieldEffects must be a list of at most 256 map-owned effects.',
+    ]);
+});
+
+it('reports a record list entry that names nothing, or a definition the project lacks', function () {
+    $root = makeTemporaryProject();
+    writeConsistentQuests($root);
+    writeConsistentSkits($root);
+    writeConsistentEnemies($root);
+    $path = $root . '/assets/Data/Enemies/sewer-rat.php';
+    file_put_contents($path, str_replace(
+        "'rewards' => ['experience' => 1, 'gold' => 1],",
+        "'rewards' => ['experience' => 1, 'gold' => 1, 'items' => [['item' => '', 'rate' => 0.5], ['item' => 'Moon Tonic', 'rate' => 0.1], ['item' => 'S-Potion', 'rate' => 0.2]]],",
+        (string) file_get_contents($path),
+    ));
+
+    $issues = array_map(static fn(Issue $issue): string => $issue->where . ': ' . $issue->message, validateProject($root));
+
+    expect($issues)->toBe([
+        'enemy Sewer Rat, drop 1: Its item names no item.',
+        'enemy Sewer Rat, drop 2: Its item names the item "Moon Tonic", which the project does not define.',
     ]);
 });
