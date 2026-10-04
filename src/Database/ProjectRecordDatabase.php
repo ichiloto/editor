@@ -34,6 +34,14 @@ final class ProjectRecordDatabase
     use TracksPersistedState { isDirty as private isRecordStateDirty; }
 
     /**
+     * Numeric identities of records removed this session, so a new record never
+     * takes one something may still name.
+     *
+     * @var list<int>
+     */
+    private array $retiredIdentities = [];
+
+    /**
      * @param RecordSchema $schema The category schema.
      * @param string $path The file or directory backing the category.
      * @param ProjectRecord[] $records The loaded records.
@@ -698,6 +706,36 @@ final class ProjectRecordDatabase
     }
 
     /**
+     * A new record's payload without the list members other records already
+     * hold, for every field held by one record at most.
+     *
+     * @param array<string, mixed> $payload The record about to be added.
+     * @return array<string, mixed>
+     */
+    private function withoutClaimedMembers(array $payload): array
+    {
+        foreach ($this->schema->fieldsFor($payload) as $field) {
+            $members = $field->uniqueAcrossRecords ? ($payload[$field->key] ?? null) : null;
+            if (! is_array($members)) {
+                continue;
+            }
+            $held = [];
+            foreach ($this->getRecords() as $record) {
+                $theirs = $record->get($field->key);
+                $held = [...$held, ...(is_array($theirs) ? $theirs : [])];
+            }
+            $free = array_values(array_diff($members, $held));
+            if ($free === [] && $field->removeWhenEmpty) {
+                unset($payload[$field->key]);
+            } else {
+                $payload[$field->key] = $free;
+            }
+        }
+
+        return $payload;
+    }
+
+    /**
      * Refuses a list member another record of the category already holds,
      * naming that record, before anything changes.
      *
@@ -797,6 +835,9 @@ final class ProjectRecordDatabase
             $payload[$identityKey] = $this->makeUniqueIdentity($payload[$identityKey]);
             $recordId = strval($payload[$identityKey]);
         }
+        if (is_array($payload)) {
+            $payload = $this->withoutClaimedMembers($payload);
+        }
 
         if ($this->schema->recordFilter !== null && ! ($this->schema->recordFilter)($payload)) {
             // Never append what the save merge would drop: a blank that is not
@@ -851,6 +892,10 @@ final class ProjectRecordDatabase
         array_splice($records, $index, 1);
         $this->records = $records;
         $this->touchState();
+        $identity = $record->get($this->schema->identityKey ?? 'id');
+        if (is_int($identity)) {
+            $this->retiredIdentities[] = $identity;
+        }
 
         if ($record->sourcePath !== null && is_file($record->sourcePath)) {
             $this->stagedDeletions[$record->sourcePath] = $record->sourcePath;
@@ -1011,6 +1056,9 @@ final class ProjectRecordDatabase
             $payload[$identityKey] = $this->makeUniqueIdentity($payload[$identityKey]);
             $recordId = strval($payload[$identityKey]);
         }
+        // A copy cannot hold what one record holds alone (an animation's
+        // roles): it starts without them, and the original keeps them.
+        $payload = $this->withoutClaimedMembers($payload);
 
         if ($this->schema->recordFilter !== null && ! ($this->schema->recordFilter)($payload)) {
             return null;
@@ -3970,13 +4018,14 @@ final class ProjectRecordDatabase
 
         if (is_int($preferred)) {
             // A numeric identity (an animation's id) is the next number after
-            // the largest any record holds, so it never reuses one.
-            $numbers = array_filter(
+            // the largest any record holds or held this session, so it never
+            // reuses one something may still name.
+            $numbers = [...array_filter(
                 array_map(static fn(ProjectRecord $record): mixed => $record->get($identityKey), $this->getRecords()),
                 is_int(...),
-            );
+            ), ...$this->retiredIdentities];
 
-            return in_array($preferred, $numbers, true) ? max($numbers) + 1 : $preferred;
+            return $numbers === [] ? $preferred : max($numbers) + 1;
         }
 
         $preferred = strval($preferred);

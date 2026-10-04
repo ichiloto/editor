@@ -129,3 +129,35 @@ it('reports roles the runtime cannot play and roles the project reaches with no 
 
     expect(array_filter(roleIssues($root), static fn(string $message): bool => str_contains($message, 'role')))->toBe([]);
 });
+
+it('numbers a new animation after the largest id, even one deleted this session', function () {
+    $root = makeTemporaryProject();
+    file_put_contents($root . '/assets/Data/animations.php', "<?php return [['id' => 2, 'name' => 'Spark'], ['id' => 4, 'name' => 'Burst']];");
+    $database = ProjectWorkspace::fromProject($root)->getRecordDatabase('animations');
+
+    $added = $database->addRecord();
+    expect($database->getRecordByIndex($added)->get('id'))->toBe(5);
+
+    $database->removeRecord($added);
+    $database->removeRecord(1);
+    $again = $database->addRecord();
+    // 4 and 5 were deleted, and something may still name them.
+    expect($database->getRecordByIndex($again)->get('id'))->toBe(6);
+});
+
+it('copies an animation without the roles it holds alone, so each role still plays one animation', function () {
+    $root = makeTemporaryProject();
+    writeRoleAnimations($root);
+    $database = ProjectWorkspace::fromProject($root)->getRecordDatabase('animations');
+
+    $copy = $database->duplicateRecord(0);
+    expect($database->getRecordByIndex($copy)->toArray())->toBe(['id' => 3, 'name' => 'Blade Slash', 'targetEffect' => 'battle-blade-slash'])
+        ->and($database->getRecordByIndex(0)->get('roles'))->toBe(['attack-sword']);
+
+    $database->save();
+    $saved = require $root . '/assets/Data/animations.php';
+    $holders = array_filter($saved, static fn(array $entry): bool => in_array('attack-sword', $entry['roles'] ?? [], true));
+
+    expect($holders)->toHaveCount(1)
+        ->and(array_filter(roleIssues($root), static fn(string $message): bool => str_contains($message, 'bound to')))->toBe([]);
+});
