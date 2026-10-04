@@ -14264,8 +14264,13 @@ final class Editor
             }
 
             $prefix = $index === $selectedIndex ? '> ' : '  ';
-            $dirty = $database->getRecordByIndex($index)?->isDirty() ? ' *' : '';
-            $lines[] = sprintf('%s%s%s', $prefix, $label, $dirty);
+            $record = $database->getRecordByIndex($index);
+            $dirty = $record?->isDirty() ? ' *' : '';
+            // Entries identified by a number (classes, animations) list it
+            // before their name.
+            $identity = $database->schema->identityKey === null ? null : $record?->get($database->schema->identityKey);
+            $number = is_int($identity) ? sprintf('%04d ', $identity) : '';
+            $lines[] = sprintf('%s%s%s%s', $prefix, $number, $label, $dirty);
         }
 
         if ($lines === []) {

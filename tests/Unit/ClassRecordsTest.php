@@ -60,3 +60,10 @@ it('offers the engine\'s weapon and armor types for a class\'s equipment', funct
         ->and($values('armor_types'))->toContain('Heavy Armor', 'Large Shield')
         ->and($values('classes'))->toBe(['Vanguard', 'Oracle']);
 });
+
+it('lists classes in the terminal by their number and name', function () {
+    $editor = deletionEditor(makeTemporaryProject());
+    openDatabaseCategory($editor, 'classes');
+
+    expect(callEditorMethod($editor, 'getDatabaseListLines'))->toBe(['> 0001 Vanguard', '  0002 Oracle']);
+});
