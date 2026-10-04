@@ -10,6 +10,7 @@ use Ichiloto\Editor\Database\RecordRefusal;
 use Ichiloto\Editor\Database\SummonAssignmentDiagnostics;
 use Ichiloto\Editor\EquipmentOptimizationPolicy;
 use Ichiloto\Editor\History\GenericCommand;
+use Ichiloto\Editor\History\SourceSetRequired;
 use Ichiloto\Editor\Inspector\InputControl;
 use Ichiloto\Editor\Inspector\InputControlType;
 use Ichiloto\Editor\PermanentGrowthCatalog;
@@ -17,6 +18,7 @@ use Ichiloto\Editor\ProjectActor;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Engine\Entities\Enumerations\WeaponType;
 use RuntimeException;
+use Throwable;
 
 /**
  * How an actor is authored, for the terminal editor and the GUI alike: the
@@ -195,6 +197,45 @@ final class ActorAuthoring
             static fn() => $actor->restoreData($after),
             static fn() => $actor->restoreData($before),
         ), $index);
+    }
+
+    /**
+     * Returns the project-wide repair an actor's identity freeze needs when
+     * freezing its name is not the whole of it: the other files that name
+     * actors by what the repair changes are rewritten with it, at once.
+     * Returns null when the freeze alone is the repair.
+     *
+     * @throws RecordRefusal When the repair cannot be planned.
+     */
+    public function planIdentityRepair(ProjectWorkspace $workspace, ProjectActor $actor): ?ActorIdentityMigrationPlan
+    {
+        try {
+            $plan = ActorIdentityMigration::planProject($workspace->projectRoot);
+        } catch (Throwable $failure) {
+            throw new RecordRefusal(sprintf('The actor identity repair could not be planned: %s', $failure->getMessage()), previous: $failure);
+        }
+
+        return $plan->getChangedPaths() === [$actor->path] ? null : $plan;
+    }
+
+    /**
+     * Describes a project-wide identity repair as the file set it writes,
+     * for whoever owns the workspace to confirm and write as one step.
+     */
+    public function describeIdentityRepair(ProjectWorkspace $workspace, ProjectActor $actor, ActorIdentityMigrationPlan $plan): SourceSetRequired
+    {
+        $paths = array_map(
+            static fn(string $path): string => ltrim(substr($path, strlen(rtrim($workspace->projectRoot, DIRECTORY_SEPARATOR))), DIRECTORY_SEPARATOR),
+            $plan->getChangedPaths(),
+        );
+
+        return new SourceSetRequired(
+            $plan->getSourceSet(),
+            'Migrate actor identities and references',
+            'this actor migration',
+            sprintf('Freeze "%s" as its permanent id, repairing actor references in %d files?', $actor->getName(), count($paths)),
+            $paths,
+        );
     }
 
     /**

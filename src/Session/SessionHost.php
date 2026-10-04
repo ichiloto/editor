@@ -276,6 +276,7 @@ final class SessionHost
                 self::requireInt($params, 'index'),
                 is_array($params['key'] ?? null) ? $params['key'] : throw new InvalidRequest('"key" must be the row key database.record gave.'),
                 is_scalar($params['value'] ?? null) ? (string) $params['value'] : throw new InvalidRequest('"value" must be a string, number or boolean.'),
+                self::readOptionalString($params, 'answer'),
             ),
             'database.add' => $session->addDatabaseItem(
                 self::requireString($params, 'category'),

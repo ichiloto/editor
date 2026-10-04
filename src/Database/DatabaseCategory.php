@@ -71,6 +71,7 @@ interface DatabaseCategory
     /**
      * @param list<int|string> $frame
      * @throws RecordRefusal When the record is gone or read-only, or the value is refused.
+     * @throws \Ichiloto\Editor\History\SourceSetRequired When the edit is only whole as files written at once.
      */
     public function applyField(int $index, array $frame, string $fieldId, string $value, string $label): RecordChange;
 

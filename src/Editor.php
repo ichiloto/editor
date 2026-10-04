@@ -9328,8 +9328,8 @@ final class Editor
     private function openActorIdentityMigration(ProjectActor $actor): void
     {
         try {
-            $plan = ActorIdentityMigration::planProject($this->projectRoot);
-            if ($plan->getChangedPaths() !== [$actor->path]) {
+            $plan = $this->workspace instanceof ProjectWorkspace ? $this->actorAuthoring->planIdentityRepair($this->workspace, $actor) : null;
+            if ($plan !== null) {
                 $this->openActorReferenceMigration($plan);
                 return;
             }

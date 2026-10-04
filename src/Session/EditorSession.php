@@ -46,6 +46,8 @@ use Ichiloto\Editor\Maps\LayerEditor;
 use Ichiloto\Editor\Maps\MapLayers;
 use Ichiloto\Editor\Maps\MapReferences;
 use Ichiloto\Editor\Maps\TilePalette;
+use Ichiloto\Editor\History\SourceSetCommand;
+use Ichiloto\Editor\History\SourceSetRequired;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Editor\Storage\WorkspaceSave;
@@ -60,6 +62,7 @@ use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasImage;
 use Closure;
 use InvalidArgumentException;
 use RuntimeException;
+use WeakReference;
 
 /**
  * One open project as every editor interface edits it: its documents, the
@@ -84,6 +87,16 @@ final class EditorSession
 
     /** How actors are authored, with what this editor's actor panes show. */
     private readonly ActorAuthoring $actorAuthoring;
+
+    /**
+     * Where each map's revisions count from. A map read afresh, when a file
+     * set written at once reloads the project or its undo puts the earlier
+     * one back, counts on from every revision given for it before, so one
+     * revision never names two states of a map.
+     *
+     * @var array<string, array{map: WeakReference<ProjectMap>, base: int, last: int}>
+     */
+    private array $mapRevisions = [];
     private function __construct(
         ProjectWorkspace $workspace,
         private readonly CommandHistory $history,
@@ -129,12 +142,12 @@ final class EditorSession
      */
     public function describeMaps(): array
     {
-        return array_map(static fn(ProjectMap $map): array => [
+        return array_map(fn(ProjectMap $map): array => [
             'id' => $map->mapId,
             'name' => $map->getDisplayName(),
             'dirty' => $map->isDirty(),
             'readOnly' => $map->getGridSourceIssue(),
-            'revision' => $map->stateVersion(),
+            'revision' => $this->getMapRevision($map),
         ], $this->workspace->maps);
     }
 
@@ -280,7 +293,7 @@ final class EditorSession
             'name' => $map->getDisplayName(),
             'width' => $width,
             'height' => $height,
-            'revision' => $map->stateVersion(),
+            'revision' => $this->getMapRevision($map),
             'dirty' => $map->isDirty(),
             'readOnly' => $map->getGridSourceIssue(),
             'baseLayer' => $map->getBaseLayerId(),
@@ -328,7 +341,7 @@ final class EditorSession
 
         return [
             'map' => $map->mapId,
-            'revision' => $map->stateVersion(),
+            'revision' => $this->getMapRevision($map),
             'assetRoot' => $map->getAssetRoot(),
             'operations' => $world->getOperations(true, $tileShadows),
             'layerIds' => $layerIds,
@@ -381,7 +394,7 @@ final class EditorSession
             }
         }
 
-        return ['map' => $map->mapId, 'revision' => $map->stateVersion(), 'layers' => $layers];
+        return ['map' => $map->mapId, 'revision' => $this->getMapRevision($map), 'layers' => $layers];
     }
 
     /**
@@ -422,7 +435,7 @@ final class EditorSession
             $this->history->record($applied['command']);
         }
 
-        return ['changed' => $applied['changed'], 'revision' => $map->stateVersion()];
+        return ['changed' => $applied['changed'], 'revision' => $this->getMapRevision($map)];
     }
 
     /**
@@ -468,7 +481,7 @@ final class EditorSession
             $this->history->record($applied['command']);
         }
 
-        return ['status' => 'applied', 'changed' => $applied['changed'], 'revision' => $map->stateVersion()];
+        return ['status' => 'applied', 'changed' => $applied['changed'], 'revision' => $this->getMapRevision($map)];
     }
 
     /**
@@ -631,7 +644,7 @@ final class EditorSession
             $this->history->record($result['command']);
         }
 
-        return ['status' => 'applied', 'revision' => $map->stateVersion(), 'changed' => $result['command'] !== null,
+        return ['status' => 'applied', 'revision' => $this->getMapRevision($map), 'changed' => $result['command'] !== null,
             'layer' => $result['layer']];
     }
 
@@ -680,7 +693,7 @@ final class EditorSession
 
         return [
             'map' => $mapId,
-            'revision' => $map->stateVersion(),
+            'revision' => $this->getMapRevision($map),
             'event' => $marker,
             'rows' => array_map(self::describeRow(...), $this->collectInspectorFields($map, $marker)),
         ];
@@ -724,7 +737,7 @@ final class EditorSession
                 throw new SessionRefusal(sprintf('Answer clear or cancel, not %s.', $answer));
             }
             if ($answer === 'cancel') {
-                return ['status' => 'applied', 'revision' => $map->stateVersion(), 'changed' => false];
+                return ['status' => 'applied', 'revision' => $this->getMapRevision($map), 'changed' => false];
             }
         }
 
@@ -732,7 +745,7 @@ final class EditorSession
             ? $inspector->changeMapKind($map, $value, $cleared > 0 && $answer === 'clear')
             : $inspector->apply($map, $field, $value));
 
-        return ['status' => 'applied', 'revision' => $map->stateVersion(), 'changed' => $command !== null];
+        return ['status' => 'applied', 'revision' => $this->getMapRevision($map), 'changed' => $command !== null];
     }
 
     /**
@@ -772,7 +785,7 @@ final class EditorSession
             return $created['command'];
         });
 
-        return ['marker' => $created['marker'], 'revision' => $map->stateVersion()];
+        return ['marker' => $created['marker'], 'revision' => $this->getMapRevision($map)];
     }
 
     /**
@@ -787,7 +800,7 @@ final class EditorSession
         $map = $this->requireCurrentMap($mapId, $revision);
         $this->runEdit(static fn(): Command => EventAuthoring::deleteEvent($map, $marker));
 
-        return ['revision' => $map->stateVersion()];
+        return ['revision' => $this->getMapRevision($map)];
     }
 
     /**
@@ -801,7 +814,7 @@ final class EditorSession
         $map = $this->requireCurrentMap($mapId, $revision);
         $command = $this->runEdit(static fn(): ?Command => EventAuthoring::moveEvent($map, $marker, $deltaX, $deltaY));
 
-        return ['revision' => $map->stateVersion(), 'changed' => $command !== null];
+        return ['revision' => $this->getMapRevision($map), 'changed' => $command !== null];
     }
 
     /**
@@ -815,7 +828,7 @@ final class EditorSession
         $map = $this->requireCurrentMap($mapId, $revision);
         $command = $this->runEdit(static fn(): ?Command => EventAuthoring::setEventBounds($map, $marker, $x, $y, $width, $height));
 
-        return ['revision' => $map->stateVersion(), 'changed' => $command !== null];
+        return ['revision' => $this->getMapRevision($map), 'changed' => $command !== null];
     }
 
     /**
@@ -831,7 +844,7 @@ final class EditorSession
         $destination = $this->requireMap($destinationMapId);
         $command = $this->runEdit(fn(): ?Command => $this->createMapInspector($map)->setTransferDestination($map, $marker, $destination, $x, $y));
 
-        return ['revision' => $map->stateVersion(), 'changed' => $command !== null];
+        return ['revision' => $this->getMapRevision($map), 'changed' => $command !== null];
     }
 
     /**
@@ -878,7 +891,7 @@ final class EditorSession
             return $result?->command;
         });
 
-        return ['revision' => $map->stateVersion(), 'changed' => $result?->command !== null, 'message' => $result?->summary ?? 'Nothing changed.'];
+        return ['revision' => $this->getMapRevision($map), 'changed' => $result?->command !== null, 'message' => $result?->summary ?? 'Nothing changed.'];
     }
 
     /**
@@ -1302,7 +1315,7 @@ final class EditorSession
      * @return array{changed: bool, records: list<string>, note?: string} Whether it changed, the labels afterwards (a rename shows), and what else it did.
      * @throws SessionRefusal When the category or record is unknown or read-only, the row is gone or read-only, or the value is refused.
      */
-    public function applyDatabaseRecord(string $category, int $index, array $key, string $value): array
+    public function applyDatabaseRecord(string $category, int $index, array $key, string $value, ?string $answer = null): array
     {
         $database = $this->requireCategory($category);
         $frame = self::requireFrame($key['frame'] ?? [], 'database.record');
@@ -1318,12 +1331,63 @@ final class EditorSession
             throw new SessionRefusal(sprintf('%s cannot be edited here.', trim((string) ($field['label'] ?? 'That row'))));
         }
 
-        $change = $this->changeRecord(static fn(): RecordChange => $database->applyField(
-            $index, $frame, $fieldId, $value, (string) ($field['label'] ?? 'Database field'),
-        ));
+        try {
+            $change = $this->changeRecord(static fn(): RecordChange => $database->applyField(
+                $index, $frame, $fieldId, $value, (string) ($field['label'] ?? 'Database field'),
+            ));
+        } catch (SourceSetRequired $required) {
+            return $this->writeSourceSet($required, $answer, fn(): array => $this->requireCategory($category)->getRecordLabels());
+        }
 
         return array_filter(['changed' => $change->command !== null, 'records' => $database->getRecordLabels(), 'note' => $change->note],
             static fn(mixed $value): bool => $value !== null);
+    }
+
+    /**
+     * Asks before writing a file set an edit needs at once, then writes it
+     * as one undo step: the workspace is reloaded from the written files, so
+     * every map and category reads afresh.
+     *
+     * @param Closure(): list<string> $records The category's labels afterwards.
+     * @return array{status: 'question', question: string, answers: list<array{key: string, label: string, description: string}>}|array{changed: bool, records: list<string>, reloaded?: true}
+     * @throws SessionRefusal When an answer is not one offered, edits are pending, or the files cannot be written.
+     */
+    private function writeSourceSet(SourceSetRequired $required, ?string $answer, Closure $records): array
+    {
+        if ($answer === null) {
+            return [
+                'status' => 'question',
+                'question' => $required->question,
+                'answers' => [
+                    ['key' => 'cancel', 'label' => 'Cancel', 'description' => 'Leave all files unchanged.'],
+                    ['key' => 'write', 'label' => sprintf('Write %d repaired files now', count($required->paths)),
+                        'description' => sprintf('Writes %s now, not on Save. Undo restores the files.', implode(', ', $required->paths))],
+                ],
+            ];
+        }
+        if (! in_array($answer, ['write', 'cancel'], true)) {
+            throw new SessionRefusal(sprintf('Answer write or cancel, not %s.', $answer));
+        }
+        if ($answer === 'cancel') {
+            return ['changed' => false, 'records' => $records()];
+        }
+        if ($this->workspace->hasUnsavedChanges()) {
+            throw new SessionRefusal(sprintf('Save or undo pending edits before %s. No files were changed.', $required->subject));
+        }
+
+        $command = new SourceSetCommand($required->label, $required->subject, $required->plan, $this->workspace,
+            fn(): ProjectWorkspace => $this->workspace,
+            function (ProjectWorkspace $workspace): void { $this->workspace = $workspace; },
+        );
+
+        try {
+            $command->execute();
+        } catch (RuntimeException $failure) {
+            throw new SessionRefusal($failure->getMessage(), previous: $failure);
+        }
+        $this->history->record($command);
+
+        return ['changed' => true, 'records' => $records(), 'reloaded' => true];
     }
 
     /**
@@ -1654,7 +1718,7 @@ final class EditorSession
 
         return [
             'map' => $mapId,
-            'revision' => $map->stateVersion(),
+            'revision' => $this->getMapRevision($map),
             'index' => $index,
             'frame' => $frame,
             'frameLabel' => $frame === [] ? null : $inspector->records()->describeFramePath($frame),
@@ -1762,7 +1826,7 @@ final class EditorSession
         }
 
         return [
-            'revision' => $map->stateVersion(),
+            'revision' => $this->getMapRevision($map),
             'changed' => $applied->command !== null,
             'index' => $applied->index,
             'id' => $applied->npc?->getId(),
@@ -1988,17 +2052,24 @@ final class EditorSession
      */
     private function traverseHistory(callable $step): array
     {
-        $before = array_map(static fn(ProjectMap $map): int => $map->stateVersion(), $this->workspace->maps);
+        $workspace = $this->workspace;
+        $before = array_map($this->getMapRevision(...), $this->getMapsById());
         $databases = $this->listDatabaseVersions();
         $command = $step();
+        // A step that put another workspace in place (a file set written at
+        // once, or its undo) changed whatever it reloaded: everything.
+        $reloaded = $this->workspace !== $workspace;
         $changed = $revisions = [];
-        foreach ($this->workspace->maps as $index => $map) {
-            if ($map->stateVersion() !== $before[$index]) {
-                $changed[] = $map->mapId;
-                $revisions[$map->mapId] = $map->stateVersion();
+        foreach ($this->getMapsById() as $mapId => $map) {
+            $revision = $this->getMapRevision($map);
+            if ($reloaded || $revision !== ($before[$mapId] ?? null)) {
+                $changed[] = (string) $mapId;
+                $revisions[$mapId] = $revision;
             }
         }
-        $changedDatabases = array_keys(array_diff_assoc($this->listDatabaseVersions(), $databases));
+        $changedDatabases = $reloaded
+            ? array_keys($this->listDatabaseVersions())
+            : array_keys(array_diff_assoc($this->listDatabaseVersions(), $databases));
 
         return ['label' => $command?->label, 'maps' => $changed, 'revisions' => $revisions, 'databases' => array_values(array_map('strval', $changedDatabases))];
     }
@@ -2165,10 +2236,32 @@ final class EditorSession
     }
 
     /** @throws SessionRefusal When the map changed since the revision the caller saw. */
+    /**
+     * A map's revision as an interface is given it: its own state version,
+     * counted on from every revision given for an earlier reading of it.
+     */
+    private function getMapRevision(ProjectMap $map): int
+    {
+        $known = $this->mapRevisions[$map->mapId] ?? null;
+
+        if ($known === null || $known['map']->get() !== $map) {
+            $known = [
+                'map' => WeakReference::create($map),
+                'base' => $known === null ? 0 : $known['last'] + 1 - $map->stateVersion(),
+                'last' => 0,
+            ];
+        }
+
+        $known['last'] = $known['base'] + $map->stateVersion();
+        $this->mapRevisions[$map->mapId] = $known;
+
+        return $known['last'];
+    }
+
     private function requireCurrentMap(string $mapId, int $revision): ProjectMap
     {
         $map = $this->requireMap($mapId);
-        if ($map->stateVersion() !== $revision) {
+        if ($this->getMapRevision($map) !== $revision) {
             throw new SessionRefusal(sprintf('%s changed since revision %d; reload it and edit again.', $mapId, $revision));
         }
 

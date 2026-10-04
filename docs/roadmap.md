@@ -265,11 +265,11 @@ terminal editor uses too.
 Progress: Classes, Quests, System, a new Configuration category, Actors,
 Types, Skills, Tilesets, Items, Weapons and Armors are done in both editors;
 the GUI session now serves every category.
-Known gap: an actor authored without an id whose identity freeze also needs
-other files rewritten (the cross-file repair `SourceSetCommand` writes at
-once) is refused in the GUI with a pointer to the terminal's repair dialog;
-the single-file freeze works in both editors. The session would need its
-workspace replacement to keep loaded maps for the repair's undo.
+An identity freeze that also repairs other files is asked about and written
+at once in both editors: a document reports the file set it needs
+(`SourceSetRequired`) and the workspace's owner writes it as one
+`SourceSetCommand`. The session's map revisions count on across the reload,
+so a revision given before it never names the reloaded map.
 
 Order of work, each a complete slice before the next:
 

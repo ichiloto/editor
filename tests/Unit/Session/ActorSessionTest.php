@@ -134,17 +134,51 @@ it('offers the one-time identity freeze of an actor authored without an id as th
     expect(file_get_contents($path))->toContain("'id' => 'Mira'");
 });
 
-it('refuses an identity freeze that needs other files repaired at once, naming where that is done', function () {
+it('asks before an identity freeze that repairs other files at once, then writes it as one undo step', function () {
     $root = makeTemporaryProject();
-    writeLegacyActor($root, 'Mira');
+    $mira = writeLegacyActor($root, 'Mira');
     writeLegacyActor($root, 'Tobin');
+    $before = sourceHashTree($root);
     $session = EditorSession::open($root);
+    [$map] = $session->describeMaps();
     $index = array_search('Mira', $session->listDatabaseRecords('actors')['records'], true);
     $id = actorSessionRow($session->readDatabaseRecord('actors', $index), 'id');
+    $question = $session->applyDatabaseRecord('actors', $index, $id['key'], '');
 
-    expect(fn() => $session->applyDatabaseRecord('actors', $index, $id['key'], ''))
-        ->toThrow(SessionRefusal::class, 'other file(s) repaired at once')
-        ->and($session->listDatabaseRecords('actors')['dirty'])->toBeFalse();
+    expect($question['status'])->toBe('question')
+        ->and($question['question'])->toContain('Freeze "Mira"')
+        ->and(array_column($question['answers'], 'key'))->toBe(['cancel', 'write'])
+        ->and($question['answers'][1]['description'])->toContain('assets/Data/Actors/Mira.php', 'Undo restores the files')
+        ->and($session->applyDatabaseRecord('actors', $index, $id['key'], '', 'cancel')['changed'])->toBeFalse()
+        ->and(fn() => $session->applyDatabaseRecord('actors', $index, $id['key'], '', 'maybe'))->toThrow(SessionRefusal::class, 'Answer write or cancel')
+        ->and(sourceHashTree($root))->toBe($before);
+
+    // Pending edits are saved or undone first: the set is written at once.
+    $description = actorSessionRow($session->readDatabaseRecord('actors', 0), 'description')['key'];
+    $session->applyDatabaseRecord('actors', 0, $description, 'Pending.');
+    expect(fn() => $session->applyDatabaseRecord('actors', $index, $id['key'], '', 'write'))
+        ->toThrow(SessionRefusal::class, 'Save or undo pending edits');
+    $session->undo();
+
+    $written = $session->applyDatabaseRecord('actors', $index, $id['key'], '', 'write');
+    [$reread] = $session->describeMaps();
+
+    expect($written)->toMatchArray(['changed' => true, 'reloaded' => true])
+        ->and((string) file_get_contents($mira))->toContain("'id' => 'Mira'")
+        ->and(sourceHashTree($root))->not->toBe($before)
+        ->and(actorSessionRow($session->readDatabaseRecord('actors', $index), 'id'))->toMatchArray(['kind' => 'info', 'value' => 'Mira'])
+        ->and($session->listDatabaseRecords('actors')['dirty'])->toBeFalse()
+        // The project was read again; a revision given before names nothing now.
+        ->and($reread['revision'])->toBeGreaterThan($map['revision'])
+        ->and(fn() => $session->deleteEvent($map['id'], $map['revision'], 'A'))->toThrow(SessionRefusal::class, 'changed since revision');
+
+    $undone = $session->undo();
+
+    expect($undone['label'])->toBe('Migrate actor identities and references')
+        ->and($undone['databases'])->toContain('actors')
+        ->and($undone['revisions'][$map['id']])->toBeGreaterThan($reread['revision'])
+        ->and(sourceHashTree($root))->toBe($before)
+        ->and(actorSessionRow($session->readDatabaseRecord('actors', $index), 'id')['kind'])->toBe('action');
 });
 
 it('serves actors over the line protocol', function () {
@@ -161,4 +195,21 @@ it('serves actors over the line protocol', function () {
     expect($request(5, 'database.records', ['category' => 'actors'])['result']['records'])->toBe(['Kaelion'])
         ->and($applied['changed'])->toBeTrue()
         ->and($undone['databases'])->toBe(['actors']);
+});
+
+it('asks and answers a file set written at once over the line protocol', function () {
+    $root = makeTemporaryProject();
+    writeLegacyActor($root, 'Mira');
+    writeLegacyActor($root, 'Tobin');
+    $host = new SessionHost(fopen('php://memory', 'r'), fopen('php://memory', 'w'), fopen('php://memory', 'w'));
+    $request = static fn(int $id, string $method, array $params = []): array =>
+        $host->handle(json_encode(['id' => $id, 'method' => $method, 'params' => $params]));
+    $request(1, 'hello', ['protocol' => SessionHost::PROTOCOL, 'project' => $root]);
+    $index = array_search('Mira', $request(2, 'database.records', ['category' => 'actors'])['result']['records'], true);
+    $key = actorSessionRow($request(3, 'database.record', ['category' => 'actors', 'index' => $index, 'frame' => []])['result'], 'id')['key'];
+    $apply = ['category' => 'actors', 'index' => $index, 'key' => $key, 'value' => ''];
+
+    expect($request(4, 'database.apply', $apply)['result']['status'])->toBe('question')
+        ->and($request(5, 'database.apply', [...$apply, 'answer' => 'write'])['result'])->toMatchArray(['changed' => true, 'reloaded' => true])
+        ->and($request(6, 'history.undo')['result']['label'])->toBe('Migrate actor identities and references');
 });

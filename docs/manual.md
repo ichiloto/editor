@@ -944,6 +944,12 @@ what a save resolves the actor by. A project that declares none is resolved
 by display name, so the row says so, and renaming such an actor strands
 every save that named it.
 
+The row's action freezes the current name as the permanent id. When that
+is the whole repair, it is one edit, written on Save. When other files name
+actors by what the repair changes (skits, maps, other actors), both editors
+first list every file it writes; confirming writes them all at once, not on
+Save, and Undo restores them. Pending edits are saved or undone first.
+
 **Attack Style** is the character's own weapon: the weapon type they fight
 with when no weapon is equipped, part of who they are and with no stats
 (`Unarmed`, the default, writes nothing). A battle's basic attack plays the
@@ -1015,7 +1021,7 @@ skill's effects, a quest's rewards) listed under them.
 
 | Category | Backing file | Terminal editor | GUI editor |
 | --- | --- | --- | --- |
-| Actors | `assets/Data/Actors/*.php` | Editable | Same; an identity freeze that needs other files repaired at once is made in the terminal |
+| Actors | `assets/Data/Actors/*.php` | Editable | Same |
 | Classes | `assets/Data/classes.php` | Editable - levels, the experience curve, every stat curve, equipment types and skills learned | Same |
 | Skills | `assets/Data/Skills/*.php` | Editable - one data record per numbered file, attacks, abilities and spells alike, with their effects; `skills.php` loads them | Same |
 | Items | `assets/Data/Items/*.php` | Editable - one data record per numbered file, with scope, occasion, animation and effects; `items.php` loads Items, Weapons and Armors | Same |

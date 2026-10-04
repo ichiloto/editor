@@ -11,7 +11,6 @@ use Ichiloto\Editor\Database\RecordRefusal;
 use Ichiloto\Editor\ProjectActor;
 use Ichiloto\Editor\ProjectWorkspace;
 use RuntimeException;
-use Throwable;
 
 /**
  * The project's actors as a Database category, authored through the same
@@ -100,7 +99,13 @@ final readonly class ActorCategory implements DatabaseCategory
         if ($fieldId === 'id' && ! array_key_exists('id', $actor->getData())) {
             // An actor authored without an id: the edit is the one-time
             // freeze of its name, as the terminal's Enter on the row is.
-            $this->refuseWiderRepair($actor);
+            // When other files name actors by what it changes, the freeze is
+            // that whole repair, written at once by the workspace's owner.
+            $repair = $this->authoring->planIdentityRepair($this->workspace, $actor);
+
+            if ($repair !== null) {
+                throw $this->authoring->describeIdentityRepair($this->workspace, $actor, $repair);
+            }
 
             return $this->authoring->freezeIdentity($this->workspace, $index);
         }
@@ -159,29 +164,6 @@ final readonly class ActorCategory implements DatabaseCategory
     {
         return $this->workspace->actorDatabase->getActorByIndex($index)
             ?? throw new RecordRefusal(sprintf('actors has no record %d.', $index));
-    }
-
-    /**
-     * Freezing one actor's name is the whole repair only when no other file
-     * needs it too. A repair across files rewrites them at once rather than
-     * on save, so it is made from the terminal editor's repair dialog.
-     *
-     * @throws RecordRefusal
-     */
-    private function refuseWiderRepair(ProjectActor $actor): void
-    {
-        try {
-            $paths = ActorIdentityMigration::planProject($this->workspace->projectRoot)->getChangedPaths();
-        } catch (Throwable $failure) {
-            throw new RecordRefusal(sprintf('The actor identity repair could not be planned: %s', $failure->getMessage()), previous: $failure);
-        }
-
-        if ($paths !== [$actor->path]) {
-            throw new RecordRefusal(sprintf(
-                'Freezing this id also needs %d other file(s) repaired at once. Repair actor identities and references from Database > Actors in the terminal editor.',
-                max(0, count($paths) - 1),
-            ));
-        }
     }
 
     /**
