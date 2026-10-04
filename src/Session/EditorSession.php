@@ -7,6 +7,7 @@ namespace Ichiloto\Editor\Session;
 use Ichiloto\Editor\Backup\BackupSettings;
 use Ichiloto\Editor\Backup\BackupWriter;
 use Ichiloto\Editor\Canvas\CanvasEditor;
+use Ichiloto\Editor\ProjectDirectoryContext;
 use Ichiloto\Editor\Canvas\PieceRole;
 use Ichiloto\Editor\Cutscenes\Source\SourcePreservationRefusal;
 use Ichiloto\Editor\Database\ConditionCodec;
@@ -1035,15 +1036,7 @@ final class EditorSession
     {
         $record = $this->requireRecordDatabase('troops')->getRecordByIndex($index)
             ?? throw new SessionRefusal(sprintf('troops has no record %d.', $index));
-        $assetRoot = $this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets';
-        try {
-            $catalog = BattlePresentationCatalog::load($assetRoot);
-        } catch (\Throwable $error) {
-            throw new SessionRefusal('The battle presentation cannot be read: ' . $error->getMessage(), previous: $error);
-        }
-        if ($catalog?->ui === null) {
-            throw new SessionRefusal('This project has no graphical battle layout to arrange troops on.');
-        }
+        $catalog = $this->requireBattleLayoutCatalog('arrange troops on');
 
         $members = $placed = $placedMembers = [];
         foreach ($record->getSubList('enemies') as $memberIndex => $entry) {
@@ -1060,6 +1053,101 @@ final class EditorSession
                 $members[$memberIndex]['issue'] = $error->getMessage();
             }
         }
+        [$formation, $view] = $this->composeFormation($catalog, $arena, $placed);
+        foreach ($formation->enemies as $position => $battler) {
+            $members[$placedMembers[$position]]['battler'] = self::describeFormationBattler($battler);
+        }
+
+        return [...$view, 'members' => array_values($members)];
+    }
+
+    /**
+     * An enemy as Database > Enemies shows it: its terminal sprite, read the
+     * way the game reads it, and its battle art composed by the Engine's
+     * BattleFormationLayout at battle scale beside the starting party. Battle
+     * layouts define where the party stands, not enemies (troops place those),
+     * so the enemy stands opposite the lead party member, its slot mirrored
+     * across the canvas: a size comparison, not a battle position. Both read
+     * the record as it is now, unsaved edits included. A project without a
+     * graphical battle still gets the sprite, with the reason there is no art.
+     *
+     * @return array<string, mixed>
+     * @throws SessionRefusal When the enemy is unknown.
+     */
+    public function readEnemyPreview(int $index, ?string $arena = null): array
+    {
+        $record = $this->requireRecordDatabase('enemies')->getRecordByIndex($index)
+            ?? throw new SessionRefusal(sprintf('enemies has no record %d.', $index));
+        $name = trim((string) $record->get('name'));
+        $preview = ['name' => $name, 'sprite' => $this->readEnemySprite($record->get('imagePath')), 'formation' => null, 'formationIssue' => null];
+
+        try {
+            $catalog = $this->requireBattleLayoutCatalog('preview enemies at battle scale on');
+            $lead = $catalog->ui->partySlots[0] ?? throw new SessionRefusal('The battle layout has no party slot to stand an enemy beside.');
+            $slot = new BattlerSlot($catalog->ui->width - $lead->x, $lead->y, $lead->width, $lead->height);
+            [$formation, $view] = $this->composeFormation($catalog, $arena, [['enemyId' => $name, 'slot' => $slot]]);
+            $preview['formation'] = [...$view, 'members' => [[
+                'enemy' => $name,
+                'placement' => null,
+                'battler' => self::describeFormationBattler($formation->enemies[0]),
+            ]]];
+        } catch (SessionRefusal $refusal) {
+            $preview['formationIssue'] = $refusal->getMessage();
+        }
+
+        return $preview;
+    }
+
+    /**
+     * An enemy's terminal sprite rows, read by the game's own rule
+     * (`Graphics/Enemies/<imagePath>.txt`), never from outside that folder.
+     *
+     * @return array{lines?: list<string>, issue?: string}
+     */
+    private function readEnemySprite(mixed $imagePath): array
+    {
+        if (! is_string($imagePath) || trim($imagePath) === '') {
+            return ['issue' => 'No sprite is chosen.'];
+        }
+        $root = $this->workspace->projectRoot;
+        $folder = realpath($root . '/assets/Graphics/Enemies');
+        $file = realpath($root . '/assets/Graphics/Enemies/' . $imagePath . '.txt');
+        if ($folder === false || $file === false || ! str_starts_with($file, $folder . DIRECTORY_SEPARATOR)) {
+            return ['issue' => sprintf('Graphics/Enemies/%s.txt is not a sprite in this project.', $imagePath)];
+        }
+
+        return ['lines' => array_values(array_map(strval(...), (array) ProjectDirectoryContext::run(
+            $root,
+            static fn(): array => (array) graphics('Enemies/' . $imagePath),
+        )))];
+    }
+
+    /** The project's battle presentation, when it lays battles out on a graphical canvas. */
+    private function requireBattleLayoutCatalog(string $purpose): BattlePresentationCatalog
+    {
+        try {
+            $catalog = BattlePresentationCatalog::load($this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets');
+        } catch (\Throwable $error) {
+            throw new SessionRefusal('The battle presentation cannot be read: ' . $error->getMessage(), previous: $error);
+        }
+        if ($catalog?->ui === null) {
+            throw new SessionRefusal(sprintf('This project has no graphical battle layout to %s.', $purpose));
+        }
+
+        return $catalog;
+    }
+
+    /**
+     * Composes enemies with the starting party over an arena, and describes
+     * what every formation view shares: the canvas, the arenas with the one
+     * previewed and its backgrounds, and the party in its slots.
+     *
+     * @param list<array{enemyId: string, slot: BattlerSlot}> $enemies
+     * @return array{0: BattleFormationLayout, 1: array<string, mixed>}
+     */
+    private function composeFormation(BattlePresentationCatalog $catalog, ?string $arena, array $enemies): array
+    {
+        $assetRoot = $this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets';
         $names = [];
         foreach ($this->workspace->actorDatabase->getActors() as $actor) {
             $names[$actor->getDefinitionId()] = $actor->getName();
@@ -1068,12 +1156,9 @@ final class EditorSession
         $partyIds = array_values(array_slice(array_filter(is_array($starting) ? $starting : [], is_string(...)), 0, count($catalog->ui->partySlots)));
 
         try {
-            $formation = BattleFormationLayout::compose($catalog, $arena, $placed, $partyIds, $assetRoot);
+            $formation = BattleFormationLayout::compose($catalog, $arena, $enemies, $partyIds, $assetRoot);
         } catch (\InvalidArgumentException|\RuntimeException $error) {
             throw new SessionRefusal('The formation cannot be composed: ' . $error->getMessage(), previous: $error);
-        }
-        foreach ($formation->enemies as $position => $battler) {
-            $members[$placedMembers[$position]]['battler'] = self::describeFormationBattler($battler);
         }
         $party = [];
         foreach ($formation->party as $position => $battler) {
@@ -1085,15 +1170,14 @@ final class EditorSession
         }
         $chosen = $formation->arena === null ? false : array_search($formation->arena, $catalog->arenas, true);
 
-        return [
+        return [$formation, [
             'assetRoot' => $assetRoot,
             'canvas' => ['width' => $formation->layout->width, 'height' => $formation->layout->height],
             'arenas' => $arenas,
             'arena' => $chosen === false ? null : (string) $chosen,
             'backgrounds' => array_map(self::describeCanvasImage(...), $formation->backgrounds),
             'party' => $party,
-            'members' => array_values($members),
-        ];
+        ]];
     }
 
     /** @return array<string, mixed> Where a battler stands and is drawn, its art and its body at battle scale. */

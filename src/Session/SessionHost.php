@@ -264,6 +264,8 @@ final class SessionHost
             'database.records' => $session->listDatabaseRecords(self::requireString($params, 'category')),
             'troops.formation' => $session->readTroopFormation(self::requireInt($params, 'index'),
                 is_string($params['arena'] ?? null) ? $params['arena'] : null),
+            'enemies.preview' => $session->readEnemyPreview(self::requireInt($params, 'index'),
+                is_string($params['arena'] ?? null) ? $params['arena'] : null),
             'database.record' => $session->readDatabaseRecord(
                 self::requireString($params, 'category'),
                 self::requireInt($params, 'index'),
