@@ -103,9 +103,9 @@ final readonly class RecordCategory implements DatabaseCategory
         return $this->authoring->removeItem($this->database, $index, $frame, $fieldId);
     }
 
-    public function createRecord(): RecordChange
+    public function createRecord(?string $identity = null): RecordChange
     {
-        return $this->authoring->createRecord($this->database);
+        return $this->authoring->createRecord($this->database, $identity);
     }
 
     public function duplicateRecord(int $index): RecordChange

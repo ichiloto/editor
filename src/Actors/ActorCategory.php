@@ -123,8 +123,12 @@ final readonly class ActorCategory implements DatabaseCategory
         throw new RecordRefusal('An actor has no list to remove from.');
     }
 
-    public function createRecord(): RecordChange
+    public function createRecord(?string $identity = null): RecordChange
     {
+        if ($identity !== null) {
+            throw new RecordRefusal('A new actor is named once it is made, not for another record.');
+        }
+
         return $this->authoring->createActor($this->workspace);
     }
 

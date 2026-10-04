@@ -48,6 +48,30 @@ final class DatabaseCatalog
     }
 
     /**
+     * Returns the categories edited from another category's records rather
+     * than listed on their own: battle art is set on the actor's or enemy's
+     * own page, in the graphical editor, and never shown in the terminal's.
+     *
+     * @return list<DatabaseCategoryDefinition>
+     */
+    public static function getEmbedded(): array
+    {
+        return [
+            new DatabaseCategoryDefinition('battler_actors', 'Actor Battle Art', 'The art an actor fights with in a graphical battle.', true, ['actors']),
+            new DatabaseCategoryDefinition('battler_enemies', 'Enemy Battle Art', 'The art an enemy fights with in a graphical battle.', true, ['enemies']),
+            new DatabaseCategoryDefinition('battle_scale', 'Battle Scale', 'The actor every battler\'s size is measured against.', true, ['actors', 'enemies']),
+        ];
+    }
+
+    /**
+     * Returns whether a key names a category, listed or embedded.
+     */
+    public static function knows(string $key): bool
+    {
+        return array_any([...self::all(), ...self::getEmbedded()], static fn(DatabaseCategoryDefinition $category): bool => $category->key === $key);
+    }
+
+    /**
      * Returns the category index for the requested key.
      *
      * @param string $key Stable category key.

@@ -8,6 +8,7 @@ use Closure;
 use LogicException;
 
 use Ichiloto\Editor\ActorStatPreview;
+use Ichiloto\Editor\Database\Projections\BattlerBindingProjection;
 use Ichiloto\Editor\Database\Projections\KeyedListProjection;
 use Ichiloto\Editor\Database\Projections\KnowledgeEnemyMappingProjection;
 use Ichiloto\Editor\Database\Projections\KnowledgeRecordTypeProjection;
@@ -42,6 +43,9 @@ use Ichiloto\Engine\Rendering\Tilesets\TilesetPiece;
 use Ichiloto\Engine\Rendering\Tilesets\TilesetSheet;
 use Ichiloto\Engine\Quests\QuestObjectiveType;
 use Ichiloto\Engine\Battle\Enumerations\BattleEngineType;
+use Ichiloto\Engine\Battle\Presentation\BattlePoseRole;
+use Ichiloto\Engine\Battle\Presentation\BattlePresentationCatalog;
+use Ichiloto\Engine\Battle\Presentation\BattlerBindings;
 use Ichiloto\Engine\Core\Enumerations\MovementHeading;
 use Ichiloto\Editor\Database\Projections\WholeFileProjection;
 use Ichiloto\Engine\Entities\Enumerations\ActionConditionType;
@@ -120,6 +124,9 @@ final class RecordSchemaCatalog
             self::configuration(),
             self::types(),
             self::tilesets(),
+            self::battlerArt('actors'),
+            self::battlerArt('enemies'),
+            self::battleScaleReference(),
         ];
 
         $keyed = [];
@@ -1624,6 +1631,114 @@ final class RecordSchemaCatalog
             ),
         );
     }
+    /** Where battle art is bound to battlers as data, the Engine's {@see BattlerBindings::FILE}. */
+    public const string BATTLERS_PATH = 'assets/' . BattlerBindings::FILE;
+
+    /**
+     * One side of the battler bindings: which art an actor or enemy fights
+     * with in a graphical battle, edited from that actor's or enemy's own
+     * page. Each record is one identity (an actor's definition id, an
+     * enemy's name, as the battle catalog keys them) with its base artwork,
+     * its pose roles and its body profile against the scale reference. Image
+     * sizes are the files', never stored. The terminal battle never reads it.
+     *
+     * @param 'actors'|'enemies' $side
+     */
+    private static function battlerArt(string $side): RecordSchema
+    {
+        $actors = $side === 'actors';
+
+        return new RecordSchema(
+            key: $actors ? 'battler_actors' : 'battler_enemies',
+            entryNoun: $actors ? 'actor battle art' : 'enemy battle art',
+            storage: RecordStorage::LIST_FILE,
+            relativePath: self::BATTLERS_PATH,
+            fields: [
+                // Set when the art is made for its battler, and never moved to another.
+                new RecordField(BattlerBindingProjection::IDENTITY, $actors ? 'Actor' : 'Enemy', isReadOnly: true),
+                RecordField::reference('artwork.image', 'Image', 'png_assets', allowsNone: true),
+                new RecordField('artwork.pivot', 'Ground Point', codec: RecordFieldCodec::NORMALIZED_POINT, removeWhenEmpty: true, displayDefault: '0.5, 1 (bottom centre)'),
+                new RecordField('scale.relativeSize', 'Size', InputControlType::FLOAT, removeWhenEmpty: true),
+                new RecordField('scale.sourceSpan', 'Body Span', InputControlType::FLOAT, removeWhenEmpty: true),
+                new RecordField('scale.horizontal', 'Measured Across', InputControlType::BOOLEAN, removeWhenEmpty: true, displayDefault: 'false'),
+            ],
+            labelKey: BattlerBindingProjection::IDENTITY,
+            identityKey: BattlerBindingProjection::IDENTITY,
+            blank: [BattlerBindingProjection::IDENTITY => ''],
+            projection: new BattlerBindingProjection($side),
+            subLists: [
+                // Each role the battle shows the battler in, a still or a
+                // sheet of frames, keyed by role as the file keys it.
+                new RecordSubList(
+                    key: 'poses',
+                    prefix: 'pose',
+                    singular: 'pose',
+                    fields: [
+                        new RecordField('role', 'Role', options: array_map(static fn(BattlePoseRole $role): string => $role->value, BattlePoseRole::cases())),
+                        RecordField::reference('image', 'Image', 'png_assets'),
+                        new RecordField('pivot', 'Ground Point', codec: RecordFieldCodec::NORMALIZED_POINT, removeWhenEmpty: true, displayDefault: '0.5, 1 (bottom centre)'),
+                        new RecordField('columns', 'Columns', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '1'),
+                        new RecordField('rows', 'Rows', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '1'),
+                        new RecordField('frames', 'Frames', codec: RecordFieldCodec::CSV_INTEGERS, removeWhenEmpty: true, displayDefault: '0'),
+                        new RecordField('fps', 'Frames per Second', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '8'),
+                        new RecordField('loop', 'Loops', InputControlType::BOOLEAN, removeWhenEmpty: true, displayDefault: 'true'),
+                        new RecordField('restFrame', 'Rest Frame', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '0'),
+                        new RecordField('scaleSpan', 'Body Span', InputControlType::FLOAT, removeWhenEmpty: true),
+                    ],
+                    blank: ['role' => BattlePoseRole::IDLE->value, 'image' => ''],
+                    heading: 'Poses',
+                    removeWhenEmpty: true,
+                    keyField: 'role',
+                ),
+            ],
+            saveCheck: self::checkBattlerBindings(...),
+            identityGiven: true,
+        );
+    }
+
+    /**
+     * The battle scale's reference: the actor every battler's size is
+     * measured against, and how tall that actor stands in arena units.
+     */
+    private static function battleScaleReference(): RecordSchema
+    {
+        return new RecordSchema(
+            key: 'battle_scale',
+            entryNoun: 'battle scale',
+            storage: RecordStorage::LIST_FILE,
+            relativePath: self::BATTLERS_PATH,
+            fields: [
+                RecordField::reference('reference.actor', 'Reference Actor', 'actor_ids', allowsNone: true),
+                new RecordField('reference.height', 'Reference Height', InputControlType::FLOAT, removeWhenEmpty: true),
+            ],
+            labelKey: 'reference.actor',
+            identityKey: null,
+            projection: new WholeFileProjection(['reference']),
+            saveCheck: self::checkBattlerBindings(...),
+        );
+    }
+
+    /**
+     * Why the battle could not read battler bindings as they would be
+     * saved, or null when it can: the Engine reads them, and binds them
+     * beside the battlers the project's battle presentation code registers,
+     * refusing an identity both own.
+     *
+     * @param array<array-key, mixed> $whole The bindings file as it would be written.
+     */
+    public static function checkBattlerBindings(array $whole, string $projectRoot): ?string
+    {
+        $assets = rtrim($projectRoot, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . 'assets';
+        try {
+            $bindings = BattlerBindings::getFromArray($whole, $assets);
+            BattlePresentationCatalog::loadCode($assets)?->bindBattlers($bindings);
+        } catch (\InvalidArgumentException|\RuntimeException $error) {
+            return sprintf('The battle could not read %s as it would be saved: %s', BattlerBindings::FILE, $error->getMessage());
+        }
+
+        return null;
+    }
+
     /**
      * The shared read-only fields every inventory entry displays.
      *

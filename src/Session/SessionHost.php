@@ -308,7 +308,7 @@ final class SessionHost
                 self::requireInt($params, 'index'),
                 is_array($params['key'] ?? null) ? $params['key'] : throw new InvalidRequest('"key" must be the row key database.record gave.'),
             ),
-            'database.create' => $session->createDatabaseRecord(self::requireString($params, 'category')),
+            'database.create' => $session->createDatabaseRecord(self::requireString($params, 'category'), self::readOptionalString($params, 'identity')),
             'database.duplicate' => $session->duplicateDatabaseRecord(self::requireString($params, 'category'), self::requireInt($params, 'index')),
             'database.delete' => $session->deleteDatabaseRecord(self::requireString($params, 'category'), self::requireInt($params, 'index')),
             'database.move' => $session->moveDatabaseRecord(
@@ -324,6 +324,7 @@ final class SessionHost
                 is_array($params['entries'] ?? null) ? $params['entries'] : throw new InvalidRequest('"entries" must be a list.'),
                 is_array($params['writeTypes'] ?? null) ? array_values(array_filter($params['writeTypes'], is_string(...))) : null,
             ),
+            'battlers.describe' => $session->describeBattlerArt(self::requireString($params, 'side'), self::requireString($params, 'identity')),
             'affinities.vocabulary' => $session->describeAffinityVocabulary(),
             'affinities.encode' => $session->encodeAffinities(
                 is_array($params['entries'] ?? null) ? $params['entries'] : throw new InvalidRequest('"entries" must be a list.'),

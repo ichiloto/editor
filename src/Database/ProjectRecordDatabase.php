@@ -991,15 +991,21 @@ final class ProjectRecordDatabase
      * Appends a blank record, or says why none can be made: the category
      * takes no new records, or the project lacks what a new one needs.
      *
+     * @param string|null $identity The identity the record is for, when it is
+     * made for something that already has one (an enemy's battle art); a
+     * fresh unique one when null.
      * @return int The new record index.
-     * @throws RecordRefusal With the reason an author reads.
+     * @throws RecordRefusal With the reason an author reads, including an identity that already has a record.
      */
-    public function requireNewRecord(): int
+    public function requireNewRecord(?string $identity = null): int
     {
         $cannot = sprintf('%s entries cannot be created from the editor.', ucfirst($this->schema->entryNoun));
 
         if (! $this->supportsRecordCreation()) {
             throw new RecordRefusal($cannot);
+        }
+        if ($this->schema->identityGiven && $identity === null) {
+            throw new RecordRefusal(sprintf('%s is made for what it belongs to, from that record\'s own page.', ucfirst($this->schema->entryNoun)));
         }
 
         $payload = $this->schema->blank;
@@ -1039,7 +1045,16 @@ final class ProjectRecordDatabase
             }
         }
 
-        if (is_array($payload) && $identityKey !== null && array_key_exists($identityKey, $payload)) {
+        if ($identity !== null) {
+            if ($identityKey === null || ! is_array($payload)) {
+                throw new RecordRefusal(sprintf('%s entries are not made for a given name.', ucfirst($this->schema->entryNoun)));
+            }
+            if (array_any($this->getRecords(), static fn(ProjectRecord $record): bool => $record->getDisplayValue($identityKey) === $identity)) {
+                throw new RecordRefusal(sprintf('%s already has %s.', $identity, $this->schema->entryNoun));
+            }
+            $payload[$identityKey] = $identity;
+            $recordId = $identity;
+        } elseif (is_array($payload) && $identityKey !== null && array_key_exists($identityKey, $payload)) {
             $payload[$identityKey] = $this->makeUniqueIdentity($payload[$identityKey]);
             $recordId = strval($payload[$identityKey]);
         }

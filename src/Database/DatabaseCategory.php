@@ -87,8 +87,11 @@ interface DatabaseCategory
      */
     public function removeItem(int $index, array $frame, string $fieldId): RecordChange;
 
-    /** @throws RecordRefusal When the category takes no new records. */
-    public function createRecord(): RecordChange;
+    /**
+     * @param string|null $identity The identity a record is made for, when it belongs to something that already has one.
+     * @throws RecordRefusal When the category takes no new records, or none for that identity.
+     */
+    public function createRecord(?string $identity = null): RecordChange;
 
     /** @throws RecordRefusal When the record cannot be duplicated. */
     public function duplicateRecord(int $index): RecordChange;

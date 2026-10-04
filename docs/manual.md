@@ -1059,6 +1059,7 @@ skill's effects, a quest's rewards) listed under them.
 | Configuration | `config.php` (`save`, `accessibility`, `ui`, `graphics`, `audio`, `inn`) | Editable - one row per setting, typed by what it holds; field zoom is kept from 1 to 8 | Same |
 | Types | `assets/Data/system.php` | Editable - the project's elements, one per row; an empty list means the Engine's defaults. Weapon, armor and equipment types are the Engine's own | Same |
 | Terms | `config.php` (`vocab`, `messages`) | Literal terms editable; comments and unrelated expressions preserved | Same |
+| Actor Battle Art, Enemy Battle Art, Battle Scale | `assets/Data/Presentation/battlers.php` | Not shown: graphical battle art | Editable from the actor's or enemy's own page (see Battle Art) |
 
 Why a category can still turn out read-only: a file the editor cannot
 evaluate, a value it could not write back out, or a comment inside returned
@@ -1228,6 +1229,33 @@ A troop may also declare a `Classification` - `ordinary` or `boss` - which
 battle-entry rules match against. An omitted classification is the engine's
 `ordinary` default; the picker shows that without writing the key into older
 data.
+
+### Battle Art
+
+The art an actor or enemy fights with in a graphical battle is bound to it as
+data in `assets/Data/Presentation/battlers.php`, the Engine's battler
+bindings file. Per actor (by definition id) or enemy (by name) it holds:
+
+- Image: base artwork, picked from the project's PNGs.
+- Ground point: where the battler stands on its image, from 0 to 1 across and
+  down. It defaults to bottom centre.
+- Poses: each role the battle shows (idle, attack, guard, knockout and the
+  rest), a still or a sheet of frames with columns, rows, frames, frames per
+  second, looping and a rest frame.
+- Body profile: its size against the scale reference, and the share of its
+  image that size measures.
+
+The file can also name the scale reference: the actor every battler's size is
+measured against, and that actor's height. Image sizes are always read from
+the files, so replacing an image needs no edit here.
+
+This is graphical presentation, so it is set in the GUI editor, on the actor's
+or enemy's own page, and the terminal editor does not list it. Each battler
+has one owner. Art the project's `battle.php` registers in code stays there:
+the editor says so and does not rewrite program code. A battler's art is set
+here once it moves to `battlers.php`. A save that the battle could not read is
+refused before anything is written, and so is one that binds a battler
+`battle.php` also binds.
 
 ### Battle Entry
 

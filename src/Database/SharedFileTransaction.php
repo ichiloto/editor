@@ -111,6 +111,10 @@ final class SharedFileTransaction
         $path = $first->backingFilePath();
         $file = PhpDataFile::load($path, $first->projectRoot());
 
+        if ($write) {
+            self::checkSave($databases, $dirty, $file);
+        }
+
         // One snapshot of the source, and every category's wants resolved
         // against it before a byte is written.
         if (self::commitToSource($dirty, $file, $write)) {
@@ -148,6 +152,33 @@ final class SharedFileTransaction
         self::adopt($dirty);
 
         return true;
+    }
+
+    /**
+     * Refuses a save the runtime could not read: the file as every dirty
+     * category would leave it is put to each sharing category's own check.
+     *
+     * @param array<array-key, object> $databases The categories sharing the file.
+     * @param ProjectRecordDatabase[] $dirty The dirty ones.
+     * @throws RecordRefusal With the first check's reason.
+     */
+    private static function checkSave(array $databases, array $dirty, PhpDataFile $file): void
+    {
+        $checks = array_filter($databases, static fn(object $database): bool => $database instanceof ProjectRecordDatabase
+            && $database->schema->saveCheck !== null);
+        if ($checks === []) {
+            return;
+        }
+        $payload = is_array($file->payload) ? $file->payload : [];
+        foreach ($dirty as $database) {
+            $payload = $database->foldInto($payload);
+        }
+        foreach ($checks as $database) {
+            $reason = ($database->schema->saveCheck)($payload, (string) $database->projectRoot());
+            if ($reason !== null) {
+                throw new RecordRefusal($reason);
+            }
+        }
     }
 
     /**

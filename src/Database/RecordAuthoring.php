@@ -341,15 +341,15 @@ final readonly class RecordAuthoring
     }
 
     /**
-     * Creates a blank record at the end of the category. Its index is the
-     * change's.
+     * Creates a blank record at the end of the category, for an identity
+     * when one is given. Its index is the change's.
      *
-     * @throws RecordRefusal When the category is read-only, takes no new records, or the project lacks what one needs.
+     * @throws RecordRefusal When the category is read-only, takes no new records, the project lacks what one needs, or the identity has one.
      */
-    public function createRecord(ProjectRecordDatabase $database): RecordChange
+    public function createRecord(ProjectRecordDatabase $database, ?string $identity = null): RecordChange
     {
         $this->requireEditable($database);
-        $index = $database->requireNewRecord();
+        $index = $database->requireNewRecord($identity);
         $record = $database->getRecordByIndex($index)
             ?? throw new RecordRefusal(sprintf('%s entries cannot be created from the editor.', ucfirst($database->schema->entryNoun)));
 

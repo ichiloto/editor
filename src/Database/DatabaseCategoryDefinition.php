@@ -14,12 +14,15 @@ final readonly class DatabaseCategoryDefinition
      * @param string $label User-facing category label.
      * @param string $description Short category purpose summary.
      * @param bool $isImplemented Whether the editor is currently implemented.
+     * @param list<string> $hosts For a category edited from other categories' records
+     * rather than listed on its own: those categories' keys.
      */
     public function __construct(
         public string $key,
         public string $label,
         public string $description,
         public bool $isImplemented = false,
+        public array $hosts = [],
     ) {
     }
 }

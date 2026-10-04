@@ -55,6 +55,12 @@ final readonly class RecordSchema
      * @param bool $numberedFiles For one-file-per-record categories listed in file
      * order (skills): a file is named `0001-<slug>.php`, a new or copied record
      * takes the next number, and so goes last, as reopening lists it.
+     * @param Closure(array<array-key, mixed>, string): ?string|null $saveCheck Why the runtime could
+     * not read the file as a save would write it, given that whole payload and the project root, or
+     * null when it can. Edits on the way there are free; the save is refused before a byte is written.
+     * @param bool $identityGiven Whether a record only ever belongs to something another category
+     * names (an enemy's battle art), so one is made for that name or not at all, never under an
+     * invented one the file could not key.
      */
     public function __construct(
         public string $key,
@@ -78,6 +84,8 @@ final readonly class RecordSchema
         public array $subLists = [],
         public bool $identityFollowsLabel = false,
         public bool $numberedFiles = false,
+        public ?Closure $saveCheck = null,
+        public bool $identityGiven = false,
     ) {
         if ($projection instanceof WholeFileProjection) {
             // A field outside the keys the category owns would read blank and

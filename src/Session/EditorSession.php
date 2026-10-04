@@ -56,6 +56,9 @@ use Ichiloto\Editor\Validation\MapValidator;
 use Ichiloto\Engine\Rendering\Presentation\PresentationLayerPolicy;
 use Ichiloto\Engine\Rendering\Presentation\PresentationWorld;
 use Ichiloto\Engine\Battle\Presentation\BattlePresentationCatalog;
+use Ichiloto\Engine\Battle\Presentation\BattlerBindings;
+use Ichiloto\Editor\Database\PhpDataFile;
+use Ichiloto\Editor\Database\RecordSchemaCatalog;
 use Ichiloto\Engine\Battle\Presentation\BattleFormationBattler;
 use Ichiloto\Engine\Battle\Presentation\BattleFormationLayout;
 use Ichiloto\Engine\Battle\Presentation\BattlerSlot;
@@ -1286,11 +1289,21 @@ final class EditorSession
         )))];
     }
 
-    /** The project's battle presentation, when it lays battles out on a graphical canvas. */
+    /**
+     * The project's battle presentation, when it lays battles out on a
+     * graphical canvas: its presentation code, with the battle art bound as
+     * data as it is now, unsaved edits included, so a preview shows the art
+     * being set.
+     */
     private function requireBattleLayoutCatalog(string $purpose): BattlePresentationCatalog
     {
+        $assets = $this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets';
         try {
-            $catalog = BattlePresentationCatalog::load($this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets');
+            $catalog = BattlePresentationCatalog::loadCode($assets);
+            $bindings = $catalog === null ? null : $this->readProposedBattlerBindings();
+            if ($catalog !== null && $bindings !== null) {
+                $catalog = $catalog->bindBattlers(BattlerBindings::getFromArray($bindings, $assets));
+            }
         } catch (\Throwable $error) {
             throw new SessionRefusal('The battle presentation cannot be read: ' . $error->getMessage(), previous: $error);
         }
@@ -1299,6 +1312,74 @@ final class EditorSession
         }
 
         return $catalog;
+    }
+
+    /**
+     * The battler bindings file as a save would write it now: the file as
+     * saved, with every battle art category's unsaved edits folded in. Null
+     * when the project binds no battle art as data.
+     *
+     * @return array<array-key, mixed>|null
+     */
+    private function readProposedBattlerBindings(): ?array
+    {
+        $root = $this->workspace->projectRoot;
+        $file = PhpDataFile::load($root . DIRECTORY_SEPARATOR . RecordSchemaCatalog::BATTLERS_PATH, $root);
+        $payload = is_array($file->payload) ? $file->payload : null;
+        foreach (DatabaseCatalog::getEmbedded() as $category) {
+            $database = $this->workspace->getRecordDatabase($category->key);
+            if ($database !== null && $database->isDirty()) {
+                $payload = $database->foldInto($payload ?? []);
+            }
+        }
+
+        return $payload;
+    }
+
+    /**
+     * Where an actor's or enemy's battle art is set: its record in the
+     * battle art category when it has one, and otherwise whether the
+     * project's presentation code binds it, which the editor leaves to the
+     * code rather than rewriting program-shaped source.
+     *
+     * @param 'actors'|'enemies' $side
+     * @return array{category: string, index: ?int, owner: 'data'|'code'|null, note?: string}
+     * @throws SessionRefusal When the side is unknown or the presentation cannot be read.
+     */
+    public function describeBattlerArt(string $side, string $identity): array
+    {
+        $category = match ($side) {
+            'actors' => 'battler_actors',
+            'enemies' => 'battler_enemies',
+            default => throw new SessionRefusal(sprintf('Battle art is bound to actors or enemies, not %s.', $side)),
+        };
+        $database = $this->requireRecordDatabase($category);
+        foreach ($database->getRecords() as $index => $record) {
+            if ($record->getDisplayValue('identity') === $identity) {
+                return ['category' => $category, 'index' => $index, 'owner' => 'data'];
+            }
+        }
+        try {
+            $code = BattlePresentationCatalog::loadCode($this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets');
+        } catch (\Throwable $error) {
+            throw new SessionRefusal('The battle presentation cannot be read: ' . $error->getMessage(), previous: $error);
+        }
+        $party = $side === 'actors';
+        $owned = $code !== null && in_array($identity, [
+            ...array_keys($party ? $code->actors : $code->enemies),
+            ...array_keys($party ? $code->actorPoses : $code->enemyPoses),
+            ...array_keys(($party ? $code->scale?->actors : $code->scale?->enemies) ?? []),
+        ], true);
+
+        $described = ['category' => $category, 'index' => null, 'owner' => $owned ? 'code' : null];
+        if ($code === null) {
+            $described['note'] = 'This project has no graphical battle to set art for.';
+        } elseif ($owned) {
+            $described['note'] = sprintf('%s binds this art in code, which the editor does not rewrite. Once it moves to %s, it is set here.',
+                BattlePresentationCatalog::FILE, BattlerBindings::FILE);
+        }
+
+        return $described;
     }
 
     /**
@@ -1585,15 +1666,17 @@ final class EditorSession
     }
 
     /**
-     * Creates a blank record at the end of a category, as one undo step.
+     * Creates a blank record at the end of a category, as one undo step:
+     * for an identity when one is given (an enemy's battle art, made for
+     * that enemy), refused when that identity already has one.
      *
      * @return array{index: int, records: list<string>} The new record's index, and the labels afterwards.
      * @throws SessionRefusal When the category is unknown, read-only or takes no new records.
      */
-    public function createDatabaseRecord(string $category): array
+    public function createDatabaseRecord(string $category, ?string $identity = null): array
     {
         $database = $this->requireCategory($category);
-        $change = $this->changeRecord(static fn(): RecordChange => $database->createRecord());
+        $change = $this->changeRecord(static fn(): RecordChange => $database->createRecord($identity));
 
         return ['index' => (int) $change->index, 'records' => $database->getRecordLabels()];
     }
@@ -1662,8 +1745,17 @@ final class EditorSession
         if (! $database->isEditable()) {
             throw new SessionRefusal(sprintf('Read-only: %s.', $database->getReadOnlyReason() ?? 'this category cannot be written'));
         }
+        // What the page edits beside the record (an enemy's battle art) is
+        // saved with it, first, so a save it refuses leaves the page unsaved.
+        $embedded = ['saved' => false, 'backupFailures' => []];
+        foreach (DatabaseCatalog::getEmbedded() as $definition) {
+            if (in_array($category, $definition->hosts, true) && $this->workspace->getRecordDatabase($definition->key)?->isDirty()) {
+                $saved = $this->saveDatabase($definition->key);
+                $embedded = ['saved' => true, 'backupFailures' => [...$embedded['backupFailures'], ...$saved['backupFailures']]];
+            }
+        }
         if (! $database->isDirty()) {
-            return ['saved' => false, 'warnings' => [], 'backupFailures' => []];
+            return ['saved' => $embedded['saved'], 'warnings' => [], 'backupFailures' => $embedded['backupFailures']];
         }
         $paths = $database->getBackupPaths();
         $failures = $this->backups->isEnabled() && $paths !== [] ? $this->backups->backup(...$paths)['failed'] : [];
@@ -1674,7 +1766,7 @@ final class EditorSession
             throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
         }
 
-        return ['saved' => true, 'warnings' => [], 'backupFailures' => array_values($failures)];
+        return ['saved' => true, 'warnings' => [], 'backupFailures' => [...$embedded['backupFailures'], ...array_values($failures)]];
     }
 
     /**
@@ -2363,7 +2455,7 @@ final class EditorSession
     /** @throws SessionRefusal */
     private function requireRecordDatabase(string $category): ProjectRecordDatabase
     {
-        if (! array_any(DatabaseCatalog::all(), static fn($definition): bool => $definition->key === $category)) {
+        if (! DatabaseCatalog::knows($category)) {
             throw new SessionRefusal(sprintf('There is no database category %s.', $category));
         }
 
