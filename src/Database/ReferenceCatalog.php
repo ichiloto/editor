@@ -73,6 +73,7 @@ final class ReferenceCatalog
         'event_markers',
         'tilesets',
         'effects',
+        'map_regions',
     ];
 
     /**
@@ -192,10 +193,34 @@ final class ReferenceCatalog
             'event_markers' => $this->currentMap?->getEventMarkers() ?? [],
             // A map's kind is one of the project's tilesets, by file stem.
             'tilesets' => array_keys($this->loadTilesetNames()),
+            // A region is the display name the game shows for where the party
+            // is; choosing from the names the maps already use keeps one
+            // region spelled one way.
+            'map_regions' => $this->mapRegions(),
             // Effect timelines are folders the Engine lists by stable id.
             'effects' => new EffectTimelineLibrary($this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets')->findTimelineIds(),
             default => $this->recordValues($category),
         };
+    }
+
+    /**
+     * The region names the project's maps use, each once, in name order.
+     *
+     * @return string[]
+     */
+    private function mapRegions(): array
+    {
+        $regions = [];
+        foreach ($this->workspace->maps as $map) {
+            $region = $map->getMapField('region');
+            if (is_string($region) && trim($region) !== '') {
+                $regions[trim($region)] = true;
+            }
+        }
+        $regions = array_keys($regions);
+        natcasesort($regions);
+
+        return array_values($regions);
     }
 
     /**

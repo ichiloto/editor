@@ -783,6 +783,14 @@ scrolls by rows, keeping the selected row's first line in view.
 
 The Destination row on an event is a reference: `Ctrl+G` follows it.
 
+### Map region
+
+`Region` is the place name the game shows for where the party is, such as
+Happyville or Garden of Roads. Enter opens a picker of the region names the
+project's maps already use, so a region is spelled one way everywhere; it is
+never typed. Choosing one changes only the map data's `region`: the map stays
+in its folder under `assets/Maps`.
+
 ### Map kind
 
 `Kind`, under `Region`, is the setting the map draws: one of the project's

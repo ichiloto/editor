@@ -148,6 +148,30 @@ it('lists a map\'s inspector rows with how each is edited and the key that names
         ->and($inspector['revision'])->toBe($session->readMap('test-map')['revision']);
 });
 
+it('chooses a map\'s region from the names the project\'s maps use, never by typing, and leaves the map where it is', function () {
+    $root = makeTemporaryProject();
+    $maps = $root . '/assets/Maps';
+    $data = $maps . '/test-map/test-map.data.php';
+    file_put_contents($data, str_replace("'region' => ''", "'region' => 'Happyville'", (string) file_get_contents($data)));
+    mkdir($maps . '/somewheretown/inn', 0o777, true);
+    foreach (['data', 'event', 'map'] as $kind) {
+        $source = (string) file_get_contents("{$maps}/test-map/test-map.{$kind}.php");
+        file_put_contents("{$maps}/somewheretown/inn/inn.{$kind}.php",
+            $kind === 'data' ? str_replace("'region' => 'Happyville'", "'region' => 'Somewheretown'", $source) : $source);
+    }
+    $session = EditorSession::open($root);
+    $region = inspectorRow($session->readInspector('test-map'), 'Region');
+
+    expect($region)->toMatchArray(['kind' => 'reference', 'reference' => 'map_regions', 'value' => 'Happyville'])
+        ->and(array_column($session->listReferences('test-map', 'map_regions'), 'value'))->toBe(['Happyville', 'Somewheretown']);
+
+    $session->applyInspector('test-map', $session->readInspector('test-map')['revision'], $region['key'], 'Somewheretown');
+    expect(inspectorRow($session->readInspector('test-map'), 'Region')['value'])->toBe('Somewheretown')
+        ->and(array_column($session->describeMaps(), 'id'))->toContain('test-map', 'somewheretown/inn')
+        ->and($session->undo()['maps'])->toBe(['test-map'])
+        ->and(inspectorRow($session->readInspector('test-map'), 'Region')['value'])->toBe('Happyville');
+});
+
 it('applies an inspector edit as one undo step and refuses a stale or read-only row', function () {
     $session = EditorSession::open(makeTemporaryProject());
     $inspector = $session->readInspector('test-map');

@@ -14296,7 +14296,7 @@ final class Editor
         $category = (string) ($field['reference'] ?? '');
         $target = (string) ($field['target'] ?? '');
 
-        if ($category === '' || ! in_array($target, ['map-data', 'map-kind', 'map-encounters', 'map-bgm-variants'], true)) {
+        if ($category === '' || ! in_array($target, ['map', 'map-data', 'map-kind', 'map-encounters', 'map-bgm-variants'], true)) {
             return false;
         }
 

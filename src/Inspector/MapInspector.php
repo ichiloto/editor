@@ -80,10 +80,12 @@ final readonly class MapInspector
                 'target' => 'map',
                 'field' => 'name',
             ],
+            // Chosen from the region names the project's maps use, never typed.
             [
                 'label' => 'Region',
                 'value' => $map->getRegion(),
-                'control' => new InputControl(InputControlType::TEXT, $map->getRegion()),
+                'selectedValue' => $map->getRegion(),
+                'reference' => 'map_regions',
                 'target' => 'map',
                 'field' => 'region',
             ],
