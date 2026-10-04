@@ -319,7 +319,6 @@ it('rewrites nothing anywhere when an untouched project is saved wholesale', fun
     }
 
     $workspace->actorDatabase->save();
-    $workspace->classDatabase->save();
     $workspace->skillDatabase->save();
     $workspace->questDatabase->save();
     $workspace->systemDatabase->save();

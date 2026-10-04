@@ -43,7 +43,6 @@ final readonly class ProjectWorkspace
         public array                    $maps,
         public array                    $mapIds,
         public ProjectActorDatabase     $actorDatabase,
-        public ProjectClassDatabase     $classDatabase,
         public ProjectSkillDatabase     $skillDatabase,
         public ProjectSystemDatabase    $systemDatabase,
         public ProjectQuestDatabase     $questDatabase,
@@ -170,7 +169,6 @@ final readonly class ProjectWorkspace
             maps: $maps = self::discoverMaps($projectRoot),
             mapIds: array_map(static fn(ProjectMap $map): string => $map->mapId, $maps),
             actorDatabase: ProjectActorDatabase::fromProject($projectRoot),
-            classDatabase: ProjectClassDatabase::fromProject($projectRoot),
             skillDatabase: ProjectSkillDatabase::fromProject($projectRoot),
             systemDatabase: ProjectSystemDatabase::fromProject($projectRoot),
             questDatabase: ProjectQuestDatabase::fromProject($projectRoot),
@@ -281,7 +279,6 @@ final readonly class ProjectWorkspace
         }
 
         return $this->actorDatabase->isDirty()
-            || $this->classDatabase->isDirty()
             || $this->skillDatabase->isDirty()
             || $this->systemDatabase->isDirty()
             || $this->questDatabase->isDirty()
@@ -323,13 +320,12 @@ final readonly class ProjectWorkspace
      * Read-only record categories are left out: they hold no edits, and
      * asking them to save would raise instead of doing nothing.
      *
-     * @return array<string, ProjectActorDatabase|ProjectClassDatabase|ProjectSkillDatabase|ProjectQuestDatabase|ProjectSystemDatabase|ProjectConfig|ProjectRecordDatabase>
+     * @return array<string, ProjectActorDatabase|ProjectSkillDatabase|ProjectQuestDatabase|ProjectSystemDatabase|ProjectConfig|ProjectRecordDatabase>
      */
     public function listSaveableDatabases(): array
     {
         $databases = [
             'Actors' => $this->actorDatabase,
-            'Classes' => $this->classDatabase,
             'Skills' => $this->skillDatabase,
             'Quests' => $this->questDatabase,
             'System' => $this->systemDatabase,
@@ -410,7 +406,6 @@ final readonly class ProjectWorkspace
             maps: $maps,
             mapIds: array_map(static fn(ProjectMap $workspaceMap): string => $workspaceMap->mapId, $maps),
             actorDatabase: $this->actorDatabase,
-            classDatabase: $this->classDatabase,
             skillDatabase: $this->skillDatabase,
             systemDatabase: $this->systemDatabase,
             questDatabase: $this->questDatabase,

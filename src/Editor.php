@@ -603,7 +603,6 @@ final class Editor
     private int $databaseCategoryIndex = 9;
     private string $databaseFocus = self::DATABASE_FOCUS_CATEGORIES;
     private int $databaseSelectedActorIndex = 0;
-    private int $databaseSelectedClassIndex = 0;
     private int $databaseSelectedSkillIndex = 0;
     private int $databaseSelectedQuestIndex = 0;
     /**
@@ -916,7 +915,6 @@ final class Editor
         $this->databaseCategoryIndex = DatabaseCatalog::indexOf(self::DATABASE_CATEGORY_ACTORS);
         $this->databaseFocus = self::DATABASE_FOCUS_CATEGORIES;
         $this->databaseSelectedActorIndex = 0;
-        $this->databaseSelectedClassIndex = 0;
         $this->databaseSelectedSkillIndex = 0;
         $this->databaseSelectedQuestIndex = 0;
         $this->databaseSelectedSettingIndex = 0;
@@ -2835,7 +2833,6 @@ final class Editor
         $this->databaseCategoryIndex = DatabaseCatalog::indexOf(self::DATABASE_CATEGORY_ACTORS);
         $this->databaseFocus = self::DATABASE_FOCUS_CATEGORIES;
         $this->databaseSelectedActorIndex = 0;
-        $this->databaseSelectedClassIndex = 0;
         $this->databaseSelectedSkillIndex = 0;
         $this->databaseSelectedQuestIndex = 0;
         $this->databaseSelectedSettingIndex = 0;
@@ -3169,11 +3166,6 @@ final class Editor
             return;
         }
 
-        if ($this->isClassesDatabaseSelected()) {
-            $this->moveDatabaseClassSelection($step);
-            return;
-        }
-
         if ($this->isSkillsDatabaseSelected()) {
             $this->moveDatabaseSkillSelection($step);
             return;
@@ -3214,31 +3206,6 @@ final class Editor
         $this->renderDatabasePanes(['list', 'settings', 'cue', 'frames', 'preview']);
     }
 
-    /**
-     * Moves the selected class entry.
-     *
-     * @param int $step The entry step.
-     * @return void
-     */
-    private function moveDatabaseClassSelection(int $step): void
-    {
-        $classes = $this->workspace?->classDatabase->getClasses() ?? [];
-
-        if ($classes === []) {
-            return;
-        }
-
-        $nextIndex = $this->resolveDatabaseSelectionStep($this->databaseSelectedClassIndex, $step);
-
-        if ($nextIndex === $this->databaseSelectedClassIndex) {
-            return;
-        }
-
-        $this->databaseSelectedClassIndex = $nextIndex;
-        $this->databaseSelectedSettingIndex = 0;
-        $this->statusMessage = sprintf('Selected class %s.', $classes[$nextIndex]->getName());
-        $this->renderDatabasePanes(['list', 'settings', 'cue', 'frames', 'preview']);
-    }
     /**
      * Moves the selected skill entry.
      *
@@ -5811,13 +5778,6 @@ final class Editor
             );
         }
 
-        if ($this->isClassesDatabaseSelected()) {
-            return array_map(
-                static fn(ProjectClass $class): string => $class->getName(),
-                $this->workspace?->classDatabase->getClasses() ?? [],
-            );
-        }
-
         if ($this->isSkillsDatabaseSelected()) {
             return array_map(
                 static fn(ProjectSkill $skill): string => $skill->getName(),
@@ -5885,7 +5845,6 @@ final class Editor
     {
         return match (true) {
             $this->isActorsDatabaseSelected() => $this->databaseSelectedActorIndex,
-            $this->isClassesDatabaseSelected() => $this->databaseSelectedClassIndex,
             $this->isSkillsDatabaseSelected() => $this->databaseSelectedSkillIndex,
             $this->isQuestsDatabaseSelected() => $this->databaseSelectedQuestIndex,
             default => $this->getSelectedRecordIndex(),
@@ -5904,7 +5863,6 @@ final class Editor
 
         match (true) {
             $this->isActorsDatabaseSelected() => $this->databaseSelectedActorIndex = $index,
-            $this->isClassesDatabaseSelected() => $this->databaseSelectedClassIndex = $index,
             $this->isSkillsDatabaseSelected() => $this->databaseSelectedSkillIndex = $index,
             $this->isQuestsDatabaseSelected() => $this->databaseSelectedQuestIndex = $index,
             default => $this->setSelectedRecordIndex($index),
@@ -6126,11 +6084,6 @@ final class Editor
                 fn(): ?object => $workspace->actorDatabase->removeActor($index),
                 static fn(object $entry) => $workspace->actorDatabase->insertActor($index, $entry),
             ),
-            self::DATABASE_CATEGORY_CLASSES => $this->buildDatabaseDeletionCommand(
-                sprintf('Delete class %s', $label),
-                fn(): ?object => $workspace->classDatabase->removeClass($index),
-                static fn(object $entry) => $workspace->classDatabase->insertClass($index, $entry),
-            ),
             self::DATABASE_CATEGORY_SKILLS => $this->buildDatabaseDeletionCommand(
                 sprintf('Delete skill %s', $label),
                 fn(): ?object => $workspace->skillDatabase->removeSkill($index),
@@ -6321,7 +6274,7 @@ final class Editor
         $this->pushNavigationOrigin(sprintf('actor %s', $actor->getName()));
         $this->databaseFilter->clear();
         $this->databaseCategoryIndex = DatabaseCatalog::indexOf(self::DATABASE_CATEGORY_CLASSES);
-        $this->databaseSelectedClassIndex = $classIndex;
+        $this->setSelectedRecordIndex($classIndex);
         $this->databaseFocus = self::DATABASE_FOCUS_LIST;
         $this->databaseSelectedSettingIndex = 0;
         $this->setStatus(sprintf('Went to class %s (Ctrl+B goes back).', $className), StatusLevel::INFO);
@@ -6477,8 +6430,8 @@ final class Editor
      */
     private function findDatabaseClassIndex(string $className): ?int
     {
-        foreach ($this->workspace?->classDatabase->getClasses() ?? [] as $index => $class) {
-            if (mb_strtolower($class->getName()) === mb_strtolower($className)) {
+        foreach ($this->workspace?->getRecordDatabase(self::DATABASE_CATEGORY_CLASSES)?->getEntryLabels() ?? [] as $index => $name) {
+            if (mb_strtolower($name) === mb_strtolower($className)) {
                 return $index;
             }
         }
@@ -6530,7 +6483,6 @@ final class Editor
             'databaseCategoryIndex' => $this->databaseCategoryIndex,
             'databaseFocus' => $this->databaseFocus,
             'actor' => $this->databaseSelectedActorIndex,
-            'class' => $this->databaseSelectedClassIndex,
             'skill' => $this->databaseSelectedSkillIndex,
             'quest' => $this->databaseSelectedQuestIndex,
             'records' => $this->databaseSelectedRecordIndexes,
@@ -6550,7 +6502,6 @@ final class Editor
             $this->databaseCategoryIndex = $snapshot['databaseCategoryIndex'];
             $this->databaseFocus = $snapshot['databaseFocus'];
             $this->databaseSelectedActorIndex = $snapshot['actor'];
-            $this->databaseSelectedClassIndex = $snapshot['class'];
             $this->databaseSelectedSkillIndex = $snapshot['skill'];
             $this->databaseSelectedQuestIndex = $snapshot['quest'];
             $this->databaseSelectedRecordIndexes = $snapshot['records'];
@@ -9290,7 +9241,10 @@ final class Editor
             return null;
         }
 
-        return $this->workspace?->classDatabase->getClassByIndex($this->databaseSelectedClassIndex);
+        // The terminal's curve panes read the class as the shared record holds it, unsaved edits included.
+        $record = $this->getSelectedRecordDatabase()?->getRecordByIndex($this->getSelectedRecordIndex());
+
+        return $record === null ? null : ProjectClass::fromArray((array) $record->toArray(), $this->getSelectedRecordIndex() + 1);
     }
 
     /**
@@ -9311,11 +9265,6 @@ final class Editor
 
         if ($this->isSkillsDatabaseSelected()) {
             $this->createDatabaseSkill();
-            return;
-        }
-
-        if ($this->isClassesDatabaseSelected()) {
-            $this->createDatabaseClass();
             return;
         }
 
@@ -9343,25 +9292,6 @@ final class Editor
         $this->databaseFocus = self::DATABASE_FOCUS_SETTINGS;
         $this->statusMessage = 'Created a new actor.';
         $this->renderDatabasePanes(['list', 'settings', 'cue', 'frames', 'preview']);
-        $this->beginDatabaseEdit();
-    }
-
-    /**
-     * Creates a new class entry in the project database.
-     *
-     * @return void
-     */
-    private function createDatabaseClass(): void
-    {
-        if (! $this->workspace instanceof ProjectWorkspace) {
-            return;
-        }
-
-        $this->databaseSelectedClassIndex = $this->workspace->classDatabase->addClass();
-        $this->databaseSelectedSettingIndex = 0;
-        $this->databaseFocus = self::DATABASE_FOCUS_SETTINGS;
-        $this->statusMessage = "Created a new class.";
-        $this->renderDatabasePanes(["list", "settings", "cue", "frames", "preview"]);
         $this->beginDatabaseEdit();
     }
 
@@ -9614,10 +9544,6 @@ final class Editor
                 $this->backupBeforeSave(...$this->workspace->actorDatabase->getBackupPaths());
                 $this->workspace->actorDatabase->save();
                 $this->setStatus('Actor database saved.', StatusLevel::SUCCESS);
-            } elseif ($this->isClassesDatabaseSelected()) {
-                $this->backupBeforeSave(...$this->workspace->classDatabase->getBackupPaths());
-                $this->workspace->classDatabase->save();
-                $this->setStatus('Class database saved.', StatusLevel::SUCCESS);
             } elseif ($this->isSkillsDatabaseSelected()) {
                 $this->backupBeforeSave(...$this->workspace->skillDatabase->getBackupPaths());
                 $this->workspace->skillDatabase->save();
@@ -9675,10 +9601,6 @@ final class Editor
 
         if ($this->isActorsDatabaseSelected()) {
             return $this->getDatabaseActorSettingsFields();
-        }
-
-        if ($this->isClassesDatabaseSelected()) {
-            return $this->getDatabaseClassSettingsFields();
         }
 
         if ($this->isSkillsDatabaseSelected()) {
@@ -10159,78 +10081,7 @@ final class Editor
     {
         return [
             ProjectActor::CLASS_NONE,
-            ...array_map(
-                static fn(ProjectClass $class): string => $class->getName(),
-                $this->workspace?->classDatabase->getClasses() ?? [],
-            ),
-        ];
-    }
-
-    /**
-     * Returns the editable settings fields for the selected class.
-     *
-     * @return array<int, array<string, mixed>>
-     */
-    private function getDatabaseClassSettingsFields(): array
-    {
-        $class = $this->getSelectedClass();
-
-        if (! $class instanceof ProjectClass) {
-            return [];
-        }
-
-        $experienceCurve = $class->getExperienceCurve();
-
-        return [
-            [
-                'label' => 'Name',
-                'value' => $class->getName(),
-                'control' => new InputControl(InputControlType::TEXT, $class->getName()),
-                'field' => 'name',
-            ],
-            [
-                'label' => 'Description',
-                'value' => $class->getDescription(),
-                'control' => new InputControl(InputControlType::TEXT, $class->getDescription()),
-                'field' => 'description',
-            ],
-            [
-                'label' => 'Initial Level',
-                'value' => (string) $class->getInitialLevel(),
-                'control' => new InputControl(InputControlType::INTEGER, (string) $class->getInitialLevel()),
-                'field' => 'initialLevel',
-            ],
-            [
-                'label' => 'Max Level',
-                'value' => (string) $class->getMaxLevel(),
-                'control' => new InputControl(InputControlType::INTEGER, (string) $class->getMaxLevel()),
-                'field' => 'maxLevel',
-            ],
-            [
-                'label' => 'EXP Base',
-                'value' => (string) $experienceCurve['baseValue'],
-                'control' => new InputControl(InputControlType::INTEGER, (string) $experienceCurve['baseValue']),
-                'field' => 'expBaseValue',
-            ],
-            [
-                'label' => 'EXP Extra',
-                'value' => (string) $experienceCurve['extraValue'],
-                'control' => new InputControl(InputControlType::INTEGER, (string) $experienceCurve['extraValue']),
-                'field' => 'expExtraValue',
-            ],
-            [
-                'label' => 'EXP Accel A',
-                'value' => (string) $experienceCurve['accelerationA'],
-                'control' => new InputControl(InputControlType::INTEGER, (string) $experienceCurve['accelerationA']),
-                'field' => 'expAccelerationA',
-            ],
-            [
-                'label' => 'EXP Accel B',
-                'value' => (string) $experienceCurve['accelerationB'],
-                'control' => new InputControl(InputControlType::INTEGER, (string) $experienceCurve['accelerationB']),
-                'field' => 'expAccelerationB',
-            ],
-            ...$this->getDatabaseClassBaseValueFields($class),
+            ...$this->workspace?->getRecordDatabase(self::DATABASE_CATEGORY_CLASSES)?->getEntryLabels() ?? [],
         ];
     }
 
@@ -10384,39 +10235,6 @@ final class Editor
                 'value' => $revealConditions,
                 'conditions' => true,
                 'field' => sprintf('objective%dRevealConditions', $index),
-            ];
-        }
-
-        return $fields;
-    }
-
-    /**
-     * Returns the editable class base-value fields.
-     *
-     * @param ProjectClass $class The selected class.
-     * @return array<int, array<string, mixed>>
-     */
-    private function getDatabaseClassBaseValueFields(ProjectClass $class): array
-    {
-        $fieldMap = [
-            'HP Base' => ['field' => 'totalHpBaseValue', 'curve' => 'totalHp'],
-            'MP Base' => ['field' => 'totalMpBaseValue', 'curve' => 'totalMp'],
-            'ATK Base' => ['field' => 'attackBaseValue', 'curve' => 'attack'],
-            'DEF Base' => ['field' => 'defenceBaseValue', 'curve' => 'defence'],
-            'MAT Base' => ['field' => 'magicAttackBaseValue', 'curve' => 'magicAttack'],
-            'MDF Base' => ['field' => 'magicDefenceBaseValue', 'curve' => 'magicDefence'],
-            'SPD Base' => ['field' => 'speedBaseValue', 'curve' => 'speed'],
-        ];
-        $fields = [];
-
-        foreach ($fieldMap as $label => $definition) {
-            $curve = $class->getParameterCurve($definition['curve']);
-            $value = (string) $curve['baseValue'];
-            $fields[] = [
-                'label' => $label,
-                'value' => $value,
-                'control' => new InputControl(InputControlType::INTEGER, $value),
-                'field' => $definition['field'],
             ];
         }
 
@@ -11940,7 +11758,6 @@ final class Editor
         $identity = [
             'category' => $this->databaseCategoryIndex,
             'actor' => $this->databaseSelectedActorIndex,
-            'class' => $this->databaseSelectedClassIndex,
             'skill' => $this->databaseSelectedSkillIndex,
             'quest' => $this->databaseSelectedQuestIndex,
             'records' => $this->databaseSelectedRecordIndexes,
@@ -12034,7 +11851,7 @@ final class Editor
      * Applies a database value onto a pinned entry identity, restoring the
      * live selection afterwards.
      *
-     * @param array{category: int, actor: int, class: int, skill: int, quest: int, records?: array<string, int>} $identity The pinned selection.
+     * @param array{category: int, actor: int, skill: int, quest: int, records?: array<string, int>} $identity The pinned selection.
      * @param string $field The field identifier.
      * @param string $rawValue The raw value to apply.
      * @return void
@@ -12044,14 +11861,12 @@ final class Editor
         $liveSelection = [
             $this->databaseCategoryIndex,
             $this->databaseSelectedActorIndex,
-            $this->databaseSelectedClassIndex,
             $this->databaseSelectedSkillIndex,
             $this->databaseSelectedQuestIndex,
             $this->databaseSelectedRecordIndexes,
         ];
         $this->databaseCategoryIndex = $identity['category'];
         $this->databaseSelectedActorIndex = $identity['actor'];
-        $this->databaseSelectedClassIndex = $identity['class'];
         $this->databaseSelectedSkillIndex = $identity['skill'];
         $this->databaseSelectedQuestIndex = $identity['quest'];
         $this->databaseSelectedRecordIndexes = $identity['records'] ?? $this->databaseSelectedRecordIndexes;
@@ -12062,7 +11877,6 @@ final class Editor
             [
                 $this->databaseCategoryIndex,
                 $this->databaseSelectedActorIndex,
-                $this->databaseSelectedClassIndex,
                 $this->databaseSelectedSkillIndex,
                 $this->databaseSelectedQuestIndex,
                 $this->databaseSelectedRecordIndexes,
@@ -12138,16 +11952,6 @@ final class Editor
                 $this->databaseSelectedActorIndex,
                 $field,
                 $this->coerceActorFieldValue($field, $rawValue),
-            );
-
-            return;
-        }
-
-        if ($this->isClassesDatabaseSelected()) {
-            $this->workspace->classDatabase->setField(
-                $this->databaseSelectedClassIndex,
-                $field,
-                in_array($field, ['name', 'description', 'note'], true) ? trim($rawValue) : max(0, intval($rawValue)),
             );
 
             return;
@@ -14191,10 +13995,12 @@ final class Editor
      */
     private function createDatabaseListWindow(array $layout): EditorWindow
     {
+        // Every category that can take a new entry says how; record categories
+        // ask their database rather than being listed here.
         $supportsEntries = $this->isActorsDatabaseSelected()
-            || $this->isClassesDatabaseSelected()
             || $this->isSkillsDatabaseSelected()
-            || $this->isQuestsDatabaseSelected();
+            || $this->isQuestsDatabaseSelected()
+            || ($this->getSelectedRecordDatabase()?->supportsRecordCreation() ?? false);
 
         return new EditorWindow(
             // The category dirty marker rides the title so categories whose
@@ -14392,10 +14198,6 @@ final class Editor
             return $this->getDatabaseActorListLines();
         }
 
-        if ($this->isClassesDatabaseSelected()) {
-            return $this->getDatabaseClassListLines();
-        }
-
         if ($this->isSkillsDatabaseSelected()) {
             return $this->getDatabaseSkillListLines();
         }
@@ -14510,35 +14312,6 @@ final class Editor
         return $lines === [] ? ['No matches.'] : $lines;
     }
 
-    /**
-     * Returns the class list lines.
-     *
-     * @return string[]
-     */
-    private function getDatabaseClassListLines(): array
-    {
-        $classes = $this->workspace?->classDatabase->getClasses() ?? [];
-
-        if ($classes === []) {
-            return ['No classes yet.', '', 'Shift+A to create one.'];
-        }
-
-        $lines = [];
-
-        foreach ($this->getVisibleDatabaseEntryIndexes() as $index) {
-            $class = $classes[$index] ?? null;
-
-            if (! $class instanceof ProjectClass) {
-                continue;
-            }
-
-            $prefix = $index === $this->databaseSelectedClassIndex ? '> ' : '  ';
-            $dirty = $class->isDirty() ? ' *' : '';
-            $lines[] = sprintf('%s%04d %s%s', $prefix, $class->id, $class->getName(), $dirty);
-        }
-
-        return $lines === [] ? ['No matches.'] : $lines;
-    }
     /**
      * Returns the skill list lines.
      *
@@ -15380,11 +15153,10 @@ final class Editor
 
         return match ($categoryKey) {
             self::DATABASE_CATEGORY_ACTORS => $this->workspace->actorDatabase->isDirty(),
-            self::DATABASE_CATEGORY_CLASSES => $this->workspace->classDatabase->isDirty(),
             self::DATABASE_CATEGORY_SKILLS => $this->workspace->skillDatabase->isDirty(),
             self::DATABASE_CATEGORY_SYSTEM => $this->workspace->systemDatabase->isDirty() || ($this->workspace->config?->isDirty() ?? false),
             self::DATABASE_CATEGORY_QUESTS => $this->workspace->questDatabase->isDirty(),
-            default => false,
+            default => $this->workspace->getRecordDatabase($categoryKey)?->isDirty() ?? false,
         };
     }
 

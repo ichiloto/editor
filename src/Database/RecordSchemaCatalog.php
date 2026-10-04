@@ -64,6 +64,15 @@ final class RecordSchemaCatalog
     public const array EVENT_COMMAND_TYPES = EventInterpreter::COMMAND_TYPES;
 
     /**
+     * The stats a class grows by a curve, in `ClassStore`'s order, with the
+     * abbreviations their rows are labelled by.
+     */
+    private const array CLASS_CURVE_STATS = [
+        'totalHp' => 'HP', 'totalMp' => 'MP', 'attack' => 'ATK', 'defence' => 'DEF', 'magicAttack' => 'MAT',
+        'magicDefence' => 'MDF', 'speed' => 'SPD', 'grace' => 'GRC', 'evasion' => 'EVA',
+    ];
+
+    /**
      * Returns every schema-driven category, keyed by Database category key.
      *
      * @return array<string, RecordSchema>
@@ -71,6 +80,7 @@ final class RecordSchemaCatalog
     public static function all(): array
     {
         $schemas = [
+            self::classes(),
             self::states(),
             self::troops(),
             self::animations(),
@@ -815,6 +825,80 @@ final class RecordSchemaCatalog
                 '%s · %s',
                 trim(strval($row['value'] ?? '')) ?: '(nothing)',
                 strval($row['kind'] ?? ''),
+            ),
+        );
+    }
+
+    /**
+     * Classes — `assets/Data/classes.php`, the plain data the engine's
+     * `ClassStore` reads: growth curves, equipment types, skills learned by
+     * level. A class is addressed by its numeric id; new ones take the next.
+     *
+     * @return RecordSchema
+     */
+    private static function classes(): RecordSchema
+    {
+        $curves = [];
+
+        foreach (self::CLASS_CURVE_STATS as $stat => $label) {
+            $curves[] = new RecordField("parameterCurves.{$stat}.baseValue", "{$label} Base", InputControlType::INTEGER);
+            $curves[] = new RecordField("parameterCurves.{$stat}.extraGrowth", "{$label} Growth", InputControlType::INTEGER);
+            $curves[] = new RecordField("parameterCurves.{$stat}.flatIncrement", "{$label} Per Level", InputControlType::INTEGER);
+        }
+
+        return new RecordSchema(
+            key: 'classes',
+            entryNoun: 'class',
+            storage: RecordStorage::LIST_FILE,
+            relativePath: 'assets/Data/classes.php',
+            fields: [
+                new RecordField('id', 'Id', InputControlType::INTEGER, isReadOnly: true),
+                new RecordField('name', 'Name', uniqueAcrossRecords: true),
+                new RecordField('description', 'Description'),
+                new RecordField('note', 'Note'),
+                new RecordField('initialLevel', 'Initial Level', InputControlType::INTEGER),
+                new RecordField('maxLevel', 'Max Level', InputControlType::INTEGER),
+                new RecordField('equipment.weapons', 'Weapon Types', codec: RecordFieldCodec::CSV_LIST, reference: 'weapon_types'),
+                new RecordField('equipment.armor', 'Armor Types', codec: RecordFieldCodec::CSV_LIST, reference: 'armor_types'),
+                new RecordField('experienceCurve.baseValue', 'EXP Base', InputControlType::INTEGER),
+                new RecordField('experienceCurve.extraValue', 'EXP Extra', InputControlType::INTEGER),
+                new RecordField('experienceCurve.accelerationA', 'EXP Accel A', InputControlType::INTEGER),
+                new RecordField('experienceCurve.accelerationB', 'EXP Accel B', InputControlType::INTEGER),
+                ...$curves,
+            ],
+            labelKey: 'name',
+            identityKey: 'id',
+            blank: [
+                'id' => 1,
+                'name' => 'New Class',
+                'description' => '',
+                'initialLevel' => 1,
+                'maxLevel' => 99,
+                'equipment' => ['weapons' => [], 'armor' => []],
+                'skillsToLearn' => [],
+                'experienceCurve' => ['baseValue' => 30, 'extraValue' => 20, 'accelerationA' => 30, 'accelerationB' => 30],
+                'parameterCurves' => [
+                    'totalHp' => ['baseValue' => 120, 'extraGrowth' => 500, 'flatIncrement' => 40],
+                    'totalMp' => ['baseValue' => 12, 'extraGrowth' => 100, 'flatIncrement' => 10],
+                    'attack' => ['baseValue' => 10, 'extraGrowth' => 50, 'flatIncrement' => 1],
+                    'defence' => ['baseValue' => 10, 'extraGrowth' => 30, 'flatIncrement' => 1],
+                    'magicAttack' => ['baseValue' => 10, 'extraGrowth' => 50, 'flatIncrement' => 1],
+                    'magicDefence' => ['baseValue' => 10, 'extraGrowth' => 30, 'flatIncrement' => 1],
+                    'speed' => ['baseValue' => 10, 'extraGrowth' => 20, 'flatIncrement' => 1],
+                    'grace' => ['baseValue' => 10, 'extraGrowth' => 15, 'flatIncrement' => 1],
+                    'evasion' => ['baseValue' => 5, 'extraGrowth' => 10, 'flatIncrement' => 1],
+                ],
+            ],
+            subList: new RecordSubList(
+                key: 'skillsToLearn',
+                prefix: 'learn',
+                singular: 'skill to learn',
+                fields: [
+                    new RecordField('level', 'Level', InputControlType::INTEGER),
+                    RecordField::reference('skill', 'Skill', 'skills'),
+                    new RecordField('note', 'Note', removeWhenEmpty: true),
+                ],
+                blank: ['level' => 2, 'skill' => ''],
             ),
         );
     }

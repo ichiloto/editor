@@ -1010,7 +1010,7 @@ status line says exactly why.
 | Category | Backing file | Status |
 | --- | --- | --- |
 | Actors | `assets/Data/Actors/*.php` | Editable |
-| Classes | `assets/Data/classes.php` | Editable |
+| Classes | `assets/Data/classes.php` | Editable - levels, the experience curve, every stat curve, equipment types and skills learned |
 | Skills | `assets/Data/skills.php` | Editable - spells and abilities in `magic.php` and `abilities.php` are validated and offered as references, not yet edited here |
 | Items | `assets/Data/items.php` | Editable - authored as `new Item(...)` calls, edited entry by entry |
 | Weapons | `assets/Data/items.php` | Editable - authored as `new Weapon(...)` calls, edited entry by entry |

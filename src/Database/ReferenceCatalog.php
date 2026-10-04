@@ -6,7 +6,6 @@ namespace Ichiloto\Editor\Database;
 
 use Ichiloto\Editor\PermanentGrowthCatalog;
 use Ichiloto\Editor\ProjectActor;
-use Ichiloto\Editor\ProjectClass;
 use Ichiloto\Editor\ProjectQuest;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\Cutscenes\CutsceneAsset;
@@ -14,6 +13,8 @@ use Ichiloto\Editor\Cutscenes\CutsceneType;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Engine\Animations\Timelines\EffectTimelineLibrary;
 use Ichiloto\Engine\Rendering\Tilesets\Tileset;
+use Ichiloto\Engine\Entities\Enumerations\ArmorType;
+use Ichiloto\Engine\Entities\Enumerations\WeaponType;
 
 /**
  * What a field pointing at another resource may point at.
@@ -34,6 +35,8 @@ final class ReferenceCatalog
         'actors',
         'actor_ids',
         'classes',
+        'weapon_types',
+        'armor_types',
         'skills',
         'quests',
         'maps',
@@ -127,10 +130,9 @@ final class ReferenceCatalog
                 array_values(array_filter($this->workspace->actorDatabase->getActors(),
                     static fn(ProjectActor $actor): bool => $actor->hasDefinitionId()))
             ),
-            'classes' => array_map(
-                static fn(ProjectClass $class): string => $class->getName(),
-                $this->workspace->classDatabase->getClasses()
-            ),
+            // A class restricts what its members equip by the engine's type names.
+            'weapon_types' => array_map(static fn(WeaponType $type): string => $type->value, WeaponType::cases()),
+            'armor_types' => array_map(static fn(ArmorType $type): string => $type->value, ArmorType::cases()),
             // Spells and abilities may be authored in any of the Engine's
             // skill files; a reference names the skill wherever it lives.
             'skills' => $this->workspace->getSkillNames(),

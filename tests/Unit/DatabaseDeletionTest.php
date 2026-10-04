@@ -20,8 +20,8 @@ it('defaults the entry delete confirmation to Cancel: Enter does not delete', fu
         $workspace = getEditorProperty($editor, 'workspace');
 
         expect(getEditorProperty($editor, 'isDatabaseEntryDeleteConfirmationOpen'))->toBeFalse()
-            ->and($workspace->classDatabase->getClasses())->toHaveCount(2)
-            ->and($workspace->classDatabase->isDirty())->toBeFalse()
+            ->and($workspace->getRecordDatabase('classes')->getRecords())->toHaveCount(2)
+            ->and($workspace->getRecordDatabase('classes')->isDirty())->toBeFalse()
             ->and(getEditorProperty($editor, 'pendingDatabaseDeletion'))->toBeNull();
     } finally {
         removeDirectoryRecursively($root);
@@ -42,7 +42,7 @@ it('cancels the entry delete on Esc and on an explicit n', function () {
             $workspace = getEditorProperty($editor, 'workspace');
 
             expect(getEditorProperty($editor, 'isDatabaseEntryDeleteConfirmationOpen'))->toBeFalse()
-                ->and($workspace->classDatabase->getClasses())->toHaveCount(2);
+                ->and($workspace->getRecordDatabase('classes')->getRecords())->toHaveCount(2);
         }
     } finally {
         removeDirectoryRecursively($root);
@@ -55,21 +55,21 @@ it('deletes a class on an explicit y and restores it with one undo', function ()
     try {
         $editor = deletionEditor($root);
         openDatabaseCategory($editor, 'classes');
-        setEditorProperty($editor, 'databaseSelectedClassIndex', 1);
+        setEditorProperty($editor, 'databaseSelectedRecordIndexes', ['classes' => 1]);
         callEditorMethod($editor, 'dispatchInput', "\033[3~");
         callEditorMethod($editor, 'dispatchInput', 'y');
 
         /** @var ProjectWorkspace $workspace */
         $workspace = getEditorProperty($editor, 'workspace');
-        $names = array_map(static fn(object $class): string => $class->getName(), $workspace->classDatabase->getClasses());
+        $names = $workspace->getRecordDatabase('classes')->getEntryLabels();
 
         expect($names)->toBe(['Vanguard'])
-            ->and($workspace->classDatabase->isDirty())->toBeTrue()
-            ->and(getEditorProperty($editor, 'databaseSelectedClassIndex'))->toBe(0);
+            ->and($workspace->getRecordDatabase('classes')->isDirty())->toBeTrue()
+            ->and(getEditorProperty($editor, 'databaseSelectedRecordIndexes')['classes'] ?? 0)->toBe(0);
 
         callEditorMethod($editor, 'dispatchInput', "\x1a");
 
-        $restored = array_map(static fn(object $class): string => $class->getName(), $workspace->classDatabase->getClasses());
+        $restored = $workspace->getRecordDatabase('classes')->getEntryLabels();
 
         expect($restored)->toBe(['Vanguard', 'Oracle']);
     } finally {
