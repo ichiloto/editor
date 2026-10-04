@@ -281,6 +281,9 @@ class ProjectValidator
     $seen = [];
     $statKeys = ActorStatPreview::statKeys();
 
+    // What an actor's Attack command may use, by the rule its picker offers.
+    $attackSkills = new ReferenceCatalog($workspace)->valuesFor('attack_skills');
+
     foreach ($workspace->actorDatabase->getActors() as $actor) {
       $where = sprintf('actor %s', $actor->getName());
       $id = $actor->getDefinitionId();
@@ -306,6 +309,14 @@ class ProjectValidator
           $where,
           sprintf('Its attack style "%s" is not a weapon type the Engine knows.', $actor->getAttackStyle()),
           'Choose one on the Attack Style row, or remove it to fight unarmed.'
+        );
+      }
+
+      if ($actor->getAttackSkill() !== '' && ! in_array($actor->getAttackSkill(), $attackSkills, true)) {
+        $issues[] = Issue::error(
+          $where,
+          sprintf('Its attack skill "%s" is not a basic skill usable in battle.', $actor->getAttackSkill()),
+          'Choose one on the Attack Skill row, or clear it for the built-in attack.'
         );
       }
 

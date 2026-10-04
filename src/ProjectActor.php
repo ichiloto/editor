@@ -195,6 +195,18 @@ final class ProjectActor
     }
 
     /**
+     * Returns the basic skill the actor attacks with, from `data.attackSkill`.
+     *
+     * @return string The skill's name, or an empty string for the Engine's built-in attack.
+     */
+    public function getAttackSkill(): string
+    {
+        $skill = $this->getData()['attackSkill'] ?? '';
+
+        return is_string($skill) ? $skill : '';
+    }
+
+    /**
      * Returns the Engine weapon type an attack style names, read by the
      * Engine's own rule, or null when it names none.
      */
@@ -591,6 +603,21 @@ final class ProjectActor
                 $type = self::findAttackStyleType($style)
                     ?? throw new RuntimeException(sprintf('The Engine has no weapon type "%s".', $style));
                 $this->payload['data']['attackStyle'] = $type->value;
+            }
+
+            $this->touchState();
+            return;
+        }
+
+        if ($field === 'attackSkill') {
+            // The built-in attack is the absence of a skill, so it removes
+            // the key; any other value names a basic skill in the catalogue.
+            $skill = trim((string) $value);
+
+            if ($skill === '') {
+                unset($this->payload['data']['attackSkill']);
+            } else {
+                $this->payload['data']['attackSkill'] = $skill;
             }
 
             $this->touchState();

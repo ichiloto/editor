@@ -14,6 +14,9 @@ use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Engine\Animations\Timelines\EffectTimelineLibrary;
 use Ichiloto\Engine\Rendering\Tilesets\Tileset;
 use Ichiloto\Engine\Entities\Enumerations\ArmorType;
+use Ichiloto\Engine\Entities\Enumerations\Occasion;
+use Ichiloto\Engine\Entities\Skills\BasicSkill;
+use Ichiloto\Engine\Entities\Skills\Skill;
 use Ichiloto\Engine\Entities\Enumerations\WeaponType;
 
 /**
@@ -35,6 +38,7 @@ final class ReferenceCatalog
         'actors',
         'actor_ids',
         'classes',
+        'attack_skills',
         'weapon_types',
         'armor_types',
         'skills',
@@ -130,6 +134,9 @@ final class ReferenceCatalog
                 array_values(array_filter($this->workspace->actorDatabase->getActors(),
                     static fn(ProjectActor $actor): bool => $actor->hasDefinitionId()))
             ),
+            // What an actor's Attack command may use: a basic skill from the
+            // catalogue that can be used in battle.
+            'attack_skills' => $this->attackSkillNames(),
             // A class restricts what its members equip by the engine's type names.
             'weapon_types' => array_map(static fn(WeaponType $type): string => $type->value, WeaponType::cases()),
             'armor_types' => array_map(static fn(ArmorType $type): string => $type->value, ArmorType::cases()),
@@ -204,6 +211,16 @@ final class ReferenceCatalog
             'effects' => new EffectTimelineLibrary($this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets')->findTimelineIds(),
             default => $this->recordValues($category),
         };
+    }
+
+    /** @return string[] The catalogue's basic skills usable in battle, in catalogue order. */
+    private function attackSkillNames(): array
+    {
+        return array_keys(array_filter(
+            $this->workspace->loadSkillCatalog()->getSkills(),
+            static fn(Skill $skill): bool => $skill instanceof BasicSkill
+                && in_array($skill->occasion, [Occasion::ALWAYS, Occasion::BATTLE_SCREEN], true),
+        ));
     }
 
     /** @return ProjectRecord[] The project's animations, in file order. */

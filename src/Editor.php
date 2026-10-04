@@ -551,6 +551,8 @@ final class Editor
      * What the growth row reads when the preview assumes nothing was earned.
      */
     private const string NO_ASSUMED_GROWTH = '(none earned yet)';
+    /** What the Attack Skill row reads when the actor uses the Engine's own attack. */
+    private const string BUILT_IN_ATTACK = '(Built-in attack)';
 
     /**
      * What the growth row reads when the preview assumes all of it was.
@@ -9716,6 +9718,16 @@ final class Editor
                 'field' => 'attackStyle',
                 'hint' => 'own weapon when none is equipped; no stats',
             ],
+            [
+                // The basic skill the Attack command uses; a battle-usable
+                // basic skill from the catalogue, or the Engine's own attack.
+                'label' => 'Attack Skill',
+                'value' => $actor->getAttackSkill() === '' ? self::BUILT_IN_ATTACK : $actor->getAttackSkill(),
+                'reference' => 'attack_skills',
+                'allowsNone' => true,
+                'noneLabel' => self::BUILT_IN_ATTACK,
+                'field' => 'attackSkill',
+            ],
             ...$this->actorSummonFields($actor),
             [
                 'label' => 'Level',
@@ -11474,7 +11486,7 @@ final class Editor
      */
     private function coerceActorFieldValue(string $field, string $rawValue): string|int
     {
-        if (in_array($field, ['name', 'description', 'class', 'attackStyle', 'id', 'defaultNaturalVariantId', 'summons'], true)) {
+        if (in_array($field, ['name', 'description', 'class', 'attackStyle', 'attackSkill', 'id', 'defaultNaturalVariantId', 'summons'], true)) {
             return trim($rawValue);
         }
 
