@@ -31,7 +31,7 @@ function writeOptimizePolicy(string $root, string $body): string
  */
 function writeOptimizeInventory(string $root): void
 {
-    file_put_contents($root . '/assets/Data/items.php', <<<'PHP'
+    writeItemRecords($root, ...itemsFromSource(<<<'PHP'
     <?php
 
     use Ichiloto\Engine\Entities\Enumerations\WeaponType;
@@ -70,7 +70,7 @@ function writeOptimizeInventory(string $root): void
         specialProperty: ['type' => 'lifesteal', 'amount' => 10],
       ),
     ];
-    PHP);
+    PHP));
 }
 
 /**

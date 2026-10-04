@@ -47,15 +47,14 @@ use Ichiloto\Editor\Database\Projections\WholeFileProjection;
 use Ichiloto\Engine\Entities\Enumerations\ActionConditionType;
 use Ichiloto\Engine\Entities\Enumerations\ItemUserType;
 use Ichiloto\Engine\Progress\Knowledge\KnowledgeProgressService;
-use Ichiloto\Engine\Entities\Inventory\Accessory;
+use Ichiloto\Engine\Entities\Inventory\InventoryItem;
+use Ichiloto\Engine\Entities\Inventory\ItemCatalog;
+use Ichiloto\Engine\Entities\Inventory\ItemRecord;
+use Ichiloto\Engine\Entities\Enumerations\ValueBasis;
 use Ichiloto\Engine\Entities\Inventory\EquipmentSlotType;
-use Ichiloto\Engine\Entities\Inventory\Armor;
-use Ichiloto\Engine\Entities\Inventory\Items\Item;
-use Ichiloto\Engine\Entities\Inventory\Weapons\Weapon;
 use Ichiloto\Engine\Entities\Enumerations\ArmorType;
 use Ichiloto\Engine\Entities\Enumerations\WeaponType;
 use Ichiloto\Engine\Entities\Character;
-use Ichiloto\Engine\Entities\ParameterChanges;
 
 /**
  * The schemas behind the Database categories added in Phase 6.
@@ -362,49 +361,70 @@ final class RecordSchemaCatalog
     }
 
     /**
-     * Consumables and key items — the `Item` entries of `assets/Data/items.php`.
-     *
-     * The file is authored as `new Item(...)` constructor calls, so the editor
-     * browses it and never rewrites it.
+     * Consumables and key items: one record per numbered file under
+     * `assets/Data/Items`, in the form the Engine's ItemRecord reads, with
+     * whom an item reaches, when, its effects and its animation.
      *
      * @return RecordSchema
      */
     private static function items(): RecordSchema
     {
+        $enumValues = static fn(array $cases): array => array_map(static fn(\BackedEnum $case): string => strval($case->value), $cases);
+
         return new RecordSchema(
             key: 'items',
             entryNoun: 'item',
-            storage: RecordStorage::LIST_FILE,
-            relativePath: 'assets/Data/items.php',
+            storage: RecordStorage::DIRECTORY,
+            relativePath: 'assets/Data/' . ItemCatalog::DIRECTORIES[0],
             fields: [
                 ...self::inventoryFields(),
-                // Only a plain item carries a stack limit: the engine's
-                // Equipment constructor does not take one.
-                new RecordField('maxQuantity', 'Max Quantity', InputControlType::INTEGER),
+                new RecordField('scope.side', 'Scope Side', options: $enumValues(ItemScopeSide::cases()), removeWhenEmpty: true, displayDefault: ItemScopeSide::NONE->value),
+                new RecordField('scope.number', 'Scope Number', options: $enumValues(ItemScopeNumber::cases()), removeWhenEmpty: true, displayDefault: ItemScopeNumber::ONE->value),
+                new RecordField('scope.status', 'Scope Status', options: $enumValues(ItemScopeStatus::cases()), removeWhenEmpty: true, displayDefault: ItemScopeStatus::ALIVE->value),
+                new RecordField('scope.randomNumber', 'Random Targets', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '1'),
+                new RecordField('occasion', 'Occasion', options: $enumValues(Occasion::cases()), removeWhenEmpty: true, displayDefault: Occasion::ALWAYS->value),
                 new RecordField(
                     'animationId',
                     'Animation',
                     InputControlType::INTEGER,
                     reference: 'animation_ids',
+                    removeWhenEmpty: true,
                     allowsNone: true,
                     displayDefault: '(None)',
                 ),
             ],
             labelKey: 'name',
             identityKey: 'id',
-            recordFilter: static fn(mixed $entry): bool => $entry instanceof Item,
-            makeBlank: static fn(string $name): object => new Item(
-                $name,
-                'What it does.',
-                '✨',
-                0,
-                id: self::inventoryDefinitionId('item', $name),
+            subList: new RecordSubList(
+                key: 'effects',
+                prefix: 'effect',
+                singular: 'effect',
+                fields: [
+                    new RecordField('type', 'Type', options: array_keys(ItemRecord::EFFECTS)),
+                    new RecordField('name', 'Name'),
+                    new RecordField('description', 'Description'),
+                    new RecordField('value', 'Value', InputControlType::INTEGER),
+                    new RecordField('successRate', 'Success Rate', InputControlType::FLOAT),
+                    new RecordField('valueBasis', 'Value Basis', options: $enumValues(ValueBasis::cases()), removeWhenEmpty: true, displayDefault: ValueBasis::ACTUAL->value),
+                ],
+                blank: ['type' => 'hp_recovery', 'name' => 'Recover HP', 'description' => 'Recovers HP', 'value' => 50, 'successRate' => 1.0],
+                removeWhenEmpty: true,
             ),
+            makeBlank: static fn(string $name): array => [
+                'kind' => 'item',
+                'id' => self::inventoryDefinitionId('item', $name),
+                'name' => $name,
+                'description' => 'What it does.',
+                'icon' => '✨',
+                'price' => 0,
+            ],
+            recordClass: InventoryItem::class,
+            numberedFiles: true,
         );
     }
 
     /**
-     * Weapons — the `Weapon` entries of `assets/Data/items.php`. Edited by rebuilding the entry.
+     * Weapons: one record per numbered file under `assets/Data/Weapons`.
      *
      * @return RecordSchema
      */
@@ -413,69 +433,80 @@ final class RecordSchemaCatalog
         return new RecordSchema(
             key: 'weapons',
             entryNoun: 'weapon',
-            storage: RecordStorage::LIST_FILE,
-            relativePath: 'assets/Data/items.php',
-            fields: self::equipmentFields([
+            storage: RecordStorage::DIRECTORY,
+            relativePath: 'assets/Data/' . ItemCatalog::DIRECTORIES[1],
+            fields: self::equipmentFields(EquipmentSlotType::WEAPON, [
                 new RecordField(
                     'equipmentType',
                     'Equipment Type',
                     options: array_map(static fn(WeaponType $type): string => $type->value, WeaponType::cases()),
-                    enumClass: WeaponType::class,
+                    removeWhenEmpty: true,
                 ),
                 ...self::parameterChangeFields(),
             ]),
             labelKey: 'name',
             identityKey: 'id',
-            recordFilter: static fn(mixed $entry): bool => $entry instanceof Weapon,
-            makeBlank: static fn(string $name): object => new Weapon(
-                $name,
-                'What it does.',
-                '🗡',
-                0,
-                equipmentType: WeaponType::SWORD,
-                parameterChanges: new ParameterChanges(attack: 1),
-                id: self::inventoryDefinitionId('equipment', $name),
-            ),
+            makeBlank: static fn(string $name): array => [
+                'kind' => 'weapon',
+                'id' => self::inventoryDefinitionId('equipment', $name),
+                'name' => $name,
+                'description' => 'What it does.',
+                'icon' => '🗡',
+                'price' => 0,
+                'equipmentType' => WeaponType::SWORD->value,
+                'parameterChanges' => ['attack' => 1],
+            ],
+            recordClass: InventoryItem::class,
+            numberedFiles: true,
         );
     }
 
     /**
-     * Armors and accessories — the `Armor`/`Accessory` entries of
-     * `assets/Data/items.php`. Edited by rebuilding the entry.
+     * Armors and accessories: one record per numbered file under
+     * `assets/Data/Armors`. An accessory has no equipment type.
      *
      * @return RecordSchema
      */
     private static function armors(): RecordSchema
     {
+        $kind = new RecordField('kind', 'Kind', options: ['armor', 'accessory']);
+        $type = new RecordField(
+            'equipmentType',
+            'Equipment Type',
+            options: array_map(static fn(ArmorType $type): string => $type->value, ArmorType::cases()),
+            removeWhenEmpty: true,
+        );
+        $fields = static fn(bool $isAccessory): array => [
+            $kind,
+            ...self::equipmentFields($isAccessory ? EquipmentSlotType::ACCESSORY : EquipmentSlotType::BODY, [
+                ...($isAccessory ? [] : [$type]),
+                ...self::parameterChangeFields(),
+            ]),
+        ];
+
         return new RecordSchema(
             key: 'armors',
             entryNoun: 'armor',
-            storage: RecordStorage::LIST_FILE,
-            relativePath: 'assets/Data/items.php',
-            fields: self::equipmentFields([
-                new RecordField(
-                    'equipmentType',
-                    'Equipment Type',
-                    options: array_map(static fn(ArmorType $type): string => $type->value, ArmorType::cases()),
-                    enumClass: ArmorType::class,
-                ),
-                ...self::parameterChangeFields(),
-            ]),
+            storage: RecordStorage::DIRECTORY,
+            relativePath: 'assets/Data/' . ItemCatalog::DIRECTORIES[2],
+            fields: $fields(false),
             labelKey: 'name',
             identityKey: 'id',
-            recordFilter: static fn(mixed $entry): bool => $entry instanceof Armor || $entry instanceof Accessory,
-            makeBlank: static fn(string $name): object => new Armor(
-                $name,
-                'What it protects against.',
-                '🛡',
-                0,
-                equipmentType: ArmorType::GENERAL_ARMOR,
-                parameterChanges: new ParameterChanges(defence: 1),
-                id: self::inventoryDefinitionId('equipment', $name),
-            ),
+            makeBlank: static fn(string $name): array => [
+                'kind' => 'armor',
+                'id' => self::inventoryDefinitionId('equipment', $name),
+                'name' => $name,
+                'description' => 'What it protects against.',
+                'icon' => '🛡',
+                'price' => 0,
+                'equipmentType' => ArmorType::GENERAL_ARMOR->value,
+                'parameterChanges' => ['defence' => 1],
+            ],
+            fieldsFor: static fn(array $row): array => $fields(strval($row['kind'] ?? 'armor') === 'accessory'),
+            recordClass: InventoryItem::class,
+            numberedFiles: true,
         );
     }
-
     /**
      * Knowledge subjects — the `subjects` list of
      * `assets/Data/knowledge.php`.
@@ -1623,16 +1654,18 @@ final class RecordSchemaCatalog
                 'userType',
                 'Who May Use It',
                 options: array_map(static fn(ItemUserType $type): string => $type->value, ItemUserType::cases()),
-                enumClass: ItemUserType::class,
+                removeWhenEmpty: true,
+                displayDefault: ItemUserType::ALL->value,
             ),
-            RecordField::boolean('isKeyItem', 'Key Item'),
-            RecordField::boolean('consumable', 'Consumable'),
+            // What a record leaves out reads as the Engine's default for its kind.
+            RecordField::boolean('isKeyItem', 'Key Item', displayDefault: 'false'),
+            RecordField::boolean('consumable', 'Consumable', displayDefault: $isEquipment ? 'false' : 'true'),
             // Trade
             new RecordField('price', 'Price', InputControlType::INTEGER),
-            RecordField::boolean('sellable', 'Sellable', removeWhenEmpty: false),
-            new RecordField('sellRateBasisPoints', 'Sell Rate (basis points)', InputControlType::INTEGER, step: 500),
+            RecordField::boolean('sellable', 'Sellable', removeWhenEmpty: false, displayDefault: 'true'),
+            new RecordField('sellRateBasisPoints', 'Sell Rate (basis points)', InputControlType::INTEGER, step: 500, displayDefault: '5000'),
             // Stock
-            new RecordField('quantity', 'Quantity', InputControlType::INTEGER),
+            new RecordField('quantity', 'Quantity', InputControlType::INTEGER, displayDefault: '1'),
             // Project-owned vocabularies: the engine reads these as plain
             // strings a project gives meaning to, so they are typed rather
             // than chosen from a list this code would have to invent.
@@ -1691,19 +1724,21 @@ final class RecordSchemaCatalog
      * enough, which is why a shield has to say so. Form, size and material
      * are project-owned words the engine only stores.
      *
+     * @param EquipmentSlotType $defaultSlot The slot this kind of equipment is equipped to unless it says otherwise.
      * @param RecordField[] $typeAndStats The type row and the stat rows this kind of equipment has.
      * @return RecordField[]
      */
-    private static function equipmentFields(array $typeAndStats): array
+    private static function equipmentFields(EquipmentSlotType $defaultSlot, array $typeAndStats): array
     {
         return [
             ...self::inventoryFields(isEquipment: true),
-            // Slot and kind
+            // Slot and kind; a record leaves out the slot its kind defaults to.
             new RecordField(
                 'semanticSlot',
                 'Slot',
                 options: array_map(static fn(EquipmentSlotType $slot): string => $slot->value, EquipmentSlotType::cases()),
-                enumClass: EquipmentSlotType::class,
+                removeWhenEmpty: true,
+                displayDefault: $defaultSlot->value,
             ),
             ...$typeAndStats,
             // Shape

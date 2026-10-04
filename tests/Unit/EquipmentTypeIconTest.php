@@ -27,7 +27,7 @@ it('shows an armor or accessory\'s own icon as read-only legacy data', function 
 it('shows a weapon\'s own icon as read-only legacy data and keeps it through an edit', function () {
     $root = makeTemporaryProject();
     $database = ProjectRecordDatabase::fromProject($root, RecordSchemaCatalog::forKey('weapons'));
-    $before = $database->getRecords()[0]->toArray()->icon;
+    $before = $database->getRecords()[0]->get('icon');
     $row = iconRow($database, 0);
 
     expect($row)->not->toBeNull()
@@ -36,10 +36,11 @@ it('shows a weapon\'s own icon as read-only legacy data and keeps it through an 
 
     $database->setField(0, 'description', 'Edited beside a legacy icon.');
     $database->save();
-    $saved = ProjectRecordDatabase::fromProject($root, RecordSchemaCatalog::forKey('weapons'))->getRecords()[0]->toArray();
+    $saved = ProjectRecordDatabase::fromProject($root, RecordSchemaCatalog::forKey('weapons'))->getRecords()[0];
 
-    expect($saved->description)->toBe('Edited beside a legacy icon.')
-        ->and($saved->icon)->toBe($before);
+    expect($before)->not->toBeNull()
+        ->and($saved->get('description'))->toBe('Edited beside a legacy icon.')
+        ->and($saved->get('icon'))->toBe($before);
 });
 
 it('keeps a consumable\'s own icon editable', function () {

@@ -263,8 +263,8 @@ actors through `ActorCategory` over `ActorAuthoring`, the actor service the
 terminal editor uses too.
 
 Progress: Classes, Quests, System, a new Configuration category, Actors,
-Types and Skills are done in both editors; the GUI session now serves every
-category.
+Types, Skills, Tilesets, Items, Weapons and Armors are done in both editors;
+the GUI session now serves every category.
 Known gap: an actor authored without an id whose identity freeze also needs
 other files rewritten (the cross-file repair `SourceSetCommand` writes at
 once) is refused in the GUI with a pointer to the terminal's repair dialog;
@@ -276,8 +276,8 @@ Order of work, each a complete slice before the next:
 1. Classes, Quests, System, Actors and Skills move onto the shared record
    service. The terminal keeps its workflow and every field and preview it has
    now (experience and stat curves, actor stats); the GUI gains the category.
-2. Data the record files hold but no editor reaches: item effects (after
-   items' per-record move). Skill effects and kind are done. Enemy drops are done,
+2. Data the record files hold but no editor reaches: done. Item effects,
+   scope, occasion and animation, and skill effects and kind, are edited. Enemy drops are done,
    and every schema record's references, list entries included, are now
    validated. Enemy `position` and `battleAnimation` are not authored: troops
    own battle positions (`Troop` overwrites the enemy's), and no runtime code
@@ -285,7 +285,12 @@ Order of work, each a complete slice before the next:
    The rest of `system.php` is done (System and Configuration).
 3. Skills are one declarative record per numbered file under
    `assets/Data/Skills` (done; `abilities.php` and `magic.php` are gone).
-   Items, weapons and armors follow.
+   Items, weapons and armors are too, under `assets/Data/Items`, `Weapons`
+   and `Armors`, with `items.php` as their barrel (done). No catalogued
+   category stores `new Class(...)` entries any more, so the object-entry
+   write path (constructor-call entries in `ProjectRecordDatabase` and
+   `SharedFileTransaction`) serves no category; removing it, while keeping
+   the `PhpSourceDocument` reading `ActorReferenceSource` uses, is open.
 4. Tilesets are done in both editors: sheets, missing art, above and table
    tiles, shadows, and pieces keyed by id, stamped or connected, with their
    tile layers. Tile identities are typed in both editors; picking them on a

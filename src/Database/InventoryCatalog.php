@@ -5,6 +5,9 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Database;
 
 use Ichiloto\Editor\ProjectWorkspace;
+use Ichiloto\Engine\Entities\Inventory\InventoryItem;
+use Ichiloto\Engine\Entities\Inventory\ItemRecord;
+use InvalidArgumentException;
 use RuntimeException;
 
 /**
@@ -34,9 +37,9 @@ final class InventoryCatalog
     /**
      * The record categories whose entries are inventory definitions.
      *
-     * The engine reads one `assets/Data/items.php` catalogue; the editor
-     * presents it as consumables, weapons and armors, so identity spans all
-     * three rather than living in any one of them.
+     * The engine reads one catalogue from the `Items`, `Weapons` and `Armors`
+     * record folders; the editor presents it as those three categories, so
+     * identity spans all three rather than living in any one of them.
      */
     public const array CATEGORIES = ['items', 'weapons', 'armors'];
 
@@ -418,6 +421,24 @@ final class InventoryCatalog
         }
 
         return 'legacy.' . self::slug($name);
+    }
+
+    /**
+     * Returns a definition as the game builds it from its record, unsaved
+     * edits included and the defaults the record leaves out filled in. A
+     * record the game cannot build is the validator's to report, so it reads
+     * as null here.
+     *
+     * @param ProjectRecord $record The inventory record.
+     * @return InventoryItem|null The definition.
+     */
+    public static function readDefinition(ProjectRecord $record): ?InventoryItem
+    {
+        try {
+            return ItemRecord::readItem((array) $record->toArray());
+        } catch (InvalidArgumentException) {
+            return null;
+        }
     }
 
     /**

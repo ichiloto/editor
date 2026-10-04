@@ -286,15 +286,12 @@ it('adds and removes troop members', function (): void {
     removeDirectoryRecursively($root);
 });
 
-it('edits object-backed inventory categories by rebuilding the entry', function (): void {
+it('edits inventory categories one record file each', function (): void {
     $root = makeTemporaryProject();
 
     $items = loadRecordDatabase($root, 'items');
     $weapons = loadRecordDatabase($root, 'weapons');
 
-    // Entries authored as `new Item(...)` are rebuilt from the arguments they
-    // were built with, so they can be edited without rewriting the file into
-    // something else.
     expect($items->isEditable())->toBeTrue();
     expect($items->getEntryLabels())->toBe(['S-Potion', 'Antidote']);
     expect($weapons->getEntryLabels())->toBe(['Wooden Sword']);
@@ -305,17 +302,19 @@ it('edits object-backed inventory categories by rebuilding the entry', function 
     removeDirectoryRecursively($root);
 });
 
-it('writes an edited object entry back as the constructor call it was', function (): void {
+it('writes an edited inventory record back into its own file', function (): void {
     $root = makeTemporaryProject();
+    $antidote = (string) file_get_contents($root . '/assets/Data/Items/0002-antidote.php');
     $database = loadRecordDatabase($root, 'items');
 
     $database->setField(0, 'price', '75');
     $database->save();
 
-    $written = (string) file_get_contents($root . '/assets/Data/items.php');
+    $written = (string) file_get_contents($root . '/assets/Data/Items/0001-s-potion.php');
     $reloaded = loadRecordDatabase($root, 'items');
 
-    expect($written)->toContain('price: 75')
+    expect($written)->toContain("'price' => 75,")
+        ->and((string) file_get_contents($root . '/assets/Data/Items/0002-antidote.php'))->toBe($antidote)
         ->and($reloaded->getRecordByIndex(0)?->get('price'))->toBe(75)
         // Everything else survives the rewrite.
         ->and($reloaded->getEntryLabels())->toBe(['S-Potion', 'Antidote']);

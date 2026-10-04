@@ -150,7 +150,8 @@ final class ProjectRecordDatabase
      * Describes where a record sits in its source, for a diagnostic that has
      * to tell two records with one identity apart.
      *
-     * Only for a category over one file, and only while the records still
+     * A record with a file of its own is that file. In a category over one
+     * file it is the record's place in it, and only while the records still
      * stand in the order the file was read in -- after a record is added or
      * removed the file's places no longer line up with the list, and a
      * guess would point at the wrong entry, so nothing is said.
@@ -160,6 +161,12 @@ final class ProjectRecordDatabase
      */
     public function sourceContextOf(int $index): ?string
     {
+        if ($this->schema->storage === RecordStorage::DIRECTORY) {
+            $record = array_values($this->records)[$index] ?? null;
+
+            return $record === null ? null : sprintf('%s/%s.php', $this->schema->relativePath, $record->recordId);
+        }
+
         if ($this->schema->storage !== RecordStorage::LIST_FILE || ! $this->file instanceof PhpDataFile || ! is_array($this->file->payload)) {
             return null;
         }

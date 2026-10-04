@@ -1018,9 +1018,9 @@ skill's effects, a quest's rewards) listed under them.
 | Actors | `assets/Data/Actors/*.php` | Editable | Same; an identity freeze that needs other files repaired at once is made in the terminal |
 | Classes | `assets/Data/classes.php` | Editable - levels, the experience curve, every stat curve, equipment types and skills learned | Same |
 | Skills | `assets/Data/Skills/*.php` | Editable - one data record per numbered file, attacks, abilities and spells alike, with their effects; `skills.php` loads them | Same |
-| Items | `assets/Data/items.php` | Editable - authored as `new Item(...)` calls, edited entry by entry | Same |
-| Weapons | `assets/Data/items.php` | Editable - authored as `new Weapon(...)` calls, edited entry by entry | Same |
-| Armors | `assets/Data/items.php` | Editable - authored as `new Armor(...)` calls, edited entry by entry | Same |
+| Items | `assets/Data/Items/*.php` | Editable - one data record per numbered file, with scope, occasion, animation and effects; `items.php` loads Items, Weapons and Armors | Same |
+| Weapons | `assets/Data/Weapons/*.php` | Editable - one data record per numbered file, with type, stats, element, affinities and equipment metadata | Same |
+| Armors | `assets/Data/Armors/*.php` | Editable - one data record per numbered file, armor or accessory, with type, slot, stats and affinities | Same |
 | Enemies | `assets/Data/Enemies/*.php` | Editable - one data record per file, which `enemies.php` loads | Same |
 | Troops | `assets/Data/troops.php` | Editable | Same |
 | Battle Entry | `assets/Data/battle-entry-rules.php` | Editable | Same |
@@ -1049,45 +1049,7 @@ data that holds objects or is not an array literal are each a reason, and the st
 still browse everything: an enemy shows its level, every stat, its sprite,
 its battle rewards, and its element affinities.
 
-### How A File Of Constructor Calls Is Written
-
-`items.php` is not data, it is PHP code that *builds* data: `new Item(...)`,
-`new Weapon(...)` and `new Armor(...)` calls with named arguments,
-imports, comments, and enum expressions the author chose. Regenerating such
-a file from loaded values would reorder arguments, spell out defaults nobody
-wrote, and rewrite every entry to change one. So the editor does not
-regenerate it. It edits the author's own source, entry by entry:
-
-- **A changed value** is patched where its argument sits. Every other byte of
-  the file - the other arguments, the other entries, the comments between
-  them - is the same afterwards.
-- **A new entry** is written as a constructor call in the file's own
-  indentation, after the last entry.
-- **A deleted entry** is cut whole, with its separator.
-- **A deleted entry put back** by undo goes back exactly where it was when
-  the file has not been saved in between, and, when it has, is written back
-  ahead of the entry that follows it in the list - so the file reads in the
-  order the editor does.
-
-Every entry is found by the identity it declares - an item's stable id -
-looked up in a fresh reading of the file at the moment of
-writing, never by where it happened to sit when it was loaded. That is what
-lets three categories share one file: Items, Weapons and Armors are three
-views of `items.php`, and saving one of them, or all of them with `Ctrl+A`,
-reads the file once, composes every dirty category's changes against that
-one reading, and writes it once.
-
-Equipment is shown everywhere, in every renderer, by the one icon of its
-type (one for all swords, one for all daggers), which the game's theme
-binds. A weapon's or armor's own `icon` is legacy compatibility data: the
-Weapons and Armors records show it as a read-only `Legacy Icon` row and keep
-it exactly as written. A consumable item's `Icon` stays its own and
-editable.
-
-Where identity cannot prove the address, nothing is written and the status
-line says why: two entries in the file declaring one id, an entry declaring
-none, or a save that would leave two entries declaring one id. Give each
-entry a distinct id, reload, and save again.
+### How Data Files Are Written
 
 Files that are data - Troops, States, Permanent Growth - are regenerated as
 data, keeping everything from `<?php` to the top-level `return` byte for
@@ -1123,6 +1085,31 @@ kind, drops the values only the old one read. Files are numbered
 (`0001-attack.php`) because menus list skills in file order; a new or copied
 skill takes the next number and goes last. `skills.php` is the barrel that
 loads the folder.
+
+Items, weapons and armors are one file each under `assets/Data/Items`,
+`Weapons` and `Armors`, returning `['class' => InventoryItem::class, 'data'
+=> [...]]` with a `kind` of `item`, `weapon`, `armor` or `accessory`, a
+stable id, and only the values the record sets: the Engine's defaults fill
+the rest. An item has its scope, occasion, battle animation and effects: a
+list under the Effects heading, each a type (HP or MP recovery, resurrection,
+HP damage, or a max HP or MP increase) with a value, a success rate and
+whether the value is an amount or a percentage. Equipment has its type,
+parameter changes, element and affinities, and its metadata (form, size,
+material, slot, availability, acquisition policy, special property). An
+armor that becomes an accessory drops its equipment type. Files are numbered
+because shops and menus list definitions in file order, items first, then
+weapons, then armors; a new or copied record takes the next number and goes
+last. `items.php` is the barrel that loads all three folders. A record the
+game cannot build, such as a sell rate outside 0 through 10000, is left out
+of the game and reported by validation against its own file, in the Engine's
+own words.
+
+Equipment is shown everywhere, in every renderer, by the one icon of its
+type (one for all swords, one for all daggers), which the game's theme
+binds. A weapon's or armor's own `icon` is legacy compatibility data: the
+Weapons and Armors records show it as a read-only `Legacy Icon` row and keep
+it exactly as written. A consumable item's `Icon` stays its own and
+editable.
 
 A tileset is one file under `assets/Data/Tilesets`, named by the id maps
 give it, so renaming a tileset keeps its file. It names its RPG Maker sheets
@@ -2212,7 +2199,7 @@ renderers enter battle with a direct cut; the terminal intro is unaffected.
 
 An inventory id two definitions claim is reported once, naming every
 claimant with the category it was authored in, the aliases it brought, and
-its entry in `items.php` - the game refuses the whole catalogue until one
+its record file - the game refuses the whole catalogue until one
 of them is renamed, and until then nothing under any claimant is offered by
 a picker, resolved by a reference, or accepted as a save alias target.
 

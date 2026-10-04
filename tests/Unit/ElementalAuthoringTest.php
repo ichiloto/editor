@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use Ichiloto\Editor\Database\AffinityEditor;
 use Ichiloto\Editor\Database\ElementAffinityCodec;
+use Ichiloto\Editor\Database\InventoryCatalog;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Database\RecordSchemaCatalog;
 use Ichiloto\Editor\Database\ReferenceCatalog;
@@ -82,7 +83,7 @@ it('builds a ward list by picking and cycling, never typing', function () {
     expect($editor->encoded())->toBe('Fire: -1');
 });
 
-it('authors an armor ward end to end, into the engine object', function () {
+it('authors an armor ward end to end, into the definition the game builds', function () {
     $root = makeTemporaryProject();
     writeProjectElements($root);
 
@@ -94,11 +95,11 @@ it('authors an armor ward end to end, into the engine object', function () {
 
     $reloaded = ProjectRecordDatabase::fromProject($root, RecordSchemaCatalog::forKey('armors'));
     $labels = $reloaded->getEntryLabels();
-    $armor = $reloaded->getRecords()[array_search('Flame Ward', $labels, true)]->toArray();
+    $armor = InventoryCatalog::readDefinition($reloaded->getRecords()[array_search('Flame Ward', $labels, true)]);
 
     expect($armor)->toBeInstanceOf(Armor::class)
         ->and($armor->elementAffinities)->toBe(['Fire' => 0.5, 'Ice' => 2.0])
-        // The engine's own lookup, on the object the editor wrote.
+        // The engine's own lookup, on the definition the editor wrote.
         ->and($armor->getElementMultiplier('Fire'))->toBe(0.5);
 });
 
@@ -110,13 +111,14 @@ it('gives a weapon an attack element and takes it away again', function () {
     $index = $database->addRecord();
     $database->setField($index, 'element', 'Fire');
 
-    expect($database->getRecords()[$index]->toArray()->element)->toBe('Fire');
+    expect(InventoryCatalog::readDefinition($database->getRecords()[$index])?->element)->toBe('Fire');
 
     // '(None)' is what the picker's clearing entry commits: an optional
     // reference must have a way back to nothing.
     $database->setField($index, 'element', '(None)');
 
-    expect($database->getRecords()[$index]->toArray()->element)->toBeNull();
+    expect($database->getRecords()[$index]->get('element'))->toBeNull()
+        ->and(InventoryCatalog::readDefinition($database->getRecords()[$index]))->not->toBeNull();
 });
 
 it('declares the element fields as picked, cycled, or row-built', function () {

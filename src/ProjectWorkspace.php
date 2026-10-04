@@ -19,6 +19,7 @@ use Ichiloto\Editor\Storage\FileSetTransaction;
 use Ichiloto\Editor\Storage\FilesystemFileSetOperations;
 use Ichiloto\Engine\Core\ProjectFormat;
 use Ichiloto\Engine\Entities\Elements\ElementRegistry;
+use Ichiloto\Engine\Entities\Inventory\ItemCatalog;
 use Ichiloto\Engine\Entities\Skills\SkillCatalog;
 use Ichiloto\Engine\Field\MapGraphics;
 use RecursiveDirectoryIterator;
@@ -117,6 +118,17 @@ final readonly class ProjectWorkspace
     public function loadSkillCatalog(): SkillCatalog
     {
         return SkillCatalog::load($this->projectRoot . DIRECTORY_SEPARATOR . 'assets');
+    }
+
+    /**
+     * Reads the project's inventory catalogue as saved: every item, weapon
+     * and armor record, as the runtime reads them.
+     *
+     * @return ItemCatalog
+     */
+    public function loadItemCatalog(): ItemCatalog
+    {
+        return ItemCatalog::load($this->projectRoot . DIRECTORY_SEPARATOR . 'assets');
     }
 
     /**

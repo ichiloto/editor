@@ -55,7 +55,7 @@ The full vocabulary:
 | `set_switch` | Switch, Value | |
 | `set_variable` | Variable, Operation, Value | Operation is `set` or `add` |
 | `record_event` | Story Event | What conditions test with `event:` |
-| `give_item` | Item, Quantity | Item must exist in `items.php` |
+| `give_item` | Item, Quantity | Item must be an item, weapon or armor the project defines |
 | `give_gold` | Amount | Negative debits |
 | `recover_party` | none | Fully restores travelling members and clears battle-only states |
 | `play_sound` | Sound | |

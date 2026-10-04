@@ -110,19 +110,10 @@ class ProjectValidator
       $this->inventoryCatalog = InventoryCatalog::fromWorkspace($workspace);
     } catch (Throwable $throwable) {
       return [Issue::error(
-        'assets/Data/items.php',
+        'assets/Data/Items, Weapons and Armors',
         sprintf('The inventory could not be read: %s', $throwable->getMessage()),
         'Until this is fixed the project has no items, weapons or armors at all.'
       )];
-    }
-
-    $unreadableInventory = $this->describeUnreadableInventory($workspace);
-
-    if ($unreadableInventory !== null) {
-      // Every reference to an item would now fail for the same reason, and
-      // a page of "does not exist" would bury it. One accurate error beats
-      // the cascade it causes.
-      return [$unreadableInventory];
     }
 
     $issues = [
@@ -132,6 +123,7 @@ class ProjectValidator
       ...$this->checkTroops($workspace),
       ...$this->checkBattleEntryRules($workspace),
       ...$this->checkSkillCatalog($workspace),
+      ...$this->checkItemCatalog($workspace),
       ...$this->checkSummons($workspace),
       ...$this->checkCutscenes($workspace),
       ...$this->checkReferences($workspace),
@@ -158,51 +150,6 @@ class ProjectValidator
     );
 
     return $issues;
-  }
-
-  /**
-   * Returns the one error to report when a project has an inventory file
-   * the runtime cannot read, or null when it can.
-   *
-   * The engine's own constructors enforce a definition's bounds -- a sell
-   * rate outside 0 through 10000, a modifier outside -100 through 100, an
-   * affinity that is not a factor -- by refusing to build it, which takes
-   * the whole file with it. The catalogue is then empty, and every
-   * reference to an item in the project fails for a reason that has
-   * nothing to do with that reference.
-   *
-   * @param ProjectWorkspace $workspace The project.
-   * @return Issue|null The error, or null.
-   */
-  protected function describeUnreadableInventory(ProjectWorkspace $workspace): ?Issue
-  {
-    $path = rtrim($workspace->projectRoot, '/') . '/assets/Data/items.php';
-
-    // Whether the file loaded at all, which a catalogue whose every
-    // definition is contested still did.
-    if (! is_file($path) || $this->inventoryCatalog->claimants() !== []) {
-      return null;
-    }
-
-    try {
-      $payload = ProjectDirectoryContext::run($workspace->projectRoot, static fn(): mixed => require $path);
-    } catch (Throwable $throwable) {
-      return Issue::error(
-        'assets/Data/items.php',
-        sprintf('The inventory could not be read: %s', $throwable->getMessage()),
-        'Until this is fixed the project has no items, weapons or armors at all.'
-      );
-    }
-
-    if (is_array($payload) && $payload !== []) {
-      return Issue::error(
-        'assets/Data/items.php',
-        'The inventory holds entries the project could not read as definitions.',
-        'Until this is fixed the project has no items, weapons or armors at all.'
-      );
-    }
-
-    return null;
   }
 
   /**
@@ -1396,6 +1343,30 @@ class ProjectValidator
         'Each skill is one record file; correct the file named, and give each skill a name no other skill uses.',
       ),
       $workspace->loadSkillCatalog()->getProblems(),
+    );
+  }
+
+  /**
+   * Reports the inventory records the Engine's item catalogue cannot read.
+   *
+   * The engine's own constructors enforce a definition's bounds (a sell rate
+   * outside 0 through 10000, a modifier outside -100 through 100, an
+   * affinity that is not a factor) by refusing to build it. The game then
+   * leaves that one record out, so it is reported against its own file in
+   * the engine's own words; a reference to it is still a reference to the
+   * definition the author meant, and is not reported again.
+   *
+   * @return Issue[]
+   */
+  protected function checkItemCatalog(ProjectWorkspace $workspace): array
+  {
+    return array_map(
+      static fn(string $problem): Issue => Issue::error(
+        'assets/Data/' . strstr($problem, ':', true),
+        ltrim((string) strstr($problem, ':'), ': '),
+        'Each item, weapon and armor is one record file; correct the file named in Database > Items, Weapons or Armors.',
+      ),
+      $workspace->loadItemCatalog()->getProblems(),
     );
   }
 

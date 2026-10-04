@@ -64,7 +64,7 @@ Editable today: Actors, Classes, Skills, Items, Weapons, Armors, Enemies, Troops
 
 Enemies are one data file each under `assets/Data/Enemies`, and `enemies.php` loads them. An enemy's action patterns name skills from your skill catalogue, so you pick the skill rather than rebuild it.
 
-`items.php` is PHP that *builds* data with `new Item(...)`, `new Weapon(...)` and `new Armor(...)` calls. The editor never regenerates it: a change is patched into the argument it belongs to, so your imports, comments and the other entries stay exactly as you wrote them.
+Items, weapons and armors are one data file each under `assets/Data/Items`, `Weapons` and `Armors`, numbered in the order shops list them, and `items.php` loads all three. An item's effects are a list you edit row by row; a change to one record touches only its own file, keeping your imports and comments.
 
 Re-author one of those files as a plain array and the editor picks it up as editable automatically. Nothing in the editor needs to change.
 

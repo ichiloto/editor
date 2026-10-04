@@ -553,9 +553,10 @@ final class ReferenceCatalog
      *
      * An availability, an acquisition policy and a special property are all
      * project words -- the runtime imposes no list of them -- so what a
-     * picker can offer is what the project has already said somewhere. A
-     * special property is a shape rather than a string, and it is the `type`
-     * inside it that Optimize weighs.
+     * picker can offer is what the project has already said somewhere,
+     * including what a record says by leaving the engine's default in place.
+     * A special property is a shape rather than a string, and it is the
+     * `type` inside it that Optimize weighs.
      *
      * @param string $field The equipment field.
      * @return string[] The distinct values, sorted.
@@ -572,7 +573,8 @@ final class ReferenceCatalog
             }
 
             foreach ($database->getRecords() as $record) {
-                $value = $record->get($field);
+                $definition = InventoryCatalog::readDefinition($record);
+                $value = $definition !== null && property_exists($definition, $field) ? $definition->{$field} : null;
 
                 if ($field === 'specialProperty') {
                     $value = is_array($value) ? ($value['type'] ?? null) : null;
