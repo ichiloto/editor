@@ -287,3 +287,38 @@ it('adds and removes a whole entry, and puts the file back', function () {
     expect($emptied->entryCount())->toBe(1)
         ->and($emptied->argumentSource(0, 'name'))->toBe("'Two'");
 });
+
+it('edits a constructor-call file with comments inside its data in place, keeping every comment', function () {
+    $root = makeTemporaryProject('ichiloto-source-');
+    $path = $root . '/assets/Data/items.php';
+    $source = <<<'PHP'
+<?php
+
+use Ichiloto\Engine\Entities\Inventory\Items\Item;
+
+return [
+  // Restoratives the shop always stocks.
+  new Item(name: 'S-Potion', description: 'Restores 50 HP.', icon: '🧪', price: 50),
+  /* Status cures. */ new Item(name: 'Antidote', description: 'Cures Poison.', icon: '🧪', price: 80),
+];
+PHP;
+    file_put_contents($path, $source);
+    $items = inventoryDatabase($root, 'items');
+
+    expect($items->isEditable())->toBeTrue()->and($items->getReadOnlyReason())->toBeNull();
+
+    $items->setField(1, 'price', '95');
+    $items->save();
+
+    expect((string) file_get_contents($path))->toBe(str_replace('price: 80', 'price: 95', $source));
+});
+
+it('refuses to regenerate a commented file it cannot edit in place, rather than drop the comments', function () {
+    $root = makeTemporaryProject('ichiloto-source-');
+    $path = $root . '/assets/Data/states.php';
+    file_put_contents($path, "<?php\n\nreturn array_merge(\n  // keep me\n  [['id' => 'poison', 'name' => 'Poison']],\n);\n");
+    $file = \Ichiloto\Editor\Database\PhpDataFile::load($path);
+
+    expect($file->isEditable())->toBeFalse()
+        ->and($file->readOnlyReason)->toContain('comments inside its data');
+});

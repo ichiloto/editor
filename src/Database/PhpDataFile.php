@@ -28,8 +28,11 @@ use Throwable;
  *  - every leaf of the returned value is a scalar, array, or enum case
  *    (a `new Item(...)` payload cannot be regenerated without inventing
  *    source, so those files are browsed, never written); and
- *  - any comment *inside* the returned expression sits in an array literal
- *    the source can be edited in, since a regeneration would drop it.
+ *  - any comment *inside* the returned expression sits where the source is
+ *    edited in place: plain data, or a list of constructor calls whose
+ *    arguments the record database edits one at a time. A save that would
+ *    instead regenerate the returned expression is refused, since it would
+ *    drop the comment.
  *
  * When either fails the file reports a read-only reason instead, and the
  * editor surfaces that reason rather than risking the author's work.
@@ -43,6 +46,7 @@ final class PhpDataFile
      * @param bool $exists Whether the file is present on disk.
      * @param string|null $readOnlyReason Why the file cannot be rewritten.
      * @param string|null $source The file's bytes as read, which a save edits.
+     * @param bool $hasInteriorComment Whether a comment sits inside the returned data.
      */
     private function __construct(
         public readonly string $path,
@@ -51,6 +55,7 @@ final class PhpDataFile
         public readonly bool $exists,
         public readonly ?string $readOnlyReason,
         private ?string $source = null,
+        private bool $hasInteriorComment = false,
     ) {
     }
 
@@ -490,7 +495,7 @@ final class PhpDataFile
             return new self($path, $payload, $header, true, sprintf('%s contains %s', basename($path), $reason));
         }
 
-        if ($hasInteriorComment && (self::holdsObject($payload) || self::parseArraySource($source) === null)) {
+        if ($hasInteriorComment && ! self::isEditedInPlace($source, $payload)) {
             return new self(
                 $path,
                 $payload,
@@ -500,7 +505,20 @@ final class PhpDataFile
             );
         }
 
-        return new self($path, $payload, $header, true, null, $source);
+        return new self($path, $payload, $header, true, null, $source, $hasInteriorComment);
+    }
+
+    /**
+     * Whether saves edit the file's own source rather than regenerate it:
+     * plain data, or a list of constructor calls edited argument by argument.
+     */
+    private static function isEditedInPlace(string $source, mixed $payload): bool
+    {
+        if (! self::holdsObject($payload) && self::parseArraySource($source) !== null) {
+            return true;
+        }
+
+        return array_filter(PhpSourceDocument::parse($source)->entryClasses(), static fn(string $class): bool => trim($class) !== '') !== [];
     }
 
     /** Whether a value holds an object anywhere, an enum case included. */
@@ -564,6 +582,11 @@ final class PhpDataFile
                 ));
             }
             $contents = ArraySourceWriter::rewrite($document, $this->payload, $payload)->source;
+        } elseif ($this->hasInteriorComment) {
+            throw new RuntimeException(sprintf(
+                'Refusing to rewrite %s: it has comments inside its data, which rewriting it would drop. Edit the entries one value at a time, or edit the file directly.',
+                $this->path,
+            ));
         } else {
             $contents = $this->header . 'return ' . PhpValueExporter::export($payload) . ";\n";
         }
