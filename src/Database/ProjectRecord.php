@@ -393,11 +393,26 @@ final class ProjectRecord
      * @param string $key The payload key holding the list.
      * @return array<int, array<string, mixed>>
      */
-    public function getSubList(string $key): array
+    public function getSubList(string $key, ?string $scalarKey = null): array
     {
         $list = $this->get($key);
 
-        return is_array($list) ? array_values(array_filter($list, is_array(...))) : [];
+        if (! is_array($list)) {
+            return [];
+        }
+
+        $entries = [];
+
+        foreach ($list as $entry) {
+            if (is_array($entry)) {
+                $entries[] = $entry;
+            } elseif ($scalarKey !== null && is_scalar($entry)) {
+                // An entry authored as a bare value is that value's field.
+                $entries[] = [$scalarKey => $entry];
+            }
+        }
+
+        return $entries;
     }
 
     /**
@@ -407,8 +422,25 @@ final class ProjectRecord
      * @param array<int, array<string, mixed>> $list The new list.
      * @return void
      */
-    public function setSubList(string $key, array $list): void
+    public function setSubList(string $key, array $list, ?string $scalarKey = null, bool $removeWhenEmpty = false): void
     {
+        if ($list === [] && $removeWhenEmpty) {
+            // An empty list would read as "none, explicitly"; absence is how
+            // such a list is authored.
+            $this->set($key, null);
+
+            return;
+        }
+
+        if ($scalarKey !== null) {
+            // An entry holding nothing but that field stays a bare value, as
+            // it was authored; one with more is written as its fields.
+            $list = array_map(
+                static fn(array $entry): mixed => array_keys($entry) === [$scalarKey] ? $entry[$scalarKey] : $entry,
+                $list,
+            );
+        }
+
         $this->set($key, array_values($list));
     }
 

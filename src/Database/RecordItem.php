@@ -26,14 +26,18 @@ final readonly class RecordItem
     /** An option of a choice command. */
     public const string OPTION = 'option';
 
+    /** A list's heading: entries are added to it, and it is never removed. */
+    public const string LIST = 'list';
+
     /**
-     * @param string $kind One of {@see ENTRY}, {@see NESTED} or {@see OPTION}.
+     * @param string $kind One of {@see ENTRY}, {@see NESTED}, {@see OPTION} or {@see LIST}.
      * @param array<int, int|string> $framePath The frame whose list holds the entry.
      * @param int $entryIndex The entry, or the entry a nested item or option belongs to.
      * @param int|null $childIndex The nested item or option; null for an entry.
      * @param string $noun What the item is called, singular.
      * @param string|null $childKind What an entry holds beneath it, when it can hold more: {@see NESTED} for its nested list's entries, {@see OPTION} for a choice's options.
      * @param string|null $childNoun What those are called, singular.
+     * @param string|null $listKey The inline list the item is in, when it is not the record's own.
      */
     public function __construct(
         public string $kind,
@@ -43,6 +47,7 @@ final readonly class RecordItem
         public string $noun,
         public ?string $childKind = null,
         public ?string $childNoun = null,
+        public ?string $listKey = null,
     ) {
     }
 }

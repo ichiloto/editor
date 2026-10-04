@@ -2927,7 +2927,7 @@ class ProjectValidator
    */
   protected function checkQuests(ProjectWorkspace $workspace): array
   {
-    $quests = $workspace->questDatabase->getQuests();
+    $quests = $workspace->getQuests();
 
     if ($quests === []) {
       return [];

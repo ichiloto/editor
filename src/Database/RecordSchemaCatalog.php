@@ -29,6 +29,7 @@ use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandRegistry;
 use Ichiloto\Engine\Events\Interpreter\EventInterpreter;
 use Ichiloto\Engine\Entities\Enemies\Enemy;
 use Ichiloto\Engine\Entities\Enemies\EnemyCatalog;
+use Ichiloto\Engine\Quests\QuestObjectiveType;
 use Ichiloto\Engine\Entities\Enumerations\ActionConditionType;
 use Ichiloto\Engine\Entities\Enumerations\ItemUserType;
 use Ichiloto\Engine\Progress\Knowledge\KnowledgeProgressService;
@@ -81,6 +82,7 @@ final class RecordSchemaCatalog
     {
         $schemas = [
             self::classes(),
+            self::quests(),
             self::states(),
             self::troops(),
             self::animations(),
@@ -826,6 +828,99 @@ final class RecordSchemaCatalog
                 trim(strval($row['value'] ?? '')) ?: '(nothing)',
                 strval($row['kind'] ?? ''),
             ),
+        );
+    }
+
+    /**
+     * Quests — `assets/Data/quests.php`, as the engine's `Quest::fromArray`
+     * reads it. A quest's id is its name's slug and follows a rename while
+     * nothing refers to it (the workspace knows what does). Objectives are
+     * its own list; the target an objective is picked from follows its type.
+     * Reward items are a second list, each a bare item name until it is given
+     * a quantity, the two forms the engine reads.
+     *
+     * @return RecordSchema
+     */
+    private static function quests(): RecordSchema
+    {
+        $objectiveFields = static fn(?string $reference): array => [
+            $reference === null
+                ? new RecordField('target', 'Target')
+                : RecordField::reference('target', 'Target', $reference),
+            new RecordField('quantity', 'Quantity', InputControlType::INTEGER, removeWhenEmpty: true),
+            new RecordField('description', 'Text', removeWhenEmpty: true),
+            new RecordField('revealedDescription', 'Revealed', removeWhenEmpty: true),
+            new RecordField('revealConditions', 'Reveal When', removeWhenEmpty: true, codec: RecordFieldCodec::CONDITIONS),
+        ];
+        $variants = [];
+
+        foreach (QuestObjectiveType::cases() as $type) {
+            $variants[$type->value] = $objectiveFields(match ($type) {
+                // Collecting is not limited to consumables: a quest may ask
+                // for a weapon or a piece of armor, and the runtime resolves
+                // all three from one catalogue.
+                QuestObjectiveType::COLLECT => 'inventory',
+                QuestObjectiveType::DEFEAT => 'enemies',
+                QuestObjectiveType::REACH_MAP => 'maps',
+                QuestObjectiveType::TALK_TO => 'actors',
+                default => null,
+            });
+        }
+
+        return new RecordSchema(
+            key: 'quests',
+            entryNoun: 'quest',
+            storage: RecordStorage::LIST_FILE,
+            relativePath: 'assets/Data/quests.php',
+            fields: [
+                new RecordField('id', 'Id', isReadOnly: true),
+                new RecordField('name', 'Name'),
+                new RecordField('description', 'Description'),
+                new RecordField('giver', 'Giver'),
+                RecordField::boolean('optional', 'Optional'),
+                new RecordField('rewards.gold', 'Reward Gold', InputControlType::INTEGER, removeWhenEmpty: true),
+                new RecordField('rewards.experience', 'Reward EXP', InputControlType::INTEGER, removeWhenEmpty: true),
+                new RecordField('prerequisites', 'Prereqs', removeWhenEmpty: true, codec: RecordFieldCodec::CONDITIONS),
+            ],
+            labelKey: 'name',
+            identityKey: 'id',
+            blank: [
+                'id' => 'new-quest',
+                'name' => 'New Quest',
+                'description' => '',
+                'objectives' => [['type' => QuestObjectiveType::TALK_TO->value, 'target' => 'New Target']],
+            ],
+            subList: new RecordSubList(
+                key: 'objectives',
+                prefix: 'objective',
+                singular: 'objective',
+                fields: [
+                    new RecordField(
+                        'type',
+                        'Type',
+                        options: array_map(static fn(QuestObjectiveType $type): string => $type->value, QuestObjectiveType::cases()),
+                    ),
+                ],
+                blank: ['type' => QuestObjectiveType::TALK_TO->value, 'target' => 'New Target'],
+                variants: $variants,
+                variantKey: 'type',
+            ),
+            subLists: [
+                new RecordSubList(
+                    key: 'rewards.items',
+                    prefix: 'reward',
+                    singular: 'reward item',
+                    fields: [
+                        RecordField::reference('item', 'Item', 'inventory'),
+                        new RecordField('quantity', 'Quantity', InputControlType::INTEGER, removeWhenEmpty: true),
+                    ],
+                    blank: ['item' => ''],
+                    heading: 'Reward Items',
+                    scalarKey: 'item',
+                    removeWhenEmpty: true,
+                ),
+            ],
+            identityFollowsLabel: true,
         );
     }
 

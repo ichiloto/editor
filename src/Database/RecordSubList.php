@@ -36,6 +36,12 @@ final readonly class RecordSubList
      * only some variants carry, variant => (key => label): a cinematic
      * `sequence` owns its `commands`, a `choice` its `cancel` arm.
      * @param list<list<string>> $exclusiveFields Field groups where authoring one removes the others.
+     * @param string|null $scalarKey The field an entry authored as a bare value is (a
+     * reward item's `item`): read as that field, and written back bare while it holds nothing else.
+     * @param bool $removeWhenEmpty Whether the list's key is dropped when its last entry goes,
+     * as files that omit an empty list author it (a quest's reward items).
+     * @param string $heading What a list beside the record's own is headed as ("Reward Items"): its
+     * heading row names it, counts it, and is where an entry is added to it.
      */
     public function __construct(
         public string $key,
@@ -49,6 +55,9 @@ final readonly class RecordSubList
         public array $commandArms = [],
         public array $variantArms = [],
         public array $exclusiveFields = [],
+        public string $heading = '',
+        public ?string $scalarKey = null,
+        public bool $removeWhenEmpty = false,
     ) {
     }
 

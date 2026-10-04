@@ -70,7 +70,34 @@ final readonly class RecordAuthoring
             sprintf('%s edit', $label),
             static fn() => $record->restorePayload($after),
             static fn() => $record->restorePayload($before),
-        ), $index);
+        ), $index, note: self::describeIdentityFollow($database, $fieldId, $framePath, $before, $after));
+    }
+
+    /**
+     * What a rename did to an identity that follows its label: moved with it,
+     * or stayed because something refers to it.
+     *
+     * @param array<string, mixed>|object $before
+     * @param array<string, mixed>|object $after
+     */
+    private static function describeIdentityFollow(ProjectRecordDatabase $database, string $fieldId, array $framePath, array|object $before, array|object $after): ?string
+    {
+        $schema = $database->schema;
+
+        if (! $schema->identityFollowsLabel || $framePath !== [] || $fieldId !== $schema->labelKey || ! is_array($before) || ! is_array($after)) {
+            return null;
+        }
+
+        $was = strval($before[$schema->identityKey] ?? '');
+        $is = strval($after[$schema->identityKey] ?? '');
+
+        if ($was !== $is) {
+            return sprintf('Its id is now %s.', $is);
+        }
+
+        return Slug::of(strval($after[$schema->labelKey] ?? '')) === $is
+            ? null
+            : sprintf('Its id stays %s, which other things point at.', $is);
     }
 
     /**
@@ -86,7 +113,9 @@ final readonly class RecordAuthoring
      */
     public function addItem(ProjectRecordDatabase $database, int $index, array $framePath, ?string $fieldId, bool $child = false): RecordChange
     {
-        $this->requireList($database, $index, $framePath);
+        // The list is the row's, so it is required where the row is found.
+        $this->requireRecord($database, $index);
+        $this->requireFrame($database, $index, $framePath);
 
         if ($fieldId === null) {
             if ($child) {
@@ -99,6 +128,11 @@ final readonly class RecordAuthoring
         $item = $database->locateItem($index, $framePath, $fieldId)
             ?? throw new RecordRefusal('That row belongs to no item to add after; add at the end of the list instead.');
 
+        if ($item->kind === RecordItem::LIST) {
+            // A list's heading: the entry goes first in that list.
+            return $this->addEntry($database, $index, $framePath, -1, $item->listKey);
+        }
+
         if ($child) {
             return match ($item->kind === RecordItem::ENTRY ? $item->childKind : null) {
                 RecordItem::NESTED => $this->addNestedItem($database, $index, $framePath, $item->entryIndex),
@@ -110,7 +144,7 @@ final readonly class RecordAuthoring
         return match ($item->kind) {
             RecordItem::NESTED => $this->addNestedItem($database, $index, $framePath, $item->entryIndex, $item->childIndex),
             RecordItem::OPTION => $this->addOption($database, $index, $framePath, $item->entryIndex, $item->childIndex),
-            default => $this->addEntry($database, $index, $framePath, $item->entryIndex),
+            default => $this->addEntry($database, $index, $framePath, $item->entryIndex, $item->listKey),
         };
     }
 
@@ -124,14 +158,15 @@ final readonly class RecordAuthoring
      */
     public function removeItem(ProjectRecordDatabase $database, int $index, array $framePath, string $fieldId): RecordChange
     {
-        $this->requireList($database, $index, $framePath);
+        $this->requireRecord($database, $index);
+        $this->requireFrame($database, $index, $framePath);
         $item = $database->locateItem($index, $framePath, $fieldId);
 
         return match ($item?->kind) {
-            null => new RecordChange(null),
+            null, RecordItem::LIST => new RecordChange(null),
             RecordItem::NESTED => $this->removeNestedItem($database, $index, $framePath, $item->entryIndex, (int) $item->childIndex),
             RecordItem::OPTION => $this->removeOption($database, $index, $framePath, $item->entryIndex, (int) $item->childIndex),
-            default => $this->removeEntry($database, $index, $framePath, $item->entryIndex),
+            default => $this->removeEntry($database, $index, $framePath, $item->entryIndex, $item->listKey),
         };
     }
 
@@ -140,16 +175,17 @@ final readonly class RecordAuthoring
      * frame: after an entry, or at the end.
      *
      * @param array<int, int|string> $framePath The frame; [] for the record's own list.
-     * @param int|null $after The entry it follows; null for the end.
+     * @param int|null $after The entry it follows; null for the end, -1 for the start.
+     * @param string|null $listKey At the record's root, the inline list; the record's own when null.
      * @throws RecordRefusal When the category or record is read-only or gone, or there is no such list.
      */
-    public function addEntry(ProjectRecordDatabase $database, int $index, array $framePath, ?int $after = null): RecordChange
+    public function addEntry(ProjectRecordDatabase $database, int $index, array $framePath, ?int $after = null, ?string $listKey = null): RecordChange
     {
-        $list = $this->requireList($database, $index, $framePath);
+        $list = $this->requireList($database, $index, $framePath, $listKey);
         $at = $framePath === []
-            ? $database->addSubItem($index, at: $after === null ? null : $after + 1)
+            ? $database->addSubItem($index, at: $after === null ? null : $after + 1, listKey: $listKey)
             : $database->addFrameCommand($index, $framePath, $after);
-        $entry = $at === null ? null : ($database->getFrameCommands($index, $framePath)[$at] ?? null);
+        $entry = $at === null ? null : (($framePath === [] ? $database->getSubItems($index, $listKey) : $database->getFrameCommands($index, $framePath))[$at] ?? null);
 
         if ($at === null || ! is_array($entry)) {
             return new RecordChange(null);
@@ -158,10 +194,10 @@ final readonly class RecordAuthoring
         return new RecordChange(new GenericCommand(
             sprintf('%s add', ucfirst($list->singular)),
             $framePath === []
-                ? static fn() => $database->insertSubItem($index, $at, $entry)
+                ? static fn() => $database->insertSubItem($index, $at, $entry, $listKey)
                 : static fn() => $database->insertFrameCommand($index, $framePath, $at, $entry),
             $framePath === []
-                ? static fn() => $database->removeSubItem($index, $at)
+                ? static fn() => $database->removeSubItem($index, $at, $listKey)
                 : static fn() => $database->removeFrameCommand($index, $framePath, $at),
         ), $at);
     }
@@ -171,13 +207,14 @@ final readonly class RecordAuthoring
      * with everything under it.
      *
      * @param array<int, int|string> $framePath The frame; [] for the record's own list.
+     * @param string|null $listKey At the record's root, the inline list; the record's own when null.
      * @throws RecordRefusal When the category or record is read-only or gone, or there is no such list.
      */
-    public function removeEntry(ProjectRecordDatabase $database, int $index, array $framePath, int $entryIndex): RecordChange
+    public function removeEntry(ProjectRecordDatabase $database, int $index, array $framePath, int $entryIndex, ?string $listKey = null): RecordChange
     {
-        $list = $this->requireList($database, $index, $framePath);
+        $list = $this->requireList($database, $index, $framePath, $listKey);
         $removed = $framePath === []
-            ? $database->removeSubItem($index, $entryIndex)
+            ? $database->removeSubItem($index, $entryIndex, $listKey)
             : $database->removeFrameCommand($index, $framePath, $entryIndex);
 
         if ($removed === null) {
@@ -187,10 +224,10 @@ final readonly class RecordAuthoring
         return new RecordChange(new GenericCommand(
             sprintf('%s remove', ucfirst($list->singular)),
             $framePath === []
-                ? static fn() => $database->removeSubItem($index, $entryIndex)
+                ? static fn() => $database->removeSubItem($index, $entryIndex, $listKey)
                 : static fn() => $database->removeFrameCommand($index, $framePath, $entryIndex),
             $framePath === []
-                ? static fn() => $database->insertSubItem($index, $entryIndex, $removed)
+                ? static fn() => $database->insertSubItem($index, $entryIndex, $removed, $listKey)
                 : static fn() => $database->insertFrameCommand($index, $framePath, $entryIndex, $removed),
         ), $entryIndex, $removed);
     }
@@ -441,12 +478,12 @@ final readonly class RecordAuthoring
      * @param array<int, int|string> $framePath
      * @throws RecordRefusal
      */
-    private function requireList(ProjectRecordDatabase $database, int $index, array $framePath): RecordSubList
+    private function requireList(ProjectRecordDatabase $database, int $index, array $framePath, ?string $listKey = null): RecordSubList
     {
         $this->requireRecord($database, $index);
         $this->requireFrame($database, $index, $framePath);
 
-        return $database->getFrameSubList($framePath)
+        return ($framePath === [] && $listKey !== null ? $database->schema->findInlineSubList($listKey) : $database->getFrameSubList($framePath))
             ?? throw new RecordRefusal(sprintf('A %s has no list of its own to add to.', $database->schema->entryNoun));
     }
 

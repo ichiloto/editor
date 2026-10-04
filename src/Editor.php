@@ -604,7 +604,6 @@ final class Editor
     private string $databaseFocus = self::DATABASE_FOCUS_CATEGORIES;
     private int $databaseSelectedActorIndex = 0;
     private int $databaseSelectedSkillIndex = 0;
-    private int $databaseSelectedQuestIndex = 0;
     /**
      * Selected entry index per schema-driven category, keyed by category key.
      *
@@ -916,7 +915,6 @@ final class Editor
         $this->databaseFocus = self::DATABASE_FOCUS_CATEGORIES;
         $this->databaseSelectedActorIndex = 0;
         $this->databaseSelectedSkillIndex = 0;
-        $this->databaseSelectedQuestIndex = 0;
         $this->databaseSelectedSettingIndex = 0;
         $this->isDatabaseEditing = false;
         $this->databaseEditBuffer = '';
@@ -2834,7 +2832,6 @@ final class Editor
         $this->databaseFocus = self::DATABASE_FOCUS_CATEGORIES;
         $this->databaseSelectedActorIndex = 0;
         $this->databaseSelectedSkillIndex = 0;
-        $this->databaseSelectedQuestIndex = 0;
         $this->databaseSelectedSettingIndex = 0;
         $this->isDatabaseEditing = false;
         $this->databaseEditBuffer = '';
@@ -3013,26 +3010,16 @@ final class Editor
             return;
         }
 
-        if ($this->isQuestsDatabaseSelected() && $this->isShiftLetterShortcut($input, 'O')) {
-            $this->addDatabaseQuestObjective();
-            return;
-        }
-
-        if ($this->isQuestsDatabaseSelected() && $this->isShiftLetterShortcut($input, 'X')) {
-            $this->removeDatabaseQuestObjective();
-            return;
-        }
-
         // Shift+O/Shift+X are the one sub-list idiom: quest objectives, skit
         // beats, troop members, and event-script commands all use them.
-        if ($this->getSelectedRecordDatabase()?->schema->subList !== null && $this->isShiftLetterShortcut($input, 'O')) {
+        if (($this->getSelectedRecordDatabase()?->schema->getInlineSubLists() ?? []) !== [] && $this->isShiftLetterShortcut($input, 'O')) {
             $this->selectedDatabaseNestedContext() !== null
                 ? $this->addDatabaseNestedSubItem()
                 : $this->addDatabaseRecordSubItem();
             return;
         }
 
-        if ($this->getSelectedRecordDatabase()?->schema->subList !== null && $this->isShiftLetterShortcut($input, 'X')) {
+        if (($this->getSelectedRecordDatabase()?->schema->getInlineSubLists() ?? []) !== [] && $this->isShiftLetterShortcut($input, 'X')) {
             $this->selectedDatabaseNestedContext() !== null
                 ? $this->removeDatabaseNestedSubItem()
                 : $this->removeDatabaseRecordSubItem();
@@ -3171,11 +3158,6 @@ final class Editor
             return;
         }
 
-        if ($this->isQuestsDatabaseSelected()) {
-            $this->moveDatabaseQuestSelection($step);
-            return;
-        }
-
         $this->moveDatabaseRecordSelection($step);
 
     }
@@ -3232,32 +3214,6 @@ final class Editor
         $this->renderDatabasePanes(["list", "settings", "cue", "frames", "preview"]);
     }
 
-
-    /**
-     * Moves the selected quest entry.
-     *
-     * @param int $step The entry step.
-     * @return void
-     */
-    private function moveDatabaseQuestSelection(int $step): void
-    {
-        $quests = $this->workspace?->questDatabase->getQuests() ?? [];
-
-        if ($quests === []) {
-            return;
-        }
-
-        $nextIndex = $this->resolveDatabaseSelectionStep($this->databaseSelectedQuestIndex, $step);
-
-        if ($nextIndex === $this->databaseSelectedQuestIndex) {
-            return;
-        }
-
-        $this->databaseSelectedQuestIndex = $nextIndex;
-        $this->databaseSelectedSettingIndex = 0;
-        $this->statusMessage = sprintf('Selected quest %s.', $quests[$nextIndex]->getName());
-        $this->renderDatabasePanes(['list', 'settings', 'cue', 'frames', 'preview']);
-    }
 
     /**
      * Moves the selected settings field.
@@ -5785,13 +5741,6 @@ final class Editor
             );
         }
 
-        if ($this->isQuestsDatabaseSelected()) {
-            return array_map(
-                static fn(ProjectQuest $quest): string => $quest->getName(),
-                $this->workspace?->questDatabase->getQuests() ?? [],
-            );
-        }
-
         return $this->getSelectedRecordDatabase()?->getEntryLabels() ?? [];
 
     }
@@ -5846,7 +5795,6 @@ final class Editor
         return match (true) {
             $this->isActorsDatabaseSelected() => $this->databaseSelectedActorIndex,
             $this->isSkillsDatabaseSelected() => $this->databaseSelectedSkillIndex,
-            $this->isQuestsDatabaseSelected() => $this->databaseSelectedQuestIndex,
             default => $this->getSelectedRecordIndex(),
         };
     }
@@ -5864,7 +5812,6 @@ final class Editor
         match (true) {
             $this->isActorsDatabaseSelected() => $this->databaseSelectedActorIndex = $index,
             $this->isSkillsDatabaseSelected() => $this->databaseSelectedSkillIndex = $index,
-            $this->isQuestsDatabaseSelected() => $this->databaseSelectedQuestIndex = $index,
             default => $this->setSelectedRecordIndex($index),
         };
     }
@@ -6088,11 +6035,6 @@ final class Editor
                 sprintf('Delete skill %s', $label),
                 fn(): ?object => $workspace->skillDatabase->removeSkill($index),
                 static fn(object $entry) => $workspace->skillDatabase->insertSkill($index, $entry),
-            ),
-            self::DATABASE_CATEGORY_QUESTS => $this->buildDatabaseDeletionCommand(
-                sprintf('Delete quest %s', $label),
-                fn(): ?object => $workspace->questDatabase->removeQuest($index),
-                static fn(object $entry) => $workspace->questDatabase->insertQuest($index, $entry),
             ),
 
             default => $this->buildRecordDeletionCommand($pending['category'], $index),
@@ -6484,7 +6426,6 @@ final class Editor
             'databaseFocus' => $this->databaseFocus,
             'actor' => $this->databaseSelectedActorIndex,
             'skill' => $this->databaseSelectedSkillIndex,
-            'quest' => $this->databaseSelectedQuestIndex,
             'records' => $this->databaseSelectedRecordIndexes,
             'setting' => $this->databaseSelectedSettingIndex,
             'assetIndex' => $this->selectedAssetIndex,
@@ -6503,7 +6444,6 @@ final class Editor
             $this->databaseFocus = $snapshot['databaseFocus'];
             $this->databaseSelectedActorIndex = $snapshot['actor'];
             $this->databaseSelectedSkillIndex = $snapshot['skill'];
-            $this->databaseSelectedQuestIndex = $snapshot['quest'];
             $this->databaseSelectedRecordIndexes = $snapshot['records'];
             $this->databaseSelectedSettingIndex = $snapshot['setting'];
             $this->selectedAssetIndex = $snapshot['assetIndex'];
@@ -8913,6 +8853,12 @@ final class Editor
             : $this->getSelectedRecordIndex();
     }
 
+    /** The field id of the settings row under the cursor, or an empty string. */
+    private function getSelectedDatabaseFieldId(): string
+    {
+        return (string) ($this->getDatabaseSettingsFields()[$this->databaseSelectedSettingIndex]['field'] ?? '');
+    }
+
     /**
      * Leaves the open command frame for the one enclosing it.
      *
@@ -8964,7 +8910,7 @@ final class Editor
     private function addDatabaseRecordSubItem(): void
     {
         $database = $this->getSelectedRecordDatabase();
-        $subList = $database?->schema->subList;
+        $subList = $database?->schema->getInlineSubLists()[0] ?? null;
 
         if (! $database instanceof ProjectRecordDatabase || $subList === null) {
             return;
@@ -8982,7 +8928,15 @@ final class Editor
         }
 
         $recordIndex = $this->getSelectedRecordIndex();
-        $change = $this->applyRecordChange(static fn(RecordAuthoring $authoring): RecordChange => $authoring->addEntry($database, $recordIndex, []));
+        // The row under the cursor says which list and where: after its
+        // entry, or first in the list whose heading it is. Elsewhere, at the
+        // end of the record's own list.
+        $fieldId = $this->getSelectedDatabaseFieldId();
+        $item = $database->locateItem($recordIndex, [], $fieldId);
+        $subList = $database->schema->findInlineSubList($item?->listKey) ?? $subList;
+        $change = $this->applyRecordChange(static fn(RecordAuthoring $authoring): RecordChange => $item === null
+            ? $authoring->addEntry($database, $recordIndex, [])
+            : $authoring->addItem($database, $recordIndex, [], $fieldId));
 
         if ($change?->command === null) {
             return;
@@ -9016,7 +8970,7 @@ final class Editor
     private function removeDatabaseRecordSubItem(): void
     {
         $database = $this->getSelectedRecordDatabase();
-        $subList = $database?->schema->subList;
+        $subList = $database?->schema->getInlineSubLists()[0] ?? null;
 
         if (! $database instanceof ProjectRecordDatabase || $subList === null) {
             return;
@@ -9034,7 +8988,12 @@ final class Editor
         }
 
         $recordIndex = $this->getSelectedRecordIndex();
-        $entryIndex = $database->countSubItems($recordIndex) - 1;
+        // The entry under the cursor, in whichever list it is; elsewhere the
+        // last entry of the record's own list.
+        $item = $database->locateItem($recordIndex, [], $this->getSelectedDatabaseFieldId());
+        $listKey = $item?->kind === RecordItem::ENTRY ? $item->listKey : null;
+        $subList = $database->schema->findInlineSubList($listKey) ?? $subList;
+        $entryIndex = $item?->kind === RecordItem::ENTRY ? $item->entryIndex : $database->countSubItems($recordIndex) - 1;
 
         if ($entryIndex < 0) {
             $this->setStatus(sprintf('No %s to remove.', $subList->singular), StatusLevel::WARN);
@@ -9042,7 +9001,7 @@ final class Editor
             return;
         }
 
-        $change = $this->applyRecordChange(static fn(RecordAuthoring $authoring): RecordChange => $authoring->removeEntry($database, $recordIndex, [], $entryIndex));
+        $change = $this->applyRecordChange(static fn(RecordAuthoring $authoring): RecordChange => $authoring->removeEntry($database, $recordIndex, [], $entryIndex, $listKey));
 
         if ($change?->command === null) {
             return;
@@ -9227,7 +9186,10 @@ final class Editor
             return null;
         }
 
-        return $this->workspace?->questDatabase->getQuestByIndex($this->databaseSelectedQuestIndex);
+        // The terminal's journal panes read the quest as the shared record holds it, unsaved edits included.
+        $record = $this->getSelectedRecordDatabase()?->getRecordByIndex($this->getSelectedRecordIndex());
+
+        return $record === null ? null : new ProjectQuest((array) $record->toArray());
     }
 
     /**
@@ -9265,11 +9227,6 @@ final class Editor
 
         if ($this->isSkillsDatabaseSelected()) {
             $this->createDatabaseSkill();
-            return;
-        }
-
-        if ($this->isQuestsDatabaseSelected()) {
-            $this->createDatabaseQuest();
             return;
         }
 
@@ -9315,220 +9272,6 @@ final class Editor
     }
 
     /**
-     * Creates a new quest entry in the project database.
-     *
-     * @return void
-     */
-    private function createDatabaseQuest(): void
-    {
-        if (! $this->workspace instanceof ProjectWorkspace) {
-            return;
-        }
-
-        $this->databaseSelectedQuestIndex = $this->workspace->questDatabase->addQuest();
-        $this->databaseSelectedSettingIndex = 0;
-        $this->databaseFocus = self::DATABASE_FOCUS_SETTINGS;
-        $this->statusMessage = "Created a new quest.";
-        $this->renderDatabasePanes(["list", "settings", "cue", "frames", "preview"]);
-        $this->beginDatabaseEdit();
-    }
-
-    /**
-     * Appends an objective to the selected quest and records it for undo.
-     *
-     * @return void
-     */
-    /**
-     * Returns the reward slot the settings cursor is on, if it is on one.
-     *
-     * @return int|null The slot.
-     */
-    private function selectedQuestRewardSlot(): ?int
-    {
-        $field = $this->getDatabaseSettingsFields()[$this->databaseSelectedSettingIndex] ?? null;
-
-        if (is_array($field) && preg_match('/^rewardItem(\d+)$/', strval($field['field'] ?? '')) === 1) {
-            return intval(substr(strval($field['field']), strlen('rewardItem')));
-        }
-
-        return null;
-    }
-
-    /**
-     * Determines whether the cursor sits on the quest's reward fields, which
-     * is where adding a first reward item should work from.
-     *
-     * @return bool True when it does.
-     */
-    private function isQuestRewardListSelected(): bool
-    {
-        $field = $this->getDatabaseSettingsFields()[$this->databaseSelectedSettingIndex] ?? null;
-
-        return is_array($field)
-            && in_array($field['field'] ?? '', ['rewardGold', 'rewardExperience', 'rewardItems'], true);
-    }
-
-    /**
-     * Adds a reward item slot, below the cursor's slot when it is on one.
-     *
-     * @return void
-     */
-    private function addDatabaseQuestRewardItem(): void
-    {
-        if (! $this->workspace instanceof ProjectWorkspace) {
-            return;
-        }
-
-        $questDatabase = $this->workspace->questDatabase;
-        $questIndex = $this->databaseSelectedQuestIndex;
-        $slot = $questDatabase->addRewardItem($questIndex, $this->selectedQuestRewardSlot());
-
-        if ($slot === null) {
-            return;
-        }
-
-        $this->recordCommand(new GenericCommand(
-            'Reward item add',
-            static fn() => $questDatabase->insertRewardItem($questIndex, $slot, 'S-Potion'),
-            static fn() => $questDatabase->removeRewardItem($questIndex, $slot),
-        ));
-
-        // Land on the new row and open its picker: an unchosen placeholder
-        // is not what anyone wanted to add.
-        foreach ($this->getDatabaseSettingsFields() as $index => $field) {
-            if (($field['field'] ?? null) === sprintf('rewardItem%d', $slot)) {
-                $this->databaseSelectedSettingIndex = $index;
-                break;
-            }
-        }
-
-        $this->setStatus(sprintf('Reward item %d added.', $slot + 1), StatusLevel::INFO);
-        $this->renderDatabasePanes(['list', 'settings', 'cue', 'frames', 'preview']);
-        $this->beginDatabaseEdit();
-    }
-
-    /**
-     * Removes the reward item slot the cursor is on.
-     *
-     * @return void
-     */
-    private function removeDatabaseQuestRewardItem(): void
-    {
-        $slot = $this->selectedQuestRewardSlot();
-
-        if ($slot === null || ! $this->workspace instanceof ProjectWorkspace) {
-            return;
-        }
-
-        $questDatabase = $this->workspace->questDatabase;
-        $questIndex = $this->databaseSelectedQuestIndex;
-        $removed = $questDatabase->removeRewardItem($questIndex, $slot);
-
-        if ($removed === null) {
-            return;
-        }
-
-        $this->databaseSelectedSettingIndex = min(
-            $this->databaseSelectedSettingIndex,
-            max(0, count($this->getDatabaseSettingsFields()) - 1)
-        );
-        $this->recordCommand(new GenericCommand(
-            'Reward item remove',
-            static fn() => $questDatabase->removeRewardItem($questIndex, $slot),
-            static fn() => $questDatabase->insertRewardItem($questIndex, $slot, $removed),
-        ));
-        $this->setStatus(sprintf('Reward item %d removed (%s).', $slot + 1, $removed), StatusLevel::INFO);
-        $this->renderDatabasePanes(['list', 'settings', 'cue', 'frames', 'preview']);
-    }
-
-    private function addDatabaseQuestObjective(): void
-    {
-        if ($this->selectedQuestRewardSlot() !== null || $this->isQuestRewardListSelected()) {
-            $this->addDatabaseQuestRewardItem();
-
-            return;
-        }
-
-        if (! $this->workspace instanceof ProjectWorkspace || ! $this->getSelectedQuest() instanceof ProjectQuest) {
-            return;
-        }
-
-        $questDatabase = $this->workspace->questDatabase;
-        $questIndex = $this->databaseSelectedQuestIndex;
-        $objectiveIndex = $questDatabase->addObjective($questIndex);
-
-        if ($objectiveIndex === null) {
-            return;
-        }
-
-        $objective = $questDatabase->getQuestByIndex($questIndex)?->getObjectives()[$objectiveIndex] ?? [];
-        $this->recordCommand(new GenericCommand(
-            'Quest objective add',
-            static fn() => $questDatabase->insertObjective($questIndex, $objectiveIndex, $objective),
-            static fn() => $questDatabase->removeObjective($questIndex, $objectiveIndex),
-        ));
-        $this->setStatus(sprintf('Objective %d added.', $objectiveIndex + 1), StatusLevel::INFO);
-        $this->renderDatabasePanes(['list', 'settings', 'cue', 'frames', 'preview']);
-    }
-
-    /**
-     * Removes the selected quest objective and records it for undo.
-     *
-     * The objective under the highlighted settings field is removed when one
-     * is highlighted; the last objective otherwise.
-     *
-     * @return void
-     */
-    private function removeDatabaseQuestObjective(): void
-    {
-        if ($this->selectedQuestRewardSlot() !== null) {
-            $this->removeDatabaseQuestRewardItem();
-
-            return;
-        }
-
-        $quest = $this->getSelectedQuest();
-
-        if (! $this->workspace instanceof ProjectWorkspace || ! $quest instanceof ProjectQuest) {
-            return;
-        }
-
-        $objectiveCount = count($quest->getObjectives());
-
-        if ($objectiveCount === 0) {
-            return;
-        }
-
-        $objectiveIndex = $objectiveCount - 1;
-        $fields = $this->getDatabaseSettingsFields();
-        $selectedField = (string) ($fields[$this->databaseSelectedSettingIndex]['field'] ?? '');
-
-        if (preg_match('/^objective(\d+)/', $selectedField, $matches) === 1) {
-            $objectiveIndex = min($objectiveCount - 1, intval($matches[1]));
-        }
-
-        $questDatabase = $this->workspace->questDatabase;
-        $questIndex = $this->databaseSelectedQuestIndex;
-        $removed = $questDatabase->removeObjective($questIndex, $objectiveIndex);
-
-        if ($removed === null) {
-            return;
-        }
-
-        $this->databaseSelectedSettingIndex = min(
-            $this->databaseSelectedSettingIndex,
-            max(0, count($this->getDatabaseSettingsFields()) - 1)
-        );
-        $this->recordCommand(new GenericCommand(
-            'Quest objective remove',
-            static fn() => $questDatabase->removeObjective($questIndex, $objectiveIndex),
-            static fn() => $questDatabase->insertObjective($questIndex, $objectiveIndex, $removed),
-        ));
-        $this->setStatus(sprintf('Objective %d removed.', $objectiveIndex + 1), StatusLevel::INFO);
-        $this->renderDatabasePanes(['list', 'settings', 'cue', 'frames', 'preview']);
-    }
-
-    /**
      * Saves the active Database category.
      *
      * @return void
@@ -9548,10 +9291,6 @@ final class Editor
                 $this->backupBeforeSave(...$this->workspace->skillDatabase->getBackupPaths());
                 $this->workspace->skillDatabase->save();
                 $this->setStatus('Skill database saved.', StatusLevel::SUCCESS);
-            } elseif ($this->isQuestsDatabaseSelected()) {
-                $this->backupBeforeSave(...$this->workspace->questDatabase->getBackupPaths());
-                $this->workspace->questDatabase->save();
-                $this->setStatus('Quest database saved.', StatusLevel::SUCCESS);
             } elseif ($this->isSystemDatabaseSelected()) {
                 if ($this->workspace->config?->isDirty()) {
                     $this->backupBeforeSave($this->workspace->config->path);
@@ -9605,10 +9344,6 @@ final class Editor
 
         if ($this->isSkillsDatabaseSelected()) {
             return $this->getDatabaseSkillSettingsFields();
-        }
-
-        if ($this->isQuestsDatabaseSelected()) {
-            return $this->getDatabaseQuestSettingsFields();
         }
 
         if ($this->isSystemDatabaseSelected()) {
@@ -10141,107 +9876,6 @@ final class Editor
         return $fields;
     }
     /**
-     * Returns the editable settings fields for the selected quest.
-     *
-     * Objectives are flattened into per-objective field groups (type,
-     * target, quantity, spoiler-safe text, and conditional revealed text) so
-     * the flat settings pane can edit the nested list; Shift+O / Shift+X add
-     * and remove objectives.
-     *
-     * @return array<int, array<string, mixed>>
-     */
-    private function getDatabaseQuestSettingsFields(): array
-    {
-        $quest = $this->getSelectedQuest();
-
-        if (! $quest instanceof ProjectQuest) {
-            return [];
-        }
-
-        $fields = [
-            // Derived from the name, so an id is never invented or mistyped.
-            ['label' => 'Id', 'value' => $quest->getId(), 'field' => 'id'],
-            ['label' => 'Name', 'value' => $quest->getName(), 'control' => new InputControl(InputControlType::TEXT, $quest->getName()), 'field' => 'name'],
-            ['label' => 'Description', 'value' => $quest->getDescription(), 'control' => new InputControl(InputControlType::TEXT, $quest->getDescription()), 'field' => 'description'],
-            ['label' => 'Giver', 'value' => $quest->getGiver(), 'control' => new InputControl(InputControlType::TEXT, $quest->getGiver()), 'field' => 'giver'],
-            ['label' => 'Reward Gold', 'value' => (string) $quest->getRewardGold(), 'control' => new InputControl(InputControlType::INTEGER, (string) $quest->getRewardGold()), 'field' => 'rewardGold'],
-            ['label' => 'Reward EXP', 'value' => (string) $quest->getRewardExperience(), 'control' => new InputControl(InputControlType::INTEGER, (string) $quest->getRewardExperience()), 'field' => 'rewardExperience'],
-            ['label' => 'Prereqs', 'value' => $quest->getPrerequisitesString(), 'conditions' => true, 'field' => 'prerequisites'],
-        ];
-
-        // One row per reward item, picked from the inventory the engine's
-        // store resolves them against. Shift+O on a row adds a slot below
-        // it; Shift+X or Del removes the one the cursor is on.
-        foreach ($quest->getRewardItems() as $slot => $item) {
-            $fields[] = [
-                'label' => sprintf('Reward Item %d', $slot + 1),
-                'value' => $item,
-                'reference' => 'inventory',
-                'field' => sprintf('rewardItem%d', $slot),
-            ];
-        }
-
-        foreach ($quest->getObjectives() as $index => $objective) {
-            $label = sprintf('Obj %d', $index + 1);
-            $type = strval($objective['type'] ?? QuestObjectiveType::TALK_TO->value);
-            $target = strval($objective['target'] ?? '');
-            $quantity = (string) max(1, intval($objective['quantity'] ?? 1));
-            $description = strval($objective['description'] ?? '');
-            $revealedDescription = strval($objective['revealedDescription'] ?? '');
-            $revealConditions = ConditionCodec::encodeAll((array) ($objective['revealConditions'] ?? []));
-            $fields[] = [
-                'label' => $label . ' Type',
-                'value' => $type,
-                'options' => array_map(static fn(QuestObjectiveType $objectiveType): string => $objectiveType->value, QuestObjectiveType::cases()),
-                'field' => sprintf('objective%dType', $index),
-            ];
-            $reference = self::questObjectiveReference($type);
-            $targetField = [
-                'label' => $label . ' Target',
-                'value' => $target,
-                'field' => sprintf('objective%dTarget', $index),
-            ];
-
-            // What a target may be depends on what the objective asks for, so
-            // the picker follows the type: an item to collect, an enemy to
-            // defeat, a map to reach.
-            if ($reference !== null) {
-                $targetField['reference'] = $reference;
-            } else {
-                $targetField['control'] = new InputControl(InputControlType::TEXT, $target);
-            }
-
-            $fields[] = $targetField;
-            $fields[] = [
-                'label' => $label . ' Qty',
-                'value' => $quantity,
-                'control' => new InputControl(InputControlType::INTEGER, $quantity),
-                'field' => sprintf('objective%dQuantity', $index),
-            ];
-            $fields[] = [
-                'label' => $label . ' Text',
-                'value' => $description,
-                'control' => new InputControl(InputControlType::TEXT, $description),
-                'field' => sprintf('objective%dDescription', $index),
-            ];
-            $fields[] = [
-                'label' => $label . ' Revealed',
-                'value' => $revealedDescription,
-                'control' => new InputControl(InputControlType::TEXT, $revealedDescription),
-                'field' => sprintf('objective%dRevealedDescription', $index),
-            ];
-            $fields[] = [
-                'label' => $label . ' Reveal When',
-                'value' => $revealConditions,
-                'conditions' => true,
-                'field' => sprintf('objective%dRevealConditions', $index),
-            ];
-        }
-
-        return $fields;
-    }
-
-    /**
      * Returns the input control for a database settings field when editable.
      *
      * @param array<string, mixed> $field The field descriptor.
@@ -10506,8 +10140,7 @@ final class Editor
      */
     private function hasDatabaseSubList(): bool
     {
-        return $this->isQuestsDatabaseSelected()
-            || $this->getSelectedRecordDatabase()?->schema->subList !== null;
+        return ($this->getSelectedRecordDatabase()?->schema->getInlineSubLists() ?? []) !== [];
     }
 
     /**
@@ -10517,65 +10150,10 @@ final class Editor
      */
     private function removeDatabaseSubItem(): void
     {
-        if ($this->isQuestsDatabaseSelected()) {
-            $this->removeDatabaseQuestObjective();
-
-            return;
-        }
-
-        if ($this->getSelectedRecordDatabase()?->schema->subList !== null) {
+        if (($this->getSelectedRecordDatabase()?->schema->getInlineSubLists() ?? []) !== []) {
             $this->selectedDatabaseNestedContext() !== null
                 ? $this->removeDatabaseNestedSubItem()
                 : $this->removeDatabaseRecordSubItem();
-        }
-    }
-
-    /**
-     * Renames the selected quest, and its id with it where that is safe.
-     *
-     * @param string $name The new name.
-     * @return void
-     */
-    private function renameSelectedQuest(string $name): void
-    {
-        if (! $this->workspace instanceof ProjectWorkspace) {
-            return;
-        }
-
-        $questDatabase = $this->workspace->questDatabase;
-        $questIndex = $this->databaseSelectedQuestIndex;
-        $quest = $questDatabase->getQuestByIndex($questIndex);
-
-        if (! $quest instanceof ProjectQuest) {
-            return;
-        }
-
-        $previousName = $quest->getName();
-        $previousId = $quest->getId();
-        $isReferenced = new QuestReferences($this->workspace)->exist($previousId);
-        $newId = $questDatabase->renameQuest($questIndex, $name, ! $isReferenced);
-
-        $this->recordCommand(new GenericCommand(
-            'Quest rename',
-            static fn() => $questDatabase->renameQuest($questIndex, $name, ! $isReferenced),
-            static function () use ($questDatabase, $questIndex, $previousName, $previousId): void {
-                $questDatabase->renameQuest($questIndex, $previousName, false);
-                $questDatabase->setField($questIndex, 'id', $previousId);
-            },
-        ));
-
-        if (is_string($newId)) {
-            $this->setStatus(sprintf('Renamed. Its id is now %s.', $newId), StatusLevel::INFO);
-
-            return;
-        }
-
-        if ($isReferenced) {
-            // Saying so beats an id that silently stops matching its name.
-            $this->setStatus(
-                sprintf('Renamed. Its id stays %s, which other things point at.', $previousId),
-                StatusLevel::INFO
-            );
         }
     }
 
@@ -11742,6 +11320,9 @@ final class Editor
             if ($change?->command !== null) {
                 $this->recordCommand($change->command);
             }
+            if ($change?->note !== null) {
+                $this->setStatus($change->note, StatusLevel::INFO);
+            }
 
             return;
         }
@@ -11759,7 +11340,6 @@ final class Editor
             'category' => $this->databaseCategoryIndex,
             'actor' => $this->databaseSelectedActorIndex,
             'skill' => $this->databaseSelectedSkillIndex,
-            'quest' => $this->databaseSelectedQuestIndex,
             'records' => $this->databaseSelectedRecordIndexes,
         ];
 
@@ -11851,7 +11431,7 @@ final class Editor
      * Applies a database value onto a pinned entry identity, restoring the
      * live selection afterwards.
      *
-     * @param array{category: int, actor: int, skill: int, quest: int, records?: array<string, int>} $identity The pinned selection.
+     * @param array{category: int, actor: int, skill: int, records?: array<string, int>} $identity The pinned selection.
      * @param string $field The field identifier.
      * @param string $rawValue The raw value to apply.
      * @return void
@@ -11862,13 +11442,11 @@ final class Editor
             $this->databaseCategoryIndex,
             $this->databaseSelectedActorIndex,
             $this->databaseSelectedSkillIndex,
-            $this->databaseSelectedQuestIndex,
             $this->databaseSelectedRecordIndexes,
         ];
         $this->databaseCategoryIndex = $identity['category'];
         $this->databaseSelectedActorIndex = $identity['actor'];
         $this->databaseSelectedSkillIndex = $identity['skill'];
-        $this->databaseSelectedQuestIndex = $identity['quest'];
         $this->databaseSelectedRecordIndexes = $identity['records'] ?? $this->databaseSelectedRecordIndexes;
 
         try {
@@ -11878,7 +11456,6 @@ final class Editor
                 $this->databaseCategoryIndex,
                 $this->databaseSelectedActorIndex,
                 $this->databaseSelectedSkillIndex,
-                $this->databaseSelectedQuestIndex,
                 $this->databaseSelectedRecordIndexes,
             ] = $liveSelection;
         }
@@ -11962,20 +11539,6 @@ final class Editor
                 ? max(0, intval($rawValue))
                 : ($field === "scopeTargetCount" ? $rawValue : trim($rawValue));
             $this->workspace->skillDatabase->setField($this->databaseSelectedSkillIndex, $field, $value);
-            return;
-        }
-
-        if ($this->isQuestsDatabaseSelected()) {
-            if ($field === 'name') {
-                $this->renameSelectedQuest(trim($rawValue));
-
-                return;
-            }
-
-            $isIntegerField = in_array($field, ['rewardGold', 'rewardExperience'], true)
-                || preg_match('/^objective\d+Quantity$/', $field) === 1;
-            $value = $isIntegerField ? max(0, intval($rawValue)) : trim($rawValue);
-            $this->workspace->questDatabase->setField($this->databaseSelectedQuestIndex, $field, $value);
             return;
         }
 
@@ -14202,10 +13765,6 @@ final class Editor
             return $this->getDatabaseSkillListLines();
         }
 
-        if ($this->isQuestsDatabaseSelected()) {
-            return $this->getDatabaseQuestListLines();
-        }
-
         if ($this->isSystemDatabaseSelected()) {
             return $this->getDatabaseSystemListLines();
         }
@@ -14347,59 +13906,6 @@ final class Editor
         return $lines;
     }
 
-
-    /**
-     * Returns what an objective of the given type points at.
-     *
-     * A flag names a switch or story event the world sets, which is authored
-     * text rather than a record, so it stays typed.
-     *
-     * @param string $type The objective type.
-     * @return string|null The kind of reference, or null when it is free text.
-     */
-    private static function questObjectiveReference(string $type): ?string
-    {
-        return match (QuestObjectiveType::tryFrom($type)) {
-            // Collecting is not limited to consumables: a quest may ask for
-            // a weapon or a piece of armor, and the runtime resolves all
-            // three from one catalogue.
-            QuestObjectiveType::COLLECT => 'inventory',
-            QuestObjectiveType::DEFEAT => 'enemies',
-            QuestObjectiveType::REACH_MAP => 'maps',
-            QuestObjectiveType::TALK_TO => 'actors',
-            default => null,
-        };
-    }
-
-    /**
-     * Returns the quest list lines.
-     *
-     * @return string[]
-     */
-    private function getDatabaseQuestListLines(): array
-    {
-        $quests = $this->workspace?->questDatabase->getQuests() ?? [];
-
-        if ($quests === []) {
-            return ['No quests yet.', '', 'Shift+A to create one.'];
-        }
-
-        $lines = [];
-
-        foreach ($this->getVisibleDatabaseEntryIndexes() as $index) {
-            $quest = $quests[$index] ?? null;
-
-            if (! $quest instanceof ProjectQuest) {
-                continue;
-            }
-
-            $prefix = $index === $this->databaseSelectedQuestIndex ? '> ' : '  ';
-            $dirty = $quest->isDirty() ? ' *' : '';
-            $lines[] = sprintf('%s%s%s', $prefix, $quest->getName(), $dirty);
-        }
-
-        return $lines === [] ? ['No matches.'] : $lines;
-    }
 
     /**
      * Returns the system list lines.
@@ -15160,7 +14666,6 @@ final class Editor
             self::DATABASE_CATEGORY_ACTORS => $this->workspace->actorDatabase->isDirty(),
             self::DATABASE_CATEGORY_SKILLS => $this->workspace->skillDatabase->isDirty(),
             self::DATABASE_CATEGORY_SYSTEM => $this->workspace->systemDatabase->isDirty() || ($this->workspace->config?->isDirty() ?? false),
-            self::DATABASE_CATEGORY_QUESTS => $this->workspace->questDatabase->isDirty(),
             default => $this->workspace->getRecordDatabase($categoryKey)?->isDirty() ?? false,
         };
     }

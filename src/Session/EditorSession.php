@@ -14,6 +14,7 @@ use Ichiloto\Editor\Database\ConditionCodec;
 use Ichiloto\Editor\Database\ConditionEditor;
 use Ichiloto\Editor\Database\DatabaseCatalog;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
+use Ichiloto\Editor\Database\RecordItem;
 use Ichiloto\Editor\Database\RecordAuthoring;
 use Ichiloto\Editor\Database\RecordChange;
 use Ichiloto\Editor\Database\RecordRefusal;
@@ -1248,10 +1249,13 @@ final class EditorSession
      * it to edit the commands inside. A row of an item the record's lists
      * hold carries `item` and `itemNoun`, and `childNoun` when the item holds
      * a list of its own (a route's steps, a choice's options): add and
-     * remove act on it.
+     * remove act on it. The heading of a list beside the record's own (a
+     * quest's reward items) carries `listHeading`: adding to it adds that
+     * list's first entry. `listNoun` names an entry of the list an add with
+     * no row goes to.
      *
      * @param array<int|string, mixed> $frame The frame; [] for the record itself.
-     * @return array{category: string, index: int, frame: list<int|string>, frameLabel: ?string, editable: bool, readOnly: ?string, rows: list<array<string, mixed>>}
+     * @return array{category: string, index: int, frame: list<int|string>, frameLabel: ?string, editable: bool, readOnly: ?string, listNoun: ?string, rows: list<array<string, mixed>>}
      * @throws SessionRefusal When the category, record or frame is unknown.
      */
     public function readDatabaseRecord(string $category, int $index, array $frame = []): array
@@ -1267,6 +1271,9 @@ final class EditorSession
             'frameLabel' => $frame === [] ? null : $database->describeFramePath($frame),
             'editable' => $database->isEditable(),
             'readOnly' => $database->getReadOnlyReason(),
+            // What an entry of the list an add with no row goes to is called:
+            // the record's own list, or the open frame's.
+            'listNoun' => $database->getFrameSubList($frame)?->singular,
             // A row that names a field keeps its key whether or not it can be
             // edited; a read-only one is an `info` row the edit refuses.
             'rows' => array_map(static fn(array $field): array => self::describeRecordRow(
@@ -1285,7 +1292,7 @@ final class EditorSession
      * field cannot take is refused with what is wrong with it.
      *
      * @param array<string, mixed> $key The row's key, as `database.record` gave it.
-     * @return array{changed: bool, records: list<string>} Whether it changed, and the labels afterwards (a rename shows).
+     * @return array{changed: bool, records: list<string>, note?: string} Whether it changed, the labels afterwards (a rename shows), and what else it did.
      * @throws SessionRefusal When the category or record is unknown or read-only, the row is gone or read-only, or the value is refused.
      */
     public function applyDatabaseRecord(string $category, int $index, array $key, string $value): array
@@ -1308,7 +1315,8 @@ final class EditorSession
             $database, $index, $frame, $fieldId, $value, (string) ($field['label'] ?? 'Database field'),
         ));
 
-        return ['changed' => $change->command !== null, 'records' => self::listRecordLabels($database)];
+        return array_filter(['changed' => $change->command !== null, 'records' => self::listRecordLabels($database), 'note' => $change->note],
+            static fn(mixed $value): bool => $value !== null);
     }
 
     /**
@@ -1521,6 +1529,10 @@ final class EditorSession
             if ($item !== null) {
                 $row['item'] = true;
                 $row['itemNoun'] = $item->noun;
+                if ($item->kind === RecordItem::LIST) {
+                    // A list's heading: entries are added to it, never removed with it.
+                    $row['listHeading'] = true;
+                }
                 if ($item->childNoun !== null) {
                     $row['childNoun'] = $item->childNoun;
                 }

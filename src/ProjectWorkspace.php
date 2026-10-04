@@ -8,7 +8,9 @@ use FilesystemIterator;
 use Ichiloto\Editor\Cutscenes\CutsceneLibrary;
 use Ichiloto\Editor\Database\DatabaseCatalog;
 use Ichiloto\Editor\Database\EngineDataBootstrap;
+use Ichiloto\Editor\Database\ProjectRecord;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
+use Ichiloto\Editor\Database\QuestReferences;
 use Ichiloto\Editor\Database\RecordSchema;
 use Ichiloto\Editor\Database\RecordSchemaCatalog;
 use Ichiloto\Editor\Events\ProjectScriptCommands;
@@ -45,12 +47,29 @@ final readonly class ProjectWorkspace
         public ProjectActorDatabase     $actorDatabase,
         public ProjectSkillDatabase     $skillDatabase,
         public ProjectSystemDatabase    $systemDatabase,
-        public ProjectQuestDatabase     $questDatabase,
         public array                    $recordDatabases = [],
         public ?CutsceneLibrary         $cutscenes = null,
         public ?ProjectConfig           $config = null,
         public ?ProjectScriptCommands   $scriptCommands = null,
     ) {
+        // A quest's id follows its name until something refers to it, and
+        // what refers to a quest lives across the whole project.
+        $this->getRecordDatabase('quests')?->useIdentityReferences(
+            fn(string $questId): bool => new QuestReferences($this)->exist($questId),
+        );
+    }
+
+    /**
+     * The project's quests as validation and the journal panes read them.
+     *
+     * @return list<ProjectQuest>
+     */
+    public function getQuests(): array
+    {
+        return array_map(
+            static fn(ProjectRecord $record): ProjectQuest => new ProjectQuest((array) $record->toArray()),
+            array_values($this->getRecordDatabase('quests')?->getRecords() ?? []),
+        );
     }
 
     /**
@@ -171,7 +190,6 @@ final readonly class ProjectWorkspace
             actorDatabase: ProjectActorDatabase::fromProject($projectRoot),
             skillDatabase: ProjectSkillDatabase::fromProject($projectRoot),
             systemDatabase: ProjectSystemDatabase::fromProject($projectRoot),
-            questDatabase: ProjectQuestDatabase::fromProject($projectRoot),
             recordDatabases: array_map(
                 static fn(RecordSchema $schema): ProjectRecordDatabase => ProjectRecordDatabase::fromProject($projectRoot, $schema, $projectConfig),
                 RecordSchemaCatalog::all(),
@@ -281,7 +299,6 @@ final readonly class ProjectWorkspace
         return $this->actorDatabase->isDirty()
             || $this->skillDatabase->isDirty()
             || $this->systemDatabase->isDirty()
-            || $this->questDatabase->isDirty()
             || ($this->config?->isDirty() ?? false)
             || ($this->cutscenes?->hasUnsavedChanges() ?? false);
     }
@@ -320,14 +337,13 @@ final readonly class ProjectWorkspace
      * Read-only record categories are left out: they hold no edits, and
      * asking them to save would raise instead of doing nothing.
      *
-     * @return array<string, ProjectActorDatabase|ProjectSkillDatabase|ProjectQuestDatabase|ProjectSystemDatabase|ProjectConfig|ProjectRecordDatabase>
+     * @return array<string, ProjectActorDatabase|ProjectSkillDatabase|ProjectSystemDatabase|ProjectConfig|ProjectRecordDatabase>
      */
     public function listSaveableDatabases(): array
     {
         $databases = [
             'Actors' => $this->actorDatabase,
             'Skills' => $this->skillDatabase,
-            'Quests' => $this->questDatabase,
             'System' => $this->systemDatabase,
         ];
 
@@ -408,7 +424,6 @@ final readonly class ProjectWorkspace
             actorDatabase: $this->actorDatabase,
             skillDatabase: $this->skillDatabase,
             systemDatabase: $this->systemDatabase,
-            questDatabase: $this->questDatabase,
             recordDatabases: $this->recordDatabases,
             cutscenes: $this->cutscenes,
             config: $this->config,

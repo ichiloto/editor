@@ -61,6 +61,7 @@ final class ProjectRecordDatabase
         private ?\Closure $writeBack = null,
         private ?string $projectRoot = null,
         private ?ProjectConfig $config = null,
+        private ?\Closure $identityReferences = null,
     ) {
         if ($schema->storage === RecordStorage::LIST_FILE && $schema->projection === null) {
             // What the file declares for each record -- the identity it is
@@ -480,14 +481,21 @@ final class ProjectRecordDatabase
             ];
         }
 
-        $subList = $this->schema->subList;
+        foreach ($this->schema->getInlineSubLists() as $subList) {
+            if ($subList !== $this->schema->subList) {
+                // A list beside the record's own is headed by its name and
+                // count; its heading is where an entry is added to it.
+                $fields[] = [
+                    'label' => $subList->heading,
+                    'value' => sprintf('%d', count($record->getSubList($subList->key, $subList->scalarKey))),
+                    'field' => $subList->prefix . 'List',
+                    'listHeading' => true,
+                ];
+            }
 
-        if ($subList === null) {
-            return $fields;
-        }
-
-        foreach ($record->getSubList($subList->key) as $entryIndex => $entry) {
-            $fields = [...$fields, ...$this->describeSubEntryFields($subList, $entryIndex, $entry, $isEditable, [])];
+            foreach ($record->getSubList($subList->key, $subList->scalarKey) as $entryIndex => $entry) {
+                $fields = [...$fields, ...$this->describeSubEntryFields($subList, $entryIndex, $entry, $isEditable, [])];
+            }
         }
 
         return $fields;
@@ -669,9 +677,11 @@ final class ProjectRecordDatabase
             }
         }
 
-        if ($subList !== null && preg_match('/^' . preg_quote($subList->prefix, '/') . '(\d+)([A-Za-z][A-Za-z0-9]*)$/', $fieldId, $matches) === 1) {
-            $this->setSubField($record, $subList, intval($matches[1]), $matches[2], $rawValue);
-            return;
+        foreach ($this->schema->getInlineSubLists() as $inlineList) {
+            if (preg_match('/^' . preg_quote($inlineList->prefix, '/') . '(\d+)([A-Za-z][A-Za-z0-9]*)$/', $fieldId, $matches) === 1) {
+                $this->setSubField($record, $inlineList, intval($matches[1]), $matches[2], $rawValue);
+                return;
+            }
         }
 
         foreach ($this->schema->fieldsFor($record->toArray()) as $field) {
@@ -696,9 +706,15 @@ final class ProjectRecordDatabase
 
             $value = self::coerce($field, $rawValue);
             if ($field->uniqueAcrossRecords) {
-                $this->assertMembersUnclaimed($record, $field, is_array($value) ? $value : []);
+                is_array($value)
+                    ? $this->assertMembersUnclaimed($record, $field, $value)
+                    : $this->assertValueUnclaimed($record, $field, $value);
             }
+            $previousIdentity = $this->schema->identityKey === null ? null : $record->get($this->schema->identityKey);
             $record->set($field->key, $value);
+            if ($field->key === $this->schema->labelKey && $this->schema->identityFollowsLabel) {
+                $this->followLabelWithIdentity($record, strval($previousIdentity));
+            }
             $this->touchState();
 
             return;
@@ -733,6 +749,67 @@ final class ProjectRecordDatabase
         }
 
         return $payload;
+    }
+
+    /**
+     * Refuses a value another record of the category already has, ignoring
+     * case, before anything changes: two classes or enemies by one name.
+     *
+     * @throws \InvalidArgumentException When another record has it.
+     */
+    private function assertValueUnclaimed(ProjectRecord $record, RecordField $field, mixed $value): void
+    {
+        if (! is_scalar($value) || trim(strval($value)) === '') {
+            return;
+        }
+
+        foreach ($this->getRecords() as $other) {
+            $theirs = $other === $record ? null : $other->get($field->key);
+
+            if (is_scalar($theirs) && mb_strtolower(trim(strval($theirs))) === mb_strtolower(trim(strval($value)))) {
+                throw new \InvalidArgumentException(sprintf(
+                    'Another %s already has %s %s.',
+                    $this->schema->entryNoun,
+                    mb_strtolower($field->label),
+                    trim(strval($value)),
+                ));
+            }
+        }
+    }
+
+    /**
+     * Keeps a record's identity in step with its label, as the identity's
+     * slug, while nothing refers to the identity it has; once something does,
+     * the identity stays, so the reference keeps resolving.
+     */
+    private function followLabelWithIdentity(ProjectRecord $record, string $previousIdentity): void
+    {
+        $identityKey = (string) $this->schema->identityKey;
+
+        if ($previousIdentity !== '' && $this->identityReferences !== null && ($this->identityReferences)($previousIdentity)) {
+            return;
+        }
+
+        $taken = [];
+        foreach ($this->getRecords() as $other) {
+            if ($other !== $record) {
+                $taken[] = $other->getDisplayValue($identityKey);
+            }
+        }
+
+        $record->set($identityKey, Slug::unique(strval($record->get($this->schema->labelKey)), $taken, Slug::of($this->schema->entryNoun)));
+    }
+
+    /**
+     * Says whether something in the project refers to a record by an
+     * identity, for a category whose identities follow their labels. The
+     * workspace supplies it: what refers to a record lives across the project.
+     *
+     * @param \Closure(string): bool $isReferenced
+     */
+    public function useIdentityReferences(\Closure $isReferenced): void
+    {
+        $this->identityReferences = $isReferenced;
     }
 
     /**
@@ -1085,19 +1162,19 @@ final class ProjectRecordDatabase
      * @param int|null $at Where to insert it, or null for the end.
      * @return int|null The new entry index.
      */
-    public function addSubItem(int $index, ?array $entry = null, ?int $at = null): ?int
+    public function addSubItem(int $index, ?array $entry = null, ?int $at = null, ?string $listKey = null): ?int
     {
         $record = $this->getRecordByIndex($index);
-        $subList = $this->schema->subList;
+        $subList = $this->schema->findInlineSubList($listKey);
 
         if ($subList === null || ! $record instanceof ProjectRecord || ! $this->isEditable() || ! $record->isEditable()) {
             return null;
         }
 
-        $entries = $record->getSubList($subList->key);
+        $entries = $record->getSubList($subList->key, $subList->scalarKey);
         $position = $at === null ? count($entries) : max(0, min(count($entries), $at));
         array_splice($entries, $position, 0, [$entry ?? $subList->blank]);
-        $record->setSubList($subList->key, $entries);
+        $record->setSubList($subList->key, $entries, $subList->scalarKey, $subList->removeWhenEmpty);
         $this->touchState();
 
         return $position;
@@ -1110,23 +1187,23 @@ final class ProjectRecordDatabase
      * @param int $entryIndex The entry index.
      * @return array<string, mixed>|null The removed entry payload.
      */
-    public function removeSubItem(int $index, int $entryIndex): ?array
+    public function removeSubItem(int $index, int $entryIndex, ?string $listKey = null): ?array
     {
         $record = $this->getRecordByIndex($index);
-        $subList = $this->schema->subList;
+        $subList = $this->schema->findInlineSubList($listKey);
 
         if ($subList === null || ! $record instanceof ProjectRecord || ! $this->isEditable() || ! $record->isEditable()) {
             return null;
         }
 
-        $entries = $record->getSubList($subList->key);
+        $entries = $record->getSubList($subList->key, $subList->scalarKey);
 
         if (! array_key_exists($entryIndex, $entries)) {
             return null;
         }
 
         [$removed] = array_splice($entries, $entryIndex, 1);
-        $record->setSubList($subList->key, $entries);
+        $record->setSubList($subList->key, $entries, $subList->scalarKey, $subList->removeWhenEmpty);
         $this->touchState();
 
         return $removed;
@@ -1140,19 +1217,19 @@ final class ProjectRecordDatabase
      * @param array<string, mixed> $entry The entry payload.
      * @return void
      */
-    public function insertSubItem(int $index, int $entryIndex, array $entry): void
+    public function insertSubItem(int $index, int $entryIndex, array $entry, ?string $listKey = null): void
     {
         $record = $this->getRecordByIndex($index);
-        $subList = $this->schema->subList;
+        $subList = $this->schema->findInlineSubList($listKey);
 
         if ($subList === null || ! $record instanceof ProjectRecord) {
             return;
         }
 
-        $entries = $record->getSubList($subList->key);
+        $entries = $record->getSubList($subList->key, $subList->scalarKey);
         $entryIndex = max(0, min(count($entries), $entryIndex));
         array_splice($entries, $entryIndex, 0, [$entry]);
-        $record->setSubList($subList->key, $entries);
+        $record->setSubList($subList->key, $entries, $subList->scalarKey, $subList->removeWhenEmpty);
         $this->touchState();
     }
 
@@ -1162,15 +1239,29 @@ final class ProjectRecordDatabase
      * @param int $index The record index.
      * @return int
      */
-    public function countSubItems(int $index): int
+    public function countSubItems(int $index, ?string $listKey = null): int
     {
-        $subList = $this->schema->subList;
+        $subList = $this->schema->findInlineSubList($listKey);
 
         if ($subList === null) {
             return 0;
         }
 
-        return count($this->getRecordByIndex($index)?->getSubList($subList->key) ?? []);
+        return count($this->getRecordByIndex($index)?->getSubList($subList->key, $subList->scalarKey) ?? []);
+    }
+
+    /**
+     * Returns the entries of one of the lists a record shows inline.
+     *
+     * @param int $index The record index.
+     * @param string|null $listKey The list; the record's own when null.
+     * @return array<int, array<string, mixed>>
+     */
+    public function getSubItems(int $index, ?string $listKey = null): array
+    {
+        $subList = $this->schema->findInlineSubList($listKey);
+
+        return $subList === null ? [] : ($this->getRecordByIndex($index)?->getSubList($subList->key, $subList->scalarKey) ?? []);
     }
 
     /**
@@ -1192,7 +1283,7 @@ final class ProjectRecordDatabase
         }
 
         $parentIndex = intval($parentMatch[1]);
-        $entry = $record->getSubList($subList->key)[$parentIndex] ?? null;
+        $entry = $record->getSubList($subList->key, $subList->scalarKey)[$parentIndex] ?? null;
         $nestedList = is_array($entry) ? $subList->nestedListFor($entry) : null;
 
         if ($nestedList === null) {
@@ -2427,7 +2518,7 @@ final class ProjectRecordDatabase
      */
     private function setSubField(ProjectRecord $record, RecordSubList $subList, int $entryIndex, string $token, string $rawValue): void
     {
-        $entries = $record->getSubList($subList->key);
+        $entries = $record->getSubList($subList->key, $subList->scalarKey);
 
         if (! array_key_exists($entryIndex, $entries)) {
             return;
@@ -2444,7 +2535,7 @@ final class ProjectRecordDatabase
                 self::coerce($field, $rawValue),
             );
             $entries[$entryIndex] = $subList->removeConflictingFields($entries[$entryIndex], $field->key);
-            $record->setSubList($subList->key, $entries);
+            $record->setSubList($subList->key, $entries, $subList->scalarKey, $subList->removeWhenEmpty);
             $this->touchState();
 
             return;
@@ -2461,7 +2552,7 @@ final class ProjectRecordDatabase
         string $fieldToken,
         string $rawValue,
     ): void {
-        $entries = $record->getSubList($subList->key);
+        $entries = $record->getSubList($subList->key, $subList->scalarKey);
         $entry = $entries[$entryIndex] ?? null;
 
         if (! is_array($entry)) {
@@ -2472,7 +2563,7 @@ final class ProjectRecordDatabase
 
         if ($written !== null) {
             $entries[$entryIndex] = $written;
-            $record->setSubList($subList->key, $entries);
+            $record->setSubList($subList->key, $entries, $subList->scalarKey, $subList->removeWhenEmpty);
             $this->touchState();
         }
     }
@@ -2599,6 +2690,18 @@ final class ProjectRecordDatabase
      */
     public function locateItem(int $recordIndex, array $framePath, string $fieldId): ?RecordItem
     {
+        if ($framePath === []) {
+            foreach ($this->schema->subLists as $inlineList) {
+                if ($fieldId === $inlineList->prefix . 'List') {
+                    return new RecordItem(RecordItem::LIST, [], -1, null, $inlineList->heading, RecordItem::ENTRY, $inlineList->singular, $inlineList->key);
+                }
+
+                if (preg_match('/^' . preg_quote($inlineList->prefix, '/') . '(\d+)[A-Za-z]/', $fieldId, $matches) === 1) {
+                    return new RecordItem(RecordItem::ENTRY, [], intval($matches[1]), null, $inlineList->singular, listKey: $inlineList->key);
+                }
+            }
+        }
+
         $list = $this->getFrameSubList($framePath);
         $entries = $this->getFrameCommands($recordIndex, $framePath);
 
@@ -2764,7 +2867,7 @@ final class ProjectRecordDatabase
             return null;
         }
 
-        $entries = $record->getSubList($subList->key);
+        $entries = $record->getSubList($subList->key, $subList->scalarKey);
         $parent = $entries[$parentIndex] ?? null;
         $nestedList = is_array($parent) ? $subList->nestedListFor($parent) : null;
 
@@ -2797,7 +2900,7 @@ final class ProjectRecordDatabase
 
         $entries = $context['entries'];
         $entries[$context['parentIndex']][$context['list']->key] = array_values($nestedEntries);
-        $context['record']->setSubList($subList->key, $entries);
+        $context['record']->setSubList($subList->key, $entries, $subList->scalarKey, $subList->removeWhenEmpty);
         $this->touchState();
     }
 

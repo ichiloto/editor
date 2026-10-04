@@ -324,7 +324,7 @@ final class SaveCompatibilityValidator
             ContentReferenceCategory::ONE_SHOT_EVENT => $this->oneShotEventIds($workspace),
             ContentReferenceCategory::QUEST => array_map(
                 static fn(object $quest): string => $quest->getId(),
-                $workspace->questDatabase->getQuests()
+                $workspace->getQuests()
             ),
             // The durable identity a save reconstructs an actor by, which
             // is the definition id where one is declared and the display

@@ -1022,7 +1022,7 @@ status line says exactly why.
 | Animations | `assets/Data/animations.php` | Editable |
 | Tilesets | - | Read-only - the engine has no tileset system |
 | Common Events | `assets/Events/*.php` | Editable |
-| Quests | `assets/Data/quests.php` | Editable |
+| Quests | `assets/Data/quests.php` | Editable - objectives (the target picked by type), reward items with quantities, prerequisites, optional; the id follows the name until something refers to it |
 | Skits | `assets/Data/Skits/*.php` | Editable |
 | Knowledge | `assets/Data/knowledge.php` | Editable |
 | Knowledge Reports | `assets/Data/knowledge.php` | Editable |

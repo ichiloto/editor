@@ -136,10 +136,7 @@ final class ReferenceCatalog
             // Spells and abilities may be authored in any of the Engine's
             // skill files; a reference names the skill wherever it lives.
             'skills' => $this->workspace->getSkillNames(),
-            'quests' => array_map(
-                static fn(ProjectQuest $quest): string => $quest->getId(),
-                $this->workspace->questDatabase->getQuests()
-            ),
+            'quests' => array_map(static fn(ProjectQuest $quest): string => $quest->getId(), $this->workspace->getQuests()),
             'maps' => $this->workspace->mapIds,
             // A shop's stock is whatever the engine's ItemStore holds, and
             // that is everything in items.php: items, weapons and armors

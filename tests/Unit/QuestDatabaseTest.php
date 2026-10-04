@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 use Ichiloto\Editor\Database\DatabaseCatalog;
 use Ichiloto\Editor\History\CommandHistory;
-use Ichiloto\Editor\ProjectQuestDatabase;
+use Ichiloto\Editor\Database\ProjectRecordDatabase;
+use Ichiloto\Editor\Database\RecordSchemaCatalog;
+use Ichiloto\Editor\ProjectQuest;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Engine\Quests\Quest;
 
@@ -22,6 +24,18 @@ function questsEditor(): \Ichiloto\Editor\Editor
   return $editor;
 }
 
+/** The quests category of a project, through the shared record service. */
+function questRecords(string $root): ProjectRecordDatabase
+{
+  return ProjectRecordDatabase::fromProject($root, RecordSchemaCatalog::forKey('quests'));
+}
+
+/** @return list<ProjectQuest> */
+function questViews(ProjectRecordDatabase $database): array
+{
+  return array_map(static fn($record): ProjectQuest => new ProjectQuest((array) $record->toArray()), $database->getRecords());
+}
+
 /**
  * Copies the fixture project into a scratch directory so saves never touch
  * the shared fixture.
@@ -37,8 +51,8 @@ function scratchQuestProject(): string
 }
 
 it('loads the quests from the fixture project', function () {
-  $database = ProjectQuestDatabase::fromProject(fixturePath('sample-project'));
-  $quests = $database->getQuests();
+  $database = questRecords(fixturePath('sample-project'));
+  $quests = questViews($database);
 
   expect($quests)->toHaveCount(2)
     ->and($quests[0]->getId())->toBe('breakfast-duty')
@@ -52,11 +66,11 @@ it('loads the quests from the fixture project', function () {
 it('tolerates a missing quests.php and creates it on first save', function () {
   $root = rememberTemporaryProject(sys_get_temp_dir() . '/ichiloto-quests-empty-' . uniqid());
   mkdir($root, 0777, true);
-  $database = ProjectQuestDatabase::fromProject($root);
+  $database = questRecords($root);
 
-  expect($database->getQuests())->toBe([]);
+  expect($database->getRecords())->toBe([]);
 
-  $index = $database->addQuest();
+  $index = $database->addRecord();
   $database->setField($index, 'objective0Target', 'Mom');
   $database->save();
 
@@ -71,16 +85,16 @@ it('tolerates a missing quests.php and creates it on first save', function () {
 
 it('round-trips the example file shape losslessly through save', function () {
   $root = scratchQuestProject();
-  $original = require $root . '/assets/Data/quests.php';
+  $original = (string) file_get_contents($root . '/assets/Data/quests.php');
 
-  $database = ProjectQuestDatabase::fromProject($root);
+  $database = questRecords($root);
+  $database->setField(0, 'giver', 'Grandma');
+  $database->setField(0, 'giver', 'Mom');
   $database->save();
 
-  $saved = require $root . '/assets/Data/quests.php';
+  expect((string) file_get_contents($root . '/assets/Data/quests.php'))->toBe($original);
 
-  expect($saved)->toBe($original);
-
-  foreach ($saved as $entry) {
+  foreach (require $root . '/assets/Data/quests.php' as $entry) {
     expect(Quest::fromArray($entry))->toBeInstanceOf(Quest::class);
   }
 });
@@ -101,35 +115,33 @@ PHP;
   file_put_contents($path, $header . 'return ' . var_export($quests, true) . ";\n");
   $original = require $path;
 
-  $database = ProjectQuestDatabase::fromProject($root);
+  $database = questRecords($root);
+  $database->setField(1, 'giver', 'Noticeboard');
   $database->save();
 
   $savedSource = (string) file_get_contents($path);
   $saved = require $path;
-  $reloaded = ProjectQuestDatabase::fromProject($root);
+  $original[1]['giver'] = 'Noticeboard';
 
   expect($saved)->toBe($original)
     ->and($savedSource)->toStartWith($header)
-    ->and($savedSource)->toContain('// Production quest definitions. Keep this file-level header.')
-    ->and($saved[0]['productionMetadata'])->toBe(['owner' => 'narrative', 'revision' => 3])
-    ->and(array_map(
-      static fn(\Ichiloto\Editor\ProjectQuest $quest): array => $quest->toArray(),
-      $reloaded->getQuests(),
-    ))->toBe($original);
+    ->and($saved[0]['productionMetadata'])->toBe(['owner' => 'narrative', 'revision' => 3]);
 });
 
 it('builds the quest settings fields with the five objective types', function () {
-  // Regression guard mirroring the AnimationTargetPosition test: the field
-  // builder must resolve QuestObjectiveType and flatten the objectives.
   $editor = questsEditor();
 
   $fields = callEditorMethod($editor, 'getDatabaseSettingsFields');
   $labels = array_column($fields, 'label');
-  $typeField = $fields[array_search('Obj 1 Type', $labels, true)];
+  $typeField = $fields[array_search('Objective 1 Type', $labels, true)];
 
-  expect($labels)->toContain('Id', 'Name', 'Description', 'Giver', 'Reward Gold', 'Reward EXP', 'Prereqs', 'Obj 1 Type', 'Obj 1 Target', 'Obj 1 Qty', 'Obj 1 Text', 'Obj 1 Revealed', 'Obj 1 Reveal When', 'Obj 2 Type')
+  expect($labels)->toContain('Id', 'Name', 'Description', 'Giver', 'Optional', 'Reward Gold', 'Reward EXP', 'Prereqs',
+      'Objective 1 Type', 'Objective 1 Target', 'Objective 1 Quantity', 'Objective 1 Text', 'Objective 1 Revealed',
+      'Objective 1 Reveal When', 'Objective 2 Type', 'Reward Items')
     ->and($typeField['options'])->toBe(['talk_to', 'collect', 'defeat', 'reach_map', 'flag'])
-    ->and($typeField['value'])->toBe('reach_map');
+    ->and($typeField['value'])->toBe('reach_map')
+    // The target is picked from what the type asks for: a map to reach.
+    ->and($fields[array_search('Objective 1 Target', $labels, true)]['reference'] ?? null)->toBe('maps');
 });
 
 it('edits, saves, and reloads a quest through the editor', function () {
@@ -139,37 +151,42 @@ it('edits, saves, and reloads a quest through the editor', function () {
   setEditorProperty($editor, 'lastTerminalSize', ['width' => 120, 'height' => 40]);
   setEditorProperty($editor, 'databaseCategoryIndex', DatabaseCatalog::indexOf('quests'));
 
-  $fields = callEditorMethod($editor, 'getDatabaseSettingsFields');
-  $labels = array_column($fields, 'label');
+  $field = static function (string $label) use ($editor): array {
+    $fields = callEditorMethod($editor, 'getDatabaseSettingsFields');
 
-  callEditorMethod($editor, 'applyDatabaseFieldValueRecorded', $fields[array_search('Name', $labels, true)], 'Morning Errand');
-  callEditorMethod($editor, 'applyDatabaseFieldValueRecorded', $fields[array_search('Reward Gold', $labels, true)], '350');
-  callEditorMethod($editor, 'applyDatabaseFieldValueRecorded', $fields[array_search('Obj 1 Target', $labels, true)], 'happyville/plaza');
-  callEditorMethod($editor, 'applyDatabaseFieldValueRecorded', $fields[array_search('Obj 1 Revealed', $labels, true)], 'Return to the east gate');
-  callEditorMethod($editor, 'applyDatabaseFieldValueRecorded', $fields[array_search('Obj 1 Reveal When', $labels, true)], 'event:east_gate_identified');
+    return $fields[array_search($label, array_column($fields, 'label'), true)];
+  };
+
+  callEditorMethod($editor, 'applyDatabaseFieldValueRecorded', $field('Name'), 'Morning Errand');
+  callEditorMethod($editor, 'applyDatabaseFieldValueRecorded', $field('Reward Gold'), '350');
+  callEditorMethod($editor, 'applyDatabaseFieldValueRecorded', $field('Objective 1 Target'), 'happyville/plaza');
+  callEditorMethod($editor, 'applyDatabaseFieldValueRecorded', $field('Objective 1 Revealed'), 'Return to the east gate');
+  callEditorMethod($editor, 'applyDatabaseFieldValueRecorded', $field('Objective 1 Reveal When'), 'event:east_gate_identified');
 
   /** @var ProjectWorkspace $workspace */
   $workspace = getEditorProperty($editor, 'workspace');
+  $database = $workspace->getRecordDatabase('quests');
 
-  expect($workspace->questDatabase->isDirty())->toBeTrue()
+  expect($database->isDirty())->toBeTrue()
     ->and(callEditorMethod($editor, 'isDatabaseCategoryDirty', 'quests'))->toBeTrue();
 
-  $workspace->questDatabase->save();
+  $database->save();
 
-  expect($workspace->questDatabase->isDirty())->toBeFalse();
+  expect($database->isDirty())->toBeFalse();
 
-  $reloaded = ProjectQuestDatabase::fromProject($root);
-  $quest = $reloaded->getQuestByIndex(0);
+  $quest = questViews(questRecords($root))[0];
 
   expect($quest->getName())->toBe('Morning Errand')
+    // Something points at breakfast-duty, so its id stayed.
+    ->and($quest->getId())->toBe('breakfast-duty')
     ->and($quest->getRewardGold())->toBe(350)
     ->and($quest->getObjectives()[0]['target'])->toBe('happyville/plaza')
     ->and($quest->getObjectives()[0]['description'])->toBe('Visit the Happyville town center')
     ->and($quest->getObjectives()[0]['revealedDescription'])->toBe('Return to the east gate')
     ->and($quest->getObjectives()[0]['revealConditions'])->toBe([['type' => 'event', 'name' => 'east_gate_identified']]);
 
-  foreach ($reloaded->getQuests() as $entry) {
-    expect(Quest::fromArray($entry->toArray()))->toBeInstanceOf(Quest::class);
+  foreach (require $root . '/assets/Data/quests.php' as $entry) {
+    expect(Quest::fromArray($entry))->toBeInstanceOf(Quest::class);
   }
 });
 
@@ -183,23 +200,23 @@ it('undoes quest field edits against the pinned entry', function () {
 
   /** @var ProjectWorkspace $workspace */
   $workspace = getEditorProperty($editor, 'workspace');
-  $quest = $workspace->questDatabase->getQuestByIndex(0);
+  $record = $workspace->getRecordDatabase('quests')->getRecordByIndex(0);
 
-  expect($quest->getGiver())->toBe('Grandma');
+  expect($record->get('giver'))->toBe('Grandma');
 
   // Move the selection elsewhere: undo must still hit quest 0.
-  setEditorProperty($editor, 'databaseSelectedQuestIndex', 1);
+  setEditorProperty($editor, 'databaseSelectedRecordIndexes', ['quests' => 1]);
 
   /** @var CommandHistory $history */
   $history = getEditorProperty($editor, 'history');
   $history->undo();
 
-  expect($quest->getGiver())->toBe('Mom')
-    ->and(getEditorProperty($editor, 'databaseSelectedQuestIndex'))->toBe(1);
+  expect($record->get('giver'))->toBe('Mom')
+    ->and(getEditorProperty($editor, 'databaseSelectedRecordIndexes')['quests'])->toBe(1);
 
   $history->redo();
 
-  expect($quest->getGiver())->toBe('Grandma');
+  expect($record->get('giver'))->toBe('Grandma');
 });
 
 it('adds and removes objectives with undo support', function () {
@@ -207,57 +224,53 @@ it('adds and removes objectives with undo support', function () {
 
   /** @var ProjectWorkspace $workspace */
   $workspace = getEditorProperty($editor, 'workspace');
-  $quest = $workspace->questDatabase->getQuestByIndex(0);
+  $database = $workspace->getRecordDatabase('quests');
+  $objectives = static fn(): array => $database->getSubItems(0);
 
-  expect($quest->getObjectives())->toHaveCount(2);
+  expect($objectives())->toHaveCount(2);
 
   // The handlers repaint the Database panes; swallow the ANSI output.
   ob_start();
-  callEditorMethod($editor, 'addDatabaseQuestObjective');
+  callEditorMethod($editor, 'addDatabaseRecordSubItem');
 
-  expect($quest->getObjectives())->toHaveCount(3)
-    ->and($quest->getObjectives()[2]['type'])->toBe('talk_to');
+  expect($objectives())->toHaveCount(3)
+    ->and($objectives()[2]['type'])->toBe('talk_to');
 
   /** @var CommandHistory $history */
   $history = getEditorProperty($editor, 'history');
   $history->undo();
 
-  expect($quest->getObjectives())->toHaveCount(2);
+  expect($objectives())->toHaveCount(2);
 
   $history->redo();
 
-  expect($quest->getObjectives())->toHaveCount(3);
+  expect($objectives())->toHaveCount(3);
 
-  callEditorMethod($editor, 'removeDatabaseQuestObjective');
+  callEditorMethod($editor, 'removeDatabaseRecordSubItem');
   ob_end_clean();
 
-  expect($quest->getObjectives())->toHaveCount(2);
+  expect($objectives())->toHaveCount(2);
 
   $history->undo();
 
-  expect($quest->getObjectives())->toHaveCount(3);
+  expect($objectives())->toHaveCount(3);
 });
 
 it('round-trips prerequisites through the one-line editable form', function () {
-  $editor = questsEditor();
-  setEditorProperty($editor, 'databaseSelectedQuestIndex', 1);
+  $database = questRecords(fixturePath('sample-project'));
 
-  /** @var ProjectWorkspace $workspace */
-  $workspace = getEditorProperty($editor, 'workspace');
-  $quest = $workspace->questDatabase->getQuestByIndex(1);
+  expect(questViews($database)[1]->getPrerequisitesString())->toBe('quest:breakfast-duty:completed');
 
-  expect($quest->getPrerequisitesString())->toBe('quest:breakfast-duty:completed');
+  $database->setField(1, 'prerequisites', 'quest:breakfast-duty:active; !switch:dark-mode; item:Rusty Key:2');
 
-  $quest->setField('prerequisites', 'quest:breakfast-duty:active; !switch:dark-mode; item:Rusty Key:2');
-
-  expect($quest->getPrerequisites())->toBe([
+  expect(questViews($database)[1]->getPrerequisites())->toBe([
     ['type' => 'quest', 'name' => 'breakfast-duty', 'status' => 'active'],
     ['type' => 'switch', 'name' => 'dark-mode', 'negate' => true],
     ['type' => 'item', 'name' => 'Rusty Key', 'quantity' => 2],
   ]);
 
-  $quest->setField('prerequisites', '');
+  $database->setField(1, 'prerequisites', '');
 
-  expect($quest->getPrerequisites())->toBe([])
-    ->and(array_key_exists('prerequisites', $quest->toArray()))->toBeFalse();
+  expect(questViews($database)[1]->getPrerequisites())->toBe([])
+    ->and(array_key_exists('prerequisites', questViews($database)[1]->toArray()))->toBeFalse();
 });

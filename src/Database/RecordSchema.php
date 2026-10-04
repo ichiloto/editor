@@ -47,6 +47,11 @@ final readonly class RecordSchema
      * @param string|null $recordClass For one-file-per-record categories whose
      * files return `['class' => $recordClass, 'data' => [...]]`: the record is
      * the data, and saves write it back inside the same envelope.
+     * @param list<RecordSubList> $subLists Lists a record holds beside its own
+     * (`subList`), each shown inline under its own heading: a quest's reward
+     * items beside its objectives. Every list's prefix is its own.
+     * @param bool $identityFollowsLabel Whether the identity is its label's slug, kept
+     * in step on rename while nothing refers to it (a quest's id follows its name).
      */
     public function __construct(
         public string $key,
@@ -69,7 +74,29 @@ final readonly class RecordSchema
         public ?Closure $fieldsFor = null,
         public ?Closure $labelFor = null,
         public ?string $recordClass = null,
+        public array $subLists = [],
+        public bool $identityFollowsLabel = false,
     ) {
+    }
+
+    /**
+     * The lists a record's rows show inline, its own first.
+     *
+     * @return list<RecordSubList>
+     */
+    public function getInlineSubLists(): array
+    {
+        return $this->subList === null ? $this->subLists : [$this->subList, ...$this->subLists];
+    }
+
+    /** The inline list held under a payload key; the record's own when the key is null. */
+    public function findInlineSubList(?string $key): ?RecordSubList
+    {
+        if ($key === null) {
+            return $this->subList;
+        }
+
+        return array_find($this->getInlineSubLists(), static fn(RecordSubList $list): bool => $list->key === $key);
     }
 
     /**
