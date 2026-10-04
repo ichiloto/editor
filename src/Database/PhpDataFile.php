@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Database;
 
+use Ichiloto\Editor\Cutscenes\Source\ArraySourceWriter;
+use Ichiloto\Editor\Cutscenes\Source\PhpArraySourceDocument;
+use Ichiloto\Editor\Cutscenes\Source\SourceUnreadable;
 use Ichiloto\Editor\IO\AtomicFile;
 use Ichiloto\Editor\ProjectDirectoryContext;
 use RuntimeException;
@@ -12,18 +15,21 @@ use Throwable;
 /**
  * One authored PHP data file, loaded with its source header preserved.
  *
- * The editor's contract with an author's file is deliberately narrow: it
- * regenerates **only the returned expression**. Everything from `<?php` up to
- * the top-level `return` — the file docblock, `use` imports, blank lines, the
- * explanatory comment above a cutscene — is kept byte-for-byte and re-emitted
- * verbatim on save.
+ * A file that returns an array literal of plain data (scalars and arrays,
+ * no objects or enum cases) is saved by editing its own source:
+ * only the values that changed are rewritten where they sit, so comments,
+ * nowdocs, variables and layout inside the data survive, and a change that
+ * cannot be expressed there is refused rather than flattened. A save also
+ * refuses when the file changed on disk since it was read. Any other file
+ * keeps everything from `<?php` up to the top-level `return` byte-for-byte
+ * and regenerates only the returned expression.
  *
  * A file is editable only when both hold:
  *  - every leaf of the returned value is a scalar, array, or enum case
  *    (a `new Item(...)` payload cannot be regenerated without inventing
  *    source, so those files are browsed, never written); and
- *  - no comment sits *inside* the returned expression, because a rewrite
- *    would silently drop it.
+ *  - any comment *inside* the returned expression sits in an array literal
+ *    the source can be edited in, since a regeneration would drop it.
  *
  * When either fails the file reports a read-only reason instead, and the
  * editor surfaces that reason rather than risking the author's work.
@@ -36,13 +42,15 @@ final class PhpDataFile
      * @param string $header The verbatim source preceding the top-level `return`.
      * @param bool $exists Whether the file is present on disk.
      * @param string|null $readOnlyReason Why the file cannot be rewritten.
+     * @param string|null $source The file's bytes as read, which a save edits.
      */
     private function __construct(
         public readonly string $path,
-        public readonly mixed $payload,
+        public private(set) mixed $payload,
         public readonly string $header,
         public readonly bool $exists,
         public readonly ?string $readOnlyReason,
+        private ?string $source = null,
     ) {
     }
 
@@ -482,7 +490,7 @@ final class PhpDataFile
             return new self($path, $payload, $header, true, sprintf('%s contains %s', basename($path), $reason));
         }
 
-        if ($hasInteriorComment) {
+        if ($hasInteriorComment && (self::holdsObject($payload) || self::parseArraySource($source) === null)) {
             return new self(
                 $path,
                 $payload,
@@ -492,7 +500,27 @@ final class PhpDataFile
             );
         }
 
-        return new self($path, $payload, $header, true, null);
+        return new self($path, $payload, $header, true, null, $source);
+    }
+
+    /** Whether a value holds an object anywhere, an enum case included. */
+    private static function holdsObject(mixed $value): bool
+    {
+        if (is_object($value)) {
+            return true;
+        }
+
+        return is_array($value) && array_any($value, self::holdsObject(...));
+    }
+
+    /** The file as an editable array literal, or null when it is not one. */
+    private static function parseArraySource(string $source): ?PhpArraySourceDocument
+    {
+        try {
+            return PhpArraySourceDocument::parse($source);
+        } catch (SourceUnreadable) {
+            return null;
+        }
     }
 
     /**
@@ -523,16 +551,33 @@ final class PhpDataFile
             throw new RuntimeException(sprintf('Refusing to write %s: %s.', $this->path, $reason));
         }
 
+        $document = $this->source === null ? null : self::parseArraySource($this->source);
+
+        // Plain data is edited in its own source; objects keep the regeneration
+        // (or the constructor-argument edits) their files were written for.
+        if ($document !== null && is_array($this->payload) && is_array($payload)
+            && ! self::holdsObject($this->payload) && ! self::holdsObject($payload)) {
+            if (@file_get_contents($this->path) !== $this->source) {
+                throw new RuntimeException(sprintf(
+                    'Refusing to overwrite %s: it changed outside the editor since it was read. Reload it first.',
+                    $this->path,
+                ));
+            }
+            $contents = ArraySourceWriter::rewrite($document, $this->payload, $payload)->source;
+        } else {
+            $contents = $this->header . 'return ' . PhpValueExporter::export($payload) . ";\n";
+        }
+
         $directory = dirname($this->path);
 
         if (! is_dir($directory) && ! mkdir($directory, 0777, true) && ! is_dir($directory)) {
             throw new RuntimeException("Unable to create {$directory}.");
         }
 
-        AtomicFile::write(
-            $this->path,
-            $this->header . 'return ' . PhpValueExporter::export($payload) . ";\n",
-        );
+        AtomicFile::write($this->path, $contents);
+        // The file now reads as this payload, so the next save edits from here.
+        $this->payload = $payload;
+        $this->source = $contents;
     }
 
     /**

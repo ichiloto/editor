@@ -24,7 +24,7 @@ it('refuses an object whose state it cannot put back', function (): void {
     expect(PhpValueExporter::findUnexportableClass(['bad' => $carriesState]))->toBe('stdClass');
 });
 
-it('keeps a data file header verbatim and regenerates only the returned value', function (): void {
+it('keeps a data file header verbatim and edits only the returned value', function (): void {
     $root = makeTemporaryProject();
     $path = $root . '/assets/Events/dresser-note.php';
 
@@ -36,7 +36,6 @@ it('keeps a data file header verbatim and regenerates only the returned value', 
 
     $contents = (string) file_get_contents($path);
     expect($contents)->toContain('// A small demo cutscene: reading the note on the dresser.');
-    expect($contents)->toContain("return [\n  [\n    'type' => 'text',");
     expect(require $path)->toBe([['type' => 'text', 'text' => 'Rewritten.']]);
 
     removeDirectoryRecursively($root);
@@ -123,15 +122,47 @@ it('keeps authored globals out of the isolated runner protocol', function (): vo
     }
 });
 
-it('refuses to rewrite a file whose data carries comments', function (): void {
+it('edits a data file whose data carries comments in its own source, keeping every comment', function (): void {
     $root = makeTemporaryProject();
     $path = $root . '/assets/Data/states.php';
-    file_put_contents($path, "<?php\n\nreturn [\n  // keep me\n  ['id' => 'poison'],\n];\n");
+    $source = "<?php\n\nreturn [\n  // keep me\n  ['id' => 'poison', 'turns' => 3], // and me\n  /* and this */ ['id' => 'sleep'],\n];\n";
+    file_put_contents($path, $source);
 
     $file = PhpDataFile::load($path);
+    expect($file->isEditable())->toBeTrue();
 
-    expect($file->isEditable())->toBeFalse();
-    expect($file->readOnlyReason)->toContain('comments inside its data');
+    $file->save([['id' => 'poison', 'turns' => 4], ['id' => 'sleep'], ['id' => 'burn']]);
+    $written = (string) file_get_contents($path);
+    expect($written)->toContain('// keep me', '// and me', '/* and this */', "'turns' => 4")
+        ->and(require $path)->toBe([['id' => 'poison', 'turns' => 4], ['id' => 'sleep'], ['id' => 'burn']]);
+
+    // A second save edits from what the first wrote.
+    $file->save([['id' => 'poison', 'turns' => 4], ['id' => 'sleep']]);
+    expect(require $path)->toBe([['id' => 'poison', 'turns' => 4], ['id' => 'sleep']])
+        ->and((string) file_get_contents($path))->toContain('// keep me', '// and me', '/* and this */');
+
+    // Another hand changed the file since it was read: the save refuses rather than overwrite it.
+    file_put_contents($path, (string) file_get_contents($path) . "// outside edit\n");
+    expect(fn() => $file->save([['id' => 'sleep']]))->toThrow(RuntimeException::class, 'changed outside the editor')
+        ->and((string) file_get_contents($path))->toEndWith("// outside edit\n");
+
+    removeDirectoryRecursively($root);
+});
+
+it('still refuses to regenerate commented data that holds objects or is not an array literal', function (): void {
+    $root = makeTemporaryProject();
+    $path = $root . '/assets/Data/states.php';
+
+    foreach ([
+        "<?php\n\nreturn [\n  // keep me\n  ['color' => \\" . Color::class . "::RED],\n];\n",
+        "<?php\n\nreturn array_merge(\n  // keep me\n  [['id' => 'poison']],\n);\n",
+    ] as $source) {
+        file_put_contents($path, $source);
+        $file = PhpDataFile::load($path);
+
+        expect($file->isEditable())->toBeFalse()
+            ->and($file->readOnlyReason)->toContain('comments inside its data');
+    }
 
     removeDirectoryRecursively($root);
 });

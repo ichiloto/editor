@@ -1000,8 +1000,12 @@ resolved-stat preview: the game does not resolve them as layered stats. They
 
 Whether a category can be written is *detected*, not assumed. On load the
 editor evaluates the authored file and asks two questions: can every value be
-written back out losslessly, and would a rewrite drop a comment? A category is
-editable only when both answers are safe. Anything else is browsable, and the
+written back out losslessly, and would a save drop a comment? A file of plain
+data (an array literal of values, with no objects) is saved by editing its own
+source, so comments, nowdocs and layout inside the data stay as written, a
+change the source cannot express is refused rather than flattened, and a file
+changed on disk since it was read is refused rather than overwritten. A category
+is editable only when both answers are safe. Anything else is browsable, and the
 status line says exactly why.
 
 | Category | Backing file | Status |
@@ -1034,8 +1038,8 @@ status line says exactly why.
 | Terms | `config.php` (`vocab`, `messages`) | Literal terms editable; comments and unrelated expressions preserved |
 
 Why a category can still turn out read-only: a file the editor cannot
-evaluate, a value it could not write back out, or a comment sitting inside
-the returned data are each a reason, and the status line names it. You can
+evaluate, a value it could not write back out, or a comment inside returned
+data that holds objects or is not an array literal are each a reason, and the status line names it. You can
 still browse everything: an enemy shows its level, every stat, its sprite,
 its battle rewards, and its element affinities.
 
