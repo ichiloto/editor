@@ -25,9 +25,11 @@ function databaseSessionRow(array $read, string $fieldId): array
 }
 
 it('lists a category with what it can do, and reads a frame\'s rows with the items they belong to', function () {
-    $session = EditorSession::open(makeTemporaryProject());
+    $root = makeTemporaryProject();
+    $unwritable = makeUnwritableCategory($root);
+    $session = EditorSession::open($root);
     $states = $session->listDatabaseRecords('states');
-    $types = $session->listDatabaseRecords('types');
+    $types = $session->listDatabaseRecords($unwritable);
     $root = $session->readDatabaseRecord('common_events', 0);
     $then = $session->readDatabaseRecord('common_events', 0, [3, 'then']);
 
@@ -104,14 +106,16 @@ it('adds and removes items by row, beneath an item that holds a list, and at a f
 });
 
 it('creates, duplicates, moves and deletes records, each one undo step', function () {
-    $session = EditorSession::open(makeTemporaryProject());
+    $root = makeTemporaryProject();
+    $unwritable = makeUnwritableCategory($root);
+    $session = EditorSession::open($root);
 
     expect($session->createDatabaseRecord('states'))->toBe(['index' => 2, 'records' => ['Poison', 'Stun', 'New State']])
         ->and($session->duplicateDatabaseRecord('states', 0))->toBe(['index' => 1, 'records' => ['Poison', 'Poison', 'Stun', 'New State']])
         ->and($session->deleteDatabaseRecord('states', 1))->toBe(['index' => 0, 'records' => ['Poison', 'Stun', 'New State']])
         ->and(fn() => $session->moveDatabaseRecord('states', 0, 'down'))->toThrow(SessionRefusal::class, 'would not survive reopening')
         ->and(fn() => $session->createDatabaseRecord('terms'))->toThrow(SessionRefusal::class, 'Term entries cannot be created from the editor.')
-        ->and(fn() => $session->deleteDatabaseRecord('types', 0))->toThrow(SessionRefusal::class, 'Read-only: ');
+        ->and(fn() => $session->deleteDatabaseRecord($unwritable, 0))->toThrow(SessionRefusal::class, 'Read-only: ');
 
     expect(array_column([$session->undo(), $session->undo(), $session->undo()], 'label'))
         ->toBe(['Delete state Poison', 'State duplicate', 'State create'])
@@ -129,6 +133,7 @@ it('creates, duplicates, moves and deletes records, each one undo step', functio
 
 it('saves a category through its own file, and refuses one that cannot be written', function () {
     $root = makeTemporaryProject();
+    $unwritable = makeUnwritableCategory($root);
     $session = EditorSession::open($root);
 
     expect($session->saveDatabase('states'))->toBe(['saved' => false, 'warnings' => [], 'backupFailures' => []]);
@@ -140,7 +145,7 @@ it('saves a category through its own file, and refuses one that cannot be writte
         ->and(loadRecordDatabase($root, 'states')->getEntryLabels())->toBe(['Venom', 'Stun'])
         ->and($session->listDatabaseRecords('states')['dirty'])->toBeFalse()
         ->and($session->hasUnsavedChanges())->toBeFalse()
-        ->and(fn() => $session->saveDatabase('types'))->toThrow(SessionRefusal::class, 'Read-only: ');
+        ->and(fn() => $session->saveDatabase($unwritable))->toThrow(SessionRefusal::class, 'Read-only: ');
 });
 
 it('serves database authoring over the line protocol', function () {

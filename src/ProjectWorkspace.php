@@ -18,9 +18,11 @@ use Ichiloto\Editor\Storage\FileSetOperations;
 use Ichiloto\Editor\Storage\FileSetTransaction;
 use Ichiloto\Editor\Storage\FilesystemFileSetOperations;
 use Ichiloto\Engine\Core\ProjectFormat;
+use Ichiloto\Engine\Entities\Elements\ElementRegistry;
 use Ichiloto\Engine\Entities\Skills\SkillCatalog;
 use Ichiloto\Engine\Field\MapGraphics;
 use RecursiveDirectoryIterator;
+use InvalidArgumentException;
 use RecursiveIteratorIterator;
 use RuntimeException;
 use Throwable;
@@ -65,6 +67,21 @@ final readonly class ProjectWorkspace
     public function getSystemField(string $key): mixed
     {
         return $this->getRecordDatabase('system')?->getRecordByIndex(0)?->get($key);
+    }
+
+    /**
+     * The elements the game knows, as the Types record holds them, unsaved
+     * edits included: the list `system.php` declares, or the Engine's
+     * defaults when it lists none, read as the Engine's registry reads them.
+     *
+     * @return list<string> The element identities, in authored order.
+     * @throws InvalidArgumentException When the list names an element twice or names an empty one.
+     */
+    public function getElementIdentities(): array
+    {
+        $authored = $this->getRecordDatabase('types')?->getRecordByIndex(0)?->get('elements');
+
+        return ElementRegistry::getCanonicalIdentities(is_array($authored) ? $authored : []);
     }
 
     /**

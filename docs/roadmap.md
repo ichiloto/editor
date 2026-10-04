@@ -286,8 +286,9 @@ Order of work, each a complete slice before the next:
    and abilities in `magic.php` and `abilities.php` are edited too (the
    section above). Items, weapons and armors follow.
 4. Tilesets: an editor for `Data/Tilesets/<id>.php` (sheets, pieces, tables,
-   shadows); the "no tileset system" note is stale. Types: element names live
-   in `system.php`; the enum files stay read-only.
+   shadows); the "no tileset system" note is stale. Types is done: it edits
+   the elements `system.php` declares, which the element pickers now read
+   (they read an unused enum under `assets/Data/Types` before).
 5. The manual's category table gains a GUI column and states each category's
    real coverage.
 

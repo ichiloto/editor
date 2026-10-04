@@ -211,11 +211,12 @@ it('moves a record only where its file keeps the order, saying why elsewhere', f
 });
 
 it('refuses every change to a read-only category with its reason', function () {
-    $types = loadRecordDatabase(makeTemporaryProject(), 'types');
+    $root = makeTemporaryProject();
+    $types = loadRecordDatabase($root, makeUnwritableCategory($root));
     $authoring = new RecordAuthoring();
     $reason = sprintf('Read-only: %s.', $types->getReadOnlyReason());
 
-    expect(fn() => $authoring->applyField($types, 0, [], 'file', 'x', 'File'))->toThrow(RecordRefusal::class, $reason)
+    expect(fn() => $authoring->applyField($types, 0, [], 'title', 'x', 'Title'))->toThrow(RecordRefusal::class, $reason)
         ->and(fn() => $authoring->createRecord($types))->toThrow(RecordRefusal::class, $reason)
         ->and(fn() => $authoring->deleteRecord($types, 0))->toThrow(RecordRefusal::class, $reason)
         ->and(fn() => $authoring->addItem($types, 0, [], null))->toThrow(RecordRefusal::class, $reason);

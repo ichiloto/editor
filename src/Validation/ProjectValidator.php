@@ -141,6 +141,7 @@ class ProjectValidator
       ...new RecordReferenceValidator()->validate($workspace),
       ...$this->checkKnowledgeCatalog($workspace),
       ...$this->checkSpecialProperties($workspace),
+      ...$this->checkElements($workspace),
       ...$this->checkPermanentGrowth($workspace),
       ...$this->checkOptimizationPolicy($workspace),
       ...new SaveCompatibilityValidator()->validate($workspace),
@@ -370,6 +371,24 @@ class ProjectValidator
    * @param ProjectWorkspace $workspace The project.
    * @return Issue[] The issues found.
    */
+  /**
+   * Checks the project's elements as the game reads them at start: a name
+   * twice, or an empty one, stops the game from starting at all.
+   *
+   * @param ProjectWorkspace $workspace The project.
+   * @return Issue[] The issues found.
+   */
+  protected function checkElements(ProjectWorkspace $workspace): array
+  {
+    try {
+      $workspace->getElementIdentities();
+    } catch (InvalidArgumentException $refused) {
+      return [Issue::error('assets/Data/system.php elements', $refused->getMessage(), 'Give each element one distinct name in Types.')];
+    }
+
+    return [];
+  }
+
   /**
    * Checks the special properties a project's equipment declares.
    *

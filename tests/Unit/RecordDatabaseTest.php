@@ -325,12 +325,11 @@ it('writes an edited object entry back as the constructor call it was', function
 
 it('refuses every write path on a category it cannot rewrite', function (): void {
     $root = makeTemporaryProject();
-    $database = loadRecordDatabase($root, 'types');
+    $database = loadRecordDatabase($root, makeUnwritableCategory($root));
 
-    // Element and weapon types are PHP enum declarations, not data.
     expect($database->isEditable())->toBeFalse();
 
-    $database->setField(0, 'value', 'Tampered');
+    $database->setField(0, 'title', 'Tampered');
 
     expect($database->addRecord())->toBeNull();
     expect($database->removeRecord(0))->toBeNull();
@@ -401,15 +400,10 @@ it('edits literal terms while preserving inline config comments byte for byte', 
     removeDirectoryRecursively($root);
 });
 
-it('lists type tables without evaluating them and explains tilesets', function (): void {
+it('explains tilesets', function (): void {
     $root = makeTemporaryProject();
 
-    $types = loadRecordDatabase($root, 'types');
     $tilesets = loadRecordDatabase($root, 'tilesets');
-
-    expect($types->isEditable())->toBeFalse();
-    expect($types->getReadOnlyReason())->toContain('PHP enum declarations');
-    expect($types->getEntryLabels())->toBe(['equipment.php']);
 
     expect($tilesets->isEditable())->toBeFalse();
     expect($tilesets->getReadOnlyReason())->toContain('no tileset system');

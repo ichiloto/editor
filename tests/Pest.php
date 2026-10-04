@@ -243,6 +243,18 @@ function getEditorProperty(Editor $editor, string $property): mixed
 }
 
 /**
+ * Makes a temporary project's System category one the editor cannot write,
+ * as a real project's can be: its file returns a list, not the one map of
+ * settings the editor rewrites. Returns the category's key.
+ */
+function makeUnwritableCategory(string $root): string
+{
+    file_put_contents($root . '/assets/Data/system.php', "<?php\n\nreturn ['one setting', 'another'];\n");
+
+    return 'system';
+}
+
+/**
  * Invokes a private Editor method by reflection.
  */
 function callEditorMethod(Editor $editor, string $method, mixed ...$arguments): mixed

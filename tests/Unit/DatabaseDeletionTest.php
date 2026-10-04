@@ -123,16 +123,17 @@ it('refuses deletion in categories that have no entries', function () {
 
 it('refuses deletion in a read-only category before prompting', function () {
     $root = makeTemporaryProject();
-    $typesPath = $root . '/assets/Data/Types';
+    $category = makeUnwritableCategory($root);
+    $typesPath = $root . '/assets/Data';
     $hash = static fn(): string => md5(implode('', array_map(
         static fn(string $file): string => (string) file_get_contents($file),
-        glob($typesPath . '/*.php') ?: []
+        glob($typesPath . '/system.php') ?: []
     )));
     $before = $hash();
 
     try {
         $editor = deletionEditor($root);
-        openDatabaseCategory($editor, 'types');
+        openDatabaseCategory($editor, $category);
 
         // The category lists real entries, so this is not an "empty" refusal.
         expect(callEditorMethod($editor, 'getDatabaseEntryLabels'))->not->toBeEmpty();

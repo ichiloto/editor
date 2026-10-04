@@ -121,23 +121,23 @@ it('adds and removes a skit beat with Shift+O and Shift+X, both undoable', funct
 
 it('warns instead of editing when the category is read-only', function (): void {
     $root = makeTemporaryProject();
-    $typesPath = $root . '/assets/Data/Types';
+    $category = makeUnwritableCategory($root);
+    $typesPath = $root . '/assets/Data';
     $before = md5(implode('', array_map(
         static fn(string $file): string => (string) file_get_contents($file),
-        glob($typesPath . '/*.php') ?: []
+        glob($typesPath . '/system.php') ?: []
     )));
 
     try {
         $editor = deletionEditor($root);
 
-        // Element and weapon types are PHP enum declarations, not data.
-        openDatabaseCategory($editor, 'types');
+        openDatabaseCategory($editor, $category);
 
         callEditorMethod($editor, 'saveActiveDatabase');
 
         $after = md5(implode('', array_map(
             static fn(string $file): string => (string) file_get_contents($file),
-            glob($typesPath . '/*.php') ?: []
+            glob($typesPath . '/system.php') ?: []
         )));
 
         expect(getEditorProperty($editor, 'statusMessage'))->toContain('read-only')

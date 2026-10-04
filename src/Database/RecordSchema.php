@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Database;
 
 use Closure;
+use Ichiloto\Editor\Database\Projections\WholeFileProjection;
+use LogicException;
 
 /**
  * Declares one Database category: where its records live, what an entry is
@@ -77,6 +79,18 @@ final readonly class RecordSchema
         public array $subLists = [],
         public bool $identityFollowsLabel = false,
     ) {
+        if ($projection instanceof WholeFileProjection) {
+            // A field outside the keys the category owns would read blank and
+            // its edits would never reach the file.
+            $unowned = $projection->findUnownedKey([
+                ...array_map(static fn(RecordField $field): string => $field->key, $fields),
+                ...array_map(static fn(RecordSubList $list): string => $list->key, $this->getInlineSubLists()),
+            ]);
+
+            if ($unowned !== null) {
+                throw new LogicException(sprintf('The %s category edits "%s", a key its file projection does not own.', $key, $unowned));
+            }
+        }
     }
 
     /**

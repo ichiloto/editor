@@ -1032,9 +1032,9 @@ status line says exactly why.
 | Optimize Weights | `assets/Data/equipment-optimization.php` | Editable |
 | Optimize Outcomes | `assets/Data/equipment-optimization.php` | Editable |
 | Optimize Exclusions | `assets/Data/equipment-optimization.php` | Editable |
-| System | `assets/Data/system.php` | Editable - title, starting gold, party, inventory and position, elements, battle engine, openings and ATB settings |
+| System | `assets/Data/system.php` | Editable - title, starting gold, party, inventory and position, battle engine, openings and ATB settings |
 | Configuration | `config.php` (`save`, `accessibility`, `ui`, `graphics`, `audio`, `inn`) | Editable - one row per setting, typed by what it holds; field zoom is kept from 1 to 8 |
-| Types | `assets/Data/Types/*.php` | Read-only - PHP enum declarations |
+| Types | `assets/Data/system.php` | Editable - the project's elements, one per row; an empty list means the Engine's defaults. Weapon, armor and equipment types are the Engine's own |
 | Terms | `config.php` (`vocab`, `messages`) | Literal terms editable; comments and unrelated expressions preserved |
 
 Why a category can still turn out read-only: a file the editor cannot

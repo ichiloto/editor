@@ -838,8 +838,8 @@ final class RecordSchemaCatalog
 
     /**
      * System — `assets/Data/system.php`, one map the engine reads at start:
-     * the title, starting gold, party, inventory and position, the project's
-     * elements, and battle settings. The file is the category's one record,
+     * the title, starting gold, party, inventory and position, and battle
+     * settings. Its elements are the Types category's. The file is the category's one record,
      * only ever edited. The starting party and inventory are lists of their
      * own; a party member is a bare actor id, as the file authors it.
      *
@@ -863,7 +863,6 @@ final class RecordSchemaCatalog
                     'Start Facing',
                     options: array_map(static fn(MovementHeading $heading): string => $heading->value, MovementHeading::cases()),
                 ),
-                new RecordField('elements', 'Elements', codec: RecordFieldCodec::CSV_LIST),
                 new RecordField(
                     'battle.engine',
                     'Battle Engine',
@@ -879,7 +878,8 @@ final class RecordSchemaCatalog
             ],
             labelKey: 'title',
             identityKey: null,
-            projection: new WholeFileProjection(),
+            // The keys System owns; its elements are the Types category's.
+            projection: new WholeFileProjection(['title', 'currency', 'startingPositions', 'startingParty', 'startingInventory', 'battle']),
             subLists: [
                 new RecordSubList(
                     key: 'startingParty',
@@ -1343,13 +1343,12 @@ final class RecordSchemaCatalog
     }
 
     /**
-     * Element/equipment type tables — `assets/Data/Types`.
-     *
-     * These are PHP enum *declarations*, not data: the engine reads its own
-     * `Entities\Enumerations` enums and never loads this directory. The
-     * editor lists the files so they are discoverable, and does not evaluate
-     * them (requiring a class declaration into the editor's process would
-     * risk a redeclaration fatal).
+     * Types: the project's elements, the `elements` list of
+     * `assets/Data/system.php` that the Engine's element registry reads (its
+     * own defaults when the list is empty). Weapon, armor and equipment
+     * types are the Engine's own enums, not project data, and nothing reads
+     * `assets/Data/Types`. The category shares `system.php` with System,
+     * each saving only what it changed.
      *
      * @return RecordSchema
      */
@@ -1358,17 +1357,28 @@ final class RecordSchemaCatalog
         return new RecordSchema(
             key: 'types',
             entryNoun: 'type table',
-            storage: RecordStorage::FILE_LISTING,
-            relativePath: 'assets/Data/Types',
-            fields: [
-                new RecordField('file', 'File', isReadOnly: true),
-                new RecordField('kind', 'Kind', isReadOnly: true),
-                new RecordField('lines', 'Lines', InputControlType::INTEGER, isReadOnly: true),
-            ],
-            labelKey: 'file',
+            storage: RecordStorage::LIST_FILE,
+            relativePath: 'assets/Data/system.php',
+            fields: [],
+            labelKey: 'title',
             identityKey: null,
-            isAlwaysReadOnly: true,
-            readOnlyNote: 'element and equipment types are PHP enum declarations, not data the engine loads — edit them in your IDE',
+            projection: new WholeFileProjection(['elements']),
+            subLists: [
+                // An element is one name, as the file authors it. A list the
+                // game would refuse (a name twice, an empty one) is reported
+                // by validation; an empty list means the Engine's defaults.
+                new RecordSubList(
+                    key: 'elements',
+                    prefix: 'element',
+                    singular: 'element',
+                    fields: [new RecordField('name', 'Element')],
+                    blank: ['name' => 'New Element'],
+                    heading: 'Elements',
+                    scalarKey: 'name',
+                    removeWhenEmpty: true,
+                ),
+            ],
+            labelFor: static fn(array $payload): string => 'Elements',
         );
     }
 

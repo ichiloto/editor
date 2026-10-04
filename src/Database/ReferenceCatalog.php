@@ -18,6 +18,7 @@ use Ichiloto\Engine\Entities\Enumerations\Occasion;
 use Ichiloto\Engine\Entities\Skills\BasicSkill;
 use Ichiloto\Engine\Entities\Skills\Skill;
 use Ichiloto\Engine\Entities\Enumerations\WeaponType;
+use InvalidArgumentException;
 
 /**
  * What a field pointing at another resource may point at.
@@ -667,36 +668,18 @@ final class ReferenceCatalog
     }
 
     /**
-     * Returns the elements the project's own element enum declares.
+     * Returns the elements the game knows ({@see ProjectWorkspace::getElementIdentities()}).
+     * A list the game would refuse offers nothing; validation says why.
      *
-     * A project defines its elements as a PHP enum under assets/Data/Types
-     * (the Types category), and the engine matches them by their string
-     * values. The cases are read from the source, so the list is available
-     * whether or not the enum is loaded.
-     *
-     * @return string[] The element values, in declaration order.
+     * @return string[] The element identities, in authored order.
      */
     private function elementValues(): array
     {
-        $directory = rtrim($this->workspace->projectRoot, '/') . '/assets/Data/Types';
-
-        if (! is_dir($directory)) {
+        try {
+            return $this->workspace->getElementIdentities();
+        } catch (InvalidArgumentException) {
             return [];
         }
-
-        foreach (glob($directory . '/*.php') ?: [] as $path) {
-            $source = (string) file_get_contents($path);
-
-            if (preg_match('/^\s*enum\s+\w*Element\w*\s*:/m', $source) !== 1) {
-                continue;
-            }
-
-            preg_match_all("/^\\s*case\\s+\\w+\\s*=\\s*'([^']+)'\\s*;/m", $source, $matches);
-
-            return $matches[1];
-        }
-
-        return [];
     }
 
     /**

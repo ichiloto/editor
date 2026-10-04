@@ -153,3 +153,30 @@ it('refuses an edit to a value the file writes as an expression when it is made,
 
     expect((string) file_get_contents($path))->toContain("strtoupper('fixture')", "'amount' => 9");
 });
+
+it('saves System and Types, which share system.php, each with only its own keys', function (): void {
+    $root = scratchSystemProject();
+    $path = $root . '/assets/Data/system.php';
+    file_put_contents($path, "<?php\n\nreturn " . var_export([...productionSystem(), 'elements' => ['Fire', 'Ice']], true) . ";\n");
+    $system = systemRecords($root);
+    $types = ProjectRecordDatabase::fromProject($root, RecordSchemaCatalog::forKey('types'));
+
+    $types->setField(0, ProjectRecordDatabase::subFieldId('element', 1, 'name'), 'Frost');
+    $system->setField(0, 'currency.amount', '900');
+    $system->save();
+    $types->save();
+    $saved = require $path;
+
+    expect($saved['currency']['amount'])->toBe(900)
+        ->and($saved['elements'])->toBe(['Fire', 'Frost'])
+        ->and($saved['unknownSystemSetting'])->toBe(['preserve' => 'yes'])
+        ->and(array_keys($system->getRecordByIndex(0)?->toArray() ?? []))->not->toContain('elements')
+        ->and(fn() => new Ichiloto\Editor\Database\RecordSchema(
+            key: 'stray',
+            entryNoun: 'stray',
+            storage: Ichiloto\Editor\Database\RecordStorage::LIST_FILE,
+            relativePath: 'assets/Data/system.php',
+            fields: [new Ichiloto\Editor\Database\RecordField('title', 'Title')],
+            projection: new Ichiloto\Editor\Database\Projections\WholeFileProjection(['elements']),
+        ))->toThrow(LogicException::class, 'The stray category edits "title", a key its file projection does not own.');
+});
