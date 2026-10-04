@@ -315,7 +315,7 @@ final class EditorSession
             'map' => $map->mapId,
             'revision' => $map->stateVersion(),
             'assetRoot' => $map->getAssetRoot(),
-            'operations' => $world->getOperations(true),
+            'operations' => $world->getOperations(true, true),
             'layerIds' => $layerIds,
             'animated' => $world->animated,
             'graphicsIssue' => $issue,

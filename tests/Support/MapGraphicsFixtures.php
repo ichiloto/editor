@@ -31,7 +31,8 @@ function writeTilesetTestPng(string $path, int $width, int $height): void
  * @param array<string, array<string, mixed>> $pieces Pieces by id, as a tileset file lists them.
  * @param int|null $missingArt The tileset's missing-art tile, if it names one.
  */
-function writeTestTileset(string $root, string $id = 'home', ?array $sheets = null, array $pieces = [], ?int $missingArt = null): void
+function writeTestTileset(string $root, string $id = 'home', ?array $sheets = null, array $pieces = [], ?int $missingArt = null,
+    ?array $shadows = null): void
 {
     $sheets ??= ['A2' => 'Graphics/Tilesets/Home_A2.png', 'B' => 'Graphics/Tilesets/Home_B.png'];
     writeTilesetTestPng($root . '/assets/Graphics/Tilesets/Home_A2.png', 32, 24);
@@ -40,7 +41,7 @@ function writeTestTileset(string $root, string $id = 'home', ?array $sheets = nu
         mkdir($root . '/assets/Data/Tilesets', 0o777, true);
     }
     $data = ['name' => ucfirst($id), 'sheets' => $sheets] + ($pieces === [] ? [] : ['pieces' => $pieces])
-        + ($missingArt === null ? [] : ['missingArt' => $missingArt]);
+        + ($missingArt === null ? [] : ['missingArt' => $missingArt]) + ($shadows === null ? [] : ['shadows' => $shadows]);
     file_put_contents($root . "/assets/Data/Tilesets/{$id}.php", "<?php\n\nreturn " . var_export($data, true) . ";\n");
 }
 

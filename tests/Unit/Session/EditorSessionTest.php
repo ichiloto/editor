@@ -277,6 +277,32 @@ it('places, erases and undoes tiles as one step each, drawn from the unsaved lay
         ->and(fn() => $session->paintTiles('test-map', $session->readMap('test-map')['revision'], 'floor', [[0, 0]], 9000))->toThrow(SessionRefusal::class, "'9000' is not an RPG Maker tile identity");
 });
 
+it('redraws wall shadows from the tiles after every stroke, with no shadow data to place and none in the palette', function () {
+    $root = mapGraphicsProject();
+    writeTestTileset($root, shadows: ['casters' => [5], 'width' => 0.5, 'opacity' => 0.4]);
+    $session = EditorSession::open($root);
+    $shadows = static function () use ($session): array {
+        $cells = [];
+        foreach ($session->readWorld('test-map')['operations'] as $operation) {
+            if ($operation['op'] === 'worldTiles' && str_ends_with($operation['layerId'], ':shadows')) {
+                $cells[$operation['rows'][0]['row']] = array_column($operation['rows'][0]['cells'], 'column');
+            }
+        }
+        ksort($cells);
+        return $cells;
+    };
+
+    // Decor casters at (1, 0) and (3, 1): the first shades the floor to its right; the second stands at the map edge.
+    expect($shadows())->toBe([0 => [2]]);
+    $extended = $session->paintTiles('test-map', $session->readMap('test-map')['revision'], 'decor', [[2, 0]], 5);
+    expect($shadows())->toBe([0 => [3]]);
+    $session->paintTiles('test-map', $extended['revision'], 'decor', [[1, 0], [2, 0]], 0, 'Erase tiles');
+    expect($shadows())->toBe([])
+        ->and($session->undo()['label'])->toBe('Erase tiles')
+        ->and($shadows())->toBe([0 => [3]])
+        ->and(json_encode($session->readTilePalette('test-map')))->not->toContain('shadows');
+});
+
 it('saves placed tiles into the tile layer file the Engine reads', function () {
     $root = mapGraphicsProject();
     $session = EditorSession::open($root);
