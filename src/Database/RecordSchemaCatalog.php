@@ -29,6 +29,14 @@ use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandRegistry;
 use Ichiloto\Engine\Events\Interpreter\EventInterpreter;
 use Ichiloto\Engine\Entities\Enemies\Enemy;
 use Ichiloto\Engine\Entities\Enemies\EnemyCatalog;
+use Ichiloto\Engine\Entities\Enumerations\ItemScopeNumber;
+use Ichiloto\Engine\Entities\Enumerations\ItemScopeSide;
+use Ichiloto\Engine\Entities\Enumerations\ItemScopeStatus;
+use Ichiloto\Engine\Entities\Enumerations\Occasion;
+use Ichiloto\Engine\Entities\Skills\Skill;
+use Ichiloto\Engine\Entities\Skills\SkillCatalog;
+use Ichiloto\Engine\Entities\Skills\SkillRecord;
+use Ichiloto\Engine\Entities\Skills\SkillResolutionScope;
 use Ichiloto\Engine\Quests\QuestObjectiveType;
 use Ichiloto\Engine\Battle\Enumerations\BattleEngineType;
 use Ichiloto\Engine\Core\Enumerations\MovementHeading;
@@ -95,6 +103,7 @@ final class RecordSchemaCatalog
             self::weapons(),
             self::armors(),
             self::enemies(),
+            self::skills(),
             self::skits(),
             self::knowledgeSubjects(),
             self::knowledgeReports(),
@@ -1180,6 +1189,113 @@ final class RecordSchemaCatalog
                 ];
             },
             recordClass: Enemy::class,
+        );
+    }
+
+    /**
+     * Skills: one record per file under `assets/Data/Skills`, in the form
+     * the Engine's SkillRecord reads, numbered in the order menus list them.
+     * A skill's kind (an attack, an ability or a spell) is a value of the
+     * record; a spell also states its effect type. Effects are a list, each
+     * a `type` with that type's own values. `skills.php` is the barrel that
+     * returns them.
+     *
+     * @return RecordSchema
+     */
+    private static function skills(): RecordSchema
+    {
+        $fields = [
+            new RecordField('kind', 'Kind', options: array_keys(SkillRecord::KINDS)),
+            new RecordField('name', 'Name', uniqueAcrossRecords: true),
+            new RecordField('description', 'Description'),
+            new RecordField('icon', 'Icon'),
+            new RecordField('cost', 'Cost', InputControlType::INTEGER),
+            new RecordField('cooldown', 'Cooldown', InputControlType::INTEGER),
+            new RecordField('occasion', 'Occasion', options: array_map(static fn(Occasion $occasion): string => $occasion->value, Occasion::cases())),
+            new RecordField('scope.side', 'Scope Side', options: array_map(static fn(ItemScopeSide $side): string => $side->value, ItemScopeSide::cases())),
+            new RecordField('scope.number', 'Scope Number', options: array_map(static fn(ItemScopeNumber $number): string => $number->value, ItemScopeNumber::cases())),
+            new RecordField('scope.status', 'Scope Status', options: array_map(static fn(ItemScopeStatus $status): string => $status->value, ItemScopeStatus::cases())),
+            new RecordField('scope.targetCount', 'Target Count', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: 'Auto'),
+            new RecordField('invocation.message', 'Invoke Text'),
+            new RecordField('invocation.speed', 'Invoke Speed', InputControlType::INTEGER),
+            new RecordField('invocation.accuracy', 'Accuracy', InputControlType::INTEGER),
+            new RecordField('invocation.repeat', 'Repeat', InputControlType::INTEGER),
+            new RecordField('invocation.apGain', 'AP Gain', InputControlType::INTEGER),
+            new RecordField('invocation.hitScope', 'Hit Roll', reference: 'resolution_scopes', removeWhenEmpty: true, allowsNone: true, displayDefault: SkillResolutionScope::PER_HIT->value),
+            new RecordField('invocation.criticalScope', 'Critical Roll', reference: 'resolution_scopes', removeWhenEmpty: true, allowsNone: true, displayDefault: SkillResolutionScope::PER_HIT->value),
+            new RecordField(
+                'animationId',
+                'Animation',
+                InputControlType::INTEGER,
+                reference: 'animation_ids',
+                removeWhenEmpty: true,
+                allowsNone: true,
+                displayDefault: '(Legacy fallback)',
+            ),
+        ];
+        // Only a spell has an effect type; left out, the Engine infers it
+        // from the spell's effects.
+        $effectType = new RecordField('effectType', 'Effect Type', reference: 'magic_effect_types', removeWhenEmpty: true, allowsNone: true, displayDefault: '(from its effects)');
+        $formula = static fn(bool $resolves): array => [
+            new RecordField('formula', 'Formula'),
+            new RecordField('element', 'Element', reference: 'elements', removeWhenEmpty: true, allowsNone: true, displayDefault: '(none)'),
+            new RecordField('variance', 'Variance', InputControlType::FLOAT),
+            new RecordField('isCriticalHit', 'Can Critical', InputControlType::BOOLEAN, removeWhenEmpty: true),
+            ...($resolves ? [new RecordField('resolutionKind', 'Resolves As', reference: 'resolution_kinds', removeWhenEmpty: true, allowsNone: true, displayDefault: '(by effect)')] : []),
+        ];
+        $variants = [];
+
+        foreach (array_keys(SkillRecord::FORMULA_EFFECTS) as $type) {
+            $variants[$type] = $formula($type === 'hp_damage');
+        }
+
+        $variants['add_state'] = [
+            RecordField::reference('stateId', 'State', 'states'),
+            new RecordField('chancePercent', 'Chance %', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '100'),
+        ];
+        $variants['remove_state'] = [
+            new RecordField('stateIds', 'States', reference: 'states', codec: RecordFieldCodec::CSV_LIST),
+        ];
+        $variants['modify_stat_stage'] = [
+            new RecordField('stat', 'Stat', options: Character::buffableStats()),
+            new RecordField('delta', 'Stages', InputControlType::INTEGER),
+            new RecordField('affectsUser', 'On User', InputControlType::BOOLEAN, removeWhenEmpty: true),
+        ];
+
+        return new RecordSchema(
+            key: 'skills',
+            entryNoun: 'skill',
+            storage: RecordStorage::DIRECTORY,
+            relativePath: 'assets/Data/' . SkillCatalog::DIRECTORY,
+            fields: $fields,
+            labelKey: 'name',
+            identityKey: 'name',
+            blank: [
+                'kind' => 'special',
+                'name' => 'New Skill',
+                'description' => '',
+                'icon' => '',
+                'cost' => 0,
+                'cooldown' => 0,
+                'occasion' => Occasion::BATTLE_SCREEN->value,
+                'scope' => ['side' => ItemScopeSide::ENEMY->value, 'number' => ItemScopeNumber::ONE->value, 'status' => ItemScopeStatus::ALIVE->value],
+                'invocation' => ['message' => '$1 uses $2!', 'speed' => 0, 'accuracy' => 100, 'repeat' => 1, 'apGain' => 10],
+                'effects' => [],
+            ],
+            subList: new RecordSubList(
+                key: 'effects',
+                prefix: 'effect',
+                singular: 'effect',
+                fields: [
+                    new RecordField('type', 'Type', options: [...array_keys(SkillRecord::FORMULA_EFFECTS), ...array_keys(SkillRecord::STATE_EFFECTS)]),
+                ],
+                blank: ['type' => 'hp_damage', 'formula' => '$user->stats->attack * 2', 'variance' => 0.2],
+                variants: $variants,
+                variantKey: 'type',
+            ),
+            fieldsFor: static fn(array $row): array => strval($row['kind'] ?? '') === 'magic' ? [...$fields, $effectType] : $fields,
+            recordClass: Skill::class,
+            numberedFiles: true,
         );
     }
 

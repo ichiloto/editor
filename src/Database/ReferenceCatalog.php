@@ -18,6 +18,9 @@ use Ichiloto\Engine\Entities\Enumerations\Occasion;
 use Ichiloto\Engine\Entities\Skills\BasicSkill;
 use Ichiloto\Engine\Entities\Skills\Skill;
 use Ichiloto\Engine\Entities\Enumerations\WeaponType;
+use Ichiloto\Engine\Battle\Resolution\ResolutionKind;
+use Ichiloto\Engine\Entities\Magic\MagicEffectType;
+use Ichiloto\Engine\Entities\Skills\SkillResolutionScope;
 use InvalidArgumentException;
 
 /**
@@ -40,6 +43,9 @@ final class ReferenceCatalog
         'actor_ids',
         'classes',
         'attack_skills',
+        'resolution_kinds',
+        'resolution_scopes',
+        'magic_effect_types',
         'weapon_types',
         'armor_types',
         'skills',
@@ -139,6 +145,11 @@ final class ReferenceCatalog
             // catalogue that can be used in battle.
             'attack_skills' => $this->attackSkillNames(),
             // A class restricts what its members equip by the engine's type names.
+            // How a skill effect resolves, how often a skill rolls, and what
+            // kind of spell it is: the Engine's own vocabularies.
+            'resolution_kinds' => array_map(static fn(ResolutionKind $kind): string => $kind->value, ResolutionKind::cases()),
+            'resolution_scopes' => array_map(static fn(SkillResolutionScope $scope): string => $scope->value, SkillResolutionScope::cases()),
+            'magic_effect_types' => array_map(static fn(MagicEffectType $type): string => $type->value, MagicEffectType::cases()),
             'weapon_types' => array_map(static fn(WeaponType $type): string => $type->value, WeaponType::cases()),
             'armor_types' => array_map(static fn(ArmorType $type): string => $type->value, ArmorType::cases()),
             // Spells and abilities may be authored in any of the Engine's

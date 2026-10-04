@@ -146,34 +146,17 @@ function cutsceneProject(): string
  */
 function writeFireballSkill(string $root): void
 {
-    file_put_contents($root . '/assets/Data/skills.php', <<<'PHP_SOURCE'
-<?php
-
-use Ichiloto\Engine\Entities\Effects\SkillEffects\HPDamageSkillEffect;
-use Ichiloto\Engine\Entities\Enumerations\ItemScopeNumber;
-use Ichiloto\Engine\Entities\Enumerations\ItemScopeSide;
-use Ichiloto\Engine\Entities\Enumerations\ItemScopeStatus;
-use Ichiloto\Engine\Entities\Enumerations\Occasion;
-use Ichiloto\Engine\Entities\ItemScope;
-use Ichiloto\Engine\Entities\Skills\MagicSkill;
-use Ichiloto\Engine\Entities\Skills\SkillInvocation;
-
-return [
-  new MagicSkill(
-    'Fireball',
-    'A burst of flame.',
-    'FIR',
-    4,
-    0,
-    new ItemScope(ItemScopeSide::ENEMY, ItemScopeNumber::ONE, ItemScopeStatus::ALIVE),
-    Occasion::BATTLE_SCREEN,
-    new SkillInvocation('$1 casts Fireball!', 0, 0, 1, 10),
-    [
-      new HPDamageSkillEffect('$user->stats->magicAttack * 3', NULL, 0.2, false),
-    ],
-  ),
-];
-PHP_SOURCE);
+    writeSkillRecords($root, new \Ichiloto\Engine\Entities\Skills\MagicSkill(
+        'Fireball',
+        'A burst of flame.',
+        'FIR',
+        4,
+        0,
+        new \Ichiloto\Engine\Entities\ItemScope(),
+        \Ichiloto\Engine\Entities\Enumerations\Occasion::BATTLE_SCREEN,
+        new \Ichiloto\Engine\Entities\Skills\SkillInvocation('$1 casts Fireball!', 0, 0, 1, 10),
+        [new \Ichiloto\Engine\Entities\Effects\SkillEffects\HPDamageSkillEffect('$user->stats->magicAttack * 3', null, 0.2, false)],
+    ));
 }
 
 /**

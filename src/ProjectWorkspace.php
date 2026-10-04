@@ -47,7 +47,6 @@ final readonly class ProjectWorkspace
         public array                    $maps,
         public array                    $mapIds,
         public ProjectActorDatabase     $actorDatabase,
-        public ProjectSkillDatabase     $skillDatabase,
         public array                    $recordDatabases = [],
         public ?CutsceneLibrary         $cutscenes = null,
         public ?ProjectConfig           $config = null,
@@ -109,8 +108,8 @@ final readonly class ProjectWorkspace
     }
 
     /**
-     * Reads the project's skill catalogue as saved: every skill across the
-     * Engine's skill data files, identified and classified as the runtime
+     * Reads the project's skill catalogue as saved: every skill record, as
+     * the runtime reads them, identified and classified as the runtime
      * finds them.
      *
      * @return SkillCatalog
@@ -121,26 +120,17 @@ final readonly class ProjectWorkspace
     }
 
     /**
-     * Returns every skill name a reference may use: the skills.php entries as
-     * currently edited, then the skills the catalogue's other files author.
+     * Returns every skill name a reference may use: the Skills records as
+     * currently edited, in the order menus list them.
      *
      * @return string[]
      */
     public function getSkillNames(): array
     {
-        $names = array_map(
-            static fn(ProjectSkill $skill): string => $skill->getName(),
-            $this->skillDatabase->getSkills()
-        );
-        $catalog = $this->loadSkillCatalog();
-
-        foreach (array_keys($catalog->getSkills()) as $name) {
-            if ($catalog->getSourceFile($name) !== basename($this->skillDatabase->path)) {
-                $names[] = $name;
-            }
-        }
-
-        return array_values(array_unique($names));
+        return array_values(array_unique(array_filter(array_map(
+            static fn(ProjectRecord $record): string => trim(strval($record->get('name') ?? '')),
+            $this->getRecordDatabase('skills')?->getRecords() ?? [],
+        ), static fn(string $name): bool => $name !== '')));
     }
 
     /**
@@ -213,7 +203,6 @@ final readonly class ProjectWorkspace
             maps: $maps = self::discoverMaps($projectRoot),
             mapIds: array_map(static fn(ProjectMap $map): string => $map->mapId, $maps),
             actorDatabase: ProjectActorDatabase::fromProject($projectRoot),
-            skillDatabase: ProjectSkillDatabase::fromProject($projectRoot),
             recordDatabases: array_map(
                 static fn(RecordSchema $schema): ProjectRecordDatabase => ProjectRecordDatabase::fromProject($projectRoot, $schema, $projectConfig),
                 RecordSchemaCatalog::all(),
@@ -321,7 +310,6 @@ final readonly class ProjectWorkspace
         }
 
         return $this->actorDatabase->isDirty()
-            || $this->skillDatabase->isDirty()
             || ($this->config?->isDirty() ?? false)
             || ($this->cutscenes?->hasUnsavedChanges() ?? false);
     }
@@ -360,13 +348,12 @@ final readonly class ProjectWorkspace
      * Read-only record categories are left out: they hold no edits, and
      * asking them to save would raise instead of doing nothing.
      *
-     * @return array<string, ProjectActorDatabase|ProjectSkillDatabase|ProjectConfig|ProjectRecordDatabase>
+     * @return array<string, ProjectActorDatabase|ProjectConfig|ProjectRecordDatabase>
      */
     public function listSaveableDatabases(): array
     {
         $databases = [
             'Actors' => $this->actorDatabase,
-            'Skills' => $this->skillDatabase,
         ];
 
         if ($this->config !== null) {
@@ -444,7 +431,6 @@ final readonly class ProjectWorkspace
             maps: $maps,
             mapIds: array_map(static fn(ProjectMap $workspaceMap): string => $workspaceMap->mapId, $maps),
             actorDatabase: $this->actorDatabase,
-            skillDatabase: $this->skillDatabase,
             recordDatabases: $this->recordDatabases,
             cutscenes: $this->cutscenes,
             config: $this->config,

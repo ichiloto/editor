@@ -54,6 +54,9 @@ final readonly class RecordSchema
      * items beside its objectives. Every list's prefix is its own.
      * @param bool $identityFollowsLabel Whether the identity is its label's slug, kept
      * in step on rename while nothing refers to it (a quest's id follows its name).
+     * @param bool $numberedFiles For one-file-per-record categories listed in file
+     * order (skills): a file is named `0001-<slug>.php`, a new or copied record
+     * takes the next number, and so goes last, as reopening lists it.
      */
     public function __construct(
         public string $key,
@@ -78,6 +81,7 @@ final readonly class RecordSchema
         public ?string $recordClass = null,
         public array $subLists = [],
         public bool $identityFollowsLabel = false,
+        public bool $numberedFiles = false,
     ) {
         if ($projection instanceof WholeFileProjection) {
             // A field outside the keys the category owns would read blank and

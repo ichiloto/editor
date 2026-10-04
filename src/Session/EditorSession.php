@@ -1221,11 +1221,10 @@ final class EditorSession
     /**
      * A database category's records, as its list shows them, whether they
      * can be edited and have unsaved changes, and which record operations
-     * the category takes. A category whose rows only the terminal editor
-     * builds yet is refused.
+     * the category takes.
      *
      * @return array{category: string, editable: bool, readOnly: ?string, dirty: bool, canCreate: bool, canDuplicate: bool, canDelete: bool, canReorder: bool, records: list<string>}
-     * @throws SessionRefusal When the category is unknown or not yet served.
+     * @throws SessionRefusal When the category is unknown.
      */
     public function listDatabaseRecords(string $category): array
     {
@@ -2130,7 +2129,7 @@ final class EditorSession
         }
 
         return $this->workspace->getRecordDatabase($category)
-            ?? throw new SessionRefusal(sprintf('The %s database is edited in the terminal editor for now.', $category));
+            ?? throw new SessionRefusal(sprintf('The %s database has no records to edit here.', $category));
     }
 
     /**
@@ -2138,7 +2137,7 @@ final class EditorSession
      * actor service, with what this editor's actor panes show, and every
      * schema-driven category through the shared record rules.
      *
-     * @throws SessionRefusal When the category is unknown or not yet served.
+     * @throws SessionRefusal When the category is unknown.
      */
     private function requireCategory(string $category): DatabaseCategory
     {

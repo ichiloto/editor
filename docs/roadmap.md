@@ -262,8 +262,9 @@ session reaches a category through `DatabaseCategory`: schema-driven ones
 actors through `ActorCategory` over `ActorAuthoring`, the actor service the
 terminal editor uses too.
 
-Progress: Classes, Quests, System, a new Configuration category and Actors
-are done in both editors. Skills is the one category the GUI still refuses.
+Progress: Classes, Quests, System, a new Configuration category, Actors,
+Types and Skills are done in both editors; the GUI session now serves every
+category.
 Known gap: an actor authored without an id whose identity freeze also needs
 other files rewritten (the cross-file repair `SourceSetCommand` writes at
 once) is refused in the GUI with a pointer to the terminal's repair dialog;
@@ -275,16 +276,16 @@ Order of work, each a complete slice before the next:
 1. Classes, Quests, System, Actors and Skills move onto the shared record
    service. The terminal keeps its workflow and every field and preview it has
    now (experience and stat curves, actor stats); the GUI gains the category.
-2. Data the record files hold but no editor reaches: item and skill effects,
-   skill kind (both after step 3's per-record move). Enemy drops are done,
+2. Data the record files hold but no editor reaches: item effects (after
+   items' per-record move). Skill effects and kind are done. Enemy drops are done,
    and every schema record's references, list entries included, are now
    validated. Enemy `position` and `battleAnimation` are not authored: troops
    own battle positions (`Troop` overwrites the enemy's), and no runtime code
    reads an enemy's `battleAnimation`; attacks animate through their skills.
    The rest of `system.php` is done (System and Configuration).
-3. Skills become one declarative record per file, as enemies are, so spells
-   and abilities in `magic.php` and `abilities.php` are edited too (the
-   section above). Items, weapons and armors follow.
+3. Skills are one declarative record per numbered file under
+   `assets/Data/Skills` (done; `abilities.php` and `magic.php` are gone).
+   Items, weapons and armors follow.
 4. Tilesets: an editor for `Data/Tilesets/<id>.php` (sheets, pieces, tables,
    shadows); the "no tileset system" note is stale. Types is done: it edits
    the elements `system.php` declares, which the element pickers now read

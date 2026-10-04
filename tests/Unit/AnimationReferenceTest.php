@@ -5,8 +5,6 @@ declare(strict_types=1);
 use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\Database\CutsceneSchemas;
 use Ichiloto\Editor\Database\ReferencePicker;
-use Ichiloto\Editor\ProjectSkill;
-use Ichiloto\Editor\ProjectSkillDatabase;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Editor\Validation\AnimationReferenceValidator;
 use Ichiloto\Editor\Validation\Severity;
@@ -15,6 +13,7 @@ use Ichiloto\Engine\Entities\Skills\MagicSkill;
 use Ichiloto\Engine\Entities\Skills\SpecialSkill;
 use Ichiloto\Engine\Entities\Magic\MagicEffectType;
 use Ichiloto\Engine\Cutscenes\Summons\SummonEffectTiming;
+use Ichiloto\Engine\Entities\Skills\SkillCatalog;
 
 it('displays the engine default summon effect timing in the editor', function () {
     $timing = array_values(array_filter(CutsceneSchemas::summons()->fields,
@@ -36,15 +35,14 @@ it('offers animation names while storing stable numeric ids', function () {
 
 it('round trips explicit animation ids for every skill subtype and allows clearing them', function (string $class) {
     $root = makeTemporaryProject();
-    $skill = ProjectSkill::fromSkill(new $class('Renamed', '', '', 0, 0, animationId: 1), 1);
-    $database = new ProjectSkillDatabase($root . '/assets/Data/skills.php', [$skill], true);
-    $database->save();
-    $loaded = ProjectSkillDatabase::fromProject($root);
-    expect($loaded->getSkillByIndex(0)->animationId)->toBe(1);
+    writeSkillRecords($root, new $class('Renamed', '', '', 0, 0, animationId: 1));
+    $path = $root . '/assets/Data/Skills/0001-renamed.php';
+    $loaded = loadRecordDatabase($root, 'skills');
+    expect($loaded->getRecordByIndex(0)?->get('animationId'))->toBe(1);
     $loaded->setField(0, 'animationId', '');
     $loaded->save();
-    expect(ProjectSkillDatabase::fromProject($root)->getSkillByIndex(0)->animationId)->toBeNull()
-        ->and(file_get_contents($root . '/assets/Data/skills.php'))->not->toContain('animationId:');
+    expect(SkillCatalog::load($root . '/assets')->findSkill('Renamed')?->animationId)->toBeNull()
+        ->and(file_get_contents($path))->not->toContain('animationId');
 })->with([BasicSkill::class, MagicSkill::class, SpecialSkill::class]);
 
 it('round trips item animation references through the existing typed resource picker schema', function () {
@@ -62,12 +60,12 @@ it('round trips item animation references through the existing typed resource pi
 
 it('reports deprecated name fallback and stale ids without rejecting gameplay', function () {
     $root = makeTemporaryProject();
-    $database = new ProjectSkillDatabase($root . '/assets/Data/skills.php', [
-        ProjectSkill::fromSkill(new SpecialSkill('Slash', '', '', 0, 0), 1),
-        ProjectSkill::fromSkill(new SpecialSkill('Renamed', '', '', 0, 0, animationId: 1), 2),
-        ProjectSkill::fromSkill(new SpecialSkill('Missing', '', '', 0, 0, animationId: 999), 3),
-    ], true);
-    $database->save();
+    writeSkillRecords(
+        $root,
+        new SpecialSkill('Slash', '', '', 0, 0),
+        new SpecialSkill('Renamed', '', '', 0, 0, animationId: 1),
+        new SpecialSkill('Missing', '', '', 0, 0, animationId: 999),
+    );
     $issues = new AnimationReferenceValidator()->validate(ProjectWorkspace::fromProject($root));
     expect($issues)->toHaveCount(2)
         ->and($issues[0]->severity)->toBe(Severity::WARNING)
@@ -79,16 +77,16 @@ it('reports deprecated name fallback and stale ids without rejecting gameplay', 
 it('uses the engine fallback rules for magic animation diagnostics', function () {
     $root = makeTemporaryProject();
     file_put_contents($root . '/assets/Data/animations.php', "<?php return [['id' => 2, 'name' => 'Healing Aura']];");
-    $database = new ProjectSkillDatabase($root . '/assets/Data/skills.php', [
-        ProjectSkill::fromSkill(new MagicSkill('Cure', '', '', 0, 0, effectType: MagicEffectType::RESTORATIVE), 1),
-        ProjectSkill::fromSkill(new MagicSkill('Flare', '', '', 0, 0, effectType: MagicEffectType::DESTRUCTIVE), 2),
-    ], true);
-    $database->save();
+    writeSkillRecords(
+        $root,
+        new MagicSkill('Cure', '', '', 0, 0, effectType: MagicEffectType::RESTORATIVE),
+        new MagicSkill('Flare', '', '', 0, 0, effectType: MagicEffectType::DESTRUCTIVE),
+    );
     // Only the skills' diagnostics; this project binds no roles, which is
     // reported separately.
     $issues = array_values(array_filter(
         new AnimationReferenceValidator()->validate(ProjectWorkspace::fromProject($root)),
-        static fn($issue): bool => str_starts_with($issue->where, 'assets/Data/skills.php'),
+        static fn($issue): bool => str_starts_with($issue->where, 'assets/Data/Skills/'),
     ));
     expect($issues)->toHaveCount(1)
         ->and($issues[0]->where)->toContain('Cure');
@@ -96,81 +94,56 @@ it('uses the engine fallback rules for magic animation diagnostics', function ()
 
 it('routes skill animation edits through the existing picker and undo transaction', function () {
     $root = makeTemporaryProject();
-    $database = new ProjectSkillDatabase($root . '/assets/Data/skills.php', [
-        ProjectSkill::fromSkill(new SpecialSkill('Skill', '', '', 0, 0), 1),
-    ], true);
-    $database->save();
+    writeSkillRecords($root, new SpecialSkill('Skill', '', '', 0, 0));
     $editor = deletionEditor($root);
     openDatabaseCategory($editor, 'skills');
-    $fields = callEditorMethod($editor, 'getDatabaseSkillSettingsFields');
-    $field = array_values(array_filter($fields, static fn(array $field): bool => $field['field'] === 'animationId'))[0];
+    $fields = callEditorMethod($editor, 'getDatabaseSettingsFields');
+    $field = array_values(array_filter($fields, static fn(array $field): bool => ($field['field'] ?? null) === 'animationId'))[0];
     expect($field['reference'])->toBe('animation_ids')->and($field['allowsNone'])->toBeTrue()
         ->and(isset($field['control']))->toBeFalse();
     callEditorMethod($editor, 'applyDatabaseFieldValueRecorded', $field, '1');
-    $workspace = getEditorProperty($editor, 'workspace');
-    expect($workspace->skillDatabase->getSkillByIndex(0)->animationId)->toBe(1);
+    $skills = getEditorProperty($editor, 'workspace')->getRecordDatabase('skills');
+    $animation = static fn(): mixed => $skills->getRecordByIndex(0)?->get('animationId');
+    expect($animation())->toBe(1);
     callEditorMethod($editor, 'performUndo');
-    expect($workspace->skillDatabase->getSkillByIndex(0)->animationId)->toBeNull();
+    expect($animation())->toBeNull();
     callEditorMethod($editor, 'performRedo');
-    expect($workspace->skillDatabase->getSkillByIndex(0)->animationId)->toBe(1);
+    expect($animation())->toBe(1);
     callEditorMethod($editor, 'applyDatabaseFieldValueRecorded', $field, '(Legacy fallback)');
-    expect($workspace->skillDatabase->getSkillByIndex(0)->animationId)->toBeNull();
+    expect($animation())->toBeNull();
 });
 
-it('offers only supported skill fields and leaves a no-op pick unchanged', function (string $class) {
+it('offers a spell its effect type alone, and leaves a no-op pick unchanged', function (string $class) {
     $root = makeTemporaryProject();
-    $database = new ProjectSkillDatabase($root . '/assets/Data/skills.php', [
-        ProjectSkill::fromSkill(new $class('Skill', '', '', 0, 0), 1),
-    ], true);
-    $database->save();
+    writeSkillRecords($root, new $class('Skill', '', '', 0, 0));
     $editor = deletionEditor($root);
     openDatabaseCategory($editor, 'skills');
-    $fields = callEditorMethod($editor, 'getDatabaseSkillSettingsFields');
-    $byName = array_column($fields, null, 'field');
-    expect($byName)->not->toHaveKey('type');
-    $workspace = getEditorProperty($editor, 'workspace');
-    $skill = $workspace->skillDatabase->getSkillByIndex(0);
-    $before = $skill->toArray();
+    $byName = array_column(array_filter(callEditorMethod($editor, 'getDatabaseSettingsFields'), static fn(array $field): bool => isset($field['field'])), null, 'field');
+    $skills = getEditorProperty($editor, 'workspace')->getRecordDatabase('skills');
+    $before = $skills->getRecordByIndex(0)?->toArray();
+    expect($byName)->toHaveKey('kind');
     if ($class === MagicSkill::class) {
         expect($byName)->toHaveKey('effectType');
         callEditorMethod($editor, 'applyDatabaseFieldValueRecorded', $byName['effectType'], $byName['effectType']['value']);
     } else {
         expect($byName)->not->toHaveKey('effectType');
-        expect(fn() => $workspace->skillDatabase->setField(0, 'effectType', 'Destructive'))
-            ->toThrow(RuntimeException::class, 'does not support editing effectType');
     }
-    expect($skill->toArray())->toBe($before)->and($workspace->skillDatabase->isDirty())->toBeFalse();
+    expect($skills->getRecordByIndex(0)?->toArray())->toBe($before)->and($skills->isDirty())->toBeFalse();
     callEditorMethod($editor, 'applyDatabaseFieldValueRecorded', $byName['animationId'], '1');
-    $workspace->skillDatabase->save();
-    expect((require $root . '/assets/Data/skills.php')[0]->animationId)->toBe(1);
+    $skills->save();
+    expect(SkillCatalog::load($root . '/assets')->findSkill('Skill')?->animationId)->toBe(1);
 })->with([BasicSkill::class, MagicSkill::class, SpecialSkill::class]);
 
-it('shows opaque skill fields read-only and refuses Enter and directional edits before opening controls', function () {
+it('drops a spell\'s effect type when it becomes another kind of skill', function () {
     $root = makeTemporaryProject();
-    $path = $root . '/assets/Data/skills.php';
-    $source = <<<'PHP'
-<?php
-$computed = new \Ichiloto\Engine\Entities\Skills\SpecialSkill('Computed', 'Authored description', '', 4, 0);
-return [$computed];
-PHP;
-    file_put_contents($path, $source);
-    $editor = deletionEditor($root);
-    openDatabaseCategory($editor, 'skills');
-    setEditorProperty($editor, 'databaseFocus', 'database_settings');
-    $fields = callEditorMethod($editor, 'getDatabaseSkillSettingsFields');
-    expect($fields[0]['value'])->toContain('Computed', 'read-only');
-    $values = array_column($fields, 'value', 'label');
-    expect($values)->toMatchArray(['Name' => 'Computed', 'Description' => 'Authored description', 'Cost' => '4']);
-    foreach ($fields as $index => $field) {
-        expect($field['editable'])->toBeFalse();
-        setEditorProperty($editor, 'databaseSelectedSettingIndex', $index);
-        callEditorMethod($editor, 'dispatchInput', "\r");
-        callEditorMethod($editor, 'dispatchInput', "\033[C");
-        expect(getEditorProperty($editor, 'isDatabaseEditing'))->toBeFalse()
-            ->and(callEditorMethod($editor, 'isInspectorFieldInteractive', $field))->toBeFalse();
-    }
-    expect(getEditorProperty($editor, 'workspace')->skillDatabase->isDirty())->toBeFalse()
-        ->and(file_get_contents($path))->toBe($source);
+    writeSkillRecords($root, new MagicSkill('Mend', '', '', 0, 0, effectType: MagicEffectType::BUFF));
+    $skills = loadRecordDatabase($root, 'skills');
+
+    $skills->setField(0, 'kind', 'special');
+    $skills->save();
+
+    expect($skills->getRecordByIndex(0)?->get('effectType'))->toBeNull()
+        ->and(SkillCatalog::load($root . '/assets')->findSkill('Mend'))->toBeInstanceOf(SpecialSkill::class);
 });
 
 it('does not enter text editing for an established actor id', function () {

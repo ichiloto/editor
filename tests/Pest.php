@@ -386,3 +386,30 @@ require_once __DIR__ . '/Support/BattleEntryFixtures.php';
 require_once __DIR__ . '/Support/MapMetadataFixtures.php';
 
 require_once __DIR__ . '/Support/BattleFormationFixtures.php';
+
+/**
+ * Authors a project's skill catalogue as record files, one per skill and
+ * numbered in the given order, replacing any records already there: the
+ * fixture form of `assets/Data/Skills`.
+ *
+ * @param string $root The project root.
+ */
+function writeSkillRecords(string $root, \Ichiloto\Engine\Entities\Skills\Skill ...$skills): void
+{
+    $directory = $root . '/assets/Data/' . \Ichiloto\Engine\Entities\Skills\SkillCatalog::DIRECTORY;
+
+    if (! is_dir($directory)) {
+        mkdir($directory, 0777, true);
+    }
+
+    array_map(unlink(...), glob($directory . '/*.php') ?: []);
+
+    foreach (array_values($skills) as $index => $skill) {
+        $slug = trim(preg_replace('/[^a-z0-9]+/', '-', strtolower($skill->name)) ?? '', '-');
+        $data = var_export(\Ichiloto\Engine\Entities\Skills\SkillRecord::writeSkill($skill), true);
+        file_put_contents(
+            sprintf('%s/%04d-%s.php', $directory, $index + 1, $slug),
+            "<?php\n\nreturn ['class' => \\Ichiloto\\Engine\\Entities\\Skills\\Skill::class, 'data' => {$data}];\n",
+        );
+    }
+}

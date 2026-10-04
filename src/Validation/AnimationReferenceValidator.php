@@ -7,7 +7,11 @@ namespace Ichiloto\Editor\Validation;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Engine\Animations\ActionAnimationResolver;
 use Ichiloto\Engine\Entities\Enumerations\WeaponType;
-use Ichiloto\Engine\Entities\Magic\MagicEffectType;
+use Ichiloto\Engine\Entities\Skills\BasicSkill;
+use Ichiloto\Engine\Entities\Skills\MagicSkill;
+use Ichiloto\Engine\Entities\Skills\SkillCatalog;
+use Ichiloto\Engine\Entities\Skills\SkillRecord;
+use InvalidArgumentException;
 
 /** Checks optional presentation references without invalidating gameplay. */
 final class AnimationReferenceValidator
@@ -20,8 +24,15 @@ final class AnimationReferenceValidator
         $names = array_map(static fn($animation): string => strval($animation->get('name')), $animations);
         $issues = [];
 
-        foreach ($workspace->skillDatabase->getSkills() as $skill) {
-            $where = 'assets/Data/skills.php: ' . $skill->getName();
+        foreach ($workspace->getRecordDatabase('skills')?->getRecords() ?? [] as $record) {
+            try {
+                $skill = SkillRecord::readSkill((array) $record->toArray());
+            } catch (InvalidArgumentException) {
+                // A record the game cannot read is the skill catalogue's finding.
+                continue;
+            }
+
+            $where = sprintf('assets/Data/%s/%s.php: %s', SkillCatalog::DIRECTORY, $record->recordId, $skill->name);
             if ($skill->animationId !== null) {
                 array_push($issues, ...$this->checkId($skill->animationId, $ids, $where));
                 continue;
@@ -29,13 +40,12 @@ final class AnimationReferenceValidator
 
             // A basic skill's effect follows the attacker's weapon role, and a
             // summon plays its cutscene; neither is chosen by an animation name.
-            if ($skill->getType() === 'basic') {
+            if ($skill instanceof BasicSkill) {
                 continue;
             }
 
-            $magicEffectType = $skill->getType() === 'magic'
-                ? MagicEffectType::tryFrom($skill->getEffectType() ?? '') : null;
-            $candidates = ActionAnimationResolver::getSkillCandidateNames($skill->getName(), $magicEffectType);
+            $magicEffectType = $skill instanceof MagicSkill ? $skill->effectType : null;
+            $candidates = ActionAnimationResolver::getSkillCandidateNames($skill->name, $magicEffectType);
             if (array_intersect($candidates, $names) !== []) {
                 $issues[] = Issue::warning(
                     $where,

@@ -1011,7 +1011,7 @@ status line says exactly why.
 | --- | --- | --- |
 | Actors | `assets/Data/Actors/*.php` | Editable |
 | Classes | `assets/Data/classes.php` | Editable - levels, the experience curve, every stat curve, equipment types and skills learned |
-| Skills | `assets/Data/skills.php` | Editable - spells and abilities in `magic.php` and `abilities.php` are validated and offered as references, not yet edited here |
+| Skills | `assets/Data/Skills/*.php` | Editable - one data record per numbered file, attacks, abilities and spells alike, with their effects; `skills.php` loads them |
 | Items | `assets/Data/items.php` | Editable - authored as `new Item(...)` calls, edited entry by entry |
 | Weapons | `assets/Data/items.php` | Editable - authored as `new Weapon(...)` calls, edited entry by entry |
 | Armors | `assets/Data/items.php` | Editable - authored as `new Armor(...)` calls, edited entry by entry |
@@ -1104,6 +1104,19 @@ keeping its imports and comments. A new enemy gets a file named after it
 and starts on the project's first enemy sprite; a duplicate gets a file and
 a name of its own. A file in the folder that is not an enemy record stays
 in the list, read-only, saying why.
+
+A skill is one file under `assets/Data/Skills`, returning
+`['class' => Skill::class, 'data' => [...]]`. Its kind is a value: `basic`
+(an attack), `special` (an ability) or `magic` (a spell, which also states
+its effect type). The rest is cost, cooldown, occasion, scope, how it is
+invoked, its animation, and its effects: a list under the Effects heading,
+each a type with that type's own values (a formula with its element and
+variance for damage and recovery, a state for adding one, the states to
+remove, or a stat and its stages). Changing an effect's type, or a skill's
+kind, drops the values only the old one read. Files are numbered
+(`0001-attack.php`) because menus list skills in file order; a new or copied
+skill takes the next number and goes last. `skills.php` is the barrel that
+loads the folder.
 
 ### Project-Owned Parameters
 
@@ -2145,11 +2158,10 @@ spawn points outside the map. The warnings appear in the status footer;
 `Ctrl+E` shows the full text. The project-wide pass (`ichiloto validate`) also
 covers every NPC field, as described under [NPC Mode](#npc-mode).
 
-Skills are read as one catalogue across `skills.php`, `abilities.php` and
-`magic.php`, as the game reads them: a skill name defined twice, an entry that
-is not a skill, or a key that differs from its skill's name is an error, and
-save aliases for spells must point at spells and those for abilities at
-abilities.
+Skills are read as one catalogue from their record files, as the game reads
+them: a skill name defined twice, or a record the game cannot read, is an
+error naming its file, and save aliases for spells must point at spells and
+those for abilities at abilities.
 
 Save migration steps are read as the Engine reads them: each declares a
 project class, or declared position edits, `mapShifts` for inserted rows and

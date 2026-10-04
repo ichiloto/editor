@@ -783,24 +783,17 @@ it('warns that a tiles2d crop table is no longer read', function () {
         ->and($issues[0]->message)->toBe('Its tiles2d crop table is no longer read.');
 });
 
-/** Writes skills spread across all three of the Engine's skill files. */
-function writeSpreadSkillCatalog(string $root, string $extraMagic = ''): void
+/** Writes a catalogue of every kind of skill, one record each. */
+function writeSpreadSkillCatalog(string $root, Ichiloto\Engine\Entities\Skills\Skill ...$extra): void
 {
-    $header = "<?php\nuse Ichiloto\\Engine\\Entities\\Skills\\BasicSkill;\n"
-        . "use Ichiloto\\Engine\\Entities\\Skills\\MagicSkill;\n"
-        . "use Ichiloto\\Engine\\Entities\\Skills\\SpecialSkill;\n";
-
-    file_put_contents($root . '/assets/Data/skills.php', $header . "return [\n"
-        . "  new BasicSkill('Attack', 'Strikes.', '', 0, 0),\n"
-        . "  new MagicSkill('Cleanse', 'Lifts a poison.', '', 3, 0),\n"
-        . "];\n");
-    file_put_contents($root . '/assets/Data/abilities.php', $header . "return [\n"
-        . "  'Ward' => new SpecialSkill('Ward', 'Guards.', '', 2, 0),\n"
-        . "];\n");
-    file_put_contents($root . '/assets/Data/magic.php', $header . "return [\n"
-        . "  'Burn I' => new MagicSkill('Burn I', 'Burns.', '', 5, 0),\n"
-        . $extraMagic
-        . "];\n");
+    writeSkillRecords(
+        $root,
+        new Ichiloto\Engine\Entities\Skills\BasicSkill('Attack', 'Strikes.', '', 0, 0),
+        new Ichiloto\Engine\Entities\Skills\MagicSkill('Cleanse', 'Lifts a poison.', '', 3, 0),
+        new Ichiloto\Engine\Entities\Skills\SpecialSkill('Ward', 'Guards.', '', 2, 0),
+        new Ichiloto\Engine\Entities\Skills\MagicSkill('Burn I', 'Burns.', '', 5, 0),
+        ...$extra,
+    );
 }
 
 it('checks ability and spell alias targets against their own kind across every skill file', function () {
@@ -846,9 +839,9 @@ it('reports a skill name the catalogue defines twice', function () {
     writeConsistentQuests($root);
     writeConsistentSkits($root);
     writeConsistentEnemies($root);
-    writeSpreadSkillCatalog($root, "  'Cleanse' => new MagicSkill('Cleanse', 'Again.', '', 3, 0),\n");
+    writeSpreadSkillCatalog($root, new Ichiloto\Engine\Entities\Skills\MagicSkill('Cleanse', 'Again.', '', 3, 0));
 
-    $issues = issuesMentioning(validateProject($root), '"Cleanse" is defined in both skills.php and magic.php');
+    $issues = issuesMentioning(validateProject($root), '"Cleanse" is already defined by Skills/0002-cleanse.php');
 
     expect($issues)->toHaveCount(1)
         ->and($issues[0]->severity)->toBe(Severity::ERROR);

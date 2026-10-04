@@ -134,14 +134,14 @@ it('refuses project actor migration while unrelated edits are pending without sa
     $root = makeTemporaryProject();
     $editor = deletionEditor($root);
     $workspace = getEditorProperty($editor, 'workspace');
-    $database = $workspace->skillDatabase;
-    $database->addSkill('Pending skill');
-    $database->setField(0, 'cost', 123);
+    $database = $workspace->getRecordDatabase('skills');
+    $index = $database->addRecord();
+    $database->setField((int) $index, 'cost', '123');
     callEditorMethod($editor, 'openActorReferenceMigration');
     expect(getEditorProperty($editor, 'isEventOptionDialogOpen'))->toBeFalse()
         ->and(getEditorProperty($editor, 'statusMessage'))->toContain('pending edits')
         ->and($database->isDirty())->toBeTrue()
-        ->and(is_file($database->path))->toBeFalse();
+        ->and(glob($root . '/assets/Data/Skills/*.php') ?: [])->toBe([]);
 });
 
 it('explains malformed explicit ids without offering a migration or opening input', function (): void {

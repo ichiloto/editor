@@ -720,13 +720,37 @@ final class ProjectRecordDatabase
                     : $this->assertValueUnclaimed($record, $field, $value);
             }
             $previousIdentity = $this->schema->identityKey === null ? null : $record->get($this->schema->identityKey);
+            $before = $record->toArray();
             $record->set($field->key, $value);
             if ($field->key === $this->schema->labelKey && $this->schema->identityFollowsLabel) {
                 $this->followLabelWithIdentity($record, strval($previousIdentity));
             }
+            $this->dropStaleShapeFields($record, $before);
             $this->touchState();
 
             return;
+        }
+    }
+
+    /**
+     * Drops the values only a record's old shape offered, when an edit
+     * changes which fields it offers: a spell turned into an ability keeps
+     * no spell effect type for the Engine to refuse. As an entry's variant
+     * does ({@see withoutStaleVariantFields()}).
+     *
+     * @param array<string, mixed>|object $before The record before the edit.
+     */
+    private function dropStaleShapeFields(ProjectRecord $record, array|object $before): void
+    {
+        if ($this->schema->fieldsFor === null || ! is_array($before)) {
+            return;
+        }
+
+        $keys = static fn(array $fields): array => array_map(static fn(RecordField $field): string => $field->key, $fields);
+        $offered = $keys($this->schema->fieldsFor($record->toArray()));
+
+        foreach (array_diff($keys($this->schema->fieldsFor($before)), $offered) as $stale) {
+            $record->set($stale, null);
         }
     }
 
@@ -1163,11 +1187,14 @@ final class ProjectRecordDatabase
         }
 
         $copy = new ProjectRecord($payload, true, $sourcePath, $recordId, $file);
-        array_splice($records, $index + 1, 0, [$copy]);
+        // A numbered copy takes the next number, so it goes last, where
+        // reopening the folder lists it.
+        $at = $this->schema->numberedFiles ? count($records) : $index + 1;
+        array_splice($records, $at, 0, [$copy]);
         $this->records = $records;
         $this->touchState();
 
-        return $index + 1;
+        return $at;
     }
 
     /**
@@ -2578,12 +2605,19 @@ final class ProjectRecordDatabase
                 continue;
             }
 
+            $before = $entries[$entryIndex];
             $entries[$entryIndex] = self::writeNested(
                 $entries[$entryIndex],
                 explode('.', $field->key),
                 self::coerce($field, $rawValue),
             );
             $entries[$entryIndex] = $subList->removeConflictingFields($entries[$entryIndex], $field->key);
+
+            if ($field->key === $subList->variantKey) {
+                // A new type keeps nothing only the old one read.
+                $entries[$entryIndex] = self::withoutStaleVariantFields($subList, $before, $entries[$entryIndex]);
+            }
+
             $record->setSubList($subList->key, $entries, $subList->scalarKey, $subList->removeWhenEmpty);
             $this->touchState();
 
@@ -4246,7 +4280,8 @@ final class ProjectRecordDatabase
      */
     private function prepareRecordFile(string $identity, array|object $payload): array
     {
-        $stem = $this->makeUniqueFileStem(Slug::of($identity) ?: 'new-' . Slug::of($this->schema->entryNoun));
+        $slug = Slug::of($identity) ?: 'new-' . Slug::of($this->schema->entryNoun);
+        $stem = $this->makeUniqueFileStem($this->schema->numberedFiles ? sprintf('%04d-%s', $this->findNextFileNumber(), $slug) : $slug);
         $sourcePath = $this->path . DIRECTORY_SEPARATOR . $stem . '.php';
 
         if ($this->schema->listPayloadKey !== null && is_array($payload)) {
@@ -4254,6 +4289,27 @@ final class ProjectRecordDatabase
         }
 
         return [$stem, $sourcePath, PhpDataFile::load($sourcePath), $payload];
+    }
+
+    /**
+     * The number after the highest a record file of this category carries,
+     * on disk or not yet written, so a new record is listed last.
+     */
+    private function findNextFileNumber(): int
+    {
+        $stems = [
+            ...array_map(static fn(string $file): string => basename($file, '.php'), glob($this->path . DIRECTORY_SEPARATOR . '*.php') ?: []),
+            ...array_map(static fn(ProjectRecord $record): string => $record->recordId, $this->records),
+        ];
+        $highest = 0;
+
+        foreach ($stems as $stem) {
+            if (preg_match('/\A(\d+)-/', $stem, $match) === 1) {
+                $highest = max($highest, (int) $match[1]);
+            }
+        }
+
+        return $highest + 1;
     }
 
     /**

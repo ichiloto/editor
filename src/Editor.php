@@ -107,7 +107,10 @@ use Ichiloto\Engine\Entities\Inventory\Weapons\Weapon;
 use Ichiloto\Engine\Entities\Magic\MagicEffectType;
 use Ichiloto\Engine\Entities\Roles\ExperienceCurveGenerator;
 use Ichiloto\Engine\Entities\Roles\ParameterCurveGenerator;
+use Ichiloto\Engine\Entities\Skills\MagicSkill;
+use Ichiloto\Engine\Entities\Skills\Skill;
 use Ichiloto\Engine\Entities\Skills\SkillCatalog;
+use Ichiloto\Engine\Entities\Skills\SkillRecord;
 use Ichiloto\Engine\Events\Enumerations\ChestType;
 use Ichiloto\Engine\Events\Enumerations\LootType;
 use Ichiloto\Engine\Quests\QuestObjectiveType;
@@ -115,6 +118,7 @@ use Ichiloto\Engine\Rendering\Tilesets\TileId;
 use Ichiloto\Engine\Rendering\Tilesets\Tileset;
 use RuntimeException;
 use Throwable;
+use InvalidArgumentException;
 
 /**
  * Launches the Ichiloto terminal editor shell.
@@ -565,7 +569,6 @@ final class Editor
     private int $databaseCategoryIndex = 9;
     private string $databaseFocus = self::DATABASE_FOCUS_CATEGORIES;
     private int $databaseSelectedActorIndex = 0;
-    private int $databaseSelectedSkillIndex = 0;
     /**
      * Selected entry index per schema-driven category, keyed by category key.
      *
@@ -877,7 +880,6 @@ final class Editor
         $this->databaseCategoryIndex = DatabaseCatalog::indexOf(self::DATABASE_CATEGORY_ACTORS);
         $this->databaseFocus = self::DATABASE_FOCUS_CATEGORIES;
         $this->databaseSelectedActorIndex = 0;
-        $this->databaseSelectedSkillIndex = 0;
         $this->databaseSelectedSettingIndex = 0;
         $this->isDatabaseEditing = false;
         $this->databaseEditBuffer = '';
@@ -2794,7 +2796,6 @@ final class Editor
         $this->databaseCategoryIndex = DatabaseCatalog::indexOf(self::DATABASE_CATEGORY_ACTORS);
         $this->databaseFocus = self::DATABASE_FOCUS_CATEGORIES;
         $this->databaseSelectedActorIndex = 0;
-        $this->databaseSelectedSkillIndex = 0;
         $this->databaseSelectedSettingIndex = 0;
         $this->isDatabaseEditing = false;
         $this->databaseEditBuffer = '';
@@ -3116,11 +3117,6 @@ final class Editor
             return;
         }
 
-        if ($this->isSkillsDatabaseSelected()) {
-            $this->moveDatabaseSkillSelection($step);
-            return;
-        }
-
         $this->moveDatabaseRecordSelection($step);
 
     }
@@ -3150,33 +3146,6 @@ final class Editor
         $this->statusMessage = sprintf('Selected actor %s.', $actors[$nextIndex]->getName());
         $this->renderDatabasePanes(['list', 'settings', 'cue', 'frames', 'preview']);
     }
-
-    /**
-     * Moves the selected skill entry.
-     *
-     * @param int $step The entry step.
-     * @return void
-     */
-    private function moveDatabaseSkillSelection(int $step): void
-    {
-        $skills = $this->workspace?->skillDatabase->getSkills() ?? [];
-
-        if ($skills === []) {
-            return;
-        }
-
-        $nextIndex = $this->resolveDatabaseSelectionStep($this->databaseSelectedSkillIndex, $step);
-
-        if ($nextIndex === $this->databaseSelectedSkillIndex) {
-            return;
-        }
-
-        $this->databaseSelectedSkillIndex = $nextIndex;
-        $this->databaseSelectedSettingIndex = 0;
-        $this->statusMessage = sprintf("Selected skill %s.", $skills[$nextIndex]->getName());
-        $this->renderDatabasePanes(["list", "settings", "cue", "frames", "preview"]);
-    }
-
 
     /**
      * Moves the selected settings field.
@@ -5697,13 +5666,6 @@ final class Editor
             );
         }
 
-        if ($this->isSkillsDatabaseSelected()) {
-            return array_map(
-                static fn(ProjectSkill $skill): string => $skill->getName(),
-                $this->workspace?->skillDatabase->getSkills() ?? [],
-            );
-        }
-
         return $this->getSelectedRecordDatabase()?->getEntryLabels() ?? [];
 
     }
@@ -5757,7 +5719,6 @@ final class Editor
     {
         return match (true) {
             $this->isActorsDatabaseSelected() => $this->databaseSelectedActorIndex,
-            $this->isSkillsDatabaseSelected() => $this->databaseSelectedSkillIndex,
             default => $this->getSelectedRecordIndex(),
         };
     }
@@ -5774,7 +5735,6 @@ final class Editor
 
         match (true) {
             $this->isActorsDatabaseSelected() => $this->databaseSelectedActorIndex = $index,
-            $this->isSkillsDatabaseSelected() => $this->databaseSelectedSkillIndex = $index,
             default => $this->setSelectedRecordIndex($index),
         };
     }
@@ -5913,15 +5873,6 @@ final class Editor
             return;
         }
 
-        if ($this->getSelectedDatabaseCategoryDefinition()->key === self::DATABASE_CATEGORY_SKILLS) {
-            $reason = $this->workspace->skillDatabase->getReadOnlyReason($index);
-            if ($reason !== null) {
-                $this->setStatus($reason, StatusLevel::WARN);
-                $this->renderFooter();
-                return;
-            }
-        }
-
         $this->pendingDatabaseDeletion = [
             'category' => $this->getSelectedDatabaseCategoryDefinition()->key,
             'index' => $index,
@@ -5990,12 +5941,6 @@ final class Editor
         $label = $pending['label'];
         $command = match ($pending['category']) {
             self::DATABASE_CATEGORY_ACTORS => $this->actorAuthoring->deleteActor($workspace, $index)->command,
-            self::DATABASE_CATEGORY_SKILLS => $this->buildDatabaseDeletionCommand(
-                sprintf('Delete skill %s', $label),
-                fn(): ?object => $workspace->skillDatabase->removeSkill($index),
-                static fn(object $entry) => $workspace->skillDatabase->insertSkill($index, $entry),
-            ),
-
             default => $this->buildRecordDeletionCommand($pending['category'], $index),
         };
 
@@ -6191,11 +6136,13 @@ final class Editor
     {
         $skill = $this->getSelectedSkill();
 
-        if (! $skill instanceof ProjectSkill) {
+        if (! $skill instanceof Skill) {
+            $this->setStatus('This skill does not read as one yet; validation says why.', StatusLevel::WARN);
+            $this->renderFooter();
             return;
         }
 
-        $candidates = array_values(array_filter([$skill->getName(), $skill->getEffectType() ?? '']));
+        $candidates = array_values(array_filter([$skill->name, $skill instanceof MagicSkill ? ($skill->effectType?->value ?? '') : '']));
         $animationIndex = null;
         $matchedName = '';
 
@@ -6222,14 +6169,14 @@ final class Editor
 
         if ($animationIndex === null) {
             $this->setStatus(
-                sprintf('No animation found for "%s". Choose its Animation in the settings picker.', $skill->getName()),
+                sprintf('No animation found for "%s". Choose its Animation in the settings picker.', $skill->name),
                 StatusLevel::WARN,
             );
             $this->renderFooter();
             return;
         }
 
-        $this->pushNavigationOrigin(sprintf('skill %s', $skill->getName()));
+        $this->pushNavigationOrigin(sprintf('skill %s', $skill->name));
         $this->databaseFilter->clear();
         $this->databaseCategoryIndex = DatabaseCatalog::indexOf(self::DATABASE_CATEGORY_ANIMATIONS);
         $this->setSelectedRecordIndex($animationIndex);
@@ -6384,7 +6331,6 @@ final class Editor
             'databaseCategoryIndex' => $this->databaseCategoryIndex,
             'databaseFocus' => $this->databaseFocus,
             'actor' => $this->databaseSelectedActorIndex,
-            'skill' => $this->databaseSelectedSkillIndex,
             'records' => $this->databaseSelectedRecordIndexes,
             'setting' => $this->databaseSelectedSettingIndex,
             'assetIndex' => $this->selectedAssetIndex,
@@ -6402,7 +6348,6 @@ final class Editor
             $this->databaseCategoryIndex = $snapshot['databaseCategoryIndex'];
             $this->databaseFocus = $snapshot['databaseFocus'];
             $this->databaseSelectedActorIndex = $snapshot['actor'];
-            $this->databaseSelectedSkillIndex = $snapshot['skill'];
             $this->databaseSelectedRecordIndexes = $snapshot['records'];
             $this->databaseSelectedSettingIndex = $snapshot['setting'];
             $this->selectedAssetIndex = $snapshot['assetIndex'];
@@ -9121,17 +9066,143 @@ final class Editor
     }
 
     /**
-     * Returns the selected skill from the project database.
+     * The selected skill's record data, as the shared record holds it,
+     * unsaved edits included.
      *
-     * @return ProjectSkill|null
+     * @return array<string, mixed>|null
      */
-    private function getSelectedSkill(): ?ProjectSkill
+    private function getSelectedSkillData(): ?array
     {
         if (! $this->isSkillsDatabaseSelected()) {
             return null;
         }
 
-        return $this->workspace?->skillDatabase->getSkillByIndex($this->databaseSelectedSkillIndex);
+        $record = $this->getSelectedRecordDatabase()?->getRecordByIndex($this->getSelectedRecordIndex());
+
+        return $record === null ? null : (array) $record->toArray();
+    }
+
+    /**
+     * The selected skill as the game builds it from its record, or null when
+     * none is selected or its record does not read as a skill yet.
+     */
+    private function getSelectedSkill(): ?Skill
+    {
+        $data = $this->getSelectedSkillData();
+
+        try {
+            return $data === null ? null : SkillRecord::readSkill($data);
+        } catch (InvalidArgumentException) {
+            return null;
+        }
+    }
+
+    /**
+     * One effect of a skill record, as the Effects pane lists it.
+     *
+     * @param array<string, mixed> $effect The effect's record data.
+     */
+    private static function describeSkillEffect(array $effect): string
+    {
+        $parts = match (true) {
+            isset($effect['formula']) => [strval($effect['formula'])],
+            isset($effect['stateId']) => [sprintf('%s, %d%%', strval($effect['stateId']), intval($effect['chancePercent'] ?? 100))],
+            isset($effect['stateIds']) && is_array($effect['stateIds']) => [implode(', ', array_map('strval', $effect['stateIds']))],
+            isset($effect['stat']) => [sprintf('%s %+d%s', strval($effect['stat']), intval($effect['delta'] ?? 0), ($effect['affectsUser'] ?? false) === true ? ' on the user' : '')],
+            default => [],
+        };
+
+        foreach (['element', 'resolutionKind'] as $key) {
+            if (isset($effect[$key])) {
+                $parts[] = strval($effect[$key]);
+            }
+        }
+
+        if (isset($effect['variance'])) {
+            $parts[] = sprintf('±%d%%', (int) round(floatval($effect['variance']) * 100));
+        }
+
+        return sprintf('%s: %s', ucfirst(str_replace('_', ' ', strval($effect['type'] ?? 'effect'))), implode(' · ', $parts));
+    }
+
+    /**
+     * The selected skill's effects, one line each.
+     *
+     * @return string[]
+     */
+    private function getDatabaseSkillCueLines(): array
+    {
+        $data = $this->getSelectedSkillData();
+
+        if ($data === null) {
+            return ['No skill selected.'];
+        }
+
+        $effects = array_filter((array) ($data['effects'] ?? []), is_array(...));
+
+        return $effects === [] ? ['No effects configured.'] : array_values(array_map(self::describeSkillEffect(...), $effects));
+    }
+
+    /**
+     * Whom the selected skill reaches, when, and how often it rolls.
+     *
+     * @return string[]
+     */
+    private function getDatabaseSkillFrameLines(): array
+    {
+        $data = $this->getSelectedSkillData();
+
+        if ($data === null) {
+            return ['No skill selected.'];
+        }
+
+        $scope = (array) ($data['scope'] ?? []);
+        $invocation = (array) ($data['invocation'] ?? []);
+
+        return [
+            sprintf('Side: %s', strval($scope['side'] ?? '')),
+            sprintf('Number: %s', strval($scope['number'] ?? '')),
+            sprintf('Status: %s', strval($scope['status'] ?? '')),
+            sprintf('Targets: %s', ($scope['targetCount'] ?? null) === null ? 'Auto' : strval($scope['targetCount'])),
+            '',
+            sprintf('Occasion: %s', strval($data['occasion'] ?? '')),
+            sprintf('Repeat: %d', intval($invocation['repeat'] ?? 1)),
+            sprintf('AP Gain: %d', intval($invocation['apGain'] ?? 0)),
+        ];
+    }
+
+    /**
+     * A summary of the selected skill: its number, kind, cost, scope and effects.
+     *
+     * @return string[]
+     */
+    private function getDatabaseSkillPreviewLines(): array
+    {
+        $data = $this->getSelectedSkillData();
+        $record = $this->getSelectedRecordDatabase()?->getRecordByIndex($this->getSelectedRecordIndex());
+
+        if ($data === null || $record === null) {
+            return ['No skill selected.'];
+        }
+
+        $scope = (array) ($data['scope'] ?? []);
+        $invocation = (array) ($data['invocation'] ?? []);
+        $effects = array_filter((array) ($data['effects'] ?? []), is_array(...));
+
+        return [
+            sprintf('File: %s/%s.php', SkillCatalog::DIRECTORY, $record->recordId),
+            sprintf('Name: %s', strval($data['name'] ?? '')),
+            sprintf('Kind: %s', ucfirst(strval($data['kind'] ?? ''))),
+            sprintf('Occasion: %s', strval($data['occasion'] ?? '')),
+            sprintf('Cost: %d MP', intval($data['cost'] ?? 0)),
+            sprintf('Cooldown: %d', intval($data['cooldown'] ?? 0)),
+            '',
+            sprintf('Scope: %s / %s / %s', strval($scope['side'] ?? ''), strval($scope['number'] ?? ''), strval($scope['status'] ?? '')),
+            sprintf('Invoke: %s', strval($invocation['message'] ?? '')),
+            '',
+            'Effects',
+            ...($effects === [] ? ['No effects configured.'] : array_values(array_map(self::describeSkillEffect(...), $effects))),
+        ];
     }
 
     /**
@@ -9184,11 +9255,6 @@ final class Editor
             return;
         }
 
-        if ($this->isSkillsDatabaseSelected()) {
-            $this->createDatabaseSkill();
-            return;
-        }
-
         $this->createDatabaseRecord();
     }
 
@@ -9216,25 +9282,6 @@ final class Editor
     }
 
     /**
-     * Creates a new skill entry in the project database.
-     *
-     * @return void
-     */
-    private function createDatabaseSkill(): void
-    {
-        if (! $this->workspace instanceof ProjectWorkspace) {
-            return;
-        }
-
-        $this->databaseSelectedSkillIndex = $this->workspace->skillDatabase->addSkill();
-        $this->databaseSelectedSettingIndex = 0;
-        $this->databaseFocus = self::DATABASE_FOCUS_SETTINGS;
-        $this->statusMessage = "Created a new skill.";
-        $this->renderDatabasePanes(["list", "settings", "cue", "frames", "preview"]);
-        $this->beginDatabaseEdit();
-    }
-
-    /**
      * Saves the active Database category.
      *
      * @return void
@@ -9250,10 +9297,6 @@ final class Editor
                 $this->backupBeforeSave(...$this->workspace->actorDatabase->getBackupPaths());
                 $this->workspace->actorDatabase->save();
                 $this->setStatus('Actor database saved.', StatusLevel::SUCCESS);
-            } elseif ($this->isSkillsDatabaseSelected()) {
-                $this->backupBeforeSave(...$this->workspace->skillDatabase->getBackupPaths());
-                $this->workspace->skillDatabase->save();
-                $this->setStatus('Skill database saved.', StatusLevel::SUCCESS);
             } elseif (($recordDatabase = $this->getSelectedRecordDatabase()) instanceof ProjectRecordDatabase) {
                 if (! $recordDatabase->isEditable()) {
                     $this->setStatus($this->describeRecordReadOnly($recordDatabase), StatusLevel::WARN);
@@ -9301,10 +9344,6 @@ final class Editor
                 : [];
         }
 
-        if ($this->isSkillsDatabaseSelected()) {
-            return $this->getDatabaseSkillSettingsFields();
-        }
-
         $recordDatabase = $this->getSelectedRecordDatabase();
 
         if ($recordDatabase instanceof ProjectRecordDatabase) {
@@ -9336,61 +9375,6 @@ final class Editor
     }
 
 
-    /**
-     * Returns the editable settings fields for the selected skill.
-     *
-     * @return array<int, array<string, mixed>>
-     */
-    private function getDatabaseSkillSettingsFields(): array
-    {
-        $skill = $this->getSelectedSkill();
-
-        if (! $skill instanceof ProjectSkill) {
-            return [];
-        }
-
-        $scope = $skill->getScope();
-        $invocation = $skill->getInvocation();
-
-        $fields = [
-            ['label' => 'Name', 'value' => $skill->getName(), 'control' => new InputControl(InputControlType::TEXT, $skill->getName()), 'field' => 'name'],
-            ['label' => 'Description', 'value' => $skill->getDescription(), 'control' => new InputControl(InputControlType::TEXT, $skill->getDescription()), 'field' => 'description'],
-            ['label' => 'Icon', 'value' => $skill->getIcon(), 'control' => new InputControl(InputControlType::TEXT, $skill->getIcon()), 'field' => 'icon'],
-            ['label' => 'Cost', 'value' => (string) $skill->getCost(), 'control' => new InputControl(InputControlType::INTEGER, (string) $skill->getCost()), 'field' => 'cost'],
-            ['label' => 'Cooldown', 'value' => (string) $skill->getCooldown(), 'control' => new InputControl(InputControlType::INTEGER, (string) $skill->getCooldown()), 'field' => 'cooldown'],
-            ['label' => 'Occasion', 'value' => $skill->getOccasion(), 'options' => array_map(static fn(Occasion $occasion): string => $occasion->value, Occasion::cases()), 'field' => 'occasion'],
-            ['label' => 'Scope Side', 'value' => (string) ($scope['side'] ?? ItemScopeSide::ENEMY->value), 'options' => array_map(static fn(ItemScopeSide $side): string => $side->value, ItemScopeSide::cases()), 'field' => 'scopeSide'],
-            ['label' => 'Scope Number', 'value' => (string) ($scope['number'] ?? ItemScopeNumber::ONE->value), 'options' => array_map(static fn(ItemScopeNumber $number): string => $number->value, ItemScopeNumber::cases()), 'field' => 'scopeNumber'],
-            ['label' => 'Scope Status', 'value' => (string) ($scope['status'] ?? ItemScopeStatus::ALIVE->value), 'options' => array_map(static fn(ItemScopeStatus $status): string => $status->value, ItemScopeStatus::cases()), 'field' => 'scopeStatus'],
-            ['label' => 'Target Count', 'value' => (string) ($scope['targetCount'] ?? ''), 'control' => new InputControl(InputControlType::INTEGER, (string) ($scope['targetCount'] ?? '')), 'field' => 'scopeTargetCount'],
-            ['label' => 'Invoke Text', 'value' => (string) ($invocation['message'] ?? ''), 'control' => new InputControl(InputControlType::TEXT, (string) ($invocation['message'] ?? '')), 'field' => 'invocationMessage'],
-            ['label' => 'Invoke Speed', 'value' => (string) ($invocation['speed'] ?? 0), 'control' => new InputControl(InputControlType::INTEGER, (string) ($invocation['speed'] ?? 0)), 'field' => 'invocationSpeed'],
-            ['label' => 'Accuracy', 'value' => (string) ($invocation['accuracy'] ?? 0), 'control' => new InputControl(InputControlType::INTEGER, (string) ($invocation['accuracy'] ?? 0)), 'field' => 'invocationAccuracy'],
-            ['label' => 'Repeat', 'value' => (string) ($invocation['repeat'] ?? 1), 'control' => new InputControl(InputControlType::INTEGER, (string) ($invocation['repeat'] ?? 1)), 'field' => 'invocationRepeat'],
-            ['label' => 'AP Gain', 'value' => (string) ($invocation['apGain'] ?? 10), 'control' => new InputControl(InputControlType::INTEGER, (string) ($invocation['apGain'] ?? 10)), 'field' => 'invocationApGain'],
-            ['label' => 'Effect Type', 'value' => $skill->getEffectType() ?? MagicEffectType::DESTRUCTIVE->value, 'options' => array_map(static fn(MagicEffectType $effectType): string => $effectType->value, MagicEffectType::cases()), 'field' => 'effectType'],
-            [
-                'label' => 'Animation',
-                'value' => $skill->animationId === null ? '(Legacy fallback)' : (string) $skill->animationId,
-                'field' => 'animationId',
-                'reference' => 'animation_ids',
-                'allowsNone' => true,
-                'noneLabel' => '(Legacy fallback)',
-            ],
-        ];
-        $database = $this->workspace->skillDatabase;
-        $fields = array_values(array_filter($fields, fn(array $field): bool =>
-            $database->supportsField($this->databaseSelectedSkillIndex, $field['field'])));
-        $reason = $database->getReadOnlyReason($this->databaseSelectedSkillIndex);
-        if ($reason !== null) {
-            foreach ($fields as &$field) {
-                $field['editable'] = false;
-            }
-            unset($field);
-            array_unshift($fields, ['label' => 'Read-only', 'value' => $reason, 'editable' => false]);
-        }
-        return $fields;
-    }
     /**
      * Returns the input control for a database settings field when editable.
      *
@@ -10825,7 +10809,6 @@ final class Editor
         $identity = [
             'category' => $this->databaseCategoryIndex,
             'actor' => $this->databaseSelectedActorIndex,
-            'skill' => $this->databaseSelectedSkillIndex,
             'records' => $this->databaseSelectedRecordIndexes,
         ];
 
@@ -10895,12 +10878,10 @@ final class Editor
         $liveSelection = [
             $this->databaseCategoryIndex,
             $this->databaseSelectedActorIndex,
-            $this->databaseSelectedSkillIndex,
             $this->databaseSelectedRecordIndexes,
         ];
         $this->databaseCategoryIndex = $identity['category'];
         $this->databaseSelectedActorIndex = $identity['actor'];
-        $this->databaseSelectedSkillIndex = $identity['skill'];
         $this->databaseSelectedRecordIndexes = $identity['records'] ?? $this->databaseSelectedRecordIndexes;
 
         try {
@@ -10909,7 +10890,6 @@ final class Editor
             [
                 $this->databaseCategoryIndex,
                 $this->databaseSelectedActorIndex,
-                $this->databaseSelectedSkillIndex,
                 $this->databaseSelectedRecordIndexes,
             ] = $liveSelection;
         }
@@ -10925,14 +10905,6 @@ final class Editor
     private function applyDatabaseFieldValue(string $field, string $rawValue): void
     {
         if (! $this->workspace instanceof ProjectWorkspace) {
-            return;
-        }
-
-        if ($this->isSkillsDatabaseSelected()) {
-            $value = in_array($field, ["cost", "cooldown", "invocationSpeed", "invocationAccuracy", "invocationRepeat", "invocationApGain"], true)
-                ? max(0, intval($rawValue))
-                : ($field === "scopeTargetCount" ? $rawValue : trim($rawValue));
-            $this->workspace->skillDatabase->setField($this->databaseSelectedSkillIndex, $field, $value);
             return;
         }
 
@@ -13143,10 +13115,6 @@ final class Editor
             return $this->getDatabaseActorListLines();
         }
 
-        if ($this->isSkillsDatabaseSelected()) {
-            return $this->getDatabaseSkillListLines();
-        }
-
         if ($this->getSelectedRecordDatabase() instanceof ProjectRecordDatabase) {
             return $this->getDatabaseRecordListLines();
         }
@@ -13203,10 +13171,14 @@ final class Editor
             $prefix = $index === $selectedIndex ? '> ' : '  ';
             $record = $database->getRecordByIndex($index);
             $dirty = $record?->isDirty() ? ' *' : '';
-            // Entries identified by a number (classes, animations) list it
-            // before their name.
+            // Entries identified by a number (classes, animations), or kept in
+            // numbered files (skills), list it before their name.
             $identity = $database->schema->identityKey === null ? null : $record?->get($database->schema->identityKey);
-            $number = is_int($identity) ? sprintf('%04d ', $identity) : '';
+            $number = match (true) {
+                is_int($identity) => sprintf('%04d ', $identity),
+                $database->schema->numberedFiles && preg_match('/\A(\d+)-/', (string) $record?->recordId, $match) === 1 => $match[1] . ' ',
+                default => '',
+            };
             $lines[] = sprintf('%s%s%s%s', $prefix, $number, $label, $dirty);
         }
 
@@ -13253,37 +13225,6 @@ final class Editor
 
         return $lines === [] ? ['No matches.'] : $lines;
     }
-
-    /**
-     * Returns the skill list lines.
-     *
-     * @return string[]
-     */
-    private function getDatabaseSkillListLines(): array
-    {
-        $skills = $this->workspace?->skillDatabase->getSkills() ?? [];
-
-        if ($skills === []) {
-            return ["No skills yet.", "", "Shift+A to create one."];
-        }
-
-        $lines = [];
-
-        foreach ($this->getVisibleDatabaseEntryIndexes() as $index) {
-            $skill = $skills[$index] ?? null;
-
-            if (! $skill instanceof ProjectSkill) {
-                continue;
-            }
-
-            $prefix = $index === $this->databaseSelectedSkillIndex ? "> " : "  ";
-            $dirty = $skill->isDirty() ? " *" : "";
-            $lines[] = sprintf("%s%04d %s%s", $prefix, $skill->id, $skill->getName(), $dirty);
-        }
-
-        return $lines;
-    }
-
 
     /**
      * Returns the current Database settings lines.
@@ -13586,23 +13527,6 @@ final class Editor
     }
 
     /**
-     * Returns the skill effect summary lines.
-     *
-     * @return string[]
-     */
-    private function getDatabaseSkillCueLines(): array
-    {
-        $skill = $this->getSelectedSkill();
-
-        if (! $skill instanceof ProjectSkill) {
-            return ["No skill selected."];
-        }
-
-        return $skill->getEffectSummaryLines();
-    }
-
-
-    /**
      * Returns the execution-order lines for the battle-entry rules cue.
      *
      * The runtime runs matching rules in priority then declaration order;
@@ -13753,34 +13677,6 @@ final class Editor
     }
 
     /**
-     * Returns the skill scope summary lines.
-     *
-     * @return string[]
-     */
-    private function getDatabaseSkillFrameLines(): array
-    {
-        $skill = $this->getSelectedSkill();
-
-        if (! $skill instanceof ProjectSkill) {
-            return ["No skill selected."];
-        }
-
-        $scope = $skill->getScope();
-        $invocation = $skill->getInvocation();
-
-        return [
-            sprintf("Side: %s", (string) ($scope["side"] ?? "Enemy")),
-            sprintf("Number: %s", (string) ($scope["number"] ?? "One")),
-            sprintf("Status: %s", (string) ($scope["status"] ?? "Alive")),
-            sprintf("Targets: %s", ($scope["targetCount"] ?? null) === null ? "Auto" : (string) $scope["targetCount"]),
-            "",
-            sprintf("Occasion: %s", $skill->getOccasion()),
-            sprintf("Repeat: %d", (int) ($invocation["repeat"] ?? 1)),
-            sprintf("AP Gain: %d", (int) ($invocation["apGain"] ?? 10)),
-        ];
-    }
-
-    /**
      * Returns system behavior notes.
      *
      * @return string[]
@@ -13914,37 +13810,6 @@ final class Editor
     }
 
     /**
-     * Returns the preview lines for the selected skill.
-     *
-     * @return string[]
-     */
-    private function getDatabaseSkillPreviewLines(): array
-    {
-        $skill = $this->getSelectedSkill();
-
-        if (! $skill instanceof ProjectSkill) {
-            return ["No skill selected."];
-        }
-
-        $scope = $skill->getScope();
-        $invocation = $skill->getInvocation();
-        $lines = [
-            sprintf("Skill ID: %04d", $skill->id),
-            sprintf("Name: %s", $skill->getName()),
-            sprintf("Type: %s", ucfirst($skill->getType())),
-            sprintf("Occasion: %s", $skill->getOccasion()),
-            sprintf("Cost: %d MP", $skill->getCost()),
-            sprintf("Cooldown: %d", $skill->getCooldown()),
-            "",
-            sprintf("Scope: %s / %s / %s", (string) ($scope["side"] ?? "Enemy"), (string) ($scope["number"] ?? "One"), (string) ($scope["status"] ?? "Alive")),
-            sprintf("Invoke: %s", (string) ($invocation["message"] ?? "")),
-            "",
-            "Effects",
-        ];
-
-        return array_merge($lines, $skill->getEffectSummaryLines());
-    }
-    /**
      * Returns the preview lines for the system database.
      *
      * @return string[]
@@ -14050,7 +13915,6 @@ final class Editor
 
         return match ($categoryKey) {
             self::DATABASE_CATEGORY_ACTORS => $this->workspace->actorDatabase->isDirty(),
-            self::DATABASE_CATEGORY_SKILLS => $this->workspace->skillDatabase->isDirty(),
             default => $this->workspace->getRecordDatabase($categoryKey)?->isDirty() ?? false,
         };
     }

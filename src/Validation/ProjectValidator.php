@@ -1353,8 +1353,8 @@ class ProjectValidator
   }
 
   /**
-   * Reports what the Engine's skill catalogue cannot identify: a skill the
-   * runtime would skip, or one whose name another skill already uses.
+   * Reports what the Engine's skill catalogue cannot identify: a record the
+   * runtime cannot read, or a skill whose name another skill already uses.
    *
    * @return Issue[]
    */
@@ -1362,9 +1362,9 @@ class ProjectValidator
   {
     return array_map(
       static fn(string $problem): Issue => Issue::error(
-        'assets/Data skill catalogue',
+        'assets/Data/Skills',
         $problem,
-        'A skill is found by its name across skills.php, abilities.php and magic.php, so each name must be unique.',
+        'Each skill is one record file; correct the file named, and give each skill a name no other skill uses.',
       ),
       $workspace->loadSkillCatalog()->getProblems(),
     );
@@ -1433,7 +1433,7 @@ class ProjectValidator
         $issues[] = Issue::error(
           $where,
           sprintf('It links to action "%s", which does not exist.', $linkedAction),
-          'Choose a skill from assets/Data/skills.php, abilities.php or magic.php.',
+          'Choose one of the skills under assets/Data/Skills.',
         );
       }
 

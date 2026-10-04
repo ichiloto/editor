@@ -9,18 +9,12 @@ use Ichiloto\Editor\ProjectWorkspace;
 function attackSkillProject(): string
 {
     $root = makeTemporaryProject();
-    file_put_contents($root . '/assets/Data/skills.php', <<<'PHP'
-    <?php
-    use Ichiloto\Engine\Entities\Enumerations\Occasion;
-    use Ichiloto\Engine\Entities\ItemScope;
-    use Ichiloto\Engine\Entities\Skills\BasicSkill;
-    use Ichiloto\Engine\Entities\Skills\MagicSkill;
-    return [
-        new BasicSkill('Attack', 'Strikes.', '', 0, 0, new ItemScope(), Occasion::BATTLE_SCREEN),
-        new BasicSkill('Tidy Up', 'Out of battle only.', '', 0, 0, new ItemScope(), Occasion::MENU_SCREEN),
-        new MagicSkill('Fire', 'Burns.', '', 4, 0),
-    ];
-    PHP);
+    writeSkillRecords(
+        $root,
+        new Ichiloto\Engine\Entities\Skills\BasicSkill('Attack', 'Strikes.', '', 0, 0, new Ichiloto\Engine\Entities\ItemScope(), Ichiloto\Engine\Entities\Enumerations\Occasion::BATTLE_SCREEN),
+        new Ichiloto\Engine\Entities\Skills\BasicSkill('Tidy Up', 'Out of battle only.', '', 0, 0, new Ichiloto\Engine\Entities\ItemScope(), Ichiloto\Engine\Entities\Enumerations\Occasion::MENU_SCREEN),
+        new Ichiloto\Engine\Entities\Skills\MagicSkill('Fire', 'Burns.', '', 4, 0),
+    );
 
     return $root;
 }
