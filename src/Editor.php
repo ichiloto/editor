@@ -94,8 +94,6 @@ use Ichiloto\Editor\UI\TextFieldEditor;
 use Ichiloto\Editor\UI\TextFieldKeyResult;
 use Ichiloto\Editor\Storage\WorkspaceSave;
 use Ichiloto\Editor\Validation\MapValidator;
-use Ichiloto\Engine\Animations\ActionAnimationResolver;
-use Ichiloto\Engine\Animations\AnimationTargetPosition;
 use Ichiloto\Engine\Entities\Enumerations\ItemScopeNumber;
 use Ichiloto\Engine\Entities\Enumerations\ItemScopeSide;
 use Ichiloto\Engine\Entities\Enumerations\ItemScopeStatus;
@@ -115,9 +113,6 @@ use Ichiloto\Engine\Quests\QuestObjectiveType;
 use Ichiloto\Engine\Rendering\Tilesets\TileId;
 use Ichiloto\Engine\Rendering\Tilesets\Tileset;
 use RuntimeException;
-if (! class_exists(__NAMESPACE__ . chr(92) . 'Animation', false)) { class_alias('Ichiloto' . chr(92) . 'Engine' . chr(92) . 'Animations' . chr(92) . 'Animation', __NAMESPACE__ . chr(92) . 'Animation'); }
-if (! class_exists(__NAMESPACE__ . chr(92) . 'AnimationCue', false)) { class_alias('Ichiloto' . chr(92) . 'Engine' . chr(92) . 'Animations' . chr(92) . 'AnimationCue', __NAMESPACE__ . chr(92) . 'AnimationCue'); }
-if (! class_exists(__NAMESPACE__ . chr(92) . 'AnimationPlayer', false)) { class_alias('Ichiloto' . chr(92) . 'Engine' . chr(92) . 'Animations' . chr(92) . 'AnimationPlayer', __NAMESPACE__ . chr(92) . 'AnimationPlayer'); }
 use Throwable;
 
 /**
@@ -144,11 +139,6 @@ final class Editor
      * subprocess, so it must never run per frame).
      */
     private const float TERMINAL_SIZE_PROBE_INTERVAL_SECONDS = 0.25;
-    /**
-     * Seconds each animation preview frame stays on screen (matches the
-     * engine AnimationPlayer default cadence).
-     */
-    private const float PREVIEW_SECONDS_PER_FRAME = 0.12;
 
     private const string FOCUS_ASSETS = 'assets';
     private const string FOCUS_CANVAS = 'canvas';
@@ -168,8 +158,6 @@ final class Editor
     private const string DATABASE_FOCUS_CATEGORIES = 'database_categories';
     private const string DATABASE_FOCUS_LIST = 'database_list';
     private const string DATABASE_FOCUS_SETTINGS = 'database_settings';
-    private const string DATABASE_FOCUS_FRAMES = 'database_frames';
-    private const string DATABASE_FOCUS_PREVIEW = 'database_preview';
     private const int CHARACTER_MAP_COLUMNS = 8;
 
     /** Rows or columns one wheel tick scrolls the canvas viewport. */
@@ -618,7 +606,6 @@ final class Editor
     private int $databaseSelectedClassIndex = 0;
     private int $databaseSelectedSkillIndex = 0;
     private int $databaseSelectedQuestIndex = 0;
-    private int $databaseSelectedAnimationIndex = 0;
     /**
      * Selected entry index per schema-driven category, keyed by category key.
      *
@@ -629,9 +616,6 @@ final class Editor
      */
     private array $databaseSelectedRecordIndexes = [];
     private int $databaseSelectedSettingIndex = 0;
-    private int $databaseSelectedFrameIndex = 1;
-    private int $databasePreviewCursorX = 0;
-    private int $databasePreviewCursorY = 0;
     /**
      * Legacy views over the database field editor; see the inspector hooks.
      */
@@ -657,15 +641,6 @@ final class Editor
             $this->databaseFieldEditor->caret = $value;
         }
     }
-    private string $databaseSelectedPaintSymbol = '*';
-    private ?string $databaseSelectedPaintColor = 'white';
-    private bool $isDatabasePreviewPlaying = false;
-    private int $databasePlaybackFrameIndex = 1;
-    /**
-     * When the non-blocking animation preview should advance to its next frame.
-     */
-    private float $databasePlaybackNextFrameAt = 0.0;
-    private ?string $databasePlaybackFlashColor = null;
     /**
      * The idle footer message shown once every queued status expires.
      */
@@ -837,10 +812,7 @@ final class Editor
                 DatabaseScreen::PANE_SETTINGS => fn(array $layout) => $this->createDatabaseSettingsWindow($layout)->render(),
                 DatabaseScreen::PANE_CUE => fn(array $layout) => $this->createDatabaseCueWindow($layout)->render(),
                 DatabaseScreen::PANE_FRAMES => fn(array $layout) => $this->createDatabaseFramesWindow($layout)->render(),
-                DatabaseScreen::PANE_PREVIEW => function (array $layout): void {
-                    $this->createDatabasePreviewWindow($layout)->render();
-                    $this->renderDatabasePreview($layout);
-                },
+                DatabaseScreen::PANE_PREVIEW => fn(array $layout) => $this->createDatabasePreviewWindow($layout)->render(),
             ],
             $this->renderDatabaseEditCursor(...),
             fn(): bool => $this->isDatabaseEditing,
@@ -948,17 +920,9 @@ final class Editor
         $this->databaseSelectedSkillIndex = 0;
         $this->databaseSelectedQuestIndex = 0;
         $this->databaseSelectedSettingIndex = 0;
-        $this->databaseSelectedFrameIndex = 1;
-        $this->databasePreviewCursorX = 0;
-        $this->databasePreviewCursorY = 0;
         $this->isDatabaseEditing = false;
         $this->databaseEditBuffer = '';
         $this->databaseEditCursorIndex = 0;
-        $this->databaseSelectedPaintSymbol = '*';
-        $this->databaseSelectedPaintColor = 'white';
-        $this->isDatabasePreviewPlaying = false;
-        $this->databasePlaybackFrameIndex = 1;
-        $this->databasePlaybackFlashColor = null;
         $this->statusMessage = self::STATUS_IDLE_MESSAGE;
         $this->statusDetailTitle = '';
         $this->statusDetailLines = [];
@@ -1027,7 +991,6 @@ final class Editor
     private function update(): void
     {
         $this->syncTerminalSizeIfNeeded();
-        $this->tickDatabaseAnimationPreview();
         $this->tickCutscenePreview();
         $this->tickStatusExpiry();
     }
@@ -2876,13 +2839,9 @@ final class Editor
         $this->databaseSelectedSkillIndex = 0;
         $this->databaseSelectedQuestIndex = 0;
         $this->databaseSelectedSettingIndex = 0;
-        $this->databaseSelectedFrameIndex = 1;
         $this->isDatabaseEditing = false;
         $this->databaseEditBuffer = '';
         $this->databaseEditCursorIndex = 0;
-        $this->databasePlaybackFrameIndex = $this->databaseSelectedFrameIndex;
-        $this->databasePlaybackFlashColor = null;
-        $this->centerDatabasePreviewCursor();
         $this->statusMessage = 'Database open.';
         $this->renderDatabaseArea(includeRoot: true);
     }
@@ -2898,8 +2857,6 @@ final class Editor
         $this->isDatabaseEditing = false;
         $this->databaseEditBuffer = '';
         $this->databaseEditCursorIndex = 0;
-        $this->isDatabasePreviewPlaying = false;
-        $this->databasePlaybackFlashColor = null;
         $this->statusMessage = 'Database closed.';
         $this->requestFullRender();
     }
@@ -3095,15 +3052,6 @@ final class Editor
             return;
         }
 
-        if ($this->databaseFocus === self::DATABASE_FOCUS_PREVIEW && ($input === "\n" || $input === "\r")) {
-            $this->paintDatabasePreviewSymbol($this->databaseSelectedPaintSymbol);
-            return;
-        }
-
-        if ($this->isShiftLetterShortcut($input, 'P')) {
-            $this->playDatabaseAnimationPreview();
-            return;
-        }
 
         if (str_contains($input, "\033[A")) {
             $this->moveDatabaseSelection(0, -1);
@@ -3134,15 +3082,6 @@ final class Editor
             $this->moveDatabaseSelection(1, 0);
             return;
         }
-
-        if ($this->databaseFocus === self::DATABASE_FOCUS_PREVIEW) {
-            if ($input === "\177" || $input === "\010") {
-                $this->paintDatabasePreviewSymbol(' ');
-                return;
-            }
-
-            $this->handleDatabaseTypedSymbolInput($input);
-        }
     }
 
     /**
@@ -3157,8 +3096,6 @@ final class Editor
             self::DATABASE_FOCUS_CATEGORIES,
             self::DATABASE_FOCUS_LIST,
             self::DATABASE_FOCUS_SETTINGS,
-            self::DATABASE_FOCUS_FRAMES,
-            self::DATABASE_FOCUS_PREVIEW,
         ];
         $currentIndex = array_search($this->databaseFocus, $paneOrder, true);
         $currentIndex = is_int($currentIndex) ? $currentIndex : 0;
@@ -3195,16 +3132,6 @@ final class Editor
 
         if ($this->databaseFocus === self::DATABASE_FOCUS_SETTINGS) {
             $this->moveDatabaseSettingsSelection($deltaY);
-            return;
-        }
-
-        if ($this->databaseFocus === self::DATABASE_FOCUS_FRAMES) {
-            $this->moveDatabaseFrameSelection($deltaY);
-            return;
-        }
-
-        if ($this->databaseFocus === self::DATABASE_FOCUS_PREVIEW) {
-            $this->moveDatabasePreviewCursor($deltaX, $deltaY);
         }
     }
 
@@ -3257,12 +3184,8 @@ final class Editor
             return;
         }
 
-        if ($this->isAnimationsDatabaseSelected()) {
-            $this->moveDatabaseAnimationSelection($step);
-            return;
-        }
-
         $this->moveDatabaseRecordSelection($step);
+
     }
 
     /**
@@ -3370,39 +3293,6 @@ final class Editor
     }
 
     /**
-     * Moves the selected animation entry.
-     *
-     * @param int $step The entry step.
-     * @return void
-     */
-    private function moveDatabaseAnimationSelection(int $step): void
-    {
-        if (! $this->isAnimationsDatabaseSelected()) {
-            return;
-        }
-
-        $animations = $this->workspace?->animationDatabase->getAnimations() ?? [];
-
-        if ($animations === []) {
-            return;
-        }
-
-        $nextIndex = $this->resolveDatabaseSelectionStep($this->databaseSelectedAnimationIndex, $step);
-
-        if ($nextIndex === $this->databaseSelectedAnimationIndex) {
-            return;
-        }
-
-        $this->databaseSelectedAnimationIndex = $nextIndex;
-        $this->databaseSelectedFrameIndex = 1;
-        $this->databaseSelectedSettingIndex = 0;
-        $this->databasePlaybackFrameIndex = 1;
-        $this->centerDatabasePreviewCursor();
-        $this->statusMessage = sprintf('Selected animation %s.', $animations[$nextIndex]->name);
-        $this->renderDatabasePanes(['list', 'settings', 'cue', 'frames', 'preview']);
-    }
-
-    /**
      * Moves the selected settings field.
      *
      * @param int $step The field step.
@@ -3424,54 +3314,6 @@ final class Editor
 
         $this->databaseSelectedSettingIndex = $nextIndex;
         $this->renderDatabasePanes(['settings']);
-    }
-
-    /**
-     * Moves the selected frame index.
-     *
-     * @param int $step The frame step.
-     * @return void
-     */
-    private function moveDatabaseFrameSelection(int $step): void
-    {
-        $animation = $this->getSelectedAnimation();
-
-        if (! $animation instanceof Animation) {
-            return;
-        }
-
-        $nextIndex = ListNavigation::step($this->databaseSelectedFrameIndex - 1, $step, $animation->maxFrames) + 1;
-
-        if ($nextIndex === $this->databaseSelectedFrameIndex) {
-            return;
-        }
-
-        $this->databaseSelectedFrameIndex = $nextIndex;
-        $this->databasePlaybackFrameIndex = $nextIndex;
-        $this->statusMessage = sprintf('Frame #%03d selected.', $nextIndex);
-        $this->renderDatabasePanes(['settings', 'cue', 'frames', 'preview']);
-    }
-
-    /**
-     * Moves the animation preview cursor.
-     *
-     * @param int $deltaX The horizontal movement amount.
-     * @param int $deltaY The vertical movement amount.
-     * @return void
-     */
-    private function moveDatabasePreviewCursor(int $deltaX, int $deltaY): void
-    {
-        $previewSize = $this->getDatabasePreviewSize();
-        $nextX = max(0, min($previewSize['width'] - 1, $this->databasePreviewCursorX + $deltaX));
-        $nextY = max(0, min($previewSize['height'] - 1, $this->databasePreviewCursorY + $deltaY));
-
-        if ($nextX === $this->databasePreviewCursorX && $nextY === $this->databasePreviewCursorY) {
-            return;
-        }
-
-        $this->databasePreviewCursorX = $nextX;
-        $this->databasePreviewCursorY = $nextY;
-        $this->renderDatabasePanes(['preview']);
     }
 
     /**
@@ -5990,14 +5832,8 @@ final class Editor
             );
         }
 
-        if ($this->isAnimationsDatabaseSelected()) {
-            return array_map(
-                static fn(Animation $animation): string => $animation->name,
-                $this->workspace?->animationDatabase->getAnimations() ?? [],
-            );
-        }
-
         return $this->getSelectedRecordDatabase()?->getEntryLabels() ?? [];
+
     }
 
     /**
@@ -6052,7 +5888,6 @@ final class Editor
             $this->isClassesDatabaseSelected() => $this->databaseSelectedClassIndex,
             $this->isSkillsDatabaseSelected() => $this->databaseSelectedSkillIndex,
             $this->isQuestsDatabaseSelected() => $this->databaseSelectedQuestIndex,
-            $this->isAnimationsDatabaseSelected() => $this->databaseSelectedAnimationIndex,
             default => $this->getSelectedRecordIndex(),
         };
     }
@@ -6072,7 +5907,6 @@ final class Editor
             $this->isClassesDatabaseSelected() => $this->databaseSelectedClassIndex = $index,
             $this->isSkillsDatabaseSelected() => $this->databaseSelectedSkillIndex = $index,
             $this->isQuestsDatabaseSelected() => $this->databaseSelectedQuestIndex = $index,
-            $this->isAnimationsDatabaseSelected() => $this->databaseSelectedAnimationIndex = $index,
             default => $this->setSelectedRecordIndex($index),
         };
     }
@@ -6307,11 +6141,7 @@ final class Editor
                 fn(): ?object => $workspace->questDatabase->removeQuest($index),
                 static fn(object $entry) => $workspace->questDatabase->insertQuest($index, $entry),
             ),
-            self::DATABASE_CATEGORY_ANIMATIONS => $this->buildDatabaseDeletionCommand(
-                sprintf('Delete animation %s', $label),
-                fn(): ?object => $workspace->animationDatabase->removeAnimation($index),
-                static fn(object $entry) => $workspace->animationDatabase->insertAnimation($index, $entry),
-            ),
+
             default => $this->buildRecordDeletionCommand($pending['category'], $index),
         };
 
@@ -6515,11 +6345,13 @@ final class Editor
         $animationIndex = null;
         $matchedName = '';
 
+        $animations = $this->workspace?->getRecordDatabase(self::DATABASE_CATEGORY_ANIMATIONS);
+
         if ($skill->animationId !== null) {
-            foreach ($this->workspace?->animationDatabase->getAnimations() ?? [] as $index => $animation) {
-                if ($animation->id === $skill->animationId) {
+            foreach ($animations?->getRecords() ?? [] as $index => $animation) {
+                if ($animation->get('id') === $skill->animationId) {
                     $animationIndex = $index;
-                    $matchedName = $animation->name;
+                    $matchedName = $animations->getEntryLabel($animation);
                     break;
                 }
             }
@@ -6546,7 +6378,7 @@ final class Editor
         $this->pushNavigationOrigin(sprintf('skill %s', $skill->getName()));
         $this->databaseFilter->clear();
         $this->databaseCategoryIndex = DatabaseCatalog::indexOf(self::DATABASE_CATEGORY_ANIMATIONS);
-        $this->databaseSelectedAnimationIndex = $animationIndex;
+        $this->setSelectedRecordIndex($animationIndex);
         $this->databaseFocus = self::DATABASE_FOCUS_LIST;
         $this->databaseSelectedSettingIndex = 0;
         $this->setStatus(sprintf('Went to animation %s (Ctrl+B goes back).', $matchedName), StatusLevel::INFO);
@@ -6666,8 +6498,8 @@ final class Editor
             return null;
         }
 
-        foreach ($this->workspace?->animationDatabase->getAnimations() ?? [] as $index => $animation) {
-            if (mb_strtolower($animation->name) === mb_strtolower($animationName)) {
+        foreach ($this->workspace?->getRecordDatabase(self::DATABASE_CATEGORY_ANIMATIONS)?->getRecords() ?? [] as $index => $animation) {
+            if (mb_strtolower(strval($animation->get('name'))) === mb_strtolower($animationName)) {
                 return $index;
             }
         }
@@ -6701,7 +6533,7 @@ final class Editor
             'class' => $this->databaseSelectedClassIndex,
             'skill' => $this->databaseSelectedSkillIndex,
             'quest' => $this->databaseSelectedQuestIndex,
-            'animation' => $this->databaseSelectedAnimationIndex,
+            'records' => $this->databaseSelectedRecordIndexes,
             'setting' => $this->databaseSelectedSettingIndex,
             'assetIndex' => $this->selectedAssetIndex,
             'cursorX' => $this->cursorX,
@@ -6721,7 +6553,7 @@ final class Editor
             $this->databaseSelectedClassIndex = $snapshot['class'];
             $this->databaseSelectedSkillIndex = $snapshot['skill'];
             $this->databaseSelectedQuestIndex = $snapshot['quest'];
-            $this->databaseSelectedAnimationIndex = $snapshot['animation'];
+            $this->databaseSelectedRecordIndexes = $snapshot['records'];
             $this->databaseSelectedSettingIndex = $snapshot['setting'];
             $this->selectedAssetIndex = $snapshot['assetIndex'];
             $this->cursorX = $snapshot['cursorX'];
@@ -8729,16 +8561,6 @@ final class Editor
         return $this->getSelectedDatabaseCategoryDefinition()->key === self::DATABASE_CATEGORY_SKILLS;
     }
     /**
-     * Returns whether the Animations database is active.
-     *
-     * @return bool
-     */
-    private function isAnimationsDatabaseSelected(): bool
-    {
-        return $this->getSelectedDatabaseCategoryDefinition()->key === self::DATABASE_CATEGORY_ANIMATIONS;
-    }
-
-    /**
      * Returns whether the Quests database is active.
      *
      * @return bool
@@ -9472,20 +9294,6 @@ final class Editor
     }
 
     /**
-     * Returns the selected animation from the project database.
-     *
-     * @return Animation|null
-     */
-    private function getSelectedAnimation()
-    {
-        if (! $this->isAnimationsDatabaseSelected()) {
-            return null;
-        }
-
-        return $this->workspace?->animationDatabase->getAnimationByIndex($this->databaseSelectedAnimationIndex);
-    }
-
-    /**
      * Creates a new entry in the active Database category.
      *
      * @return void
@@ -9513,11 +9321,6 @@ final class Editor
 
         if ($this->isQuestsDatabaseSelected()) {
             $this->createDatabaseQuest();
-            return;
-        }
-
-        if ($this->isAnimationsDatabaseSelected()) {
-            $this->createDatabaseAnimation();
             return;
         }
 
@@ -9796,27 +9599,6 @@ final class Editor
     }
 
     /**
-     * Creates a new animation entry in the project database.
-     *
-     * @return void
-     */
-    private function createDatabaseAnimation(): void
-    {
-        if (! $this->workspace instanceof ProjectWorkspace || ! $this->isAnimationsDatabaseSelected()) {
-            return;
-        }
-
-        $this->databaseSelectedAnimationIndex = $this->workspace->animationDatabase->addAnimation();
-        $this->databaseSelectedFrameIndex = 1;
-        $this->databaseSelectedSettingIndex = 0;
-        $this->databaseFocus = self::DATABASE_FOCUS_SETTINGS;
-        $this->centerDatabasePreviewCursor();
-        $this->statusMessage = "Created a new animation.";
-        $this->renderDatabasePanes(["list", "settings", "cue", "frames", "preview"]);
-        $this->beginDatabaseEdit();
-    }
-
-    /**
      * Saves the active Database category.
      *
      * @return void
@@ -9844,10 +9626,6 @@ final class Editor
                 $this->backupBeforeSave(...$this->workspace->questDatabase->getBackupPaths());
                 $this->workspace->questDatabase->save();
                 $this->setStatus('Quest database saved.', StatusLevel::SUCCESS);
-            } elseif ($this->isAnimationsDatabaseSelected()) {
-                $this->backupBeforeSave(...$this->workspace->animationDatabase->getBackupPaths());
-                $this->workspace->animationDatabase->save();
-                $this->setStatus('Animation database saved.', StatusLevel::SUCCESS);
             } elseif ($this->isSystemDatabaseSelected()) {
                 if ($this->workspace->config?->isDirty()) {
                     $this->backupBeforeSave($this->workspace->config->path);
@@ -9942,108 +9720,7 @@ final class Editor
             return $recordDatabase->getSettingsFields($this->getSelectedRecordIndex());
         }
 
-        $animation = $this->getSelectedAnimation();
-
-        if (! $animation instanceof Animation) {
-            return [];
-        }
-
-        $cue = $animation->getCue($this->databaseSelectedFrameIndex);
-
-        return [
-            [
-                'label' => 'Name',
-                'value' => $animation->name,
-                'control' => new InputControl(InputControlType::TEXT, $animation->name),
-                'field' => 'name',
-            ],
-            [
-                'label' => 'Position',
-                'value' => ucfirst($animation->position->value),
-                'options' => array_map(
-                    static fn(AnimationTargetPosition $position): string => $position->value,
-                    AnimationTargetPosition::cases()
-                ),
-                'field' => 'position',
-            ],
-            [
-                'label' => 'Max Frames',
-                'value' => (string) $animation->maxFrames,
-                'control' => new InputControl(InputControlType::INTEGER, (string) $animation->maxFrames),
-                'field' => 'maxFrames',
-            ],
-            [
-                'label' => 'Brush Symbol',
-                'value' => $this->databaseSelectedPaintSymbol === ' ' ? 'Space' : $this->databaseSelectedPaintSymbol,
-                'control' => new InputControl(InputControlType::TEXT, $this->databaseSelectedPaintSymbol),
-                'field' => 'brushSymbol',
-            ],
-            [
-                'label' => 'Brush Color',
-                'value' => ucfirst((string) ($this->databaseSelectedPaintColor ?? 'none')),
-                'options' => ['none', 'white', 'red', 'green', 'blue', 'yellow', 'cyan', 'magenta'],
-                'field' => 'brushColor',
-            ],
-            [
-                'label' => 'Frame Sound',
-                'value' => $cue?->soundEffect ?? '',
-                'reference' => 'sfx',
-                'allowsNone' => true,
-                'noneLabel' => '(No sound)',
-                'field' => 'frameSound',
-            ],
-            [
-                'label' => 'Flash Color',
-                'value' => ucfirst((string) ($cue?->flashColor ?? 'none')),
-                'options' => ['none', 'white', 'red', 'green', 'blue', 'yellow', 'cyan', 'magenta'],
-                'field' => 'flashColor',
-            ],
-            [
-                'label' => 'Flash Frames',
-                'value' => (string) ($cue?->flashDurationFrames ?? 0),
-                'control' => new InputControl(InputControlType::INTEGER, (string) ($cue?->flashDurationFrames ?? 0)),
-                'field' => 'flashDurationFrames',
-            ],
-            ...$this->getAnimationRoleFields(),
-        ];
-    }
-
-    /**
-     * Returns the selected animation's role rows: which battle actions play it
-     * when they name no animation of their own. One row per role the Engine
-     * supports, switched on or off; a role bound elsewhere names its holder.
-     *
-     * @return array<int, array<string, mixed>>
-     */
-    private function getAnimationRoleFields(): array
-    {
-        $database = $this->workspace?->animationDatabase;
-
-        if ($database === null || ! $this->getSelectedAnimation() instanceof Animation) {
-            return [];
-        }
-
-        $roles = $database->getRoles($this->databaseSelectedAnimationIndex);
-        $fields = [[
-            'label' => 'Roles',
-            'value' => $roles === [] ? '(none)' : implode(', ', $roles),
-            'editable' => false,
-            'field' => '',
-        ]];
-
-        foreach (ActionAnimationResolver::getSupportedRoles() as $role) {
-            $owner = $database->findRoleOwner($role);
-            $holder = $owner === null || $owner === $this->databaseSelectedAnimationIndex
-                ? '' : sprintf(' (on %s)', $database->getAnimationByIndex($owner)?->name ?? '?');
-            $fields[] = [
-                'label' => '  ' . $role . $holder,
-                'value' => in_array($role, $roles, true) ? 'Yes' : 'No',
-                'options' => ['no', 'yes'],
-                'field' => 'role:' . $role,
-            ];
-        }
-
-        return $fields;
+        return [];
     }
 
 
@@ -12266,8 +11943,6 @@ final class Editor
             'class' => $this->databaseSelectedClassIndex,
             'skill' => $this->databaseSelectedSkillIndex,
             'quest' => $this->databaseSelectedQuestIndex,
-            'animation' => $this->databaseSelectedAnimationIndex,
-            'frame' => $this->databaseSelectedFrameIndex,
             'records' => $this->databaseSelectedRecordIndexes,
         ];
 
@@ -12277,7 +11952,17 @@ final class Editor
         $before = $record?->toArray();
         $actor = $this->isActorsDatabaseSelected() ? $this->getSelectedActor() : null;
         $actorBefore = $actor?->getData();
+        // A schema record's edit is one step only when it changed the record:
+        // a value the record refused, or the value it already held, leaves none.
+        $schemaRecord = $record === null && $actor === null
+            ? $this->getSelectedRecordDatabase()?->getRecordByIndex($this->getSelectedRecordIndex())
+            : null;
+        $schemaBefore = $schemaRecord?->toArray();
         $this->applyDatabaseFieldValue($fieldId, $rawValue);
+
+        if ($schemaRecord !== null && $schemaRecord->toArray() === $schemaBefore) {
+            return;
+        }
 
         if ($actor !== null && $actorBefore !== null) {
             $actorAfter = $actor->getData();
@@ -12303,16 +11988,7 @@ final class Editor
             return;
         }
 
-        if (in_array($fieldId, ['brushSymbol', 'brushColor'], true) || $oldRawValue === $rawValue) {
-            return;
-        }
-
-        // A role row shows Yes/No and sends yes/no. Choosing what it already
-        // shows, or a refused change, changes nothing and leaves no undo step.
-        if (str_starts_with($fieldId, 'role:')
-            && (strcasecmp($oldRawValue, $rawValue) === 0
-                || in_array(substr($fieldId, 5), $this->workspace?->animationDatabase->getRoles($this->databaseSelectedAnimationIndex) ?? [], true)
-                    !== (strtolower(trim($rawValue)) === 'yes'))) {
+        if ($oldRawValue === $rawValue) {
             return;
         }
 
@@ -12358,7 +12034,7 @@ final class Editor
      * Applies a database value onto a pinned entry identity, restoring the
      * live selection afterwards.
      *
-     * @param array{category: int, actor: int, class: int, skill: int, quest: int, animation: int, frame: int, records?: array<string, int>} $identity The pinned selection.
+     * @param array{category: int, actor: int, class: int, skill: int, quest: int, records?: array<string, int>} $identity The pinned selection.
      * @param string $field The field identifier.
      * @param string $rawValue The raw value to apply.
      * @return void
@@ -12371,8 +12047,6 @@ final class Editor
             $this->databaseSelectedClassIndex,
             $this->databaseSelectedSkillIndex,
             $this->databaseSelectedQuestIndex,
-            $this->databaseSelectedAnimationIndex,
-            $this->databaseSelectedFrameIndex,
             $this->databaseSelectedRecordIndexes,
         ];
         $this->databaseCategoryIndex = $identity['category'];
@@ -12380,8 +12054,6 @@ final class Editor
         $this->databaseSelectedClassIndex = $identity['class'];
         $this->databaseSelectedSkillIndex = $identity['skill'];
         $this->databaseSelectedQuestIndex = $identity['quest'];
-        $this->databaseSelectedAnimationIndex = $identity['animation'];
-        $this->databaseSelectedFrameIndex = $identity['frame'];
         $this->databaseSelectedRecordIndexes = $identity['records'] ?? $this->databaseSelectedRecordIndexes;
 
         try {
@@ -12393,8 +12065,6 @@ final class Editor
                 $this->databaseSelectedClassIndex,
                 $this->databaseSelectedSkillIndex,
                 $this->databaseSelectedQuestIndex,
-                $this->databaseSelectedAnimationIndex,
-                $this->databaseSelectedFrameIndex,
                 $this->databaseSelectedRecordIndexes,
             ] = $liveSelection;
         }
@@ -12523,95 +12193,7 @@ final class Editor
             // The schema owns coercion, so no per-category intval/trim rules
             // are needed here. This path keeps no undo step.
             $this->applyRecordFieldValue($recordDatabase, $field, $rawValue, $field);
-            return;
         }
-
-        match ($field) {
-            'name', 'position', 'maxFrames' => $this->workspace->animationDatabase->setField(
-                $this->databaseSelectedAnimationIndex,
-                $field,
-                $field === 'maxFrames' ? max(1, intval($rawValue)) : trim($rawValue)
-            ),
-            'brushSymbol' => $this->databaseSelectedPaintSymbol = $this->normalizeDatabaseSymbol($rawValue),
-            'brushColor' => $this->databaseSelectedPaintColor = $this->normalizeDatabaseColor($rawValue),
-            'frameSound', 'flashColor', 'flashDurationFrames' => $this->applyDatabaseCueFieldValue($field, $rawValue),
-            default => str_starts_with($field, 'role:') ? $this->applyAnimationRoleValue(substr($field, 5), $rawValue) : null,
-        };
-
-        $animation = $this->getSelectedAnimation();
-
-        if ($animation instanceof Animation) {
-            $this->databaseSelectedFrameIndex = max(1, min($animation->maxFrames, $this->databaseSelectedFrameIndex));
-            $this->databasePlaybackFrameIndex = $this->databaseSelectedFrameIndex;
-        }
-
-        $this->centerDatabasePreviewCursor();
-    }
-
-    /**
-     * Binds or unbinds a role on the selected animation, saying why when the
-     * database refuses.
-     *
-     * @param string $role The role.
-     * @param string $rawValue `yes` to bind, anything else to unbind.
-     * @return void
-     */
-    private function applyAnimationRoleValue(string $role, string $rawValue): void
-    {
-        $refusal = $this->workspace?->animationDatabase->setRole(
-            $this->databaseSelectedAnimationIndex,
-            $role,
-            strtolower(trim($rawValue)) === 'yes',
-        );
-
-        if ($refusal !== null) {
-            $this->setStatus($refusal, StatusLevel::WARN);
-        }
-    }
-
-    /**
-     * Applies cue-field edits for the selected frame.
-     *
-     * @param string $field The field identifier.
-     * @param string $rawValue The raw field value.
-     * @return void
-     */
-    private function applyDatabaseCueFieldValue(string $field, string $rawValue): void
-    {
-        if (! $this->workspace instanceof ProjectWorkspace) {
-            return;
-        }
-
-        $animation = $this->getSelectedAnimation();
-
-        if (! $animation instanceof Animation) {
-            return;
-        }
-
-        $cue = $animation->getCue($this->databaseSelectedFrameIndex) ?? new AnimationCue();
-        $soundEffect = $cue->soundEffect;
-        $flashColor = $cue->flashColor;
-        $flashDurationFrames = $cue->flashDurationFrames;
-
-        if ($field === 'frameSound') {
-            $soundEffect = trim($rawValue);
-        }
-
-        if ($field === 'flashColor') {
-            $flashColor = $this->normalizeDatabaseColor($rawValue);
-        }
-
-        if ($field === 'flashDurationFrames') {
-            $flashDurationFrames = max(0, intval($rawValue));
-        }
-
-        $this->workspace->animationDatabase->setFrameCue(
-            $this->databaseSelectedAnimationIndex,
-            $this->databaseSelectedFrameIndex,
-            $soundEffect,
-            $flashColor,
-            $flashDurationFrames,
-        );
     }
 
     /**
@@ -12653,231 +12235,6 @@ final class Editor
         $optionIndex = ListNavigation::step($optionIndex, $step, count($options));
         $this->applyDatabaseFieldValueRecorded($field, (string) $options[$optionIndex]);
         $this->renderDatabasePanes(['list', 'settings', 'cue', 'frames', 'preview']);
-    }
-
-    /**
-     * Handles typed painting input inside the database preview.
-     *
-     * @param string $input The raw input.
-     * @return void
-     */
-    private function handleDatabaseTypedSymbolInput(string $input): void
-    {
-        if (str_contains($input, "\033")) {
-            return;
-        }
-
-        if (preg_match('/^\X/u', $input, $matches) !== 1) {
-            return;
-        }
-
-        $symbol = $matches[0];
-
-        if ($symbol === "\n" || $symbol === "\r" || $symbol === "\t") {
-            return;
-        }
-
-        $this->databaseSelectedPaintSymbol = $this->normalizeDatabaseSymbol($symbol);
-        $this->paintDatabasePreviewSymbol($this->databaseSelectedPaintSymbol, true);
-    }
-
-    /**
-     * Paints the selected symbol onto the current animation frame.
-     *
-     * @param string $symbol The symbol to paint.
-     * @return void
-     */
-    private function paintDatabasePreviewSymbol(string $symbol, bool $refreshSettings = false): void
-    {
-        if (! $this->workspace instanceof ProjectWorkspace) {
-            return;
-        }
-
-        $animation = $this->getSelectedAnimation();
-
-        if (! $animation instanceof Animation) {
-            return;
-        }
-
-        $previewSize = $this->getDatabasePreviewSize();
-        $origin = AnimationPreviewRenderer::resolveOrigin($animation->position, $previewSize['width'], $previewSize['height']);
-        $cellX = $this->databasePreviewCursorX - $origin['x'];
-        $cellY = $this->databasePreviewCursorY - $origin['y'];
-        $color = trim($symbol) === '' ? null : $this->databaseSelectedPaintColor;
-        $animationDatabase = $this->workspace->animationDatabase;
-        $animationIndex = $this->databaseSelectedAnimationIndex;
-        $frameIndex = $this->databaseSelectedFrameIndex;
-        $oldCell = $animation->getFrame($frameIndex)->getCellAt($cellX, $cellY);
-        $oldSymbol = $oldCell?->symbol ?? ' ';
-        $oldColor = $oldCell?->color;
-
-        $animationDatabase->setFrameCell($animationIndex, $frameIndex, $cellX, $cellY, $symbol, $color);
-
-        $newCell = $animation->getFrame($frameIndex)->getCellAt($cellX, $cellY);
-
-        if (($newCell?->symbol ?? ' ') !== $oldSymbol || ($newCell?->color) !== $oldColor) {
-            $this->recordCommand(new GenericCommand(
-                'Frame paint',
-                static fn() => $animationDatabase->setFrameCell($animationIndex, $frameIndex, $cellX, $cellY, $symbol, $color),
-                static fn() => $animationDatabase->setFrameCell($animationIndex, $frameIndex, $cellX, $cellY, $oldSymbol, $oldColor),
-            ));
-        }
-
-        $this->databasePlaybackFrameIndex = $this->databaseSelectedFrameIndex;
-        $this->statusMessage = sprintf('Animation frame #%03d updated.', $this->databaseSelectedFrameIndex);
-        $this->renderDatabasePanes($refreshSettings ? ['settings', 'preview'] : ['preview']);
-    }
-
-    /**
-     * Plays the selected animation inside the Database preview pane.
-     *
-     * @return void
-     */
-    private function playDatabaseAnimationPreview(): void
-    {
-        $animation = $this->getSelectedAnimation();
-
-        if (! $animation instanceof Animation) {
-            return;
-        }
-
-        if ($this->isDatabasePreviewPlaying) {
-            // Shift+P toggles: a second press stops the running preview.
-            $this->stopDatabaseAnimationPreview('Preview stopped.');
-            return;
-        }
-
-        $this->isDatabasePreviewPlaying = true;
-        $this->databasePlaybackFrameIndex = 1;
-        $this->databasePlaybackNextFrameAt = microtime(true);
-        $this->statusMessage = sprintf('Playing %s.', $animation->name);
-        $this->renderDatabasePanes(['preview']);
-    }
-
-    /**
-     * Advances the non-blocking animation preview from the frame loop.
-     *
-     * Playback is a state ticked from update() rather than a blocking call so
-     * the editor keeps accepting input while an animation plays.
-     *
-     * @return void
-     */
-    private function tickDatabaseAnimationPreview(): void
-    {
-        if (! $this->isDatabasePreviewPlaying) {
-            return;
-        }
-
-        $animation = $this->getSelectedAnimation();
-
-        if (! $animation instanceof Animation) {
-            $this->stopDatabaseAnimationPreview('Preview stopped.');
-            return;
-        }
-
-        $now = microtime(true);
-
-        if ($now < $this->databasePlaybackNextFrameAt) {
-            return;
-        }
-
-        if ($this->databasePlaybackFrameIndex > $animation->maxFrames) {
-            $this->stopDatabaseAnimationPreview('Preview complete.');
-            return;
-        }
-
-        $cue = $animation->getCue($this->databasePlaybackFrameIndex);
-        $this->databasePlaybackFlashColor = $cue?->flashColor;
-        $this->renderDatabasePanes(['preview']);
-        $this->databasePlaybackFrameIndex++;
-        $this->databasePlaybackNextFrameAt = $now + self::PREVIEW_SECONDS_PER_FRAME;
-    }
-
-    /**
-     * Ends the animation preview and restores the selected frame.
-     *
-     * @param string $statusMessage The status line to show.
-     * @return void
-     */
-    private function stopDatabaseAnimationPreview(string $statusMessage): void
-    {
-        $this->isDatabasePreviewPlaying = false;
-        $this->databasePlaybackFlashColor = null;
-        $this->databasePlaybackFrameIndex = $this->databaseSelectedFrameIndex;
-        $this->statusMessage = $statusMessage;
-        $this->renderDatabasePanes(['preview']);
-    }
-
-    /**
-     * Centers the database preview cursor on the current animation target.
-     *
-     * @return void
-     */
-    private function centerDatabasePreviewCursor(): void
-    {
-        $animation = $this->getSelectedAnimation();
-        $previewSize = $this->getDatabasePreviewSize();
-
-        if (! $animation instanceof Animation) {
-            $this->databasePreviewCursorX = intdiv($previewSize['width'], 2);
-            $this->databasePreviewCursorY = intdiv($previewSize['height'], 2);
-            return;
-        }
-
-        $origin = AnimationPreviewRenderer::resolveOrigin($animation->position, $previewSize['width'], $previewSize['height']);
-        $this->databasePreviewCursorX = $origin['x'];
-        $this->databasePreviewCursorY = $origin['y'];
-    }
-
-    /**
-     * Returns the size of the database preview grid.
-     *
-     * @return array{width: int, height: int}
-     */
-    private function getDatabasePreviewSize(): array
-    {
-        $layout = $this->resolveDatabaseLayout($this->resolveLayout());
-
-        return [
-            'width' => max(10, $layout['previewWidth'] - 2 - (self::WINDOW_HORIZONTAL_PADDING * 2)),
-            'height' => max(6, $layout['previewHeight'] - 2),
-        ];
-    }
-
-    /**
-     * Normalizes a paint symbol down to one visible grapheme.
-     *
-     * @param string $symbol The raw symbol.
-     * @return string
-     */
-    private function normalizeDatabaseSymbol(string $symbol): string
-    {
-        if (trim($symbol) === '') {
-            return ' ';
-        }
-
-        if (preg_match('/^\X/u', $symbol, $matches) !== 1) {
-            return ' ';
-        }
-
-        return $matches[0];
-    }
-
-    /**
-     * Normalizes a stored animation color.
-     *
-     * @param string|null $color The raw color value.
-     * @return string|null
-     */
-    private function normalizeDatabaseColor(?string $color): ?string
-    {
-        $normalized = strtolower(trim((string) $color));
-
-        if ($normalized === '' || $normalized === 'none') {
-            return null;
-        }
-
-        return $normalized;
     }
 
     /**
@@ -14699,47 +14056,6 @@ final class Editor
     }
 
     /**
-     * Renders the animation preview content inside the preview window.
-     *
-     * @param array<string, int> $layout The Database layout.
-     * @return void
-     */
-    private function renderDatabasePreview(array $layout): void
-    {
-        if (! $this->isAnimationsDatabaseSelected()) {
-            return;
-        }
-
-        $animation = $this->getSelectedAnimation();
-
-        if (! $animation instanceof Animation) {
-            return;
-        }
-
-        $previewLeft = $layout['innerX'] + $layout['categoryWidth'] + $layout['listWidth'] + $layout['framesWidth'] + ($layout['gutter'] * 4);
-        $previewTop = $layout['innerY'] + $layout['topHeight'] + $layout['gutter'];
-        $previewWidth = max(10, $layout['previewWidth'] - 2 - (self::WINDOW_HORIZONTAL_PADDING * 2));
-        $previewHeight = $this->getDatabasePreviewSize()['height'];
-        $frameIndex = $this->isDatabasePreviewPlaying ? $this->databasePlaybackFrameIndex : $this->databaseSelectedFrameIndex;
-        $preview = AnimationPreviewRenderer::build($animation, $frameIndex, $previewWidth, $previewHeight);
-
-        foreach ($preview['cells'] as $cell) {
-            $x = $previewLeft + 1 + self::WINDOW_HORIZONTAL_PADDING + $cell['x'];
-            $y = $previewTop + 1 + $cell['y'];
-            Console::cursor()->moveTo($x, $y);
-            echo $this->resolveAnimationColor($cell['color'])->value . $cell['symbol'] . Color::RESET->value;
-        }
-
-        if ($this->databaseFocus === self::DATABASE_FOCUS_PREVIEW && ! $this->isDatabasePreviewPlaying) {
-            Console::cursor()->moveTo(
-                $previewLeft + 1 + self::WINDOW_HORIZONTAL_PADDING + $this->databasePreviewCursorX,
-                $previewTop + 1 + $this->databasePreviewCursorY,
-            );
-            echo Color::LIGHT_BLUE->value . '▣' . Color::RESET->value;
-        }
-    }
-
-    /**
      * Renders the live cursor for editing Database settings.
      *
      * @param array<string, int> $layout The Database layout.
@@ -14878,8 +14194,7 @@ final class Editor
         $supportsEntries = $this->isActorsDatabaseSelected()
             || $this->isClassesDatabaseSelected()
             || $this->isSkillsDatabaseSelected()
-            || $this->isQuestsDatabaseSelected()
-            || $this->isAnimationsDatabaseSelected();
+            || $this->isQuestsDatabaseSelected();
 
         return new EditorWindow(
             // The category dirty marker rides the title so categories whose
@@ -15030,7 +14345,7 @@ final class Editor
             position: ["x" => $layout["innerX"] + $layout["categoryWidth"] + $layout["listWidth"] + ($layout["gutter"] * 2), "y" => $layout["innerY"] + $layout["topHeight"] + $layout["gutter"]],
             width: $layout["framesWidth"],
             height: $layout["previewHeight"],
-            foregroundColor: $this->resolveDatabasePaneColor(self::DATABASE_FOCUS_FRAMES),
+            foregroundColor: Color::WHITE,
             content: $this->fitLines(
                 $this->framesPaneFitsContent()
                     ? $this->wrapLines($this->getDatabaseFrameLines(), $this->getWindowContentWidth($layout["framesWidth"]))
@@ -15055,7 +14370,7 @@ final class Editor
             position: ["x" => $layout["innerX"] + $layout["categoryWidth"] + $layout["listWidth"] + $layout["framesWidth"] + ($layout["gutter"] * 3), "y" => $layout["innerY"] + $layout["topHeight"] + $layout["gutter"]],
             width: $layout["previewWidth"],
             height: $layout["previewHeight"],
-            foregroundColor: $this->resolveDatabasePaneColor(self::DATABASE_FOCUS_PREVIEW),
+            foregroundColor: Color::WHITE,
             content: ($this->isActorsDatabaseSelected() || $this->isClassesDatabaseSelected() || $this->isSkillsDatabaseSelected() || $this->isQuestsDatabaseSelected() || $this->isSystemDatabaseSelected())
                 ? $this->fitLines(
                     $this->getDatabasePreviewLines(),
@@ -15091,10 +14406,6 @@ final class Editor
 
         if ($this->isSystemDatabaseSelected()) {
             return $this->getDatabaseSystemListLines();
-        }
-
-        if ($this->isAnimationsDatabaseSelected()) {
-            return $this->getDatabaseAnimationListLines();
         }
 
         if ($this->getSelectedRecordDatabase() instanceof ProjectRecordDatabase) {
@@ -15313,38 +14624,6 @@ final class Editor
     }
 
     /**
-     * Returns the animation list lines.
-     *
-     * @return string[]
-     */
-    private function getDatabaseAnimationListLines(): array
-    {
-        $animations = $this->workspace?->animationDatabase->getAnimations() ?? [];
-
-        if ($animations === []) {
-            return ['No animations yet.', '', 'Shift+A to create one.'];
-        }
-
-        $lines = [];
-        $isDirty = $this->workspace?->animationDatabase->isDirty() === true;
-
-        foreach ($this->getVisibleDatabaseEntryIndexes() as $index) {
-            $animation = $animations[$index] ?? null;
-
-            if (! $animation instanceof Animation) {
-                continue;
-            }
-
-            $prefix = $index === $this->databaseSelectedAnimationIndex ? '> ' : '  ';
-            // The animation database tracks dirtiness per file, not per
-            // entry, so the marker is honest about the whole list.
-            $lines[] = sprintf('%s%04d %s%s', $prefix, $animation->id, $animation->name, $isDirty ? ' *' : '');
-        }
-
-        return $lines === [] ? ['No matches.'] : $lines;
-    }
-
-    /**
      * Returns the system list lines.
      *
      * @return string[]
@@ -15540,45 +14819,7 @@ final class Editor
             return $this->getDatabaseBattleEntryCueLines();
         }
 
-        $animation = $this->getSelectedAnimation();
-
-        if (! $animation instanceof Animation) {
-            $category = $this->getSelectedDatabaseCategoryDefinition();
-
-            if (! $category->isImplemented) {
-                return ['No timing data yet.'];
-            }
-
-            return ['No animation selected.'];
-        }
-
-        $lines = ['No.  SE        Flash'];
-        $hasCue = false;
-
-        for ($frameIndex = 1; $frameIndex <= $animation->maxFrames; $frameIndex++) {
-            $cue = $animation->getCue($frameIndex);
-
-            if (! $cue instanceof AnimationCue || $cue->isEmpty()) {
-                continue;
-            }
-
-            $hasCue = true;
-            $lines[] = sprintf(
-                '#%03d  %-8s %s',
-                $frameIndex,
-                $cue->soundEffect !== '' ? $cue->soundEffect : '-',
-                $cue->flashColor !== null
-                    ? sprintf('%s (%d)', ucfirst($cue->flashColor), $cue->flashDurationFrames)
-                    : '-'
-            );
-        }
-
-        if (! $hasCue) {
-            $lines[] = '';
-            $lines[] = 'No cues on this animation.';
-        }
-
-        return $lines;
+        return $this->getSelectedDatabaseCategoryDefinition()->isImplemented ? ['-'] : ['No timing data yet.'];
     }
 
     /**
@@ -15776,22 +15017,7 @@ final class Editor
         }
 
 
-        $animation = $this->getSelectedAnimation();
-
-        if (! $animation instanceof Animation) {
-            $category = $this->getSelectedDatabaseCategoryDefinition();
-
-            return $category->isImplemented ? ['-'] : ['No entry frames.'];
-        }
-
-        $lines = [];
-
-        for ($frameIndex = 1; $frameIndex <= $animation->maxFrames; $frameIndex++) {
-            $prefix = $frameIndex === $this->databaseSelectedFrameIndex ? '> ' : '  ';
-            $lines[] = sprintf('%s#%03d', $prefix, $frameIndex);
-        }
-
-        return $lines;
+        return $this->getSelectedDatabaseCategoryDefinition()->isImplemented ? ['-'] : ['No entry frames.'];
     }
 
     /**
@@ -16156,7 +15382,6 @@ final class Editor
             self::DATABASE_CATEGORY_ACTORS => $this->workspace->actorDatabase->isDirty(),
             self::DATABASE_CATEGORY_CLASSES => $this->workspace->classDatabase->isDirty(),
             self::DATABASE_CATEGORY_SKILLS => $this->workspace->skillDatabase->isDirty(),
-            self::DATABASE_CATEGORY_ANIMATIONS => $this->workspace->animationDatabase->isDirty(),
             self::DATABASE_CATEGORY_SYSTEM => $this->workspace->systemDatabase->isDirty() || ($this->workspace->config?->isDirty() ?? false),
             self::DATABASE_CATEGORY_QUESTS => $this->workspace->questDatabase->isDirty(),
             default => false,
@@ -16172,25 +15397,6 @@ final class Editor
     private function resolveDatabasePaneColor(string $pane): Color
     {
         return $this->databaseFocus === $pane ? Color::LIGHT_BLUE : Color::WHITE;
-    }
-
-    /**
-     * Resolves the termutil color for a stored animation color name.
-     *
-     * @param string|null $color The stored color name.
-     * @return Color
-     */
-    private function resolveAnimationColor(?string $color): Color
-    {
-        return match (strtolower((string) $color)) {
-            'red' => Color::LIGHT_RED,
-            'green' => Color::LIGHT_GREEN,
-            'blue' => Color::LIGHT_BLUE,
-            'yellow' => Color::YELLOW,
-            'cyan' => Color::LIGHT_CYAN,
-            'magenta' => Color::LIGHT_PURPLE,
-            default => Color::WHITE,
-        };
     }
 
     /**

@@ -2,14 +2,15 @@
 
 declare(strict_types=1);
 
-use Ichiloto\Editor\ProjectAnimationDatabase;
+use Ichiloto\Editor\ProjectWorkspace;
 
 /**
- * The editor edits an animation's name, position, frames and cues. Everything
- * else an entry holds (effect bindings, roles, fields the Engine adds later)
- * and the file's header must survive a save untouched.
+ * Animations are edited through the shared record database: a record's name,
+ * effects and roles. Everything else an entry holds (an older record's own
+ * frames and cues, fields the Engine adds later), the file's comments and its
+ * header survive a save untouched, and a new animation takes the next id.
  */
-it('keeps every field it does not edit, and the file header, when it saves an animation', function () {
+it('keeps every field it does not edit, comments and the header, and numbers a new animation', function () {
     $root = makeTemporaryProject();
     $path = $root . '/assets/Data/animations.php';
     file_put_contents($path, <<<'PHP'
@@ -24,6 +25,7 @@ it('keeps every field it does not edit, and the file header, when it saves an an
         'name' => 'Slash',
         'position' => AnimationTargetPosition::CENTER->value,
         'maxFrames' => 2,
+        // Played for sword attacks.
         'roles' => ['attack'],
         'sourceEffect' => 'battle-blade-slash',
         'targetEffect' => 'battle-physical-impact',
@@ -31,10 +33,19 @@ it('keeps every field it does not edit, and the file header, when it saves an an
         'frames' => [['index' => 1, 'cells' => [['symbol' => '/', 'x' => 0, 'y' => 0, 'color' => 'red']]]],
         'cues' => [],
       ],
+      ['id' => 4, 'name' => 'Spark', 'targetEffect' => 'battle-physical-impact'],
     ];
     PHP);
 
-    $database = ProjectAnimationDatabase::fromProject($root);
+    $database = ProjectWorkspace::fromProject($root)->getRecordDatabase('animations');
+    $legacy = array_column($database->getSettingsFields(0), null, 'label');
+    $current = array_column($database->getSettingsFields(1), 'label');
+
+    // An older record shows its own frames and cues read-only; a current one has none.
+    expect($legacy['Legacy Frames'])->toMatchArray(['value' => '(1)', 'editable' => false])
+        ->and($legacy['Legacy Position']['value'])->toBe('center')
+        ->and($current)->toBe(['Id', 'Name', 'Caster Effect', 'Target Effect', 'Roles']);
+
     $database->setField(0, 'name', 'Blade Slash');
     $database->save();
     $saved = require $path;
@@ -43,19 +54,16 @@ it('keeps every field it does not edit, and the file header, when it saves an an
     expect($saved[0]['name'])->toBe('Blade Slash')
         ->and($saved[0]['roles'])->toBe(['attack'])
         ->and($saved[0]['sourceEffect'])->toBe('battle-blade-slash')
-        ->and($saved[0]['targetEffect'])->toBe('battle-physical-impact')
         ->and($saved[0]['futureField'])->toBe(['kept' => true])
         ->and($saved[0]['frames'][0]['cells'][0]['symbol'])->toBe('/')
-        ->and($source)->toContain('// Battle and field animations.')
-        ->and($source)->toContain('use Ichiloto\Engine\Animations\AnimationTargetPosition;');
+        ->and($source)->toContain('// Battle and field animations.', '// Played for sword attacks.', 'use Ichiloto\Engine\Animations\AnimationTargetPosition;');
 
-    // A new animation has only what the editor writes, and saving twice changes nothing more.
-    $database->addAnimation('Spark');
+    // A new animation takes the next number after the largest, and only what the editor writes.
+    $index = $database->addRecord();
     $database->save();
     $again = require $path;
 
-    expect($again)->toHaveCount(2)
-        ->and($again[0]['targetEffect'])->toBe('battle-physical-impact')
-        ->and($again[1]['name'])->toBe('Spark')
-        ->and($again[1])->not->toHaveKey('targetEffect');
+    expect($again)->toHaveCount(3)
+        ->and($again[$index])->toBe(['id' => 5, 'name' => 'New Animation'])
+        ->and($again[0]['targetEffect'])->toBe('battle-physical-impact');
 });

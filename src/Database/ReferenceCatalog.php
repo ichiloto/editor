@@ -74,6 +74,7 @@ final class ReferenceCatalog
         'tilesets',
         'effects',
         'map_regions',
+        'animation_roles',
     ];
 
     /**
@@ -171,13 +172,14 @@ final class ReferenceCatalog
             // read live from the collection, a just-created NPC is offered
             // at once and a deleted one is gone.
             'map_npcs' => $this->currentMap?->getNpcs()->ids() ?? [],
+            // Older references name an animation; current ones store its id.
             'animations' => array_map(
-                static fn(object $animation): string => $animation->name ?? '',
-                $this->workspace->animationDatabase->getAnimations()
+                static fn(ProjectRecord $animation): string => strval($animation->get('name')),
+                $this->animationRecords(),
             ),
             'animation_ids' => array_map(
-                static fn(object $animation): string => (string) $animation->id,
-                $this->workspace->animationDatabase->getAnimations()
+                static fn(ProjectRecord $animation): string => strval($animation->get('id')),
+                $this->animationRecords(),
             ),
             // Cutscenes are folders, so the stable id is the folder name.
             'cinematics' => $this->workspace->cutscenes?->ids(CutsceneType::CINEMATIC) ?? [],
@@ -197,10 +199,18 @@ final class ReferenceCatalog
             // is; choosing from the names the maps already use keeps one
             // region spelled one way.
             'map_regions' => $this->mapRegions(),
+            // The battle roles an animation can play, as the Engine resolves them.
+            'animation_roles' => \Ichiloto\Engine\Animations\ActionAnimationResolver::getSupportedRoles(),
             // Effect timelines are folders the Engine lists by stable id.
             'effects' => new EffectTimelineLibrary($this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets')->findTimelineIds(),
             default => $this->recordValues($category),
         };
+    }
+
+    /** @return ProjectRecord[] The project's animations, in file order. */
+    private function animationRecords(): array
+    {
+        return $this->workspace->getRecordDatabase('animations')?->getRecords() ?? [];
     }
 
     /**
@@ -376,9 +386,26 @@ final class ReferenceCatalog
 
         if ($category === 'animation_ids') {
             $labels = [];
-            foreach ($this->workspace->animationDatabase->getAnimations() as $animation) {
-                $labels[(string) $animation->id] = sprintf('%s (%d)', $animation->name, $animation->id);
+            foreach ($this->animationRecords() as $animation) {
+                $labels[strval($animation->get('id'))] = sprintf('%s (%s)', strval($animation->get('name')), strval($animation->get('id')));
             }
+            return $labels;
+        }
+
+        if ($category === 'animation_roles') {
+            // A role plays one animation, so the picker says which holds it.
+            $database = $this->workspace->getRecordDatabase('animations');
+            $owners = [];
+            foreach ($database?->getRecords() ?? [] as $record) {
+                foreach ((array) $record->get('roles') as $role) {
+                    $owners[(string) $role] ??= $database->getEntryLabel($record);
+                }
+            }
+            $labels = [];
+            foreach ($this->valuesFor('animation_roles') as $role) {
+                $labels[$role] = isset($owners[$role]) ? sprintf('%s (on %s)', $role, $owners[$role]) : $role;
+            }
+
             return $labels;
         }
 

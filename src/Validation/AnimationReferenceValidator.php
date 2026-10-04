@@ -15,9 +15,9 @@ final class AnimationReferenceValidator
     /** @return Issue[] */
     public function validate(ProjectWorkspace $workspace): array
     {
-        $animations = $workspace->animationDatabase->getAnimations();
-        $ids = array_map(static fn($animation): int => $animation->id, $animations);
-        $names = array_map(static fn($animation): string => $animation->name, $animations);
+        $animations = $workspace->getRecordDatabase('animations')?->getRecords() ?? [];
+        $ids = array_map(static fn($animation): mixed => $animation->get('id'), $animations);
+        $names = array_map(static fn($animation): string => strval($animation->get('name')), $animations);
         $issues = [];
 
         foreach ($workspace->skillDatabase->getSkills() as $skill) {
@@ -67,18 +67,18 @@ final class AnimationReferenceValidator
     {
         $where = 'assets/Data/animations.php';
         $supported = ActionAnimationResolver::getSupportedRoles();
-        $database = $workspace->animationDatabase;
         $holders = [];
         $issues = [];
 
-        foreach ($database->getAnimations() as $index => $animation) {
-            foreach ($database->getRoles($index) as $role) {
+        foreach ($workspace->getRecordDatabase('animations')?->getRecords() ?? [] as $animation) {
+            $name = strval($animation->get('name'));
+            foreach ((array) ($animation->get('roles') ?? []) as $role) {
                 if (! in_array($role, $supported, true)) {
-                    $issues[] = Issue::error("{$where}: {$animation->name}", sprintf('Its role "%s" is not one the Engine supports, so the whole animation is skipped.', $role),
-                        'Choose its roles in the Roles rows, which offer only supported roles.');
+                    $issues[] = Issue::error("{$where}: {$name}", sprintf('Its role "%s" is not one the Engine supports, so the whole animation is skipped.', strval($role)),
+                        'Choose its roles in the Roles picker, which offers only supported roles.');
                     continue;
                 }
-                $holders[$role][] = $animation->name;
+                $holders[$role][] = $name;
             }
         }
 
@@ -106,7 +106,7 @@ final class AnimationReferenceValidator
         foreach ($reached as $role => $reason) {
             if (! isset($holders[$role])) {
                 $issues[] = Issue::warning($where, sprintf('No animation holds role %s, so %s play no effect.', $role, $reason),
-                    'Switch the role on for the animation that should play.');
+                    'Pick the role in the Roles of the animation that should play.');
             }
         }
 

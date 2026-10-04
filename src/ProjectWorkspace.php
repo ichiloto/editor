@@ -45,7 +45,6 @@ final readonly class ProjectWorkspace
         public ProjectActorDatabase     $actorDatabase,
         public ProjectClassDatabase     $classDatabase,
         public ProjectSkillDatabase     $skillDatabase,
-        public ProjectAnimationDatabase $animationDatabase,
         public ProjectSystemDatabase    $systemDatabase,
         public ProjectQuestDatabase     $questDatabase,
         public array                    $recordDatabases = [],
@@ -173,7 +172,6 @@ final readonly class ProjectWorkspace
             actorDatabase: ProjectActorDatabase::fromProject($projectRoot),
             classDatabase: ProjectClassDatabase::fromProject($projectRoot),
             skillDatabase: ProjectSkillDatabase::fromProject($projectRoot),
-            animationDatabase: ProjectAnimationDatabase::fromProject($projectRoot),
             systemDatabase: ProjectSystemDatabase::fromProject($projectRoot),
             questDatabase: ProjectQuestDatabase::fromProject($projectRoot),
             recordDatabases: array_map(
@@ -285,7 +283,6 @@ final readonly class ProjectWorkspace
         return $this->actorDatabase->isDirty()
             || $this->classDatabase->isDirty()
             || $this->skillDatabase->isDirty()
-            || $this->animationDatabase->isDirty()
             || $this->systemDatabase->isDirty()
             || $this->questDatabase->isDirty()
             || ($this->config?->isDirty() ?? false)
@@ -326,7 +323,7 @@ final readonly class ProjectWorkspace
      * Read-only record categories are left out: they hold no edits, and
      * asking them to save would raise instead of doing nothing.
      *
-     * @return array<string, ProjectActorDatabase|ProjectClassDatabase|ProjectSkillDatabase|ProjectQuestDatabase|ProjectAnimationDatabase|ProjectSystemDatabase|ProjectConfig|ProjectRecordDatabase>
+     * @return array<string, ProjectActorDatabase|ProjectClassDatabase|ProjectSkillDatabase|ProjectQuestDatabase|ProjectSystemDatabase|ProjectConfig|ProjectRecordDatabase>
      */
     public function listSaveableDatabases(): array
     {
@@ -335,7 +332,6 @@ final readonly class ProjectWorkspace
             'Classes' => $this->classDatabase,
             'Skills' => $this->skillDatabase,
             'Quests' => $this->questDatabase,
-            'Animations' => $this->animationDatabase,
             'System' => $this->systemDatabase,
         ];
 
@@ -416,7 +412,6 @@ final readonly class ProjectWorkspace
             actorDatabase: $this->actorDatabase,
             classDatabase: $this->classDatabase,
             skillDatabase: $this->skillDatabase,
-            animationDatabase: $this->animationDatabase,
             systemDatabase: $this->systemDatabase,
             questDatabase: $this->questDatabase,
             recordDatabases: $this->recordDatabases,

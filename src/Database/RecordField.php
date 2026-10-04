@@ -40,6 +40,9 @@ final readonly class RecordField
      * types this surface may author, when the runtime restricts it to fewer
      * than the writer's full vocabulary (a transactional boundary rejects
      * quest acceptance). Null offers everything the writer applies.
+     * @param bool $uniqueAcrossRecords For a list field, whether a member may
+     * be held by one record of the category at most (an animation role plays
+     * one animation), so taking one another record holds is refused.
      */
     public function __construct(
         public string $key,
@@ -56,6 +59,7 @@ final readonly class RecordField
         public ?string $displayDefault = null,
         public ?string $blankLabel = null,
         public ?array $writeTypes = null,
+        public bool $uniqueAcrossRecords = false,
     ) {
     }
 

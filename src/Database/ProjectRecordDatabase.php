@@ -295,22 +295,26 @@ final class ProjectRecordDatabase
      */
     public function getEntryLabels(): array
     {
-        return array_map(function (ProjectRecord $record): string {
-            if ($this->schema->labelFor !== null) {
-                // A record whose name is made of its parts -- the scope a
-                // weight vector applies at, what an exclusion excludes --
-                // rather than stored under a key of its own.
-                return strval(($this->schema->labelFor)((array) $record->toArray()));
-            }
+        return array_map($this->getEntryLabel(...), $this->getRecords());
+    }
 
-            $label = $record->getDisplayValue($this->schema->labelKey);
+    /** The entry-list label of one record. */
+    public function getEntryLabel(ProjectRecord $record): string
+    {
+        if ($this->schema->labelFor !== null) {
+            // A record whose name is made of its parts -- the scope a
+            // weight vector applies at, what an exclusion excludes --
+            // rather than stored under a key of its own.
+            return strval(($this->schema->labelFor)((array) $record->toArray()));
+        }
 
-            if ($label === '' && $this->schema->identityKey !== null) {
-                $label = $record->getDisplayValue($this->schema->identityKey);
-            }
+        $label = $record->getDisplayValue($this->schema->labelKey);
 
-            return $label === '' ? ($record->recordId ?: '(unnamed)') : $label;
-        }, $this->getRecords());
+        if ($label === '' && $this->schema->identityKey !== null) {
+            $label = $record->getDisplayValue($this->schema->identityKey);
+        }
+
+        return $label === '' ? ($record->recordId ?: '(unnamed)') : $label;
     }
 
     /**
@@ -682,10 +686,41 @@ final class ProjectRecordDatabase
                 return;
             }
 
-            $record->set($field->key, self::coerce($field, $rawValue));
+            $value = self::coerce($field, $rawValue);
+            if ($field->uniqueAcrossRecords) {
+                $this->assertMembersUnclaimed($record, $field, is_array($value) ? $value : []);
+            }
+            $record->set($field->key, $value);
             $this->touchState();
 
             return;
+        }
+    }
+
+    /**
+     * Refuses a list member another record of the category already holds,
+     * naming that record, before anything changes.
+     *
+     * @param list<mixed> $members The list this record would hold.
+     * @throws \InvalidArgumentException When another record holds one of them.
+     */
+    private function assertMembersUnclaimed(ProjectRecord $record, RecordField $field, array $members): void
+    {
+        $held = $record->get($field->key);
+        $added = array_diff($members, is_array($held) ? $held : []);
+
+        foreach ($this->getRecords() as $other) {
+            $theirs = $other === $record ? null : $other->get($field->key);
+            $taken = is_array($theirs) ? array_values(array_intersect($added, $theirs)) : [];
+
+            if ($taken !== []) {
+                throw new \InvalidArgumentException(sprintf(
+                    '%s already has %s %s; take it off there first.',
+                    $this->getEntryLabel($other),
+                    mb_strtolower($field->label),
+                    implode(', ', array_map(strval(...), $taken)),
+                ));
+            }
         }
     }
 
@@ -759,7 +794,7 @@ final class ProjectRecordDatabase
         }
 
         if (is_array($payload) && $identityKey !== null && array_key_exists($identityKey, $payload)) {
-            $payload[$identityKey] = $this->makeUniqueIdentity(strval($payload[$identityKey]));
+            $payload[$identityKey] = $this->makeUniqueIdentity($payload[$identityKey]);
             $recordId = strval($payload[$identityKey]);
         }
 
@@ -973,7 +1008,7 @@ final class ProjectRecordDatabase
         $recordId = '';
 
         if ($identityKey !== null && array_key_exists($identityKey, $payload)) {
-            $payload[$identityKey] = $this->makeUniqueIdentity(strval($payload[$identityKey]));
+            $payload[$identityKey] = $this->makeUniqueIdentity($payload[$identityKey]);
             $recordId = strval($payload[$identityKey]);
         }
 
@@ -3929,9 +3964,22 @@ final class ProjectRecordDatabase
         return $candidate;
     }
 
-    private function makeUniqueIdentity(string $preferred): string
+    private function makeUniqueIdentity(mixed $preferred): int|string
     {
         $identityKey = $this->schema->identityKey ?? 'id';
+
+        if (is_int($preferred)) {
+            // A numeric identity (an animation's id) is the next number after
+            // the largest any record holds, so it never reuses one.
+            $numbers = array_filter(
+                array_map(static fn(ProjectRecord $record): mixed => $record->get($identityKey), $this->getRecords()),
+                is_int(...),
+            );
+
+            return in_array($preferred, $numbers, true) ? max($numbers) + 1 : $preferred;
+        }
+
+        $preferred = strval($preferred);
         $existing = array_map(
             static fn(ProjectRecord $record): string => $record->getDisplayValue($identityKey),
             $this->getRecords(),

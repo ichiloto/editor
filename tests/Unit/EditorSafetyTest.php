@@ -120,19 +120,17 @@ it('marks dirty maps in the asset list', function () {
   expect($workspace->getAssetLines(0))->toBe(['Maps', '> test-map *']);
 });
 
-it('builds the animation settings fields without a class error', function () {
-  // Regression: AnimationTargetPosition used to resolve to the missing class
-  // Ichiloto\Editor\AnimationTargetPosition and fatal at Editor.php:3457.
+it('builds the animation rows from the shared schema, an older record showing its own frames read-only', function () {
   $editor = workspaceEditor();
   setEditorProperty($editor, 'databaseCategoryIndex', DatabaseCatalog::indexOf('animations'));
 
   $fields = callEditorMethod($editor, 'getDatabaseSettingsFields');
-  $labels = array_column($fields, 'label');
-  $positionField = $fields[array_search('Position', $labels, true)];
+  $rows = array_column($fields, null, 'label');
 
-  expect($labels)->toContain('Name', 'Position', 'Max Frames')
-    ->and($positionField['options'])->toBe(['center', 'head', 'feet', 'screen'])
-    ->and($positionField['value'])->toBe('Center');
+  expect(array_keys($rows))->toContain('Name', 'Caster Effect', 'Target Effect', 'Roles', 'Legacy Position', 'Legacy Frames')
+    ->and($rows['Legacy Position']['options'])->toBe(['center', 'head', 'feet', 'screen'])
+    ->and($rows['Legacy Frames']['editable'])->toBeFalse()
+    ->and($rows['Target Effect']['reference'])->toBe('effects');
 });
 
 it('undoes database field edits against the pinned entry', function () {
@@ -140,24 +138,23 @@ it('undoes database field edits against the pinned entry', function () {
   setEditorProperty($editor, 'databaseCategoryIndex', DatabaseCatalog::indexOf('animations'));
 
   $fields = callEditorMethod($editor, 'getDatabaseSettingsFields');
-  $labels = array_column($fields, 'label');
-  $nameField = $fields[array_search('Name', $labels, true)];
+  $nameField = $fields[array_search('Name', array_column($fields, 'label'), true)];
 
   callEditorMethod($editor, 'applyDatabaseFieldValueRecorded', $nameField, 'Mega Slash');
 
   /** @var ProjectWorkspace $workspace */
   $workspace = getEditorProperty($editor, 'workspace');
-  $animation = $workspace->animationDatabase->getAnimationByIndex(0);
+  $animation = $workspace->getRecordDatabase('animations')->getRecordByIndex(0);
 
-  expect($animation->name)->toBe('Mega Slash');
+  expect($animation->get('name'))->toBe('Mega Slash');
 
   // Move the selection elsewhere: undo must still hit animation 0.
-  setEditorProperty($editor, 'databaseSelectedAnimationIndex', 5);
+  setEditorProperty($editor, 'databaseSelectedRecordIndexes', ['animations' => 5]);
 
   /** @var CommandHistory $history */
   $history = getEditorProperty($editor, 'history');
   $history->undo();
 
-  expect($animation->name)->toBe('Slash')
-    ->and(getEditorProperty($editor, 'databaseSelectedAnimationIndex'))->toBe(5);
+  expect($animation->get('name'))->toBe('Slash')
+    ->and(getEditorProperty($editor, 'databaseSelectedRecordIndexes'))->toBe(['animations' => 5]);
 });

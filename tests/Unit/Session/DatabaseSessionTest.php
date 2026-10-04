@@ -224,3 +224,13 @@ it('names every unsaved map and database, and saves them all in one request', fu
         ->and(ProjectWorkspace::fromProject($root)->maps[0]->getLayerSymbol($map['baseLayer'], 1, 1))->toBe('#')
         ->and(loadRecordDatabase($root, 'states')->getEntryLabels())->toBe(['Venom', 'Stun']);
 });
+
+it('serves animations as a schema category, its roles a list picked a member at a time', function () {
+    $root = makeTemporaryProject();
+    file_put_contents($root . '/assets/Data/animations.php', "<?php return [['id' => 1, 'name' => 'Hit Spark', 'roles' => ['attack'], 'targetEffect' => 'battle-physical-impact']];");
+    $session = EditorSession::open($root);
+    $roles = databaseSessionRow($session->readDatabaseRecord('animations', 0), 'roles');
+
+    expect($session->listDatabaseRecords('animations')['records'])->toBe(['Hit Spark'])
+        ->and($roles)->toMatchArray(['kind' => 'reference', 'reference' => 'animation_roles', 'multi' => true, 'value' => 'attack']);
+});

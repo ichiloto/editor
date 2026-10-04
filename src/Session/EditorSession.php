@@ -1093,8 +1093,8 @@ final class EditorSession
      * A database category's records, as its list shows them, whether they
      * can be edited and have unsaved changes, and which record operations
      * the category takes. The bespoke categories (actors, classes, skills,
-     * animations, quests, system) still build their rows in the terminal
-     * editor, so they are refused here until those builders are shared.
+     * quests, system) still build their rows in the terminal editor, so
+     * they are refused here until those builders are shared.
      *
      * @return array{category: string, editable: bool, readOnly: ?string, dirty: bool, canCreate: bool, canDuplicate: bool, canDelete: bool, canReorder: bool, records: list<string>}
      * @throws SessionRefusal When the category is unknown or not yet served.
@@ -1938,6 +1938,8 @@ final class EditorSession
                 'destination' => 'maps',
                 default => null,
             },
+            // A list picked a member at a time: each pick toggles one member.
+            'multi' => $kind === 'reference' && ($field['multi'] ?? false) === true ? true : null,
             'list' => is_array($list) && $target !== null ? ['index' => (int) ($list['index'] ?? 0)] : null,
             // Conditions and writes are built a part at a time from these.
             'entries' => match ($kind) {

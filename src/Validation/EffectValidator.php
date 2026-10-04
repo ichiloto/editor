@@ -103,13 +103,11 @@ final class EffectValidator
             $uses[$effect][$battle ? 'battle' : 'field'][] = $where;
         };
 
-        foreach ($workspace->animationDatabase->getAnimations() as $animation) {
-            // Read from the authored entry, which keeps the bindings whatever the Engine's Animation carries.
-            $entry = $workspace->animationDatabase->getAuthoredEntry($animation) ?? [];
-
-            foreach (['sourceEffect' => $entry['sourceEffect'] ?? null, 'targetEffect' => $entry['targetEffect'] ?? null] as $field => $effect) {
+        foreach ($workspace->getRecordDatabase('animations')?->getRecords() ?? [] as $animation) {
+            foreach (['sourceEffect', 'targetEffect'] as $field) {
+                $effect = $animation->get($field);
                 if (is_string($effect) && $effect !== '') {
-                    $use($effect, true, sprintf('assets/Data/animations.php: %s %s', $animation->name, $field));
+                    $use($effect, true, sprintf('assets/Data/animations.php: %s %s', strval($animation->get('name')), $field));
                 }
             }
         }

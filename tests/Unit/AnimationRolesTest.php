@@ -3,9 +3,9 @@
 declare(strict_types=1);
 
 use Ichiloto\Editor\Database\DatabaseCatalog;
+use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\Editor;
 use Ichiloto\Editor\History\CommandHistory;
-use Ichiloto\Editor\ProjectAnimationDatabase;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Editor\Validation\AnimationReferenceValidator;
 use Ichiloto\Engine\Animations\ActionAnimationResolver;
@@ -14,10 +14,9 @@ use Ichiloto\Engine\Animations\ActionAnimationResolver;
 function writeRoleAnimations(string $root, array $bladeRoles = ['attack-sword'], array $impactRoles = ['attack', 'attack-unarmed']): void
 {
     $entry = static fn(int $id, string $name, array $roles): array => [
-        'id' => $id, 'name' => $name, 'position' => 'center', 'maxFrames' => 1,
+        'id' => $id, 'name' => $name,
         ...($roles === [] ? [] : ['roles' => $roles]),
         'targetEffect' => $id === 1 ? 'battle-blade-slash' : 'battle-physical-impact',
-        'frames' => [], 'cues' => [],
     ];
     file_put_contents($root . '/assets/Data/animations.php', '<?php return ' . var_export([
         $entry(1, 'Blade Slash', $bladeRoles),
@@ -36,20 +35,6 @@ function roleEditor(string $root): Editor
     return $editor;
 }
 
-/** @return array<string, array<string, mixed>> The role rows keyed by field. */
-function roleRows(Editor $editor): array
-{
-    $rows = [];
-
-    foreach (callEditorMethod($editor, 'getDatabaseSettingsFields') as $field) {
-        if (str_starts_with((string) ($field['field'] ?? ''), 'role:')) {
-            $rows[(string) $field['field']] = $field;
-        }
-    }
-
-    return $rows;
-}
-
 /** @return list<string> The validation messages about animations. */
 function roleIssues(string $root): array
 {
@@ -59,72 +44,67 @@ function roleIssues(string $root): array
     );
 }
 
-it('binds and unbinds roles, writing them over the authored entry and keeping everything else', function () {
+it('binds and unbinds roles as one list on the record, keeping everything else', function () {
     $root = makeTemporaryProject();
     writeRoleAnimations($root);
-    $database = ProjectAnimationDatabase::fromProject($root);
+    $database = ProjectWorkspace::fromProject($root)->getRecordDatabase('animations');
 
-    expect($database->getRoles(0))->toBe(['attack-sword'])
-        ->and($database->findRoleOwner('attack-unarmed'))->toBe(1)
-        ->and($database->setRole(0, 'attack-dagger', true))->toBeNull()
-        ->and($database->setRole(1, 'attack-unarmed', false))->toBeNull()
-        ->and($database->setRole(1, 'attack', false))->toBeNull();
-
+    $database->setField(0, 'roles', 'attack-sword, attack-dagger');
+    $database->setField(1, 'roles', '');
     $database->save();
     $saved = require $root . '/assets/Data/animations.php';
 
     expect($saved[0]['roles'])->toBe(['attack-sword', 'attack-dagger'])
         ->and($saved[1])->not->toHaveKey('roles')
-        ->and($saved[0]['targetEffect'])->toBe('battle-blade-slash')
-        ->and(ProjectAnimationDatabase::fromProject($root)->getRoles(0))->toBe(['attack-sword', 'attack-dagger']);
+        ->and($saved[0]['targetEffect'])->toBe('battle-blade-slash');
 });
 
-it('refuses a role the Engine does not support or one already bound elsewhere, changing nothing', function () {
+it('refuses a role another animation holds, naming it and changing nothing', function () {
     $root = makeTemporaryProject();
     writeRoleAnimations($root);
-    $database = ProjectAnimationDatabase::fromProject($root);
+    $database = ProjectWorkspace::fromProject($root)->getRecordDatabase('animations');
 
-    expect($database->setRole(1, 'attack-sword', true))->toBe('Role attack-sword is already bound to Blade Slash; unbind it there first.')
-        ->and($database->setRole(0, 'attack-lance', true))->toBe('The Engine has no animation role "attack-lance".')
-        ->and($database->getRoles(0))->toBe(['attack-sword'])
-        ->and($database->getRoles(1))->toBe(['attack', 'attack-unarmed'])
+    expect(fn() => $database->setField(1, 'roles', 'attack, attack-unarmed, attack-sword'))
+        ->toThrow(InvalidArgumentException::class, 'Blade Slash already has roles attack-sword; take it off there first.')
+        ->and($database->getRecordByIndex(1)->get('roles'))->toBe(['attack', 'attack-unarmed'])
         ->and($database->isDirty())->toBeFalse();
 });
 
-it('offers every supported role as a row, naming the animation that holds it', function () {
+it('offers every supported role in the roles picker, naming the animation that holds it', function () {
     $root = makeTemporaryProject();
     writeRoleAnimations($root);
-    $rows = roleRows(roleEditor($root));
+    $catalog = new ReferenceCatalog(ProjectWorkspace::fromProject($root));
+    $row = array_find(callEditorMethod(roleEditor($root), 'getDatabaseSettingsFields'), static fn(array $field): bool => ($field['field'] ?? null) === 'roles');
 
-    expect(array_keys($rows))->toBe(array_map(static fn(string $role): string => 'role:' . $role, ActionAnimationResolver::getSupportedRoles()))
-        ->and($rows['role:attack-sword']['value'])->toBe('Yes')
-        ->and($rows['role:attack-sword']['options'])->toBe(['no', 'yes'])
-        ->and(trim((string) $rows['role:attack-unarmed']['label']))->toBe('attack-unarmed (on Hit Spark)')
-        ->and($rows['role:attack-unarmed']['value'])->toBe('No');
+    expect($row)->toMatchArray(['reference' => 'animation_roles', 'multi' => true, 'value' => 'attack-sword'])
+        ->and($catalog->valuesFor('animation_roles'))->toBe(ActionAnimationResolver::getSupportedRoles())
+        ->and($catalog->labelsFor('animation_roles')['attack-unarmed'])->toBe('attack-unarmed (on Hit Spark)')
+        ->and($catalog->labelsFor('animation_roles')['attack-axe'])->toBe('attack-axe');
 });
 
-it('switches a role on from its row and undoes it, and leaves no undo step when refused', function () {
+it('takes a role from the picker as one undo step, and leaves no step when refused', function () {
     $root = makeTemporaryProject();
     writeRoleAnimations($root);
     $editor = roleEditor($root);
     /** @var CommandHistory $history */
     $history = getEditorProperty($editor, 'history');
-    $database = getEditorProperty($editor, 'workspace')->animationDatabase;
+    $database = getEditorProperty($editor, 'workspace')->getRecordDatabase('animations');
+    $roles = static fn(): array => array_find(callEditorMethod($editor, 'getDatabaseSettingsFields'), static fn(array $field): bool => ($field['field'] ?? null) === 'roles');
 
-    callEditorMethod($editor, 'applyDatabaseFieldValueRecorded', roleRows($editor)['role:attack-axe'], 'yes');
-    expect($database->getRoles(0))->toBe(['attack-sword', 'attack-axe']);
+    callEditorMethod($editor, 'applyDatabaseFieldValueRecorded', $roles(), 'attack-sword, attack-axe');
+    expect($database->getRecordByIndex(0)->get('roles'))->toBe(['attack-sword', 'attack-axe']);
 
     $history->undo();
-    expect($database->getRoles(0))->toBe(['attack-sword']);
+    expect($database->getRecordByIndex(0)->get('roles'))->toBe(['attack-sword']);
 
     $history->redo();
     $history->undo();
     $steps = new ReflectionProperty(CommandHistory::class, 'undoStack')->getValue($history);
-    callEditorMethod($editor, 'applyDatabaseFieldValueRecorded', roleRows($editor)['role:attack-unarmed'], 'yes');
+    callEditorMethod($editor, 'applyDatabaseFieldValueRecorded', $roles(), 'attack-sword, attack-unarmed');
 
-    expect($database->getRoles(0))->toBe(['attack-sword'])
+    expect($database->getRecordByIndex(0)->get('roles'))->toBe(['attack-sword'])
         ->and(new ReflectionProperty(CommandHistory::class, 'undoStack')->getValue($history))->toBe($steps)
-        ->and(getEditorProperty($editor, 'statusMessage'))->toContain('already bound to Hit Spark');
+        ->and(getEditorProperty($editor, 'statusMessage'))->toContain('Hit Spark already has roles attack-unarmed');
 });
 
 it('reports roles the runtime cannot play and roles the project reaches with no animation', function () {

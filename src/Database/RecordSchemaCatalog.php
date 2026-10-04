@@ -20,6 +20,7 @@ use Ichiloto\Editor\Field\ProjectNpc;
 use Ichiloto\Editor\Inspector\InputControlType;
 use Ichiloto\Editor\PermanentGrowthCatalog;
 use Ichiloto\Engine\Entities\States\StateDisposition;
+use Ichiloto\Engine\Animations\AnimationTargetPosition;
 use Ichiloto\Editor\Events\ProjectScriptCommands;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandDefinition;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandField;
@@ -72,6 +73,7 @@ final class RecordSchemaCatalog
         $schemas = [
             self::states(),
             self::troops(),
+            self::animations(),
             self::battleEntryRules(),
             self::items(),
             self::weapons(),
@@ -156,6 +158,50 @@ final class RecordSchemaCatalog
      *
      * @return RecordSchema
      */
+    /**
+     * Animations -- `assets/Data/animations.php`, the list the Engine's
+     * AnimationLibrary reads. A record names the effect timelines it plays on
+     * the caster and the target, and the battle roles it plays for; a role
+     * plays one animation, so taking one another record holds is refused.
+     * An older record's own frames and cues are kept exactly as written and
+     * shown read-only beside the position they play at: the Engine still
+     * plays them through its importer, and new animation is authored as
+     * effect timelines.
+     */
+    private static function animations(): RecordSchema
+    {
+        $fields = [
+            new RecordField('id', 'Id', InputControlType::INTEGER, isReadOnly: true),
+            new RecordField('name', 'Name'),
+            RecordField::reference('sourceEffect', 'Caster Effect', 'effects', allowsNone: true, noneLabel: '(none)'),
+            RecordField::reference('targetEffect', 'Target Effect', 'effects', allowsNone: true, noneLabel: '(none)'),
+            new RecordField('roles', 'Roles', codec: RecordFieldCodec::CSV_LIST, removeWhenEmpty: true,
+                reference: 'animation_roles', uniqueAcrossRecords: true),
+        ];
+        $legacy = [
+            new RecordField('position', 'Legacy Position',
+                options: array_map(static fn(AnimationTargetPosition $position): string => $position->value, AnimationTargetPosition::cases()),
+                removeWhenEmpty: true),
+            new RecordField('maxFrames', 'Legacy Frame Count', InputControlType::INTEGER, isReadOnly: true),
+            new RecordField('frames', 'Legacy Frames', isReadOnly: true),
+            new RecordField('cues', 'Legacy Cues', isReadOnly: true),
+        ];
+
+        return new RecordSchema(
+            key: 'animations',
+            entryNoun: 'animation',
+            storage: RecordStorage::LIST_FILE,
+            relativePath: 'assets/Data/animations.php',
+            fields: $fields,
+            labelKey: 'name',
+            identityKey: 'id',
+            // A numeric identity: a new animation takes the next free number.
+            blank: ['id' => 1, 'name' => 'New Animation'],
+            fieldsFor: static fn(array $row): array => array_key_exists('frames', $row) || array_key_exists('cues', $row)
+                ? [...$fields, ...$legacy] : $fields,
+        );
+    }
+
     private static function troops(): RecordSchema
     {
         return new RecordSchema(

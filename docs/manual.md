@@ -110,8 +110,7 @@ prefer. Arrow keys always act inside the focused panel.
 
 Every selection list wraps: `Down` on the last row selects the first, and
 `Up` on the first row selects the last. This holds for the asset list, the
-Database categories, entries, settings rows and animation frames, dialog and
-picker lists, the command palette, option-value cycling, and the Cutscenes
+Database categories, entries and settings rows, dialog and picker lists, the command palette, option-value cycling, and the Cutscenes
 lists. Map cursors, scrolling panes and text editing keep ordinary bounds -
 wrapping is for choosing from a list, not for walking a canvas.
 
@@ -1129,9 +1128,17 @@ skill effects use, with `$target` bound to the afflicted battler.
 
 ### Animations
 
-Below an animation's frame and cue rows are its **Roles**: which battle
-actions play it when they name no animation of their own. There is one row
-per role the Engine supports, switched on or off with `Left` / `Right`:
+An animation names what plays on the caster and the target of a battle
+action: its **Caster Effect** and **Target Effect**, each one of the
+project's effect timelines (authored on the Cutscenes screen, where
+terminal glyph frames are timeline tracks), picked from a list. `Id` is
+read-only; a new animation takes the next number after the largest. Like
+every Database category, edits are undoable and only the values you change
+are rewritten in `assets/Data/animations.php`, so its comments stay.
+
+**Roles** say which battle actions play the animation when they name no
+animation of their own. Enter opens a picker of every role the Engine
+supports; each pick adds or removes one role:
 
 - `attack-sword`, `attack-staff`, `attack-flail` and the other weapon types:
   a party member's basic attack with that weapon equipped;
@@ -1140,13 +1147,17 @@ per role the Engine supports, switched on or off with `Left` / `Right`:
 - `skill` and `restorative`: skills and restorative magic with no animation
   of their own.
 
-A role plays only when exactly one animation holds it, so a role row held by
-another animation names it, and switching it on here is refused until it is
-switched off there. Changes are undoable and saved with the animation; every
-other field of the entry is kept as written. Validation reports a role the
-Engine does not support (the runtime then skips the whole animation), a role
-held twice, and a role the project's battles reach with no animation: the
-neutral attack, the unarmed attack, and each weapon type its weapons use.
+A role plays only when exactly one animation holds it, so the picker names
+the animation that holds each role, and taking one held elsewhere is refused
+until it is removed there. Validation reports a role the Engine does not
+support (the runtime then skips the whole animation), a role held twice, and
+a role the project's battles reach with no animation: the neutral attack,
+the unarmed attack, and each weapon type its weapons use.
+
+An older animation that carries its own frames and cues keeps them exactly as
+written, shown read-only as **Legacy Frames** and **Legacy Cues** beside its
+**Legacy Position**; the Engine still plays them through its importer. New
+animation is authored as effect timelines.
 
 ### Troops
 
