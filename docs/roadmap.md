@@ -286,8 +286,10 @@ Order of work, each a complete slice before the next:
 3. Skills are one declarative record per numbered file under
    `assets/Data/Skills` (done; `abilities.php` and `magic.php` are gone).
    Items, weapons and armors follow.
-4. Tilesets: an editor for `Data/Tilesets/<id>.php` (sheets, pieces, tables,
-   shadows); the "no tileset system" note is stale. Types is done: it edits
+4. Tilesets are done in both editors: sheets, missing art, above and table
+   tiles, shadows, and pieces keyed by id, stamped or connected, with their
+   tile layers. Tile identities are typed in both editors; picking them on a
+   sheet is GUI work for its visual authoring. Types is done: it edits
    the elements `system.php` declares, which the element pickers now read
    (they read an unused enum under `assets/Data/Types` before).
 5. The manual's category table has a GUI column (done) and states each category's

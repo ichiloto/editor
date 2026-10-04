@@ -1026,7 +1026,7 @@ skill's effects, a quest's rewards) listed under them.
 | Battle Entry | `assets/Data/battle-entry-rules.php` | Editable | Same |
 | States | `assets/Data/states.php` | Editable | Same |
 | Animations | `assets/Data/animations.php` | Editable | Same |
-| Tilesets | - | Read-only - the engine has no tileset system | Same (read-only) |
+| Tilesets | `assets/Data/Tilesets/*.php` | Editable - name, RPG Maker sheets, missing-art tile, above and table tiles, shadow, and pieces by id with their glyphs and tiles | Same |
 | Common Events | `assets/Events/*.php` | Editable | Same |
 | Quests | `assets/Data/quests.php` | Editable - objectives (the target picked by type), reward items with quantities, prerequisites, optional; the id follows the name until something refers to it | Same |
 | Skits | `assets/Data/Skits/*.php` | Editable | Same |
@@ -1123,6 +1123,19 @@ kind, drops the values only the old one read. Files are numbered
 (`0001-attack.php`) because menus list skills in file order; a new or copied
 skill takes the next number and goes last. `skills.php` is the barrel that
 loads the folder.
+
+A tileset is one file under `assets/Data/Tilesets`, named by the id maps
+give it, so renaming a tileset keeps its file. It names its RPG Maker sheets
+(each picked from the project's PNGs), the tiles drawn above characters and
+those drawn as tables (tile identities, comma-separated), the shadow its raised
+tiles cast (casters, width and opacity, all three or none), the tile that marks
+missing art, and its pieces, keyed by piece id. A stamped piece has glyph
+rows, an optional effect, and tile rows on each tile layer; a connected piece
+(`Connects: lines`) has a glyph for each shape and a tile on each layer, one
+for every shape or one per shape (`horizontal: 5888, vertical: 5890, corner:
+5892`). A new piece gets an id no other piece has, and an id another piece
+already has is refused, since keys are what maps stamp by. Validation reports
+a tileset the Engine would refuse, whether or not a map uses it yet.
 
 ### Project-Owned Parameters
 

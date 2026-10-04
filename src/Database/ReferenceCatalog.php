@@ -44,6 +44,7 @@ final class ReferenceCatalog
         'classes',
         'attack_skills',
         'resolution_kinds',
+        'piece_connections',
         'resolution_scopes',
         'magic_effect_types',
         'weapon_types',
@@ -148,6 +149,8 @@ final class ReferenceCatalog
             // How a skill effect resolves, how often a skill rolls, and what
             // kind of spell it is: the Engine's own vocabularies.
             'resolution_kinds' => array_map(static fn(ResolutionKind $kind): string => $kind->value, ResolutionKind::cases()),
+            // How a tileset piece joins the cells beside it.
+            'piece_connections' => [\Ichiloto\Engine\Rendering\Tilesets\TilesetPiece::LINES],
             'resolution_scopes' => array_map(static fn(SkillResolutionScope $scope): string => $scope->value, SkillResolutionScope::cases()),
             'magic_effect_types' => array_map(static fn(MagicEffectType $type): string => $type->value, MagicEffectType::cases()),
             'weapon_types' => array_map(static fn(WeaponType $type): string => $type->value, WeaponType::cases()),

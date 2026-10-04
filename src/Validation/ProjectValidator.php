@@ -25,6 +25,7 @@ use Ichiloto\Editor\ProjectQuest;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Engine\Animations\Timelines\EffectTimelineLibrary;
+use Ichiloto\Engine\Rendering\Tilesets\Tileset;
 use Ichiloto\Engine\Core\WorldConditionType;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicScriptValidator;
 use Ichiloto\Engine\Field\SkitSpeaker;
@@ -142,6 +143,7 @@ class ProjectValidator
       ...$this->checkKnowledgeCatalog($workspace),
       ...$this->checkSpecialProperties($workspace),
       ...$this->checkElements($workspace),
+      ...$this->checkTilesets($workspace),
       ...$this->checkPermanentGrowth($workspace),
       ...$this->checkOptimizationPolicy($workspace),
       ...new SaveCompatibilityValidator()->validate($workspace),
@@ -371,6 +373,33 @@ class ProjectValidator
    * @param ProjectWorkspace $workspace The project.
    * @return Issue[] The issues found.
    */
+  /**
+   * Checks every tileset as the Engine reads it, unsaved edits included:
+   * one the Engine refuses leaves every map that names it without its
+   * pieces and graphics, used by a map yet or not.
+   *
+   * @param ProjectWorkspace $workspace The project.
+   * @return Issue[] The issues found.
+   */
+  protected function checkTilesets(ProjectWorkspace $workspace): array
+  {
+    $issues = [];
+
+    foreach ($workspace->getRecordDatabase('tilesets')?->getRecords() ?? [] as $record) {
+      try {
+        Tileset::fromArray($record->recordId, (array) $record->toArray());
+      } catch (InvalidArgumentException $refused) {
+        $issues[] = Issue::error(
+          sprintf('assets/%s/%s.php', Tileset::DIRECTORY, $record->recordId),
+          $refused->getMessage(),
+          'Correct it in Database > Tilesets.',
+        );
+      }
+    }
+
+    return $issues;
+  }
+
   /**
    * Checks the project's elements as the game reads them at start: a name
    * twice, or an empty one, stops the game from starting at all.

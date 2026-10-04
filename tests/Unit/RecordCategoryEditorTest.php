@@ -149,13 +149,15 @@ it('warns instead of editing when the category is read-only', function (): void 
 
 it('enrols editable record categories in Save All and leaves read-only ones out', function (): void {
     $root = makeTemporaryProject();
+    // system.php, which System and Types share, written so the editor cannot rewrite it.
+    makeUnwritableCategory($root);
 
     try {
         $editor = deletionEditor($root);
         $saveable = getEditorProperty($editor, 'workspace')->listSaveableDatabases();
 
-        expect(array_keys($saveable))->toContain('States', 'Troops', 'Skits', 'Common Events', 'Terms');
-        expect(array_keys($saveable))->not->toContain('Items', 'Weapons', 'Armors', 'Enemies', 'Types', 'Tilesets');
+        expect(array_keys($saveable))->toContain('States', 'Troops', 'Skits', 'Common Events', 'Terms', 'Tilesets');
+        expect(array_keys($saveable))->not->toContain('Items', 'Weapons', 'Armors', 'Enemies', 'System', 'Types');
 
         foreach (['States', 'Troops', 'Skits'] as $label) {
             expect($saveable[$label])->toBeInstanceOf(ProjectRecordDatabase::class);

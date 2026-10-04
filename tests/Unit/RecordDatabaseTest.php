@@ -399,15 +399,3 @@ it('edits literal terms while preserving inline config comments byte for byte', 
 
     removeDirectoryRecursively($root);
 });
-
-it('explains tilesets', function (): void {
-    $root = makeTemporaryProject();
-
-    $tilesets = loadRecordDatabase($root, 'tilesets');
-
-    expect($tilesets->isEditable())->toBeFalse();
-    expect($tilesets->getReadOnlyReason())->toContain('no tileset system');
-    expect($tilesets->getEntryLabels())->toBe([]);
-
-    removeDirectoryRecursively($root);
-});

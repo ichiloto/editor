@@ -102,7 +102,7 @@ final class RecordReferenceValidator
             if (in_array($list->key, self::OWNED_ELSEWHERE[$schema->key] ?? [], true)) {
                 continue;
             }
-            foreach ($record->getSubList($list->key, $list->scalarKey) as $position => $entry) {
+            foreach ($record->getEntries($list) as $position => $entry) {
                 $entryWhere = sprintf('%s, %s %d', $where, $list->singular, $position + 1);
                 foreach ($list->fieldsFor($entry) as $field) {
                     $issue = $this->checkValue($field, self::readPath($entry, $field->key), $entryWhere, true);

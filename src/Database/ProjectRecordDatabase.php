@@ -280,7 +280,6 @@ final class ProjectRecordDatabase
             RecordStorage::LIST_FILE => self::loadListFile($path, $schema, $projectRoot),
             RecordStorage::DIRECTORY => self::loadDirectory($path, $schema, $projectRoot),
             RecordStorage::CONFIG_SUBTREE => self::loadConfigSubtree($path, $schema, $projectRoot, $config),
-            RecordStorage::FILE_LISTING => self::loadFileListing($path, $schema),
             RecordStorage::MAP_OWNED => throw new RuntimeException('Map-owned records are built over their owner, not loaded from a path.'),
         };
     }
@@ -412,7 +411,7 @@ final class ProjectRecordDatabase
                 static fn(ProjectRecord $record): string => $record->recordId . '=' . PhpValueExporter::export($record->toArray()),
                 $this->records,
             )) . '|' . implode(';', array_values($this->stagedDeletions)),
-            RecordStorage::CONFIG_SUBTREE, RecordStorage::FILE_LISTING, RecordStorage::MAP_OWNED => serialize([
+            RecordStorage::CONFIG_SUBTREE, RecordStorage::MAP_OWNED => serialize([
                 array_map(static fn(ProjectRecord $record): array|object => $record->toArray(), $this->records),
                 array_values($this->stagedDeletions),
             ]),
@@ -488,13 +487,13 @@ final class ProjectRecordDatabase
                 // count; its heading is where an entry is added to it.
                 $fields[] = [
                     'label' => $subList->heading,
-                    'value' => sprintf('%d', count($record->getSubList($subList->key, $subList->scalarKey))),
+                    'value' => sprintf('%d', count($record->getEntries($subList))),
                     'field' => $subList->prefix . 'List',
                     'listHeading' => true,
                 ];
             }
 
-            foreach ($record->getSubList($subList->key, $subList->scalarKey) as $entryIndex => $entry) {
+            foreach ($record->getEntries($subList) as $entryIndex => $entry) {
                 $fields = [...$fields, ...$this->describeSubEntryFields($subList, $entryIndex, $entry, $isEditable, [])];
             }
         }
@@ -588,7 +587,7 @@ final class ProjectRecordDatabase
             return $fields;
         }
 
-        foreach (array_values((array) ($entry[$nestedList->key] ?? [])) as $nestedIndex => $nestedEntry) {
+        foreach ($nestedList->readEntries($entry[$nestedList->key] ?? []) as $nestedIndex => $nestedEntry) {
             if (! is_array($nestedEntry)) {
                 continue;
             }
@@ -729,6 +728,59 @@ final class ProjectRecordDatabase
             $this->touchState();
 
             return;
+        }
+    }
+
+    /**
+     * A new entry of a keyed list under a key no other entry holds: its
+     * blank's, or the list's noun, numbered when taken.
+     *
+     * @param list<mixed> $entries The list's entries.
+     * @param array<string, mixed> $entry The entry to add.
+     * @return array<string, mixed>
+     */
+    private static function withUniqueKey(RecordSubList $list, array $entries, array $entry): array
+    {
+        if ($list->keyField === null) {
+            return $entry;
+        }
+
+        $taken = array_map(static fn(mixed $other): string => is_array($other) ? strval($other[$list->keyField] ?? '') : '', $entries);
+        $base = trim(strval($entry[$list->keyField] ?? '')) ?: Slug::of('new ' . $list->singular);
+        $key = $base;
+
+        for ($number = 2; in_array($key, $taken, true); $number++) {
+            $key = $base . '-' . $number;
+        }
+
+        $entry[$list->keyField] = $key;
+
+        return $entry;
+    }
+
+    /**
+     * Refuses a keyed list's key edit that would leave an entry without a key,
+     * or give it another entry's: either would lose an entry on save.
+     *
+     * @param list<mixed> $entries The list's entries.
+     * @throws \InvalidArgumentException
+     */
+    private static function assertKeyAvailable(RecordSubList $list, array $entries, int $at, RecordField $field, mixed $value): void
+    {
+        if ($list->keyField === null || $field->key !== $list->keyField) {
+            return;
+        }
+
+        $key = trim(strval($value ?? ''));
+
+        if ($key === '') {
+            throw new \InvalidArgumentException(sprintf('A %s needs %s.', $list->singular, strtolower($field->label)));
+        }
+
+        foreach ($entries as $index => $other) {
+            if ($index !== $at && is_array($other) && strval($other[$list->keyField] ?? '') === $key) {
+                throw new \InvalidArgumentException(sprintf('Another %s already has %s "%s".', $list->singular, strtolower($field->label), $key));
+            }
         }
     }
 
@@ -883,8 +935,7 @@ final class ProjectRecordDatabase
     {
         return $this->isEditable()
             && ! $this->holdsOneRecord()
-            && $this->schema->storage !== RecordStorage::CONFIG_SUBTREE
-            && $this->schema->storage !== RecordStorage::FILE_LISTING;
+            && $this->schema->storage !== RecordStorage::CONFIG_SUBTREE;
     }
 
     /** Whether the file is the category's one record (system.php), only ever edited. */
@@ -1215,10 +1266,10 @@ final class ProjectRecordDatabase
             return null;
         }
 
-        $entries = $record->getSubList($subList->key, $subList->scalarKey);
+        $entries = $record->getEntries($subList);
         $position = $at === null ? count($entries) : max(0, min(count($entries), $at));
-        array_splice($entries, $position, 0, [$entry ?? $subList->blank]);
-        $record->setSubList($subList->key, $entries, $subList->scalarKey, $subList->removeWhenEmpty);
+        array_splice($entries, $position, 0, [self::withUniqueKey($subList, $entries, $entry ?? $subList->blank)]);
+        $record->setEntries($subList, $entries);
         $this->touchState();
 
         return $position;
@@ -1240,14 +1291,14 @@ final class ProjectRecordDatabase
             return null;
         }
 
-        $entries = $record->getSubList($subList->key, $subList->scalarKey);
+        $entries = $record->getEntries($subList);
 
         if (! array_key_exists($entryIndex, $entries)) {
             return null;
         }
 
         [$removed] = array_splice($entries, $entryIndex, 1);
-        $record->setSubList($subList->key, $entries, $subList->scalarKey, $subList->removeWhenEmpty);
+        $record->setEntries($subList, $entries);
         $this->touchState();
 
         return $removed;
@@ -1270,10 +1321,10 @@ final class ProjectRecordDatabase
             return;
         }
 
-        $entries = $record->getSubList($subList->key, $subList->scalarKey);
+        $entries = $record->getEntries($subList);
         $entryIndex = max(0, min(count($entries), $entryIndex));
         array_splice($entries, $entryIndex, 0, [$entry]);
-        $record->setSubList($subList->key, $entries, $subList->scalarKey, $subList->removeWhenEmpty);
+        $record->setEntries($subList, $entries);
         $this->touchState();
     }
 
@@ -1291,7 +1342,7 @@ final class ProjectRecordDatabase
             return 0;
         }
 
-        return count($this->getRecordByIndex($index)?->getSubList($subList->key, $subList->scalarKey) ?? []);
+        return count($this->getRecordByIndex($index)?->getEntries($subList) ?? []);
     }
 
     /**
@@ -1305,7 +1356,7 @@ final class ProjectRecordDatabase
     {
         $subList = $this->schema->findInlineSubList($listKey);
 
-        return $subList === null ? [] : ($this->getRecordByIndex($index)?->getSubList($subList->key, $subList->scalarKey) ?? []);
+        return $subList === null ? [] : ($this->getRecordByIndex($index)?->getEntries($subList) ?? []);
     }
 
     /**
@@ -1327,7 +1378,7 @@ final class ProjectRecordDatabase
         }
 
         $parentIndex = intval($parentMatch[1]);
-        $entry = $record->getSubList($subList->key, $subList->scalarKey)[$parentIndex] ?? null;
+        $entry = $record->getEntries($subList)[$parentIndex] ?? null;
         $nestedList = is_array($entry) ? $subList->nestedListFor($entry) : null;
 
         if ($nestedList === null) {
@@ -1357,9 +1408,9 @@ final class ProjectRecordDatabase
             return null;
         }
 
-        $entries = array_values((array) ($context['parent'][$context['list']->key] ?? []));
+        $entries = $context['list']->readEntries($context['parent'][$context['list']->key] ?? []);
         $position = $at === null ? count($entries) : max(0, min(count($entries), $at));
-        array_splice($entries, $position, 0, [$entry ?? $context['list']->blank]);
+        array_splice($entries, $position, 0, [self::withUniqueKey($context['list'], $entries, $entry ?? $context['list']->blank)]);
         $this->writeNestedSubList($context, $entries);
 
         return $position;
@@ -1374,7 +1425,7 @@ final class ProjectRecordDatabase
             return null;
         }
 
-        $entries = array_values((array) ($context['parent'][$context['list']->key] ?? []));
+        $entries = $context['list']->readEntries($context['parent'][$context['list']->key] ?? []);
 
         if (! array_key_exists($nestedIndex, $entries) || ! is_array($entries[$nestedIndex])) {
             return null;
@@ -1395,7 +1446,7 @@ final class ProjectRecordDatabase
             return;
         }
 
-        $entries = array_values((array) ($context['parent'][$context['list']->key] ?? []));
+        $entries = $context['list']->readEntries($context['parent'][$context['list']->key] ?? []);
         $nestedIndex = max(0, min(count($entries), $nestedIndex));
         array_splice($entries, $nestedIndex, 0, [$entry]);
         $this->writeNestedSubList($context, $entries);
@@ -1443,7 +1494,6 @@ final class ProjectRecordDatabase
         match ($this->schema->storage) {
             RecordStorage::DIRECTORY => $this->saveDirectory(),
             RecordStorage::CONFIG_SUBTREE => null,
-            RecordStorage::FILE_LISTING => null,
             RecordStorage::MAP_OWNED => $this->writeBack !== null
                 ? ($this->writeBack)(array_map(static fn(ProjectRecord $record): array|object => $record->toArray(), $this->getRecords()))
                 : null,
@@ -1555,7 +1605,7 @@ final class ProjectRecordDatabase
             $records[] = new ProjectRecord($payload, false, $filename, $stem, $file);
         }
 
-        return new self($schema, $path, $records, null, readOnlyReason: $schema->isAlwaysReadOnly ? $schema->readOnlyNote : null);
+        return new self($schema, $path, $records, null);
     }
 
     /**
@@ -1569,44 +1619,7 @@ final class ProjectRecordDatabase
     {
         $config ??= new ProjectConfig($projectRoot ?? dirname($path));
         return new self($schema, $path, $config->getTermRecords($schema->configPath),
-            readOnlyReason: $schema->isAlwaysReadOnly ? $schema->readOnlyNote : $config->getReadOnlyReason(), config: $config);
-    }
-
-    /**
-     * Lists the files in a directory without evaluating any of them.
-     *
-     * @param string $path The directory path.
-     * @param RecordSchema $schema The category schema.
-     * @return self
-     */
-    private static function loadFileListing(string $path, RecordSchema $schema): self
-    {
-        $records = [];
-        $files = is_dir($path) ? (glob($path . DIRECTORY_SEPARATOR . '*.php') ?: []) : [];
-        sort($files);
-
-        foreach ($files as $filename) {
-            $source = (string) file_get_contents($filename);
-            $kind = match (true) {
-                preg_match('/^\s*enum\s+/m', $source) === 1 => 'PHP enum',
-                preg_match('/^\s*(final\s+)?(readonly\s+)?class\s+/m', $source) === 1 => 'PHP class',
-                preg_match('/^\s*interface\s+/m', $source) === 1 => 'PHP interface',
-                default => 'data file',
-            };
-
-            $records[] = new ProjectRecord(
-                [
-                    'file' => basename($filename),
-                    'kind' => $kind,
-                    'lines' => substr_count($source, "\n") + 1,
-                ],
-                false,
-                $filename,
-                basename($filename, '.php'),
-            );
-        }
-
-        return new self($schema, $path, $records, null, readOnlyReason: $schema->readOnlyNote);
+            readOnlyReason: $config->getReadOnlyReason(), config: $config);
     }
 
     /**
@@ -1619,10 +1632,6 @@ final class ProjectRecordDatabase
      */
     private static function resolveReadOnlyReason(RecordSchema $schema, PhpDataFile $file, array $records): ?string
     {
-        if ($schema->isAlwaysReadOnly) {
-            return $schema->readOnlyNote;
-        }
-
         if ($file->readOnlyReason !== null) {
             return $file->readOnlyReason;
         }
@@ -2594,7 +2603,7 @@ final class ProjectRecordDatabase
      */
     private function setSubField(ProjectRecord $record, RecordSubList $subList, int $entryIndex, string $token, string $rawValue): void
     {
-        $entries = $record->getSubList($subList->key, $subList->scalarKey);
+        $entries = $record->getEntries($subList);
 
         if (! array_key_exists($entryIndex, $entries)) {
             return;
@@ -2606,10 +2615,12 @@ final class ProjectRecordDatabase
             }
 
             $before = $entries[$entryIndex];
+            $value = self::coerce($field, $rawValue);
+            self::assertKeyAvailable($subList, $entries, $entryIndex, $field, $value);
             $entries[$entryIndex] = self::writeNested(
                 $entries[$entryIndex],
                 explode('.', $field->key),
-                self::coerce($field, $rawValue),
+                $value,
             );
             $entries[$entryIndex] = $subList->removeConflictingFields($entries[$entryIndex], $field->key);
 
@@ -2618,7 +2629,7 @@ final class ProjectRecordDatabase
                 $entries[$entryIndex] = self::withoutStaleVariantFields($subList, $before, $entries[$entryIndex]);
             }
 
-            $record->setSubList($subList->key, $entries, $subList->scalarKey, $subList->removeWhenEmpty);
+            $record->setEntries($subList, $entries);
             $this->touchState();
 
             return;
@@ -2635,7 +2646,7 @@ final class ProjectRecordDatabase
         string $fieldToken,
         string $rawValue,
     ): void {
-        $entries = $record->getSubList($subList->key, $subList->scalarKey);
+        $entries = $record->getEntries($subList);
         $entry = $entries[$entryIndex] ?? null;
 
         if (! is_array($entry)) {
@@ -2646,7 +2657,7 @@ final class ProjectRecordDatabase
 
         if ($written !== null) {
             $entries[$entryIndex] = $written;
-            $record->setSubList($subList->key, $entries, $subList->scalarKey, $subList->removeWhenEmpty);
+            $record->setEntries($subList, $entries);
             $this->touchState();
         }
     }
@@ -2683,7 +2694,7 @@ final class ProjectRecordDatabase
             return null;
         }
 
-        $nestedEntries = array_values((array) ($entry[$nestedList->key] ?? []));
+        $nestedEntries = $nestedList->readEntries($entry[$nestedList->key] ?? []);
 
         if (! is_array($nestedEntries[$nestedIndex] ?? null)) {
             return null;
@@ -2694,12 +2705,14 @@ final class ProjectRecordDatabase
                 continue;
             }
 
+            $value = self::coerce($field, $rawValue);
+            self::assertKeyAvailable($nestedList, $nestedEntries, $nestedIndex, $field, $value);
             $nestedEntries[$nestedIndex] = self::writeNested(
                 $nestedEntries[$nestedIndex],
                 explode('.', $field->key),
-                self::coerce($field, $rawValue),
+                $value,
             );
-            $entry[$nestedList->key] = $nestedEntries;
+            $entry[$nestedList->key] = $nestedList->writeEntries($nestedEntries);
 
             return $entry;
         }
@@ -2846,7 +2859,7 @@ final class ProjectRecordDatabase
         $parent = $commands[$parentIndex] ?? null;
         $nestedList = is_array($parent) && $frameList !== null ? $frameList->nestedListFor($parent) : null;
 
-        return $nestedList === null ? 0 : count(array_values((array) ($parent[$nestedList->key] ?? [])));
+        return $nestedList === null ? 0 : count($nestedList->readEntries($parent[$nestedList->key] ?? []));
     }
 
     /**
@@ -2878,10 +2891,10 @@ final class ProjectRecordDatabase
             return null;
         }
 
-        $nestedEntries = array_values((array) ($parent[$nestedList->key] ?? []));
+        $nestedEntries = $nestedList->readEntries($parent[$nestedList->key] ?? []);
         $position = $at === null ? count($nestedEntries) : max(0, min(count($nestedEntries), $at));
-        array_splice($nestedEntries, $position, 0, [$entry ?? $nestedList->blank]);
-        $commands[$parentIndex][$nestedList->key] = $nestedEntries;
+        array_splice($nestedEntries, $position, 0, [self::withUniqueKey($nestedList, $nestedEntries, $entry ?? $nestedList->blank)]);
+        $commands[$parentIndex][$nestedList->key] = $nestedList->writeEntries($nestedEntries);
         $this->writeFrameCommands($record, $rootList, $framePath, $commands);
 
         return $position;
@@ -2913,7 +2926,7 @@ final class ProjectRecordDatabase
             return null;
         }
 
-        $nestedEntries = array_values((array) ($parent[$nestedList->key] ?? []));
+        $nestedEntries = $nestedList->readEntries($parent[$nestedList->key] ?? []);
 
         if (! is_array($nestedEntries[$nestedIndex] ?? null)) {
             return null;
@@ -2928,7 +2941,7 @@ final class ProjectRecordDatabase
             // not.
             unset($commands[$parentIndex][$nestedList->key]);
         } else {
-            $commands[$parentIndex][$nestedList->key] = $nestedEntries;
+            $commands[$parentIndex][$nestedList->key] = $nestedList->writeEntries($nestedEntries);
         }
 
         $this->writeFrameCommands($record, $rootList, $framePath, $commands);
@@ -2950,7 +2963,7 @@ final class ProjectRecordDatabase
             return null;
         }
 
-        $entries = $record->getSubList($subList->key, $subList->scalarKey);
+        $entries = $record->getEntries($subList);
         $parent = $entries[$parentIndex] ?? null;
         $nestedList = is_array($parent) ? $subList->nestedListFor($parent) : null;
 
@@ -2982,8 +2995,8 @@ final class ProjectRecordDatabase
         }
 
         $entries = $context['entries'];
-        $entries[$context['parentIndex']][$context['list']->key] = array_values($nestedEntries);
-        $context['record']->setSubList($subList->key, $entries, $subList->scalarKey, $subList->removeWhenEmpty);
+        $entries[$context['parentIndex']][$context['list']->key] = $context['list']->writeEntries($nestedEntries);
+        $context['record']->setEntries($subList, $entries);
         $this->touchState();
     }
 
@@ -3219,13 +3232,47 @@ final class ProjectRecordDatabase
             return null;
         }
 
-        if ($field->codec === RecordFieldCodec::CSV_LIST) {
+        if (in_array($field->codec, [RecordFieldCodec::CSV_LIST, RecordFieldCodec::CSV_INTEGERS, RecordFieldCodec::CSV_TOKENS], true)) {
             $items = array_values(array_filter(
                 array_map(trim(...), explode(',', $trimmed)),
                 static fn(string $item): bool => $item !== '',
             ));
+            $isWhole = static fn(string $item): bool => preg_match('/\A-?\d+\z/', $item) === 1;
+
+            if ($field->codec === RecordFieldCodec::CSV_INTEGERS) {
+                if (array_filter($items, static fn(string $item): bool => ! $isWhole($item)) !== []) {
+                    throw new \InvalidArgumentException(sprintf('%s lists whole numbers separated by commas.', $field->label));
+                }
+
+                $items = array_map(intval(...), $items);
+            } elseif ($field->codec === RecordFieldCodec::CSV_TOKENS) {
+                $items = array_map(static fn(string $item): int|string => $isWhole($item) ? intval($item) : $item, $items);
+            }
 
             return $items === [] && $field->removeWhenEmpty ? null : $items;
+        }
+
+        if ($field->codec === RecordFieldCodec::SHAPE_TILES) {
+            if ($trimmed === '') {
+                return $field->removeWhenEmpty ? null : '';
+            }
+
+            if (! str_contains($trimmed, ':')) {
+                return $trimmed;
+            }
+
+            $shapes = [];
+
+            foreach (explode(',', $trimmed) as $pair) {
+                [$shape, $tile] = array_map(trim(...), explode(':', $pair, 2)) + [1 => ''];
+                $shapes[$shape] = $tile;
+            }
+
+            if (array_keys($shapes) !== ['horizontal', 'vertical', 'corner'] || in_array('', $shapes, true)) {
+                throw new \InvalidArgumentException(sprintf('%s is one tile, or one for each shape: horizontal: 5888, vertical: 5890, corner: 5892.', $field->label));
+            }
+
+            return $shapes;
         }
 
         if ($field->enumClass !== null && enum_exists($field->enumClass)) {
@@ -3298,7 +3345,10 @@ final class ProjectRecordDatabase
             RecordFieldCodec::AFFINITIES => ElementAffinityCodec::encodeAll(is_array($value) ? $value : []),
             RecordFieldCodec::WORLD_WRITES => WorldWriteCodec::encodeAll(is_array($value) ? $value : []),
             RecordFieldCodec::ACTOR_PREDICATES => BattleEntryPredicateCodec::encodeAll(is_array($value) ? $value : []),
-            RecordFieldCodec::CSV_LIST => implode(', ', array_map(strval(...), is_array($value) ? $value : [])),
+            RecordFieldCodec::CSV_LIST, RecordFieldCodec::CSV_INTEGERS, RecordFieldCodec::CSV_TOKENS => implode(', ', array_map(strval(...), is_array($value) ? $value : [])),
+            RecordFieldCodec::SHAPE_TILES => is_array($value)
+                ? implode(', ', array_map(static fn(string $shape): string => sprintf('%s: %s', $shape, ProjectRecord::stringify($value[$shape] ?? '')), array_keys($value)))
+                : ProjectRecord::stringify($value),
             RecordFieldCodec::KEY_VALUES => ParameterMapCodec::encode(is_array($value) ? $value : []),
             // A sprite authored as one string is one row; as a list, its rows.
             RecordFieldCodec::LINES => is_array($value)
@@ -4085,7 +4135,10 @@ final class ProjectRecordDatabase
      * when an entry changes variant: a wait turned into a transfer keeps
      * nothing of its seconds, and a finalizer command turned from a switch
      * write into a player move carries no name or value for the Engine's
-     * strict shapes to refuse. Unknown keys -- neither variant's -- stay.
+     * strict shapes to refuse. A value is dropped by its whole path, so two
+     * variants that keep different shapes under one key (a stamped piece's
+     * glyph rows, a connected piece's glyph per shape) never mix. Unknown
+     * keys -- neither variant's -- stay.
      *
      * @param array<string, mixed> $before The entry before the change.
      * @param array<string, mixed> $after The entry with the new variant.
@@ -4093,27 +4146,24 @@ final class ProjectRecordDatabase
      */
     private static function withoutStaleVariantFields(RecordSubList $subList, array $before, array $after): array
     {
-        $roots = static function (array $fields): array {
-            $keys = [];
+        if (strval($before[$subList->variantKey] ?? '') === strval($after[$subList->variantKey] ?? '')) {
+            // The same variant picked again changes nothing.
+            return $after;
+        }
 
-            foreach ($fields as $field) {
-                $keys[] = explode('.', $field->key)[0];
-            }
-
-            return $keys;
-        };
-        $oldRoots = $roots($subList->fieldsFor($before));
-        $newRoots = $roots($subList->fieldsFor($after));
+        $keys = static fn(array $fields): array => array_map(static fn(RecordField $field): string => $field->key, $fields);
+        $newKeys = $keys($subList->fieldsFor($after));
         $oldNested = $subList->nestedListFor($before);
         $newNested = $subList->nestedListFor($after);
 
-        foreach ($oldRoots as $root) {
-            if ($root !== $subList->variantKey && ! in_array($root, $newRoots, true)) {
-                unset($after[$root]);
+        foreach ($keys($subList->fieldsFor($before)) as $key) {
+            if ($key !== $subList->variantKey && ! in_array($key, $newKeys, true)) {
+                $after = self::writeNested($after, explode('.', $key), null);
             }
         }
 
-        if ($oldNested !== null && ($newNested === null || $newNested->key !== $oldNested->key)) {
+        if ($oldNested !== null && $newNested !== $oldNested) {
+            // Another list, even under the same key, holds another shape.
             unset($after[$oldNested->key]);
         }
 

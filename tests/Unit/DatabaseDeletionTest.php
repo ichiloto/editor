@@ -110,7 +110,7 @@ it('refuses deletion in categories that have no entries', function () {
 
     try {
         $editor = deletionEditor($root);
-        // The engine has no tileset system, so the category is genuinely empty.
+        // The fixture has no tilesets, so the category is genuinely empty.
         openDatabaseCategory($editor, 'tilesets');
         callEditorMethod($editor, 'dispatchInput', "\033[3~");
 

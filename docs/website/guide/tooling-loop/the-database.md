@@ -68,7 +68,7 @@ Enemies are one data file each under `assets/Data/Enemies`, and `enemies.php` lo
 
 Re-author one of those files as a plain array and the editor picks it up as editable automatically. Nothing in the editor needs to change.
 
-`Types` holds your elements: the list in `system.php` that the game knows every element by, and that skills, equipment and affinities pick from. System and Types share `system.php`, and each saves only its own settings. `Tilesets` is empty because the engine has no tileset system: map tiles are painted directly on the canvas.
+`Types` holds your elements: the list in `system.php` that the game knows every element by, and that skills, equipment and affinities pick from. System and Types share `system.php`, and each saves only its own settings. `Tilesets` edits each tileset's sheets, tile flags, shadow and the pieces maps are built from, one file per tileset.
 
 ## What saving preserves
 

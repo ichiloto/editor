@@ -31,8 +31,6 @@ final readonly class RecordSchema
      * @param string|null $listPayloadKey When set, the file returns the sub-list bare (event scripts).
      * @param string[] $configPath The config.php subtree roots, for CONFIG_SUBTREE storage.
      * @param Closure(mixed): bool|null $recordFilter Selects which of a shared file's entries belong here.
-     * @param bool $isAlwaysReadOnly Whether the category never writes, regardless of the file probe.
-     * @param string $readOnlyNote An honest explanation shown when the category cannot be edited.
      */
     /**
      * @param RecordProjection|null $projection How this category's records are
@@ -73,8 +71,6 @@ final readonly class RecordSchema
         public ?Closure $recordFilter = null,
         public ?Closure $makeBlank = null,
         public array $commandLists = [],
-        public bool $isAlwaysReadOnly = false,
-        public string $readOnlyNote = '',
         public ?RecordProjection $projection = null,
         public ?Closure $fieldsFor = null,
         public ?Closure $labelFor = null,

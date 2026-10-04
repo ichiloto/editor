@@ -388,6 +388,28 @@ final class ProjectRecord
     }
 
     /**
+     * A list's entries as the editor edits them ({@see RecordSubList::readEntries()}).
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function getEntries(RecordSubList $list): array
+    {
+        return array_values(array_filter($list->readEntries($this->get($list->key)), is_array(...)));
+    }
+
+    /**
+     * Replaces a list's entries, stored as the list stores them
+     * ({@see RecordSubList::writeEntries()}); an empty list the file leaves
+     * out is removed.
+     *
+     * @param list<array<string, mixed>> $entries
+     */
+    public function setEntries(RecordSubList $list, array $entries): void
+    {
+        $this->set($list->key, $entries === [] && $list->removeWhenEmpty ? null : $list->writeEntries($entries));
+    }
+
+    /**
      * Returns a nested sub-list (objectives, beats, members, commands).
      *
      * @param string $key The payload key holding the list.

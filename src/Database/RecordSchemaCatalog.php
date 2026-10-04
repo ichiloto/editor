@@ -37,6 +37,9 @@ use Ichiloto\Engine\Entities\Skills\Skill;
 use Ichiloto\Engine\Entities\Skills\SkillCatalog;
 use Ichiloto\Engine\Entities\Skills\SkillRecord;
 use Ichiloto\Engine\Entities\Skills\SkillResolutionScope;
+use Ichiloto\Engine\Rendering\Tilesets\Tileset;
+use Ichiloto\Engine\Rendering\Tilesets\TilesetPiece;
+use Ichiloto\Engine\Rendering\Tilesets\TilesetSheet;
 use Ichiloto\Engine\Quests\QuestObjectiveType;
 use Ichiloto\Engine\Battle\Enumerations\BattleEngineType;
 use Ichiloto\Engine\Core\Enumerations\MovementHeading;
@@ -1499,32 +1502,97 @@ final class RecordSchemaCatalog
     }
 
     /**
-     * Tilesets — no engine system exists yet.
-     *
-     * Ichiloto maps store their glyphs directly in the map files and the
-     * canvas paints them; there is no tileset/terrain table to edit. The
-     * category stays visible and says so rather than pretending.
+     * Tilesets: one file per tileset under `assets/Data/Tilesets`, in the
+     * form the Engine's Tileset reads. A map names its tileset by the file's
+     * name, so the file keeps its name when the tileset is renamed. A
+     * tileset names its RPG Maker sheets, the tiles drawn above characters
+     * or as tables, the shadow its raised tiles cast, the tile that marks
+     * missing art, and the pieces maps are built from, keyed by piece id:
+     * a stamped piece's glyph rows with its tile rows on each tile layer, or
+     * a connected piece's glyph and tile for each shape of a line.
      *
      * @return RecordSchema
      */
     private static function tilesets(): RecordSchema
     {
+        $layer = new RecordField('layer', 'Tile Layer');
+        $tilesFor = static fn(?string $valueField, RecordField $value, array $blank): RecordSubList => new RecordSubList(
+            key: 'tiles',
+            prefix: 'tiles',
+            singular: 'tile layer',
+            fields: [$layer, $value],
+            blank: $blank,
+            keyField: 'layer',
+            valueField: $valueField,
+        );
+
         return new RecordSchema(
             key: 'tilesets',
             entryNoun: 'tileset',
-            storage: RecordStorage::FILE_LISTING,
-            relativePath: 'assets/Data/Tilesets',
+            storage: RecordStorage::DIRECTORY,
+            relativePath: 'assets/' . Tileset::DIRECTORY,
             fields: [
-                new RecordField('file', 'File', isReadOnly: true),
-                new RecordField('kind', 'Kind', isReadOnly: true),
+                new RecordField('name', 'Name'),
+                ...array_map(
+                    static fn(TilesetSheet $sheet): RecordField => new RecordField(
+                        'sheets.' . $sheet->value,
+                        'Sheet ' . $sheet->value,
+                        reference: 'png_assets',
+                        removeWhenEmpty: true,
+                        allowsNone: true,
+                        displayDefault: '(none)',
+                    ),
+                    TilesetSheet::cases(),
+                ),
+                new RecordField('missingArt', 'Missing Art Tile', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '(none)'),
+                new RecordField('above', 'Above Characters', codec: RecordFieldCodec::CSV_INTEGERS, removeWhenEmpty: true),
+                new RecordField('tables', 'Tables', codec: RecordFieldCodec::CSV_INTEGERS, removeWhenEmpty: true),
+                // A shadow is all three or none; validation names what is missing.
+                new RecordField('shadows.casters', 'Shadow Casters', codec: RecordFieldCodec::CSV_TOKENS, removeWhenEmpty: true),
+                new RecordField('shadows.width', 'Shadow Width', InputControlType::FLOAT, removeWhenEmpty: true),
+                new RecordField('shadows.opacity', 'Shadow Opacity', InputControlType::FLOAT, removeWhenEmpty: true),
             ],
-            labelKey: 'file',
+            labelKey: 'name',
             identityKey: null,
-            isAlwaysReadOnly: true,
-            readOnlyNote: 'the engine has no tileset system yet — map tiles are authored directly on the canvas',
+            blank: ['name' => 'New Tileset', 'sheets' => []],
+            subList: new RecordSubList(
+                key: 'pieces',
+                prefix: 'piece',
+                singular: 'piece',
+                fields: [
+                    new RecordField('id', 'Id'),
+                    new RecordField('name', 'Name'),
+                    new RecordField('layer', 'Glyph Layer'),
+                    new RecordField(
+                        'connects',
+                        'Connects',
+                        reference: 'piece_connections',
+                        removeWhenEmpty: true,
+                        allowsNone: true,
+                        displayDefault: '(stamped whole)',
+                    ),
+                ],
+                blank: ['id' => 'new-piece', 'name' => 'New piece', 'layer' => 'fixtures', 'glyphs' => ['#']],
+                variants: [
+                    '' => [
+                        new RecordField('glyphs', 'Glyph Rows', InputControlType::MULTILINE, codec: RecordFieldCodec::LINES),
+                        new RecordField('effect', 'Effect', reference: 'effects', removeWhenEmpty: true, allowsNone: true, displayDefault: '(none)'),
+                    ],
+                    TilesetPiece::LINES => [
+                        new RecordField('glyphs.horizontal', 'Across Glyph'),
+                        new RecordField('glyphs.vertical', 'Down Glyph'),
+                        new RecordField('glyphs.corner', 'Corner Glyph'),
+                    ],
+                ],
+                variantKey: 'connects',
+                nestedLists: [
+                    '' => $tilesFor('rows', new RecordField('rows', 'Tile Rows', InputControlType::MULTILINE, codec: RecordFieldCodec::LINES), ['layer' => 'tiles', 'rows' => ['0']]),
+                    TilesetPiece::LINES => $tilesFor('tile', new RecordField('tile', 'Tile', codec: RecordFieldCodec::SHAPE_TILES), ['layer' => 'tiles', 'tile' => '0']),
+                ],
+                keyField: 'id',
+            ),
         );
     }
-
     /**
      * The shared read-only fields every inventory entry displays.
      *

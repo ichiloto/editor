@@ -22,6 +22,23 @@ enum RecordFieldCodec: string
     /** A list of plain strings, shown comma-separated. */
     case CSV_LIST = 'csv_list';
 
+    /** A list of whole numbers, shown comma-separated: a tileset's tile identities. */
+    case CSV_INTEGERS = 'csv_integers';
+
+    /**
+     * A list shown comma-separated whose whole numbers are stored as numbers
+     * and anything else as text: a tileset's shadow casters, sheet names and
+     * tile identities alike.
+     */
+    case CSV_TOKENS = 'csv_tokens';
+
+    /**
+     * A connected piece's tile on one layer: one tile entry for every shape
+     * (`5888`), or one per shape, shown as `horizontal: 5888, vertical: 5890,
+     * corner: 5892`.
+     */
+    case SHAPE_TILES = 'shape_tiles';
+
     /** An element => multiplier map, edited a row at a time. */
     case AFFINITIES = 'affinities';
 

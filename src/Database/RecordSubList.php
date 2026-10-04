@@ -42,6 +42,10 @@ final readonly class RecordSubList
      * as files that omit an empty list author it (a quest's reward items).
      * @param string $heading What a list beside the record's own is headed as ("Reward Items"): its
      * heading row names it, counts it, and is where an entry is added to it.
+     * @param string|null $keyField For a list stored as a map (a tileset's pieces, keyed by piece
+     * id): the field each entry carries its key as. Keys are unique and never empty.
+     * @param string|null $valueField For a keyed list whose values are not entries of their own (a
+     * piece's tiles: a layer name keyed to its rows): the field each entry carries its value as.
      */
     public function __construct(
         public string $key,
@@ -58,7 +62,88 @@ final readonly class RecordSubList
         public string $heading = '',
         public ?string $scalarKey = null,
         public bool $removeWhenEmpty = false,
+        public ?string $keyField = null,
+        public ?string $valueField = null,
     ) {
+    }
+
+    /** Where a keyed list's entry keeps a value the editor does not read, to write it back as it was. */
+    public const string RAW_VALUE = '__value';
+
+    /**
+     * The entries a list holds, as the editor edits them. An entry authored
+     * as a bare value is its scalar field's value; in a list keyed by
+     * `keyField` each entry carries its key as that field. A value an
+     * unkeyed list holds that is neither stays as it is; a keyed list keeps
+     * it under its key, so writing the list back keeps it.
+     *
+     * @param mixed $stored The list as the file holds it.
+     * @return list<mixed>
+     */
+    public function readEntries(mixed $stored): array
+    {
+        if (! is_array($stored)) {
+            return [];
+        }
+
+        $entries = [];
+
+        foreach ($stored as $key => $value) {
+            $entry = match (true) {
+                $this->valueField !== null => [$this->valueField => $value],
+                is_array($value) => $value,
+                $this->scalarKey !== null && is_scalar($value) => [$this->scalarKey => $value],
+                default => null,
+            };
+
+            $entries[] = $this->keyField === null
+                ? $entry ?? $value
+                : [$this->keyField => (string) $key] + ($entry ?? [self::RAW_VALUE => $value]);
+        }
+
+        return $entries;
+    }
+
+    /**
+     * The form a list's entries are stored in: a map keyed by `keyField`
+     * where the list is one, and an entry holding nothing but its scalar
+     * field written bare.
+     *
+     * @param list<mixed> $entries The entries, as the editor edits them.
+     * @return array<array-key, mixed>
+     */
+    public function writeEntries(array $entries): array
+    {
+        $stored = [];
+
+        foreach (array_values($entries) as $entry) {
+            if (! is_array($entry)) {
+                $stored[] = $entry;
+                continue;
+            }
+
+            $key = null;
+
+            if ($this->keyField !== null) {
+                $key = (string) ($entry[$this->keyField] ?? '');
+                unset($entry[$this->keyField]);
+            }
+
+            $value = match (true) {
+                $this->valueField !== null => $entry[$this->valueField] ?? null,
+                array_key_exists(self::RAW_VALUE, $entry) => $entry[self::RAW_VALUE],
+                $this->scalarKey !== null && array_keys($entry) === [$this->scalarKey] => $entry[$this->scalarKey],
+                default => $entry,
+            };
+
+            if ($key === null) {
+                $stored[] = $value;
+            } else {
+                $stored[$key] = $value;
+            }
+        }
+
+        return $stored;
     }
 
     /** @param array<string, mixed> $entry @return array<string, mixed> */
