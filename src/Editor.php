@@ -29,6 +29,7 @@ use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Database\RecordAuthoring;
 use Ichiloto\Editor\Database\RecordChange;
 use Ichiloto\Editor\Database\RecordItem;
+use Ichiloto\Editor\Database\RecordPanes;
 use Ichiloto\Editor\Database\RecordRefusal;
 use Ichiloto\Editor\Database\SharedFileTransaction;
 use Ichiloto\Editor\Database\ConditionCodec;
@@ -105,8 +106,6 @@ use Ichiloto\Engine\Entities\Inventory\Armor;
 use Ichiloto\Engine\Entities\Inventory\Items\Item;
 use Ichiloto\Engine\Entities\Inventory\Weapons\Weapon;
 use Ichiloto\Engine\Entities\Magic\MagicEffectType;
-use Ichiloto\Engine\Entities\Roles\ExperienceCurveGenerator;
-use Ichiloto\Engine\Entities\Roles\ParameterCurveGenerator;
 use Ichiloto\Engine\Entities\Skills\MagicSkill;
 use Ichiloto\Engine\Entities\Skills\Skill;
 use Ichiloto\Engine\Entities\Skills\SkillCatalog;
@@ -9098,148 +9097,6 @@ final class Editor
     }
 
     /**
-     * One effect of a skill record, as the Effects pane lists it.
-     *
-     * @param array<string, mixed> $effect The effect's record data.
-     */
-    private static function describeSkillEffect(array $effect): string
-    {
-        $parts = match (true) {
-            isset($effect['formula']) => [strval($effect['formula'])],
-            isset($effect['stateId']) => [sprintf('%s, %d%%', strval($effect['stateId']), intval($effect['chancePercent'] ?? 100))],
-            isset($effect['stateIds']) && is_array($effect['stateIds']) => [implode(', ', array_map('strval', $effect['stateIds']))],
-            isset($effect['stat']) => [sprintf('%s %+d%s', strval($effect['stat']), intval($effect['delta'] ?? 0), ($effect['affectsUser'] ?? false) === true ? ' on the user' : '')],
-            default => [],
-        };
-
-        foreach (['element', 'resolutionKind'] as $key) {
-            if (isset($effect[$key])) {
-                $parts[] = strval($effect[$key]);
-            }
-        }
-
-        if (isset($effect['variance'])) {
-            $parts[] = sprintf('±%d%%', (int) round(floatval($effect['variance']) * 100));
-        }
-
-        return sprintf('%s: %s', ucfirst(str_replace('_', ' ', strval($effect['type'] ?? 'effect'))), implode(' · ', $parts));
-    }
-
-    /**
-     * The selected skill's effects, one line each.
-     *
-     * @return string[]
-     */
-    private function getDatabaseSkillCueLines(): array
-    {
-        $data = $this->getSelectedSkillData();
-
-        if ($data === null) {
-            return ['No skill selected.'];
-        }
-
-        $effects = array_filter((array) ($data['effects'] ?? []), is_array(...));
-
-        return $effects === [] ? ['No effects configured.'] : array_values(array_map(self::describeSkillEffect(...), $effects));
-    }
-
-    /**
-     * Whom the selected skill reaches, when, and how often it rolls.
-     *
-     * @return string[]
-     */
-    private function getDatabaseSkillFrameLines(): array
-    {
-        $data = $this->getSelectedSkillData();
-
-        if ($data === null) {
-            return ['No skill selected.'];
-        }
-
-        $scope = (array) ($data['scope'] ?? []);
-        $invocation = (array) ($data['invocation'] ?? []);
-
-        return [
-            sprintf('Side: %s', strval($scope['side'] ?? '')),
-            sprintf('Number: %s', strval($scope['number'] ?? '')),
-            sprintf('Status: %s', strval($scope['status'] ?? '')),
-            sprintf('Targets: %s', ($scope['targetCount'] ?? null) === null ? 'Auto' : strval($scope['targetCount'])),
-            '',
-            sprintf('Occasion: %s', strval($data['occasion'] ?? '')),
-            sprintf('Repeat: %d', intval($invocation['repeat'] ?? 1)),
-            sprintf('AP Gain: %d', intval($invocation['apGain'] ?? 0)),
-        ];
-    }
-
-    /**
-     * A summary of the selected skill: its number, kind, cost, scope and effects.
-     *
-     * @return string[]
-     */
-    private function getDatabaseSkillPreviewLines(): array
-    {
-        $data = $this->getSelectedSkillData();
-        $record = $this->getSelectedRecordDatabase()?->getRecordByIndex($this->getSelectedRecordIndex());
-
-        if ($data === null || $record === null) {
-            return ['No skill selected.'];
-        }
-
-        $scope = (array) ($data['scope'] ?? []);
-        $invocation = (array) ($data['invocation'] ?? []);
-        $effects = array_filter((array) ($data['effects'] ?? []), is_array(...));
-
-        return [
-            sprintf('File: %s/%s.php', SkillCatalog::DIRECTORY, $record->recordId),
-            sprintf('Name: %s', strval($data['name'] ?? '')),
-            sprintf('Kind: %s', ucfirst(strval($data['kind'] ?? ''))),
-            sprintf('Occasion: %s', strval($data['occasion'] ?? '')),
-            sprintf('Cost: %d MP', intval($data['cost'] ?? 0)),
-            sprintf('Cooldown: %d', intval($data['cooldown'] ?? 0)),
-            '',
-            sprintf('Scope: %s / %s / %s', strval($scope['side'] ?? ''), strval($scope['number'] ?? ''), strval($scope['status'] ?? '')),
-            sprintf('Invoke: %s', strval($invocation['message'] ?? '')),
-            '',
-            'Effects',
-            ...($effects === [] ? ['No effects configured.'] : array_values(array_map(self::describeSkillEffect(...), $effects))),
-        ];
-    }
-
-    /**
-     * Returns the selected quest from the project database.
-     *
-     * @return ProjectQuest|null
-     */
-    private function getSelectedQuest(): ?ProjectQuest
-    {
-        if (! $this->isQuestsDatabaseSelected()) {
-            return null;
-        }
-
-        // The terminal's journal panes read the quest as the shared record holds it, unsaved edits included.
-        $record = $this->getSelectedRecordDatabase()?->getRecordByIndex($this->getSelectedRecordIndex());
-
-        return $record === null ? null : new ProjectQuest((array) $record->toArray());
-    }
-
-    /**
-     * Returns the selected class from the project database.
-     *
-     * @return ProjectClass|null
-     */
-    private function getSelectedClass(): ?ProjectClass
-    {
-        if (! $this->isClassesDatabaseSelected()) {
-            return null;
-        }
-
-        // The terminal's curve panes read the class as the shared record holds it, unsaved edits included.
-        $record = $this->getSelectedRecordDatabase()?->getRecordByIndex($this->getSelectedRecordIndex());
-
-        return $record === null ? null : ProjectClass::fromArray((array) $record->toArray(), $this->getSelectedRecordIndex() + 1);
-    }
-
-    /**
      * Creates a new entry in the active Database category.
      *
      * @return void
@@ -13038,7 +12895,7 @@ final class Editor
     private function createDatabaseCueWindow(array $layout): EditorWindow
     {
         return new EditorWindow(
-            title: $this->isActorsDatabaseSelected() ? "Collections" : ($this->isClassesDatabaseSelected() ? "Experience Curve" : ($this->isSkillsDatabaseSelected() ? "Effects" : ($this->isQuestsDatabaseSelected() ? "Objectives" : ($this->isSystemDatabaseSelected() ? "Battle Settings" : ($this->isBattleEntryRulesDatabaseSelected() ? "Execution Order" : "SE and Flash Timing"))))),
+            title: $this->getDatabasePanes()['cue']['title'] ?? 'SE and Flash Timing',
             help: $this->isQuestsDatabaseSelected()
                 ? $this->fitHelp($layout['cueWidth'], 'Shift+O:Add  Shift+X:Del', 'Shift+O/X:Add/Del', '?:Help')
                 : '',
@@ -13063,7 +12920,7 @@ final class Editor
     private function createDatabaseFramesWindow(array $layout): EditorWindow
     {
         return new EditorWindow(
-            title: $this->isActorsDatabaseSelected() ? "Stats" : ($this->isClassesDatabaseSelected() ? "Stat Curves" : ($this->isSkillsDatabaseSelected() ? "Scope" : ($this->isQuestsDatabaseSelected() ? "Rewards" : ($this->isSystemDatabaseSelected() ? "Notes" : "Frames")))),
+            title: $this->getDatabasePanes()['frames']['title'] ?? 'Frames',
             help: $this->isActorsDatabaseSelected() || $this->isClassesDatabaseSelected() || $this->isSkillsDatabaseSelected() || $this->isQuestsDatabaseSelected() || $this->isSystemDatabaseSelected() ? "" : "Up/Down:Frame",
             position: ["x" => $layout["innerX"] + $layout["categoryWidth"] + $layout["listWidth"] + ($layout["gutter"] * 2), "y" => $layout["innerY"] + $layout["topHeight"] + $layout["gutter"]],
             width: $layout["framesWidth"],
@@ -13386,202 +13243,21 @@ final class Editor
      */
     private function getDatabaseCueLines(): array
     {
-        if ($this->isActorsDatabaseSelected()) {
-            return $this->getDatabaseActorCollectionLines();
-        }
-
-        if ($this->isClassesDatabaseSelected()) {
-            return $this->getDatabaseClassExperienceLines();
-        }
-
-        if ($this->isSkillsDatabaseSelected()) {
-            return $this->getDatabaseSkillCueLines();
-        }
-
-        if ($this->isQuestsDatabaseSelected()) {
-            return $this->getDatabaseQuestCueLines();
-        }
-
-        if ($this->isSystemDatabaseSelected()) {
-            return $this->getDatabaseSystemCueLines();
-        }
-
-        if ($this->isBattleEntryRulesDatabaseSelected()) {
-            return $this->getDatabaseBattleEntryCueLines();
-        }
-
-        return $this->getSelectedDatabaseCategoryDefinition()->isImplemented ? ['-'] : ['No timing data yet.'];
+        return $this->getDatabasePanes()['cue']['lines']
+            ?? ($this->getSelectedDatabaseCategoryDefinition()->isImplemented ? ['-'] : ['No timing data yet.']);
     }
 
     /**
-     * The project's battle settings as the system record holds them, with
-     * the defaults the engine reads where it holds none.
+     * The summaries beside the selected record ({@see RecordPanes}), shared
+     * with the GUI.
      *
-     * @return array{engine: string, mode: string, baseFillRate: int, speedFactorPercent: int}
+     * @return array<'cue'|'frames'|'preview', array{title: string, lines: list<string>}>
      */
-    private function getSystemBattleSettings(): array
+    private function getDatabasePanes(): array
     {
-        $battle = $this->workspace?->getSystemField('battle');
-        $battle = is_array($battle) ? $battle : [];
-        $activeTime = is_array($battle['activeTime'] ?? null) ? $battle['activeTime'] : [];
-
-        return [
-            'engine' => strval($battle['engine'] ?? 'traditional'),
-            'mode' => strval($activeTime['mode'] ?? 'wait'),
-            'baseFillRate' => max(1, intval($activeTime['baseFillRate'] ?? 35)),
-            'speedFactorPercent' => max(0, intval($activeTime['speedFactorPercent'] ?? 35)),
-        ];
-    }
-
-    /**
-     * Returns the system battle summary lines.
-     *
-     * @return string[]
-     */
-    private function getDatabaseSystemCueLines(): array
-    {
-        if (! $this->workspace instanceof ProjectWorkspace) {
-            return ['No system settings loaded.'];
-        }
-
-        $system = $this->getSystemBattleSettings();
-
-        return [
-            sprintf('Engine: %s', $system['engine']),
-            sprintf('ATB Mode: %s', $system['mode']),
-            sprintf('Base Fill Rate: %d', $system['baseFillRate']),
-            sprintf('Speed Factor: %d%%', $system['speedFactorPercent']),
-        ];
-    }
-
-    /**
-     * Returns the class experience summary lines.
-     *
-     * @return string[]
-     */
-    private function getDatabaseClassExperienceLines(): array
-    {
-        $class = $this->getSelectedClass();
-
-        if (! $class instanceof ProjectClass) {
-            return ['No class selected.'];
-        }
-
-        $curve = $class->getExperienceCurve();
-
-        return [
-            sprintf('Base: %d', $curve['baseValue']),
-            sprintf('Extra: %d', $curve['extraValue']),
-            sprintf('Accel A: %d', $curve['accelerationA']),
-            sprintf('Accel B: %d', $curve['accelerationB']),
-            '',
-            sprintf('Initial Lv: %d', $class->getInitialLevel()),
-            sprintf('Max Lv: %d', $class->getMaxLevel()),
-            sprintf('Traits: %d', count($class->getTraits())),
-        ];
-    }
-
-    /**
-     * Returns the actor collection summary lines.
-     *
-     * @return string[]
-     */
-    private function getDatabaseActorCollectionLines(): array
-    {
-        $actor = $this->getSelectedActor();
-
-        if (! $actor instanceof ProjectActor) {
-            return ['No actor selected.'];
-        }
-
-        $abilities = $actor->getAbilities();
-        $magic = $actor->getMagic();
-
-        return [
-            'Abilities',
-            sprintf('Learned: %d', count($abilities['learned'] ?? [])),
-            sprintf('Learnables: %d', count($abilities['learnables'] ?? [])),
-            sprintf('Sort: %s', (string) ($abilities['sortOrder'] ?? 'A-Z')),
-            '',
-            'Magic',
-            sprintf('Learned: %d', count($magic['learned'] ?? [])),
-            sprintf('Learnables: %d', count($magic['learnables'] ?? [])),
-            sprintf('Sort: %s', (string) ($magic['sortOrder'] ?? 'A-Z')),
-        ];
-    }
-
-    /**
-     * Returns the quest objective summary lines.
-     *
-     * @return string[]
-     */
-    private function getDatabaseQuestCueLines(): array
-    {
-        $quest = $this->getSelectedQuest();
-
-        if (! $quest instanceof ProjectQuest) {
-            return ['No quest selected.'];
-        }
-
-        return $quest->getObjectiveSummaryLines();
-    }
-
-    /**
-     * Returns the execution-order lines for the battle-entry rules cue.
-     *
-     * The runtime runs matching rules in priority then declaration order;
-     * this presents that deterministic order beside the settings pane, with
-     * the selected rule marked.
-     *
-     * @return string[]
-     */
-    private function getDatabaseBattleEntryCueLines(): array
-    {
-        if (! $this->workspace instanceof ProjectWorkspace) {
-            return ['No project loaded.'];
-        }
-
-        $database = $this->workspace->getRecordDatabase(self::DATABASE_CATEGORY_BATTLE_ENTRY_RULES);
-
-        if (! $database instanceof ProjectRecordDatabase) {
-            return ['No rules loaded.'];
-        }
-
-        $rules = [];
-
-        foreach ($database->getRecords() as $index => $record) {
-            $priority = $record->get('priority');
-            $rules[] = [
-                'index' => $index,
-                'priority' => is_int($priority) ? $priority : 0,
-                'id' => trim(strval($record->get('id') ?? '')) ?: '(no id)',
-            ];
-        }
-
-        if ($rules === []) {
-            return ['No rules yet.', '', 'Battles begin unchanged.'];
-        }
-
-        usort(
-            $rules,
-            static fn(array $left, array $right): int =>
-                [$left['priority'], $left['index']] <=> [$right['priority'], $right['index']],
-        );
-
-        $selectedIndex = $this->getSelectedRecordIndex();
-        $lines = ['Runs in this order:'];
-
-        foreach ($rules as $position => $rule) {
-            $lines[] = sprintf(
-                '%s%2d. %s%s',
-                $rule['index'] === $selectedIndex ? '> ' : '  ',
-                $position + 1,
-                $rule['id'],
-                $rule['priority'] !== 0 ? sprintf('  (p %d)', $rule['priority']) : '',
-            );
-        }
-
-        return $lines;
+        return $this->workspace instanceof ProjectWorkspace
+            ? RecordPanes::describe($this->workspace, $this->getSelectedDatabaseCategoryDefinition()->key, $this->getSelectedDatabaseEntryIndex())
+            : [];
     }
 
     /**
@@ -13591,148 +13267,8 @@ final class Editor
      */
     private function getDatabaseFrameLines(): array
     {
-        if ($this->isActorsDatabaseSelected()) {
-            return $this->getDatabaseActorStatLines();
-        }
-
-        if ($this->isClassesDatabaseSelected()) {
-            return $this->getDatabaseClassCurveLines();
-        }
-
-        if ($this->isSystemDatabaseSelected()) {
-            return $this->getDatabaseSystemFrameLines();
-        }
-        if ($this->isSkillsDatabaseSelected()) {
-            return $this->getDatabaseSkillFrameLines();
-        }
-
-        if ($this->isQuestsDatabaseSelected()) {
-            return $this->getDatabaseQuestFrameLines();
-        }
-
-
-        return $this->getSelectedDatabaseCategoryDefinition()->isImplemented ? ['-'] : ['No entry frames.'];
-    }
-
-    /**
-     * Returns the class curve summary lines.
-     *
-     * @return string[]
-     */
-    private function getDatabaseClassCurveLines(): array
-    {
-        $class = $this->getSelectedClass();
-
-        if (! $class instanceof ProjectClass) {
-            return ['No class selected.'];
-        }
-
-        $labelMap = [
-            'totalHp' => 'HP',
-            'totalMp' => 'MP',
-            'attack' => 'ATK',
-            'defence' => 'DEF',
-            'magicAttack' => 'MAT',
-            'magicDefence' => 'MDF',
-            'speed' => 'SPD',
-            'grace' => 'GRC',
-            'evasion' => 'EVA',
-        ];
-        $lines = [];
-
-        foreach ($class->getParameterCurves() as $key => $curve) {
-            $lines[] = sprintf(
-                '%-3s %d +%d / %d',
-                $labelMap[$key] ?? strtoupper($key),
-                $curve['baseValue'],
-                $curve['extraGrowth'],
-                $curve['flatIncrement'],
-            );
-        }
-
-        return $lines;
-    }
-
-    /**
-     * Returns the quest reward and prerequisite summary lines.
-     *
-     * @return string[]
-     */
-    private function getDatabaseQuestFrameLines(): array
-    {
-        $quest = $this->getSelectedQuest();
-
-        if (! $quest instanceof ProjectQuest) {
-            return ['No quest selected.'];
-        }
-
-        return [
-            sprintf('Gold: %d', $quest->getRewardGold()),
-            sprintf('EXP: %d', $quest->getRewardExperience()),
-            sprintf('Items: %s', $quest->getRewardItemsString() === '' ? '-' : $quest->getRewardItemsString()),
-            '',
-            'Prereqs',
-            ...$quest->getPrerequisiteSummaryLines(),
-        ];
-    }
-
-    /**
-     * Returns system behavior notes.
-     *
-     * @return string[]
-     */
-    private function getDatabaseSystemFrameLines(): array
-    {
-        if (! $this->workspace instanceof ProjectWorkspace) {
-            return ['No system settings loaded.'];
-        }
-
-        $system = $this->getSystemBattleSettings();
-
-        if ($system['engine'] !== 'active_time') {
-            return [
-                'Traditional turn-based battles.',
-                'ATB settings are stored but inactive.',
-                'Switch Battle Engine to active_time',
-                'to enable gauge-driven turns.',
-            ];
-        }
-
-        return [
-            'Active Time Battle is enabled.',
-            'Mode: wait',
-            'This first slice uses wait-mode flow',
-            'during command selection and resolution.',
-        ];
-    }
-
-    /**
-     * Returns the actor stat summary lines.
-     *
-     * @return string[]
-     */
-    private function getDatabaseActorStatLines(): array
-    {
-        $actor = $this->getSelectedActor();
-
-        if (! $actor instanceof ProjectActor) {
-            return ['No actor selected.'];
-        }
-
-        return [
-            sprintf('HP %d/%d', $actor->getStat('currentHp'), $actor->getStat('totalHp')),
-            sprintf('MP %d/%d', $actor->getStat('currentMp'), $actor->getStat('totalMp')),
-            sprintf('AP %d/%d', $actor->getStat('currentAp'), $actor->getStat('totalAp')),
-            sprintf('ATK %d', $actor->getStat('attack')),
-            sprintf('DEF %d', $actor->getStat('defence')),
-            sprintf('MAT %d', $actor->getStat('magicAttack')),
-            sprintf('MDF %d', $actor->getStat('magicDefence')),
-            sprintf('SPD %d', $actor->getStat('speed')),
-            sprintf('GRC %d', $actor->getStat('grace')),
-            sprintf('EVA %d', $actor->getStat('evasion')),
-            sprintf('ACC %d', $actor->getStat('accuracy')),
-            sprintf('CRT %d', $actor->getStat('critical')),
-        ];
+        return $this->getDatabasePanes()['frames']['lines']
+            ?? ($this->getSelectedDatabaseCategoryDefinition()->isImplemented ? ['-'] : ['No entry frames.']);
     }
 
     /**
@@ -13742,163 +13278,7 @@ final class Editor
      */
     private function getDatabasePreviewLines(): array
     {
-        if ($this->isActorsDatabaseSelected()) {
-            $actor = $this->getSelectedActor();
-
-            if (! $actor instanceof ProjectActor) {
-                return ["No actor selected."];
-            }
-
-            $images = $actor->getImages();
-            $battleLines = $actor->getBattleSpriteLines();
-
-            return [
-                sprintf("Actor ID: %s", $actor->id),
-                sprintf("Field sprites: %d", count($images["field"] ?? [])),
-                sprintf("Dialog portraits: %d", count($images["dialog"] ?? [])),
-                "",
-                "Battle Sprite",
-                ...($battleLines !== [] ? $battleLines : ["(no battle sprite configured)"]),
-            ];
-        }
-
-        if ($this->isClassesDatabaseSelected()) {
-            return $this->getDatabaseClassPreviewLines();
-        }
-
-        if ($this->isSkillsDatabaseSelected()) {
-            return $this->getDatabaseSkillPreviewLines();
-        }
-
-        if ($this->isQuestsDatabaseSelected()) {
-            return $this->getDatabaseQuestPreviewLines();
-        }
-
-        if ($this->isSystemDatabaseSelected()) {
-            return $this->getDatabaseSystemPreviewLines();
-        }
-
-        return [];
-    }
-
-    /**
-     * Returns the preview lines for the selected quest.
-     *
-     * @return string[]
-     */
-    private function getDatabaseQuestPreviewLines(): array
-    {
-        $quest = $this->getSelectedQuest();
-
-        if (! $quest instanceof ProjectQuest) {
-            return ['No quest selected.'];
-        }
-
-        return [
-            sprintf('Quest ID: %s', $quest->getId()),
-            sprintf('Name: %s', $quest->getName()),
-            sprintf('Giver: %s', $quest->getGiver() === '' ? '-' : $quest->getGiver()),
-            sprintf('Objectives: %d', count($quest->getObjectives())),
-            sprintf('Prereqs: %d', count($quest->getPrerequisites())),
-            '',
-            'Description',
-            $quest->getDescription() === '' ? '(none)' : $quest->getDescription(),
-            '',
-            'Objectives',
-            ...$quest->getObjectiveSummaryLines(),
-        ];
-    }
-
-    /**
-     * Returns the preview lines for the system database.
-     *
-     * @return string[]
-     */
-    private function getDatabaseSystemPreviewLines(): array
-    {
-        if (! $this->workspace instanceof ProjectWorkspace) {
-            return ['No system settings loaded.'];
-        }
-
-        $system = $this->getSystemBattleSettings();
-        $engine = $system['engine'];
-
-        if ($engine === 'active_time') {
-            return [
-                'Battle Engine',
-                'Active Time Battle',
-                '',
-                sprintf('Mode: %s', $system['mode']),
-                sprintf('Base Fill Rate: %d', $system['baseFillRate']),
-                sprintf('Speed Factor: %d%%', $system['speedFactorPercent']),
-                '',
-                'This engine fills battler gauges',
-                'continuously and resolves actions',
-                'as battlers become ready.',
-            ];
-        }
-
-
-        return [
-            'Battle Engine',
-            'Traditional Turn-Based',
-            '',
-            'Battlers act in a queued round order.',
-            'ATB settings are ignored until you',
-            'switch the project to active_time.',
-        ];
-    }
-
-    /**
-     * Returns the preview lines for the selected class.
-     *
-     * @return string[]
-     */
-    private function getDatabaseClassPreviewLines(): array
-    {
-        $class = $this->getSelectedClass();
-
-        if (! $class instanceof ProjectClass) {
-            return ['No class selected.'];
-        }
-
-        $experienceCurve = $class->getExperienceCurve();
-        $experienceGenerator = new ExperienceCurveGenerator(
-            baseValue: $experienceCurve['baseValue'],
-            extraValue: $experienceCurve['extraValue'],
-            accelerationA: $experienceCurve['accelerationA'],
-            accelerationB: $experienceCurve['accelerationB'],
-        );
-        $hpCurve = $class->getParameterCurve('totalHp');
-        $mpCurve = $class->getParameterCurve('totalMp');
-        $attackCurve = $class->getParameterCurve('attack');
-        $hpGenerator = new ParameterCurveGenerator(1, $hpCurve['baseValue'], $hpCurve['extraGrowth'], $hpCurve['flatIncrement']);
-        $mpGenerator = new ParameterCurveGenerator(1, $mpCurve['baseValue'], $mpCurve['extraGrowth'], $mpCurve['flatIncrement']);
-        $attackGenerator = new ParameterCurveGenerator(1, $attackCurve['baseValue'], $attackCurve['extraGrowth'], $attackCurve['flatIncrement']);
-        $sampleLevels = [1, 10, 25, 50, 99];
-        $lines = [
-            sprintf('Class ID: %04d', $class->id),
-            sprintf('Name: %s', $class->getName()),
-            '',
-            'Curve Samples',
-        ];
-
-        foreach ($sampleLevels as $level) {
-            if ($level > $class->getMaxLevel()) {
-                continue;
-            }
-
-            $lines[] = sprintf(
-                'Lv%02d HP%-4d MP%-3d ATK%-3d EXP%-6d',
-                $level,
-                $hpGenerator->getValue($level),
-                $mpGenerator->getValue($level),
-                $attackGenerator->getValue($level),
-                $experienceGenerator->getValue($level),
-            );
-        }
-
-        return $lines;
+        return $this->getDatabasePanes()['preview']['lines'] ?? [];
     }
 
     /**

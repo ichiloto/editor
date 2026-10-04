@@ -19,6 +19,7 @@ use Ichiloto\Editor\Database\RecordRefusal;
 use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\Database\DatabaseCategory;
 use Ichiloto\Editor\Database\RecordCategory;
+use Ichiloto\Editor\Database\RecordPanes;
 use Ichiloto\Editor\Actors\ActorAuthoring;
 use Ichiloto\Editor\Actors\ActorCategory;
 use Ichiloto\Editor\Database\WorldWriteCodec;
@@ -1255,10 +1256,12 @@ final class EditorSession
      * remove act on it. The heading of a list beside the record's own (a
      * quest's reward items) carries `listHeading`: adding to it adds that
      * list's first entry. `listNoun` names an entry of the list an add with
-     * no row goes to.
+     * no row goes to. At the record itself, `panes` are the summaries the
+     * terminal shows beside it ({@see RecordPanes}): a class's curves, a
+     * skill's effects, a quest's rewards, each a title and its lines.
      *
      * @param array<int|string, mixed> $frame The frame; [] for the record itself.
-     * @return array{category: string, index: int, frame: list<int|string>, frameLabel: ?string, editable: bool, readOnly: ?string, listNoun: ?string, rows: list<array<string, mixed>>}
+     * @return array{category: string, index: int, frame: list<int|string>, frameLabel: ?string, editable: bool, readOnly: ?string, listNoun: ?string, rows: list<array<string, mixed>>, panes: list<array{title: string, lines: list<string>}>}
      * @throws SessionRefusal When the category, record or frame is unknown.
      */
     public function readDatabaseRecord(string $category, int $index, array $frame = []): array
@@ -1286,6 +1289,7 @@ final class EditorSession
                 $field,
                 isset($field['field']) ? 'record' : null,
             ), $fields),
+            'panes' => $frame === [] ? array_values(RecordPanes::describe($this->workspace, $category, $index)) : [],
         ];
     }
 

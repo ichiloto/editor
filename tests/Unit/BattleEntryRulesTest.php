@@ -672,7 +672,7 @@ it('presents the cue in priority then declaration order, deterministically', fun
         $editor = deletionEditor($root);
         openDatabaseCategory($editor, 'battle_entry_rules');
 
-        $cue = callEditorMethod($editor, 'getDatabaseBattleEntryCueLines');
+        $cue = callEditorMethod($editor, 'getDatabaseCueLines');
 
         expect($cue[0])->toBe('Runs in this order:')
             ->and($cue[1])->toContain('1. first-declared-of-ties')

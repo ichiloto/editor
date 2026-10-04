@@ -239,3 +239,14 @@ it('serves animations as a schema category, its roles a list picked a member at 
     expect($session->listDatabaseRecords('animations')['records'])->toBe(['Hit Spark'])
         ->and($roles)->toMatchArray(['kind' => 'reference', 'reference' => 'animation_roles', 'multi' => true, 'value' => 'attack']);
 });
+
+it('reads a record with the summaries the terminal shows beside it', function () {
+    $session = EditorSession::open(makeTemporaryProject());
+    $class = $session->readDatabaseRecord('classes', 0);
+    $state = $session->readDatabaseRecord('states', 0);
+
+    expect(array_column($class['panes'], 'title'))->toBe(['Experience Curve', 'Stat Curves', 'Preview'])
+        ->and($class['panes'][2]['lines'])->toContain('Curve Samples')
+        ->and($state['panes'])->toBe([])
+        ->and($session->readDatabaseRecord('common_events', 0, [3, 'then'])['panes'])->toBe([]);
+});
