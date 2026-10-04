@@ -2709,6 +2709,10 @@ final class ProjectRecordDatabase
         ];
 
         if (! $isEditable || $field->isReadOnly) {
+            // Said outright, so the pane never opens an editor on a value the
+            // record would refuse to take.
+            $descriptor['editable'] = false;
+
             return $descriptor;
         }
 

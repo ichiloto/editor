@@ -1004,9 +1004,15 @@ final class RecordSchemaCatalog
     /**
      * The shared read-only fields every inventory entry displays.
      *
+     * Equipment is shown everywhere by the one icon of its type (one for all
+     * swords, one for all daggers), from the theme; an equipment entry's own
+     * `icon` is legacy compatibility data, shown and kept exactly as written
+     * but no longer a presentation choice to edit. A consumable keeps its own.
+     *
+     * @param bool $isEquipment Whether the entry is equipment.
      * @return RecordField[]
      */
-    private static function inventoryFields(): array
+    private static function inventoryFields(bool $isEquipment = false): array
     {
         return [
             // Identity. The id is what a save, an alias and every reference
@@ -1015,7 +1021,9 @@ final class RecordSchemaCatalog
             new RecordField('id', 'Id', isReadOnly: true),
             new RecordField('name', 'Name'),
             new RecordField('description', 'Description'),
-            new RecordField('icon', 'Icon'),
+            $isEquipment
+                ? new RecordField('icon', 'Legacy Icon (type icon shown)', isReadOnly: true)
+                : new RecordField('icon', 'Icon'),
             // Compatibility references an older save may still name.
             new RecordField('aliases', 'Aliases', codec: RecordFieldCodec::CSV_LIST, removeWhenEmpty: true),
             // Policy
@@ -1097,7 +1105,7 @@ final class RecordSchemaCatalog
     private static function equipmentFields(array $typeAndStats): array
     {
         return [
-            ...self::inventoryFields(),
+            ...self::inventoryFields(isEquipment: true),
             // Slot and kind
             new RecordField(
                 'semanticSlot',
