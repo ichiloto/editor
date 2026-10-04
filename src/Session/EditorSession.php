@@ -136,6 +136,70 @@ final class EditorSession
     }
 
     /**
+     * Finds what the project names a text by: maps by id or name, events by
+     * marker, type or any value they hold (a chest's loot, a destination, a
+     * script), and NPCs by id or name, unsaved edits included. Case is
+     * ignored; a query of one character is an event marker, matched exactly,
+     * rather than every text that contains it.
+     *
+     * @return list<array{kind: 'map'|'event'|'npc', map: string, label: string, detail: string, marker?: string, index?: int, x?: int, y?: int}>
+     */
+    public function searchProject(string $query, int $limit = 100): array
+    {
+        $query = trim($query);
+        if ($query === '') {
+            return [];
+        }
+        $contains = static fn(string $text): bool => mb_stripos($text, $query) !== false;
+        $marker = mb_strlen($query) === 1;
+        $results = [];
+
+        foreach ($this->getMapsById() as $mapId => $map) {
+            $mapId = (string) $mapId;
+            $name = $map->getDisplayName();
+            if (! $marker && ($contains($mapId) || $contains($name))) {
+                $results[] = ['kind' => 'map', 'map' => $mapId, 'label' => $name, 'detail' => $mapId];
+            }
+
+            foreach (array_unique([...$map->getEventMarkers(), ...$map->getPlacedEventMarkers()]) as $eventMarker) {
+                $definition = $map->getEventDefinition($eventMarker);
+                $type = EventTypeCatalog::describeClass(is_string($definition['class'] ?? null) ? $definition['class'] : null);
+                $values = [];
+                // What the event holds, not the class that plays it.
+                $data = is_array($definition['data'] ?? null) ? $definition['data'] : [];
+                array_walk_recursive($data, static function (mixed $value) use (&$values): void {
+                    if (is_scalar($value)) {
+                        $values[] = (string) $value;
+                    }
+                });
+                $found = $marker
+                    ? $eventMarker === $query
+                    : $contains($type) || array_find($values, $contains) !== null;
+                if (! $found) {
+                    continue;
+                }
+                $cell = $map->getEventArea($eventMarker)?->cells[0] ?? null;
+                $results[] = ['kind' => 'event', 'map' => $mapId, 'label' => sprintf('%s %s', $eventMarker, $type),
+                    'detail' => sprintf('%s · %s', $name, $marker ? 'marker' : (array_find($values, $contains) ?? $type)),
+                    'marker' => $eventMarker, ...($cell === null ? [] : ['x' => (int) $cell[0], 'y' => (int) $cell[1]])];
+            }
+
+            foreach ($map->getNpcs()->all() as $index => $npc) {
+                if (! $marker && $contains($npc->getId()) || $contains($npc->getName())) {
+                    $results[] = ['kind' => 'npc', 'map' => $mapId, 'label' => $npc->getName(), 'detail' => sprintf('%s · %s', $name, $npc->getId()),
+                        'index' => (int) $index, 'x' => $npc->getX(), 'y' => $npc->getY()];
+                }
+            }
+
+            if (count($results) >= $limit) {
+                return array_slice($results, 0, $limit);
+            }
+        }
+
+        return $results;
+    }
+
+    /**
      * Every map, by stable id, with what a list shows about it.
      *
      * @return list<array{id: string, name: string, dirty: bool, readOnly: ?string, revision: int}>

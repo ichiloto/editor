@@ -185,7 +185,7 @@ it('finds a console installed globally, on PATH', function (): void {
 });
 
 it('discovers consoles from installed package locations', function (): void {
-    $candidates = new ReflectionMethod(PlaytestLauncher::class, 'candidates')
+    $candidates = new ReflectionMethod(\Ichiloto\Editor\Console\ConsoleBinary::class, 'candidates')
         ->invoke(null, null, '/srv/my-game');
 
     expect($candidates)->toContain('/srv/my-game/vendor/bin/ichiloto')

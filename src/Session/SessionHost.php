@@ -4,7 +4,10 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Session;
 
+use Ichiloto\Editor\Console\ConsoleBinary;
+use Ichiloto\Editor\Console\ProjectCreator;
 use JsonException;
+use RuntimeException;
 use Throwable;
 
 /**
@@ -94,9 +97,25 @@ final class SessionHost
             return ['protocol' => self::PROTOCOL, 'project' => $this->session->describeProject()];
         }
 
+        // Creating a project needs none open: an editor with no project offers it.
+        if ($method === 'project.create') {
+            try {
+                return ['root' => new ProjectCreator(ConsoleBinary::discover())->createProject(
+                    self::requireString($params, 'title'),
+                    self::requireString($params, 'directory'),
+                    self::readOptionalString($params, 'hero'),
+                    self::readOptionalString($params, 'battleEngine'),
+                    ($params['install'] ?? false) === true,
+                )];
+            } catch (RuntimeException $refused) {
+                throw new SessionRefusal($refused->getMessage(), previous: $refused);
+            }
+        }
+
         $session = $this->session ?? throw new InvalidRequest('Say hello with a project first.');
 
         return match ($method) {
+            'project.search' => $session->searchProject(self::requireString($params, 'query')),
             'maps.list' => $session->describeMaps(),
             'maps.kinds' => $session->listMapKinds(),
             'map.create' => $session->createMap(
