@@ -107,6 +107,22 @@ final class ProjectActorDatabase
     }
 
     /**
+     * Returns a key that changes whenever an actor is added, removed or
+     * edited, so a caller can tell whether a step touched the actors
+     * without reading them.
+     *
+     * @return string The key, exact rather than summed: a removal and an
+     *   edit never cancel out to the same key.
+     */
+    public function getContentVersion(): string
+    {
+        return implode(',', array_map(
+            static fn(ProjectActor $actor): string => spl_object_id($actor) . ':' . $actor->getContentVersion(),
+            $this->getActors(),
+        )) . '|' . implode(',', $this->pendingDeletions);
+    }
+
+    /**
      * Returns the actor at the requested index.
      *
      * @param int $index The actor index.

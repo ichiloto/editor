@@ -42,7 +42,7 @@ function actorEditorOn(string $root): Editor
  */
 function actorRow(Editor $editor, string $fieldId): array
 {
-    foreach (callEditorMethod($editor, 'getDatabaseActorSettingsFields') as $field) {
+    foreach (callEditorMethod($editor, 'getDatabaseSettingsFields') as $field) {
         if (($field['field'] ?? null) === $fieldId) {
             return $field;
         }
@@ -266,7 +266,7 @@ it('shows the layers in the Inspector and edits the variant in force', function 
     $database->save();
 
     $editor = actorEditorOn($root);
-    $labels = array_column(callEditorMethod($editor, 'getDatabaseActorSettingsFields'), 'label');
+    $labels = array_column(callEditorMethod($editor, 'getDatabaseSettingsFields'), 'label');
 
     expect($labels)->toContain('Identity')
         ->toContain('Nature')
@@ -276,7 +276,7 @@ it('shows the layers in the Inspector and edits the variant in force', function 
     // The rows edit the default variant until another is chosen.
     expect(actorRow($editor, 'naturalVariants.awakened.attack')['value'])->toBe('12');
 
-    callEditorMethod($editor, 'applyDatabaseFieldValue', '__actor_variant', 'dormant');
+    callEditorMethod($editor, 'applyDatabaseFieldValueRecorded', actorRow($editor, '__actor_variant'), 'dormant');
 
     expect(actorRow($editor, 'naturalVariants.dormant.attack')['value'])->toBe('1');
 
@@ -287,6 +287,6 @@ it('shows the layers in the Inspector and edits the variant in force', function 
     expect($workspace->actorDatabase->isDirty())->toBeFalse();
 
     // Editing through the pane writes into that variant.
-    callEditorMethod($editor, 'applyDatabaseFieldValue', 'naturalVariants.dormant.attack', '7');
+    callEditorMethod($editor, 'applyDatabaseFieldValueRecorded', actorRow($editor, 'naturalVariants.dormant.attack'), '7');
     expect($workspace->actorDatabase->getActors()[0]->getNaturalVariants()['dormant'])->toBe(['attack' => 7]);
 });

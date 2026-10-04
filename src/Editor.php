@@ -48,6 +48,7 @@ use Ichiloto\Editor\Database\BattleEntryPredicateEditor;
 use Ichiloto\Editor\Database\ElementAffinityCodec;
 use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\Database\SummonAssignmentDiagnostics;
+use Ichiloto\Editor\Actors\ActorAuthoring;
 use Ichiloto\Editor\Database\RecordSubList;
 use Ichiloto\Editor\Database\ReferencePicker;
 use Ichiloto\Editor\Debug\Debug;
@@ -521,53 +522,12 @@ final class Editor
      */
     private const string NPC_SELECT_FIELD = '__npc_select';
 
-    /**
-     * The row that chooses which natural variant the actor rows edit. It is
-     * a view of the pane, not a value the project stores.
-     */
-    private const string ACTOR_VARIANT_FIELD = '__actor_variant';
-
-    /**
-     * @var array<string, string> Which variant each actor's rows are editing.
-     */
-    private array $actorVariantSelections = [];
-
-    /**
-     * The row that chooses which permanent growth the preview assumes the
-     * party has earned. Earned growth lives in a save, not in a project, so
-     * this is a fixture for looking at and nothing the editor writes.
-     */
-    private const string ACTOR_GROWTH_FIELD = '__actor_growth';
+    /** How actors are authored: their rows, their edits, and what their panes show. */
+    private readonly ActorAuthoring $actorAuthoring;
     /**
      * The picker row that clears a map's background music.
      */
 
-    /**
-     * The row that chooses which kind of slot the Optimize preview fills.
-     */
-    private const string ACTOR_OPTIMIZE_SLOT_FIELD = '__actor_optimize_slot';
-
-    /**
-     * What the growth row reads when the preview assumes nothing was earned.
-     */
-    private const string NO_ASSUMED_GROWTH = '(none earned yet)';
-    /** What the Attack Skill row reads when the actor uses the Engine's own attack. */
-    private const string BUILT_IN_ATTACK = '(Built-in attack)';
-
-    /**
-     * What the growth row reads when the preview assumes all of it was.
-     */
-    private const string ALL_ASSUMED_GROWTH = '(everything defined)';
-
-    /**
-     * @var array<string, string> Which growth each actor's preview assumes.
-     */
-    private array $actorGrowthSelections = [];
-
-    /**
-     * @var array<string, string> Which slot each actor's Optimize preview fills.
-     */
-    private array $actorOptimizeSlots = [];
 
     /**
      * The Inspector row that assigns a stable id to an NPC authored without
@@ -756,6 +716,7 @@ final class Editor
 
     public function __construct(private readonly string $projectRoot)
     {
+        $this->actorAuthoring = new ActorAuthoring();
         $this->toasts = new ToastQueue();
         $this->commandPalette = new CommandPalette();
         $this->clipboard = new Clipboard();
@@ -6028,11 +5989,7 @@ final class Editor
         $index = $pending['index'];
         $label = $pending['label'];
         $command = match ($pending['category']) {
-            self::DATABASE_CATEGORY_ACTORS => $this->buildDatabaseDeletionCommand(
-                sprintf('Delete actor %s', $label),
-                fn(): ?object => $workspace->actorDatabase->removeActor($index),
-                static fn(object $entry) => $workspace->actorDatabase->insertActor($index, $entry),
-            ),
+            self::DATABASE_CATEGORY_ACTORS => $this->actorAuthoring->deleteActor($workspace, $index)->command,
             self::DATABASE_CATEGORY_SKILLS => $this->buildDatabaseDeletionCommand(
                 sprintf('Delete skill %s', $label),
                 fn(): ?object => $workspace->skillDatabase->removeSkill($index),
@@ -9246,7 +9203,11 @@ final class Editor
             return;
         }
 
-        $this->databaseSelectedActorIndex = $this->workspace->actorDatabase->addActor();
+        $change = $this->actorAuthoring->createActor($this->workspace);
+        if ($change->command !== null) {
+            $this->recordCommand($change->command);
+        }
+        $this->databaseSelectedActorIndex = (int) $change->index;
         $this->databaseSelectedSettingIndex = 0;
         $this->databaseFocus = self::DATABASE_FOCUS_SETTINGS;
         $this->statusMessage = 'Created a new actor.';
@@ -9333,7 +9294,11 @@ final class Editor
         }
 
         if ($this->isActorsDatabaseSelected()) {
-            return $this->getDatabaseActorSettingsFields();
+            $actor = $this->getSelectedActor();
+
+            return $actor instanceof ProjectActor && $this->workspace instanceof ProjectWorkspace
+                ? $this->actorAuthoring->describeFields($this->workspace, $actor)
+                : [];
         }
 
         if ($this->isSkillsDatabaseSelected()) {
@@ -9370,455 +9335,6 @@ final class Editor
         return [];
     }
 
-
-    /**
-     * Returns the editable settings fields for the selected actor.
-     *
-     * @return array<int, array<string, mixed>>
-     */
-    /**
-     * The rows that say which actor this is to a save.
-     *
-     * @param ProjectActor $actor The actor.
-     * @return array<int, array<string, mixed>> The rows.
-     */
-    private function getActorIdentityFields(ProjectActor $actor): array
-    {
-        $missingId = ! array_key_exists('id', $actor->getData());
-        return [
-            ['label' => 'Identity', 'value' => '', 'editable' => false, 'field' => ''],
-            [
-                'label' => 'Definition Id',
-                'value' => $actor->hasDefinitionId() ? $actor->getDefinitionId() : '',
-                'editable' => $missingId,
-                'actorIdentityMigration' => $missingId ? $actor : null,
-                'field' => 'id',
-                'displayDefault' => $missingId
-                    ? sprintf('Enter to freeze the current name (%s) as its permanent id', $actor->getName())
-                    : 'Malformed explicit id: correct the authored actor file; automatic replacement is not allowed.',
-            ],
-        ];
-    }
-
-    /**
-     * The rows for an actor's own nature: the adjustments it makes to its
-     * class baseline, and the named variants of that nature.
-     *
-     * While an actor declares variants the runtime reads the selected
-     * variant's adjustments and ignores the fixed ones, so the rows edit
-     * whichever set is actually in force.
-     *
-     * @param ProjectActor $actor The actor.
-     * @return array<int, array<string, mixed>> The rows.
-     */
-    private function actorNatureFields(ProjectActor $actor): array
-    {
-        $variants = $actor->getNaturalVariants();
-        $selected = $this->selectedActorVariantId($actor);
-        $rows = [['label' => 'Nature', 'value' => '', 'editable' => false, 'field' => '']];
-
-        if ($variants !== []) {
-            $rows[] = [
-                'label' => 'Default Variant',
-                'value' => (string) $actor->getDefaultNaturalVariantId(),
-                'options' => array_keys($variants),
-                'field' => 'defaultNaturalVariantId',
-            ];
-            $rows[] = [
-                'label' => 'Editing Variant',
-                'value' => $selected ?? '',
-                'options' => array_keys($variants),
-                'field' => self::ACTOR_VARIANT_FIELD,
-            ];
-        }
-
-        // Both layers are real: the runtime adds the selected variant on top
-        // of the fixed adjustments rather than replacing them, so both are
-        // shown and both are editable.
-        $inForce = $actor->getNaturalAdjustmentsFor($selected);
-        $fixed = $actor->getActorNaturalAdjustments();
-        $rows = [...$rows, ...$this->actorAdjustmentRows(
-            $variants === [] ? 'Adjustments' : 'Fixed, always applied',
-            'actorNaturalAdjustments',
-            $fixed,
-        )];
-
-        if ($variants !== [] && $selected !== null) {
-            $rows = [...$rows, ...$this->actorAdjustmentRows(
-                sprintf('Variant %s, added on top', $selected),
-                sprintf('naturalVariants.%s', $selected),
-                $variants[$selected] ?? [],
-            )];
-            $rows[] = [
-                'label' => '  In force',
-                'value' => $this->describeAdjustments($inForce),
-                'editable' => false,
-                'field' => '',
-            ];
-        }
-
-        return $rows;
-    }
-
-    /**
-     * The rows for one layer of an actor's nature.
-     *
-     * @param string $heading What the layer is.
-     * @param string $prefix The payload path the rows write to.
-     * @param array<string, int> $adjustments The layer's adjustments.
-     * @return array<int, array<string, mixed>> The rows.
-     */
-    private function actorAdjustmentRows(string $heading, string $prefix, array $adjustments): array
-    {
-        $rows = [['label' => '  ' . $heading, 'value' => '', 'editable' => false, 'field' => '']];
-
-        foreach (ActorStatPreview::statKeys() as $key) {
-            $amount = $adjustments[$key] ?? 0;
-            $rows[] = [
-                'label' => '    ' . ucfirst(strtolower((string) preg_replace('/(?<!^)[A-Z]/', ' $0', $key))),
-                'value' => (string) $amount,
-                'control' => new InputControl(InputControlType::INTEGER, (string) $amount),
-                'field' => $prefix . '.' . $key,
-            ];
-        }
-
-        return $rows;
-    }
-
-    /**
-     * Describes what an actor's nature comes to once composed.
-     *
-     * @param array<string, int> $adjustments The composed adjustments.
-     * @return string The description.
-     */
-    private function describeAdjustments(array $adjustments): string
-    {
-        $parts = [];
-
-        foreach ($adjustments as $key => $amount) {
-            if ($amount !== 0) {
-                $parts[] = sprintf('%+d %s', $amount, $key);
-            }
-        }
-
-        return $parts === [] ? 'nothing adjusted' : implode(', ', $parts);
-    }
-
-    /**
-     * The read-only rows showing what each stat actually comes to.
-     *
-     * @param ProjectActor $actor The actor.
-     * @return array<int, array<string, mixed>> The rows.
-     */
-    private function actorStatPreviewFields(ProjectActor $actor): array
-    {
-        if (! ActorStatPreview::isAvailable()) {
-            return [];
-        }
-
-        $catalog = PermanentGrowthCatalog::fromProject($this->workspace->projectRoot);
-        $assumed = $this->assumedGrowthFor($actor);
-        $rows = [
-            ['label' => 'Resolved Stats', 'value' => '', 'editable' => false, 'field' => ''],
-            [
-                // Earned growth is save state. What a preview can do is
-                // assume some of it, say that it is assuming, and write
-                // nothing.
-                'label' => '  Assumed Growth',
-                'value' => $assumed,
-                'options' => [
-                    self::NO_ASSUMED_GROWTH,
-                    self::ALL_ASSUMED_GROWTH,
-                    ...$catalog->ids(),
-                ],
-                'field' => self::ACTOR_GROWTH_FIELD,
-                'displayDefault' => 'assumed for this preview only; the party earns growth in play',
-            ],
-        ];
-
-        $permanent = match ($assumed) {
-            self::NO_ASSUMED_GROWTH => [],
-            self::ALL_ASSUMED_GROWTH => $catalog->totalsFor(),
-            default => $catalog->totalsFor([$assumed]),
-        };
-
-        foreach (ActorStatPreview::resolve($actor, $this->selectedActorVariantId($actor), $permanent) as $row) {
-            $rows[] = [
-                'label' => '  ' . $row['stat'],
-                'value' => ActorStatPreview::describeRow($row),
-                'editable' => false,
-                'field' => '',
-            ];
-        }
-
-        return [...$rows, ...$this->actorOptimizeFields($actor)];
-    }
-
-    /**
-     * Returns which permanent growth this actor's preview assumes.
-     *
-     * @param ProjectActor $actor The actor.
-     * @return string The selection.
-     */
-    private function assumedGrowthFor(ProjectActor $actor): string
-    {
-        return $this->actorGrowthSelections[$actor->getDefinitionId()] ?? self::NO_ASSUMED_GROWTH;
-    }
-
-    /**
-     * Returns which slot this actor's Optimize preview fills.
-     *
-     * @param ProjectActor $actor The actor.
-     * @return string The semantic slot.
-     */
-    private function optimizeSlotFor(ProjectActor $actor): string
-    {
-        $slots = EquipmentOptimizationPolicy::slotKeys();
-        $selected = $this->actorOptimizeSlots[$actor->getDefinitionId()] ?? '';
-
-        return in_array($selected, $slots, true) ? $selected : ($slots[0] ?? 'weapon');
-    }
-
-    /**
-     * The read-only rows showing what Optimize would choose, and why.
-     *
-     * @param ProjectActor $actor The actor.
-     * @return array<int, array<string, mixed>> The rows.
-     */
-    private function actorOptimizeFields(ProjectActor $actor): array
-    {
-        if (! $this->workspace instanceof ProjectWorkspace || ! EquipmentOptimizationPolicy::isAvailable()) {
-            return [];
-        }
-
-        $root = $this->workspace->projectRoot;
-        $slot = $this->optimizeSlotFor($actor);
-        $rows = [
-            ['label' => 'Optimize Preview', 'value' => '', 'editable' => false, 'field' => ''],
-            [
-                // Which policy is scoring is the first thing to know: a
-                // project that has declared none is not being scored by its
-                // own rules at all.
-                'label' => '  Policy',
-                'value' => EquipmentOptimizationPolicy::describeSource($root),
-                'editable' => false,
-                'field' => '',
-            ],
-            [
-                'label' => '  Slot',
-                'value' => $slot,
-                'options' => EquipmentOptimizationPolicy::slotKeys(),
-                'field' => self::ACTOR_OPTIMIZE_SLOT_FIELD,
-            ],
-        ];
-        $ranked = EquipmentOptimizationPolicy::rank($this->workspace, $actor, $slot);
-
-        if ($ranked === []) {
-            $rows[] = [
-                'label' => '  (nothing)',
-                'value' => 'no equipment this project has fits that slot',
-                'editable' => false,
-                'field' => '',
-            ];
-
-            return $rows;
-        }
-
-        foreach ($ranked as $position => $candidate) {
-            $rows[] = [
-                'label' => sprintf('  %d. %s', $position + 1, $candidate['name']),
-                'value' => sprintf(
-                    '%d · %s',
-                    $candidate['value'],
-                    EquipmentOptimizationPolicy::describeRow($candidate),
-                ),
-                'editable' => false,
-                'field' => '',
-            ];
-        }
-
-        return $rows;
-    }
-
-    /**
-     * Returns which natural variant the actor rows are editing.
-     *
-     * @param ProjectActor $actor The actor.
-     * @return string|null The variant id, or null when the actor has none.
-     */
-    private function selectedActorVariantId(ProjectActor $actor): ?string
-    {
-        $variants = $actor->getNaturalVariants();
-
-        if ($variants === []) {
-            return null;
-        }
-
-        $selected = $this->actorVariantSelections[$actor->getDefinitionId()] ?? null;
-
-        return $selected !== null && isset($variants[$selected])
-            ? $selected
-            : ($actor->getDefaultNaturalVariantId() ?? array_key_first($variants));
-    }
-
-    private function getDatabaseActorSettingsFields(): array
-    {
-        $actor = $this->getSelectedActor();
-
-        if (! $actor instanceof ProjectActor) {
-            return [];
-        }
-
-        return [
-            ...$this->getActorIdentityFields($actor),
-            [
-                'label' => 'Name',
-                'value' => $actor->getName(),
-                'control' => new InputControl(InputControlType::TEXT, $actor->getName()),
-                'editable' => $actor->hasDefinitionId(),
-                'field' => 'name',
-            ],
-            [
-                'label' => 'Description',
-                'value' => $actor->getDescription(),
-                'control' => new InputControl(InputControlType::TEXT, $actor->getDescription()),
-                'field' => 'description',
-            ],
-            [
-                // The character-class reference: a name from
-                // assets/Data/classes.php, written to the actor's
-                // data['class'] key (the engine's ClassStore hydrates it
-                // into a CharacterRole). ←/→ cycles the picker; Ctrl+G jumps
-                // to the class entry.
-                'label' => 'Class',
-                'value' => $actor->getClassName() === '' ? ProjectActor::CLASS_NONE : $actor->getClassName(),
-                'options' => $this->getActorClassOptions(),
-                'field' => 'class',
-            ],
-            [
-                // The character's own weapon, part of who they are and with
-                // no stats: what their attack looks like when no weapon is
-                // equipped. An equipped weapon's type takes its place.
-                'label' => 'Attack Style',
-                'value' => $actor->getAttackStyle() === '' ? 'Unarmed' : $actor->getAttackStyle(),
-                'options' => [ProjectActor::ATTACK_STYLE_UNARMED, ...array_map(
-                    static fn(WeaponType $type): string => $type->value, WeaponType::cases())],
-                'field' => 'attackStyle',
-                'hint' => 'own weapon when none is equipped; no stats',
-            ],
-            [
-                // The basic skill the Attack command uses; a battle-usable
-                // basic skill from the catalogue, or the Engine's own attack.
-                'label' => 'Attack Skill',
-                'value' => $actor->getAttackSkill() === '' ? self::BUILT_IN_ATTACK : $actor->getAttackSkill(),
-                'reference' => 'attack_skills',
-                'allowsNone' => true,
-                'noneLabel' => self::BUILT_IN_ATTACK,
-                'field' => 'attackSkill',
-            ],
-            ...$this->actorSummonFields($actor),
-            [
-                'label' => 'Level',
-                'value' => (string) $actor->getLevel(),
-                'control' => new InputControl(InputControlType::INTEGER, (string) $actor->getLevel()),
-                'field' => 'level',
-            ],
-            [
-                'label' => 'Current Exp',
-                'value' => (string) $actor->getCurrentExp(),
-                'control' => new InputControl(InputControlType::INTEGER, (string) $actor->getCurrentExp()),
-                'field' => 'currentExp',
-            ],
-            [
-                'label' => 'Current HP',
-                'value' => (string) $actor->getStat('currentHp'),
-                'control' => new InputControl(InputControlType::INTEGER, (string) $actor->getStat('currentHp')),
-                'field' => 'currentHp',
-            ],
-            [
-                'label' => 'Current MP',
-                'value' => (string) $actor->getStat('currentMp'),
-                'control' => new InputControl(InputControlType::INTEGER, (string) $actor->getStat('currentMp')),
-                'field' => 'currentMp',
-            ],
-            [
-                'label' => 'Current AP',
-                'value' => (string) $actor->getStat('currentAp'),
-                'control' => new InputControl(InputControlType::INTEGER, (string) $actor->getStat('currentAp')),
-                'field' => 'currentAp',
-            ],
-            ...$this->actorNatureFields($actor),
-            ...$this->actorStatPreviewFields($actor),
-        ];
-    }
-
-    /**
-     * Returns the actor's starting summon assignments: a multi-pick over the
-     * project's summons, and one verdict row per assignment judged by the
-     * same rules the validator applies (existence, wielder eligibility,
-     * story locks, duplicates, exclusive tenancy across the cast).
-     *
-     * @return array<int, array<string, mixed>>
-     */
-    private function actorSummonFields(ProjectActor $actor): array
-    {
-        $assignments = $actor->getSummons();
-        $list = is_array($assignments) ? array_values(array_filter(array_map(static fn(mixed $id): string => is_string($id) ? trim($id) : '', $assignments), static fn(string $id): bool => $id !== '')) : [];
-        $rows = [
-            [
-                'label' => 'Summons',
-                'value' => implode(', ', $list),
-                'reference' => 'summons',
-                'multi' => true,
-                'noneLabel' => '(None)',
-                'field' => 'summons',
-            ],
-        ];
-        $diagnostics = SummonAssignmentDiagnostics::fromLibrary($this->workspace?->cutscenes);
-        $holders = [];
-
-        foreach ($this->workspace?->actorDatabase->getActors() ?? [] as $other) {
-            if ($other === $actor) {
-                continue;
-            }
-
-            foreach ((array) $other->getSummons() as $id) {
-                if (is_string($id) && trim($id) !== '') {
-                    $holders[strtolower(trim($id))][] = $other->getName();
-                }
-            }
-        }
-
-        foreach ($diagnostics->forActor($actor->getName(), $actor->getClassName(), $assignments) as $row) {
-            $verdict = SummonAssignmentDiagnostics::describe($row);
-            $id = strtolower($row['id']);
-
-            if ($row['problems'] === [] && $diagnostics->isExclusive($id) && isset($holders[$id])) {
-                $verdict = sprintf('✗ %s: exclusive, also held by %s.', $row['id'], implode(', ', $holders[$id]));
-            }
-
-            $rows[] = ['label' => '  ' . $verdict, 'value' => '', 'editable' => false, 'field' => ''];
-        }
-
-        return $rows;
-    }
-
-    /**
-     * Returns the actor class picker options.
-     *
-     * The list is the project's own class names from
-     * `assets/Data/classes.php`, prefixed with the "none" sentinel that
-     * clears the reference.
-     *
-     * @return string[]
-     */
-    private function getActorClassOptions(): array
-    {
-        return [
-            ProjectActor::CLASS_NONE,
-            ...$this->workspace?->getRecordDatabase(self::DATABASE_CATEGORY_CLASSES)?->getEntryLabels() ?? [],
-        ];
-    }
 
     /**
      * Returns the editable settings fields for the selected skill.
@@ -9907,8 +9423,9 @@ final class Editor
             return;
         }
 
-        if (($field['actorIdentityMigration'] ?? null) instanceof ProjectActor) {
-            $this->openActorIdentityMigration($field['actorIdentityMigration']);
+        if ($this->isActorsDatabaseSelected() && is_string($field['action'] ?? null) && ($actor = $this->getSelectedActor()) instanceof ProjectActor) {
+            // An actor without an id: its row's edit is the one-time freeze.
+            $this->openActorIdentityMigration($actor);
             return;
         }
 
@@ -10002,14 +9519,14 @@ final class Editor
             return;
         }
         try {
-            $before = $actor->getData();
-            ActorIdentityMigration::freezeCurrentName($this->workspace->actorDatabase, $actor);
-            $after = $actor->getData();
-            $this->recordCommand(new GenericCommand(
-                'Freeze actor identity',
-                static fn() => $actor->restoreData($after),
-                static fn() => $actor->restoreData($before),
-            ));
+            $index = array_search($actor, $this->workspace->actorDatabase->getActors(), true);
+            if (! is_int($index)) {
+                throw new RecordRefusal('The actor is no longer in the project database.');
+            }
+            $change = $this->actorAuthoring->freezeIdentity($this->workspace, $index);
+            if ($change->command !== null) {
+                $this->recordCommand($change->command);
+            }
             $this->closeEventOptionDialog('Actor identity frozen. Save the project to write it.');
         } catch (Throwable $failure) {
             $this->closeEventOptionDialog('');
@@ -11276,6 +10793,26 @@ final class Editor
             return;
         }
 
+        if ($this->isActorsDatabaseSelected()) {
+            if (! $this->workspace instanceof ProjectWorkspace) {
+                return;
+            }
+
+            try {
+                $change = $this->actorAuthoring->applyField($this->workspace, $this->databaseSelectedActorIndex, $fieldId, $rawValue, (string) ($field['label'] ?? 'Actor field'));
+            } catch (RecordRefusal $refusal) {
+                $this->setStatus($refusal->getMessage(), StatusLevel::ERROR);
+
+                return;
+            }
+
+            if ($change->command !== null) {
+                $this->recordCommand($change->command);
+            }
+
+            return;
+        }
+
         $control = $this->getDatabaseFieldControl($field);
         // Option values keep their authored case (the actor class picker
         // writes `Vanguard`); matching them is case-insensitive instead.
@@ -11292,29 +10829,13 @@ final class Editor
             'records' => $this->databaseSelectedRecordIndexes,
         ];
 
-        $actor = $this->isActorsDatabaseSelected() ? $this->getSelectedActor() : null;
-        $actorBefore = $actor?->getData();
         // A schema record's edit is one step only when it changed the record:
         // a value the record refused, or the value it already held, leaves none.
-        $schemaRecord = $actor === null
-            ? $this->getSelectedRecordDatabase()?->getRecordByIndex($this->getSelectedRecordIndex())
-            : null;
+        $schemaRecord = $this->getSelectedRecordDatabase()?->getRecordByIndex($this->getSelectedRecordIndex());
         $schemaBefore = $schemaRecord?->toArray();
         $this->applyDatabaseFieldValue($fieldId, $rawValue);
 
         if ($schemaRecord !== null && $schemaRecord->toArray() === $schemaBefore) {
-            return;
-        }
-
-        if ($actor !== null && $actorBefore !== null) {
-            $actorAfter = $actor->getData();
-            if ($actorBefore !== $actorAfter) {
-                $this->recordCommand(new GenericCommand(
-                    sprintf('%s edit', $field['label'] ?? 'Actor field'),
-                    static fn() => $actor->restoreData($actorAfter),
-                    static fn() => $actor->restoreData($actorBefore),
-                ));
-            }
             return;
         }
 
@@ -11395,30 +10916,6 @@ final class Editor
     }
 
     /**
-     * Returns an edited actor value as the field's own type.
-     *
-     * Most actor numbers are quantities that cannot go below zero, but an
-     * actor's nature is an adjustment: being slower than the class baseline
-     * is a legitimate thing to author, so those keep their sign.
-     *
-     * @param string $field The field identifier.
-     * @param string $rawValue The raw edited value.
-     * @return string|int The coerced value.
-     */
-    private function coerceActorFieldValue(string $field, string $rawValue): string|int
-    {
-        if (in_array($field, ['name', 'description', 'class', 'attackStyle', 'attackSkill', 'id', 'defaultNaturalVariantId', 'summons'], true)) {
-            return trim($rawValue);
-        }
-
-        if (str_starts_with($field, 'actorNaturalAdjustments.') || str_starts_with($field, 'naturalVariants.')) {
-            return intval(trim($rawValue));
-        }
-
-        return max(0, intval($rawValue));
-    }
-
-    /**
      * Applies one database settings value.
      *
      * @param string $field The field identifier.
@@ -11428,42 +10925,6 @@ final class Editor
     private function applyDatabaseFieldValue(string $field, string $rawValue): void
     {
         if (! $this->workspace instanceof ProjectWorkspace) {
-            return;
-        }
-
-        if ($this->isActorsDatabaseSelected() && in_array($field, [self::ACTOR_GROWTH_FIELD, self::ACTOR_OPTIMIZE_SLOT_FIELD], true)) {
-            // Both are assumptions the preview makes, not values the project
-            // stores: neither marks anything dirty and neither is written.
-            $actor = $this->getSelectedActor();
-
-            if ($actor instanceof ProjectActor && $field === self::ACTOR_GROWTH_FIELD) {
-                $this->actorGrowthSelections[$actor->getDefinitionId()] = trim($rawValue);
-            } elseif ($actor instanceof ProjectActor) {
-                $this->actorOptimizeSlots[$actor->getDefinitionId()] = trim($rawValue);
-            }
-
-            return;
-        }
-
-        if ($this->isActorsDatabaseSelected() && $field === self::ACTOR_VARIANT_FIELD) {
-            // Which variant the rows edit is a choice about the pane, not a
-            // value the project stores.
-            $actor = $this->getSelectedActor();
-
-            if ($actor instanceof ProjectActor) {
-                $this->actorVariantSelections[$actor->getDefinitionId()] = trim($rawValue);
-            }
-
-            return;
-        }
-
-        if ($this->isActorsDatabaseSelected()) {
-            $this->workspace->actorDatabase->setField(
-                $this->databaseSelectedActorIndex,
-                $field,
-                $this->coerceActorFieldValue($field, $rawValue),
-            );
-
             return;
         }
 

@@ -46,7 +46,7 @@ it('lists a category with what it can do, and reads a frame\'s rows with the ite
         ->and(fn() => $session->readDatabaseRecord('common_events', 0, [9, 'then']))->toThrow(SessionRefusal::class, 'is no longer there')
         ->and(fn() => $session->readDatabaseRecord('common_events', 0, ['then' => 3]))->toThrow(SessionRefusal::class, 'A frame must be a list')
         ->and(fn() => $session->readDatabaseRecord('states', 9))->toThrow(SessionRefusal::class, 'states has no record 9.')
-        ->and(fn() => $session->readDatabaseRecord('actors', 0))->toThrow(SessionRefusal::class, 'edited in the terminal editor for now');
+        ->and(fn() => $session->readDatabaseRecord('skills', 0))->toThrow(SessionRefusal::class, 'edited in the terminal editor for now');
 });
 
 it('applies a row as one undo step, history naming the category, and refuses what the field cannot take', function () {

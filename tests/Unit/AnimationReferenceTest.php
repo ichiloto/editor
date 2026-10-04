@@ -178,7 +178,7 @@ it('does not enter text editing for an established actor id', function () {
     $editor = deletionEditor($root);
     openDatabaseCategory($editor, 'actors');
     setEditorProperty($editor, 'databaseFocus', 'database_settings');
-    $fields = callEditorMethod($editor, 'getDatabaseActorSettingsFields');
+    $fields = callEditorMethod($editor, 'getDatabaseSettingsFields');
     $index = array_search('id', array_column($fields, 'field'), true);
     expect($index)->not->toBeFalse()->and($fields[$index]['editable'])->toBeFalse();
     setEditorProperty($editor, 'databaseSelectedSettingIndex', $index);

@@ -15,7 +15,7 @@ it('offers a confirmed one-time identity migration with cancellation and saved u
     $editor = deletionEditor($root);
     openDatabaseCategory($editor, 'actors');
     setEditorProperty($editor, 'databaseFocus', 'database_settings');
-    $fields = callEditorMethod($editor, 'getDatabaseActorSettingsFields');
+    $fields = callEditorMethod($editor, 'getDatabaseSettingsFields');
     $index = array_search('id', array_column($fields, 'field'), true);
     setEditorProperty($editor, 'databaseSelectedSettingIndex', $index);
     $workspace = getEditorProperty($editor, 'workspace');
@@ -151,11 +151,11 @@ it('explains malformed explicit ids without offering a migration or opening inpu
     $editor = deletionEditor($root);
     openDatabaseCategory($editor, 'actors');
     setEditorProperty($editor, 'databaseFocus', 'database_settings');
-    $fields = callEditorMethod($editor, 'getDatabaseActorSettingsFields');
+    $fields = callEditorMethod($editor, 'getDatabaseSettingsFields');
     $index = array_search('id', array_column($fields, 'field'), true);
     expect($fields[$index]['editable'])->toBeFalse()
         ->and($fields[$index]['displayDefault'])->toContain('Malformed explicit id')
-        ->and($fields[$index]['actorIdentityMigration'])->toBeNull();
+        ->and($fields[$index]['action'])->toBeNull();
     setEditorProperty($editor, 'databaseSelectedSettingIndex', $index);
     callEditorMethod($editor, 'dispatchInput', "\r");
     expect(getEditorProperty($editor, 'isDatabaseEditing'))->toBeFalse()

@@ -255,12 +255,20 @@ Acceptance criteria:
 
 ### Database completion across TUI and GUI (in progress, 2026-10-04)
 
-Every Database category is edited through one shared record service, so the
-terminal editor and the GUI editor read and write it the same way. Today 21
-categories are schema-driven (`RecordSchemaCatalog` over
-`ProjectRecordDatabase`) and reach both editors. Actors, Classes, Skills,
-Quests and System are built by hand inside `Editor.php` over their own
-database classes, so the GUI session refuses them.
+Every Database category is edited through one shared service, so the
+terminal editor and the GUI editor read and write it the same way. The GUI
+session reaches a category through `DatabaseCategory`: schema-driven ones
+(`RecordSchemaCatalog` over `ProjectRecordDatabase`) through `RecordCategory`,
+actors through `ActorCategory` over `ActorAuthoring`, the actor service the
+terminal editor uses too.
+
+Progress: Classes, Quests, System, a new Configuration category and Actors
+are done in both editors. Skills is the one category the GUI still refuses.
+Known gap: an actor authored without an id whose identity freeze also needs
+other files rewritten (the cross-file repair `SourceSetCommand` writes at
+once) is refused in the GUI with a pointer to the terminal's repair dialog;
+the single-file freeze works in both editors. The session would need its
+workspace replacement to keep loaded maps for the repair's undo.
 
 Order of work, each a complete slice before the next:
 

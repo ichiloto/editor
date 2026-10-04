@@ -9,17 +9,18 @@ use Ichiloto\Editor\Backup\BackupWriter;
 use Ichiloto\Editor\Canvas\CanvasEditor;
 use Ichiloto\Editor\ProjectDirectoryContext;
 use Ichiloto\Editor\Canvas\PieceRole;
-use Ichiloto\Editor\Cutscenes\Source\SourcePreservationRefusal;
 use Ichiloto\Editor\Database\ConditionCodec;
 use Ichiloto\Editor\Database\ConditionEditor;
 use Ichiloto\Editor\Database\DatabaseCatalog;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Database\RecordItem;
-use Ichiloto\Editor\Database\RecordAuthoring;
 use Ichiloto\Editor\Database\RecordChange;
 use Ichiloto\Editor\Database\RecordRefusal;
 use Ichiloto\Editor\Database\ReferenceCatalog;
-use Ichiloto\Editor\Database\SourceIdentityConflict;
+use Ichiloto\Editor\Database\DatabaseCategory;
+use Ichiloto\Editor\Database\RecordCategory;
+use Ichiloto\Editor\Actors\ActorAuthoring;
+use Ichiloto\Editor\Actors\ActorCategory;
 use Ichiloto\Editor\Database\WorldWriteCodec;
 use Ichiloto\Editor\Database\WorldWriteEditor;
 use Ichiloto\Editor\Events\EventAuthoring;
@@ -79,12 +80,16 @@ final class EditorSession
 
     /** The playtest running in the background, or the last one, to report how it ended. */
     private ?PlaytestRun $playtest = null;
+
+    /** How actors are authored, with what this editor's actor panes show. */
+    private readonly ActorAuthoring $actorAuthoring;
     private function __construct(
         ProjectWorkspace $workspace,
         private readonly CommandHistory $history,
         private readonly BackupWriter $backups,
     ) {
         $this->workspace = $workspace;
+        $this->actorAuthoring = new ActorAuthoring();
     }
 
     /** Opens the project at a root, as the terminal editor opens it. */
@@ -1216,16 +1221,15 @@ final class EditorSession
     /**
      * A database category's records, as its list shows them, whether they
      * can be edited and have unsaved changes, and which record operations
-     * the category takes. The bespoke categories (actors, classes, skills,
-     * quests, system) still build their rows in the terminal editor, so
-     * they are refused here until those builders are shared.
+     * the category takes. A category whose rows only the terminal editor
+     * builds yet is refused.
      *
      * @return array{category: string, editable: bool, readOnly: ?string, dirty: bool, canCreate: bool, canDuplicate: bool, canDelete: bool, canReorder: bool, records: list<string>}
      * @throws SessionRefusal When the category is unknown or not yet served.
      */
     public function listDatabaseRecords(string $category): array
     {
-        $database = $this->requireRecordDatabase($category);
+        $database = $this->requireCategory($category);
 
         return [
             'category' => $category,
@@ -1233,11 +1237,11 @@ final class EditorSession
             'readOnly' => $database->getReadOnlyReason(),
             'dirty' => $database->isDirty(),
             'canCreate' => $database->supportsRecordCreation(),
-            'canDuplicate' => $database->duplicateRecordSupported(),
+            'canDuplicate' => $database->supportsRecordDuplication(),
             'canDelete' => $database->supportsRecordDeletion(),
             // Only where the file keeps the order; a move elsewhere is refused with why.
             'canReorder' => $database->supportsDurableReorder(),
-            'records' => self::listRecordLabels($database),
+            'records' => $database->getRecordLabels(),
         ];
     }
 
@@ -1260,7 +1264,7 @@ final class EditorSession
      */
     public function readDatabaseRecord(string $category, int $index, array $frame = []): array
     {
-        $database = $this->requireRecordDatabase($category);
+        $database = $this->requireCategory($category);
         $frame = self::requireFrame($frame, 'database.record');
         $fields = $this->collectRecordFields($database, $index, $frame);
 
@@ -1268,12 +1272,12 @@ final class EditorSession
             'category' => $category,
             'index' => $index,
             'frame' => $frame,
-            'frameLabel' => $frame === [] ? null : $database->describeFramePath($frame),
+            'frameLabel' => $database->describeFrame($frame),
             'editable' => $database->isEditable(),
             'readOnly' => $database->getReadOnlyReason(),
             // What an entry of the list an add with no row goes to is called:
             // the record's own list, or the open frame's.
-            'listNoun' => $database->getFrameSubList($frame)?->singular,
+            'listNoun' => $database->getListNoun($frame),
             // A row that names a field keeps its key whether or not it can be
             // edited; a read-only one is an `info` row the edit refuses.
             'rows' => array_map(static fn(array $field): array => self::describeRecordRow(
@@ -1297,7 +1301,7 @@ final class EditorSession
      */
     public function applyDatabaseRecord(string $category, int $index, array $key, string $value): array
     {
-        $database = $this->requireRecordDatabase($category);
+        $database = $this->requireCategory($category);
         $frame = self::requireFrame($key['frame'] ?? [], 'database.record');
         $fieldId = $key['field'] ?? null;
         // Field ids are unique within a frame, so the field and frame name the row.
@@ -1311,11 +1315,11 @@ final class EditorSession
             throw new SessionRefusal(sprintf('%s cannot be edited here.', trim((string) ($field['label'] ?? 'That row'))));
         }
 
-        $change = $this->changeRecord(static fn(RecordAuthoring $authoring): RecordChange => $authoring->applyField(
-            $database, $index, $frame, $fieldId, $value, (string) ($field['label'] ?? 'Database field'),
+        $change = $this->changeRecord(static fn(): RecordChange => $database->applyField(
+            $index, $frame, $fieldId, $value, (string) ($field['label'] ?? 'Database field'),
         ));
 
-        return array_filter(['changed' => $change->command !== null, 'records' => self::listRecordLabels($database), 'note' => $change->note],
+        return array_filter(['changed' => $change->command !== null, 'records' => $database->getRecordLabels(), 'note' => $change->note],
             static fn(mixed $value): bool => $value !== null);
     }
 
@@ -1331,7 +1335,7 @@ final class EditorSession
      */
     public function addDatabaseItem(string $category, int $index, array $key, bool $child = false): array
     {
-        $database = $this->requireRecordDatabase($category);
+        $database = $this->requireCategory($category);
         $frame = self::requireFrame($key['frame'] ?? [], 'database.record');
         $fieldId = $key['field'] ?? null;
 
@@ -1339,9 +1343,9 @@ final class EditorSession
             throw new SessionRefusal('A row key names its field as a string, as database.record gave it.');
         }
 
-        $change = $this->changeRecord(static fn(RecordAuthoring $authoring): RecordChange => $authoring->addItem($database, $index, $frame, $fieldId, $child));
+        $change = $this->changeRecord(static fn(): RecordChange => $database->addItem($index, $frame, $fieldId, $child));
 
-        return ['changed' => $change->command !== null, 'records' => self::listRecordLabels($database)];
+        return ['changed' => $change->command !== null, 'records' => $database->getRecordLabels()];
     }
 
     /**
@@ -1356,7 +1360,7 @@ final class EditorSession
      */
     public function removeDatabaseItem(string $category, int $index, array $key): array
     {
-        $database = $this->requireRecordDatabase($category);
+        $database = $this->requireCategory($category);
         $frame = self::requireFrame($key['frame'] ?? [], 'database.record');
         $fieldId = $key['field'] ?? null;
 
@@ -1364,9 +1368,9 @@ final class EditorSession
             throw new SessionRefusal('Name the row whose item to remove by its key, as database.record gave it.');
         }
 
-        $change = $this->changeRecord(static fn(RecordAuthoring $authoring): RecordChange => $authoring->removeItem($database, $index, $frame, $fieldId));
+        $change = $this->changeRecord(static fn(): RecordChange => $database->removeItem($index, $frame, $fieldId));
 
-        return ['changed' => $change->command !== null, 'records' => self::listRecordLabels($database)];
+        return ['changed' => $change->command !== null, 'records' => $database->getRecordLabels()];
     }
 
     /**
@@ -1377,10 +1381,10 @@ final class EditorSession
      */
     public function createDatabaseRecord(string $category): array
     {
-        $database = $this->requireRecordDatabase($category);
-        $change = $this->changeRecord(static fn(RecordAuthoring $authoring): RecordChange => $authoring->createRecord($database));
+        $database = $this->requireCategory($category);
+        $change = $this->changeRecord(static fn(): RecordChange => $database->createRecord());
 
-        return ['index' => (int) $change->index, 'records' => self::listRecordLabels($database)];
+        return ['index' => (int) $change->index, 'records' => $database->getRecordLabels()];
     }
 
     /**
@@ -1391,10 +1395,10 @@ final class EditorSession
      */
     public function duplicateDatabaseRecord(string $category, int $index): array
     {
-        $database = $this->requireRecordDatabase($category);
-        $change = $this->changeRecord(static fn(RecordAuthoring $authoring): RecordChange => $authoring->duplicateRecord($database, $index));
+        $database = $this->requireCategory($category);
+        $change = $this->changeRecord(static fn(): RecordChange => $database->duplicateRecord($index));
 
-        return ['index' => (int) $change->index, 'records' => self::listRecordLabels($database)];
+        return ['index' => (int) $change->index, 'records' => $database->getRecordLabels()];
     }
 
     /**
@@ -1405,10 +1409,10 @@ final class EditorSession
      */
     public function deleteDatabaseRecord(string $category, int $index): array
     {
-        $database = $this->requireRecordDatabase($category);
-        $change = $this->changeRecord(static fn(RecordAuthoring $authoring): RecordChange => $authoring->deleteRecord($database, $index));
+        $database = $this->requireCategory($category);
+        $change = $this->changeRecord(static fn(): RecordChange => $database->deleteRecord($index));
 
-        return ['index' => $change->index, 'records' => self::listRecordLabels($database)];
+        return ['index' => $change->index, 'records' => $database->getRecordLabels()];
     }
 
     /**
@@ -1421,15 +1425,15 @@ final class EditorSession
      */
     public function moveDatabaseRecord(string $category, int $index, string $direction): array
     {
-        $database = $this->requireRecordDatabase($category);
+        $database = $this->requireCategory($category);
         $step = match ($direction) {
             'up' => -1,
             'down' => 1,
             default => throw new SessionRefusal(sprintf('A record moves "up" or "down", not "%s".', $direction)),
         };
-        $change = $this->changeRecord(static fn(RecordAuthoring $authoring): RecordChange => $authoring->moveRecord($database, $index, $step));
+        $change = $this->changeRecord(static fn(): RecordChange => $database->moveRecord($index, $step));
 
-        return ['index' => (int) $change->index, 'changed' => $change->command !== null, 'records' => self::listRecordLabels($database)];
+        return ['index' => (int) $change->index, 'changed' => $change->command !== null, 'records' => $database->getRecordLabels()];
     }
 
     /**
@@ -1443,7 +1447,7 @@ final class EditorSession
      */
     public function saveDatabase(string $category): array
     {
-        $database = $this->requireRecordDatabase($category);
+        $database = $this->requireCategory($category);
         if (! $database->isEditable()) {
             throw new SessionRefusal(sprintf('Read-only: %s.', $database->getReadOnlyReason() ?? 'this category cannot be written'));
         }
@@ -1455,7 +1459,7 @@ final class EditorSession
 
         try {
             $database->save();
-        } catch (SourceIdentityConflict|SourcePreservationRefusal $refusal) {
+        } catch (RecordRefusal $refusal) {
             throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
         }
 
@@ -1465,13 +1469,13 @@ final class EditorSession
     /**
      * Makes one record change, records it, and turns a refusal into the session's.
      *
-     * @param callable(RecordAuthoring): RecordChange $change
+     * @param callable(): RecordChange $change
      * @throws SessionRefusal
      */
     private function changeRecord(callable $change): RecordChange
     {
         try {
-            $applied = $change(new RecordAuthoring());
+            $applied = $change();
         } catch (RecordRefusal $refusal) {
             throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
         }
@@ -1489,22 +1493,13 @@ final class EditorSession
      * @return array<int, array<string, mixed>>
      * @throws SessionRefusal
      */
-    private function collectRecordFields(ProjectRecordDatabase $database, int $index, array $frame): array
+    private function collectRecordFields(DatabaseCategory $database, int $index, array $frame): array
     {
-        if ($database->getRecordByIndex($index) === null) {
-            throw new SessionRefusal(sprintf('%s has no record %d.', $database->schema->key, $index));
+        try {
+            return $database->getRecordRows($index, $frame);
+        } catch (RecordRefusal $refusal) {
+            throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
         }
-        if ($frame !== [] && (! $database->hasCommandFrames() || $database->getFrameCommands($index, $frame) === null)) {
-            throw new SessionRefusal(sprintf('%s is no longer there; read the record again.', $database->describeFramePath($frame)));
-        }
-
-        return $database->getFrameSettingsFields($index, $frame);
-    }
-
-    /** @return list<string> A category's record labels, as its list shows them. */
-    private static function listRecordLabels(ProjectRecordDatabase $database): array
-    {
-        return array_values(array_map('strval', $database->getEntryLabels()));
     }
 
     /**
@@ -1518,7 +1513,7 @@ final class EditorSession
      * @param string|null $target The key's target, or null for a row no edit applies through.
      * @return array<string, mixed>
      */
-    private static function describeRecordRow(ProjectRecordDatabase $records, int $index, array $frame, array $field, ?string $target): array
+    private static function describeRecordRow(ProjectRecordDatabase|DatabaseCategory $records, int $index, array $frame, array $field, ?string $target): array
     {
         $row = self::describeRow([...$field, 'target' => $target]);
 
@@ -1991,7 +1986,7 @@ final class EditorSession
     private function traverseHistory(callable $step): array
     {
         $before = array_map(static fn(ProjectMap $map): int => $map->stateVersion(), $this->workspace->maps);
-        $databases = array_map(static fn(ProjectRecordDatabase $database): string => $database->getContentVersion(), $this->workspace->recordDatabases);
+        $databases = $this->listDatabaseVersions();
         $command = $step();
         $changed = $revisions = [];
         foreach ($this->workspace->maps as $index => $map) {
@@ -2000,10 +1995,18 @@ final class EditorSession
                 $revisions[$map->mapId] = $map->stateVersion();
             }
         }
-        $changedDatabases = array_keys(array_filter($this->workspace->recordDatabases,
-            static fn(ProjectRecordDatabase $database, string $key): bool => $database->getContentVersion() !== $databases[$key], ARRAY_FILTER_USE_BOTH));
+        $changedDatabases = array_keys(array_diff_assoc($this->listDatabaseVersions(), $databases));
 
         return ['label' => $command?->label, 'maps' => $changed, 'revisions' => $revisions, 'databases' => array_values(array_map('strval', $changedDatabases))];
+    }
+
+    /** @return array<string, string> Each category the session edits, by key, with its content version. */
+    private function listDatabaseVersions(): array
+    {
+        return [
+            'actors' => $this->workspace->actorDatabase->getContentVersion(),
+            ...array_map(static fn(ProjectRecordDatabase $database): string => $database->getContentVersion(), $this->workspace->recordDatabases),
+        ];
     }
 
     /** @return array<int, array<string, mixed>> */
@@ -2032,6 +2035,9 @@ final class EditorSession
         $choices = MapInspector::findChoiceValues($field);
         $kind = match (true) {
             ($field['editable'] ?? true) === false, $target === null => 'info',
+            // A row whose edit is one action (freezing an actor's identity),
+            // made by applying it with no value.
+            is_string($field['action'] ?? null) => 'action',
             ($field['mapConditions'] ?? false) === true, ($field['conditions'] ?? false) === true => 'conditions',
             ($field['worldWrites'] ?? false) === true => 'writes',
             ($field['destination'] ?? false) === true => 'destination',
@@ -2073,6 +2079,9 @@ final class EditorSession
                 'destination' => 'maps',
                 default => null,
             },
+            // How the choice of nothing reads, where the row says (the Engine's own attack).
+            'noneLabel' => $kind === 'reference' && is_string($field['noneLabel'] ?? null) ? $field['noneLabel'] : null,
+            'action' => $kind === 'action' ? $field['action'] : null,
             // A list picked a member at a time: each pick toggles one member.
             'multi' => $kind === 'reference' && ($field['multi'] ?? false) === true ? true : null,
             'list' => is_array($list) && $target !== null ? ['index' => (int) ($list['index'] ?? 0)] : null,
@@ -2122,6 +2131,22 @@ final class EditorSession
 
         return $this->workspace->getRecordDatabase($category)
             ?? throw new SessionRefusal(sprintf('The %s database is edited in the terminal editor for now.', $category));
+    }
+
+    /**
+     * A Database category as this session edits it: actors through the
+     * actor service, with what this editor's actor panes show, and every
+     * schema-driven category through the shared record rules.
+     *
+     * @throws SessionRefusal When the category is unknown or not yet served.
+     */
+    private function requireCategory(string $category): DatabaseCategory
+    {
+        if ($category === 'actors') {
+            return new ActorCategory($this->workspace, $this->actorAuthoring);
+        }
+
+        return new RecordCategory($this->requireRecordDatabase($category));
     }
 
     /** @return array<string, ProjectMap> */
