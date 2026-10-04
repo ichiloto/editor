@@ -260,3 +260,63 @@ it('keeps skit diagnostics attached to their files when sorted record positions 
         ->and($after[0]->where)->toBe('assets/Data/Skits/z-last-scene.php:beats.0.actor')
         ->and(\Ichiloto\Editor\Validation\Issue::error('elsewhere', 'Other failure')->code)->toBeNull();
 });
+
+it('repairs every actor keyed presentation reference without touching enemies or artwork resources', function () {
+    [$root, $actorPath] = createLegacyActorProject();
+    file_put_contents($actorPath, "<?php return ['data' => ['id' => 'hero', 'name' => 'Kaelion']];");
+    mkdir($root . '/assets/Data/Presentation');
+    $battle = <<<'PHP'
+<?php
+use Ichiloto\Engine\Battle\Presentation\BattlePresentationCatalog;
+use Ichiloto\Engine\Battle\Presentation\BattlePoseSet;
+use Ichiloto\Engine\Battle\Presentation\BattlerArtwork;
+return new BattlePresentationCatalog(
+    enemyPoses: ['Kaelion' => new BattlePoseSet([], displayWidth: 90)],
+    // Party poses follow the same stable identity as their artwork.
+    actorPoses: [/* lead */ 'Kaelion' => new BattlePoseSet([], displayWidth: 120)],
+    arenas: [],
+    enemies: ['Kaelion' => new BattlerArtwork('shade.png', 1, 1, 0, 0)],
+    actors: ['Kaelion' => new BattlerArtwork('hero.png', 1, 1, 0, 0)],
+);
+PHP;
+    $dialogue = <<<'PHP'
+<?php
+use Ichiloto\Engine\Messaging\Dialogue\Presentation\DialoguePresentationCatalog;
+return new DialoguePresentationCatalog(
+    actors: ['Kaelion' => ['emotions' => []]],
+    resources: ['Fira' => ['emotions' => []]],
+    speakers: ['Kael' => 'Kaelion', 'Fira Nel' => 'Fira'],
+);
+PHP;
+    file_put_contents($root . '/assets/Data/Presentation/battle.php', $battle);
+    file_put_contents($root . '/assets/Data/Presentation/dialogue.php', $dialogue);
+    ActorIdentityMigration::migrateProject($root);
+    expect(file_get_contents($root . '/assets/Data/Presentation/battle.php'))->toBe(str_replace(
+        ["/* lead */ 'Kaelion'", "actors: ['Kaelion'"], ["/* lead */ 'hero'", "actors: ['hero'"], $battle))
+        ->and(file_get_contents($root . '/assets/Data/Presentation/dialogue.php'))->toBe(str_replace(
+            ["actors: ['Kaelion'", "'Kael' => 'Kaelion'"], ["actors: ['hero'", "'Kael' => 'hero'"], $dialogue))
+        ->and(ActorIdentityMigration::planProject($root)->getChangedPaths())->toBe([])
+        ->and(new \Ichiloto\Editor\Validation\ActorReferenceValidator()->validate(\Ichiloto\Editor\ProjectWorkspace::fromProject($root)))->toBe([]);
+});
+
+it('refuses a variable backed presentation argument rather than stranding or flattening its actor keys', function () {
+    [$root, $actorPath] = createLegacyActorProject();
+    file_put_contents($actorPath, "<?php return ['data' => ['id' => 'hero', 'name' => 'Kaelion']];");
+    mkdir($root . '/assets/Data/Presentation');
+    file_put_contents($root . '/assets/Data/Presentation/battle.php', <<<'PHP'
+<?php
+use Ichiloto\Engine\Battle\Presentation\BattlePresentationCatalog;
+use Ichiloto\Engine\Battle\Presentation\BattlePoseSet;
+$poses = ['Kaelion' => new BattlePoseSet([], displayWidth: 120)];
+return new BattlePresentationCatalog([], [], [], actorPoses: $poses);
+PHP);
+    $before = sourceHashTree($root);
+    try {
+        ActorIdentityMigration::planProject($root);
+        $this->fail('A variable-backed pose catalog must be refused.');
+    } catch (RuntimeException $failure) {
+        expect($failure->getPrevious())->toBeInstanceOf(\Ichiloto\Editor\Cutscenes\Source\SourcePreservationRefusal::class)
+            ->and($failure->getMessage())->toContain('battle.php', 'actorPoses', 'refusing to flatten');
+    }
+    expect(sourceHashTree($root))->toBe($before);
+});

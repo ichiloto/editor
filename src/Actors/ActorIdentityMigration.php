@@ -88,7 +88,7 @@ final class ActorIdentityMigration
             if ($changes === []) { continue; }
             try {
                 $after[$path] = ActorReferenceSource::getUpdatedValue($payload, $changes);
-                $proposals[$path] = ActorReferenceSource::rewrite($source, $changes);
+                $proposals[$path] = ActorReferenceSource::rewrite($source, $changes, $payload);
             } catch (Throwable $failure) {
                 throw self::createContextualFailure($path, $failure);
             }

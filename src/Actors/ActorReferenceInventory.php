@@ -21,13 +21,21 @@ final class ActorReferenceInventory
             }
         }
         if (str_starts_with($relativePath, 'assets/Data/Presentation/')) {
-            foreach (['actors', 'portraits'] as $field) {
+            // Dialogue artwork, menu portraits and battle artwork/poses are keyed by actor ID.
+            foreach (['actors', 'portraits', 'actorPoses'] as $field) {
                 foreach (array_keys((array) ($payload[$field] ?? [])) as $id) {
                     $references[] = ['path' => [$field, $id], 'reference' => $id, 'kind' => 'key'];
                 }
             }
             foreach (array_keys((array) ($payload['results']['portraits'] ?? [])) as $id) {
                 $references[] = ['path' => ['results', 'portraits', $id], 'reference' => $id, 'kind' => 'key'];
+            }
+            // Speaker labels bind to an actor or to a non-actor artwork resource.
+            $resources = (array) ($payload['resources'] ?? []);
+            foreach ((array) ($payload['speakers'] ?? []) as $label => $identity) {
+                if (! is_string($identity) || ! array_key_exists($identity, $resources)) {
+                    $references[] = ['path' => ['speakers', $label], 'reference' => $identity, 'kind' => 'value'];
+                }
             }
             return $references;
         }
