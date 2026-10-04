@@ -252,6 +252,40 @@ Acceptance criteria:
   name twice, as validation already reports it.
 - Round-trip comments, expressions and unknown fields in all three files, and
   refuse unsupported source rather than flattening it.
+
+### Database completion across TUI and GUI (in progress, 2026-10-04)
+
+Every Database category is edited through one shared record service, so the
+terminal editor and the GUI editor read and write it the same way. Today 21
+categories are schema-driven (`RecordSchemaCatalog` over
+`ProjectRecordDatabase`) and reach both editors. Actors, Classes, Skills,
+Quests and System are built by hand inside `Editor.php` over their own
+database classes, so the GUI session refuses them.
+
+Order of work, each a complete slice before the next:
+
+1. Classes, Quests, System, Actors and Skills move onto the shared record
+   service. The terminal keeps its workflow and every field and preview it has
+   now (experience and stat curves, actor stats); the GUI gains the category.
+2. Data the record files hold but no editor reaches: item and skill effects,
+   skill kind, enemy drops, battle animation, the rest of `system.php` (title,
+   currency, elements, starting party, inventory and positions, battle
+   opening).
+3. Skills become one declarative record per file, as enemies are, so spells
+   and abilities in `magic.php` and `abilities.php` are edited too (the
+   section above). Items, weapons and armors follow.
+4. Tilesets: an editor for `Data/Tilesets/<id>.php` (sheets, pieces, tables,
+   shadows); the "no tileset system" note is stale. Types: element names live
+   in `system.php`; the enum files stay read-only.
+5. The manual's category table gains a GUI column and states each category's
+   real coverage.
+
+Acceptance criteria:
+
+- Every category opens, edits, saves and undoes in both editors through the
+  same service, with source-preserving saves.
+- No field or preview the terminal editor offers today is lost.
+
 ### Phase 1 — The responsiveness sprint (quick wins, no redesign) ✅ *shipped 2026-08*
 > Status: implemented. `InputDecoder` (src/IO/InputDecoder.php, unit-tested)
 > replaces the blocking reader: non-blocking drained stdin, offline escape
