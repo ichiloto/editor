@@ -113,3 +113,14 @@ it('plays a battle test from an overlay carrying the battle test as it stands, n
         ->and($none)->not->toHaveKey(ProjectBattleTest::SYSTEM_KEY)
         ->and(file_get_contents($system))->toBe($before);
 });
+
+it('describes a draft the dialog is editing without writing it', function () {
+    $root = battleTestProject();
+    $session = EditorSession::open($root);
+    $draft = $session->describeBattleTest(['members' => [['actor' => 'Kaelion', 'level' => 5]]]);
+
+    expect($draft['source'])->toBe('battle test')
+        ->and($draft['members'][0]['level'])->toBe(5)
+        ->and($session->describeBattleTest()['source'])->toBe('starting party')
+        ->and($session->listUnsavedChanges())->toBe([]);
+});

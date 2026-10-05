@@ -2448,14 +2448,16 @@ final class EditorSession
      * battle, and says so. Each member comes with what it may be given (the
      * Engine's BattleTestChoices, the same as the in-game arena offers) and
      * the setup with the Engine's own problems. Reads the record as it is
-     * now, unsaved edits included.
+     * now, unsaved edits included, or describes a draft the dialog is
+     * editing without writing it.
      *
+     * @param array<string, mixed>|null $draft An entry to describe instead of the record's.
      * @return array<string, mixed>
      * @throws SessionRefusal When the project has no system settings.
      */
-    public function describeBattleTest(): array
+    public function describeBattleTest(?array $draft = null): array
     {
-        $entry = $this->readBattleTestEntry();
+        $entry = $draft ?? $this->readBattleTestEntry();
         $view = [
             'battleTest' => $entry,
             'troops' => array_values(array_map(strval(...), $this->listDatabaseRecords('troops')['records'])),
