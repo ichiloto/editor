@@ -114,3 +114,31 @@ it('reports a grant the Engine would refuse, with the Engine\'s reason', functio
         ->and($issues[0]->where)->toContain('Regular Bat')
         ->and($issues[0]->message)->toContain('battle-usable basic or special skill');
 });
+
+it('never offers or accepts a skill the project links to a summon', function () {
+    $root = counterAttackProject();
+    // A special skill that would otherwise qualify, linked to an authored summon.
+    writeSkillRecords($root,
+        new BasicSkill('Riposte', '', '', 0, 0),
+        new \Ichiloto\Engine\Entities\Skills\SpecialSkill('Ember Call', '', '', 0, 0),
+    );
+    $summon = $root . '/assets/Cutscenes/Summons/ember';
+    mkdir($summon, 0777, true);
+    file_put_contents($summon . '/ember.data.php', "<?php\n\nreturn " . var_export([
+        'id' => 'ember', 'name' => 'Ember', 'linkedActionId' => 'Ember Call',
+        'availability' => ['conditions' => []],
+        'wielders' => ['mode' => 'characters', 'characters' => ['Kaelion'], 'tenancy' => 'exclusive'],
+    ], true) . ";\n");
+    file_put_contents($summon . '/ember.timeline.php', "<?php\n\nreturn ['fps' => 12, 'lengthFrames' => 1, 'tracks' => [], 'cues' => []];\n");
+    $file = $root . '/assets/Data/Enemies/regular-bat.php';
+    file_put_contents($file, str_replace("'level' => 2,", "'level' => 2,\n    'counterAttack' => ['skill' => 'Ember Call'],", (string) file_get_contents($file)));
+
+    $session = EditorSession::open($root);
+    [$map] = $session->describeMaps();
+    $issues = new CounterAttackValidator()->validate(ProjectWorkspace::fromProject($root));
+
+    expect(array_column($session->listReferences($map['id'], 'counter_skills'), 'value'))->toBe(['Riposte'])
+        ->and($issues)->toHaveCount(1)
+        ->and($issues[0]->where)->toContain('Regular Bat')
+        ->and($issues[0]->message)->toContain('without summon');
+});
