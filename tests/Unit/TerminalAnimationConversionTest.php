@@ -24,7 +24,7 @@ function longLegacyAnimations(): string
     // Every role the Engine supports: a long list of battle consumers to wrap.
     $roles = implode(', ', array_map(static fn(string $role): string => var_export($role, true), ActionAnimationResolver::getSupportedRoles()));
 
-    return "<?php\n\nreturn [\n    // A spark in the old cell frames.\n    [\n        'id' => 1,\n        'name' => 'Old Spark',\n"
+    return "<?php\n\nreturn [\n    // A spark in the old cell frames.\n    [\n                        // preserved nested source\n        'id' => 1,\n        'name' => 'Old Spark',\n"
         . "        'position' => 'center',\n        'maxFrames' => 30,\n        'roles' => [{$roles}],\n        'frames' => [\n"
         . implode("\n", $frames) . "\n        ],\n"
         . "        'cues' => [['frame' => 1, 'soundEffect' => 'spark', 'flashColor' => 'white', 'flashDurationFrames' => 2]],\n    ],\n];\n";
@@ -122,6 +122,9 @@ it('reviews every proposed line before writing exactly that plan, as one undo st
         pressKeys($editor, "\033[B");
     }
     $read = preg_replace('/\s+/', '', implode('', $seen));
+
+    // Deeply indented source stays readable however narrow the pane.
+    expect($read)->toContain('//preservednestedsource');
 
     // Every proposed file was on screen in full, in order: nothing is written unread.
     foreach ($conversion->getPlan()->getProposedSources() as $source) {
