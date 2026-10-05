@@ -65,6 +65,14 @@ use Ichiloto\Editor\Database\RecordSchemaCatalog;
 use Ichiloto\Engine\Battle\Presentation\BattleFormationBattler;
 use Ichiloto\Engine\Battle\Presentation\BattleFormationLayout;
 use Ichiloto\Engine\Battle\Presentation\BattlerSlot;
+use Ichiloto\Editor\Database\EngineDataBootstrap;
+use Ichiloto\Engine\Cutscenes\Summons\SummonCutsceneLibrary;
+use Ichiloto\Engine\Scenes\Arena\BattleTestChoices;
+use Ichiloto\Engine\Scenes\Arena\BattleTestLoadoutCatalog;
+use Ichiloto\Engine\Scenes\Arena\BattleTestSetup;
+use Ichiloto\Engine\Scenes\Arena\ProjectBattleTest;
+use Ichiloto\Engine\Util\Config\ConfigStore;
+use Ichiloto\Engine\Util\Stores\ItemStore;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasImage;
 use Closure;
 use InvalidArgumentException;
@@ -91,6 +99,9 @@ final class EditorSession
 
     /** The playtest running in the background, or the last one, to report how it ended. */
     private ?PlaytestRun $playtest = null;
+    /** The battle test running in its own window, and the troop it fights. */
+    private ?PlaytestRun $battleTestRun = null;
+    private ?string $battleTestTroop = null;
 
     /** How actors are authored, with what this editor's actor panes show. */
     private readonly ActorAuthoring $actorAuthoring;
@@ -1500,8 +1511,7 @@ final class EditorSession
         foreach ($this->workspace->actorDatabase->getActors() as $actor) {
             $names[$actor->getDefinitionId()] = $actor->getName();
         }
-        $starting = $this->workspace->getSystemField('startingParty');
-        $partyIds = array_values(array_filter(is_array($starting) ? $starting : [], is_string(...)));
+        [$partyIds, $partySource] = $this->readPreviewParty();
         if ($lead !== null) {
             $partyIds = [$lead, ...array_filter($partyIds, static fn(string $id): bool => $id !== $lead)];
         }
@@ -1530,7 +1540,29 @@ final class EditorSession
             'arena' => $chosen === false ? null : (string) $chosen,
             'backgrounds' => array_map(self::describeCanvasImage(...), $formation->backgrounds),
             'party' => $party,
+            'partySource' => $partySource,
         ], $clearance];
+    }
+
+    /**
+     * The party a battle preview stands beside its enemies: the battle
+     * test's when it sets one, as the battle test will fight with it, else
+     * the starting party; and which it is. A battle test that cannot be read
+     * is named, not quietly replaced.
+     *
+     * @return array{0: list<string>, 1: string}
+     */
+    private function readPreviewParty(): array
+    {
+        $starting = array_values(array_filter($this->readStartingPartyReferences(), is_string(...)));
+        try {
+            $setup = ProjectBattleTest::fromArray($this->readBattleTestEntry())->setup;
+        } catch (InvalidArgumentException) {
+            return [$starting, 'starting party (the battle test cannot be read)'];
+        }
+
+        return $setup === null ? [$starting, 'starting party']
+            : [array_map(static fn($member): string => $member->actorId, $setup->members), 'battle test'];
     }
 
     /**
@@ -2408,10 +2440,246 @@ final class EditorSession
         return $this->describePlaytest();
     }
 
-    /** Ends what the session started that would outlive it: a running playtest. */
+    /**
+     * The project's battle test as the Battle Test dialog edits it, as RPG
+     * Maker's Troops > Battle Test does: the troop to preselect, the party
+     * and the arena, kept in system data as the Engine's ProjectBattleTest.
+     * With no party set the starting party stands in, as it will in the
+     * battle, and says so. Each member comes with what it may be given (the
+     * Engine's BattleTestChoices, the same as the in-game arena offers) and
+     * the setup with the Engine's own problems. Reads the record as it is
+     * now, unsaved edits included.
+     *
+     * @return array<string, mixed>
+     * @throws SessionRefusal When the project has no system settings.
+     */
+    public function describeBattleTest(): array
+    {
+        $entry = $this->readBattleTestEntry();
+        $view = [
+            'battleTest' => $entry,
+            'troops' => array_values(array_map(strval(...), $this->listDatabaseRecords('troops')['records'])),
+            'arenas' => $this->readArenaChoices(),
+            'actors' => array_map(static fn($actor): array => ['id' => $actor->getDefinitionId(), 'name' => $actor->getName()],
+                array_values(array_filter($this->workspace->actorDatabase->getActors(), static fn($actor): bool => $actor->hasDefinitionId()))),
+            'maxMembers' => BattleTestSetup::MAX_MEMBERS,
+            'troop' => null, 'arena' => null, 'source' => 'starting party', 'members' => [], 'problems' => [], 'issue' => null,
+        ];
+        try {
+            $test = ProjectBattleTest::fromArray($entry);
+        } catch (InvalidArgumentException $invalid) {
+            return [...$view, 'issue' => 'The battle test cannot be read: ' . $invalid->getMessage()];
+        }
+
+        return ProjectDirectoryContext::run($this->workspace->projectRoot, function () use ($view, $test): array {
+            $actors = $this->workspace->actorDatabase->createActorStore();
+            $items = $this->loadItemStore();
+            $skills = $this->workspace->loadSkillCatalog();
+            $summons = new SummonCutsceneLibrary($this->workspace->projectRoot . '/assets/Cutscenes/Summons');
+            $view = [...$view, 'troop' => $test->troop, 'source' => $test->setup === null ? 'starting party' : 'battle test'];
+            try {
+                $setup = $test->createSetup($actors, $this->readStartingPartyReferences());
+            } catch (InvalidArgumentException $invalid) {
+                return [...$view, 'arena' => $test->arena, 'issue' => $invalid->getMessage()];
+            }
+            $choices = new BattleTestChoices($actors, $items, new BattleTestLoadoutCatalog($skills, $summons));
+            $names = array_column($view['actors'], 'name', 'id');
+            $members = [];
+            foreach ($setup->members as $index => $member) {
+                $described = ['actor' => $member->actorId, 'name' => $names[$member->actorId] ?? $member->actorId, 'level' => $member->level,
+                    'commands' => $member->commands === null ? null : array_column($member->commands, 'value'),
+                    'skills' => $member->skills, 'summons' => $member->summons, 'maxLevel' => null, 'equipment' => [], 'choices' => null];
+                if ($actors->get($member->actorId) !== null) {
+                    $described['maxLevel'] = $choices->getMaxLevel($member->actorId);
+                    $described['equipment'] = array_map(static fn(string $slot): array => ['slot' => $slot, 'item' => $member->equipment[$slot] ?? null,
+                        'choices' => $choices->getEquipmentChoices($member->actorId, $slot)], $choices->getSlotNames($member->actorId));
+                    $described['choices'] = array_combine(['commands', 'skills', 'magic', 'summons'], array_map(
+                        static fn(string $field): array => $choices->getLoadoutChoices($setup, $index, $field), ['commands', 'skills', 'magic', 'summons']));
+                }
+                $members[] = $described;
+            }
+
+            return [...$view, 'arena' => $setup->arena, 'members' => $members,
+                'problems' => $setup->getProblems($actors, $items, $skills, $summons)];
+        });
+    }
+
+    /**
+     * Sets the project's battle test, as the Battle Test dialog applies it:
+     * the whole entry written to system data through the record service in
+     * one undo step, read the Engine's way first so a shape it would not
+     * read is refused before anything changes. An empty entry removes it.
+     *
+     * @param array<string, mixed> $battleTest As the Engine's ProjectBattleTest writes it.
+     * @return array<string, mixed> The battle test, as {@see describeBattleTest()}.
+     * @throws SessionRefusal When the entry is not a battle test.
+     */
+    public function applyBattleTest(array $battleTest): array
+    {
+        try {
+            $entry = ProjectBattleTest::fromArray($battleTest)->toArray();
+        } catch (InvalidArgumentException $invalid) {
+            throw new SessionRefusal('That is not a battle test: ' . $invalid->getMessage(), previous: $invalid);
+        }
+        $row = array_find($this->readDatabaseRecord('system', 0)['rows'],
+            static fn(array $row): bool => ($row['key']['field'] ?? null) === ProjectBattleTest::SYSTEM_KEY)
+            ?? throw new SessionRefusal('System settings have no battle test.');
+        $this->applyDatabaseRecord('system', 0, $row['key'],
+            $entry === [] ? '' : (string) json_encode($entry, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
+
+        return $this->describeBattleTest();
+    }
+
+    /**
+     * Plays the battle test in the background in its own graphical window,
+     * as `ichiloto battle` does: the named troop, or the battle test's own,
+     * fought by the battle test's party in its arena. It runs from an
+     * overlay of the project carrying the battle test as it is now, unsaved
+     * edits included, and writes nothing into the project; anything else a
+     * battle reads from disk must be saved first.
+     *
+     * @param int|null $troopIndex The troop to fight; null for the battle test's troop.
+     * @return array<string, mixed> The battle test run, as {@see describeBattleTestRun()}.
+     * @throws SessionRefusal When no troop is chosen, the setup has problems, something is unsaved, one is running, or it cannot start.
+     */
+    public function startBattleTest(?int $troopIndex = null): array
+    {
+        if ($this->battleTestRun?->isRunning() === true) {
+            throw new SessionRefusal('A battle test is already running; stop it or close its window first.');
+        }
+        $troops = $this->requireRecordDatabase('troops');
+        $troop = $troopIndex === null
+            ? (ProjectBattleTest::fromArray($this->readBattleTestEntry())->troop ?? null)
+            : trim(strval(($troops->getRecordByIndex($troopIndex) ?? throw new SessionRefusal(sprintf('troops has no record %d.', $troopIndex)))->get('name')));
+        if ($troop === null || $troop === '') {
+            throw new SessionRefusal('Choose a troop to fight in the battle test.');
+        }
+        $unsaved = $this->listBattleUnsavedChanges();
+        if ($unsaved !== []) {
+            throw new SessionRefusal(sprintf('Save %s first; the battle reads them on disk.', implode(', ', $unsaved)));
+        }
+        $described = $this->describeBattleTest();
+        if ($described['issue'] !== null || $described['problems'] !== []) {
+            throw new SessionRefusal("The battle test party cannot be set up:\n" . implode("\n", array_filter([$described['issue'], ...$described['problems']])));
+        }
+        $overlay = null;
+        try {
+            $overlay = PlaytestOverlay::createForBattle($this->workspace->projectRoot, $this->readBattleTestEntry());
+            $launcher = PlaytestLauncher::discover(projectRoot: $this->workspace->projectRoot);
+            $log = sys_get_temp_dir() . DIRECTORY_SEPARATOR . uniqid('ichiloto-battle-test-', true) . '.log';
+            $this->battleTestRun = $launcher->startBattle($overlay, self::PLAYTEST_RENDERER, $log, $troop);
+            $this->battleTestTroop = $troop;
+        } catch (RuntimeException $error) {
+            $overlay?->destroy();
+            throw new SessionRefusal(sprintf('The battle test could not start: %s', $error->getMessage()), previous: $error);
+        }
+
+        return $this->describeBattleTestRun();
+    }
+
+    /**
+     * Whether a battle test is running, the troop it fights, and how the
+     * last one ended: its exit code and, when it failed, the end of its output.
+     *
+     * @return array{running: bool, troop: ?string, stopped: bool, exitCode: ?int, log: ?string}
+     */
+    public function describeBattleTestRun(): array
+    {
+        $run = $this->battleTestRun;
+        $running = $run?->isRunning() ?? false;
+        $exitCode = $running ? null : $run?->getExitCode();
+
+        return [
+            'running' => $running,
+            'troop' => $run === null ? null : $this->battleTestTroop,
+            'stopped' => $run?->wasStopped() ?? false,
+            'exitCode' => $exitCode,
+            'log' => $run !== null && ! $running && ! $run->wasStopped() && $exitCode !== 0 ? $run->readLogTail() : null,
+        ];
+    }
+
+    /**
+     * Ends a running battle test, window and all.
+     *
+     * @return array<string, mixed> The run, as {@see describeBattleTestRun()}.
+     */
+    public function stopBattleTest(): array
+    {
+        $this->battleTestRun?->stop();
+
+        return $this->describeBattleTestRun();
+    }
+
+    /** The system data's battle test as it stands, unsaved edits included; empty when there is none. */
+    private function readBattleTestEntry(): array
+    {
+        $system = $this->requireRecordDatabase('system')->getRecordByIndex(0)
+            ?? throw new SessionRefusal('The project has no system settings.');
+        $entry = $system->get(ProjectBattleTest::SYSTEM_KEY);
+
+        return is_array($entry) ? $entry : [];
+    }
+
+    /** @return list<mixed> The starting party as system data holds it now, unsaved edits included. */
+    private function readStartingPartyReferences(): array
+    {
+        $starting = $this->workspace->getSystemField('startingParty');
+
+        return is_array($starting) ? array_values($starting) : [];
+    }
+
+    /** @return list<array{id: string, name: string}> The battle presentation's arenas; none without one. */
+    private function readArenaChoices(): array
+    {
+        try {
+            $catalog = BattlePresentationCatalog::loadCode($this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets');
+        } catch (\Throwable) {
+            return [];
+        }
+        $choices = $catalog?->getArenaChoices() ?? [];
+
+        return array_map(static fn(string|int $id, string $name): array => ['id' => (string) $id, 'name' => $name], array_keys($choices), $choices);
+    }
+
+    /** The Engine's item store for this project, as authored data reads it. */
+    private function loadItemStore(): ItemStore
+    {
+        EngineDataBootstrap::ensure($this->workspace->projectRoot);
+
+        $items = ConfigStore::has(ItemStore::class) ? ConfigStore::get(ItemStore::class) : null;
+
+        return $items instanceof ItemStore ? $items
+            : throw new SessionRefusal('The project\'s items cannot be read, so a battle test party cannot be set up.');
+    }
+
+    /**
+     * What a battle reads from disk that has unsaved edits: every database
+     * but System (whose battle test the overlay carries) and every
+     * cutscene, since summons play them. Maps are not part of a battle.
+     *
+     * @return list<string>
+     */
+    private function listBattleUnsavedChanges(): array
+    {
+        $system = $this->workspace->getRecordDatabase('system');
+        $unsaved = [];
+        foreach ($this->workspace->listSaveableDatabases() as $label => $database) {
+            if ($database !== $system && $database->isDirty()) {
+                $unsaved[] = $label;
+            }
+        }
+        foreach ($this->workspace->cutscenes?->dirtyAssets() ?? [] as $asset) {
+            $unsaved[] = $asset->type->noun() . ' ' . $asset->id;
+        }
+
+        return $unsaved;
+    }
+
+    /** Ends what the session started that would outlive it: a running playtest or battle test. */
     public function close(): void
     {
         $this->playtest?->stop();
+        $this->battleTestRun?->stop();
     }
 
     /** Whether any map or database has changes not yet saved. */

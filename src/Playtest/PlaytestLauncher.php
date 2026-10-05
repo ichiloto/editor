@@ -62,6 +62,31 @@ final class PlaytestLauncher
      */
     public function start(PlaytestOverlay $overlay, string $rendererId, string $logPath): PlaytestRun
     {
+        return $this->spawn($overlay, ['play', '--no-tmux', '--no-interaction', '--renderer=' . $rendererId, '-d', $overlay->root], $logPath);
+    }
+
+    /**
+     * Starts a battle test in the background with a renderer of its own, as
+     * {@see start()} starts a playtest: `ichiloto battle` against a battle
+     * test overlay, fighting the named troop with the party and arena its
+     * system data's battle test sets.
+     *
+     * @param string $troop The troop to fight, by name.
+     * @throws RuntimeException When the process cannot start.
+     */
+    public function startBattle(PlaytestOverlay $overlay, string $rendererId, string $logPath, string $troop): PlaytestRun
+    {
+        return $this->spawn($overlay, ['battle', '--no-interaction', '--renderer=' . $rendererId, '-d', $overlay->root, '--troop', $troop], $logPath);
+    }
+
+    /**
+     * Runs a console command against an overlay, reading nothing and writing
+     * its output to a log.
+     *
+     * @param list<string> $arguments The command and its options.
+     */
+    private function spawn(PlaytestOverlay $overlay, array $arguments, string $logPath): PlaytestRun
+    {
         $log = @fopen($logPath, 'ab');
         if (! is_resource($log)) {
             throw new RuntimeException("Unable to open the playtest log at {$logPath}.");
@@ -70,7 +95,7 @@ final class PlaytestLauncher
         try {
             $pipes = [];
             $process = @proc_open(
-                [PHP_BINARY, $this->consoleBinary, 'play', '--no-tmux', '--no-interaction', '--renderer=' . $rendererId, '-d', $overlay->root],
+                [PHP_BINARY, $this->consoleBinary, ...$arguments],
                 [0 => ['file', '/dev/null', 'r'], 1 => $log, 2 => $log],
                 $pipes,
                 $overlay->root,

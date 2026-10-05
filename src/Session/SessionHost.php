@@ -399,6 +399,12 @@ final class SessionHost
             'playtest.start' => $session->startPlaytest(self::requireString($params, 'map'), self::requireInt($params, 'x'), self::requireInt($params, 'y')),
             'playtest.status' => $session->describePlaytest(),
             'playtest.stop' => $session->stopPlaytest(),
+            'battleTest.describe' => $session->describeBattleTest(),
+            'battleTest.apply' => $session->applyBattleTest(is_array($params['battleTest'] ?? null) ? $params['battleTest']
+                : throw new InvalidRequest('"battleTest" must be a battle test object.')),
+            'battleTest.start' => $session->startBattleTest(array_key_exists('troop', $params) ? self::requireInt($params, 'troop') : null),
+            'battleTest.status' => $session->describeBattleTestRun(),
+            'battleTest.stop' => $session->stopBattleTest(),
             default => throw new InvalidRequest(sprintf('Unknown method "%s".', $method)),
         };
     }

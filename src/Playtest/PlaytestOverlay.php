@@ -8,6 +8,7 @@ use Ichiloto\Editor\Database\PhpDataFile;
 use Ichiloto\Editor\Database\PhpValueExporter;
 use Ichiloto\Editor\Events\EventMarkers;
 use Ichiloto\Engine\Field\MapGridSource;
+use Ichiloto\Engine\Scenes\Arena\ProjectBattleTest;
 use RuntimeException;
 use Throwable;
 
@@ -37,15 +38,15 @@ final class PlaytestOverlay
 
     /**
      * @param string $root The overlay project root.
-     * @param string $mapId The map the playtest starts on.
-     * @param int $spawnX The spawn column.
-     * @param int $spawnY The spawn row.
+     * @param string|null $mapId The map the playtest starts on; null for a battle test, which starts on none.
+     * @param int|null $spawnX The spawn column.
+     * @param int|null $spawnY The spawn row.
      */
     private function __construct(
         public readonly string $root,
-        public readonly string $mapId,
-        public readonly int $spawnX,
-        public readonly int $spawnY,
+        public readonly ?string $mapId = null,
+        public readonly ?int $spawnX = null,
+        public readonly ?int $spawnY = null,
     ) {
     }
 
@@ -59,6 +60,48 @@ final class PlaytestOverlay
      * @return self
      */
     public static function create(string $projectRoot, string $mapId, int $spawnX, int $spawnY): self
+    {
+        $root = self::build($projectRoot, static function (array $system) use ($mapId, $spawnX, $spawnY): array {
+            $player = $system['startingPositions']['player'] ?? [];
+            $player = is_array($player) ? $player : [];
+            $player['destinationMap'] = $mapId;
+            $player['spawnPoint'] = ['x' => $spawnX, 'y' => $spawnY];
+            $player['spawnSprite'] = $player['spawnSprite'] ?? ['^'];
+            $system['startingPositions']['player'] = $player;
+
+            return $system;
+        }, 'a playtest spawn');
+
+        return new self($root, $mapId, $spawnX, $spawnY);
+    }
+
+    /**
+     * Builds an overlay for a battle test: the author's project with its
+     * system data's battle test replaced by the one given (unsaved edits
+     * included), or removed when it is empty, so `ichiloto battle` reads the
+     * party and arena the author set without the project being written.
+     *
+     * @param array<string, mixed> $battleTest The battle test, as the Engine's ProjectBattleTest writes it.
+     */
+    public static function createForBattle(string $projectRoot, array $battleTest): self
+    {
+        return new self(self::build($projectRoot, static function (array $system) use ($battleTest): array {
+            unset($system[ProjectBattleTest::SYSTEM_KEY]);
+
+            return $battleTest === [] ? $system : [...$system, ProjectBattleTest::SYSTEM_KEY => $battleTest];
+        }, 'a battle test'));
+    }
+
+    /**
+     * Fills a fresh overlay directory: links to the project throughout, a
+     * fresh `.data` holding only the player settings, and a system.php the
+     * given change has rewritten.
+     *
+     * @param callable(array<string, mixed>): array<string, mixed> $rewriteSystem
+     * @param string $purpose What the rewrite is for, as an error names it.
+     * @return string The overlay root.
+     */
+    private static function build(string $projectRoot, callable $rewriteSystem, string $purpose): string
     {
         $projectRoot = rtrim($projectRoot, DIRECTORY_SEPARATOR);
         $root = sys_get_temp_dir() . DIRECTORY_SEPARATOR . uniqid('ichiloto-playtest-', true);
@@ -94,9 +137,8 @@ final class PlaytestOverlay
             self::writeSystemOverride(
                 $dataSource . DIRECTORY_SEPARATOR . 'system.php',
                 $dataTarget . DIRECTORY_SEPARATOR . 'system.php',
-                $mapId,
-                $spawnX,
-                $spawnY,
+                $rewriteSystem,
+                $purpose,
             );
         } catch (\Throwable $throwable) {
             // An overlay that could not be finished is not left behind: what
@@ -107,7 +149,7 @@ final class PlaytestOverlay
             throw $throwable;
         }
 
-        return new self($root, $mapId, $spawnX, $spawnY);
+        return $root;
     }
 
     /**
@@ -147,6 +189,10 @@ final class PlaytestOverlay
     {
         $mapsSource = $projectRoot . '/assets/Maps';
         $mapsTarget = $this->root . '/assets/Maps';
+        if ($this->mapId === null || $this->spawnX === null || $this->spawnY === null) {
+            throw new RuntimeException('A cinematic playtest starts on a map cell.');
+        }
+
         $segments = explode('/', trim(str_replace('\\', '/', $this->mapId), '/'));
         $leaf = $segments[array_key_last($segments)];
         $mapSourceDirectory = $mapsSource . '/' . implode('/', $segments);
@@ -306,24 +352,23 @@ final class PlaytestOverlay
     }
 
     /**
-     * Writes a copy of system.php with the playtest spawn substituted in.
+     * Writes a copy of system.php with one change made: a playtest's spawn,
+     * or a battle test's setup.
      *
      * The rest of the author's system data — party, battle settings, title
      * screen — is preserved exactly, so the playtest is the real game.
      *
      * @param string $sourcePath The project's system.php.
      * @param string $targetPath The overlay's system.php.
-     * @param string $mapId The map to start on.
-     * @param int $spawnX The spawn column.
-     * @param int $spawnY The spawn row.
+     * @param callable(array<string, mixed>): array<string, mixed> $rewriteSystem The change.
+     * @param string $purpose What the change is for, as an error names it.
      * @return void
      */
     private static function writeSystemOverride(
         string $sourcePath,
         string $targetPath,
-        string $mapId,
-        int $spawnX,
-        int $spawnY,
+        callable $rewriteSystem,
+        string $purpose,
     ): void {
         if (! is_file($sourcePath)) {
             throw new RuntimeException("The project has no assets/Data/system.php to base a playtest on.");
@@ -341,16 +386,11 @@ final class PlaytestOverlay
 
         if (! PhpValueExporter::isExportable($payload)) {
             throw new RuntimeException(
-                'system.php contains PHP objects, so a playtest spawn cannot be written without rewriting them.',
+                "system.php contains PHP objects, so {$purpose} cannot be written without rewriting them.",
             );
         }
 
-        $player = $payload['startingPositions']['player'] ?? [];
-        $player = is_array($player) ? $player : [];
-        $player['destinationMap'] = $mapId;
-        $player['spawnPoint'] = ['x' => $spawnX, 'y' => $spawnY];
-        $player['spawnSprite'] = $player['spawnSprite'] ?? ['^'];
-        $payload['startingPositions']['player'] = $player;
+        $payload = $rewriteSystem($payload);
 
         PhpDataFile::writeTransactionally(
             $targetPath,

@@ -21,6 +21,7 @@ use Ichiloto\Editor\Field\ProjectNpc;
 use Ichiloto\Editor\Inspector\InputControlType;
 use Ichiloto\Editor\PermanentGrowthCatalog;
 use Ichiloto\Engine\Entities\States\StateDisposition;
+use Ichiloto\Engine\Scenes\Arena\ProjectBattleTest;
 use Ichiloto\Engine\Animations\AnimationTargetPosition;
 use Ichiloto\Editor\Events\ProjectScriptCommands;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandDefinition;
@@ -927,11 +928,13 @@ final class RecordSchemaCatalog
                 new RecordField('battle.activeTime.speedFactorPercent', 'ATB Speed Factor %', InputControlType::INTEGER),
                 new RecordField('battle.activeTime.openingVariance', 'ATB Opening Variance', InputControlType::INTEGER, removeWhenEmpty: true),
                 new RecordField('battle.activeTime.openingSpeedFactorPercent', 'ATB Opening Speed %', InputControlType::INTEGER, removeWhenEmpty: true),
+                // Test settings, as RPG Maker keeps its Battle Test: normal play never reads them.
+                new RecordField(ProjectBattleTest::SYSTEM_KEY, 'Battle Test', removeWhenEmpty: true, codec: RecordFieldCodec::BATTLE_TEST),
             ],
             labelKey: 'title',
             identityKey: null,
             // The keys System owns; its elements are the Types category's.
-            projection: new WholeFileProjection(['title', 'currency', 'startingPositions', 'startingParty', 'startingInventory', 'battle']),
+            projection: new WholeFileProjection(['title', 'currency', 'startingPositions', 'startingParty', 'startingInventory', 'battle', ProjectBattleTest::SYSTEM_KEY]),
             subLists: [
                 new RecordSubList(
                     key: 'startingParty',

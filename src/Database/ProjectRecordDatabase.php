@@ -17,6 +17,7 @@ use Ichiloto\Editor\Inspector\InputControl;
 use Ichiloto\Editor\Inspector\InputControlType;
 use RuntimeException;
 use Ichiloto\Engine\Battle\Presentation\BattlerSlot;
+use Ichiloto\Engine\Scenes\Arena\ProjectBattleTest;
 
 /**
  * A schema-driven Database category.
@@ -3282,6 +3283,23 @@ final class ProjectRecordDatabase
             return [intval($parts[0]), intval($parts[1])];
         }
 
+        if ($field->codec === RecordFieldCodec::BATTLE_TEST) {
+            if ($trimmed === '' && $field->removeWhenEmpty) {
+                return null;
+            }
+
+            $decoded = json_decode($trimmed, true);
+
+            if (! is_array($decoded)) {
+                throw new \InvalidArgumentException(sprintf('%s must be a battle test, written as a JSON object.', $field->label));
+            }
+
+            // The Engine's own reading: a shape it would refuse is refused here, before anything is written.
+            $test = ProjectBattleTest::fromArray($decoded)->toArray();
+
+            return $test === [] && $field->removeWhenEmpty ? null : $test;
+        }
+
         if ($field->codec === RecordFieldCodec::BATTLER_SLOT) {
             if ($trimmed === '' && $field->removeWhenEmpty) {
                 return null;
@@ -3479,6 +3497,9 @@ final class ProjectRecordDatabase
                 : ProjectRecord::stringify($value),
             RecordFieldCodec::POINT => is_array($value)
                 ? implode(', ', array_map(strval(...), array_values($value)))
+                : ProjectRecord::stringify($value),
+            RecordFieldCodec::BATTLE_TEST => is_array($value)
+                ? (string) json_encode($value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
                 : ProjectRecord::stringify($value),
             RecordFieldCodec::BATTLER_SLOT => is_array($value)
                 ? implode(', ', array_map(static fn(string $key): string => ProjectRecord::stringify($value[$key] ?? ''),

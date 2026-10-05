@@ -84,4 +84,12 @@ enum RecordFieldCodec: string
      * is kept.
      */
     case BATTLER_SLOT = 'battler_slot';
+
+    /**
+     * A project's battle test, the Engine's ProjectBattleTest: the troop to
+     * preselect, the party (each member's actor, level, equipment and
+     * loadout) and the arena. Stored as the Engine writes it and shown as
+     * one line of JSON; a value the Engine would not read is refused.
+     */
+    case BATTLE_TEST = 'battle_test';
 }
