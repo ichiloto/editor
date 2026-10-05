@@ -12,6 +12,7 @@ use Ichiloto\Editor\Cutscenes\CutsceneAsset;
 use Ichiloto\Editor\Cutscenes\CutsceneType;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Engine\Animations\Timelines\EffectTimelineLibrary;
+use Ichiloto\Engine\Battle\CounterAttackRule;
 use Ichiloto\Engine\Battle\Presentation\BattlePresentationCatalog;
 use Ichiloto\Engine\Rendering\Tilesets\Tileset;
 use Ichiloto\Engine\Entities\Enumerations\ArmorType;
@@ -44,6 +45,7 @@ final class ReferenceCatalog
         'actor_ids',
         'classes',
         'attack_skills',
+        'counter_skills',
         'resolution_kinds',
         'piece_connections',
         'resolution_scopes',
@@ -150,6 +152,8 @@ final class ReferenceCatalog
             // What an actor's Attack command may use: a basic skill from the
             // catalogue that can be used in battle.
             'attack_skills' => $this->attackSkillNames(),
+            // What a counter attack may respond with, by the Engine's own rule.
+            'counter_skills' => $this->counterSkillNames(),
             // A class restricts what its members equip by the engine's type names.
             // How a skill effect resolves, how often a skill rolls, and what
             // kind of spell it is: the Engine's own vocabularies.
@@ -244,6 +248,29 @@ final class ReferenceCatalog
             static fn(Skill $skill): bool => $skill instanceof BasicSkill
                 && in_array($skill->occasion, [Occasion::ALWAYS, Occasion::BATTLE_SCREEN], true),
         ));
+    }
+
+    /**
+     * The skills a counter attack may respond with: those the Engine's
+     * CounterAttackRule accepts (a battle-usable basic or special skill
+     * targeting one living opponent, without summon or required weapons).
+     *
+     * @return list<string>
+     */
+    private function counterSkillNames(): array
+    {
+        $catalog = $this->workspace->loadSkillCatalog();
+        $names = [];
+        foreach (array_keys($catalog->getSkills()) as $name) {
+            try {
+                new CounterAttackRule((string) $name)->resolveSkill($catalog);
+                $names[] = (string) $name;
+            } catch (\InvalidArgumentException) {
+                continue;
+            }
+        }
+
+        return $names;
     }
 
     /** @return ProjectRecord[] The project's animations, in file order. */

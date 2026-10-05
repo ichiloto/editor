@@ -207,6 +207,18 @@ final class ProjectActor
     }
 
     /**
+     * Returns the skill the actor counters with, from `data.counterAttack.skill`.
+     *
+     * @return string The skill's name, or an empty string when the actor does not counter.
+     */
+    public function getCounterAttackSkill(): string
+    {
+        $skill = $this->getData()['counterAttack']['skill'] ?? '';
+
+        return is_string($skill) ? $skill : '';
+    }
+
+    /**
      * Returns the Engine weapon type an attack style names, read by the
      * Engine's own rule, or null when it names none.
      */
@@ -618,6 +630,22 @@ final class ProjectActor
                 unset($this->payload['data']['attackSkill']);
             } else {
                 $this->payload['data']['attackSkill'] = $skill;
+            }
+
+            $this->touchState();
+            return;
+        }
+
+        if ($field === 'counterAttack') {
+            // No counter is the absence of the grant, so it removes the key,
+            // as the Engine reads an omitted counterAttack; any other value
+            // names the skill it responds with.
+            $skill = trim((string) $value);
+
+            if ($skill === '') {
+                unset($this->payload['data']['counterAttack']);
+            } else {
+                $this->payload['data']['counterAttack'] = ['skill' => $skill];
             }
 
             $this->touchState();

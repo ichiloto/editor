@@ -1259,6 +1259,18 @@ battle-entry rules match against. An omitted classification is the engine's
 `ordinary` default; the picker shows that without writing the key into older
 data.
 
+### Counter Attacks
+
+An actor, an enemy, a state or a non-magic skill can grant a **Counter
+Attack**: the skill its bearer answers with when a physical hit lands on
+it, after the attacker has returned, never chaining into another counter.
+It is off unless chosen. The picker offers only skills the Engine accepts
+for a counter (a battle-usable basic or special skill aimed at one living
+opponent), and choosing none removes the grant, as the Engine reads one
+left out. A state grants it while active, and a skill once learned; spells
+do not grant one. Validation reports a grant the Engine would refuse, with
+the Engine's own reason.
+
 ### Battle Art
 
 The art an actor or enemy fights with in a graphical battle is bound to it as

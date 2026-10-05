@@ -175,6 +175,8 @@ final class RecordSchemaCatalog
                 new RecordField('disposition', 'Disposition',
                     options: array_map(static fn(StateDisposition $disposition): string => $disposition->value, StateDisposition::cases()),
                     removeWhenEmpty: true, displayDefault: StateDisposition::HARMFUL->value),
+                // A bearer of this state counters while it is active.
+                self::counterAttackField(),
             ],
             labelKey: 'name',
             identityKey: 'id',
@@ -1158,6 +1160,7 @@ final class RecordSchemaCatalog
                 new RecordField('elementAffinities', 'Element Affinities', removeWhenEmpty: true, codec: RecordFieldCodec::AFFINITIES),
                 new RecordField('stateResistances', 'State Resistances', removeWhenEmpty: true, codec: RecordFieldCodec::KEY_VALUES),
                 RecordField::reference('knowledgeSubjectId', 'Knowledge Subject', 'knowledge_subjects', allowsNone: true),
+                self::counterAttackField(),
             ],
             labelKey: 'name',
             identityKey: 'name',
@@ -1334,7 +1337,8 @@ final class RecordSchemaCatalog
                 variants: $variants,
                 variantKey: 'type',
             ),
-            fieldsFor: static fn(array $row): array => strval($row['kind'] ?? '') === 'magic' ? [...$fields, $effectType] : $fields,
+            // A spell has an effect type; a learned non-magic ability may grant a counter attack instead.
+            fieldsFor: static fn(array $row): array => strval($row['kind'] ?? '') === 'magic' ? [...$fields, $effectType] : [...$fields, self::counterAttackField()],
             recordClass: Skill::class,
             numberedFiles: true,
         );
@@ -1631,6 +1635,19 @@ final class RecordSchemaCatalog
             ),
         );
     }
+    /**
+     * A counter attack: the skill a battler responds with when a physical
+     * hit lands on it, after the attacker returns, never chaining. It is off
+     * unless chosen, and choosing none removes it, as the Engine reads an
+     * omitted counterAttack. The picker offers only skills the Engine's
+     * CounterAttackRule accepts.
+     */
+    private static function counterAttackField(): RecordField
+    {
+        return new RecordField('counterAttack.skill', 'Counter Attack', reference: 'counter_skills', removeWhenEmpty: true,
+            allowsNone: true, displayDefault: '(no counter)');
+    }
+
     /** Where battle art is bound to battlers as data, the Engine's {@see BattlerBindings::FILE}. */
     public const string BATTLERS_PATH = 'assets/' . BattlerBindings::FILE;
 

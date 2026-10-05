@@ -61,6 +61,9 @@ final class ActorAuthoring
     /** What the Attack Skill row reads when the actor uses the Engine's own attack. */
     public const string BUILT_IN_ATTACK = '(Built-in attack)';
 
+    /** What an actor without a counter attack reads as. */
+    public const string NO_COUNTER = '(no counter)';
+
     /** @var array<string, string> Which variant each actor's rows are editing. */
     private array $variantSelections = [];
 
@@ -578,6 +581,17 @@ final class ActorAuthoring
                 'noneLabel' => self::BUILT_IN_ATTACK,
                 'field' => 'attackSkill',
             ],
+            [
+                // The skill this actor responds with when a physical hit
+                // lands on it; off unless chosen, picked from the skills the
+                // Engine's counter rule accepts.
+                'label' => 'Counter Attack',
+                'value' => $actor->getCounterAttackSkill() === '' ? self::NO_COUNTER : $actor->getCounterAttackSkill(),
+                'reference' => 'counter_skills',
+                'allowsNone' => true,
+                'noneLabel' => self::NO_COUNTER,
+                'field' => 'counterAttack',
+            ],
             ...$this->actorSummonFields($workspace, $actor),
             [
                 'label' => 'Level',
@@ -695,7 +709,7 @@ final class ActorAuthoring
      */
     private static function coerceActorFieldValue(string $field, string $rawValue): string|int
     {
-        if (in_array($field, ['name', 'description', 'class', 'attackStyle', 'attackSkill', 'id', 'defaultNaturalVariantId', 'summons'], true)) {
+        if (in_array($field, ['name', 'description', 'class', 'attackStyle', 'attackSkill', 'counterAttack', 'id', 'defaultNaturalVariantId', 'summons'], true)) {
             return trim($rawValue);
         }
 
