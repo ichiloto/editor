@@ -1214,6 +1214,31 @@ written, shown read-only as **Legacy Frames** and **Legacy Cues** beside its
 **Legacy Position**; the Engine still plays them through its importer. New
 animation is authored as effect timelines.
 
+Such a record can be converted to a timeline: **Shift+T** in the terminal,
+or **Convert to timeline** on its page in the GUI editor. Both use the same
+conversion, which lists what plays the record now (skills, items, roles and
+field scripts) and asks for the timing its consumer needs. Nothing is filled
+in for it:
+
+- Who plays the timeline:
+  - a battle paced by its phases;
+  - a battle at a fixed rate;
+  - a field script at a fixed rate.
+- For a battle, whether the record names it as its **Target Effect** or its
+  **Caster Effect**.
+- The timeline's name, its frames per second (for a fixed rate), the ticks
+  each original frame lasts, and the rest frame shown with reduced motion.
+- Whether the record's flash cues become flash tracks. Battles have always
+  played them; field animations never did.
+
+Preview shows every file as it would be written: the new
+`assets/Animations/<name>/<name>.timeline.php`, and for a battle the record
+naming it. Write applies exactly that preview as one undo step. A changed
+choice, or a file changed since, needs a fresh preview, and pending edits are
+saved or undone first. The record's legacy frames and cues stay as written,
+and field scripts keep playing the record until their own command names the
+timeline.
+
 ### Troops
 
 Encounter groups. Each troop has a `Name`, an optional `Escape Policy`, and a

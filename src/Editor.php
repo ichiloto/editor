@@ -34,6 +34,8 @@ use Ichiloto\Editor\Database\RecordRefusal;
 use Ichiloto\Editor\Database\SharedFileTransaction;
 use Ichiloto\Editor\Database\ConditionCodec;
 use Ichiloto\Editor\Database\QuestReferences;
+use Ichiloto\Editor\Animations\AnimationConversionEditor;
+use Ichiloto\Editor\Animations\LegacyAnimationConversion;
 use Ichiloto\Editor\Database\AffinityEditor;
 use Ichiloto\Editor\Database\ConditionEditor;
 use Ichiloto\Editor\Field\NpcInspector;
@@ -496,6 +498,7 @@ final class Editor
     private readonly ReferencePicker $referencePicker;
     private readonly ConditionEditor $conditionEditor;
     private readonly AffinityEditor $affinityEditor;
+    private readonly AnimationConversionEditor $animationConversion;
     private readonly WorldWriteEditor $worldWriteEditor;
     private readonly BattleEntryPredicateEditor $battleEntryPredicateEditor;
     private const string WORLD_WRITE_NAME_FIELD = '__world_write_name';
@@ -736,6 +739,7 @@ final class Editor
         $this->referencePicker = new ReferencePicker();
         $this->conditionEditor = new ConditionEditor();
         $this->affinityEditor = new AffinityEditor();
+        $this->animationConversion = new AnimationConversionEditor();
         $this->worldWriteEditor = new WorldWriteEditor();
         $this->battleEntryPredicateEditor = new BattleEntryPredicateEditor();
         $this->modals = new ModalStack();
@@ -1834,6 +1838,12 @@ final class Editor
             return;
         }
 
+        if ($this->animationConversion->isOpen()) {
+            $this->handleAnimationConversionInput($input);
+
+            return;
+        }
+
         if ($this->worldWriteEditor->isOpen()) {
             $this->handleWorldWriteEditorInput($input);
 
@@ -2847,6 +2857,11 @@ final class Editor
             return;
         }
 
+        if ($this->animationConversion->isOpen()) {
+            $this->handleAnimationConversionInput($input);
+            return;
+        }
+
         if ($this->worldWriteEditor->isOpen()) {
             $this->handleWorldWriteEditorInput($input);
             return;
@@ -2970,6 +2985,12 @@ final class Editor
 
         if ($this->databaseFocus === self::DATABASE_FOCUS_LIST && ($input === '[' || $input === ']')) {
             $this->moveDatabaseRecord($input === '[' ? -1 : 1);
+            return;
+        }
+
+        // Shift+T converts a legacy cell-frame animation to a timeline.
+        if ($this->getSelectedDatabaseCategoryDefinition()->key === 'animations' && $this->isShiftLetterShortcut($input, 'T')) {
+            $this->openAnimationConversion();
             return;
         }
 
@@ -5318,6 +5339,10 @@ final class Editor
         if ($this->getSelectedRecordDatabase()?->supportsDurableReorder() === true) {
             $lines[] = '  [ / ]              move the entry up or down; this';
             $lines[] = '                     category stores its order';
+        }
+        if ($this->getSelectedDatabaseCategoryDefinition()->key === 'animations') {
+            $lines[] = '  Shift+T            convert a legacy cell-frame record';
+            $lines[] = '                     to a timeline, previewed first';
         }
         $lines[] = '  Shift+O / Shift+X  add or remove an objective, beat,';
         $lines[] = '                     troop member or script command';
@@ -9897,6 +9922,122 @@ final class Editor
      * @param array<string, mixed> $field The settings-pane field descriptor.
      * @return void
      */
+    /**
+     * Opens the timeline conversion on the selected animation record, when
+     * it still holds legacy cell frames or cues.
+     */
+    private function openAnimationConversion(): void
+    {
+        if (! $this->workspace instanceof ProjectWorkspace) {
+            return;
+        }
+        $index = $this->getSelectedRecordIndex();
+        $id = $this->getSelectedRecordDatabase()?->getRecordByIndex($index)?->get('id');
+        try {
+            $facts = LegacyAnimationConversion::describe($this->workspace, is_int($id) ? $id : -1);
+        } catch (InvalidArgumentException $refusal) {
+            $this->setStatus($refusal->getMessage(), StatusLevel::WARN);
+            $this->renderDatabasePanes(['settings']);
+
+            return;
+        }
+        $this->animationConversion->open($index, $facts);
+        $this->databaseFocus = self::DATABASE_FOCUS_SETTINGS;
+        $this->statusMessage = sprintf('Converting %s to a timeline.', $this->animationConversion->getName());
+        $this->renderDatabasePanes(['settings']);
+    }
+
+    /**
+     * Handles input while a conversion is being set up: rows move with
+     * Up/Down, choices step with Left/Right, text rows take typing, Enter on
+     * Preview plans it and on Write applies exactly that plan as one undo
+     * step, and Escape leaves everything unchanged.
+     */
+    private function handleAnimationConversionInput(string $input): void
+    {
+        $conversion = $this->animationConversion;
+        if ($input === "\033" || $input === "\x1b") {
+            $conversion->close();
+            $this->statusMessage = 'Conversion cancelled; nothing was written.';
+            $this->renderDatabasePanes(['settings']);
+
+            return;
+        }
+        match (true) {
+            str_contains($input, "\033[A") => $conversion->move(-1),
+            str_contains($input, "\033[B") => $conversion->move(1),
+            str_contains($input, "\033[D") => $conversion->cycle(-1),
+            str_contains($input, "\033[C") => $conversion->cycle(1),
+            $input === "\x7f" || $input === "\x08" => $conversion->backspace(),
+            $input === "\n" || $input === "\r" => $this->submitAnimationConversion(),
+            mb_strlen($input) === 1 && ctype_print($input) => $conversion->type($input),
+            default => null,
+        };
+        if ($conversion->isOpen()) {
+            $this->renderDatabasePanes(['settings']);
+        }
+    }
+
+    /** Enter in the conversion: preview it, write the previewed plan, or move to the next row. */
+    private function submitAnimationConversion(): void
+    {
+        $conversion = $this->animationConversion;
+        if (! $this->workspace instanceof ProjectWorkspace) {
+            return;
+        }
+        if ($conversion->getSelectedRow() === 'preview') {
+            if ($conversion->preview($this->workspace)) {
+                $conversion->move(1);
+                $this->statusMessage = 'Previewed. Write applies exactly these files.';
+            }
+
+            return;
+        }
+        if ($conversion->getSelectedRow() !== 'write') {
+            $conversion->move(1);
+
+            return;
+        }
+        $plan = $conversion->getPlan();
+        if ($plan === null) {
+            return;
+        }
+        if ($this->workspace->hasUnsavedChanges()) {
+            $conversion->setError('Save or undo pending edits before converting. No files were changed.');
+
+            return;
+        }
+        try {
+            $command = new SourceSetCommand(sprintf('Convert %s to a timeline', $conversion->getName()), 'this animation conversion', $plan, $this->workspace,
+                fn(): ?ProjectWorkspace => $this->workspace,
+                function (ProjectWorkspace $workspace): void { $this->workspace = $workspace; },
+            );
+            $command->execute();
+        } catch (Throwable $failure) {
+            // Files changed since the preview, or the write failed: nothing is written; preview again.
+            $conversion->setError($failure->getMessage());
+
+            return;
+        }
+        $this->recordCommand($command);
+        $name = $conversion->getName();
+        $conversion->close();
+        $this->setStatus(sprintf('%s converted. Ctrl+Z restores the files.', $name));
+        $this->requestFullRender();
+    }
+
+    /** @return list<string> The conversion's rows, in the settings pane. */
+    private function buildAnimationConversionRows(): array
+    {
+        $width = $this->recordPaneMetrics()['width'];
+        $lines = [sprintf('Convert %s to a timeline', $this->animationConversion->getName()), ''];
+        foreach ($this->animationConversion->describeRows($this->projectRoot) as $line) {
+            $lines = [...$lines, ...($line === '' ? [''] : SettingsPaneLayout::wrapProse($line, $width))];
+        }
+
+        return $lines;
+    }
+
     private function openAffinityEditor(array $field): void
     {
         if (! $this->workspace instanceof ProjectWorkspace) {
@@ -12848,6 +12989,13 @@ final class Editor
                     'a/d:Add/Del  n/x:Edit  ?:Help',
                     '?:Help',
                 ),
+                $this->animationConversion->isOpen() => $this->fitHelp(
+                    $layout['settingsWidth'],
+                    'Up/Down:Row  Left/Right:Choose  Type:Text  Enter:Preview/Write  Esc:Cancel',
+                    'Left/Right:Choose  Enter:Preview/Write  Esc:Cancel',
+                    'Enter:Preview/Write  Esc:Cancel',
+                    '?:Help',
+                ),
                 $this->affinityEditor->isOpen() => $this->fitHelp(
                     $layout['settingsWidth'],
                     'a:Add  d:Delete  n:Element  x/X:Effect  Enter:Done  Esc:Cancel',
@@ -13118,6 +13266,10 @@ final class Editor
 
         if ($this->affinityEditor->isOpen()) {
             return $this->buildAffinityEditorRows();
+        }
+
+        if ($this->animationConversion->isOpen()) {
+            return $this->buildAnimationConversionRows();
         }
 
         if ($this->worldWriteEditor->isOpen()) {
