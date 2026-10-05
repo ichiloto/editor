@@ -57,6 +57,16 @@ final class SourceSetPlan
     /** @return array<string, string> */
     public function getProposedSources(): array { return $this->proposals; }
 
+    /**
+     * What the plan is exactly: every source it read and every byte it would
+     * write. An author who reviewed a plan confirms this; a plan made again
+     * from changed choices or changed files has another.
+     */
+    public function getFingerprint(): string
+    {
+        return hash('sha256', serialize([$this->root, $this->watched, $this->originals, $this->proposals]));
+    }
+
     /** @return list<string> Every changed path. */
     public function apply(): array
     {

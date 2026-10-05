@@ -56,7 +56,7 @@ it('asks first, then writes the timeline and the battle binding as one undo step
     $root = legacyAnimationProject();
     $session = EditorSession::open($root);
     $index = legacyAnimationIndex($session, 'Old Spark');
-    $convert = static fn(?string $answer) => $session->convertAnimation($index, 'old-spark', 'battle_phase', null, 1, 0, true, 'targetEffect', $answer);
+    $convert = static fn(?string $answer, ?string $confirm = null) => $session->convertAnimation($index, 'old-spark', 'battle_phase', null, 1, 0, true, 'targetEffect', $answer, $confirm);
     $timeline = $root . '/assets/Animations/old-spark/old-spark.timeline.php';
 
     $asked = $convert(null);
@@ -66,7 +66,7 @@ it('asks first, then writes the timeline and the battle binding as one undo step
         ->and($asked['preview']['assets/Data/animations.php'])->toContain("// A spark in the old cell frames.", "'targetEffect' => 'old-spark'")
         ->and(file_exists($timeline))->toBeFalse();
 
-    expect($convert('write'))->toMatchArray(['changed' => true, 'reloaded' => true])
+    expect($convert('write', $asked['confirm']))->toMatchArray(['changed' => true, 'reloaded' => true])
         ->and(file_get_contents($root . '/assets/Data/animations.php'))->toBe($asked['preview']['assets/Data/animations.php'])
         ->and(file_get_contents($root . '/assets/Data/animations.php'))->toContain("'frames' => [", "'cues' => [")
         ->and(new EffectTimelineLibrary($root . '/assets')->load('old-spark', forBattle: true))->not->toBeNull();
@@ -82,7 +82,9 @@ it('converts for a field consumer at an explicit fixed rate, leaving the record 
     $root = legacyAnimationProject();
     $session = EditorSession::open($root);
 
-    $session->convertAnimation(legacyAnimationIndex($session, 'Old Spark'), 'field-old-spark', 'fixed', 25, 3, 0, false, null, 'write');
+    $index = legacyAnimationIndex($session, 'Old Spark');
+    $asked = $session->convertAnimation($index, 'field-old-spark', 'fixed', 25, 3, 0, false, null);
+    $session->convertAnimation($index, 'field-old-spark', 'fixed', 25, 3, 0, false, null, 'write', $asked['confirm']);
     $written = require $root . '/assets/Animations/field-old-spark/field-old-spark.timeline.php';
 
     expect(file_get_contents($root . '/assets/Data/animations.php'))->toBe(LEGACY_ANIMATIONS)
@@ -105,7 +107,27 @@ it('refuses, before writing, timing its consumer cannot use, a taken name, and p
     $name = array_find($session->readDatabaseRecord('animations', $index)['rows'], static fn(array $row): bool => ($row['key']['field'] ?? null) === 'name');
     $session->applyDatabaseRecord('animations', $index, $name['key'], 'Renamed Spark');
 
-    expect(fn() => $session->convertAnimation($index, 'old-spark', 'battle_phase', null, 1, 0, true, 'targetEffect', 'write'))
+    $asked = $session->convertAnimation($index, 'old-spark', 'battle_phase', null, 1, 0, true, 'targetEffect');
+    expect(fn() => $session->convertAnimation($index, 'old-spark', 'battle_phase', null, 1, 0, true, 'targetEffect', 'write', $asked['confirm']))
         ->toThrow(SessionRefusal::class, 'Save or undo pending edits')
         ->and(file_exists($root . '/assets/Animations/old-spark'))->toBeFalse();
+});
+
+it('writes only the plan that was previewed: other choices, or files changed since, are asked again', function () {
+    $root = legacyAnimationProject();
+    $session = EditorSession::open($root);
+    $index = legacyAnimationIndex($session, 'Old Spark');
+    $asked = $session->convertAnimation($index, 'old-spark', 'battle_phase', null, 1, 0, true, 'targetEffect');
+
+    // The author changed a choice after the preview.
+    expect(fn() => $session->convertAnimation($index, 'old-spark', 'battle_phase', null, 2, 0, true, 'targetEffect', 'write', $asked['confirm']))
+        ->toThrow(SessionRefusal::class, 'Review it again');
+
+    // The animations file changed on disk after the preview.
+    file_put_contents($root . '/assets/Data/animations.php', str_replace('// A spark in the old cell frames.', '// Edited elsewhere.', LEGACY_ANIMATIONS));
+
+    expect(fn() => $session->convertAnimation($index, 'old-spark', 'battle_phase', null, 1, 0, true, 'targetEffect', 'write', $asked['confirm']))
+        ->toThrow(SessionRefusal::class, 'Review it again')
+        ->and(file_exists($root . '/assets/Animations/old-spark'))->toBeFalse()
+        ->and(file_get_contents($root . '/assets/Data/animations.php'))->toContain('// Edited elsewhere.');
 });

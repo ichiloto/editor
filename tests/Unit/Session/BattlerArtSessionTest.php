@@ -133,3 +133,34 @@ it('previews an actor in the lead party slot with its art as set, unsaved edits 
         ->and($preview['formation']['members'])->toBe([])
         ->and($session->describeBattlerArt('actors', $identity))->toMatchArray(['index' => $art, 'owner' => 'data']);
 });
+
+it('sets the ground point of a base image and the idle pose showing it as one undo step', function () {
+    $root = battlerArtProject();
+    $session = EditorSession::open($root);
+    $index = $session->createDatabaseRecord('battler_enemies', 'Regular Bat')['index'];
+    setBattlerRow($session, $index, 'artwork.image', 'Graphics/Enemies/Bat.png');
+    $heading = array_find($session->readDatabaseRecord('battler_enemies', $index)['rows'], static fn(array $row): bool => ($row['listHeading'] ?? false) === true);
+    $session->addDatabaseItem('battler_enemies', $index, $heading['key'], true);
+    setBattlerRow($session, $index, 'pose0Image', 'Graphics/Enemies/Bat.png');
+    $both = [
+        ['key' => readBattlerRow($session, $index, 'pose0Pivot')['key'], 'value' => '0.25, 0.9'],
+        ['key' => readBattlerRow($session, $index, 'artwork.pivot')['key'], 'value' => '0.25, 0.9'],
+    ];
+
+    expect($session->applyDatabaseRecordValues('battler_enemies', $index, $both, 'Ground point')['changed'])->toBeTrue()
+        ->and(readBattlerRow($session, $index, 'pose0Pivot')['value'])->toBe('0.25, 0.9')
+        ->and(readBattlerRow($session, $index, 'artwork.pivot')['value'])->toBe('0.25, 0.9');
+
+    expect($session->undo()['label'])->toBe('Ground point')
+        ->and(readBattlerRow($session, $index, 'pose0Pivot')['value'])->toBe('')
+        ->and(readBattlerRow($session, $index, 'artwork.pivot')['value'])->toBe('');
+
+    $session->redo();
+    expect(readBattlerRow($session, $index, 'artwork.pivot')['value'])->toBe('0.25, 0.9');
+
+    // One refused value takes back the rest.
+    $refused = [['key' => readBattlerRow($session, $index, 'pose0Pivot')['key'], 'value' => '0.5, 0.5'],
+        ['key' => readBattlerRow($session, $index, 'artwork.pivot')['key'], 'value' => 'off the image']];
+    expect(fn() => $session->applyDatabaseRecordValues('battler_enemies', $index, $refused, 'Ground point'))->toThrow(SessionRefusal::class)
+        ->and(readBattlerRow($session, $index, 'pose0Pivot')['value'])->toBe('0.25, 0.9');
+});

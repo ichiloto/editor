@@ -50,6 +50,7 @@ use Ichiloto\Editor\Maps\MapLayers;
 use Ichiloto\Editor\Maps\MapReferences;
 use Ichiloto\Editor\Maps\TilePalette;
 use Ichiloto\Editor\History\SourceSetCommand;
+use Ichiloto\Editor\History\CommandGroup;
 use Ichiloto\Editor\History\SourceSetRequired;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
@@ -1399,7 +1400,7 @@ final class EditorSession
      * @throws SessionRefusal When the conversion cannot be made as asked, edits are pending, or the files cannot be written.
      */
     public function convertAnimation(int $index, string $timelineId, string $cadence, ?int $fps, int $ticksPerFrame,
-        int $restFrame, bool $includeFlash, ?string $binding, ?string $answer = null): array
+        int $restFrame, bool $includeFlash, ?string $binding, ?string $answer = null, ?string $confirm = null): array
     {
         $id = $this->requireAnimationId($index);
         try {
@@ -1414,7 +1415,7 @@ final class EditorSession
         $name = strval($this->requireRecordDatabase('animations')->getRecordByIndex($index)?->get('name'));
         $required = new SourceSetRequired($plan, sprintf('Convert %s to timeline %s', $name, $timelineId), 'this animation conversion',
             sprintf('Convert %s to the timeline %s, writing %s?', $name, $timelineId, implode(' and ', $paths)), $paths);
-        $result = $this->writeSourceSet($required, $answer, fn(): array => $this->requireCategory('animations')->getRecordLabels());
+        $result = $this->writeSourceSet($required, $answer, fn(): array => $this->requireCategory('animations')->getRecordLabels(), $confirm);
         if ($answer === null) {
             $result['preview'] = array_combine($paths, array_values($plan->getProposedSources()));
         }
@@ -1638,7 +1639,7 @@ final class EditorSession
      * @return array{changed: bool, records: list<string>, note?: string} Whether it changed, the labels afterwards (a rename shows), and what else it did.
      * @throws SessionRefusal When the category or record is unknown or read-only, the row is gone or read-only, or the value is refused.
      */
-    public function applyDatabaseRecord(string $category, int $index, array $key, string $value, ?string $answer = null): array
+    public function applyDatabaseRecord(string $category, int $index, array $key, string $value, ?string $answer = null, ?string $confirm = null): array
     {
         $database = $this->requireCategory($category);
         $frame = self::requireFrame($key['frame'] ?? [], 'database.record');
@@ -1659,7 +1660,7 @@ final class EditorSession
                 $index, $frame, $fieldId, $value, (string) ($field['label'] ?? 'Database field'),
             ));
         } catch (SourceSetRequired $required) {
-            return $this->writeSourceSet($required, $answer, fn(): array => $this->requireCategory($category)->getRecordLabels());
+            return $this->writeSourceSet($required, $answer, fn(): array => $this->requireCategory($category)->getRecordLabels(), $confirm);
         }
 
         return array_filter(['changed' => $change->command !== null, 'records' => $database->getRecordLabels(), 'note' => $change->note],
@@ -1667,15 +1668,69 @@ final class EditorSession
     }
 
     /**
+     * Sets several of a record's rows as one action, undone and redone
+     * together: what one gesture changes, such as a click that sets the
+     * ground point of two images showing the same stance. Each value goes
+     * through the record's own field rules, as one row's edit does; if any is
+     * refused, those already made are taken back and nothing is recorded.
+     * An edit that needs a file set written at once is not made this way.
+     *
+     * @param list<array{key: array<string, mixed>, value: string}> $changes Each row's key, as `database.record` gave it, and its value.
+     * @return array{changed: bool, records: list<string>}
+     * @throws SessionRefusal When a row is gone or read-only, or a value is refused; nothing is changed.
+     */
+    public function applyDatabaseRecordValues(string $category, int $index, array $changes, string $label): array
+    {
+        $database = $this->requireCategory($category);
+        $made = [];
+        try {
+            foreach ($changes as $change) {
+                $key = is_array($change) && is_array($change['key'] ?? null) ? $change['key'] : throw new SessionRefusal('Each change needs the row key database.record gave.');
+                $frame = self::requireFrame($key['frame'] ?? [], 'database.record');
+                $fieldId = $key['field'] ?? null;
+                $field = is_string($fieldId) ? array_find($this->collectRecordFields($database, $index, $frame),
+                    static fn(array $candidate): bool => ($candidate['field'] ?? null) === $fieldId) : null;
+                if (! is_string($fieldId) || $field === null || ($field['editable'] ?? true) === false) {
+                    throw new SessionRefusal('That row is no longer in the record, or cannot be edited; read it again.');
+                }
+                try {
+                    $applied = $database->applyField($index, $frame, $fieldId, strval($change['value'] ?? ''), (string) ($field['label'] ?? $label));
+                } catch (RecordRefusal $refusal) {
+                    throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+                } catch (SourceSetRequired $required) {
+                    throw new SessionRefusal(sprintf('%s writes several files at once; set it on its own.', trim((string) ($field['label'] ?? 'That row'))), previous: $required);
+                }
+                if ($applied->command !== null) {
+                    $made[] = $applied->command;
+                }
+            }
+        } catch (SessionRefusal $refusal) {
+            foreach (array_reverse($made) as $command) {
+                $command->undo();
+            }
+            throw $refusal;
+        }
+        if ($made !== []) {
+            $this->history->record(new CommandGroup($label, $made));
+        }
+
+        return ['changed' => $made !== [], 'records' => $database->getRecordLabels()];
+    }
+
+    /**
      * Asks before writing a file set an edit needs at once, then writes it
      * as one undo step: the workspace is reloaded from the written files, so
-     * every map and category reads afresh.
+     * every map and category reads afresh. The question carries the plan's
+     * fingerprint, and writing requires it back: a plan made again from
+     * other choices or changed files is refused, so what is written is
+     * exactly what the author was shown.
      *
      * @param Closure(): list<string> $records The category's labels afterwards.
-     * @return array{status: 'question', question: string, answers: list<array{key: string, label: string, description: string}>}|array{changed: bool, records: list<string>, reloaded?: true}
-     * @throws SessionRefusal When an answer is not one offered, edits are pending, or the files cannot be written.
+     * @param string|null $confirm The fingerprint the question gave, when answering write.
+     * @return array{status: 'question', question: string, answers: list<array{key: string, label: string, description: string}>, confirm: string}|array{changed: bool, records: list<string>, reloaded?: true}
+     * @throws SessionRefusal When an answer is not one offered, the plan is not the one shown, edits are pending, or the files cannot be written.
      */
-    private function writeSourceSet(SourceSetRequired $required, ?string $answer, Closure $records): array
+    private function writeSourceSet(SourceSetRequired $required, ?string $answer, Closure $records, ?string $confirm = null): array
     {
         if ($answer === null) {
             return [
@@ -1683,9 +1738,11 @@ final class EditorSession
                 'question' => $required->question,
                 'answers' => [
                     ['key' => 'cancel', 'label' => 'Cancel', 'description' => 'Leave all files unchanged.'],
-                    ['key' => 'write', 'label' => sprintf('Write %d repaired files now', count($required->paths)),
+                    ['key' => 'write', 'label' => sprintf('Write %d files now', count($required->paths)),
                         'description' => sprintf('Writes %s now, not on Save. Undo restores the files.', implode(', ', $required->paths))],
                 ],
+                // Answering write names this, so what is written is what was asked about.
+                'confirm' => $required->plan->getFingerprint(),
             ];
         }
         if (! in_array($answer, ['write', 'cancel'], true)) {
@@ -1693,6 +1750,11 @@ final class EditorSession
         }
         if ($answer === 'cancel') {
             return ['changed' => false, 'records' => $records()];
+        }
+        // The plan made now must be the one the author was shown: the same
+        // choices over the same files. Anything else is asked again.
+        if ($confirm === null || ! hash_equals($required->plan->getFingerprint(), $confirm)) {
+            throw new SessionRefusal(sprintf('The files or choices changed since %s was shown, so nothing was written. Review it again.', $required->subject));
         }
         if ($this->workspace->hasUnsavedChanges()) {
             throw new SessionRefusal(sprintf('Save or undo pending edits before %s. No files were changed.', $required->subject));

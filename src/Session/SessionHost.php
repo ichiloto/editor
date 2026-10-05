@@ -298,6 +298,13 @@ final class SessionHost
                 is_array($params['key'] ?? null) ? $params['key'] : throw new InvalidRequest('"key" must be the row key database.record gave.'),
                 is_scalar($params['value'] ?? null) ? (string) $params['value'] : throw new InvalidRequest('"value" must be a string, number or boolean.'),
                 self::readOptionalString($params, 'answer'),
+                self::readOptionalString($params, 'confirm'),
+            ),
+            'database.applyMany' => $session->applyDatabaseRecordValues(
+                self::requireString($params, 'category'),
+                self::requireInt($params, 'index'),
+                is_array($params['changes'] ?? null) ? array_values($params['changes']) : throw new InvalidRequest('"changes" must be a list of {key, value}.'),
+                self::requireString($params, 'label'),
             ),
             'database.add' => $session->addDatabaseItem(
                 self::requireString($params, 'category'),
@@ -338,6 +345,7 @@ final class SessionHost
                 is_bool($params['includeFlash'] ?? true) ? ($params['includeFlash'] ?? true) : throw new InvalidRequest('"includeFlash" must be a boolean.'),
                 self::readOptionalString($params, 'binding'),
                 self::readOptionalString($params, 'answer'),
+                self::readOptionalString($params, 'confirm'),
             ),
             'affinities.vocabulary' => $session->describeAffinityVocabulary(),
             'affinities.encode' => $session->encodeAffinities(

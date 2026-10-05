@@ -156,11 +156,16 @@ it('asks before an identity freeze that repairs other files at once, then writes
     // Pending edits are saved or undone first: the set is written at once.
     $description = actorSessionRow($session->readDatabaseRecord('actors', 0), 'description')['key'];
     $session->applyDatabaseRecord('actors', 0, $description, 'Pending.');
-    expect(fn() => $session->applyDatabaseRecord('actors', $index, $id['key'], '', 'write'))
+    expect(fn() => $session->applyDatabaseRecord('actors', $index, $id['key'], '', 'write', $question['confirm']))
         ->toThrow(SessionRefusal::class, 'Save or undo pending edits');
     $session->undo();
 
-    $written = $session->applyDatabaseRecord('actors', $index, $id['key'], '', 'write');
+    // Writing names the plan that was shown; without it, or with another, nothing is written.
+    expect(fn() => $session->applyDatabaseRecord('actors', $index, $id['key'], '', 'write'))->toThrow(SessionRefusal::class, 'Review it again')
+        ->and(fn() => $session->applyDatabaseRecord('actors', $index, $id['key'], '', 'write', str_repeat('0', 64)))->toThrow(SessionRefusal::class, 'Review it again')
+        ->and(sourceHashTree($root))->toBe($before);
+
+    $written = $session->applyDatabaseRecord('actors', $index, $id['key'], '', 'write', $question['confirm']);
     [$reread] = $session->describeMaps();
 
     expect($written)->toMatchArray(['changed' => true, 'reloaded' => true])
@@ -209,7 +214,9 @@ it('asks and answers a file set written at once over the line protocol', functio
     $key = actorSessionRow($request(3, 'database.record', ['category' => 'actors', 'index' => $index, 'frame' => []])['result'], 'id')['key'];
     $apply = ['category' => 'actors', 'index' => $index, 'key' => $key, 'value' => ''];
 
-    expect($request(4, 'database.apply', $apply)['result']['status'])->toBe('question')
-        ->and($request(5, 'database.apply', [...$apply, 'answer' => 'write'])['result'])->toMatchArray(['changed' => true, 'reloaded' => true])
+    $asked = $request(4, 'database.apply', $apply)['result'];
+
+    expect($asked['status'])->toBe('question')
+        ->and($request(5, 'database.apply', [...$apply, 'answer' => 'write', 'confirm' => $asked['confirm']])['result'])->toMatchArray(['changed' => true, 'reloaded' => true])
         ->and($request(6, 'history.undo')['result']['label'])->toBe('Migrate actor identities and references');
 });
