@@ -11,7 +11,9 @@ use Ichiloto\Editor\ProjectDirectoryContext;
 use Ichiloto\Editor\Canvas\PieceRole;
 use Ichiloto\Editor\Database\ConditionCodec;
 use Ichiloto\Editor\Database\ConditionEditor;
+use Ichiloto\Editor\Animations\LegacyAnimationConversion;
 use Ichiloto\Editor\Database\DatabaseCatalog;
+use Ichiloto\Engine\Animations\Timelines\EffectCadence;
 use Ichiloto\Editor\Database\ElementAffinityCodec;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Database\RecordItem;
@@ -1365,6 +1367,67 @@ final class EditorSession
         }
 
         return $payload;
+    }
+
+    /**
+     * What converting a legacy cell-frame animation to a timeline would
+     * touch: its frames and cues, its current battle bindings, and the
+     * battle and field consumers that play it now.
+     *
+     * @return array<string, mixed> As {@see LegacyAnimationConversion::describe()}.
+     * @throws SessionRefusal When the record is unknown or has nothing to convert.
+     */
+    public function describeAnimationConversion(int $index): array
+    {
+        try {
+            return LegacyAnimationConversion::describe($this->workspace, $this->requireAnimationId($index));
+        } catch (InvalidArgumentException $error) {
+            throw new SessionRefusal($error->getMessage(), previous: $error);
+        }
+    }
+
+    /**
+     * Converts a legacy cell-frame animation to a timeline with the timing
+     * its consumer needs, asked first and written as one undo step: the new
+     * timeline and, when a battle is to play it, the record naming it. The
+     * question carries each file as it would be written. Nothing supplies a
+     * rate; the author's cadence, ticks and rest frame are the timeline's.
+     *
+     * @param 'battle_phase'|'fixed' $cadence
+     * @param 'sourceEffect'|'targetEffect'|null $binding
+     * @return array<string, mixed> The question with `preview` (path to source), or the write's result.
+     * @throws SessionRefusal When the conversion cannot be made as asked, edits are pending, or the files cannot be written.
+     */
+    public function convertAnimation(int $index, string $timelineId, string $cadence, ?int $fps, int $ticksPerFrame,
+        int $restFrame, bool $includeFlash, ?string $binding, ?string $answer = null): array
+    {
+        $id = $this->requireAnimationId($index);
+        try {
+            $plan = LegacyAnimationConversion::plan($this->workspace, $id, $timelineId, EffectCadence::parse($cadence),
+                $fps, $ticksPerFrame, $restFrame, $includeFlash, $binding);
+        } catch (InvalidArgumentException $error) {
+            throw new SessionRefusal($error->getMessage(), previous: $error);
+        }
+        $root = rtrim($this->workspace->projectRoot, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
+        $relative = static fn(string $path): string => str_starts_with($path, $root) ? substr($path, strlen($root)) : $path;
+        $paths = array_map($relative, $plan->getChangedPaths());
+        $name = strval($this->requireRecordDatabase('animations')->getRecordByIndex($index)?->get('name'));
+        $required = new SourceSetRequired($plan, sprintf('Convert %s to timeline %s', $name, $timelineId), 'this animation conversion',
+            sprintf('Convert %s to the timeline %s, writing %s?', $name, $timelineId, implode(' and ', $paths)), $paths);
+        $result = $this->writeSourceSet($required, $answer, fn(): array => $this->requireCategory('animations')->getRecordLabels());
+        if ($answer === null) {
+            $result['preview'] = array_combine($paths, array_values($plan->getProposedSources()));
+        }
+
+        return $result;
+    }
+
+    /** @throws SessionRefusal When the animations category has no record there. */
+    private function requireAnimationId(int $index): int
+    {
+        $id = $this->requireRecordDatabase('animations')->getRecordByIndex($index)?->get('id');
+
+        return is_int($id) ? $id : throw new SessionRefusal(sprintf('animations has no record %d with an id.', $index));
     }
 
     /**

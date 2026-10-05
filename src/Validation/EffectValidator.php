@@ -169,13 +169,33 @@ final class EffectValidator
     public static function findScriptUses(ProjectWorkspace $workspace, iterable $cinematics): array
     {
         $uses = [];
-        $collect = static function (mixed $value, string $where) use (&$uses, &$collect): void {
+        self::visitFieldAnimations($workspace, $cinematics, static function (array $command, string $where) use (&$uses): void {
+            if (is_string($command['effect'] ?? null) && $command['effect'] !== '') {
+                $uses[$command['effect']][] = $where;
+            }
+        });
+
+        return array_map(static fn(array $places): array => array_values(array_unique($places)), $uses);
+    }
+
+    /**
+     * Visits every `field_animation` command a script plays: map events,
+     * event scripts and cinematics, at any depth of branches, lanes and
+     * choices, since the command is the same wherever it is nested. What
+     * cannot be read is not visited; validation reports it.
+     *
+     * @param iterable<CutsceneAsset> $cinematics The project's cinematics, as the editor holds them.
+     * @param \Closure(array<array-key, mixed>, string): void $visit Given the command and where it is.
+     */
+    public static function visitFieldAnimations(ProjectWorkspace $workspace, iterable $cinematics, \Closure $visit): void
+    {
+        $collect = static function (mixed $value, string $where) use (&$collect, $visit): void {
             if (! is_array($value)) {
                 return;
             }
 
-            if (($value['type'] ?? null) === 'field_animation' && is_string($value['effect'] ?? null) && $value['effect'] !== '') {
-                $uses[$value['effect']][] = $where;
+            if (($value['type'] ?? null) === 'field_animation') {
+                $visit($value, $where);
             }
 
             foreach ($value as $nested) {
@@ -198,7 +218,5 @@ final class EffectValidator
         foreach ($cinematics as $cinematic) {
             $collect([$cinematic->data(), $cinematic->partner()], sprintf('cinematic %s', $cinematic->id));
         }
-
-        return array_map(static fn(array $places): array => array_values(array_unique($places)), $uses);
     }
 }

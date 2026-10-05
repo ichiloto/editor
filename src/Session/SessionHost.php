@@ -327,6 +327,18 @@ final class SessionHost
                 is_array($params['writeTypes'] ?? null) ? array_values(array_filter($params['writeTypes'], is_string(...))) : null,
             ),
             'battlers.describe' => $session->describeBattlerArt(self::requireString($params, 'side'), self::requireString($params, 'identity')),
+            'animations.conversion' => $session->describeAnimationConversion(self::requireInt($params, 'index')),
+            'animations.convert' => $session->convertAnimation(
+                self::requireInt($params, 'index'),
+                self::requireString($params, 'timeline'),
+                self::requireString($params, 'cadence'),
+                is_int($params['fps'] ?? null) ? $params['fps'] : null,
+                self::requireInt($params, 'ticksPerFrame'),
+                self::requireInt($params, 'restFrame'),
+                is_bool($params['includeFlash'] ?? true) ? ($params['includeFlash'] ?? true) : throw new InvalidRequest('"includeFlash" must be a boolean.'),
+                self::readOptionalString($params, 'binding'),
+                self::readOptionalString($params, 'answer'),
+            ),
             'affinities.vocabulary' => $session->describeAffinityVocabulary(),
             'affinities.encode' => $session->encodeAffinities(
                 is_array($params['entries'] ?? null) ? $params['entries'] : throw new InvalidRequest('"entries" must be a list.'),
