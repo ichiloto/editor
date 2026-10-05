@@ -1206,9 +1206,9 @@ final class EditorSession
                 $members[$memberIndex]['issue'] = $error->getMessage();
             }
         }
-        [$formation, $view] = $this->composeFormation($catalog, $arena, $placed);
+        [$formation, $view, $clearance] = $this->composeFormation($catalog, $arena, $placed);
         foreach ($formation->enemies as $position => $battler) {
-            $members[$placedMembers[$position]]['battler'] = self::describeFormationBattler($battler);
+            $members[$placedMembers[$position]]['battler'] = self::describeFormationBattler($battler, $clearance['enemies'][$position]);
         }
 
         return [...$view, 'members' => array_values($members)];
@@ -1221,9 +1221,10 @@ final class EditorSession
      * layouts define where the party stands, not enemies (troops place those),
      * so the enemy stands opposite a party member, its slot mirrored across
      * the canvas: a size comparison, not a battle position. It stands opposite
-     * the lead when its art fits on the canvas there, else opposite the next
-     * member it fits beside, so a creature taller than the lead's ground line
-     * is still shown whole. Both read the record as it is now, unsaved edits
+     * the first member it stands clear beside by the Engine's formation
+     * clearance, else the first it fits on the canvas beside, so a creature
+     * taller than the lead's ground line is still shown whole, with what it
+     * does not clear. Both read the record as it is now, unsaved edits
      * included. A project without a graphical battle still gets the sprite,
      * with the reason there is no art.
      *
@@ -1246,20 +1247,25 @@ final class EditorSession
             foreach ($catalog->ui->partySlots as $party) {
                 $slot = new BattlerSlot($catalog->ui->width - $party->x, $party->y, $party->width, $party->height);
                 try {
-                    $composed = $this->composeFormation($catalog, $arena, [['enemyId' => $name, 'slot' => $slot]]);
-                    break;
+                    $candidate = $this->composeFormation($catalog, $arena, [['enemyId' => $name, 'slot' => $slot]]);
                 } catch (SessionRefusal $refusal) {
                     $firstRefusal ??= $refusal;
+                    continue;
+                }
+                $composed ??= $candidate;
+                if ($candidate[2]['enemies'][0] === []) {
+                    $composed = $candidate;
+                    break;
                 }
             }
             if ($composed === null) {
                 throw $firstRefusal;
             }
-            [$formation, $view] = $composed;
+            [$formation, $view, $clearance] = $composed;
             $preview['formation'] = [...$view, 'members' => [[
                 'enemy' => $name,
                 'placement' => null,
-                'battler' => self::describeFormationBattler($formation->enemies[0]),
+                'battler' => self::describeFormationBattler($formation->enemies[0], $clearance['enemies'][0]),
             ]]];
         } catch (SessionRefusal $refusal) {
             $preview['formationIssue'] = $refusal->getMessage();
@@ -1480,10 +1486,12 @@ final class EditorSession
     /**
      * Composes enemies with the starting party over an arena, and describes
      * what every formation view shares: the canvas, the arenas with the one
-     * previewed and its backgrounds, and the party in its slots.
+     * previewed and its backgrounds, and the party in its slots. Also returns
+     * the Engine's clearance diagnostics for party and enemies, by position,
+     * which include each battler's own.
      *
      * @param list<array{enemyId: string, slot: BattlerSlot}> $enemies
-     * @return array{0: BattleFormationLayout, 1: array<string, mixed>}
+     * @return array{0: BattleFormationLayout, 1: array<string, mixed>, 2: array{party: list<list<string>>, enemies: list<list<string>>}}
      */
     private function composeFormation(BattlePresentationCatalog $catalog, ?string $arena, array $enemies, ?string $lead = null): array
     {
@@ -1504,9 +1512,10 @@ final class EditorSession
         } catch (\InvalidArgumentException|\RuntimeException $error) {
             throw new SessionRefusal('The formation cannot be composed: ' . $error->getMessage(), previous: $error);
         }
+        $clearance = $formation->getClearanceDiagnostics($assetRoot);
         $party = [];
         foreach ($formation->party as $position => $battler) {
-            $party[] = ['name' => $names[$partyIds[$position]] ?? $partyIds[$position], ...self::describeFormationBattler($battler)];
+            $party[] = ['name' => $names[$partyIds[$position]] ?? $partyIds[$position], ...self::describeFormationBattler($battler, $clearance['party'][$position])];
         }
         $arenas = [];
         foreach ($formation->arenaChoices as $id => $name) {
@@ -1521,11 +1530,14 @@ final class EditorSession
             'arena' => $chosen === false ? null : (string) $chosen,
             'backgrounds' => array_map(self::describeCanvasImage(...), $formation->backgrounds),
             'party' => $party,
-        ]];
+        ], $clearance];
     }
 
-    /** @return array<string, mixed> Where a battler stands and is drawn, its art and its body at battle scale. */
-    private static function describeFormationBattler(BattleFormationBattler $battler): array
+    /**
+     * @param list<string> $diagnostics What the Engine reports about it in this formation.
+     * @return array<string, mixed> Where a battler stands and is drawn, its art, its body at battle scale and what it does not clear.
+     */
+    private static function describeFormationBattler(BattleFormationBattler $battler, array $diagnostics): array
     {
         $bounds = $battler->bounds;
 
@@ -1535,7 +1547,7 @@ final class EditorSession
             'image' => $battler->image === null ? null : self::describeCanvasImage($battler->image),
             'bodySpan' => $battler->bodySpan,
             'horizontal' => $battler->horizontal,
-            'diagnostics' => array_values(array_map(strval(...), $battler->diagnostics)),
+            'diagnostics' => array_values(array_map(strval(...), $diagnostics)),
         ];
     }
 

@@ -143,6 +143,7 @@ class ProjectValidator
       ...$this->checkReferences($workspace),
       ...new AnimationReferenceValidator()->validate($workspace),
       ...new CounterAttackValidator()->validate($workspace),
+      ...new TroopFormationValidator()->validate($workspace),
       ...$this->checkDefinitionIdentities($workspace),
       ...$this->checkActorDefinitions($workspace),
       ...new ActorReferenceValidator()->validate($workspace),

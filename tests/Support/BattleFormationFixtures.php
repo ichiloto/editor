@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+use Ichiloto\Editor\Session\EditorSession;
+
 /** A project whose battle has two arenas, two party slots and a troop of two. */
 function troopFormationProject(): string
 {
@@ -61,4 +63,26 @@ function enemyPreviewProject(): string
         ]], true) . "];\n");
 
     return $root;
+}
+
+/** The enemy preview project with battle art for its bat on disk. */
+function battlerArtProject(): string
+{
+    $root = enemyPreviewProject();
+    writeTilesetTestPng($root . '/assets/Graphics/Enemies/Bat.png', 40, 80);
+    writeTilesetTestPng($root . '/assets/Graphics/Enemies/BatAttack.png', 160, 80);
+
+    return $root;
+}
+
+/** A battle art record's row, by its field. */
+function readBattlerRow(EditorSession $session, int $index, string $field): array
+{
+    return array_find($session->readDatabaseRecord('battler_enemies', $index)['rows'], static fn(array $row): bool => ($row['key']['field'] ?? null) === $field)
+        ?? throw new RuntimeException("No row {$field}.");
+}
+
+function setBattlerRow(EditorSession $session, int $index, string $field, string $value): void
+{
+    $session->applyDatabaseRecord('battler_enemies', $index, readBattlerRow($session, $index, $field)['key'], $value);
 }

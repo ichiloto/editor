@@ -10,28 +10,6 @@ use Ichiloto\Engine\Battle\Presentation\BattlerBindings;
 
 /** Setting an actor's or enemy's battle art as data, from its own page. Synthetic fixtures only. */
 
-/** The enemy preview project with battle art for its bat on disk. */
-function battlerArtProject(): string
-{
-    $root = enemyPreviewProject();
-    writeTilesetTestPng($root . '/assets/Graphics/Enemies/Bat.png', 40, 80);
-    writeTilesetTestPng($root . '/assets/Graphics/Enemies/BatAttack.png', 160, 80);
-
-    return $root;
-}
-
-/** A battle art record's row, by its field. */
-function readBattlerRow(EditorSession $session, int $index, string $field): array
-{
-    return array_find($session->readDatabaseRecord('battler_enemies', $index)['rows'], static fn(array $row): bool => ($row['key']['field'] ?? null) === $field)
-        ?? throw new RuntimeException("No row {$field}.");
-}
-
-function setBattlerRow(EditorSession $session, int $index, string $field, string $value): void
-{
-    $session->applyDatabaseRecord('battler_enemies', $index, readBattlerRow($session, $index, $field)['key'], $value);
-}
-
 it('binds an enemy\'s battle art as data, previews it unsaved, and saves a file the battle reads', function () {
     $root = battlerArtProject();
     $session = EditorSession::open($root);
