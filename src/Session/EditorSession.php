@@ -1266,6 +1266,37 @@ final class EditorSession
     }
 
     /**
+     * An actor as Database > Actors shows it in battle: its art composed by
+     * the Engine's BattleFormationLayout at battle scale in the lead party
+     * slot, the rest of the starting party beside it for comparison. It reads
+     * the art as it is now, unsaved edits included. An actor without a
+     * stable id has no battle art to bind, and says so.
+     *
+     * @return array{name: string, identity: ?string, formation: ?array<string, mixed>, formationIssue: ?string}
+     * @throws SessionRefusal When the actor is unknown.
+     */
+    public function readActorPreview(int $index, ?string $arena = null): array
+    {
+        $actor = array_values($this->workspace->actorDatabase->getActors())[$index]
+            ?? throw new SessionRefusal(sprintf('actors has no record %d.', $index));
+        $identity = $actor->hasDefinitionId() ? $actor->getDefinitionId() : null;
+        $preview = ['name' => $actor->getName(), 'identity' => $identity, 'formation' => null, 'formationIssue' => null];
+        if ($identity === null) {
+            $preview['formationIssue'] = 'This actor has no stable id yet, which its battle art is bound to. Repair actor identities first.';
+
+            return $preview;
+        }
+        try {
+            [, $view] = $this->composeFormation($this->requireBattleLayoutCatalog('preview actors at battle scale on'), $arena, [], $identity);
+            $preview['formation'] = [...$view, 'members' => []];
+        } catch (SessionRefusal $refusal) {
+            $preview['formationIssue'] = $refusal->getMessage();
+        }
+
+        return $preview;
+    }
+
+    /**
      * An enemy's terminal sprite rows, read by the game's own rule
      * (`Graphics/Enemies/<imagePath>.txt`), never from outside that folder.
      *
@@ -1390,7 +1421,7 @@ final class EditorSession
      * @param list<array{enemyId: string, slot: BattlerSlot}> $enemies
      * @return array{0: BattleFormationLayout, 1: array<string, mixed>}
      */
-    private function composeFormation(BattlePresentationCatalog $catalog, ?string $arena, array $enemies): array
+    private function composeFormation(BattlePresentationCatalog $catalog, ?string $arena, array $enemies, ?string $lead = null): array
     {
         $assetRoot = $this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets';
         $names = [];
@@ -1398,7 +1429,11 @@ final class EditorSession
             $names[$actor->getDefinitionId()] = $actor->getName();
         }
         $starting = $this->workspace->getSystemField('startingParty');
-        $partyIds = array_values(array_slice(array_filter(is_array($starting) ? $starting : [], is_string(...)), 0, count($catalog->ui->partySlots)));
+        $partyIds = array_values(array_filter(is_array($starting) ? $starting : [], is_string(...)));
+        if ($lead !== null) {
+            $partyIds = [$lead, ...array_filter($partyIds, static fn(string $id): bool => $id !== $lead)];
+        }
+        $partyIds = array_values(array_slice($partyIds, 0, count($catalog->ui->partySlots)));
 
         try {
             $formation = BattleFormationLayout::compose($catalog, $arena, $enemies, $partyIds, $assetRoot);
