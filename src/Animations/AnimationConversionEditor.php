@@ -6,19 +6,25 @@ namespace Ichiloto\Editor\Animations;
 
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Editor\Storage\SourceSetPlan;
+use Ichiloto\Editor\UI\SettingsPaneLayout;
 use Ichiloto\Engine\Animations\Timelines\EffectCadence;
 use InvalidArgumentException;
 
 /**
  * The terminal's form for converting a legacy cell-frame animation to a
- * timeline, a row at a time: who plays it, the binding a battle uses, its
- * name, rate, ticks per original frame, rest frame and flash policy. Nothing
- * is filled in for the timing, which belongs to the consumer.
+ * timeline. It has two modes, each a list of lines a cursor walks, so the
+ * pane's shared scrolling keeps the cursor in view at any size:
+ *
+ * - Choices: who plays it, the binding a battle uses, its name, rate, ticks
+ *   per original frame, rest frame and flash policy, then Preview. The
+ *   record's facts follow, so walking on past the controls reads them.
+ *   Nothing is filled in for the timing, which belongs to the consumer.
+ * - Review: every file the previewed plan would write, line by line. Enter
+ *   writes exactly that plan; Escape goes back to the choices.
  *
  * Previewing plans the conversion with {@see LegacyAnimationConversion} and
- * holds that exact plan; writing applies it, so what is written is what was
- * shown, and the plan itself refuses files changed since. Any change to a
- * choice forgets the preview.
+ * holds that exact plan. The plan itself refuses files changed since, and
+ * any changed choice forgets it.
  *
  * Nothing here draws, so the behaviour can be exercised without a terminal.
  */
@@ -34,10 +40,17 @@ final class AnimationConversionEditor
     /** The record keys a battle plays a timeline through. */
     public const array BINDINGS = ['targetEffect' => 'Target effect', 'sourceEffect' => 'Caster effect'];
 
+    /** Choosing the conversion's settings. */
+    public const string MODE_CHOICES = 'choices';
+
+    /** Reading the previewed files before writing them. */
+    public const string MODE_REVIEW = 'review';
+
     /** Rows typed into, by name. */
     private const array TYPED = ['timeline', 'fps', 'ticks', 'rest'];
 
     private bool $isOpen = false;
+    private string $mode = self::MODE_CHOICES;
     private int $recordIndex = 0;
     private int $animationId = 0;
     private string $name = '';
@@ -48,7 +61,12 @@ final class AnimationConversionEditor
     /** @var array<string, string> The typed rows' text. */
     private array $typed = [];
     private bool $includeFlash = true;
-    private int $selectedIndex = 0;
+    /** The cursor's line in the mode's lines. */
+    private int $cursor = 0;
+    /** @var list<?string> The control each line of the choices belongs to, as last laid out; null for facts. */
+    private array $lineControls = [];
+    /** A control the cursor goes to once the choices are next laid out. */
+    private ?string $cursorControl = null;
     private ?SourceSetPlan $plan = null;
     private ?string $error = null;
 
@@ -60,6 +78,7 @@ final class AnimationConversionEditor
     public function open(int $recordIndex, array $facts): void
     {
         $this->isOpen = true;
+        $this->mode = self::MODE_CHOICES;
         $this->recordIndex = $recordIndex;
         $this->animationId = intval($facts['id'] ?? 0);
         $this->name = strval($facts['name'] ?? '');
@@ -69,7 +88,7 @@ final class AnimationConversionEditor
         // The name is the record's, in lowercase words; the timing is the author's.
         $this->typed = ['timeline' => trim(strtolower(preg_replace('/[^A-Za-z0-9]+/', '-', $this->name) ?? ''), '-'), 'fps' => '', 'ticks' => '', 'rest' => ''];
         $this->includeFlash = true;
-        $this->selectedIndex = 0;
+        $this->cursor = 0;
         $this->plan = null;
         $this->error = null;
     }
@@ -86,6 +105,11 @@ final class AnimationConversionEditor
         return $this->isOpen;
     }
 
+    public function getMode(): string
+    {
+        return $this->mode;
+    }
+
     public function getRecordIndex(): int
     {
         return $this->recordIndex;
@@ -96,8 +120,8 @@ final class AnimationConversionEditor
         return $this->name;
     }
 
-    /** @return list<string> The rows shown now, in order; the binding and rate rows only where the consumer has them. */
-    public function getRows(): array
+    /** @return list<string> The controls shown now, in order; the binding and rate only where the consumer has them. */
+    public function getControls(): array
     {
         $battle = $this->consumer !== null && $this->consumer !== 'field';
 
@@ -110,27 +134,95 @@ final class AnimationConversionEditor
             'rest',
             'flash',
             'preview',
-            $this->plan !== null ? 'write' : null,
+            $this->plan !== null ? 'review' : null,
         ]));
     }
 
-    public function getSelectedRow(): string
+    /**
+     * The control under the cursor, on any of its wrapped lines, or null on
+     * a line of facts, a message or a reviewed file. Before the choices are
+     * first laid out, each control is one line.
+     */
+    public function getSelectedControl(): ?string
     {
-        $rows = $this->getRows();
+        if ($this->mode !== self::MODE_CHOICES) {
+            return null;
+        }
 
-        return $rows[min($this->selectedIndex, count($rows) - 1)];
+        return $this->lineControls === [] ? ($this->getControls()[$this->cursor] ?? null) : ($this->lineControls[$this->cursor] ?? null);
     }
 
-    public function move(int $delta): void
+    public function getCursor(): int
     {
-        $count = count($this->getRows());
-        $this->selectedIndex = max(0, min($count - 1, $this->selectedIndex + $delta));
+        return $this->cursor;
     }
 
-    /** Steps the selected choice row: the consumer, the binding or the flash policy. */
+    /**
+     * The last line a scrolling pane must show so the whole selected
+     * control is on screen: the end of its wrapped lines, or the cursor's
+     * own line elsewhere. A control taller than the pane shows from its start.
+     */
+    public function getCursorEnd(int $visibleRows): int
+    {
+        $control = $this->getSelectedControl();
+        $end = $this->cursor;
+        while ($control !== null && ($this->lineControls[$end + 1] ?? null) === $control) {
+            $end++;
+        }
+
+        return min($end, $this->cursor + max(1, $visibleRows) - 1);
+    }
+
+    /**
+     * The mode's lines at a width, with the cursor's line marked: the
+     * choices with the facts after them, or every reviewed file. Each line is
+     * one the cursor can rest on, so following the cursor shows them all.
+     *
+     * @return list<string>
+     */
+    public function getLines(int $width, string $projectRoot): array
+    {
+        $lines = $this->mode === self::MODE_REVIEW ? $this->getReviewLines($width, $projectRoot) : $this->getChoiceLines($width);
+        $this->cursor = max(0, min($this->cursor, count($lines) - 1));
+        foreach ($lines as $index => $line) {
+            $lines[$index] = ($index === $this->cursor ? '> ' : '  ') . $line;
+        }
+
+        return $lines;
+    }
+
+    /**
+     * Moves the cursor a step, within as many lines as the mode has at that
+     * width. Among the choices a step is a whole control, however many
+     * lines it wraps to, landing on its first line; through facts and a
+     * review it is a line.
+     */
+    public function move(int $delta, int $lineCount): void
+    {
+        $last = max(0, $lineCount - 1);
+        $step = $delta <=> 0;
+        foreach (range(1, abs($delta)) as $ignored) {
+            $from = $this->cursor;
+            $control = $this->mode === self::MODE_CHOICES ? ($this->lineControls[$from] ?? null) : null;
+            $at = max(0, min($last, $from + $step));
+            // Off the rest of this control's lines when going down; onto the first line of the one above when going up.
+            while ($step > 0 && $control !== null && $at < $last && ($this->lineControls[$at] ?? null) === $control) {
+                $at++;
+            }
+            if ($step < 0 && $this->mode === self::MODE_CHOICES && ($this->lineControls[$at] ?? null) !== null) {
+                while ($at > 0 && ($this->lineControls[$at - 1] ?? null) === $this->lineControls[$at]) {
+                    $at--;
+                }
+            }
+            // A last control taller than the rest stays where it is rather than landing mid-way.
+            $this->cursor = $step > 0 && $control !== null && ($this->lineControls[$at] ?? null) === $control ? $from : $at;
+        }
+    }
+
+    /** Steps the selected choice: the consumer, the binding or the flash policy. */
     public function cycle(int $step): void
     {
-        switch ($this->getSelectedRow()) {
+        switch ($this->getSelectedControl()) {
             case 'consumer':
                 $keys = array_keys(self::CONSUMERS);
                 $at = $this->consumer === null ? ($step > 0 ? -1 : 0) : (int) array_search($this->consumer, $keys, true);
@@ -150,28 +242,29 @@ final class AnimationConversionEditor
         $this->forgetPreview();
     }
 
-    /** Types into the selected text row; a row of choices takes no typing. */
+    /** Types into the selected text control; any other line takes no typing. */
     public function type(string $text): void
     {
-        $row = $this->getSelectedRow();
-        if (! in_array($row, self::TYPED, true)) {
+        $control = $this->getSelectedControl();
+        if (! in_array($control, self::TYPED, true)) {
             return;
         }
-        $this->typed[$row] .= $text;
+        $this->typed[$control] .= $text;
         $this->forgetPreview();
     }
 
     public function backspace(): void
     {
-        $row = $this->getSelectedRow();
-        if (in_array($row, self::TYPED, true) && $this->typed[$row] !== '') {
-            $this->typed[$row] = mb_substr($this->typed[$row], 0, -1);
+        $control = $this->getSelectedControl();
+        if (in_array($control, self::TYPED, true) && $this->typed[$control] !== '') {
+            $this->typed[$control] = mb_substr($this->typed[$control], 0, -1);
             $this->forgetPreview();
         }
     }
 
     /**
-     * Plans the conversion for the choices shown and holds that plan.
+     * Plans the conversion for the choices shown, holds that plan, and opens
+     * it for review from its first line.
      *
      * @return bool Whether a plan is held; otherwise the error says why.
      */
@@ -199,8 +292,27 @@ final class AnimationConversionEditor
         } catch (InvalidArgumentException $refusal) {
             $this->error = $refusal->getMessage();
         }
+        if ($this->plan !== null) {
+            $this->review();
+        }
 
         return $this->plan !== null;
+    }
+
+    /** Opens the held plan for review from its first line. */
+    public function review(): void
+    {
+        if ($this->plan !== null) {
+            $this->mode = self::MODE_REVIEW;
+            $this->cursor = 0;
+        }
+    }
+
+    /** Back from review to the choices, the cursor on the review control's first line once laid out. */
+    public function returnToChoices(): void
+    {
+        $this->mode = self::MODE_CHOICES;
+        $this->cursorControl = 'review';
     }
 
     /** The plan previewed for the choices shown, which writing applies exactly. */
@@ -214,22 +326,26 @@ final class AnimationConversionEditor
         $this->error = $error;
     }
 
-    /** @return list<string> The form's lines, without layout. */
-    public function describeRows(string $projectRoot): array
+    /** Why the last preview or write could not be made, if it could not. */
+    public function getError(): ?string
     {
-        $facts = $this->facts;
-        $plays = static fn(mixed $list): string => is_array($list) && $list !== [] ? implode(', ', array_map(strval(...), $list)) : 'nothing';
-        $lines = [
-            sprintf('%d authored frames over %d (%s anchored), %d cues, %d with a flash.',
-                intval($facts['frames'] ?? 0), intval($facts['maxFrames'] ?? 0), strval($facts['position'] ?? ''),
-                intval($facts['cues'] ?? 0), intval($facts['flashes'] ?? 0)),
-            sprintf('Battle plays it through: %s.', $plays($facts['battle'] ?? [])),
-            sprintf('Field scripts that play it: %s. They keep playing the record until their command names the timeline.', $plays($facts['field'] ?? [])),
-            '',
-        ];
-        $selected = $this->getSelectedRow();
-        foreach ($this->getRows() as $row) {
-            $value = match ($row) {
+        return $this->error;
+    }
+
+    /**
+     * The controls, a message if any, then the record's facts, every one
+     * wrapped to the pane so none is cut short; each line remembers the
+     * control it belongs to.
+     *
+     * @return list<string>
+     */
+    private function getChoiceLines(int $width): array
+    {
+        $width = max(8, $width - 2);
+        $lines = [];
+        $this->lineControls = [];
+        foreach ($this->getControls() as $control) {
+            $label = match ($control) {
                 'consumer' => sprintf('Played by: %s', $this->consumer === null ? '(choose with Left/Right)' : self::CONSUMERS[$this->consumer]),
                 'binding' => sprintf('Binds as: %s', self::BINDINGS[$this->binding]),
                 'timeline' => sprintf('Timeline name: %s', $this->typed['timeline']),
@@ -238,21 +354,50 @@ final class AnimationConversionEditor
                 'rest' => sprintf('Rest frame (from 0): %s', $this->typed['rest']),
                 'flash' => sprintf('Flash cues: %s', $this->includeFlash ? 'become flash tracks' : 'left out'),
                 'preview' => '[ Preview the files ]',
-                'write' => sprintf('[ Write %d files now ]', count($this->plan?->getChangedPaths() ?? [])),
+                'review' => sprintf('[ Review and write %d files ]', count($this->plan?->getChangedPaths() ?? [])),
             };
-            $lines[] = ($row === $selected ? '> ' : '  ') . $value;
+            foreach (SettingsPaneLayout::wrapProse($label, $width) as $line) {
+                $lines[] = $line;
+                $this->lineControls[] = $control;
+            }
         }
-        if ($this->error !== null) {
-            $lines = [...$lines, '', '  ' . $this->error];
+        $facts = $this->facts;
+        $plays = static fn(mixed $list): string => is_array($list) && $list !== [] ? implode(', ', array_map(strval(...), $list)) : 'nothing';
+        $prose = [
+            ...($this->error === null ? [] : ['', $this->error]),
+            '',
+            sprintf('%d authored frames over %d (%s anchored), %d cues, %d with a flash.',
+                intval($facts['frames'] ?? 0), intval($facts['maxFrames'] ?? 0), strval($facts['position'] ?? ''),
+                intval($facts['cues'] ?? 0), intval($facts['flashes'] ?? 0)),
+            sprintf('Battle plays it through: %s.', $plays($facts['battle'] ?? [])),
+            sprintf('Field scripts that play it: %s. They keep playing the record until their command names the timeline.', $plays($facts['field'] ?? [])),
+        ];
+        foreach ($prose as $paragraph) {
+            $lines = [...$lines, ...($paragraph === '' ? [''] : SettingsPaneLayout::wrapProse($paragraph, $width))];
         }
-        if ($this->plan !== null) {
-            $root = rtrim($projectRoot, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
-            foreach ($this->plan->getProposedSources() as $path => $source) {
-                $lines[] = '';
-                $lines[] = '  ' . (str_starts_with($path, $root) ? substr($path, strlen($root)) : $path);
-                foreach (explode("\n", rtrim($source, "\n")) as $line) {
-                    $lines[] = '    ' . $line;
-                }
+        $this->lineControls = array_pad($this->lineControls, count($lines), null);
+        if ($this->cursorControl !== null) {
+            $at = array_search($this->cursorControl, $this->lineControls, true);
+            $this->cursor = is_int($at) ? $at : 0;
+            $this->cursorControl = null;
+        }
+
+        return $lines;
+    }
+
+    /** @return list<string> Every file the held plan would write, path then source, wrapped. */
+    private function getReviewLines(int $width, string $projectRoot): array
+    {
+        $width = max(8, $width - 2);
+        $root = rtrim($projectRoot, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
+        $sources = $this->plan?->getProposedSources() ?? [];
+        $lines = SettingsPaneLayout::wrapProse(sprintf('Review the %d files Enter writes; Esc returns to the choices.', count($sources)), $width);
+        foreach ($sources as $path => $source) {
+            $lines[] = '';
+            $lines = [...$lines, ...SettingsPaneLayout::wrapProse(str_starts_with($path, $root) ? substr($path, strlen($root)) : $path, $width)];
+            foreach (explode("\n", rtrim($source, "\n")) as $line) {
+                // Code keeps its indentation; a line wider than the pane continues below it.
+                $lines = [...$lines, ...($line === '' ? [''] : SettingsPaneLayout::wrapProse('  ' . $line, $width))];
             }
         }
 
@@ -263,5 +408,6 @@ final class AnimationConversionEditor
     {
         $this->plan = null;
         $this->error = null;
+        $this->mode = self::MODE_CHOICES;
     }
 }

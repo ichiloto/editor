@@ -9948,24 +9948,32 @@ final class Editor
     }
 
     /**
-     * Handles input while a conversion is being set up: rows move with
-     * Up/Down, choices step with Left/Right, text rows take typing, Enter on
-     * Preview plans it and on Write applies exactly that plan as one undo
-     * step, and Escape leaves everything unchanged.
+     * Handles input while a conversion is being set up or reviewed. Up/Down
+     * walk the mode's lines, the pane following the cursor; choices step
+     * with Left/Right and text takes typing; Enter on Preview plans it and
+     * opens the review, and in review writes exactly that plan as one undo
+     * step. Escape goes back from review to the choices, and from the
+     * choices leaves everything unchanged.
      */
     private function handleAnimationConversionInput(string $input): void
     {
         $conversion = $this->animationConversion;
+        $review = $conversion->getMode() === AnimationConversionEditor::MODE_REVIEW;
         if ($input === "\033" || $input === "\x1b") {
-            $conversion->close();
-            $this->statusMessage = 'Conversion cancelled; nothing was written.';
+            if ($review) {
+                $conversion->returnToChoices();
+            } else {
+                $conversion->close();
+                $this->statusMessage = 'Conversion cancelled; nothing was written.';
+            }
             $this->renderDatabasePanes(['settings']);
 
             return;
         }
+        $lineCount = count($conversion->getLines($this->recordPaneMetrics()['width'], $this->projectRoot));
         match (true) {
-            str_contains($input, "\033[A") => $conversion->move(-1),
-            str_contains($input, "\033[B") => $conversion->move(1),
+            str_contains($input, "\033[A") => $conversion->move(-1, $lineCount),
+            str_contains($input, "\033[B") => $conversion->move(1, $lineCount),
             str_contains($input, "\033[D") => $conversion->cycle(-1),
             str_contains($input, "\033[C") => $conversion->cycle(1),
             $input === "\x7f" || $input === "\x08" => $conversion->backspace(),
@@ -9978,23 +9986,25 @@ final class Editor
         }
     }
 
-    /** Enter in the conversion: preview it, write the previewed plan, or move to the next row. */
+    /** Enter in the conversion: preview it, open its review, write the reviewed plan, or move on a line. */
     private function submitAnimationConversion(): void
     {
         $conversion = $this->animationConversion;
         if (! $this->workspace instanceof ProjectWorkspace) {
             return;
         }
-        if ($conversion->getSelectedRow() === 'preview') {
-            if ($conversion->preview($this->workspace)) {
-                $conversion->move(1);
-                $this->statusMessage = 'Previewed. Write applies exactly these files.';
+        if ($conversion->getMode() === AnimationConversionEditor::MODE_CHOICES) {
+            $control = $conversion->getSelectedControl();
+            if ($control === 'preview') {
+                // The status line carries the outcome, so a refusal is read wherever the pane has scrolled.
+                $conversion->preview($this->workspace)
+                    ? $this->setStatus('Review the files; Enter writes exactly these.')
+                    : $this->setStatus((string) $conversion->getError(), StatusLevel::WARN);
+            } elseif ($control === 'review') {
+                $conversion->review();
+            } elseif ($control !== null) {
+                $conversion->move(1, count($conversion->getLines($this->recordPaneMetrics()['width'], $this->projectRoot)));
             }
-
-            return;
-        }
-        if ($conversion->getSelectedRow() !== 'write') {
-            $conversion->move(1);
 
             return;
         }
@@ -10016,6 +10026,8 @@ final class Editor
         } catch (Throwable $failure) {
             // Files changed since the preview, or the write failed: nothing is written; preview again.
             $conversion->setError($failure->getMessage());
+            $conversion->returnToChoices();
+            $this->setStatus($failure->getMessage(), StatusLevel::WARN);
 
             return;
         }
@@ -10026,16 +10038,26 @@ final class Editor
         $this->requestFullRender();
     }
 
-    /** @return list<string> The conversion's rows, in the settings pane. */
+    /**
+     * The conversion in the settings pane: its title, then the mode's lines
+     * in whatever height the pane has, following the cursor through the
+     * shared scroll window so the selected line is always shown.
+     *
+     * @return list<string>
+     */
     private function buildAnimationConversionRows(): array
     {
-        $width = $this->recordPaneMetrics()['width'];
-        $lines = [sprintf('Convert %s to a timeline', $this->animationConversion->getName()), ''];
-        foreach ($this->animationConversion->describeRows($this->projectRoot) as $line) {
-            $lines = [...$lines, ...($line === '' ? [''] : SettingsPaneLayout::wrapProse($line, $width))];
-        }
+        $metrics = $this->recordPaneMetrics();
+        $conversion = $this->animationConversion;
+        $title = $conversion->getMode() === AnimationConversionEditor::MODE_REVIEW
+            ? sprintf('Review: convert %s', $conversion->getName())
+            : sprintf('Convert %s to a timeline', $conversion->getName());
+        $lines = $conversion->getLines($metrics['width'], $this->projectRoot);
+        // Two header lines, then the lines in whatever height the pane has.
+        $visibleRows = max(1, $metrics['rows'] - 2);
 
-        return $lines;
+        // The whole selected control stays on screen, not only its first line.
+        return [$title, '', ...ScrollWindow::slice($lines, $conversion->getCursorEnd($visibleRows), $visibleRows)];
     }
 
     private function openAffinityEditor(array $field): void
@@ -12989,11 +13011,17 @@ final class Editor
                     'a/d:Add/Del  n/x:Edit  ?:Help',
                     '?:Help',
                 ),
+                $this->animationConversion->isOpen() && $this->animationConversion->getMode() === AnimationConversionEditor::MODE_REVIEW => $this->fitHelp(
+                    $layout['settingsWidth'],
+                    'Up/Down:Read  Enter:Write these files  Esc:Back to choices',
+                    'Up/Down:Read  Enter:Write  Esc:Back',
+                    'Enter:Write  Esc:Back',
+                ),
                 $this->animationConversion->isOpen() => $this->fitHelp(
                     $layout['settingsWidth'],
-                    'Up/Down:Row  Left/Right:Choose  Type:Text  Enter:Preview/Write  Esc:Cancel',
-                    'Left/Right:Choose  Enter:Preview/Write  Esc:Cancel',
-                    'Enter:Preview/Write  Esc:Cancel',
+                    'Up/Down:Row  Left/Right:Choose  Type:Text  Enter:Preview  Esc:Cancel',
+                    'Left/Right:Choose  Enter:Preview  Esc:Cancel',
+                    'Enter:Preview  Esc:Cancel',
                     '?:Help',
                 ),
                 $this->affinityEditor->isOpen() => $this->fitHelp(

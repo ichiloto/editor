@@ -1233,7 +1233,11 @@ in for it:
 
 Preview shows every file as it would be written: the new
 `assets/Animations/<name>/<name>.timeline.php`, and for a battle the record
-naming it. Write applies exactly that preview as one undo step. A changed
+naming it. In the terminal it opens a review of those files: Up/Down read
+them a line at a time, Enter writes them, and Esc goes back to the choices.
+The pane follows the cursor, so the selected choice and every reviewed line
+are shown at any terminal size. Write applies exactly that preview as one
+undo step. A changed
 choice, or a file changed since, needs a fresh preview, and pending edits are
 saved or undone first. The record's legacy frames and cues stay as written,
 and field scripts keep playing the record until their own command names the
