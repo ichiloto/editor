@@ -68,11 +68,23 @@ final class DatabaseCatalog
      */
     public static function knows(string $key): bool
     {
-        return array_any([...self::all(), ...self::getEmbedded()], static fn(DatabaseCategoryDefinition $category): bool => $category->key === $key);
+        return self::findByKey($key) !== null;
     }
 
     /**
-     * Returns the category index for the requested key.
+     * Returns the category a key names, listed or embedded; null when none
+     * does. Unlike {@see indexOf()}, which places a listed category in the
+     * Database list, this never answers with another category.
+     */
+    public static function findByKey(string $key): ?DatabaseCategoryDefinition
+    {
+        return array_find([...self::all(), ...self::getEmbedded()], static fn(DatabaseCategoryDefinition $category): bool => $category->key === $key);
+    }
+
+    /**
+     * Returns the Database list position of a listed category; the first
+     * category for any other key, embedded ones included. To name a
+     * category by its key, use {@see findByKey()}.
      *
      * @param string $key Stable category key.
      * @return int

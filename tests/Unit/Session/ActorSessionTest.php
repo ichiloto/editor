@@ -220,3 +220,18 @@ it('asks and answers a file set written at once over the line protocol', functio
         ->and($request(5, 'database.apply', [...$apply, 'answer' => 'write', 'confirm' => $asked['confirm']])['result'])->toMatchArray(['changed' => true, 'reloaded' => true])
         ->and($request(6, 'history.undo')['result']['label'])->toBe('Migrate actor identities and references');
 });
+
+it('names an unsaved actor edit among the unsaved changes, and Save All writes it, beside the battle art categories', function () {
+    $root = makeTemporaryProject();
+    $path = $root . '/assets/Data/Actors/Kaelion.php';
+    $session = EditorSession::open($root);
+    $name = actorSessionRow($session->readDatabaseRecord('actors', 0), 'name');
+    $session->applyDatabaseRecord('actors', 0, $name['key'], 'Kaelion the Bold');
+
+    expect($session->listUnsavedChanges())->toBe(['Actors database']);
+
+    $session->saveAll();
+
+    expect(file_get_contents($path))->toContain('Kaelion the Bold')
+        ->and($session->listUnsavedChanges())->toBe([]);
+});

@@ -142,3 +142,17 @@ it('sets the ground point of a base image and the idle pose showing it as one un
     expect(fn() => $session->applyDatabaseRecordValues('battler_enemies', $index, $refused, 'Ground point'))->toThrow(SessionRefusal::class)
         ->and(readBattlerRow($session, $index, 'pose0Pivot')['value'])->toBe('0.25, 0.9');
 });
+
+it('names unsaved battle art among the unsaved changes, as the status bar counts them', function () {
+    $root = battlerArtProject();
+    $session = EditorSession::open($root);
+    $index = $session->createDatabaseRecord('battler_enemies', 'Regular Bat')['index'];
+    setBattlerRow($session, $index, 'artwork.image', 'Graphics/Enemies/Bat.png');
+    setBattlerRow($session, $index, 'artwork.pivot', '0.25, 1');
+
+    expect($session->listUnsavedChanges())->not->toBe([]);
+
+    $session->saveDatabase('battler_enemies');
+
+    expect($session->listUnsavedChanges())->toBe([]);
+});

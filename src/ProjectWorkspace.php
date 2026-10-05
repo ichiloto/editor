@@ -24,6 +24,7 @@ use Ichiloto\Engine\Entities\Skills\SkillCatalog;
 use Ichiloto\Engine\Field\MapGraphics;
 use RecursiveDirectoryIterator;
 use InvalidArgumentException;
+use LogicException;
 use RecursiveIteratorIterator;
 use RuntimeException;
 use Throwable;
@@ -374,7 +375,12 @@ final readonly class ProjectWorkspace
 
         foreach ($this->recordDatabases as $categoryKey => $recordDatabase) {
             if ($recordDatabase->isEditable()) {
-                $databases[DatabaseCatalog::at(DatabaseCatalog::indexOf($categoryKey))->label] = $recordDatabase;
+                // By its own label: an embedded category (battle art) has no
+                // Database list position, and naming it by one replaced the
+                // Actors database here, hiding it from Save All.
+                $category = DatabaseCatalog::findByKey($categoryKey)
+                    ?? throw new LogicException(sprintf('The record category %s is not in the Database catalog.', $categoryKey));
+                $databases[$category->label] = $recordDatabase;
             }
         }
 
