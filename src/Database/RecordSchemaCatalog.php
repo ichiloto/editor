@@ -283,7 +283,7 @@ final class RecordSchemaCatalog
                     new RecordField('position.1', 'Y', InputControlType::INTEGER),
                     // The graphical battle's own placement: the point its feet stand on
                     // and its contain limits, never the terminal position above.
-                    new RecordField('graphicalPlacement', 'Battle Placement', codec: RecordFieldCodec::RECT, removeWhenEmpty: true),
+                    new RecordField('graphicalPlacement', 'Battle Placement', codec: RecordFieldCodec::BATTLER_SLOT, removeWhenEmpty: true),
                 ],
                 blank: ['enemy' => 'Regular Bat', 'position' => [15, 7]],
             ),

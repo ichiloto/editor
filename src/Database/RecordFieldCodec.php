@@ -76,9 +76,12 @@ enum RecordFieldCodec: string
     case NORMALIZED_POINT = 'normalized_point';
 
     /**
-     * A rectangle stored as `['x' => x, 'y' => y, 'width' => w, 'height' => h]`,
-     * shown as `x, y, width, height`: a battler's graphical placement. Whole
-     * or not at all, so one edit moves it as one step.
+     * A battler slot, the Engine's BattlerSlot, stored as `['x' => x,
+     * 'y' => y, 'width' => w, 'height' => h]` with an optional
+     * `'displayScale' => s`, shown as `x, y, width, height` or
+     * `x, y, width, height, s`: a battler's graphical placement. Whole or
+     * not at all, so one edit moves it as one step, and its display scale
+     * is kept.
      */
-    case RECT = 'rect';
+    case BATTLER_SLOT = 'battler_slot';
 }

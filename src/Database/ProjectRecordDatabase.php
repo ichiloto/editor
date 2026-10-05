@@ -16,6 +16,7 @@ use Ichiloto\Editor\Database\Projections\WholeFileProjection;
 use Ichiloto\Editor\Inspector\InputControl;
 use Ichiloto\Editor\Inspector\InputControlType;
 use RuntimeException;
+use Ichiloto\Engine\Battle\Presentation\BattlerSlot;
 
 /**
  * A schema-driven Database category.
@@ -3281,21 +3282,24 @@ final class ProjectRecordDatabase
             return [intval($parts[0]), intval($parts[1])];
         }
 
-        if ($field->codec === RecordFieldCodec::RECT) {
+        if ($field->codec === RecordFieldCodec::BATTLER_SLOT) {
             if ($trimmed === '' && $field->removeWhenEmpty) {
                 return null;
             }
 
             $parts = array_map(trim(...), explode(',', $trimmed));
 
-            if (count($parts) !== 4 || array_filter($parts, static fn(string $part): bool => ! is_numeric($part)) !== []) {
-                throw new \InvalidArgumentException(sprintf('%s must be four numbers: x, y, width and height.', $field->label));
+            if (! in_array(count($parts), [4, 5], true) || array_filter($parts, static fn(string $part): bool => ! is_numeric($part)) !== []) {
+                throw new \InvalidArgumentException(sprintf('%s must be four numbers, x, y, width and height, and optionally a display scale.', $field->label));
             }
 
             // Whole numbers stay integers, as an author writes them.
             $numbers = array_map(static fn(string $part): int|float => floor((float) $part) === (float) $part ? (int) $part : (float) $part, $parts);
+            $slot = array_combine(array_slice(['x', 'y', 'width', 'height', 'displayScale'], 0, count($numbers)), $numbers);
+            // The Engine's own slot rules decide what a battle accepts.
+            BattlerSlot::fromArray($slot, $field->label);
 
-            return array_combine(['x', 'y', 'width', 'height'], $numbers);
+            return $slot;
         }
 
         if ($field->codec === RecordFieldCodec::NORMALIZED_POINT) {
@@ -3476,8 +3480,9 @@ final class ProjectRecordDatabase
             RecordFieldCodec::POINT => is_array($value)
                 ? implode(', ', array_map(strval(...), array_values($value)))
                 : ProjectRecord::stringify($value),
-            RecordFieldCodec::RECT => is_array($value)
-                ? implode(', ', array_map(static fn(string $key): string => ProjectRecord::stringify($value[$key] ?? ''), ['x', 'y', 'width', 'height']))
+            RecordFieldCodec::BATTLER_SLOT => is_array($value)
+                ? implode(', ', array_map(static fn(string $key): string => ProjectRecord::stringify($value[$key] ?? ''),
+                    array_key_exists('displayScale', $value) ? ['x', 'y', 'width', 'height', 'displayScale'] : ['x', 'y', 'width', 'height']))
                 : ProjectRecord::stringify($value),
             RecordFieldCodec::NORMALIZED_POINT => is_array($value)
                 ? sprintf('%s, %s', ProjectRecord::stringify($value['x'] ?? ''), ProjectRecord::stringify($value['y'] ?? ''))

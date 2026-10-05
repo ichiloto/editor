@@ -47,3 +47,19 @@ it('moves a member by its battle placement as one undo step, keeping the troop f
         ->and($session->undo()['label'] ?? null)->not->toBeNull()
         ->and($session->readTroopFormation(0)['members'][0]['placement']['x'])->toBe(260);
 });
+
+it('keeps a member placement\'s display scale through an edit, and refuses one the battle would not accept', function () {
+    $root = troopFormationProject();
+    $troops = $root . '/assets/Data/troops.php';
+    file_put_contents($troops, str_replace("'height' => 190]]", "'height' => 190, 'displayScale' => 1.1]]", (string) file_get_contents($troops)));
+    $session = EditorSession::open($root);
+    $placement = array_find($session->readDatabaseRecord('troops', 0)['rows'], static fn(array $row): bool => ($row['key']['field'] ?? null) === 'member0GraphicalPlacement');
+
+    expect($placement['value'])->toBe('260, 300, 275, 190, 1.1');
+    $session->applyDatabaseRecord('troops', 0, $placement['key'], '410, 330, 275, 190, 1.1');
+    expect($session->readTroopFormation(0)['members'][0]['placement'])->toBe(['x' => 410, 'y' => 330, 'width' => 275, 'height' => 190, 'displayScale' => 1.1])
+        ->and(fn() => $session->applyDatabaseRecord('troops', 0, $placement['key'], '410, 330, 275, 190, 0'))->toThrow(SessionRefusal::class);
+
+    $session->saveDatabase('troops');
+    expect((require $troops)[0]['enemies'][0]['graphicalPlacement'])->toBe(['x' => 410, 'y' => 330, 'width' => 275, 'height' => 190, 'displayScale' => 1.1]);
+});
