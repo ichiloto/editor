@@ -1066,3 +1066,42 @@ it('reports a record list entry that names nothing, or a definition the project 
         'enemy Sewer Rat, drop 2: Its item names the item "Moon Tonic", which the project does not define.',
     ]);
 });
+
+it('checks a summon alias against the summons the project defines', function () {
+    $root = makeTemporaryProject();
+    writeConsistentQuests($root);
+    writeConsistentSkits($root);
+    writeConsistentEnemies($root);
+    writeSpreadSkillCatalog($root);
+    // One summon, defined as the Engine loads it: a directory holding its data and timeline records.
+    $summon = $root . '/assets/Cutscenes/Summons/ember';
+    mkdir($summon, 0777, true);
+    file_put_contents($summon . '/ember.data.php', "<?php\n\nreturn " . var_export([
+        'id' => 'ember', 'name' => 'Ember', 'linkedActionId' => 'Ember Call',
+        'availability' => ['conditions' => []],
+        'wielders' => ['mode' => 'characters', 'characters' => ['Kaelion'], 'tenancy' => 'exclusive'],
+    ], true) . ";\n");
+    file_put_contents($summon . '/ember.timeline.php', "<?php\n\nreturn ['fps' => 12, 'lengthFrames' => 1, 'tracks' => [], 'cues' => []];\n");
+    writeSaveCompatibilityManifest($root, <<<'PHP'
+    <?php
+
+    return [
+      'contentVersion' => 0,
+      'migrations' => [],
+      'aliases' => [
+        'summons' => [
+          ['from' => 'spark', 'to' => 'ember'],
+          ['from' => 'ash', 'to' => 'cinder'],
+        ],
+      ],
+      'tombstones' => [],
+    ];
+    PHP);
+
+    $missing = array_map(
+        static fn(Issue $issue): string => $issue->message,
+        issuesMentioning(validateProject($root), 'is not defined in the current'),
+    );
+
+    expect($missing)->toBe(['Alias target "cinder" is not defined in the current summons catalog.']);
+});

@@ -8,12 +8,12 @@ use Ichiloto\Editor\Database\InventoryCatalog;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
+use Ichiloto\Engine\Cutscenes\Summons\SummonCutsceneDefinition;
+use Ichiloto\Engine\Cutscenes\Summons\SummonCutsceneLibrary;
 use Ichiloto\Engine\Entities\Skills\SkillCatalog;
 use Ichiloto\Engine\Exceptions\InvalidSaveCompatibilityManifestException;
 use Ichiloto\Engine\IO\SaveCompatibility\ContentReferenceCategory;
 use Ichiloto\Engine\IO\SaveCompatibility\SaveCompatibilityManifest;
-use RecursiveDirectoryIterator;
-use RecursiveIteratorIterator;
 use Throwable;
 
 /** Validates the project-owned save compatibility manifest. */
@@ -450,7 +450,12 @@ final class SaveCompatibilityValidator
         return $ids;
     }
 
-    /** @return string[] */
+    /**
+     * The summons the game defines, as the Engine's summon library loads them:
+     * one definition per directory, each a single record.
+     *
+     * @return string[]
+     */
     private function summonIds(ProjectWorkspace $workspace): array
     {
         $root = $workspace->projectRoot . '/assets/Cutscenes/Summons';
@@ -459,18 +464,10 @@ final class SaveCompatibilityValidator
             return [];
         }
 
-        $ids = [];
-        $iterator = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root));
-
-        foreach ($iterator as $file) {
-            if (! $file->isFile() || ! str_ends_with($file->getFilename(), '.data.php')) {
-                continue;
-            }
-
-            $ids = [...$ids, ...$this->phpListIdentities($file->getPathname())];
-        }
-
-        return array_values(array_unique($ids));
+        return array_values(array_unique(array_map(
+            static fn(SummonCutsceneDefinition $definition): string => $definition->id,
+            new SummonCutsceneLibrary($root)->load(),
+        )));
     }
 
     private function isOneShotEventIdentity(string $identity): bool
