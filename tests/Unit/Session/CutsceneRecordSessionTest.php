@@ -111,7 +111,24 @@ it('previews a summon frame as its terminal presentation draws it, clamped to th
     expect($preview['frame'])->toBe($preview['totalFrames'] - 1)
         ->and($preview['lines'])->toHaveCount(10)
         ->and(mb_strlen($preview['lines'][0]))->toBe(40);
+    expectTerminalCanvas($preview['terminalCanvas'], 40, 10);
 });
+
+/** A terminal picture as the renderer receives it: one text layer on the picture's own grid, its runs free of control codes. */
+function expectTerminalCanvas(array $canvas, int $columns, int $rows): void
+{
+    expect($canvas['textLayers'])->toHaveCount(1);
+    $layer = $canvas['textLayers'][0];
+    expect($layer['grid']['columns'])->toBe($columns)
+        ->and($layer['grid']['rows'])->toBe($rows)
+        ->and($canvas['width'])->toBe($columns * $layer['grid']['cellWidth'])
+        ->and($canvas['height'])->toBe($rows * $layer['grid']['cellHeight']);
+    foreach ($layer['runs'] as $run) {
+        expect($run['row'])->toBeLessThan($rows)
+            ->and($run['column'] + mb_strlen($run['text']))->toBeLessThanOrEqual($columns)
+            ->and(preg_match('/\p{Cc}/u', $run['text']))->toBe(0);
+    }
+}
 
 it('shows an effect\'s graphical sequence with its image track\'s art, and sets the pivot as one undo step', function () {
     $session = EditorSession::open(effectProject());
@@ -224,6 +241,7 @@ it('previews a cinematic as the terminal plays it, and plays, steps, restarts an
     expect($started)->toMatchArray(['id' => 'harbour-lanterns', 'playing' => false])
         ->and($started['lines'])->not->toBe([])
         ->and($started['failure'])->toBeNull();
+    expectTerminalCanvas($started['terminalCanvas'], 60, 16);
 
     $session->controlCinematicPreview('play');
     $played = $session->controlCinematicPreview('tick', 0.5);

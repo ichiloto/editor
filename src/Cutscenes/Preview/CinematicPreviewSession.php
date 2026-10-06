@@ -563,6 +563,18 @@ final class CinematicPreviewSession
     }
 
     /**
+     * The captured screen's size, in columns and rows.
+     *
+     * @return array{int, int}
+     */
+    public function getScreenSize(): array
+    {
+        $screen = $this->scene->previewCamera()->screen;
+
+        return [$screen->getWidth(), $screen->getHeight()];
+    }
+
+    /**
      * Resizes the captured screen.
      */
     public function resize(int $width, int $height): void

@@ -62,7 +62,10 @@ use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Editor\Storage\WorkspaceSave;
 use Ichiloto\Editor\Validation\MapValidator;
+use Ichiloto\Engine\IO\Console\TerminalPresentationComposer;
+use Ichiloto\Engine\Rendering\Presentation\Canvas\PresentationCanvas;
 use Ichiloto\Engine\Rendering\Presentation\PresentationLayerPolicy;
+use Ichiloto\Engine\Rendering\Transport\RendererGridConfig;
 use Ichiloto\Engine\Rendering\Presentation\PresentationWorld;
 use Ichiloto\Engine\Battle\Presentation\BattlePresentationCatalog;
 use Ichiloto\Engine\Battle\Presentation\BattlerBindings;
@@ -136,6 +139,8 @@ final class EditorSession
      * @var array<string, array{key: string, preview: EffectBattlePreview}>
      */
     private array $effectBattlePreviews = [];
+    /** Projects terminal pictures into renderer runs, keeping its parsed styles between frames. */
+    private ?TerminalPresentationComposer $terminalComposer = null;
     /** The cinematic previewed as the terminal plays it, and which one it is. */
     private ?CinematicPreviewSession $cinematicPreview = null;
     private ?string $cinematicPreviewId = null;
@@ -1398,7 +1403,7 @@ final class EditorSession
      * from the record as edited, unsaved changes included, with the cues on
      * that frame: what a timeline editor shows at its playhead.
      *
-     * @return array{frame: int, totalFrames: int, fps: int, lines: list<string>, cues: list<array<string, mixed>>}
+     * @return array{frame: int, totalFrames: int, fps: int, lines: list<string>, terminalCanvas: array<string, mixed>, cues: list<array<string, mixed>>}
      * @throws SessionRefusal When the record is not a summon or effect, or its timeline does not compile.
      */
     public function readCutscenePreview(string $category, int $index, int $frame, int $width, int $height): array
@@ -1414,8 +1419,10 @@ final class EditorSession
         $preview = new TimelinePreviewSession($compiled, $asset->type === CutsceneType::EFFECT ? null : false);
         $frame = max(0, min($frame, $preview->totalFrames() - 1));
 
+        $lines = array_values($preview->frame(max(1, $width), max(1, $height), $frame));
+
         return ['frame' => $frame, 'totalFrames' => $preview->totalFrames(), 'fps' => $preview->fps(),
-            'lines' => array_values($preview->frame(max(1, $width), max(1, $height), $frame)),
+            'lines' => $lines, 'terminalCanvas' => $this->describeTerminalCanvas($lines, max(1, $width), max(1, $height)),
             'cues' => array_values($preview->cuesAt($frame))];
     }
 
@@ -1504,6 +1511,22 @@ final class EditorSession
     }
 
     /**
+     * A terminal picture as a renderer paints it: the Engine's styled runs on the
+     * picture's own grid, its colours kept and its control codes never counted as
+     * text. Cells take the share of the Engine's canvas the battle arena's do.
+     *
+     * @param list<string> $lines
+     * @return array<string, mixed>
+     */
+    private function describeTerminalCanvas(array $lines, int $columns, int $rows): array
+    {
+        $grid = new RendererGridConfig($columns, $rows, max(1, intdiv(PresentationCanvas::DEFAULT_WIDTH, $columns)),
+            max(1, intdiv(PresentationCanvas::DEFAULT_HEIGHT, $rows)));
+
+        return ($this->terminalComposer ??= new TerminalPresentationComposer())->createCanvasFromLines($lines, $grid)->toArray();
+    }
+
+    /**
      * The cinematic previewed: which one, its terminal picture now, how long
      * it has run, its status, whether it plays or has finished, and why it
      * stopped or waits, when it does.
@@ -1514,9 +1537,13 @@ final class EditorSession
     {
         $preview = $this->cinematicPreview ?? throw new SessionRefusal('No cinematic is being previewed.');
 
+        $lines = array_values($preview->frame());
+        [$columns, $rows] = $preview->getScreenSize();
+
         return [
             'id' => $this->cinematicPreviewId,
-            'lines' => array_values($preview->frame()),
+            'lines' => $lines,
+            'terminalCanvas' => $this->describeTerminalCanvas($lines, $columns, $rows),
             'elapsed' => $preview->elapsed(),
             'status' => $preview->status(),
             'playing' => $preview->isPlaying(),
