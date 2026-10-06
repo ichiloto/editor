@@ -3447,7 +3447,9 @@ final class ProjectRecordDatabase
             return self::coerceScalar($field, $trimmed);
         }
 
-        if ($trimmed === '' && $field->removeWhenEmpty) {
+        // Clearing the field, or writing back what its absence reads as, is its absence.
+        if ($field->removeWhenEmpty && ($trimmed === ''
+            || ($field->displayDefault !== null && mb_strtolower($trimmed) === mb_strtolower($field->displayDefault)))) {
             return null;
         }
 
@@ -3531,7 +3533,9 @@ final class ProjectRecordDatabase
 
     /**
      * Casts an integer field, dropping the key when the value is zero and the
-     * schema treats zero as "unset".
+     * schema treats zero as "unset": its absence reads as zero, or as nothing
+     * it names. Where absence means something else (a 100% chance, the last
+     * frame), zero is a value of its own and is kept.
      *
      * @param RecordField $field The field schema.
      * @param string $value The trimmed value.
@@ -3541,7 +3545,7 @@ final class ProjectRecordDatabase
     {
         $number = intval($value);
 
-        return $number === 0 && $field->removeWhenEmpty ? null : $number;
+        return $number === 0 && $field->removeWhenEmpty && ($field->displayDefault ?? '0') === '0' ? null : $number;
     }
 
     /**
