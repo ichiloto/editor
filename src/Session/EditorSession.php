@@ -83,6 +83,11 @@ use Ichiloto\Engine\Battle\BattlePacing;
 use Ichiloto\Engine\Entities\Troop;
 use Ichiloto\Engine\Scenes\Battle\BattleConfig;
 use Ichiloto\Editor\Cutscenes\Preview\SummonBattlePreview;
+use Ichiloto\Editor\Cutscenes\Preview\EffectBattlePreview;
+use Ichiloto\Engine\Animations\Animation;
+use Ichiloto\Engine\Animations\AnimationLibrary;
+use Ichiloto\Engine\Animations\Timelines\CompiledEffectTimeline;
+use Ichiloto\Engine\Entities\Skills\SkillCatalog;
 use Ichiloto\Editor\Cutscenes\Preview\CinematicPreviewOrigin;
 use Ichiloto\Editor\Cutscenes\Preview\CinematicPreviewSession;
 use Ichiloto\Engine\Battle\Presentation\BattleCommandTimeline;
@@ -124,6 +129,12 @@ final class EditorSession
      * @var array<string, array{key: string, preview: SummonBattlePreview}>
      */
     private array $summonBattlePreviews = [];
+    /**
+     * The effect battle previews last built, by presentation, and what each was built from.
+     *
+     * @var array<string, array{key: string, preview: EffectBattlePreview}>
+     */
+    private array $effectBattlePreviews = [];
     /** The cinematic previewed as the terminal plays it, and which one it is. */
     private ?CinematicPreviewSession $cinematicPreview = null;
     private ?string $cinematicPreviewId = null;
@@ -1484,14 +1495,8 @@ final class EditorSession
         SummonCompiledCutscene $terminal, array $entry, array $troop, BattlePacing $pacing, ?BattlePresentationCatalog $catalog,
         EffectPresentation $presentation): SummonBattlePreview
     {
-        $actors = $this->workspace->actorDatabase->createActorStore();
-        $skills = $this->workspace->loadSkillCatalog();
-        $previousEnemies = ConfigStore::has(EnemyStore::class) ? ConfigStore::get(EnemyStore::class) : null;
         try {
-            $setup = ProjectBattleTest::fromArray($entry)->createSetup($actors, $this->readStartingPartyReferences());
-            $party = $setup->createParty($actors, $this->loadItemStore(), $skills);
-            ConfigStore::put(EnemyStore::class, new EnemyStore());
-            $battle = new BattleConfig($party, Troop::fromArray($troop['data']), settings: $setup->getBattleSettings());
+            [$battle, $skills] = $this->createPreviewBattle($entry, $troop);
 
             return SummonBattlePreview::create($definition, $graphical, $terminal, $battle, $skills, $pacing, $catalog,
                 $this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets', $presentation);
@@ -1499,6 +1504,113 @@ final class EditorSession
             throw $refusal;
         } catch (Throwable $failure) {
             throw new SessionRefusal(sprintf('%s cannot be previewed in battle: %s', $definition->name, $failure->getMessage()), previous: $failure);
+        }
+    }
+
+    /**
+     * A battle effect as a battle plays it, at one command frame, in one
+     * presentation: in an action of the battle test party that the Engine's
+     * own animation selection plays it in (its attacks, skills, magic and
+     * items; a summon is previewed as a summon), with the animation's other
+     * effect beside it, the action's pose and the project's battle pacing.
+     * The effects are compiled as they stand, unsaved edits included, and the
+     * animations are read as they stand too. Every action that plays the
+     * effect is listed, so another can be chosen; a frame of the effect's own
+     * timeline may be asked for instead of a command frame. Nothing is
+     * resolved, spent or played aloud, and nothing is written.
+     *
+     * @return array<string, mixed>
+     * @throws SessionRefusal When the effect does not compile, no action of the party plays it, or the battle cannot be set up.
+     */
+    public function readEffectBattlePreview(int $index, int $frame, bool $reducedMotion = false,
+        EffectPresentation $presentation = EffectPresentation::GRAPHICAL, ?int $authoredFrame = null, int $binding = 0): array
+    {
+        $asset = $this->requireTimelineCutscene(CutsceneType::EFFECT->getRecordCategory(), $index);
+        $effects = $this->workspace->cutscenes?->assets(CutsceneType::EFFECT) ?? [];
+        $animations = array_values(array_map(static fn($record): mixed => $record->toArray(), $this->requireRecordDatabase('animations')->getRecords()));
+        $entry = $this->readBattleTestEntry();
+        $troop = $this->readPreviewTroop($entry);
+        $config = $this->workspace->config?->getRecord('ui.battle')->get('value');
+        $battleUi = is_array($config) ? $config : [];
+        $graphic = $presentation === EffectPresentation::GRAPHICAL;
+        $key = hash('xxh128', serialize([$asset->id, array_map(static fn(CutsceneAsset $effect): array => $effect->payload(), $effects), $animations,
+            $entry, $this->readStartingPartyReferences(), $troop, $battleUi, $binding, $graphic ? $this->readProposedBattlerBindings() : null]));
+        if (($this->effectBattlePreviews[$presentation->value]['key'] ?? null) !== $key) {
+            $catalog = $graphic ? $this->requireBattleLayoutCatalog('preview effects on') : null;
+            $this->effectBattlePreviews[$presentation->value] = ['key' => $key, 'preview' => ProjectDirectoryContext::run($this->workspace->projectRoot,
+                fn(): EffectBattlePreview => $this->createEffectBattlePreview($asset->id, $animations, $entry, $troop,
+                    BattlePacing::fromBattleUiConfig($battleUi), $catalog, $presentation, $binding))];
+        }
+        $preview = $this->effectBattlePreviews[$presentation->value]['preview'];
+        $frame = $authoredFrame === null ? $frame : $preview->findCommandFrame($authoredFrame);
+        try {
+            $read = $preview->readFrame(max(0, min($frame, $preview->totalFrames - 1)), $reducedMotion);
+        } catch (Throwable $failure) {
+            throw new SessionRefusal(sprintf('%s cannot be previewed: %s', $asset->id, $failure->getMessage()), previous: $failure);
+        }
+
+        return [...$read, 'totalFrames' => $preview->totalFrames, 'fps' => BattleCommandTimeline::FPS,
+            'assetRoot' => $this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets', 'lane' => $preview->lane,
+            'contexts' => $preview->contexts, 'binding' => $preview->binding,
+            'caster' => $preview->caster, 'targets' => $preview->targets, 'troop' => $troop['name'], 'phases' => $preview->phases];
+    }
+
+    /**
+     * The battle an effect preview plays in, and the effect played in it.
+     *
+     * @param list<mixed> $animations The animation records as they stand.
+     * @param array<string, mixed> $entry The battle test as system data holds it.
+     * @param array{name: string, data: array<string, mixed>} $troop
+     * @throws SessionRefusal When the battle cannot be set up or no action of it plays the effect.
+     */
+    private function createEffectBattlePreview(string $effectId, array $animations, array $entry, array $troop, BattlePacing $pacing,
+        ?BattlePresentationCatalog $catalog, EffectPresentation $presentation, int $binding): EffectBattlePreview
+    {
+        // The animations as authored now; an entry the Engine would not read plays nothing, as in battle.
+        $library = AnimationLibrary::createFromAnimations(array_values(array_filter(array_map(static function (mixed $data): ?Animation {
+            try {
+                return is_array($data) ? Animation::fromArray($data) : null;
+            } catch (Throwable) {
+                return null;
+            }
+        }, $animations))));
+        $compile = function (string $id, EffectPresentation $presentation): CompiledEffectTimeline {
+            $effect = $this->workspace->cutscenes?->find(CutsceneType::EFFECT, $id)
+                ?? throw new SessionRefusal(sprintf('The animation plays the effect %s, which does not exist.', $id));
+
+            return $effect->compiledEffect($presentation, true);
+        };
+        try {
+            [$battle, $skills] = $this->createPreviewBattle($entry, $troop);
+
+            return EffectBattlePreview::create($effectId, $battle, $skills, $library, $pacing, $catalog,
+                $this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets', $presentation, $compile, $binding);
+        } catch (SessionRefusal $refusal) {
+            throw $refusal;
+        } catch (Throwable $failure) {
+            throw new SessionRefusal(sprintf('%s cannot be previewed in battle: %s', $effectId, $failure->getMessage()), previous: $failure);
+        }
+    }
+    /**
+     * The battle a preview plays in, built the way the battle test builds it:
+     * its party, or the starting party, against its troop, with the skills
+     * they know.
+     *
+     * @param array<string, mixed> $entry The battle test as system data holds it.
+     * @param array{name: string, data: array<string, mixed>} $troop
+     * @return array{0: BattleConfig, 1: SkillCatalog}
+     */
+    private function createPreviewBattle(array $entry, array $troop): array
+    {
+        $actors = $this->workspace->actorDatabase->createActorStore();
+        $skills = $this->workspace->loadSkillCatalog();
+        $setup = ProjectBattleTest::fromArray($entry)->createSetup($actors, $this->readStartingPartyReferences());
+        $party = $setup->createParty($actors, $this->loadItemStore(), $skills);
+        $previousEnemies = ConfigStore::has(EnemyStore::class) ? ConfigStore::get(EnemyStore::class) : null;
+        try {
+            ConfigStore::put(EnemyStore::class, new EnemyStore());
+
+            return [new BattleConfig($party, Troop::fromArray($troop['data']), settings: $setup->getBattleSettings()), $skills];
         } finally {
             $previousEnemies === null ? ConfigStore::remove(EnemyStore::class) : ConfigStore::put(EnemyStore::class, $previousEnemies);
         }

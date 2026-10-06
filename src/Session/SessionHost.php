@@ -340,6 +340,12 @@ final class SessionHost
             'cutscenes.cinematicControl' => $session->controlCinematicPreview(self::requireString($params, 'action'),
                 is_int($params['seconds'] ?? null) || is_float($params['seconds'] ?? null) ? (float) $params['seconds'] : 0.0),
             'cutscenes.cinematicStop' => $session->stopCinematicPreview(),
+            'cutscenes.effectBattlePreview' => $session->readEffectBattlePreview(self::requireInt($params, 'index'), is_int($params['frame'] ?? null) ? $params['frame'] : 0,
+                ($params['reducedMotion'] ?? false) === true,
+                EffectPresentation::tryFrom(is_string($params['presentation'] ?? null) ? $params['presentation'] : 'graphical')
+                    ?? throw new InvalidRequest('"presentation" must be terminal or graphical.'),
+                is_int($params['authoredFrame'] ?? null) ? $params['authoredFrame'] : null,
+                is_int($params['binding'] ?? null) ? $params['binding'] : 0),
             'cutscenes.battlePreview' => $session->readSummonBattlePreview(self::requireInt($params, 'index'), is_int($params['frame'] ?? null) ? $params['frame'] : 0,
                 ($params['reducedMotion'] ?? false) === true,
                 EffectPresentation::tryFrom(is_string($params['presentation'] ?? null) ? $params['presentation'] : 'graphical')
