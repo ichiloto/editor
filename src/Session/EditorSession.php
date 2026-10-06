@@ -151,12 +151,15 @@ final class EditorSession
                 'label' => $category->label,
                 'description' => $category->description,
                 'implemented' => $category->isImplemented,
+                'group' => 'Database',
             ], DatabaseCatalog::all()),
             // Cutscene types, edited through the same record RPCs under their record category keys.
             'cutscenes' => array_map(static fn(CutsceneType $type): array => [
                 'key' => $type->getRecordCategory(),
                 'label' => $type->label(),
                 'description' => $type->describeCategory(),
+                'implemented' => true,
+                'group' => 'Cutscenes',
             ], CutsceneType::cases()),
         ];
     }

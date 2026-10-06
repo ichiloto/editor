@@ -11,7 +11,9 @@ it('lists the cutscene types an interface edits as record categories', function 
     $hello = EditorSession::open(cutsceneProject())->describeProject();
 
     expect(array_column($hello['cutscenes'], 'key'))->toBe(['cutscenes/cinematic', 'cutscenes/summon', 'cutscenes/effect'])
-        ->and(array_column($hello['cutscenes'], 'label'))->toBe(['Cinematic', 'Summon', 'Effect']);
+        ->and(array_column($hello['cutscenes'], 'label'))->toBe(['Cinematic', 'Summon', 'Effect'])
+        ->and(array_unique(array_column($hello['cutscenes'], 'group')))->toBe(['Cutscenes'])
+        ->and(array_unique(array_column($hello['databases'], 'group')))->toBe(['Database']);
 });
 
 it('reads a summon\'s fields and its tracks, keyframes and cues as frames of its record', function () {
@@ -41,4 +43,16 @@ it('edits a summon field as one undo step and saves it to its data file', functi
     expect((string) file_get_contents($file))->toContain("'Lantern Wraith'")
         ->and($session->listUnsavedChanges())->toBe([])
         ->and(fn() => $session->readDatabaseRecord('cutscenes/nothing', 0))->toThrow(SessionRefusal::class);
+});
+
+it('saves a summon category as the Database window saves any category', function () {
+    $root = cutsceneProject();
+    $session = EditorSession::open($root);
+    $name = array_find($session->readDatabaseRecord('cutscenes/summon', 0)['rows'], static fn(array $row): bool => trim($row['label']) === 'Name');
+    $session->applyDatabaseRecord('cutscenes/summon', 0, $name['key'], 'Lantern Wraith');
+
+    expect($session->listDatabaseRecords('cutscenes/summon'))->toMatchArray(['dirty' => true, 'canCreate' => false])
+        ->and($session->saveDatabase('cutscenes/summon')['saved'])->toBeTrue()
+        ->and((string) file_get_contents($root . '/assets/Cutscenes/Summons/lantern-wisp/lantern-wisp.data.php'))->toContain("'Lantern Wraith'")
+        ->and($session->listUnsavedChanges())->toBe([]);
 });
