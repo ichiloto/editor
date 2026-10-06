@@ -1068,7 +1068,7 @@ skill's effects, a quest's rewards) listed under them.
 | Optimize Weights | `assets/Data/equipment-optimization.php` | Editable | Same |
 | Optimize Outcomes | `assets/Data/equipment-optimization.php` | Editable | Same |
 | Optimize Exclusions | `assets/Data/equipment-optimization.php` | Editable | Same |
-| System | `assets/Data/system.php` | Editable - title, starting gold, party, inventory and position, battle engine, openings and ATB settings | Same |
+| System | `assets/Data/system.php` | Editable - title, starting gold, party, inventory and position, battle engine, openings and time gauge settings | Same |
 | Configuration | `config.php` (`save`, `accessibility`, `ui`, `graphics`, `audio`, `inn`) | Editable - one row per setting, typed by what it holds; field zoom is kept from 1 to 8 | Same |
 | Types | `assets/Data/system.php` | Editable - the project's elements, one per row; an empty list means the Engine's defaults. Weapon, armor and equipment types are the Engine's own | Same |
 | Terms | `config.php` (`vocab`, `messages`) | Literal terms editable; comments and unrelated expressions preserved | Same |

@@ -281,23 +281,23 @@ final class RecordPanes
             'Battle Settings',
             [
                 sprintf('Engine: %s', $engine),
-                sprintf('ATB Mode: %s', $mode),
+                sprintf('Time Gauge Mode: %s', $mode),
                 sprintf('Base Fill Rate: %d', $fillRate),
                 sprintf('Speed Factor: %d%%', $speedFactor),
             ],
             'Notes',
             $activeTimeOn
-                ? ['Active Time Battle is enabled.', 'Mode: wait', 'This first slice uses wait-mode flow', 'during command selection and resolution.']
-                : ['Traditional turn-based battles.', 'ATB settings are stored but inactive.', 'Switch Battle Engine to active_time', 'to enable gauge-driven turns.'],
+                ? ['Time gauge battles are enabled.', 'Mode: wait', 'This first slice uses wait-mode flow', 'during command selection and resolution.']
+                : ['Traditional turn-based battles.', 'Time gauge settings are stored but inactive.', 'Switch Battle Engine to active_time', 'to enable gauge-driven turns.'],
             $activeTimeOn
                 ? [
-                    'Battle Engine', 'Active Time Battle', '',
+                    'Battle Engine', 'Time Gauge', '',
                     sprintf('Mode: %s', $mode), sprintf('Base Fill Rate: %d', $fillRate), sprintf('Speed Factor: %d%%', $speedFactor), '',
                     'This engine fills battler gauges', 'continuously and resolves actions', 'as battlers become ready.',
                 ]
                 : [
                     'Battle Engine', 'Traditional Turn-Based', '',
-                    'Battlers act in a queued round order.', 'ATB settings are ignored until you', 'switch the project to active_time.',
+                    'Battlers act in a queued round order.', 'Time gauge settings are ignored until you', 'switch the project to active_time.',
                 ],
         );
     }
