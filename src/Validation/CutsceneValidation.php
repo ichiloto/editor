@@ -9,6 +9,7 @@ use Ichiloto\Editor\Cutscenes\CutsceneHydration;
 use Ichiloto\Editor\Cutscenes\CutsceneLibrary;
 use Ichiloto\Editor\Cutscenes\CutsceneType;
 use Ichiloto\Editor\ProjectWorkspace;
+use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicCommandSchema;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicScriptValidator;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandRegistry;
@@ -125,10 +126,14 @@ trait CutsceneValidation
             return [...$issues, ...$this->checkCinematicReferences($workspace, $asset, $definition->commands, $definition->finalizer)];
         }
 
-        try {
-            $asset->compiledSummon();
-        } catch (Throwable $throwable) {
-            return [...$issues, Issue::error($where, $throwable->getMessage(), 'The Engine refuses this summon as it stands; the message names what it needs.')];
+        // The terminal and the graphical presentation each compile the summon as they play it.
+        foreach (EffectPresentation::cases() as $presentation) {
+            try {
+                $asset->compiledSummon($presentation);
+            } catch (Throwable $throwable) {
+                return [...$issues, Issue::error($where, sprintf('%s presentation: %s', ucfirst($presentation->value), $throwable->getMessage()),
+                    'The Engine refuses this summon as it stands; the message names what it needs.')];
+            }
         }
 
         return $issues;

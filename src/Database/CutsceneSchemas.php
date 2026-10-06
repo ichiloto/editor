@@ -649,6 +649,8 @@ final class CutsceneSchemas
             blank: ['type' => 'glyph', 'id' => 'track', 'keyframes' => []],
             variants: ['image' => [
                 new RecordField('anchor', 'Anchor', options: ['target', 'caster', 'screen'], removeWhenEmpty: true, displayDefault: 'target'),
+                // Battle only: the way the art is drawn; the battle mirrors it for a summon cast the other way.
+                new RecordField('facing', 'Facing', options: ['', 'west', 'east'], removeWhenEmpty: true, displayDefault: '(undirected)'),
                 ...self::imageTrackFields(),
             ]],
             variantKey: 'type',

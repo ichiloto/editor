@@ -663,7 +663,10 @@ final class CutsceneAsset
             return;
         }
 
-        CutsceneHydration::compileSummon($data, $partner, $this->projectRoot);
+        // Both renderers play a summon; each must accept it as it stands.
+        foreach (EffectPresentation::cases() as $presentation) {
+            CutsceneHydration::compileSummon($data, $partner, $this->projectRoot, $presentation);
+        }
     }
 
     /**
@@ -696,17 +699,18 @@ final class CutsceneAsset
     }
 
     /**
-     * Compiles the summon as it stands in memory, unsaved edits included.
+     * Compiles the summon as it stands in memory, unsaved edits included, as
+     * one renderer plays it: the terminal by default, as the editors preview it.
      *
      * @throws RuntimeException When the Engine refuses it, or for a cinematic.
      */
-    public function compiledSummon(): SummonCompiledCutscene
+    public function compiledSummon(EffectPresentation $presentation = EffectPresentation::TERMINAL): SummonCompiledCutscene
     {
         if ($this->type !== CutsceneType::SUMMON) {
             throw new RuntimeException(sprintf('%s is a cinematic, not a summon.', $this->id));
         }
 
-        return CutsceneHydration::compileSummon($this->data, $this->partner, $this->projectRoot);
+        return CutsceneHydration::compileSummon($this->data, $this->partner, $this->projectRoot, $presentation);
     }
 
     /**

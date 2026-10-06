@@ -59,17 +59,21 @@ final class CutsceneHydration
     }
 
     /**
-     * Compiles a summon through the engine's own compiler.
+     * Compiles a summon through the engine's own compiler, as one renderer
+     * plays it: the terminal never needs the graphical art, and the
+     * graphical presentation checks its images against the project's assets.
      *
      * @param array<string, mixed> $data The data file's array.
      * @param array<string, mixed> $timeline The timeline file's array.
      */
-    public static function compileSummon(array $data, array $timeline, ?string $projectRoot = null): SummonCompiledCutscene
+    public static function compileSummon(array $data, array $timeline, ?string $projectRoot = null,
+        EffectPresentation $presentation = EffectPresentation::TERMINAL): SummonCompiledCutscene
     {
         return self::inProject(
             $projectRoot,
-            static fn(): SummonCompiledCutscene => new SummonCutsceneCompiler()->compile(
+            static fn(): SummonCompiledCutscene => new SummonCutsceneCompiler(assetRoot: self::getAssetRoot($projectRoot))->compile(
                 SummonCutsceneDefinition::fromArrays($data, $timeline),
+                $presentation,
             ),
         );
     }

@@ -139,3 +139,29 @@ it('creates, duplicates and deletes summons as one undo step each, reaching disk
     $session->saveAll();
     expect(is_dir($root . '/assets/Cutscenes/Summons/lantern-wisp-copy'))->toBeFalse();
 });
+
+it('authors a summon image track with the effect image fields, compiled per renderer', function () {
+    $root = cutsceneProject();
+    $file = $root . '/assets/Cutscenes/Summons/lantern-wisp/lantern-wisp.timeline.php';
+    // A summon with art rests on an authored frame, as reduced motion draws it.
+    file_put_contents($file, str_replace(["  'lengthFrames' => 24,", "    ['type' => 'text', 'id' => 'name',"], ["  'lengthFrames' => 24,\n  'restFrame' => 12,", 
+        "    ['type' => 'image', 'id' => 'wisp-art', 'asset' => 'Graphics/Summons/Wisp.png', 'sheet' => ['columns' => 2, 'rows' => 1],\n"
+        . "      'anchor' => 'target', 'attachment' => 'ground', 'pivot' => ['x' => 0.5, 'y' => 1],\n"
+        . "      'keyframes' => [['frame' => 0, 'sourceFrame' => 0], ['frame' => 12, 'sourceFrame' => 1]]],\n"
+        . "    ['type' => 'text', 'id' => 'name',"], (string) file_get_contents($file)));
+    $session = EditorSession::open($root);
+    $track = array_find($session->describeCutsceneTimeline('cutscenes/summon', 0)['tracks'], static fn(array $track): bool => $track['id'] === 'wisp-art');
+    $asset = Ichiloto\Editor\Cutscenes\CutsceneLibrary::fromProject($root)->find(Ichiloto\Editor\Cutscenes\CutsceneType::SUMMON, 'lantern-wisp');
+
+    // The record shows the image track's own rows, and its keyframes' sheet cells.
+    expect($track['type'])->toBe('image')
+        ->and($track['art'])->toMatchArray(['asset' => 'Graphics/Summons/Wisp.png', 'columns' => 2, 'pivot' => '0.5, 1', 'width' => null])
+        ->and(array_column($track['keyframes'], 'sourceFrame'))->toBe([0, 1])
+        // The terminal never needs the art; the graphical presentation refuses an image that is not there.
+        ->and($asset->compiledSummon()->fps)->toBe(12)
+        ->and(fn() => $asset->compiledSummon(Ichiloto\Engine\Animations\Timelines\EffectPresentation::GRAPHICAL))->toThrow(RuntimeException::class, 'Graphics/Summons/Wisp.png');
+
+    mkdir($root . '/assets/Graphics/Summons', 0o777, true);
+    writeTilesetTestPng($root . '/assets/Graphics/Summons/Wisp.png', 16, 8);
+    expect($asset->compiledSummon(Ichiloto\Engine\Animations\Timelines\EffectPresentation::GRAPHICAL)->fps)->toBe(12);
+});
