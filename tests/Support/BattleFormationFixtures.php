@@ -52,17 +52,24 @@ PHP);
 function enemyPreviewProject(): string
 {
     $root = troopFormationProject();
+    @mkdir($root . '/assets/Graphics/Enemies', 0o777, true);
+    file_put_contents($root . '/assets/Graphics/Enemies/wisp.txt', "~*~\n");
+    file_put_contents($root . '/assets/secret.txt', "not a sprite\n");
+    writeRegularBatEnemy($root);
+
+    return $root;
+}
+
+/** The Regular Bat the troop formation project's troop fights, as its one enemy record, with its terminal sprite. */
+function writeRegularBatEnemy(string $root): void
+{
     @mkdir($root . '/assets/Data/Enemies', 0o777, true);
     @mkdir($root . '/assets/Graphics/Enemies', 0o777, true);
     file_put_contents($root . '/assets/Graphics/Enemies/bat.txt', "/\\o/\\\n ' '\n");
-    file_put_contents($root . '/assets/Graphics/Enemies/wisp.txt', "~*~\n");
-    file_put_contents($root . '/assets/secret.txt', "not a sprite\n");
     file_put_contents($root . '/assets/Data/Enemies/regular-bat.php', "<?php\n\nuse Ichiloto\\Engine\\Entities\\Enemies\\Enemy;\n\nreturn ['class' => Enemy::class, 'data' => "
         . var_export(['name' => 'Regular Bat', 'level' => 2, 'imagePath' => 'bat', 'rewards' => ['experience' => 1, 'gold' => 1], 'stats' => [
             'maxHp' => 10, 'maxMp' => 0, 'attack' => 3, 'defence' => 2, 'magicAttack' => 1, 'magicDefence' => 1, 'speed' => 2, 'grace' => 1, 'evasion' => 1,
         ]], true) . "];\n");
-
-    return $root;
 }
 
 /** The enemy preview project with battle art for its bat on disk. */
@@ -85,4 +92,18 @@ function readBattlerRow(EditorSession $session, int $index, string $field): arra
 function setBattlerRow(EditorSession $session, int $index, string $field, string $value): void
 {
     $session->applyDatabaseRecord('battler_enemies', $index, readBattlerRow($session, $index, $field)['key'], $value);
+}
+
+/** The troop formation project with a Kaelion the Engine can build: full stats, as a battle needs. */
+function battleTestProject(): string
+{
+    $root = troopFormationProject();
+    file_put_contents($root . '/assets/Data/Actors/Kaelion.php', "<?php\n\nuse Ichiloto\\Engine\\Entities\\Character;\n\nreturn " . var_export(['class' => 'Ichiloto\\Engine\\Entities\\Character', 'data' => [
+        'id' => 'Kaelion', 'name' => 'Kaelion', 'level' => 1, 'currentExp' => 0, 'stats' => [
+            'currentHp' => 40, 'currentMp' => 10, 'currentAp' => 3, 'totalHp' => 100, 'totalMp' => 20, 'totalAp' => 3,
+            'attack' => 8, 'defence' => 7, 'magicAttack' => 6, 'magicDefence' => 5, 'speed' => 4, 'grace' => 3, 'evasion' => 2,
+        ],
+    ]], true) . ";\n");
+
+    return $root;
 }

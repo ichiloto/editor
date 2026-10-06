@@ -334,6 +334,8 @@ final class SessionHost
                 self::requireInt($params, 'index'), self::requireString($params, 'presentation')),
             'cutscenes.preview' => $session->readCutscenePreview(self::requireString($params, 'category'), self::requireInt($params, 'index'),
                 self::requireInt($params, 'frame'), self::requireInt($params, 'width'), self::requireInt($params, 'height')),
+            'cutscenes.battlePreview' => $session->readSummonBattlePreview(self::requireInt($params, 'index'), self::requireInt($params, 'frame'),
+                ($params['reducedMotion'] ?? false) === true),
             'references.list' => $session->listReferences(
                 is_string($params['map'] ?? null) ? $params['map'] : null,
                 self::requireString($params, 'category'),

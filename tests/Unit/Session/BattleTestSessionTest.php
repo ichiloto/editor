@@ -11,20 +11,6 @@ use Ichiloto\Engine\Scenes\Arena\ProjectBattleTest;
 
 /** Choosing the battle test's troop and party in the editor, kept in system data as RPG Maker keeps its Battle Test. Synthetic fixtures only. */
 
-/** The troop formation project with a Kaelion the Engine can build: full stats, as a battle needs. */
-function battleTestProject(): string
-{
-    $root = troopFormationProject();
-    file_put_contents($root . '/assets/Data/Actors/Kaelion.php', "<?php\n\nuse Ichiloto\\Engine\\Entities\\Character;\n\nreturn " . var_export(['class' => 'Ichiloto\\Engine\\Entities\\Character', 'data' => [
-        'id' => 'Kaelion', 'name' => 'Kaelion', 'level' => 1, 'currentExp' => 0, 'stats' => [
-            'currentHp' => 40, 'currentMp' => 10, 'currentAp' => 3, 'totalHp' => 100, 'totalMp' => 20, 'totalAp' => 3,
-            'attack' => 8, 'defence' => 7, 'magicAttack' => 6, 'magicDefence' => 5, 'speed' => 4, 'grace' => 3, 'evasion' => 2,
-        ],
-    ]], true) . ";\n");
-
-    return $root;
-}
-
 it('stands the starting party in for a battle test that sets none, saying so, with what each member may wear', function () {
     $root = battleTestProject();
     $test = EditorSession::open($root)->describeBattleTest();

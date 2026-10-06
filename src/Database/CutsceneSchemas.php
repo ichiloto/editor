@@ -159,7 +159,7 @@ final class CutsceneSchemas
                 new RecordField('formatVersion', 'Timeline Format', InputControlType::INTEGER),
                 new RecordField('fps', 'FPS', InputControlType::INTEGER),
                 new RecordField('lengthFrames', 'Length (frames)', InputControlType::INTEGER),
-                new RecordField('restFrame', 'Rest Frame', InputControlType::INTEGER, removeWhenEmpty: true),
+                new RecordField('restFrame', 'Rest Frame', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: 'Last frame'),
                 new RecordField('editor', 'Editor Metadata', codec: RecordFieldCodec::KEY_VALUES, removeWhenEmpty: true),
             ],
             labelKey: 'name',

@@ -78,6 +78,14 @@ use Ichiloto\Engine\Scenes\Arena\BattleTestSetup;
 use Ichiloto\Engine\Scenes\Arena\ProjectBattleTest;
 use Ichiloto\Engine\Util\Config\ConfigStore;
 use Ichiloto\Engine\Util\Stores\ItemStore;
+use Ichiloto\Engine\Util\Stores\EnemyStore;
+use Ichiloto\Engine\Battle\BattlePacing;
+use Ichiloto\Engine\Entities\Troop;
+use Ichiloto\Engine\Scenes\Battle\BattleConfig;
+use Ichiloto\Editor\Cutscenes\Preview\SummonBattlePreview;
+use Ichiloto\Engine\Battle\Presentation\BattleCommandTimeline;
+use Ichiloto\Engine\Cutscenes\Summons\SummonCompiledCutscene;
+use Ichiloto\Engine\Cutscenes\Summons\SummonCutsceneDefinition;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasImage;
 use Closure;
 use InvalidArgumentException;
@@ -108,6 +116,8 @@ final class EditorSession
     /** The battle test running in its own window, and the troop it fights. */
     private ?PlaytestRun $battleTestRun = null;
     private ?string $battleTestTroop = null;
+    /** The summon battle preview last built, and what it was built from, so seeking reuses it until either changes. */
+    private ?array $summonBattlePreview = null;
 
     /** How actors are authored, with what this editor's actor panes show. */
     private readonly ActorAuthoring $actorAuthoring;
@@ -1285,6 +1295,109 @@ final class EditorSession
             'cues' => array_values($preview->cuesAt($frame))];
     }
 
+    /**
+     * A summon as the battle test plays it, at one command frame: the
+     * Engine's command preview of the summon as it stands, unsaved edits
+     * included, cast by the first member of the battle test party (else the
+     * starting party) its wielder policy allows, at the targets its linked
+     * action takes in the battle test troop (else the first troop), over the
+     * battle test arena, with the project's battle pacing. The graphical
+     * canvas comes with the terminal arena's lines, so both renderers are
+     * previewed from the one command. Enemies and the party are read as
+     * saved; nothing is resolved, spent or played aloud, and nothing is
+     * written. Seeking reuses the preview until the summon or its battle
+     * changes.
+     *
+     * @return array<string, mixed>
+     * @throws SessionRefusal When the summon does not compile, the battle cannot be set up or the frame is outside the command.
+     */
+    public function readSummonBattlePreview(int $index, int $frame, bool $reducedMotion = false): array
+    {
+        $asset = $this->requireTimelineCutscene(CutsceneType::SUMMON->getRecordCategory(), $index);
+        try {
+            $definition = $asset->summonDefinition();
+            $graphical = $asset->compiledSummon(EffectPresentation::GRAPHICAL);
+            $terminal = $asset->compiledSummon(EffectPresentation::TERMINAL);
+        } catch (Throwable $failure) {
+            throw new SessionRefusal(sprintf('%s does not compile: %s', $asset->id, $failure->getMessage()), previous: $failure);
+        }
+        $entry = $this->readBattleTestEntry();
+        $troop = $this->readPreviewTroop($entry);
+        $config = $this->workspace->config?->getRecord('ui.battle')->get('value');
+        $battleUi = is_array($config) ? $config : [];
+        $key = hash('xxh128', serialize([$asset->id, $definition->toDataArray(), $graphical->toArray(), $terminal->toArray(),
+            $entry, $this->readStartingPartyReferences(), $troop, $battleUi, $this->readProposedBattlerBindings()]));
+        if (($this->summonBattlePreview['key'] ?? null) !== $key) {
+            $catalog = $this->requireBattleLayoutCatalog('preview summons on');
+            $this->summonBattlePreview = ['key' => $key, 'preview' => ProjectDirectoryContext::run($this->workspace->projectRoot,
+                fn(): SummonBattlePreview => $this->createSummonBattlePreview($definition, $graphical, $terminal, $entry, $troop,
+                    BattlePacing::fromBattleUiConfig($battleUi), $catalog))];
+        }
+        $preview = $this->summonBattlePreview['preview'];
+        try {
+            $read = $preview->readFrame(max(0, min($frame, $preview->totalFrames - 1)), $reducedMotion);
+        } catch (Throwable $failure) {
+            throw new SessionRefusal(sprintf('%s cannot be previewed: %s', $asset->id, $failure->getMessage()), previous: $failure);
+        }
+
+        return [...$read, 'totalFrames' => $preview->totalFrames, 'fps' => BattleCommandTimeline::FPS,
+            'assetRoot' => $this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets',
+            'caster' => $preview->caster, 'targets' => $preview->targets, 'troop' => $troop['name'], 'phases' => $preview->phases];
+    }
+
+    /**
+     * The battle a summon preview plays in, built the way the battle test
+     * builds it, and the summon cast in it.
+     *
+     * @param array<string, mixed> $entry The battle test as system data holds it.
+     * @param array{name: string, data: array<string, mixed>} $troop
+     * @throws SessionRefusal When the battle cannot be set up or the summon cannot be cast in it.
+     */
+    private function createSummonBattlePreview(SummonCutsceneDefinition $definition, SummonCompiledCutscene $graphical,
+        SummonCompiledCutscene $terminal, array $entry, array $troop, BattlePacing $pacing, BattlePresentationCatalog $catalog): SummonBattlePreview
+    {
+        $actors = $this->workspace->actorDatabase->createActorStore();
+        $skills = $this->workspace->loadSkillCatalog();
+        $previousEnemies = ConfigStore::has(EnemyStore::class) ? ConfigStore::get(EnemyStore::class) : null;
+        try {
+            $setup = ProjectBattleTest::fromArray($entry)->createSetup($actors, $this->readStartingPartyReferences());
+            $party = $setup->createParty($actors, $this->loadItemStore(), $skills);
+            ConfigStore::put(EnemyStore::class, new EnemyStore());
+            $battle = new BattleConfig($party, Troop::fromArray($troop['data']), settings: $setup->getBattleSettings());
+
+            return SummonBattlePreview::create($definition, $graphical, $terminal, $battle, $skills, $pacing, $catalog,
+                $this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets');
+        } catch (SessionRefusal $refusal) {
+            throw $refusal;
+        } catch (Throwable $failure) {
+            throw new SessionRefusal(sprintf('%s cannot be previewed in battle: %s', $definition->name, $failure->getMessage()), previous: $failure);
+        } finally {
+            $previousEnemies === null ? ConfigStore::remove(EnemyStore::class) : ConfigStore::put(EnemyStore::class, $previousEnemies);
+        }
+    }
+
+    /**
+     * The troop a summon preview is cast at: the battle test's, as the
+     * battle test fights it, else the project's first; as it stands now.
+     *
+     * @param array<string, mixed> $entry The battle test as system data holds it.
+     * @return array{name: string, data: array<string, mixed>}
+     * @throws SessionRefusal When the project has no troops, or the battle test names one it does not have.
+     */
+    private function readPreviewTroop(array $entry): array
+    {
+        $named = is_string($entry['troop'] ?? null) ? trim($entry['troop']) : null;
+        foreach ($this->requireRecordDatabase('troops')->getRecords() as $record) {
+            $data = $record->toArray();
+            $name = is_array($data) ? trim(strval($data['name'] ?? '')) : '';
+            if ($name !== '' && ($named === null || $named === $name)) {
+                return ['name' => $name, 'data' => $data];
+            }
+        }
+
+        throw new SessionRefusal($named === null ? 'This project has no troop to cast a summon at.'
+            : sprintf('The battle test fights %s, which no troop is named.', $named));
+    }
     /**
      * An image track's art with the image's own size, read from the file the
      * track names inside the asset root; none for a file that is missing or

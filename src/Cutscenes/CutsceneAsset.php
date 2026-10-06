@@ -18,6 +18,7 @@ use Ichiloto\Engine\Animations\Timelines\EffectCadence;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicDefinition;
 use Ichiloto\Engine\Cutscenes\Summons\SummonCompiledCutscene;
+use Ichiloto\Engine\Cutscenes\Summons\SummonCutsceneDefinition;
 use RuntimeException;
 use Throwable;
 
@@ -696,6 +697,20 @@ final class CutsceneAsset
         }
 
         return CutsceneHydration::cinematic($this->data, $this->partner, $this->projectRoot);
+    }
+
+    /**
+     * Hydrates the summon as it stands in memory, unsaved edits included.
+     *
+     * @throws RuntimeException When the Engine refuses it, or for a cinematic.
+     */
+    public function summonDefinition(): SummonCutsceneDefinition
+    {
+        if ($this->type !== CutsceneType::SUMMON) {
+            throw new RuntimeException(sprintf('%s is a cinematic, not a summon.', $this->id));
+        }
+
+        return CutsceneHydration::summon($this->data, $this->partner, $this->projectRoot);
     }
 
     /**
