@@ -19,9 +19,11 @@ use Throwable;
  * record rows and frames as any other category. Reads go through the shared
  * record rules; every change goes through {@see CutsceneLibrary::changeAsset()},
  * which takes it into the asset at once and undoes it by the asset's own edit
- * state. Saving writes the type's changed assets with their paired files.
- * Assets are created, duplicated and deleted by the library's own flows,
- * which name their folders first; this category does not offer them.
+ * state. An asset is created from the schema's blank or duplicated under the
+ * id the interface names (made free and safe), and deleted, each one undo
+ * step through the library; the folder follows on save. Saving writes the
+ * type's changed assets with their paired files. The records' order is the
+ * folders', so they are not reordered.
  */
 final readonly class CutsceneRecordCategory implements DatabaseCategory
 {
@@ -50,17 +52,17 @@ final readonly class CutsceneRecordCategory implements DatabaseCategory
 
     public function supportsRecordCreation(): bool
     {
-        return false;
+        return true;
     }
 
     public function supportsRecordDuplication(): bool
     {
-        return false;
+        return true;
     }
 
     public function supportsRecordDeletion(): bool
     {
-        return false;
+        return true;
     }
 
     public function supportsDurableReorder(): bool
@@ -111,19 +113,33 @@ final readonly class CutsceneRecordCategory implements DatabaseCategory
             => $records->removeItem($at, $frame, $fieldId));
     }
 
+    /** @param string|null $identity The new asset's id, made free and safe; the schema's blank id when none is given. */
     public function createRecord(?string $identity = null): RecordChange
     {
-        throw $this->refuseRecordOperation('created');
+        ['asset' => $asset, 'command' => $command] = $this->library->createAsset($this->type, $identity);
+
+        return new RecordChange($command, $this->findIndex($asset->id));
     }
 
     public function duplicateRecord(int $index): RecordChange
     {
-        throw $this->refuseRecordOperation('duplicated');
+        $id = $this->library->ids($this->type)[$index] ?? throw new RecordRefusal(sprintf('There is no %s %d.', $this->type->noun(), $index));
+        try {
+            ['asset' => $copy, 'command' => $command] = $this->library->duplicateAsset($this->type, $id);
+        } catch (RuntimeException $failure) {
+            throw new RecordRefusal($failure->getMessage(), previous: $failure);
+        }
+
+        return new RecordChange($command, $this->findIndex($copy->id));
     }
 
     public function deleteRecord(int $index): RecordChange
     {
-        throw $this->refuseRecordOperation('deleted');
+        $label = sprintf('Delete %s', $this->type->noun());
+        $deleted = $this->change($index, $label, static fn(RecordCategory $records, int $at): RecordChange => $records->deleteRecord($at));
+        $count = count($this->library->ids($this->type));
+
+        return new RecordChange($deleted->command, $count === 0 ? null : min($index, $count - 1));
     }
 
     public function moveRecord(int $index, int $step): RecordChange
@@ -150,6 +166,14 @@ final readonly class CutsceneRecordCategory implements DatabaseCategory
                 $this->library->save($this->type, $asset->id);
             }
         }
+    }
+
+    /** Where an asset sits among its type's records. */
+    private function findIndex(string $id): ?int
+    {
+        $index = array_search($id, $this->library->ids($this->type), true);
+
+        return is_int($index) ? $index : null;
     }
 
     /** The type's records, read through the shared record rules. */

@@ -311,6 +311,62 @@ final class CutsceneLibrary
         if ($after === $before) {
             return ['command' => null, 'result' => $result];
         }
+        return ['command' => $this->createRestoringCommand($label, $type, $id, $before, $after, $restored), 'result' => $result];
+    }
+
+    /**
+     * Creates a new asset of a type from its schema's blank, under the
+     * preferred id made free and safe (or the blank's own), and returns it
+     * with the command that undoes and redoes its creation. It reaches disk
+     * on save.
+     *
+     * @param (Closure(CutsceneAsset): void)|null $restored Told when an undo or redo puts the asset back.
+     * @return array{asset: CutsceneAsset, command: Command}
+     */
+    public function createAsset(CutsceneType $type, ?string $preferredId = null, ?Closure $restored = null): array
+    {
+        $blank = $this->records($type)->schema->blank;
+        $id = $this->freeId($type, $preferredId ?? strval($blank['id'] ?? ('new-' . $type->noun())));
+        $created = CutsceneAsset::create($type, $id, $this->rootFor($type), [...$blank, 'id' => $id], $this->projectRoot);
+        $this->adopt($created);
+
+        return ['asset' => $created, 'command' => $this->createPresenceCommand(sprintf('Create %s', $type->noun()), $created, $restored)];
+    }
+
+    /**
+     * Duplicates an asset under the preferred id made free and safe (or the
+     * original's with `-copy`), and returns the copy with the command that
+     * undoes and redoes the duplication. It reaches disk on save.
+     *
+     * @param (Closure(CutsceneAsset): void)|null $restored Told when an undo or redo puts the copy back.
+     * @return array{asset: CutsceneAsset, command: Command}
+     * @throws RuntimeException When the asset is missing.
+     */
+    public function duplicateAsset(CutsceneType $type, string $id, ?string $preferredId = null, ?Closure $restored = null): array
+    {
+        $copy = $this->duplicate($type, $id, $this->freeId($type, $preferredId ?? $id . '-copy'));
+
+        return ['asset' => $copy, 'command' => $this->createPresenceCommand(sprintf('Duplicate %s', $type->noun()), $copy, $restored)];
+    }
+
+    /** The command that takes a just-made asset away on undo and brings it back on redo. */
+    private function createPresenceCommand(string $label, CutsceneAsset $asset, ?Closure $restored): Command
+    {
+        $state = $asset->captureEditState();
+
+        return $this->createRestoringCommand($label, $asset->type, $asset->id, [...$state, 'deleted' => true], [...$state, 'deleted' => false], $restored);
+    }
+
+    /**
+     * The command that puts an asset into one edit state on redo and another
+     * on undo, pinned to the asset whatever is selected when it fires.
+     *
+     * @param array<string, mixed> $before
+     * @param array<string, mixed> $after
+     * @param (Closure(CutsceneAsset): void)|null $restored
+     */
+    private function createRestoringCommand(string $label, CutsceneType $type, string $id, array $before, array $after, ?Closure $restored): Command
+    {
         $restore = function (array $state) use ($type, $id, $restored): void {
             $asset = $this->find($type, $id);
             if ($asset === null) {
@@ -323,7 +379,7 @@ final class CutsceneLibrary
             }
         };
 
-        return ['command' => new GenericCommand($label, static fn() => $restore($after), static fn() => $restore($before)), 'result' => $result];
+        return new GenericCommand($label, static fn() => $restore($after), static fn() => $restore($before));
     }
 
     private function buildRecords(CutsceneType $type): ProjectRecordDatabase

@@ -1516,13 +1516,10 @@ trait CutscenesWorkspace
         }
 
         $type = $this->cutsceneType;
-        $id = $library->freeId($type, strval($records->schema->blank['id'] ?? ('new-' . $type->noun())));
-        $payload = $records->schema->blank;
-        $payload['id'] = $id;
 
         try {
-            $created = CutsceneAsset::create($type, $id, $library->rootFor($type), $payload, $this->workspace?->projectRoot);
-            $library->adopt($created);
+            ['asset' => $created, 'command' => $command] = $library->createAsset($type,
+                restored: fn(CutsceneAsset $restored) => $this->followRestoredCutscene($restored));
         } catch (Throwable $throwable) {
             $this->setErrorStatus($throwable, 'Cutscene creation');
             $this->renderCutscenesArea();
@@ -1530,12 +1527,8 @@ trait CutscenesWorkspace
             return;
         }
 
-        $state = $created->captureEditState();
-        $this->recordCommand(new GenericCommand(
-            sprintf('Create %s', $type->noun()),
-            fn() => $this->restoreCutsceneSnapshot($type, $id, [...$state, 'deleted' => false]),
-            fn() => $this->restoreCutsceneSnapshot($type, $id, [...$state, 'deleted' => true]),
-        ));
+        $id = $created->id;
+        $this->recordCommand($command);
 
         $this->leaveCutsceneEditingState();
         $this->cutsceneFilter->clear();
@@ -1559,11 +1552,9 @@ trait CutscenesWorkspace
             return;
         }
 
-        $type = $asset->type;
-        $newId = $library->freeId($type, $asset->id . '-copy');
-
         try {
-            $copy = $library->duplicate($type, $asset->id, $newId);
+            ['asset' => $copy, 'command' => $command] = $library->duplicateAsset($asset->type, $asset->id,
+                restored: fn(CutsceneAsset $restored) => $this->followRestoredCutscene($restored));
         } catch (Throwable $throwable) {
             $this->setErrorStatus($throwable, 'Cutscene duplication');
             $this->renderCutscenesArea();
@@ -1571,12 +1562,8 @@ trait CutscenesWorkspace
             return;
         }
 
-        $state = $copy->captureEditState();
-        $this->recordCommand(new GenericCommand(
-            sprintf('Duplicate %s', $type->noun()),
-            fn() => $this->restoreCutsceneSnapshot($type, $newId, [...$state, 'deleted' => false]),
-            fn() => $this->restoreCutsceneSnapshot($type, $newId, [...$state, 'deleted' => true]),
-        ));
+        $newId = $copy->id;
+        $this->recordCommand($command);
 
         $this->leaveCutsceneEditingState();
         $this->selectCutsceneById($newId);

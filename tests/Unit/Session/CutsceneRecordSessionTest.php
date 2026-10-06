@@ -51,7 +51,7 @@ it('saves a summon category as the Database window saves any category', function
     $name = array_find($session->readDatabaseRecord('cutscenes/summon', 0)['rows'], static fn(array $row): bool => trim($row['label']) === 'Name');
     $session->applyDatabaseRecord('cutscenes/summon', 0, $name['key'], 'Lantern Wraith');
 
-    expect($session->listDatabaseRecords('cutscenes/summon'))->toMatchArray(['dirty' => true, 'canCreate' => false])
+    expect($session->listDatabaseRecords('cutscenes/summon'))->toMatchArray(['dirty' => true])
         ->and($session->saveDatabase('cutscenes/summon')['saved'])->toBeTrue()
         ->and((string) file_get_contents($root . '/assets/Cutscenes/Summons/lantern-wisp/lantern-wisp.data.php'))->toContain("'Lantern Wraith'")
         ->and($session->listUnsavedChanges())->toBe([]);
