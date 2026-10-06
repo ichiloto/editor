@@ -48,7 +48,8 @@ function hydrateThroughAcceptedEngine(string $engineRoot, string $ruleFile, stri
  */
 function parityActorsDirectory(array $actors): string
 {
-    $directory = sys_get_temp_dir() . '/ichiloto-parity-actors-' . bin2hex(random_bytes(4));
+    // Registered, so the suite removes it after the test whatever its outcome.
+    $directory = rememberTemporaryProject(sys_get_temp_dir() . '/ichiloto-parity-actors-' . bin2hex(random_bytes(4)));
     mkdir($directory, 0755, true);
 
     foreach ($actors as $fileStem => [$name, $id]) {
