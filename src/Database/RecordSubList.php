@@ -41,7 +41,8 @@ final readonly class RecordSubList
      * @param bool $removeWhenEmpty Whether the list's key is dropped when its last entry goes,
      * as files that omit an empty list author it (a quest's reward items).
      * @param string $heading What a list beside the record's own is headed as ("Reward Items"): its
-     * heading row names it, counts it, and is where an entry is added to it.
+     * heading row names it, counts it, and is where an entry is added to it. A record-level command
+     * list is named by it on the row that opens it ("Stage Camera"), rather than by its key.
      * @param string|null $keyField For a list stored as a map (a tileset's pieces, keyed by piece
      * id): the field each entry carries its key as. Keys are unique and never empty.
      * @param string|null $valueField For a keyed list whose values are not entries of their own (a

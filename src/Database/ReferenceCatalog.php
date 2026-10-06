@@ -88,6 +88,8 @@ final class ReferenceCatalog
         'cinematic_checkpoints',
         'summon_cues',
         'effect_cues',
+        'stage_subjects',
+        'stage_attachments',
         'event_markers',
         'tilesets',
         'effects',
@@ -222,6 +224,10 @@ final class ReferenceCatalog
             'cinematic_checkpoints' => $this->checkpointIds(),
             'summon_cues' => $this->getTimelineCueIds(CutsceneType::SUMMON),
             'effect_cues' => $this->getTimelineCueIds(CutsceneType::EFFECT),
+            // A summon sequence's stage: the subjects it registers, and every
+            // named point on them (each image picks one on its own subject).
+            'stage_subjects' => array_keys($this->getStageSubjects()),
+            'stage_attachments' => array_keys($this->getStageAttachments()),
             'event_markers' => $this->currentMap?->getEventMarkers() ?? [],
             // A map's kind is one of the project's tilesets, by file stem.
             'tilesets' => array_keys($this->loadTilesetNames()),
@@ -434,6 +440,54 @@ final class ReferenceCatalog
     }
 
     /**
+     * The subjects of the stage the current summon sequence declares, by id.
+     *
+     * @return array<string, array<string, mixed>>
+     */
+    private function getStageSubjects(): array
+    {
+        if ($this->currentCutscene?->type !== CutsceneType::SUMMON) {
+            return [];
+        }
+
+        $stage = $this->currentCutscene->payload()['stage'] ?? null;
+        $subjects = [];
+
+        foreach (is_array($stage) && is_array($stage['subjects'] ?? null) ? $stage['subjects'] : [] as $subject) {
+            $id = is_array($subject) ? trim(strval($subject['id'] ?? '')) : '';
+
+            if ($id !== '') {
+                $subjects[$id] ??= $subject;
+            }
+        }
+
+        return $subjects;
+    }
+
+    /**
+     * The named points of the current stage's subjects, by id, each with the
+     * subjects that name it.
+     *
+     * @return array<string, list<string>>
+     */
+    private function getStageAttachments(): array
+    {
+        $points = [];
+
+        foreach ($this->getStageSubjects() as $subject => $data) {
+            foreach (is_array($data['attachments'] ?? null) ? $data['attachments'] : [] as $point) {
+                $id = is_array($point) ? trim(strval($point['id'] ?? '')) : '';
+
+                if ($id !== '') {
+                    $points[$id][] = $subject;
+                }
+            }
+        }
+
+        return $points;
+    }
+
+    /**
      * Returns how each value of a reference kind should be shown, when the
      * value stored is not what an author recognises.
      *
@@ -474,6 +528,16 @@ final class ReferenceCatalog
             $labels = [];
             foreach ($this->valuesFor('animation_roles') as $role) {
                 $labels[$role] = isset($owners[$role]) ? sprintf('%s (on %s)', $role, $owners[$role]) : $role;
+            }
+
+            return $labels;
+        }
+
+        if ($category === 'stage_attachments') {
+            // A point is picked on the image's own subject: the label says which have it.
+            $labels = [];
+            foreach ($this->getStageAttachments() as $id => $subjects) {
+                $labels[$id] = sprintf('%s (on %s)', $id, implode(', ', $subjects));
             }
 
             return $labels;

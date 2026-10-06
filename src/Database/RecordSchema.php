@@ -61,6 +61,9 @@ final readonly class RecordSchema
      * @param bool $identityGiven Whether a record only ever belongs to something another category
      * names (an enemy's battle art), so one is made for that name or not at all, never under an
      * invented one the file could not key.
+     * @param Closure(array<string, mixed>): string[]|null $commandListsFor The keys of the command lists
+     * one record offers, when they depend on what the record is: a summon's stage lists exist only
+     * where its stage does. Absent, every command list is offered.
      */
     public function __construct(
         public string $key,
@@ -86,6 +89,7 @@ final readonly class RecordSchema
         public bool $numberedFiles = false,
         public ?Closure $saveCheck = null,
         public bool $identityGiven = false,
+        public ?Closure $commandListsFor = null,
     ) {
         if ($projection instanceof WholeFileProjection) {
             // A field outside the keys the category owns would read blank and
@@ -137,6 +141,25 @@ final readonly class RecordSchema
         $fields = ($this->fieldsFor)(is_array($payload) ? $payload : (array) $payload);
 
         return $fields;
+    }
+
+    /**
+     * Returns the command lists one record offers, by key: every one, unless
+     * the record's shape decides.
+     *
+     * @param array<string, mixed>|object $payload The record payload.
+     * @return array<string, RecordSubList> The lists.
+     */
+    public function commandListsFor(array|object $payload): array
+    {
+        if ($this->commandListsFor === null) {
+            return $this->commandLists;
+        }
+
+        /** @var string[] $keys */
+        $keys = ($this->commandListsFor)(is_array($payload) ? $payload : (array) $payload);
+
+        return array_intersect_key($this->commandLists, array_flip($keys));
     }
 
     /**

@@ -10,6 +10,7 @@ use Ichiloto\Editor\Canvas\CanvasEditor;
 use Ichiloto\Editor\Cutscenes\CutsceneAsset;
 use Ichiloto\Editor\Cutscenes\CutsceneRecordCategory;
 use Ichiloto\Editor\Cutscenes\CutsceneType;
+use Ichiloto\Editor\Database\CutsceneSchemas;
 use Ichiloto\Editor\Cutscenes\Preview\TimelinePreviewSession;
 use Ichiloto\Editor\ProjectDirectoryContext;
 use Ichiloto\Editor\Canvas\PieceRole;
@@ -1250,11 +1251,13 @@ final class EditorSession
             $field = (string) ($row['key']['field'] ?? '');
             if (preg_match('/^track(\d+)(Id|Type|Presentation)$/', $field, $match) === 1) {
                 $tracks[(int) $match[1]][strtolower($match[2])] = (string) $row['value'];
-            } elseif (preg_match('/^track(\d+)(Asset|Sheetcolumns|Sheetrows|Fit|Attachment|Pivot)$/', $field, $match) === 1) {
-                // An image track's art, and the keys that edit how it fills its cells and where it sits on its anchor.
-                $art = ['Asset' => 'asset', 'Sheetcolumns' => 'columns', 'Sheetrows' => 'rows', 'Fit' => 'fit', 'Attachment' => 'attachment', 'Pivot' => 'pivot'][$match[2]];
+            } elseif (preg_match('/^track(\d+)(Asset|Sheetcolumns|Sheetrows|Fit|Attachment|Pivot|Anchor|Placementsubject|Placementattachment)$/', $field, $match) === 1) {
+                // An image track's art, and the keys that edit how it fills its cells and where it sits on its
+                // anchor: a battler point, or on the stage a subject and a named point on it.
+                $art = ['Asset' => 'asset', 'Sheetcolumns' => 'columns', 'Sheetrows' => 'rows', 'Fit' => 'fit', 'Attachment' => 'attachment', 'Pivot' => 'pivot',
+                    'Anchor' => 'anchor', 'Placementsubject' => 'subject', 'Placementattachment' => 'point'][$match[2]];
                 $tracks[(int) $match[1]]['art'][$art] = in_array($art, ['columns', 'rows'], true) ? max(1, (int) $row['value']) : (string) ($row['raw'] ?? $row['value']);
-                if (in_array($art, ['fit', 'attachment', 'pivot'], true)) {
+                if (in_array($art, ['fit', 'attachment', 'pivot', 'subject', 'point'], true)) {
                     $tracks[(int) $match[1]]['art'][$art . 'Key'] = $row['key'];
                 }
                 if (in_array($art, ['fit', 'attachment'], true)) {
@@ -1280,15 +1283,114 @@ final class EditorSession
         $payload = $asset->payload();
 
         return [
-            // An effect with separate terminal and graphical sequences names the one shown; others name none.
+            // An effect or summon with separate terminal and graphical sequences names the one shown; others name none.
             'presentation' => $asset->getPresentationView()?->value,
             'fps' => (int) ($payload['fps'] ?? 0),
             'lengthFrames' => (int) ($payload['lengthFrames'] ?? 0),
-            'tracks' => array_values(array_map(fn(array $track): array => [...$track,
+            'tracks' => array_values(array_map(fn(array $track, int $position): array => self::placeOnStage([...$track,
                 'keyframes' => array_values($track['keyframes'] ?? []),
-                ...(isset($track['art']) ? ['art' => $this->measureTrackArt($track['art'])] : [])], $tracks)),
+                ...(isset($track['art']) ? ['art' => $this->measureTrackArt($track['art'])] : [])], $payload['tracks'][$position] ?? null), $tracks, array_keys($tracks))),
             'cues' => array_values($cues),
+            // Whether this sequence may have a stage (a summon's graphical one), and the stage it has.
+            'canHaveStage' => $asset->type === CutsceneType::SUMMON && $asset->getPresentationView() === EffectPresentation::GRAPHICAL,
+            'stage' => is_array($payload['stage'] ?? null) ? $this->describeCutsceneStage($category, $index) : null,
         ];
+    }
+
+    /**
+     * A stage image's placement in stage units, and each keyframe's offset,
+     * as the Engine reads them with their absent defaults, so an editor can
+     * find the subject's box under a point of the art. Other tracks are as
+     * described.
+     *
+     * @param array<string, mixed> $described
+     * @return array<string, mixed>
+     */
+    private static function placeOnStage(array $described, mixed $authored): array
+    {
+        if (! is_array($authored) || ($authored['anchor'] ?? null) !== 'stage' || ! isset($described['art'])) {
+            return $described;
+        }
+
+        $placement = is_array($authored['placement'] ?? null) ? $authored['placement'] : [];
+        $described['art']['placement'] = [
+            'position' => self::readStagePoint($placement['position'] ?? null, ['x' => 0, 'y' => 0]),
+            'size' => is_array($placement['size'] ?? null) ? ['width' => (float) ($placement['size']['width'] ?? 0), 'height' => (float) ($placement['size']['height'] ?? 0)] : null,
+            // An image's own pivot is its cell's centre unless authored.
+            'pivot' => self::readStagePoint($authored['pivot'] ?? null, ['x' => 0.5, 'y' => 0.5]),
+        ];
+        foreach ($described['keyframes'] as $index => $keyframe) {
+            $described['keyframes'][$index]['offset'] = self::readStagePoint($authored['keyframes'][$index]['position'] ?? null, ['x' => 0, 'y' => 0]);
+        }
+
+        return $described;
+    }
+
+    /**
+     * @param array{x: int|float, y: int|float} $default
+     * @return array{x: float, y: float}
+     */
+    private static function readStagePoint(mixed $point, array $default): array
+    {
+        $point = is_array($point) ? $point : $default;
+
+        return ['x' => (float) ($point['x'] ?? $default['x']), 'y' => (float) ($point['y'] ?? $default['y'])];
+    }
+
+    /**
+     * A summon sequence's stage as a timeline editor lays it out: its canvas
+     * and the frames it is shown between, each subject with its named points
+     * (where they are in its box), and its camera and cover keys on the
+     * clock, each value with the row key that edits it.
+     *
+     * @return array<string, mixed>
+     */
+    private function describeCutsceneStage(string $category, int $index): array
+    {
+        $stage = ['subjects' => [], 'camera' => [], 'covers' => []];
+        foreach ($this->readDatabaseRecord($category, $index)['rows'] as $row) {
+            $name = ['stage.canvas' => 'canvas', 'stage.startFrame' => 'startFrame', 'stage.restoreFrame' => 'restoreFrame'][(string) ($row['key']['field'] ?? '')] ?? null;
+            if ($name !== null) {
+                $stage[$name] = $name === 'canvas' ? (string) $row['value'] : (int) $row['value'];
+                $stage[$name . 'Key'] = $row['key'];
+            }
+        }
+        foreach ($this->readDatabaseRecord($category, $index, [CutsceneSchemas::STAGE_SUBJECTS_KEY])['rows'] as $row) {
+            $field = (string) ($row['key']['field'] ?? '');
+            if (preg_match('/^subject(\d+)Id$/', $field, $match) === 1) {
+                $stage['subjects'][(int) $match[1]]['id'] = (string) $row['value'];
+            } elseif (preg_match('/^subject(\d+)Attachment(\d+)(Id|X|Y)$/', $field, $match) === 1) {
+                $name = strtolower($match[3]);
+                $stage['subjects'][(int) $match[1]]['points'][(int) $match[2]][$name] = $name === 'id' ? (string) $row['value'] : (float) $row['value'];
+                $stage['subjects'][(int) $match[1]]['points'][(int) $match[2]][$name . 'Key'] = $row['key'];
+            }
+        }
+        foreach ([CutsceneSchemas::STAGE_CAMERA_KEY => ['camera', 'camera'], CutsceneSchemas::STAGE_COVERS_KEY => ['cover', 'covers']] as $list => [$prefix, $name]) {
+            foreach ($this->readDatabaseRecord($category, $index, [$list])['rows'] as $row) {
+                if (preg_match('/^' . $prefix . '(\d+)(Id|Frame)$/', (string) ($row['key']['field'] ?? ''), $match) === 1) {
+                    $stage[$name][(int) $match[1]][strtolower($match[2])] = $match[2] === 'Frame' ? (int) $row['value'] : (string) $row['value'];
+                    if ($match[2] === 'Frame') {
+                        $stage[$name][(int) $match[1]]['frameKey'] = $row['key'];
+                    }
+                }
+            }
+        }
+
+        $authored = $this->requireTimelineCutscene($category, $index)->payload()['stage']['subjects'] ?? [];
+        foreach ($stage['subjects'] as $position => $subject) {
+            // Where the subject's box is, as the Engine reads it: its pivot is its bottom centre unless authored.
+            $data = is_array($authored[$position] ?? null) ? $authored[$position] : [];
+            $stage['subjects'][$position] += [
+                'position' => self::readStagePoint($data['position'] ?? null, ['x' => 0, 'y' => 0]),
+                'size' => ['width' => (float) ($data['size']['width'] ?? 0), 'height' => (float) ($data['size']['height'] ?? 0)],
+                'pivot' => self::readStagePoint($data['pivot'] ?? null, ['x' => 0.5, 'y' => 1]),
+            ];
+        }
+
+        return [...$stage,
+            'subjects' => array_values(array_map(static fn(array $subject): array => [...$subject, 'points' => array_values($subject['points'] ?? [])], $stage['subjects'])),
+            'camera' => array_values($stage['camera']),
+            'covers' => array_values($stage['covers'])];
     }
 
     /**
@@ -1656,18 +1758,18 @@ final class EditorSession
     }
 
     /**
-     * Chooses which of an effect's sequences its record shows and edits,
-     * terminal or graphical, as the TUI's sequence switch does. Nothing is
-     * written; the other sequence stays as it is.
+     * Chooses which of an effect's or summon's sequences its record shows and
+     * edits, terminal or graphical, as the TUI's sequence switch does.
+     * Nothing is written; the other sequence stays as it is.
      *
      * @return array{presentation: string}
-     * @throws SessionRefusal When the record is not an effect with separate sequences, or the sequence is unknown.
+     * @throws SessionRefusal When the record has no separate sequences, or the sequence is unknown.
      */
     public function selectCutscenePresentation(string $category, int $index, string $presentation): array
     {
         $asset = $this->requireTimelineCutscene($category, $index);
         $chosen = EffectPresentation::tryFrom($presentation)
-            ?? throw new SessionRefusal(sprintf('An effect sequence is terminal or graphical, not %s.', $presentation));
+            ?? throw new SessionRefusal(sprintf('A sequence is terminal or graphical, not %s.', $presentation));
         if (! $asset->hasPresentations()) {
             throw new SessionRefusal(sprintf('%s has one sequence for every renderer.', $asset->id));
         }
@@ -1675,6 +1777,69 @@ final class EditorSession
         $this->workspace->cutscenes?->refreshRecords($asset->type);
 
         return ['presentation' => $chosen->value];
+    }
+
+    /**
+     * Gives a summon or effect with one sequence for every renderer a
+     * terminal and a graphical sequence, each a copy of it, as one undo step,
+     * as the TUI's sequence choice does; the record then edits the terminal
+     * one. It reaches disk on save.
+     *
+     * @return array{changed: bool, presentation: string}
+     * @throws SessionRefusal When the record already has them or cannot be written.
+     */
+    public function separateCutsceneSequences(string $category, int $index): array
+    {
+        $asset = $this->requireTimelineCutscene($category, $index);
+        if ($asset->hasPresentations()) {
+            throw new SessionRefusal(sprintf('%s already has a terminal and a graphical sequence.', $asset->id));
+        }
+        try {
+            $command = $this->workspace->cutscenes?->changeAsset($asset->type, $index, sprintf('Separate %s sequences', $asset->type->noun()),
+                static function () use ($asset): void {
+                    $asset->selectPresentation(EffectPresentation::TERMINAL);
+                    $asset->splitIntoPresentations();
+                })['command'];
+        } catch (RuntimeException $failure) {
+            throw new SessionRefusal($failure->getMessage(), previous: $failure);
+        }
+        if ($command !== null) {
+            $this->history->record($command);
+        }
+
+        return ['changed' => $command !== null, 'presentation' => EffectPresentation::TERMINAL->value];
+    }
+
+    /**
+     * Gives a summon's graphical sequence a cinematic stage, or takes it
+     * away, as one undo step, as the TUI's Stage row does. It reaches disk
+     * on save.
+     *
+     * @return array{changed: bool, stage: bool}
+     * @throws SessionRefusal When the record is not a summon with separate sequences, or cannot hold one.
+     */
+    public function setCutsceneStage(string $category, int $index, bool $present): array
+    {
+        $asset = $this->requireTimelineCutscene($category, $index);
+        if ($asset->type !== CutsceneType::SUMMON || ! $asset->hasPresentations()) {
+            throw new SessionRefusal(sprintf('A stage is a summon\'s graphical sequence\'s own; separate %s\'s sequences first.', $asset->id));
+        }
+        try {
+            $command = $this->workspace->cutscenes?->changeAsset($asset->type, $index, $present ? 'Add stage' : 'Remove stage',
+                static function () use ($asset, $present): void {
+                    $asset->setStage($present);
+                })['command'];
+        } catch (RuntimeException $failure) {
+            throw new SessionRefusal($failure->getMessage(), previous: $failure);
+        }
+        if ($present && ! $asset->hasStage()) {
+            throw new SessionRefusal(sprintf('%s needs at least two frames to restore its stage before it ends.', $asset->id));
+        }
+        if ($command !== null) {
+            $this->history->record($command);
+        }
+
+        return ['changed' => $command !== null, 'stage' => $asset->hasStage()];
     }
 
     /** A summon or effect record's asset; a cinematic is a command tree, not a timeline. */

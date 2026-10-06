@@ -148,7 +148,7 @@ final class CutscenePairShape
      */
     public function split(array $payload): array
     {
-        unset($payload[CutsceneAsset::ORIGIN_KEY]);
+        unset($payload[CutsceneAsset::ORIGIN_KEY], $payload[CutsceneAsset::SEQUENCE_KEY]);
         $data = [];
         $partner = [];
 
@@ -272,12 +272,27 @@ final class CutscenePairShape
             array_keys($partner),
             static fn(int|string $key): bool => $key !== self::COMMANDS && array_key_exists($key, $data),
         ));
+        $reasons = [];
 
-        if ($shared === []) {
-            return [];
+        if ($this->type === CutsceneType::SUMMON && is_array($partner['presentations'] ?? null)) {
+            // A summon's sequence is edited beside its definition and the
+            // timeline's own keys, so it may not hold one of theirs.
+            $outer = [...$data, ...array_diff_key($partner, ['presentations' => true])];
+
+            foreach ($partner['presentations'] as $name => $sequence) {
+                $clashes = is_array($sequence) ? array_keys(array_intersect_key($sequence, $outer)) : [];
+
+                if ($clashes !== []) {
+                    $reasons[] = sprintf('the %s sequence also declares %s, which the definition or timeline holds', $name, self::quoteKeys(array_map(strval(...), $clashes)));
+                }
+            }
         }
 
-        return [sprintf(
+        if ($shared === []) {
+            return $reasons;
+        }
+
+        return [...$reasons, sprintf(
             'both files declare the top-level key%s %s, and the editor can hold only one value for each',
             count($shared) === 1 ? '' : 's',
             implode(', ', array_map(static fn(int|string $key): string => '"' . $key . '"', $shared)),

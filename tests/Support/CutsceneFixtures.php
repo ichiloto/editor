@@ -121,6 +121,44 @@ return [
 PHP_SOURCE;
 }
 
+/** A summon project whose lantern wisp has a terminal and a graphical sequence, its art a synthetic sheet. */
+function stagedSummonProject(): string
+{
+    $root = cutsceneProject();
+    file_put_contents($root . '/assets/Cutscenes/Summons/lantern-wisp/lantern-wisp.timeline.php', <<<'PHP_SOURCE'
+<?php
+
+return [
+  'formatVersion' => 1,
+  'presentations' => [
+    'terminal' => [
+      'fps' => 12,
+      'lengthFrames' => 24,
+      'tracks' => [
+        ['type' => 'glyph', 'id' => 'wisp', 'keyframes' => [['frame' => 0, 'duration' => 24, 'content' => '*', 'position' => ['x' => 10, 'y' => 5]]]],
+      ],
+      'cues' => [['id' => 'flare', 'frame' => 12, 'type' => 'applyEffect']],
+    ],
+    'graphical' => [
+      'fps' => 12,
+      'lengthFrames' => 24,
+      'restFrame' => 12,
+      'tracks' => [
+        // The wisp itself.
+        ['type' => 'image', 'id' => 'wisp-art', 'asset' => 'Graphics/Summons/Wisp.png', 'sheet' => ['columns' => 2, 'rows' => 1],
+          'keyframes' => [['frame' => 0, 'duration' => 24, 'sourceFrame' => 0]]],
+      ],
+      'cues' => [['id' => 'flare', 'frame' => 12, 'type' => 'applyEffect']],
+    ],
+  ],
+];
+PHP_SOURCE);
+    mkdir($root . '/assets/Graphics/Summons', 0o777, true);
+    writeTilesetTestPng($root . '/assets/Graphics/Summons/Wisp.png', 16, 8);
+
+    return $root;
+}
+
 /**
  * A throwaway project holding the cinematic and the summon.
  */

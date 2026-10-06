@@ -515,10 +515,7 @@ final class CutsceneLibrary
             throw new RuntimeException(sprintf('"%s" is not a stable id (%s).', $newId, $type->describeIdCharacters()));
         }
 
-        $payload = $source->payload();
-        $payload['id'] = $newId;
-        unset($payload[CutsceneAsset::ORIGIN_KEY]);
-        $renamed = CutsceneAsset::create($type, $newId, $this->rootFor($type), $payload, $this->projectRoot);
+        $renamed = $source->copyAs($newId, $this->rootFor($type));
 
         foreach ($this->assets[$type->value] as $position => $asset) {
             if ($asset === $source) {
@@ -550,10 +547,8 @@ final class CutsceneLibrary
             throw new RuntimeException(sprintf('"%s" is not a stable id (%s).', $newId, $type->describeIdCharacters()));
         }
 
-        $payload = $source->payload();
-        $payload['id'] = $newId;
-        unset($payload[CutsceneAsset::ORIGIN_KEY]);
-        $copy = CutsceneAsset::create($type, $newId, $this->rootFor($type), $payload, $this->projectRoot);
+        // Both files as they stand: every sequence, not only the one shown.
+        $copy = $source->copyAs($newId, $this->rootFor($type));
         $this->assets[$type->value][] = $copy;
         $this->refreshRecords($type);
 

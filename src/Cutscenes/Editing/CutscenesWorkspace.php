@@ -48,9 +48,12 @@ use Throwable;
 trait CutscenesWorkspace
 {
     /** The row choosing an effect's sequence; no timeline key, so no schema field, has this id. */
-    private const string EFFECT_SEQUENCE_FIELD = '@sequence';
-    private const string EFFECT_SEQUENCE_SHARED = 'shared';
-    private const string EFFECT_SEQUENCE_SEPARATE = 'separate';
+    private const string SEQUENCE_FIELD = '@sequence';
+    private const string SEQUENCE_SHARED = 'shared';
+    private const string SEQUENCE_SEPARATE = 'separate';
+    private const string STAGE_FIELD = '@stage';
+    private const string STAGE_NONE = 'none';
+    private const string STAGE_ADDED = 'added';
 
     /**
      * The type whose assets the screen shows.
@@ -892,7 +895,10 @@ trait CutscenesWorkspace
                 'Availability' => ['availability.conditions'],
                 'Wielders' => ['wielders.mode', 'wielders.roles', 'wielders.characters', 'wielders.tenancy'],
                 'Playback' => ['playback.defaultSpeed', 'playback.allowSkip', 'playback.loopPreview', 'transitionIn.type', 'transitionIn.durationMs', 'transitionIn.color', 'transitionOut.type', 'transitionOut.durationMs', 'transitionOut.color', 'effectTiming.mode', 'effectTiming.cueId', 'effectTiming.frame', 'targetPresentation.mode', 'targetPresentation.showCasterNameBanner'],
-                'Timeline' => ['formatVersion', 'fps', 'lengthFrames', 'editor', 'commandListTracks', 'commandListCues'],
+                'Timeline' => ['formatVersion', 'fps', 'lengthFrames', 'restFrame', 'editor', 'commandListTracks', 'commandListCues'],
+                'Stage' => ['stage.canvas', 'stage.startFrame', 'stage.restoreFrame', 'stage.background',
+                    'commandList' . ucfirst(CutsceneSchemas::STAGE_SUBJECTS_KEY), 'commandList' . ucfirst(CutsceneSchemas::STAGE_CAMERA_KEY),
+                    'commandList' . ucfirst(CutsceneSchemas::STAGE_COVERS_KEY)],
             ],
         };
         $byId = [];
@@ -941,11 +947,22 @@ trait CutscenesWorkspace
                 }
             }
 
-            if ($rows === []) {
+            $stageRow = $title === 'Stage' ? $this->getStageField($asset) : null;
+
+            if ($rows === [] && $stageRow === null) {
                 continue;
             }
 
             $grouped[] = $heading($title);
+
+            if ($stageRow !== null) {
+                $grouped[] = $stageRow;
+            }
+
+            if ($title === 'Timeline' && $asset->type === CutsceneType::SUMMON) {
+                // A summon's definition is shared; its timeline may be one per renderer.
+                $grouped = [...$grouped, ...$this->getSequenceFields($asset)];
+            }
 
             if ($title === 'Skip') {
                 // Skip is a second ending, not a cancel: the Engine cancels
@@ -965,7 +982,7 @@ trait CutscenesWorkspace
             $grouped = [...$grouped, ...$rows];
 
             if ($title === 'Identity' && $asset->type === CutsceneType::EFFECT) {
-                $grouped = [...$grouped, ...$this->getEffectSequenceFields($asset)];
+                $grouped = [...$grouped, ...$this->getSequenceFields($asset)];
             }
         }
 
@@ -978,14 +995,15 @@ trait CutscenesWorkspace
     }
 
     /**
-     * Returns the row that chooses which of an effect's sequences the pane
-     * edits, and a note on what the other one does. A flat effect's single
-     * sequence plays for every renderer; choosing separate gives it a
-     * terminal and a graphical sequence, each a copy of it, undoably.
+     * Returns the row that chooses which of an effect's or summon's sequences
+     * the pane edits, and a note on what the other one does. A flat
+     * timeline's single sequence plays for every renderer; choosing separate
+     * gives it a terminal and a graphical sequence, each a copy of it,
+     * undoably.
      *
      * @return array<int, array<string, mixed>>
      */
-    private function getEffectSequenceFields(CutsceneAsset $asset): array
+    private function getSequenceFields(CutsceneAsset $asset): array
     {
         $view = $asset->getPresentationView();
 
@@ -994,8 +1012,8 @@ trait CutscenesWorkspace
                 [
                     'label' => 'Sequence',
                     'value' => 'Shared',
-                    'options' => [self::EFFECT_SEQUENCE_SHARED, self::EFFECT_SEQUENCE_SEPARATE],
-                    'field' => self::EFFECT_SEQUENCE_FIELD,
+                    'options' => [self::SEQUENCE_SHARED, self::SEQUENCE_SEPARATE],
+                    'field' => self::SEQUENCE_FIELD,
                     'hint' => 'separate gives the terminal and graphical renderers a sequence each',
                 ],
                 ['label' => '  One sequence plays for the terminal and graphical renderers alike.', 'value' => '', 'editable' => false],
@@ -1009,7 +1027,7 @@ trait CutscenesWorkspace
                 'label' => 'Sequence',
                 'value' => ucfirst($view->value),
                 'options' => array_map(static fn(EffectPresentation $presentation): string => $presentation->value, EffectPresentation::cases()),
-                'field' => self::EFFECT_SEQUENCE_FIELD,
+                'field' => self::SEQUENCE_FIELD,
                 'hint' => 'the sequence these rows edit',
             ],
             ['label' => sprintf('  Edits apply to the %s sequence; the %s one is kept as written.', $view->value, $other->value), 'value' => '', 'editable' => false],
@@ -1017,28 +1035,76 @@ trait CutscenesWorkspace
     }
 
     /**
-     * Shows another of the selected effect's sequences, or gives a flat
-     * effect separate ones, recorded so undo puts the flat file back.
+     * Returns the row that gives a summon's graphical sequence a cinematic
+     * stage or takes it away; none for any other sequence, since the
+     * terminal never draws one.
+     *
+     * @return array<string, mixed>|null
      */
-    private function applyEffectSequenceValue(string $rawValue): void
+    private function getStageField(CutsceneAsset $asset): ?array
+    {
+        if ($asset->type !== CutsceneType::SUMMON || $asset->getPresentationView() !== EffectPresentation::GRAPHICAL) {
+            return null;
+        }
+
+        return [
+            'label' => 'Stage',
+            'value' => $asset->hasStage() ? self::STAGE_ADDED : self::STAGE_NONE,
+            'options' => [self::STAGE_NONE, self::STAGE_ADDED],
+            'field' => self::STAGE_FIELD,
+            'hint' => 'a stage of its own in place of the arena, until it is restored',
+        ];
+    }
+
+    /**
+     * Gives the selected summon's graphical sequence a stage, or takes it
+     * away, as one undo step.
+     */
+    private function applyStageValue(string $rawValue): void
+    {
+        $asset = $this->selectedCutscene();
+        $present = strtolower(trim($rawValue)) === self::STAGE_ADDED;
+
+        if ($asset === null || $asset->getPresentationView() !== EffectPresentation::GRAPHICAL || $present === $asset->hasStage()) {
+            return;
+        }
+
+        $changed = $this->mutateSelectedCutscene($present ? 'Add stage' : 'Remove stage', static function () use ($asset, $present): void {
+            $asset->setStage($present);
+        });
+
+        if ($changed) {
+            $this->setStatus($present
+                ? sprintf('Summon "%s" has a stage. Give it subjects, art on it and a rest frame inside it. It reaches disk on save.', $asset->id)
+                : sprintf('Summon "%s" no longer has a stage. It reaches disk on save.', $asset->id), StatusLevel::INFO);
+        }
+
+        $this->renderCutscenesArea();
+    }
+
+    /**
+     * Shows another of the selected effect's or summon's sequences, or gives
+     * a flat one separate sequences, recorded so undo puts the flat file back.
+     */
+    private function applySequenceValue(string $rawValue): void
     {
         $asset = $this->selectedCutscene();
         $value = strtolower(trim($rawValue));
 
-        if ($asset === null || $asset->type !== CutsceneType::EFFECT) {
+        if ($asset === null || $asset->type === CutsceneType::CINEMATIC) {
             return;
         }
 
         if (! $asset->hasPresentations()) {
-            if ($value !== self::EFFECT_SEQUENCE_SEPARATE) {
+            if ($value !== self::SEQUENCE_SEPARATE) {
                 return;
             }
 
-            $this->mutateSelectedCutscene('Separate effect sequences', static function () use ($asset): void {
+            $this->mutateSelectedCutscene(sprintf('Separate %s sequences', $asset->type->noun()), static function () use ($asset): void {
                 $asset->selectPresentation(EffectPresentation::TERMINAL);
                 $asset->splitIntoPresentations();
             });
-            $this->setStatus(sprintf('Effect "%s" now has a terminal and a graphical sequence. It reaches disk on save.', $asset->id), StatusLevel::INFO);
+            $this->setStatus(sprintf('%s "%s" now has a terminal and a graphical sequence. It reaches disk on save.', ucfirst($asset->type->noun()), $asset->id), StatusLevel::INFO);
             $this->renderCutscenesArea();
 
             return;
@@ -1057,7 +1123,7 @@ trait CutscenesWorkspace
         // A running preview plays the other sequence; it starts again on this one.
         $this->disposeCinematicPreview();
         $this->databaseCommandFramePath = [];
-        $this->setStatus(sprintf('Editing the %s sequence of effect "%s".', $presentation->value, $asset->id), StatusLevel::INFO);
+        $this->setStatus(sprintf('Editing the %s sequence of %s "%s".', $presentation->value, $asset->type->noun(), $asset->id), StatusLevel::INFO);
         $this->renderCutscenesArea();
     }
 
@@ -1244,8 +1310,14 @@ trait CutscenesWorkspace
             return;
         }
 
-        if ($fieldId === self::EFFECT_SEQUENCE_FIELD && $this->databaseCommandFramePath === []) {
-            $this->applyEffectSequenceValue($rawValue);
+        if ($fieldId === self::SEQUENCE_FIELD && $this->databaseCommandFramePath === []) {
+            $this->applySequenceValue($rawValue);
+
+            return;
+        }
+
+        if ($fieldId === self::STAGE_FIELD && $this->databaseCommandFramePath === []) {
+            $this->applyStageValue($rawValue);
 
             return;
         }

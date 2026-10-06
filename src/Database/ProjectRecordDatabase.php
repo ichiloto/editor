@@ -488,13 +488,13 @@ final class ProjectRecordDatabase
         }
         if ($configIssue !== null) { $fields[] = ['label' => 'Read-only', 'value' => $configIssue, 'editable' => false]; }
 
-        foreach ($this->schema->commandLists as $listKey => $commandList) {
+        foreach ($this->schema->commandListsFor($record->toArray()) as $listKey => $commandList) {
             // A record-level command list (an NPC's inline script) is a
             // frame to open, like a branch arm, never a wall of rows here.
             $fields[] = [
                 // Named for what it is to the record (its Script), with the
                 // count of commands it holds.
-                'label' => ucfirst($listKey),
+                'label' => $commandList->heading !== '' ? $commandList->heading : ucfirst($listKey),
                 'value' => sprintf('%d', count($record->getSubList($listKey))),
                 'field' => 'commandList' . ucfirst($listKey),
                 'frame' => [$listKey],
@@ -3320,6 +3320,26 @@ final class ProjectRecordDatabase
             return $slot;
         }
 
+        if ($field->codec === RecordFieldCodec::COORDINATES || $field->codec === RecordFieldCodec::SIZE) {
+            if ($trimmed === '' && $field->removeWhenEmpty) {
+                return null;
+            }
+
+            $parts = array_map(trim(...), explode(',', $trimmed));
+            $names = $field->codec === RecordFieldCodec::SIZE ? ['width', 'height'] : ['x', 'y'];
+
+            if (count($parts) !== 2 || ! is_numeric($parts[0]) || ! is_numeric($parts[1])
+                || ($field->codec === RecordFieldCodec::SIZE && min(floatval($parts[0]), floatval($parts[1])) <= 0.0)) {
+                throw new \InvalidArgumentException(sprintf(
+                    $field->codec === RecordFieldCodec::SIZE ? '%s must be two numbers above 0, width and height, separated by a comma.' : '%s must be two numbers, x and y, separated by a comma.',
+                    $field->label,
+                ));
+            }
+
+            // Whole numbers stay integers, as an author writes them.
+            return array_combine($names, array_map(static fn(string $part): int|float => floor((float) $part) === (float) $part ? (int) $part : (float) $part, $parts));
+        }
+
         if ($field->codec === RecordFieldCodec::NORMALIZED_POINT) {
             if ($trimmed === '' && $field->removeWhenEmpty) {
                 return null;
@@ -3509,6 +3529,12 @@ final class ProjectRecordDatabase
                 : ProjectRecord::stringify($value),
             RecordFieldCodec::NORMALIZED_POINT => is_array($value)
                 ? sprintf('%s, %s', ProjectRecord::stringify($value['x'] ?? ''), ProjectRecord::stringify($value['y'] ?? ''))
+                : ProjectRecord::stringify($value),
+            RecordFieldCodec::COORDINATES => is_array($value)
+                ? sprintf('%s, %s', ProjectRecord::stringify($value['x'] ?? ''), ProjectRecord::stringify($value['y'] ?? ''))
+                : ProjectRecord::stringify($value),
+            RecordFieldCodec::SIZE => is_array($value)
+                ? sprintf('%s, %s', ProjectRecord::stringify($value['width'] ?? ''), ProjectRecord::stringify($value['height'] ?? ''))
                 : ProjectRecord::stringify($value),
             RecordFieldCodec::NONE => ProjectRecord::stringify($value),
         };
@@ -4246,6 +4272,8 @@ final class ProjectRecordDatabase
         $record->setSubList(
             $rootKey,
             self::withFrameList($record->getSubList($rootKey), $relativePath, $commands),
+            // A record-level list its file leaves out when empty goes with its last entry.
+            removeWhenEmpty: $this->schema->commandLists[$rootKey]->removeWhenEmpty ?? false,
         );
         $this->touchState();
     }

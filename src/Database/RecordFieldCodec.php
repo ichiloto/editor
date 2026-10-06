@@ -76,6 +76,21 @@ enum RecordFieldCodec: string
     case NORMALIZED_POINT = 'normalized_point';
 
     /**
+     * A point in authored units, stored as `['x' => x, 'y' => y]`, shown as
+     * `x, y`: where a cinematic stage subject stands, a camera key's focus,
+     * an image's offset on the stage. Whole numbers stay integers; both or
+     * neither.
+     */
+    case COORDINATES = 'coordinates';
+
+    /**
+     * A size in authored units, stored as `['width' => w, 'height' => h]`,
+     * shown as `width, height`: a cinematic stage's canvas, a subject's
+     * registered box. Whole numbers stay integers; both or neither.
+     */
+    case SIZE = 'size';
+
+    /**
      * A battler slot, the Engine's BattlerSlot, stored as `['x' => x,
      * 'y' => y, 'width' => w, 'height' => h]` with an optional
      * `'displayScale' => s`, shown as `x, y, width, height` or

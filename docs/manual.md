@@ -1966,20 +1966,73 @@ renaming an actor never changes who may call it; tenancy `shared` or
 `exclusive`), **Playback**
 (default speed, allow skip, loop preview, transitions in and out, effect
 timing by `end`, `cue` or `frame`, target presentation) and **Timeline**
-(format version, FPS, length in frames, editor metadata, and the Tracks
-and Cues frames). `allowSkip` is authored data; whether a battle honours it
-is the engine's business, and this manual claims nothing more.
+(the Sequence row, format version, FPS, length in frames, rest frame,
+editor metadata, and the Tracks and Cues frames). `allowSkip` is authored
+data; whether a battle honours it is the engine's business, and this manual
+claims nothing more.
+
+**Sequence** works as an effect's does: a summon whose timeline every
+renderer shares stays that way unless you choose `separate`, which gives it
+a terminal and a graphical sequence, each a copy of the shared one (undo
+puts the shared file back). The definition (identity, wielders, playback
+and the rest) stays one for both; the timeline rows, Tracks and Cues edit
+the sequence chosen, and the other is kept exactly as written. A key a
+sequence did not hold, such as a first rest frame, is written into that
+sequence.
+
+#### Stage
+
+A summon's graphical sequence may have a **stage**: a presentation space of
+its own, in stage units, shown in place of the arena from its start frame
+until its restore frame, when the arena, the formation and the battlers'
+current state return. The terminal sequence never has one. In the graphical
+sequence, the **Stage** row is `none` or `added`; adding gives the sequence
+the smallest stage the engine reads (a `1280, 720` canvas shown from the
+first frame to the last, its camera on the canvas's centre at its own
+scale), and `none` takes it away, each one undo step.
+
+With a stage, its rows are **Stage Canvas** (`width, height`), **Stage Start
+Frame**, **Stage Restore Frame** and **Stage Background** (`black`,
+`white` or `#RRGGBB`; empty is black), and three frames to open:
+
+- **Stage Subjects**: each subject has an id, a `Position` (`x, y`), a
+  `Size` (`width, height`, the box its art is fitted to, not a copy of an
+  image's size) and a `Pivot` (the point of that box at its position, `x,
+  y` from 0 to 1; empty is the bottom centre). `Shift+O` on a subject row
+  adds a named **point** to it, such as `chest` or `ground`: an id and an
+  `X` and `Y` from 0 to 1 across and down its box.
+- **Stage Camera**: keys in frame order from frame 0, each a `Focus`
+  (`x, y`, the stage point at the centre of the view), a `Zoom` from 0.125
+  to 4 and an `Easing` to the next key (`linear`, `hold` or `smoothstep`;
+  empty is linear).
+- **Stage Covers**: full-screen colour keys in frame order, from frame 0 to
+  a fully clear key on the last frame, each a `Color`, an `Opacity` from 0
+  to 1 and an `Easing`.
+
+An image track whose `Anchor` is `stage` is placed on the stage: its
+`Subject` and `Subject Point` are picked from the stage's subjects and
+their points (none: the stage origin, or the subject's pivot), with an
+`Offset` and a `Size` in stage units (empty: no offset, and the subject's
+size), and a `Z Index` among the stage's art. Battler rows (cells, facing,
+battler attachment) do not apply on the stage. Its keyframes add an
+`Offset` and an `Opacity` (empty is 1). The sequence's rest frame is also
+the stage's reduced-motion view, so it must fall inside the stage's frames
+with art showing; a save the engine refuses names the stage row it refuses,
+such as `stage.camera[initial].zoom`.
 
 #### Tracks, keyframes and cues
 
 Open `Tracks` and each track is a row (`Id`, `Type`: `glyph`, `text`,
-`flash`, `shake`; `Presentation`: `all`, `terminal` or `graphical`, the
+`image`, `flash`, `shake`; `Presentation`: `all`, `terminal` or `graphical`, the
 renderers that draw it) followed by its keyframes: frame, duration, position,
 content, asset id, color, visible, z-index, blend mode, easing and a
-free-form payload. `Content` opens the **multiline editor** (`Enter` on the
+free-form payload; an image track has the image rows an effect's has.
+`Content` opens the **multiline editor** (`Enter` on the
 row), which keeps every space, backslash, blank line, tab and wide glyph
 exactly as typed or pasted; `Ctrl+S` there commits, `Esc` cancels. Open
-`Cues` for the cue rows: id, frame, type and payload. `Shift+O` adds a
+`Cues` for the cue rows: id, frame, type (including `restoreBattlefield`,
+which clears flash, shake and effect art and redraws the field) and
+payload. `Shift+O` adds a
 track, a keyframe under the cursor's track, or a cue; `Shift+X` and
 `Delete` remove. The Timeline pane lists tracks, keyframes and cues as
 rows: `[` / `]` reorder, `Shift+D` duplicates (a copied track or cue gets a

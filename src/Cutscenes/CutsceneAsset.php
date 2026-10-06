@@ -16,6 +16,7 @@ use Ichiloto\Editor\ProjectDirectoryContext;
 use Ichiloto\Engine\Animations\Timelines\CompiledEffectTimeline;
 use Ichiloto\Engine\Animations\Timelines\EffectCadence;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
+use Ichiloto\Engine\Cutscenes\Cinematics\CinematicCommandSchema;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicDefinition;
 use Ichiloto\Engine\Cutscenes\Summons\SummonCompiledCutscene;
 use Ichiloto\Engine\Cutscenes\Summons\SummonCutsceneDefinition;
@@ -56,6 +57,23 @@ final class CutsceneAsset
     public const string COMMANDS_KEY = 'commands';
 
     /**
+     * The hidden payload key naming the sequence a record with separate
+     * terminal and graphical sequences shows, so its schema offers the rows
+     * that sequence reads (a summon's stage is graphical only). Never shown,
+     * never written to a file.
+     */
+    public const string SEQUENCE_KEY = '__sequence';
+
+    /**
+     * A summon timeline's keys that stay beside its separate sequences; the
+     * Engine reads every other timeline key inside each sequence.
+     */
+    public const array PAIRED_SUMMON_TIMELINE_FIELDS = ['formatVersion', 'presentations', 'editor'];
+
+    /** The canvas a new summon stage starts with, in stage units. */
+    private const array STAGE_CANVAS = ['width' => 1280, 'height' => 720];
+
+    /**
      * @var array<string, mixed> The data file's array as the editor now holds it.
      */
     private array $data;
@@ -85,9 +103,10 @@ final class CutsceneAsset
     private ?PhpArraySourceDocument $partnerDocument = null;
 
     /**
-     * The sequence an effect with separate terminal and graphical sequences
-     * is being edited in. The editor shows and edits one at a time; the file
-     * keeps both, each exactly as written unless it is the one edited.
+     * The sequence an effect or summon with separate terminal and graphical
+     * sequences is being edited in. The editor shows and edits one at a
+     * time; the file keeps both, each exactly as written unless it is the
+     * one edited.
      */
     private EffectPresentation $presentationView = EffectPresentation::TERMINAL;
     /**
@@ -343,14 +362,25 @@ final class CutsceneAsset
      */
     public function payload(): array
     {
-        $payload = $this->hasPresentations()
-            ? $this->getPresentationSequence($this->partner)
-            : $this->shape->merge($this->data, $this->partner);
+        $payload = match (true) {
+            ! $this->hasPresentations() => $this->shape->merge($this->data, $this->partner),
+            // An effect is its timeline alone: the sequence is the record.
+            $this->type === CutsceneType::EFFECT => $this->getPresentationSequence($this->partner),
+            // A summon is its definition, the timeline's own keys and the sequence.
+            default => [
+                ...$this->shape->merge($this->data, array_diff_key($this->partner, ['presentations' => true])),
+                ...$this->getPresentationSequence($this->partner),
+            ],
+        };
 
         if (! $this->type->hasDataFile()) {
             // An effect's id is its folder, as the Engine finds it; it is
             // shown and renamed here like any id, and never written.
             $payload = ['id' => $this->id, ...$payload];
+        }
+
+        if ($this->hasPresentations()) {
+            $payload[self::SEQUENCE_KEY] = $this->presentationView->value;
         }
 
         $payload[self::ORIGIN_KEY] = $this->id;
@@ -359,23 +389,23 @@ final class CutsceneAsset
     }
 
     /**
-     * Whether this is an effect with separate terminal and graphical
-     * sequences, edited one at a time.
+     * Whether this is an effect or a summon with separate terminal and
+     * graphical sequences, edited one at a time.
      */
     public function hasPresentations(): bool
     {
-        return $this->type === CutsceneType::EFFECT && is_array($this->partner['presentations'] ?? null);
+        return $this->type !== CutsceneType::CINEMATIC && is_array($this->partner['presentations'] ?? null);
     }
 
-    /** The sequence being edited, for an effect with separate sequences; null otherwise. */
+    /** The sequence being edited, for an effect or summon with separate sequences; null otherwise. */
     public function getPresentationView(): ?EffectPresentation
     {
         return $this->hasPresentations() ? $this->presentationView : null;
     }
 
     /**
-     * Chooses which of an effect's sequences the editor shows and edits.
-     * Nothing is written; the other sequence stays as it is.
+     * Chooses which of the sequences the editor shows and edits. Nothing is
+     * written; the other sequence stays as it is.
      */
     public function selectPresentation(EffectPresentation $presentation): void
     {
@@ -383,25 +413,138 @@ final class CutsceneAsset
     }
 
     /**
-     * Gives a flat effect separate terminal and graphical sequences, each
-     * starting as a copy of the flat one, so each presentation can then be
-     * authored on its own. A flat effect stays flat unless this is chosen.
+     * Gives a flat effect or summon separate terminal and graphical
+     * sequences, each starting as a copy of the flat one, so each
+     * presentation can then be authored on its own. A summon keeps its
+     * format version and editor metadata beside them, where the Engine reads
+     * them. A flat timeline stays flat unless this is chosen.
      *
-     * @return bool False when it already has them, is not an effect, or cannot be written.
+     * @return bool False when it already has them, is a cinematic, or cannot be written.
      */
     public function splitIntoPresentations(): bool
     {
-        if ($this->type !== CutsceneType::EFFECT || $this->hasPresentations() || $this->readOnlyReason !== null) {
+        if ($this->type === CutsceneType::CINEMATIC || $this->hasPresentations() || $this->readOnlyReason !== null) {
             return false;
         }
 
-        $this->partner = ['presentations' => [
-            EffectPresentation::TERMINAL->value => $this->partner,
-            EffectPresentation::GRAPHICAL->value => $this->partner,
-        ]];
+        $outer = $this->type === CutsceneType::SUMMON
+            ? array_intersect_key($this->partner, array_flip(self::PAIRED_SUMMON_TIMELINE_FIELDS))
+            : [];
+        $sequence = array_diff_key($this->partner, $outer);
+        $presentations = [EffectPresentation::TERMINAL->value => $sequence, EffectPresentation::GRAPHICAL->value => $sequence];
+        $partner = [];
+
+        // The sequences take the place the first sequence key had.
+        foreach ($this->partner as $key => $value) {
+            if (array_key_exists($key, $outer)) {
+                $partner[$key] = $value;
+            } elseif (! array_key_exists('presentations', $partner)) {
+                $partner['presentations'] = $presentations;
+            }
+        }
+
+        $this->partner = $partner + ['presentations' => $presentations];
         $this->touchState();
 
         return true;
+    }
+
+    /**
+     * Whether the summon's graphical sequence has a cinematic stage.
+     */
+    public function hasStage(): bool
+    {
+        return $this->type === CutsceneType::SUMMON && $this->hasPresentations()
+            && is_array($this->partner['presentations'][EffectPresentation::GRAPHICAL->value]['stage'] ?? null);
+    }
+
+    /**
+     * Gives a summon's graphical sequence a cinematic stage, or takes it
+     * away. A new stage is the smallest the Engine reads: a 16:9 canvas
+     * shown from the first frame until the last, its camera on the canvas's
+     * centre at its own scale. Its subjects, art, covers and the sequence's
+     * rest frame are authored after. The terminal sequence never has one.
+     *
+     * @return bool False when nothing changed: not a summon with separate
+     * sequences, too short to restore before its end, or already so.
+     */
+    public function setStage(bool $present): bool
+    {
+        $graphical = EffectPresentation::GRAPHICAL->value;
+
+        if ($this->type !== CutsceneType::SUMMON || ! $this->hasPresentations() || $this->readOnlyReason !== null || $present === $this->hasStage()) {
+            return false;
+        }
+
+        $sequence = $this->getSequence(EffectPresentation::GRAPHICAL);
+
+        if (! $present) {
+            unset($sequence['stage']);
+        } else {
+            $length = (int) ($sequence['lengthFrames'] ?? 0);
+
+            if ($length < 2) {
+                return false;
+            }
+
+            $stage = [
+                'canvas' => self::STAGE_CANVAS,
+                'startFrame' => 0,
+                'restoreFrame' => $length - 1,
+                'camera' => [['id' => 'initial', 'frame' => 0,
+                    'focus' => ['x' => intdiv(self::STAGE_CANVAS['width'], 2), 'y' => intdiv(self::STAGE_CANVAS['height'], 2)], 'zoom' => 1]],
+            ];
+            // Where the Engine writes it: after the sequence's clock, before its tracks.
+            $placed = [];
+
+            foreach ($sequence as $key => $value) {
+                if (in_array($key, ['tracks', 'cues'], true) && ! array_key_exists('stage', $placed)) {
+                    $placed['stage'] = $stage;
+                }
+
+                $placed[$key] = $value;
+            }
+
+            $sequence = $placed + ['stage' => $stage];
+        }
+
+        $this->partner['presentations'][$graphical] = $sequence;
+        $this->touchState();
+
+        return true;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function getSequence(EffectPresentation $presentation): array
+    {
+        $sequence = $this->partner['presentations'][$presentation->value] ?? [];
+
+        return is_array($sequence) ? $sequence : [];
+    }
+
+    /**
+     * Starts a new asset with this one's files under another id: both
+     * sequences of one that has two, whichever is shown.
+     */
+    public function copyAs(string $id, string $root): self
+    {
+        $copy = new self($this->type, $id, rtrim($root, '/') . '/' . $id, $this->projectRoot);
+        $copy->isNew = true;
+        $copy->data = $this->type->hasDataFile() && array_key_exists('id', $this->data)
+            ? [...$this->data, 'id' => $id]
+            : ($this->type->hasDataFile() ? ['id' => $id, ...$this->data] : $this->data);
+        $copy->partner = $this->partner;
+        $copy->presentationView = $this->presentationView;
+        $copy->pacedFps = $this->pacedFps;
+        $copy->shape = CutscenePairShape::of($this->type, $copy->data, $copy->partner);
+        $copy->loadedData = [];
+        $copy->loadedPartner = [];
+        $copy->persistedFingerprint = null;
+        $copy->touchState();
+
+        return $copy;
     }
 
     /**
@@ -500,15 +643,28 @@ final class CutsceneAsset
             $payload = $this->settleEffectCadence($payload);
         }
 
+        unset($payload[self::SEQUENCE_KEY]);
+
         if ($this->hasPresentations()) {
             // The edited sequence goes back into its place; the other
             // sequence, and the keys of this one, keep their order.
             unset($payload[self::ORIGIN_KEY]);
             $old = $this->getPresentationSequence($this->partner);
-            $ordered = array_intersect_key(array_replace(array_flip(array_keys($old)), $payload), $payload);
-            $partner = $this->partner;
-            $partner['presentations'][$this->presentationView->value] = $ordered;
-            $data = $this->data;
+            $edited = $this->type === CutsceneType::EFFECT
+                ? $payload
+                : array_filter($payload, static fn(string $key): bool => array_key_exists($key, $old)
+                    || (in_array($key, CinematicCommandSchema::SUMMON_TIMELINE_FIELDS, true) && ! in_array($key, self::PAIRED_SUMMON_TIMELINE_FIELDS, true)),
+                    ARRAY_FILTER_USE_KEY);
+            $presentations = $this->partner['presentations'];
+            $presentations[$this->presentationView->value] = array_intersect_key(array_replace(array_flip(array_keys($old)), $edited), $edited);
+
+            if ($this->type === CutsceneType::EFFECT) {
+                $partner = [...$this->partner, 'presentations' => $presentations];
+                $data = $this->data;
+            } else {
+                // A summon's definition and the timeline's own keys split as a flat pair does.
+                [$data, $partner] = $this->shape->split([...array_diff_key($payload, $edited), 'presentations' => $presentations]);
+            }
         } else {
             [$data, $partner] = $this->shape->split($payload);
         }

@@ -58,6 +58,21 @@ final class CutsceneSchemas
      */
     public const string CUES_KEY = 'cues';
 
+    /** The payload key a summon stage's subjects are edited under. */
+    public const string STAGE_SUBJECTS_KEY = 'stage.subjects';
+
+    /** The payload key a summon stage's camera keys are edited under. */
+    public const string STAGE_CAMERA_KEY = 'stage.camera';
+
+    /** The payload key a summon stage's cover keys are edited under. */
+    public const string STAGE_COVERS_KEY = 'stage.covers';
+
+    /** Where a summon image track is placed: on a battler, the screen, or the graphical stage. */
+    public const array SUMMON_IMAGE_ANCHORS = ['target', 'caster', 'screen', 'stage'];
+
+    /** How a stage camera or cover key moves to the next: the Engine's easings. */
+    public const array STAGE_EASINGS = ['linear', 'hold', 'smoothstep'];
+
     /**
      * Cardinal facings a staged actor and a movement route step use.
      */
@@ -113,56 +128,58 @@ final class CutsceneSchemas
      */
     public static function summons(): RecordSchema
     {
+        $fields = [
+            new RecordField('id', 'Id', isReadOnly: true),
+            new RecordField('name', 'Name'),
+            new RecordField('description', 'Description', removeWhenEmpty: true),
+            new RecordField('moveName', 'Move Name', removeWhenEmpty: true),
+            new RecordField('version', 'Version', InputControlType::INTEGER, removeWhenEmpty: true),
+            new RecordField('linkedSummonId', 'Linked Summon Id', removeWhenEmpty: true),
+            RecordField::reference('linkedActionId', 'Linked Action', 'skills', allowsNone: true, noneLabel: '(none)'),
+            new RecordField('tags', 'Tags', codec: RecordFieldCodec::CSV_LIST, removeWhenEmpty: true),
+            // Lore and metadata.
+            new RecordField('lore', 'Lore', removeWhenEmpty: true),
+            RecordField::reference('element', 'Element', 'elements', allowsNone: true, noneLabel: '(none)'),
+            new RecordField('strengths', 'Strengths', codec: RecordFieldCodec::CSV_LIST, removeWhenEmpty: true),
+            new RecordField('weaknesses', 'Weaknesses', codec: RecordFieldCodec::CSV_LIST, removeWhenEmpty: true),
+            new RecordField('attributes', 'Attributes', codec: RecordFieldCodec::KEY_VALUES, removeWhenEmpty: true),
+            new RecordField('authoring', 'Authoring Metadata', codec: RecordFieldCodec::KEY_VALUES, removeWhenEmpty: true),
+            // Availability: omitted is open; declared conditions must hold.
+            new RecordField('availability.conditions', 'Availability', codec: RecordFieldCodec::CONDITIONS, removeWhenEmpty: true, displayDefault: '(omitted: open)'),
+            // Wielder policy.
+            new RecordField('wielders.mode', 'Wielders', options: ['all', 'roles', 'characters'], removeWhenEmpty: true, displayDefault: '(omitted: open)'),
+            new RecordField('wielders.roles', 'Wielder Roles', codec: RecordFieldCodec::CSV_LIST, reference: 'classes', removeWhenEmpty: true),
+            new RecordField('wielders.characters', 'Wielder Characters', codec: RecordFieldCodec::CSV_LIST, reference: 'actor_ids', removeWhenEmpty: true),
+            new RecordField('wielders.tenancy', 'Tenancy', options: ['shared', 'exclusive'], removeWhenEmpty: true, displayDefault: 'shared'),
+            // Playback and presentation.
+            new RecordField('playback.defaultSpeed', 'Default Speed', InputControlType::FLOAT, removeWhenEmpty: true, displayDefault: '1'),
+            RecordField::boolean('playback.allowSkip', 'Allow Skip'),
+            RecordField::boolean('playback.loopPreview', 'Loop Preview'),
+            new RecordField('transitionIn.type', 'Transition In', options: ['fadeToBlack', 'fadeFromBlack', 'none'], removeWhenEmpty: true, displayDefault: 'fadeToBlack'),
+            new RecordField('transitionIn.durationMs', 'Transition In Ms', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '0'),
+            new RecordField('transitionIn.color', 'Transition In Color', removeWhenEmpty: true),
+            new RecordField('transitionOut.type', 'Transition Out', options: ['fadeFromBlack', 'fadeToBlack', 'none'], removeWhenEmpty: true, displayDefault: 'fadeFromBlack'),
+            new RecordField('transitionOut.durationMs', 'Transition Out Ms', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '0'),
+            new RecordField('transitionOut.color', 'Transition Out Color', removeWhenEmpty: true),
+            new RecordField('effectTiming.mode', 'Effect Timing', options: SummonEffectTiming::AUTHORING_MODES, removeWhenEmpty: true, displayDefault: SummonEffectTiming::DEFAULT_MODE),
+            RecordField::reference('effectTiming.cueId', 'Effect Cue', 'summon_cues', allowsNone: true, noneLabel: '(none)'),
+            new RecordField('effectTiming.frame', 'Effect Frame', InputControlType::INTEGER, removeWhenEmpty: true),
+            new RecordField('targetPresentation.mode', 'Target Presentation', options: ['full_screen', 'inline'], removeWhenEmpty: true, displayDefault: 'full_screen'),
+            RecordField::boolean('targetPresentation.showCasterNameBanner', 'Caster Name Banner'),
+            // Timeline.
+            new RecordField('formatVersion', 'Timeline Format', InputControlType::INTEGER),
+            new RecordField('fps', 'FPS', InputControlType::INTEGER),
+            new RecordField('lengthFrames', 'Length (frames)', InputControlType::INTEGER),
+            new RecordField('restFrame', 'Rest Frame', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: 'Last frame'),
+            new RecordField('editor', 'Editor Metadata', codec: RecordFieldCodec::KEY_VALUES, removeWhenEmpty: true),
+        ];
+
         return new RecordSchema(
             key: self::SUMMONS_KEY,
             entryNoun: 'summon',
             storage: RecordStorage::MAP_OWNED,
             relativePath: 'assets/Cutscenes/Summons',
-            fields: [
-                new RecordField('id', 'Id', isReadOnly: true),
-                new RecordField('name', 'Name'),
-                new RecordField('description', 'Description', removeWhenEmpty: true),
-                new RecordField('moveName', 'Move Name', removeWhenEmpty: true),
-                new RecordField('version', 'Version', InputControlType::INTEGER, removeWhenEmpty: true),
-                new RecordField('linkedSummonId', 'Linked Summon Id', removeWhenEmpty: true),
-                RecordField::reference('linkedActionId', 'Linked Action', 'skills', allowsNone: true, noneLabel: '(none)'),
-                new RecordField('tags', 'Tags', codec: RecordFieldCodec::CSV_LIST, removeWhenEmpty: true),
-                // Lore and metadata.
-                new RecordField('lore', 'Lore', removeWhenEmpty: true),
-                RecordField::reference('element', 'Element', 'elements', allowsNone: true, noneLabel: '(none)'),
-                new RecordField('strengths', 'Strengths', codec: RecordFieldCodec::CSV_LIST, removeWhenEmpty: true),
-                new RecordField('weaknesses', 'Weaknesses', codec: RecordFieldCodec::CSV_LIST, removeWhenEmpty: true),
-                new RecordField('attributes', 'Attributes', codec: RecordFieldCodec::KEY_VALUES, removeWhenEmpty: true),
-                new RecordField('authoring', 'Authoring Metadata', codec: RecordFieldCodec::KEY_VALUES, removeWhenEmpty: true),
-                // Availability: omitted is open; declared conditions must hold.
-                new RecordField('availability.conditions', 'Availability', codec: RecordFieldCodec::CONDITIONS, removeWhenEmpty: true, displayDefault: '(omitted: open)'),
-                // Wielder policy.
-                new RecordField('wielders.mode', 'Wielders', options: ['all', 'roles', 'characters'], removeWhenEmpty: true, displayDefault: '(omitted: open)'),
-                new RecordField('wielders.roles', 'Wielder Roles', codec: RecordFieldCodec::CSV_LIST, reference: 'classes', removeWhenEmpty: true),
-                new RecordField('wielders.characters', 'Wielder Characters', codec: RecordFieldCodec::CSV_LIST, reference: 'actor_ids', removeWhenEmpty: true),
-                new RecordField('wielders.tenancy', 'Tenancy', options: ['shared', 'exclusive'], removeWhenEmpty: true, displayDefault: 'shared'),
-                // Playback and presentation.
-                new RecordField('playback.defaultSpeed', 'Default Speed', InputControlType::FLOAT, removeWhenEmpty: true, displayDefault: '1'),
-                RecordField::boolean('playback.allowSkip', 'Allow Skip'),
-                RecordField::boolean('playback.loopPreview', 'Loop Preview'),
-                new RecordField('transitionIn.type', 'Transition In', options: ['fadeToBlack', 'fadeFromBlack', 'none'], removeWhenEmpty: true, displayDefault: 'fadeToBlack'),
-                new RecordField('transitionIn.durationMs', 'Transition In Ms', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '0'),
-                new RecordField('transitionIn.color', 'Transition In Color', removeWhenEmpty: true),
-                new RecordField('transitionOut.type', 'Transition Out', options: ['fadeFromBlack', 'fadeToBlack', 'none'], removeWhenEmpty: true, displayDefault: 'fadeFromBlack'),
-                new RecordField('transitionOut.durationMs', 'Transition Out Ms', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '0'),
-                new RecordField('transitionOut.color', 'Transition Out Color', removeWhenEmpty: true),
-                new RecordField('effectTiming.mode', 'Effect Timing', options: SummonEffectTiming::AUTHORING_MODES, removeWhenEmpty: true, displayDefault: SummonEffectTiming::DEFAULT_MODE),
-                RecordField::reference('effectTiming.cueId', 'Effect Cue', 'summon_cues', allowsNone: true, noneLabel: '(none)'),
-                new RecordField('effectTiming.frame', 'Effect Frame', InputControlType::INTEGER, removeWhenEmpty: true),
-                new RecordField('targetPresentation.mode', 'Target Presentation', options: ['full_screen', 'inline'], removeWhenEmpty: true, displayDefault: 'full_screen'),
-                RecordField::boolean('targetPresentation.showCasterNameBanner', 'Caster Name Banner'),
-                // Timeline.
-                new RecordField('formatVersion', 'Timeline Format', InputControlType::INTEGER),
-                new RecordField('fps', 'FPS', InputControlType::INTEGER),
-                new RecordField('lengthFrames', 'Length (frames)', InputControlType::INTEGER),
-                new RecordField('restFrame', 'Rest Frame', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: 'Last frame'),
-                new RecordField('editor', 'Editor Metadata', codec: RecordFieldCodec::KEY_VALUES, removeWhenEmpty: true),
-            ],
+            fields: $fields,
             labelKey: 'name',
             identityKey: 'id',
             blank: [
@@ -178,7 +195,123 @@ final class CutsceneSchemas
             commandLists: [
                 self::TRACKS_KEY => self::trackList(),
                 self::CUES_KEY => self::cueList(),
+                self::STAGE_SUBJECTS_KEY => self::stageSubjectList(),
+                self::STAGE_CAMERA_KEY => self::stageCameraList(),
+                self::STAGE_COVERS_KEY => self::stageCoverList(),
             ],
+            // A sequence with a stage edits it as rows and lists of its own.
+            fieldsFor: static fn(array $payload): array => is_array($payload['stage'] ?? null) ? [...$fields, ...self::stageFields()] : $fields,
+            commandListsFor: static fn(array $payload): array => is_array($payload['stage'] ?? null)
+                ? [self::TRACKS_KEY, self::CUES_KEY, self::STAGE_SUBJECTS_KEY, self::STAGE_CAMERA_KEY, self::STAGE_COVERS_KEY]
+                : [self::TRACKS_KEY, self::CUES_KEY],
+        );
+    }
+
+    /**
+     * A summon's graphical stage: its own canvas in stage units, the frames
+     * it is shown from and until the arena returns, and what it is drawn on.
+     * Its subjects, camera keys and cover keys are lists opened as frames.
+     *
+     * @return list<RecordField>
+     */
+    public static function stageFields(): array
+    {
+        return [
+            new RecordField('stage.canvas', 'Stage Canvas', codec: RecordFieldCodec::SIZE),
+            new RecordField('stage.startFrame', 'Stage Start Frame', InputControlType::INTEGER),
+            new RecordField('stage.restoreFrame', 'Stage Restore Frame', InputControlType::INTEGER),
+            // black, white or #RRGGBB, as cover colours are written.
+            new RecordField('stage.background', 'Stage Background', removeWhenEmpty: true, displayDefault: 'black'),
+        ];
+    }
+
+    /**
+     * The subjects a stage places art on: each a stable id, where it stands,
+     * its registered box and the point of that box that stands there, and
+     * named points within the box (a chest, the ground) that art and effects
+     * attach to.
+     */
+    public static function stageSubjectList(): RecordSubList
+    {
+        return new RecordSubList(
+            key: self::STAGE_SUBJECTS_KEY,
+            prefix: 'subject',
+            singular: 'subject',
+            fields: [
+                new RecordField('id', 'Id'),
+                new RecordField('position', 'Position', codec: RecordFieldCodec::COORDINATES),
+                new RecordField('size', 'Size', codec: RecordFieldCodec::SIZE),
+                new RecordField('pivot', 'Pivot', codec: RecordFieldCodec::NORMALIZED_POINT, removeWhenEmpty: true, displayDefault: '0.5, 1 (bottom centre)'),
+            ],
+            blank: ['id' => 'subject', 'position' => ['x' => 0, 'y' => 0], 'size' => ['width' => 100, 'height' => 100]],
+            nestedLists: ['*' => self::stageAttachmentList()],
+            heading: 'Stage Subjects',
+            removeWhenEmpty: true,
+        );
+    }
+
+    /**
+     * A stage subject's named points: each from 0 to 1 across and down its
+     * registered box.
+     */
+    public static function stageAttachmentList(): RecordSubList
+    {
+        return new RecordSubList(
+            key: 'attachments',
+            prefix: 'attachment',
+            singular: 'point',
+            fields: [
+                new RecordField('id', 'Id'),
+                new RecordField('x', 'X', InputControlType::FLOAT),
+                new RecordField('y', 'Y', InputControlType::FLOAT),
+            ],
+            blank: ['id' => 'point', 'x' => 0.5, 'y' => 0.5],
+            removeWhenEmpty: true,
+        );
+    }
+
+    /**
+     * The stage camera's keys, in frame order from frame zero: the stage
+     * point at the centre of the view and how near it is.
+     */
+    public static function stageCameraList(): RecordSubList
+    {
+        return new RecordSubList(
+            key: self::STAGE_CAMERA_KEY,
+            prefix: 'camera',
+            singular: 'camera key',
+            fields: [
+                new RecordField('id', 'Id'),
+                new RecordField('frame', 'Frame', InputControlType::INTEGER),
+                new RecordField('focus', 'Focus', codec: RecordFieldCodec::COORDINATES),
+                new RecordField('zoom', 'Zoom', InputControlType::FLOAT),
+                new RecordField('easing', 'Easing', options: ['', ...self::STAGE_EASINGS], removeWhenEmpty: true, displayDefault: '(linear)'),
+            ],
+            blank: ['id' => 'key', 'frame' => 0, 'focus' => ['x' => 0, 'y' => 0], 'zoom' => 1],
+            heading: 'Stage Camera',
+        );
+    }
+
+    /**
+     * The stage's full-screen covers, in frame order: a colour and how
+     * opaque it is, from frame zero to a clear last frame.
+     */
+    public static function stageCoverList(): RecordSubList
+    {
+        return new RecordSubList(
+            key: self::STAGE_COVERS_KEY,
+            prefix: 'cover',
+            singular: 'cover key',
+            fields: [
+                new RecordField('id', 'Id'),
+                new RecordField('frame', 'Frame', InputControlType::INTEGER),
+                new RecordField('color', 'Color'),
+                new RecordField('opacity', 'Opacity', InputControlType::FLOAT),
+                new RecordField('easing', 'Easing', options: ['', ...self::STAGE_EASINGS], removeWhenEmpty: true, displayDefault: '(linear)'),
+            ],
+            blank: ['id' => 'cover', 'frame' => 0, 'color' => 'black', 'opacity' => 1],
+            heading: 'Stage Covers',
+            removeWhenEmpty: true,
         );
     }
 
@@ -652,15 +785,17 @@ final class CutsceneSchemas
                     removeWhenEmpty: true, displayDefault: 'all'),
             ],
             blank: ['type' => 'glyph', 'id' => 'track', 'keyframes' => []],
-            variants: ['image' => [
-                new RecordField('anchor', 'Anchor', options: ['target', 'caster', 'screen'], removeWhenEmpty: true, displayDefault: 'target'),
+            // On a graphical stage, art is placed in stage units on a subject,
+            // not on a battler; elsewhere it sits on its battle anchor.
+            variants: ['image' => static fn(array $entry): array => self::isOnStage($entry) ? self::stageImageTrackFields() : [
+                new RecordField('anchor', 'Anchor', options: self::SUMMON_IMAGE_ANCHORS, removeWhenEmpty: true, displayDefault: 'target'),
                 // Battle only: the way the art is drawn; the battle mirrors it for a summon cast the other way.
                 new RecordField('facing', 'Facing', options: ['', 'west', 'east'], removeWhenEmpty: true, displayDefault: '(undirected)'),
                 ...self::imageTrackFields(),
             ]],
             variantKey: 'type',
             nestedLists: [
-                'image' => self::effectImageKeyframeList(),
+                'image' => static fn(array $entry): RecordSubList => self::isOnStage($entry) ? self::stageImageKeyframeList() : self::effectImageKeyframeList(),
                 // A track whose type is left out is a glyph track.
                 '' => self::keyframeList(),
                 'glyph' => self::keyframeList(),
@@ -668,6 +803,66 @@ final class CutsceneSchemas
                 'flash' => self::keyframeList(),
                 'shake' => self::keyframeList(),
             ],
+        );
+    }
+
+    /** Whether a summon image track is placed on its sequence's graphical stage. */
+    private static function isOnStage(array $track): bool
+    {
+        return ($track['anchor'] ?? null) === 'stage';
+    }
+
+    /**
+     * A summon image track on the stage: its sheet and how a cell fills its
+     * box, the subject and named point it stands on (else the stage origin),
+     * an offset and box in stage units, and its depth among the stage's art.
+     * Battler geometry (cells, facing, battler attachment) does not apply.
+     *
+     * @return list<RecordField>
+     */
+    public static function stageImageTrackFields(): array
+    {
+        $byKey = [];
+
+        foreach (self::imageTrackFields() as $field) {
+            $byKey[$field->key] = $field;
+        }
+
+        return [
+            new RecordField('anchor', 'Anchor', options: self::SUMMON_IMAGE_ANCHORS, removeWhenEmpty: true, displayDefault: 'target'),
+            $byKey['asset'],
+            $byKey['sheet.columns'],
+            $byKey['sheet.rows'],
+            $byKey['fit'],
+            $byKey['pivot'],
+            RecordField::reference('placement.subject', 'Subject', 'stage_subjects', allowsNone: true, noneLabel: '(stage origin)'),
+            RecordField::reference('placement.attachment', 'Subject Point', 'stage_attachments', allowsNone: true, noneLabel: "(the subject's pivot)"),
+            new RecordField('placement.position', 'Offset', codec: RecordFieldCodec::COORDINATES, removeWhenEmpty: true, displayDefault: '0, 0'),
+            new RecordField('placement.size', 'Size', codec: RecordFieldCodec::SIZE, removeWhenEmpty: true, displayDefault: "(the subject's size)"),
+            new RecordField('zIndex', 'Z Index', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '0'),
+        ];
+    }
+
+    /**
+     * The keyframes of an image on the stage: which sheet cell shows, its
+     * offset in stage units, how opaque it is, and whether it is flipped.
+     */
+    public static function stageImageKeyframeList(): RecordSubList
+    {
+        return new RecordSubList(
+            key: 'keyframes',
+            prefix: 'keyframe',
+            singular: 'keyframe',
+            fields: [
+                new RecordField('frame', 'Frame', InputControlType::INTEGER),
+                new RecordField('duration', 'Duration', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '1'),
+                new RecordField('sourceFrame', 'Sheet Frame', InputControlType::INTEGER),
+                new RecordField('position', 'Offset', codec: RecordFieldCodec::COORDINATES, removeWhenEmpty: true, displayDefault: '0, 0'),
+                new RecordField('opacity', 'Opacity', InputControlType::FLOAT, removeWhenEmpty: true, displayDefault: '1'),
+                RecordField::boolean('flipX', 'Flip Horizontally'),
+                RecordField::boolean('flipY', 'Flip Vertically'),
+            ],
+            blank: ['frame' => 0, 'sourceFrame' => 0],
         );
     }
 
@@ -709,7 +904,7 @@ final class CutsceneSchemas
             fields: [
                 new RecordField('id', 'Id'),
                 new RecordField('frame', 'Frame', InputControlType::INTEGER),
-                new RecordField('type', 'Type', options: ['applyEffect', 'showMessage', 'playSound', 'shake', 'flash'], removeWhenEmpty: true, displayDefault: 'showMessage'),
+                new RecordField('type', 'Type', options: ['applyEffect', 'showMessage', 'playSound', 'shake', 'flash', 'restoreBattlefield'], removeWhenEmpty: true, displayDefault: 'showMessage'),
                 new RecordField('payload', 'Payload', codec: RecordFieldCodec::KEY_VALUES, removeWhenEmpty: true),
             ],
             blank: ['id' => 'cue', 'frame' => 0, 'type' => 'showMessage', 'payload' => []],
