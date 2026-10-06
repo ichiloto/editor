@@ -63,8 +63,11 @@ function enemyPreviewProject(): string
 /** The Regular Bat the troop formation project's troop fights, as its one enemy record, with its terminal sprite. */
 function writeRegularBatEnemy(string $root): void
 {
-    @mkdir($root . '/assets/Data/Enemies', 0o777, true);
-    @mkdir($root . '/assets/Graphics/Enemies', 0o777, true);
+    foreach (['/assets/Data/Enemies', '/assets/Graphics/Enemies'] as $folder) {
+        if (! is_dir($root . $folder)) {
+            mkdir($root . $folder, 0o777, true);
+        }
+    }
     file_put_contents($root . '/assets/Graphics/Enemies/bat.txt', "/\\o/\\\n ' '\n");
     file_put_contents($root . '/assets/Data/Enemies/regular-bat.php', "<?php\n\nuse Ichiloto\\Engine\\Entities\\Enemies\\Enemy;\n\nreturn ['class' => Enemy::class, 'data' => "
         . var_export(['name' => 'Regular Bat', 'level' => 2, 'imagePath' => 'bat', 'rewards' => ['experience' => 1, 'gold' => 1], 'stats' => [

@@ -2319,7 +2319,10 @@ final class EditorSession
             'category' => $category,
             'editable' => $database->isEditable(),
             'readOnly' => $database->getReadOnlyReason(),
-            'dirty' => $database->isDirty(),
+            // What its Save writes is unsaved: its records, or what their pages edit and save with them.
+            'dirty' => $this->isCategoryUnsaved($category),
+            // Every listed category with something to save, so a list of them can say which.
+            'unsavedCategories' => $this->listUnsavedCategories(),
             'canCreate' => $database->supportsRecordCreation(),
             'canDuplicate' => $database->supportsRecordDuplication(),
             'canDelete' => $database->supportsRecordDeletion(),
@@ -2674,6 +2677,43 @@ final class EditorSession
         }
 
         return ['saved' => true, 'warnings' => [], 'backupFailures' => [...$embedded['backupFailures'], ...array_values($failures)]];
+    }
+
+    /**
+     * Whether a category's Save has something to write: its own records, or
+     * what their pages edit beside them and save with them (an enemy's
+     * battle art, the battle scale), the same set `saveDatabase` writes.
+     */
+    private function isCategoryUnsaved(string $category): bool
+    {
+        if ($this->requireCategory($category)->isDirty()) {
+            return true;
+        }
+
+        return array_any(DatabaseCatalog::getEmbedded(), fn($definition): bool => in_array($category, $definition->hosts, true)
+            && ($this->workspace->getRecordDatabase($definition->key)?->isDirty() ?? false));
+    }
+
+    /**
+     * The listed Database and cutscene categories with something to save.
+     *
+     * @return list<string>
+     */
+    private function listUnsavedCategories(): array
+    {
+        $keys = [
+            ...array_map(static fn($category): string => $category->key, DatabaseCatalog::all()),
+            ...array_map(static fn(CutsceneType $type): string => $type->getRecordCategory(), CutsceneType::cases()),
+        ];
+
+        return array_values(array_filter($keys, function (string $key): bool {
+            try {
+                return $this->isCategoryUnsaved($key);
+            } catch (SessionRefusal) {
+                // A category this project cannot open has nothing to save.
+                return false;
+            }
+        }));
     }
 
     /**

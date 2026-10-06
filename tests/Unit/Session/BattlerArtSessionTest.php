@@ -58,6 +58,19 @@ it('saves an enemy\'s battle art with the enemy, as its page edits both', functi
         ->and($session->listUnsavedChanges())->toBe([]);
 });
 
+it('shows the enemy category unsaved while its battle art is, since its Save writes both', function () {
+    $session = EditorSession::open(battlerArtProject());
+    expect($session->listDatabaseRecords('enemies'))->toMatchArray(['dirty' => false, 'unsavedCategories' => []]);
+
+    $index = $session->createDatabaseRecord('battler_enemies', 'Regular Bat')['index'];
+    setBattlerRow($session, $index, 'artwork.image', 'Graphics/Enemies/Bat.png');
+
+    expect($session->listDatabaseRecords('enemies'))->toMatchArray(['dirty' => true, 'unsavedCategories' => ['enemies']])
+        ->and($session->listDatabaseRecords('actors')['dirty'])->toBeFalse();
+    $session->saveDatabase('enemies');
+    expect($session->listDatabaseRecords('enemies'))->toMatchArray(['dirty' => false, 'unsavedCategories' => []]);
+});
+
 it('refuses to save art the battle could not read, writing nothing', function () {
     $root = battlerArtProject();
     $session = EditorSession::open($root);
