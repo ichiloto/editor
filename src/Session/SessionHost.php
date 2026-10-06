@@ -329,7 +329,11 @@ final class SessionHost
                 in_array($params['direction'] ?? null, ['up', 'down'], true) ? $params['direction'] : throw new InvalidRequest('"direction" must be "up" or "down".'),
             ),
             'database.save' => $session->saveDatabase(self::requireString($params, 'category')),
-            'references.list' => $session->listReferences(self::requireString($params, 'map'), self::requireString($params, 'category')),
+            'references.list' => $session->listReferences(
+                is_string($params['map'] ?? null) ? $params['map'] : null,
+                self::requireString($params, 'category'),
+                is_array($params['record'] ?? null) ? $params['record'] : null,
+            ),
             'conditions.grammar' => $session->describeWorldStateGrammar(),
             'conditions.encode' => $session->encodeWorldState(
                 self::requireString($params, 'codec'),

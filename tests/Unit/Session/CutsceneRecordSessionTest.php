@@ -56,3 +56,16 @@ it('saves a summon category as the Database window saves any category', function
         ->and((string) file_get_contents($root . '/assets/Cutscenes/Summons/lantern-wisp/lantern-wisp.data.php'))->toContain("'Lantern Wraith'")
         ->and($session->listUnsavedChanges())->toBe([]);
 });
+
+it('lists a project reference without a map, and a summon\'s own cues from the summon being edited', function () {
+    $root = cutsceneProject();
+    mkdir($root . '/assets/Graphics/Effects', 0o777, true);
+    writeTilesetTestPng($root . '/assets/Graphics/Effects/Spark.png', 8, 8);
+    $session = EditorSession::open($root);
+    $cues = $session->listReferences(null, 'summon_cues', ['category' => 'cutscenes/summon', 'index' => 0]);
+
+    expect(array_column($session->listReferences(null, 'png_assets'), 'value'))->toContain('Graphics/Effects/Spark.png')
+        ->and($cues)->not->toBe([])
+        ->and(fn() => $session->listReferences(null, 'summon_cues', ['category' => 'cutscenes/summon', 'index' => 9]))
+            ->toThrow(SessionRefusal::class);
+});

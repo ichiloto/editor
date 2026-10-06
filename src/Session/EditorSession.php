@@ -1196,12 +1196,29 @@ final class EditorSession
         ];
     }
 
-    public function listReferences(string $mapId, string $category): array
+    /**
+     * The choices a reference row offers, read in the context it is edited
+     * in: the project's own references need no map, a map's own (its events,
+     * regions) are read from the map named, and a cutscene's own (a summon's
+     * cues) from the cutscene record named, as `{category, index}`.
+     *
+     * @param array{category?: mixed, index?: mixed}|null $record The record being edited, when it gives the context.
+     * @return list<array{value: string, label: string}>
+     * @throws SessionRefusal When the category, map or record is unknown.
+     */
+    public function listReferences(?string $mapId, string $category, ?array $record = null): array
     {
         if (! ReferenceCatalog::knows($category)) {
             throw new SessionRefusal(sprintf('There is no reference category %s.', $category));
         }
-        $catalog = new ReferenceCatalog($this->workspace, $this->requireMap($mapId));
+        $cutscene = null;
+        $type = is_string($record['category'] ?? null) ? CutsceneType::findByRecordCategory($record['category']) : null;
+        if ($type !== null) {
+            $id = $this->workspace->cutscenes?->ids($type)[(int) ($record['index'] ?? -1)] ?? null;
+            $cutscene = ($id === null ? null : $this->workspace->cutscenes?->find($type, $id))
+                ?? throw new SessionRefusal(sprintf('There is no %s %s.', $type->noun(), strval($record['index'] ?? '')));
+        }
+        $catalog = new ReferenceCatalog($this->workspace, $mapId === null ? null : $this->requireMap($mapId), $cutscene);
         $labels = $catalog->labelsFor($category);
 
         return array_map(static fn(mixed $value): array => [
