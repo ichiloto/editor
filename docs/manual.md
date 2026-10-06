@@ -411,6 +411,19 @@ intact:
   typed again, and the eyedropper picks up the piece a glyph draws. Tiles no
   piece accounts for, such as a floor under a wall, stay where they are.
 
+- Glyphs follow the tiles that stand for them, the other way round. Any tile
+  a tileset piece draws stands for that piece's glyph on its gameplay layer,
+  such as a bed's tiles for `O` and `U` on fixtures or a wall's tile for `-`,
+  `|` and `+` on buildings. Placing such a tile in the GUI editor writes its
+  glyph, and so its collision, where the piece puts it, with the rest of that
+  glyph's tiles and the piece's glyph cells that draw no tile (the lower half
+  of a window); erasing or covering one removes the glyph it stood for, with
+  its other tiles; a wall's cells take the shapes their neighbours give them.
+  Glyphs, collision and tiles change in one undo step, and picked-up tiles
+  move in one step too. A tile two pieces draw is asked about. A tile whose
+  glyph would fall off the map is refused. Tiles no piece draws, such as a
+  rug or a picture, stand for nothing in the terminal and are placed freely.
+
 - Each tile layer moves with one gameplay layer: the one the map data names
   (`'tileLayers' => ['floor' => ['movesWith' => 'buildings']]`), or else the
   one whose tileset pieces write it, when only one does. Copying, cutting and

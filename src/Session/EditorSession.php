@@ -480,44 +480,60 @@ final class EditorSession
     }
 
     /**
-     * Sets one tile in cells of a tile layer, `0` erasing, as one undo step
-     * ({@see CanvasEditor::setTiles()}). A layer the map does not have yet is
-     * created. Tiles never change glyphs or collision.
+     * Sets one tile in cells of a tile layer, `0` erasing, as one undo step,
+     * by {@see stampTiles()}.
      *
      * @param list<array{0: int, 1: int}> $cells The cells, as [x, y].
-     * @return array{changed: int, revision: int}
+     * @param array<string, string> $choices The role key chosen for a tile that could stand for several glyphs, by tile entry.
+     * @return array{status: 'applied', changed: int, glyphs: int, revision: int}|array{status: 'question', tile: string, roles: list<array{key: string, label: string}>}
      * @throws SessionRefusal When the map is unknown, stale or read-only, or refuses the tile.
      */
-    public function paintTiles(string $mapId, int $revision, string $layerName, array $cells, int $tile, string $label = 'Place tiles'): array
+    public function paintTiles(string $mapId, int $revision, string $layerName, array $cells, int $tile, string $label = 'Place tiles',
+        array $choices = []): array
     {
-        return $this->stampTiles($mapId, $revision, $layerName, array_map(static fn(array $cell): array => [$cell[0], $cell[1], $tile], $cells), $label);
+        return $this->stampTiles($mapId, $revision, $layerName, array_map(static fn(array $cell): array => [$cell[0], $cell[1], $tile], $cells),
+            $label, $choices);
     }
 
     /**
      * Sets each cell of a tile layer to its own tile as one undo step
      * ({@see CanvasEditor::stampTiles()}): a block chosen in the palette or
-     * picked from the map, stamped where the author drags.
+     * picked from the map, stamped where the author drags, or an erase and a
+     * stamp together that move it. A layer the map does not have yet is
+     * created. A tile that stands for a glyph brings or takes that glyph and
+     * its collision with it; a tile that could stand for several is asked
+     * about, and nothing changes until the edit is made again with the answer.
      *
      * @param list<array{0: int, 1: int, 2: int}> $cells Each cell as [x, y, tile].
-     * @return array{changed: int, revision: int}
+     * @param array<string, string> $choices The role key chosen for a tile that could stand for several glyphs, by tile entry.
+     * @return array{status: 'applied', changed: int, glyphs: int, revision: int}|array{status: 'question', tile: string, roles: list<array{key: string, label: string}>}
      * @throws SessionRefusal When the map is unknown, stale or read-only, or refuses a tile.
      */
-    public function stampTiles(string $mapId, int $revision, string $layerName, array $cells, string $label = 'Place tiles'): array
+    public function stampTiles(string $mapId, int $revision, string $layerName, array $cells, string $label = 'Place tiles',
+        array $choices = []): array
     {
         $map = $this->requireCurrentMap($mapId, $revision);
         if ($map->getGridSourceIssue() !== null) {
             throw new SessionRefusal(sprintf('%s is read-only: %s', $mapId, $map->getGridSourceIssue()));
         }
         try {
-            $applied = CanvasEditor::stampTiles($map, $layerName, $cells, $label);
+            $applied = CanvasEditor::stampTiles($map, $layerName, $cells, $label, $choices);
         } catch (MapSourceRefusal $refusal) {
             throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+        }
+        if ($applied['unresolved'] !== []) {
+            $tile = (string) array_key_first($applied['unresolved']);
+
+            return ['status' => 'question', 'tile' => $tile, 'roles' => array_map(
+                static fn(PieceRole $role): array => ['key' => $role->key, 'label' => $role->label],
+                $applied['unresolved'][$tile],
+            )];
         }
         if ($applied['command'] !== null) {
             $this->history->record($applied['command']);
         }
 
-        return ['changed' => $applied['changed'], 'revision' => $this->getMapRevision($map)];
+        return ['status' => 'applied', 'changed' => $applied['changed'], 'glyphs' => $applied['glyphs'], 'revision' => $this->getMapRevision($map)];
     }
 
     /**

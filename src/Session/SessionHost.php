@@ -136,13 +136,16 @@ final class SessionHost
                 self::requireString($params, 'layer'),
                 self::requireTileCells($params),
                 is_string($params['label'] ?? null) ? $params['label'] : 'Place tiles',
-            ),            'tiles.paint' => $session->paintTiles(
+                self::readTileChoices($params),
+            ),
+            'tiles.paint' => $session->paintTiles(
                 self::requireString($params, 'map'),
                 self::requireInt($params, 'revision'),
                 self::requireString($params, 'layer'),
                 self::requireCells($params),
                 self::requireInt($params, 'tile'),
                 is_string($params['label'] ?? null) ? $params['label'] : 'Place tiles',
+                self::readTileChoices($params),
             ),
             'map.paint' => $session->paint(
                 self::requireString($params, 'map'),
@@ -493,5 +496,23 @@ final class SessionHost
         }
 
         return $choices;
+    }
+
+    /**
+     * The role key the author chose for each tile that could stand for
+     * several glyphs, by tile entry. A tile that stands for a glyph always
+     * takes one, so there is no answer for none.
+     *
+     * @param array<string, mixed> $params
+     * @return array<string, string>
+     */
+    private static function readTileChoices(array $params): array
+    {
+        $choices = $params['choices'] ?? [];
+        if (! is_array($choices) || ! array_all($choices, static fn(mixed $choice): bool => is_string($choice))) {
+            throw new InvalidRequest('"choices" must map tiles to a role key.');
+        }
+
+        return array_combine(array_map(strval(...), array_keys($choices)), $choices);
     }
 }

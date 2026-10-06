@@ -731,3 +731,28 @@ function readTileEntries(string $source): array
 {
     return Ichiloto\Editor\Maps\TileLayerSource::readLayer($source, 'layer.tiles.php')->getEntries();
 }
+
+it('takes a covered glyph\'s tiles with it when a wall or a piece is drawn over it', function () {
+    [$editor, $map] = createWallCanvasEditor();
+    $tilesOf = static function (string $layer) use ($map): array {
+        $found = array_filter($map->getTileLayerSources(), static fn(string $path): bool => str_ends_with($path, ".{$layer}.tiles.php"), ARRAY_FILTER_USE_KEY);
+
+        return $found === [] ? [] : readTileEntries((string) reset($found));
+    };
+    choosePieceByKeys($editor);
+    callEditorMethod($editor, 'dispatchInput', "\n");
+    callEditorMethod($editor, 'dispatchInput', "\033");
+    expect(readBuildingRows($map)[0])->toBe('=     ')
+        ->and($tilesOf('decor')[0])->toBe(['5', '5', '0', '0', '0', '0'])
+        ->and($tilesOf('furniture')[0][0])->toBe('7');
+
+    // The wall covers the bed's top cell, which takes its own tiles and the
+    // blank cell's beside it; the bed's lower cells keep theirs.
+    chooseWallByKeys($editor);
+    drawWallThrough($editor, [0, 0], [2, 0]);
+    expect(readBuildingRows($map)[0])->toBe('---   ')
+        ->and($tilesOf('decor'))->toBe([['0', '0', '0', '0', '0', '0'], ['6', '0', '0', '0', '0', '0'],
+            ...array_fill(0, 3, array_fill(0, 6, '0'))])
+        ->and($tilesOf('furniture')[0][0])->toBe('0')
+        ->and($tilesOf('furniture')[1][1])->toBe('8');
+});

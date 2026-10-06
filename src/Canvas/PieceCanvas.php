@@ -270,13 +270,29 @@ trait PieceCanvas
      * Stamps the piece at the cursor as one undo step: its glyphs on the
      * gameplay layer it names, in the brush colour, and its tiles on the tile
      * layers it names, creating any the map does not have yet. Space glyphs
-     * and `0` tiles leave their cells as they are. A stamp that cannot be
-     * made whole changes nothing.
+     * and `0` tiles leave their cells as they are. A glyph the stamp covers
+     * takes its own tiles with it, as any glyph edit does
+     * ({@see GlyphTilePlanner}). A stamp that cannot be made whole changes
+     * nothing.
      */
     private function stampPiece(ProjectMap $map, TilesetPiece $piece): void
     {
         $x = $this->cursorX;
         $y = $this->cursorY;
+        $writes = $assigned = [];
+        foreach ($piece->glyphs as $row => $symbols) {
+            foreach ($symbols as $column => $symbol) {
+                if ($symbol !== ' ') {
+                    $writes[] = ['x' => $x + $column, 'y' => $y + $row, 'symbol' => $symbol, 'color' => $this->selectedPaintColor];
+                }
+            }
+        }
+        // Each glyph cell plays its own cell of this piece, never a lookalike.
+        foreach (PieceRole::readPiece($piece) as $roles) {
+            foreach ($roles as $role) {
+                $assigned[($x + $role->cell[1]) . ',' . ($y + $role->cell[0])] = $role->key;
+            }
+        }
         try {
             $layer = $this->findPieceLayer($map, $piece);
             foreach ($piece->glyphs as $row => $symbols) {
@@ -289,20 +305,15 @@ trait PieceCanvas
             }
             $this->finalizeActiveStroke();
             $tilesBefore = $map->getTileLayerSources();
-            $map->writeTileEntries($piece->tiles, $x, $y);
+            // A piece with glyphs draws through its roles; one without, such as a rug, stands for nothing and is laid as authored.
+            $writes === []
+                ? $map->writeTileEntries($piece->tiles, $x, $y)
+                : $map->writeTileCells(CanvasEditor::plan($map, $layer, $writes, assigned: $assigned)['tiles'] ?? []);
             $tilesAfter = $map->getTileLayerSources();
         } catch (MapSourceRefusal $refusal) {
             $this->setStatus($refusal->getMessage(), StatusLevel::WARN);
             $this->renderCanvasArea();
             return;
-        }
-        $writes = [];
-        foreach ($piece->glyphs as $row => $symbols) {
-            foreach ($symbols as $column => $symbol) {
-                if ($symbol !== ' ') {
-                    $writes[] = ['x' => $x + $column, 'y' => $y + $row, 'symbol' => $symbol, 'color' => $this->selectedPaintColor];
-                }
-            }
         }
         [$stroke] = CanvasEditor::writeCells($map, $layer, $writes, 'Piece stamp');
         if (! $stroke->hasChanges() && $tilesAfter === $tilesBefore) {
@@ -405,29 +416,23 @@ trait PieceCanvas
                 }
             }
             $cells = ConnectedPieceShaper::reshapeCells($piece, $drawn, $erased, $this->resolveConnectedMemberLookup($map, $layer, $piece));
-            $tiles = [];
-            foreach ($piece->shapeTiles as $tileLayer => $entries) {
-                foreach ($cells as $cell) {
-                    $tiles[$tileLayer][] = ['x' => $cell['x'], 'y' => $cell['y'],
-                        'entry' => $cell['shape'] === null ? (string) TileId::EMPTY : $entries[$cell['shape']]];
-                }
-            }
+            $drawnKeys = array_flip(array_map(static fn(array $cell): string => "{$cell['x']},{$cell['y']}", $drawn));
+            $writes = array_map(fn(array $cell): array => [
+                'x' => $cell['x'],
+                'y' => $cell['y'],
+                'symbol' => $cell['shape'] === null ? ' ' : $piece->shapes[$cell['shape']],
+                'color' => isset($drawnKeys["{$cell['x']},{$cell['y']}"]) ? $this->selectedPaintColor : null,
+            ], $cells);
+            // Each shape draws its tiles, and a glyph the wall covers takes its own ({@see GlyphTilePlanner}).
             $this->finalizeActiveStroke();
             $tilesBefore = $map->getTileLayerSources();
-            $map->writeTileCells($tiles);
+            $map->writeTileCells(CanvasEditor::plan($map, $layer, $writes)['tiles'] ?? []);
             $tilesAfter = $map->getTileLayerSources();
         } catch (MapSourceRefusal $refusal) {
             $this->setStatus($refusal->getMessage(), StatusLevel::WARN);
             $this->renderCanvasArea();
             return null;
         }
-        $drawnKeys = array_flip(array_map(static fn(array $cell): string => "{$cell['x']},{$cell['y']}", $drawn));
-        $writes = array_map(fn(array $cell): array => [
-            'x' => $cell['x'],
-            'y' => $cell['y'],
-            'symbol' => $cell['shape'] === null ? ' ' : $piece->shapes[$cell['shape']],
-            'color' => isset($drawnKeys["{$cell['x']},{$cell['y']}"]) ? $this->selectedPaintColor : null,
-        ], $cells);
         [$stroke] = CanvasEditor::writeCells($map, $layer, $writes, $label);
         if (! $stroke->hasChanges() && $tilesAfter === $tilesBefore) {
             return false;

@@ -19,8 +19,11 @@ use Ichiloto\Engine\Rendering\Tilesets\TilesetPiece;
  */
 final readonly class GlyphTilePlanner
 {
-    /** @param array<string, list<PieceRole>> $roles Roles by glyph, distinct by the tiles they draw. */
-    private function __construct(private array $roles) {}
+    /**
+     * @param array<string, list<PieceRole>> $roles Roles by glyph, distinct by the tiles they draw.
+     * @param array<string, PieceRole> $twins The kept role for each key of a role that draws the same tiles with the same glyph.
+     */
+    private function __construct(private array $roles, private array $twins = []) {}
 
     /**
      * @param iterable<TilesetPiece> $pieces The map's tileset pieces.
@@ -29,19 +32,28 @@ final readonly class GlyphTilePlanner
      */
     public static function fromPieces(iterable $pieces, string $layerName, array $excludedLayers = []): self
     {
-        $roles = [];
+        $roles = $twins = [];
         foreach ($pieces as $piece) {
             if ($piece->layer !== $layerName) {
                 continue;
             }
             foreach (PieceRole::readPiece($piece, $excludedLayers) as $glyph => $pieceRoles) {
                 foreach ($pieceRoles as $role) {
-                    $roles[(string) $glyph][self::getSignature($role)] ??= $role;
+                    $kept = $roles[(string) $glyph][self::getSignature($role)] ??= $role;
+                    if ($kept !== $role) {
+                        $twins[$role->key] = $kept;
+                    }
                 }
             }
         }
 
-        return new self(array_map(array_values(...), $roles));
+        return new self(array_map(array_values(...), $roles), $twins);
+    }
+
+    /** @return array<string, list<PieceRole>> Every role the layer's glyphs can play, keyed by glyph. */
+    public function listRoles(): array
+    {
+        return $this->roles;
     }
 
     /** @return list<PieceRole> The roles a glyph can play, one for each set of tiles. */
@@ -50,11 +62,15 @@ final readonly class GlyphTilePlanner
         return $this->roles[$glyph] ?? [];
     }
 
-    /** The role with this key that a glyph can play, or null when it has none. */
+    /**
+     * The role with this key that a glyph can play, or null when it has none.
+     * A role kept for another that draws the same tiles answers for its key.
+     */
     public function findRole(string $glyph, string $key): ?PieceRole
     {
+        $twin = $this->twins[$key] ?? null;
         foreach ($this->getRoles($glyph) as $role) {
-            if ($role->key === $key) {
+            if ($role->key === $key || $role === $twin) {
                 return $role;
             }
         }
@@ -102,12 +118,17 @@ final readonly class GlyphTilePlanner
      * @param Closure(int, int): ?string $glyphAt The layer's glyph at a cell before the changes, or null off the map.
      * @param Closure(string, int, int): string $tileAt The entry at a cell of a tile layer before the changes.
      * @param array<string, ?string> $choices The role key the author chose for a glyph, or null for no tiles.
+     * @param array<string, string> $assigned The role key a cell's glyph plays, by `x,y`, when the edit already knows
+     *     it, such as a tile edit that placed that role's tile. It outranks proof and choice, and plans the cell even
+     *     when its glyph stays the same, so a role whose tiles had gone missing gets them back.
      * @return array{tiles: array<string, list<array{x: int, y: int, entry: string}>>, unresolved: array<string, list<PieceRole>>}
      *     The tile cells to write, keyed by tile layer name, and the roles of each glyph that still needs a choice.
      */
-    public function plan(array $changes, Closure $glyphAt, Closure $tileAt, array $choices = [], bool $repaint = false): array
+    public function plan(array $changes, Closure $glyphAt, Closure $tileAt, array $choices = [], bool $repaint = false,
+        array $assigned = []): array
     {
-        $changes = array_values(array_filter($changes, static fn(array $change): bool => $repaint || $change['old'] !== $change['new']));
+        $changes = array_values(array_filter($changes, static fn(array $change): bool => $repaint || $change['old'] !== $change['new']
+            || isset($assigned["{$change['x']},{$change['y']}"])));
         $changed = [];
         foreach ($changes as $change) {
             $changed["{$change['x']},{$change['y']}"] = $change['new'];
@@ -117,7 +138,12 @@ final readonly class GlyphTilePlanner
         $unresolved = [];
 
         foreach ($changes as $index => $change) {
-            $resolved[$index] = $change['new'] === ' ' ? null : $this->resolveRole($change, $glyphAt, $tileAt, $changed, $choices, $unresolved);
+            $key = $assigned["{$change['x']},{$change['y']}"] ?? null;
+            $resolved[$index] = match (true) {
+                $change['new'] === ' ' => null,
+                $key !== null => $this->findRole($change['new'], $key),
+                default => $this->resolveRole($change, $glyphAt, $tileAt, $changed, $choices, $unresolved),
+            };
         }
         // Every leaving role takes its tiles before any arriving role draws,
         // so a glyph moved within one edit keeps the tiles it brings.
