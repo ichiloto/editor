@@ -3524,6 +3524,9 @@ final class EditorSession
 
         return array_filter([
             'label' => trim($label),
+            // A list entry's row: which entry (and nested entry) it is part of, and its name within it.
+            'entry' => is_array($field['entry'] ?? null) ? array_values($field['entry']) : null,
+            'name' => is_string($field['name'] ?? null) ? $field['name'] : null,
             'depth' => $depth,
             // A section heading: a row that only names the rows after it.
             'heading' => $kind === 'info' && (string) ($field['value'] ?? '') === '' && $key === null && $list === null ? true : null,

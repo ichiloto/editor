@@ -154,3 +154,20 @@ it('describes the stage for a timeline editor: subjects with their boxes and poi
     $session->selectCutscenePresentation('cutscenes/summon', 0, 'terminal');
     expect($session->describeCutsceneTimeline('cutscenes/summon', 0))->toMatchArray(['canHaveStage' => false, 'stage' => null]);
 });
+
+it('names the entry each list row belongs to and its name within it, so one selected entry can be shown on its own', function () {
+    $session = EditorSession::open(stagedSummonProject());
+    $session->selectCutscenePresentation('cutscenes/summon', 0, 'graphical');
+    $session->setCutsceneStage('cutscenes/summon', 0, true);
+    $session->addDatabaseItem('cutscenes/summon', 0, ['frame' => ['stage.subjects']]);
+    $session->addDatabaseItem('cutscenes/summon', 0, stageRows($session, ['stage.subjects'])['Subject 1 Id']['key'], true);
+    $tracks = stageRows($session, ['tracks']);
+    $subjects = stageRows($session, ['stage.subjects']);
+
+    expect($tracks['Track 1 Id'])->toMatchArray(['entry' => [0], 'name' => 'Id'])
+        ->and($tracks['Track 1 Keyframe 1 Sheet Frame'])->toMatchArray(['entry' => [0, 0], 'name' => 'Sheet Frame'])
+        ->and($subjects['Subject 1 Size'])->toMatchArray(['entry' => [0], 'name' => 'Size'])
+        ->and($subjects['Subject 1 Point 1 X'])->toMatchArray(['entry' => [0, 0], 'name' => 'X'])
+        // The record's own rows belong to no entry.
+        ->and(stageRows($session)['Name'])->not->toHaveKey('entry');
+});

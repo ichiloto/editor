@@ -538,14 +538,16 @@ final class ProjectRecordDatabase
     {
         $fields = [];
 
+        // Each row names the entry it belongs to and its own name within it, so an
+        // interface can show one selected entry's rows, labelled as that entry's.
         foreach ($subList->fieldsFor($entry) as $field) {
-            $fields[] = self::describeField(
+            $fields[] = [...self::describeField(
                 $field,
                 self::displayValue($field, self::readNested($entry, $field->key)),
                 self::subFieldId($subList->prefix, $entryIndex, $field->key),
                 $isEditable,
                 sprintf('%s %d %s', ucfirst($subList->singular), $entryIndex + 1, $field->label),
-            );
+            ), 'entry' => [$entryIndex], 'name' => $field->label];
         }
 
         $variant = $subList->variantKey !== null ? strval($entry[$subList->variantKey] ?? '') : '';
@@ -566,6 +568,8 @@ final class ProjectRecordDatabase
                     'label' => $label . ' Text',
                     'value' => $text,
                     'field' => sprintf('%s%dOption%dText', $subList->prefix, $entryIndex, $optionIndex),
+                    'entry' => [$entryIndex],
+                    'name' => sprintf('Option %d Text', $optionIndex + 1),
                 ];
 
                 if ($isEditable) {
@@ -578,6 +582,8 @@ final class ProjectRecordDatabase
                     'value' => sprintf('%d', $armCount),
                     'field' => sprintf('%s%dOption%dThen', $subList->prefix, $entryIndex, $optionIndex),
                     'frame' => [...$basePath, $entryIndex, 'options', $optionIndex, 'then'],
+                    'entry' => [$entryIndex],
+                    'name' => sprintf('Option %d Commands', $optionIndex + 1),
                 ];
             }
         }
@@ -598,6 +604,8 @@ final class ProjectRecordDatabase
                 'value' => sprintf('%d', count((array) ($entry[$armKey] ?? []))),
                 'field' => sprintf('%s%d%s', $subList->prefix, $entryIndex, ucfirst($armKey)),
                 'frame' => [...$basePath, $entryIndex, $armKey],
+                'entry' => [$entryIndex],
+                'name' => $armLabel . ' Commands',
             ];
         }
 
@@ -613,7 +621,7 @@ final class ProjectRecordDatabase
             }
 
             foreach ($nestedList->fieldsFor($nestedEntry) as $field) {
-                $fields[] = self::describeField(
+                $fields[] = ['entry' => [$entryIndex, $nestedIndex], 'name' => $field->label] + self::describeField(
                     $field,
                     self::displayValue($field, self::readNested($nestedEntry, $field->key)),
                     self::nestedSubFieldId(
@@ -650,6 +658,8 @@ final class ProjectRecordDatabase
                     'value' => sprintf('%d', count((array) ($nestedEntry[$armKey] ?? []))),
                     'field' => self::nestedSubFieldId($subList->prefix, $entryIndex, $nestedList->prefix, $nestedIndex, ucfirst($armKey)),
                     'frame' => [...$basePath, $entryIndex, $nestedList->key, $nestedIndex, $armKey],
+                    'entry' => [$entryIndex, $nestedIndex],
+                    'name' => $armLabel . ' Commands',
                 ];
             }
         }
