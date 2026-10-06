@@ -227,6 +227,15 @@ function writeFakeConsole(string $directory, ?int $exitCode = null): string
     return $path;
 }
 
+/** A throwaway directory for a playtest's console and log, removed after the test whatever its outcome. */
+function playtestScratch(): string
+{
+    $scratch = rememberTemporaryProject(sys_get_temp_dir() . '/' . uniqid('ichiloto-playtest-run-', true));
+    mkdir($scratch);
+
+    return $scratch;
+}
+
 function playtestProject(): string
 {
     $root = makeTemporaryProject();
@@ -256,50 +265,53 @@ it('carries the player settings into the playtest and leaves the saves behind', 
 
 it('runs a playtest in the background with its renderer and stops the whole game', function (): void {
     $root = playtestProject();
-    $scratch = sys_get_temp_dir() . '/' . uniqid('ichiloto-playtest-run-', true);
-    mkdir($scratch);
+    $scratch = playtestScratch();
     $overlay = PlaytestOverlay::create($root, 'test-map', 2, 3);
     $run = (new PlaytestLauncher(writeFakeConsole($scratch)))->start($overlay, 'gpui', $scratch . '/play.log');
 
-    $deadline = microtime(true) + 5;
-    while (! str_contains((string) @file_get_contents($scratch . '/play.log'), 'play') && microtime(true) < $deadline) {
-        usleep(20000);
+    try {
+        $deadline = microtime(true) + 5;
+        while (! str_contains((string) @file_get_contents($scratch . '/play.log'), 'play') && microtime(true) < $deadline) {
+            usleep(20000);
+        }
+        $pid = $run->getProcessId();
+        $children = trim((string) shell_exec('pgrep -P ' . $pid));
+
+        expect($run->isRunning())->toBeTrue()
+            ->and(file_get_contents($scratch . '/play.log'))->toContain('play --no-tmux --no-interaction --renderer=gpui -d ' . $overlay->root)
+            ->and($children)->not->toBe('');
+
+        $run->stop();
+        usleep(100000);
+        expect($run->isRunning())->toBeFalse()
+            ->and($run->wasStopped())->toBeTrue()
+            ->and(is_dir($overlay->root))->toBeFalse()
+            // The child the play command started went with it.
+            ->and(trim((string) shell_exec('ps -p ' . (int) $children . ' -o pid=')))->toBe('');
+    } finally {
+        // A failed expectation still stops the game it started and takes its overlay with it.
+        $run->stop();
+        $overlay->destroy();
     }
-    $pid = $run->getProcessId();
-    $children = trim((string) shell_exec('pgrep -P ' . $pid));
-
-    expect($run->isRunning())->toBeTrue()
-        ->and(file_get_contents($scratch . '/play.log'))->toContain('play --no-tmux --no-interaction --renderer=gpui -d ' . $overlay->root)
-        ->and($children)->not->toBe('');
-
-    $run->stop();
-    usleep(100000);
-    expect($run->isRunning())->toBeFalse()
-        ->and($run->wasStopped())->toBeTrue()
-        ->and(is_dir($overlay->root))->toBeFalse()
-        // The child the play command started went with it.
-        ->and(trim((string) shell_exec('ps -p ' . (int) $children . ' -o pid=')))->toBe('');
-
-    removeDirectoryRecursively($root);
-    removeDirectoryRecursively($scratch);
 });
 
 it('reports how a failed playtest ended and removes its overlay', function (): void {
     $root = playtestProject();
-    $scratch = sys_get_temp_dir() . '/' . uniqid('ichiloto-playtest-run-', true);
-    mkdir($scratch);
+    $scratch = playtestScratch();
     $overlay = PlaytestOverlay::create($root, 'test-map', 0, 0);
     $run = (new PlaytestLauncher(writeFakeConsole($scratch, 3)))->start($overlay, 'gpui', $scratch . '/play.log');
 
-    $deadline = microtime(true) + 5;
-    while ($run->isRunning() && microtime(true) < $deadline) {
-        usleep(20000);
+    try {
+        $deadline = microtime(true) + 5;
+        while ($run->isRunning() && microtime(true) < $deadline) {
+            usleep(20000);
+        }
+
+        expect($run->getExitCode())->toBe(3)
+            ->and($run->readLogTail())->toContain('renderer missing')
+            ->and(is_dir($overlay->root))->toBeFalse();
+    } finally {
+        $run->stop();
+        $overlay->destroy();
     }
-
-    expect($run->getExitCode())->toBe(3)
-        ->and($run->readLogTail())->toContain('renderer missing')
-        ->and(is_dir($overlay->root))->toBeFalse();
-
-    removeDirectoryRecursively($root);
-    removeDirectoryRecursively($scratch);
 });
