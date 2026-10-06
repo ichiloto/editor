@@ -113,3 +113,29 @@ it('shows an effect\'s graphical sequence with its image track\'s art, and sets 
         ->and(fn() => $session->selectCutscenePresentation('cutscenes/summon', 0, 'graphical'))->toThrow(SessionRefusal::class)
         ->and(fn() => $session->selectCutscenePresentation('cutscenes/effect', $index, 'holographic'))->toThrow(SessionRefusal::class);
 });
+
+it('creates, duplicates and deletes summons as one undo step each, reaching disk on save', function () {
+    $root = cutsceneProject();
+    $session = EditorSession::open($root);
+    $summons = static fn(): array => $session->listDatabaseRecords('cutscenes/summon');
+
+    expect($summons())->toMatchArray(['canCreate' => true, 'canDuplicate' => true, 'canDelete' => true]);
+    $created = $session->createDatabaseRecord('cutscenes/summon', 'Ember Djinn');
+    $id = array_find($session->readDatabaseRecord('cutscenes/summon', $created['index'])['rows'], static fn(array $row): bool => trim($row['label']) === 'Id')['value'];
+    expect($id)->toBe('ember-djinn')
+        ->and($summons()['records'])->toHaveCount(2);
+
+    $session->undo();
+    expect($summons()['records'])->toHaveCount(1);
+    $session->redo();
+    $copy = $session->duplicateDatabaseRecord('cutscenes/summon', 0);
+    expect($summons()['records'])->toHaveCount(3);
+    $session->saveAll();
+    expect(is_file($root . '/assets/Cutscenes/Summons/ember-djinn/ember-djinn.data.php'))->toBeTrue()
+        ->and(is_dir($root . '/assets/Cutscenes/Summons/lantern-wisp-copy'))->toBeTrue();
+
+    $session->deleteDatabaseRecord('cutscenes/summon', $copy['index']);
+    expect($summons()['records'])->toHaveCount(2);
+    $session->saveAll();
+    expect(is_dir($root . '/assets/Cutscenes/Summons/lantern-wisp-copy'))->toBeFalse();
+});
