@@ -1228,15 +1228,15 @@ final class EditorSession
             $field = (string) ($row['key']['field'] ?? '');
             if (preg_match('/^track(\d+)(Id|Type|Presentation)$/', $field, $match) === 1) {
                 $tracks[(int) $match[1]][strtolower($match[2])] = (string) $row['value'];
-            } elseif (preg_match('/^track(\d+)(Asset|Sheetcolumns|Sheetrows|Attachment|Pivot)$/', $field, $match) === 1) {
-                // An image track's art, and the keys that edit where it sits on its anchor.
-                $art = ['Asset' => 'asset', 'Sheetcolumns' => 'columns', 'Sheetrows' => 'rows', 'Attachment' => 'attachment', 'Pivot' => 'pivot'][$match[2]];
+            } elseif (preg_match('/^track(\d+)(Asset|Sheetcolumns|Sheetrows|Fit|Attachment|Pivot)$/', $field, $match) === 1) {
+                // An image track's art, and the keys that edit how it fills its cells and where it sits on its anchor.
+                $art = ['Asset' => 'asset', 'Sheetcolumns' => 'columns', 'Sheetrows' => 'rows', 'Fit' => 'fit', 'Attachment' => 'attachment', 'Pivot' => 'pivot'][$match[2]];
                 $tracks[(int) $match[1]]['art'][$art] = in_array($art, ['columns', 'rows'], true) ? max(1, (int) $row['value']) : (string) ($row['raw'] ?? $row['value']);
-                if (in_array($art, ['attachment', 'pivot'], true)) {
+                if (in_array($art, ['fit', 'attachment', 'pivot'], true)) {
                     $tracks[(int) $match[1]]['art'][$art . 'Key'] = $row['key'];
                 }
-                if ($art === 'attachment') {
-                    $tracks[(int) $match[1]]['art']['attachmentOptions'] = array_values(array_filter($row['options'] ?? [], static fn(mixed $option): bool => $option !== ''));
+                if (in_array($art, ['fit', 'attachment'], true)) {
+                    $tracks[(int) $match[1]]['art'][$art . 'Options'] = array_values(array_filter($row['options'] ?? [], static fn(mixed $option): bool => $option !== ''));
                 }
             } elseif (preg_match('/^track(\d+)Keyframe(\d+)(Frame|Duration|SourceFrame)$/', $field, $match) === 1) {
                 $name = lcfirst($match[3]);

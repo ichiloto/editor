@@ -2040,6 +2040,8 @@ command's result lands: at the `end`, a `frame` or a `cue`) and
 for a battle stroke drawn one way, `Facing` (`west` or `east`; the empty
 choice removes it, and the stroke stays as drawn). An image track names its
 PNG through the asset picker, its sheet columns and rows, its cell size, its
+`Fit` (`stretch` fills the cells; `contain` keeps the sheet cell's own
+proportions inside them; the empty choice removes it, so it stretches), its
 depth and, in battle, its `Attachment` (`center`, `head` or `ground` on the
 battler; the empty choice removes it, so the image is centred) and `Pivot`
 (the point of the sheet cell that sits there, `x, y` from 0 to 1, such as

@@ -9,6 +9,7 @@ use Ichiloto\Editor\Inspector\InputControlType;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Engine\Animations\Timelines\EffectCadence;
 use Ichiloto\Engine\Animations\Timelines\EffectImageAttachment;
+use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasImageFit;
 use Ichiloto\Engine\Animations\Timelines\EffectTimelineLibrary;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicCommandSchema;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandRegistry;
@@ -615,6 +616,10 @@ final class CutsceneSchemas
             new RecordField('sheet.rows', 'Sheet Rows', InputControlType::INTEGER, displayDefault: '1'),
             new RecordField('cells.width', 'Cell Width', InputControlType::INTEGER, displayDefault: '1'),
             new RecordField('cells.height', 'Cell Height', InputControlType::INTEGER, displayDefault: '1'),
+            // How a sheet cell fills its cells: stretched to them, or kept to its
+            // own proportions inside them (the empty choice removes it: stretched).
+            new RecordField('fit', 'Fit', options: ['', ...array_map(static fn(CanvasImageFit $fit): string => $fit->value, CanvasImageFit::cases())],
+                removeWhenEmpty: true, displayDefault: '(' . CanvasImageFit::STRETCH->value . ')'),
             new RecordField('depth', 'Depth', options: ['front', 'behind'], removeWhenEmpty: true, displayDefault: 'front'),
             // Battle only: the battler point the image is placed on (the empty
             // choice removes it: its centre), and the point of the sheet cell that

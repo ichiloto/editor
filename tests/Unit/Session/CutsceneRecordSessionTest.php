@@ -165,3 +165,33 @@ it('authors a summon image track with the effect image fields, compiled per rend
     writeTilesetTestPng($root . '/assets/Graphics/Summons/Wisp.png', 16, 8);
     expect($asset->compiledSummon(Ichiloto\Engine\Animations\Timelines\EffectPresentation::GRAPHICAL)->fps)->toBe(12);
 });
+
+it('sets how an image track fills its cells, one undo step, keeping the timeline\'s own source', function () {
+    $root = cutsceneProject();
+    $file = $root . '/assets/Cutscenes/Summons/lantern-wisp/lantern-wisp.timeline.php';
+    // Written as authors write tracks: the keys run on from the first line and the bracket closes the last.
+    file_put_contents($file, str_replace(["  'lengthFrames' => 24,", "    ['type' => 'text', 'id' => 'name',"], ["  'lengthFrames' => 24,\n  'restFrame' => 0,",
+        "    ['type' => 'image', 'id' => 'wisp-art', 'asset' => 'Graphics/Summons/Wisp.png', 'sheet' => ['columns' => 2, 'rows' => 1],\n"
+        . "      'keyframes' => [['frame' => 0, 'sourceFrame' => 0]]],\n    ['type' => 'text', 'id' => 'name',"], (string) file_get_contents($file)));
+    mkdir($root . '/assets/Graphics/Summons', 0o777, true);
+    writeTilesetTestPng($root . '/assets/Graphics/Summons/Wisp.png', 16, 8);
+    $session = EditorSession::open($root);
+    $art = fn(): array => array_find($session->describeCutsceneTimeline('cutscenes/summon', 0)['tracks'], static fn(array $track): bool => $track['id'] === 'wisp-art')['art'];
+
+    // Unset reads as the default it falls back to, in brackets.
+    expect($art()['fit'])->toBe('(stretch)')
+        ->and($art()['fitOptions'])->toBe(['stretch', 'contain']);
+    $session->applyDatabaseRecord('cutscenes/summon', 0, $art()['fitKey'], 'contain');
+    expect($art()['fit'])->toBe('contain');
+    $session->undo();
+    expect($art()['fit'])->toBe('(stretch)');
+    $session->redo();
+    $session->saveAll();
+
+    $written = (string) file_get_contents($file);
+    expect($written)->toContain('// The wisp itself.', "'keyframes' => [['frame' => 0, 'sourceFrame' => 0]],\n      'fit' => 'contain'],")
+        ->and($session->listUnsavedChanges())->toBe([]);
+    $session->applyDatabaseRecord('cutscenes/summon', 0, $art()['fitKey'], '');
+    $session->saveAll();
+    expect((string) file_get_contents($file))->not->toContain("'fit'")->toContain('// The wisp itself.');
+});

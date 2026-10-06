@@ -781,6 +781,22 @@ final class PhpArraySourceDocument
             return [$expansion];
         }
 
+        $closingLine = $this->lineStartOf($array->bodyEnd);
+        $last = $array->entries === [] ? null : $array->entries[count($array->entries) - 1];
+
+        if ($last !== null && $lastSurviving === $last && $last->end > $closingLine) {
+            // The closing bracket shares the last entry's line, so the
+            // start of that line is ahead of the entry: the lines follow the
+            // entry instead, and the bracket stays where it is written,
+            // after a comma only when the entry had one.
+            $trailingComma = $last->separatorEnd !== $last->end;
+            $body = substr(rtrim($lines, "\n"), 0, -1) . ($trailingComma ? ',' : '');
+
+            return $trailingComma
+                ? [[$last->separatorEnd, $last->separatorEnd, "\n" . $body]]
+                : [[$last->end, $last->end, ",\n" . $body]];
+        }
+
         $edits = [];
 
         if ($lastSurviving !== null && $lastSurviving->separatorEnd === $lastSurviving->end) {
@@ -788,7 +804,7 @@ final class PhpArraySourceDocument
             $edits[] = [$lastSurviving->end, $lastSurviving->end, ','];
         }
 
-        $edits[] = [$this->lineStartOf($array->bodyEnd), $this->lineStartOf($array->bodyEnd), $lines];
+        $edits[] = [$closingLine, $closingLine, $lines];
 
         return $edits;
     }

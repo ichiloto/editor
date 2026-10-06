@@ -94,3 +94,15 @@ it('inserts into an array that holds only a comment, after the comment', functio
         ->and(insertEntry($source, ['inline'], 0, null, "'v1'"))
         ->toBe("<?php\n\nreturn [\n    'migrations' => [\n        // None yet.\n    ],\n    'inline' => [/* none */ 'v1'],\n];\n");
 });
+
+it('appends after the last entry when the closing bracket shares its line, keeping the bracket and the comma style', function (string $comma) {
+    $source = "<?php\nreturn [\n  'tracks' => [\n    ['type' => 'image', 'sheet' => ['columns' => 2],\n      'keyframes' => [['frame' => 0]]{$comma}],\n    ['type' => 'text'],\n  ],\n];\n";
+    $old = eval('?>' . $source);
+    $new = $old;
+    $new['tracks'][0]['fit'] = 'contain';
+    $new['tracks'][0]['depth'] = 'behind';
+    $written = ArraySourceWriter::rewrite(PhpArraySourceDocument::parse($source), $old, $new)->source;
+
+    expect($written)->toBe("<?php\nreturn [\n  'tracks' => [\n    ['type' => 'image', 'sheet' => ['columns' => 2],\n      'keyframes' => [['frame' => 0]],\n      'fit' => 'contain',\n      'depth' => 'behind'{$comma}],\n    ['type' => 'text'],\n  ],\n];\n")
+        ->and(eval('?>' . $written))->toBe($new);
+})->with(['without a trailing comma' => '', 'with a trailing comma' => ',']);
