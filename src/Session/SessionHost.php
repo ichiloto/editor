@@ -329,6 +329,9 @@ final class SessionHost
                 in_array($params['direction'] ?? null, ['up', 'down'], true) ? $params['direction'] : throw new InvalidRequest('"direction" must be "up" or "down".'),
             ),
             'database.save' => $session->saveDatabase(self::requireString($params, 'category')),
+            'cutscenes.timeline' => $session->describeCutsceneTimeline(self::requireString($params, 'category'), self::requireInt($params, 'index')),
+            'cutscenes.preview' => $session->readCutscenePreview(self::requireString($params, 'category'), self::requireInt($params, 'index'),
+                self::requireInt($params, 'frame'), self::requireInt($params, 'width'), self::requireInt($params, 'height')),
             'references.list' => $session->listReferences(
                 is_string($params['map'] ?? null) ? $params['map'] : null,
                 self::requireString($params, 'category'),

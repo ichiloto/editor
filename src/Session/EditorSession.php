@@ -7,14 +7,17 @@ namespace Ichiloto\Editor\Session;
 use Ichiloto\Editor\Backup\BackupSettings;
 use Ichiloto\Editor\Backup\BackupWriter;
 use Ichiloto\Editor\Canvas\CanvasEditor;
+use Ichiloto\Editor\Cutscenes\CutsceneAsset;
 use Ichiloto\Editor\Cutscenes\CutsceneRecordCategory;
 use Ichiloto\Editor\Cutscenes\CutsceneType;
+use Ichiloto\Editor\Cutscenes\Preview\TimelinePreviewSession;
 use Ichiloto\Editor\ProjectDirectoryContext;
 use Ichiloto\Editor\Canvas\PieceRole;
 use Ichiloto\Editor\Database\ConditionCodec;
 use Ichiloto\Editor\Database\ConditionEditor;
 use Ichiloto\Editor\Animations\LegacyAnimationConversion;
 use Ichiloto\Editor\Database\DatabaseCatalog;
+use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Engine\Animations\Timelines\EffectCadence;
 use Ichiloto\Editor\Database\ElementAffinityCodec;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
@@ -79,6 +82,7 @@ use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasImage;
 use Closure;
 use InvalidArgumentException;
 use RuntimeException;
+use Throwable;
 use WeakReference;
 
 /**
@@ -1194,6 +1198,88 @@ final class EditorSession
                 array_values($affinities),
             ),
         ];
+    }
+
+    /**
+     * A summon's or effect's timeline as a timeline editor lays it out: its
+     * frames per second and length, each track with its keyframes' frames and
+     * durations, and the cues, each value with the record row key that edits
+     * it through `database.apply`, as the record grid edits it. A cinematic is
+     * a command tree, not a timeline.
+     *
+     * @return array{fps: int, lengthFrames: int, tracks: list<array<string, mixed>>, cues: list<array<string, mixed>>}
+     * @throws SessionRefusal When the record is not a summon or effect the project has.
+     */
+    public function describeCutsceneTimeline(string $category, int $index): array
+    {
+        $asset = $this->requireTimelineCutscene($category, $index);
+        $tracks = $cues = [];
+        foreach ($this->readDatabaseRecord($category, $index, ['tracks'])['rows'] as $row) {
+            $field = (string) ($row['key']['field'] ?? '');
+            if (preg_match('/^track(\d+)(Id|Type|Presentation)$/', $field, $match) === 1) {
+                $tracks[(int) $match[1]][strtolower($match[2])] = (string) $row['value'];
+            } elseif (preg_match('/^track(\d+)Keyframe(\d+)(Frame|Duration)$/', $field, $match) === 1) {
+                $tracks[(int) $match[1]]['keyframes'][(int) $match[2]][strtolower($match[3])] = (int) $row['value'];
+                $tracks[(int) $match[1]]['keyframes'][(int) $match[2]][strtolower($match[3]) . 'Key'] = $row['key'];
+            }
+        }
+        foreach ($this->readDatabaseRecord($category, $index, ['cues'])['rows'] as $row) {
+            if (preg_match('/^cue(\d+)(Id|Frame|Type)$/', (string) ($row['key']['field'] ?? ''), $match) === 1) {
+                $value = $match[2] === 'Frame' ? (int) $row['value'] : (string) $row['value'];
+                $cues[(int) $match[1]][strtolower($match[2])] = $value;
+                if ($match[2] === 'Frame') {
+                    $cues[(int) $match[1]]['frameKey'] = $row['key'];
+                }
+            }
+        }
+        $payload = $asset->payload();
+
+        return [
+            'fps' => (int) ($payload['fps'] ?? 0),
+            'lengthFrames' => (int) ($payload['lengthFrames'] ?? 0),
+            'tracks' => array_values(array_map(static fn(array $track): array => [...$track,
+                'keyframes' => array_values($track['keyframes'] ?? [])], $tracks)),
+            'cues' => array_values($cues),
+        ];
+    }
+
+    /**
+     * One frame of a summon or effect as its terminal presentation draws it,
+     * from the record as edited, unsaved changes included, with the cues on
+     * that frame: what a timeline editor shows at its playhead.
+     *
+     * @return array{frame: int, totalFrames: int, fps: int, lines: list<string>, cues: list<array<string, mixed>>}
+     * @throws SessionRefusal When the record is not a summon or effect, or its timeline does not compile.
+     */
+    public function readCutscenePreview(string $category, int $index, int $frame, int $width, int $height): array
+    {
+        $asset = $this->requireTimelineCutscene($category, $index);
+        try {
+            $compiled = $asset->type === CutsceneType::EFFECT
+                ? $asset->compiledEffect(EffectPresentation::TERMINAL, false)
+                : $asset->compiledSummon();
+        } catch (Throwable $failure) {
+            throw new SessionRefusal(sprintf('%s does not compile: %s', $asset->id, $failure->getMessage()), previous: $failure);
+        }
+        $preview = new TimelinePreviewSession($compiled, $asset->type === CutsceneType::EFFECT ? null : false);
+        $frame = max(0, min($frame, $preview->totalFrames() - 1));
+
+        return ['frame' => $frame, 'totalFrames' => $preview->totalFrames(), 'fps' => $preview->fps(),
+            'lines' => array_values($preview->frame(max(1, $width), max(1, $height), $frame)),
+            'cues' => array_values($preview->cuesAt($frame))];
+    }
+
+    /** A summon or effect record's asset; a cinematic is a command tree, not a timeline. */
+    private function requireTimelineCutscene(string $category, int $index): CutsceneAsset
+    {
+        $type = CutsceneType::findByRecordCategory($category);
+        if ($type === null || $type === CutsceneType::CINEMATIC) {
+            throw new SessionRefusal(sprintf('%s is not a summon or effect category.', $category));
+        }
+        $id = $this->workspace->cutscenes?->ids($type)[$index] ?? null;
+
+        return ($id === null ? null : $this->workspace->cutscenes?->find($type, $id))
+            ?? throw new SessionRefusal(sprintf('There is no %s %d.', $type->noun(), $index));
     }
 
     /**

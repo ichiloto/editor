@@ -69,3 +69,29 @@ it('lists a project reference without a map, and a summon\'s own cues from the s
         ->and(fn() => $session->listReferences(null, 'summon_cues', ['category' => 'cutscenes/summon', 'index' => 9]))
             ->toThrow(SessionRefusal::class);
 });
+
+it('describes a summon timeline with the row keys that edit it, and moves a keyframe as one undo step', function () {
+    $session = EditorSession::open(cutsceneProject());
+    $timeline = $session->describeCutsceneTimeline('cutscenes/summon', 0);
+    $keyframe = $timeline['tracks'][0]['keyframes'][0];
+
+    expect($timeline['fps'])->toBeGreaterThan(0)
+        ->and($timeline['lengthFrames'])->toBeGreaterThan(0)
+        ->and($timeline['tracks'])->not->toBe([])
+        ->and($keyframe)->toHaveKeys(['frame', 'duration', 'frameKey', 'durationKey']);
+
+    $session->applyDatabaseRecord('cutscenes/summon', 0, $keyframe['frameKey'], (string) ($keyframe['frame'] + 1));
+    expect($session->describeCutsceneTimeline('cutscenes/summon', 0)['tracks'][0]['keyframes'][0]['frame'])->toBe($keyframe['frame'] + 1);
+    $session->undo();
+    expect($session->describeCutsceneTimeline('cutscenes/summon', 0)['tracks'][0]['keyframes'][0]['frame'])->toBe($keyframe['frame'])
+        ->and(fn() => $session->describeCutsceneTimeline('cutscenes/cinematic', 0))->toThrow(SessionRefusal::class);
+});
+
+it('previews a summon frame as its terminal presentation draws it, clamped to the timeline', function () {
+    $session = EditorSession::open(cutsceneProject());
+    $preview = $session->readCutscenePreview('cutscenes/summon', 0, 9999, 40, 10);
+
+    expect($preview['frame'])->toBe($preview['totalFrames'] - 1)
+        ->and($preview['lines'])->toHaveCount(10)
+        ->and(mb_strlen($preview['lines'][0]))->toBe(40);
+});
