@@ -272,7 +272,7 @@ it('validates generic summon availability, policies, identities, and linked acti
 
     expect(issuesMentioning($issues, 'unknown condition type "lunar_phase"'))->toHaveCount(1)
         ->and(issuesMentioning($issues, 'invalid tenancy "forever"'))->toHaveCount(1)
-        ->and(issuesMentioning($issues, 'eligible character "No Such Actor"'))->toHaveCount(1)
+        ->and(issuesMentioning($issues, "Unresolved actor reference 'No Such Actor'"))->toHaveCount(1)
         ->and(issuesMentioning($issues, 'links to action "Missing Action"'))->toHaveCount(1);
 });
 

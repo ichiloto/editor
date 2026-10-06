@@ -78,8 +78,17 @@ final class ActorReferenceInventory
                 }
             }
         }
+        // A summon's character wielders, which the Engine matches by stable actor id.
+        if (str_starts_with($relativePath, 'assets/Cutscenes/Summons/') && str_ends_with($relativePath, '.data.php')) {
+            $wielders = $payload['wielders'] ?? null;
+            if (is_array($wielders) && is_array($wielders['characters'] ?? null)) {
+                foreach ($wielders['characters'] as $index => $id) {
+                    $references[] = ['path' => ['wielders', 'characters', $index], 'reference' => $id, 'kind' => 'value', 'caseInsensitive' => true];
+                }
+            }
+        }
         // Troops use enemy IDs; event actorId/actor target staged subjects.
-        // Display names and summon wielder names are not this identity contract.
+        // Display names are not this identity contract.
         return $references;
     }
 
@@ -98,11 +107,11 @@ final class ActorReferenceInventory
             'assets/Data/Presentation/menus.php'] as $relative) {
             if (is_file($root . '/' . $relative)) { $paths[] = $root . '/' . $relative; }
         }
-        foreach (['assets/Data/Skits', 'assets/Events', 'assets/Maps'] as $directory) {
+        foreach (['assets/Data/Skits', 'assets/Events', 'assets/Maps', 'assets/Cutscenes/Summons'] as $directory) {
             if (! is_dir($root . '/' . $directory)) { continue; }
             $files = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($root . '/' . $directory, \FilesystemIterator::SKIP_DOTS));
             foreach ($files as $file) {
-                if ($file->isFile() && str_ends_with($file->getFilename(), $directory === 'assets/Maps' ? '.data.php' : '.php')) {
+                if ($file->isFile() && str_ends_with($file->getFilename(), in_array($directory, ['assets/Maps', 'assets/Cutscenes/Summons'], true) ? '.data.php' : '.php')) {
                     $paths[] = $file->getPathname();
                 }
             }

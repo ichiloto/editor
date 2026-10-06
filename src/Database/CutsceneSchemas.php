@@ -138,7 +138,7 @@ final class CutsceneSchemas
                 // Wielder policy.
                 new RecordField('wielders.mode', 'Wielders', options: ['all', 'roles', 'characters'], removeWhenEmpty: true, displayDefault: '(omitted: open)'),
                 new RecordField('wielders.roles', 'Wielder Roles', codec: RecordFieldCodec::CSV_LIST, reference: 'classes', removeWhenEmpty: true),
-                new RecordField('wielders.characters', 'Wielder Characters', codec: RecordFieldCodec::CSV_LIST, reference: 'actors', removeWhenEmpty: true),
+                new RecordField('wielders.characters', 'Wielder Characters', codec: RecordFieldCodec::CSV_LIST, reference: 'actor_ids', removeWhenEmpty: true),
                 new RecordField('wielders.tenancy', 'Tenancy', options: ['shared', 'exclusive'], removeWhenEmpty: true, displayDefault: 'shared'),
                 // Playback and presentation.
                 new RecordField('playback.defaultSpeed', 'Default Speed', InputControlType::FLOAT, removeWhenEmpty: true, displayDefault: '1'),

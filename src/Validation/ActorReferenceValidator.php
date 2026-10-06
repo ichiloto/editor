@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Validation;
 
 use Ichiloto\Editor\Actors\ActorReferenceInventory;
+use Ichiloto\Editor\Cutscenes\CutsceneType;
 use Ichiloto\Editor\Database\PhpDataFile;
 use Ichiloto\Editor\ProjectWorkspace;
 use Throwable;
@@ -36,6 +37,13 @@ final class ActorReferenceValidator
         }
         foreach ($workspace->maps as $map) {
             $payloads[$map->dataPath] = $map->getEditableData();
+        }
+        // Summons as they stand, unsaved edits included; their wielders name actors.
+        $root = rtrim($workspace->projectRoot, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
+        foreach ($workspace->cutscenes?->assets(CutsceneType::SUMMON) ?? [] as $summon) {
+            if (! $summon->isDeleted() && str_starts_with($summon->dataPath(), $root)) {
+                $payloads[substr($summon->dataPath(), strlen($root))] = $summon->payload();
+            }
         }
         $issues = [];
         foreach (['battle', 'dialogue', 'menus'] as $name) {

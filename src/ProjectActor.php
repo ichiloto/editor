@@ -337,6 +337,17 @@ final class ProjectActor
     }
 
     /**
+     * Returns the id the runtime knows this actor by: its declared id, or,
+     * for a legacy asset that declares none, its authored name, which the
+     * Engine freezes as a provisional id until the identity migration writes
+     * one. Never the display name of an actor that declares an id.
+     */
+    public function getRuntimeId(): string
+    {
+        return array_key_exists('id', $this->getData()) ? $this->getDefinitionId() : trim($this->getName());
+    }
+
+    /**
      * Returns whether the project declares a durable id of its own.
      *
      * @return bool True when it does.

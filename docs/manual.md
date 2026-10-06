@@ -1961,7 +1961,9 @@ strengths, weaknesses, free-form attributes, authoring metadata),
 **Availability** (conditions through the shared condition editor; an
 omitted policy is open and is written as nothing), **Wielders** (mode
 `all`, `roles` or `characters`, with roles picked from classes and
-characters from actors; tenancy `shared` or `exclusive`), **Playback**
+characters picked by stable actor id, as the battle matches them, so
+renaming an actor never changes who may call it; tenancy `shared` or
+`exclusive`), **Playback**
 (default speed, allow skip, loop preview, transitions in and out, effect
 timing by `end`, `cue` or `frame`, target presentation) and **Timeline**
 (format version, FPS, length in frames, editor metadata, and the Tracks
@@ -2020,8 +2022,8 @@ multi-pick over the project's summons where each pick toggles a member in
 or out, undoable and dirty-tracked, written as a list of stable ids (and
 removed entirely when emptied). Under it, one verdict row per assignment,
 judged by the same rules the validator applies: the summon must exist, the
-actor must be eligible under its wielder policy (by character, by role, or
-open to all), a story-locked summon cannot be a starting assignment, each
+actor must be eligible under its wielder policy (by character id, by role,
+or open to all), a story-locked summon cannot be a starting assignment, each
 id appears once, and an exclusive summon has at most one starting holder
 across the cast.
 

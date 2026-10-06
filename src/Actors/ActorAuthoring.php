@@ -665,7 +665,7 @@ final class ActorAuthoring
             }
         }
 
-        foreach ($diagnostics->forActor($actor->getName(), $actor->getClassName(), $assignments) as $row) {
+        foreach ($diagnostics->forActor($actor->getRuntimeId(), $actor->getClassName(), $assignments) as $row) {
             $verdict = SummonAssignmentDiagnostics::describe($row);
             $id = strtolower($row['id']);
 

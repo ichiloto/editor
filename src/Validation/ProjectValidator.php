@@ -1407,10 +1407,6 @@ class ProjectValidator
       'quests' => $catalog->valuesFor('quests'),
       'inventory' => $catalog->valuesFor('inventory'),
     ];
-    $actorNames = array_map(
-      static fn(\Ichiloto\Editor\ProjectActor $actor): string => $actor->getName(),
-      $workspace->actorDatabase->getActors(),
-    );
     $skillNames = $workspace->getSkillNames();
 
     $definitions = [];
@@ -1457,7 +1453,7 @@ class ProjectValidator
       $issues = [
         ...$issues,
         ...$this->checkSummonAvailability($data, $where, $known),
-        ...$this->checkSummonWielders($data, $where, $actorNames),
+        ...$this->checkSummonWielders($data, $where),
       ];
     }
 
@@ -1525,8 +1521,13 @@ class ProjectValidator
     return [...$issues, ...$this->checkConditions($conditions, $where, $known)];
   }
 
-  /** @return Issue[] */
-  protected function checkSummonWielders(array $data, string $where, array $actorNames): array
+  /**
+   * The wielder policy's shape. Which actors it names is checked with every
+   * other actor reference, by stable id, by ActorReferenceValidator.
+   *
+   * @return Issue[]
+   */
+  protected function checkSummonWielders(array $data, string $where): array
   {
     if (! array_key_exists('wielders', $data)) {
       return [];
@@ -1557,18 +1558,6 @@ class ProjectValidator
 
       if (! is_array($characters) || $characters === []) {
         $issues[] = Issue::error($where, 'Its character eligibility list is empty or malformed.', 'Name at least one project actor.');
-      } else {
-        foreach ($characters as $character) {
-          $name = is_string($character) ? trim($character) : '';
-
-          if ($name === '' || ! in_array($name, $actorNames, true)) {
-            $issues[] = Issue::error(
-              $where,
-              sprintf('Its eligible character "%s" does not exist.', $name !== '' ? $name : '(malformed)'),
-              'Use an exact actor identity from assets/Data/Actors.',
-            );
-          }
-        }
       }
     }
 
@@ -1607,7 +1596,7 @@ class ProjectValidator
       $where = 'actor ' . $actor->getName();
       $reported = [];
 
-      foreach ($diagnostics->forActor($actor->getName(), $actor->getClassName(), $actor->getSummons()) as $row) {
+      foreach ($diagnostics->forActor($actor->getRuntimeId(), $actor->getClassName(), $actor->getSummons()) as $row) {
         foreach ($row['problems'] as $problem) {
           // One assignment list reports duplicates once, as before.
           if (str_starts_with($problem['message'], 'Its summon assignments contain duplicate ids') && isset($reported['duplicates'])) {

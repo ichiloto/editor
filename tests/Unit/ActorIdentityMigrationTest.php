@@ -378,3 +378,67 @@ SOURCE;
         ["'actor' => 'hero'", "        'hero' => ['artwork' => ['image' => 'Graphics/Kaelion/Idle.png']"], $battlers))
         ->and(ActorIdentityMigration::planProject($root)->getChangedPaths())->toBe([]);
 });
+
+/** A summon whose wielder policy names actors, beside the other policy fields a migration must leave alone. */
+function writeWielderSummon(string $root, string $characters): string
+{
+    $directory = $root . '/assets/Cutscenes/Summons/ember';
+    @mkdir($directory, 0777, true);
+    file_put_contents($directory . '/ember.timeline.php', "<?php return ['fps' => 12, 'lengthFrames' => 1, 'tracks' => [], 'cues' => []];");
+    $path = $directory . '/ember.data.php';
+    file_put_contents($path, "<?php\n// Keep this summon header.\nreturn ['id' => 'ember', 'name' => 'Ember', 'linkedActionId' => 'Fireball',\n    'wielders' => ['mode' => 'characters', 'characters' => [{$characters}], 'tenancy' => 'exclusive']];\n");
+
+    return $path;
+}
+
+it('repairs summon wielders to stable ids, source preserving, leaving mode and tenancy as they are', function () {
+    [$root, $actorPath] = createLegacyActorProject();
+    file_put_contents($actorPath, "<?php return ['data' => ['id' => 'hero', 'name' => 'Kaelion']];");
+    $summon = writeWielderSummon($root, "/* lead */ 'Kaelion'");
+    $before = sourceHashTree($root);
+
+    $plan = ActorIdentityMigration::planProject($root);
+    expect($plan->getChangedPaths())->toContain($summon)->and(sourceHashTree($root))->toBe($before);
+    $plan->apply();
+
+    $written = (string) file_get_contents($summon);
+    expect($written)->toContain('// Keep this summon header.', "/* lead */ 'hero'", "'mode' => 'characters'", "'tenancy' => 'exclusive'")
+        ->and(ActorIdentityMigration::planProject($root)->getChangedPaths())->toBe([])
+        ->and(new \Ichiloto\Editor\Validation\ActorReferenceValidator()->validate(\Ichiloto\Editor\ProjectWorkspace::fromProject($root)))->toBe([]);
+    $plan->revert();
+    expect(sourceHashTree($root))->toBe($before);
+});
+
+it('refuses a summon wielder two actors are displayed as, and never hands one actor\'s id to another', function () {
+    [$root, $actorPath] = createLegacyActorProject();
+    file_put_contents($actorPath, "<?php return ['data' => ['id' => 'first', 'name' => 'Twin']];");
+    file_put_contents(dirname($actorPath) . '/Second.php', "<?php return ['data' => ['id' => 'second', 'name' => 'Twin']];");
+    $summon = writeWielderSummon($root, "'Twin'");
+    $before = sourceHashTree($root);
+    expect(fn() => ActorIdentityMigration::planProject($root))->toThrow(RuntimeException::class, 'ambiguous')
+        ->and(sourceHashTree($root))->toBe($before);
+
+    // An explicit id wins over another actor displayed under the same text.
+    file_put_contents(dirname($actorPath) . '/Third.php', "<?php return ['data' => ['id' => 'Twin', 'name' => 'Modern']];");
+    expect(ActorIdentityMigration::planProject($root)->getChangedPaths())->not->toContain($summon);
+});
+
+it('judges summon eligibility by stable id, so a display rename keeps a holder and a shared name grants nothing', function () {
+    $diagnostics = new \Ichiloto\Editor\Database\SummonAssignmentDiagnostics([
+        'ember' => ['id' => 'ember', 'wielders' => ['mode' => 'characters', 'characters' => ['Hero'], 'tenancy' => 'exclusive']],
+    ]);
+    [$root, $actorPath] = createLegacyActorProject();
+    file_put_contents($actorPath, "<?php return ['data' => ['id' => 'hero', 'name' => 'Kaelion Renamed']];");
+    file_put_contents(dirname($actorPath) . '/Impostor.php', "<?php return ['data' => ['id' => 'impostor', 'name' => 'Hero']];");
+    file_put_contents(dirname($actorPath) . '/Legacy.php', "<?php return ['data' => ['name' => 'Hero']];");
+    $actors = [];
+    foreach (ProjectActorDatabase::fromProject($root)->getActors() as $actor) {
+        $actors[$actor->getName() . '/' . ($actor->getDefinitionId() ?: 'legacy')] = $actor->getRuntimeId();
+    }
+
+    expect($diagnostics->forActor($actors['Kaelion Renamed/hero'], 'Vanguard', ['ember'])[0]['problems'])->toBe([])
+        ->and($diagnostics->forActor($actors['Hero/impostor'], 'Vanguard', ['ember'])[0]['problems'])->not->toBe([])
+        // A legacy actor declaring no id is known by its authored name until the migration writes one.
+        ->and($actors['Hero/legacy'])->toBe('Hero')
+        ->and($diagnostics->forActor($actors['Hero/legacy'], 'Vanguard', ['ember'])[0]['problems'])->toBe([]);
+});
