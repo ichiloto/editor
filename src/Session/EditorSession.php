@@ -118,8 +118,12 @@ final class EditorSession
     /** The battle test running in its own window, and the troop it fights. */
     private ?PlaytestRun $battleTestRun = null;
     private ?string $battleTestTroop = null;
-    /** The summon battle preview last built, and what it was built from, so seeking reuses it until either changes. */
-    private ?array $summonBattlePreview = null;
+    /**
+     * The summon battle previews last built, by presentation, and what each was built from, so seeking reuses them until either changes.
+     *
+     * @var array<string, array{key: string, preview: SummonBattlePreview}>
+     */
+    private array $summonBattlePreviews = [];
     /** The cinematic previewed as the terminal plays it, and which one it is. */
     private ?CinematicPreviewSession $cinematicPreview = null;
     private ?string $cinematicPreviewId = null;
@@ -1414,9 +1418,13 @@ final class EditorSession
      * included, cast by the first member of the battle test party (else the
      * starting party) its wielder policy allows, at the targets its linked
      * action takes in the battle test troop (else the first troop), over the
-     * battle test arena, with the project's battle pacing. The graphical
-     * canvas comes with the terminal arena's lines, so both renderers are
-     * previewed from the one command. Enemies and the party are read as
+     * battle test arena, with the project's battle pacing, in one
+     * presentation: graphical, its canvas with the terminal arena's lines
+     * from the paired lane, or terminal alone, at the terminal sequence's own
+     * cadence, reading no graphical image. A frame of the summon's own
+     * timeline may be asked for instead of a command frame; each frame says
+     * which of the summon's frames it draws, so the timeline and the battle
+     * share one playhead. Enemies and the party are read as
      * saved; nothing is resolved, spent or played aloud, and nothing is
      * written. Seeking reuses the preview until the summon or its battle
      * changes.
@@ -1424,12 +1432,15 @@ final class EditorSession
      * @return array<string, mixed>
      * @throws SessionRefusal When the summon does not compile, the battle cannot be set up or the frame is outside the command.
      */
-    public function readSummonBattlePreview(int $index, int $frame, bool $reducedMotion = false): array
+    public function readSummonBattlePreview(int $index, int $frame, bool $reducedMotion = false,
+        EffectPresentation $presentation = EffectPresentation::GRAPHICAL, ?int $authoredFrame = null): array
     {
         $asset = $this->requireTimelineCutscene(CutsceneType::SUMMON->getRecordCategory(), $index);
+        $graphic = $presentation === EffectPresentation::GRAPHICAL;
         try {
             $definition = $asset->summonDefinition();
-            $graphical = $asset->compiledSummon(EffectPresentation::GRAPHICAL);
+            // The terminal arena plays the terminal compile alone, which needs no graphical image.
+            $graphical = $graphic ? $asset->compiledSummon(EffectPresentation::GRAPHICAL) : null;
             $terminal = $asset->compiledSummon(EffectPresentation::TERMINAL);
         } catch (Throwable $failure) {
             throw new SessionRefusal(sprintf('%s does not compile: %s', $asset->id, $failure->getMessage()), previous: $failure);
@@ -1438,15 +1449,18 @@ final class EditorSession
         $troop = $this->readPreviewTroop($entry);
         $config = $this->workspace->config?->getRecord('ui.battle')->get('value');
         $battleUi = is_array($config) ? $config : [];
-        $key = hash('xxh128', serialize([$asset->id, $definition->toDataArray(), $graphical->toArray(), $terminal->toArray(),
-            $entry, $this->readStartingPartyReferences(), $troop, $battleUi, $this->readProposedBattlerBindings()]));
-        if (($this->summonBattlePreview['key'] ?? null) !== $key) {
-            $catalog = $this->requireBattleLayoutCatalog('preview summons on');
-            $this->summonBattlePreview = ['key' => $key, 'preview' => ProjectDirectoryContext::run($this->workspace->projectRoot,
+        $key = hash('xxh128', serialize([$asset->id, $definition->toDataArray(), $graphical?->toArray(), $terminal->toArray(),
+            $entry, $this->readStartingPartyReferences(), $troop, $battleUi, $graphic ? $this->readProposedBattlerBindings() : null]));
+        if (($this->summonBattlePreviews[$presentation->value]['key'] ?? null) !== $key) {
+            // The terminal arena needs no graphical layout, and reads no image.
+            $catalog = $graphic ? $this->requireBattleLayoutCatalog('preview summons on') : null;
+            $this->summonBattlePreviews[$presentation->value] = ['key' => $key, 'preview' => ProjectDirectoryContext::run($this->workspace->projectRoot,
                 fn(): SummonBattlePreview => $this->createSummonBattlePreview($definition, $graphical, $terminal, $entry, $troop,
-                    BattlePacing::fromBattleUiConfig($battleUi), $catalog))];
+                    BattlePacing::fromBattleUiConfig($battleUi), $catalog, $presentation))];
         }
-        $preview = $this->summonBattlePreview['preview'];
+        $preview = $this->summonBattlePreviews[$presentation->value]['preview'];
+        // A frame of the summon's own timeline is drawn where the battle plays it.
+        $frame = $authoredFrame === null ? $frame : $preview->findCommandFrame($authoredFrame);
         try {
             $read = $preview->readFrame(max(0, min($frame, $preview->totalFrames - 1)), $reducedMotion);
         } catch (Throwable $failure) {
@@ -1466,8 +1480,9 @@ final class EditorSession
      * @param array{name: string, data: array<string, mixed>} $troop
      * @throws SessionRefusal When the battle cannot be set up or the summon cannot be cast in it.
      */
-    private function createSummonBattlePreview(SummonCutsceneDefinition $definition, SummonCompiledCutscene $graphical,
-        SummonCompiledCutscene $terminal, array $entry, array $troop, BattlePacing $pacing, BattlePresentationCatalog $catalog): SummonBattlePreview
+    private function createSummonBattlePreview(SummonCutsceneDefinition $definition, ?SummonCompiledCutscene $graphical,
+        SummonCompiledCutscene $terminal, array $entry, array $troop, BattlePacing $pacing, ?BattlePresentationCatalog $catalog,
+        EffectPresentation $presentation): SummonBattlePreview
     {
         $actors = $this->workspace->actorDatabase->createActorStore();
         $skills = $this->workspace->loadSkillCatalog();
@@ -1479,7 +1494,7 @@ final class EditorSession
             $battle = new BattleConfig($party, Troop::fromArray($troop['data']), settings: $setup->getBattleSettings());
 
             return SummonBattlePreview::create($definition, $graphical, $terminal, $battle, $skills, $pacing, $catalog,
-                $this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets');
+                $this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets', $presentation);
         } catch (SessionRefusal $refusal) {
             throw $refusal;
         } catch (Throwable $failure) {

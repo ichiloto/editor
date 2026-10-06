@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Cutscenes\Preview;
 
+use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Engine\Battle\Actions\SkillBattleAction;
 use Ichiloto\Engine\Battle\BattlePacing;
 use Ichiloto\Engine\Battle\BattleTargetPolicy;
@@ -19,7 +20,8 @@ use Ichiloto\Engine\Scenes\Battle\BattleConfig;
 use InvalidArgumentException;
 
 /**
- * A summon as a battle plays it, frame by frame, for its editors: the
+ * A summon as a battle plays it, frame by frame, for its editors, in one
+ * presentation, graphical or terminal: the
  * Engine's own command preview of the summon's linked action, cast by a
  * member of the given battle the summon's wielder policy allows, at the
  * targets that action's scope takes, with the project's battle pacing.
@@ -40,6 +42,7 @@ final class SummonBattlePreview
      */
     private function __construct(
         private readonly BattleCommandPreview $preview,
+        private readonly BattleCommandTimeline $plan,
         public readonly string $caster,
         public readonly array $targets,
         public readonly array $phases,
@@ -47,19 +50,25 @@ final class SummonBattlePreview
     }
 
     /**
-     * @param SummonCompiledCutscene $graphical The summon compiled for the graphical battle.
+     * A graphical preview plays the graphical compile, with the terminal one
+     * as its paired lane; a terminal preview plays the terminal compile alone,
+     * at its own cadence, and reads no graphical image.
+     *
+     * @param SummonCompiledCutscene|null $graphical The summon compiled for the graphical battle, which a graphical preview requires.
      * @param SummonCompiledCutscene $terminal The same summon compiled for the terminal arena.
+     * @param BattlePresentationCatalog|null $catalog The battle presentation, which a graphical preview requires.
      * @throws InvalidArgumentException When no member may cast it, its action is unknown or it has no one to target.
      */
     public static function create(
         SummonCutsceneDefinition $definition,
-        SummonCompiledCutscene $graphical,
+        ?SummonCompiledCutscene $graphical,
         SummonCompiledCutscene $terminal,
         BattleConfig $battle,
         SkillCatalog $skills,
         BattlePacing $pacing,
-        BattlePresentationCatalog $catalog,
+        ?BattlePresentationCatalog $catalog,
         string $assetRoot,
+        EffectPresentation $presentation,
     ): self {
         $battlers = $battle->partyRoster->battlers;
         $policy = $definition->wielders;
@@ -74,10 +83,15 @@ final class SummonBattlePreview
         if ($targets === []) {
             throw new InvalidArgumentException(sprintf('%s has no one to target in the battle test.', $definition->name));
         }
-        $plan = new BattleCommandTimeline($pacing->getTurnTimings($action), target: $graphical, terminalTarget: $terminal);
+        $timings = $pacing->getTurnTimings($action);
+        $plan = $presentation === EffectPresentation::TERMINAL
+            ? new BattleCommandTimeline($timings, target: $terminal)
+            : new BattleCommandTimeline($timings, target: $graphical ?? throw new InvalidArgumentException('A graphical preview plays the graphical compile.'), terminalTarget: $terminal);
 
         return new self(
-            new BattleCommandPreview($battle, $plan, $caster, $targets, BattlePoseRole::SUMMON, $catalog, $assetRoot),
+            new BattleCommandPreview($battle, $plan, $caster, $targets, BattlePoseRole::SUMMON,
+                $presentation === EffectPresentation::TERMINAL ? null : $catalog, $assetRoot, $presentation),
+            $plan,
             $caster->name,
             array_map(static fn($target): string => $target->name, $targets),
             $plan->phases,
@@ -96,5 +110,18 @@ final class SummonBattlePreview
     public function readFrame(int $frame, bool $reducedMotion): array
     {
         return $this->preview->getFrameAtIndex($frame, $reducedMotion)->toArray();
+    }
+
+    /**
+     * The command frame that draws one of the summon's own frames, so its
+     * timeline and its battle share one playhead; a frame before the summon
+     * plays maps to its first, one after it to its last.
+     */
+    public function findCommandFrame(int $authoredFrame): int
+    {
+        $target = $this->phases['target'];
+        $frame = $this->plan->getCommandFrameForAuthoredFrame('target', max(0, $authoredFrame));
+
+        return $frame ?? ($authoredFrame <= 0 ? $target['start'] : $target['start'] + $target['length'] - 1);
     }
 }

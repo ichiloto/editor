@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Session;
 
+use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Editor\Console\ConsoleBinary;
 use Ichiloto\Editor\Console\ProjectCreator;
 use JsonException;
@@ -339,8 +340,11 @@ final class SessionHost
             'cutscenes.cinematicControl' => $session->controlCinematicPreview(self::requireString($params, 'action'),
                 is_int($params['seconds'] ?? null) || is_float($params['seconds'] ?? null) ? (float) $params['seconds'] : 0.0),
             'cutscenes.cinematicStop' => $session->stopCinematicPreview(),
-            'cutscenes.battlePreview' => $session->readSummonBattlePreview(self::requireInt($params, 'index'), self::requireInt($params, 'frame'),
-                ($params['reducedMotion'] ?? false) === true),
+            'cutscenes.battlePreview' => $session->readSummonBattlePreview(self::requireInt($params, 'index'), is_int($params['frame'] ?? null) ? $params['frame'] : 0,
+                ($params['reducedMotion'] ?? false) === true,
+                EffectPresentation::tryFrom(is_string($params['presentation'] ?? null) ? $params['presentation'] : 'graphical')
+                    ?? throw new InvalidRequest('"presentation" must be terminal or graphical.'),
+                is_int($params['authoredFrame'] ?? null) ? $params['authoredFrame'] : null),
             'references.list' => $session->listReferences(
                 is_string($params['map'] ?? null) ? $params['map'] : null,
                 self::requireString($params, 'category'),

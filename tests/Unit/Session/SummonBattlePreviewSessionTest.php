@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use Ichiloto\Editor\Session\EditorSession;
 use Ichiloto\Editor\Session\SessionRefusal;
+use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 
 /** A summon previewed as the battle test plays it, through the Engine's command preview. Synthetic fixtures only. */
 
@@ -80,4 +81,37 @@ it('refuses a summon no one in the battle test party may call, naming why', func
 
     expect(fn() => $session->readSummonBattlePreview(0, 0))->toThrow(SessionRefusal::class, 'No one in the battle test party may call Lantern Wisp')
         ->and(fn() => $session->readSummonBattlePreview(4, 0))->toThrow(SessionRefusal::class);
+});
+
+it('previews the summon in the terminal arena alone, reading no graphical image', function () {
+    $root = summonBattlePreviewProject();
+    // Every graphical image gone: the terminal arena never needs one.
+    foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root . '/assets/Graphics', FilesystemIterator::SKIP_DOTS)) as $file) {
+        if (str_ends_with($file->getFilename(), '.png')) {
+            unlink($file->getPathname());
+        }
+    }
+    $session = EditorSession::open($root);
+    $first = $session->readSummonBattlePreview(0, 0, presentation: EffectPresentation::TERMINAL);
+    $atTarget = $session->readSummonBattlePreview(0, $first['phases']['target']['start'] + 1, presentation: EffectPresentation::TERMINAL);
+
+    expect($first['caster'])->toBe('Kaelion')
+        ->and($atTarget['phase'])->toBe('target')
+        ->and($atTarget['canvas'])->toBeNull()
+        ->and($atTarget['terminalLines'])->not->toBe([])
+        ->and(fn() => $session->readSummonBattlePreview(0, 0))->toThrow(SessionRefusal::class);
+});
+
+it('draws a frame of the summon\'s own timeline where the battle plays it, in either presentation', function () {
+    $session = EditorSession::open(summonBattlePreviewProject());
+    foreach ([EffectPresentation::GRAPHICAL, EffectPresentation::TERMINAL] as $presentation) {
+        $twelfth = $session->readSummonBattlePreview(0, 0, presentation: $presentation, authoredFrame: 12);
+        $first = $session->readSummonBattlePreview(0, 0, presentation: $presentation, authoredFrame: -5);
+        $last = $session->readSummonBattlePreview(0, 0, presentation: $presentation, authoredFrame: 999);
+
+        expect($twelfth['authoredFrames']['target'])->toBe(12)
+            ->and($twelfth['phase'])->toBe('target')
+            ->and($first['frame'])->toBe($first['phases']['target']['start'])
+            ->and($last['frame'])->toBe($last['phases']['target']['start'] + $last['phases']['target']['length'] - 1);
+    }
 });
