@@ -57,6 +57,23 @@ it('saves a summon category as the Database window saves any category', function
         ->and($session->listUnsavedChanges())->toBe([]);
 });
 
+it('writes a rest frame the timeline did not hold to the timeline, where the summon reads it', function () {
+    $root = cutsceneProject();
+    $folder = $root . '/assets/Cutscenes/Summons/lantern-wisp';
+    $dataBefore = (string) file_get_contents($folder . '/lantern-wisp.data.php');
+    expect((string) file_get_contents($folder . '/lantern-wisp.timeline.php'))->not->toContain("'restFrame'");
+    $session = EditorSession::open($root);
+    $rest = array_find($session->readDatabaseRecord('cutscenes/summon', 0)['rows'], static fn(array $row): bool => trim($row['label']) === 'Rest Frame');
+
+    $session->applyDatabaseRecord('cutscenes/summon', 0, $rest['key'], '12');
+    $session->saveAll();
+
+    expect((string) file_get_contents($folder . '/lantern-wisp.timeline.php'))->toContain("'restFrame' => 12")
+        ->and((string) file_get_contents($folder . '/lantern-wisp.data.php'))->toBe($dataBefore)
+        ->and(Ichiloto\Editor\Cutscenes\CutsceneLibrary::fromProject($root)->find(Ichiloto\Editor\Cutscenes\CutsceneType::SUMMON, 'lantern-wisp')
+            ->summonDefinition()->restFrame)->toBe(12);
+});
+
 it('lists a project reference without a map, and a summon\'s own cues from the summon being edited', function () {
     $root = cutsceneProject();
     mkdir($root . '/assets/Graphics/Effects', 0o777, true);
