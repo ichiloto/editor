@@ -61,6 +61,21 @@ enum CutsceneType: string
     }
 
     /**
+     * The record category an interface edits this type's assets through, as
+     * it edits a Database category: `cutscenes/summon` for summons.
+     */
+    public function getRecordCategory(): string
+    {
+        return 'cutscenes/' . $this->value;
+    }
+
+    /** The type a record category key names, or null for a key that names no cutscene type. */
+    public static function findByRecordCategory(string $category): ?self
+    {
+        return str_starts_with($category, 'cutscenes/') ? self::tryFrom(substr($category, strlen('cutscenes/'))) : null;
+    }
+
+    /**
      * Returns the singular noun used in status messages.
      */
     public function noun(): string

@@ -1093,9 +1093,8 @@ trait CutscenesWorkspace
     {
         $library = $this->cutsceneLibrary();
         $asset = $this->selectedCutscene();
-        $records = $this->cutsceneRecords();
 
-        if ($library === null || $asset === null || $records === null) {
+        if ($library === null || $asset === null) {
             return false;
         }
 
@@ -1106,33 +1105,22 @@ trait CutscenesWorkspace
             return false;
         }
 
-        $type = $asset->type;
-        $id = $asset->id;
-        $before = $this->snapshotCutscene($asset);
-
         try {
-            $mutation($records, $this->getSelectedRecordIndex());
-            $records->save();
+            // The library owns the change: records, the asset and the undo step that restores it.
+            $command = $library->changeAsset($asset->type, $this->getSelectedRecordIndex(), $label, $mutation,
+                fn(CutsceneAsset $restored) => $this->followRestoredCutscene($restored))['command'];
         } catch (Throwable $throwable) {
-            $library->refreshRecords($type);
             $this->setErrorStatus($throwable, $label);
             $this->renderCutscenesArea();
 
             return false;
         }
 
-        $library->refreshRecords($type);
-        $after = $this->snapshotCutscene($asset);
-
-        if ($after === $before) {
+        if ($command === null) {
             return false;
         }
 
-        $this->recordCommand(new GenericCommand(
-            $label,
-            fn() => $this->restoreCutsceneSnapshot($type, $id, $after),
-            fn() => $this->restoreCutsceneSnapshot($type, $id, $before),
-        ));
+        $this->recordCommand($command);
 
         return true;
     }
@@ -1219,14 +1207,19 @@ trait CutscenesWorkspace
 
         $asset->restoreEditState($snapshot);
         $library->refreshRecords($type);
+        $this->followRestoredCutscene($asset);
+    }
 
+    /** Puts the screen onto an asset an undo or redo just restored, when the workspace is open. */
+    private function followRestoredCutscene(CutsceneAsset $asset): void
+    {
         if ($this->isCutscenesOpen) {
-            if ($this->cutsceneType !== $type) {
-                $this->switchCutsceneType($type);
+            if ($this->cutsceneType !== $asset->type) {
+                $this->switchCutsceneType($asset->type);
             }
 
             $this->clampCutsceneSelection();
-            $this->selectCutsceneById($id);
+            $this->selectCutsceneById($asset->id);
             $this->clampDatabaseSettingSelection();
             $this->renderCutscenesArea();
         }

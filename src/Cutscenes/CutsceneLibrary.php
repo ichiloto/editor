@@ -6,6 +6,8 @@ namespace Ichiloto\Editor\Cutscenes;
 
 use Closure;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
+use Ichiloto\Editor\History\Command;
+use Ichiloto\Editor\History\GenericCommand;
 use Ichiloto\Editor\Database\RecordSchema;
 use Ichiloto\Editor\Database\RecordSchemaCatalog;
 use RuntimeException;
@@ -273,6 +275,55 @@ final class CutsceneLibrary
     public function refreshRecords(CutsceneType $type): void
     {
         $this->databases[$type->value] = $this->buildRecords($type);
+    }
+
+    /**
+     * Changes one asset through its type's records, the one way every
+     * interface does: the change runs against the records, is taken into
+     * the asset at once, and comes back as the command that undoes and redoes
+     * it by restoring the asset's whole edit state, pinned to that asset
+     * whatever is selected when the history fires. Null when nothing changed.
+     *
+     * @template T
+     * @param int $index The asset's place among its type's records.
+     * @param callable(ProjectRecordDatabase, int): T $change The change, against the records and the record index.
+     * @param (Closure(CutsceneAsset): void)|null $restored Told when an undo or redo puts the asset back, for an interface to follow.
+     * @return array{command: ?Command, result: T}
+     * @throws RuntimeException When the asset is missing or read-only; nothing is changed.
+     * @throws Throwable Whatever the change throws; the records are rebuilt from the untouched asset.
+     */
+    public function changeAsset(CutsceneType $type, int $index, string $label, callable $change, ?Closure $restored = null): array
+    {
+        $id = $this->ids($type)[$index] ?? throw new RuntimeException(sprintf('There is no %s %d.', $type->noun(), $index));
+        $asset = $this->find($type, $id) ?? throw new RuntimeException(sprintf('There is no %s %s.', $type->noun(), $id));
+        if (! $asset->isEditable()) {
+            throw new RuntimeException(sprintf('%s is read-only: %s.', ucfirst($type->noun()), $asset->readOnlyReason()));
+        }
+        $records = $this->records($type);
+        $before = $asset->captureEditState();
+        try {
+            $result = $change($records, $index);
+            $records->save();
+        } finally {
+            $this->refreshRecords($type);
+        }
+        $after = $asset->captureEditState();
+        if ($after === $before) {
+            return ['command' => null, 'result' => $result];
+        }
+        $restore = function (array $state) use ($type, $id, $restored): void {
+            $asset = $this->find($type, $id);
+            if ($asset === null) {
+                return;
+            }
+            $asset->restoreEditState($state);
+            $this->refreshRecords($type);
+            if ($restored !== null) {
+                $restored($asset);
+            }
+        };
+
+        return ['command' => new GenericCommand($label, static fn() => $restore($after), static fn() => $restore($before)), 'result' => $result];
     }
 
     private function buildRecords(CutsceneType $type): ProjectRecordDatabase

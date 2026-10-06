@@ -7,6 +7,8 @@ namespace Ichiloto\Editor\Session;
 use Ichiloto\Editor\Backup\BackupSettings;
 use Ichiloto\Editor\Backup\BackupWriter;
 use Ichiloto\Editor\Canvas\CanvasEditor;
+use Ichiloto\Editor\Cutscenes\CutsceneRecordCategory;
+use Ichiloto\Editor\Cutscenes\CutsceneType;
 use Ichiloto\Editor\ProjectDirectoryContext;
 use Ichiloto\Editor\Canvas\PieceRole;
 use Ichiloto\Editor\Database\ConditionCodec;
@@ -150,6 +152,12 @@ final class EditorSession
                 'description' => $category->description,
                 'implemented' => $category->isImplemented,
             ], DatabaseCatalog::all()),
+            // Cutscene types, edited through the same record RPCs under their record category keys.
+            'cutscenes' => array_map(static fn(CutsceneType $type): array => [
+                'key' => $type->getRecordCategory(),
+                'label' => $type->label(),
+                'description' => $type->describeCategory(),
+            ], CutsceneType::cases()),
         ];
     }
 
@@ -2771,9 +2779,15 @@ final class EditorSession
     /** @return array<string, string> Each category the session edits, by key, with its content version. */
     private function listDatabaseVersions(): array
     {
+        $cutscenes = [];
+        foreach ($this->workspace->cutscenes === null ? [] : CutsceneType::cases() as $type) {
+            $cutscenes[$type->getRecordCategory()] = $this->workspace->cutscenes->records($type)->getContentVersion();
+        }
+
         return [
             'actors' => $this->workspace->actorDatabase->getContentVersion(),
             ...array_map(static fn(ProjectRecordDatabase $database): string => $database->getContentVersion(), $this->workspace->recordDatabases),
+            ...$cutscenes,
         ];
     }
 
@@ -2913,6 +2927,12 @@ final class EditorSession
     /** @throws SessionRefusal */
     private function requireRecordDatabase(string $category): ProjectRecordDatabase
     {
+        // A cutscene type's assets are records too, edited through the library's own record category.
+        $cutscene = CutsceneType::findByRecordCategory($category);
+        if ($cutscene !== null) {
+            return $this->workspace->cutscenes?->records($cutscene)
+                ?? throw new SessionRefusal(sprintf('This project has no %s assets to edit.', $cutscene->noun()));
+        }
         if (! DatabaseCatalog::knows($category)) {
             throw new SessionRefusal(sprintf('There is no database category %s.', $category));
         }
@@ -2932,6 +2952,11 @@ final class EditorSession
     {
         if ($category === 'actors') {
             return new ActorCategory($this->workspace, $this->actorAuthoring);
+        }
+        $cutscene = CutsceneType::findByRecordCategory($category);
+        if ($cutscene !== null) {
+            return new CutsceneRecordCategory($this->workspace->cutscenes
+                ?? throw new SessionRefusal(sprintf('This project has no %s assets to edit.', $cutscene->noun())), $cutscene);
         }
 
         return new RecordCategory($this->requireRecordDatabase($category));
