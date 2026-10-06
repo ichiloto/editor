@@ -164,10 +164,10 @@ it('names the entry each list row belongs to and its name within it, so one sele
     $tracks = stageRows($session, ['tracks']);
     $subjects = stageRows($session, ['stage.subjects']);
 
-    expect($tracks['Track 1 Id'])->toMatchArray(['entry' => [0], 'name' => 'Id'])
+    expect($tracks['Track 1 Id'])->toMatchArray(['entry' => [0], 'entryLabel' => 'Track 1', 'name' => 'Id'])
         ->and($tracks['Track 1 Keyframe 1 Sheet Frame'])->toMatchArray(['entry' => [0, 0], 'name' => 'Sheet Frame'])
         ->and($subjects['Subject 1 Size'])->toMatchArray(['entry' => [0], 'name' => 'Size'])
-        ->and($subjects['Subject 1 Point 1 X'])->toMatchArray(['entry' => [0, 0], 'name' => 'X'])
+        ->and($subjects['Subject 1 Point 1 X'])->toMatchArray(['entry' => [0, 0], 'entryLabel' => 'Point 1', 'name' => 'X'])
         // The record's own rows belong to no entry.
         ->and(stageRows($session)['Name'])->not->toHaveKey('entry');
 });
