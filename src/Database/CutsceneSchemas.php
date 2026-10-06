@@ -159,6 +159,7 @@ final class CutsceneSchemas
                 new RecordField('formatVersion', 'Timeline Format', InputControlType::INTEGER),
                 new RecordField('fps', 'FPS', InputControlType::INTEGER),
                 new RecordField('lengthFrames', 'Length (frames)', InputControlType::INTEGER),
+                new RecordField('restFrame', 'Rest Frame', InputControlType::INTEGER, removeWhenEmpty: true),
                 new RecordField('editor', 'Editor Metadata', codec: RecordFieldCodec::KEY_VALUES, removeWhenEmpty: true),
             ],
             labelKey: 'name',
@@ -514,23 +515,7 @@ final class CutsceneSchemas
                 new RecordField('facing', 'Facing', options: ['', 'west', 'east'], removeWhenEmpty: true, displayDefault: '(undirected)'),
             ],
             blank: ['id' => 'track', 'type' => 'glyph', 'keyframes' => [['frame' => 0, 'duration' => 1, 'content' => '*', 'position' => ['x' => 0, 'y' => 0]]]],
-            variants: [
-                'image' => [
-                    RecordField::reference('asset', 'Image', 'png_assets'),
-                    new RecordField('sheet.columns', 'Sheet Columns', InputControlType::INTEGER, displayDefault: '1'),
-                    new RecordField('sheet.rows', 'Sheet Rows', InputControlType::INTEGER, displayDefault: '1'),
-                    new RecordField('cells.width', 'Cell Width', InputControlType::INTEGER, displayDefault: '1'),
-                    new RecordField('cells.height', 'Cell Height', InputControlType::INTEGER, displayDefault: '1'),
-                    new RecordField('depth', 'Depth', options: ['front', 'behind'], removeWhenEmpty: true, displayDefault: 'front'),
-                    // Battle only: the battler point the image is placed on (the empty
-                    // choice removes it: its centre), and the point of the sheet cell that
-                    // sits there, x and y from 0 to 1 (removed: the cell's middle).
-                    new RecordField('attachment', 'Attachment',
-                        options: ['', ...array_map(static fn(EffectImageAttachment $attachment): string => $attachment->value, EffectImageAttachment::cases())],
-                        removeWhenEmpty: true, displayDefault: '(center)'),
-                    new RecordField('pivot', 'Pivot', codec: RecordFieldCodec::NORMALIZED_POINT, removeWhenEmpty: true, displayDefault: '0.5, 0.5'),
-                ],
-            ],
+            variants: ['image' => self::imageTrackFields()],
             variantKey: 'type',
             nestedLists: [
                 'image' => self::effectImageKeyframeList(),
@@ -615,6 +600,38 @@ final class CutsceneSchemas
      * Returns the track list of a summon timeline, each track owning its
      * keyframes as a nested list.
      */
+    /**
+     * An image track's own fields, the same on an effect and a summon: the
+     * sheet it draws from, its depth, and (in battle) the battler point it is
+     * placed on and the point of the sheet cell that sits there.
+     *
+     * @return list<RecordField>
+     */
+    public static function imageTrackFields(): array
+    {
+        return [
+            RecordField::reference('asset', 'Image', 'png_assets'),
+            new RecordField('sheet.columns', 'Sheet Columns', InputControlType::INTEGER, displayDefault: '1'),
+            new RecordField('sheet.rows', 'Sheet Rows', InputControlType::INTEGER, displayDefault: '1'),
+            new RecordField('cells.width', 'Cell Width', InputControlType::INTEGER, displayDefault: '1'),
+            new RecordField('cells.height', 'Cell Height', InputControlType::INTEGER, displayDefault: '1'),
+            new RecordField('depth', 'Depth', options: ['front', 'behind'], removeWhenEmpty: true, displayDefault: 'front'),
+            // Battle only: the battler point the image is placed on (the empty
+            // choice removes it: its centre), and the point of the sheet cell that
+            // sits there, x and y from 0 to 1 (removed: the cell's middle).
+            new RecordField('attachment', 'Attachment',
+                options: ['', ...array_map(static fn(EffectImageAttachment $attachment): string => $attachment->value, EffectImageAttachment::cases())],
+                removeWhenEmpty: true, displayDefault: '(center)'),
+            new RecordField('pivot', 'Pivot', codec: RecordFieldCodec::NORMALIZED_POINT, removeWhenEmpty: true, displayDefault: '0.5, 0.5'),
+        ];
+    }
+
+    /**
+     * A summon's tracks. Glyph and text tracks keep the summon's own screen
+     * positions; an image track is an effect image track, placed on its
+     * anchor (the target, by default) with the effect schema's fields and
+     * keyframes, so a summon's art is authored as any effect's is.
+     */
     public static function trackList(): RecordSubList
     {
         return new RecordSubList(
@@ -623,14 +640,27 @@ final class CutsceneSchemas
             singular: 'track',
             fields: [
                 new RecordField('id', 'Id'),
-                new RecordField('type', 'Type', options: ['glyph', 'text', 'flash', 'shake'], removeWhenEmpty: true, displayDefault: 'glyph'),
+                new RecordField('type', 'Type', options: ['glyph', 'text', 'image', 'flash', 'shake'], removeWhenEmpty: true, displayDefault: 'glyph'),
                 // Which renderers draw the track: every one, or only the terminal or the graphical.
                 new RecordField('presentation', 'Presentation',
                     options: ['all', ...array_map(static fn(EffectPresentation $presentation): string => $presentation->value, EffectPresentation::cases())],
                     removeWhenEmpty: true, displayDefault: 'all'),
             ],
             blank: ['type' => 'glyph', 'id' => 'track', 'keyframes' => []],
-            nestedLists: ['*' => self::keyframeList()],
+            variants: ['image' => [
+                new RecordField('anchor', 'Anchor', options: ['target', 'caster', 'screen'], removeWhenEmpty: true, displayDefault: 'target'),
+                ...self::imageTrackFields(),
+            ]],
+            variantKey: 'type',
+            nestedLists: [
+                'image' => self::effectImageKeyframeList(),
+                // A track whose type is left out is a glyph track.
+                '' => self::keyframeList(),
+                'glyph' => self::keyframeList(),
+                'text' => self::keyframeList(),
+                'flash' => self::keyframeList(),
+                'shake' => self::keyframeList(),
+            ],
         );
     }
 
