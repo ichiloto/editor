@@ -1218,9 +1218,22 @@ final class EditorSession
             $field = (string) ($row['key']['field'] ?? '');
             if (preg_match('/^track(\d+)(Id|Type|Presentation)$/', $field, $match) === 1) {
                 $tracks[(int) $match[1]][strtolower($match[2])] = (string) $row['value'];
-            } elseif (preg_match('/^track(\d+)Keyframe(\d+)(Frame|Duration)$/', $field, $match) === 1) {
-                $tracks[(int) $match[1]]['keyframes'][(int) $match[2]][strtolower($match[3])] = (int) $row['value'];
-                $tracks[(int) $match[1]]['keyframes'][(int) $match[2]][strtolower($match[3]) . 'Key'] = $row['key'];
+            } elseif (preg_match('/^track(\d+)(Asset|Sheetcolumns|Sheetrows|Attachment|Pivot)$/', $field, $match) === 1) {
+                // An image track's art, and the keys that edit where it sits on its anchor.
+                $art = ['Asset' => 'asset', 'Sheetcolumns' => 'columns', 'Sheetrows' => 'rows', 'Attachment' => 'attachment', 'Pivot' => 'pivot'][$match[2]];
+                $tracks[(int) $match[1]]['art'][$art] = in_array($art, ['columns', 'rows'], true) ? max(1, (int) $row['value']) : (string) ($row['raw'] ?? $row['value']);
+                if (in_array($art, ['attachment', 'pivot'], true)) {
+                    $tracks[(int) $match[1]]['art'][$art . 'Key'] = $row['key'];
+                }
+                if ($art === 'attachment') {
+                    $tracks[(int) $match[1]]['art']['attachmentOptions'] = array_values(array_filter($row['options'] ?? [], static fn(mixed $option): bool => $option !== ''));
+                }
+            } elseif (preg_match('/^track(\d+)Keyframe(\d+)(Frame|Duration|SourceFrame)$/', $field, $match) === 1) {
+                $name = lcfirst($match[3]);
+                $tracks[(int) $match[1]]['keyframes'][(int) $match[2]][$name] = (int) $row['value'];
+                if ($name !== 'sourceFrame') {
+                    $tracks[(int) $match[1]]['keyframes'][(int) $match[2]][$name . 'Key'] = $row['key'];
+                }
             }
         }
         foreach ($this->readDatabaseRecord($category, $index, ['cues'])['rows'] as $row) {
@@ -1235,10 +1248,13 @@ final class EditorSession
         $payload = $asset->payload();
 
         return [
+            // An effect with separate terminal and graphical sequences names the one shown; others name none.
+            'presentation' => $asset->getPresentationView()?->value,
             'fps' => (int) ($payload['fps'] ?? 0),
             'lengthFrames' => (int) ($payload['lengthFrames'] ?? 0),
-            'tracks' => array_values(array_map(static fn(array $track): array => [...$track,
-                'keyframes' => array_values($track['keyframes'] ?? [])], $tracks)),
+            'tracks' => array_values(array_map(fn(array $track): array => [...$track,
+                'keyframes' => array_values($track['keyframes'] ?? []),
+                ...(isset($track['art']) ? ['art' => $this->measureTrackArt($track['art'])] : [])], $tracks)),
             'cues' => array_values($cues),
         ];
     }
@@ -1267,6 +1283,45 @@ final class EditorSession
         return ['frame' => $frame, 'totalFrames' => $preview->totalFrames(), 'fps' => $preview->fps(),
             'lines' => array_values($preview->frame(max(1, $width), max(1, $height), $frame)),
             'cues' => array_values($preview->cuesAt($frame))];
+    }
+
+    /**
+     * An image track's art with the image's own size, read from the file the
+     * track names inside the asset root; none for a file that is missing or
+     * not an image, which the track's own validation reports.
+     *
+     * @param array<string, mixed> $art
+     * @return array<string, mixed>
+     */
+    private function measureTrackArt(array $art): array
+    {
+        $root = realpath($this->workspace->projectRoot . '/assets');
+        $path = $root === false || ($art['asset'] ?? '') === '' ? false : realpath($root . '/' . $art['asset']);
+        $size = $path !== false && str_starts_with($path, $root . DIRECTORY_SEPARATOR) ? @getimagesize($path) : false;
+
+        return [...$art, 'width' => $size === false ? null : $size[0], 'height' => $size === false ? null : $size[1]];
+    }
+
+    /**
+     * Chooses which of an effect's sequences its record shows and edits,
+     * terminal or graphical, as the TUI's sequence switch does. Nothing is
+     * written; the other sequence stays as it is.
+     *
+     * @return array{presentation: string}
+     * @throws SessionRefusal When the record is not an effect with separate sequences, or the sequence is unknown.
+     */
+    public function selectCutscenePresentation(string $category, int $index, string $presentation): array
+    {
+        $asset = $this->requireTimelineCutscene($category, $index);
+        $chosen = EffectPresentation::tryFrom($presentation)
+            ?? throw new SessionRefusal(sprintf('An effect sequence is terminal or graphical, not %s.', $presentation));
+        if (! $asset->hasPresentations()) {
+            throw new SessionRefusal(sprintf('%s has one sequence for every renderer.', $asset->id));
+        }
+        $asset->selectPresentation($chosen);
+        $this->workspace->cutscenes?->refreshRecords($asset->type);
+
+        return ['presentation' => $chosen->value];
     }
 
     /** A summon or effect record's asset; a cinematic is a command tree, not a timeline. */

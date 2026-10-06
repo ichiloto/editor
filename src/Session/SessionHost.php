@@ -330,6 +330,8 @@ final class SessionHost
             ),
             'database.save' => $session->saveDatabase(self::requireString($params, 'category')),
             'cutscenes.timeline' => $session->describeCutsceneTimeline(self::requireString($params, 'category'), self::requireInt($params, 'index')),
+            'cutscenes.presentation' => $session->selectCutscenePresentation(self::requireString($params, 'category'),
+                self::requireInt($params, 'index'), self::requireString($params, 'presentation')),
             'cutscenes.preview' => $session->readCutscenePreview(self::requireString($params, 'category'), self::requireInt($params, 'index'),
                 self::requireInt($params, 'frame'), self::requireInt($params, 'width'), self::requireInt($params, 'height')),
             'references.list' => $session->listReferences(

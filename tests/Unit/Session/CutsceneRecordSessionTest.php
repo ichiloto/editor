@@ -95,3 +95,21 @@ it('previews a summon frame as its terminal presentation draws it, clamped to th
         ->and($preview['lines'])->toHaveCount(10)
         ->and(mb_strlen($preview['lines'][0]))->toBe(40);
 });
+
+it('shows an effect\'s graphical sequence with its image track\'s art, and sets the pivot as one undo step', function () {
+    $session = EditorSession::open(effectProject());
+    $index = array_search('dusk-slash', $session->listDatabaseRecords('cutscenes/effect')['records'], true);
+
+    expect($session->describeCutsceneTimeline('cutscenes/effect', $index)['presentation'])->toBe('terminal')
+        ->and($session->selectCutscenePresentation('cutscenes/effect', $index, 'graphical'))->toBe(['presentation' => 'graphical']);
+    $art = $session->describeCutsceneTimeline('cutscenes/effect', $index)['tracks'][0]['art'];
+    expect($art)->toMatchArray(['asset' => 'Graphics/Effects/dusk-slash.png', 'columns' => 2, 'rows' => 1, 'width' => 32, 'height' => 16])
+        ->and($art['attachmentOptions'])->toBe(['center', 'head', 'ground']);
+
+    $session->applyDatabaseRecord('cutscenes/effect', $index, $art['pivotKey'], '0.25, 1');
+    expect($session->describeCutsceneTimeline('cutscenes/effect', $index)['tracks'][0]['art']['pivot'])->toBe('0.25, 1');
+    $session->undo();
+    expect($session->describeCutsceneTimeline('cutscenes/effect', $index)['tracks'][0]['art']['pivot'])->toBe($art['pivot'])
+        ->and(fn() => $session->selectCutscenePresentation('cutscenes/summon', 0, 'graphical'))->toThrow(SessionRefusal::class)
+        ->and(fn() => $session->selectCutscenePresentation('cutscenes/effect', $index, 'holographic'))->toThrow(SessionRefusal::class);
+});
