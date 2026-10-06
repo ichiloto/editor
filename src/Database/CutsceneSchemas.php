@@ -12,6 +12,7 @@ use Ichiloto\Engine\Animations\Timelines\EffectImageAttachment;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasImageFit;
 use Ichiloto\Engine\Animations\Timelines\EffectTimelineLibrary;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicCommandSchema;
+use Ichiloto\Engine\Cutscenes\Presentation\CinematicStage;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandRegistry;
 use Ichiloto\Engine\Cutscenes\Summons\SummonEffectTiming;
 
@@ -69,9 +70,6 @@ final class CutsceneSchemas
 
     /** Where a summon image track is placed: on a battler, the screen, or the graphical stage. */
     public const array SUMMON_IMAGE_ANCHORS = ['target', 'caster', 'screen', 'stage'];
-
-    /** How a stage camera or cover key moves to the next: the Engine's easings. */
-    public const array STAGE_EASINGS = ['linear', 'hold', 'smoothstep'];
 
     /**
      * Cardinal facings a staged actor and a movement route step use.
@@ -285,7 +283,7 @@ final class CutsceneSchemas
                 new RecordField('frame', 'Frame', InputControlType::INTEGER),
                 new RecordField('focus', 'Focus', codec: RecordFieldCodec::COORDINATES),
                 new RecordField('zoom', 'Zoom', InputControlType::FLOAT),
-                new RecordField('easing', 'Easing', options: ['', ...self::STAGE_EASINGS], removeWhenEmpty: true, displayDefault: '(linear)'),
+                new RecordField('easing', 'Easing', options: ['', ...CinematicStage::EASINGS], removeWhenEmpty: true, displayDefault: '(linear)'),
             ],
             blank: ['id' => 'key', 'frame' => 0, 'focus' => ['x' => 0, 'y' => 0], 'zoom' => 1],
             heading: 'Stage Camera',
@@ -307,7 +305,7 @@ final class CutsceneSchemas
                 new RecordField('frame', 'Frame', InputControlType::INTEGER),
                 new RecordField('color', 'Color'),
                 new RecordField('opacity', 'Opacity', InputControlType::FLOAT),
-                new RecordField('easing', 'Easing', options: ['', ...self::STAGE_EASINGS], removeWhenEmpty: true, displayDefault: '(linear)'),
+                new RecordField('easing', 'Easing', options: ['', ...CinematicStage::EASINGS], removeWhenEmpty: true, displayDefault: '(linear)'),
             ],
             blank: ['id' => 'cover', 'frame' => 0, 'color' => 'black', 'opacity' => 1],
             heading: 'Stage Covers',

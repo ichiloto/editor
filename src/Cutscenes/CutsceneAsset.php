@@ -64,12 +64,6 @@ final class CutsceneAsset
      */
     public const string SEQUENCE_KEY = '__sequence';
 
-    /**
-     * A summon timeline's keys that stay beside its separate sequences; the
-     * Engine reads every other timeline key inside each sequence.
-     */
-    public const array PAIRED_SUMMON_TIMELINE_FIELDS = ['formatVersion', 'presentations', 'editor'];
-
     /** The canvas a new summon stage starts with, in stage units. */
     private const array STAGE_CANVAS = ['width' => 1280, 'height' => 720];
 
@@ -428,7 +422,7 @@ final class CutsceneAsset
         }
 
         $outer = $this->type === CutsceneType::SUMMON
-            ? array_intersect_key($this->partner, array_flip(self::PAIRED_SUMMON_TIMELINE_FIELDS))
+            ? array_intersect_key($this->partner, array_flip(SummonCutsceneDefinition::PAIRED_TIMELINE_FIELDS))
             : [];
         $sequence = array_diff_key($this->partner, $outer);
         $presentations = [EffectPresentation::TERMINAL->value => $sequence, EffectPresentation::GRAPHICAL->value => $sequence];
@@ -653,7 +647,7 @@ final class CutsceneAsset
             $edited = $this->type === CutsceneType::EFFECT
                 ? $payload
                 : array_filter($payload, static fn(string $key): bool => array_key_exists($key, $old)
-                    || (in_array($key, CinematicCommandSchema::SUMMON_TIMELINE_FIELDS, true) && ! in_array($key, self::PAIRED_SUMMON_TIMELINE_FIELDS, true)),
+                    || (in_array($key, CinematicCommandSchema::SUMMON_TIMELINE_FIELDS, true) && ! in_array($key, SummonCutsceneDefinition::PAIRED_TIMELINE_FIELDS, true)),
                     ARRAY_FILTER_USE_KEY);
             $presentations = $this->partner['presentations'];
             $presentations[$this->presentationView->value] = array_intersect_key(array_replace(array_flip(array_keys($old)), $edited), $edited);
