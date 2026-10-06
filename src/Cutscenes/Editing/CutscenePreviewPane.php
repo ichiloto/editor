@@ -7,6 +7,7 @@ namespace Ichiloto\Editor\Cutscenes\Editing;
 use Ichiloto\Editor\Cutscenes\CutsceneAsset;
 use Ichiloto\Editor\Cutscenes\CutsceneLaneOverview;
 use Ichiloto\Editor\Cutscenes\CutsceneType;
+use Ichiloto\Editor\Cutscenes\Preview\CinematicPreviewOrigin;
 use Ichiloto\Editor\Cutscenes\Preview\CinematicPreviewSession;
 use Ichiloto\Editor\Cutscenes\Preview\EffectPreviewStage;
 use Ichiloto\Editor\Cutscenes\Preview\PreviewSnapshot;
@@ -14,7 +15,6 @@ use Ichiloto\Editor\Cutscenes\Preview\TimelinePreviewSession;
 use Ichiloto\Editor\EditorWindow;
 use Ichiloto\Editor\Playtest\PlaytestLauncher;
 use Ichiloto\Editor\Playtest\PlaytestOverlay;
-use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Editor\Status\StatusLevel;
 use Ichiloto\Editor\UI\CutscenesScreen;
@@ -975,9 +975,7 @@ trait CutscenePreviewPane
     }
 
     /**
-     * Where a preview or playtest starts: the map event that triggers the
-     * cinematic when one exists, otherwise the cinematic's start map (or the
-     * selected map) at its first open tile.
+     * Where a preview or playtest starts, shared with every editor; the selected map stands in for a start map.
      *
      * @return array{mapId: string|null, x: int, y: int, marker: string|null}
      */
@@ -985,68 +983,11 @@ trait CutscenePreviewPane
     {
         $workspace = $this->workspace;
 
-        if ($workspace instanceof ProjectWorkspace) {
-            foreach ($workspace->maps as $map) {
-                foreach ($map->getEventDefinitions() as $marker => $definition) {
-                    if (! is_array($definition) || ! str_contains(strval($definition['class'] ?? ''), 'CinematicEventTrigger')) {
-                        continue;
-                    }
-
-                    $data = is_array($definition['data'] ?? null) ? $definition['data'] : [];
-
-                    if (trim(strval($data['cinematicId'] ?? '')) !== $asset->id) {
-                        continue;
-                    }
-
-                    // Where the runtime places the marker: its first cell.
-                    $first = $map->getEventArea((string) $marker)?->firstCell;
-
-                    if ($first !== null) {
-                        return ['mapId' => $map->mapId, 'x' => (int) $first->x, 'y' => (int) $first->y, 'marker' => (string) $marker];
-                    }
-                }
-            }
-        }
-
-        $map = null;
-
-        if ($startMap !== null && $workspace instanceof ProjectWorkspace) {
-            foreach ($workspace->maps as $candidate) {
-                if ($candidate->mapId === $startMap) {
-                    $map = $candidate;
-                }
-            }
-        }
-
-        $map ??= $this->getSelectedMap();
-
-        if (! $map instanceof ProjectMap) {
+        if (! $workspace instanceof ProjectWorkspace) {
             return ['mapId' => $startMap, 'x' => 1, 'y' => 1, 'marker' => null];
         }
 
-        [$x, $y] = $this->firstOpenTile($map);
-
-        return ['mapId' => $map->mapId, 'x' => $x, 'y' => $y, 'marker' => null];
-    }
-
-    /**
-     * The first tile that is not a wall-like glyph, row by row.
-     *
-     * @return array{0: int, 1: int}
-     */
-    private function firstOpenTile(ProjectMap $map): array
-    {
-        for ($y = 0; $y < $map->getHeight(); $y++) {
-            for ($x = 0; $x < $map->getWidth(); $x++) {
-                $symbol = $map->getTileSymbol($x, $y);
-
-                if ($symbol === ' ') {
-                    return [$x, $y];
-                }
-            }
-        }
-
-        return [0, 0];
+        return CinematicPreviewOrigin::locate($workspace, $asset, $startMap, $this->getSelectedMap());
     }
 
     /**

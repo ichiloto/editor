@@ -195,3 +195,37 @@ it('sets how an image track fills its cells, one undo step, keeping the timeline
     $session->saveAll();
     expect((string) file_get_contents($file))->not->toContain("'fit'")->toContain('// The wisp itself.');
 });
+
+it('previews a cinematic as the terminal plays it, and plays, steps, restarts and stops it, writing nothing', function () {
+    $root = cutsceneProject();
+    $before = sourceHashTree($root);
+    $session = EditorSession::open($root);
+    $index = array_search('harbour-lanterns', array_map(strval(...), $session->listDatabaseRecords('cutscenes/cinematic')['records']), true);
+    $index = $index === false ? 0 : $index;
+
+    $started = $session->startCinematicPreview($index, 60, 16);
+    expect($started)->toMatchArray(['id' => 'harbour-lanterns', 'playing' => false])
+        ->and($started['lines'])->not->toBe([])
+        ->and($started['failure'])->toBeNull();
+
+    $session->controlCinematicPreview('play');
+    $played = $session->controlCinematicPreview('tick', 0.5);
+    expect($played['elapsed'])->toBeGreaterThan(0.0);
+    $session->controlCinematicPreview('pause');
+    $paused = $session->controlCinematicPreview('tick', 0.5);
+    expect($paused['elapsed'])->toBe($played['elapsed'])
+        ->and($session->controlCinematicPreview('step')['elapsed'])->toBeGreaterThan($played['elapsed'])
+        // Asked to keep it, an unchanged cinematic carries on; an edited one starts again.
+        ->and($session->startCinematicPreview($index, 60, 16, keep: true)['elapsed'])->toBeGreaterThan($played['elapsed'])
+        ->and($session->controlCinematicPreview('restart')['elapsed'])->toBe(0.0)
+        ->and(fn() => $session->controlCinematicPreview('rewind'))->toThrow(SessionRefusal::class)
+        ->and($session->controlCinematicPreview('step')['elapsed'])->toBeGreaterThan(0.0);
+    $name = array_find($session->readDatabaseRecord('cutscenes/cinematic', $index)['rows'], static fn(array $row): bool => trim($row['label']) === 'Name');
+    $session->applyDatabaseRecord('cutscenes/cinematic', $index, $name['key'], 'Harbour Lanterns Renamed');
+    expect($session->startCinematicPreview($index, 60, 16, keep: true)['elapsed'])->toBe(0.0)
+        ->and($session->stopCinematicPreview())->toBe(['stopped' => true])
+        ->and(fn() => $session->controlCinematicPreview('play'))->toThrow(SessionRefusal::class)
+        ->and(fn() => $session->startCinematicPreview(9, 60, 16))->toThrow(SessionRefusal::class);
+    $session->undo();
+    expect(sourceHashTree($root))->toBe($before);
+});

@@ -334,6 +334,11 @@ final class SessionHost
                 self::requireInt($params, 'index'), self::requireString($params, 'presentation')),
             'cutscenes.preview' => $session->readCutscenePreview(self::requireString($params, 'category'), self::requireInt($params, 'index'),
                 self::requireInt($params, 'frame'), self::requireInt($params, 'width'), self::requireInt($params, 'height')),
+            'cutscenes.cinematicPreview' => $session->startCinematicPreview(self::requireInt($params, 'index'), self::requireInt($params, 'width'),
+                self::requireInt($params, 'height'), ($params['play'] ?? false) === true, ($params['keep'] ?? false) === true),
+            'cutscenes.cinematicControl' => $session->controlCinematicPreview(self::requireString($params, 'action'),
+                is_int($params['seconds'] ?? null) || is_float($params['seconds'] ?? null) ? (float) $params['seconds'] : 0.0),
+            'cutscenes.cinematicStop' => $session->stopCinematicPreview(),
             'cutscenes.battlePreview' => $session->readSummonBattlePreview(self::requireInt($params, 'index'), self::requireInt($params, 'frame'),
                 ($params['reducedMotion'] ?? false) === true),
             'references.list' => $session->listReferences(

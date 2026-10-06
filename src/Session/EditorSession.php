@@ -83,6 +83,8 @@ use Ichiloto\Engine\Battle\BattlePacing;
 use Ichiloto\Engine\Entities\Troop;
 use Ichiloto\Engine\Scenes\Battle\BattleConfig;
 use Ichiloto\Editor\Cutscenes\Preview\SummonBattlePreview;
+use Ichiloto\Editor\Cutscenes\Preview\CinematicPreviewOrigin;
+use Ichiloto\Editor\Cutscenes\Preview\CinematicPreviewSession;
 use Ichiloto\Engine\Battle\Presentation\BattleCommandTimeline;
 use Ichiloto\Engine\Cutscenes\Summons\SummonCompiledCutscene;
 use Ichiloto\Engine\Cutscenes\Summons\SummonCutsceneDefinition;
@@ -118,6 +120,11 @@ final class EditorSession
     private ?string $battleTestTroop = null;
     /** The summon battle preview last built, and what it was built from, so seeking reuses it until either changes. */
     private ?array $summonBattlePreview = null;
+    /** The cinematic previewed as the terminal plays it, and which one it is. */
+    private ?CinematicPreviewSession $cinematicPreview = null;
+    private ?string $cinematicPreviewId = null;
+    /** The cinematic as it stood when its preview started, so an unchanged one keeps playing. */
+    private ?string $cinematicPreviewFingerprint = null;
 
     /** How actors are authored, with what this editor's actor panes show. */
     private readonly ActorAuthoring $actorAuthoring;
@@ -1295,6 +1302,112 @@ final class EditorSession
             'cues' => array_values($preview->cuesAt($frame))];
     }
 
+    /**
+     * Starts previewing a cinematic as it stands, unsaved edits included, as
+     * the terminal plays it: from the map event that triggers it, else its
+     * start map, in an isolated scene with silent audio, the way the
+     * Cutscenes workspace previews it. Nothing is written. A preview already
+     * running ends first, unless `keep` is asked and it is of this cinematic
+     * as it still stands: then it carries on where it is.
+     *
+     * @return array<string, mixed> The preview, as {@see describeCinematicPreview()}.
+     * @throws SessionRefusal When the cinematic is unknown or does not compile.
+     */
+    public function startCinematicPreview(int $index, int $width, int $height, bool $play = false, bool $keep = false): array
+    {
+        $type = CutsceneType::CINEMATIC;
+        $id = $this->workspace->cutscenes?->ids($type)[$index] ?? null;
+        $asset = ($id === null ? null : $this->workspace->cutscenes?->find($type, $id))
+            ?? throw new SessionRefusal(sprintf('There is no %s %d.', $type->noun(), $index));
+        $fingerprint = hash('xxh128', serialize($asset->payload()));
+        if ($keep && $this->cinematicPreview !== null && $this->cinematicPreviewId === $asset->id && $this->cinematicPreviewFingerprint === $fingerprint) {
+            return $this->describeCinematicPreview();
+        }
+        $this->stopCinematicPreview();
+        try {
+            $definition = $asset->cinematicDefinition();
+        } catch (Throwable $failure) {
+            throw new SessionRefusal(sprintf('%s does not compile: %s', $asset->id, $failure->getMessage()), previous: $failure);
+        }
+        $origin = CinematicPreviewOrigin::locate($this->workspace, $asset, $definition->startMap);
+        try {
+            $this->cinematicPreview = CinematicPreviewSession::start($this->workspace->projectRoot, $definition, [
+                'mapId' => $origin['mapId'], 'x' => $origin['x'], 'y' => $origin['y'], 'width' => max(20, $width), 'height' => max(8, $height),
+            ]);
+        } catch (Throwable $failure) {
+            throw new SessionRefusal(sprintf('%s cannot be previewed: %s', $asset->id, $failure->getMessage()), previous: $failure);
+        }
+        $this->cinematicPreviewId = $asset->id;
+        $this->cinematicPreviewFingerprint = $fingerprint;
+        if ($play) {
+            $this->cinematicPreview->play();
+        }
+
+        return $this->describeCinematicPreview();
+    }
+
+    /**
+     * Plays, pauses, steps, advances while playing, or restarts the
+     * cinematic previewed. An advance is the time since the last one, so the
+     * preview keeps real time however often it is asked.
+     *
+     * @param 'play'|'pause'|'step'|'tick'|'restart' $action
+     * @return array<string, mixed> The preview, as {@see describeCinematicPreview()}.
+     * @throws SessionRefusal When no cinematic is previewed or the action is unknown.
+     */
+    public function controlCinematicPreview(string $action, float $seconds = 0.0): array
+    {
+        $preview = $this->cinematicPreview ?? throw new SessionRefusal('No cinematic is being previewed.');
+        match ($action) {
+            'play' => $preview->play(),
+            'pause' => $preview->pause(),
+            'step' => $preview->step(),
+            'tick' => $preview->tick(max(0.0, min($seconds, 1.0))),
+            'restart' => $this->cinematicPreview = $preview->restart(),
+            default => throw new SessionRefusal(sprintf('A cinematic preview cannot %s.', $action)),
+        };
+
+        return $this->describeCinematicPreview();
+    }
+
+    /**
+     * Ends the cinematic preview, releasing its scene.
+     *
+     * @return array{stopped: bool} Whether one was running.
+     */
+    public function stopCinematicPreview(): array
+    {
+        $stopped = $this->cinematicPreview !== null;
+        $this->cinematicPreview?->dispose();
+        $this->cinematicPreview = null;
+        $this->cinematicPreviewId = null;
+        $this->cinematicPreviewFingerprint = null;
+
+        return ['stopped' => $stopped];
+    }
+
+    /**
+     * The cinematic previewed: which one, its terminal picture now, how long
+     * it has run, its status, whether it plays or has finished, and why it
+     * stopped or waits, when it does.
+     *
+     * @return array<string, mixed>
+     */
+    private function describeCinematicPreview(): array
+    {
+        $preview = $this->cinematicPreview ?? throw new SessionRefusal('No cinematic is being previewed.');
+
+        return [
+            'id' => $this->cinematicPreviewId,
+            'lines' => array_values($preview->frame()),
+            'elapsed' => $preview->elapsed(),
+            'status' => $preview->status(),
+            'playing' => $preview->isPlaying(),
+            'finished' => $preview->isFinished(),
+            'failure' => $preview->failure()['message'] ?? null,
+            'wait' => $preview->waitDescription(),
+        ];
+    }
     /**
      * A summon as the battle test plays it, at one command frame: the
      * Engine's command preview of the summon as it stands, unsaved edits
