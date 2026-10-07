@@ -289,6 +289,28 @@ it('draws a piece area with a mouse drag, and a click stamps one copy where it l
         ->and($map->getLayerSymbol('map:4', 0, 0))->not->toBe('=');
 });
 
+it('stamps a piece\'s own colours byte for byte and the brush colour where it has none', function () {
+    $root = mapGraphicsProject();
+    // A small tree: two leaves and a trunk in their own colours, and a plain cell that takes the brush.
+    writeTestTileset($root, pieces: ['tree' => ['name' => 'Tree', 'layer' => 'buildings',
+        'glyphs' => ['<fg=#5faf00>^^</>', '<fg=#875f00>|</>=']]]);
+    [$editor, $map] = layeredCanvasEditor($root);
+    setEditorProperty($editor, 'selectedPaintColor', 'cyan');
+    selectPieceLayer($editor, 'buildings');
+    callEditorMethod($editor, 'dispatchInput', 'P');
+    callEditorMethod($editor, 'dispatchInput', "\n");
+    callEditorMethod($editor, 'dispatchInput', "\n");
+
+    expect($map->getLayerCellStyle('map:4', 0, 0))->toBe(['prefix' => '<fg=#5faf00>', 'suffix' => '</>'])
+        ->and($map->getLayerCellStyle('map:4', 1, 0))->toBe(['prefix' => '<fg=#5faf00>', 'suffix' => '</>'])
+        ->and($map->getLayerCellStyle('map:4', 0, 1))->toBe(['prefix' => '<fg=#875f00>', 'suffix' => '</>'])
+        ->and($map->getLayerSymbol('map:4', 0, 1))->toBe('|')
+        ->and($map->getLayerColor('map:4', 1, 1))->toBe('cyan');
+    callEditorMethod($editor, 'dispatchInput', "\x13");
+    expect((string) file_get_contents($map->directory . '/layers/04.buildings.map.php'))
+        ->toContain('<fg=#5faf00>^^</>', '<fg=#875f00>|</>')->not->toContain("\033");
+});
+
 it('creates graphics/ for a map whose tileset pieces name tile layers it lacks', function () {
     $root = layeredMapProject();
     writeTestTileset($root, pieces: buildTestPieces());

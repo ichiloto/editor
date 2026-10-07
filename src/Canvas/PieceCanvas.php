@@ -14,6 +14,7 @@ use Ichiloto\Editor\History\PaintStrokeCommand;
 use Ichiloto\Engine\Rendering\Tilesets\TileId;
 use Ichiloto\Engine\Rendering\Tilesets\Tileset;
 use Ichiloto\Engine\Rendering\Tilesets\TilesetPiece;
+use Ichiloto\Engine\IO\Console\TerminalText;
 
 /**
  * Tileset pieces on the terminal canvas: choose a whole item from the map's
@@ -310,12 +311,14 @@ trait PieceCanvas
     private function stampPieceArea(ProjectMap $map, TilesetPiece $piece, ?array $anchor): void
     {
         $origins = $this->getPieceAreaOrigins($piece, $anchor);
+        $sources = $piece->getSourceGrid();
         $writes = $assigned = [];
         foreach ($origins as ['x' => $x, 'y' => $y]) {
             foreach ($piece->glyphs as $row => $symbols) {
                 foreach ($symbols as $column => $symbol) {
                     if ($symbol !== ' ') {
-                        $writes[] = ['x' => $x + $column, 'y' => $y + $row, 'symbol' => $symbol, 'color' => $this->selectedPaintColor];
+                        $writes[] = ['x' => $x + $column, 'y' => $y + $row, 'symbol' => $symbol]
+                            + self::resolvePieceCellPaint($sources[$row][$column], $this->selectedPaintColor);
                     }
                 }
             }
@@ -368,6 +371,22 @@ trait PieceCanvas
             : sprintf('Stamped %d %s across (%d, %d) to (%d, %d).', count($origins), $piece->name,
                 $origins[0]['x'], $origins[0]['y'], $this->cursorX, $this->cursorY) . $next);
         $this->renderCanvasArea();
+    }
+
+    /**
+     * How one piece cell is painted: in the style its tileset authored for it,
+     * kept byte for byte, or with the fallback colour when it has none (null
+     * keeps the map cell's own colour).
+     *
+     * @return array{style: array{prefix: string, suffix: string}}|array{color: string|null}
+     */
+    private static function resolvePieceCellPaint(string $source, ?string $fallbackColor): array
+    {
+        $cell = TerminalText::parseSourceCells($source)[0] ?? null;
+
+        return $cell !== null && ($cell['prefix'] !== '' || $cell['suffix'] !== '')
+            ? ['style' => ['prefix' => $cell['prefix'], 'suffix' => $cell['suffix']]]
+            : ['color' => $fallbackColor];
     }
 
     /**
@@ -488,12 +507,14 @@ trait PieceCanvas
             }
             $cells = ConnectedPieceShaper::reshapeCells($piece, $drawn, $erased, $this->resolveConnectedMemberLookup($map, $layer, $piece));
             $drawnKeys = array_flip(array_map(static fn(array $cell): string => "{$cell['x']},{$cell['y']}", $drawn));
+            $sources = $piece->getSourceShapeGrid();
+            // A drawn cell takes the brush colour unless its shape has its own; a reshaped neighbour keeps its colour.
             $writes = array_map(fn(array $cell): array => [
                 'x' => $cell['x'],
                 'y' => $cell['y'],
                 'symbol' => $cell['shape'] === null ? ' ' : $piece->shapes[$cell['shape']],
-                'color' => isset($drawnKeys["{$cell['x']},{$cell['y']}"]) ? $this->selectedPaintColor : null,
-            ], $cells);
+            ] + ($cell['shape'] === null ? ['color' => null] : self::resolvePieceCellPaint($sources[$cell['shape']],
+                isset($drawnKeys["{$cell['x']},{$cell['y']}"]) ? $this->selectedPaintColor : null)), $cells);
             // Each shape draws its tiles, and a glyph the wall covers takes its own ({@see GlyphTilePlanner}).
             $this->finalizeActiveStroke();
             $tilesBefore = $map->getTileLayerSources();
