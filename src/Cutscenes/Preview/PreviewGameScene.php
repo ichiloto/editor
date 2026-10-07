@@ -4,12 +4,17 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Cutscenes\Preview;
 
+use Closure;
 use Ichiloto\Engine\Animations\Field\FieldEffectManager;
+use Ichiloto\Engine\Animations\Field\FieldEffectAnchor;
+use Ichiloto\Engine\Animations\Field\FieldEffectSession;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
+use Ichiloto\Engine\Animations\Timelines\CompiledEffectTimeline;
 use Ichiloto\Engine\Core\GameState;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicController;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicPresentationManager;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicStageManager;
+use Ichiloto\Engine\Cutscenes\Cinematics\CinematicSubjectResolver;
 use Ichiloto\Engine\Entities\Party;
 use Ichiloto\Engine\Events\Interpreter\EventExecutionSession;
 use Ichiloto\Engine\Events\Interpreter\EventInterpreter;
@@ -39,6 +44,12 @@ final class PreviewGameScene extends GameScene
     public array $transfers = [];
 
     public PreviewMapManager $previewMap;
+
+    /** The id the effect an author previews plays under on the field. */
+    private const string SHOWN_EFFECT_ID = 'editor-preview';
+
+    /** @var array{0: Closure(EffectPresentation): CompiledEffectTimeline, 1: int}|null The effect an author previews, at its frame. */
+    private ?array $shownEffect = null;
 
     public function __construct(
         public readonly PreviewSceneManager $previewSceneManager,
@@ -72,6 +83,32 @@ final class PreviewGameScene extends GameScene
         $this->fieldEffects?->clear();
         $this->fieldEffects = new FieldEffectManager(getcwd() . '/assets', $presentation);
         $this->previewMap->installFieldEffects();
+        if ($this->shownEffect !== null) {
+            $this->showFieldEffect(...$this->shownEffect);
+        }
+    }
+
+    /**
+     * Shows an effect on the field at one of its frames, at the player the
+     * camera follows, as a cinematic's field animation presents one: an
+     * effect session this scene owns, compiled for the field's presentation
+     * and held at the frame for inspection, so no cue plays and no clock
+     * moves it. It stays shown, in whichever presentation the field is,
+     * until another is shown.
+     *
+     * @param Closure(EffectPresentation): CompiledEffectTimeline $compile The effect, compiled for a presentation.
+     */
+    public function showFieldEffect(Closure $compile, int $frame): void
+    {
+        $this->shownEffect = [$compile, $frame];
+        $presentation = $this->cinematicPresentation ?? throw new \LogicException('The preview scene has no cinematic presentation.');
+        $presentation->removeEffect(self::SHOWN_EFFECT_ID);
+        $session = new FieldEffectSession(self::SHOWN_EFFECT_ID, FieldEffectAnchor::createAtPosition(
+            new CinematicSubjectResolver($this)->position(['kind' => 'player'])),
+            $compile($this->isGraphicalFieldPresented() ? EffectPresentation::GRAPHICAL : EffectPresentation::TERMINAL));
+        $session->playback->seek($frame);
+        $session->playback->pause();
+        $presentation->presentEffect($session);
     }
 
     public function installPlayer(PreviewPlayer $player): void

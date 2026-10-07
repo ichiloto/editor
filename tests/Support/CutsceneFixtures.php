@@ -6,6 +6,7 @@ use Ichiloto\Editor\Cutscenes\CutsceneHydration;
 use Ichiloto\Editor\Cutscenes\CutsceneLibrary;
 use Ichiloto\Editor\Editor;
 use Ichiloto\Editor\ProjectDirectoryContext;
+use Ichiloto\Engine\Rendering\Transport\RendererSessionConfig;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Editor\UI\CutscenesScreen;
 
@@ -576,4 +577,21 @@ function harbourDefinition(string $root): \Ichiloto\Engine\Cutscenes\Cinematics\
     $script = ProjectDirectoryContext::run($root, static fn(): mixed => require $folder . '/harbour-lanterns.script.php');
 
     return CutsceneHydration::cinematic($data, $script, $root);
+}
+
+/** The editor window's READY: what its graphical view can draw, as the game's renderer says it. */
+function previewWindowReady(): string
+{
+    return json_encode(['protocol' => 2, 'type' => 'ready', 'capabilities' => [
+        RendererSessionConfig::SPRITE_SOURCE_RECT, RendererSessionConfig::GRAPHICAL_CANVAS, RendererSessionConfig::CANVAS_OVERLAY,
+        RendererSessionConfig::CANVAS_CLIP_OPACITY, RendererSessionConfig::FRAME_VIEWPORT, RendererSessionConfig::FIELD_MOTION,
+        RendererSessionConfig::SPRITE_LIFT, RendererSessionConfig::CANVAS_IMAGE_TONE, RendererSessionConfig::CANVAS_IMAGE_FLIP,
+    ]]);
+}
+
+/** @param list<array{type: string, payload: array<string, mixed>}> $messages */
+function previewFrameGenerations(array $messages): array
+{
+    return array_values(array_filter(array_map(static fn(array $message): ?int => $message['type'] === 'frame'
+        ? ($message['payload']['generation'] ?? null) : null, $messages), static fn(?int $generation): bool => $generation !== null));
 }

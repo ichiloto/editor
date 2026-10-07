@@ -4,8 +4,6 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Cutscenes\Preview;
 
-use Ichiloto\Editor\ProjectDirectoryContext;
-use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Engine\Audio\BackgroundMusicState;
 use Ichiloto\Engine\Battle\BattleResult;
 use Ichiloto\Engine\Core\Vector2;
@@ -14,14 +12,7 @@ use Ichiloto\Engine\Events\Interpreter\EventExecutionLane;
 use Ichiloto\Engine\Events\Interpreter\EventExecutionSession;
 use Ichiloto\Engine\Events\Interpreter\EventExecutionStatus;
 use Ichiloto\Engine\Events\Interpreter\EventInterpreter;
-use Ichiloto\Engine\IO\Console\Console;
-use Ichiloto\Engine\Rendering\Runtime\RendererRuntimeConfig;
 use Ichiloto\Engine\Rendering\Transport\RendererGridConfig;
-use Ichiloto\Engine\Util\Config\ConfigStore;
-use Ichiloto\Engine\Util\Config\PlaySettings;
-use Ichiloto\Engine\Util\Config\ProjectConfig;
-use Ichiloto\Engine\Util\Debug;
-use Ichiloto\Engine\Util\Interfaces\ConfigInterface;
 use Throwable;
 
 /**
@@ -61,9 +52,6 @@ final class CinematicPreviewSession
     private ?string $battleOutcome = null;
     /** @var array<int, array{time: float, text: string}> */
     private array $log = [];
-    /** @var array<string, ConfigInterface> */
-    private array $previousConfigs = [];
-    private bool $configured = false;
     /** @var array<int, string> Row keys executing when the session last ticked. */
     private array $lastActiveKeys = [];
     /** @var array<int, array{key: string, command: array<string, mixed>|null}> The same, with the commands. */
@@ -72,11 +60,8 @@ final class CinematicPreviewSession
     private bool $outcomeAnnounced = false;
     /** What was playing before the cinematic started, as the engine held it. */
     private ?BackgroundMusicState $musicBefore = null;
-    /** The editor window's graphical view of the scene, while one is attached. */
-    private ?PreviewSceneHost $sceneHost = null;
-    /** The preview's screen in Terminal cells, which the graphical view's camera viewport never changes. */
-    private int $screenWidth = 60;
-    private int $screenHeight = 18;
+    /** The isolated field the cinematic plays in. */
+    private PreviewField $field;
 
     /**
      * @param array{mapId?: string|null, x?: int, y?: int, width?: int, height?: int, autoAdvance?: bool, battleOutcome?: string} $options
@@ -117,35 +102,25 @@ final class CinematicPreviewSession
 
     private function boot(): void
     {
-        $width = $this->screenWidth = max(20, intval($this->options['width'] ?? 60));
-        $height = $this->screenHeight = max(8, intval($this->options['height'] ?? 18));
         $mapId = $this->options['mapId'] ?? $this->definition->startMap;
         $mapId = is_string($mapId) && trim($mapId) !== '' ? trim($mapId) : '';
+        $this->field = PreviewField::open($this->projectRoot, $mapId,
+            new Vector2(intval($this->options['x'] ?? 0), intval($this->options['y'] ?? 0)),
+            intval($this->options['width'] ?? 60), intval($this->options['height'] ?? 18), fn(): float => $this->elapsed);
+        $this->scene = $this->field->scene;
+        $this->presentation = $this->field->presentation;
+        if ($mapId === '') {
+            $this->note('No start map: the cinematic plays over undefined terrain.');
+        } elseif ($this->field->mapFailure !== null) {
+            $this->note(sprintf('Map %s could not be loaded: %s', $mapId, $this->field->mapFailure));
+        } else {
+            $this->note(sprintf('Map %s loaded.', $mapId));
+        }
 
-        $this->run(function () use ($width, $height, $mapId): void {
-            $this->scene = new PreviewGameScene(new PreviewSceneManager(), $width, $height, $mapId);
-            $this->scene->installFieldEffects(EffectPresentation::TERMINAL);
-            $camera = $this->scene->previewCamera();
-            $this->presentation = new PreviewPresentation($camera);
+        $this->run(function (): void {
             $this->presentation->autoAdvance = (bool) ($this->options['autoAdvance'] ?? false);
             $this->interpreter = new EventInterpreter($this->scene, $this->presentation);
             $this->scene->installInterpreter($this->interpreter);
-            $player = new PreviewPlayer($this->scene, new Vector2(intval($this->options['x'] ?? 0), intval($this->options['y'] ?? 0)));
-            $this->scene->installPlayer($player);
-
-            if ($mapId !== '') {
-                try {
-                    $this->scene->previewMap->loadForPreview($mapId);
-                    $this->note(sprintf('Map %s loaded.', $mapId));
-                } catch (Throwable $throwable) {
-                    $this->scene->previewMap->unload();
-                    $this->note(sprintf('Map %s could not be loaded: %s', $mapId, $throwable->getMessage()));
-                }
-            } else {
-                $this->note('No start map: the cinematic plays over undefined terrain.');
-            }
-
-            $camera->attach($player);
             $audio = $this->scene->getGame()->audioManager;
             $startingMusic = is_array($this->options['startingMusic'] ?? null) ? $this->options['startingMusic'] : null;
 
@@ -305,20 +280,7 @@ final class CinematicPreviewSession
      */
     public function dispose(): void
     {
-        $this->detachScene();
-        if (! $this->configured) {
-            return;
-        }
-
-        foreach ([ProjectConfig::class, PlaySettings::class] as $class) {
-            if (isset($this->previousConfigs[$class])) {
-                ConfigStore::put($class, $this->previousConfigs[$class]);
-            } else {
-                ConfigStore::remove($class);
-            }
-        }
-
-        $this->configured = false;
+        $this->field->dispose();
     }
 
     // ------------------------------------------------------------------
@@ -557,67 +519,31 @@ final class CinematicPreviewSession
      */
     public function frame(): array
     {
-        $rows = [];
-        $this->run(function () use (&$rows): void {
-            // The same isolated capture the graphical view composes from, with nothing left out.
-            $rows = Console::capturePresentation($this->screenWidth, $this->screenHeight, $this->renderScene(...))->rows ?? [];
-        });
-
-        return $rows;
+        return $this->field->frame();
     }
 
     /**
      * One exchange with the editor window's graphical view of the scene
-     * ({@see PreviewSceneHost::exchange()}): its renderer event lines in, what
-     * it should apply out. The view's grid is the preview's screen in the
-     * game's graphical text cells, so it shows what the game's graphical
-     * field would. While attached, the Engine sizes the preview's camera to
-     * the graphical field's viewport, as the game does, so the Terminal
-     * picture is the game's Terminal view only while detached.
+     * ({@see PreviewField::exchangeScene()}), at the preview's playhead.
      *
      * @param list<string> $events
      * @return list<array{type: string, payload: array<string, mixed>}>
      */
     public function exchangeScene(array $events): array
     {
-        $grid = $this->getSceneGrid();
-        $messages = [];
-        $this->run(function () use ($grid, $events, &$messages): void {
-            $this->sceneHost ??= new PreviewSceneHost($this->scene, $this->presentation,
-                $this->projectRoot . '/assets', $grid, $this->renderScene(...), fn(): float => $this->elapsed);
-            $messages = $this->sceneHost->exchange($events);
-        });
-
-        return $messages;
+        return $this->field->exchangeScene($events);
     }
 
-    /** The graphical view's grid: the preview's screen in the game's graphical text cells. */
+    /** The graphical view's grid ({@see PreviewField::getSceneGrid()}). */
     public function getSceneGrid(): RendererGridConfig
     {
-        return new RendererGridConfig($this->screenWidth, $this->screenHeight,
-            RendererRuntimeConfig::GPUI_CELL_WIDTH, RendererRuntimeConfig::GPUI_CELL_HEIGHT);
+        return $this->field->getSceneGrid();
     }
 
     /** Ends the editor window's graphical view of the scene, if one is attached. */
     public function detachScene(): void
     {
-        if ($this->sceneHost === null) {
-            return;
-        }
-        // In the project, as every step of the preview runs, so the Terminal effects it restores find their files.
-        $this->run(fn() => $this->sceneHost->dispose());
-        $this->sceneHost = null;
-    }
-
-    /** Draws everything the field draws during a cinematic, in the game's order. */
-    private function renderScene(): void
-    {
-        $this->scene->previewMap->render();
-        $this->scene->npcManager?->render();
-        $this->scene->player?->render();
-        $this->scene->cinematicStage?->render();
-        $this->scene->cinematicPresentation?->render();
-        $this->presentation->render();
+        $this->field->detachScene();
     }
 
     /**
@@ -627,7 +553,7 @@ final class CinematicPreviewSession
      */
     public function getScreenSize(): array
     {
-        return [$this->screenWidth, $this->screenHeight];
+        return $this->field->getScreenSize();
     }
 
     /**
@@ -635,11 +561,7 @@ final class CinematicPreviewSession
      */
     public function resize(int $width, int $height): void
     {
-        // The graphical view's grid is the screen's, so a new size starts it again.
-        $this->detachScene();
-        $this->screenWidth = max(20, $width);
-        $this->screenHeight = max(8, $height);
-        $this->scene->previewCamera()->resize($this->screenWidth, $this->screenHeight);
+        $this->field->resize($width, $height);
     }
 
     /**
@@ -739,6 +661,8 @@ final class CinematicPreviewSession
                 $this->resolveBattle();
             }
 
+            // What the field shows by itself, then the cinematic, in a game frame's order.
+            $this->scene->advanceFieldPresentation($seconds);
             $this->presentation->update();
             $this->interpreter->update($seconds);
             // The engine's own audio upkeep, as a game frame runs it.
@@ -1035,54 +959,10 @@ final class CinematicPreviewSession
     }
 
     /**
-     * Runs Engine code inside the project root with the preview
-     * configuration installed and any stray terminal output discarded.
+     * Runs Engine code in the preview's field ({@see PreviewField::run()}).
      */
     private function run(callable $operation): void
     {
-        $this->installConfiguration();
-
-        ProjectDirectoryContext::run($this->projectRoot, function () use ($operation): void {
-            ob_start();
-
-            try {
-                $operation();
-            } finally {
-                ob_end_clean();
-            }
-        });
-    }
-
-    private function installConfiguration(): void
-    {
-        if ($this->configured) {
-            return;
-        }
-
-        foreach ([ProjectConfig::class, PlaySettings::class] as $class) {
-            if (ConfigStore::has($class)) {
-                $this->previousConfigs[$class] = ConfigStore::get($class);
-            }
-        }
-
-        $width = max(20, intval($this->options['width'] ?? 60));
-        $height = max(8, intval($this->options['height'] ?? 18));
-        ConfigStore::put(ProjectConfig::class, new PreviewConfig([
-            'accessibility' => ['reducedMotion' => false],
-            'save' => ['autosave' => false],
-            'ui' => ['hud' => ['location' => false]],
-            // The engine records what a cinematic asked for either way; with
-            // music off it never starts a player process for it.
-            'audio' => ['music' => false, 'sfx' => false, 'voice' => false],
-        ]));
-        ConfigStore::put(PlaySettings::class, new PreviewConfig([
-            'screen' => ['width' => $width, 'height' => $height],
-            'width' => $width,
-            'height' => $height,
-        ]));
-
-        $logDirectory = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'ichiloto-editor-preview-logs';
-        Debug::configure(['log_level' => Debug::ERROR, 'log_directory' => $logDirectory]);
-        $this->configured = true;
+        $this->field->run($operation);
     }
 }

@@ -3,7 +3,6 @@
 declare(strict_types=1);
 
 use Ichiloto\Editor\Cutscenes\Preview\CinematicPreviewSession;
-use Ichiloto\Engine\Rendering\Transport\RendererSessionConfig;
 
 /**
  * The editor window draws a previewed cinematic as the game's graphical field
@@ -11,24 +10,6 @@ use Ichiloto\Engine\Rendering\Transport\RendererSessionConfig;
  * sends it through the relay one generation at a time, as the window
  * acknowledges each. Synthetic cutscene project only.
  */
-
-const PREVIEW_WINDOW_CAPABILITIES = [
-    RendererSessionConfig::SPRITE_SOURCE_RECT, RendererSessionConfig::GRAPHICAL_CANVAS, RendererSessionConfig::CANVAS_OVERLAY,
-    RendererSessionConfig::CANVAS_CLIP_OPACITY, RendererSessionConfig::FRAME_VIEWPORT, RendererSessionConfig::FIELD_MOTION,
-    RendererSessionConfig::SPRITE_LIFT, RendererSessionConfig::CANVAS_IMAGE_TONE, RendererSessionConfig::CANVAS_IMAGE_FLIP,
-];
-
-function previewWindowReady(): string
-{
-    return json_encode(['protocol' => 2, 'type' => 'ready', 'capabilities' => PREVIEW_WINDOW_CAPABILITIES]);
-}
-
-/** @param list<array{type: string, payload: array<string, mixed>}> $messages */
-function previewFrameGenerations(array $messages): array
-{
-    return array_values(array_filter(array_map(static fn(array $message): ?int => $message['type'] === 'frame'
-        ? ($message['payload']['generation'] ?? null) : null, $messages), static fn(?int $generation): bool => $generation !== null));
-}
 
 it('sends nothing until the window says what it can draw, then the scene as the game composes it', function () {
     $root = cutsceneProject();

@@ -62,6 +62,11 @@ it('plays the map\'s own field effects in the preview, as the game\'s field has 
     try {
         $scene = new ReflectionProperty($preview, 'scene')->getValue($preview);
         expect($scene->fieldEffects->count)->toBe(1);
+        // The preview's clock moves the map's effects as a game frame does, the cinematic's commands aside.
+        $glow = static fn(): int => new ReflectionProperty($scene->fieldEffects, 'sessions')->getValue($scene->fieldEffects)['map-glow']->playback->currentFrame;
+        $before = $glow();
+        $preview->step(0.5);
+        expect($glow())->not->toBe($before);
         // The graphical view's field has the same effect, drawn its own way.
         $preview->exchangeScene([json_encode(['protocol' => 2, 'type' => 'ready', 'capabilities' => ['sprite_source_rect',
             'graphical_canvas', 'canvas_overlay', 'frame_viewport', 'field_motion']])]);

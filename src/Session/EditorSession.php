@@ -106,9 +106,11 @@ use Ichiloto\Editor\Cutscenes\Preview\EffectBattlePreview;
 use Ichiloto\Engine\Animations\Animation;
 use Ichiloto\Engine\Animations\AnimationLibrary;
 use Ichiloto\Engine\Animations\Timelines\CompiledEffectTimeline;
+use Ichiloto\Engine\Core\Vector2;
 use Ichiloto\Engine\Entities\Skills\SkillCatalog;
 use Ichiloto\Editor\Cutscenes\Preview\CinematicPreviewOrigin;
 use Ichiloto\Editor\Cutscenes\Preview\CinematicPreviewSession;
+use Ichiloto\Editor\Cutscenes\Preview\PreviewField;
 use Ichiloto\Engine\Battle\Presentation\BattleCommandTimeline;
 use Ichiloto\Engine\Cutscenes\Summons\SummonCompiledCutscene;
 use Ichiloto\Engine\Cutscenes\Summons\SummonCutsceneDefinition;
@@ -167,6 +169,14 @@ final class EditorSession
     private ?string $cinematicPreviewId = null;
     /** The cinematic as it stood when its preview started, so an unchanged one keeps playing. */
     private ?string $cinematicPreviewFingerprint = null;
+    /**
+     * The field an effect is previewed on, where it stands and at what size,
+     * and the effect's playhead in seconds. It and the cinematic preview are
+     * never open together: each installs the preview's Engine configuration.
+     */
+    private ?PreviewField $effectField = null;
+    private ?string $effectFieldKey = null;
+    private float $effectFieldSeconds = 0.0;
 
     /** How actors are authored, with what this editor's actor panes show. */
     private readonly ActorAuthoring $actorAuthoring;
@@ -1975,6 +1985,7 @@ final class EditorSession
             return $this->describeCinematicPreview();
         }
         $this->stopCinematicPreview();
+        $this->closeEffectField();
         try {
             $definition = $asset->cinematicDefinition();
         } catch (Throwable $failure) {
@@ -2075,6 +2086,92 @@ final class EditorSession
         $this->cinematicPreview?->detachScene();
 
         return ['detached' => $this->cinematicPreview !== null];
+    }
+
+    /**
+     * Shows an effect, as edited, unsaved changes included, on the game's
+     * field at one of its frames: at the player, where a new game starts
+     * (System's player starting position), in an isolated field with silent
+     * audio, as a cinematic's field animation presents it. Nothing is
+     * written. The field stays open while it stands where it did, so the
+     * editor window's graphical view of it ({@see exchangeEffectFieldScene()})
+     * carries on; a cinematic preview running ends first.
+     *
+     * @return array{frame: int, totalFrames: int, fps: int, mapId: string, lines: list<string>, issue: string|null}
+     * @throws SessionRefusal When the record is not an effect, it does not compile, or no starting position names a map.
+     */
+    public function showEffectOnField(int $index, int $frame, int $width, int $height): array
+    {
+        $asset = $this->requireTimelineCutscene(CutsceneType::EFFECT->getRecordCategory(), $index);
+        try {
+            // The timeline editor's own playhead: the same frames and rate its Terminal preview steps through.
+            $timeline = new TimelinePreviewSession($asset->compiledEffect(EffectPresentation::TERMINAL, false), null);
+        } catch (Throwable $failure) {
+            throw new SessionRefusal(sprintf('%s does not compile: %s', $asset->id, $failure->getMessage()), previous: $failure);
+        }
+        $start = $this->workspace->getSystemField('startingPositions');
+        $player = is_array($start) && is_array($start['player'] ?? null) ? $start['player'] : [];
+        $mapId = is_string($player['destinationMap'] ?? null) ? trim($player['destinationMap']) : '';
+        if ($mapId === '') {
+            throw new SessionRefusal('An effect is shown on the field where a new game starts; System names no player starting map.');
+        }
+        $spawn = new Vector2(intval($player['spawnPoint']['x'] ?? 0), intval($player['spawnPoint']['y'] ?? 0));
+        $key = implode(':', [$mapId, (int) $spawn->x, (int) $spawn->y, max(20, $width), max(8, $height)]);
+        if ($this->effectField === null || $this->effectFieldKey !== $key) {
+            $this->stopCinematicPreview();
+            $this->closeEffectField();
+            $this->effectField = PreviewField::open($this->workspace->projectRoot, $mapId, $spawn, $width, $height,
+                fn(): float => $this->effectFieldSeconds);
+            $this->effectFieldKey = $key;
+        }
+        $frame = max(0, min($frame, $timeline->totalFrames() - 1));
+        $this->effectFieldSeconds = $frame / $timeline->fps();
+        try {
+            $this->effectField->showFieldEffect(static fn(EffectPresentation $presentation): CompiledEffectTimeline
+                => $asset->compiledEffect($presentation, false), $frame);
+        } catch (Throwable $failure) {
+            throw new SessionRefusal(sprintf('%s cannot be shown on the field: %s', $asset->id, $failure->getMessage()), previous: $failure);
+        }
+
+        return ['frame' => $frame, 'totalFrames' => $timeline->totalFrames(), 'fps' => $timeline->fps(), 'mapId' => $mapId,
+            'lines' => array_values($this->effectField->frame()), 'issue' => $this->effectField->mapFailure];
+    }
+
+    /**
+     * One exchange with the editor window's graphical view of the field an
+     * effect is shown on, as {@see exchangeCinematicScene()} is for a cinematic.
+     *
+     * @param list<string> $events
+     * @return array{grid: array{columns: int, rows: int, cellWidth: int, cellHeight: int}, messages: list<array{type: string, payload: array<string, mixed>}>}
+     * @throws SessionRefusal When no effect is shown on the field or a line is not a renderer event.
+     */
+    public function exchangeEffectFieldScene(array $events): array
+    {
+        $field = $this->effectField ?? throw new SessionRefusal('No effect is shown on the field.');
+        $grid = $field->getSceneGrid();
+        try {
+            return [
+                'grid' => ['columns' => $grid->columns, 'rows' => $grid->rows, 'cellWidth' => $grid->cellWidth, 'cellHeight' => $grid->cellHeight],
+                'messages' => $field->exchangeScene($events),
+            ];
+        } catch (RendererProtocolException | RendererTransportException $error) {
+            throw new SessionRefusal('The graphical preview stopped: ' . $error->getMessage(), previous: $error);
+        }
+    }
+
+    /**
+     * Closes the field an effect is shown on, with its graphical view.
+     *
+     * @return array{closed: bool} Whether one was open.
+     */
+    public function closeEffectField(): array
+    {
+        $closed = $this->effectField !== null;
+        $this->effectField?->dispose();
+        $this->effectField = null;
+        $this->effectFieldKey = null;
+
+        return ['closed' => $closed];
     }
 
     /**

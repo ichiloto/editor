@@ -402,6 +402,10 @@ final class SessionHost
             'cutscenes.cinematicStop' => $session->stopCinematicPreview(),
             'cutscenes.cinematicScene' => $session->exchangeCinematicScene(self::requireLines($params, 'events')),
             'cutscenes.cinematicSceneDetach' => $session->detachCinematicScene(),
+            'cutscenes.effectField' => $session->showEffectOnField(self::requireInt($params, 'index'), is_int($params['frame'] ?? null) ? $params['frame'] : 0,
+                self::requireInt($params, 'width'), self::requireInt($params, 'height')),
+            'cutscenes.effectFieldScene' => $session->exchangeEffectFieldScene(self::requireLines($params, 'events')),
+            'cutscenes.effectFieldClose' => $session->closeEffectField(),
             'cutscenes.effectBattlePreview' => $session->readEffectBattlePreview(self::requireInt($params, 'index'), is_int($params['frame'] ?? null) ? $params['frame'] : 0,
                 ($params['reducedMotion'] ?? false) === true,
                 EffectPresentation::tryFrom(is_string($params['presentation'] ?? null) ? $params['presentation'] : 'graphical')
