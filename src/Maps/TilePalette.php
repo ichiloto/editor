@@ -11,6 +11,7 @@ use Ichiloto\Engine\Field\MapTileLayer;
 use Ichiloto\Engine\Rendering\Presentation\PresentationWorld;
 use Ichiloto\Engine\Rendering\Tilesets\TileId;
 use Ichiloto\Engine\Rendering\Tilesets\Tileset;
+use Ichiloto\Engine\Rendering\Tilesets\TilesetPiece;
 use Ichiloto\Engine\Rendering\Tilesets\TilesetSheet;
 
 /**
@@ -63,6 +64,43 @@ final class TilePalette
             implode("\n", array_map(static fn(array $row): string => implode(' ', $row), $rows)));
 
         return PresentationWorld::getFromLayers($layers, $id, new MapGraphics($tileset, [$tiles]), $assetRoot);
+    }
+
+    /**
+     * A piece drawn as the game draws its tiles, for a picker: its tile
+     * layers in authored order over a blank grid of the piece's size, or a
+     * connected piece's shapes laid out as a small room, as its glyph picture
+     * is ({@see \Ichiloto\Editor\Canvas\PiecePlacer::buildPicture()}).
+     * Null when the piece draws no tiles.
+     */
+    public static function buildPieceWorld(Tileset $tileset, TilesetPiece $piece, string $assetRoot, string $id): ?PresentationWorld
+    {
+        $grids = [];
+        if ($piece->connects === null) {
+            foreach ($piece->tiles as $name => $rows) {
+                $grids[$name] = array_map(static fn(array $row): array => array_map(intval(...), $row), $rows);
+            }
+        } else {
+            foreach ($piece->shapeTiles as $name => $shapes) {
+                [$corner, $across, $down] = array_map(static fn(string $shape): int => (int) ($shapes[$shape] ?? TileId::EMPTY), ['corner', 'horizontal', 'vertical']);
+                $grids[$name] = [[$corner, $across, $corner], [$down, TileId::EMPTY, $down], [$corner, $across, $corner]];
+            }
+        }
+        if ($grids === []) {
+            return null;
+        }
+        $height = max(array_map(count(...), $grids));
+        $width = max(array_map(static fn(array $rows): int => max(array_map(count(...), $rows) ?: [0]), $grids));
+        $glyphs = new MapLayerSet([new MapLayer(self::LAYER, 1, false, self::LAYER, implode("\n", array_fill(0, $height, str_repeat(' ', $width))))]);
+        $layers = [];
+        $order = 1;
+        foreach ($grids as $name => $rows) {
+            $padded = array_map(static fn(array $row): string => implode(' ', array_pad($row, $width, TileId::EMPTY)),
+                array_pad($rows, $height, []));
+            $layers[] = new MapTileLayer((string) $name, $order++, (string) $name, implode("\n", $padded));
+        }
+
+        return PresentationWorld::getFromLayers($glyphs, $id, new MapGraphics($tileset, $layers), $assetRoot);
     }
 
     /** @return list<int> */

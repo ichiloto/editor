@@ -130,6 +130,7 @@ final class SessionHost
             'map.world' => $session->readWorld(self::requireString($params, 'map'),
                 is_bool($params['tileShadows'] ?? false) ? ($params['tileShadows'] ?? false) : throw new InvalidRequest('"tileShadows" must be a boolean.')),
             'tiles.palette' => $session->readTilePalette(self::requireString($params, 'map')),
+            'tilesets.preview' => $session->readTilesetPreview(self::requireInt($params, 'index')),
             'tiles.read' => $session->readTiles(self::requireString($params, 'map')),
             'tiles.stamp' => $session->stampTiles(
                 self::requireString($params, 'map'),

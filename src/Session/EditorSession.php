@@ -19,6 +19,8 @@ use Ichiloto\Editor\Canvas\CanvasTool;
 use Ichiloto\Editor\Canvas\ToolGeometry;
 use Ichiloto\Engine\Rendering\Tilesets\TileId;
 use Ichiloto\Engine\Rendering\Tilesets\TilesetPiece;
+use Ichiloto\Engine\Rendering\Tilesets\Tileset;
+use Ichiloto\Engine\Rendering\Tilesets\TilesetSheet;
 use Ichiloto\Editor\Database\ConditionCodec;
 use Ichiloto\Editor\Database\ConditionEditor;
 use Ichiloto\Editor\Animations\LegacyAnimationConversion;
@@ -514,6 +516,75 @@ final class EditorSession
 
         return ['tileset' => $tileset->id, 'name' => $tileset->name, 'assetRoot' => $map->getAssetRoot(), 'tabs' => $tabs];
     }
+    /**
+     * A tileset record as an author sees it, unsaved edits included: its
+     * sheets as the tile palette lays them out ({@see TilePalette}), the tiles
+     * it marks (drawn above characters, tables, the missing-art tile), and its
+     * pieces, each with its glyph picture and its tiles drawn. A tileset the
+     * Engine would refuse still shows the sheets it can, and `issue` says
+     * what is wrong; a sheet that cannot be drawn is left out and named.
+     *
+     * @return array<string, mixed>
+     * @throws SessionRefusal When the record is unknown.
+     */
+    public function readTilesetPreview(int $index): array
+    {
+        $record = $this->requireRecordDatabase('tilesets')->getRecordByIndex($index)
+            ?? throw new SessionRefusal(sprintf('tilesets has no record %d.', $index));
+        $assetRoot = rtrim($this->workspace->projectRoot, '/') . '/assets';
+        $data = $record->toArray();
+        $data = is_array($data) ? $data : (array) $data;
+        $issue = null;
+        try {
+            $tileset = Tileset::fromArray($record->recordId, $data);
+        } catch (InvalidArgumentException $error) {
+            $issue = $error->getMessage();
+            // The sheets alone, so what can be seen still is.
+            $sheets = array_filter(is_array($data['sheets'] ?? null) ? $data['sheets'] : [], static fn(mixed $asset, mixed $sheet): bool => is_string($asset)
+                && TilesetSheet::tryFrom((string) $sheet) !== null && strtolower(pathinfo($asset, PATHINFO_EXTENSION)) === 'png', ARRAY_FILTER_USE_BOTH);
+            $tileset = new Tileset($record->recordId, trim((string) ($data['name'] ?? '')) ?: $record->recordId, $sheets);
+        }
+        $tabs = $unreadable = [];
+        foreach (TilePalette::getTabs($tileset) as $tab) {
+            try {
+                $world = TilePalette::buildWorld($tileset, $tab['ids'], $assetRoot, 'tileset-preview:' . $tab['name']);
+                $tabs[] = [...$tab, 'operations' => $world->operations];
+            } catch (\Throwable $error) {
+                $unreadable[] = sprintf('Tab %s cannot be drawn: %s', $tab['name'], $error->getMessage());
+            }
+        }
+        $pieces = [];
+        foreach ($tileset->pieces as $piece) {
+            try {
+                $world = TilePalette::buildPieceWorld($tileset, $piece, $assetRoot, 'tileset-piece:' . $piece->id);
+            } catch (\Throwable $error) {
+                $world = null;
+                $unreadable[] = sprintf('%s\'s tiles cannot be drawn: %s', $piece->name, $error->getMessage());
+            }
+            $pieces[] = [
+                'id' => $piece->id,
+                'name' => $piece->name,
+                'layerLabel' => MapLayers::formatLabel($piece->layer),
+                'connected' => $piece->connects !== null,
+                'width' => $piece->width,
+                'height' => $piece->height,
+                'tileLayers' => array_keys($piece->connects === null ? $piece->tiles : $piece->shapeTiles),
+                'picture' => PiecePlacer::buildPicture($piece),
+                'operations' => $world?->operations,
+            ];
+        }
+
+        return [
+            'palette' => ['tileset' => $tileset->id, 'name' => $tileset->name, 'assetRoot' => $assetRoot, 'tabs' => $tabs],
+            'missingArt' => $tileset->missingArt,
+            'above' => $tileset->above,
+            'tables' => $tileset->tables,
+            'pieces' => $pieces,
+            'issue' => $issue,
+            'unreadable' => $unreadable,
+        ];
+    }
+
     /**
      * Each tile layer's tile identities by row, unsaved edits included, in
      * drawing order: what a tile picker reads. A layer that cannot be read
@@ -3827,6 +3898,8 @@ final class EditorSession
                 'destination' => 'maps',
                 default => null,
             },
+            // What the value looks like, when the reference names a picture: shown with the row and in its picker.
+            'media' => $kind === 'reference' ? ReferenceCatalog::describeMedia((string) $field['reference']) : null,
             // How the choice of nothing reads, where the row says (the Engine's own attack).
             'noneLabel' => $kind === 'reference' && is_string($field['noneLabel'] ?? null) ? $field['noneLabel'] : null,
             'action' => $kind === 'action' ? $field['action'] : null,

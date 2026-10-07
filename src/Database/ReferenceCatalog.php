@@ -99,12 +99,34 @@ final class ReferenceCatalog
     ];
 
     /**
+     * The reference kinds whose values are pictures an author looks at: how
+     * an interface shows each value, and the folder under the project root
+     * its values are relative to. An interface shows a value's picture from
+     * this, never from the kind's name.
+     */
+    private const array MEDIA = [
+        'png_assets' => ['kind' => 'image', 'root' => 'assets'],
+    ];
+
+    /**
      * Where each audio kind's files live, under assets/Audio.
      */
     private const array AUDIO_DIRECTORIES = [
         'bgm' => 'BGM',
         'sfx' => 'SFX',
     ];
+
+    /**
+     * How an interface shows the values of a reference kind, when they are
+     * pictures: `kind` (`image`) and `root`, the folder under the project
+     * root the values are relative to. Null for any other kind.
+     *
+     * @return array{kind: string, root: string}|null
+     */
+    public static function describeMedia(string $category): ?array
+    {
+        return self::MEDIA[$category] ?? null;
+    }
 
     /**
      * @param ProjectWorkspace $workspace The project.
