@@ -273,7 +273,10 @@ it('draws the previewed cinematic in the window\'s graphical view through the se
     $ready = json_encode(['protocol' => 2, 'type' => 'ready', 'capabilities' => ['sprite_source_rect', 'graphical_canvas', 'canvas_overlay',
         'canvas_clip_opacity', 'frame_viewport', 'field_motion']]);
 
-    $sent = $session->exchangeCinematicScene([$ready])['messages'];
+    $exchange = $session->exchangeCinematicScene([$ready]);
+    // The window builds its scene with the grid the session names: the preview's screen in the game's graphical text cells.
+    expect($exchange['grid'])->toBe(['columns' => 60, 'rows' => 16, 'cellWidth' => 10, 'cellHeight' => 20]);
+    $sent = $exchange['messages'];
     expect(array_column($sent, 'type'))->toContain('frame')
         ->and(array_key_exists('protocol', $sent[0]['payload']))->toBeFalse()
         ->and(fn() => $session->exchangeCinematicScene(['not a renderer event']))->toThrow(SessionRefusal::class, 'graphical preview stopped')

@@ -578,8 +578,7 @@ final class CinematicPreviewSession
      */
     public function exchangeScene(array $events): array
     {
-        $grid = new RendererGridConfig($this->screenWidth, $this->screenHeight,
-            RendererRuntimeConfig::GPUI_CELL_WIDTH, RendererRuntimeConfig::GPUI_CELL_HEIGHT);
+        $grid = $this->getSceneGrid();
         $messages = [];
         $this->run(function () use ($grid, $events, &$messages): void {
             $this->sceneHost ??= new PreviewSceneHost($this->scene, $this->presentation,
@@ -588,6 +587,13 @@ final class CinematicPreviewSession
         });
 
         return $messages;
+    }
+
+    /** The graphical view's grid: the preview's screen in the game's graphical text cells. */
+    public function getSceneGrid(): RendererGridConfig
+    {
+        return new RendererGridConfig($this->screenWidth, $this->screenHeight,
+            RendererRuntimeConfig::GPUI_CELL_WIDTH, RendererRuntimeConfig::GPUI_CELL_HEIGHT);
     }
 
     /** Ends the editor window's graphical view of the scene, if one is attached. */

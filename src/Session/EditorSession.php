@@ -2044,15 +2044,21 @@ final class EditorSession
      * rejections, exactly as the game's renderer writes them), the frames it
      * should apply out, in order, each its FRAME payload without envelope.
      *
+     * The answer names the view's grid, which the window's scene session is built with.
+     *
      * @param list<string> $events
-     * @return array{messages: list<array{type: string, payload: array<string, mixed>}>}
+     * @return array{grid: array{columns: int, rows: int, cellWidth: int, cellHeight: int}, messages: list<array{type: string, payload: array<string, mixed>}>}
      * @throws SessionRefusal When no cinematic is previewed or a line is not a renderer event.
      */
     public function exchangeCinematicScene(array $events): array
     {
         $preview = $this->cinematicPreview ?? throw new SessionRefusal('No cinematic is being previewed.');
+        $grid = $preview->getSceneGrid();
         try {
-            return ['messages' => $preview->exchangeScene($events)];
+            return [
+                'grid' => ['columns' => $grid->columns, 'rows' => $grid->rows, 'cellWidth' => $grid->cellWidth, 'cellHeight' => $grid->cellHeight],
+                'messages' => $preview->exchangeScene($events),
+            ];
         } catch (RendererProtocolException | RendererTransportException $error) {
             throw new SessionRefusal('The graphical preview stopped: ' . $error->getMessage(), previous: $error);
         }
