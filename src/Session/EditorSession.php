@@ -15,6 +15,9 @@ use Ichiloto\Editor\Cutscenes\Preview\TimelinePreviewSession;
 use Ichiloto\Editor\ProjectDirectoryContext;
 use Ichiloto\Editor\Canvas\PieceRole;
 use Ichiloto\Editor\Canvas\PiecePlacer;
+use Ichiloto\Editor\Canvas\CanvasTool;
+use Ichiloto\Editor\Canvas\ToolGeometry;
+use Ichiloto\Engine\Rendering\Tilesets\TileId;
 use Ichiloto\Engine\Rendering\Tilesets\TilesetPiece;
 use Ichiloto\Editor\Database\ConditionCodec;
 use Ichiloto\Editor\Database\ConditionEditor;
@@ -591,6 +594,91 @@ final class EditorSession
         }
 
         return ['status' => 'applied', 'changed' => $applied['changed'], 'glyphs' => $applied['glyphs'], 'revision' => $this->getMapRevision($map)];
+    }
+
+    /**
+     * The cells a canvas tool paints, the one way every interface works them
+     * out ({@see CanvasTool::getShapeCells()}): a brush stroke's path widened
+     * by the brush, or a line or rectangle between two corners. Cells off the
+     * map are left out, so an interface previews and paints exactly these.
+     *
+     * @param array{0: int, 1: int} $from The anchor.
+     * @param array{0: int, 1: int} $to The cursor.
+     * @param list<array{0: int, 1: int}> $path A brush stroke's cells, in the order dragged; the cursor alone when empty.
+     * @return array{cells: list<array{0: int, 1: int}>}
+     * @throws SessionRefusal When the map, the tool or the brush width is unknown.
+     */
+    public function getToolShape(string $mapId, string $tool, array $from, array $to, int $brushSize, array $path = []): array
+    {
+        $map = $this->requireMap($mapId);
+        $canvasTool = CanvasTool::tryFrom($tool);
+        if ($canvasTool === null || $canvasTool === CanvasTool::SELECT) {
+            throw new SessionRefusal(sprintf('%s is not a painting tool.', $tool));
+        }
+        if (! in_array($brushSize, CanvasTool::BRUSH_SIZES, true)) {
+            throw new SessionRefusal(sprintf('The brush is %s cells wide.', implode(', ', CanvasTool::BRUSH_SIZES)));
+        }
+        [$anchor, $cursor] = [['x' => $from[0], 'y' => $from[1]], ['x' => $to[0], 'y' => $to[1]]];
+        $cells = $canvasTool === CanvasTool::BRUSH && $path !== []
+            ? ToolGeometry::expandByBrush(array_map(static fn(array $cell): array => ['x' => $cell[0], 'y' => $cell[1]], $path), $brushSize)
+            : $canvasTool->getShapeCells($anchor, $cursor, $brushSize);
+
+        return ['cells' => $this->listCellsOnMap($map, $cells)];
+    }
+
+    /**
+     * The region a flood fill paints from a cell: the cells joined to it
+     * across and down that hold the same glyph on a glyph layer, or the same
+     * tile on a tile layer, an autotile counting as its kind whatever shape
+     * its neighbours give it. A tile layer the map does not have yet is empty
+     * everywhere.
+     *
+     * @return array{cells: list<array{0: int, 1: int}>}
+     * @throws SessionRefusal When the map or the glyph layer is unknown, or not exactly one layer is named.
+     */
+    public function getFillRegion(string $mapId, int $x, int $y, ?string $layerId, ?string $tileLayer): array
+    {
+        $map = $this->requireMap($mapId);
+        if (($layerId === null) === ($tileLayer === null)) {
+            throw new SessionRefusal('Name the glyph layer or the tile layer to fill.');
+        }
+        if ($layerId !== null) {
+            if (! array_any($map->getLayers(), static fn(array $layer): bool => $layer['id'] === $layerId)) {
+                throw new SessionRefusal(sprintf('%s has no layer %s.', $mapId, $layerId));
+            }
+            $identityAt = static fn(int $x, int $y): string => $map->getLayerSymbol($layerId, $x, $y);
+        } else {
+            try {
+                $rows = in_array($tileLayer, $map->getTileLayerNames(), true)
+                    ? $map->readTileEntries([$tileLayer], 0, 0, $map->getWidth(), $map->getHeight())[$tileLayer] ?? []
+                    : [];
+            } catch (MapSourceRefusal $refusal) {
+                throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+            }
+            $identityAt = static function (int $x, int $y) use ($rows): string {
+                $tile = (int) ($rows[$y][$x] ?? TileId::EMPTY);
+
+                return TileId::isAutotile($tile) ? 'kind:' . TileId::getKind($tile) : (string) $tile;
+            };
+        }
+
+        return ['cells' => $this->listCellsOnMap($map, ToolGeometry::floodFill($identityAt, $map->getWidth(), $map->getHeight(), $x, $y))];
+    }
+
+    /**
+     * @param array<int, array{x: int, y: int}> $cells
+     * @return list<array{0: int, 1: int}>
+     */
+    private function listCellsOnMap(ProjectMap $map, array $cells): array
+    {
+        $listed = [];
+        foreach ($cells as ['x' => $x, 'y' => $y]) {
+            if ($x >= 0 && $y >= 0 && $x < $map->getWidth() && $y < $map->getHeight()) {
+                $listed[] = [$x, $y];
+            }
+        }
+
+        return $listed;
     }
 
     /**

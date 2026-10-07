@@ -184,7 +184,6 @@ final class Editor
     /**
      * The brush widths Ctrl+W cycles through. 1 is the historic single cell.
      */
-    private const array BRUSH_SIZES = [1, 2, 3, 5];
 
     private bool $isRunning = false;
     private ?ProjectWorkspace $workspace = null;
@@ -4539,7 +4538,7 @@ final class Editor
      */
     private function cycleCanvasBrushSize(): void
     {
-        $sizes = self::BRUSH_SIZES;
+        $sizes = CanvasTool::BRUSH_SIZES;
         $index = array_search($this->canvasBrushSize, $sizes, true);
         $index = is_int($index) ? $index : 0;
         $this->canvasBrushSize = $sizes[($index + 1) % count($sizes)];
@@ -4650,16 +4649,11 @@ final class Editor
      */
     private function getCanvasToolShapeCells(array $anchor): array
     {
-        $cells = match ($this->canvasTool) {
-            CanvasTool::LINE => ToolGeometry::line($anchor['x'], $anchor['y'], $this->cursorX, $this->cursorY),
-            CanvasTool::RECTANGLE => ToolGeometry::rectangleOutline($anchor['x'], $anchor['y'], $this->cursorX, $this->cursorY),
-            CanvasTool::FILLED_RECTANGLE => ToolGeometry::rectangleFilled($anchor['x'], $anchor['y'], $this->cursorX, $this->cursorY),
-            default => [],
-        };
+        if (! in_array($this->canvasTool, [CanvasTool::LINE, CanvasTool::RECTANGLE, CanvasTool::FILLED_RECTANGLE], true)) {
+            return [];
+        }
 
-        // The brush thickens outlines and lines; a filled rectangle is
-        // already solid, so widening it would only spill past the corners.
-        return $this->canvasTool === CanvasTool::FILLED_RECTANGLE ? $cells : ToolGeometry::expandByBrush($cells, $this->canvasBrushSize);
+        return $this->canvasTool->getShapeCells($anchor, ['x' => $this->cursorX, 'y' => $this->cursorY], $this->canvasBrushSize);
     }
 
     /**

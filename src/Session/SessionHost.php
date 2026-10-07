@@ -148,6 +148,21 @@ final class SessionHost
                 is_string($params['label'] ?? null) ? $params['label'] : 'Place tiles',
                 self::readTileChoices($params),
             ),
+            'canvas.shape' => $session->getToolShape(
+                self::requireString($params, 'map'),
+                self::requireString($params, 'tool'),
+                self::requireCell($params, 'from'),
+                self::requireCell($params, 'to'),
+                self::requireInt($params, 'size'),
+                array_key_exists('path', $params) ? self::requireCells(['cells' => $params['path']]) : [],
+            ),
+            'canvas.fill' => $session->getFillRegion(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'x'),
+                self::requireInt($params, 'y'),
+                self::readOptionalString($params, 'layer'),
+                self::readOptionalString($params, 'tileLayer'),
+            ),
             'pieces.list' => $session->listPieces(self::requireString($params, 'map')),
             'pieces.preview' => $session->previewPiece(
                 self::requireString($params, 'map'),
