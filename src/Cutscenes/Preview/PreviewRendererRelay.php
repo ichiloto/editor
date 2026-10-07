@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Cutscenes\Preview;
 
-use Ichiloto\Engine\Rendering\Transport\Enumerations\RendererMessageType;
 use Ichiloto\Engine\Rendering\Transport\Enumerations\RendererTransportState;
 use Ichiloto\Engine\Rendering\Transport\Exceptions\RendererTransportException;
 use Ichiloto\Engine\Rendering\Transport\Interfaces\RendererTransportInterface;
@@ -142,11 +141,5 @@ final class PreviewRendererRelay implements RendererTransportInterface
     public function getSession(): ?RendererSessionConfig
     {
         return $this->session;
-    }
-
-    /** Whether a frame is waiting for the window. */
-    public function hasFrame(): bool
-    {
-        return array_any($this->outgoing, static fn(RendererMessage $message): bool => $message->type === RendererMessageType::FRAME);
     }
 }

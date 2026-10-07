@@ -13,6 +13,7 @@ use Ichiloto\Editor\Backup\BackupSettings;
 use Ichiloto\Editor\Actors\ActorIdentityMigration;
 use Ichiloto\Editor\Actors\ActorIdentityMigrationPlan;
 use Ichiloto\Editor\Backup\BackupWriter;
+use Ichiloto\Editor\Canvas\CanvasClipboard;
 use Ichiloto\Editor\Canvas\CanvasEditor;
 use Ichiloto\Editor\Canvas\CanvasTool;
 use Ichiloto\Editor\Canvas\Clipboard;
@@ -4871,45 +4872,30 @@ final class Editor
     {
         $selectedMap = $this->getSelectedMap();
 
-        if (! $selectedMap instanceof ProjectMap || $this->captureCanvasSelection() === 0) {
+        if (! $selectedMap instanceof ProjectMap || ! is_array($this->canvasSelection)) {
+            $this->captureCanvasSelection();
             return;
         }
 
         $selection = $this->canvasSelection;
-        $cells = ToolGeometry::rectangleFilled(
-            $selection['x'],
-            $selection['y'],
-            $selection['x'] + $selection['width'] - 1,
-            $selection['y'] + $selection['height'] - 1,
-        );
-        // The tiles that moved into the clipboard with the glyphs leave too.
-        $clears = array_map(
-            static fn(array $tiles): array => array_map(
-                static fn(array $cell): array => ['entry' => (string) TileId::EMPTY] + $cell,
-                $tiles,
-            ),
-            $this->clipboard->projectTiles($selection['x'], $selection['y'], $selectedMap->getWidth(), $selectedMap->getHeight()),
-        );
-        $changed = $this->commitCanvasWrites(
-            $selectedMap,
-            array_map(
-                fn(array $cell): array => ['x' => $cell['x'], 'y' => $cell['y'], 'symbol' => ' ', 'color' => $this->selectedPaintColor],
-                $cells,
-            ),
-            'cut selection',
-            $clears,
-        );
-
-        if ($changed === null) {
+        $this->finalizeActiveStroke();
+        try {
+            $cut = CanvasClipboard::cut($selectedMap, $this->getActiveCanvasLayer(), $selection['x'], $selection['y'],
+                $selection['width'], $selection['height'], $this->clipboard, $this->editingMode !== self::MODE_NPC);
+        } catch (MapSourceRefusal $refusal) {
+            $this->setStatus($refusal->getMessage(), StatusLevel::WARN);
             $this->renderCanvasArea();
             return;
+        }
+        if ($cut['command'] !== null) {
+            $this->recordCommand($cut['command']);
         }
         $this->setStatus(sprintf(
             'Cut %d x %d (%d cell%s cleared).',
             $this->clipboard->getWidth(),
             $this->clipboard->getHeight(),
-            $changed,
-            $changed === 1 ? '' : 's',
+            $cut['changed'],
+            $cut['changed'] === 1 ? '' : 's',
         ));
         $this->renderCanvasArea();
     }
@@ -4934,39 +4920,15 @@ final class Editor
         }
 
         $selection = $this->canvasSelection;
-        $rows = [];
-        $styles = [];
-
-        for ($rowIndex = 0; $rowIndex < $selection['height']; $rowIndex++) {
-            $row = [];
-            $styleRow = [];
-
-            for ($columnIndex = 0; $columnIndex < $selection['width']; $columnIndex++) {
-                $row[] = $this->readCanvasSymbol($selectedMap, $selection['x'] + $columnIndex, $selection['y'] + $rowIndex);
-
-                $styleRow[] = $selectedMap->getLayerCellStyle($this->getActiveCanvasLayer(), $selection['x'] + $columnIndex, $selection['y'] + $rowIndex);
-            }
-
-            $rows[] = $row;
-            $styles[] = $styleRow;
-        }
-
         // The tiles that move with this layer's glyphs travel with the block.
         try {
-            $tiles = $this->editingMode === self::MODE_NPC ? [] : $selectedMap->readTileEntries(
-                $selectedMap->getTileLayersMovingWith($this->getActiveCanvasLayer()),
-                $selection['x'],
-                $selection['y'],
-                $selection['width'],
-                $selection['height'],
-            );
+            CanvasClipboard::copy($selectedMap, $this->getActiveCanvasLayer(), $selection['x'], $selection['y'],
+                $selection['width'], $selection['height'], $this->clipboard, $this->editingMode !== self::MODE_NPC);
         } catch (MapSourceRefusal $refusal) {
             $this->setStatus($refusal->getMessage(), StatusLevel::WARN);
             $this->renderFooter();
             return 0;
         }
-
-        $this->clipboard->store($rows, $this->getActiveCanvasLayer(), $styles, $tiles);
 
         return $selection['width'] * $selection['height'];
     }
@@ -4985,43 +4947,22 @@ final class Editor
             return;
         }
 
-        if ($this->clipboard->isEmpty()) {
-            $this->setStatus('The clipboard is empty - select a region and press Ctrl+L.', StatusLevel::WARN);
+        $this->finalizeActiveStroke();
+        try {
+            $pasted = CanvasClipboard::paste($selectedMap, $this->getActiveCanvasLayer(), $this->clipboard,
+                $this->cursorX, $this->cursorY, $choices);
+        } catch (MapSourceRefusal $refusal) {
+            $this->setStatus($refusal->getMessage(), StatusLevel::WARN);
             $this->renderFooter();
             return;
         }
-
-        if ($this->clipboard->layer !== $this->getActiveCanvasLayer()) {
-            $source = array_find($this->getSelectedMap()?->getLayers() ?? [],
-                fn(array $layer): bool => $layer['id'] === $this->clipboard->layer);
-            $this->setStatus(
-                $source === null
-                    ? 'The clipboard holds a block from another layer; switch layers before pasting.'
-                    : sprintf('The clipboard holds a block from the %s layer; switch to it before pasting.',
-                        MapLayers::formatLabel($source['name'])),
-                StatusLevel::WARN,
-            );
-            $this->renderFooter();
+        if ($pasted['unresolved'] !== []) {
+            $glyph = (string) array_key_first($pasted['unresolved']);
+            $this->askForGlyphPiece($glyph, $pasted['unresolved'][$glyph], $choices, $this->pasteCanvasClipboard(...));
             return;
         }
-
-        $writes = $this->clipboard->project(
-            $this->cursorX,
-            $this->cursorY,
-            $selectedMap->getWidth(),
-            $selectedMap->getHeight(),
-        );
-        // Tiles land only on the layers that move with this map's layer.
-        $tiles = array_intersect_key(
-            $this->clipboard->projectTiles($this->cursorX, $this->cursorY, $selectedMap->getWidth(), $selectedMap->getHeight()),
-            array_flip($selectedMap->getTileLayersMovingWith($this->getActiveCanvasLayer())),
-        );
-        $changed = $this->commitCanvasWrites($selectedMap, $writes, 'pasted selection', $tiles,
-            $this->pasteCanvasClipboard(...), $choices);
-
-        if ($changed === null) {
-            $this->renderCanvasArea();
-            return;
+        if ($pasted['command'] !== null) {
+            $this->recordCommand($pasted['command']);
         }
         $this->setStatus(sprintf(
             'Stamped %d x %d at (%d, %d): %d cell%s changed.',
@@ -5029,8 +4970,8 @@ final class Editor
             $this->clipboard->getHeight(),
             $this->cursorX,
             $this->cursorY,
-            $changed,
-            $changed === 1 ? '' : 's',
+            $pasted['changed'],
+            $pasted['changed'] === 1 ? '' : 's',
         ));
         $this->renderCanvasArea();
     }

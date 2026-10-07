@@ -6,7 +6,9 @@ namespace Ichiloto\Editor\Session;
 
 use Ichiloto\Editor\Backup\BackupSettings;
 use Ichiloto\Editor\Backup\BackupWriter;
+use Ichiloto\Editor\Canvas\CanvasClipboard;
 use Ichiloto\Editor\Canvas\CanvasEditor;
+use Ichiloto\Editor\Canvas\Clipboard;
 use Ichiloto\Editor\Cutscenes\CutsceneAsset;
 use Ichiloto\Editor\Cutscenes\CutsceneRecordCategory;
 use Ichiloto\Editor\Cutscenes\CutsceneType;
@@ -137,6 +139,9 @@ final class EditorSession
     private ?PlaytestRun $playtest = null;
     /** The battle test running in its own window, and the troop it fights. */
     private ?PlaytestRun $battleTestRun = null;
+
+    /** The block an author last copied or cut, for pasting on its layer. */
+    private ?Clipboard $clipboard = null;
 
     /** The music or sound an author is hearing from a field, once one has been played. */
     private ?AudioAudition $audition = null;
@@ -939,6 +944,110 @@ final class EditorSession
             'available' => $cells !== null,
             'cells' => array_map(static fn(array $cell): array => [$cell['x'], $cell['y'], $cell['glyph'], $cell['layer']], $cells ?? []),
         ];
+    }
+
+    /**
+     * Copies a rectangle of a layer into the session's clipboard: its glyphs
+     * and styles, and the tiles that move with that layer ({@see CanvasClipboard::copy()}).
+     *
+     * @return array{layer: string, width: int, height: int}
+     * @throws SessionRefusal When the map, layer or rectangle is unknown, or a tile layer cannot be read.
+     */
+    public function copySelection(string $mapId, string $layerId, int $x, int $y, int $width, int $height): array
+    {
+        $map = $this->requireMap($mapId);
+        $this->requireSelection($map, $layerId, $x, $y, $width, $height);
+        try {
+            CanvasClipboard::copy($map, $layerId, $x, $y, $width, $height, $this->clipboard ??= new Clipboard());
+        } catch (MapSourceRefusal $refusal) {
+            throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+        }
+
+        return $this->describeClipboard();
+    }
+
+    /**
+     * Copies a rectangle of a layer into the session's clipboard and clears
+     * it, glyphs and the tiles that went with them, as one undo step.
+     *
+     * @return array{layer: string, width: int, height: int, changed: int, revision: int}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, or the layer or rectangle is unknown.
+     */
+    public function cutSelection(string $mapId, int $revision, string $layerId, int $x, int $y, int $width, int $height): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        if ($map->getGridSourceIssue() !== null) {
+            throw new SessionRefusal(sprintf('%s is read-only: %s', $mapId, $map->getGridSourceIssue()));
+        }
+        $this->requireSelection($map, $layerId, $x, $y, $width, $height);
+        try {
+            $cut = CanvasClipboard::cut($map, $layerId, $x, $y, $width, $height, $this->clipboard ??= new Clipboard());
+        } catch (MapSourceRefusal $refusal) {
+            throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+        }
+        if ($cut['command'] !== null) {
+            $this->history->record($cut['command']);
+        }
+
+        return [...$this->describeClipboard(), 'changed' => $cut['changed'], 'revision' => $this->getMapRevision($map)];
+    }
+
+    /**
+     * Stamps the session's clipboard with its top-left cell at a map cell as
+     * one undo step. A glyph that could be several pieces is asked about, and
+     * nothing changes until the paste is made again with the answer.
+     *
+     * @param array<string, ?string> $choices
+     * @return array{status: 'applied', changed: int, revision: int}|array{status: 'question', glyph: string, roles: list<array{key: string, label: string}>}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, the clipboard is empty or from another layer.
+     */
+    public function pasteSelection(string $mapId, int $revision, string $layerId, int $x, int $y, array $choices = []): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        if ($map->getGridSourceIssue() !== null) {
+            throw new SessionRefusal(sprintf('%s is read-only: %s', $mapId, $map->getGridSourceIssue()));
+        }
+        try {
+            $pasted = CanvasClipboard::paste($map, $layerId, $this->clipboard ??= new Clipboard(), $x, $y, $choices);
+        } catch (MapSourceRefusal $refusal) {
+            throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+        }
+        if ($pasted['unresolved'] !== []) {
+            $glyph = (string) array_key_first($pasted['unresolved']);
+
+            return ['status' => 'question', 'glyph' => $glyph, 'roles' => array_map(
+                static fn(PieceRole $role): array => ['key' => $role->key, 'label' => $role->label],
+                $pasted['unresolved'][$glyph],
+            )];
+        }
+        if ($pasted['command'] !== null) {
+            $this->history->record($pasted['command']);
+        }
+
+        return ['status' => 'applied', 'changed' => $pasted['changed'], 'revision' => $this->getMapRevision($map)];
+    }
+
+    /**
+     * What the session's clipboard holds: the layer it came from and its size; an empty layer when it holds nothing.
+     *
+     * @return array{layer: string, width: int, height: int}
+     */
+    public function describeClipboard(): array
+    {
+        $clipboard = $this->clipboard ?? new Clipboard();
+
+        return ['layer' => $clipboard->layer, 'width' => $clipboard->getWidth(), 'height' => $clipboard->getHeight()];
+    }
+
+    /** @throws SessionRefusal When the layer is not the map's, or the rectangle is empty or leaves the map. */
+    private function requireSelection(ProjectMap $map, string $layerId, int $x, int $y, int $width, int $height): void
+    {
+        if (! array_any($map->getLayers(), static fn(array $layer): bool => $layer['id'] === $layerId)) {
+            throw new SessionRefusal(sprintf('%s has no layer %s.', $map->mapId, $layerId));
+        }
+        if ($width < 1 || $height < 1 || $x < 0 || $y < 0 || $x + $width > $map->getWidth() || $y + $height > $map->getHeight()) {
+            throw new SessionRefusal(sprintf('A selection of %d x %d at (%d, %d) does not fit %s.', $width, $height, $x, $y, $map->mapId));
+        }
     }
 
     /**
