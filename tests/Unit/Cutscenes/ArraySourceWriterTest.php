@@ -361,15 +361,24 @@ it('rewrites the real Last Legend summon timelines to themselves and back from a
         // patched in place and evaluates exactly.
         expect(ArraySourceWriter::rewrite($document, $evaluated, $evaluated)->source)->toBe($source);
 
+        // Every sequence the file authors: its own tracks, or each
+        // presentation's when it pairs terminal and graphical ones.
         $new = $evaluated;
-
-        foreach ($new['tracks'] as &$track) {
-            foreach ($track['keyframes'] as &$keyframe) {
-                $keyframe['frame'] = $keyframe['frame'] + 1;
+        $shift = static function (array $sequence): array {
+            foreach ($sequence['tracks'] ?? [] as $track => $authored) {
+                foreach ($authored['keyframes'] ?? [] as $keyframe => $key) {
+                    $sequence['tracks'][$track]['keyframes'][$keyframe]['frame'] = $key['frame'] + 1;
+                }
             }
+
+            return $sequence;
+        };
+        $new = $shift($new);
+        foreach (array_keys($new['presentations'] ?? []) as $presentation) {
+            $new['presentations'][$presentation] = $shift($new['presentations'][$presentation]);
         }
 
-        unset($track, $keyframe);
+        expect($new)->not->toBe($evaluated);
         $rewritten = ArraySourceWriter::rewrite($document, $evaluated, $new);
 
         expect(evaluateSource($rewritten->source))->toBe($new)
