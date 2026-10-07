@@ -383,6 +383,26 @@ final readonly class NpcAuthoring
         }
     }
 
+    /**
+     * Gives an NPC the RPG Maker character sheet it walks with in the
+     * graphical field, or takes it away (null), as one undo step. The sheet's
+     * other settings are kept, the terminal sprite is untouched, and the sheet
+     * is checked as the game will read it ({@see ProjectMap::setNpcGraphicalSprites()}).
+     *
+     * @throws NpcRefusal When there is no such NPC.
+     * @throws MapSourceRefusal When the sheet is not a usable character sheet or the map's source cannot take the change.
+     */
+    public function setFieldSheet(ProjectMap $map, int $index, ?string $sheet): NpcChange
+    {
+        $before = $map->getNpcs();
+        $npc = $this->requireNpc($map, $before, $index);
+        $current = $npc->toArray()['sprites2d'] ?? null;
+        $sheet = $sheet === null ? '' : trim($sheet);
+        $map->setNpcGraphicalSprites($index, $sheet === '' ? null : [...(is_array($current) ? $current : []), 'sheet' => $sheet]);
+
+        return $this->createRowChange($map, 'NPC field sheet', $before, $index);
+    }
+
     /** The change a row edit made to one NPC, with its command when it changed anything. */
     private function createRowChange(ProjectMap $map, string $label, NpcCollection $before, int $index): NpcChange
     {

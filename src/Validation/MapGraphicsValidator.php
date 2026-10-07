@@ -92,26 +92,13 @@ final class MapGraphicsValidator
      */
     public static function validateCoverage(ProjectMap $map): array
     {
-        $ignored = [];
-        $tileset = is_string($tilesetId = $map->getMapDataField(['tileset'])) ? self::loadTileset($map, $tilesetId, $ignored) : null;
-        if ($tileset === null) {
+        $coverage = self::readCoverage($map);
+        if ($coverage === null) {
             return [];
         }
-        $layers = self::readLayers($map, $map->getTileLayerSources(), $ignored);
-
-        try {
-            $layerSet = $map->getLayerSet();
-            $owners = MapGraphics::resolveLayerOwners($map->getMapDataField([MapGraphics::SETTINGS_KEY]),
-                array_map(static fn(MapTileLayer $layer): string => $layer->name, $layers),
-                array_column(array_filter($map->getLayers(), static fn(array $layer): bool =>
-                    $layer['id'] !== MapLayers::EVENT && ! $layer['decoration']), 'name'), $tileset, $map->mapId);
-        } catch (Throwable) {
-            // The terminal layers' and tile layer settings' own checks report why.
-            return [];
-        }
-
+        [$tileset, $layers, $shownCells] = $coverage;
         $shown = [];
-        foreach (new MapGraphics($tileset, $layers, owners: $owners)->getShownGlyphCells($layerSet, $map->getAssetRoot()) as $cell) {
+        foreach ($shownCells as $cell) {
             $shown[$cell['y']][$cell['x']] = $cell;
         }
 
@@ -167,6 +154,48 @@ final class MapGraphicsValidator
         }
 
         return $issues;
+    }
+
+    /**
+     * The cells whose glyph still shows in the graphical field, by the
+     * Engine's glyph fallback rule ({@see MapGraphics::getShownGlyphCells()}),
+     * in row order. Null when the map has no kind, or its kind or tile layers
+     * cannot be read; {@see validate()} reports why.
+     *
+     * @return list<array{x: int, y: int, glyph: string, layer: string}>|null
+     */
+    public static function listShownGlyphCells(ProjectMap $map): ?array
+    {
+        return self::readCoverage($map)[2] ?? null;
+    }
+
+    /**
+     * The map's tileset, its readable tile layers and the cells whose glyph
+     * still shows; null when they cannot be read.
+     *
+     * @return array{0: Tileset, 1: list<MapTileLayer>, 2: list<array{x: int, y: int, glyph: string, layer: string}>}|null
+     */
+    private static function readCoverage(ProjectMap $map): ?array
+    {
+        $ignored = [];
+        $tileset = is_string($tilesetId = $map->getMapDataField(['tileset'])) ? self::loadTileset($map, $tilesetId, $ignored) : null;
+        if ($tileset === null) {
+            return null;
+        }
+        $layers = self::readLayers($map, $map->getTileLayerSources(), $ignored);
+
+        try {
+            $layerSet = $map->getLayerSet();
+            $owners = MapGraphics::resolveLayerOwners($map->getMapDataField([MapGraphics::SETTINGS_KEY]),
+                array_map(static fn(MapTileLayer $layer): string => $layer->name, $layers),
+                array_column(array_filter($map->getLayers(), static fn(array $layer): bool =>
+                    $layer['id'] !== MapLayers::EVENT && ! $layer['decoration']), 'name'), $tileset, $map->mapId);
+        } catch (Throwable) {
+            // The terminal layers' and tile layer settings' own checks report why.
+            return null;
+        }
+
+        return [$tileset, $layers, new MapGraphics($tileset, $layers, owners: $owners)->getShownGlyphCells($layerSet, $map->getAssetRoot())];
     }
 
     /**

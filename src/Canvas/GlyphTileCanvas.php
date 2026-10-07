@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Canvas;
 
 use Closure;
-use Ichiloto\Editor\History\GenericCommand;
 use Ichiloto\Editor\MapSourceRefusal;
 use Ichiloto\Editor\Maps\MapLayers;
 use Ichiloto\Editor\ProjectMap;
@@ -157,50 +156,31 @@ trait GlyphTileCanvas
         $layerId = $this->getActiveCanvasLayer();
         $layer = array_find($map->getLayers(), static fn(array $candidate): bool => $candidate['id'] === $layerId);
         $label = MapLayers::formatLabel((string) ($layer['name'] ?? $layerId));
-        $writes = [];
-        for ($y = 0; $y < $map->getHeight(); $y++) {
-            for ($x = 0; $x < $map->getWidth(); $x++) {
-                if ($map->hasLayerCell($layerId, $x, $y) && ($symbol = $map->getLayerSymbol($layerId, $x, $y)) !== ' ') {
-                    $writes[] = ['x' => $x, 'y' => $y, 'symbol' => $symbol];
-                }
-            }
-        }
         try {
-            $plan = $this->planGlyphTiles($map, $layerId, $writes, $choices, true);
+            $drawn = CanvasEditor::drawTilesForGlyphs($map, $layerId, $choices);
         } catch (MapSourceRefusal | InvalidArgumentException | RuntimeException $refusal) {
             $this->setStatus('Tiles were not drawn: ' . $refusal->getMessage(), StatusLevel::WARN);
             $this->renderFooter();
             return;
         }
-        if ($plan === null) {
+        if ($drawn === null) {
             $this->setStatus(sprintf('The %s layer has no pieces in this map\'s kind to draw tiles for.', $label), StatusLevel::WARN);
             $this->renderFooter();
             return;
         }
-        if ($plan['unresolved'] !== []) {
-            $glyph = (string) array_key_first($plan['unresolved']);
-            $this->askForGlyphPiece($glyph, $plan['unresolved'][$glyph], $choices,
+        if ($drawn['unresolved'] !== []) {
+            $glyph = (string) array_key_first($drawn['unresolved']);
+            $this->askForGlyphPiece($glyph, $drawn['unresolved'][$glyph], $choices,
                 fn(array $chosen) => $this->drawTilesForLayerGlyphs($chosen));
             return;
         }
-        $before = $map->getTileLayerSources();
-        try {
-            $map->writeTileCells($plan['tiles']);
-        } catch (MapSourceRefusal $refusal) {
-            $this->setStatus($refusal->getMessage(), StatusLevel::WARN);
-            $this->renderFooter();
-            return;
-        }
-        $after = $map->getTileLayerSources();
-        if ($after === $before) {
+        if ($drawn['command'] === null) {
             $this->setStatus(sprintf('Every glyph on the %s layer already has its tiles.', $label));
             $this->renderFooter();
             return;
         }
-        $this->recordCommand(new GenericCommand(sprintf('Draw %s tiles', $label),
-            static fn() => $map->restoreTileLayerSources($after),
-            static fn() => $map->restoreTileLayerSources($before)));
-        $cells = array_sum(array_map(count(...), $plan['tiles']));
+        $this->recordCommand($drawn['command']);
+        $cells = $drawn['cells'];
         $this->setStatus(sprintf('Drew %d tile%s for the %s layer\'s glyphs; save to keep them.', $cells, $cells === 1 ? '' : 's', $label),
             StatusLevel::INFO);
         $this->renderCanvasArea();

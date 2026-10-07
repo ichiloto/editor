@@ -25,7 +25,12 @@ trait NpcSpriteArt
         }
         if ($node !== null) { $this->assertNpcArtLiteral($node, true); }
         if ($data !== null) {
-            $sheet = NpcCharacterSheet::validate($data, dirname($this->getMapsRoot()));
+            try {
+                $sheet = NpcCharacterSheet::validate($data, dirname($this->getMapsRoot()));
+            } catch (\InvalidArgumentException | \RuntimeException $invalid) {
+                // A sheet the game could not read is refused like any other edit the map cannot take.
+                throw new MapSourceRefusal($invalid->getMessage(), previous: $invalid);
+            }
             if (! in_array($sheet->asset, ReferenceCatalog::getPngAssets(dirname($this->getMapsRoot(), 2)), true)) {
                 throw new MapSourceRefusal('Choose the character sheet through the project asset picker.');
             }

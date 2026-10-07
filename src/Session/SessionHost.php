@@ -188,6 +188,13 @@ final class SessionHost
                 self::requireCell($params, 'to'),
                 self::readOptionalString($params, 'color'),
             ),
+            'map.coverage' => $session->readCoverage(self::requireString($params, 'map')),
+            'layer.drawTiles' => $session->drawLayerTiles(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireString($params, 'layer'),
+                self::readChoices($params),
+            ),
             'map.paint' => $session->paint(
                 self::requireString($params, 'map'),
                 self::requireInt($params, 'revision'),

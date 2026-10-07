@@ -67,6 +67,50 @@ final class CanvasEditor
     }
 
     /**
+     * Draws the tiles of the glyphs already on a layer, as if each were
+     * painted again: every glyph a piece draws gets that piece's tiles, as one
+     * step the caller records. A glyph that could be several pieces is
+     * reported unresolved, as painting does, and its answer in `$choices`
+     * applies wherever its neighbours do not decide. Glyphs no piece draws,
+     * and the glyphs themselves, are left as they are.
+     *
+     * @param array<string, ?string> $choices The role key chosen for a glyph, or null for no tiles.
+     * @return array{command: ?Command, cells: int, unresolved: array<string, list<PieceRole>>}|null
+     *     The applied step and how many tiles it drew; or, when a glyph must be asked about, nothing applied and the
+     *     roles of the first glyph unresolved. Null when no piece in the map's kind draws this layer's glyphs.
+     * @throws MapSourceRefusal When the tile layers cannot take the tiles; nothing is written then.
+     */
+    public static function drawTilesForGlyphs(ProjectMap $map, string $layerId, array $choices = []): ?array
+    {
+        $writes = [];
+        for ($y = 0; $y < $map->getHeight(); $y++) {
+            for ($x = 0; $x < $map->getWidth(); $x++) {
+                if ($map->hasLayerCell($layerId, $x, $y) && ($symbol = $map->getLayerSymbol($layerId, $x, $y)) !== ' ') {
+                    $writes[] = ['x' => $x, 'y' => $y, 'symbol' => $symbol];
+                }
+            }
+        }
+        $plan = self::plan($map, $layerId, $writes, $choices, true);
+        if ($plan === null) {
+            return null;
+        }
+        if ($plan['unresolved'] !== []) {
+            return ['command' => null, 'cells' => 0, 'unresolved' => $plan['unresolved']];
+        }
+        $before = $map->getTileLayerSources();
+        $map->writeTileCells($plan['tiles']);
+        $after = $map->getTileLayerSources();
+        $layer = array_find($map->getLayers(), static fn(array $candidate): bool => $candidate['id'] === $layerId);
+        $command = $after === $before ? null : new GenericCommand(
+            sprintf('Draw %s tiles', MapLayers::formatLabel((string) ($layer['name'] ?? $layerId))),
+            static fn() => $map->restoreTileLayerSources($after),
+            static fn() => $map->restoreTileLayerSources($before),
+        );
+
+        return ['command' => $command, 'cells' => $command === null ? 0 : array_sum(array_map(count(...), $plan['tiles'])), 'unresolved' => []];
+    }
+
+    /**
      * Writes glyphs onto a layer and tiles onto the tile layers, and returns
      * the command that undoes and redoes both, already applied. The command
      * is null when nothing changed.

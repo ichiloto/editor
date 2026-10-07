@@ -50,6 +50,7 @@ use Ichiloto\Editor\Field\NpcAuthoring;
 use Ichiloto\Editor\Field\NpcChange;
 use Ichiloto\Editor\Field\NpcInspector;
 use Ichiloto\Editor\Field\NpcRefusal;
+use Ichiloto\Editor\Field\ProjectNpc;
 use Ichiloto\Editor\History\Command;
 use Ichiloto\Editor\History\CommandHistory;
 use Ichiloto\Editor\Inspector\InputControlType;
@@ -70,6 +71,7 @@ use Ichiloto\Editor\History\SourceSetRequired;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Editor\Storage\WorkspaceSave;
+use Ichiloto\Editor\Validation\MapGraphicsValidator;
 use Ichiloto\Editor\Validation\MapValidator;
 use Ichiloto\Engine\IO\Console\TerminalPresentationComposer;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\PresentationCanvas;
@@ -915,6 +917,70 @@ final class EditorSession
         }
 
         return $pieces[$pieceId] ?? throw new SessionRefusal(sprintf("%s is no longer in the map's tileset. Choose a piece again.", $pieceId));
+    }
+
+    /**
+     * The cells of a map whose glyph still shows in the graphical field, by
+     * the Engine's glyph fallback rule ({@see MapGraphicsValidator::listShownGlyphCells()}),
+     * unsaved edits included: what is left to tile. `available` is false for
+     * a map without a kind, or whose kind or tile layers cannot be read.
+     *
+     * @return array{map: string, revision: int, available: bool, cells: list<array{0: int, 1: int, 2: string, 3: string}>}
+     * @throws SessionRefusal When the map is unknown.
+     */
+    public function readCoverage(string $mapId): array
+    {
+        $map = $this->requireMap($mapId);
+        $cells = MapGraphicsValidator::listShownGlyphCells($map);
+
+        return [
+            'map' => $map->mapId,
+            'revision' => $this->getMapRevision($map),
+            'available' => $cells !== null,
+            'cells' => array_map(static fn(array $cell): array => [$cell['x'], $cell['y'], $cell['glyph'], $cell['layer']], $cells ?? []),
+        ];
+    }
+
+    /**
+     * Draws the tiles of the glyphs already on a layer as one undo step
+     * ({@see CanvasEditor::drawTilesForGlyphs()}): every glyph a piece of the
+     * map's kind draws gets that piece's tiles. A glyph that could be several
+     * pieces is asked about, and nothing changes until the edit is made again
+     * with the answer in `$choices` (a role key, or null for no tiles).
+     *
+     * @param array<string, ?string> $choices
+     * @return array{status: 'applied', cells: int, revision: int}|array{status: 'question', glyph: string, roles: list<array{key: string, label: string}>}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, the layer is unknown or no piece draws its glyphs.
+     */
+    public function drawLayerTiles(string $mapId, int $revision, string $layerId, array $choices = []): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        if ($map->getGridSourceIssue() !== null) {
+            throw new SessionRefusal(sprintf('%s is read-only: %s', $mapId, $map->getGridSourceIssue()));
+        }
+        $layer = array_find($map->getLayers(), static fn(array $layer): bool => $layer['id'] === $layerId)
+            ?? throw new SessionRefusal(sprintf('%s has no layer %s.', $mapId, $layerId));
+        try {
+            $drawn = CanvasEditor::drawTilesForGlyphs($map, $layerId, $choices);
+        } catch (MapSourceRefusal | InvalidArgumentException | \RuntimeException $refusal) {
+            throw new SessionRefusal('Tiles were not drawn: ' . $refusal->getMessage(), previous: $refusal);
+        }
+        if ($drawn === null) {
+            throw new SessionRefusal(sprintf('The %s layer has no pieces in this map\'s kind to draw tiles for.', MapLayers::formatLabel((string) $layer['name'])));
+        }
+        if ($drawn['unresolved'] !== []) {
+            $glyph = (string) array_key_first($drawn['unresolved']);
+
+            return ['status' => 'question', 'glyph' => $glyph, 'roles' => array_map(
+                static fn(PieceRole $role): array => ['key' => $role->key, 'label' => $role->label],
+                $drawn['unresolved'][$glyph],
+            )];
+        }
+        if ($drawn['command'] !== null) {
+            $this->history->record($drawn['command']);
+        }
+
+        return ['status' => 'applied', 'cells' => $drawn['cells'], 'revision' => $this->getMapRevision($map)];
     }
 
     /**
@@ -3253,6 +3319,7 @@ final class EditorSession
         $inspector = new NpcInspector($map);
         $npc = $map->getNpcs()->get($index) ?? throw new SessionRefusal(sprintf('%s has no NPC %d.', $mapId, $index));
         $fields = $this->collectNpcFields($inspector, $index, $frame);
+        $rows = array_map(static fn(array $field): array => self::describeNpcRow($inspector->records(), $index, $field, $frame), $fields);
 
         return [
             'map' => $mapId,
@@ -3268,8 +3335,39 @@ final class EditorSession
                 'y' => $npc->getY(),
                 'sprite' => $npc->getVisibleSprite(),
             ],
-            'rows' => array_map(static fn(array $field): array => self::describeNpcRow($inspector->records(), $index, $field, $frame), $fields),
+            'rows' => $frame === [] ? self::insertNpcFieldSheetRow($rows, $npc) : $rows,
         ];
+    }
+
+    /** The field id of an NPC's graphical character sheet, a row only the graphical editor shows. */
+    private const string NPC_FIELD_SHEET = 'sprites2d.sheet';
+
+    /**
+     * An NPC's rows with its graphical character sheet after its terminal
+     * appearance: a picture picked from the project's images, set through
+     * {@see NpcAuthoring::setFieldSheet()}. The terminal editor's rows are
+     * its own; graphical art never changes them.
+     *
+     * @param list<array<string, mixed>> $rows
+     * @return list<array<string, mixed>>
+     */
+    private static function insertNpcFieldSheetRow(array $rows, ProjectNpc $npc): array
+    {
+        $sprites = $npc->toArray()['sprites2d'] ?? null;
+        $row = self::describeRow([
+            'label' => '  Field Sheet',
+            'field' => self::NPC_FIELD_SHEET,
+            'value' => is_array($sprites) && is_string($sprites['sheet'] ?? null) ? $sprites['sheet'] : '',
+            'reference' => 'png_assets',
+            'noneLabel' => 'None: the glyph shows',
+            'target' => 'npc',
+        ]);
+        $row['key'] = [...$row['key'], 'frame' => []];
+        $appearance = array_keys(array_filter($rows, static fn(array $candidate): bool =>
+            in_array($candidate['key']['field'] ?? null, ['sprite', 'sprites.north', 'sprites.south', 'sprites.east', 'sprites.west'], true)));
+        $at = $appearance === [] ? count($rows) : max($appearance) + 1;
+
+        return [...array_slice($rows, 0, $at), $row, ...array_slice($rows, $at)];
     }
 
     /**
@@ -3287,6 +3385,10 @@ final class EditorSession
         $inspector = new NpcInspector($map);
         $frame = self::requireNpcFrame($key['frame'] ?? []);
         $fieldId = $key['field'] ?? null;
+        if ($fieldId === self::NPC_FIELD_SHEET && $frame === []) {
+            return $this->applyNpcChange($map,
+                static fn(NpcAuthoring $authoring): NpcChange => $authoring->setFieldSheet($map, $index, $value === '' ? null : $value));
+        }
         // Field ids are unique within a frame, so the field and frame name the row.
         $field = is_string($fieldId) ? array_find($this->collectNpcFields($inspector, $index, $frame),
             static fn(array $candidate): bool => ($candidate['field'] ?? null) === $fieldId) : null;
