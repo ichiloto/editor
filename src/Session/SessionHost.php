@@ -188,6 +188,8 @@ final class SessionHost
                 self::requireCell($params, 'to'),
                 self::readOptionalString($params, 'color'),
             ),
+            'map.pieceAt' => $session->readPieceAt(self::requireString($params, 'map'), self::requireString($params, 'layer'),
+                self::requireInt($params, 'x'), self::requireInt($params, 'y')),
             'selection.copy' => $session->copySelection(self::requireString($params, 'map'), self::requireString($params, 'layer'),
                 self::requireInt($params, 'x'), self::requireInt($params, 'y'), self::requireInt($params, 'width'), self::requireInt($params, 'height')),
             'selection.cut' => $session->cutSelection(self::requireString($params, 'map'), self::requireInt($params, 'revision'),

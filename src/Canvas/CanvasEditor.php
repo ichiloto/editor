@@ -67,6 +67,25 @@ final class CanvasEditor
     }
 
     /**
+     * The piece a layer's glyph plays at a cell, read from the tiles around
+     * it: what an eyedropper picks up with the glyph, so painting it again
+     * draws the same piece. Null when no piece of the map's kind draws it, or
+     * its tiles do not tell which.
+     */
+    public static function findPlayedRole(ProjectMap $map, string $layerId, int $x, int $y): ?PieceRole
+    {
+        $planner = self::loadGlyphTilePlanner($map, $layerId);
+        if ($planner === null || ! $map->hasLayerCell($layerId, $x, $y)) {
+            return null;
+        }
+        try {
+            return $planner->findPlayedRole($map->getLayerSymbol($layerId, $x, $y), $x, $y, self::createTileReader($map));
+        } catch (MapSourceRefusal) {
+            return null;
+        }
+    }
+
+    /**
      * Draws the tiles of the glyphs already on a layer, as if each were
      * painted again: every glyph a piece draws gets that piece's tiles, as one
      * step the caller records. A glyph that could be several pieces is

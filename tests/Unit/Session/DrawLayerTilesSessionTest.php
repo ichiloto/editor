@@ -82,3 +82,16 @@ it('lists the cells still showing glyphs, and they go once their tiles are drawn
     $session->drawLayerTiles('test-map', $before['revision'], 'map:4', ['x' => null]);
     expect($shownRamps($session->readCoverage('test-map')))->toBe([]);
 });
+
+it('says which piece a glyph plays at a cell, from the tiles around it, for the eyedropper', function () {
+    $session = drawLayerTilesSession([
+        'crate' => ['name' => 'Crate', 'layer' => 'buildings', 'glyphs' => ['x'], 'tiles' => ['furniture' => ['61']]],
+        'barrel' => ['name' => 'Barrel', 'layer' => 'buildings', 'glyphs' => ['x'], 'tiles' => ['furniture' => ['62']]],
+    ]);
+    expect($session->readPieceAt('test-map', 'map:4', 1, 1))->toBe(['glyph' => 'x', 'role' => null]);
+
+    $revision = $session->readMap('test-map')['revision'];
+    $barrel = array_find($session->drawLayerTiles('test-map', $revision, 'map:4')['roles'], static fn(array $role): bool => str_contains($role['label'], 'Barrel'))['key'];
+    $session->drawLayerTiles('test-map', $revision, 'map:4', ['x' => $barrel]);
+    expect($session->readPieceAt('test-map', 'map:4', 1, 1)['role']['key'])->toBe($barrel);
+});

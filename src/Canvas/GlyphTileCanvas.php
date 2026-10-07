@@ -264,20 +264,11 @@ trait GlyphTileCanvas
     {
         $this->paintPieceRole = null;
         $layerId = $this->getActiveCanvasLayer();
-        $planner = CanvasEditor::loadGlyphTilePlanner($map, $layerId);
-        if ($planner === null || ! $map->hasLayerCell($layerId, $x, $y)) {
-            return '';
-        }
-        $symbol = $map->getLayerSymbol($layerId, $x, $y);
-        try {
-            $role = $planner->findPlayedRole($symbol, $x, $y, CanvasEditor::createTileReader($map));
-        } catch (MapSourceRefusal) {
-            return '';
-        }
+        $role = CanvasEditor::findPlayedRole($map, $layerId, $x, $y);
         if ($role === null) {
             return '';
         }
-        $this->paintPieceRole = ['symbol' => $symbol, 'role' => $role->key];
+        $this->paintPieceRole = ['symbol' => $map->getLayerSymbol($layerId, $x, $y), 'role' => $role->key];
 
         return $role->label;
     }

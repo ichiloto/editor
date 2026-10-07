@@ -947,6 +947,28 @@ final class EditorSession
     }
 
     /**
+     * The piece a layer's glyph plays at a cell ({@see CanvasEditor::findPlayedRole()}):
+     * what an eyedropper picks up with the glyph, so painting it again draws
+     * the same piece. Null role when no piece draws it or its tiles do not tell.
+     *
+     * @return array{glyph: string, role: ?array{key: string, label: string}}
+     * @throws SessionRefusal When the map or layer is unknown.
+     */
+    public function readPieceAt(string $mapId, string $layerId, int $x, int $y): array
+    {
+        $map = $this->requireMap($mapId);
+        if (! array_any($map->getLayers(), static fn(array $layer): bool => $layer['id'] === $layerId)) {
+            throw new SessionRefusal(sprintf('%s has no layer %s.', $mapId, $layerId));
+        }
+        $role = CanvasEditor::findPlayedRole($map, $layerId, $x, $y);
+
+        return [
+            'glyph' => $map->hasLayerCell($layerId, $x, $y) ? $map->getLayerSymbol($layerId, $x, $y) : ' ',
+            'role' => $role === null ? null : ['key' => $role->key, 'label' => $role->label],
+        ];
+    }
+
+    /**
      * Copies a rectangle of a layer into the session's clipboard: its glyphs
      * and styles, and the tiles that move with that layer ({@see CanvasClipboard::copy()}).
      *
