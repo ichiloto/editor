@@ -4,17 +4,13 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Canvas;
 
-use Ichiloto\Editor\History\GenericCommand;
 use Ichiloto\Editor\MapSourceRefusal;
 use Ichiloto\Editor\Maps\MapLayers;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\Status\StatusLevel;
 use Ichiloto\Editor\UI\PaletteItem;
 use Ichiloto\Editor\History\PaintStrokeCommand;
-use Ichiloto\Engine\Rendering\Tilesets\TileId;
-use Ichiloto\Engine\Rendering\Tilesets\Tileset;
 use Ichiloto\Engine\Rendering\Tilesets\TilesetPiece;
-use Ichiloto\Engine\IO\Console\TerminalText;
 
 /**
  * Tileset pieces on the terminal canvas: choose a whole item from the map's
@@ -111,20 +107,11 @@ trait PieceCanvas
     private function loadCanvasPieces(ProjectMap $map): ?array
     {
         try {
-            $tileset = $map->loadTileset();
-        } catch (\Throwable $error) {
-            $this->setStatus('Pieces are unavailable: ' . $error->getMessage(), StatusLevel::WARN);
+            return PiecePlacer::loadPieces($map);
+        } catch (MapSourceRefusal $refusal) {
+            $this->setStatus($refusal->getMessage(), StatusLevel::WARN);
             return null;
         }
-        if ($tileset === null) {
-            $this->setStatus('This map has no kind yet, so it has no pieces. Set its Kind in the Inspector.', StatusLevel::WARN);
-            return null;
-        }
-        if ($tileset->pieces === []) {
-            $this->setStatus(sprintf('Tileset %s has no pieces. Add them to assets/%s/%s.php.', $tileset->id, Tileset::DIRECTORY, $tileset->id), StatusLevel::WARN);
-            return null;
-        }
-        return $tileset->pieces;
     }
 
     /** Starts placing the chosen piece on the selected map, in Map mode. */
@@ -194,10 +181,8 @@ trait PieceCanvas
     }
 
     /**
-     * The piece's footprint with its top-left cell at the cursor, for the
-     * canvas preview: a glyph where the piece writes one, null where a space
-     * glyph leaves the map's cell as it is. A connected piece previews the
-     * cells Enter would draw, each with the glyph of the shape it would take.
+     * What Enter would write with the cursor as the far corner, for the
+     * canvas preview ({@see PiecePlacer::getPreviewCells()}).
      *
      * @return array<int, array<int, string|null>> Cells by row and column.
      */
@@ -207,19 +192,10 @@ trait PieceCanvas
         if ($placement === null) {
             return [];
         }
-        $piece = $placement['piece'];
-        if ($piece->connects !== null) {
-            return $this->getConnectedPreviewCells($placement['map'], $piece, $placement['anchor']);
-        }
-        $cells = [];
-        foreach ($this->getPieceAreaOrigins($piece, $placement['anchor']) as ['x' => $x, 'y' => $y]) {
-            foreach ($piece->glyphs as $row => $symbols) {
-                foreach ($symbols as $column => $symbol) {
-                    $cells[$y + $row][$x + $column] = $symbol === ' ' ? null : $symbol;
-                }
-            }
-        }
-        return $cells;
+        $cursor = ['x' => $this->cursorX, 'y' => $this->cursorY];
+
+        return array_map(static fn(array $row): array => array_map(static fn(?array $cell): ?string => $cell['symbol'] ?? null, $row),
+            PiecePlacer::getPreviewCells($placement['map'], $placement['piece'], $placement['anchor'] ?? $cursor, $cursor));
     }
 
     /**
@@ -266,106 +242,35 @@ trait PieceCanvas
         return $this->piecePlacement;
     }
 
-    /**
-     * The top-left cells the piece is stamped at: the cursor alone without an
-     * anchor, otherwise whole copies of the piece side by side and row under
-     * row across the rectangle from the anchor to the cursor, as RPG Maker
-     * repeats a multi-tile selection. An area smaller than the piece holds
-     * one copy, at its top-left.
-     *
-     * @param array{x: int, y: int}|null $anchor
-     * @return list<array{x: int, y: int}>
-     */
-    private function getPieceAreaOrigins(TilesetPiece $piece, ?array $anchor): array
-    {
-        $anchor ??= ['x' => $this->cursorX, 'y' => $this->cursorY];
-        $span = static function (int $from, int $to, int $size): array {
-            [$low, $high] = [min($from, $to), max($from, $to)];
-            $starts = [$low];
-            for ($start = $low + $size; $start + $size - 1 <= $high; $start += $size) {
-                $starts[] = $start;
-            }
-            return $starts;
-        };
-        $origins = [];
-        foreach ($span($anchor['y'], $this->cursorY, $piece->height) as $y) {
-            foreach ($span($anchor['x'], $this->cursorX, $piece->width) as $x) {
-                $origins[] = ['x' => $x, 'y' => $y];
-            }
-        }
-        return $origins;
-    }
 
     /**
      * Stamps the piece across the area from the anchor to the cursor (the
-     * cursor alone without an anchor) as one undo step, then anchors at the
-     * cursor so the next Enter fills on from there: its glyphs on the gameplay
-     * layer it names, in the brush colour, and its tiles on the tile layers it
-     * names, creating any the map does not have yet. Space glyphs and `0`
-     * tiles leave their cells as they are. A glyph the stamp covers takes its
-     * own tiles with it, as any glyph edit does ({@see GlyphTilePlanner}). An
-     * area that cannot be stamped whole changes nothing.
+     * cursor alone without an anchor) as one undo step
+     * ({@see PiecePlacer::stampArea()}), in the brush colour where the piece
+     * has none, then anchors at the cursor so the next Enter fills on from
+     * there. An area that cannot be stamped whole changes nothing.
      *
      * @param array{x: int, y: int}|null $anchor
      */
     private function stampPieceArea(ProjectMap $map, TilesetPiece $piece, ?array $anchor): void
     {
-        $origins = $this->getPieceAreaOrigins($piece, $anchor);
-        $sources = $piece->getSourceGrid();
-        $writes = $assigned = [];
-        foreach ($origins as ['x' => $x, 'y' => $y]) {
-            foreach ($piece->glyphs as $row => $symbols) {
-                foreach ($symbols as $column => $symbol) {
-                    if ($symbol !== ' ') {
-                        $writes[] = ['x' => $x + $column, 'y' => $y + $row, 'symbol' => $symbol]
-                            + self::resolvePieceCellPaint($sources[$row][$column], $this->selectedPaintColor);
-                    }
-                }
-            }
-            // Each glyph cell plays its own cell of this piece, never a lookalike.
-            foreach (PieceRole::readPiece($piece) as $roles) {
-                foreach ($roles as $role) {
-                    $assigned[($x + $role->cell[1]) . ',' . ($y + $role->cell[0])] = $role->key;
-                }
-            }
-        }
+        $cursor = ['x' => $this->cursorX, 'y' => $this->cursorY];
+        $this->finalizeActiveStroke();
         try {
-            $layer = $this->findPieceLayer($map, $piece);
-            foreach ($origins as ['x' => $x, 'y' => $y]) {
-                foreach ($piece->glyphs as $row => $symbols) {
-                    foreach (array_keys($symbols) as $column) {
-                        if (! $map->hasLayerCell($layer, $x + $column, $y + $row)) {
-                            throw new MapSourceRefusal(sprintf('%s (%d x %d) does not fit at (%d, %d): the map has no cell at (%d, %d). Nothing was changed.',
-                                $piece->name, $piece->width, $piece->height, $x, $y, $x + $column, $y + $row));
-                        }
-                    }
-                }
-            }
-            $this->finalizeActiveStroke();
-            $tilesBefore = $map->getTileLayerSources();
-            if ($writes === []) {
-                // A piece without glyphs, such as a rug, stands for nothing and is laid as authored.
-                foreach ($origins as ['x' => $x, 'y' => $y]) {
-                    $map->writeTileEntries($piece->tiles, $x, $y);
-                }
-            } else {
-                $map->writeTileCells(CanvasEditor::plan($map, $layer, $writes, assigned: $assigned)['tiles'] ?? []);
-            }
-            $tilesAfter = $map->getTileLayerSources();
+            ['command' => $command, 'origins' => $origins] = PiecePlacer::stampArea($map, $piece, $anchor ?? $cursor, $cursor, $this->selectedPaintColor);
         } catch (MapSourceRefusal $refusal) {
             $this->setStatus($refusal->getMessage(), StatusLevel::WARN);
             $this->renderCanvasArea();
             return;
         }
-        $this->piecePlacement['anchor'] = ['x' => $this->cursorX, 'y' => $this->cursorY];
-        [$stroke] = CanvasEditor::writeCells($map, $layer, $writes, 'Piece stamp');
+        $this->piecePlacement['anchor'] = $cursor;
         $next = ' Enter fills on from here; Esc drops the anchor.';
-        if (! $stroke->hasChanges() && $tilesAfter === $tilesBefore) {
+        if ($command === null) {
             $this->setStatus(sprintf('%s is already there.', $piece->name) . $next);
             $this->renderCanvasArea();
             return;
         }
-        $this->recordStrokeWithTiles('Piece stamp', $map, $stroke, $tilesBefore, $tilesAfter);
+        $this->recordCommand($command);
         $this->setStatus(count($origins) === 1
             ? sprintf('Stamped %s at (%d, %d).', $piece->name, $origins[0]['x'], $origins[0]['y']) . $next
             : sprintf('Stamped %d %s across (%d, %d) to (%d, %d).', count($origins), $piece->name,
@@ -373,21 +278,6 @@ trait PieceCanvas
         $this->renderCanvasArea();
     }
 
-    /**
-     * How one piece cell is painted: in the style its tileset authored for it,
-     * kept byte for byte, or with the fallback colour when it has none (null
-     * keeps the map cell's own colour).
-     *
-     * @return array{style: array{prefix: string, suffix: string}}|array{color: string|null}
-     */
-    private static function resolvePieceCellPaint(string $source, ?string $fallbackColor): array
-    {
-        $cell = TerminalText::parseSourceCells($source)[0] ?? null;
-
-        return $cell !== null && ($cell['prefix'] !== '' || $cell['suffix'] !== '')
-            ? ['style' => ['prefix' => $cell['prefix'], 'suffix' => $cell['suffix']]]
-            : ['color' => $fallbackColor];
-    }
 
     /**
      * A mouse drag while placing a piece: the press anchors it, the drag
@@ -418,7 +308,7 @@ trait PieceCanvas
 
     /**
      * Records a glyph stroke and the tile layer change made with it, such as
-     * a stamped piece or a pasted block, as one undo step.
+     * a pasted block, as one undo step.
      *
      * @param array<string, string> $tilesBefore Tile layer sources before the change.
      * @param array<string, string> $tilesAfter Tile layer sources after it.
@@ -427,6 +317,7 @@ trait PieceCanvas
     {
         $this->recordCommand(CanvasEditor::combineStrokeWithTiles($label, $map, $stroke, $tilesBefore, $tilesAfter));
     }
+
     /**
      * Draws a connected piece: the cell at the cursor without an anchor,
      * otherwise the line or room outline from the anchor to the cursor. The
@@ -436,12 +327,13 @@ trait PieceCanvas
      */
     private function drawConnectedPiece(ProjectMap $map, TilesetPiece $piece, ?array $anchor): void
     {
-        $cells = $this->getConnectedDrawCells($anchor);
+        $cursor = ['x' => $this->cursorX, 'y' => $this->cursorY];
+        $cells = PiecePlacer::getConnectedDrawCells($anchor ?? $cursor, $cursor);
         $changed = $this->applyConnectedPiece($map, $piece, $cells, [], 'Piece draw');
         if ($changed === null) {
             return;
         }
-        $this->piecePlacement['anchor'] = ['x' => $this->cursorX, 'y' => $this->cursorY];
+        $this->piecePlacement['anchor'] = $cursor;
         $drew = $changed
             ? sprintf('Drew %d %s %s.', count($cells), mb_strtolower($piece->name), count($cells) === 1 ? 'cell' : 'cells')
             : sprintf('%s is already drawn there.', $piece->name);
@@ -466,13 +358,13 @@ trait PieceCanvas
         $x = $this->cursorX;
         $y = $this->cursorY;
         try {
-            $layer = $this->findPieceLayer($map, $piece);
+            $layer = PiecePlacer::findLayer($map, $piece);
         } catch (MapSourceRefusal $refusal) {
             $this->setStatus($refusal->getMessage(), StatusLevel::WARN);
             $this->renderCanvasArea();
             return;
         }
-        if (! $this->resolveConnectedMemberLookup($map, $layer, $piece)($x, $y)) {
+        if (! PiecePlacer::resolveMemberLookup($map, $layer, $piece)($x, $y)) {
             $this->setStatus(sprintf('(%d, %d) is not part of a %s, so nothing was erased.', $x, $y, mb_strtolower($piece->name)));
             $this->renderCanvasArea();
             return;
@@ -484,12 +376,9 @@ trait PieceCanvas
     }
 
     /**
-     * Draws and erases a connected piece's cells as one undo step: writes
-     * them, then gives every drawn cell and every member beside a drawn or
-     * erased cell the glyph and tiles of its shape. Glyphs go on the piece's
-     * gameplay layer, drawn cells in the brush colour and reshaped cells
-     * keeping theirs; tiles go on the piece's tile layers, `0` where a cell
-     * was erased. A cell beyond the map refuses the whole change.
+     * Draws and erases a connected piece's cells as one undo step
+     * ({@see PiecePlacer::drawConnected()}), drawn cells in the brush colour
+     * where their shape has none.
      *
      * @param list<array{x: int, y: int}> $drawn
      * @param list<array{x: int, y: int}> $erased
@@ -497,108 +386,25 @@ trait PieceCanvas
      */
     private function applyConnectedPiece(ProjectMap $map, TilesetPiece $piece, array $drawn, array $erased, string $label): ?bool
     {
+        $this->finalizeActiveStroke();
         try {
-            $layer = $this->findPieceLayer($map, $piece);
-            foreach ([...$drawn, ...$erased] as $cell) {
-                if (! $map->hasLayerCell($layer, $cell['x'], $cell['y'])) {
-                    throw new MapSourceRefusal(sprintf('%s cannot reach (%d, %d): the map has no cell there. Nothing was changed.',
-                        $piece->name, $cell['x'], $cell['y']));
-                }
-            }
-            $cells = ConnectedPieceShaper::reshapeCells($piece, $drawn, $erased, $this->resolveConnectedMemberLookup($map, $layer, $piece));
-            $drawnKeys = array_flip(array_map(static fn(array $cell): string => "{$cell['x']},{$cell['y']}", $drawn));
-            $sources = $piece->getSourceShapeGrid();
-            // A drawn cell takes the brush colour unless its shape has its own; a reshaped neighbour keeps its colour.
-            $writes = array_map(fn(array $cell): array => [
-                'x' => $cell['x'],
-                'y' => $cell['y'],
-                'symbol' => $cell['shape'] === null ? ' ' : $piece->shapes[$cell['shape']],
-            ] + ($cell['shape'] === null ? ['color' => null] : self::resolvePieceCellPaint($sources[$cell['shape']],
-                isset($drawnKeys["{$cell['x']},{$cell['y']}"]) ? $this->selectedPaintColor : null)), $cells);
-            // Each shape draws its tiles, and a glyph the wall covers takes its own ({@see GlyphTilePlanner}).
-            $this->finalizeActiveStroke();
-            $tilesBefore = $map->getTileLayerSources();
-            $map->writeTileCells(CanvasEditor::plan($map, $layer, $writes)['tiles'] ?? []);
-            $tilesAfter = $map->getTileLayerSources();
+            $command = PiecePlacer::drawConnected($map, $piece, $drawn, $erased, $this->selectedPaintColor, $label);
         } catch (MapSourceRefusal $refusal) {
             $this->setStatus($refusal->getMessage(), StatusLevel::WARN);
             $this->renderCanvasArea();
             return null;
         }
-        [$stroke] = CanvasEditor::writeCells($map, $layer, $writes, $label);
-        if (! $stroke->hasChanges() && $tilesAfter === $tilesBefore) {
+        if ($command === null) {
             return false;
         }
-        $this->recordStrokeWithTiles($label, $map, $stroke, $tilesBefore, $tilesAfter);
+        $this->recordCommand($command);
 
         return true;
     }
 
-    /**
-     * The cells Enter would draw: the cursor's cell without an anchor,
-     * otherwise the outline of the rectangle with the anchor and the cursor
-     * as opposite corners, which is a straight line when they share a row or
-     * a column.
-     *
-     * @param array{x: int, y: int}|null $anchor
-     * @return list<array{x: int, y: int}>
-     */
-    private function getConnectedDrawCells(?array $anchor): array
-    {
-        $anchor ??= ['x' => $this->cursorX, 'y' => $this->cursorY];
 
-        return array_values(ToolGeometry::rectangleOutline($anchor['x'], $anchor['y'], $this->cursorX, $this->cursorY));
-    }
 
-    /**
-     * The cells Enter would draw, each with the glyph of the shape it would
-     * take, for the canvas preview.
-     *
-     * @param array{x: int, y: int}|null $anchor
-     * @return array<int, array<int, string|null>> Cells by row and column.
-     */
-    private function getConnectedPreviewCells(ProjectMap $map, TilesetPiece $piece, ?array $anchor): array
-    {
-        $drawn = $this->getConnectedDrawCells($anchor);
-        try {
-            $isMemberCell = $this->resolveConnectedMemberLookup($map, $this->findPieceLayer($map, $piece), $piece);
-        } catch (MapSourceRefusal) {
-            $isMemberCell = static fn(int $x, int $y): bool => false;
-        }
-        $preview = [];
-        foreach (array_slice(ConnectedPieceShaper::reshapeCells($piece, $drawn, [], $isMemberCell), 0, count($drawn)) as $cell) {
-            $preview[$cell['y']][$cell['x']] = $piece->shapes[(string) $cell['shape']];
-        }
 
-        return $preview;
-    }
-
-    /**
-     * Whether a cell of the layer belongs to the connected piece now: it is
-     * on the map and holds one of the piece's glyphs.
-     *
-     * @return \Closure(int, int): bool
-     */
-    private function resolveConnectedMemberLookup(ProjectMap $map, string $layer, TilesetPiece $piece): \Closure
-    {
-        return static fn(int $x, int $y): bool => $map->hasLayerCell($layer, $x, $y) && $piece->isMember($map->getLayerSymbol($layer, $x, $y));
-    }
-
-    /**
-     * The id of the gameplay layer the piece's glyphs go on.
-     *
-     * @throws MapSourceRefusal When the map has no gameplay layer with that name.
-     */
-    private function findPieceLayer(ProjectMap $map, TilesetPiece $piece): string
-    {
-        foreach ($map->getLayers() as $layer) {
-            if ($layer['id'] !== MapLayers::EVENT && ! $layer['decoration'] && $layer['name'] === $piece->layer) {
-                return $layer['id'];
-            }
-        }
-        throw new MapSourceRefusal(sprintf('%s goes on the %s layer, which this map does not have. Create it (Ctrl+P, Layers: Create gameplay layer) first. Nothing was changed.',
-            $piece->name, $piece->layer));
-    }
 
     /** The canvas border hint while a piece is being placed, or null when none is. */
     private function getPiecePlacementHelp(int $windowWidth): ?string

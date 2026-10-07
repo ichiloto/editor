@@ -1233,7 +1233,7 @@ final class ProjectMap
      * @param string $prefix The cell's styling prefix bytes.
      * @return string|null The `fg=` value, or null when none is declared.
      */
-    private static function getInnermostForeground(string $prefix): ?string
+    public static function getInnermostForeground(string $prefix): ?string
     {
         $state = new SgrStyleState();
         preg_match_all('/\x1b\[[0-9;]*m/', $prefix, $sequences);

@@ -14,6 +14,8 @@ use Ichiloto\Editor\Database\CutsceneSchemas;
 use Ichiloto\Editor\Cutscenes\Preview\TimelinePreviewSession;
 use Ichiloto\Editor\ProjectDirectoryContext;
 use Ichiloto\Editor\Canvas\PieceRole;
+use Ichiloto\Editor\Canvas\PiecePlacer;
+use Ichiloto\Engine\Rendering\Tilesets\TilesetPiece;
 use Ichiloto\Editor\Database\ConditionCodec;
 use Ichiloto\Editor\Database\ConditionEditor;
 use Ichiloto\Editor\Animations\LegacyAnimationConversion;
@@ -589,6 +591,127 @@ final class EditorSession
         }
 
         return ['status' => 'applied', 'changed' => $applied['changed'], 'glyphs' => $applied['glyphs'], 'revision' => $this->getMapRevision($map)];
+    }
+
+    /**
+     * The pieces of the map's tileset an author places ({@see PiecePlacer}),
+     * in authored order: each with the gameplay layer its glyphs go on and
+     * whether the map has it, whether it is drawn as connected cells rather
+     * than stamped whole, its size, and a picture of what it draws. A map
+     * whose tileset offers none says why in `issue`.
+     *
+     * @return array{map: string, pieces: list<array<string, mixed>>, issue: ?string}
+     * @throws SessionRefusal When the map is unknown.
+     */
+    public function listPieces(string $mapId): array
+    {
+        $map = $this->requireMap($mapId);
+        try {
+            $pieces = PiecePlacer::loadPieces($map);
+        } catch (MapSourceRefusal $refusal) {
+            return ['map' => $map->mapId, 'pieces' => [], 'issue' => $refusal->getMessage()];
+        }
+        $described = [];
+        foreach ($pieces as $piece) {
+            try {
+                PiecePlacer::findLayer($map, $piece);
+                $layerIssue = null;
+            } catch (MapSourceRefusal $refusal) {
+                $layerIssue = $refusal->getMessage();
+            }
+            $described[] = [
+                'id' => $piece->id,
+                'name' => $piece->name,
+                'layer' => $piece->layer,
+                'layerLabel' => MapLayers::formatLabel($piece->layer),
+                'layerIssue' => $layerIssue,
+                'connected' => $piece->connects !== null,
+                'width' => $piece->width,
+                'height' => $piece->height,
+                'tileLayers' => array_keys($piece->connects === null ? $piece->tiles : $piece->shapeTiles),
+                'picture' => PiecePlacer::buildPicture($piece),
+            ];
+        }
+
+        return ['map' => $map->mapId, 'pieces' => $described, 'issue' => null];
+    }
+
+    /**
+     * What placing a piece between two corners would write, for a preview
+     * ({@see PiecePlacer::getPreviewCells()}): each cell the piece writes, as
+     * [x, y, glyph, colour], cells off the map left out.
+     *
+     * @param array{0: int, 1: int} $from
+     * @param array{0: int, 1: int} $to
+     * @param string|null $color The colour of cells the piece leaves unstyled.
+     * @return array{cells: list<array{0: int, 1: int, 2: string, 3: ?string}>}
+     * @throws SessionRefusal When the map or the piece is unknown.
+     */
+    public function previewPiece(string $mapId, string $pieceId, array $from, array $to, ?string $color = null): array
+    {
+        $map = $this->requireMap($mapId);
+        $piece = $this->requirePiece($map, $pieceId);
+        $cells = [];
+        foreach (PiecePlacer::getPreviewCells($map, $piece, ['x' => $from[0], 'y' => $from[1]], ['x' => $to[0], 'y' => $to[1]], $color) as $y => $row) {
+            foreach ($row as $x => $cell) {
+                if ($cell !== null && $x >= 0 && $y >= 0 && $x < $map->getWidth() && $y < $map->getHeight()) {
+                    $cells[] = [$x, $y, $cell['symbol'], $cell['color']];
+                }
+            }
+        }
+
+        return ['cells' => $cells];
+    }
+
+    /**
+     * Places a piece between two corners as one undo step: an item piece
+     * stamped as whole copies across the area, a connected piece drawn along
+     * its outline ({@see PiecePlacer}). An area that cannot be placed whole
+     * changes nothing.
+     *
+     * @param array{0: int, 1: int} $from
+     * @param array{0: int, 1: int} $to
+     * @param string|null $color The colour of cells the piece leaves unstyled; null keeps each cell's own.
+     * @return array{status: 'applied', changed: bool, copies: int, cells: int, revision: int}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, the piece is unknown, or the placement is refused.
+     */
+    public function placePiece(string $mapId, int $revision, string $pieceId, array $from, array $to, ?string $color = null): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        if ($map->getGridSourceIssue() !== null) {
+            throw new SessionRefusal(sprintf('%s is read-only: %s', $mapId, $map->getGridSourceIssue()));
+        }
+        $piece = $this->requirePiece($map, $pieceId);
+        [$from, $to] = [['x' => $from[0], 'y' => $from[1]], ['x' => $to[0], 'y' => $to[1]]];
+        try {
+            if ($piece->connects === null) {
+                ['command' => $command, 'origins' => $origins] = PiecePlacer::stampArea($map, $piece, $from, $to, $color);
+                [$copies, $cells] = [count($origins), 0];
+            } else {
+                $drawn = PiecePlacer::getConnectedDrawCells($from, $to);
+                $command = PiecePlacer::drawConnected($map, $piece, $drawn, [], $color);
+                [$copies, $cells] = [0, count($drawn)];
+            }
+        } catch (MapSourceRefusal $refusal) {
+            throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+        }
+        if ($command !== null) {
+            $this->history->record($command);
+        }
+
+        return ['status' => 'applied', 'changed' => $command !== null, 'copies' => $copies, 'cells' => $cells, 'revision' => $this->getMapRevision($map)];
+    }
+
+    /** @throws SessionRefusal When the map's tileset has no piece with the id. */
+    private function requirePiece(ProjectMap $map, string $pieceId): TilesetPiece
+    {
+        try {
+            $pieces = PiecePlacer::loadPieces($map);
+        } catch (MapSourceRefusal $refusal) {
+            throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+        }
+
+        return $pieces[$pieceId] ?? throw new SessionRefusal(sprintf("%s is no longer in the map's tileset. Choose a piece again.", $pieceId));
     }
 
     /**

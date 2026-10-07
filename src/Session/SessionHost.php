@@ -148,6 +148,22 @@ final class SessionHost
                 is_string($params['label'] ?? null) ? $params['label'] : 'Place tiles',
                 self::readTileChoices($params),
             ),
+            'pieces.list' => $session->listPieces(self::requireString($params, 'map')),
+            'pieces.preview' => $session->previewPiece(
+                self::requireString($params, 'map'),
+                self::requireString($params, 'piece'),
+                self::requireCell($params, 'from'),
+                self::requireCell($params, 'to'),
+                self::readOptionalString($params, 'color'),
+            ),
+            'pieces.place' => $session->placePiece(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireString($params, 'piece'),
+                self::requireCell($params, 'from'),
+                self::requireCell($params, 'to'),
+                self::readOptionalString($params, 'color'),
+            ),
             'map.paint' => $session->paint(
                 self::requireString($params, 'map'),
                 self::requireInt($params, 'revision'),
@@ -496,6 +512,19 @@ final class SessionHost
         }
 
         return $cells;
+    }
+
+    /**
+     * @param array<string, mixed> $params
+     * @return array{0: int, 1: int}
+     */
+    private static function requireCell(array $params, string $key): array
+    {
+        $cell = $params[$key] ?? null;
+
+        return is_array($cell) && array_is_list($cell) && count($cell) === 2 && is_int($cell[0]) && is_int($cell[1])
+            ? $cell
+            : throw new InvalidRequest(sprintf('"%s" must be an [x, y] integer pair.', $key));
     }
 
     /**
