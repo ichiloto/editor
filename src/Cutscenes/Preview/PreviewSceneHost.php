@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Cutscenes\Preview;
 
 use Closure;
+use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Engine\IO\Console\Console;
 use Ichiloto\Engine\Rendering\Presentation\RendererPresentation;
 use Ichiloto\Engine\Rendering\Presentation\RetainedWorldProviderInterface;
@@ -107,6 +108,9 @@ final class PreviewSceneHost
     {
         if ($this->scene->getPresentationContext() !== null) {
             $this->scene->setPresentationContext(null);
+            if ($this->scene instanceof PreviewGameScene) {
+                $this->scene->installFieldEffects(EffectPresentation::TERMINAL);
+            }
         }
         $this->dialogue->pageLayout = null;
         $this->client->shutdown();
@@ -120,6 +124,10 @@ final class PreviewSceneHost
         }
         $this->scene->setPresentationContext(new ScenePresentationContext($this->grid, $this->client->supports(...),
             collectPresentations: fn(): array => $this->dialogue->getActivePresentations(), readTime: $this->readTime));
+        // The graphical field draws its effects as sprites, as the game's does in a graphical window.
+        if ($this->scene instanceof PreviewGameScene) {
+            $this->scene->installFieldEffects(EffectPresentation::GRAPHICAL);
+        }
         $width = $this->grid->columns * $this->grid->cellWidth;
         $this->dialogue->pageLayout = fn(string $speaker, $context, string $help) => $this->composer->getDialoguePageLayout($speaker, $context, $help, $width);
     }

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Cutscenes\Preview;
 
+use Ichiloto\Engine\Animations\Field\FieldEffectManager;
+use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Engine\Core\GameState;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicController;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicPresentationManager;
@@ -58,6 +60,18 @@ final class PreviewGameScene extends GameScene
         $this->cinematicStage = new CinematicStageManager($this);
         $this->cinematicPresentation = new CinematicPresentationManager($this);
         $this->cinematicController = new CinematicController($this);
+    }
+
+    /**
+     * Gives the scene the field's effects for a presentation, with the loaded
+     * map's installed, as the game's field has them: Terminal glyphs for the
+     * Terminal picture, graphical sprites for the graphical view.
+     */
+    public function installFieldEffects(EffectPresentation $presentation): void
+    {
+        $this->fieldEffects?->clear();
+        $this->fieldEffects = new FieldEffectManager(getcwd() . '/assets', $presentation);
+        $this->previewMap->installFieldEffects();
     }
 
     public function installPlayer(PreviewPlayer $player): void

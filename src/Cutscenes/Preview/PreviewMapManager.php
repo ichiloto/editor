@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Cutscenes\Preview;
 
+use Ichiloto\Engine\Events\Triggers\EventTriggerFactory;
 use Ichiloto\Engine\Core\Game;
 use Ichiloto\Engine\Core\Vector2;
 use Ichiloto\Engine\Field\MapManager;
@@ -45,8 +46,26 @@ final class PreviewMapManager extends MapManager
             ? $this->generateCollisionMap($this->tileMap, $dictionary)
             : $this->generateLayerCollisionMap($this->layers, $dictionary);
         $this->gameScene->npcManager?->configure(is_array($map['npcs'] ?? null) ? $map['npcs'] : []);
+        $this->installFieldEffects();
 
         return $map;
+    }
+
+    /**
+     * Gives the scene's field effects the loaded map's own, as the game's
+     * field installs them when it loads a map: its declared effects, piece
+     * effects and event cues.
+     */
+    public function installFieldEffects(): void
+    {
+        if ($this->mapData === [] || $this->gameScene->fieldEffects === null) {
+            return;
+        }
+        // The map names itself by its data's id, as the game's field reads it.
+        $mapId = strval($this->mapData['id'] ?? '');
+        $triggers = array_map(static fn(array $event) => EventTriggerFactory::create($event, $mapId !== '' ? $mapId : null),
+            array_values(array_filter((array) ($this->mapData['events'] ?? []), is_array(...))));
+        $this->gameScene->fieldEffects->installMap($mapId, $this->mapData['fieldEffects'] ?? null, $this->graphics, $triggers);
     }
 
     /**

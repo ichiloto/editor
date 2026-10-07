@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Cutscenes\Preview;
 
 use Ichiloto\Editor\ProjectDirectoryContext;
+use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Engine\Audio\BackgroundMusicState;
 use Ichiloto\Engine\Battle\BattleResult;
 use Ichiloto\Engine\Core\Vector2;
@@ -123,6 +124,7 @@ final class CinematicPreviewSession
 
         $this->run(function () use ($width, $height, $mapId): void {
             $this->scene = new PreviewGameScene(new PreviewSceneManager(), $width, $height, $mapId);
+            $this->scene->installFieldEffects(EffectPresentation::TERMINAL);
             $camera = $this->scene->previewCamera();
             $this->presentation = new PreviewPresentation($camera);
             $this->presentation->autoAdvance = (bool) ($this->options['autoAdvance'] ?? false);
@@ -599,7 +601,11 @@ final class CinematicPreviewSession
     /** Ends the editor window's graphical view of the scene, if one is attached. */
     public function detachScene(): void
     {
-        $this->sceneHost?->dispose();
+        if ($this->sceneHost === null) {
+            return;
+        }
+        // In the project, as every step of the preview runs, so the Terminal effects it restores find their files.
+        $this->run(fn() => $this->sceneHost->dispose());
         $this->sceneHost = null;
     }
 
