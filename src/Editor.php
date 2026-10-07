@@ -400,8 +400,8 @@ final class Editor
     }
     private ?MouseButton $activeMousePaintButton = null;
     /**
-     * @var array{start: array{x: int, y: int}, symbol: string}|null A line, rectangle or selection being dragged out
-     *     with the mouse: the cell it started on and the symbol it draws (a space erases).
+     * @var array{start: array{x: int, y: int}, symbol: string, piece?: bool}|null A line, rectangle, selection or piece
+     *     area being dragged out with the mouse: the cell it started on and the symbol it draws (a space erases).
      */
     private ?array $mouseToolDrag = null;
     /**
@@ -4013,6 +4013,10 @@ final class Editor
             $this->cursorX = max(0, min($selectedMap->getWidth() - 1, $this->canvasOffsetX + ($event->x - $bounds['left'])));
             $this->cursorY = max(0, min($selectedMap->getHeight() - 1, $this->canvasOffsetY + ($event->y - $bounds['top'])));
         }
+        if ($drag['piece'] ?? false) {
+            $this->dragPieceWithMouse($this->cursorX, $this->cursorY, false, true);
+            return;
+        }
         $anchor = $this->canvasToolAnchor ?? $drag['start'];
         $this->canvasToolAnchor = null;
         if (! $selectedMap instanceof ProjectMap) {
@@ -4064,6 +4068,21 @@ final class Editor
             $this->cursorX = $targetX;
             $this->cursorY = $targetY;
             $this->stampFacadeBrush();
+            return true;
+        }
+
+        // A piece being placed follows a left drag: the press anchors it, the
+        // drag previews the area (or a connected piece's line) and the release
+        // draws it.
+        if ($this->editingMode === self::MODE_MAP && $this->getActivePiecePlacement() !== null && $event->button === MouseButton::LEFT_BUTTON) {
+            $starting = ! $event->isMotion || $this->mouseToolDrag === null;
+            if ($starting) {
+                $this->mouseToolDrag = ['start' => ['x' => $targetX, 'y' => $targetY], 'symbol' => '', 'piece' => true];
+            }
+            $this->dragPieceWithMouse($targetX, $targetY, ! $starting, false);
+            if ($focusChanged) {
+                $this->renderFocusDependentArea();
+            }
             return true;
         }
 

@@ -281,6 +281,14 @@ final class ProjectMap
     }
 
     /**
+     * The region the map's author gave it, empty when none was given.
+     */
+    public function getAuthoredRegion(): string
+    {
+        return trim((string) ($this->editableData['region'] ?? ''));
+    }
+
+    /**
      * Returns the map description.
      *
      * @return string

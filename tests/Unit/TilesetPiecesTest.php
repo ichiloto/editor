@@ -151,14 +151,7 @@ it('previews the piece\'s footprint at the cursor while placing it', function ()
         ->toContain("\033[7m=\033[0m", "\033[7mH\033[0m");
 
     $frame = renderEditorPlainFrame($editor, 160, 45);
-    expect($frame)->toContain('.=..', '.=H.', 'PIECE Bed  Enter:Stamp  Esc:Done')
-        ->and($map->isDirty())->toBeFalse();
-
-    // A Normal-mode click only moves the cursor, and the preview with it.
-    $bounds = callEditorMethod($editor, 'getCanvasPreviewBounds');
-    callEditorMethod($editor, 'dispatchInput', sprintf("\033[<0;%d;%dM", $bounds['left'] + 2, $bounds['top']));
-    callEditorMethod($editor, 'dispatchInput', sprintf("\033[<0;%d;%dm", $bounds['left'] + 2, $bounds['top']));
-    expect(array_keys(callEditorMethod($editor, 'getPiecePreviewCells')[0]))->toBe([2, 3])
+    expect($frame)->toContain('.=..', '.=H.', 'PIECE Bed  Enter:Stamp  Drag:Fill  Esc:Done')
         ->and($map->isDirty())->toBeFalse();
 
     // Esc ends placement and the preview goes with it.
@@ -172,7 +165,8 @@ it('fits the placement hint to narrow canvases and shows P:Piece in Normal mode'
     expect(callEditorMethod($editor, 'getPiecePlacementHelp', 40))->toBeNull();
     choosePieceByKeys($editor);
 
-    expect(callEditorMethod($editor, 'getPiecePlacementHelp', 40))->toBe('PIECE Bed  Enter:Stamp  Esc:Done')
+    expect(callEditorMethod($editor, 'getPiecePlacementHelp', 46))->toBe('PIECE Bed  Enter:Stamp  Drag:Fill  Esc:Done')
+        ->and(callEditorMethod($editor, 'getPiecePlacementHelp', 45))->toBe('PIECE Bed Enter:Stamp Esc:Done')
         ->and(callEditorMethod($editor, 'getPiecePlacementHelp', 33))->toBe('PIECE Bed Enter:Stamp Esc:Done')
         ->and(callEditorMethod($editor, 'getPiecePlacementHelp', 29))->toBe('PIECE Enter:Stamp Esc:Done')
         ->and(callEditorMethod($editor, 'getPiecePlacementHelp', 24))->toBe('Enter:Stamp Esc:Done')
@@ -234,6 +228,65 @@ it('stamps glyphs on the piece\'s layer and its tiles in one undo step', functio
     callEditorMethod($editor, 'dispatchInput', "\x1a");
     callEditorMethod($editor, 'dispatchInput', "\x13");
     expect(sourceHashTree($map->directory))->toBe($disk);
+});
+
+it('fills the area between two corners with whole copies of the piece in one undo step', function () {
+    [$editor, $map] = createPieceCanvasEditor();
+    $before = $map->captureLayerSnapshot();
+    $tilesBefore = $map->getTileLayerSources();
+    choosePieceByKeys($editor);
+
+    // Enter stamps at the cursor and anchors there; the next Enter fills the area to the cursor.
+    callEditorMethod($editor, 'dispatchInput', "\n");
+    expect(getEditorProperty($editor, 'piecePlacement')['anchor'])->toBe(['x' => 0, 'y' => 0])
+        ->and(callEditorMethod($editor, 'getPiecePlacementHelp', 120))->toContain('Enter:Fill', 'Esc:Unanchor');
+    setEditorProperty($editor, 'cursorX', 3);
+    setEditorProperty($editor, 'cursorY', 1);
+    expect(array_keys(callEditorMethod($editor, 'getPiecePreviewCells')[1]))->toBe([0, 1, 2, 3]);
+    callEditorMethod($editor, 'dispatchInput', "\n");
+
+    foreach ([0, 2] as $x) {
+        expect($map->getLayerSymbol('map:4', $x, 0))->toBe('=')
+            ->and($map->getLayerSymbol('map:4', $x + 1, 1))->toBe('H');
+    }
+    // The stamp and the fill are two steps; undoing both restores the map.
+    callEditorMethod($editor, 'dispatchInput', "\x1a");
+    expect($map->getLayerSymbol('map:4', 2, 0))->not->toBe('=')
+        ->and($map->getLayerSymbol('map:4', 0, 0))->toBe('=');
+    callEditorMethod($editor, 'dispatchInput', "\x1a");
+    expect($map->captureLayerSnapshot())->toBe($before)
+        ->and($map->getTileLayerSources())->toBe($tilesBefore);
+
+    // Esc drops the anchor, so Enter stamps a single copy again.
+    callEditorMethod($editor, 'dispatchInput', "\033");
+    expect(getEditorProperty($editor, 'piecePlacement'))->not->toBeNull()
+        ->and(getEditorProperty($editor, 'piecePlacement')['anchor'])->toBeNull();
+});
+
+it('draws a piece area with a mouse drag, and a click stamps one copy where it lands', function () {
+    [$editor, $map] = createPieceCanvasEditor();
+    $before = $map->captureLayerSnapshot();
+    choosePieceByKeys($editor);
+    $bounds = callEditorMethod($editor, 'getCanvasPreviewBounds');
+    $at = static fn(string $kind, int $x, int $y): string => sprintf("\033[<%d;%d;%d%s", $kind === 'move' ? 32 : 0,
+        $bounds['left'] + $x, $bounds['top'] + $y, $kind === 'release' ? 'm' : 'M');
+
+    callEditorMethod($editor, 'dispatchInput', $at('press', 0, 0));
+    callEditorMethod($editor, 'dispatchInput', $at('move', 3, 1));
+    expect(array_keys(callEditorMethod($editor, 'getPiecePreviewCells')[1]))->toBe([0, 1, 2, 3])
+        ->and($map->isDirty())->toBeFalse();
+    callEditorMethod($editor, 'dispatchInput', $at('release', 3, 1));
+
+    expect($map->getLayerSymbol('map:4', 0, 0))->toBe('=')
+        ->and($map->getLayerSymbol('map:4', 2, 0))->toBe('=')
+        ->and(getEditorProperty($editor, 'piecePlacement')['anchor'])->toBeNull();
+    callEditorMethod($editor, 'dispatchInput', "\x1a");
+    expect($map->captureLayerSnapshot())->toBe($before);
+
+    callEditorMethod($editor, 'dispatchInput', $at('press', 2, 0));
+    callEditorMethod($editor, 'dispatchInput', $at('release', 2, 0));
+    expect($map->getLayerSymbol('map:4', 2, 0))->toBe('=')
+        ->and($map->getLayerSymbol('map:4', 0, 0))->not->toBe('=');
 });
 
 it('creates graphics/ for a map whose tileset pieces name tile layers it lacks', function () {

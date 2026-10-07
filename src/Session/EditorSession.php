@@ -280,6 +280,8 @@ final class EditorSession
         return array_map(fn(ProjectMap $map): array => [
             'id' => $map->mapId,
             'name' => $map->getDisplayName(),
+            // Maps are listed under their region, so two maps with one name (an inn in each town) stay apart.
+            'region' => $map->getAuthoredRegion(),
             'dirty' => $map->isDirty(),
             'readOnly' => $map->getGridSourceIssue(),
             'revision' => $this->getMapRevision($map),

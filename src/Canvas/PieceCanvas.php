@@ -148,7 +148,7 @@ trait PieceCanvas
         $this->setFocusedPane(self::FOCUS_CANVAS, false);
         $this->piecePlacement = ['map' => $map, 'piece' => $piece, 'anchor' => null];
         $this->setStatus(sprintf($piece->connects === null
-            ? 'Placing %s. Arrows move it, Enter stamps, Esc when done.'
+            ? 'Placing %s. Enter stamps and anchors; Enter again fills the area to the cursor, or drag with the mouse. Esc when done.'
             : 'Drawing %s. Enter draws at the cursor and anchors there, Del erases, Esc when done.', $piece->name));
         $this->renderFocusDependentArea();
     }
@@ -211,9 +211,11 @@ trait PieceCanvas
             return $this->getConnectedPreviewCells($placement['map'], $piece, $placement['anchor']);
         }
         $cells = [];
-        foreach ($piece->glyphs as $row => $symbols) {
-            foreach ($symbols as $column => $symbol) {
-                $cells[$this->cursorY + $row][$this->cursorX + $column] = $symbol === ' ' ? null : $symbol;
+        foreach ($this->getPieceAreaOrigins($piece, $placement['anchor']) as ['x' => $x, 'y' => $y]) {
+            foreach ($piece->glyphs as $row => $symbols) {
+                foreach ($symbols as $column => $symbol) {
+                    $cells[$y + $row][$x + $column] = $symbol === ' ' ? null : $symbol;
+                }
             }
         }
         return $cells;
@@ -231,7 +233,7 @@ trait PieceCanvas
             return;
         }
         if ($placement['piece']->connects === null) {
-            $this->stampPiece($placement['map'], $placement['piece']);
+            $this->stampPieceArea($placement['map'], $placement['piece'], $placement['anchor']);
             return;
         }
         $this->drawConnectedPiece($placement['map'], $placement['piece'], $placement['anchor']);
@@ -259,70 +261,139 @@ trait PieceCanvas
             return null;
         }
         $this->piecePlacement['piece'] = $piece;
-        if ($piece->connects === null) {
-            $this->piecePlacement['anchor'] = null;
-        }
 
         return $this->piecePlacement;
     }
 
     /**
-     * Stamps the piece at the cursor as one undo step: its glyphs on the
-     * gameplay layer it names, in the brush colour, and its tiles on the tile
-     * layers it names, creating any the map does not have yet. Space glyphs
-     * and `0` tiles leave their cells as they are. A glyph the stamp covers
-     * takes its own tiles with it, as any glyph edit does
-     * ({@see GlyphTilePlanner}). A stamp that cannot be made whole changes
-     * nothing.
+     * The top-left cells the piece is stamped at: the cursor alone without an
+     * anchor, otherwise whole copies of the piece side by side and row under
+     * row across the rectangle from the anchor to the cursor, as RPG Maker
+     * repeats a multi-tile selection. An area smaller than the piece holds
+     * one copy, at its top-left.
+     *
+     * @param array{x: int, y: int}|null $anchor
+     * @return list<array{x: int, y: int}>
      */
-    private function stampPiece(ProjectMap $map, TilesetPiece $piece): void
+    private function getPieceAreaOrigins(TilesetPiece $piece, ?array $anchor): array
     {
-        $x = $this->cursorX;
-        $y = $this->cursorY;
-        $writes = $assigned = [];
-        foreach ($piece->glyphs as $row => $symbols) {
-            foreach ($symbols as $column => $symbol) {
-                if ($symbol !== ' ') {
-                    $writes[] = ['x' => $x + $column, 'y' => $y + $row, 'symbol' => $symbol, 'color' => $this->selectedPaintColor];
-                }
+        $anchor ??= ['x' => $this->cursorX, 'y' => $this->cursorY];
+        $span = static function (int $from, int $to, int $size): array {
+            [$low, $high] = [min($from, $to), max($from, $to)];
+            $starts = [$low];
+            for ($start = $low + $size; $start + $size - 1 <= $high; $start += $size) {
+                $starts[] = $start;
+            }
+            return $starts;
+        };
+        $origins = [];
+        foreach ($span($anchor['y'], $this->cursorY, $piece->height) as $y) {
+            foreach ($span($anchor['x'], $this->cursorX, $piece->width) as $x) {
+                $origins[] = ['x' => $x, 'y' => $y];
             }
         }
-        // Each glyph cell plays its own cell of this piece, never a lookalike.
-        foreach (PieceRole::readPiece($piece) as $roles) {
-            foreach ($roles as $role) {
-                $assigned[($x + $role->cell[1]) . ',' . ($y + $role->cell[0])] = $role->key;
+        return $origins;
+    }
+
+    /**
+     * Stamps the piece across the area from the anchor to the cursor (the
+     * cursor alone without an anchor) as one undo step, then anchors at the
+     * cursor so the next Enter fills on from there: its glyphs on the gameplay
+     * layer it names, in the brush colour, and its tiles on the tile layers it
+     * names, creating any the map does not have yet. Space glyphs and `0`
+     * tiles leave their cells as they are. A glyph the stamp covers takes its
+     * own tiles with it, as any glyph edit does ({@see GlyphTilePlanner}). An
+     * area that cannot be stamped whole changes nothing.
+     *
+     * @param array{x: int, y: int}|null $anchor
+     */
+    private function stampPieceArea(ProjectMap $map, TilesetPiece $piece, ?array $anchor): void
+    {
+        $origins = $this->getPieceAreaOrigins($piece, $anchor);
+        $writes = $assigned = [];
+        foreach ($origins as ['x' => $x, 'y' => $y]) {
+            foreach ($piece->glyphs as $row => $symbols) {
+                foreach ($symbols as $column => $symbol) {
+                    if ($symbol !== ' ') {
+                        $writes[] = ['x' => $x + $column, 'y' => $y + $row, 'symbol' => $symbol, 'color' => $this->selectedPaintColor];
+                    }
+                }
+            }
+            // Each glyph cell plays its own cell of this piece, never a lookalike.
+            foreach (PieceRole::readPiece($piece) as $roles) {
+                foreach ($roles as $role) {
+                    $assigned[($x + $role->cell[1]) . ',' . ($y + $role->cell[0])] = $role->key;
+                }
             }
         }
         try {
             $layer = $this->findPieceLayer($map, $piece);
-            foreach ($piece->glyphs as $row => $symbols) {
-                foreach (array_keys($symbols) as $column) {
-                    if (! $map->hasLayerCell($layer, $x + $column, $y + $row)) {
-                        throw new MapSourceRefusal(sprintf('%s (%d x %d) does not fit at (%d, %d): the map has no cell at (%d, %d). Nothing was changed.',
-                            $piece->name, $piece->width, $piece->height, $x, $y, $x + $column, $y + $row));
+            foreach ($origins as ['x' => $x, 'y' => $y]) {
+                foreach ($piece->glyphs as $row => $symbols) {
+                    foreach (array_keys($symbols) as $column) {
+                        if (! $map->hasLayerCell($layer, $x + $column, $y + $row)) {
+                            throw new MapSourceRefusal(sprintf('%s (%d x %d) does not fit at (%d, %d): the map has no cell at (%d, %d). Nothing was changed.',
+                                $piece->name, $piece->width, $piece->height, $x, $y, $x + $column, $y + $row));
+                        }
                     }
                 }
             }
             $this->finalizeActiveStroke();
             $tilesBefore = $map->getTileLayerSources();
-            // A piece with glyphs draws through its roles; one without, such as a rug, stands for nothing and is laid as authored.
-            $writes === []
-                ? $map->writeTileEntries($piece->tiles, $x, $y)
-                : $map->writeTileCells(CanvasEditor::plan($map, $layer, $writes, assigned: $assigned)['tiles'] ?? []);
+            if ($writes === []) {
+                // A piece without glyphs, such as a rug, stands for nothing and is laid as authored.
+                foreach ($origins as ['x' => $x, 'y' => $y]) {
+                    $map->writeTileEntries($piece->tiles, $x, $y);
+                }
+            } else {
+                $map->writeTileCells(CanvasEditor::plan($map, $layer, $writes, assigned: $assigned)['tiles'] ?? []);
+            }
             $tilesAfter = $map->getTileLayerSources();
         } catch (MapSourceRefusal $refusal) {
             $this->setStatus($refusal->getMessage(), StatusLevel::WARN);
             $this->renderCanvasArea();
             return;
         }
+        $this->piecePlacement['anchor'] = ['x' => $this->cursorX, 'y' => $this->cursorY];
         [$stroke] = CanvasEditor::writeCells($map, $layer, $writes, 'Piece stamp');
+        $next = ' Enter fills on from here; Esc drops the anchor.';
         if (! $stroke->hasChanges() && $tilesAfter === $tilesBefore) {
-            $this->setStatus(sprintf('%s is already at (%d, %d).', $piece->name, $x, $y));
+            $this->setStatus(sprintf('%s is already there.', $piece->name) . $next);
             $this->renderCanvasArea();
             return;
         }
         $this->recordStrokeWithTiles('Piece stamp', $map, $stroke, $tilesBefore, $tilesAfter);
-        $this->setStatus(sprintf('Stamped %s at (%d, %d). Enter stamps again; Esc when done.', $piece->name, $x, $y));
+        $this->setStatus(count($origins) === 1
+            ? sprintf('Stamped %s at (%d, %d).', $piece->name, $origins[0]['x'], $origins[0]['y']) . $next
+            : sprintf('Stamped %d %s across (%d, %d) to (%d, %d).', count($origins), $piece->name,
+                $origins[0]['x'], $origins[0]['y'], $this->cursorX, $this->cursorY) . $next);
+        $this->renderCanvasArea();
+    }
+
+    /**
+     * A mouse drag while placing a piece: the press anchors it, the drag
+     * previews the area or line to the pointer, and the release draws it and
+     * drops the anchor, since the drag was the whole gesture.
+     */
+    private function dragPieceWithMouse(int $x, int $y, bool $isMotion, bool $isRelease): void
+    {
+        if ($this->getActivePiecePlacement() === null) {
+            return;
+        }
+        $this->cursorX = $x;
+        $this->cursorY = $y;
+        if (! $isMotion && ! $isRelease) {
+            $this->piecePlacement['anchor'] = ['x' => $x, 'y' => $y];
+        }
+        if ($isRelease) {
+            $this->applyPieceAtCursor();
+            if ($this->piecePlacement !== null) {
+                $this->piecePlacement['anchor'] = null;
+            }
+            return;
+        }
+        $anchor = $this->piecePlacement['anchor'] ?? ['x' => $x, 'y' => $y];
+        $this->setStatus(sprintf('%s from (%d, %d) to (%d, %d). Release to draw.', $this->piecePlacement['piece']->name, $anchor['x'], $anchor['y'], $x, $y));
         $this->renderCanvasArea();
     }
 
@@ -516,17 +587,18 @@ trait PieceCanvas
             return null;
         }
         $piece = $placement['piece'];
+        $escape = $placement['anchor'] === null ? 'Esc:Done' : 'Esc:Unanchor';
         if ($piece->connects === null) {
+            $enter = $placement['anchor'] === null ? 'Enter:Stamp' : 'Enter:Fill';
             return $this->fitHelp(
                 $windowWidth,
-                sprintf('PIECE %s  Enter:Stamp  Esc:Done', $piece->name),
-                sprintf('PIECE %s Enter:Stamp Esc:Done', $piece->name),
-                'PIECE Enter:Stamp Esc:Done',
-                'Enter:Stamp Esc:Done',
-                'Esc:Done',
+                sprintf('PIECE %s  %s  Drag:Fill  %s', $piece->name, $enter, $escape),
+                sprintf('PIECE %s %s %s', $piece->name, $enter, $escape),
+                "PIECE {$enter} {$escape}",
+                "{$enter} {$escape}",
+                $escape,
             );
         }
-        $escape = $placement['anchor'] === null ? 'Esc:Done' : 'Esc:Unanchor';
         return $this->fitHelp(
             $windowWidth,
             sprintf('PIECE %s  Enter:Draw  Del:Erase  %s', $piece->name, $escape),
