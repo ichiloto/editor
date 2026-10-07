@@ -99,13 +99,17 @@ final class ReferenceCatalog
     ];
 
     /**
-     * The reference kinds whose values are pictures an author looks at: how
-     * an interface shows each value, and the folder under the project root
-     * its values are relative to. An interface shows a value's picture from
-     * this, never from the kind's name.
+     * The reference kinds whose values are pictures an author looks at or
+     * sounds an author listens to: how an interface shows or plays each
+     * value, and the folder under the project root its values are found in.
+     * An interface knows a value is a picture or a sound from this, never
+     * from the kind's name.
      */
     private const array MEDIA = [
         'png_assets' => ['kind' => 'image', 'root' => 'assets'],
+        // Music and sound are named without their extension; the game's players find the file and play it.
+        'bgm' => ['kind' => 'audio', 'root' => 'assets/Audio/BGM'],
+        'sfx' => ['kind' => 'audio', 'root' => 'assets/Audio/SFX'],
     ];
 
     /**
@@ -117,9 +121,10 @@ final class ReferenceCatalog
     ];
 
     /**
-     * How an interface shows the values of a reference kind, when they are
-     * pictures: `kind` (`image`) and `root`, the folder under the project
-     * root the values are relative to. Null for any other kind.
+     * How an interface shows or plays the values of a reference kind, when
+     * they are pictures or sounds: `kind` (`image` or `audio`) and `root`,
+     * the folder under the project root the values are found in. Null for
+     * any other kind.
      *
      * @return array{kind: string, root: string}|null
      */

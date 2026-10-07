@@ -15,6 +15,8 @@ use Ichiloto\Editor\Cutscenes\Preview\TimelinePreviewSession;
 use Ichiloto\Editor\ProjectDirectoryContext;
 use Ichiloto\Editor\Canvas\PieceRole;
 use Ichiloto\Editor\Canvas\PiecePlacer;
+use Ichiloto\Editor\Audio\AudioAudition;
+use Ichiloto\Editor\Cutscenes\Preview\PreviewGame;
 use Ichiloto\Editor\Canvas\CanvasTool;
 use Ichiloto\Editor\Canvas\ToolGeometry;
 use Ichiloto\Engine\Rendering\Tilesets\TileId;
@@ -133,6 +135,9 @@ final class EditorSession
     private ?PlaytestRun $playtest = null;
     /** The battle test running in its own window, and the troop it fights. */
     private ?PlaytestRun $battleTestRun = null;
+
+    /** The music or sound an author is hearing from a field, once one has been played. */
+    private ?AudioAudition $audition = null;
     private ?string $battleTestTroop = null;
     /**
      * The summon battle previews last built, by presentation, and what each was built from, so seeking reuses them until either changes.
@@ -3775,6 +3780,52 @@ final class EditorSession
     {
         $this->playtest?->stop();
         $this->battleTestRun?->stop();
+        $this->audition?->stop();
+    }
+
+    /**
+     * Plays a music track or sound effect a field names, once through, to
+     * hear it ({@see AudioAudition}): the game's own players find and play
+     * the file. Another audition, or stopping, ends it.
+     *
+     * @param 'bgm'|'sfx' $kind The reference kind of the field.
+     * @return array{playing: array{kind: string, name: string}|null}
+     * @throws SessionRefusal When the kind is not audio, the file is missing or nothing on this computer can play it.
+     */
+    public function playAudio(string $kind, string $name): array
+    {
+        if ((ReferenceCatalog::describeMedia($kind)['kind'] ?? null) !== 'audio') {
+            throw new SessionRefusal(sprintf('%s is not music or a sound effect.', $kind));
+        }
+        $this->audition ??= new AudioAudition(new PreviewGame(), $this->workspace->projectRoot);
+        $refusal = $this->audition->play($kind, $name);
+        if ($refusal !== null) {
+            throw new SessionRefusal($refusal);
+        }
+
+        return $this->describeAudio();
+    }
+
+    /**
+     * Stops the audition, if one is playing.
+     *
+     * @return array{playing: null}
+     */
+    public function stopAudio(): array
+    {
+        $this->audition?->stop();
+
+        return ['playing' => null];
+    }
+
+    /**
+     * What the audition is playing, as kind and name; null once it has finished.
+     *
+     * @return array{playing: array{kind: string, name: string}|null}
+     */
+    public function describeAudio(): array
+    {
+        return ['playing' => $this->audition?->describePlaying()];
     }
 
     /** Whether any map or database has changes not yet saved. */

@@ -136,6 +136,9 @@ final class SessionHost
                 self::requireString($params, 'mark'),
                 self::requireInt($params, 'tile'),
             ),
+            'audio.play' => $session->playAudio(self::requireString($params, 'kind'), self::requireString($params, 'name')),
+            'audio.stop' => $session->stopAudio(),
+            'audio.status' => $session->describeAudio(),
             'tiles.read' => $session->readTiles(self::requireString($params, 'map')),
             'tiles.stamp' => $session->stampTiles(
                 self::requireString($params, 'map'),
