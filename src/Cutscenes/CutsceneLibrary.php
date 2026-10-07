@@ -112,6 +112,11 @@ final class CutsceneLibrary
             $hasPartner = is_file($partnerPath);
 
             if (($type->hasDataFile() && ! $hasData) || ! $hasPartner) {
+                // A folder of resources with no PHP at all, such as artwork several cutscenes share, is not a
+                // cutscene; the game passes over it as well. An empty folder or half a pair is reported.
+                if (! $hasData && ! $hasPartner && self::holdsOnlyResources($folder)) {
+                    continue;
+                }
                 $this->reportIncomplete($type, $folder, $entry, $hasData, $hasPartner);
 
                 continue;
@@ -143,6 +148,20 @@ final class CutsceneLibrary
 
             $this->assets[$type->value][] = $asset;
         }
+    }
+
+    /** Whether a folder holds something, none of it a PHP file, at any depth. */
+    private static function holdsOnlyResources(string $folder): bool
+    {
+        $found = false;
+        foreach (new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($folder, \FilesystemIterator::SKIP_DOTS)) as $file) {
+            if (str_ends_with($file->getFilename(), '.php')) {
+                return false;
+            }
+            $found = true;
+        }
+
+        return $found;
     }
 
     /**

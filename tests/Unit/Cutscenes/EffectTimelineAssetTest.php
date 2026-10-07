@@ -129,6 +129,12 @@ it('deletes only the effect timeline, and reports a folder without one or with a
     file_put_contents(effectPath($root, 'old.style'), emberSparkTimeline());
     $messages = array_column(CutsceneLibrary::fromProject($root)->issues(CutsceneType::EFFECT), 'message');
 
+    // A folder of shared artwork, with no PHP at all, is not an effect; the game passes over it as well.
+    @mkdir($root . '/assets/Animations/shared/graphical', 0o777, true);
+    file_put_contents($root . '/assets/Animations/shared/graphical/flare.png', 'png');
+    $messages = array_column(CutsceneLibrary::fromProject($root)->issues(CutsceneType::EFFECT), 'message');
+    expect(array_filter($messages, static fn(string $message): bool => str_contains($message, '"shared"')))->toBe([]);
+
     expect(implode("\n", $messages))->toContain('Folder "empty-effect" is missing empty-effect.timeline.php; an effect is its timeline file.')
         ->and(implode("\n", $messages))->toContain('The folder name "old.style" is not a stable id (lowercase letters, digits, "_" and "-").');
 });
