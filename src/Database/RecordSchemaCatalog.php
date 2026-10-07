@@ -17,6 +17,7 @@ use Ichiloto\Editor\Database\Projections\OptimizationExclusionProjection;
 use Ichiloto\Editor\Database\Projections\OptimizationOutcomeProjection;
 use Ichiloto\Editor\Database\Projections\OptimizationWeightProjection;
 use Ichiloto\Editor\EquipmentOptimizationPolicy;
+use Ichiloto\Editor\ProjectConfig;
 use Ichiloto\Editor\Field\ProjectNpc;
 use Ichiloto\Editor\Inspector\InputControlType;
 use Ichiloto\Editor\PermanentGrowthCatalog;
@@ -1457,9 +1458,13 @@ final class RecordSchemaCatalog
                 $value = array_key_exists('default', $row) ? $row['default'] : ($row['value'] ?? null);
                 $default = array_key_exists('default', $row) ? ProjectRecord::stringify($row['default']) : null;
 
+                $reference = ProjectConfig::ENGINE_REFERENCES[strval($row['path'] ?? '')] ?? null;
+
                 return [
                     new RecordField('path', 'Setting', isReadOnly: true),
                     match (true) {
+                        // A setting naming another resource is chosen, never spelled.
+                        $reference !== null => RecordField::reference('value', 'Value', $reference, allowsNone: true, noneLabel: 'None'),
                         // An enum setting is a choice of its cases by name: some
                         // enums' values (a colour's terminal code) are not text
                         // an author can read.

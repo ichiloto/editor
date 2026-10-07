@@ -12380,7 +12380,17 @@ final class Editor
             ]);
         }
 
-        if ($entries === [] || ($category === 'bgm' && count($entries) === 1 && $target === 'map-data')) {
+        if (($field['optional'] ?? false) === true) {
+            // Optional data is cleared by choosing nothing, which removes it.
+            array_unshift($entries, [
+                'label' => 'None',
+                'value' => '',
+                'description' => 'Unset: the game uses its default.',
+            ]);
+        }
+
+        $unset = ($field['optional'] ?? false) === true && (string) ($field['value'] ?? '') === '';
+        if ($entries === [] || (($unset || ($category === 'bgm' && $target === 'map-data')) && count($entries) === 1)) {
             $this->setStatus(
                 sprintf('This project has no %s to choose from.', mb_strtolower($title)),
                 StatusLevel::WARN,

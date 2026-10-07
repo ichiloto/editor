@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Validation;
 
 use Ichiloto\Editor\Cutscenes\CutsceneAsset;
+use Ichiloto\Editor\Cutscenes\CutsceneType;
+use Ichiloto\Editor\ProjectConfig;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Engine\Animations\Field\FieldEffectManager;
 use Ichiloto\Engine\Animations\Field\FieldPresentationCatalog;
@@ -17,9 +19,11 @@ use Throwable;
  * Checks every effect timeline the project uses, as the Engine plays it for
  * each consumer: battle animations' source and target effects in battle;
  * the field presentation's cue and action prompt effects, maps' field
- * effects and tileset pieces' effects on the field. Each is compiled for
- * both the terminal and the graphical presentation, so a sequence that only
- * one renderer would refuse is still found.
+ * effects and tileset pieces' effects on the field; inns' rest stages as a
+ * stage of their own. Battle and field effects are compiled for both the
+ * terminal and the graphical presentation, so a sequence that only one
+ * renderer would refuse is still found; a stage is admitted as the Engine's
+ * stage loading admits it.
  */
 final class EffectValidator
 {
@@ -36,6 +40,16 @@ final class EffectValidator
 
         foreach ($uses as $effect => $contexts) {
             foreach ($contexts as $context => $places) {
+                if ($context === 'stage') {
+                    try {
+                        $library->loadStage($effect);
+                    } catch (Throwable $failure) {
+                        $issues[] = Issue::error($places[0], sprintf('Effect %s cannot be played as a stage: %s', $effect, $failure->getMessage()),
+                            sprintf('Fix assets/Animations/%s, or choose a stage timeline. Until then the rest shows no graphical stage.%s', $effect,
+                                count($places) > 1 ? sprintf(' Also used by %d more.', count($places) - 1) : ''));
+                    }
+                    continue;
+                }
                 foreach (EffectPresentation::cases() as $presentation) {
                     try {
                         $library->load($effect, $context === 'battle', $presentation);
@@ -90,10 +104,11 @@ final class EffectValidator
      * Returns where the project plays each effect, by context: battle
      * animations' source and target effects in battle; the field
      * presentation's cues and action prompt, maps' field effects and tileset
-     * pieces' effects on the field.
+     * pieces' effects on the field; and the rest stage of Sleep events, `inn`
+     * commands at any depth and the project's default inn presentation.
      *
      * @param Issue[] $issues Receives what could not be read.
-     * @return array<string, array{battle?: list<string>, field?: list<string>}>
+     * @return array<string, array{battle?: list<string>, field?: list<string>, stage?: list<string>}>
      */
     public static function findUses(ProjectWorkspace $workspace, array &$issues = []): array
     {
@@ -110,6 +125,10 @@ final class EffectValidator
                     $use($effect, true, sprintf('assets/Data/animations.php: %s %s', strval($animation->get('name')), $field));
                 }
             }
+        }
+
+        foreach (self::findStageUses($workspace) as $effect => $places) {
+            $uses[$effect]['stage'] = $places;
         }
 
         try {
@@ -158,6 +177,38 @@ final class EffectValidator
     }
 
     /**
+     * Returns where each rest stage timeline is named, as InnOffer reads it:
+     * a Sleep event's data, an `inn` command at any depth of a map event,
+     * event script or cinematic, and config's graphics.inn.presentation for
+     * an inn naming none.
+     *
+     * @return array<string, list<string>> Timeline id to where it is named.
+     */
+    private static function findStageUses(ProjectWorkspace $workspace): array
+    {
+        $uses = [];
+        $name = static function (mixed $presentation, string $where) use (&$uses): void {
+            if (is_string($presentation) && trim($presentation) !== '') {
+                $uses[trim($presentation)][] = $where;
+            }
+        };
+
+        foreach ($workspace->maps as $map) {
+            foreach ((array) ($map->data['events'] ?? []) as $marker => $definition) {
+                if (is_array($definition) && str_ends_with(strval($definition['class'] ?? ''), 'SleepEventTrigger')) {
+                    $name(((array) ($definition['data'] ?? []))['presentation'] ?? null, sprintf('map %s event %s', $map->mapId, strval($marker)));
+                }
+            }
+        }
+
+        self::visitCommands($workspace, $workspace->cutscenes?->assets(CutsceneType::CINEMATIC) ?? [], 'inn',
+            static fn(array $command, string $where) => $name($command['presentation'] ?? null, $where));
+        $name($workspace->config?->getRecord(ProjectConfig::INN_PRESENTATION)->get('value'), 'config.php: ' . ProjectConfig::INN_PRESENTATION);
+
+        return array_map(static fn(array $places): array => array_values(array_unique($places)), $uses);
+    }
+
+    /**
      * Returns the scripts whose `field_animation` commands play each effect:
      * map events, event scripts and cinematics, at any depth of branches,
      * lanes and choices, since the command is the same wherever it is
@@ -189,12 +240,25 @@ final class EffectValidator
      */
     public static function visitFieldAnimations(ProjectWorkspace $workspace, iterable $cinematics, \Closure $visit): void
     {
-        $collect = static function (mixed $value, string $where) use (&$collect, $visit): void {
+        self::visitCommands($workspace, $cinematics, 'field_animation', $visit);
+    }
+
+    /**
+     * Visits every command of a type a script runs: map events, event
+     * scripts and cinematics, at any depth of branches, lanes and choices.
+     * What cannot be read is not visited; validation reports it.
+     *
+     * @param iterable<CutsceneAsset> $cinematics The project's cinematics, as the editor holds them.
+     * @param \Closure(array<array-key, mixed>, string): void $visit Given the command and where it is.
+     */
+    private static function visitCommands(ProjectWorkspace $workspace, iterable $cinematics, string $type, \Closure $visit): void
+    {
+        $collect = static function (mixed $value, string $where) use (&$collect, $visit, $type): void {
             if (! is_array($value)) {
                 return;
             }
 
-            if (($value['type'] ?? null) === 'field_animation') {
+            if (($value['type'] ?? null) === $type) {
                 $visit($value, $where);
             }
 

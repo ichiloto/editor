@@ -125,6 +125,10 @@ final class EventTypeCatalog
                     'cost' => 0,
                 ],
                 defaultDefinitionFields: ['cue' => ['symbol' => '', 'color' => 'bright-yellow']],
+                // InnOffer's own optional data: the rest music, else the
+                // project's sleep theme; the rest stage timeline, else
+                // config's graphics.inn.presentation.
+                optionalData: ['bgm' => '', 'presentation' => ''],
             ),
             new EventTypeDefinition(
                 label: 'Chest',
@@ -164,6 +168,12 @@ final class EventTypeCatalog
     public static function findByLabel(string $label): ?EventTypeDefinition
     {
         return array_find(self::all(), static fn(EventTypeDefinition $definition): bool => $definition->label === $label);
+    }
+
+    /** Returns the type of a trigger class, or null when the catalog does not list it. */
+    public static function findByClass(?string $className): ?EventTypeDefinition
+    {
+        return array_find(self::all(), static fn(EventTypeDefinition $definition): bool => $definition->className === $className);
     }
 
     /**

@@ -1692,6 +1692,22 @@ final class ProjectMap
         return $reference;
     }
 
+    /** Whether an event holds a field at a path, even one whose value is null. */
+    public function hasEventField(string $marker, array $path): bool
+    {
+        $reference = $this->editableData['events'][$marker] ?? null;
+
+        foreach ($path as $segment) {
+            if (! is_array($reference) || ! array_key_exists($segment, $reference)) {
+                return false;
+            }
+
+            $reference = $reference[$segment];
+        }
+
+        return $path !== [];
+    }
+
     /**
      * Returns the event marker located at the given coordinate.
      *
@@ -1927,6 +1943,30 @@ final class ProjectMap
 
             $reference = &$reference[$segment];
         }
+    }
+
+    /**
+     * Removes an event's field at a path, leaving everything else it holds;
+     * nothing changes when it holds none there.
+     */
+    public function removeEventField(string $marker, array $path): void
+    {
+        $this->assertEditable();
+        if (! $this->hasEventField($marker, $path)) {
+            return;
+        }
+
+        $next = $this->editableData;
+        $reference = &$next['events'][$marker];
+        $last = array_pop($path);
+
+        foreach ($path as $segment) {
+            $reference = &$reference[$segment];
+        }
+
+        unset($reference[$last]);
+        unset($reference);
+        $this->writeData($next);
     }
 
     /**

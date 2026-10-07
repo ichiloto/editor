@@ -569,6 +569,8 @@ final readonly class MapInspector
         return match (true) {
             $path === ['data', 'scriptId'] => ['category' => 'common_events', 'title' => 'Event Script'],
             $path === ['data', 'cinematicId'] => ['category' => 'cinematics', 'title' => 'Cinematic'],
+            // An inn's rest stage, as InnOffer reads it.
+            $path === ['data', 'presentation'] => ['category' => 'stage_timelines', 'title' => 'Rest Presentation'],
             $leaf === 'bgm' => ['category' => 'bgm', 'title' => 'Music'],
             $leaf === 'sfx' => ['category' => 'sfx', 'title' => 'Sound Effect'],
             // A shop's stock is data.items.N.item. The leaf alone would also
@@ -670,14 +672,22 @@ final readonly class MapInspector
     {
         $marker = (string) $field['marker'];
         $path = (array) ($field['path'] ?? []);
+        $held = $map->hasEventField($marker, $path);
         $oldValue = $map->getEventField($marker, $path);
-        $map->setEventField($marker, $path, $value);
+        // Optional data cleared is removed, as it was before it was set.
+        $removed = ($field['optional'] ?? false) === true && ($value === null || $value === '');
+        if ($removed && ! $held) {
+            return null;
+        }
+        $apply = $removed
+            ? static fn() => $map->removeEventField($marker, $path)
+            : static fn() => $map->setEventField($marker, $path, $value);
+        $restore = $held
+            ? static fn() => $map->setEventField($marker, $path, $oldValue)
+            : static fn() => $map->removeEventField($marker, $path);
+        $apply();
 
-        return new GenericCommand(
-            sprintf('%s edit', $field['label'] ?? 'Event field'),
-            static fn() => $map->setEventField($marker, $path, $value),
-            static fn() => $map->setEventField($marker, $path, $oldValue),
-        );
+        return new GenericCommand(sprintf('%s edit', $field['label'] ?? 'Event field'), $apply, $restore);
     }
 
     /**
@@ -1114,10 +1124,20 @@ final readonly class MapInspector
         $eventData = $definition['data'] ?? [];
 
         if (is_array($eventData)) {
-            $fields = $this->decorateEventInspectorFields(
+            // The type's optional data is offered as it reads when absent,
+            // and stays out of the stored event until an author sets it.
+            $optional = EventTypeCatalog::findByClass(is_string($definition['class'] ?? null) ? $definition['class'] : null)?->optionalData ?? [];
+            $fields = array_map(static function (array $field) use ($optional): array {
+                $path = array_values((array) ($field['path'] ?? []));
+                if (count($path) === 2 && array_key_exists((string) $path[1], $optional)) {
+                    $field['optional'] = true;
+                }
+
+                return $field;
+            }, $this->decorateEventInspectorFields(
                 $marker,
-                $this->flattenInspectorFields($eventData, ['data']),
-            );
+                $this->flattenInspectorFields([...$eventData, ...array_diff_key($optional, $eventData)], ['data']),
+            ));
         }
 
         $rootFields = array_diff_key($definition, ['class' => true, 'data' => true]);

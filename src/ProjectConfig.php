@@ -13,6 +13,7 @@ use Ichiloto\Editor\Database\ProjectRecord;
 use Ichiloto\Editor\Storage\FileSetOperations;
 use Ichiloto\Editor\Storage\FileSetTransaction;
 use Ichiloto\Editor\Storage\FilesystemFileSetOperations;
+use Ichiloto\Engine\Animations\Timelines\EffectTimelineLibrary;
 use Ichiloto\Engine\Rendering\FieldViewport;
 use RuntimeException;
 use Throwable;
@@ -21,12 +22,20 @@ use Throwable;
 final class ProjectConfig
 {
     public const string FIELD_ZOOM = 'graphics.field.zoom';
+    /** The inn's rest stage timeline when an inn names none of its own (InnStay). */
+    public const string INN_PRESENTATION = 'graphics.inn.presentation';
 
     /**
      * Settings the engine reads with a default when the file leaves them
      * out, by path, with that default.
      */
-    private const array ENGINE_DEFAULTS = [self::FIELD_ZOOM => FieldViewport::DEFAULT_ZOOM];
+    private const array ENGINE_DEFAULTS = [self::FIELD_ZOOM => FieldViewport::DEFAULT_ZOOM, self::INN_PRESENTATION => null];
+
+    /**
+     * Settings that name another resource, by path, with the reference kind
+     * ({@see \Ichiloto\Editor\Database\ReferenceCatalog}) they are chosen from.
+     */
+    public const array ENGINE_REFERENCES = [self::INN_PRESENTATION => 'stage_timelines'];
     private ?PhpArraySourceDocument $document = null;
     private ?string $issue = null;
     private array $payload = [];
@@ -109,7 +118,8 @@ final class ProjectConfig
 
     /**
      * Refuses a value the engine would not accept at a path, before anything
-     * changes: a field zoom outside its range.
+     * changes: a field zoom outside its range, or an inn presentation that
+     * is not a timeline identity.
      *
      * @throws \InvalidArgumentException
      */
@@ -118,6 +128,10 @@ final class ProjectConfig
         if ($path === self::FIELD_ZOOM && (! is_int($value) && ! is_float($value)
             || ! is_finite((float) $value) || $value < FieldViewport::MIN_ZOOM || $value > FieldViewport::MAX_ZOOM)) {
             throw new \InvalidArgumentException(sprintf('Field zoom must be a finite number from %g to %g.', FieldViewport::MIN_ZOOM, FieldViewport::MAX_ZOOM));
+        }
+        if ($path === self::INN_PRESENTATION && $value !== null) {
+            // A stable timeline identity, as InnStay loads it; null leaves inns without one.
+            EffectTimelineLibrary::assertId(is_string($value) ? $value : '');
         }
     }
 

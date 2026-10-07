@@ -6,6 +6,7 @@ namespace Ichiloto\Editor\Database;
 
 use Ichiloto\Editor\PermanentGrowthCatalog;
 use Ichiloto\Editor\ProjectActor;
+use Ichiloto\Editor\ProjectDirectoryContext;
 use Ichiloto\Editor\ProjectQuest;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\Cutscenes\CutsceneAsset;
@@ -24,6 +25,7 @@ use Ichiloto\Engine\Battle\Resolution\ResolutionKind;
 use Ichiloto\Engine\Entities\Magic\MagicEffectType;
 use Ichiloto\Engine\Entities\Skills\SkillResolutionScope;
 use InvalidArgumentException;
+use Throwable;
 
 /**
  * What a field pointing at another resource may point at.
@@ -93,6 +95,7 @@ final class ReferenceCatalog
         'event_markers',
         'tilesets',
         'effects',
+        'stage_timelines',
         'map_regions',
         'animation_roles',
         'battle_arenas',
@@ -269,8 +272,35 @@ final class ReferenceCatalog
             'animation_roles' => \Ichiloto\Engine\Animations\ActionAnimationResolver::getSupportedRoles(),
             // Effect timelines are folders the Engine lists by stable id.
             'effects' => new EffectTimelineLibrary($this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets')->findTimelineIds(),
+            'stage_timelines' => $this->stageTimelineIds(),
             default => $this->recordValues($category),
         };
+    }
+
+    /**
+     * The effect timelines the Engine admits as a stage of their own, such
+     * as an inn's rest, by stable id: those its stage loading accepts (fixed,
+     * once, a stage descriptor, stage images, no cues). Admission is the
+     * Engine's; a timeline it refuses is not offered.
+     *
+     * @return list<string>
+     */
+    private function stageTimelineIds(): array
+    {
+        $library = new EffectTimelineLibrary($this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets');
+
+        return ProjectDirectoryContext::run($this->workspace->projectRoot, static fn(): array => array_values(array_filter(
+            $library->findTimelineIds(),
+            static function (string $id) use ($library): bool {
+                try {
+                    $library->loadStage($id);
+
+                    return true;
+                } catch (Throwable) {
+                    return false;
+                }
+            },
+        )));
     }
 
     /** @return string[] The catalogue's basic skills usable in battle, in catalogue order. */
