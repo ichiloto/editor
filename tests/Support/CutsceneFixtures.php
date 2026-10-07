@@ -2,8 +2,10 @@
 
 declare(strict_types=1);
 
+use Ichiloto\Editor\Cutscenes\CutsceneHydration;
 use Ichiloto\Editor\Cutscenes\CutsceneLibrary;
 use Ichiloto\Editor\Editor;
+use Ichiloto\Editor\ProjectDirectoryContext;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Editor\UI\CutscenesScreen;
 
@@ -564,4 +566,14 @@ function effectProject(): string
     writeTilesetTestPng($root . '/assets/Graphics/Effects/dusk-slash.png', 32, 16);
 
     return $root;
+}
+
+/** The harbour cinematic of {@see cutsceneProject()}, as the Engine reads it. */
+function harbourDefinition(string $root): \Ichiloto\Engine\Cutscenes\Cinematics\CinematicDefinition
+{
+    $folder = $root . '/assets/Cutscenes/Cinematics/harbour-lanterns';
+    $data = ProjectDirectoryContext::run($root, static fn(): mixed => require $folder . '/harbour-lanterns.data.php');
+    $script = ProjectDirectoryContext::run($root, static fn(): mixed => require $folder . '/harbour-lanterns.script.php');
+
+    return CutsceneHydration::cinematic($data, $script, $root);
 }

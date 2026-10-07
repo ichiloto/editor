@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 use Ichiloto\Editor\Cutscenes\CutsceneHydration;
 use Ichiloto\Editor\Cutscenes\Preview\CinematicPreviewSession;
-use Ichiloto\Editor\ProjectDirectoryContext;
 use Ichiloto\Engine\Util\Config\ConfigStore;
 use Ichiloto\Engine\Util\Config\ProjectConfig;
 
@@ -13,14 +12,6 @@ use Ichiloto\Engine\Util\Config\ProjectConfig;
  * controller, stage and presentation are the Engine's; the editor supplies a
  * clock, a frame buffer, and read-only views.
  */
-function harbourDefinition(string $root): \Ichiloto\Engine\Cutscenes\Cinematics\CinematicDefinition
-{
-    $folder = $root . '/assets/Cutscenes/Cinematics/harbour-lanterns';
-    $data = ProjectDirectoryContext::run($root, static fn(): mixed => require $folder . '/harbour-lanterns.data.php');
-    $script = ProjectDirectoryContext::run($root, static fn(): mixed => require $folder . '/harbour-lanterns.script.php');
-
-    return CutsceneHydration::cinematic($data, $script, $root);
-}
 
 it('plays the harbour cinematic to completion through the Engine and records its final state', function () {
     $root = cutsceneProject();

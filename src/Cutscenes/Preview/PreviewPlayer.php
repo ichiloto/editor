@@ -4,15 +4,11 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Cutscenes\Preview;
 
-use Assegai\Collections\ItemList;
 use Ichiloto\Engine\Core\Rect;
 use Ichiloto\Engine\Core\Vector2;
-use Ichiloto\Engine\Events\EventManager;
 use Ichiloto\Engine\Events\Interfaces\EventInterface;
-use Ichiloto\Engine\Events\Interfaces\ObserverInterface;
-use Ichiloto\Engine\Events\Interfaces\StaticObserverInterface;
-use Ichiloto\Engine\Events\Triggers\EventTrigger;
 use Ichiloto\Engine\Field\Player;
+use Ichiloto\Engine\Field\PlayerPresentationConfig;
 use Ichiloto\Engine\Rendering\Camera;
 use Ichiloto\Engine\Scenes\Game\GameScene;
 
@@ -29,22 +25,15 @@ final class PreviewPlayer extends Player
     public array $blockedMessages = [];
 
     /**
+     * The player of a preview scene, with the field art the project gives the
+     * player ({@see PlayerPresentationConfig}), as the game's field builds it.
+     *
      * @param string[] $sprite
      */
-    public function __construct(Vector2 $position, array $sprite = ['@'])
+    public function __construct(GameScene $scene, Vector2 $position, array $sprite = ['@'])
     {
-        $this->position = $position;
-        $this->shape = new Rect(0, 0, 1, 1);
-        $this->sprite = $sprite;
-        $this->observers = new ItemList(ObserverInterface::class);
-        $this->staticObservers = new ItemList(StaticObserverInterface::class);
-        $this->events = new ItemList(EventTrigger::class);
-        $this->eventManager = EventManager::getInstance(new PreviewGame());
-    }
-
-    public function bindScene(GameScene $scene): void
-    {
-        $this->scene = $scene;
+        parent::__construct($scene, 'Player', $position, new Rect(0, 0, 1, 1), $sprite,
+            graphicalSprites: PlayerPresentationConfig::load()->graphical);
     }
 
     public function tryMove(Vector2 $direction, Camera $camera): bool

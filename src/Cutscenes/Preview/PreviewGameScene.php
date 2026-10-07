@@ -62,7 +62,6 @@ final class PreviewGameScene extends GameScene
 
     public function installPlayer(PreviewPlayer $player): void
     {
-        $player->bindScene($this);
         $this->player = $player;
     }
 

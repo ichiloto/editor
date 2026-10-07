@@ -13,6 +13,7 @@ use Ichiloto\Engine\Events\Interpreter\EventExecutionLane;
 use Ichiloto\Engine\Events\Interpreter\EventExecutionSession;
 use Ichiloto\Engine\Events\Interpreter\EventExecutionStatus;
 use Ichiloto\Engine\Events\Interpreter\EventInterpreter;
+use Ichiloto\Engine\Rendering\Transport\RendererGridConfig;
 use Ichiloto\Engine\Util\Config\ConfigStore;
 use Ichiloto\Engine\Util\Config\PlaySettings;
 use Ichiloto\Engine\Util\Config\ProjectConfig;
@@ -68,6 +69,8 @@ final class CinematicPreviewSession
     private bool $outcomeAnnounced = false;
     /** What was playing before the cinematic started, as the engine held it. */
     private ?BackgroundMusicState $musicBefore = null;
+    /** The editor window's graphical view of the scene, while one is attached. */
+    private ?PreviewSceneHost $sceneHost = null;
 
     /**
      * @param array{mapId?: string|null, x?: int, y?: int, width?: int, height?: int, autoAdvance?: bool, battleOutcome?: string} $options
@@ -120,7 +123,7 @@ final class CinematicPreviewSession
             $this->presentation->autoAdvance = (bool) ($this->options['autoAdvance'] ?? false);
             $this->interpreter = new EventInterpreter($this->scene, $this->presentation);
             $this->scene->installInterpreter($this->interpreter);
-            $player = new PreviewPlayer(new Vector2(intval($this->options['x'] ?? 0), intval($this->options['y'] ?? 0)));
+            $player = new PreviewPlayer($this->scene, new Vector2(intval($this->options['x'] ?? 0), intval($this->options['y'] ?? 0)));
             $this->scene->installPlayer($player);
 
             if ($mapId !== '') {
@@ -295,6 +298,7 @@ final class CinematicPreviewSession
      */
     public function dispose(): void
     {
+        $this->detachScene();
         if (! $this->configured) {
             return;
         }
@@ -550,16 +554,53 @@ final class CinematicPreviewSession
         $this->run(function () use (&$rows): void {
             $camera = $this->scene->previewCamera();
             $camera->clearFrame();
-            $this->scene->previewMap->render();
-            $this->scene->npcManager?->render();
-            $this->scene->player?->render();
-            $this->scene->cinematicStage?->render();
-            $this->scene->cinematicPresentation?->render();
-            $this->presentation->render();
+            $this->renderScene();
             $rows = $camera->frame();
         });
 
         return $rows;
+    }
+
+    /**
+     * One exchange with the editor window's graphical view of the scene
+     * ({@see PreviewSceneHost::exchange()}): its renderer event lines in, what
+     * it should apply out. A grid other than the attached view's starts the
+     * view again, as a resized renderer session does.
+     *
+     * @param list<string> $events
+     * @return list<array{type: string, payload: array<string, mixed>}>
+     */
+    public function exchangeScene(RendererGridConfig $grid, array $events): array
+    {
+        if ($this->sceneHost !== null && $this->sceneHost->grid != $grid) {
+            $this->detachScene();
+        }
+        $messages = [];
+        $this->run(function () use ($grid, $events, &$messages): void {
+            $this->sceneHost ??= new PreviewSceneHost($this->scene, $this->presentation,
+                $this->projectRoot . '/assets', $grid, $this->renderScene(...), fn(): float => $this->elapsed);
+            $messages = $this->sceneHost->exchange($events);
+        });
+
+        return $messages;
+    }
+
+    /** Ends the editor window's graphical view of the scene, if one is attached. */
+    public function detachScene(): void
+    {
+        $this->sceneHost?->dispose();
+        $this->sceneHost = null;
+    }
+
+    /** Draws everything the field draws during a cinematic, in the game's order. */
+    private function renderScene(): void
+    {
+        $this->scene->previewMap->render();
+        $this->scene->npcManager?->render();
+        $this->scene->player?->render();
+        $this->scene->cinematicStage?->render();
+        $this->scene->cinematicPresentation?->render();
+        $this->presentation->render();
     }
 
     /**
