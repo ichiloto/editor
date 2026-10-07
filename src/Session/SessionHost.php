@@ -131,6 +131,11 @@ final class SessionHost
                 is_bool($params['tileShadows'] ?? false) ? ($params['tileShadows'] ?? false) : throw new InvalidRequest('"tileShadows" must be a boolean.')),
             'tiles.palette' => $session->readTilePalette(self::requireString($params, 'map')),
             'tilesets.preview' => $session->readTilesetPreview(self::requireInt($params, 'index')),
+            'tilesets.mark' => $session->toggleTilesetMark(
+                self::requireInt($params, 'index'),
+                self::requireString($params, 'mark'),
+                self::requireInt($params, 'tile'),
+            ),
             'tiles.read' => $session->readTiles(self::requireString($params, 'map')),
             'tiles.stamp' => $session->stampTiles(
                 self::requireString($params, 'map'),

@@ -519,7 +519,8 @@ final class EditorSession
     /**
      * A tileset record as an author sees it, unsaved edits included: its
      * sheets as the tile palette lays them out ({@see TilePalette}), the tiles
-     * it marks (drawn above characters, tables, the missing-art tile), and its
+     * it marks (drawn above characters, tables, the missing-art tile) and
+     * those that can be tables ({@see toggleTilesetMark()}), and its
      * pieces, each with its glyph picture and its tiles drawn. A tileset the
      * Engine would refuse still shows the sheets it can, and `issue` says
      * what is wrong; a sheet that cannot be drawn is left out and named.
@@ -579,10 +580,48 @@ final class EditorSession
             'missingArt' => $tileset->missingArt,
             'above' => $tileset->above,
             'tables' => $tileset->tables,
+            // The tiles shown that can be tables, so an interface offers the mark only where it holds.
+            'tableTiles' => array_values(array_filter(array_merge(...array_map(static fn(array $tab): array => array_merge(...$tab['ids']), $tabs) ?: [[]]),
+                static fn(int $tile): bool => TileId::getSheet($tile) === TilesetSheet::A2)),
             'pieces' => $pieces,
             'issue' => $issue,
             'unreadable' => $unreadable,
         ];
+    }
+
+    /**
+     * Marks one tile of a tileset record as drawn above characters or as a
+     * table, or takes the mark away when it has it, as one undo step through
+     * the record's own Above Characters or Tables field, so every view of
+     * the record shows the same list. An autotile is marked by its kind,
+     * whatever shape it is, as the Engine reads the list; only A2 autotiles
+     * can be tables.
+     *
+     * @param 'above'|'tables' $mark
+     * @return array{changed: bool, marked: bool, records: list<string>}
+     * @throws SessionRefusal When the record or mark is unknown, or the tile cannot take the mark.
+     */
+    public function toggleTilesetMark(int $index, string $mark, int $tile): array
+    {
+        if (! in_array($mark, ['above', 'tables'], true)) {
+            throw new SessionRefusal(sprintf('%s is not a tile mark; a tile is marked above characters or as a table.', $mark));
+        }
+        if ($tile === TileId::EMPTY || ! TileId::isValid($tile)) {
+            throw new SessionRefusal(sprintf('%d is not a tile, so it cannot be marked.', $tile));
+        }
+        if ($mark === 'tables' && TileId::getSheet($tile) !== TilesetSheet::A2) {
+            throw new SessionRefusal(sprintf('Only A2 autotiles can be tables; tile %d is on sheet %s.', $tile, TileId::getSheet($tile)?->value ?? '?'));
+        }
+        $record = $this->requireRecordDatabase('tilesets')->getRecordByIndex($index)
+            ?? throw new SessionRefusal(sprintf('tilesets has no record %d.', $index));
+        $flag = TileId::getFlagId($tile);
+        $listed = array_values(array_filter(is_array($record->get($mark)) ? $record->get($mark) : [], is_int(...)));
+        $kept = array_values(array_filter($listed, static fn(int $listedTile): bool => TileId::getFlagId($listedTile) !== $flag));
+        $marked = count($kept) === count($listed);
+        $result = $this->applyDatabaseRecord('tilesets', $index, ['field' => $mark, 'frame' => []],
+            implode(', ', $marked ? [...$kept, $flag] : $kept));
+
+        return [...$result, 'marked' => $marked];
     }
 
     /**

@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Ichiloto\Editor\Session\EditorSession;
+use Ichiloto\Editor\Session\SessionRefusal;
 
 /**
  * A tileset is seen as it is set up, and every field naming a picture says
@@ -37,6 +38,9 @@ it('lays out a tileset record\'s sheets as the tile palette does, with its marks
         ->and(array_column($preview['palette']['tabs'], 'name'))->toBe(['A', 'B'])
         ->and($preview['palette']['tabs'][1]['operations'])->not->toBeEmpty()
         ->and($preview['missingArt'])->toBe(255)
+        // Only the A2 autotiles shown can be tables.
+        ->and($preview['tableTiles'])->not->toBeEmpty()
+        ->and(array_filter($preview['tableTiles'], static fn(int $tile): bool => $tile < 2816 || $tile >= 4352))->toBe([])
         ->and($preview['pieces'][0])->toMatchArray(['id' => 'stool', 'name' => 'Stool', 'connected' => false, 'tileLayers' => ['furniture']])
         ->and($preview['pieces'][0]['operations'])->not->toBeEmpty();
 });
@@ -59,4 +63,31 @@ it('says how a picture reference\'s value is shown, and nothing for a reference 
     expect(findTilesetRow($session, 'Sheet B')['media'])->toBe(['kind' => 'image', 'root' => 'assets'])
         ->and(findTilesetRow($session, 'Sheet B')['value'])->toBe('Graphics/Tilesets/Home_B.png')
         ->and(array_key_exists('media', findTilesetRow($session, 'Name')))->toBeFalse();
+});
+
+it('marks a tile above characters or as a table with a click, and a second click takes the mark away, each one undo step', function () {
+    $session = tilesetPreviewSession();
+
+    // Any shape of an autotile marks its kind, as the Engine reads the list.
+    expect($session->toggleTilesetMark(0, 'above', 2816 + 5))->toMatchArray(['changed' => true, 'marked' => true])
+        ->and($session->readTilesetPreview(0)['above'])->toBe([2816])
+        ->and(findTilesetRow($session, 'Above Characters')['value'])->toBe('2816');
+    $session->toggleTilesetMark(0, 'above', 7);
+    $session->toggleTilesetMark(0, 'tables', 2816);
+    expect($session->readTilesetPreview(0))->toMatchArray(['above' => [2816, 7], 'tables' => [2816], 'issue' => null]);
+
+    expect($session->toggleTilesetMark(0, 'above', 2816))->toMatchArray(['marked' => false])
+        ->and($session->readTilesetPreview(0)['above'])->toBe([7]);
+    $session->undo();
+    expect($session->readTilesetPreview(0)['above'])->toBe([2816, 7])
+        ->and($session->listDatabaseRecords('tilesets')['dirty'])->toBeTrue();
+});
+
+it('refuses a mark the tile cannot take, changing nothing', function () {
+    $session = tilesetPreviewSession();
+
+    expect(fn() => $session->toggleTilesetMark(0, 'tables', 7))->toThrow(SessionRefusal::class, 'Only A2 autotiles can be tables')
+        ->and(fn() => $session->toggleTilesetMark(0, 'above', 0))->toThrow(SessionRefusal::class, 'cannot be marked')
+        ->and(fn() => $session->toggleTilesetMark(0, 'counter', 7))->toThrow(SessionRefusal::class, 'not a tile mark')
+        ->and($session->listDatabaseRecords('tilesets')['dirty'])->toBeFalse();
 });
