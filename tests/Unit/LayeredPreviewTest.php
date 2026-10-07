@@ -26,10 +26,12 @@ PHP);
             ->and(new ReflectionProperty(MapManager::class, 'collisionMap')->getValue($manager))->toBe([[0, 1, 0, 0], [0, 0, 0, 0]]);
         $camera = $scene->previewCamera();
         ob_start();
-        $manager->render();
+        $frame = $preview->frame();
         $output = ob_get_clean();
+        // The preview's picture is captured, never written over the editor's screen.
         expect($output)->toBe('')
-            ->and(implode("\n", $camera->frame()))->toContain('./..', '.xx.');
+            // The layers composed, with the player standing on the map's first cell.
+            ->and(implode("\n", array_map(Ichiloto\Engine\IO\Console\TerminalText::stripAnsi(...), $frame)))->toContain('/..', '.xx.');
         $manager->unload();
         expect($manager->layers)->toBeNull()
             ->and($manager->tileMap)->toBe([])

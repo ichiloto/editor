@@ -23,6 +23,8 @@ use Ichiloto\Editor\Canvas\CanvasTool;
 use Ichiloto\Editor\Canvas\ToolGeometry;
 use Ichiloto\Engine\Rendering\Tilesets\TileId;
 use Ichiloto\Engine\Rendering\Tilesets\TilesetPiece;
+use Ichiloto\Engine\Rendering\Transport\Exceptions\RendererProtocolException;
+use Ichiloto\Engine\Rendering\Transport\Exceptions\RendererTransportException;
 use Ichiloto\Engine\Rendering\Tilesets\Tileset;
 use Ichiloto\Engine\Rendering\Tilesets\TilesetSheet;
 use Ichiloto\Editor\Database\ConditionCodec;
@@ -2033,6 +2035,40 @@ final class EditorSession
         $this->cinematicPreviewFingerprint = null;
 
         return ['stopped' => $stopped];
+    }
+
+    /**
+     * One exchange with the editor window's graphical view of the cinematic
+     * being previewed ({@see CinematicPreviewSession::exchangeScene()}): the
+     * window's renderer event lines in (its READY, frame acknowledgements and
+     * rejections, exactly as the game's renderer writes them), the frames it
+     * should apply out, in order, each its FRAME payload without envelope.
+     *
+     * @param list<string> $events
+     * @return array{messages: list<array{type: string, payload: array<string, mixed>}>}
+     * @throws SessionRefusal When no cinematic is previewed or a line is not a renderer event.
+     */
+    public function exchangeCinematicScene(array $events): array
+    {
+        $preview = $this->cinematicPreview ?? throw new SessionRefusal('No cinematic is being previewed.');
+        try {
+            return ['messages' => $preview->exchangeScene($events)];
+        } catch (RendererProtocolException | RendererTransportException $error) {
+            throw new SessionRefusal('The graphical preview stopped: ' . $error->getMessage(), previous: $error);
+        }
+    }
+
+    /**
+     * Ends the graphical view of the cinematic being previewed, giving the
+     * Terminal picture back the preview's own screen.
+     *
+     * @return array{detached: bool}
+     */
+    public function detachCinematicScene(): array
+    {
+        $this->cinematicPreview?->detachScene();
+
+        return ['detached' => $this->cinematicPreview !== null];
     }
 
     /**

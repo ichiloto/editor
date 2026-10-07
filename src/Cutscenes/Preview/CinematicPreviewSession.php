@@ -13,6 +13,8 @@ use Ichiloto\Engine\Events\Interpreter\EventExecutionLane;
 use Ichiloto\Engine\Events\Interpreter\EventExecutionSession;
 use Ichiloto\Engine\Events\Interpreter\EventExecutionStatus;
 use Ichiloto\Engine\Events\Interpreter\EventInterpreter;
+use Ichiloto\Engine\IO\Console\Console;
+use Ichiloto\Engine\Rendering\Runtime\RendererRuntimeConfig;
 use Ichiloto\Engine\Rendering\Transport\RendererGridConfig;
 use Ichiloto\Engine\Util\Config\ConfigStore;
 use Ichiloto\Engine\Util\Config\PlaySettings;
@@ -71,6 +73,9 @@ final class CinematicPreviewSession
     private ?BackgroundMusicState $musicBefore = null;
     /** The editor window's graphical view of the scene, while one is attached. */
     private ?PreviewSceneHost $sceneHost = null;
+    /** The preview's screen in Terminal cells, which the graphical view's camera viewport never changes. */
+    private int $screenWidth = 60;
+    private int $screenHeight = 18;
 
     /**
      * @param array{mapId?: string|null, x?: int, y?: int, width?: int, height?: int, autoAdvance?: bool, battleOutcome?: string} $options
@@ -111,8 +116,8 @@ final class CinematicPreviewSession
 
     private function boot(): void
     {
-        $width = max(20, intval($this->options['width'] ?? 60));
-        $height = max(8, intval($this->options['height'] ?? 18));
+        $width = $this->screenWidth = max(20, intval($this->options['width'] ?? 60));
+        $height = $this->screenHeight = max(8, intval($this->options['height'] ?? 18));
         $mapId = $this->options['mapId'] ?? $this->definition->startMap;
         $mapId = is_string($mapId) && trim($mapId) !== '' ? trim($mapId) : '';
 
@@ -552,10 +557,8 @@ final class CinematicPreviewSession
     {
         $rows = [];
         $this->run(function () use (&$rows): void {
-            $camera = $this->scene->previewCamera();
-            $camera->clearFrame();
-            $this->renderScene();
-            $rows = $camera->frame();
+            // The same isolated capture the graphical view composes from, with nothing left out.
+            $rows = Console::capturePresentation($this->screenWidth, $this->screenHeight, $this->renderScene(...))->rows ?? [];
         });
 
         return $rows;
@@ -564,17 +567,19 @@ final class CinematicPreviewSession
     /**
      * One exchange with the editor window's graphical view of the scene
      * ({@see PreviewSceneHost::exchange()}): its renderer event lines in, what
-     * it should apply out. A grid other than the attached view's starts the
-     * view again, as a resized renderer session does.
+     * it should apply out. The view's grid is the preview's screen in the
+     * game's graphical text cells, so it shows what the game's graphical
+     * field would. While attached, the Engine sizes the preview's camera to
+     * the graphical field's viewport, as the game does, so the Terminal
+     * picture is the game's Terminal view only while detached.
      *
      * @param list<string> $events
      * @return list<array{type: string, payload: array<string, mixed>}>
      */
-    public function exchangeScene(RendererGridConfig $grid, array $events): array
+    public function exchangeScene(array $events): array
     {
-        if ($this->sceneHost !== null && $this->sceneHost->grid != $grid) {
-            $this->detachScene();
-        }
+        $grid = new RendererGridConfig($this->screenWidth, $this->screenHeight,
+            RendererRuntimeConfig::GPUI_CELL_WIDTH, RendererRuntimeConfig::GPUI_CELL_HEIGHT);
         $messages = [];
         $this->run(function () use ($grid, $events, &$messages): void {
             $this->sceneHost ??= new PreviewSceneHost($this->scene, $this->presentation,
@@ -610,9 +615,7 @@ final class CinematicPreviewSession
      */
     public function getScreenSize(): array
     {
-        $screen = $this->scene->previewCamera()->screen;
-
-        return [$screen->getWidth(), $screen->getHeight()];
+        return [$this->screenWidth, $this->screenHeight];
     }
 
     /**
@@ -620,7 +623,11 @@ final class CinematicPreviewSession
      */
     public function resize(int $width, int $height): void
     {
-        $this->scene->previewCamera()->resize(max(20, $width), max(8, $height));
+        // The graphical view's grid is the screen's, so a new size starts it again.
+        $this->detachScene();
+        $this->screenWidth = max(20, $width);
+        $this->screenHeight = max(8, $height);
+        $this->scene->previewCamera()->resize($this->screenWidth, $this->screenHeight);
     }
 
     /**

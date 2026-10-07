@@ -3,7 +3,6 @@
 declare(strict_types=1);
 
 use Ichiloto\Editor\Cutscenes\Preview\CinematicPreviewSession;
-use Ichiloto\Engine\Rendering\Transport\RendererGridConfig;
 use Ichiloto\Engine\Rendering\Transport\RendererSessionConfig;
 
 /**
@@ -34,11 +33,10 @@ function previewFrameGenerations(array $messages): array
 it('sends nothing until the window says what it can draw, then the scene as the game composes it', function () {
     $root = cutsceneProject();
     $preview = CinematicPreviewSession::start($root, harbourDefinition($root), ['x' => 2, 'y' => 3, 'width' => 40, 'height' => 12]);
-    $grid = new RendererGridConfig(40, 12, 10, 20);
 
     try {
-        expect($preview->exchangeScene($grid, []))->toBe([]);
-        $sent = $preview->exchangeScene($grid, [previewWindowReady()]);
+        expect($preview->exchangeScene([]))->toBe([]);
+        $sent = $preview->exchangeScene([previewWindowReady()]);
         expect(array_column($sent, 'type'))->toContain('frame')
             ->and(previewFrameGenerations($sent))->not->toBe([]);
     } finally {
@@ -49,20 +47,39 @@ it('sends nothing until the window says what it can draw, then the scene as the 
 it('sends nothing while nothing visible changes, and starts again from a reset when the view is attached again', function () {
     $root = cutsceneProject();
     $preview = CinematicPreviewSession::start($root, harbourDefinition($root), ['x' => 2, 'y' => 3, 'width' => 40, 'height' => 12]);
-    $grid = new RendererGridConfig(40, 12, 10, 20);
 
     try {
-        $first = $preview->exchangeScene($grid, [previewWindowReady()]);
+        $first = $preview->exchangeScene([previewWindowReady()]);
         $generation = max(previewFrameGenerations($first));
-        expect($preview->exchangeScene($grid, [json_encode(['protocol' => 2, 'type' => 'frame_ack',
+        expect($preview->exchangeScene([json_encode(['protocol' => 2, 'type' => 'frame_ack',
             'generation' => $generation, 'frame' => 1, 'presented' => true])]))->toBe([]);
 
         $preview->detachScene();
-        // The Terminal picture is unchanged by the graphical view coming and going.
-        expect(count($preview->frame()))->toBe(12);
-        $again = array_values(array_filter($preview->exchangeScene($grid, [previewWindowReady()]),
+        // Detached, the Terminal picture has the preview's own size again.
+        expect(count($preview->frame()))->toBe(12)
+            ->and(mb_strlen(Ichiloto\Engine\IO\Console\TerminalText::stripAnsi($preview->frame()[0])))->toBe(40);
+        $again = array_values(array_filter($preview->exchangeScene([previewWindowReady()]),
             static fn(array $message): bool => $message['type'] === 'frame'));
         expect($again)->not->toBe([])->and($again[0]['payload']['reset'] ?? false)->toBeTrue();
+    } finally {
+        $preview->dispose();
+    }
+});
+
+it('follows the playhead: what the cinematic shows next arrives as the next generation once the last is acknowledged', function () {
+    $root = cutsceneProject();
+    $preview = CinematicPreviewSession::start($root, harbourDefinition($root), ['x' => 2, 'y' => 3, 'width' => 40, 'height' => 12]);
+
+    try {
+        $generation = max(previewFrameGenerations($preview->exchangeScene([previewWindowReady()])));
+        $preview->play();
+        for ($tick = 0; $tick < 5; $tick++) {
+            $preview->tick(CinematicPreviewSession::TICK_SECONDS);
+        }
+        // The harbour's narration is on screen by now; the graphical view receives it as the next generation.
+        $next = previewFrameGenerations($preview->exchangeScene([json_encode(['protocol' => 2, 'type' => 'frame_ack',
+            'generation' => $generation, 'frame' => 1, 'presented' => true])]));
+        expect($next)->not->toBe([])->and(min($next))->toBeGreaterThan($generation);
     } finally {
         $preview->dispose();
     }

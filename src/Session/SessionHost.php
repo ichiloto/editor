@@ -400,6 +400,8 @@ final class SessionHost
             'cutscenes.cinematicControl' => $session->controlCinematicPreview(self::requireString($params, 'action'),
                 is_int($params['seconds'] ?? null) || is_float($params['seconds'] ?? null) ? (float) $params['seconds'] : 0.0),
             'cutscenes.cinematicStop' => $session->stopCinematicPreview(),
+            'cutscenes.cinematicScene' => $session->exchangeCinematicScene(self::requireLines($params, 'events')),
+            'cutscenes.cinematicSceneDetach' => $session->detachCinematicScene(),
             'cutscenes.effectBattlePreview' => $session->readEffectBattlePreview(self::requireInt($params, 'index'), is_int($params['frame'] ?? null) ? $params['frame'] : 0,
                 ($params['reducedMotion'] ?? false) === true,
                 EffectPresentation::tryFrom(is_string($params['presentation'] ?? null) ? $params['presentation'] : 'graphical')
@@ -553,6 +555,20 @@ final class SessionHost
         }
 
         return $cells;
+    }
+
+    /**
+     * @param array<string, mixed> $params
+     * @return list<string>
+     */
+    private static function requireLines(array $params, string $key): array
+    {
+        $lines = $params[$key] ?? [];
+        if (! is_array($lines) || ! array_is_list($lines) || ! array_all($lines, is_string(...))) {
+            throw new InvalidRequest(sprintf('"%s" must be a list of strings.', $key));
+        }
+
+        return $lines;
     }
 
     /**

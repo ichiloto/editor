@@ -264,3 +264,21 @@ it('previews a cinematic as the terminal plays it, and plays, steps, restarts an
     $session->undo();
     expect(sourceHashTree($root))->toBe($before);
 });
+
+it('draws the previewed cinematic in the window\'s graphical view through the session, writing nothing', function () {
+    $root = cutsceneProject();
+    $before = sourceHashTree($root);
+    $session = EditorSession::open($root);
+    $session->startCinematicPreview(0, 60, 16);
+    $ready = json_encode(['protocol' => 2, 'type' => 'ready', 'capabilities' => ['sprite_source_rect', 'graphical_canvas', 'canvas_overlay',
+        'canvas_clip_opacity', 'frame_viewport', 'field_motion']]);
+
+    $sent = $session->exchangeCinematicScene([$ready])['messages'];
+    expect(array_column($sent, 'type'))->toContain('frame')
+        ->and(array_key_exists('protocol', $sent[0]['payload']))->toBeFalse()
+        ->and(fn() => $session->exchangeCinematicScene(['not a renderer event']))->toThrow(SessionRefusal::class, 'graphical preview stopped')
+        ->and($session->detachCinematicScene())->toBe(['detached' => true]);
+    $session->stopCinematicPreview();
+    expect(fn() => $session->exchangeCinematicScene([$ready]))->toThrow(SessionRefusal::class, 'No cinematic is being previewed')
+        ->and(sourceHashTree($root))->toBe($before);
+});

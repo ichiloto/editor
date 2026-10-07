@@ -48,7 +48,7 @@ final class PreviewGameScene extends GameScene
         $this->gameState = new GameState();
         $this->hasDeferredAutoSave = false;
         $this->currentMapId = $initialMapId;
-        $this->camera = new PreviewCamera($screenWidth, $screenHeight);
+        $this->camera = new PreviewCamera($this, $screenWidth, $screenHeight);
         $this->party = new Party();
         $this->knowledge = new KnowledgeProgressService(KnowledgeCatalog::fromProject());
         $this->bestiary = new Bestiary($this->knowledge);
