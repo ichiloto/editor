@@ -126,3 +126,9 @@ against that checkout instead of the installed Engine sources.
 - Console repository: [github.com/ichiloto/console](https://github.com/ichiloto/console)
 - Website repository: [github.com/ichiloto/website-v2](https://github.com/ichiloto/website-v2)
 - Editor issues: [github.com/ichiloto/editor/issues](https://github.com/ichiloto/editor/issues)
+
+## Contributing and Git workflow
+
+Read [GIT_WORKFLOW.md](GIT_WORKFLOW.md) and install the Git guards with
+`sh scripts/install-git-guards.sh` before contributing. All changes integrate
+into `develop`; `main` is updated only by a PR from this repository's `develop`.
