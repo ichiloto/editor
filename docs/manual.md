@@ -516,7 +516,7 @@ replace it.
 RPG Maker-like GUI editor for graphical materials, atlases and crop authoring.
 The planned `ichiloto edit` entry point will offer a TUI/GUI choice; that choice
 and the GUI itself are not delivered by this TUI boundary correction. See the
-[GUI editor plan](../../gui-editor/README.md).
+[GUI editor plan](../../gui-editor/docs/plan.md).
 
 ### Normal mode
 
