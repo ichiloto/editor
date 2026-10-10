@@ -8,6 +8,10 @@ use Ichiloto\Editor\Cutscenes\Source\SourceNode;
 use Ichiloto\Editor\Cutscenes\Source\SourcePreservationRefusal;
 use Ichiloto\Editor\Cutscenes\Source\SourceUnreadable;
 use Ichiloto\Editor\Cutscenes\Source\SourceVariable;
+use Ichiloto\Editor\Tests\Fixtures\SourceWriterBacked;
+use Ichiloto\Editor\Tests\Fixtures\SourceWriterUnit;
+
+require_once fixturePath('SourceWriterEnums.php');
 
 /**
  * Editing an authored PHP array file in place.
@@ -430,3 +434,153 @@ it('cuts the entries of an array written on one line with the separators that jo
     'the last two' => [['name', 'text'], "['type' => 'text']", true],
     'every one' => [['type', 'name', 'text'], '[]', false],
 ]);
+
+it('rewrites backed and unit enum literals without changing class spelling comments or key order', function (
+    string $import, string $expression, string $replacement, UnitEnum $first, UnitEnum $second,
+) {
+    $source = "<?php {$import}\nreturn array(\n"
+        . "  'before' => 'kept',\n  // Authored case heading.\n"
+        . "  'case' => {$expression}, // Authored tail.\n"
+        . "  'after' => strtoupper('kept'),\n);\n";
+    $document = PhpArraySourceDocument::parse($source);
+    $old = evaluateSource($source);
+    $new = $old;
+    $new['case'] = $second;
+    expect($old['case'])->toBe($first);
+    $rewritten = ArraySourceWriter::rewrite($document, $old, $new);
+    expect($rewritten->source)->toBe(str_replace($expression, $replacement, $source))
+        ->and(evaluateSource($rewritten->source))->toBe($new)
+        ->and(array_keys(evaluateSource($rewritten->source)))->toBe(['before', 'case', 'after'])
+        ->and($document->source)->toBe($source)
+        ->and(ArraySourceWriter::rewrite($rewritten, $new, $old)->source)->toBe($source);
+})->with([
+    'backed import' => ['use Ichiloto\Editor\Tests\Fixtures\SourceWriterBacked;',
+        'SourceWriterBacked::FIRST', 'SourceWriterBacked::SECOND', SourceWriterBacked::FIRST, SourceWriterBacked::SECOND],
+    'unit import' => ['use Ichiloto\Editor\Tests\Fixtures\SourceWriterUnit;',
+        'SourceWriterUnit::FIRST', 'SourceWriterUnit::SECOND', SourceWriterUnit::FIRST, SourceWriterUnit::SECOND],
+    'backed alias' => ['use Ichiloto\Editor\Tests\Fixtures\SourceWriterBacked as Choice;',
+        'Choice::FIRST', 'Choice::SECOND', SourceWriterBacked::FIRST, SourceWriterBacked::SECOND],
+    'case-insensitive alias' => ['use Ichiloto\Editor\Tests\Fixtures\SourceWriterBacked as Choice;',
+        'choice::FIRST', 'choice::SECOND', SourceWriterBacked::FIRST, SourceWriterBacked::SECOND],
+    'inline import' => ['use Ichiloto\Editor\Tests\Fixtures\SourceWriterBacked as Choice; /* kept */',
+        'Choice::FIRST', 'Choice::SECOND', SourceWriterBacked::FIRST, SourceWriterBacked::SECOND],
+    'commented import' => ['use /* class */ Ichiloto\Editor\Tests\Fixtures\SourceWriterUnit /* alias */ as Choice;',
+        'Choice::FIRST', 'Choice::SECOND', SourceWriterUnit::FIRST, SourceWriterUnit::SECOND],
+    'unit alias' => ['use Ichiloto\Editor\Tests\Fixtures\SourceWriterUnit as Choice;',
+        'Choice::FIRST', 'Choice::SECOND', SourceWriterUnit::FIRST, SourceWriterUnit::SECOND],
+    'namespace alias' => ['use Ichiloto\Editor\Tests\Fixtures as Fixtures;',
+        'Fixtures\SourceWriterUnit::FIRST', 'Fixtures\SourceWriterUnit::SECOND', SourceWriterUnit::FIRST, SourceWriterUnit::SECOND],
+    'backed fully qualified' => ['', '\Ichiloto\Editor\Tests\Fixtures\SourceWriterBacked::FIRST',
+        '\Ichiloto\Editor\Tests\Fixtures\SourceWriterBacked::SECOND', SourceWriterBacked::FIRST, SourceWriterBacked::SECOND],
+    'unit fully qualified' => ['', '\Ichiloto\Editor\Tests\Fixtures\SourceWriterUnit::FIRST',
+        '\Ichiloto\Editor\Tests\Fixtures\SourceWriterUnit::SECOND', SourceWriterUnit::FIRST, SourceWriterUnit::SECOND],
+    'inter-token comments' => ['use Ichiloto\Editor\Tests\Fixtures\SourceWriterBacked as Choice;',
+        "Choice /* class */ :: /* case */ FIRST", "Choice /* class */ :: /* case */ SECOND", SourceWriterBacked::FIRST, SourceWriterBacked::SECOND],
+    'inter-token newlines' => ['use Ichiloto\Editor\Tests\Fixtures\SourceWriterUnit as Choice;',
+        "Choice\n    ::\n    FIRST", "Choice\n    ::\n    SECOND", SourceWriterUnit::FIRST, SourceWriterUnit::SECOND],
+]);
+
+it('preserves byte-exact enum source on no-op and refuses replacement by a different enum type or scalar', function (mixed $replacement) {
+    $source = "<?php\nuse Ichiloto\\Editor\\Tests\\Fixtures\\SourceWriterBacked as Choice;\n"
+        . "return ['case' => Choice::FIRST, 'kept' => 1];\n";
+    $document = PhpArraySourceDocument::parse($source);
+    $old = evaluateSource($source);
+    expect(ArraySourceWriter::rewrite($document, $old, $old))->toBe($document);
+    $new = $old;
+    $new['case'] = $replacement;
+    expect(fn() => ArraySourceWriter::rewrite($document, $old, $new))->toThrow(SourcePreservationRefusal::class, 'case')
+        ->and($document->source)->toBe($source);
+})->with([
+    'another enum' => [SourceWriterUnit::SECOND],
+    'backing value' => ['second'],
+    'integer' => [1],
+    'null' => [null],
+]);
+
+it('refuses computed enum values and noncase constants rather than flattening their expressions', function (string $expression) {
+    $source = "<?php\nuse Ichiloto\\Editor\\Tests\\Fixtures\\SourceWriterBacked as Choice;\n"
+        . "use Ichiloto\\Editor\\Tests\\Fixtures\\SourceWriterConstants as Constants;\n"
+        . "return ['case' => {$expression}, 'plain' => 1];\n";
+    $document = PhpArraySourceDocument::parse($source);
+    $old = evaluateSource($source);
+    $new = $old;
+    $new['case'] = SourceWriterBacked::SECOND;
+    expect($old['case'])->toBe(SourceWriterBacked::FIRST)
+        ->and(fn() => ArraySourceWriter::rewrite($document, $old, $new))->toThrow(SourcePreservationRefusal::class, 'case')
+        ->and($document->source)->toBe($source);
+    $new = $old;
+    $new['plain'] = 2;
+    expect(ArraySourceWriter::rewrite($document, $old, $new)->source)->toBe(str_replace("'plain' => 1", "'plain' => 2", $source));
+})->with([
+    "Choice::from('first')",
+    "Choice::tryFrom('first')",
+    'Choice::ALIAS',
+    'Constants::CASE_ALIAS',
+    'Constants::FIRST',
+    "constant(Choice::class . '::FIRST')",
+    'true ? Choice::FIRST : Choice::SECOND',
+    '(Choice::FIRST)',
+]);
+
+it('refuses unresolved class names and unknown constants without evaluating them', function (string $expression) {
+    $source = "<?php\nuse Ichiloto\\Editor\\Tests\\Fixtures\\SourceWriterBacked as Choice;\n"
+        . "return ['case' => {$expression}];\n";
+    $document = PhpArraySourceDocument::parse($source);
+    expect(fn() => ArraySourceWriter::rewrite($document, ['case' => SourceWriterBacked::FIRST], ['case' => SourceWriterBacked::SECOND]))
+        ->toThrow(SourcePreservationRefusal::class, 'case')
+        ->and($document->source)->toBe($source);
+})->with(['Choice::UNKNOWN_CASE', 'UnknownChoice::FIRST', '\UnloadedUnknownChoice::FIRST']);
+
+it('requires the loaded enum case to match the authored literal before rewriting it', function () {
+    $source = "<?php\nuse Ichiloto\\Editor\\Tests\\Fixtures\\SourceWriterBacked as Choice;\nreturn ['case' => Choice::FIRST];\n";
+    $document = PhpArraySourceDocument::parse($source);
+    expect(fn() => ArraySourceWriter::rewrite($document, ['case' => SourceWriterBacked::SECOND], ['case' => SourceWriterBacked::FIRST]))
+        ->toThrow(SourcePreservationRefusal::class, 'case')
+        ->and($document->source)->toBe($source);
+});
+
+it('does not mistake imports inside authored text or another namespace for actual enum imports', function (string $source) {
+    $document = PhpArraySourceDocument::parse($source);
+    $old = evaluateSource($source);
+    $new = $old;
+    $new['case'] = SourceWriterBacked::SECOND;
+    expect(fn() => ArraySourceWriter::rewrite($document, $old, $new))->toThrow(SourcePreservationRefusal::class, 'case')
+        ->and($document->source)->toBe($source);
+})->with([
+    'nowdoc' => <<<'PHP'
+    <?php
+    $documentation = <<<'TEXT'
+    use Ichiloto\Editor\Tests\Fixtures\SourceWriterBacked as Choice;
+    TEXT;
+    use Ichiloto\Editor\Tests\Fixtures\SourceWriterConstants as Choice;
+    return ['case' => Choice::FIRST, 'documentation' => $documentation];
+    PHP,
+    'comment' => <<<'PHP'
+    <?php
+    /*
+    use Ichiloto\Editor\Tests\Fixtures\SourceWriterBacked as Choice;
+    */
+    use Ichiloto\Editor\Tests\Fixtures\SourceWriterConstants as Choice;
+    return ['case' => Choice::FIRST];
+    PHP,
+    'previous namespace' => <<<'PHP'
+    <?php
+    namespace First;
+    use Ichiloto\Editor\Tests\Fixtures\SourceWriterBacked as Choice;
+    namespace Second;
+    use Ichiloto\Editor\Tests\Fixtures\SourceWriterConstants as Choice;
+    return ['case' => Choice::FIRST];
+    PHP,
+]);
+
+it('keeps existing backed enum value expressions editable without switching them to enum objects', function () {
+    $source = "<?php\nuse Ichiloto\\Editor\\Tests\\Fixtures\\SourceWriterBacked as Choice;\nreturn ['case' => Choice::FIRST->value];\n";
+    $document = PhpArraySourceDocument::parse($source);
+    $old = evaluateSource($source);
+    $new = ['case' => 'second'];
+    $rewritten = ArraySourceWriter::rewrite($document, $old, $new)->source;
+    expect($rewritten)->toBe(str_replace('Choice::FIRST->value', 'Choice::SECOND->value', $source))
+        ->and(evaluateSource($rewritten))->toBe($new)
+        ->and(fn() => ArraySourceWriter::rewrite($document, $old, ['case' => SourceWriterBacked::SECOND]))
+            ->toThrow(SourcePreservationRefusal::class, 'case');
+});

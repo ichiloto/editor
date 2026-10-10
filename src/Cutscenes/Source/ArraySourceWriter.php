@@ -79,6 +79,9 @@ final class ArraySourceWriter
     /** @var array<string, true> Variable names claimed by this plan. */
     private array $claimedVariables = [];
 
+    /** @var array<string, string>|null Class imports in the returned array's scope. */
+    private ?array $classImports = null;
+
     private function __construct(private readonly PhpArraySourceDocument $document)
     {
     }
@@ -136,6 +139,12 @@ final class ArraySourceWriter
 
         if (is_array($new)) {
             $this->diffArray($node, is_array($old) ? $old : null, $new, $path);
+
+            return;
+        }
+
+        if ($node->kind === SourceNode::EXPRESSION && ($edit = $this->findEnumCaseEdit($node, $old, $new)) !== null) {
+            $this->edits[] = $edit;
 
             return;
         }
@@ -781,11 +790,35 @@ final class ArraySourceWriter
     }
 
     /**
-     * Plans replacing a node with the literal for a value.
+     * Literal enum cases retain class spelling, spacing and comments; only
+     * the case-name token changes. Aliases to cases are not case literals.
      *
-     * @param array<int, int|string> $path
-     * @return array{0: int, 1: int, 2: string}
+     * @return array{0: int, 1: int, 2: string}|null
      */
+    private function findEnumCaseEdit(SourceNode $node, mixed $old, mixed $new): ?array
+    {
+        if (! $old instanceof \UnitEnum || ! $new instanceof \UnitEnum || $old::class !== $new::class) {
+            return null;
+        }
+        $prefix = '<?php ';
+        $tokens = array_values(array_filter(\PhpToken::tokenize($prefix
+            . substr($this->document->source, $node->start, $node->end - $node->start)),
+            static fn(\PhpToken $token): bool => ! $token->is([T_OPEN_TAG, T_WHITESPACE, T_COMMENT, T_DOC_COMMENT])));
+        if (count($tokens) !== 3
+            || ! $tokens[0]->is([T_STRING, T_NAME_QUALIFIED, T_NAME_FULLY_QUALIFIED])
+            || ! $tokens[1]->is(T_DOUBLE_COLON) || ! $tokens[2]->is(T_STRING)
+            || $tokens[2]->text !== $old->name) {
+            return null;
+        }
+        $class = $this->resolveClassName($tokens[0]->text);
+        if ($class === null || strcasecmp($class, $old::class) !== 0) {
+            return null;
+        }
+        $start = $node->start + $tokens[2]->pos - strlen($prefix);
+
+        return [$start, $start + strlen($tokens[2]->text), $new->name];
+    }
+
     /**
      * The expression for a new value where the file writes an enum case's
      * value as `Enum::CASE->value`: the same enum, the case holding the new
@@ -819,19 +852,70 @@ final class ArraySourceWriter
         }
 
         $first = explode('\\', $name)[0];
-        preg_match_all('/^\s*use\s+([A-Za-z0-9_\\\\]+)(?:\s+as\s+([A-Za-z0-9_]+))?\s*;/m', $this->document->source, $uses, PREG_SET_ORDER);
+        $class = $this->getClassImports()[strtolower($first)] ?? null;
 
-        foreach ($uses as $use) {
-            $alias = ($use[2] ?? '') !== '' ? $use[2] : substr((string) strrchr('\\' . $use[1], '\\'), 1);
+        return $class === null ? null : $class . substr($name, strlen($first));
+    }
 
-            if ($alias === $first) {
-                return $use[1] . substr($name, strlen($first));
+    /** @return array<string, string> Simple class imports, never text inside strings or nested uses. */
+    private function getClassImports(): array
+    {
+        if ($this->classImports !== null) {
+            return $this->classImports;
+        }
+        $imports = [];
+        $tokens = array_values(array_filter(\PhpToken::tokenize($this->document->source),
+            static fn(\PhpToken $token): bool => ! $token->is([T_OPEN_TAG, T_WHITESPACE, T_COMMENT, T_DOC_COMMENT])));
+        $depth = 0;
+
+        foreach ($tokens as $index => $token) {
+            if ($token->pos >= $this->document->root()->start) {
+                break;
+            }
+            if ($token->is(['(', '[', '{', T_CURLY_OPEN, T_DOLLAR_OPEN_CURLY_BRACES])) {
+                $depth++;
+            } elseif ($token->is([')', ']', '}'])) {
+                $depth--;
+            }
+            if ($depth !== 0) {
+                continue;
+            }
+            if ($token->is(T_NAMESPACE)) {
+                $imports = [];
+                continue;
+            }
+            if (! $token->is(T_USE)) {
+                continue;
+            }
+            $class = $tokens[$index + 1] ?? null;
+            if ($class === null || ! $class->is([T_STRING, T_NAME_QUALIFIED, T_NAME_FULLY_QUALIFIED])) {
+                continue;
+            }
+            $end = $index + 2;
+            $name = ltrim($class->text, '\\');
+            $alias = substr((string) strrchr('\\' . $name, '\\'), 1);
+            if (($tokens[$end] ?? null)?->is(T_AS)) {
+                $explicitAlias = $tokens[$end + 1] ?? null;
+                if ($explicitAlias === null || ! $explicitAlias->is(T_STRING)) {
+                    continue;
+                }
+                $alias = $explicitAlias->text;
+                $end += 2;
+            }
+            if (($tokens[$end] ?? null)?->is(';')) {
+                $imports[strtolower($alias)] = $name;
             }
         }
 
-        return null;
+        return $this->classImports = $imports;
     }
 
+    /**
+     * Plans replacing a node with the literal for a value.
+     *
+     * @param array<int, int|string> $path
+     * @return array{0: int, 1: int, 2: string}
+     */
     private function replacementFor(SourceNode $node, array $path, mixed $value): array
     {
         return $this->document->replaceValueEdit($path, $this->literalFor($value, $path));
