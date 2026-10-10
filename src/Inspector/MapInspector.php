@@ -577,9 +577,11 @@ final readonly class MapInspector
      * another resource.
      *
      * @param array<string, mixed> $field
+     * @param LootType|null $lootType The event's loot type, for a chest's loot row; without it that row has no picker
+     *     (the terminal editor chooses loot in its own dialog).
      * @return array{category: string, title: string}|null
      */
-    public static function findEventReference(array $field): ?array
+    public static function findEventReference(array $field, ?LootType $lootType = null): ?array
     {
         if (($field['target'] ?? null) !== 'event') {
             return null;
@@ -603,6 +605,14 @@ final readonly class MapInspector
             // A shop's stock is data.items.N.item. The leaf alone would also
             // match an unrelated event that happened to call a field "item".
             $leaf === 'item' && ($path[1] ?? null) === 'items' => ['category' => 'inventory', 'title' => 'Item'],
+            // A chest's loot: the runtime gives every loot but gold from the item store, by stable definition id.
+            $path === ['data', 'loot'] => match ($lootType) {
+                LootType::ITEM => ['category' => 'items', 'title' => 'Item'],
+                LootType::WEAPON => ['category' => 'weapons', 'title' => 'Weapon'],
+                LootType::ARMOR => ['category' => 'armors', 'title' => 'Armor'],
+                LootType::ACCESSORY => ['category' => 'inventory', 'title' => 'Accessory'],
+                default => null,
+            },
             default => null,
         };
     }
@@ -1416,6 +1426,9 @@ final readonly class MapInspector
     private function decorateEventInspectorFields(string $marker, array $fields): array
     {
         $decorated = [];
+        // A chest's loot is chosen from the database its loot type names, as the runtime reads an unset type: an item.
+        $lootType = LootType::tryFrom(strval(array_find($fields,
+            static fn(array $field): bool => array_values((array) ($field['path'] ?? [])) === ['data', 'lootType'])['value'] ?? '')) ?? LootType::ITEM;
 
         foreach ($fields as $field) {
             $field['marker'] = $marker;
@@ -1447,7 +1460,7 @@ final readonly class MapInspector
                 $field['destination'] = true;
             }
 
-            $reference = self::findEventReference($field);
+            $reference = self::findEventReference($field, $lootType);
 
             if (is_array($reference)) {
                 // A reference is chosen, never spelled: dropping the control

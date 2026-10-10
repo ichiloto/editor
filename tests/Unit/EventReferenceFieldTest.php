@@ -65,6 +65,28 @@ it('does not mistake another event\'s item field for shop stock', function () {
         ->and($field)->toHaveKey('control');
 });
 
+it('picks a chest\'s loot from the database its loot type names', function (array $data, ?string $category) {
+    $field = eventDataFieldFor($data, ['data', 'loot']);
+
+    expect($field['reference'] ?? null)->toBe($category);
+    if ($category !== null) {
+        expect($field)->not->toHaveKey('control');
+    }
+})->with([
+    'an item' => [['loot' => '', 'lootType' => 'item'], 'items'],
+    // The runtime reads a chest with no loot type as holding an item.
+    'no loot type' => [['loot' => ''], 'items'],
+    'a weapon' => [['loot' => '', 'lootType' => 'weapon'], 'weapons'],
+    'an armor' => [['loot' => '', 'lootType' => 'armor'], 'armors'],
+    'an accessory' => [['loot' => '', 'lootType' => 'accessory'], 'inventory'],
+    // Gold is an amount, typed.
+    'gold' => [['loot' => '50', 'lootType' => 'gold'], null],
+]);
+
+it('leaves a chest\'s loot to the terminal editor\'s own dialog when no loot type is given', function () {
+    expect(Ichiloto\Editor\Inspector\MapInspector::findEventReference(['target' => 'event', 'path' => ['data', 'loot']]))->toBeNull();
+});
+
 it('offers a shop every kind of thing an item store holds', function () {
     $catalog = new ReferenceCatalog(ProjectWorkspace::fromProject(makeTemporaryProject()));
     $stock = $catalog->valuesFor('inventory');
