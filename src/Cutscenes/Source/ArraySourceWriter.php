@@ -143,8 +143,8 @@ final class ArraySourceWriter
             return;
         }
 
-        if ($node->kind === SourceNode::EXPRESSION && ($edit = $this->findEnumCaseEdit($node, $old, $new)) !== null) {
-            $this->edits[] = $edit;
+        if ($node->kind === SourceNode::EXPRESSION && ($edits = $this->findEnumCaseEdits($node, $old, $new)) !== null) {
+            array_push($this->edits, ...$edits);
 
             return;
         }
@@ -790,14 +790,15 @@ final class ArraySourceWriter
     }
 
     /**
-     * Literal enum cases retain class spelling, spacing and comments; only
-     * the case-name token changes. Aliases to cases are not case literals.
+     * Verified enum literals retain spacing and comments. Nullable and cross-enum
+     * edits are explicit data replacements; record schemas own admissible types.
+     * Aliases to cases and computed values are not case literals.
      *
-     * @return array{0: int, 1: int, 2: string}|null
+     * @return list<array{0: int, 1: int, 2: string}>|null
      */
-    private function findEnumCaseEdit(SourceNode $node, mixed $old, mixed $new): ?array
+    private function findEnumCaseEdits(SourceNode $node, mixed $old, mixed $new): ?array
     {
-        if (! $old instanceof \UnitEnum || ! $new instanceof \UnitEnum || $old::class !== $new::class) {
+        if (! $old instanceof \UnitEnum || ($new !== null && ! $new instanceof \UnitEnum)) {
             return null;
         }
         $prefix = '<?php ';
@@ -814,9 +815,20 @@ final class ArraySourceWriter
         if ($class === null || strcasecmp($class, $old::class) !== 0) {
             return null;
         }
-        $start = $node->start + $tokens[2]->pos - strlen($prefix);
+        $edit = static function (\PhpToken $token, string $replacement) use ($node, $prefix): array {
+            $start = $node->start + $token->pos - strlen($prefix);
 
-        return [$start, $start + strlen($tokens[2]->text), $new->name];
+            return [$start, $start + strlen($token->text), $replacement];
+        };
+        if ($new === null) {
+            return [$edit($tokens[0], 'null'), $edit($tokens[1], ''), $edit($tokens[2], '')];
+        }
+        $edits = [$edit($tokens[2], $new->name)];
+        if ($old::class !== $new::class) {
+            $edits[] = $edit($tokens[0], '\\' . $new::class);
+        }
+
+        return $edits;
     }
 
     /**

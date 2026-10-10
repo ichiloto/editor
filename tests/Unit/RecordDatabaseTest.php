@@ -149,12 +149,33 @@ it('edits a data file whose data carries comments in its own source, keeping eve
     removeDirectoryRecursively($root);
 });
 
-it('still refuses to regenerate commented data that holds objects or is not an array literal', function (): void {
+it('removes the enum read-only restriction while preserving its literal comments and refusing computed replacements', function (): void {
+    $root = makeTemporaryProject();
+    $path = $root . '/assets/Data/states.php';
+    $source = "<?php\n\nreturn [\n  // keep me\n  ['color' => \\" . Color::class . "::RED],\n];\n";
+    file_put_contents($path, $source);
+    $file = PhpDataFile::load($path);
+    expect($file->isEditable())->toBeTrue();
+    $file->save([['color' => Color::YELLOW]]);
+    expect(file_get_contents($path))->toBe(str_replace('::RED', '::YELLOW', $source));
+    $file->save([['color' => null]]);
+    expect(require $path)->toBe([['color' => null]])
+        ->and(file_get_contents($path))->toContain('// keep me');
+
+    $computed = str_replace('\\' . Color::class . '::RED', '(static fn() => \\' . Color::class . '::RED)()', $source);
+    file_put_contents($path, $computed);
+    $file = PhpDataFile::load($path);
+    expect($file->payload)->toBe([['color' => Color::RED]])
+        ->and(fn() => $file->composeContents([['color' => Color::YELLOW]]))->toThrow(RuntimeException::class)
+        ->and(file_get_contents($path))->toBe($computed);
+    removeDirectoryRecursively($root);
+});
+
+it('still refuses to regenerate commented data that is not an array literal', function (): void {
     $root = makeTemporaryProject();
     $path = $root . '/assets/Data/states.php';
 
     foreach ([
-        "<?php\n\nreturn [\n  // keep me\n  ['color' => \\" . Color::class . "::RED],\n];\n",
         "<?php\n\nreturn array_merge(\n  // keep me\n  [['id' => 'poison']],\n);\n",
     ] as $source) {
         file_put_contents($path, $source);

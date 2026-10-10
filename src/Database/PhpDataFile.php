@@ -15,8 +15,8 @@ use Throwable;
 /**
  * One authored PHP data file, loaded with its source header preserved.
  *
- * A file that returns an array literal of plain data (scalars and arrays,
- * no objects or enum cases) is saved by editing its own source:
+ * A file that returns an array literal of data (scalars, arrays and enum
+ * cases, not arbitrary objects) is saved by editing its own source:
  * only the values that changed are rewritten where they sit, so comments,
  * nowdocs, variables and layout inside the data survive, and a change that
  * cannot be expressed there is refused rather than flattened. A save also
@@ -514,21 +514,21 @@ final class PhpDataFile
      */
     private static function isEditedInPlace(string $source, mixed $payload): bool
     {
-        if (! self::holdsObject($payload) && self::parseArraySource($source) !== null) {
+        if (! self::holdsNonEnumObject($payload) && self::parseArraySource($source) !== null) {
             return true;
         }
 
         return array_filter(PhpSourceDocument::parse($source)->entryClasses(), static fn(string $class): bool => trim($class) !== '') !== [];
     }
 
-    /** Whether a value holds an object anywhere, an enum case included. */
-    private static function holdsObject(mixed $value): bool
+    /** Enum cases use the same source-preserving literal path as other data. */
+    private static function holdsNonEnumObject(mixed $value): bool
     {
         if (is_object($value)) {
-            return true;
+            return ! $value instanceof \UnitEnum;
         }
 
-        return is_array($value) && array_any($value, self::holdsObject(...));
+        return is_array($value) && array_any($value, self::holdsNonEnumObject(...));
     }
 
     /** The file as an editable array literal, or null when it is not one. */
@@ -596,10 +596,10 @@ final class PhpDataFile
 
         $document = $this->source === null ? null : self::parseArraySource($this->source);
 
-        // Plain data is edited in its own source; objects keep the regeneration
+        // Data, including enum cases, is edited in its own source; objects keep the regeneration
         // (or the constructor-argument edits) their files were written for.
         if ($document !== null && is_array($this->payload) && is_array($payload)
-            && ! self::holdsObject($this->payload) && ! self::holdsObject($payload)) {
+            && ! self::holdsNonEnumObject($this->payload) && ! self::holdsNonEnumObject($payload)) {
             if ($checkDisk && @file_get_contents($this->path) !== $this->source) {
                 throw new RuntimeException(sprintf(
                     'Refusing to overwrite %s: it changed outside the editor since it was read. Reload it first.',

@@ -480,7 +480,7 @@ it('rewrites backed and unit enum literals without changing class spelling comme
         "Choice\n    ::\n    FIRST", "Choice\n    ::\n    SECOND", SourceWriterUnit::FIRST, SourceWriterUnit::SECOND],
 ]);
 
-it('preserves byte-exact enum source on no-op and refuses replacement by a different enum type or scalar', function (mixed $replacement) {
+it('preserves byte-exact enum source on no-op and refuses scalar backing-value replacements', function (mixed $replacement) {
     $source = "<?php\nuse Ichiloto\\Editor\\Tests\\Fixtures\\SourceWriterBacked as Choice;\n"
         . "return ['case' => Choice::FIRST, 'kept' => 1];\n";
     $document = PhpArraySourceDocument::parse($source);
@@ -491,11 +491,22 @@ it('preserves byte-exact enum source on no-op and refuses replacement by a diffe
     expect(fn() => ArraySourceWriter::rewrite($document, $old, $new))->toThrow(SourcePreservationRefusal::class, 'case')
         ->and($document->source)->toBe($source);
 })->with([
-    'another enum' => [SourceWriterUnit::SECOND],
     'backing value' => ['second'],
     'integer' => [1],
-    'null' => [null],
 ]);
+
+it('preserves enum literal comments during explicit nullable and cross-enum data replacements', function (?UnitEnum $replacement) {
+    $source = "<?php\nuse Ichiloto\\Editor\\Tests\\Fixtures\\SourceWriterBacked as Choice;\n"
+        . "return ['case' => Choice /* class */ :: /* case */ FIRST, 'kept' => 1];\n";
+    $old = evaluateSource($source);
+    $new = $old;
+    $new['case'] = $replacement;
+    $document = PhpArraySourceDocument::parse($source);
+    $rewritten = ArraySourceWriter::rewrite($document, $old, $new);
+    expect(evaluateSource($rewritten->source))->toBe($new)
+        ->and($rewritten->source)->toContain('/* class */', '/* case */', "'kept' => 1")
+        ->and($document->source)->toBe($source);
+})->with(['nullable' => [null], 'another enum' => [SourceWriterUnit::SECOND]]);
 
 it('refuses computed enum values and noncase constants rather than flattening their expressions', function (string $expression) {
     $source = "<?php\nuse Ichiloto\\Editor\\Tests\\Fixtures\\SourceWriterBacked as Choice;\n"
