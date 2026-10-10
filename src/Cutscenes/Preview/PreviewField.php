@@ -35,8 +35,12 @@ final class PreviewField
     public private(set) PreviewGameScene $scene;
     /** The field's dialogue and choices, drawn on its camera. */
     public private(set) PreviewPresentation $presentation;
-    /** Why the map could not be loaded, when it could not. */
-    public private(set) ?string $mapFailure = null;
+    /** Why the current map could not be loaded, when it could not. */
+    public ?string $mapFailure {
+        get => $this->scene->previewMap->mapFailure;
+    }
+    /** Opaque graphical-host epoch, reserved without opening a graphical view. */
+    public private(set) string $sessionId;
     /** The editor window's graphical view of the field, while one is attached. */
     private ?PreviewSceneHost $sceneHost = null;
     /** @var array<string, ConfigInterface> */
@@ -57,6 +61,7 @@ final class PreviewField
     ) {
         $this->screenWidth = max(20, $width);
         $this->screenHeight = max(8, $height);
+        $this->sessionId = bin2hex(random_bytes(16));
     }
 
     /**
@@ -76,13 +81,10 @@ final class PreviewField
             $field->presentation = new PreviewPresentation($camera);
             $player = new PreviewPlayer($field->scene, $spawn);
             $field->scene->installPlayer($player);
-            if ($mapId !== '') {
-                try {
-                    $field->scene->previewMap->loadForPreview($mapId);
-                } catch (Throwable $throwable) {
-                    $field->scene->previewMap->unload();
-                    $field->mapFailure = $throwable->getMessage();
-                }
+            try {
+                $field->scene->previewMap->loadForPreview($mapId);
+            } catch (Throwable) {
+                // The map manager owns the undefined terrain and its diagnostic.
             }
             $camera->attach($player);
         });
@@ -156,15 +158,20 @@ final class PreviewField
      * picture is the game's Terminal view only while detached.
      *
      * @param list<string> $events
+     * @param string|null $sessionId The epoch the feedback answers; null discovers the current epoch without applying events.
      * @return list<array{type: string, payload: array<string, mixed>}>
      */
-    public function exchangeScene(array $events): array
+    public function exchangeScene(array $events, ?string $sessionId = null): array
     {
+        // Check ownership before allocating a host or decoding old READY/ACK/error lines.
+        if ($sessionId !== $this->sessionId) {
+            return [];
+        }
         $grid = $this->getSceneGrid();
         $messages = [];
         $this->run(function () use ($grid, $events, &$messages): void {
             $this->sceneHost ??= new PreviewSceneHost($this->scene, $this->presentation,
-                $this->projectRoot . '/assets', $grid, $this->renderScene(...), $this->readTime);
+                $this->projectRoot . '/assets', $grid, $this->renderScene(...), $this->readTime, $this->sessionId);
             $messages = $this->sceneHost->exchange($events);
         });
 
@@ -178,6 +185,12 @@ final class PreviewField
             RendererRuntimeConfig::GPUI_CELL_WIDTH, RendererRuntimeConfig::GPUI_CELL_HEIGHT);
     }
 
+    /** @return list<string> Why the current field has no usable map, if it does not. */
+    public function getDiagnostics(): array
+    {
+        return $this->scene->previewMap->getDiagnostics();
+    }
+
     /** Ends the editor window's graphical view of the field, if one is attached. */
     public function detachScene(): void
     {
@@ -187,6 +200,7 @@ final class PreviewField
         // In the project, as every step of the field runs, so the Terminal effects it restores find their files.
         $this->run(fn() => $this->sceneHost->dispose());
         $this->sceneHost = null;
+        $this->sessionId = bin2hex(random_bytes(16));
     }
 
     /**
@@ -205,7 +219,11 @@ final class PreviewField
     public function resize(int $width, int $height): void
     {
         // The graphical view's grid is the screen's, so a new size starts it again.
+        $previousSessionId = $this->sessionId;
         $this->detachScene();
+        if ($this->sessionId === $previousSessionId) {
+            $this->sessionId = bin2hex(random_bytes(16));
+        }
         $this->screenWidth = max(20, $width);
         $this->screenHeight = max(8, $height);
         $this->scene->previewCamera()->resize($this->screenWidth, $this->screenHeight);

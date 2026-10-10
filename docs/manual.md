@@ -1648,6 +1648,29 @@ the map data. Routes in this phase are sequential and awaited, so `Wait` must
 remain true. Set either seconds-per-step (with an optional per-step override)
 or speed in steps per second.
 
+The shared route fields also preserve `waypoints` and `retrace` as distinct
+authored modes. A waypoint's omitted X or Y keeps the subject's coordinate for
+that leg; adding a point leaves both axes blank until authored, not zero.
+Incomplete new or changed routes refuse Save without discarding the draft or
+undo history. Unchanged legacy data survives unrelated edits.
+
+`Remember As` declares a session-local identity. `Recorded Route` selects only
+declarations in that script invocation and its referenced common events,
+including nested command arms, not other NPCs, dialogue variants, map events or
+cinematics. Ordinary NPC/map/common-event sessions and cinematics all support
+recording real subjects. Runtime verifies completion, subject/map/generation,
+endpoint and one-use consumption; the reference choice does not guarantee a
+conditional record has executed. Retrace uses actual successful movement, not
+authored reverse geometry, and records disappear at completion or cancellation.
+
+Graphical clients request these choices with the explicit owning row context:
+`references.list` keeps its optional `record` argument as `{category,index,frame}`
+for Database, `{kind:'npc',index,frame}` for NPC, or
+`{kind:'event',marker,path}` for an inline event, with the owning `map` for the
+latter two. Existing `{category,index}` cutscene requests remain compatible.
+Omitting the owner does not create a global recorded-route catalogue. This
+transport contract does not require graphical controls in the Terminal editor.
+
 A `choice` command's options and a `branch` command's `Then` / `Else` arms
 are not flattened into this list. Each arm opens as its own frame, described
 under [Command Frames](#command-frames).
@@ -1913,6 +1936,14 @@ The preview starts from the map event that triggers the cinematic when one
 exists, otherwise from the start map at its first open tile. It writes
 nothing: not your saves, not your files.
 
+Missing or malformed preview maps are reported beside the controls; the stage
+remains usable on explicitly identified undefined terrain. The diagnostic
+follows the current map and clears after a successful transfer. GPUI restarts,
+resizes and reopened views reconnect to the new scene automatically, even when
+the grid is unchanged; a retired view cannot supply its picture or feedback to
+the replacement. An effect without a selected start map now previews on
+diagnosed undefined terrain instead of refusing to open.
+
 `Ctrl+T` plays the saved cinematic in the real game through the playtest
 overlay: the start map is copied into the throwaway root with one extra
 event, an automatic single-use `CinematicEventTrigger` on the spawn tile,
@@ -2095,16 +2126,25 @@ choice removes it, and the stroke stays as drawn). An image track names its
 PNG through the asset picker, its sheet columns and rows, its cell size, its
 `Fit` (`stretch` fills the cells; `contain` keeps the sheet cell's own
 proportions inside them; the empty choice removes it, so it stretches), its
-depth and, in battle, its `Attachment` (`center`, `head` or `ground` on the
-battler; the empty choice removes it, so the image is centred) and `Pivot`
-(the point of the sheet cell that sits there, `x, y` from 0 to 1, such as
-`0.5, 0.92` for a ring at the cell's foot; empty removes it, so the cell's
-middle sits there); its keyframes give the sheet frame, the position and, in battle,
+depth and its `Pivot` (the point of the sheet cell placed at the effect's
+position, two finite coordinates `x, y` from 0 to 1). The GUI's image-cell
+picker sets that point through the same undoable record edit. Empty removes
+the authored pivot: field images use bottom-centre (`0.5, 1`), while battle
+images keep their centred default (`0.5, 0.5`). Opening or saving an effect
+does not materialize either default in the file; an effect shared between
+field and battle keeps each consumer's default until a pivot is authored.
+The picker marks an explicit pivot, or the default for the current preview
+context when omitted, and labels which it is. While a shared effect's preview
+context is still loading, no default is guessed. Stage images retain their
+centred default. In battle only, `Attachment` selects `center`,
+`head` or `ground` on the battler; empty removes it and uses the centre.
+Field image tracks do not accept battler attachments. Image keyframes give
+the sheet frame, the position and, in battle,
 `Flip Horizontally` and `Flip Vertically` for an authored reverse stroke.
 Glyph and text keyframes give frame, duration, position `x` and `y`,
 content (the multiline editor), asset id, color, visibility, z-index and a
 payload. Cues are `playSound` on the field and any battle cue in battle.
-Impact timing, facing, image attachment and pivot, flips, flashes and shakes
+Impact timing, facing, image attachment, flips, flashes and shakes
 are battle-only;
 validation names the place that uses an effect where they are refused.
 
@@ -2119,12 +2159,21 @@ sequence an edit was made in. The TUI has no graphical workflow: an image is
 chosen by path and its frames by number, and pictures belong to the GUI
 editor.
 
+An effect may instead own a graphical stage. In the GUI, its Stage, subject,
+attachment and camera controls use the same record services and Engine stage
+contract as summons. The stage owns its surroundings: it is never previewed
+against a fabricated battle or field. Its independent Terminal sequence keeps
+its own tracks, cues and clock without needing to decode graphical images.
+An incomplete stage can be edited and undone, but the Engine must admit it
+before Save; removing it preserves the sequence's tracks and cues.
+
 `Shift+O` on a Timeline row inserts the blank the effect's own lists take:
 an image keyframe after an image keyframe, starting where the selected one
 ends, and a track whose keyframe has a position `x` and `y`. A save is
-compiled by the engine for battle and for the field, for each sequence, and
-refused before anything is written unless every sequence plays in at least
-one of them. `Delete` names everything that plays the effect first: battle
+compiled by the engine in its declared stage, or for battle and the field
+when no stage is declared. Save is refused before writing unless each sequence
+has a valid context; a paired Terminal sequence retains its independent
+admission. `Delete` names everything that plays the effect first: battle
 animations, the field presentation's cues and action prompt, maps' field
 effects, tileset pieces, and the `field_animation` commands of map events,
 event scripts and cinematics.
@@ -2149,6 +2198,11 @@ frames with their flips, flashes and shakes, each with its subject.
 The preview starts as battle when a battle animation uses the effect or
 nothing on the field does. In battle a stroke with a facing is turned toward
 its target exactly as the battle turns it, so `D` shows both directions.
+An owned stage instead starts in its declared context; `B` does not change its
+ownership. The GUI GPUI tab paints the Engine's seekable stage canvas through
+the runtime's shared painter. A stage error is shown rather than replaced by
+a field frame, and late seek replies cannot overwrite a newer frame. The
+Terminal tab shows its separately authored sequence, not a graphical imitation.
 
 ### Validation
 

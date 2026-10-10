@@ -20,8 +20,8 @@ use Ichiloto\Engine\Rendering\Tilesets\TilesetPiece;
 final readonly class GlyphTilePlanner
 {
     /**
-     * @param array<string, list<PieceRole>> $roles Roles by glyph, distinct by the tiles they draw.
-     * @param array<string, PieceRole> $twins The kept role for each key of a role that draws the same tiles with the same glyph.
+     * @param array<string, list<PieceRole>> $roles Roles by glyph, distinct by the tiles they draw and keep.
+     * @param array<string, PieceRole> $twins The kept role for each key of a role that draws and keeps the same tiles with the same glyph.
      */
     private function __construct(private array $roles, private array $twins = []) {}
 
@@ -56,7 +56,7 @@ final readonly class GlyphTilePlanner
         return $this->roles;
     }
 
-    /** @return list<PieceRole> The roles a glyph can play, one for each set of tiles. */
+    /** @return list<PieceRole> The roles a glyph can play, one for each drawing and keeping behaviour. */
     public function getRoles(string $glyph): array
     {
         return $this->roles[$glyph] ?? [];
@@ -64,7 +64,7 @@ final readonly class GlyphTilePlanner
 
     /**
      * The role with this key that a glyph can play, or null when it has none.
-     * A role kept for another that draws the same tiles answers for its key.
+     * A role kept for another with the same drawing and keeping behaviour answers for its key.
      */
     public function findRole(string $glyph, string $key): ?PieceRole
     {
@@ -136,6 +136,7 @@ final readonly class GlyphTilePlanner
         $overlay = [];
         $resolved = [];
         $unresolved = [];
+        $kept = [];
 
         foreach ($changes as $index => $change) {
             $key = $assigned["{$change['x']},{$change['y']}"] ?? null;
@@ -144,9 +145,17 @@ final readonly class GlyphTilePlanner
                 $key !== null => $this->findRole($change['new'], $key),
                 default => $this->resolveRole($change, $glyphAt, $tileAt, $changed, $choices, $unresolved),
             };
+            foreach ($resolved[$index]?->keeps ?? [] as $layer => $cells) {
+                foreach ($cells as $cell) {
+                    [$x, $y] = [$change['x'] + $cell['dx'], $change['y'] + $cell['dy']];
+                    if ($glyphAt($x, $y) !== null) {
+                        $kept[$layer]["{$x},{$y}"] = true;
+                    }
+                }
+            }
         }
         // Every leaving role takes its tiles before any arriving role draws,
-        // so a glyph moved within one edit keeps the tiles it brings.
+        // except existing underlay kept by any arriving role, including its blank cells.
         foreach ($changes as $index => $change) {
             $leaving = $this->findPlayedRole($change['old'], $change['x'], $change['y'], $tileAt);
             if ($leaving === null || ($resolved[$index] ?? null) === $leaving) {
@@ -155,7 +164,8 @@ final readonly class GlyphTilePlanner
             foreach ($leaving->tiles as $layer => $cells) {
                 foreach ($cells as $cell) {
                     [$x, $y] = [$change['x'] + $cell['dx'], $change['y'] + $cell['dy']];
-                    if ($glyphAt($x, $y) !== null && ($overlay[$layer]["{$x},{$y}"] ?? $tileAt($layer, $x, $y)) === $cell['entry']) {
+                    if (! isset($kept[$layer]["{$x},{$y}"]) && $glyphAt($x, $y) !== null
+                        && ($overlay[$layer]["{$x},{$y}"] ?? $tileAt($layer, $x, $y)) === $cell['entry']) {
                         $overlay[$layer]["{$x},{$y}"] = (string) TileId::EMPTY;
                     }
                 }
@@ -269,12 +279,14 @@ final readonly class GlyphTilePlanner
         return [$other->cell[1] - $role->cell[1], $other->cell[0] - $role->cell[0]];
     }
 
-    /** What a role draws, so roles that draw the same tiles count once. */
+    /** What a role draws and keeps, so only behaviourally identical roles count once. */
     private static function getSignature(PieceRole $role): string
     {
         $tiles = $role->tiles;
+        $keeps = $role->keeps;
         ksort($tiles);
+        ksort($keeps);
 
-        return json_encode($tiles, JSON_THROW_ON_ERROR);
+        return json_encode([$tiles, $keeps], JSON_THROW_ON_ERROR);
     }
 }

@@ -6591,12 +6591,7 @@ final class Editor
      */
     private function deriveProposedMapId(ProjectMap $map): string
     {
-        $name = strtolower(trim((string) preg_replace('/[^A-Za-z0-9]+/', '-', $map->getDisplayName())));
-        $name = trim($name, '-') !== '' ? trim($name, '-') : basename($map->directory);
-        $region = strtolower(trim((string) preg_replace('/[^A-Za-z0-9]+/', '-', $map->getRegion())));
-        $region = trim($region, '-');
-
-        return $region !== '' ? $region . '/' . $name : $name;
+        return $map->getProposedMapId();
     }
 
     /**
@@ -13550,10 +13545,13 @@ final class Editor
 
         foreach ($fields as $index => $field) {
             $editing = $this->isInspectorEditing && $index === $this->selectedInspectorFieldIndex;
+            $value = (string) ($field['value'] ?? '');
+            $choice = array_find((array) ($field['choices'] ?? []),
+                static fn(array $choice): bool => (string) $choice['value'] === $value);
             $rows[] = [
                 'prefix' => $this->focusedPane === self::FOCUS_INSPECTOR && $index === $this->selectedInspectorFieldIndex ? '> ' : '  ',
                 'label' => (string) ($field['label'] ?? 'Field'),
-                'value' => $editing ? $this->inspectorEditBuffer : (string) ($field['value'] ?? ''),
+                'value' => $editing ? $this->inspectorEditBuffer : (string) ($choice['label'] ?? $value),
                 'editable' => $editing || $this->isInspectorFieldInteractive($field),
                 'singleLine' => $editing,
             ];

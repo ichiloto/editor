@@ -6,10 +6,10 @@ namespace Ichiloto\Editor\Cutscenes\Preview;
 
 use Ichiloto\Engine\Events\Triggers\EventTriggerFactory;
 use Ichiloto\Engine\Core\Game;
-use Ichiloto\Engine\Core\Vector2;
 use Ichiloto\Engine\Field\MapManager;
 use Ichiloto\Engine\Field\Player;
 use Ichiloto\Engine\Scenes\Game\GameScene;
+use Throwable;
 
 /**
  * A map manager that loads the author's map files for their tiles, collision
@@ -22,8 +22,13 @@ use Ichiloto\Engine\Scenes\Game\GameScene;
  */
 final class PreviewMapManager extends MapManager
 {
+    private const string NO_MAP_DIAGNOSTIC = 'No map is selected: the preview shows undefined terrain.';
+
     /** @var array<string, mixed> The data array of the map last loaded. */
     public array $mapData = [];
+    public private(set) ?string $mapFailure = null;
+    /** @var list<string> The outcome of the current map load, never a retired map's failure. */
+    private array $diagnostics = [self::NO_MAP_DIAGNOSTIC];
 
     public function __construct(Game $game, GameScene $gameScene)
     {
@@ -37,18 +42,40 @@ final class PreviewMapManager extends MapManager
      */
     public function loadForPreview(string $mapId): array
     {
-        $map = $this->readMapDataFromFile($mapId);
-        $this->mapData = $map;
-        $this->calculateMapDimensions();
-        $dictionaryPath = getcwd() . '/assets/Maps/collisions.php';
-        $dictionary = is_file($dictionaryPath) ? $this->loadCollisionDictionary($dictionaryPath) : [];
-        $this->collisionMap = $this->layers === null
-            ? $this->generateCollisionMap($this->tileMap, $dictionary)
-            : $this->generateLayerCollisionMap($this->layers, $dictionary);
-        $this->gameScene->npcManager?->configure(is_array($map['npcs'] ?? null) ? $map['npcs'] : []);
-        $this->installFieldEffects();
+        if ($mapId === '') {
+            $this->unload();
+
+            return [];
+        }
+        try {
+            $map = $this->readMapDataFromFile($mapId);
+            $this->mapData = $map;
+            $this->calculateMapDimensions();
+            $dictionaryPath = getcwd() . '/assets/Maps/collisions.php';
+            $dictionary = is_file($dictionaryPath) ? $this->loadCollisionDictionary($dictionaryPath) : [];
+            $this->collisionMap = $this->layers === null
+                ? $this->generateCollisionMap($this->tileMap, $dictionary)
+                : $this->generateLayerCollisionMap($this->layers, $dictionary);
+            $this->gameScene->npcManager?->configure(is_array($map['npcs'] ?? null) ? $map['npcs'] : []);
+            $this->installFieldEffects();
+        } catch (Throwable $failure) {
+            $this->unload();
+            $this->mapFailure = $failure->getMessage();
+            $this->diagnostics = [sprintf('Map %s could not be loaded: %s The preview shows undefined terrain.',
+                $mapId, $this->mapFailure)];
+
+            throw $failure;
+        }
+        $this->mapFailure = null;
+        $this->diagnostics = [];
 
         return $map;
+    }
+
+    /** @return list<string> The current map's load diagnostics. */
+    public function getDiagnostics(): array
+    {
+        return $this->diagnostics;
     }
 
     /**
@@ -76,6 +103,8 @@ final class PreviewMapManager extends MapManager
         $this->mapData = [];
         $this->clearMapGeometry();
         $this->gameScene->npcManager?->configure([]);
+        $this->mapFailure = null;
+        $this->diagnostics = [self::NO_MAP_DIAGNOSTIC];
     }
 
     public function loadMap(string $filename, Player $player): self
@@ -84,11 +113,6 @@ final class PreviewMapManager extends MapManager
         $this->camera->resetPosition($player);
 
         return $this;
-    }
-
-    public function scrollMap(Player $player, Vector2 $moveDirection): bool
-    {
-        return false;
     }
 
     public function render(?int $x = null, ?int $y = null): void

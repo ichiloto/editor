@@ -8,10 +8,14 @@ use Ichiloto\Editor\Cutscenes\CutsceneAsset;
 use Ichiloto\Editor\Cutscenes\CutsceneType;
 use Ichiloto\Editor\ProjectConfig;
 use Ichiloto\Editor\ProjectWorkspace;
+use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Engine\Animations\Field\FieldEffectManager;
 use Ichiloto\Engine\Animations\Field\FieldPresentationCatalog;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Engine\Animations\Timelines\EffectTimelineLibrary;
+use Ichiloto\Engine\Cutscenes\Presentation\PartyStageSelection;
+use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandReference;
+use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandRegistry;
 use Ichiloto\Engine\Rendering\Tilesets\Tileset;
 use Throwable;
 
@@ -22,8 +26,8 @@ use Throwable;
  * effects and tileset pieces' effects on the field; inns' rest stages as a
  * stage of their own. Battle and field effects are compiled for both the
  * terminal and the graphical presentation, so a sequence that only one
- * renderer would refuse is still found; a stage is admitted as the Engine's
- * stage loading admits it.
+ * renderer would refuse is still found; graphical stages use stage admission,
+ * while a paired Terminal sequence retains its own cues and tracks.
  */
 final class EffectValidator
 {
@@ -43,9 +47,12 @@ final class EffectValidator
                 if ($context === 'stage') {
                     try {
                         $library->loadStage($effect);
+                        $asset = $workspace->cutscenes?->find(CutsceneType::EFFECT, $effect)
+                            ?? throw new \RuntimeException('The effect timeline could not be read.');
+                        $asset->compileEffect(EffectPresentation::TERMINAL, false, forStage: true);
                     } catch (Throwable $failure) {
                         $issues[] = Issue::error($places[0], sprintf('Effect %s cannot be played as a stage: %s', $effect, $failure->getMessage()),
-                            sprintf('Fix assets/Animations/%s, or choose a stage timeline. Until then the rest shows no graphical stage.%s', $effect,
+                            sprintf('Fix assets/Animations/%s, or choose a stage timeline. Until then its consumer cannot show the stage.%s', $effect,
                                 count($places) > 1 ? sprintf(' Also used by %d more.', count($places) - 1) : ''));
                     }
                     continue;
@@ -127,7 +134,7 @@ final class EffectValidator
             }
         }
 
-        foreach (self::findStageUses($workspace) as $effect => $places) {
+        foreach (self::findStageUses($workspace, $issues) as $effect => $places) {
             $uses[$effect]['stage'] = $places;
         }
 
@@ -182,14 +189,36 @@ final class EffectValidator
      * event script or cinematic, and config's graphics.inn.presentation for
      * an inn naming none.
      *
+     * @param Issue[] $issues
+     * @param-out Issue[] $issues
      * @return array<string, list<string>> Timeline id to where it is named.
      */
-    private static function findStageUses(ProjectWorkspace $workspace): array
+    private static function findStageUses(ProjectWorkspace $workspace, array &$issues): array
     {
         $uses = [];
-        $name = static function (mixed $presentation, string $where) use (&$uses): void {
+        $actors = new ReferenceCatalog($workspace)->valuesFor('actor_ids');
+        $name = static function (mixed $presentation, string $where) use (&$uses, &$issues, $actors): void {
             if (is_string($presentation) && trim($presentation) !== '') {
                 $uses[trim($presentation)][] = $where;
+            } elseif (is_array($presentation) || $presentation instanceof PartyStageSelection) {
+                try {
+                    $selection = $presentation instanceof PartyStageSelection ? $presentation : PartyStageSelection::fromArray($presentation);
+                    $bindings = $selection->toArray();
+                    $subjects = array_keys($bindings['leaders']);
+                    foreach ($bindings['parties'] as $binding) { $subjects = [...$subjects, ...$binding['actors']]; }
+                    foreach (array_unique(array_map('strval', $subjects)) as $actor) {
+                        if (! in_array($actor, $actors, true)) {
+                            $issues[] = Issue::error($where, sprintf('Its rest presentation names unknown actor identity %s.', $actor),
+                                'Choose a stable project actor identity; do not use a display name or guessed guest.');
+                        }
+                    }
+                    foreach ($selection->getTimelineIds() as $timeline) {
+                        $uses[$timeline][] = $where;
+                    }
+                } catch (Throwable $failure) {
+                    $issues[] = Issue::error($where, 'Its rest presentation is invalid: ' . $failure->getMessage(),
+                        'Choose explicit leader or party treatment and valid bindings; no implicit fallback is used.');
+                }
             }
         };
 
@@ -201,8 +230,16 @@ final class EffectValidator
             }
         }
 
-        self::visitCommands($workspace, $workspace->cutscenes?->assets(CutsceneType::CINEMATIC) ?? [], 'inn',
-            static fn(array $command, string $where) => $name($command['presentation'] ?? null, $where));
+        self::visitCommands($workspace, $workspace->cutscenes?->assets(CutsceneType::CINEMATIC) ?? [], null,
+            static function (array $command, string $where) use ($name): void {
+                $definition = is_string($command['type'] ?? null) ? (ScriptCommandRegistry::getCatalog()->definitions[$command['type']] ?? null) : null;
+                foreach ($definition?->fields ?? [] as $field) {
+                    if ($field->reference !== ScriptCommandReference::STAGE_TIMELINE) { continue; }
+                    $value = $command;
+                    foreach (explode('.', $field->key) as $segment) { $value = is_array($value) ? ($value[$segment] ?? null) : null; }
+                    $name($value, $where);
+                }
+            });
         $name($workspace->config?->getRecord(ProjectConfig::INN_PRESENTATION)->get('value'), 'config.php: ' . ProjectConfig::INN_PRESENTATION);
 
         return array_map(static fn(array $places): array => array_values(array_unique($places)), $uses);
@@ -251,14 +288,14 @@ final class EffectValidator
      * @param iterable<CutsceneAsset> $cinematics The project's cinematics, as the editor holds them.
      * @param \Closure(array<array-key, mixed>, string): void $visit Given the command and where it is.
      */
-    private static function visitCommands(ProjectWorkspace $workspace, iterable $cinematics, string $type, \Closure $visit): void
+    private static function visitCommands(ProjectWorkspace $workspace, iterable $cinematics, ?string $type, \Closure $visit): void
     {
         $collect = static function (mixed $value, string $where) use (&$collect, $visit, $type): void {
             if (! is_array($value)) {
                 return;
             }
 
-            if (($value['type'] ?? null) === $type) {
+            if (($type === null && is_string($value['type'] ?? null)) || ($type !== null && ($value['type'] ?? null) === $type)) {
                 $visit($value, $where);
             }
 
@@ -270,6 +307,10 @@ final class EffectValidator
         foreach ($workspace->maps as $map) {
             foreach ((array) ($map->data['events'] ?? []) as $marker => $definition) {
                 $collect($definition, sprintf('map %s event %s', $map->mapId, strval($marker)));
+            }
+            foreach ((array) ($map->data['npcs'] ?? []) as $index => $npc) {
+                $id = is_array($npc) && is_string($npc['id'] ?? null) ? $npc['id'] : strval($index);
+                $collect($npc, sprintf('map %s NPC %s', $map->mapId, $id));
             }
         }
 

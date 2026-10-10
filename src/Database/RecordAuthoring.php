@@ -257,7 +257,7 @@ final readonly class RecordAuthoring
         $at = $nestedList === null ? null : $database->addFrameNestedItem($index, $framePath, $parentIndex, null, $after === null ? null : $after + 1);
         $entry = $at === null || $nestedList === null
             ? null
-            : ($database->getFrameCommands($index, $framePath)[$parentIndex][$nestedList->key][$at] ?? null);
+            : (new ProjectRecord($database->getFrameCommands($index, $framePath)[$parentIndex]))->getEntries($nestedList)[$at] ?? null;
 
         if ($at === null || $nestedList === null || ! is_array($entry)) {
             return new RecordChange(null);

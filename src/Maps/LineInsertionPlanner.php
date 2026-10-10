@@ -145,7 +145,7 @@ final class LineInsertionPlanner
             'Map and project data files',
         );
 
-        return new LineInsertionPlan($insertion, $sources, $handEdits, $notes);
+        return new LineInsertionPlan($insertion, $sources, $handEdits, $notes, $map->getWidth(), $map->getHeight());
     }
 
     /**

@@ -61,10 +61,10 @@ it('shows an effect at the player where a new game starts, held at the playhead\
 
 it('gives the editor window the field with the effect\'s own graphical art', function () {
     $session = EditorSession::open(effectFieldProject());
-    $session->showEffectOnField(effectIndex($session, 'mote'), 1, 40, 12);
+    $shown = $session->showEffectOnField(effectIndex($session, 'mote'), 1, 40, 12);
 
     try {
-        $answer = $session->exchangeEffectFieldScene([previewWindowReady()]);
+        $answer = $session->exchangeEffectFieldScene([previewWindowReady()], $shown['sessionId']);
         expect($answer['grid'])->toBe(['columns' => 40, 'rows' => 12, 'cellWidth' => 10, 'cellHeight' => 20])
             ->and(json_encode($answer['messages']))->toContain('Graphics\/Effects\/mote.png');
         expect($session->closeEffectField())->toBe(['closed' => true])
@@ -89,9 +89,14 @@ it('keeps one isolated field open: an effect on the field ends a cinematic previ
     }
 });
 
-it('refuses to show an effect on the field when no new game start names a map', function () {
+it('shows an effect over undefined terrain with a diagnostic when no new game start names a map', function () {
     $session = EditorSession::open(effectProject());
 
-    expect(fn() => $session->showEffectOnField(effectIndex($session, 'ember-spark'), 0, 40, 12))
-        ->toThrow(SessionRefusal::class, 'System names no player starting map');
+    try {
+        $answer = $session->showEffectOnField(effectIndex($session, 'ember-spark'), 0, 40, 12);
+        expect($answer['mapId'])->toBe('')->and($answer['lines'])->toHaveCount(12)
+            ->and(implode('\n', $answer['diagnostics']))->toContain('No map')->toContain('undefined terrain');
+    } finally {
+        $session->close();
+    }
 });

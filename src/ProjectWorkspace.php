@@ -13,6 +13,7 @@ use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Database\QuestReferences;
 use Ichiloto\Editor\Database\RecordSchema;
 use Ichiloto\Editor\Database\RecordSchemaCatalog;
+use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\Events\ProjectScriptCommands;
 use Ichiloto\Editor\Storage\FileSetOperations;
 use Ichiloto\Editor\Storage\FileSetTransaction;
@@ -59,6 +60,9 @@ final readonly class ProjectWorkspace
         $this->getRecordDatabase('quests')?->useIdentityReferences(
             fn(string $questId): bool => new QuestReferences($this)->exist($questId),
         );
+        $references = new ReferenceCatalog($this);
+        foreach ($this->recordDatabases as $database) { $database->useAuthoringReferences($references); }
+        $this->cutscenes?->useAuthoringReferences($references);
     }
 
     /**
@@ -162,11 +166,11 @@ final readonly class ProjectWorkspace
      * @param string $projectRoot The project root.
      * @return self
      */
-    public static function fromProject(string $projectRoot): self
+    public static function fromProject(string $projectRoot, bool $graphical = false): self
     {
         return ProjectDirectoryContext::run(
             $projectRoot,
-            static fn(string $canonicalRoot): self => self::loadFromProject($canonicalRoot),
+            static fn(string $canonicalRoot): self => self::loadFromProject($canonicalRoot, $graphical),
         );
     }
 
@@ -176,7 +180,7 @@ final readonly class ProjectWorkspace
      * @param string $projectRoot Absolute project root.
      * @return self
      */
-    private static function loadFromProject(string $projectRoot): self
+    private static function loadFromProject(string $projectRoot, bool $graphical): self
     {
         $configPath = rtrim($projectRoot, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . 'ichiloto.json';
 
@@ -217,8 +221,8 @@ final readonly class ProjectWorkspace
             mapIds: array_map(static fn(ProjectMap $map): string => $map->mapId, $maps),
             actorDatabase: ProjectActorDatabase::fromProject($projectRoot),
             recordDatabases: array_map(
-                static fn(RecordSchema $schema): ProjectRecordDatabase => ProjectRecordDatabase::fromProject($projectRoot, $schema, $projectConfig),
-                RecordSchemaCatalog::all(),
+                static fn(RecordSchema $schema): ProjectRecordDatabase => ProjectRecordDatabase::fromProject($projectRoot, $schema, $projectConfig, $graphical),
+                RecordSchemaCatalog::all($graphical),
             ),
             cutscenes: CutsceneLibrary::fromProject($projectRoot),
             config: $projectConfig,

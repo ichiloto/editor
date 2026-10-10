@@ -687,6 +687,18 @@ final class MapLayers
         }
     }
 
+    /** Retired/renamed members remain read dependencies until a successful save. */
+    public function expectSources(FileSetTransaction $transaction): void
+    {
+        $recoverFolder = ! is_dir($this->directory);
+        foreach ($this->baselineSources as $path => $source) {
+            $transaction->expectSource($path, $source, allowMissing: $recoverFolder);
+        }
+        foreach (array_diff_key($this->getSources(), $this->baselineSources) as $path => $source) {
+            $transaction->expectSource($path, null);
+        }
+    }
+
     public function getSources(?string $directory = null, ?string $baseName = null): array
     {
         $sources = [];

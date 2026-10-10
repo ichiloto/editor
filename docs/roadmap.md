@@ -838,6 +838,13 @@ Runtime-authored cue conditions use the same fail-closed world-condition
 vocabulary as trigger conditions; strict validation accepts and checks that
 shared contract even though nested cue-condition authoring remains deferred.
 
+October 10 G4 authoring adds explicit Story, Route and Unclassified (clear kind)
+choices to the same inspector in Terminal and GUI. Clearing removes only kind;
+omission retains legacy guidance without inferred classification or authored
+defaults. Invalid kinds are rejected even when the symbol is blank. Actual
+Terminal controls and the GUI session wire are checked; native picker pixels
+remain unobserved.
+
 ## Sequencing notes
 - Phase 1 is days of work and transforms perceived quality; do it first and
   ship it alone.
@@ -863,6 +870,16 @@ identical bytes, and clean saves are no-ops end to end: an untouched project
 saved wholesale is byte-for-byte unchanged (pinned by test against a
 disposable copy of the full game), and file-per-entry categories write only
 dirty, new, or deleted entries.
+
+October 10 source-history correction keeps the original map rewrite basis
+separate from the last successful save checkpoint. Removing a field, saving,
+undoing and saving again restores its original expression, reference, comments
+and key position. Layer undo restores edits without resetting that checkpoint,
+so incomplete route/rest drafts cannot bypass save validation. Ordered lists,
+external-source refusal and transactional read-back checks remain intact.
+Affected Editor families pass 406 tests / 2,636 assertions; the two existing
+conditional-cue validator regressions pass separately / three assertions.
+These are live-Engine synthetic checks, not native or whole-project acceptance.
 
 ## Map NPC authoring — shipped 2026-08
 
@@ -1078,6 +1095,23 @@ engine has reached.
 Cinematic story cutscenes and summon presentations are authored on their own
 screen (`F4`), previewed through the engine itself, validated, and saved
 without rewriting a byte the author did not change.
+
+October 10 G4 checkpoint adds declared owned-stage effects through the existing
+Engine admission and canvas projection. GUI stage authoring uses shared record
+services, reference selectors and undo; stage ownership cannot fall back to
+battle or field surroundings. Paired Terminal sequences retain their independent
+admission and clock. Saved cutscene undo now retains source templates and their
+values separately from persisted conflict and changed-reference checkpoints:
+removed arrays, nowdocs and comments are restored for effects, summons and
+cinematics without weakening external-change or proposed-source refusal.
+The complete Editor Unit run against live Engine passes 2,084 tests / 13,807
+assertions under strict warning/risky/deprecation/notice/empty-suite gates,
+with 15 optional real-Game cases skipped because no Game source was pinned.
+The original production all-effects preview regression separately passes
+one test / 56 assertions on current Game; it was not weakened or replaced.
+GUI's complete offline release suite passes 140 tests. These checks do not
+close native visual acceptance, other platforms, or the separately assigned
+retained-underlay terminal/collision restoration correction.
 
 **A cutscene is a pair, and the pair is one asset.** `CutsceneAsset` reads
 `<id>.data.php` with `<id>.script.php` or `<id>.timeline.php`, knows which

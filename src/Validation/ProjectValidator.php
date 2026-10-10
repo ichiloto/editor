@@ -36,6 +36,7 @@ use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandFieldKind;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandRegistry;
 use Ichiloto\Engine\Events\Interpreter\EventInterpreter;
 use Ichiloto\Engine\Events\Interpreter\MovementRouteRunner;
+use Ichiloto\Engine\Events\Triggers\EventCueKind;
 use Ichiloto\Engine\IO\Console\TerminalText;
 use InvalidArgumentException;
 use Throwable;
@@ -4207,8 +4208,14 @@ class ProjectValidator
     }
 
     $issues = [];
-    foreach (array_diff(array_keys($cue), ['symbol', 'color', 'conditions']) as $field) {
-      $issues[] = Issue::error($where, sprintf('Its event cue uses unsupported field "%s".', $field), 'Use symbol, color, or conditions.');
+    foreach (array_diff(array_keys($cue), ['symbol', 'color', 'conditions', 'kind']) as $field) {
+      $issues[] = Issue::error($where, sprintf('Its event cue uses unsupported field "%s".', $field), 'Use symbol, color, conditions, or kind.');
+    }
+
+    // Kind is a contract even for a cue whose blank symbol disables display.
+    if (array_key_exists('kind', $cue)
+      && (! is_string($cue['kind']) || EventCueKind::tryFrom($cue['kind']) === null)) {
+      $issues[] = Issue::error($where, 'Its authored event cue kind must be story or route.', 'Choose story or route, or omit kind for an unclassified cue.');
     }
 
     $issues = [

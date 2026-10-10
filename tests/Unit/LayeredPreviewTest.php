@@ -69,7 +69,7 @@ it('plays the map\'s own field effects in the preview, as the game\'s field has 
         expect($glow())->not->toBe($before);
         // The graphical view's field has the same effect, drawn its own way.
         $preview->exchangeScene([json_encode(['protocol' => 2, 'type' => 'ready', 'capabilities' => ['sprite_source_rect',
-            'graphical_canvas', 'canvas_overlay', 'frame_viewport', 'field_motion']])]);
+            'graphical_canvas', 'canvas_overlay', 'frame_viewport', 'field_motion']])], $preview->getSceneSessionId());
         expect($scene->fieldEffects->count)->toBe(1);
         $preview->detachScene();
         expect($scene->fieldEffects->count)->toBe(1);

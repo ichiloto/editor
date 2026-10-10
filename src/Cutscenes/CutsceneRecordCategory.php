@@ -179,7 +179,7 @@ final readonly class CutsceneRecordCategory implements DatabaseCategory
     /** The type's records, read through the shared record rules. */
     private function read(): RecordCategory
     {
-        return new RecordCategory($this->library->records($this->type));
+        return new RecordCategory($this->library->records($this->type, graphical: true));
     }
 
     /**
@@ -193,7 +193,7 @@ final readonly class CutsceneRecordCategory implements DatabaseCategory
     {
         try {
             $applied = $this->library->changeAsset($this->type, $index, $label,
-                static fn(ProjectRecordDatabase $records, int $at): RecordChange => $change(new RecordCategory($records), $at));
+                static fn(ProjectRecordDatabase $records, int $at): RecordChange => $change(new RecordCategory($records), $at), graphical: true);
         } catch (RecordRefusal $refusal) {
             throw $refusal;
         } catch (RuntimeException $failure) {

@@ -226,6 +226,11 @@ final class MapGraphicsValidator
         // Every role a glyph on the map could play accounts for its tiles,
         // including those of a piece's blank cells beside it.
         $explained = [];
+        $kept = [];
+        $entries = [];
+        foreach ($layers as $tileLayer) {
+            $entries[$tileLayer->name] = $tileLayer->getEntries();
+        }
         foreach ($map->getLayers() as $layer) {
             if ($layer['id'] === MapLayers::EVENT || $layer['decoration']) {
                 continue;
@@ -242,6 +247,19 @@ final class MapGraphicsValidator
                                 $explained[$tileLayer][$y + $cell['dy']][$x + $cell['dx']][(int) $cell['entry']] = true;
                             }
                         }
+                        // A matching role explains any underlay it keeps, only at its owned cells.
+                        if (array_filter($role->getOwnEntries(), static fn(string $entry, string $tileLayer): bool =>
+                            ($entries[$tileLayer][$y][$x] ?? (string) TileId::EMPTY) !== $entry, ARRAY_FILTER_USE_BOTH) !== []) {
+                            continue;
+                        }
+                        foreach ($role->keeps as $tileLayer => $cells) {
+                            foreach ($cells as $cell) {
+                                [$cellX, $cellY] = [$x + $cell['dx'], $y + $cell['dy']];
+                                if ($map->hasLayerCell($layer['id'], $cellX, $cellY)) {
+                                    $kept[$tileLayer][$cellY][$cellX] = true;
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -252,7 +270,8 @@ final class MapGraphicsValidator
             $stale = [];
             foreach ($layer->tiles as $y => $row) {
                 foreach ($row as $x => $id) {
-                    if (isset($drawn[$layer->name][$id]) && ! isset($explained[$layer->name][$y][$x][$id])) {
+                    if (isset($drawn[$layer->name][$id]) && ! isset($explained[$layer->name][$y][$x][$id])
+                        && ! isset($kept[$layer->name][$y][$x])) {
                         $stale[] = "({$x}, {$y})";
                     }
                 }

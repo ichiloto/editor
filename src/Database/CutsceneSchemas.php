@@ -81,7 +81,7 @@ final class CutsceneSchemas
      * fields, its cast as a sub-list, and its script and finalizer as
      * command lists opened as frames.
      */
-    public static function cinematics(): RecordSchema
+    public static function cinematics(bool $graphical = false): RecordSchema
     {
         return new RecordSchema(
             key: self::CINEMATICS_KEY,
@@ -112,9 +112,9 @@ final class CutsceneSchemas
                 'cast' => [],
                 CutsceneAsset::COMMANDS_KEY => [],
             ],
-            subList: self::castList(),
+            subList: self::castList($graphical),
             commandLists: [
-                CutsceneAsset::COMMANDS_KEY => self::cinematicCommandList(CutsceneAsset::COMMANDS_KEY),
+                CutsceneAsset::COMMANDS_KEY => self::cinematicCommandList(CutsceneAsset::COMMANDS_KEY, $graphical),
                 self::FINALIZER_KEY => self::finalizerCommandList(),
             ],
         );
@@ -316,7 +316,7 @@ final class CutsceneSchemas
     /**
      * Returns the cast sub-list: who a cinematic addresses.
      */
-    public static function castList(): RecordSubList
+    public static function castList(bool $graphical = false): RecordSubList
     {
         return new RecordSubList(
             key: 'cast',
@@ -330,9 +330,11 @@ final class CutsceneSchemas
                 'player' => [new RecordField('id', 'Id')],
                 'party_actor' => [RecordField::reference('id', 'Actor', 'actors')],
                 'npc' => [new RecordField('id', 'NPC Id', reference: 'map_npcs')],
-                'staged_actor' => self::stagedActorFields(),
+                'staged_actor' => static fn(array $entry): array => self::stagedActorFields($graphical, $entry),
             ],
             variantKey: 'kind',
+            nestedLists: $graphical ? ['staged_actor' => StagedActorFields::getSuppressionList(...)] : [],
+            prepareEdit: $graphical ? StagedActorFields::prepareEdit(...) : null,
         );
     }
 
@@ -342,22 +344,33 @@ final class CutsceneSchemas
      *
      * @return RecordField[]
      */
-    public static function stagedActorFields(): array
+    public static function stagedActorFields(bool $graphical = false, array $entry = []): array
     {
-        return [
+        $fields = [
             new RecordField('id', 'Id'),
             new RecordField('sprite', 'Sprite', InputControlType::MULTILINE, codec: RecordFieldCodec::LINES, removeWhenEmpty: true),
             new RecordField('asset', 'Asset', removeWhenEmpty: true),
             new RecordField('x', 'X', InputControlType::INTEGER),
             new RecordField('y', 'Y', InputControlType::INTEGER),
             new RecordField('facing', 'Facing', options: self::FACINGS, removeWhenEmpty: true, displayDefault: 'south'),
-            RecordField::boolean('visible', 'Visible'),
+            RecordField::boolean('visible', 'Visible', removeWhenEmpty: false, displayDefault: 'true'),
             RecordField::boolean('collision', 'Collision'),
             new RecordField('sprites.north', 'Sprite North', InputControlType::MULTILINE, codec: RecordFieldCodec::LINES, removeWhenEmpty: true),
             new RecordField('sprites.south', 'Sprite South', InputControlType::MULTILINE, codec: RecordFieldCodec::LINES, removeWhenEmpty: true),
             new RecordField('sprites.east', 'Sprite East', InputControlType::MULTILINE, codec: RecordFieldCodec::LINES, removeWhenEmpty: true),
             new RecordField('sprites.west', 'Sprite West', InputControlType::MULTILINE, codec: RecordFieldCodec::LINES, removeWhenEmpty: true),
         ];
+
+        if (! $graphical) {
+            return $fields;
+        }
+
+        if (isset($entry['subject'])) {
+            $fields = array_values(array_filter($fields, static fn(RecordField $field): bool
+                => ! in_array($field->key, ['x', 'y', 'facing', 'collision'], true)));
+        }
+
+        return [...$fields, ...StagedActorFields::getFields($entry)];
     }
 
     /**
@@ -365,7 +378,7 @@ final class CutsceneSchemas
      * the interpreter understands, each with its fields, nested blocks as
      * frames, and routes, lanes and camera points as nested lists.
      */
-    public static function cinematicCommandList(string $key): RecordSubList
+    public static function cinematicCommandList(string $key, bool $graphical = false): RecordSubList
     {
         return new RecordSubList(
             key: $key,
@@ -375,19 +388,25 @@ final class CutsceneSchemas
                 new RecordField('type', 'Type', options: [...CinematicCommandSchema::COMMAND_TYPES, ...ScriptCommandRegistry::getCatalog()->types]),
             ],
             blank: ['type' => 'wait', 'seconds' => 0.5],
-            variants: self::cinematicCommandVariants(),
+            variants: self::cinematicCommandVariants($graphical),
             variantKey: 'type',
             nestedLists: [
-                'move_route' => RecordSchemaCatalog::routeStepList(),
+                'move_route' => MovementRouteFields::getPointList(...),
                 'parallel' => self::laneList(),
                 'camera' => static fn(array $entry): ?RecordSubList => strtolower(strval($entry['operation'] ?? '')) === 'route' ? self::cameraPointList() : null,
-                ...RecordSchemaCatalog::getRegisteredCommandLists(),
+                ...RecordSchemaCatalog::getRegisteredCommandLists($graphical),
+                ...($graphical ? ['stage_actor' => StagedActorFields::getSuppressionList(...)] : []),
             ],
             variantArms: [
                 'sequence' => ['commands' => 'Sequence'],
                 'choice' => ['cancel' => 'Cancel'],
             ],
             exclusiveFields: [['effect', 'animation'], ['effect', 'id'], ['effect', 'secondsPerFrame']],
+            prepareEdit: static function (array $entry, string $field) use ($graphical): array {
+                $entry = InnPresentationFields::prepareEdit($entry, $field);
+                $entry = $graphical ? StagedActorFields::prepareEdit($entry, $field) : $entry;
+                return MovementRouteFields::prepareEdit($entry, $field);
+            },
         );
     }
 
@@ -439,9 +458,9 @@ final class CutsceneSchemas
      *
      * @return array<string, RecordField[]|\Closure(array<string, mixed>): RecordField[]>
      */
-    public static function cinematicCommandVariants(): array
+    public static function cinematicCommandVariants(bool $graphical = false): array
     {
-        $base = RecordSchemaCatalog::eventCommandVariants();
+        $base = RecordSchemaCatalog::eventCommandVariants($graphical);
         $subject = static fn(string $prefix, string $label, bool $screen = false): array => [
             new RecordField(
                 $prefix . '.kind',
@@ -457,14 +476,7 @@ final class CutsceneSchemas
 
         return [
             ...$base,
-            'move_route' => [
-                new RecordField('subject', 'Subject', options: ['player', 'npc', 'staged_actor']),
-                new RecordField('npcId', 'NPC Id', reference: 'map_npcs', removeWhenEmpty: true, allowsNone: true),
-                new RecordField('actorId', 'Staged Actor', reference: 'cinematic_cast', removeWhenEmpty: true, allowsNone: true),
-                new RecordField('secondsPerStep', 'Seconds Per Step', InputControlType::FLOAT, removeWhenEmpty: true),
-                new RecordField('speed', 'Steps Per Second', InputControlType::FLOAT, removeWhenEmpty: true),
-                new RecordField('wait', 'Wait For Completion', InputControlType::BOOLEAN, ['true'], removeWhenEmpty: false),
-            ],
+            'move_route' => static fn(array $entry): array => MovementRouteFields::getFields($entry, cinematic: true),
             'transfer' => [
                 RecordField::reference('map', 'Map', 'maps'),
                 new RecordField('x', 'X', InputControlType::INTEGER),
@@ -485,7 +497,9 @@ final class CutsceneSchemas
                     ? [new RecordField('magnitude', 'Magnitude', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '1')]
                     : []),
             ],
-            'stage_actor' => self::stagedActorFields(),
+            'stage_actor' => static fn(array $entry): array => $graphical
+                ? StagedActorFields::getCommandFields($entry)
+                : self::stagedActorFields(),
             'show_actor' => [new RecordField('actorId', 'Actor', reference: 'cinematic_cast')],
             'hide_actor' => [new RecordField('actorId', 'Actor', reference: 'cinematic_cast')],
             'remove_actor' => [new RecordField('actorId', 'Actor', reference: 'cinematic_cast')],
@@ -571,38 +585,40 @@ final class CutsceneSchemas
      * as frames. Every row is a key the Engine's effect library reads; an
      * effect with separate terminal and graphical sequences is edited one
      * sequence at a time. Battle-only keys (impact timing, facing, image
-     * attachment and pivot, flips, flash and shake) are offered for every
+     * attachment, flips, flash and shake) are offered for every
      * effect; validation says where
      * an effect is used that refuses them.
      */
-    public static function effects(): RecordSchema
+    public static function effects(bool $graphical = false): RecordSchema
     {
+        $fields = [
+            new RecordField('id', 'Id', isReadOnly: true),
+            new RecordField('fps', 'FPS', InputControlType::INTEGER),
+            new RecordField('lengthFrames', 'Length (frames)', InputControlType::INTEGER),
+            new RecordField('playback', 'Playback', options: ['once', 'loop'], removeWhenEmpty: true, displayDefault: 'once'),
+            new RecordField('loopFrom', 'Loop From', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '0'),
+            new RecordField('restFrame', 'Rest Frame', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '0'),
+            // Battle only: fixed plays at its FPS; battle_phase spreads its frames
+            // over the battle phase it plays in, as the battle's pace sets it.
+            new RecordField(
+                'cadence',
+                'Cadence',
+                options: array_map(static fn(EffectCadence $cadence): string => $cadence->value, EffectCadence::cases()),
+                removeWhenEmpty: true,
+                displayDefault: EffectCadence::FIXED->value,
+            ),
+            // Battle only: when the command's result lands.
+            new RecordField('effectTiming.mode', 'Impact Timing', options: ['end', 'frame', 'cue'], removeWhenEmpty: true, displayDefault: '(omitted)'),
+            new RecordField('effectTiming.frame', 'Impact Frame', InputControlType::INTEGER, removeWhenEmpty: true),
+            RecordField::reference('effectTiming.cueId', 'Impact Cue', 'effect_cues', allowsNone: true, noneLabel: '(none)'),
+        ];
+
         return new RecordSchema(
             key: self::EFFECTS_KEY,
             entryNoun: 'effect',
             storage: RecordStorage::MAP_OWNED,
             relativePath: 'assets/' . EffectTimelineLibrary::DIRECTORY,
-            fields: [
-                new RecordField('id', 'Id', isReadOnly: true),
-                new RecordField('fps', 'FPS', InputControlType::INTEGER),
-                new RecordField('lengthFrames', 'Length (frames)', InputControlType::INTEGER),
-                new RecordField('playback', 'Playback', options: ['once', 'loop'], removeWhenEmpty: true, displayDefault: 'once'),
-                new RecordField('loopFrom', 'Loop From', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '0'),
-                new RecordField('restFrame', 'Rest Frame', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '0'),
-                // Battle only: fixed plays at its FPS; battle_phase spreads its frames
-                // over the battle phase it plays in, as the battle's pace sets it.
-                new RecordField(
-                    'cadence',
-                    'Cadence',
-                    options: array_map(static fn(EffectCadence $cadence): string => $cadence->value, EffectCadence::cases()),
-                    removeWhenEmpty: true,
-                    displayDefault: EffectCadence::FIXED->value,
-                ),
-                // Battle only: when the command's result lands.
-                new RecordField('effectTiming.mode', 'Impact Timing', options: ['end', 'frame', 'cue'], removeWhenEmpty: true, displayDefault: '(omitted)'),
-                new RecordField('effectTiming.frame', 'Impact Frame', InputControlType::INTEGER, removeWhenEmpty: true),
-                RecordField::reference('effectTiming.cueId', 'Impact Cue', 'effect_cues', allowsNone: true, noneLabel: '(none)'),
-            ],
+            fields: $fields,
             identityKey: 'id',
             blank: [
                 'id' => 'new-effect',
@@ -616,9 +632,19 @@ final class CutsceneSchemas
                 self::CUES_KEY => [],
             ],
             commandLists: [
-                self::TRACKS_KEY => self::effectTrackList(),
+                self::TRACKS_KEY => self::effectTrackList($graphical),
                 self::CUES_KEY => self::effectCueList(),
+                ...($graphical ? [
+                    self::STAGE_SUBJECTS_KEY => self::stageSubjectList(),
+                    self::STAGE_CAMERA_KEY => self::stageCameraList(),
+                    self::STAGE_COVERS_KEY => self::stageCoverList(),
+                ] : []),
             ],
+            fieldsFor: static fn(array $payload): array => $graphical && is_array($payload['stage'] ?? null)
+                ? [...$fields, ...self::stageFields()] : $fields,
+            commandListsFor: static fn(array $payload): array => $graphical && is_array($payload['stage'] ?? null)
+                ? [self::TRACKS_KEY, self::CUES_KEY, self::STAGE_SUBJECTS_KEY, self::STAGE_CAMERA_KEY, self::STAGE_COVERS_KEY]
+                : [self::TRACKS_KEY, self::CUES_KEY],
         );
     }
 
@@ -627,9 +653,13 @@ final class CutsceneSchemas
      * reads, an image track's sheet and cells as its own rows, and each
      * track's keyframes as a nested list of the keys its type reads.
      */
-    public static function effectTrackList(): RecordSubList
+    public static function effectTrackList(bool $graphical = false): RecordSubList
     {
         $keyframes = self::effectKeyframeList();
+        $anchors = [
+            new RecordField('anchor', 'Anchor', options: ['target', 'caster', 'screen'], removeWhenEmpty: true, displayDefault: 'target'),
+            new RecordField('facing', 'Facing', options: ['', 'west', 'east'], removeWhenEmpty: true, displayDefault: '(undirected)'),
+        ];
 
         return new RecordSubList(
             key: self::TRACKS_KEY,
@@ -641,16 +671,22 @@ final class CutsceneSchemas
                 new RecordField('presentation', 'Presentation',
                     options: ['all', ...array_map(static fn(EffectPresentation $presentation): string => $presentation->value, EffectPresentation::cases())],
                     removeWhenEmpty: true, displayDefault: 'all'),
-                new RecordField('anchor', 'Anchor', options: ['target', 'caster', 'screen'], removeWhenEmpty: true, displayDefault: 'target'),
-                // Battle only: the way the stroke is drawn; the battle mirrors it for an attack the other way.
-                // The empty choice removes it: an undirected track stays as drawn.
-                new RecordField('facing', 'Facing', options: ['', 'west', 'east'], removeWhenEmpty: true, displayDefault: '(undirected)'),
             ],
             blank: ['id' => 'track', 'type' => 'glyph', 'keyframes' => [['frame' => 0, 'duration' => 1, 'content' => '*', 'position' => ['x' => 0, 'y' => 0]]]],
-            variants: ['image' => self::imageTrackFields()],
+            variants: [
+                'image' => static fn(array $entry): array => $graphical && self::isOnStage($entry)
+                    ? self::stageImageTrackFields()
+                    : [new RecordField('anchor', 'Anchor', options: $graphical ? self::SUMMON_IMAGE_ANCHORS : ['target', 'caster', 'screen'],
+                        removeWhenEmpty: true, displayDefault: 'target'), $anchors[1], ...self::imageTrackFields(sharedWithField: true)],
+                'glyph' => $anchors,
+                'text' => $anchors,
+                'flash' => $anchors,
+                'shake' => $anchors,
+            ],
             variantKey: 'type',
             nestedLists: [
-                'image' => self::effectImageKeyframeList(),
+                'image' => static fn(array $entry): RecordSubList => $graphical && self::isOnStage($entry)
+                    ? self::stageImageKeyframeList() : self::effectImageKeyframeList(),
                 'glyph' => $keyframes,
                 'text' => $keyframes,
                 'flash' => $keyframes,
@@ -734,12 +770,13 @@ final class CutsceneSchemas
      */
     /**
      * An image track's own fields, the same on an effect and a summon: the
-     * sheet it draws from, its depth, and (in battle) the battler point it is
-     * placed on and the point of the sheet cell that sits there.
+     * sheet it draws from, its depth, its normalized pivot and (in battle)
+     * the battler point it is placed on. An effect may be used in both field
+     * and battle: omission keeps the consumer's default, not an authored pivot.
      *
      * @return list<RecordField>
      */
-    public static function imageTrackFields(): array
+    public static function imageTrackFields(bool $sharedWithField = false): array
     {
         return [
             RecordField::reference('asset', 'Image', 'png_assets'),
@@ -752,13 +789,15 @@ final class CutsceneSchemas
             new RecordField('fit', 'Fit', options: ['', ...array_map(static fn(CanvasImageFit $fit): string => $fit->value, CanvasImageFit::cases())],
                 removeWhenEmpty: true, displayDefault: '(' . CanvasImageFit::STRETCH->value . ')'),
             new RecordField('depth', 'Depth', options: ['front', 'behind'], removeWhenEmpty: true, displayDefault: 'front'),
-            // Battle only: the battler point the image is placed on (the empty
-            // choice removes it: its centre), and the point of the sheet cell that
-            // sits there, x and y from 0 to 1 (removed: the cell's middle).
-            new RecordField('attachment', 'Attachment',
+            // Attachments are battle-only; a field image has only its pivot.
+            new RecordField('attachment', $sharedWithField ? 'Attachment (battle only)' : 'Attachment',
                 options: ['', ...array_map(static fn(EffectImageAttachment $attachment): string => $attachment->value, EffectImageAttachment::cases())],
                 removeWhenEmpty: true, displayDefault: '(center)'),
-            new RecordField('pivot', 'Pivot', codec: RecordFieldCodec::NORMALIZED_POINT, removeWhenEmpty: true, displayDefault: '0.5, 0.5'),
+            // Keep context-dependent defaults descriptive, never write one into
+            // a shared effect just because it was opened in a particular preview.
+            new RecordField('pivot', $sharedWithField ? 'Pivot (empty: field 0.5, 1; battle 0.5, 0.5)' : 'Pivot',
+                codec: RecordFieldCodec::NORMALIZED_POINT, removeWhenEmpty: true,
+                displayDefault: $sharedWithField ? '(field 0.5, 1; battle 0.5, 0.5)' : '0.5, 0.5'),
         ];
     }
 

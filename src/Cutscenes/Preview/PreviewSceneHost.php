@@ -46,10 +46,11 @@ final class PreviewSceneHost
     public function __construct(
         private readonly GameScene $scene,
         private readonly PreviewPresentation $dialogue,
-        string $assetRoot,
+        private readonly string $assetRoot,
         public readonly RendererGridConfig $grid,
         private readonly Closure $renderTerminal,
         private readonly Closure $readTime,
+        public readonly string $sessionId,
     ) {
         $this->relay = new PreviewRendererRelay();
         $this->client = new RendererClient($this->relay);
@@ -123,7 +124,8 @@ final class PreviewSceneHost
             return;
         }
         $this->scene->setPresentationContext(new ScenePresentationContext($this->grid, $this->client->supports(...),
-            collectPresentations: fn(): array => $this->dialogue->getActivePresentations(), readTime: $this->readTime));
+            collectPresentations: fn(): array => $this->dialogue->getActivePresentations(), readTime: $this->readTime,
+            assetRoot: $this->assetRoot));
         // The graphical field draws its effects as sprites, as the game's does in a graphical window.
         if ($this->scene instanceof PreviewGameScene) {
             $this->scene->installFieldEffects(EffectPresentation::GRAPHICAL);

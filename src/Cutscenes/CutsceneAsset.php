@@ -10,7 +10,9 @@ use Ichiloto\Editor\Cutscenes\Source\SourcePreservationRefusal;
 use Ichiloto\Editor\Cutscenes\Source\SourceUnreadable;
 use Ichiloto\Editor\Storage\FileSetTransaction;
 use Ichiloto\Editor\Storage\FileSetTransactionFailure;
+use Ichiloto\Editor\Database\InnPresentationFields;
 use Ichiloto\Editor\Database\PhpValueExporter;
+use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\History\TracksPersistedState;
 use Ichiloto\Editor\ProjectDirectoryContext;
 use Ichiloto\Engine\Animations\Timelines\CompiledEffectTimeline;
@@ -96,6 +98,12 @@ final class CutsceneAsset
     private ?PhpArraySourceDocument $dataDocument = null;
     private ?PhpArraySourceDocument $partnerDocument = null;
 
+    /** @var array<string, string> Authored bytes at load/save, even for read-only sources. */
+    private array $baselineSources = [];
+
+    /** @var array<string, array{source: string, values: array<array-key, mixed>}> Undo templates, never persisted conflict/validation baselines. */
+    private array $sourceTemplates = [];
+
     /**
      * The sequence an effect or summon with separate terminal and graphical
      * sequences is being edited in. The editor shows and edits one at a
@@ -152,6 +160,9 @@ final class CutsceneAsset
 
         $dataSource = $hasData ? (string) file_get_contents($dataPath) : '';
         $partnerSource = (string) file_get_contents($partnerPath);
+        $asset->baselineSources = $hasData
+            ? [$dataPath => $dataSource, $partnerPath => $partnerSource]
+            : [$partnerPath => $partnerSource];
         $reasons = [];
 
         try {
@@ -420,6 +431,7 @@ final class CutsceneAsset
         if ($this->type === CutsceneType::CINEMATIC || $this->hasPresentations() || $this->readOnlyReason !== null) {
             return false;
         }
+        $this->assertSourcesUnchanged();
 
         $outer = $this->type === CutsceneType::SUMMON
             ? array_intersect_key($this->partner, array_flip(SummonCutsceneDefinition::PAIRED_TIMELINE_FIELDS))
@@ -444,33 +456,39 @@ final class CutsceneAsset
     }
 
     /**
-     * Whether the summon's graphical sequence has a cinematic stage.
+     * Whether the graphical effect or summon owns a cinematic stage.
      */
     public function hasStage(): bool
     {
-        return $this->type === CutsceneType::SUMMON && $this->hasPresentations()
-            && is_array($this->partner['presentations'][EffectPresentation::GRAPHICAL->value]['stage'] ?? null);
+        return in_array($this->type, [CutsceneType::SUMMON, CutsceneType::EFFECT], true)
+            && ($this->type === CutsceneType::EFFECT || $this->hasPresentations())
+            && is_array(($this->hasPresentations()
+                ? $this->getSequence(EffectPresentation::GRAPHICAL) : $this->partner)['stage'] ?? null);
     }
 
     /**
-     * Gives a summon's graphical sequence a cinematic stage, or takes it
+     * Gives a graphical effect or summon a cinematic stage, or takes it
      * away. A new stage is the smallest the Engine reads: a 16:9 canvas
      * shown from the first frame until the last, its camera on the canvas's
      * centre at its own scale. Its subjects, art, covers and the sequence's
      * rest frame are authored after. The terminal sequence never has one.
      *
-     * @return bool False when nothing changed: not a summon with separate
-     * sequences, too short to restore before its end, or already so.
+     * @return bool False when nothing changed: ineligible, read-only, too
+     * short to restore before its end, or already so. Existing tracks/cues
+     * are preserved; incomplete authoring must compile before it can save.
      */
     public function setStage(bool $present): bool
     {
         $graphical = EffectPresentation::GRAPHICAL->value;
 
-        if ($this->type !== CutsceneType::SUMMON || ! $this->hasPresentations() || $this->readOnlyReason !== null || $present === $this->hasStage()) {
+        if (! in_array($this->type, [CutsceneType::SUMMON, CutsceneType::EFFECT], true)
+            || ($this->type === CutsceneType::SUMMON && ! $this->hasPresentations())
+            || $this->readOnlyReason !== null || $present === $this->hasStage()) {
             return false;
         }
+        $this->assertSourcesUnchanged();
 
-        $sequence = $this->getSequence(EffectPresentation::GRAPHICAL);
+        $sequence = $this->hasPresentations() ? $this->getSequence(EffectPresentation::GRAPHICAL) : $this->partner;
 
         if (! $present) {
             unset($sequence['stage']);
@@ -502,7 +520,13 @@ final class CutsceneAsset
             $sequence = $placed + ['stage' => $stage];
         }
 
-        $this->partner['presentations'][$graphical] = $sequence;
+        $partner = $this->partner;
+        if ($this->hasPresentations()) {
+            $partner['presentations'][$graphical] = $sequence;
+        } else {
+            $partner = $sequence;
+        }
+        $this->partner = $partner;
         $this->touchState();
 
         return true;
@@ -524,6 +548,7 @@ final class CutsceneAsset
      */
     public function copyAs(string $id, string $root): self
     {
+        $this->assertSourcesUnchanged();
         $copy = new self($this->type, $id, rtrim($root, '/') . '/' . $id, $this->projectRoot);
         $copy->isNew = true;
         $copy->data = $this->type->hasDataFile() && array_key_exists('id', $this->data)
@@ -547,20 +572,33 @@ final class CutsceneAsset
      * The payload alone is not enough: it is one sequence of an effect with
      * two, and a split leaves it unchanged.
      *
-     * @return array{data: array<string, mixed>, partner: array<int|string, mixed>, view: EffectPresentation, deleted: bool, pacedFps: array<string, mixed>}
+     * @return array{data: array<string, mixed>, partner: array<int|string, mixed>, view: EffectPresentation, deleted: bool, pacedFps: array<string, mixed>, sourceTemplates: array<string, array{source: string, values: array<array-key, mixed>}>}
      */
     public function captureEditState(): array
     {
-        return ['data' => $this->data, 'partner' => $this->partner, 'view' => $this->presentationView, 'deleted' => $this->isDeleted, 'pacedFps' => $this->pacedFps];
+        $templates = [];
+        if ($this->readOnlyReason === null) {
+            if ($this->type->hasDataFile()) {
+                $templates['data'] = ['source' => $this->proposedSource($this->dataDocument, $this->loadedData, $this->data, 'data'), 'values' => $this->data];
+            }
+            $templates[$this->type->partnerNoun()] = ['source' => $this->proposedSource($this->partnerDocument, $this->loadedPartner,
+                $this->partner, $this->type->partnerNoun()), 'values' => $this->partner];
+        }
+
+        return ['data' => $this->data, 'partner' => $this->partner, 'view' => $this->presentationView, 'deleted' => $this->isDeleted,
+            'pacedFps' => $this->pacedFps, 'sourceTemplates' => $templates];
     }
 
     /**
      * Puts the asset back to a state `captureEditState` returned.
      *
-     * @param array{data: array<string, mixed>, partner: array<int|string, mixed>, view: EffectPresentation, deleted: bool, pacedFps?: array<string, mixed>} $state
+     * @param array{data: array<string, mixed>, partner: array<int|string, mixed>, view: EffectPresentation, deleted: bool, pacedFps?: array<string, mixed>, sourceTemplates?: array<string, array{source: string, values: array<array-key, mixed>}>} $state
      */
     public function restoreEditState(array $state): void
     {
+        // Retain the actual last-saved baseline for conflict checks and
+        // changed-reference validation, while recovering authored syntax.
+        $this->sourceTemplates = $state['sourceTemplates'] ?? [];
         $this->presentationView = $state['view'];
         $this->pacedFps = $state['pacedFps'] ?? [];
         $this->markDeleted($state['deleted']);
@@ -571,6 +609,7 @@ final class CutsceneAsset
 
         $this->data = $state['data'];
         $this->partner = $state['partner'];
+        $this->shape = CutscenePairShape::of($this->type, $this->data, $this->partner);
         $this->touchState();
     }
 
@@ -628,6 +667,7 @@ final class CutsceneAsset
             // including the ones an author was not editing.
             return;
         }
+        $this->assertSourcesUnchanged();
 
         if (! $this->type->hasDataFile()) {
             unset($payload['id']);
@@ -687,6 +727,46 @@ final class CutsceneAsset
         $this->shape = CutscenePairShape::of($this->type, $data, $partner);
     }
 
+    /** Checks the owner's loaded source set, allowing recovery but never external replacement. */
+    public function assertSourcesUnchanged(): void
+    {
+        $this->createSourceTransaction()->assertSourcesUnchanged();
+    }
+
+    private function createSourceTransaction(): FileSetTransaction
+    {
+        $transaction = new FileSetTransaction($this->folder);
+        foreach ($this->paths() as $path) {
+            // Null requires an unwritten/deleted member to remain absent.
+            $transaction->expectSource($path, $this->baselineSources[$path] ?? null, allowMissing: true);
+        }
+        return $transaction;
+    }
+
+    /** Checks both source edits without writing, so unsupported expressions never enter history. */
+    public function assertSourceAccepts(): void
+    {
+        $this->assertSourcesUnchanged();
+        if ($this->type->hasDataFile()) {
+            $this->proposedSource($this->dataDocument, $this->loadedData, $this->data, 'data');
+        }
+        $this->proposedSource($this->partnerDocument, $this->loadedPartner, $this->partner, $this->type->partnerNoun());
+    }
+
+    /** Changed rest bindings must be complete; untouched graphical references survive Terminal edits. */
+    public function assertInnPresentationsValid(?ReferenceCatalog $references = null): void
+    {
+        InnPresentationFields::assertChangedCommandsValid($this->loadedData, $this->data, $references);
+        InnPresentationFields::assertChangedCommandsValid($this->loadedPartner, $this->partner, $references);
+    }
+
+    /** Only changed/new route paths must be complete before either source can be installed. */
+    public function assertMovementRoutesValid(): void
+    {
+        \Ichiloto\Editor\Database\MovementRouteFields::assertChangedCommandsValid($this->loadedData, $this->data);
+        \Ichiloto\Editor\Database\MovementRouteFields::assertChangedCommandsValid($this->loadedPartner, $this->partner);
+    }
+
     /**
      * Writes both files as one logical transaction.
      *
@@ -701,16 +781,20 @@ final class CutsceneAsset
      * complete new one.
      *
      * @param callable(string ...$paths): void|null $backup Called with the paths about to be overwritten, before they are.
+     * @param ReferenceCatalog|null $references The workspace's live authoring references.
      * @return bool True when anything was written.
      * @throws FileSetTransactionFailure When the pair could not be installed.
      */
-    public function save(?callable $backup = null): bool
+    public function save(?callable $backup = null, ?ReferenceCatalog $references = null): bool
     {
+        $transaction = $this->createSourceTransaction();
+        $transaction->assertSourcesUnchanged();
         if ($this->isDeleted) {
             return $this->delete($backup);
         }
 
-        if (! $this->isDirty() && ! $this->isNew) {
+        $missing = array_any($this->paths(), static fn(string $path): bool => ! is_file($path));
+        if (! $this->isDirty() && ! $this->isNew && ! $missing) {
             return false;
         }
 
@@ -718,12 +802,15 @@ final class CutsceneAsset
             throw new RuntimeException(sprintf('%s "%s" is read-only: %s.', ucfirst($this->type->noun()), $this->id, $this->readOnlyReason));
         }
 
+        $this->assertInnPresentationsValid($references);
+        $this->assertMovementRoutesValid();
+
         // 1. Both proposed sources, each touched only where it changed.
         $hasData = $this->type->hasDataFile();
         $dataSource = $hasData ? $this->proposedSource($this->dataDocument, $this->loadedData, $this->data, 'data') : '';
         $partnerSource = $this->proposedSource($this->partnerDocument, $this->loadedPartner, $this->partner, $this->type->partnerNoun());
-        $writeData = $hasData && ($this->isNew || $this->dataDocument === null || $dataSource !== $this->dataDocument->source);
-        $writePartner = $this->isNew || $this->partnerDocument === null || $partnerSource !== $this->partnerDocument->source;
+        $writeData = $hasData && (! is_file($this->dataPath()) || $this->isNew || $this->dataDocument === null || $dataSource !== $this->dataDocument->source);
+        $writePartner = ! is_file($this->partnerPath()) || $this->isNew || $this->partnerDocument === null || $partnerSource !== $this->partnerDocument->source;
 
         if (! $writeData && ! $writePartner) {
             // Dirty by fingerprint but identical in source: a same-value
@@ -732,8 +819,6 @@ final class CutsceneAsset
 
             return false;
         }
-
-        $transaction = new FileSetTransaction($this->folder);
 
         if ($writeData) {
             $transaction->write($this->dataPath(), $dataSource);
@@ -822,17 +907,29 @@ final class CutsceneAsset
 
     /**
      * Compiles the effect as it stands in memory, unsaved edits included, as
-     * battle or the field plays it in one presentation.
+     * battle, the field or an owned stage plays it in one presentation.
      *
      * @throws RuntimeException When the Engine refuses it, or for another type.
      */
-    public function compiledEffect(EffectPresentation $presentation, bool $forBattle): CompiledEffectTimeline
+    public function compileEffect(EffectPresentation $presentation, bool $forBattle, bool $forStage = false): CompiledEffectTimeline
     {
         if ($this->type !== CutsceneType::EFFECT) {
             throw new RuntimeException(sprintf('%s is a %s, not an effect.', $this->id, $this->type->noun()));
         }
 
-        return CutsceneHydration::compileEffect($this->id, $this->partner, $presentation, $forBattle, $this->projectRoot);
+        return CutsceneHydration::compileEffect($this->id, $this->partner, $presentation, $forBattle, $this->projectRoot, $forStage);
+    }
+
+    /** Preserves the existing battle/field API while new consumers use the action-named compiler. */
+    public function compiledEffect(EffectPresentation $presentation, bool $forBattle): CompiledEffectTimeline
+    {
+        return $this->compileEffect($presentation, $forBattle);
+    }
+
+    /** Whether this effect declares its own graphical space, independent of its selected sequence. */
+    public function isOwnedStageEffect(): bool
+    {
+        return $this->type === CutsceneType::EFFECT && CutsceneHydration::isOwnedStage($this->partner);
     }
 
     /**
@@ -892,12 +989,13 @@ final class CutsceneAsset
     {
         if (! is_dir($this->folder)) {
             // Never written: nothing on disk to take away.
+            $this->baselineSources = [];
             $this->captureBaseline();
 
             return false;
         }
 
-        $transaction = new FileSetTransaction($this->folder);
+        $transaction = $this->createSourceTransaction();
 
         foreach ($this->paths() as $path) {
             $transaction->remove($path);
@@ -906,6 +1004,7 @@ final class CutsceneAsset
         // Only the two files are the asset's; anything else in the folder is
         // left for its author, and the folder goes only when empty.
         $transaction->commit($backup);
+        $this->baselineSources = [];
         $this->captureBaseline();
 
         return true;
@@ -919,6 +1018,11 @@ final class CutsceneAsset
      */
     private function proposedSource(?PhpArraySourceDocument $document, array $loaded, array $current, string $noun): string
     {
+        if (isset($this->sourceTemplates[$noun])) {
+            $template = $this->sourceTemplates[$noun];
+            $document = PhpArraySourceDocument::parse($template['source']);
+            $loaded = $template['values'];
+        }
         if ($document === null) {
             // No file yet: a new asset's file is written whole, in the
             // editor's own layout.
@@ -937,6 +1041,9 @@ final class CutsceneAsset
      */
     private function adoptWritten(string $dataSource, string $partnerSource): void
     {
+        $this->baselineSources = $this->type->hasDataFile()
+            ? [$this->dataPath() => $dataSource, $this->partnerPath() => $partnerSource]
+            : [$this->partnerPath() => $partnerSource];
         $this->dataDocument = $this->type->hasDataFile() ? PhpArraySourceDocument::parse($dataSource) : null;
         $this->partnerDocument = PhpArraySourceDocument::parse($partnerSource);
         $this->loadedData = $this->data;

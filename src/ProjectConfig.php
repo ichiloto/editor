@@ -5,15 +5,16 @@ declare(strict_types=1);
 namespace Ichiloto\Editor;
 
 use Ichiloto\Editor\Cutscenes\Source\PhpArraySourceDocument;
+use Ichiloto\Editor\Cutscenes\Source\ArraySourceWriter;
 use Ichiloto\Editor\Cutscenes\Source\SourceNode;
 use Ichiloto\Editor\Cutscenes\Source\SourcePreservationRefusal;
 use Ichiloto\Editor\Database\PhpDataFile;
 use Ichiloto\Editor\Database\PhpValueExporter;
 use Ichiloto\Editor\Database\ProjectRecord;
+use Ichiloto\Editor\Database\InnPresentationFields;
 use Ichiloto\Editor\Storage\FileSetOperations;
 use Ichiloto\Editor\Storage\FileSetTransaction;
 use Ichiloto\Editor\Storage\FilesystemFileSetOperations;
-use Ichiloto\Engine\Animations\Timelines\EffectTimelineLibrary;
 use Ichiloto\Engine\Rendering\FieldViewport;
 use RuntimeException;
 use Throwable;
@@ -88,7 +89,8 @@ final class ProjectConfig
             foreach ($tree as $key => $value) {
                 $path = $prefix . '.' . $key;
                 $hasDottedKey = $ambiguous || str_contains((string) $key, '.');
-                if (is_array($value)) { $visit($value, $path, $hasDottedKey); }
+                if ($path === self::INN_PRESENTATION && ! $hasDottedKey) { $records[] = $this->getRecord($path); }
+                elseif (is_array($value)) { $visit($value, $path, $hasDottedKey); }
                 elseif (! is_object($value) || $value instanceof \UnitEnum) {
                     if ($hasDottedKey) {
                         $this->fieldIssues[$path] = $path . ' contains a dotted literal key, ambiguous with a nested path; it is preserved read-only.';
@@ -104,7 +106,7 @@ final class ProjectConfig
         // out, so it can be set without being typed in by hand.
         foreach (array_keys(self::ENGINE_DEFAULTS) as $path) {
             $root = explode('.', $path)[0];
-            if (in_array($root, $roots, true) && self::getValue($this->payload, $path) === null && $this->issue === null) {
+            if (in_array($root, $roots, true) && ! in_array($path, array_map(static fn(ProjectRecord $record): mixed => $record->get('path'), $records), true) && $this->issue === null) {
                 $records[] = $this->getRecord($path);
             }
         }
@@ -123,15 +125,14 @@ final class ProjectConfig
      *
      * @throws \InvalidArgumentException
      */
-    public function assertAcceptableValue(string $path, mixed $value): void
+    public function assertAcceptableValue(string $path, mixed $value, bool $complete = true): void
     {
         if ($path === self::FIELD_ZOOM && (! is_int($value) && ! is_float($value)
             || ! is_finite((float) $value) || $value < FieldViewport::MIN_ZOOM || $value > FieldViewport::MAX_ZOOM)) {
             throw new \InvalidArgumentException(sprintf('Field zoom must be a finite number from %g to %g.', FieldViewport::MIN_ZOOM, FieldViewport::MAX_ZOOM));
         }
         if ($path === self::INN_PRESENTATION && $value !== null) {
-            // A stable timeline identity, as InnStay loads it; null leaves inns without one.
-            EffectTimelineLibrary::assertId(is_string($value) ? $value : '');
+            InnPresentationFields::assertValid($value, complete: $complete);
         }
     }
 
@@ -139,7 +140,7 @@ final class ProjectConfig
     {
         if (isset($this->fieldIssues[$path])) { return $this->fieldIssues[$path]; }
         try {
-            $this->createFieldEdit($this->document, $path, '1');
+            $this->createFieldEdit($this->document, $path, '1', $path === self::INN_PRESENTATION);
             return null;
         } catch (Throwable $error) {
             return $error->getMessage();
@@ -163,19 +164,62 @@ final class ProjectConfig
     /** Rebuild only the changed leaf spans over the original bytes, including after save/undo. */
     public function getSource(): string
     {
+        return $this->composeSource();
+    }
+
+    /** Proves a proposed structured value is source-editable before changing its shared record. */
+    public function assertSourceAcceptsValue(string $path, mixed $value): void
+    {
+        $this->composeSource([$path => $value]);
+    }
+
+    private function composeSource(array $overrides = []): string
+    {
         $document = $this->document;
         foreach ($this->records as $path => $record) {
-            if ($record->get('value') === $this->originalValues[$path]) { continue; }
-            $edit = $this->createFieldEdit($document, $path, PhpValueExporter::export($record->get('value')));
+            $value = array_key_exists($path, $overrides) ? $overrides[$path] : $record->get('value');
+            if ($value === $this->originalValues[$path]) { continue; }
+            if ($path === self::INN_PRESENTATION && is_array($this->originalValues[$path])) {
+                $this->createFieldEdit($document, $path, '1', true);
+                $old = $this->payload;
+                $new = $old;
+                $next = &$new;
+                foreach (explode('.', $path) as $segment) { $next = &$next[$segment]; }
+                $next = $value;
+                unset($next);
+                $document = ArraySourceWriter::rewrite($document, $old, $new, $this->getLeaderKeyRenames($this->originalValues[$path], $value));
+                continue;
+            }
+            $edit = $this->createFieldEdit($document, $path, PhpValueExporter::export($value));
             $document = $document->withEdits([$edit]);
         }
         return $document?->source ?? $this->persistedSource;
+    }
+
+    /** One picker key replacement keeps the binding's authored comments and value span. */
+    private function getLeaderKeyRenames(array $old, mixed $new): array
+    {
+        if (! is_array($new) || ($old['treatment'] ?? null) !== 'leader' || ($new['treatment'] ?? null) !== 'leader'
+            || ! is_array($old['leaders'] ?? null) || ! is_array($new['leaders'] ?? null)) { return []; }
+        $before = array_keys($old['leaders']);
+        $after = array_keys($new['leaders']);
+        if (count($before) !== count($after)) { return []; }
+        $renames = [];
+        foreach ($before as $index => $key) {
+            if ($key === $after[$index]) { continue; }
+            if (array_key_exists($key, $new['leaders']) || array_key_exists($after[$index], $old['leaders'])) { return []; }
+            $renames[] = ['path' => ['graphics', 'inn', 'presentation', 'leaders', $key], 'key' => $after[$index]];
+        }
+        return $renames;
     }
 
     /** Saves all pending configuration leaves together, never a second whole-value rewrite. */
     public function save(?FileSetOperations $files = null): void
     {
         if (! $this->isDirty()) { return; }
+        foreach ($this->records as $path => $record) {
+            if ($record->isDirty() && $record->get('value') !== $this->originalValues[$path]) { $this->assertAcceptableValue($path, $record->get('value')); }
+        }
         $source = $this->getSource();
         $transaction = new FileSetTransaction($this->projectRoot, $files ?? new FilesystemFileSetOperations());
         $transaction->write($this->path, $source);
@@ -200,7 +244,7 @@ final class ProjectConfig
         foreach ($this->records as $record) { $record->markClean(); }
     }
 
-    private function createFieldEdit(?PhpArraySourceDocument $document, string $path, string $literal): array
+    private function createFieldEdit(?PhpArraySourceDocument $document, string $path, string $literal, bool $allowArray = false): array
     {
         if ($this->issue !== null || $document === null) { throw new SourcePreservationRefusal($this->issue ?? 'config.php cannot be preserved.'); }
         $segments = explode('.', $path);
@@ -222,7 +266,7 @@ final class ProjectConfig
         }
         // An enum case is written as one: replacing it with another case of
         // its enum keeps the file reading the same kind of value.
-        if ($node->kind !== SourceNode::SCALAR && ! self::getValue($this->payload, $path) instanceof \UnitEnum) {
+        if ($node->kind !== SourceNode::SCALAR && ! ($allowArray && $node->kind === SourceNode::ARRAY) && ! self::getValue($this->payload, $path) instanceof \UnitEnum) {
             throw new SourcePreservationRefusal($path . ' is an authored expression, not an editable literal.');
         }
         return $document->replaceValueEdit($walked, $literal);

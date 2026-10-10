@@ -90,6 +90,9 @@ enum RecordFieldCodec: string
      */
     case SIZE = 'size';
 
+    /** One optional pixel crop, stored atomically as integer x, y, width and height. */
+    case SOURCE_RECT = 'source_rect';
+
     /**
      * A battler slot, the Engine's BattlerSlot, stored as `['x' => x,
      * 'y' => y, 'width' => w, 'height' => h]` with an optional

@@ -126,6 +126,7 @@ it('describes the stage for a timeline editor: subjects with their boxes and poi
     $session->selectCutscenePresentation('cutscenes/summon', 0, 'graphical');
     $timeline = $session->describeCutsceneTimeline('cutscenes/summon', 0);
     expect($timeline['canHaveStage'])->toBeTrue()
+        ->and($timeline['tracks'][0]['art']['pivotDefaults'])->toBe(['battle' => ['x' => 0.5, 'y' => 0.5]])
         ->and($timeline['stage'])->toBeNull();
 
     $session->setCutsceneStage('cutscenes/summon', 0, true);
@@ -148,6 +149,7 @@ it('describes the stage for a timeline editor: subjects with their boxes and poi
         ->and($timeline['tracks'][0]['art'])->toMatchArray(['anchor' => 'stage', 'subject' => 'subject',
             'placement' => ['position' => ['x' => 0.0, 'y' => 0.0], 'size' => null, 'pivot' => ['x' => 0.5, 'y' => 0.5]]])
         ->and($timeline['tracks'][0]['art'])->not->toHaveKey('attachmentOptions')
+        ->and($timeline['tracks'][0]['art']['pivotDefaults'])->toBe(['stage' => ['x' => 0.5, 'y' => 0.5]])
         ->and($timeline['tracks'][0]['keyframes'][0]['offset'])->toBe(['x' => 4.0, 'y' => -2.5]);
 
     // The terminal sequence never has one.

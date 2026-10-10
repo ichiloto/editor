@@ -90,6 +90,7 @@ final class ProjectScriptCommands
             ScriptCommandReference::TROOP => 'troops',
             ScriptCommandReference::QUEST => 'quests',
             ScriptCommandReference::ACTOR => 'actors',
+            ScriptCommandReference::STAGE_TIMELINE => 'stage_timelines',
         };
     }
 }

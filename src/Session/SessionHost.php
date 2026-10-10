@@ -125,7 +125,17 @@ final class SessionHost
                 self::requireInt($params, 'width'),
                 self::requireInt($params, 'height'),
             ),
+            'map.duplicate' => $session->duplicateMap(self::requireString($params, 'map'), self::requireInt($params, 'revision')),
+            'map.move' => $session->moveMap(
+                self::requireString($params, 'map'), self::requireInt($params, 'revision'),
+                self::readOptionalString($params, 'destination'), ($params['confirm'] ?? false) === true,
+            ),
             'map.delete' => $session->deleteMap(self::requireString($params, 'map'), ($params['confirm'] ?? false) === true),
+            'map.insertLines' => $session->insertMapLines(
+                self::requireString($params, 'map'), self::requireInt($params, 'revision'),
+                self::requireString($params, 'axis'), self::requireInt($params, 'at'), self::requireInt($params, 'count'),
+                self::readOptionalString($params, 'answer'), self::readOptionalString($params, 'confirm'),
+            ),
             'map.read' => $session->readMap(self::requireString($params, 'map')),
             'map.world' => $session->readWorld(self::requireString($params, 'map'),
                 is_bool($params['tileShadows'] ?? false) ? ($params['tileShadows'] ?? false) : throw new InvalidRequest('"tileShadows" must be a boolean.')),
@@ -283,6 +293,15 @@ final class SessionHost
                     ? $params['movesWith'] : throw new InvalidRequest('"movesWith" must be a gameplay layer name or null.'),
             ),
             'map.save' => $session->saveMap(self::requireString($params, 'map')),
+            'mapPlacement.apply' => $session->applyMapPlacement(
+                is_array($params['context'] ?? null) ? $params['context'] : throw new InvalidRequest('A placement needs its owner.'),
+                self::requireKey($params),
+                is_array($params['expected'] ?? null) ? $params['expected'] : throw new InvalidRequest('A placement needs its descriptor.'),
+                self::requireString($params, 'previewMap'), self::requireInt($params, 'point'),
+                self::requireInt($params, 'x'), self::requireInt($params, 'y'),
+                isset($params['origin']) ? self::requireCell($params, 'origin') : null,
+                self::requireInt($params, 'previewRevision'),
+            ),
             'inspector.read' => $session->readInspector(
                 self::requireString($params, 'map'),
                 is_string($params['event'] ?? null) ? $params['event'] : null,
@@ -400,11 +419,11 @@ final class SessionHost
             'cutscenes.cinematicControl' => $session->controlCinematicPreview(self::requireString($params, 'action'),
                 is_int($params['seconds'] ?? null) || is_float($params['seconds'] ?? null) ? (float) $params['seconds'] : 0.0),
             'cutscenes.cinematicStop' => $session->stopCinematicPreview(),
-            'cutscenes.cinematicScene' => $session->exchangeCinematicScene(self::requireLines($params, 'events')),
+            'cutscenes.cinematicScene' => $session->exchangeCinematicScene(self::requireLines($params, 'events'), self::readOptionalString($params, 'sessionId')),
             'cutscenes.cinematicSceneDetach' => $session->detachCinematicScene(),
             'cutscenes.effectField' => $session->showEffectOnField(self::requireInt($params, 'index'), is_int($params['frame'] ?? null) ? $params['frame'] : 0,
                 self::requireInt($params, 'width'), self::requireInt($params, 'height')),
-            'cutscenes.effectFieldScene' => $session->exchangeEffectFieldScene(self::requireLines($params, 'events')),
+            'cutscenes.effectFieldScene' => $session->exchangeEffectFieldScene(self::requireLines($params, 'events'), self::readOptionalString($params, 'sessionId')),
             'cutscenes.effectFieldClose' => $session->closeEffectField(),
             'cutscenes.effectBattlePreview' => $session->readEffectBattlePreview(self::requireInt($params, 'index'), is_int($params['frame'] ?? null) ? $params['frame'] : 0,
                 ($params['reducedMotion'] ?? false) === true,
@@ -567,8 +586,8 @@ final class SessionHost
      */
     private static function requireLines(array $params, string $key): array
     {
-        $lines = $params[$key] ?? [];
-        if (! is_array($lines) || ! array_is_list($lines) || ! array_all($lines, is_string(...))) {
+        $lines = array_key_exists($key, $params) ? $params[$key] : [];
+        if (! is_array($lines) || ! array_is_list($lines) || ! array_all($lines, static fn(mixed $line): bool => is_string($line))) {
             throw new InvalidRequest(sprintf('"%s" must be a list of strings.', $key));
         }
 

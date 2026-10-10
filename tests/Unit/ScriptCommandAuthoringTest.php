@@ -7,6 +7,7 @@ use Ichiloto\Editor\Events\ProjectScriptCommands;
 use Ichiloto\Editor\Inspector\InputControlType;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Editor\Validation\ProjectValidator;
+use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandReference;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandRegistry;
 
 /** Declares a project command whose handler class the Editor never loads. */
@@ -46,8 +47,9 @@ function writeScriptCommandScript(string $path, array $payload): void
 function registeredVariantFields(string $type): array
 {
     $fields = [];
-
-    foreach (RecordSchemaCatalog::forKey('common_events')?->subList?->variants[$type] ?? [] as $field) {
+    $variant = RecordSchemaCatalog::forKey('common_events')?->subList?->variants[$type] ?? [];
+    if ($variant instanceof Closure) { $variant = $variant(['type' => $type]); }
+    foreach ($variant as $field) {
         $fields[$field->key] = $field;
     }
 
@@ -56,6 +58,15 @@ function registeredVariantFields(string $type): array
 
 afterEach(function (): void {
     ScriptCommandRegistry::reset();
+});
+
+it('maps every Engine command reference to an Editor resource category', function (): void {
+    foreach (ScriptCommandReference::cases() as $reference) {
+        expect(ProjectScriptCommands::getReferenceCategory($reference))->toBeString()->not->toBeEmpty();
+    }
+
+    expect(ProjectScriptCommands::getReferenceCategory(ScriptCommandReference::STAGE_TIMELINE))
+        ->toBe('stage_timelines');
 });
 
 it('reads a project\'s declared commands without loading their handlers', function (): void {
@@ -84,9 +95,11 @@ it('offers the open project\'s registered commands with their declared fields', 
     expect($list->fields[0]->options)->toBe([...RecordSchemaCatalog::EVENT_COMMAND_TYPES, 'shop', 'inn', 'hire_carriage'])
         ->and(array_keys($shop))->toBe(['buyRate', 'sellRate'])
         ->and($shop['sellRate']->type)->toBe(InputControlType::FLOAT)
-        ->and(array_keys($inn))->toBe(['confirmDialogue.text', 'confirmDialogue.name', 'cost', 'spawnPoint.x', 'spawnPoint.y', 'bgm', 'resultVariable'])
+        ->and(array_keys($inn))->toBe(['confirmDialogue.text', 'confirmDialogue.name', 'cost', 'spawnPoint.x', 'spawnPoint.y', 'bgm', 'presentation', 'resultVariable'])
         ->and($inn['bgm']->reference)->toBe('bgm')
         ->and($inn['bgm']->allowsNone)->toBeTrue()
+        ->and($inn['presentation']->reference)->toBe('stage_timelines')
+        ->and($inn['presentation']->allowsNone)->toBeTrue()
         ->and($inn['cost']->type)->toBe(InputControlType::INTEGER)
         ->and($carriage['destination']->reference)->toBe('maps')
         ->and($carriage['destination']->allowsNone)->toBeFalse()

@@ -154,11 +154,15 @@ it('carries graphics untouched through ordinary edits, and never lets an unreada
 it('refuses to save over tile layers changed or added after opening', function (bool $added) {
     $root = mapGraphicsProject();
     $map = loadLayeredMap($root);
-    writeTileLayer($map->directory, $added ? '03.shadows.tiles.php' : '02.decor.tiles.php', "0 0 0 0\n0 0 0 0");
     $map->resize(6, 3);
+    $pending = $map->captureLayerSnapshot();
+    writeTileLayer($map->directory, $added ? '03.shadows.tiles.php' : '02.decor.tiles.php', "0 0 0 0\n0 0 0 0");
     $before = sourceHashTree($map->directory);
 
-    expect(fn() => $map->save())->toThrow(MapSourceRefusal::class, 'after opening')
+    expect(fn() => $map->resize(7, 3))->toThrow(MapSourceRefusal::class, 'after opening')
+        ->and(fn() => $map->save())->toThrow(MapSourceRefusal::class, 'after opening')
+        ->and($map->captureLayerSnapshot())->toBe($pending)
+        ->and($map->isDirty())->toBeTrue()
         ->and(sourceHashTree($map->directory))->toBe($before);
 })->with(['changed' => false, 'added' => true]);
 

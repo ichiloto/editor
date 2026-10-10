@@ -10,6 +10,7 @@ use Ichiloto\Editor\History\Command;
 use Ichiloto\Editor\History\GenericCommand;
 use Ichiloto\Editor\Database\RecordSchema;
 use Ichiloto\Editor\Database\RecordSchemaCatalog;
+use Ichiloto\Editor\Database\ReferenceCatalog;
 use RuntimeException;
 use Throwable;
 
@@ -33,6 +34,13 @@ use Throwable;
  */
 final class CutsceneLibrary
 {
+    private ?ReferenceCatalog $authoringReferences = null;
+
+    public function useAuthoringReferences(ReferenceCatalog $references): void
+    {
+        $this->authoringReferences = $references;
+        foreach ($this->databases as $database) { $database->useAuthoringReferences($references); }
+    }
     /**
      * @var array<string, CutsceneAsset[]> Assets by type value, in list order.
      */
@@ -281,9 +289,11 @@ final class CutsceneLibrary
      * Returns the record category editing a type's assets, built over the
      * library and written back into it on every change.
      */
-    public function records(CutsceneType $type): ProjectRecordDatabase
+    public function records(CutsceneType $type, bool $graphical = false): ProjectRecordDatabase
     {
-        return $this->databases[$type->value] ??= $this->buildRecords($type);
+        $key = $type->value . ($graphical ? ':graphical' : '');
+
+        return $this->databases[$key] ??= $this->buildRecords($type, $graphical);
     }
 
     /**
@@ -294,6 +304,7 @@ final class CutsceneLibrary
     public function refreshRecords(CutsceneType $type): void
     {
         $this->databases[$type->value] = $this->buildRecords($type);
+        unset($this->databases[$type->value . ':graphical']);
     }
 
     /**
@@ -311,18 +322,23 @@ final class CutsceneLibrary
      * @throws RuntimeException When the asset is missing or read-only; nothing is changed.
      * @throws Throwable Whatever the change throws; the records are rebuilt from the untouched asset.
      */
-    public function changeAsset(CutsceneType $type, int $index, string $label, callable $change, ?Closure $restored = null): array
+    public function changeAsset(CutsceneType $type, int $index, string $label, callable $change, ?Closure $restored = null, bool $graphical = false): array
     {
         $id = $this->ids($type)[$index] ?? throw new RuntimeException(sprintf('There is no %s %d.', $type->noun(), $index));
         $asset = $this->find($type, $id) ?? throw new RuntimeException(sprintf('There is no %s %s.', $type->noun(), $id));
         if (! $asset->isEditable()) {
             throw new RuntimeException(sprintf('%s is read-only: %s.', ucfirst($type->noun()), $asset->readOnlyReason()));
         }
-        $records = $this->records($type);
+        $asset->assertSourcesUnchanged();
+        $records = $this->records($type, $graphical);
         $before = $asset->captureEditState();
         try {
             $result = $change($records, $index);
             $records->save();
+            $asset->assertSourceAccepts();
+        } catch (Throwable $failure) {
+            $asset->restoreEditState($before);
+            throw $failure;
         } finally {
             $this->refreshRecords($type);
         }
@@ -401,33 +417,36 @@ final class CutsceneLibrary
         return new GenericCommand($label, static fn() => $restore($after), static fn() => $restore($before));
     }
 
-    private function buildRecords(CutsceneType $type): ProjectRecordDatabase
+    private function buildRecords(CutsceneType $type, bool $graphical = false): ProjectRecordDatabase
     {
-        $schema = $this->schemaFor($type);
+        $schema = $this->schemaFor($type, $graphical);
         $entries = array_map(
             static fn(CutsceneAsset $asset): array => $asset->payload(),
             array_values(array_filter($this->assets($type), static fn(CutsceneAsset $asset): bool => ! $asset->isDeleted())),
         );
 
-        return ProjectRecordDatabase::overOwnedList(
+        $records = ProjectRecordDatabase::overOwnedList(
             $schema,
             $this->rootFor($type),
             $entries,
             function (array $written) use ($type): void {
                 $this->writeBack($type, $written);
             },
+            graphical: $graphical,
         );
+        if ($this->authoringReferences !== null) { $records->useAuthoringReferences($this->authoringReferences); }
+        return $records;
     }
 
     /**
      * Returns the schema a type's records are edited with.
      */
-    public function schemaFor(CutsceneType $type): RecordSchema
+    public function schemaFor(CutsceneType $type, bool $graphical = false): RecordSchema
     {
         return match ($type) {
-            CutsceneType::CINEMATIC => RecordSchemaCatalog::cinematics(),
+            CutsceneType::CINEMATIC => \Ichiloto\Editor\Database\CutsceneSchemas::cinematics($graphical),
             CutsceneType::SUMMON => RecordSchemaCatalog::summons(),
-            CutsceneType::EFFECT => RecordSchemaCatalog::effects(),
+            CutsceneType::EFFECT => \Ichiloto\Editor\Database\CutsceneSchemas::effects($graphical),
         };
     }
 
@@ -618,7 +637,7 @@ final class CutsceneLibrary
                 }
 
                 try {
-                    $asset->save($backup);
+                    $asset->save($backup, $this->authoringReferences);
                     $saved[] = $type->noun() . ' ' . $asset->id;
                 } catch (Throwable $throwable) {
                     $failed[$type->noun() . ' ' . $asset->id] = $throwable->getMessage();
@@ -644,7 +663,7 @@ final class CutsceneLibrary
             throw new RuntimeException(sprintf('No %s "%s" to save.', $type->noun(), $id));
         }
 
-        $written = $asset->save($backup);
+        $written = $asset->save($backup, $this->authoringReferences);
         $this->forgetDeleted($type);
 
         return $written;

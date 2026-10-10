@@ -156,10 +156,8 @@ final class PreviewGameScene extends GameScene
         try {
             $this->previewMap->loadForPreview($location->mapFilename);
         } catch (\Throwable) {
-            // An unknown destination is a validation finding, not a preview
-            // crash: the cinematic continues over undefined terrain and the
-            // final state still reports the map it asked for.
-            $this->previewMap->unload();
+            // The map manager clears failed geometry and records why; the
+            // cinematic can continue over explicitly diagnosed undefined terrain.
         }
 
         if ($this->player !== null && $this->camera->followsPlayer) {

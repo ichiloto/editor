@@ -585,6 +585,11 @@ trait CutscenePreviewPane
         }
 
         if ($asset?->type === CutsceneType::EFFECT && ($input === 'b' || $input === 'd')) {
+            if ($asset->isOwnedStageEffect()) {
+                $this->setStatus('This effect owns its stage; it has no field target or battle caster.', StatusLevel::INFO);
+
+                return true;
+            }
             if ($input === 'b') {
                 $this->effectPreviewInBattle[$asset->id] = ! $this->isEffectPreviewInBattle($asset);
             } elseif ($this->isEffectPreviewInBattle($asset)) {
@@ -707,7 +712,8 @@ trait CutscenePreviewPane
 
         try {
             $compiled = $asset->type === CutsceneType::EFFECT
-                ? $asset->compiledEffect($asset->getPresentationView() ?? EffectPresentation::TERMINAL, $this->isEffectPreviewInBattle($asset))
+                ? $asset->compileEffect($asset->getPresentationView() ?? EffectPresentation::TERMINAL,
+                    $this->isEffectPreviewInBattle($asset), forStage: $asset->isOwnedStageEffect())
                 : $asset->compiledSummon();
         } catch (Throwable $throwable) {
             $this->timelinePreview = null;
@@ -738,7 +744,8 @@ trait CutscenePreviewPane
                 ? sprintf('at %d fps', $this->timelinePreview->fps())
                 : sprintf('over %.2fs, %s (A, P, S change it)', $phaseSeconds, $this->describeEffectPreviewPacing($asset)),
             $play ? 'playing' : 'paused',
-            $asset->type === CutsceneType::EFFECT ? sprintf(', as %s plays it', $this->isEffectPreviewInBattle($asset) ? 'battle' : 'the field') : '',
+            $asset->type === CutsceneType::EFFECT ? sprintf(', in %s', $asset->isOwnedStageEffect() ? 'its owned stage'
+                : ($this->isEffectPreviewInBattle($asset) ? 'battle' : 'the field')) : '',
         ), StatusLevel::INFO);
         $this->renderDatabasePanes(['preview', 'tree']);
     }
@@ -774,6 +781,9 @@ trait CutscenePreviewPane
      */
     private function isEffectPreviewInBattle(CutsceneAsset $asset): bool
     {
+        if ($asset->isOwnedStageEffect()) {
+            return false;
+        }
         if (isset($this->effectPreviewInBattle[$asset->id])) {
             return $this->effectPreviewInBattle[$asset->id];
         }
@@ -855,7 +865,8 @@ trait CutscenePreviewPane
      */
     private function createEffectPreviewStage(CutsceneAsset $asset): EffectPreviewStage
     {
-        return new EffectPreviewStage($asset->getPresentationView() ?? EffectPresentation::TERMINAL, $this->isEffectPreviewInBattle($asset), $this->isEffectPreviewCasterOnLeft);
+        return new EffectPreviewStage($asset->getPresentationView() ?? EffectPresentation::TERMINAL, $this->isEffectPreviewInBattle($asset),
+            $this->isEffectPreviewCasterOnLeft, forStage: $asset->isOwnedStageEffect());
     }
 
     /**
@@ -1453,11 +1464,13 @@ trait CutscenePreviewPane
             return [
                 ...$this->describeCutsceneStanding($asset),
                 ...($stage === null ? [] : [sprintf('  Plays as %s, the %s sequence.%s',
-                    $stage->forBattle ? 'battle' : 'the field', $stage->presentation->value,
-                    $stage->forBattle ? sprintf(' %s is the caster, %s the target.', EffectPreviewStage::CASTER_MARKER, EffectPreviewStage::TARGET_MARKER) : sprintf(' %s is the target.', EffectPreviewStage::TARGET_MARKER))]),
+                    $stage->forStage ? 'an owned stage' : ($stage->forBattle ? 'battle' : 'the field'), $stage->presentation->value,
+                    $stage->forStage ? ' No field or battle surroundings.' : ($stage->forBattle
+                        ? sprintf(' %s is the caster, %s the target.', EffectPreviewStage::CASTER_MARKER, EffectPreviewStage::TARGET_MARKER)
+                        : sprintf(' %s is the target.', EffectPreviewStage::TARGET_MARKER)))]),
                 '',
                 '  Space: play through the Engine session  ·  . , : step  ·  < > : keyframe boundaries  ·  R: restart  ·  L: timeline/stage'
-                    . ($stage === null ? '' : '  ·  B: battle/field  ·  D: caster side'),
+                    . ($stage === null || $stage->forStage ? '' : '  ·  B: battle/field  ·  D: caster side'),
             ];
         }
 
@@ -1488,7 +1501,8 @@ trait CutscenePreviewPane
             $info[] = sprintf(' %gx speed · %s', $preview->speed(), $preview->isLooping() ? 'looping' : 'once');
 
             if ($stage !== null) {
-                $info[] = sprintf(' %s · %s sequence', $stage->forBattle ? sprintf('battle, caster %s', $stage->isCasterOnLeft ? 'left' : 'right') : 'field', $stage->presentation->value);
+                $info[] = sprintf(' %s · %s sequence', $stage->forStage ? 'owned stage'
+                    : ($stage->forBattle ? sprintf('battle, caster %s', $stage->isCasterOnLeft ? 'left' : 'right') : 'field'), $stage->presentation->value);
 
                 if ($preview->phaseDurationSeconds !== null) {
                     $info[] = sprintf(' paced over %.2fs:', $preview->phaseDurationSeconds);

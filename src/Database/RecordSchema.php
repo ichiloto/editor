@@ -90,6 +90,8 @@ final readonly class RecordSchema
         public ?Closure $saveCheck = null,
         public bool $identityGiven = false,
         public ?Closure $commandListsFor = null,
+        /** @var Closure(array<string, mixed>): list<string>|null Selects the inline lists offered by this record's shape. */
+        public ?Closure $subListsFor = null,
     ) {
         if ($projection instanceof WholeFileProjection) {
             // A field outside the keys the category owns would read blank and
@@ -110,19 +112,22 @@ final readonly class RecordSchema
      *
      * @return list<RecordSubList>
      */
-    public function getInlineSubLists(): array
+    public function getInlineSubLists(array|object|null $payload = null): array
     {
-        return $this->subList === null ? $this->subLists : [$this->subList, ...$this->subLists];
+        $lists = $this->subList === null ? $this->subLists : [$this->subList, ...$this->subLists];
+        if ($payload === null || $this->subListsFor === null) { return $lists; }
+        $keys = ($this->subListsFor)((array) $payload);
+        return array_values(array_filter($lists, static fn(RecordSubList $list): bool => in_array($list->key, $keys, true)));
     }
 
     /** The inline list held under a payload key; the record's own when the key is null. */
-    public function findInlineSubList(?string $key): ?RecordSubList
+    public function findInlineSubList(?string $key, array|object|null $payload = null): ?RecordSubList
     {
         if ($key === null) {
             return $this->subList;
         }
 
-        return array_find($this->getInlineSubLists(), static fn(RecordSubList $list): bool => $list->key === $key);
+        return array_find($this->getInlineSubLists($payload), static fn(RecordSubList $list): bool => $list->key === $key);
     }
 
     /**

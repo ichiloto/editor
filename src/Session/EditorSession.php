@@ -39,6 +39,7 @@ use Ichiloto\Editor\Database\RecordItem;
 use Ichiloto\Editor\Database\RecordChange;
 use Ichiloto\Editor\Database\RecordRefusal;
 use Ichiloto\Editor\Database\ReferenceCatalog;
+use Ichiloto\Editor\Database\MovementRouteFields;
 use Ichiloto\Editor\Database\DatabaseCategory;
 use Ichiloto\Editor\Database\RecordCategory;
 use Ichiloto\Editor\Database\RecordPanes;
@@ -51,6 +52,7 @@ use Ichiloto\Editor\Events\EventRefusal;
 use Ichiloto\Editor\Events\EventTypeCatalog;
 use Ichiloto\Editor\Events\EventTypeDefinition;
 use Ichiloto\Editor\Field\NpcAuthoring;
+use Ichiloto\Editor\Field\CharacterSheetPreview;
 use Ichiloto\Editor\Field\NpcChange;
 use Ichiloto\Editor\Field\NpcInspector;
 use Ichiloto\Editor\Field\NpcRefusal;
@@ -58,6 +60,7 @@ use Ichiloto\Editor\Field\ProjectNpc;
 use Ichiloto\Editor\History\Command;
 use Ichiloto\Editor\History\CommandHistory;
 use Ichiloto\Editor\Inspector\InputControlType;
+use Ichiloto\Editor\Inspector\InputControl;
 use Ichiloto\Editor\Inspector\InspectorListEdit;
 use Ichiloto\Editor\Inspector\InspectorRefusal;
 use Ichiloto\Editor\Inspector\MapInspector;
@@ -66,6 +69,7 @@ use Ichiloto\Editor\Playtest\PlaytestLauncher;
 use Ichiloto\Editor\Playtest\PlaytestOverlay;
 use Ichiloto\Editor\Playtest\PlaytestRun;
 use Ichiloto\Editor\Maps\LayerEditor;
+use Ichiloto\Editor\Maps\LineInsertionPlanner;
 use Ichiloto\Editor\Maps\MapLayers;
 use Ichiloto\Editor\Maps\MapReferences;
 use Ichiloto\Editor\Maps\TilePalette;
@@ -74,12 +78,14 @@ use Ichiloto\Editor\History\CommandGroup;
 use Ichiloto\Editor\History\SourceSetRequired;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
+use Ichiloto\Editor\Storage\FileSetTransactionFailure;
 use Ichiloto\Editor\Storage\WorkspaceSave;
 use Ichiloto\Editor\Validation\MapGraphicsValidator;
 use Ichiloto\Editor\Validation\MapValidator;
 use Ichiloto\Engine\IO\Console\TerminalPresentationComposer;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\PresentationCanvas;
 use Ichiloto\Engine\Rendering\Presentation\PresentationLayerPolicy;
+use Ichiloto\Engine\Rendering\Sprites\CharacterSheet;
 use Ichiloto\Engine\Rendering\Transport\RendererGridConfig;
 use Ichiloto\Engine\Rendering\Presentation\PresentationWorld;
 use Ichiloto\Engine\Battle\Presentation\BattlePresentationCatalog;
@@ -134,6 +140,8 @@ use WeakReference;
  */
 final class EditorSession
 {
+    use MapPlacementSession;
+
     /** The renderer a playtest started from a graphical editor uses: it owns no terminal to hand over. */
     public const string PLAYTEST_RENDERER = 'gpui';
 
@@ -202,7 +210,7 @@ final class EditorSession
     /** Opens the project at a root, as the terminal editor opens it. */
     public static function open(string $projectRoot): self
     {
-        $workspace = ProjectWorkspace::fromProject($projectRoot);
+        $workspace = ProjectWorkspace::fromProject($projectRoot, graphical: true);
 
         return new self($workspace, new CommandHistory(),
             new BackupWriter(BackupSettings::fromProject($workspace->projectRoot), $workspace->projectRoot));
@@ -358,6 +366,111 @@ final class EditorSession
         $this->workspace = $this->workspace->withLoadedMap($mapId);
 
         return ['map' => $mapId, 'maps' => $this->describeMaps()];
+    }
+
+    /**
+     * Copies the current authored map through the workspace's transactional
+     * duplicate operation. Unsaved source edits are included in the copy;
+     * the original and every other loaded document and undo step remain.
+     *
+     * @return array{map: string, maps: list<array<string, mixed>>}
+     * @throws SessionRefusal When the revision is stale or source cannot be copied safely.
+     */
+    public function duplicateMap(string $mapId, int $revision): array
+    {
+        $this->requireCurrentMap($mapId, $revision);
+        try {
+            $created = $this->workspace->duplicateMap((int) array_search($mapId, $this->workspace->mapIds, true))
+                ?? throw new RuntimeException('The map is no longer in the workspace.');
+        } catch (MapSourceRefusal|RuntimeException $error) {
+            throw new SessionRefusal(sprintf('%s was not duplicated: %s', $mapId, $error->getMessage()), previous: $error);
+        }
+        $this->workspace = $this->workspace->withLoadedMap($created);
+
+        return ['map' => $created, 'maps' => $this->describeMaps()];
+    }
+
+    /**
+     * Explicitly moves a map to its metadata-derived path after the author
+     * reviews that exact destination. As in the TUI, references are not
+     * migrated and a successful move clears undo history naming retired maps.
+     * Ordinary saves never call this operation.
+     *
+     * @return array<string, mixed>
+     * @throws SessionRefusal When the revision or reviewed path changed, or source cannot move safely.
+     */
+    public function moveMap(string $mapId, int $revision, ?string $destination = null, bool $confirmed = false): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        if ($map->getGridSourceIssue() !== null) {
+            throw new SessionRefusal(sprintf('%s is read-only: %s', $mapId, $map->getGridSourceIssue()));
+        }
+        $proposed = $map->getProposedMapId();
+        if ($destination !== null && $destination !== $proposed) {
+            throw new SessionRefusal('The derived destination changed; review the proposed move again.');
+        }
+        if ($proposed === $mapId) {
+            return ['status' => 'unchanged', 'map' => $mapId, 'destination' => $proposed, 'maps' => $this->describeMaps()];
+        }
+        if (! $confirmed) {
+            return [
+                'status' => 'question', 'map' => $mapId, 'revision' => $revision, 'destination' => $proposed,
+                'references' => new MapReferences($this->workspace)->describe($mapId),
+                'warning' => 'References are not migrated: doors, quests, saves and one-shot events naming the old id keep naming it. Moving clears the undo history. The original map folder is removed only after the new map validates.',
+            ];
+        }
+        if ($destination === null) {
+            throw new SessionRefusal('Review the proposed destination before confirming the move.');
+        }
+        try {
+            $moved = $map->moveTo($proposed);
+        } catch (MapSourceRefusal|RuntimeException $error) {
+            throw new SessionRefusal(sprintf('%s was not moved: %s', $mapId, $error->getMessage()), previous: $error);
+        }
+        $this->workspace = $this->workspace->withReplacedMap((int) array_search($mapId, $this->workspace->mapIds, true), $moved);
+        $this->history->clear();
+
+        return ['status' => 'moved', 'previousMap' => $mapId, 'map' => $moved->mapId, 'maps' => $this->describeMaps()];
+    }
+
+    /**
+     * Reviews a project-wide row or column insertion before writing it as
+     * one reversible source set. The plan owns coordinate rewrites and save
+     * shifts; both editor interfaces use the same planner and transaction.
+     *
+     * @return array<string, mixed>
+     * @throws SessionRefusal When the map or review is stale, edits are pending, or the plan cannot be applied safely.
+     */
+    public function insertMapLines(string $mapId, int $revision, string $axis, int $at, int $count, ?string $answer = null, ?string $confirm = null): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        if ($map->getGridSourceIssue() !== null) {
+            throw new SessionRefusal(sprintf('%s is read-only: %s', $mapId, $map->getGridSourceIssue()));
+        }
+        if ($answer === 'cancel') {
+            return ['status' => 'cancelled', 'map' => $mapId, 'revision' => $revision, 'changed' => false, 'maps' => $this->describeMaps()];
+        }
+        if ($this->workspace->hasUnsavedChanges()) {
+            throw new SessionRefusal('Save or undo pending edits before inserting map lines. No files were changed.');
+        }
+        try {
+            $plan = LineInsertionPlanner::planProject($this->workspace->projectRoot, $mapId, $axis, $at, $count);
+        } catch (InvalidArgumentException|RuntimeException $failure) {
+            throw new SessionRefusal($failure->getMessage(), previous: $failure);
+        }
+        $paths = array_map(fn(string $path): string => substr($path, strlen($this->workspace->projectRoot) + 1), $plan->getChangedPaths());
+        $description = $plan->insertion->description;
+        $required = new SourceSetRequired($plan->getSourceSet(), 'Insert ' . $plan->insertion->noun,
+            'this map line insertion', 'Insert ' . $description . '?', $paths);
+        $result = $this->writeSourceSet($required, $answer, static fn(): array => [], $confirm);
+        if (($result['status'] ?? null) === 'question') {
+            return [...$result, 'map' => $mapId, 'revision' => $revision, 'axis' => $axis, 'at' => $at, 'count' => $count,
+                'paths' => $paths, 'handEdits' => $plan->handEdits, 'notes' => $plan->notes,
+                'width' => $plan->width, 'height' => $plan->height];
+        }
+
+        return ['status' => 'inserted', 'map' => $mapId, 'revision' => $this->getMapRevision($this->requireMap($mapId)),
+            'changed' => true, 'maps' => $this->describeMaps()];
     }
 
     /**
@@ -569,7 +682,9 @@ final class EditorSession
                 && TilesetSheet::tryFrom((string) $sheet) !== null && strtolower(pathinfo($asset, PATHINFO_EXTENSION)) === 'png', ARRAY_FILTER_USE_BOTH);
             $tileset = new Tileset($record->recordId, trim((string) ($data['name'] ?? '')) ?: $record->recordId, $sheets);
         }
-        $tabs = $unreadable = [];
+        $tabs = [];
+        $sheetIssues = \Ichiloto\Editor\Maps\TilesetAuthoring::getSheetIssues($tileset, $assetRoot);
+        $unreadable = array_values($sheetIssues);
         foreach (TilePalette::getTabs($tileset) as $tab) {
             try {
                 $world = TilePalette::buildWorld($tileset, $tab['ids'], $assetRoot, 'tileset-preview:' . $tab['name']);
@@ -596,6 +711,7 @@ final class EditorSession
                 'tileLayers' => array_keys($piece->connects === null ? $piece->tiles : $piece->shapeTiles),
                 'picture' => PiecePlacer::buildPicture($piece),
                 'operations' => $world?->operations,
+                'connections' => \Ichiloto\Editor\Maps\ConnectedPiecePreview::describe($tileset, $piece, $assetRoot, $sheetIssues),
             ];
         }
 
@@ -608,6 +724,8 @@ final class EditorSession
             'tableTiles' => array_values(array_filter(array_merge(...array_map(static fn(array $tab): array => array_merge(...$tab['ids']), $tabs) ?: [[]]),
                 static fn(int $tile): bool => TileId::getSheet($tile) === TilesetSheet::A2)),
             'pieces' => $pieces,
+            'authoring' => \Ichiloto\Editor\Maps\TilesetAuthoring::describePieces($data, $this->readDatabaseRecord('tilesets', $index)['rows']),
+            'connectionShapes' => TilesetPiece::LINE_SHAPES,
             'issue' => $issue,
             'unreadable' => $unreadable,
         ];
@@ -1383,7 +1501,8 @@ final class EditorSession
             'map' => $mapId,
             'revision' => $this->getMapRevision($map),
             'event' => $marker,
-            'rows' => array_map(self::describeRow(...), $this->collectInspectorFields($map, $marker)),
+            'rows' => $this->describePlacementRows(array_map(self::describeRow(...), $this->collectInspectorFields($map, $marker)),
+                ['kind' => 'event', 'map' => $mapId, 'marker' => $marker]),
         ];
     }
 
@@ -1822,6 +1941,14 @@ final class EditorSession
                 }
             }
         }
+        // Glyph tracks also have anchors, but those are not image art. Do not
+        // project image defaults or an image picker onto terminal-only tracks.
+        foreach ($tracks as &$track) {
+            if (($track['type'] ?? '') !== 'image') {
+                unset($track['art']);
+            }
+        }
+        unset($track);
         $payload = $asset->payload();
 
         return [
@@ -1831,11 +1958,36 @@ final class EditorSession
             'lengthFrames' => (int) ($payload['lengthFrames'] ?? 0),
             'tracks' => array_values(array_map(fn(array $track, int $position): array => self::placeOnStage([...$track,
                 'keyframes' => array_values($track['keyframes'] ?? []),
-                ...(isset($track['art']) ? ['art' => $this->measureTrackArt($track['art'])] : [])], $payload['tracks'][$position] ?? null), $tracks, array_keys($tracks))),
+                ...(isset($track['art']) ? ['art' => [...$this->measureTrackArt($track['art']),
+                    'pivotDefaults' => self::getTimelinePivotDefaults($asset->type, $payload['tracks'][$position] ?? []),
+                ]] : [])], $payload['tracks'][$position] ?? null), $tracks, array_keys($tracks))),
             'cues' => array_values($cues),
-            // Whether this sequence may have a stage (a summon's graphical one), and the stage it has.
-            'canHaveStage' => $asset->type === CutsceneType::SUMMON && $asset->getPresentationView() === EffectPresentation::GRAPHICAL,
+            // Stage ownership survives switching to an independent Terminal sequence.
+            'ownedStage' => $asset->isOwnedStageEffect(),
+            'canHaveStage' => $asset->getPresentationView() !== EffectPresentation::TERMINAL
+                && ($asset->type === CutsceneType::EFFECT || $asset->hasPresentations()),
             'stage' => is_array($payload['stage'] ?? null) ? $this->describeCutsceneStage($category, $index) : null,
+        ];
+    }
+
+    /**
+     * Consumer defaults are preview metadata, never authored values. A shared
+     * effect can play in field or battle; the client selects the context it is
+     * actually previewing. Stage tracks cannot acquire field/battler geometry.
+     *
+     * @return array<string, array{x: float, y: float}>
+     */
+    private static function getTimelinePivotDefaults(CutsceneType $type, array $track): array
+    {
+        $center = ['x' => 0.5, 'y' => 0.5];
+        if (($track['anchor'] ?? null) === 'stage') {
+            return ['stage' => $center];
+        }
+
+        return [
+            ...($type === CutsceneType::EFFECT
+                ? ['field' => new \Ichiloto\Engine\Rendering\Presentation\PresentationSpritePivot()->toArray()] : []),
+            'battle' => $center,
         ];
     }
 
@@ -1936,9 +2088,8 @@ final class EditorSession
     }
 
     /**
-     * One frame of a summon or effect as its terminal presentation draws it,
-     * from the record as edited, unsaved changes included, with the cues on
-     * that frame: what a timeline editor shows at its playhead.
+     * One authored frame, with independent Terminal output and, for an
+     * owned graphical effect stage, the Engine's shared presentation canvas.
      *
      * @return array{frame: int, totalFrames: int, fps: int, lines: list<string>, terminalCanvas: array<string, mixed>, cues: list<array<string, mixed>>}
      * @throws SessionRefusal When the record is not a summon or effect, or its timeline does not compile.
@@ -1948,18 +2099,39 @@ final class EditorSession
         $asset = $this->requireTimelineCutscene($category, $index);
         try {
             $compiled = $asset->type === CutsceneType::EFFECT
-                ? $asset->compiledEffect(EffectPresentation::TERMINAL, false)
+                ? $asset->compileEffect(EffectPresentation::TERMINAL, false, forStage: $asset->isOwnedStageEffect())
                 : $asset->compiledSummon();
         } catch (Throwable $failure) {
             throw new SessionRefusal(sprintf('%s does not compile: %s', $asset->id, $failure->getMessage()), previous: $failure);
         }
         $preview = new TimelinePreviewSession($compiled, $asset->type === CutsceneType::EFFECT ? null : false);
+        $requestedFrame = $frame;
         $frame = max(0, min($frame, $preview->totalFrames() - 1));
 
-        $lines = array_values($preview->frame(max(1, $width), max(1, $height), $frame));
+        $lines = array_values($asset->isOwnedStageEffect()
+            ? new \Ichiloto\Editor\Cutscenes\Preview\EffectPreviewStage(EffectPresentation::TERMINAL, false, forStage: true)
+                ->drawFrame($preview->activeSegments($frame), max(1, $width), max(1, $height))
+            : $preview->frame(max(1, $width), max(1, $height), $frame));
+        $stageCanvas = null;
+        $stageCanvasError = null;
+        if ($asset->isOwnedStageEffect() && $asset->getPresentationView() !== EffectPresentation::TERMINAL) {
+            try {
+                $graphical = $asset->compileEffect(EffectPresentation::GRAPHICAL, false, forStage: true);
+                $preview = new TimelinePreviewSession($graphical);
+                $frame = max(0, min($requestedFrame, $preview->totalFrames() - 1));
+                $stageCanvas = new \Ichiloto\Editor\Cutscenes\Preview\EffectPreviewStage(EffectPresentation::GRAPHICAL, false, forStage: true)
+                    ->renderCanvas($graphical, $this->workspace->projectRoot . '/assets', $frame,
+                        (int) $graphical->defaults['stage']['canvas']['width'], (int) $graphical->defaults['stage']['canvas']['height'])?->toArray();
+            } catch (Throwable $failure) {
+                // A graphical failure is visible in its tab, never a field
+                // fallback or a dependency of independent Terminal playback.
+                $stageCanvasError = $failure->getMessage();
+            }
+        }
 
         return ['frame' => $frame, 'totalFrames' => $preview->totalFrames(), 'fps' => $preview->fps(),
             'lines' => $lines, 'terminalCanvas' => $this->describeTerminalCanvas($lines, max(1, $width), max(1, $height)),
+            'stageCanvas' => $stageCanvas, 'stageCanvasError' => $stageCanvasError,
             'cues' => array_values($preview->cuesAt($frame))];
     }
 
@@ -1982,6 +2154,9 @@ final class EditorSession
             ?? throw new SessionRefusal(sprintf('There is no %s %d.', $type->noun(), $index));
         $fingerprint = hash('xxh128', serialize($asset->payload()));
         if ($keep && $this->cinematicPreview !== null && $this->cinematicPreviewId === $asset->id && $this->cinematicPreviewFingerprint === $fingerprint) {
+            if ($this->cinematicPreview->getScreenSize() !== [max(20, $width), max(8, $height)]) {
+                $this->cinematicPreview->resize($width, $height);
+            }
             return $this->describeCinematicPreview();
         }
         $this->stopCinematicPreview();
@@ -2009,17 +2184,28 @@ final class EditorSession
     }
 
     /**
-     * Plays, pauses, steps, advances while playing, or restarts the
+     * Plays, pauses, steps, advances while playing, skips, or restarts the
      * cinematic previewed. An advance is the time since the last one, so the
-     * preview keeps real time however often it is asked.
+     * preview keeps real time however often it is asked. An accepted skip
+     * plays the authored finalizer, even when the preview was paused.
      *
-     * @param 'play'|'pause'|'step'|'tick'|'restart' $action
+     * @param 'play'|'pause'|'step'|'tick'|'skip'|'restart' $action
      * @return array<string, mixed> The preview, as {@see describeCinematicPreview()}.
-     * @throws SessionRefusal When no cinematic is previewed or the action is unknown.
+     * @throws SessionRefusal When no cinematic is previewed, the action is unknown, or a skip is refused.
      */
     public function controlCinematicPreview(string $action, float $seconds = 0.0): array
     {
         $preview = $this->cinematicPreview ?? throw new SessionRefusal('No cinematic is being previewed.');
+        if ($action === 'skip') {
+            if ($preview->skip()) {
+                $preview->play();
+            } elseif ($preview->failure() === null) {
+                throw new SessionRefusal('Skip refused: ' . ($preview->skipRefusalReason() ?? 'the Engine refused the skip.'));
+            }
+
+            // A finalizer failure is the preview's normal failure state, not a policy refusal.
+            return $this->describeCinematicPreview();
+        }
         match ($action) {
             'play' => $preview->play(),
             'pause' => $preview->pause(),
@@ -2055,20 +2241,24 @@ final class EditorSession
      * rejections, exactly as the game's renderer writes them), the frames it
      * should apply out, in order, each its FRAME payload without envelope.
      *
-     * The answer names the view's grid, which the window's scene session is built with.
+     * The answer names the current epoch and grid. Feedback for another epoch,
+     * or without one, is discarded before it can reach the graphical host.
      *
      * @param list<string> $events
-     * @return array{grid: array{columns: int, rows: int, cellWidth: int, cellHeight: int}, messages: list<array{type: string, payload: array<string, mixed>}>}
+     * @param string|null $sessionId The epoch the window is answering; null permits initial empty discovery.
+     * @return array{sessionId: non-empty-string, diagnostics: list<string>, grid: array{columns: int, rows: int, cellWidth: int, cellHeight: int}, messages: list<array{type: string, payload: array<string, mixed>}>}
      * @throws SessionRefusal When no cinematic is previewed or a line is not a renderer event.
      */
-    public function exchangeCinematicScene(array $events): array
+    public function exchangeCinematicScene(array $events, ?string $sessionId = null): array
     {
         $preview = $this->cinematicPreview ?? throw new SessionRefusal('No cinematic is being previewed.');
         $grid = $preview->getSceneGrid();
         try {
             return [
+                'sessionId' => $preview->getSceneSessionId(),
+                'diagnostics' => $preview->getDiagnostics(),
                 'grid' => ['columns' => $grid->columns, 'rows' => $grid->rows, 'cellWidth' => $grid->cellWidth, 'cellHeight' => $grid->cellHeight],
-                'messages' => $preview->exchangeScene($events),
+                'messages' => $preview->exchangeScene($events, $sessionId),
             ];
         } catch (RendererProtocolException | RendererTransportException $error) {
             throw new SessionRefusal('The graphical preview stopped: ' . $error->getMessage(), previous: $error);
@@ -2097,8 +2287,8 @@ final class EditorSession
      * editor window's graphical view of it ({@see exchangeEffectFieldScene()})
      * carries on; a cinematic preview running ends first.
      *
-     * @return array{frame: int, totalFrames: int, fps: int, mapId: string, lines: list<string>, issue: string|null}
-     * @throws SessionRefusal When the record is not an effect, it does not compile, or no starting position names a map.
+     * @return array{sessionId: non-empty-string, diagnostics: list<string>, frame: int, totalFrames: int, fps: int, mapId: string, lines: list<string>, issue: string|null}
+     * @throws SessionRefusal When the record is not an effect or it does not compile.
      */
     public function showEffectOnField(int $index, int $frame, int $width, int $height): array
     {
@@ -2112,9 +2302,6 @@ final class EditorSession
         $start = $this->workspace->getSystemField('startingPositions');
         $player = is_array($start) && is_array($start['player'] ?? null) ? $start['player'] : [];
         $mapId = is_string($player['destinationMap'] ?? null) ? trim($player['destinationMap']) : '';
-        if ($mapId === '') {
-            throw new SessionRefusal('An effect is shown on the field where a new game starts; System names no player starting map.');
-        }
         $spawn = new Vector2(intval($player['spawnPoint']['x'] ?? 0), intval($player['spawnPoint']['y'] ?? 0));
         $key = implode(':', [$mapId, (int) $spawn->x, (int) $spawn->y, max(20, $width), max(8, $height)]);
         if ($this->effectField === null || $this->effectFieldKey !== $key) {
@@ -2134,6 +2321,7 @@ final class EditorSession
         }
 
         return ['frame' => $frame, 'totalFrames' => $timeline->totalFrames(), 'fps' => $timeline->fps(), 'mapId' => $mapId,
+            'sessionId' => $this->effectField->sessionId, 'diagnostics' => $this->effectField->getDiagnostics(),
             'lines' => array_values($this->effectField->frame()), 'issue' => $this->effectField->mapFailure];
     }
 
@@ -2142,17 +2330,20 @@ final class EditorSession
      * effect is shown on, as {@see exchangeCinematicScene()} is for a cinematic.
      *
      * @param list<string> $events
-     * @return array{grid: array{columns: int, rows: int, cellWidth: int, cellHeight: int}, messages: list<array{type: string, payload: array<string, mixed>}>}
+     * @param string|null $sessionId The epoch the window is answering; unqualified or stale events are discarded.
+     * @return array{sessionId: non-empty-string, diagnostics: list<string>, grid: array{columns: int, rows: int, cellWidth: int, cellHeight: int}, messages: list<array{type: string, payload: array<string, mixed>}>}
      * @throws SessionRefusal When no effect is shown on the field or a line is not a renderer event.
      */
-    public function exchangeEffectFieldScene(array $events): array
+    public function exchangeEffectFieldScene(array $events, ?string $sessionId = null): array
     {
         $field = $this->effectField ?? throw new SessionRefusal('No effect is shown on the field.');
         $grid = $field->getSceneGrid();
         try {
             return [
+                'sessionId' => $field->sessionId,
+                'diagnostics' => $field->getDiagnostics(),
                 'grid' => ['columns' => $grid->columns, 'rows' => $grid->rows, 'cellWidth' => $grid->cellWidth, 'cellHeight' => $grid->cellHeight],
-                'messages' => $field->exchangeScene($events),
+                'messages' => $field->exchangeScene($events, $sessionId),
             ];
         } catch (RendererProtocolException | RendererTransportException $error) {
             throw new SessionRefusal('The graphical preview stopped: ' . $error->getMessage(), previous: $error);
@@ -2206,6 +2397,8 @@ final class EditorSession
 
         return [
             'id' => $this->cinematicPreviewId,
+            'sessionId' => $preview->getSceneSessionId(),
+            'diagnostics' => $preview->getDiagnostics(),
             'lines' => $lines,
             'terminalCanvas' => $this->describeTerminalCanvas($lines, $columns, $rows),
             'elapsed' => $preview->elapsed(),
@@ -2507,12 +2700,12 @@ final class EditorSession
      * on save.
      *
      * @return array{changed: bool, stage: bool}
-     * @throws SessionRefusal When the record is not a summon with separate sequences, or cannot hold one.
+     * @throws SessionRefusal When the graphical sequence cannot safely own or release a stage.
      */
     public function setCutsceneStage(string $category, int $index, bool $present): array
     {
         $asset = $this->requireTimelineCutscene($category, $index);
-        if ($asset->type !== CutsceneType::SUMMON || ! $asset->hasPresentations()) {
+        if ($asset->type === CutsceneType::SUMMON && ! $asset->hasPresentations()) {
             throw new SessionRefusal(sprintf('A stage is a summon\'s graphical sequence\'s own; separate %s\'s sequences first.', $asset->id));
         }
         try {
@@ -2552,7 +2745,8 @@ final class EditorSession
      * regions) are read from the map named, and a cutscene's own (a summon's
      * cues) from the cutscene record named, as `{category, index}`.
      *
-     * @param array{category?: mixed, index?: mixed}|null $record The record being edited, when it gives the context.
+     * @param array{category?: mixed, index?: mixed, kind?: mixed, marker?: mixed, frame?: mixed, path?: mixed}|null $record
+     *   Database {category,index,frame}, NPC {kind:'npc',index,frame}, or event {kind:'event',marker,path}.
      * @return list<array{value: string, label: string}>
      * @throws SessionRefusal When the category, map or record is unknown.
      */
@@ -2569,12 +2763,44 @@ final class EditorSession
                 ?? throw new SessionRefusal(sprintf('There is no %s %s.', $type->noun(), strval($record['index'] ?? '')));
         }
         $catalog = new ReferenceCatalog($this->workspace, $mapId === null ? null : $this->requireMap($mapId), $cutscene);
+        if ($category === 'cinematic_movement_routes' && $record !== null) {
+            $catalog = $catalog->createMovementContext($this->getMovementOwnerCommands($mapId, $record));
+        }
         $labels = $catalog->labelsFor($category);
 
         return array_map(static fn(mixed $value): array => [
             'value' => (string) $value,
             'label' => (string) ($labels[$value] ?? $value),
         ], array_values($catalog->valuesFor($category)));
+    }
+
+    /** Resolve only the real source owner supplied by the row, never the current selection. */
+    private function getMovementOwnerCommands(?string $mapId, array $owner): array
+    {
+        if (($owner['kind'] ?? '') === 'event') {
+            $map = $this->requireMap($mapId ?? throw new SessionRefusal('An event route reference requires its map.'));
+            $marker = is_string($owner['marker'] ?? null) ? $owner['marker'] : '';
+            $event = $map->getEventDefinition($marker)
+                ?? throw new SessionRefusal('That event route owner is no longer present.');
+            $path = self::requireFrame($owner['path'] ?? [], 'references.list');
+            return MovementRouteFields::getOwnerCommands($event, $path);
+        }
+        if (($owner['kind'] ?? '') === 'npc') {
+            $map = $this->requireMap($mapId ?? throw new SessionRefusal('An NPC route reference requires its map.'));
+            $database = (new NpcInspector($map, graphical: true))->records();
+        } else {
+            $category = is_string($owner['category'] ?? null) ? $owner['category'] : '';
+            $database = $this->requireRecordDatabase($category);
+        }
+        $index = filter_var($owner['index'] ?? null, FILTER_VALIDATE_INT);
+        $record = $index === false || $index === null ? null : $database->getRecordByIndex($index);
+        if ($record === null) { throw new SessionRefusal('That route command owner is no longer present.'); }
+        $frame = self::requireFrame($owner['frame'] ?? [], 'references.list');
+        if ($frame !== [] && $database->getFrameCommands($index, $frame) === null) {
+            throw new SessionRefusal('That route command frame is no longer present.');
+        }
+        return MovementRouteFields::getOwnerCommands((array) $record->toArray(),
+            MovementRouteFields::getFrameOwnerPath($database->schema, $frame));
     }
 
     /**
@@ -3060,13 +3286,13 @@ final class EditorSession
             'listNoun' => $database->getListNoun($frame),
             // A row that names a field keeps its key whether or not it can be
             // edited; a read-only one is an `info` row the edit refuses.
-            'rows' => array_map(static fn(array $field): array => self::describeRecordRow(
+            'rows' => $this->describePlacementRows(array_map(static fn(array $field): array => self::describeRecordRow(
                 $database,
                 $index,
                 $frame,
                 $field,
                 isset($field['field']) ? 'record' : null,
-            ), $fields),
+            ), $fields), ['kind' => 'database', 'category' => $category, 'index' => $index]),
             'panes' => $frame === [] ? array_values(RecordPanes::describe($this->workspace, $category, $index)) : [],
         ];
     }
@@ -3586,7 +3812,7 @@ final class EditorSession
     {
         $frame = self::requireNpcFrame($frame);
         $map = $this->requireMap($mapId);
-        $inspector = new NpcInspector($map);
+        $inspector = new NpcInspector($map, graphical: true, references: new ReferenceCatalog($this->workspace, $map));
         $npc = $map->getNpcs()->get($index) ?? throw new SessionRefusal(sprintf('%s has no NPC %d.', $mapId, $index));
         $fields = $this->collectNpcFields($inspector, $index, $frame);
         $rows = array_map(static fn(array $field): array => self::describeNpcRow($inspector->records(), $index, $field, $frame), $fields);
@@ -3605,7 +3831,8 @@ final class EditorSession
                 'y' => $npc->getY(),
                 'sprite' => $npc->getVisibleSprite(),
             ],
-            'rows' => $frame === [] ? self::insertNpcFieldSheetRow($rows, $npc) : $rows,
+            'rows' => $this->describePlacementRows($frame === [] ? self::insertNpcFieldSheetRow($rows, $npc, $map->getAssetRoot()) : $rows,
+                ['kind' => 'npc', 'map' => $mapId, 'index' => $index]),
         ];
     }
 
@@ -3621,7 +3848,7 @@ final class EditorSession
      * @param list<array<string, mixed>> $rows
      * @return list<array<string, mixed>>
      */
-    private static function insertNpcFieldSheetRow(array $rows, ProjectNpc $npc): array
+    private static function insertNpcFieldSheetRow(array $rows, ProjectNpc $npc, string $assetRoot): array
     {
         $sprites = $npc->toArray()['sprites2d'] ?? null;
         $row = self::describeRow([
@@ -3633,11 +3860,33 @@ final class EditorSession
             'target' => 'npc',
         ]);
         $row['key'] = [...$row['key'], 'frame' => []];
+        $sheetRows = [];
+        if ($sprites !== null) {
+            $row['imagePreview'] = CharacterSheetPreview::describe($sprites, $assetRoot);
+            if (is_array($sprites) && is_string($sprites['sheet'] ?? null) && $sprites['sheet'] !== '') {
+                $characterIndex = $sprites['index'] ?? 0;
+                $layer = $sprites['layer'] ?? CharacterSheet::DEFAULT_LAYER;
+                $indexValue = is_scalar($characterIndex) ? strval($characterIndex) : '(invalid index)';
+                $layerValue = is_scalar($layer) ? strval($layer) : '(invalid layer)';
+                $sheetRows = [
+                    self::describeRow(['label' => '  Sheet Character Index', 'field' => 'sprites2d.index',
+                        'value' => $indexValue, 'target' => 'npc',
+                        'options' => CharacterSheetPreview::getIndexOptions($sprites['sheet'])]),
+                    self::describeRow(['label' => '  Graphical Layer', 'field' => 'sprites2d.layer',
+                        'value' => $layerValue, 'target' => 'npc',
+                        'control' => new InputControl(InputControlType::INTEGER, $layerValue)]),
+                ];
+                foreach ($sheetRows as &$sheetRow) {
+                    $sheetRow['key']['frame'] = [];
+                }
+                unset($sheetRow);
+            }
+        }
         $appearance = array_keys(array_filter($rows, static fn(array $candidate): bool =>
             in_array($candidate['key']['field'] ?? null, ['sprite', 'sprites.north', 'sprites.south', 'sprites.east', 'sprites.west'], true)));
         $at = $appearance === [] ? count($rows) : max($appearance) + 1;
 
-        return [...array_slice($rows, 0, $at), $row, ...array_slice($rows, $at)];
+        return [...array_slice($rows, 0, $at), $row, ...$sheetRows, ...array_slice($rows, $at)];
     }
 
     /**
@@ -3652,12 +3901,22 @@ final class EditorSession
     public function applyNpc(string $mapId, int $revision, int $index, array $key, string $value): array
     {
         $map = $this->requireCurrentMap($mapId, $revision);
-        $inspector = new NpcInspector($map);
+        $inspector = new NpcInspector($map, graphical: true, references: new ReferenceCatalog($this->workspace, $map));
         $frame = self::requireNpcFrame($key['frame'] ?? []);
         $fieldId = $key['field'] ?? null;
         if ($fieldId === self::NPC_FIELD_SHEET && $frame === []) {
             return $this->applyNpcChange($map,
                 static fn(NpcAuthoring $authoring): NpcChange => $authoring->setFieldSheet($map, $index, $value === '' ? null : $value));
+        }
+        if (in_array($fieldId, ['sprites2d.index', 'sprites2d.layer'], true) && $frame === []) {
+            $integer = filter_var($value, FILTER_VALIDATE_INT);
+            if ($integer === false) {
+                throw new SessionRefusal('A sheet character index or graphical layer must be an integer.');
+            }
+
+            return $this->applyNpcChange($map, static fn(NpcAuthoring $authoring): NpcChange => $fieldId === 'sprites2d.index'
+                ? $authoring->setFieldSheetIndex($map, $index, $integer)
+                : $authoring->setFieldSheetLayer($map, $index, $integer));
         }
         // Field ids are unique within a frame, so the field and frame name the row.
         $field = is_string($fieldId) ? array_find($this->collectNpcFields($inspector, $index, $frame),
@@ -3687,7 +3946,7 @@ final class EditorSession
     public function addNpcItem(string $mapId, int $revision, int $index, array $key): array
     {
         $map = $this->requireCurrentMap($mapId, $revision);
-        $inspector = new NpcInspector($map);
+        $inspector = new NpcInspector($map, graphical: true, references: new ReferenceCatalog($this->workspace, $map));
         $frame = self::requireNpcFrame($key['frame'] ?? []);
         $fieldId = is_string($key['field'] ?? null) ? $key['field'] : '';
 
@@ -3707,7 +3966,7 @@ final class EditorSession
     public function removeNpcItem(string $mapId, int $revision, int $index, array $key): array
     {
         $map = $this->requireCurrentMap($mapId, $revision);
-        $inspector = new NpcInspector($map);
+        $inspector = new NpcInspector($map, graphical: true, references: new ReferenceCatalog($this->workspace, $map));
         $frame = self::requireNpcFrame($key['frame'] ?? []);
         $fieldId = is_string($key['field'] ?? null) ? $key['field'] : '';
 
@@ -3830,7 +4089,7 @@ final class EditorSession
                     $failures = $this->backups->backup(...$paths)['failed'];
                 }
             });
-        } catch (MapSourceRefusal $refusal) {
+        } catch (MapSourceRefusal|FileSetTransactionFailure $refusal) {
             throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
         }
 
@@ -4337,6 +4596,7 @@ final class EditorSession
 
         return array_filter([
             'label' => trim($label),
+            'mapPlacement' => $field['mapPlacement'] ?? null,
             // A list entry's row: which entry (and nested entry) it is part of, and its name within it.
             'entry' => is_array($field['entry'] ?? null) ? array_values($field['entry']) : null,
             'entryLabel' => is_string($field['entryLabel'] ?? null) ? $field['entryLabel'] : null,
@@ -4362,6 +4622,7 @@ final class EditorSession
             },
             // What the value looks like, when the reference names a picture: shown with the row and in its picker.
             'media' => $kind === 'reference' ? ReferenceCatalog::describeMedia((string) $field['reference']) : null,
+            'imagePreview' => is_array($field['imagePreview'] ?? null) ? $field['imagePreview'] : null,
             // How the choice of nothing reads, where the row says (the Engine's own attack).
             'noneLabel' => $kind === 'reference' && is_string($field['noneLabel'] ?? null) ? $field['noneLabel'] : null,
             'action' => $kind === 'action' ? $field['action'] : null,

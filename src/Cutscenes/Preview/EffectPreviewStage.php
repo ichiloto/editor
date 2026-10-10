@@ -4,10 +4,15 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Cutscenes\Preview;
 
+use Ichiloto\Engine\Animations\Timelines\CompiledEffectTimeline;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Engine\Animations\Timelines\EffectSegmentComposition;
 use Ichiloto\Engine\Battle\Presentation\BattleEffectDirection;
+use Ichiloto\Engine\Cutscenes\Presentation\CinematicStage;
+use Ichiloto\Engine\Cutscenes\Presentation\CinematicStagePresentation;
 use Ichiloto\Engine\IO\Console\TerminalText;
+use Ichiloto\Engine\Rendering\Presentation\Canvas\PresentationCanvas;
+use InvalidArgumentException;
 
 /**
  * An effect's frame as a terminal consumer places it.
@@ -36,7 +41,11 @@ final readonly class EffectPreviewStage
         public EffectPresentation $presentation,
         public bool $forBattle,
         public bool $isCasterOnLeft = true,
+        public bool $forStage = false,
     ) {
+        if ($forStage && $forBattle) {
+            throw new InvalidArgumentException('An owned stage cannot also preview battle surroundings.');
+        }
     }
 
     /**
@@ -79,7 +88,7 @@ final readonly class EffectPreviewStage
             $anchor = strval($command['payload']['anchor'] ?? 'target');
             $base = in_array($anchor, ['screen', 'legacy-screen'], true)
                 ? ['x' => 0, 'y' => 0]
-                : ($origins[$anchor] ?? $origins['target']);
+                : ($origins[$anchor] ?? $origins['target'] ?? ['x' => 0, 'y' => 0]);
 
             $command = $this->orient($command);
             $position = is_array($command['position'] ?? null) ? $command['position'] : [];
@@ -94,6 +103,22 @@ final readonly class EffectPreviewStage
         return array_map(static fn(array $row): string => implode('', $row), $cells);
     }
 
+    /** Seekable Engine projection, with no scene, audio or gameplay state to retain. */
+    public function renderCanvas(CompiledEffectTimeline $timeline, string $assetRoot, int $frame,
+        int $width, int $height, bool $reducedMotion = false): ?PresentationCanvas
+    {
+        if (! $this->forStage || $this->presentation !== EffectPresentation::GRAPHICAL) {
+            return null;
+        }
+
+        $length = intval($timeline->defaults['lengthFrames'] ?? 1);
+        $stage = CinematicStage::fromArray($timeline->defaults['stage'] ?? [], $length, intval($timeline->defaults['restFrame'] ?? 0));
+        $frame = max(0, min($frame, $length - 1));
+
+        return CinematicStagePresentation::compose($stage->getFrame($frame, $reducedMotion),
+            $timeline->playbackSegments, $assetRoot, max(1, $width), max(1, $height));
+    }
+
     /**
      * Describes the active draws a terminal cannot show: images with their
      * sheet frame and flips, flashes and shakes with their subject.
@@ -103,7 +128,8 @@ final readonly class EffectPreviewStage
      */
     public function describeUndrawn(array $segments): array
     {
-        $lines = [];
+        $lines = $this->forStage && $this->presentation === EffectPresentation::TERMINAL
+            ? ['stage images and camera: graphical only'] : [];
 
         foreach ($this->composeSegments($segments) as $segment) {
             $layer = strval($segment['layer'] ?? '');
@@ -168,11 +194,15 @@ final readonly class EffectPreviewStage
     /**
      * Where each subject stands on a stage of this size.
      *
-     * @return array{caster: array{x: int, y: int}, target: array{x: int, y: int}}|array{target: array{x: int, y: int}}
+     * @return array<string, array{x: int, y: int}>
      */
     private function findOrigins(int $width, int $height): array
     {
         $y = intdiv($height, 2);
+
+        if ($this->forStage) {
+            return [];
+        }
 
         if (! $this->forBattle) {
             return ['target' => ['x' => intdiv($width, 2), 'y' => $y]];

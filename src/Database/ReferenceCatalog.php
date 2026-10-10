@@ -88,6 +88,7 @@ final class ReferenceCatalog
         'cinematic_cast',
         'cinematic_subjects',
         'cinematic_checkpoints',
+        'cinematic_movement_routes',
         'summon_cues',
         'effect_cues',
         'stage_subjects',
@@ -136,6 +137,12 @@ final class ReferenceCatalog
         return self::MEDIA[$category] ?? null;
     }
 
+    /** The same live workspace root that supplies the project image picker. */
+    public function getAssetRoot(): string
+    {
+        return rtrim($this->workspace->projectRoot, '/') . '/assets';
+    }
+
     /**
      * @param ProjectWorkspace $workspace The project.
      * @param ProjectMap|null $currentMap The map the author is working in,
@@ -153,6 +160,7 @@ final class ReferenceCatalog
         private readonly ProjectWorkspace $workspace,
         private readonly ?ProjectMap $currentMap = null,
         private readonly ?CutsceneAsset $currentCutscene = null,
+        private readonly ?array $movementCommands = null,
     ) {
     }
 
@@ -233,7 +241,7 @@ final class ReferenceCatalog
             // NPC ids are map-local, so the choices are the current map's:
             // read live from the collection, a just-created NPC is offered
             // at once and a deleted one is gone.
-            'map_npcs' => $this->currentMap?->getNpcs()->ids() ?? [],
+            'map_npcs' => $this->getSubjectMap()?->getNpcs()->ids() ?? [],
             // Older references name an animation; current ones store its id.
             'animations' => array_map(
                 static fn(ProjectRecord $animation): string => strval($animation->get('name')),
@@ -252,6 +260,7 @@ final class ReferenceCatalog
             'cinematic_cast' => $this->castIds(['staged_actor']),
             'cinematic_subjects' => $this->subjectIds(),
             'cinematic_checkpoints' => $this->checkpointIds(),
+            'cinematic_movement_routes' => $this->getMovementRouteIds(),
             'summon_cues' => $this->getTimelineCueIds(CutsceneType::SUMMON),
             'effect_cues' => $this->getTimelineCueIds(CutsceneType::EFFECT),
             // A summon sequence's stage: the subjects it registers, and every
@@ -447,10 +456,26 @@ final class ReferenceCatalog
     {
         return array_values(array_unique([
             ...$this->castIds(['staged_actor', 'npc', 'party_actor', 'player']),
-            ...($this->currentMap?->getNpcs()->ids() ?? []),
+            ...($this->getSubjectMap()?->getNpcs()->ids() ?? []),
             ...$this->valuesFor('actors'),
             ...($this->currentMap?->getEventMarkers() ?? []),
         ]));
+    }
+
+    /** Without an explicitly selected map context, a cinematic owns references on its declared start map. */
+    private function getSubjectMap(): ?ProjectMap
+    {
+        if ($this->currentMap !== null) {
+            return $this->currentMap;
+        }
+        if ($this->currentCutscene?->type === CutsceneType::CINEMATIC) {
+            $id = $this->currentCutscene->data()['startMap'] ?? null;
+            if (is_string($id) && $id !== '') {
+                return array_find($this->workspace->maps, static fn(ProjectMap $map): bool => $map->mapId === $id);
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -468,6 +493,45 @@ final class ReferenceCatalog
             static fn(mixed $checkpoint): string => is_scalar($checkpoint) ? trim(strval($checkpoint)) : '',
             (array) ($this->currentCutscene->data()['checkpoints'] ?? []),
         ), static fn(string $checkpoint): bool => $checkpoint !== ''));
+    }
+
+    /** A projection keeps the actual invocation as reference owner, rather than its one displayed command. */
+    public function createMovementContext(array $commands): self
+    {
+        return new self($this->workspace, $this->currentMap, $this->currentCutscene, $commands);
+    }
+
+    /** Live invocation-local declarations; runtime checks completion, subject and one-time consumption. */
+    public function getMovementRouteIds(?ProjectRecord $record = null, array $path = []): array
+    {
+        $commands = $this->movementCommands ?? ($record === null
+            ? ($this->currentCutscene?->type === CutsceneType::CINEMATIC ? $this->currentCutscene->commands() : [])
+            : MovementRouteFields::getOwnerCommands((array) $record->toArray(), $path));
+        $ids = $visited = $events = [];
+        foreach ($this->workspace->getRecordDatabase('common_events')?->getRecords() ?? [] as $eventRecord) {
+            $events[$eventRecord->recordId] = $eventRecord->getSubList('commands');
+        }
+        $walk = static function (array $commands) use (&$walk, &$ids, &$visited, $events): void {
+            foreach ($commands as $value) {
+                if (!is_array($value)) { continue; }
+                if (($value['type'] ?? '') === 'move_route' && is_string($value['remember'] ?? null)
+                    && preg_match('/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/', $value['remember']) === 1
+                    && strtolower(trim(strval($value['subject'] ?? 'player'))) !== 'staged_actor') {
+                    $ids[$value['remember']] = $value['remember'];
+                }
+                $eventId = is_string($value['id'] ?? null) ? trim($value['id']) : '';
+                if (($value['type'] ?? '') === 'common_event'
+                    && isset($events[$eventId]) && !isset($visited[$eventId])) {
+                    $visited[$eventId] = true;
+                    $walk($events[$eventId]);
+                }
+                foreach (MovementRouteFields::getChildCommandLists($value) as $child) {
+                    $walk($child);
+                }
+            }
+        };
+        $walk($commands);
+        return array_values($ids);
     }
 
     /**
@@ -497,13 +561,13 @@ final class ReferenceCatalog
     }
 
     /**
-     * The subjects of the stage the current summon sequence declares, by id.
+     * The subjects of the stage the current timeline sequence declares, by id.
      *
      * @return array<string, array<string, mixed>>
      */
     private function getStageSubjects(): array
     {
-        if ($this->currentCutscene?->type !== CutsceneType::SUMMON) {
+        if (! in_array($this->currentCutscene?->type, [CutsceneType::SUMMON, CutsceneType::EFFECT], true)) {
             return [];
         }
 

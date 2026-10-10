@@ -25,6 +25,8 @@ final class LineInsertionPlan
         private readonly SourceSetPlan $sources,
         public readonly array $handEdits,
         public readonly array $notes,
+        public readonly int $width,
+        public readonly int $height,
     ) {
     }
 

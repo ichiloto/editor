@@ -527,17 +527,30 @@ final class CinematicPreviewSession
      * ({@see PreviewField::exchangeScene()}), at the preview's playhead.
      *
      * @param list<string> $events
+     * @param string|null $sessionId The field epoch the feedback answers.
      * @return list<array{type: string, payload: array<string, mixed>}>
      */
-    public function exchangeScene(array $events): array
+    public function exchangeScene(array $events, ?string $sessionId = null): array
     {
-        return $this->field->exchangeScene($events);
+        return $this->field->exchangeScene($events, $sessionId);
     }
 
     /** The graphical view's grid ({@see PreviewField::getSceneGrid()}). */
     public function getSceneGrid(): RendererGridConfig
     {
         return $this->field->getSceneGrid();
+    }
+
+    /** The field's graphical-host epoch, without attaching a graphical view. */
+    public function getSceneSessionId(): string
+    {
+        return $this->field->sessionId;
+    }
+
+    /** @return list<string> The current map's diagnostics, including transfers and recovery. */
+    public function getDiagnostics(): array
+    {
+        return $this->field->getDiagnostics();
     }
 
     /** Ends the editor window's graphical view of the scene, if one is attached. */

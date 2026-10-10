@@ -17,7 +17,7 @@ it('sends nothing until the window says what it can draw, then the scene as the 
 
     try {
         expect($preview->exchangeScene([]))->toBe([]);
-        $sent = $preview->exchangeScene([previewWindowReady()]);
+        $sent = $preview->exchangeScene([previewWindowReady()], $preview->getSceneSessionId());
         expect(array_column($sent, 'type'))->toContain('frame')
             ->and(previewFrameGenerations($sent))->not->toBe([]);
     } finally {
@@ -30,16 +30,16 @@ it('sends nothing while nothing visible changes, and starts again from a reset w
     $preview = CinematicPreviewSession::start($root, harbourDefinition($root), ['x' => 2, 'y' => 3, 'width' => 40, 'height' => 12]);
 
     try {
-        $first = $preview->exchangeScene([previewWindowReady()]);
+        $first = $preview->exchangeScene([previewWindowReady()], $preview->getSceneSessionId());
         $generation = max(previewFrameGenerations($first));
         expect($preview->exchangeScene([json_encode(['protocol' => 2, 'type' => 'frame_ack',
-            'generation' => $generation, 'frame' => 1, 'presented' => true])]))->toBe([]);
+            'generation' => $generation, 'frame' => 1, 'presented' => true])], $preview->getSceneSessionId()))->toBe([]);
 
         $preview->detachScene();
         // Detached, the Terminal picture has the preview's own size again.
         expect(count($preview->frame()))->toBe(12)
             ->and(mb_strlen(Ichiloto\Engine\IO\Console\TerminalText::stripAnsi($preview->frame()[0])))->toBe(40);
-        $again = array_values(array_filter($preview->exchangeScene([previewWindowReady()]),
+        $again = array_values(array_filter($preview->exchangeScene([previewWindowReady()], $preview->getSceneSessionId()),
             static fn(array $message): bool => $message['type'] === 'frame'));
         expect($again)->not->toBe([])->and($again[0]['payload']['reset'] ?? false)->toBeTrue();
     } finally {
@@ -52,14 +52,14 @@ it('follows the playhead: what the cinematic shows next arrives as the next gene
     $preview = CinematicPreviewSession::start($root, harbourDefinition($root), ['x' => 2, 'y' => 3, 'width' => 40, 'height' => 12]);
 
     try {
-        $generation = max(previewFrameGenerations($preview->exchangeScene([previewWindowReady()])));
+        $generation = max(previewFrameGenerations($preview->exchangeScene([previewWindowReady()], $preview->getSceneSessionId())));
         $preview->play();
         for ($tick = 0; $tick < 5; $tick++) {
             $preview->tick(CinematicPreviewSession::TICK_SECONDS);
         }
         // The harbour's narration is on screen by now; the graphical view receives it as the next generation.
         $next = previewFrameGenerations($preview->exchangeScene([json_encode(['protocol' => 2, 'type' => 'frame_ack',
-            'generation' => $generation, 'frame' => 1, 'presented' => true])]));
+            'generation' => $generation, 'frame' => 1, 'presented' => true])], $preview->getSceneSessionId()));
         expect($next)->not->toBe([])->and(min($next))->toBeGreaterThan($generation);
     } finally {
         $preview->dispose();

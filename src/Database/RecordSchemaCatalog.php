@@ -28,6 +28,7 @@ use Ichiloto\Editor\Events\ProjectScriptCommands;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandDefinition;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandField;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandFieldKind;
+use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandReference;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandRegistry;
 use Ichiloto\Engine\Events\Interpreter\EventInterpreter;
 use Ichiloto\Engine\Entities\Enemies\Enemy;
@@ -97,7 +98,7 @@ final class RecordSchemaCatalog
      *
      * @return array<string, RecordSchema>
      */
-    public static function all(): array
+    public static function all(bool $graphical = false): array
     {
         $schemas = [
             self::classes(),
@@ -121,9 +122,9 @@ final class RecordSchemaCatalog
             self::optimizeWeights(),
             self::optimizeOutcomes(),
             self::optimizeExclusions(),
-            self::commonEvents(),
+            self::commonEvents($graphical),
             self::terms(),
-            self::configuration(),
+            self::configuration($graphical),
             self::types(),
             self::tilesets(),
             self::battlerArt('actors'),
@@ -1405,7 +1406,7 @@ final class RecordSchemaCatalog
      *
      * @return RecordSchema
      */
-    private static function commonEvents(): RecordSchema
+    private static function commonEvents(bool $graphical = false): RecordSchema
     {
         return new RecordSchema(
             key: 'common_events',
@@ -1422,7 +1423,7 @@ final class RecordSchemaCatalog
                     ['type' => 'text', 'name' => '', 'text' => 'Something happens.'],
                 ],
             ],
-            subList: self::eventCommandList('commands'),
+            subList: self::eventCommandList('commands', $graphical),
             listPayloadKey: 'commands',
         );
     }
@@ -1438,7 +1439,7 @@ final class RecordSchemaCatalog
      *
      * @return RecordSchema
      */
-    private static function configuration(): RecordSchema
+    private static function configuration(bool $graphical = false): RecordSchema
     {
         return new RecordSchema(
             key: 'configuration',
@@ -1452,7 +1453,14 @@ final class RecordSchemaCatalog
             labelKey: 'path',
             identityKey: 'path',
             configPath: ['save', 'accessibility', 'ui', 'graphics', 'audio', 'inn'],
-            fieldsFor: static function (array $row): array {
+            subLists: $graphical ? InnPresentationFields::getBindingLists('value') : [],
+            subListsFor: static fn(array $row): array => ($row['path'] ?? null) === ProjectConfig::INN_PRESENTATION
+                && ($list = InnPresentationFields::getBindingList($row['value'] ?? null, 'value')) !== null ? [$list->key] : [],
+            fieldsFor: static function (array $row) use ($graphical): array {
+                if (($row['path'] ?? null) === ProjectConfig::INN_PRESENTATION) {
+                    return [new RecordField('path', 'Setting', isReadOnly: true),
+                        ...InnPresentationFields::getFields($row['value'] ?? null, 'value', 'Rest Presentation', $graphical)];
+                }
                 // A setting the engine knows is the type of its default, so an
                 // authored value of another type is repaired on edit.
                 $value = array_key_exists('default', $row) ? $row['default'] : ($row['value'] ?? null);
@@ -1919,7 +1927,7 @@ final class RecordSchemaCatalog
      *
      * @return RecordSchema The schema.
      */
-    public static function mapNpcs(): RecordSchema
+    public static function mapNpcs(bool $graphical = false): RecordSchema
     {
         return new RecordSchema(
             key: 'map_npcs',
@@ -1999,7 +2007,7 @@ final class RecordSchemaCatalog
             ),
             // The NPC's inline script: the shared command vocabulary, in a
             // frame. The runtime runs it INSTEAD of dialogue when non-empty.
-            commandLists: ['script' => self::eventCommandList('script')],
+            commandLists: ['script' => self::eventCommandList('script', $graphical)],
         );
     }
 
@@ -2014,7 +2022,7 @@ final class RecordSchemaCatalog
      * @param string $key The payload key holding the list.
      * @return RecordSubList The command list.
      */
-    public static function eventCommandList(string $key): RecordSubList
+    public static function eventCommandList(string $key, bool $graphical = false): RecordSubList
     {
         return new RecordSubList(
             key: $key,
@@ -2024,12 +2032,14 @@ final class RecordSchemaCatalog
                 new RecordField('type', 'Type', options: self::getEventCommandTypes()),
             ],
             blank: ['type' => 'text', 'name' => '', 'text' => 'Something happens.'],
-            variants: self::eventCommandVariants(),
+            variants: self::eventCommandVariants($graphical),
             variantKey: 'type',
             nestedLists: [
-                'move_route' => self::routeStepList(),
-                ...self::getRegisteredCommandLists(),
+                'move_route' => MovementRouteFields::getPointList(...),
+                ...self::getRegisteredCommandLists($graphical),
             ],
+            prepareEdit: static fn(array $entry, string $field): array => MovementRouteFields::prepareEdit(
+                InnPresentationFields::prepareEdit($entry, $field), $field),
         );
     }
 
@@ -2089,7 +2099,7 @@ final class RecordSchemaCatalog
      *
      * @return array<string, RecordField[]|Closure(array<string, mixed>): RecordField[]>
      */
-    public static function eventCommandVariants(): array
+    public static function eventCommandVariants(bool $graphical = false): array
     {
         return [
             'text' => [
@@ -2153,22 +2163,7 @@ final class RecordSchemaCatalog
                 ),
                 ...KnowledgeCommandShape::fieldsFor(strval($entry['operation'] ?? '')),
             ],
-            'move_route' => [
-                new RecordField('subject', 'Subject', options: ['player', 'npc']),
-                // The stable ids of the map an author is working in; the
-                // picker reads the live collection, so a just-created NPC
-                // is offered at once.
-                new RecordField('npcId', 'NPC Id', reference: 'map_npcs', removeWhenEmpty: true, allowsNone: true),
-                new RecordField('secondsPerStep', 'Seconds Per Step', InputControlType::FLOAT, removeWhenEmpty: true),
-                new RecordField('speed', 'Steps Per Second', InputControlType::FLOAT, removeWhenEmpty: true),
-                new RecordField(
-                    'wait',
-                    'Wait For Completion',
-                    InputControlType::BOOLEAN,
-                    ['true'],
-                    removeWhenEmpty: false,
-                ),
-            ],
+            'move_route' => MovementRouteFields::getFields(...),
             'transfer' => [
                 RecordField::reference('map', 'Map', 'maps'),
                 new RecordField('x', 'X', InputControlType::INTEGER),
@@ -2186,7 +2181,7 @@ final class RecordSchemaCatalog
                 new RecordField('conditions', 'Conditions', codec: RecordFieldCodec::CONDITIONS),
                 // The arms become frames; see describeSubEntryFields.
             ],
-            ...self::getRegisteredCommandVariants(),
+            ...self::getRegisteredCommandVariants($graphical),
         ];
     }
 
@@ -2209,27 +2204,31 @@ final class RecordSchemaCatalog
      * A command's first list field is edited as its entries, like a route's
      * steps; any further list field is shown read-only and kept as written.
      *
-     * @return array<string, RecordField[]>
+     * @return array<string, RecordField[]|Closure(array): list<RecordField>>
      */
-    public static function getRegisteredCommandVariants(): array
+    public static function getRegisteredCommandVariants(bool $graphical = false): array
     {
         $variants = [];
 
         foreach (ScriptCommandRegistry::getCatalog()->definitions as $type => $definition) {
-            $fields = [];
             $listField = self::findRegisteredListField($definition);
-
-            foreach ($definition->fields as $field) {
-                if ($field === $listField) {
-                    continue;
+            $getFields = static function (array $entry) use ($definition, $listField, $graphical): array {
+                $fields = [];
+                foreach ($definition->fields as $field) {
+                    if ($field === $listField) { continue; }
+                    if ($field->reference === ScriptCommandReference::STAGE_TIMELINE) {
+                        $value = $entry;
+                        foreach (explode('.', $field->key) as $segment) { $value = is_array($value) ? ($value[$segment] ?? null) : null; }
+                        array_push($fields, ...InnPresentationFields::getFields($value, $field->key, $field->label, $graphical));
+                    } else {
+                        array_push($fields, ...($field->kind === ScriptCommandFieldKind::LIST
+                            ? [new RecordField($field->key, $field->label, isReadOnly: true)] : self::describeRegisteredField($field)));
+                    }
                 }
-
-                array_push($fields, ...($field->kind === ScriptCommandFieldKind::LIST
-                    ? [new RecordField($field->key, $field->label, isReadOnly: true)]
-                    : self::describeRegisteredField($field)));
-            }
-
-            $variants[$type] = $fields;
+                return $fields;
+            };
+            $variants[$type] = array_any($definition->fields, static fn(ScriptCommandField $field): bool => $field->reference === ScriptCommandReference::STAGE_TIMELINE)
+                ? $getFields : $getFields([]);
         }
 
         return $variants;
@@ -2238,9 +2237,9 @@ final class RecordSchemaCatalog
     /**
      * Returns the entries list of each registered command that has one.
      *
-     * @return array<string, RecordSubList>
+     * @return array<string, RecordSubList|Closure(array): ?RecordSubList>
      */
-    public static function getRegisteredCommandLists(): array
+    public static function getRegisteredCommandLists(bool $graphical = false): array
     {
         $lists = [];
 
@@ -2248,6 +2247,14 @@ final class RecordSchemaCatalog
             $listField = self::findRegisteredListField($definition);
 
             if ($listField === null) {
+                $stageField = array_find($definition->fields, static fn(ScriptCommandField $field): bool => $field->reference === ScriptCommandReference::STAGE_TIMELINE);
+                if ($graphical && $stageField !== null) {
+                    $lists[$type] = static function (array $entry) use ($stageField): ?RecordSubList {
+                        $value = $entry;
+                        foreach (explode('.', $stageField->key) as $segment) { $value = is_array($value) ? ($value[$segment] ?? null) : null; }
+                        return InnPresentationFields::getBindingList($value, $stageField->key);
+                    };
+                }
                 continue;
             }
 

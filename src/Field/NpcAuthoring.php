@@ -403,6 +403,30 @@ final readonly class NpcAuthoring
         return $this->createRowChange($map, 'NPC field sheet', $before, $index);
     }
 
+    public function setFieldSheetIndex(ProjectMap $map, int $index, int $characterIndex): NpcChange
+    {
+        return $this->setFieldSheetValue($map, $index, 'index', $characterIndex);
+    }
+
+    public function setFieldSheetLayer(ProjectMap $map, int $index, int $layer): NpcChange
+    {
+        return $this->setFieldSheetValue($map, $index, 'layer', $layer);
+    }
+
+    /** Changes only the selected sheet setting through the map's validated, source-safe writer. */
+    private function setFieldSheetValue(ProjectMap $map, int $index, string $field, int $value): NpcChange
+    {
+        $before = $map->getNpcs();
+        $npc = $this->requireNpc($map, $before, $index);
+        $current = $npc->toArray()['sprites2d'] ?? null;
+        if (! is_array($current) || ! is_string($current['sheet'] ?? null) || $current['sheet'] === '') {
+            throw new NpcRefusal('Select an NPC field sheet before editing its character index or graphical layer.');
+        }
+        $map->setNpcGraphicalSprites($index, [...$current, $field => $value]);
+
+        return $this->createRowChange($map, 'NPC field sheet ' . $field, $before, $index);
+    }
+
     /** The change a row edit made to one NPC, with its command when it changed anything. */
     private function createRowChange(ProjectMap $map, string $label, NpcCollection $before, int $index): NpcChange
     {

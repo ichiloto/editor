@@ -112,8 +112,9 @@ it('retypes an event, keeping what it holds when the type is unchanged, and undo
     $current = EventTypeCatalog::at(EventTypeCatalog::indexOfClass($original['class']));
 
     $same = EventAuthoring::setEventType($map, $marker, $current);
-    expect($map->getEventDefinition($marker))->toBe($current->buildDefinition($original))
-        ->and(array_intersect_key($map->getEventDefinition($marker)['data'], $original['data']))->toEqual($original['data']);
+    // Defaults follow the type, while authored keys retain their values and relative order.
+    expect($map->getEventDefinition($marker))->toEqual($current->buildDefinition($original))
+        ->and(array_intersect_key($map->getEventDefinition($marker)['data'], $original['data']))->toBe($original['data']);
     $same?->undo();
     expect($map->getEventDefinition($marker))->toBe($original);
 

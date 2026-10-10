@@ -6,6 +6,7 @@ namespace Ichiloto\Editor\Field;
 
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Database\RecordSchemaCatalog;
+use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\ProjectMap;
 
 /**
@@ -53,7 +54,7 @@ final class NpcInspector
 
     private ProjectRecordDatabase $records;
 
-    public function __construct(public readonly ProjectMap $map)
+    public function __construct(public readonly ProjectMap $map, private readonly bool $graphical = false, private readonly ?ReferenceCatalog $references = null)
     {
         $this->records = $this->build();
     }
@@ -260,8 +261,8 @@ final class NpcInspector
             $entries[] = $entry;
         }
 
-        return ProjectRecordDatabase::overOwnedList(
-            RecordSchemaCatalog::mapNpcs(),
+        $records = ProjectRecordDatabase::overOwnedList(
+            RecordSchemaCatalog::mapNpcs($this->graphical),
             $this->map->dataPath,
             $entries,
             function (array $written): void {
@@ -277,6 +278,9 @@ final class NpcInspector
 
                 $this->map->setNpcs(NpcCollection::fromMapData($stored));
             },
+            graphical: $this->graphical,
         );
+        if ($this->references !== null) { $records->useAuthoringReferences($this->references); }
+        return $records;
     }
 }

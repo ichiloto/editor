@@ -47,6 +47,7 @@ final readonly class RecordSubList
      * id): the field each entry carries its key as. Keys are unique and never empty.
      * @param string|null $valueField For a keyed list whose values are not entries of their own (a
      * piece's tiles: a layer name keyed to its rows): the field each entry carries its value as.
+     * @param Closure(array, string): array|null $prepareEdit Normalizes dependent fields after a field edit, before mutation.
      */
     public function __construct(
         public string $key,
@@ -65,6 +66,7 @@ final readonly class RecordSubList
         public bool $removeWhenEmpty = false,
         public ?string $keyField = null,
         public ?string $valueField = null,
+        public ?Closure $prepareEdit = null,
     ) {
     }
 
@@ -150,6 +152,9 @@ final readonly class RecordSubList
     /** @param array<string, mixed> $entry @return array<string, mixed> */
     public function removeConflictingFields(array $entry, string $editedField): array
     {
+        if ($this->prepareEdit !== null) {
+            $entry = ($this->prepareEdit)($entry, $editedField);
+        }
         if (! array_key_exists($editedField, $entry)) { return $entry; }
         foreach ($this->exclusiveFields as $fields) {
             if (! in_array($editedField, $fields, true)) { continue; }

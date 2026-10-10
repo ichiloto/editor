@@ -6,6 +6,7 @@ namespace Ichiloto\Editor;
 
 use Ichiloto\Editor\Cutscenes\Source\ArraySourceWriter;
 use Ichiloto\Editor\Cutscenes\Source\PhpArraySourceDocument;
+use Ichiloto\Editor\Cutscenes\Source\SourceNode;
 use Ichiloto\Editor\Cutscenes\Source\SourcePreservationRefusal;
 use Ichiloto\Editor\Cutscenes\Source\SourceUnreadable;
 use Ichiloto\Editor\Database\PhpDataFile;
@@ -73,10 +74,12 @@ final class ProjectMap
     private ?string $unparsedDataSource = null;
 
     /**
-     * @var array<string, mixed> The data array the document corresponds to:
-     * what the file held at load, or at the last successful save.
+     * @var array<string, mixed> The data at the last load or successful save,
+     * used to validate changes against the saved checkpoint.
      */
     private array $loadedData;
+    /** @var array<string, mixed> The values of the retained authored source document. */
+    private array $sourceData;
     private string $baselineDataSource;
 
     /**
@@ -115,6 +118,7 @@ final class ProjectMap
             'path' => $mapPath, 'grid' => new EditableGrid(implode("\n", $tileLines), legacyTags: true),
         ]], new EditableGrid(implode("\n", $eventLines)), $eventPath);
         $this->loadedData = $data;
+        $this->sourceData = $data;
         $this->adoptDataSource($dataSource ?? "<?php\n\nreturn " . self::exportPhpValue($data) . ";\n");
         $this->baselineDataSource = $this->dataDocument?->source ?? (string) $this->unparsedDataSource;
         $this->baselineMapPayload = $this->buildMapPayload();
@@ -223,6 +227,18 @@ final class ProjectMap
         if ($this->gridSourceIssue !== null) {
             throw new MapSourceRefusal("{$this->mapId} is read-only: {$this->gridSourceIssue}");
         }
+        $this->assertSourcesUnchanged();
+    }
+
+    /** Refuses external source edits without comparing against unsaved internal changes. */
+    public function assertSourcesUnchanged(): void
+    {
+        $this->assertGridSourcesCanonical();
+        try {
+            $this->createSourceTransaction($this->directory)->assertSourcesUnchanged();
+        } catch (FileSetTransactionFailure $failure) {
+            throw new MapSourceRefusal($failure->getMessage() . '. Nothing was changed.', previous: $failure);
+        }
     }
 
     /** Reads one canonical grid, refusing executable or generated source. */
@@ -238,7 +254,7 @@ final class ProjectMap
         }
     }
 
-    /** Refuses a source changed on disk after this map was opened. */
+    /** Refuses grid sources changed on disk after this map was opened. */
     private function assertGridSourcesCanonical(): void
     {
         try {
@@ -246,6 +262,20 @@ final class ProjectMap
         } catch (InvalidArgumentException $error) {
             throw new MapSourceRefusal($error->getMessage() . ' Nothing was written.', previous: $error);
         }
+    }
+
+    private function createSourceTransaction(
+        string $directory,
+        ?FileSetOperations $files = null,
+        bool $reserveFolder = false,
+    ): FileSetTransaction {
+        $transaction = new FileSetTransaction($directory, $files ?? new FilesystemFileSetOperations(), $reserveFolder);
+        // Missing data can be recovered from the loaded source. An existing
+        // file must still match it; the transaction captures metadata before
+        // reading, so a failed move restores the original access time too.
+        $transaction->expectSource($this->dataPath, $this->baselineDataSource, allowMissing: true);
+        $this->layers->expectSources($transaction);
+        return $transaction;
     }
 
     /**
@@ -939,8 +969,9 @@ final class ProjectMap
     public function restoreLayerSnapshot(array $snapshot): void
     {
         $this->restoreGridSnapshot($snapshot['grid']);
-        $this->editableData = $this->loadedData = $snapshot['data'];
-        $this->adoptDataSource($snapshot['source']);
+        // History restores edits, never the last successful save checkpoint
+        // or the original source needed by other outstanding undo entries.
+        $this->editableData = $snapshot['data'];
         $this->touchState();
     }
 
@@ -1494,15 +1525,37 @@ final class ProjectMap
      */
     private function writeData(array $next): void
     {
+        $this->assertSourcesUnchanged();
         if ($next === $this->editableData) {
             // Setting data to what it already is neither dirties nor
             // deserves a history entry at the call site.
             return;
         }
 
-        $this->assertDataPreservable($next);
-        $this->editableData = $next;
+        $document = $this->assertDataPreservable($next);
+        $this->editableData = $this->alignDataWithSource($document->root(), $next);
         $this->touchState();
+    }
+
+    /** Field edits retain authored key positions; ordered lists retain their requested order. */
+    private function alignDataWithSource(SourceNode $node, array $data): array
+    {
+        if ($node->kind !== SourceNode::ARRAY || $node->hasOpaqueKey) {
+            return $data;
+        }
+
+        $ordered = [];
+        foreach ($node->entries as $index => $entry) {
+            $key = $node->isList ? $index : $entry->key;
+            if ($key === null || ! array_key_exists($key, $data)) {
+                continue;
+            }
+            $ordered[$key] = is_array($data[$key])
+                ? $this->alignDataWithSource($entry->value, $data[$key])
+                : $data[$key];
+        }
+
+        return $ordered + $data;
     }
 
     /**
@@ -1511,7 +1564,7 @@ final class ProjectMap
      * @param array<string, mixed> $next
      * @throws MapSourceRefusal When it cannot.
      */
-    private function assertDataPreservable(array $next): void
+    private function assertDataPreservable(array $next): PhpArraySourceDocument
     {
         if ($this->dataDocument === null) {
             throw new MapSourceRefusal(sprintf(
@@ -1523,7 +1576,7 @@ final class ProjectMap
         }
 
         try {
-            ArraySourceWriter::rewrite($this->dataDocument, $this->loadedData, $next);
+            return ArraySourceWriter::rewrite($this->dataDocument, $this->sourceData, $next);
         } catch (SourcePreservationRefusal $refusal) {
             throw new MapSourceRefusal(sprintf(
                 '%s: %s — %s Everything else in the file is untouched.',
@@ -1542,7 +1595,7 @@ final class ProjectMap
     private function proposedDataSource(): string
     {
         if ($this->dataDocument === null) {
-            if ($this->editableData === $this->loadedData) {
+            if ($this->editableData === $this->sourceData) {
                 throw new RuntimeException(sprintf('%s has no preservable data source to rewrite.', $this->mapId));
             }
 
@@ -1550,7 +1603,7 @@ final class ProjectMap
         }
 
         try {
-            return ArraySourceWriter::rewrite($this->dataDocument, $this->loadedData, $this->editableData)->source;
+            return ArraySourceWriter::rewrite($this->dataDocument, $this->sourceData, $this->editableData)->source;
         } catch (SourcePreservationRefusal $refusal) {
             throw new MapSourceRefusal(sprintf(
                 '%s: %s — %s',
@@ -1933,6 +1986,7 @@ final class ProjectMap
             if ($index === array_key_last($path)) {
                 $reference[$segment] = $value;
                 unset($reference);
+                $this->assertChangedInnPresentations($this->editableData, $next, complete: false);
                 $this->writeData($next);
                 return;
             }
@@ -1966,7 +2020,26 @@ final class ProjectMap
 
         unset($reference[$last]);
         unset($reference);
+        $this->assertChangedInnPresentations($this->editableData, $next, complete: false);
         $this->writeData($next);
+    }
+
+    /** Incomplete picker drafts may be edited, but no incomplete descriptor can be saved. */
+    private function assertChangedInnPresentations(array $old, array $next, bool $complete): void
+    {
+        foreach ((array) ($next['events'] ?? []) as $marker => $event) {
+            if (! is_array($event)) { continue; }
+            $before = is_array($old['events'][$marker] ?? null) ? $old['events'][$marker] : [];
+            if (str_ends_with(strval($event['class'] ?? ''), 'SleepEventTrigger')) {
+                $value = $event['data']['presentation'] ?? null;
+                if ($value !== ($before['data']['presentation'] ?? null)) {
+                    \Ichiloto\Editor\Database\InnPresentationFields::assertValid($value, complete: $complete);
+                }
+            }
+            \Ichiloto\Editor\Database\InnPresentationFields::assertChangedCommandsValid($before, $event, complete: $complete);
+        }
+        \Ichiloto\Editor\Database\InnPresentationFields::assertChangedCommandsValid(
+            (array) ($old['npcs'] ?? []), (array) ($next['npcs'] ?? []), complete: $complete);
     }
 
     /**
@@ -2094,9 +2167,12 @@ final class ProjectMap
     public function save(?callable $backup = null, ?FileSetOperations $files = null): string
     {
         $this->assertEditable();
+        $this->assertChangedInnPresentations($this->loadedData, $this->editableData, complete: true);
+        \Ichiloto\Editor\Database\MovementRouteFields::assertChangedCommandsValid($this->loadedData, $this->editableData);
         $target = $this->resolveSaveTarget();
         $moving = $target['directory'] !== $this->directory;
         $this->assertGridSourcesCanonical();
+        $transaction = $this->createSourceTransaction($target['directory'], $files);
 
         $tripletExists = is_file($this->dataPath)
             && count($this->layers->getSources()) > 0
@@ -2105,6 +2181,7 @@ final class ProjectMap
         if (! $this->isDirty() && ! $moving && is_dir($this->directory) && $tripletExists) {
             // Nothing diverges from the last save: writing would only
             // canonicalize hand-authored formatting and churn mtimes.
+            $transaction->commit();
             return $target['mapId'];
         }
 
@@ -2114,9 +2191,8 @@ final class ProjectMap
         // against the grids as of the last save, never against the bytes on
         // disk. Existing grid sources have already passed the literal-nowdoc
         // check, so an edited grid cannot silently flatten authored PHP.
-        // A data file the parser cannot hold never reaches the writer unless
-        // the on-disk member disappeared: its edits were refused, so its
-        // cached source bytes are its own and are restored unchanged.
+        // A data file the parser cannot hold keeps its original bytes;
+        // source freshness is checked by the transaction before writing.
         $dataSource = $this->dataDocument === null ? (string) $this->unparsedDataSource : $this->proposedDataSource();
         $writeData = ! is_file($this->dataPath)
             || $dataSource !== $this->baselineDataSource;
@@ -2128,12 +2204,11 @@ final class ProjectMap
         if (! $moving && ! $writeData && ! $writeMap && ! $writeEvent) {
             // Dirty by fingerprint but identical in content: a same-value
             // round trip. Clean without writing.
+            $transaction->commit();
             $this->adoptWritten($dataSource, $mapPayload, $eventPayload);
 
             return $target['mapId'];
         }
-
-        $transaction = new FileSetTransaction($target['directory'], $files ?? new FilesystemFileSetOperations());
 
         if ($writeData || $moving) {
             $transaction->write($target['dataPath'], $dataSource);
@@ -2201,7 +2276,8 @@ final class ProjectMap
      */
     private function adoptWritten(string $dataSource, string $mapPayload, string $eventPayload): void
     {
-        $this->adoptDataSource($dataSource);
+        // Saving moves the checkpoint, not the rewrite basis. History still
+        // needs removed expressions, references and comments for exact undo.
         $this->baselineDataSource = $dataSource;
         $this->loadedData = $this->editableData;
         $this->baselineMapPayload = $mapPayload;
@@ -2343,7 +2419,7 @@ final class ProjectMap
         $duplicatedData['name'] = $displayName;
 
         try {
-            $dataSource = ArraySourceWriter::rewrite($this->dataDocument, $this->loadedData, $duplicatedData)->source;
+            $dataSource = ArraySourceWriter::rewrite($this->dataDocument, $this->sourceData, $duplicatedData)->source;
         } catch (SourcePreservationRefusal $refusal) {
             throw new MapSourceRefusal(sprintf(
                 '%s: %s — %s Nothing was duplicated.',
@@ -2353,7 +2429,7 @@ final class ProjectMap
             ), previous: $refusal);
         }
 
-        $transaction = new FileSetTransaction($directory, $files ?? new FilesystemFileSetOperations());
+        $transaction = $this->createSourceTransaction($directory, $files);
         $duplicatedDataPath = $directory . DIRECTORY_SEPARATOR . $baseName . '.data.php';
         $transaction->write($duplicatedDataPath, $dataSource);
         $this->validateLayerContracts();
@@ -2487,6 +2563,15 @@ final class ProjectMap
         return $this->layers->getEventGrid()->getSource();
     }
 
+    /** The metadata-derived path proposed by an explicit move, never an ordinary save. */
+    public function getProposedMapId(): string
+    {
+        $name = self::slugify($this->getDisplayName(), basename($this->directory));
+        $region = self::slugify($this->getRegion(), '');
+
+        return $region !== '' ? $region . '/' . $name : $name;
+    }
+
     /**
      * @inheritDoc
      */
@@ -2541,7 +2626,7 @@ final class ProjectMap
         $baseName = basename($directory);
 
         try {
-            $transaction = new FileSetTransaction($directory, reserveFolder: true);
+            $transaction = $this->createSourceTransaction($directory, reserveFolder: true);
             // A move carries the map's content as authored: the data file
             // is the preserved source (unsaved edits rewritten into it, not
             // a regeneration of the whole array), and untouched grids keep
@@ -2712,13 +2797,9 @@ final class ProjectMap
         }
 
         $mapsRoot = $this->getMapsRoot();
-        $baseName = self::slugify($this->getDisplayName(), basename($this->directory));
-        // An empty region must stay empty — falling back to the default slug
-        // would silently relocate region-less maps into a "new-map" folder.
-        $region = self::slugify($this->getRegion(), '');
-        $relativePath = $region !== '' ? $region . DIRECTORY_SEPARATOR . $baseName : $baseName;
-        $directory = $mapsRoot . DIRECTORY_SEPARATOR . $relativePath;
-        $mapId = str_replace(DIRECTORY_SEPARATOR, '/', $relativePath);
+        $mapId = $this->getProposedMapId();
+        $baseName = basename($mapId);
+        $directory = $mapsRoot . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $mapId);
 
         if (is_dir($directory)) {
             throw new RuntimeException("Map path {$mapId} already exists.");

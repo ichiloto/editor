@@ -23,8 +23,10 @@ final readonly class PieceRole
      * @param string $label What an author calls it, such as `Dining table (left)`.
      * @param array<string, list<array{dx: int, dy: int, entry: string}>> $tiles Tile entries relative to the glyph cell, keyed by tile layer name; never `0`.
      * @param array{int, int}|null $cell An item piece's cell, as row and column; null for a connected piece's shape.
+     * @param array<string, list<array{dx: int, dy: int}>> $keeps Cells whose existing tiles stay, keyed by tile layer; these are not owned tiles to remove.
      */
-    public function __construct(public string $pieceId, string $part, public string $label, public array $tiles, public ?array $cell = null)
+    public function __construct(public string $pieceId, string $part, public string $label, public array $tiles, public ?array $cell = null,
+        public array $keeps = [])
     {
         $this->key = "{$pieceId}:{$part}";
     }
@@ -82,15 +84,22 @@ final readonly class PieceRole
         $roles = [];
         foreach ($glyphCells as $index => [$row, $column]) {
             $tiles = [];
+            $ownedCells = [[$row, $column], ...($attached[$index] ?? [])];
             foreach (array_diff_key($piece->tiles, $excluded) as $layer => $entries) {
-                foreach ([[$row, $column], ...($attached[$index] ?? [])] as [$cellRow, $cellColumn]) {
+                foreach ($ownedCells as [$cellRow, $cellColumn]) {
                     if ($entries[$cellRow][$cellColumn] !== (string) TileId::EMPTY) {
                         $tiles[$layer][] = ['dx' => $cellColumn - $column, 'dy' => $cellRow - $row, 'entry' => $entries[$cellRow][$cellColumn]];
                     }
                 }
             }
+            $keeps = [];
+            foreach (array_diff($piece->keeps, $excludedLayers) as $layer) {
+                foreach ($ownedCells as [$cellRow, $cellColumn]) {
+                    $keeps[$layer][] = ['dx' => $cellColumn - $column, 'dy' => $cellRow - $row];
+                }
+            }
             $roles[$piece->glyphs[$row][$column]][] = new self($piece->id, "{$row}:{$column}",
-                self::describeCell($piece->name, $glyphCells, $row, $column), $tiles, [$row, $column]);
+                self::describeCell($piece->name, $glyphCells, $row, $column), $tiles, [$row, $column], $keeps);
         }
 
         return $roles;

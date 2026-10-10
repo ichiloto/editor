@@ -150,11 +150,15 @@ it('isolates a malformed layer and refuses mismatched dimensions before evaluati
 
 it('rejects externally changed or newly added layers without overwriting author work', function (bool $added) {
     $map = loadLayeredMap(layeredMapProject());
+    $map->setLayerCell('map:1', 0, 0, 'X');
+    $pending = $map->captureLayerSnapshot();
     $path = $map->directory . '/layers/' . ($added ? '09.other.map.php' : '04.buildings.map.php');
     file_put_contents($path, MapGridSource::buildSource("new \n    ", 'OTHER'));
-    $map->setLayerCell('map:1', 0, 0, 'X');
     $before = sourceHashTree($map->directory);
-    expect(fn() => $map->save())->toThrow(MapSourceRefusal::class)
+    expect(fn() => $map->setLayerCell('map:1', 1, 0, 'Y'))->toThrow(MapSourceRefusal::class)
+        ->and(fn() => $map->save())->toThrow(MapSourceRefusal::class)
+        ->and($map->captureLayerSnapshot())->toBe($pending)
+        ->and($map->isDirty())->toBeTrue()
         ->and(sourceHashTree($map->directory))->toBe($before);
 })->with([false, true]);
 
