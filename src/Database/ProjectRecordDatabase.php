@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Database;
 
+use Ichiloto\Editor\Field\PlayerPresentationFields;
+
 use Ichiloto\Editor\IO\AtomicFile;
 
 use BackedEnum;
@@ -539,6 +541,9 @@ final class ProjectRecordDatabase
         foreach ($this->schema->fieldsFor($record->toArray()) as $field) {
             $fields[] = self::describeField($field, self::displayValue($field, $record->get($field->key)), $field->key, $isEditable);
         }
+        if ($this->schema->key === PlayerPresentationFields::CATEGORY) {
+            $fields = PlayerPresentationFields::describeFields($fields, (array) $record->toArray(), $this->authoringReferences?->getAssetRoot());
+        }
         if ($configIssue !== null) { $fields[] = ['label' => 'Read-only', 'value' => $configIssue, 'editable' => false]; }
 
         foreach ($this->schema->commandListsFor($record->toArray()) as $listKey => $commandList) {
@@ -815,7 +820,12 @@ final class ProjectRecordDatabase
             $previousIdentity = $this->schema->identityKey === null ? null : $record->get($this->schema->identityKey);
             $before = $record->toArray();
             $draft = clone $record;
-            $draft->set($field->key, $value);
+            if ($this->schema->key === PlayerPresentationFields::CATEGORY) {
+                $draft->restorePayload(PlayerPresentationFields::applyField((array) $before, $fieldId, $rawValue,
+                    $this->authoringReferences?->getAssetRoot() ?? throw new \InvalidArgumentException('The player presentation has no project asset root.')));
+            } else {
+                $draft->set($field->key, $value);
+            }
             $this->dropStaleShapeFields($draft, $before);
             $this->assertProposedRecord($record, $draft);
             $record->restorePayload($draft->toArray());
@@ -2783,6 +2793,22 @@ final class ProjectRecordDatabase
             RecordStorage::CONFIG_SUBTREE => $this->config?->getSource(),
             default => null,
         };
+    }
+
+    /** Reuse the source writer's conflict gate for categories that exclusively own a file. */
+    public function assertUnchangedSource(): void
+    {
+        if (! $this->schema->requireUnchangedSource || $this->file === null) {
+            return;
+        }
+        try {
+            if (! $this->file->exists && is_file($this->file->path)) {
+                throw new RuntimeException('The source was created outside the editor; reload before saving.');
+            }
+            $this->file->composeContents($this->mergeIntoFilePayload(), checkDisk: true);
+        } catch (RuntimeException $refused) {
+            throw new \Ichiloto\Editor\Cutscenes\Source\SourcePreservationRefusal($refused->getMessage(), previous: $refused);
+        }
     }
 
     private function saveDirectory(): void

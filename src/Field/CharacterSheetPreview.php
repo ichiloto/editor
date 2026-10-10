@@ -14,7 +14,7 @@ use RuntimeException;
 final class CharacterSheetPreview
 {
     /** @return array{frames: list<array{label: string, sourceRect: array{x: int, y: int, width: int, height: int}}>, issue?: string} */
-    public static function describe(mixed $data, ?string $assetRoot): array
+    public static function describe(mixed $data, ?string $assetRoot, bool $worldLayer = true): array
     {
         try {
             if (! is_array($data)) {
@@ -23,7 +23,7 @@ final class CharacterSheetPreview
             if ($assetRoot === null) {
                 throw new RuntimeException('The current owner has no project asset root for character-sheet preview.');
             }
-            $sheet = NpcCharacterSheet::validate($data);
+            $sheet = $worldLayer ? NpcCharacterSheet::validate($data) : CharacterSheet::fromArray($data);
             $image = PngAssetPreflight::inspect($assetRoot, $sheet->asset);
             $size = $sheet->getFrameSize($image['width'], $image['height']);
             $frames = [];

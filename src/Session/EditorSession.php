@@ -206,7 +206,7 @@ final class EditorSession
         private readonly BackupWriter $backups,
     ) {
         $this->workspace = $workspace;
-        $this->actorAuthoring = new ActorAuthoring();
+        $this->actorAuthoring = new ActorAuthoring(graphical: true);
     }
 
     /** Opens the project at a root, as the terminal editor opens it. */
@@ -235,7 +235,7 @@ final class EditorSession
                 'description' => $category->description,
                 'implemented' => $category->isImplemented,
                 'group' => 'Database',
-            ], DatabaseCatalog::all()),
+            ], DatabaseCatalog::getGraphicalCategories()),
             // Cutscene types, edited through the same record RPCs under their record category keys.
             'cutscenes' => array_map(static fn(CutsceneType $type): array => [
                 'key' => $type->getRecordCategory(),
@@ -3764,7 +3764,7 @@ final class EditorSession
     private function listUnsavedCategories(): array
     {
         $keys = [
-            ...array_map(static fn($category): string => $category->key, DatabaseCatalog::all()),
+            ...array_map(static fn($category): string => $category->key, DatabaseCatalog::getGraphicalCategories()),
             ...array_map(static fn(CutsceneType $type): string => $type->getRecordCategory(), CutsceneType::cases()),
         ];
 

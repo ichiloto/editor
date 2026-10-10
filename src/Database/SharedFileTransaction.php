@@ -107,6 +107,10 @@ final class SharedFileTransaction
             return false;
         }
 
+        foreach ($dirty as $database) {
+            $database->assertUnchangedSource();
+        }
+
         $first = $dirty[0];
         $path = $first->backingFilePath();
         $file = PhpDataFile::load($path, $first->projectRoot());

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Database;
 
+use Ichiloto\Editor\Field\PlayerPresentationFields;
+
 /**
  * Provides the editor's Database category registry.
  */
@@ -47,6 +49,13 @@ final class DatabaseCatalog
         ];
     }
 
+    /** The GUI's categories; the Terminal registry and its list positions stay unchanged. */
+    public static function getGraphicalCategories(): array
+    {
+        return [...self::all(), new DatabaseCategoryDefinition(PlayerPresentationFields::CATEGORY,
+            'Player Field Appearance', 'Choose fixed player art or the selected party leader\'s field role.', true)];
+    }
+
     /**
      * Returns the categories edited from another category's records rather
      * than listed on their own: battle art is set on the actor's or enemy's
@@ -78,7 +87,7 @@ final class DatabaseCatalog
      */
     public static function findByKey(string $key): ?DatabaseCategoryDefinition
     {
-        return array_find([...self::all(), ...self::getEmbedded()], static fn(DatabaseCategoryDefinition $category): bool => $category->key === $key);
+        return array_find([...self::getGraphicalCategories(), ...self::getEmbedded()], static fn(DatabaseCategoryDefinition $category): bool => $category->key === $key);
     }
 
     /**

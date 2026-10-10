@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Database;
 
+use Ichiloto\Editor\Field\PlayerPresentationFields;
+
 use Closure;
 use LogicException;
 
@@ -130,6 +132,7 @@ final class RecordSchemaCatalog
             self::battlerArt('actors'),
             self::battlerArt('enemies'),
             self::battleScaleReference(),
+            ...($graphical ? [PlayerPresentationFields::getSchema()] : []),
         ];
 
         $keyed = [];

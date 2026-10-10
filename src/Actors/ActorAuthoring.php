@@ -9,6 +9,7 @@ use Ichiloto\Editor\Database\RecordChange;
 use Ichiloto\Editor\Database\RecordRefusal;
 use Ichiloto\Editor\Database\SummonAssignmentDiagnostics;
 use Ichiloto\Editor\EquipmentOptimizationPolicy;
+use Ichiloto\Editor\Field\CharacterSheetFields;
 use Ichiloto\Editor\History\GenericCommand;
 use Ichiloto\Editor\History\SourceSetRequired;
 use Ichiloto\Editor\Inspector\InputControl;
@@ -17,6 +18,7 @@ use Ichiloto\Editor\PermanentGrowthCatalog;
 use Ichiloto\Editor\ProjectActor;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Engine\Entities\Enumerations\WeaponType;
+use InvalidArgumentException;
 use RuntimeException;
 use Throwable;
 
@@ -73,6 +75,8 @@ final class ActorAuthoring
     /** @var array<string, string> Which slot each actor's Optimize preview fills. */
     private array $optimizeSlots = [];
 
+    public function __construct(private readonly bool $graphical = false) {}
+
     /**
      * Applies one actor row: a choice of what the panes show, which records
      * nothing, or a value of the actor, as one undo step. A value the actor's
@@ -113,8 +117,28 @@ final class ActorAuthoring
         $before = $actor->getData();
 
         try {
-            $workspace->actorDatabase->setField($index, $field, self::coerceActorFieldValue($field, $rawValue));
-        } catch (RuntimeException $refused) {
+            if (str_starts_with($field, 'images.field2d.')) {
+                if (! $this->graphical || ! $actor->hasDefinitionId()) {
+                    throw new RuntimeException('Field art requires the graphical editor and an established actor identity.');
+                }
+                if (array_key_exists('images', $before) && ! is_array($before['images'])) {
+                    throw new RuntimeException('Actor images is not an editable role map; correct its source before binding field art.');
+                }
+                $after = $before;
+                $binding = CharacterSheetFields::applyField($before['images']['field2d'] ?? null,
+                    substr($field, strlen('images.field2d.')), $rawValue, $workspace->projectRoot . '/assets');
+                if ($binding === null) {
+                    unset($after['images']['field2d']);
+                } else {
+                    $after['images']['field2d'] = $binding;
+                }
+                // Prove literal source and external-file freshness before making an undo step.
+                $actor->getProposedSource($after);
+                $actor->restoreData($after);
+            } else {
+                $workspace->actorDatabase->setField($index, $field, self::coerceActorFieldValue($field, $rawValue));
+            }
+        } catch (RuntimeException|InvalidArgumentException $refused) {
             $actor->restoreData($before);
 
             throw new RecordRefusal($refused->getMessage(), previous: $refused);
@@ -593,6 +617,7 @@ final class ActorAuthoring
                 'field' => 'counterAttack',
             ],
             ...$this->actorSummonFields($workspace, $actor),
+            ...($this->graphical ? $this->getFieldAppearanceFields($workspace, $actor) : []),
             [
                 'label' => 'Level',
                 'value' => (string) $actor->getLevel(),
@@ -626,6 +651,32 @@ final class ActorAuthoring
             ...$this->actorNatureFields($actor),
             ...$this->actorStatPreviewFields($workspace, $actor),
         ];
+    }
+
+    private function getFieldAppearanceFields(ProjectWorkspace $workspace, ProjectActor $actor): array
+    {
+        $binding = $actor->getImages()['field2d'] ?? null;
+        $rows = [['label' => 'Field Appearance', 'value' => 'Actor role: images.field2d. Independent of terminal and battle art.', 'editable' => false]];
+        foreach (CharacterSheetFields::getFields($binding, 'images.field2d', 'Actor Field Sheet') as $field) {
+            $key = substr($field->key, strlen('images.field2d.'));
+            $value = is_array($binding) ? ($binding[$key] ?? null) : null;
+            $shown = $value ?? ($field->reference === null ? $field->displayDefault : '');
+            $rows[] = [
+                'label' => $field->label, 'field' => $field->key,
+                'value' => is_string($shown) || is_int($shown) ? (string) $shown : '(malformed)',
+                'editable' => $actor->hasDefinitionId(),
+                ...($field->reference !== null ? ['reference' => $field->reference, 'allowsNone' => true, 'noneLabel' => $field->noneLabel()] : []),
+                ...($field->options !== [] ? ['options' => $field->options] : []),
+                ...($field->reference === null && $field->options === [] ? ['control' => new InputControl($field->type,
+                    is_string($shown) || is_int($shown) ? (string) $shown : '')] : []),
+                'displayDefault' => $field->displayDefault,
+            ];
+        }
+        if (! $actor->hasDefinitionId()) {
+            $rows[] = ['label' => 'Field Art Identity', 'value' => 'Establish the actor\'s permanent id before binding artwork.', 'editable' => false];
+        }
+
+        return CharacterSheetFields::describeFields($rows, $binding, 'images.field2d', $workspace->projectRoot . '/assets');
     }
 
     /**

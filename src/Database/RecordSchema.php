@@ -92,6 +92,8 @@ final readonly class RecordSchema
         public ?Closure $commandListsFor = null,
         /** @var Closure(array<string, mixed>): list<string>|null Selects the inline lists offered by this record's shape. */
         public ?Closure $subListsFor = null,
+        /** Exclusive source owners refuse external edits rather than merging a stale snapshot. */
+        public bool $requireUnchangedSource = false,
     ) {
         if ($projection instanceof WholeFileProjection) {
             // A field outside the keys the category owns would read blank and

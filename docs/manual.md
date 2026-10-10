@@ -1085,7 +1085,7 @@ skill's effects, a quest's rewards) listed under them.
 
 | Category | Backing file | Terminal editor | GUI editor |
 | --- | --- | --- | --- |
-| Actors | `assets/Data/Actors/*.php` | Editable | Same |
+| Actors | `assets/Data/Actors/*.php` | Editable | Same, plus `images.field2d` artwork selected for the established actor id |
 | Classes | `assets/Data/classes.php` | Editable - levels, the experience curve, every stat curve, equipment types and skills learned | Same |
 | Skills | `assets/Data/Skills/*.php` | Editable - one data record per numbered file, attacks, abilities and spells alike, with their effects; `skills.php` loads them | Same |
 | Items | `assets/Data/Items/*.php` | Editable - one data record per numbered file, with scope, occasion, animation and effects; `items.php` loads Items, Weapons and Armors | Same |
@@ -1112,7 +1112,18 @@ skill's effects, a quest's rewards) listed under them.
 | Configuration | `config.php` (`save`, `accessibility`, `ui`, `graphics`, `audio`, `inn`) | Editable - one row per setting, typed by what it holds; field zoom is kept from 1 to 8 | Same |
 | Types | `assets/Data/system.php` | Editable - the project's elements, one per row; an empty list means the Engine's defaults. Weapon, armor and equipment types are the Engine's own | Same |
 | Terms | `config.php` (`vocab`, `messages`) | Literal terms editable; comments and unrelated expressions preserved | Same |
+| Player Field Appearance | `assets/Data/Entities/player.php` | Not shown: graphical ownership and art | Choose fixed-player, selected party leader, or absent legacy selector; fixed sheet picker with index/layer controls |
 | Actor Battle Art, Enemy Battle Art, Battle Scale | `assets/Data/Presentation/battlers.php` | Not shown: graphical battle art | Editable from the actor's or enemy's own page (see Battle Art) |
+
+Player Field Appearance edits only `graphicalSubject` and `sprites2d`, preserving
+the player's Terminal glyphs and unrelated authored source. Selecting
+`party-leader` retains inactive fixed art read-only and uses the selected actor's
+`images.field2d` role; missing leader art is diagnosed, never replaced with
+another actor. Actor and fixed-player sheet pickers share current-file
+four-direction previews. Clearing removes only the optional binding; undo/redo
+and save/reopen restore its settings. Unsupported expressions and external
+source conflicts are refused before overwriting files. These controls have
+automated coverage; native visual inspection remains pending.
 
 Why a category can still turn out read-only: a file the editor cannot
 evaluate, a value it could not write back out, or a comment inside returned
