@@ -56,7 +56,7 @@ final class ProjectRecordDatabase
     private function coerceReferenceField(ProjectRecord $record, RecordField $field, string $rawValue, array $ownerPath = []): mixed
     {
         $value = self::coerce($field, $rawValue);
-        if ($this->authoringReferences !== null && in_array($field->reference, ['actor_ids', 'stage_timelines', 'cinematic_movement_routes'], true) && $value !== null) {
+        if ($this->authoringReferences !== null && in_array($field->reference, ['actor_ids', 'stage_timelines', 'cinematic_movement_routes', 'map_world_objects'], true) && $value !== null) {
             $choices = $field->reference === 'cinematic_movement_routes'
                 ? $this->authoringReferences->getMovementRouteIds($record, $ownerPath)
                 : $this->authoringReferences->valuesFor($field->reference);
@@ -825,6 +825,9 @@ final class ProjectRecordDatabase
                     $this->authoringReferences?->getAssetRoot() ?? throw new \InvalidArgumentException('The player presentation has no project asset root.')));
             } else {
                 $draft->set($field->key, $value);
+            }
+            if ($this->schema->prepareEdit !== null) {
+                $draft->restorePayload(($this->schema->prepareEdit)((array) $draft->toArray(), $field->key));
             }
             $this->dropStaleShapeFields($draft, $before);
             $this->assertProposedRecord($record, $draft);

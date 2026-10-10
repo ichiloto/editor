@@ -94,6 +94,8 @@ final readonly class RecordSchema
         public ?Closure $subListsFor = null,
         /** Exclusive source owners refuse external edits rather than merging a stale snapshot. */
         public bool $requireUnchangedSource = false,
+        /** Normalize dependent fields on an edited record before accepting the draft. */
+        public ?Closure $prepareEdit = null,
     ) {
         if ($projection instanceof WholeFileProjection) {
             // A field outside the keys the category owns would read blank and

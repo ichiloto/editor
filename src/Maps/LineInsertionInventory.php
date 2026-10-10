@@ -85,6 +85,20 @@ final class LineInsertionInventory
         $isTarget = $mapId === $this->insertion->mapId;
         $here = [$mapId];
 
+        if ($isTarget) {
+            foreach (($data['worldObjects'] ?? []) as $index => $object) {
+                $this->shiftPoint($file, ['worldObjects', $index, 'anchor'], $object['anchor']);
+                foreach (($object['covers']['cells'] ?? []) as $cellIndex => $cell) {
+                    $axis = $this->insertion->axis === 'x' ? 0 : 1;
+                    $coordinate = $cell[$axis];
+                    if (is_int($coordinate) && $coordinate >= $this->insertion->at) {
+                        $path = ['worldObjects', $index, 'covers', 'cells', $cellIndex, $axis];
+                        $this->shifts[$file][self::formatKey($path)] = ['path' => $path, 'value' => $this->insertion->getShiftedCoordinate($coordinate)];
+                    }
+                }
+            }
+        }
+
         foreach ((array) ($data['npcs'] ?? []) as $index => $npc) {
             if (! is_array($npc)) {
                 continue;

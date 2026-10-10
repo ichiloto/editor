@@ -74,6 +74,8 @@ final class ReferenceCatalog
         'png_assets',
         'elements',
         'map_npcs',
+        'map_world_objects',
+        'world_object_tile_layers',
         'knowledge_subjects',
         'knowledge_reports',
         'knowledge_record_types',
@@ -141,6 +143,11 @@ final class ReferenceCatalog
     public function getAssetRoot(): string
     {
         return rtrim($this->workspace->projectRoot, '/') . '/assets';
+    }
+
+    public function describeWorldObjectReferences(ProjectMap $map, string $id): array
+    {
+        return new \Ichiloto\Editor\Field\WorldObjectReferences($this->workspace)->describeReferences($map, $id);
     }
 
     /**
@@ -242,6 +249,8 @@ final class ReferenceCatalog
             // read live from the collection, a just-created NPC is offered
             // at once and a deleted one is gone.
             'map_npcs' => $this->getSubjectMap()?->getNpcs()->ids() ?? [],
+            'map_world_objects' => $this->getSubjectMap() === null ? [] : array_column(\Ichiloto\Editor\Field\WorldObjectAuthoring::readEntries($this->getSubjectMap()), 'id'),
+            'world_object_tile_layers' => $this->currentMap === null ? [] : array_column($this->currentMap->describeTileLayers()['layers'], 'name'),
             // Older references name an animation; current ones store its id.
             'animations' => array_map(
                 static fn(ProjectRecord $animation): string => strval($animation->get('name')),
@@ -457,6 +466,7 @@ final class ReferenceCatalog
         return array_values(array_unique([
             ...$this->castIds(['staged_actor', 'npc', 'party_actor', 'player']),
             ...($this->getSubjectMap()?->getNpcs()->ids() ?? []),
+            ...$this->valuesFor('map_world_objects'),
             ...$this->valuesFor('actors'),
             ...($this->currentMap?->getEventMarkers() ?? []),
         ]));

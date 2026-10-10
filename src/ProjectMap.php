@@ -474,7 +474,13 @@ final class ProjectMap
         }
         $layer = $this->layers->getLayer($id);
         $this->changeLayers(static fn(MapLayers $layers) => $layers->renameLayer($id, $name),
-            static fn(mixed $settings): mixed => $layer['decoration'] ? $settings : TileLayerSettings::renameOwner($settings, $layer['name'], $name));
+            static fn(mixed $settings): mixed => $layer['decoration'] ? $settings : TileLayerSettings::renameOwner($settings, $layer['name'], $name),
+            static function (array $objects) use ($layer, $name): array {
+                foreach ($objects as &$object) {
+                    if (($object['covers']['layer'] ?? null) === $layer['name']) { $object['covers']['layer'] = $name; }
+                }
+                return $objects;
+            });
     }
 
     /**
@@ -530,18 +536,29 @@ final class ProjectMap
      * @param (Closure(mixed): mixed)|null $adjustSettings The tile layer settings the change leaves, given the current ones.
      * @throws MapSourceRefusal When the change or the settings are refused.
      */
-    private function changeLayers(Closure $change, ?Closure $adjustSettings = null): void
+    private function changeLayers(Closure $change, ?Closure $adjustSettings = null, ?Closure $adjustObjects = null): void
     {
         $this->assertEditable();
         $layers = clone $this->layers;
         $change($layers);
+        $data = $this->editableData;
         if ($adjustSettings !== null) {
             $settings = $this->getMapDataField([MapGraphics::SETTINGS_KEY]);
             $next = $adjustSettings($settings);
             if ($next !== $settings) {
-                $this->setMapDataField([MapGraphics::SETTINGS_KEY], $next);
+                if ($next === null) { unset($data[MapGraphics::SETTINGS_KEY]); }
+                else { $data[MapGraphics::SETTINGS_KEY] = $next; }
             }
         }
+        if ($adjustObjects !== null && isset($data['worldObjects'])) {
+            $data['worldObjects'] = $adjustObjects($data['worldObjects']);
+            if ($data['worldObjects'] !== $this->editableData['worldObjects']) {
+                $issue = \Ichiloto\Editor\Field\WorldObjectAuthoring::readSourceIssue($this);
+                if ($issue !== null) { throw new MapSourceRefusal($issue); }
+            }
+        }
+        $this->assertWorldObjectState($layers, $data);
+        $this->writeData($data);
         $this->layers = $layers;
         $this->cachedWidth = null;
         $this->touchState();
@@ -764,7 +781,15 @@ final class ProjectMap
     public function renameTileLayer(string $name, string $newName): void
     {
         $this->changeLayers(static fn(MapLayers $layers) => $layers->renameTileLayer($name, $newName),
-            static fn(mixed $settings): mixed => TileLayerSettings::renameLayer($settings, $name, $newName));
+            static fn(mixed $settings): mixed => TileLayerSettings::renameLayer($settings, $name, $newName),
+            static function (array $objects) use ($name, $newName): array {
+                foreach ($objects as &$object) {
+                    if (isset($object['covers'])) {
+                        $object['covers']['tileLayers'] = array_map(static fn($layer): string => $layer === $name ? $newName : $layer, $object['covers']['tileLayers']);
+                    }
+                }
+                return $objects;
+            });
     }
 
     /**
@@ -812,6 +837,9 @@ final class ProjectMap
             throw new MapSourceRefusal(rtrim($error->getMessage(), '.') . '. Nothing was changed.', previous: $error);
         }
         if ($next !== $settings) {
+            $data = $this->editableData;
+            $data[MapGraphics::SETTINGS_KEY] = $next;
+            $this->assertWorldObjectState($this->layers, $data);
             $this->setMapDataField([MapGraphics::SETTINGS_KEY], $next);
         }
     }
@@ -1067,10 +1095,15 @@ final class ProjectMap
 
     public function restoreLayerSnapshot(array $snapshot): void
     {
-        $this->restoreGridSnapshot($snapshot['grid']);
+        // The snapshot owns both halves; validate them together, not old data against restored layer names.
+        $candidate = clone $this;
+        $candidate->editableData = $snapshot['data'];
+        $candidate->restoreGridSnapshot($snapshot['grid']);
         // History restores edits, never the last successful save checkpoint
         // or the original source needed by other outstanding undo entries.
         $this->editableData = $snapshot['data'];
+        $this->layers = $candidate->layers;
+        $this->cachedWidth = null;
         $this->touchState();
     }
 
@@ -2114,6 +2147,7 @@ final class ProjectMap
                 throw new MapSourceRefusal($error->getMessage() . ' Nothing was changed.', previous: $error);
             }
         }
+        $this->assertWorldObjectState($layers, $next);
         if ($next !== $this->editableData) {
             $document = $this->assertDataPreservable($next);
             $next = $this->alignDataWithSource($document->root(), $next);
@@ -2122,6 +2156,18 @@ final class ProjectMap
         $this->editableData = $next;
         $this->cachedWidth = null;
         $this->touchState();
+    }
+
+    /** Layer/geometry edits cannot leave map-owned anchors or coverage dangling. */
+    private function assertWorldObjectState(MapLayers $layers, array $data): void
+    {
+        if (!isset($data['worldObjects'])) { return; }
+        $candidate = clone $this;
+        $candidate->layers = $layers;
+        $candidate->editableData = $data;
+        $candidate->cachedWidth = null;
+        try { \Ichiloto\Editor\Field\WorldObjectAuthoring::validateEntries($candidate, $data['worldObjects'], false); }
+        catch (InvalidArgumentException $error) { throw new MapSourceRefusal('World-object ownership: ' . $error->getMessage() . ' Nothing was changed.', previous: $error); }
     }
 
     /**
@@ -2342,6 +2388,14 @@ final class ProjectMap
     public function save(?callable $backup = null, ?FileSetOperations $files = null): string
     {
         $this->assertEditable();
+        if (($this->loadedData['worldObjects'] ?? null) !== ($this->editableData['worldObjects'] ?? null)) {
+            try {
+                \Ichiloto\Editor\Field\WorldObjectAuthoring::validateEntries($this,
+                    \Ichiloto\Editor\Field\WorldObjectAuthoring::readEntries($this));
+            } catch (\InvalidArgumentException $error) {
+                throw new MapSourceRefusal($error->getMessage(), previous: $error);
+            }
+        }
         $this->assertChangedInnPresentations($this->loadedData, $this->editableData, complete: true);
         \Ichiloto\Editor\Database\MovementRouteFields::assertChangedCommandsValid($this->loadedData, $this->editableData);
         $target = $this->resolveSaveTarget();

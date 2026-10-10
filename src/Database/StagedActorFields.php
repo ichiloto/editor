@@ -4,10 +4,9 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Database;
 
-use Ichiloto\Editor\Inspector\InputControlType;
 use Ichiloto\Editor\Field\CharacterSheetPreview;
+use Ichiloto\Editor\Field\FieldSpriteFields;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicCommandSchema;
-use Ichiloto\Engine\Cutscenes\Cinematics\CinematicStageManager;
 
 /** Graphical authoring controls; Engine remains the authority for accepted data. */
 final class StagedActorFields
@@ -56,10 +55,7 @@ final class StagedActorFields
     public static function getFields(array $entry): array
     {
         $contract = CinematicCommandSchema::export();
-        $animation = $contract['stagedPoseAnimation'];
         $fields = [
-            RecordField::reference('sprites2d.asset', 'Graphical Image / Pose Sheet', 'png_assets', allowsNone: true, noneLabel: '(inherit / no graphical override)'),
-            RecordField::reference('sprites2d.sheet', 'Walking Character Sheet', 'png_assets', allowsNone: true, noneLabel: '(not a walking sheet)'),
             new RecordField('subject.kind', 'Bind Visual To', options: ['', ...explode('|', $contract['stagedActorBinding']['subject']['kind'])],
                 removeWhenEmpty: true, displayDefault: '(independent staged actor)'),
             RecordField::boolean('replace', 'Replace Existing Visual'),
@@ -67,35 +63,10 @@ final class StagedActorFields
         if (($entry['subject']['kind'] ?? null) === 'npc') {
             $fields[] = RecordField::reference('subject.id', 'Bound NPC', 'map_npcs');
         }
-        $sprites = $entry['sprites2d'] ?? [];
-        if (! is_array($sprites) || $sprites === []) {
-            return $fields;
+        if (($entry['subject']['kind'] ?? null) === 'world_object') {
+            $fields[] = RecordField::reference('subject.id', 'Bound World Object', 'map_world_objects');
         }
-        $fields[] = new RecordField('sprites2d.layer', 'Graphical Layer', InputControlType::INTEGER, displayDefault: '0');
-        if (isset($sprites['sheet'])) {
-            $fields[] = new RecordField('sprites2d.index', 'Sheet Character Index', InputControlType::INTEGER, displayDefault: '0');
-
-            return $fields;
-        }
-        $fields[] = new RecordField('sprites2d.cells', 'Visual Size (cells: width, height)', codec: RecordFieldCodec::SIZE,
-            removeWhenEmpty: true, displayDefault: '1, 1');
-        $fields[] = new RecordField('sprites2d.sourceRect', 'Sheet Region (x, y, width, height)', codec: RecordFieldCodec::SOURCE_RECT,
-            removeWhenEmpty: true, displayDefault: '(whole image)');
-        $controls = [
-            'columns' => new RecordField('sprites2d.animation.columns', 'Pose Grid Columns', InputControlType::INTEGER, displayDefault: (string) $animation['defaults']['columns']),
-            'rows' => new RecordField('sprites2d.animation.rows', 'Pose Grid Rows', InputControlType::INTEGER, displayDefault: (string) $animation['defaults']['rows']),
-            'frames' => new RecordField('sprites2d.animation.frames', 'Pose Frame Order (empty: static)', codec: RecordFieldCodec::CSV_INTEGERS, removeWhenEmpty: true),
-            'fps' => new RecordField('sprites2d.animation.fps', 'Pose Frames Per Second', InputControlType::INTEGER, displayDefault: (string) $animation['defaultFps']),
-            'loop' => RecordField::boolean('sprites2d.animation.loop', 'Loop Pose', removeWhenEmpty: false, displayDefault: $animation['defaults']['loop'] ? 'true' : 'false'),
-            'restFrame' => new RecordField('sprites2d.animation.restFrame', 'Reduced-Motion Rest Cell', InputControlType::INTEGER, displayDefault: (string) $animation['defaults']['restFrame']),
-        ];
-        foreach ($animation['fields'] as $key) {
-            if (isset($controls[$key])) {
-                $fields[] = $controls[$key];
-            }
-        }
-
-        return $fields;
+        return [...FieldSpriteFields::getFields($entry, pickSheetIndex: false), ...$fields];
     }
 
     public static function getSuppressionList(array $entry): ?RecordSubList
@@ -111,7 +82,8 @@ final class StagedActorFields
             key: $wrapped ? 'actor.suppress' : 'suppress', prefix: 'suppress', singular: 'suppressed subject',
             fields: [new RecordField('kind', 'Subject Kind', options: $kinds)],
             blank: ['kind' => 'player'],
-            variants: ['npc' => [RecordField::reference('id', 'NPC', 'map_npcs')]],
+            variants: ['npc' => [RecordField::reference('id', 'NPC', 'map_npcs')],
+                'world_object' => [RecordField::reference('id', 'World Object', 'map_world_objects')]],
             variantKey: 'kind', removeWhenEmpty: true,
         );
     }
@@ -142,36 +114,6 @@ final class StagedActorFields
                 }
             }
         }
-        if (! str_starts_with($field, 'sprites2d.')) {
-            return $entry;
-        }
-        $sprites = $entry['sprites2d'] ?? [];
-        if ($field === 'sprites2d.sheet' || $field === 'sprites2d.asset') {
-            $key = substr($field, strlen('sprites2d.'));
-            if (! isset($sprites[$key])) {
-                // Clearing an already absent alternate picker must not erase the active form.
-                if (($key === 'sheet' && isset($sprites['asset'])) || ($key === 'asset' && isset($sprites['sheet']))) {
-                    return $entry;
-                }
-                unset($entry['sprites2d']);
-
-                return $entry;
-            }
-            if ($key === 'sheet') {
-                unset($sprites['asset'], $sprites['cells'], $sprites['sourceRect'], $sprites['animation']);
-            } else {
-                unset($sprites['sheet'], $sprites['index']);
-            }
-        }
-        if ($field === 'sprites2d.animation.frames' && ! isset($sprites['animation']['frames'])) {
-            unset($sprites['animation']);
-        } elseif (str_starts_with($field, 'sprites2d.animation.')) {
-            $sprites['animation']['frames'] ??= [0];
-        }
-        // Use runtime validation rather than a second copy of its bounds and shape rules.
-        CinematicStageManager::getGraphicalSprites($sprites);
-        $entry['sprites2d'] = $sprites;
-
-        return $entry;
+        return FieldSpriteFields::prepareEdit($entry, $field);
     }
 }

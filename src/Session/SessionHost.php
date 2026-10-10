@@ -146,6 +146,21 @@ final class SessionHost
                 self::readOptionalString($params, 'answer'), self::readOptionalString($params, 'confirm'),
             ),
             'map.read' => $session->readMap(self::requireString($params, 'map')),
+            'worldObjects.read' => $session->readWorldObject(self::requireString($params, 'map'), self::requireString($params, 'id')),
+            'worldObjects.create' => $session->createWorldObject(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
+                self::requireString($params, 'id'), self::requireInt($params, 'x'), self::requireInt($params, 'y')),
+            'worldObjects.delete' => $session->deleteWorldObject(self::requireString($params, 'map'), self::requireInt($params, 'revision'), self::requireString($params, 'id')),
+            'worldObjects.apply' => $session->applyWorldObject(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
+                self::requireString($params, 'id'), self::requireArray($params, 'key'), self::requireString($params, 'value')),
+            'worldObjects.add', 'worldObjects.remove' => $session->changeWorldObjectItem(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
+                self::requireString($params, 'id'), self::requireArray($params, 'key'), $method === 'worldObjects.remove'),
+            'worldObjects.place' => $session->placeWorldObject(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
+                self::requireString($params, 'id'), self::requireInt($params, 'x'), self::requireInt($params, 'y'),
+                is_bool($params['coverage'] ?? false) ? ($params['coverage'] ?? false) : throw new InvalidRequest('"coverage" must be a boolean.')),
+            'worldObjects.moveVariant' => $session->moveWorldObjectVariant(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
+                self::requireString($params, 'id'), self::requireString($params, 'variant'), self::requireInt($params, 'offset')),
+            'worldObjects.preview' => $session->readWorldObjectPreview(self::requireString($params, 'map'),
+                isset($params['variants']) ? self::requireArray($params, 'variants') : [], isset($params['seconds']) ? self::requireNumber($params, 'seconds') : 0),
             'map.world' => $session->readWorld(self::requireString($params, 'map'),
                 is_bool($params['tileShadows'] ?? false) ? ($params['tileShadows'] ?? false) : throw new InvalidRequest('"tileShadows" must be a boolean.')),
             'tiles.palette' => $session->readTilePalette(self::requireString($params, 'map')),
@@ -611,6 +626,18 @@ final class SessionHost
     private static function requireInt(array $params, string $key): int
     {
         return is_int($params[$key] ?? null) ? $params[$key] : throw new InvalidRequest(sprintf('"%s" must be an integer.', $key));
+    }
+
+    private static function requireArray(array $params, string $key): array
+    {
+        return is_array($params[$key] ?? null) ? $params[$key] : throw new InvalidRequest(sprintf('"%s" must be structured data.', $key));
+    }
+
+    private static function requireNumber(array $params, string $key): float
+    {
+        $value = $params[$key] ?? null;
+        return (is_int($value) || is_float($value)) && is_finite((float) $value)
+            ? (float) $value : throw new InvalidRequest(sprintf('"%s" must be a finite number.', $key));
     }
 
     private static function requireRecipe(array $params): array

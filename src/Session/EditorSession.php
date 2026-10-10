@@ -54,6 +54,9 @@ use Ichiloto\Editor\Events\EventRefusal;
 use Ichiloto\Editor\Events\EventTypeCatalog;
 use Ichiloto\Editor\Events\EventTypeDefinition;
 use Ichiloto\Editor\Field\NpcAuthoring;
+use Ichiloto\Editor\Field\WorldObjectAuthoring;
+use Ichiloto\Editor\Field\WorldObjectPreview;
+use Ichiloto\Editor\Field\FieldSpriteFields;
 use Ichiloto\Editor\Field\CharacterSheetPreview;
 use Ichiloto\Editor\Field\NpcChange;
 use Ichiloto\Editor\Field\NpcInspector;
@@ -583,6 +586,7 @@ final class EditorSession
             'layers' => $layers,
             'events' => $events,
             'npcs' => $npcs,
+            'worldObjects' => WorldObjectAuthoring::readEntries($map),
             'tileLayers' => $map->describeTileLayers(),
             'physicalOccupancy' => $map->hasMapDataField([MapPhysicalOccupancy::DATA_KEY]),
             'occupancy' => PhysicalOccupancyEditor::readOccupancy($map),
@@ -2908,6 +2912,14 @@ final class EditorSession
                 ?? throw new SessionRefusal(sprintf('There is no %s %s.', $type->noun(), strval($record['index'] ?? '')));
         }
         $catalog = new ReferenceCatalog($this->workspace, $mapId === null ? null : $this->requireMap($mapId), $cutscene);
+        if ($category === 'world_object_tile_layers') {
+            if ($mapId === null || !is_string($record['id'] ?? null)) { throw new SessionRefusal('A covered tile-layer picker needs its map-local object owner.'); }
+            $map = $this->requireMap($mapId);
+            $object = array_find(WorldObjectAuthoring::readEntries($map), static fn($entry): bool => $entry['id'] === $record['id'])
+                ?? throw new SessionRefusal('That world-object owner no longer exists.');
+            return array_map(static fn($layer): array => ['value' => $layer['name'], 'label' => $layer['name']],
+                array_values(array_filter($map->describeTileLayers()['layers'], static fn($layer): bool => $layer['owner'] === ($object['covers']['layer'] ?? null))));
+        }
         if ($category === 'cinematic_movement_routes' && $record !== null) {
             $catalog = $catalog->createMovementContext($this->getMovementOwnerCommands($mapId, $record));
         }
@@ -3873,13 +3885,82 @@ final class EditorSession
         return $frame;
     }
 
-    /**
-     * Creates an NPC at a tile ({@see NpcAuthoring::create()}): fixed, its
-     * stable id derived from its name, a blank name taking the placeholder.
-     *
-     * @return array{revision: int, changed: bool, index: ?int, id: ?string, followedId: ?string, idReferences: list<string>}
-     * @throws SessionRefusal When the map is unknown, stale or read-only, or the tile is outside it or taken.
-     */
+    /** Reads a transient inspector for the map-owned declaration. */
+    public function readWorldObject(string $mapId, string $id): array
+    {
+        $map = $this->requireMap($mapId);
+        $authoring = $this->createWorldObjectAuthoring($map);
+        $index = $authoring->getIndex($id);
+        $records = $authoring->getRecords();
+        $object = WorldObjectAuthoring::readEntries($map)[$index];
+        $issue = $authoring->getSourceIssue();
+        $fields = $records->getSettingsFields($index);
+        foreach ($fields as &$field) {
+            $owner = isset($field['entry'][0]) && str_starts_with($field['field'] ?? '', 'variant')
+                ? $object['variants'][$field['entry'][0]] : $object;
+            $field = FieldSpriteFields::describeFields([$field], $owner, $map->getAssetRoot())[0];
+            if ($issue !== null) { $field['editable'] = false; }
+        }
+        unset($field);
+        return ['map' => $mapId, 'revision' => $this->getMapRevision($map), 'event' => null,
+            'worldObject' => ['id' => $id, 'variants' => array_column($object['variants'] ?? [], 'id'),
+                'anchor' => $object['anchor'], 'covers' => $object['covers'] ?? null, 'issue' => $issue],
+            'issue' => $issue,
+            'rows' => array_map(static fn($field): array => self::describeRecordRow($records, $index, [], $field, 'world-object'), $fields)];
+    }
+
+    public function createWorldObject(string $mapId, int $revision, string $id, int $x, int $y): array
+    {
+        return $this->changeWorldObject($mapId, $revision, static fn($authoring): ?Command => $authoring->createObject($id, $x, $y));
+    }
+
+    public function deleteWorldObject(string $mapId, int $revision, string $id): array
+    {
+        return $this->changeWorldObject($mapId, $revision, static fn($authoring): ?Command => $authoring->deleteObject($id));
+    }
+
+    public function applyWorldObject(string $mapId, int $revision, string $id, array $key, string $value): array
+    {
+        $field = is_string($key['field'] ?? null) ? $key['field'] : throw new SessionRefusal('Name a current world-object field.');
+        return $this->changeWorldObject($mapId, $revision, static fn($authoring): ?Command => $authoring->applyField($id, $field, $value));
+    }
+
+    public function changeWorldObjectItem(string $mapId, int $revision, string $id, array $key, bool $remove): array
+    {
+        $field = is_string($key['field'] ?? null) ? $key['field'] : throw new SessionRefusal('Name a current world-object list row.');
+        return $this->changeWorldObject($mapId, $revision, static fn($authoring): ?Command => $authoring->changeItem($id, $field, $remove));
+    }
+
+    public function placeWorldObject(string $mapId, int $revision, string $id, int $x, int $y, bool $coverage = false): array
+    {
+        return $this->changeWorldObject($mapId, $revision, static fn($authoring): ?Command => $authoring->placeObject($id, $x, $y, $coverage));
+    }
+
+    public function moveWorldObjectVariant(string $mapId, int $revision, string $id, string $variantId, int $offset): array
+    {
+        return $this->changeWorldObject($mapId, $revision, static fn($authoring): ?Command => $authoring->moveVariant($id, $variantId, $offset));
+    }
+
+    public function readWorldObjectPreview(string $mapId, array $variants = [], float $seconds = 0): array
+    {
+        try { return WorldObjectPreview::describeWorld($this->requireMap($mapId), $variants, $seconds); }
+        catch (InvalidArgumentException|MapSourceRefusal $error) { throw new SessionRefusal($error->getMessage(), previous: $error); }
+    }
+
+    private function createWorldObjectAuthoring(ProjectMap $map): WorldObjectAuthoring
+    {
+        return new WorldObjectAuthoring($map, new ReferenceCatalog($this->workspace, $map));
+    }
+
+    private function changeWorldObject(string $mapId, int $revision, callable $edit): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        try { $command = $edit($this->createWorldObjectAuthoring($map)); }
+        catch (InvalidArgumentException|\RuntimeException $error) { throw new SessionRefusal($error->getMessage(), previous: $error); }
+        if ($command !== null) { $this->history->record($command); }
+        return ['changed' => $command !== null, 'revision' => $this->getMapRevision($map)];
+    }
+
     public function createNpc(string $mapId, int $revision, int $x, int $y, string $name): array
     {
         $map = $this->requireCurrentMap($mapId, $revision);
@@ -4653,7 +4734,8 @@ final class EditorSession
         $workspace = $this->workspace;
         $before = array_map($this->getMapRevision(...), $this->getMapsById());
         $databases = $this->listDatabaseVersions();
-        $command = $step();
+        try { $command = $step(); }
+        catch (MapSourceRefusal $error) { throw new SessionRefusal($error->getMessage(), previous: $error); }
         // A step that put another workspace in place (a file set written at
         // once, or its undo) changed whatever it reloaded: everything.
         $reloaded = $this->workspace !== $workspace;

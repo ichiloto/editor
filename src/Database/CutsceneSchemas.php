@@ -323,13 +323,14 @@ final class CutsceneSchemas
             prefix: 'cast',
             singular: 'cast member',
             fields: [
-                new RecordField('kind', 'Kind', options: ['player', 'party_actor', 'npc', 'staged_actor']),
+                new RecordField('kind', 'Kind', options: ['player', 'party_actor', 'npc', 'staged_actor', ...($graphical ? ['world_object'] : [])]),
             ],
             blank: ['kind' => 'staged_actor', 'id' => 'actor', 'sprite' => ['@'], 'x' => 0, 'y' => 0],
             variants: [
                 'player' => [new RecordField('id', 'Id')],
                 'party_actor' => [RecordField::reference('id', 'Actor', 'actors')],
                 'npc' => [new RecordField('id', 'NPC Id', reference: 'map_npcs')],
+                'world_object' => [RecordField::reference('id', 'World Object', 'map_world_objects')],
                 'staged_actor' => static fn(array $entry): array => self::stagedActorFields($graphical, $entry),
             ],
             variantKey: 'kind',
@@ -393,7 +394,7 @@ final class CutsceneSchemas
             nestedLists: [
                 'move_route' => MovementRouteFields::getPointList(...),
                 'parallel' => self::laneList(),
-                'camera' => static fn(array $entry): ?RecordSubList => strtolower(strval($entry['operation'] ?? '')) === 'route' ? self::cameraPointList() : null,
+                'camera' => static fn(array $entry): ?RecordSubList => strtolower(strval($entry['operation'] ?? '')) === 'route' ? self::cameraPointList($graphical) : null,
                 ...RecordSchemaCatalog::getRegisteredCommandLists($graphical),
                 ...($graphical ? ['stage_actor' => StagedActorFields::getSuppressionList(...)] : []),
             ],
@@ -461,15 +462,15 @@ final class CutsceneSchemas
     public static function cinematicCommandVariants(bool $graphical = false): array
     {
         $base = RecordSchemaCatalog::eventCommandVariants($graphical);
-        $subject = static fn(string $prefix, string $label, bool $screen = false): array => [
+        $subject = static fn(string $prefix, string $label, bool $screen = false, array $entry = []): array => [
             new RecordField(
                 $prefix . '.kind',
                 $label . ' Kind',
                 options: $screen
-                    ? CinematicCommandSchema::SUBJECT_KINDS
-                    : array_values(array_diff(CinematicCommandSchema::SUBJECT_KINDS, ['screen_position'])),
+                    ? array_values(array_diff(CinematicCommandSchema::SUBJECT_KINDS, $graphical ? [] : ['world_object']))
+                    : array_values(array_diff(CinematicCommandSchema::SUBJECT_KINDS, $graphical ? ['screen_position'] : ['screen_position', 'world_object'])),
             ),
-            new RecordField($prefix . '.id', $label . ' Id', reference: 'cinematic_subjects', removeWhenEmpty: true, allowsNone: true),
+            new RecordField($prefix . '.id', $label . ' Id', reference: ($entry[$prefix]['kind'] ?? null) === 'world_object' ? 'map_world_objects' : 'cinematic_subjects', removeWhenEmpty: true, allowsNone: true),
             new RecordField($prefix . '.x', $label . ' X', InputControlType::INTEGER, removeWhenEmpty: true),
             new RecordField($prefix . '.y', $label . ' Y', InputControlType::INTEGER, removeWhenEmpty: true),
         ];
@@ -489,7 +490,7 @@ final class CutsceneSchemas
             'checkpoint' => [new RecordField('name', 'Checkpoint', reference: 'cinematic_checkpoints')],
             'camera' => static fn(array $entry): array => [
                 new RecordField('operation', 'Operation', options: CinematicCommandSchema::CAMERA_OPERATIONS),
-                ...(in_array($entry['operation'] ?? '', ['focus', 'pan', 'track'], true) ? $subject('target', 'Target') : []),
+                ...(in_array($entry['operation'] ?? '', ['focus', 'pan', 'track'], true) ? $subject('target', 'Target', entry: $entry) : []),
                 ...(in_array($entry['operation'] ?? '', ['pan', 'track', 'shake'], true)
                     ? [new RecordField('seconds', 'Seconds', InputControlType::FLOAT)]
                     : []),
@@ -509,12 +510,12 @@ final class CutsceneSchemas
             'field_animation' => static fn(array $entry): array => array_key_exists('effect', $entry)
                 ? [
                     new RecordField('effect', 'Effect', reference: 'effects', removeWhenEmpty: true, allowsNone: true, displayDefault: '(legacy animation)'),
-                    ...$subject('target', 'Target', true),
+                    ...$subject('target', 'Target', true, $entry),
                 ]
                 : [
                     new RecordField('effect', 'Effect', reference: 'effects', removeWhenEmpty: true, allowsNone: true, displayDefault: '(legacy animation)'),
                     RecordField::reference('animation', 'Animation', 'animations'),
-                    ...$subject('target', 'Target', true),
+                    ...$subject('target', 'Target', true, $entry),
                     new RecordField('secondsPerFrame', 'Seconds Per Frame', InputControlType::FLOAT, removeWhenEmpty: true, displayDefault: '0.12'),
                 ],
             'title_card' => [
@@ -562,15 +563,16 @@ final class CutsceneSchemas
     /**
      * Returns the points of a camera route: a target each, with a duration.
      */
-    public static function cameraPointList(): RecordSubList
+    public static function cameraPointList(bool $graphical = false): RecordSubList
     {
         return new RecordSubList(
             key: 'points',
             prefix: 'point',
             singular: 'route point',
-            fields: [
-                new RecordField('kind', 'Kind', options: array_values(array_diff(CinematicCommandSchema::SUBJECT_KINDS, ['screen_position']))),
-                new RecordField('id', 'Id', reference: 'cinematic_subjects', removeWhenEmpty: true, allowsNone: true),
+            fields: [],
+            getFields: static fn(array $entry): array => [
+                new RecordField('kind', 'Kind', options: array_values(array_diff(CinematicCommandSchema::SUBJECT_KINDS, $graphical ? ['screen_position'] : ['screen_position', 'world_object']))),
+                new RecordField('id', 'Id', reference: ($entry['kind'] ?? null) === 'world_object' ? 'map_world_objects' : 'cinematic_subjects', removeWhenEmpty: true, allowsNone: true),
                 new RecordField('x', 'X', InputControlType::INTEGER, removeWhenEmpty: true),
                 new RecordField('y', 'Y', InputControlType::INTEGER, removeWhenEmpty: true),
                 new RecordField('seconds', 'Seconds', InputControlType::FLOAT),

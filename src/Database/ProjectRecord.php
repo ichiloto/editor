@@ -201,6 +201,8 @@ final class ProjectRecord
             return $target;
         }
 
+        // Removing an absent nested field never changes its scalar/null owner.
+        if ($value === null && !is_array($target[$key] ?? null)) { return $target; }
         $child = is_array($target[$key] ?? null) ? $target[$key] : [];
         $child = self::withPathValue($child, $segments, $value);
 

@@ -67,6 +67,8 @@ final readonly class RecordSubList
         public ?string $keyField = null,
         public ?string $valueField = null,
         public ?Closure $prepareEdit = null,
+        /** Dynamic entry fields independent of a persisted variant discriminator. */
+        public ?Closure $getFields = null,
     ) {
     }
 
@@ -198,6 +200,7 @@ final readonly class RecordSubList
      */
     public function fieldsFor(array $entry): array
     {
+        if ($this->getFields !== null) { return ($this->getFields)($entry); }
         if ($this->variantKey === null) {
             return $this->fields;
         }
