@@ -121,3 +121,40 @@ it('scrolls only within the canvas preview including its edge cells', function (
     callEditorMethod($editor, 'dispatchInput', sprintf("\033[<67;%d;%dM", $bounds['right'], $bounds['bottom']));
     expect(getEditorProperty($editor, 'canvasOffsetX'))->toBeGreaterThan(10);
 })->with(['map', 'event']);
+
+it('uses the rendered viewport width through wheel undo tab cursor movement and resize', function (int $terminalWidth) {
+    [$editor, $map] = createCanvasRegressionEditor();
+    setEditorProperty($editor, 'lastTerminalSize', ['width' => $terminalWidth, 'height' => 40]);
+    $map->resize(200, 100);
+    $bounds = callEditorMethod($editor, 'getCanvasPreviewBounds');
+    $lastOffset = $map->getWidth() - $bounds['width'];
+    setEditorProperty($editor, 'cursorX', $map->getWidth() - 1);
+    callEditorMethod($editor, 'syncViewportToCursor');
+    expect(getEditorProperty($editor, 'canvasOffsetX'))->toBe($lastOffset);
+
+    callEditorMethod($editor, 'applyCanvasWrites', $map, [['x' => 199, 'y' => 0, 'symbol' => 'Q']], 'test stroke');
+    callEditorMethod($editor, 'dispatchInput', sprintf("\033[<67;%d;%dM", $bounds['right'], $bounds['top']));
+    callEditorMethod($editor, 'dispatchInput', "\x1a");
+    expect(getEditorProperty($editor, 'canvasOffsetX'))->toBe($lastOffset);
+    callEditorMethod($editor, 'dispatchInput', "\t");
+    expect(getEditorProperty($editor, 'canvasOffsetX'))->toBe($lastOffset);
+    callEditorMethod($editor, 'dispatchInput', "\x19");
+    expect(getEditorProperty($editor, 'canvasOffsetX'))->toBe($lastOffset);
+
+    setEditorProperty($editor, 'canvasOffsetX', 0);
+    setEditorProperty($editor, 'cursorX', $bounds['width']);
+    callEditorMethod($editor, 'syncViewportToCursor');
+    expect(getEditorProperty($editor, 'canvasOffsetX'))->toBe(1);
+
+    setEditorProperty($editor, 'lastTerminalSize', ['width' => $terminalWidth + 20, 'height' => 45]);
+    setEditorProperty($editor, 'canvasOffsetX', 199);
+    setEditorProperty($editor, 'canvasOffsetY', 99);
+    callEditorMethod($editor, 'clampCanvasOffsets');
+    $resized = callEditorMethod($editor, 'getCanvasPreviewBounds');
+    expect(getEditorProperty($editor, 'canvasOffsetX'))->toBe(200 - $resized['width'])
+        ->and(getEditorProperty($editor, 'canvasOffsetY'))->toBe(100 - $resized['height']);
+    $map->resize(2, 2);
+    callEditorMethod($editor, 'clampCanvasOffsets');
+    expect(getEditorProperty($editor, 'canvasOffsetX'))->toBe(0)
+        ->and(getEditorProperty($editor, 'canvasOffsetY'))->toBe(0);
+})->with([100, 120, 160]);

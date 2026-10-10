@@ -31,7 +31,7 @@ function writeOptimizePolicy(string $root, string $body): string
  */
 function writeOptimizeInventory(string $root): void
 {
-    file_put_contents($root . '/assets/Data/items.php', <<<'PHP'
+    writeItemRecords($root, ...itemsFromSource(<<<'PHP'
     <?php
 
     use Ichiloto\Engine\Entities\Enumerations\WeaponType;
@@ -70,7 +70,7 @@ function writeOptimizeInventory(string $root): void
         specialProperty: ['type' => 'lifesteal', 'amount' => 10],
       ),
     ];
-    PHP);
+    PHP));
 }
 
 /**
@@ -344,7 +344,7 @@ it('shows the preview in the Inspector without writing anything', function () {
     setEditorProperty($editor, 'lastTerminalSize', ['width' => 140, 'height' => 40]);
     callEditorMethod($editor, 'openDatabaseAtCategory', 'actors');
 
-    $rows = static fn(Editor $editor): array => callEditorMethod($editor, 'getDatabaseActorSettingsFields');
+    $rows = static fn(Editor $editor): array => callEditorMethod($editor, 'getDatabaseSettingsFields');
     $valueOf = static function (Editor $editor, string $label) use ($rows): string {
         foreach ($rows($editor) as $field) {
             if (($field['label'] ?? null) === $label) {
@@ -362,7 +362,7 @@ it('shows the preview in the Inspector without writing anything', function () {
 
     // Nothing this project has is worn on the head, and the preview says so
     // rather than showing an empty list.
-    callEditorMethod($editor, 'applyDatabaseFieldValue', '__actor_optimize_slot', 'head');
+    callEditorMethod($editor, 'applyDatabaseFieldValueRecorded', array_values(array_filter(callEditorMethod($editor, 'getDatabaseSettingsFields'), static fn(array $row): bool => ($row['field'] ?? null) === '__actor_optimize_slot'))[0], 'head');
 
     expect($valueOf($editor, '  (nothing)'))->toContain('no equipment this project has fits that slot')
         ->and(sourceHashTree($root))->toBe($before);

@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 use Ichiloto\Editor\Database\QuestReferences;
 use Ichiloto\Editor\Database\Slug;
-use Ichiloto\Editor\ProjectQuestDatabase;
+use Ichiloto\Editor\Database\RecordAuthoring;
 use Ichiloto\Editor\ProjectWorkspace;
 
 it('makes an id out of a name', function () {
@@ -23,43 +23,54 @@ it('numbers an id rather than colliding', function () {
 });
 
 it('gives a new quest an id from its name', function () {
-    $database = ProjectQuestDatabase::fromProject(makeTemporaryProject());
+    $database = ProjectWorkspace::fromProject(makeTemporaryProject())->getRecordDatabase('quests');
+    $first = $database->addRecord();
+    $second = $database->addRecord();
+    $database->setField($first, 'name', 'Feed The Cat');
+    $database->setField($second, 'name', 'Breakfast Duty');
 
-    expect($database->getQuestByIndex($database->addQuest('Feed The Cat'))->getId())->toBe('feed-the-cat')
+    expect($database->getRecordByIndex($first)->get('id'))->toBe('feed-the-cat')
         // The fixture already has a breakfast-duty, which is the collision
         // the numbering is for.
-        ->and($database->getQuestByIndex($database->addQuest('Breakfast Duty'))->getId())->toBe('breakfast-duty-2');
+        ->and($database->getRecordByIndex($second)->get('id'))->toBe('breakfast-duty-2');
 });
 
 it('keeps the id in step with the name while nothing points at it', function () {
-    $database = ProjectQuestDatabase::fromProject(makeTemporaryProject());
-    $index = $database->addQuest('New Quest');
+    $database = ProjectWorkspace::fromProject(makeTemporaryProject())->getRecordDatabase('quests');
+    $index = $database->addRecord();
 
-    $id = $database->renameQuest($index, 'Feed The Cat', mayChangeId: true);
+    $change = new RecordAuthoring()->applyField($database, $index, [], 'name', 'Feed The Cat', 'Name');
 
-    expect($id)->toBe('feed-the-cat')
-        ->and($database->getQuestByIndex($index)->getName())->toBe('Feed The Cat');
+    expect($database->getRecordByIndex($index)->get('id'))->toBe('feed-the-cat')
+        ->and($database->getRecordByIndex($index)->get('name'))->toBe('Feed The Cat')
+        ->and($change->note)->toBe('Its id is now feed-the-cat.');
+
+    $change->command->undo();
+
+    expect($database->getRecordByIndex($index)->get('id'))->toBe('new-quest');
 });
 
 it('holds the id still once something points at it', function () {
-    $database = ProjectQuestDatabase::fromProject(makeTemporaryProject());
-    $index = $database->addQuest('New Quest');
+    // The fixture's skit waits on breakfast-duty.
+    $database = ProjectWorkspace::fromProject(makeTemporaryProject())->getRecordDatabase('quests');
 
-    $id = $database->renameQuest($index, 'Feed The Cat', mayChangeId: false);
+    $change = new RecordAuthoring()->applyField($database, 0, [], 'name', 'Feed The Cat', 'Name');
 
     // Renaming does not rewrite the triggers and conditions that name it, so
     // the id is what stays put.
-    expect($id)->toBeNull()
-        ->and($database->getQuestByIndex($index)->getId())->toBe('new-quest')
-        ->and($database->getQuestByIndex($index)->getName())->toBe('Feed The Cat');
+    expect($database->getRecordByIndex(0)->get('id'))->toBe('breakfast-duty')
+        ->and($database->getRecordByIndex(0)->get('name'))->toBe('Feed The Cat')
+        ->and($change->note)->toBe('Its id stays breakfast-duty, which other things point at.');
 });
 
 it('numbers a renamed quest away from one that has the name already', function () {
-    $database = ProjectQuestDatabase::fromProject(makeTemporaryProject());
-    $database->addQuest('Feed The Cat');
-    $second = $database->addQuest('New Quest');
+    $database = ProjectWorkspace::fromProject(makeTemporaryProject())->getRecordDatabase('quests');
+    $first = $database->addRecord();
+    $second = $database->addRecord();
+    $database->setField($first, 'name', 'Feed The Cat');
+    $database->setField($second, 'name', 'Feed The Cat');
 
-    expect($database->renameQuest($second, 'Feed The Cat', mayChangeId: true))->toBe('feed-the-cat-2');
+    expect($database->getRecordByIndex($second)->get('id'))->toBe('feed-the-cat-2');
 });
 
 it('finds what points at a quest', function () {

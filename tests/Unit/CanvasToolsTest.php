@@ -526,13 +526,15 @@ it('recolours the cell under the cursor from the colour picker', function () {
         ->and($map->getTileColor(5, 2))->toBe('black');
 });
 
-it('refuses the colour picker on the event layer and in Paint mode', function () {
+it('allows event colour authoring while Paint mode still treats o as a glyph', function () {
     $editor = canvasEditor();
     callEditorMethod($editor, 'dispatchInput', 'e');
     callEditorMethod($editor, 'dispatchInput', 'o');
 
-    expect(getEditorProperty($editor, 'isColorPickerOpen'))->toBeFalse()
-        ->and(getEditorProperty($editor, 'statusMessage'))->toContain('Map layer');
+    // Phase 2 removes the event-layer colour restriction; all layers use
+    // the same styled-cell workflow now.
+    expect(getEditorProperty($editor, 'isColorPickerOpen'))->toBeTrue();
+    callEditorMethod($editor, 'dispatchInput', "\033");
 
     callEditorMethod($editor, 'dispatchInput', 'm');
     callEditorMethod($editor, 'dispatchInput', 'i');
@@ -744,4 +746,100 @@ it('shows the cursor locator in the canvas header', function () {
     $lines = $workspace->getCanvasLines(0, 40, 10, cursor: ['x' => 7, 'y' => 3]);
 
     expect($lines[1])->toContain('cursor 7,3');
+});
+
+it('recolours every cell of an active selection from the colour picker', function () {
+    $editor = canvasEditor();
+    /** @var ProjectWorkspace $workspace */
+    $workspace = getEditorProperty($editor, 'workspace');
+    $map = $workspace->getMapByIndex(0);
+
+    foreach ([2, 3, 4, 5] as $x) {
+        $map->setTileSymbol($x, 2, '#');
+    }
+
+    setEditorProperty($editor, 'canvasSelection', ['x' => 2, 'y' => 2, 'width' => 4, 'height' => 1]);
+    callEditorMethod($editor, 'dispatchInput', 'o');
+    // Down twice from 'Keep cell colour' lands on the first ANSI colour.
+    callEditorMethod($editor, 'dispatchInput', "\033[B");
+    callEditorMethod($editor, 'dispatchInput', "\033[B");
+    callEditorMethod($editor, 'dispatchInput', "\n");
+
+    foreach ([2, 3, 4, 5] as $x) {
+        expect($map->getTileSymbol($x, 2))->toBe('#')
+            ->and($map->getTileColor($x, 2))->toBe('black', "cell {$x} of the selection");
+    }
+
+    // One undo restores the whole recolour.
+    callEditorMethod($editor, 'dispatchInput', 'u');
+
+    foreach ([2, 3, 4, 5] as $x) {
+        expect($map->getTileColor($x, 2))->toBeNull();
+    }
+});
+
+it('draws a filled rectangle by dragging in Paint mode, previewing it on the way, as one undo step', function () {
+    $editor = canvasEditor();
+    $before = tileRows($editor);
+    setEditorProperty($editor, 'selectedPaintSymbol', 'Q');
+    callEditorMethod($editor, 'dispatchInput', 'R');
+    callEditorMethod($editor, 'dispatchInput', 'i');
+    [$fromColumn, $fromRow] = canvasCellAt($editor, 1, 1);
+    [$overColumn, $overRow] = canvasCellAt($editor, 2, 2);
+    [$toColumn, $toRow] = canvasCellAt($editor, 3, 2);
+
+    callEditorMethod($editor, 'dispatchInput', mousePress(0, $fromColumn, $fromRow));
+    callEditorMethod($editor, 'dispatchInput', mousePress(32, $overColumn, $overRow));
+    // Nothing is painted while dragging; the canvas previews the shape.
+    expect(tileRows($editor))->toBe($before)
+        ->and(callEditorMethod($editor, 'getCanvasPreviewCells'))->toBe([1 => [1 => 'Q', 2 => 'Q'], 2 => [1 => 'Q', 2 => 'Q']]);
+
+    callEditorMethod($editor, 'dispatchInput', sprintf("\033[<0;%d;%dm", $toColumn, $toRow));
+    $rows = tileRows($editor);
+    expect(substr($rows[1], 1, 3))->toBe('QQQ')->and(substr($rows[2], 1, 3))->toBe('QQQ')
+        ->and(getEditorProperty($editor, 'canvasToolAnchor'))->toBeNull()
+        ->and(callEditorMethod($editor, 'getCanvasPreviewCells'))->toBe([]);
+
+    callEditorMethod($editor, 'dispatchInput', "\x1a");
+    expect(tileRows($editor))->toBe($before);
+});
+
+it('erases a dragged line with the right button', function () {
+    $editor = canvasEditor();
+    setEditorProperty($editor, 'selectedPaintSymbol', 'Q');
+    callEditorMethod($editor, 'dispatchInput', 'l');
+    callEditorMethod($editor, 'dispatchInput', 'i');
+    [$fromColumn, $fromRow] = canvasCellAt($editor, 0, 0);
+    [$toColumn, $toRow] = canvasCellAt($editor, 2, 0);
+
+    callEditorMethod($editor, 'dispatchInput', mousePress(2, $fromColumn, $fromRow));
+    callEditorMethod($editor, 'dispatchInput', mousePress(34, $toColumn, $toRow));
+    callEditorMethod($editor, 'dispatchInput', sprintf("\033[<2;%d;%dm", $toColumn, $toRow));
+
+    expect(substr(tileRows($editor)[0], 0, 3))->toBe('   ');
+});
+
+it('selects by dragging with the Select tool in Normal mode, and a click still only moves the cursor', function () {
+    $editor = canvasEditor();
+    $before = tileRows($editor);
+    callEditorMethod($editor, 'dispatchInput', 's');
+    [$fromColumn, $fromRow] = canvasCellAt($editor, 1, 1);
+    [$toColumn, $toRow] = canvasCellAt($editor, 3, 2);
+
+    callEditorMethod($editor, 'dispatchInput', mousePress(0, $fromColumn, $fromRow));
+    callEditorMethod($editor, 'dispatchInput', sprintf("\033[<0;%d;%dm", $fromColumn, $fromRow));
+    expect(getEditorProperty($editor, 'canvasSelection'))->toBeNull()
+        ->and([getEditorProperty($editor, 'cursorX'), getEditorProperty($editor, 'cursorY')])->toBe([1, 1]);
+
+    callEditorMethod($editor, 'dispatchInput', mousePress(0, $fromColumn, $fromRow));
+    callEditorMethod($editor, 'dispatchInput', mousePress(32, $toColumn, $toRow));
+    callEditorMethod($editor, 'dispatchInput', sprintf("\033[<0;%d;%dm", $toColumn, $toRow));
+    expect(getEditorProperty($editor, 'canvasSelection'))->toBe(['x' => 1, 'y' => 1, 'width' => 3, 'height' => 2])
+        ->and(tileRows($editor))->toBe($before);
+});
+
+it('names the tool keys in the Normal-mode canvas border', function () {
+    $editor = canvasEditor();
+
+    expect(callEditorMethod($editor, 'createCanvasWindow')->help)->toContain('b/l/r/R/s:Tool');
 });

@@ -1,0 +1,779 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Ichiloto\Editor\Session;
+
+use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
+use Ichiloto\Editor\Console\ConsoleBinary;
+use Ichiloto\Editor\Console\ProjectCreator;
+use Ichiloto\Editor\Playtest\PlaytestStart;
+use JsonException;
+use RuntimeException;
+use Throwable;
+
+/**
+ * Serves an {@see EditorSession} to a native editor over a child process's
+ * standard streams: one JSON request per line in, one JSON response per line
+ * out. Diagnostics go to standard error, never into the protocol.
+ *
+ * A request is `{"id": n, "method": "...", "params": {...}}`. Its response
+ * carries the same id and either `result`, or `error` with a `kind`:
+ * `refusal` for an edit or read the session will not make (the author reads
+ * the message), `request` for a malformed or unknown request, `failure` for
+ * anything unexpected. The first request must be `hello`, which opens the
+ * project and agrees the protocol version.
+ */
+final class SessionHost
+{
+    public const int PROTOCOL = 1;
+
+    private ?EditorSession $session = null;
+
+    /**
+     * @param resource $input
+     * @param resource $output
+     * @param resource $diagnostics
+     */
+    public function __construct(private $input, private $output, private $diagnostics)
+    {
+    }
+
+    /** Serves requests until the input closes. */
+    public function run(): void
+    {
+        while (($line = fgets($this->input)) !== false) {
+            $line = trim($line);
+            if ($line === '') {
+                continue;
+            }
+            $this->write($this->handle($line));
+        }
+        // The editor has gone: nothing it started may outlive it.
+        $this->session?->close();
+    }
+
+    /**
+     * Answers one request line.
+     *
+     * @return array<string, mixed>
+     */
+    public function handle(string $line): array
+    {
+        try {
+            $request = json_decode($line, true, 64, JSON_THROW_ON_ERROR);
+        } catch (JsonException $error) {
+            return ['id' => null, 'error' => ['kind' => 'request', 'message' => 'Not JSON: ' . $error->getMessage()]];
+        }
+        $id = is_array($request) ? ($request['id'] ?? null) : null;
+        $method = is_array($request) && is_string($request['method'] ?? null) ? $request['method'] : '';
+        $params = is_array($request) && is_array($request['params'] ?? null) ? $request['params'] : [];
+
+        try {
+            if (in_array($method, ['tileset.setOccupancy', 'occupancy.previewPiece', 'occupancy.stampPiece'], true)) {
+                // Preserve JSON object/list identity for this strict mask contract.
+                $wire = json_decode($line, false, 64, JSON_THROW_ON_ERROR);
+                foreach (['expected', 'value'] as $key) {
+                    if (($wire->params ?? null) instanceof \stdClass && property_exists($wire->params, $key)) {
+                        $params[$key] = $wire->params->{$key};
+                    }
+                }
+            }
+            return ['id' => $id, 'result' => $this->dispatch($method, $params)];
+        } catch (SessionRefusal $refusal) {
+            return ['id' => $id, 'error' => ['kind' => 'refusal', 'message' => $refusal->getMessage()]];
+        } catch (InvalidRequest $invalid) {
+            return ['id' => $id, 'error' => ['kind' => 'request', 'message' => $invalid->getMessage()]];
+        } catch (Throwable $failure) {
+            fwrite($this->diagnostics, sprintf("[session-host] %s: %s\n%s\n", $failure::class, $failure->getMessage(),
+                $failure->getTraceAsString()));
+
+            return ['id' => $id, 'error' => ['kind' => 'failure', 'message' => $failure->getMessage()]];
+        }
+    }
+
+    /**
+     * @param array<string, mixed> $params
+     * @return array<string, mixed>|list<array<string, mixed>>
+     */
+    private function dispatch(string $method, array $params): array
+    {
+        if ($method === 'hello') {
+            $protocol = $params['protocol'] ?? null;
+            if ($protocol !== self::PROTOCOL) {
+                throw new InvalidRequest(sprintf('This host speaks protocol %d, not %s.', self::PROTOCOL, var_export($protocol, true)));
+            }
+            $this->session = EditorSession::open(self::requireString($params, 'project'));
+
+            return ['protocol' => self::PROTOCOL, 'project' => $this->session->describeProject()];
+        }
+
+        // Creating a project needs none open: an editor with no project offers it.
+        if ($method === 'project.create') {
+            try {
+                return ['root' => new ProjectCreator(ConsoleBinary::discover())->createProject(
+                    self::requireString($params, 'title'),
+                    self::requireString($params, 'directory'),
+                    self::readOptionalString($params, 'hero'),
+                    self::readOptionalString($params, 'battleEngine'),
+                    ($params['install'] ?? false) === true,
+                )];
+            } catch (RuntimeException $refused) {
+                throw new SessionRefusal($refused->getMessage(), previous: $refused);
+            }
+        }
+
+        $session = $this->session ?? throw new InvalidRequest('Say hello with a project first.');
+
+        return match ($method) {
+            'project.search' => $session->searchProject(self::requireString($params, 'query')),
+            'maps.list' => $session->describeMaps(),
+            'maps.kinds' => $session->listMapKinds(),
+            'map.create' => $session->createMap(
+                is_string($params['name'] ?? null) ? $params['name'] : null,
+                is_string($params['kind'] ?? null) ? $params['kind'] : null,
+                self::requireInt($params, 'width'),
+                self::requireInt($params, 'height'),
+            ),
+            'map.duplicate' => $session->duplicateMap(self::requireString($params, 'map'), self::requireInt($params, 'revision')),
+            'map.move' => $session->moveMap(
+                self::requireString($params, 'map'), self::requireInt($params, 'revision'),
+                self::readOptionalString($params, 'destination'), ($params['confirm'] ?? false) === true,
+            ),
+            'map.delete' => $session->deleteMap(self::requireString($params, 'map'), ($params['confirm'] ?? false) === true),
+            'map.insertLines' => $session->insertMapLines(
+                self::requireString($params, 'map'), self::requireInt($params, 'revision'),
+                self::requireString($params, 'axis'), self::requireInt($params, 'at'), self::requireInt($params, 'count'),
+                self::readOptionalString($params, 'answer'), self::readOptionalString($params, 'confirm'),
+            ),
+            'map.read' => $session->readMap(self::requireString($params, 'map')),
+            'worldObjects.read' => $session->readWorldObject(self::requireString($params, 'map'), self::requireString($params, 'id')),
+            'worldObjects.create' => $session->createWorldObject(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
+                self::requireString($params, 'id'), self::requireInt($params, 'x'), self::requireInt($params, 'y')),
+            'worldObjects.delete' => $session->deleteWorldObject(self::requireString($params, 'map'), self::requireInt($params, 'revision'), self::requireString($params, 'id')),
+            'worldObjects.apply' => $session->applyWorldObject(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
+                self::requireString($params, 'id'), self::requireArray($params, 'key'), self::requireString($params, 'value')),
+            'worldObjects.add', 'worldObjects.remove' => $session->changeWorldObjectItem(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
+                self::requireString($params, 'id'), self::requireArray($params, 'key'), $method === 'worldObjects.remove'),
+            'worldObjects.place' => $session->placeWorldObject(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
+                self::requireString($params, 'id'), self::requireInt($params, 'x'), self::requireInt($params, 'y'),
+                is_bool($params['coverage'] ?? false) ? ($params['coverage'] ?? false) : throw new InvalidRequest('"coverage" must be a boolean.')),
+            'worldObjects.moveVariant' => $session->moveWorldObjectVariant(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
+                self::requireString($params, 'id'), self::requireString($params, 'variant'), self::requireInt($params, 'offset')),
+            'worldObjects.preview' => $session->readWorldObjectPreview(self::requireString($params, 'map'),
+                isset($params['variants']) ? self::requireArray($params, 'variants') : [], isset($params['seconds']) ? self::requireNumber($params, 'seconds') : 0),
+            'map.world' => $session->readWorld(self::requireString($params, 'map'),
+                is_bool($params['tileShadows'] ?? false) ? ($params['tileShadows'] ?? false) : throw new InvalidRequest('"tileShadows" must be a boolean.')),
+            'tiles.palette' => $session->readTilePalette(self::requireString($params, 'map')),
+            'tilesets.preview' => $session->readTilesetPreview(self::requireInt($params, 'index')),
+            'tileset.setOccupancy' => $session->setTilesetOccupancy(
+                self::requireInt($params, 'index'), self::requireFootprintId($params, 'tileset'), self::requireFootprintId($params, 'piece'),
+                self::requireFootprint($params, 'expected'), self::requireFootprint($params, 'value'),
+            ),
+            'tilesets.mark' => $session->toggleTilesetMark(
+                self::requireInt($params, 'index'),
+                self::requireString($params, 'mark'),
+                self::requireInt($params, 'tile'),
+            ),
+            'audio.play' => $session->playAudio(self::requireString($params, 'kind'), self::requireString($params, 'name')),
+            'audio.stop' => $session->stopAudio(),
+            'audio.status' => $session->describeAudio(),
+            'tiles.read' => $session->readTiles(self::requireString($params, 'map')),
+            'tiles.stamp' => $session->stampTiles(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireString($params, 'layer'),
+                self::requireTileCells($params),
+                is_string($params['label'] ?? null) ? $params['label'] : 'Place tiles',
+                self::readTileChoices($params),
+            ),
+            'tiles.paint' => $session->paintTiles(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireString($params, 'layer'),
+                self::requireCells($params),
+                self::requireInt($params, 'tile'),
+                is_string($params['label'] ?? null) ? $params['label'] : 'Place tiles',
+                self::readTileChoices($params),
+            ),
+            'canvas.shape' => $session->getToolShape(
+                self::requireString($params, 'map'),
+                self::requireString($params, 'tool'),
+                self::requireCell($params, 'from'),
+                self::requireCell($params, 'to'),
+                self::requireInt($params, 'size'),
+                array_key_exists('path', $params) ? self::requireCells(['cells' => $params['path']]) : [],
+            ),
+            'canvas.fill' => $session->getFillRegion(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'x'),
+                self::requireInt($params, 'y'),
+                self::readOptionalString($params, 'layer'),
+                self::readOptionalString($params, 'tileLayer'),
+            ),
+            'canvas.fillOccupancy' => $session->getOccupancyFillRegion(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'x'),
+                self::requireInt($params, 'y'),
+                self::requireInt($params, 'revision'),
+            ),
+            'pieces.list' => $session->listPieces(self::requireString($params, 'map')),
+            'pieces.preview' => $session->previewPiece(
+                self::requireString($params, 'map'),
+                self::requireString($params, 'piece'),
+                self::requireCell($params, 'from'),
+                self::requireCell($params, 'to'),
+                self::readOptionalString($params, 'color'),
+            ),
+            'pieces.place' => $session->placePiece(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireString($params, 'piece'),
+                self::requireCell($params, 'from'),
+                self::requireCell($params, 'to'),
+                self::readOptionalString($params, 'color'),
+            ),
+            'map.pieceAt' => $session->readPieceAt(self::requireString($params, 'map'), self::requireString($params, 'layer'),
+                self::requireInt($params, 'x'), self::requireInt($params, 'y')),
+            'selection.copy' => $session->copySelection(self::requireString($params, 'map'), self::requireString($params, 'layer'),
+                self::requireInt($params, 'x'), self::requireInt($params, 'y'), self::requireInt($params, 'width'), self::requireInt($params, 'height')),
+            'selection.cut' => $session->cutSelection(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
+                self::requireString($params, 'layer'), self::requireInt($params, 'x'), self::requireInt($params, 'y'),
+                self::requireInt($params, 'width'), self::requireInt($params, 'height')),
+            'selection.paste' => $session->pasteSelection(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
+                self::requireString($params, 'layer'), self::requireInt($params, 'x'), self::requireInt($params, 'y'), self::readChoices($params)),
+            'selection.clipboard' => $session->describeClipboard(),
+            'map.coverage' => $session->readCoverage(self::requireString($params, 'map')),
+            'layer.drawTiles' => $session->drawLayerTiles(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireString($params, 'layer'),
+                self::readChoices($params),
+            ),
+            'map.paint' => $session->paint(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireString($params, 'layer'),
+                self::requireCells($params),
+                self::requireString($params, 'symbol'),
+                array_key_exists('color', $params) && (is_string($params['color']) || $params['color'] === null) ? $params['color'] : null,
+                self::readChoices($params),
+                is_string($params['label'] ?? null) ? $params['label'] : 'Paint',
+            ),
+            'map.migrateOccupancy' => $session->migratePhysicalOccupancy(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+            ),
+            'map.paintOccupancy' => $session->paintOccupancy(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireCells($params),
+                self::requireInt($params, 'collision'),
+                array_key_exists('label', $params) ? self::requireString($params, 'label') : 'Paint collision',
+            ),
+            'occupancy.previewPiece' => $session->previewOccupancyPiece(
+                self::requireString($params, 'map'), self::requireInt($params, 'revision'),
+                self::requireString($params, 'tileset'), self::requireString($params, 'piece'),
+                self::requireRecipe($params), self::requireInt($params, 'x'), self::requireInt($params, 'y'),
+            ),
+            'occupancy.stampPiece' => $session->stampOccupancyPiece(
+                self::requireString($params, 'map'), self::requireInt($params, 'revision'),
+                self::requireString($params, 'tileset'), self::requireString($params, 'piece'),
+                self::requireRecipe($params), self::requireInt($params, 'x'), self::requireInt($params, 'y'),
+            ),
+            'layer.create' => $session->createLayer(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireString($params, 'name'),
+                is_bool($params['decoration'] ?? false) ? ($params['decoration'] ?? false) : throw new InvalidRequest('"decoration" must be a boolean.'),
+            ),
+            'layer.rename' => $session->renameLayer(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireString($params, 'layer'),
+                self::requireString($params, 'name'),
+                is_bool($params['confirm'] ?? false) ? ($params['confirm'] ?? false) : throw new InvalidRequest('"confirm" must be a boolean.'),
+            ),
+            'layer.remove' => $session->removeLayer(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireString($params, 'layer'),
+                is_bool($params['confirm'] ?? false) ? ($params['confirm'] ?? false) : throw new InvalidRequest('"confirm" must be a boolean.'),
+            ),
+            'layer.reorder' => $session->moveLayer(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireString($params, 'layer'),
+                is_int($params['order'] ?? null) || ! isset($params['order']) ? ($params['order'] ?? null) : throw new InvalidRequest('"order" must be an integer.'),
+                is_string($params['direction'] ?? null) || ! isset($params['direction']) ? ($params['direction'] ?? null) : throw new InvalidRequest('"direction" must be "above" or "below".'),
+                is_bool($params['confirm'] ?? false) ? ($params['confirm'] ?? false) : throw new InvalidRequest('"confirm" must be a boolean.'),
+            ),
+            'layer.decoration' => $session->setLayerDecoration(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireString($params, 'layer'),
+                is_bool($params['decoration'] ?? null) ? $params['decoration'] : throw new InvalidRequest('"decoration" must be a boolean.'),
+                is_bool($params['confirm'] ?? false) ? ($params['confirm'] ?? false) : throw new InvalidRequest('"confirm" must be a boolean.'),
+            ),
+            'tileLayer.create' => $session->createTileLayer(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireString($params, 'name'),
+            ),
+            'tileLayer.rename' => $session->renameTileLayer(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireString($params, 'name'),
+                self::requireString($params, 'newName'),
+            ),
+            'tileLayer.remove' => $session->removeTileLayer(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireString($params, 'name'),
+            ),
+            'tileLayer.reorder' => $session->moveTileLayer(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireString($params, 'name'),
+                is_int($params['order'] ?? null) || ! isset($params['order']) ? ($params['order'] ?? null) : throw new InvalidRequest('"order" must be an integer.'),
+                is_string($params['direction'] ?? null) || ! isset($params['direction']) ? ($params['direction'] ?? null) : throw new InvalidRequest('"direction" must be "above" or "below".'),
+            ),
+            'tileLayer.settings' => $session->setTileLayerSettings(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireString($params, 'name'),
+                is_array($params['offset'] ?? null) && array_is_list($params['offset']) && count($params['offset']) === 2
+                    && array_all($params['offset'], static fn(mixed $value): bool => is_int($value) || is_float($value))
+                    ? $params['offset'] : throw new InvalidRequest('"offset" must be two numbers, across and down.'),
+                array_key_exists('movesWith', $params) && (is_string($params['movesWith']) || $params['movesWith'] === null)
+                    ? $params['movesWith'] : throw new InvalidRequest('"movesWith" must be a gameplay layer name or null.'),
+            ),
+            'map.save' => $session->saveMap(self::requireString($params, 'map')),
+            'mapPlacement.apply' => $session->applyMapPlacement(
+                is_array($params['context'] ?? null) ? $params['context'] : throw new InvalidRequest('A placement needs its owner.'),
+                self::requireKey($params),
+                is_array($params['expected'] ?? null) ? $params['expected'] : throw new InvalidRequest('A placement needs its descriptor.'),
+                self::requireString($params, 'previewMap'), self::requireInt($params, 'point'),
+                self::requireInt($params, 'x'), self::requireInt($params, 'y'),
+                isset($params['origin']) ? self::requireCell($params, 'origin') : null,
+                self::requireInt($params, 'previewRevision'),
+            ),
+            'inspector.read' => $session->readInspector(
+                self::requireString($params, 'map'),
+                is_string($params['event'] ?? null) ? $params['event'] : null,
+            ),
+            'inspector.apply' => $session->applyInspector(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                is_array($params['key'] ?? null) ? $params['key'] : throw new InvalidRequest('"key" must be the row key the inspector gave.'),
+                is_scalar($params['value'] ?? null) ? (string) $params['value'] : throw new InvalidRequest('"value" must be a string, number or boolean.'),
+                self::readOptionalString($params, 'answer'),
+            ),
+            'inspector.add' => $session->addInspectorListEntry(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireKey($params),
+            ),
+            'inspector.remove' => $session->removeInspectorListEntry(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireKey($params),
+            ),
+            'event.types' => $session->listEventTypes(),
+            'event.create' => $session->createEvent(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireCells($params),
+                self::requireString($params, 'type'),
+                self::readOptionalString($params, 'marker'),
+            ),
+            'event.delete' => $session->deleteEvent(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireString($params, 'marker'),
+            ),
+            'event.move' => $session->moveEvent(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireString($params, 'marker'),
+                self::requireInt($params, 'dx'),
+                self::requireInt($params, 'dy'),
+            ),
+            'event.bounds' => $session->setEventBounds(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireString($params, 'marker'),
+                self::requireInt($params, 'x'),
+                self::requireInt($params, 'y'),
+                self::requireInt($params, 'width'),
+                self::requireInt($params, 'height'),
+            ),
+            'event.destination' => $session->setEventDestination(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireString($params, 'marker'),
+                self::requireString($params, 'destination'),
+                self::requireInt($params, 'x'),
+                self::requireInt($params, 'y'),
+            ),
+            'database.records' => $session->listDatabaseRecords(self::requireString($params, 'category')),
+            'troops.formation' => $session->readTroopFormation(self::requireInt($params, 'index'),
+                is_string($params['arena'] ?? null) ? $params['arena'] : null),
+            'actors.preview' => $session->readActorPreview(self::requireInt($params, 'index'),
+                is_string($params['arena'] ?? null) ? $params['arena'] : null),
+            'enemies.preview' => $session->readEnemyPreview(self::requireInt($params, 'index'),
+                is_string($params['arena'] ?? null) ? $params['arena'] : null),
+            'database.record' => $session->readDatabaseRecord(
+                self::requireString($params, 'category'),
+                self::requireInt($params, 'index'),
+                is_array($params['frame'] ?? []) ? ($params['frame'] ?? []) : throw new InvalidRequest('"frame" must be a list of indexes and keys.'),
+            ),
+            'database.apply' => $session->applyDatabaseRecord(
+                self::requireString($params, 'category'),
+                self::requireInt($params, 'index'),
+                is_array($params['key'] ?? null) ? $params['key'] : throw new InvalidRequest('"key" must be the row key database.record gave.'),
+                is_scalar($params['value'] ?? null) ? (string) $params['value'] : throw new InvalidRequest('"value" must be a string, number or boolean.'),
+                self::readOptionalString($params, 'answer'),
+                self::readOptionalString($params, 'confirm'),
+            ),
+            'database.applyMany' => $session->applyDatabaseRecordValues(
+                self::requireString($params, 'category'),
+                self::requireInt($params, 'index'),
+                is_array($params['changes'] ?? null) ? array_values($params['changes']) : throw new InvalidRequest('"changes" must be a list of {key, value}.'),
+                self::requireString($params, 'label'),
+            ),
+            'database.add' => $session->addDatabaseItem(
+                self::requireString($params, 'category'),
+                self::requireInt($params, 'index'),
+                is_array($params['key'] ?? null) ? $params['key'] : throw new InvalidRequest('"key" must be a row key database.record gave, or {"frame": [...]}.'),
+                is_bool($params['child'] ?? false) ? ($params['child'] ?? false) : throw new InvalidRequest('"child" must be a boolean.'),
+            ),
+            'database.remove' => $session->removeDatabaseItem(
+                self::requireString($params, 'category'),
+                self::requireInt($params, 'index'),
+                is_array($params['key'] ?? null) ? $params['key'] : throw new InvalidRequest('"key" must be the row key database.record gave.'),
+            ),
+            'database.create' => $session->createDatabaseRecord(self::requireString($params, 'category'), self::readOptionalString($params, 'identity')),
+            'database.duplicate' => $session->duplicateDatabaseRecord(self::requireString($params, 'category'), self::requireInt($params, 'index')),
+            'database.delete' => $session->deleteDatabaseRecord(self::requireString($params, 'category'), self::requireInt($params, 'index')),
+            'database.move' => $session->moveDatabaseRecord(
+                self::requireString($params, 'category'),
+                self::requireInt($params, 'index'),
+                in_array($params['direction'] ?? null, ['up', 'down'], true) ? $params['direction'] : throw new InvalidRequest('"direction" must be "up" or "down".'),
+            ),
+            'database.save' => $session->saveDatabase(self::requireString($params, 'category')),
+            'cutscenes.timeline' => $session->describeCutsceneTimeline(self::requireString($params, 'category'), self::requireInt($params, 'index')),
+            'cutscenes.presentation' => $session->selectCutscenePresentation(self::requireString($params, 'category'),
+                self::requireInt($params, 'index'), self::requireString($params, 'presentation')),
+            'cutscenes.separate' => $session->separateCutsceneSequences(self::requireString($params, 'category'), self::requireInt($params, 'index')),
+            'cutscenes.stage' => $session->setCutsceneStage(self::requireString($params, 'category'), self::requireInt($params, 'index'),
+                is_bool($params['present'] ?? null) ? $params['present'] : throw new InvalidRequest('"present" must be true or false.')),
+            'cutscenes.preview' => $session->readCutscenePreview(self::requireString($params, 'category'), self::requireInt($params, 'index'),
+                self::requireInt($params, 'frame'), self::requireInt($params, 'width'), self::requireInt($params, 'height')),
+            'cutscenes.cinematicPreview' => $session->startCinematicPreview(self::requireInt($params, 'index'), self::requireInt($params, 'width'),
+                self::requireInt($params, 'height'), ($params['play'] ?? false) === true, ($params['keep'] ?? false) === true),
+            'cutscenes.cinematicControl' => $session->controlCinematicPreview(self::requireString($params, 'action'),
+                is_int($params['seconds'] ?? null) || is_float($params['seconds'] ?? null) ? (float) $params['seconds'] : 0.0),
+            'cutscenes.cinematicStop' => $session->stopCinematicPreview(),
+            'cutscenes.cinematicScene' => $session->exchangeCinematicScene(self::requireLines($params, 'events'), self::readOptionalString($params, 'sessionId')),
+            'cutscenes.cinematicSceneDetach' => $session->detachCinematicScene(),
+            'cutscenes.effectField' => $session->showEffectOnField(self::requireInt($params, 'index'), is_int($params['frame'] ?? null) ? $params['frame'] : 0,
+                self::requireInt($params, 'width'), self::requireInt($params, 'height')),
+            'cutscenes.effectFieldScene' => $session->exchangeEffectFieldScene(self::requireLines($params, 'events'), self::readOptionalString($params, 'sessionId')),
+            'cutscenes.effectFieldClose' => $session->closeEffectField(),
+            'cutscenes.effectBattlePreview' => $session->readEffectBattlePreview(self::requireInt($params, 'index'), is_int($params['frame'] ?? null) ? $params['frame'] : 0,
+                ($params['reducedMotion'] ?? false) === true,
+                EffectPresentation::tryFrom(is_string($params['presentation'] ?? null) ? $params['presentation'] : 'graphical')
+                    ?? throw new InvalidRequest('"presentation" must be terminal or graphical.'),
+                is_int($params['authoredFrame'] ?? null) ? $params['authoredFrame'] : null,
+                is_int($params['binding'] ?? null) ? $params['binding'] : 0),
+            'cutscenes.battlePreview' => $session->readSummonBattlePreview(self::requireInt($params, 'index'), is_int($params['frame'] ?? null) ? $params['frame'] : 0,
+                ($params['reducedMotion'] ?? false) === true,
+                EffectPresentation::tryFrom(is_string($params['presentation'] ?? null) ? $params['presentation'] : 'graphical')
+                    ?? throw new InvalidRequest('"presentation" must be terminal or graphical.'),
+                is_int($params['authoredFrame'] ?? null) ? $params['authoredFrame'] : null),
+            'references.list' => $session->listReferences(
+                is_string($params['map'] ?? null) ? $params['map'] : null,
+                self::requireString($params, 'category'),
+                is_array($params['record'] ?? null) ? $params['record'] : null,
+            ),
+            'conditions.grammar' => $session->describeWorldStateGrammar(),
+            'conditions.encode' => $session->encodeWorldState(
+                self::requireString($params, 'codec'),
+                is_array($params['entries'] ?? null) ? $params['entries'] : throw new InvalidRequest('"entries" must be a list.'),
+                is_array($params['writeTypes'] ?? null) ? array_values(array_filter($params['writeTypes'], is_string(...))) : null,
+            ),
+            'battlers.describe' => $session->describeBattlerArt(self::requireString($params, 'side'), self::requireString($params, 'identity')),
+            'animations.conversion' => $session->describeAnimationConversion(self::requireInt($params, 'index')),
+            'animations.convert' => $session->convertAnimation(
+                self::requireInt($params, 'index'),
+                self::requireString($params, 'timeline'),
+                self::requireString($params, 'cadence'),
+                is_int($params['fps'] ?? null) ? $params['fps'] : null,
+                self::requireInt($params, 'ticksPerFrame'),
+                self::requireInt($params, 'restFrame'),
+                is_bool($params['includeFlash'] ?? true) ? ($params['includeFlash'] ?? true) : throw new InvalidRequest('"includeFlash" must be a boolean.'),
+                self::readOptionalString($params, 'binding'),
+                self::readOptionalString($params, 'answer'),
+                self::readOptionalString($params, 'confirm'),
+            ),
+            'affinities.vocabulary' => $session->describeAffinityVocabulary(),
+            'affinities.encode' => $session->encodeAffinities(
+                is_array($params['entries'] ?? null) ? $params['entries'] : throw new InvalidRequest('"entries" must be a list.'),
+            ),
+            'npc.create' => $session->createNpc(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireInt($params, 'x'),
+                self::requireInt($params, 'y'),
+                is_string($params['name'] ?? null) ? $params['name'] : '',
+            ),
+            'npc.move' => $session->moveNpc(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireInt($params, 'index'),
+                self::requireInt($params, 'x'),
+                self::requireInt($params, 'y'),
+            ),
+            'npc.duplicate' => $session->duplicateNpc(self::requireString($params, 'map'), self::requireInt($params, 'revision'), self::requireInt($params, 'index')),
+            'npc.delete' => $session->deleteNpc(self::requireString($params, 'map'), self::requireInt($params, 'revision'), self::requireInt($params, 'index')),
+            'npc.assignId' => $session->assignNpcId(self::requireString($params, 'map'), self::requireInt($params, 'revision'), self::requireInt($params, 'index')),
+            'npc.read' => $session->readNpc(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'index'),
+                is_array($params['frame'] ?? []) ? ($params['frame'] ?? []) : throw new InvalidRequest('"frame" must be a list of indexes and keys.'),
+            ),
+            'npc.apply' => $session->applyNpc(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireInt($params, 'index'),
+                is_array($params['key'] ?? null) ? $params['key'] : throw new InvalidRequest('"key" must be the row key npc.read gave.'),
+                is_scalar($params['value'] ?? null) ? (string) $params['value'] : throw new InvalidRequest('"value" must be a string, number or boolean.'),
+            ),
+            'npc.add' => $session->addNpcItem(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireInt($params, 'index'),
+                is_array($params['key'] ?? null) ? $params['key'] : throw new InvalidRequest('"key" must be a row key npc.read gave, or {"frame": [...]}.'),
+            ),
+            'npc.remove' => $session->removeNpcItem(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireInt($params, 'index'),
+                is_array($params['key'] ?? null) ? $params['key'] : throw new InvalidRequest('"key" must be the row key npc.read gave.'),
+            ),
+            'history.undo' => $session->undo(),
+            'history.redo' => $session->redo(),
+            'project.dirty' => ['dirty' => $session->hasUnsavedChanges(), 'unsaved' => $session->listUnsavedChanges()],
+            'project.saveAll' => $session->saveAll(),
+            'playtest.start' => self::startPlaytest($session, $params),
+            'playtest.options' => $session->describePlaytestOptions(),
+            'playtest.status' => $session->describePlaytest(),
+            'playtest.stop' => $session->stopPlaytest(),
+            'battleTest.describe' => $session->describeBattleTest(match (true) {
+                ! array_key_exists('battleTest', $params) => null,
+                is_array($params['battleTest']) => $params['battleTest'],
+                default => throw new InvalidRequest('"battleTest" must be a battle test object.'),
+            }),
+            'battleTest.apply' => $session->applyBattleTest(is_array($params['battleTest'] ?? null) ? $params['battleTest']
+                : throw new InvalidRequest('"battleTest" must be a battle test object.')),
+            'battleTest.start' => $session->startBattleTest(array_key_exists('troop', $params) ? self::requireInt($params, 'troop') : null),
+            'battleTest.status' => $session->describeBattleTestRun(),
+            'battleTest.stop' => $session->stopBattleTest(),
+            default => throw new InvalidRequest(sprintf('Unknown method "%s".', $method)),
+        };
+    }
+
+    /** @param array<string, mixed> $response */
+    private function write(array $response): void
+    {
+        fwrite($this->output, json_encode($response, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n");
+        fflush($this->output);
+    }
+
+    /** @param array<string, mixed> $params */
+    private static function requireFootprintId(array $params, string $key): string
+    {
+        $id = self::requireString($params, $key);
+        if (preg_match('/\A[a-z0-9][a-z0-9_-]*\z/', $id) !== 1) {
+            throw new InvalidRequest(sprintf('"%s" must be a stable lowercase tileset or piece id.', $key));
+        }
+
+        return $id;
+    }
+
+    /** @param array<string, mixed> $params @return list<list<int|null>>|null */
+    private static function requireFootprint(array $params, string $key): ?array
+    {
+        if (! array_key_exists($key, $params)) {
+            throw new InvalidRequest(sprintf('"%s" must be supplied as footprint rows or null.', $key));
+        }
+        if ($params[$key] === null) { return null; }
+        try {
+            $rows = \Ichiloto\Editor\Maps\PhysicalFootprintCodec::decodeRows($params[$key]);
+
+            return \Ichiloto\Editor\Maps\PhysicalFootprintCodec::exportRows($rows);
+        } catch (\InvalidArgumentException $error) {
+            throw new InvalidRequest(sprintf('"%s": %s', $key, $error->getMessage()), previous: $error);
+        }
+    }
+
+    /** @param array<string, mixed> $params */
+    private static function requireString(array $params, string $key): string
+    {
+        return is_string($params[$key] ?? null) ? $params[$key] : throw new InvalidRequest(sprintf('"%s" must be a string.', $key));
+    }
+
+    /**
+     * A playtest from a cell names its map and cell; one from the title names neither. A renderer, when named, is
+     * one the session offers.
+     *
+     * @param array<string, mixed> $params
+     */
+    private static function startPlaytest(EditorSession $session, array $params): array
+    {
+        $start = PlaytestStart::tryFrom(is_string($params['start'] ?? null) ? $params['start'] : PlaytestStart::CELL->value)
+            ?? throw new InvalidRequest('"start" must be "cell" or "title".');
+        $renderer = $params['renderer'] ?? null;
+        if ($renderer !== null && ! is_string($renderer)) {
+            throw new InvalidRequest('"renderer" must be a renderer id.');
+        }
+        if ($start === PlaytestStart::TITLE) {
+            return $session->startPlaytest(null, null, null, $start, $renderer);
+        }
+
+        return $session->startPlaytest(self::requireString($params, 'map'), self::requireInt($params, 'x'), self::requireInt($params, 'y'), $start, $renderer);
+    }
+
+    /** @param array<string, mixed> $params */
+    private static function requireInt(array $params, string $key): int
+    {
+        return is_int($params[$key] ?? null) ? $params[$key] : throw new InvalidRequest(sprintf('"%s" must be an integer.', $key));
+    }
+
+    private static function requireArray(array $params, string $key): array
+    {
+        return is_array($params[$key] ?? null) ? $params[$key] : throw new InvalidRequest(sprintf('"%s" must be structured data.', $key));
+    }
+
+    private static function requireNumber(array $params, string $key): float
+    {
+        $value = $params[$key] ?? null;
+        return (is_int($value) || is_float($value)) && is_finite((float) $value)
+            ? (float) $value : throw new InvalidRequest(sprintf('"%s" must be a finite number.', $key));
+    }
+
+    private static function requireRecipe(array $params): array
+    {
+        return self::requireFootprint($params, 'expected')
+            ?? throw new InvalidRequest('"expected" must be the non-null physical footprint from pieces.list.');
+    }
+
+    /** @param array<string, mixed> $params */
+    private static function readOptionalString(array $params, string $key): ?string
+    {
+        return match (true) {
+            ($params[$key] ?? null) === null => null,
+            is_string($params[$key]) => $params[$key],
+            default => throw new InvalidRequest(sprintf('"%s" must be a string when given.', $key)),
+        };
+    }
+
+    /**
+     * @param array<string, mixed> $params
+     * @return array<string, mixed>
+     */
+    private static function requireKey(array $params): array
+    {
+        return is_array($params['key'] ?? null) ? $params['key'] : throw new InvalidRequest('"key" must be the row key the inspector gave.');
+    }
+
+    /**
+     * @param array<string, mixed> $params
+     * @return list<array{0: int, 1: int}>
+     */
+    private static function requireCells(array $params): array
+    {
+        $cells = $params['cells'] ?? null;
+        if (! is_array($cells) || ! array_is_list($cells) || ! array_all($cells, static fn(mixed $cell): bool =>
+            is_array($cell) && count($cell) === 2 && is_int($cell[0] ?? null) && is_int($cell[1] ?? null))) {
+            throw new InvalidRequest('"cells" must be a list of [x, y] integer pairs.');
+        }
+
+        return $cells;
+    }
+
+    /**
+     * @param array<string, mixed> $params
+     * @return list<string>
+     */
+    private static function requireLines(array $params, string $key): array
+    {
+        $lines = array_key_exists($key, $params) ? $params[$key] : [];
+        if (! is_array($lines) || ! array_is_list($lines) || ! array_all($lines, static fn(mixed $line): bool => is_string($line))) {
+            throw new InvalidRequest(sprintf('"%s" must be a list of strings.', $key));
+        }
+
+        return $lines;
+    }
+
+    /**
+     * @param array<string, mixed> $params
+     * @return array{0: int, 1: int}
+     */
+    private static function requireCell(array $params, string $key): array
+    {
+        $cell = $params[$key] ?? null;
+
+        return is_array($cell) && array_is_list($cell) && count($cell) === 2 && is_int($cell[0]) && is_int($cell[1])
+            ? $cell
+            : throw new InvalidRequest(sprintf('"%s" must be an [x, y] integer pair.', $key));
+    }
+
+    /**
+     * @param array<string, mixed> $params
+     * @return list<array{0: int, 1: int, 2: int}>
+     */
+    private static function requireTileCells(array $params): array
+    {
+        $cells = $params['cells'] ?? null;
+        if (! is_array($cells) || ! array_is_list($cells) || ! array_all($cells, static fn(mixed $cell): bool => is_array($cell) && count($cell) === 3
+            && is_int($cell[0] ?? null) && is_int($cell[1] ?? null) && is_int($cell[2] ?? null))) {
+            throw new InvalidRequest('"cells" must be a list of [x, y, tile] integer triples.');
+        }
+
+        return $cells;
+    }
+
+    /**
+     * @param array<string, mixed> $params
+     * @return array<string, ?string>
+     */
+    private static function readChoices(array $params): array
+    {
+        $choices = $params['choices'] ?? [];
+        if (! is_array($choices) || ! array_all($choices, static fn(mixed $choice): bool => is_string($choice) || $choice === null)) {
+            throw new InvalidRequest('"choices" must map glyphs to a role key or null.');
+        }
+
+        return $choices;
+    }
+
+    /**
+     * The role key the author chose for each tile that could stand for
+     * several glyphs, by tile entry. A tile that stands for a glyph always
+     * takes one, so there is no answer for none.
+     *
+     * @param array<string, mixed> $params
+     * @return array<string, string>
+     */
+    private static function readTileChoices(array $params): array
+    {
+        $choices = $params['choices'] ?? [];
+        if (! is_array($choices) || ! array_all($choices, static fn(mixed $choice): bool => is_string($choice))) {
+            throw new InvalidRequest('"choices" must map tiles to a role key.');
+        }
+
+        return array_combine(array_map(strval(...), array_keys($choices)), $choices);
+    }
+}

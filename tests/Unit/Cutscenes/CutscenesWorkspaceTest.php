@@ -537,8 +537,8 @@ it('plays a summon through the Engine playback session: frames, keyframe boundar
 
     // Space compiles the summon as it stands and starts the Engine session.
     pressKeys($editor, ' ');
-    $preview = getEditorProperty($editor, 'summonPreview');
-    expect($preview)->toBeInstanceOf(\Ichiloto\Editor\Cutscenes\Preview\SummonPreviewSession::class)
+    $preview = getEditorProperty($editor, 'timelinePreview');
+    expect($preview)->toBeInstanceOf(\Ichiloto\Editor\Cutscenes\Preview\TimelinePreviewSession::class)
         ->and($preview->isPlaying())->toBeTrue()
         ->and($preview->totalFrames())->toBe(24)
         ->and($preview->fps())->toBe(12);
@@ -596,7 +596,7 @@ it('plays a summon through the Engine playback session: frames, keyframe boundar
     pressKeys($editor, 'l');
     expect(renderEditorPlainFrame($editor, 150, 45))->toContain('f12–23');
     pressKeys($editor, 'x');
-    expect(getEditorProperty($editor, 'summonPreview'))->toBeNull();
+    expect(getEditorProperty($editor, 'timelinePreview'))->toBeNull();
 });
 
 it('reorders, nests, un-nests, duplicates and removes commands from the tree, each undoable', function () {
@@ -699,4 +699,28 @@ it('reorders and duplicates summon tracks, keyframes and cues from the timeline 
     $timeline = file_get_contents($root . '/assets/Cutscenes/Summons/lantern-wisp/lantern-wisp.timeline.php');
     expect($timeline)->toContain("\$wisp = <<<'ART'")
         ->and($timeline)->toContain("'id' => 'flare-2'");
+});
+
+it('offers each summon track the Engine presentations and keeps the choice through a save', function () {
+    $field = array_values(array_filter(
+        \Ichiloto\Editor\Database\CutsceneSchemas::trackList()->fields,
+        static fn($field): bool => $field->key === 'presentation',
+    ))[0] ?? null;
+
+    expect($field?->options)->toBe(['all', 'terminal', 'graphical'])
+        ->and($field?->displayDefault)->toBe('all');
+
+    $root = cutsceneProject();
+    $editor = cutscenesEditor($root, 160, 50);
+    $asset = libraryOf($editor)->find(CutsceneType::SUMMON, 'lantern-wisp');
+    $payload = $asset->payload();
+    $payload['tracks'][0]['presentation'] = 'terminal';
+    $asset->apply($payload);
+    $asset->save();
+
+    $timeline = require $root . '/assets/Cutscenes/Summons/lantern-wisp/lantern-wisp.timeline.php';
+    expect($timeline['tracks'][0]['presentation'])->toBe('terminal')
+        ->and(file_get_contents($root . '/assets/Cutscenes/Summons/lantern-wisp/lantern-wisp.timeline.php'))->toContain("\$wisp = <<<'ART'")
+        // The Engine compiles the saved choice as authored.
+        ->and($asset->compiledSummon())->not->toBeNull();
 });

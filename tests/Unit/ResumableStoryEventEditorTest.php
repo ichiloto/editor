@@ -44,7 +44,7 @@ it('creates ScriptEventTrigger through the active event type catalog and inspect
         ->and($definition)->toHaveKeys(['conditions', 'sets', 'whenBlocked', 'cue'])
         ->and($definition['cue'])->toBe(['symbol' => '', 'color' => 'bright-yellow']);
 
-    $fields = callEditorMethod($editor, 'buildEventDataFields', 'E', $definition);
+    $fields = callEditorMethod($editor, 'createMapInspector')->buildEventDataFields('E', $definition);
     $byPath = [];
 
     foreach ($fields as $field) {
@@ -74,7 +74,7 @@ it('exposes event cues on legacy definitions without changing them on inspection
         'class' => ScriptEventTrigger::class,
         'data' => ['scriptId' => 'dresser-note', 'mode' => 'action', 'reusable' => false],
     ];
-    $fields = callEditorMethod($editor, 'buildEventDataFields', 'E', $definition);
+    $fields = callEditorMethod($editor, 'createMapInspector')->buildEventDataFields('E', $definition);
     $paths = array_map(static fn(array $field): string => implode('.', (array) ($field['path'] ?? [])), $fields);
 
     expect($paths)->toContain('cue.symbol', 'cue.color')
@@ -94,9 +94,18 @@ it('uses the runtime command vocabulary and exposes battle continuation fields',
 
     expect(RecordSchemaCatalog::EVENT_COMMAND_TYPES)->toBe(EventInterpreter::COMMAND_TYPES)
         ->and($battleFields['troop']->reference)->toBe('troops')
-        ->and($battleFields)->toHaveKeys(['resultVariable', 'defeatPolicy', 'escapePolicy'])
+        ->and($battleFields)->toHaveKeys(['resultVariable', 'defeatPolicy', 'escapePolicy', 'reservePolicy'])
         ->and($battleFields['defeatPolicy']->options)->toBe(['game_over', 'continue'])
-        ->and($battleFields['escapePolicy']->options)->toBe(['allowed', 'forbidden']);
+        ->and($battleFields['escapePolicy']->options)->toBe(['allowed', 'forbidden'])
+        // Absent, the encounter loses when its frontline is wiped out.
+        ->and($battleFields['reservePolicy']->removeWhenEmpty)->toBeTrue()
+        ->and($battleFields['reservePolicy']->displayDefault)->toBe('none');
+
+    // The choices are exactly the Engine's reserve policies, when the Engine has them.
+    if (enum_exists(\Ichiloto\Engine\Battle\ReservePolicy::class)) {
+        expect($battleFields['reservePolicy']->options)
+            ->toBe(array_map(static fn(\Ichiloto\Engine\Battle\ReservePolicy $policy): string => $policy->value, \Ichiloto\Engine\Battle\ReservePolicy::cases()));
+    }
 });
 
 it('accepts every runtime command type and still rejects vocabulary drift', function (): void {
@@ -247,7 +256,7 @@ it('validates script references, stable NPC identities, routes, and battle conti
         ['type' => 'move_route', 'subject' => 'npc', 'npcId' => 'missing-npc', 'wait' => 'true', 'speed' => 0, 'steps' => [
             ['direction' => 'diagonal', 'count' => -1, 'faceOnly' => 'false'],
         ]],
-        ['type' => 'start_battle', 'troop' => '', 'resultVariable' => '', 'defeatPolicy' => 'always_win', 'escapePolicy' => 'sometimes'],
+        ['type' => 'start_battle', 'troop' => '', 'resultVariable' => '', 'defeatPolicy' => 'always_win', 'escapePolicy' => 'sometimes', 'reservePolicy' => 'everyone'],
         ['type' => 'parallel_cutscene'],
     ]);
     writePhase7ArrayFile($root . '/assets/Data/troops.php', [
@@ -268,6 +277,7 @@ it('validates script references, stable NPC identities, routes, and battle conti
         ->and($joined)->toContain('invalid wait value')
         ->and($joined)->toContain('speed must be greater than zero')
         ->and($joined)->toContain('invalid escapePolicy "sometimes"')
+        ->and($joined)->toContain('invalid reservePolicy "everyone"')
         ->and($joined)->toContain('troop Malformed Policy Troop')
         ->and($joined)->toContain('unsupported direction "diagonal"')
         ->and($joined)->toContain('invalid count')

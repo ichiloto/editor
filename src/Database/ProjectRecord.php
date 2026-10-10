@@ -28,6 +28,7 @@ final class ProjectRecord
      * @param string|null $sourcePath The file backing this record, for one-file-per-record categories.
      * @param string $recordId The record identity, when it comes from the filename rather than the payload.
      * @param PhpDataFile|null $file The loaded source file, for one-file-per-record categories.
+     * @param string|null $loadProblem Why the file could not be read as a record, which leaves it listed but read-only.
      */
     public function __construct(
         private array|object $payload,
@@ -35,6 +36,7 @@ final class ProjectRecord
         public readonly ?string $sourcePath = null,
         public readonly string $recordId = '',
         public readonly ?PhpDataFile $file = null,
+        private readonly ?string $loadProblem = null,
     ) {
         if (! $isDirty) {
             $this->captureBaseline();
@@ -67,7 +69,7 @@ final class ProjectRecord
             );
         }
 
-        return $this->file?->readOnlyReason;
+        return $this->loadProblem ?? $this->file?->readOnlyReason;
     }
 
     /**
@@ -199,6 +201,8 @@ final class ProjectRecord
             return $target;
         }
 
+        // Removing an absent nested field never changes its scalar/null owner.
+        if ($value === null && !is_array($target[$key] ?? null)) { return $target; }
         $child = is_array($target[$key] ?? null) ? $target[$key] : [];
         $child = self::withPathValue($child, $segments, $value);
 
@@ -386,16 +390,53 @@ final class ProjectRecord
     }
 
     /**
+     * A list's entries as the editor edits them ({@see RecordSubList::readEntries()}).
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function getEntries(RecordSubList $list): array
+    {
+        return array_values(array_filter($list->readEntries($this->get($list->key)), is_array(...)));
+    }
+
+    /**
+     * Replaces a list's entries, stored as the list stores them
+     * ({@see RecordSubList::writeEntries()}); an empty list the file leaves
+     * out is removed.
+     *
+     * @param list<array<string, mixed>> $entries
+     */
+    public function setEntries(RecordSubList $list, array $entries): void
+    {
+        $this->set($list->key, $entries === [] && $list->removeWhenEmpty ? null : $list->writeEntries($entries));
+    }
+
+    /**
      * Returns a nested sub-list (objectives, beats, members, commands).
      *
      * @param string $key The payload key holding the list.
      * @return array<int, array<string, mixed>>
      */
-    public function getSubList(string $key): array
+    public function getSubList(string $key, ?string $scalarKey = null): array
     {
         $list = $this->get($key);
 
-        return is_array($list) ? array_values(array_filter($list, is_array(...))) : [];
+        if (! is_array($list)) {
+            return [];
+        }
+
+        $entries = [];
+
+        foreach ($list as $entry) {
+            if (is_array($entry)) {
+                $entries[] = $entry;
+            } elseif ($scalarKey !== null && is_scalar($entry)) {
+                // An entry authored as a bare value is that value's field.
+                $entries[] = [$scalarKey => $entry];
+            }
+        }
+
+        return $entries;
     }
 
     /**
@@ -405,8 +446,25 @@ final class ProjectRecord
      * @param array<int, array<string, mixed>> $list The new list.
      * @return void
      */
-    public function setSubList(string $key, array $list): void
+    public function setSubList(string $key, array $list, ?string $scalarKey = null, bool $removeWhenEmpty = false): void
     {
+        if ($list === [] && $removeWhenEmpty) {
+            // An empty list would read as "none, explicitly"; absence is how
+            // such a list is authored.
+            $this->set($key, null);
+
+            return;
+        }
+
+        if ($scalarKey !== null) {
+            // An entry holding nothing but that field stays a bare value, as
+            // it was authored; one with more is written as its fields.
+            $list = array_map(
+                static fn(array $entry): mixed => array_keys($entry) === [$scalarKey] ? $entry[$scalarKey] : $entry,
+                $list,
+            );
+        }
+
         $this->set($key, array_values($list));
     }
 
@@ -418,6 +476,13 @@ final class ProjectRecord
     public function toArray(): array|object
     {
         return $this->payload;
+    }
+
+    /** Restores an editor-owned snapshot, including keys removed by a compound field edit. */
+    public function restorePayload(array|object $payload): void
+    {
+        $this->payload = $payload;
+        $this->touchState();
     }
 
     /**

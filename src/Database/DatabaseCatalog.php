@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Database;
 
+use Ichiloto\Editor\Field\PlayerPresentationFields;
+
 /**
  * Provides the editor's Database category registry.
  */
@@ -41,13 +43,59 @@ final class DatabaseCatalog
             new DatabaseCategoryDefinition('optimize_outcomes', 'Optimize Outcomes', 'Weight elemental outcomes and special properties.', true),
             new DatabaseCategoryDefinition('optimize_exclusions', 'Optimize Exclusions', 'Keep gear out of automatic selection.', true),
             new DatabaseCategoryDefinition('system', 'System', 'Configure system-wide project settings.', true),
+            new DatabaseCategoryDefinition('configuration', 'Configuration', 'Adjust saving, accessibility, interface, graphics, audio and inn settings.', true),
             new DatabaseCategoryDefinition('types', 'Types', 'Manage element and weapon-type tables.', true),
             new DatabaseCategoryDefinition('terms', 'Terms', 'Customize UI labels and message terms.', true),
         ];
     }
 
+    /** The GUI's categories; the Terminal registry and its list positions stay unchanged. */
+    public static function getGraphicalCategories(): array
+    {
+        return [...self::all(), new DatabaseCategoryDefinition(PlayerPresentationFields::CATEGORY,
+            'Player Field Appearance', 'Choose fixed player art or the selected party leader\'s field role.', true),
+            new DatabaseCategoryDefinition(\Ichiloto\Editor\Field\FieldResourceFields::CATEGORY,
+            'Field Resources', 'Reusable whole images, such as trees, that maps place by reference.', true)];
+    }
+
     /**
-     * Returns the category index for the requested key.
+     * Returns the categories edited from another category's records rather
+     * than listed on their own: battle art is set on the actor's or enemy's
+     * own page, in the graphical editor, and never shown in the terminal's.
+     *
+     * @return list<DatabaseCategoryDefinition>
+     */
+    public static function getEmbedded(): array
+    {
+        return [
+            new DatabaseCategoryDefinition('battler_actors', 'Actor Battle Art', 'The art an actor fights with in a graphical battle.', true, ['actors']),
+            new DatabaseCategoryDefinition('battler_enemies', 'Enemy Battle Art', 'The art an enemy fights with in a graphical battle.', true, ['enemies']),
+            new DatabaseCategoryDefinition('battle_scale', 'Battle Scale', 'The actor every battler\'s size is measured against.', true, ['actors', 'enemies']),
+        ];
+    }
+
+    /**
+     * Returns whether a key names a category, listed or embedded.
+     */
+    public static function knows(string $key): bool
+    {
+        return self::findByKey($key) !== null;
+    }
+
+    /**
+     * Returns the category a key names, listed or embedded; null when none
+     * does. Unlike {@see indexOf()}, which places a listed category in the
+     * Database list, this never answers with another category.
+     */
+    public static function findByKey(string $key): ?DatabaseCategoryDefinition
+    {
+        return array_find([...self::getGraphicalCategories(), ...self::getEmbedded()], static fn(DatabaseCategoryDefinition $category): bool => $category->key === $key);
+    }
+
+    /**
+     * Returns the Database list position of a listed category; the first
+     * category for any other key, embedded ones included. To name a
+     * category by its key, use {@see findByKey()}.
      *
      * @param string $key Stable category key.
      * @return int

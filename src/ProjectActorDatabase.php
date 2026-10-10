@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor;
 
+use Ichiloto\Engine\Entities\Actors\ActorDefinition;
+use Ichiloto\Engine\Util\Stores\ActorStore;
 use Throwable;
 
 use RuntimeException;
@@ -72,6 +74,15 @@ final class ProjectActorDatabase
         return array_values($this->actors);
     }
 
+    /** Builds the runtime registry from the same current records used by pickers. */
+    public function createActorStore(): ActorStore
+    {
+        return new ActorStore(definitions: array_map(
+            static fn(ProjectActor $actor): ActorDefinition => ActorDefinition::fromArray($actor->getData(), $actor->path),
+            $this->getActors(),
+        ));
+    }
+
     /**
      * Returns whether the database has unsaved changes.
      *
@@ -93,6 +104,22 @@ final class ProjectActorDatabase
         }
 
         return false;
+    }
+
+    /**
+     * Returns a key that changes whenever an actor is added, removed or
+     * edited, so a caller can tell whether a step touched the actors
+     * without reading them.
+     *
+     * @return string The key, exact rather than summed: a removal and an
+     *   edit never cancel out to the same key.
+     */
+    public function getContentVersion(): string
+    {
+        return implode(',', array_map(
+            static fn(ProjectActor $actor): string => spl_object_id($actor) . ':' . $actor->getContentVersion(),
+            $this->getActors(),
+        )) . '|' . implode(',', $this->pendingDeletions);
     }
 
     /**
@@ -256,8 +283,10 @@ final class ProjectActorDatabase
         $candidate = $baseId;
         $suffix = 2;
         $existingIds = array_map(static fn(ProjectActor $actor): string => $actor->id, $this->actors);
+        $existingIds = array_map('strtolower', [...$existingIds,
+            ...array_map(static fn(ProjectActor $actor): string => $actor->getDefinitionId(), $this->actors)]);
 
-        while (in_array($candidate, $existingIds, true)) {
+        while (in_array(strtolower($candidate), $existingIds, true)) {
             $candidate = $baseId . $suffix;
             $suffix++;
         }
@@ -294,5 +323,15 @@ final class ProjectActorDatabase
         $label = preg_replace('/(?<!^)([A-Z])/', ' $1', $id) ?? $id;
 
         return trim(str_replace(['_', '-'], ' ', $label));
+    }
+
+    /**
+     * Returns the files a save of this database would overwrite: one per actor.
+     *
+     * @return string[]
+     */
+    public function getBackupPaths(): array
+    {
+        return array_map(static fn(ProjectActor $actor): string => $actor->path, $this->getActors());
     }
 }

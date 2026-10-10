@@ -59,6 +59,69 @@ function folderState(string $folder): array
     return $state;
 }
 
+it('refuses a changed read dependency before creating or writing the destination', function () {
+    [$source, $dataPath] = transactionFolder();
+    $destination = dirname($source) . '/copy';
+    $loaded = (string) file_get_contents($dataPath);
+    $transaction = new FileSetTransaction($destination);
+    $transaction->expectSource($dataPath, $loaded);
+    $transaction->write($destination . '/copy.data.php', $loaded);
+    file_put_contents($dataPath, $loaded . "\n// Another author changed the source.\n");
+    $before = folderState($source);
+
+    expect(fn() => $transaction->commit())->toThrow(FileSetTransactionFailure::class, 'changed after opening')
+        ->and(is_dir($destination))->toBeFalse()
+        ->and(folderState($source))->toBe($before);
+});
+
+it('only recovers a missing source when the caller explicitly permits it', function (bool $allowMissing) {
+    [$folder, $dataPath] = transactionFolder();
+    $loaded = (string) file_get_contents($dataPath);
+    unlink($dataPath);
+    $transaction = new FileSetTransaction($folder);
+    $transaction->expectSource($dataPath, $loaded, $allowMissing);
+    $transaction->write($dataPath, $loaded);
+    if ($allowMissing) {
+        $transaction->commit();
+        expect(file_get_contents($dataPath))->toBe($loaded);
+    } else {
+        expect(fn() => $transaction->commit())->toThrow(FileSetTransactionFailure::class, 'changed after opening')
+            ->and(is_file($dataPath))->toBeFalse();
+    }
+})->with([false, true]);
+
+it('refuses source changes made after staging without leaving temporary files', function () {
+    [$source, $dataPath] = transactionFolder();
+    $destination = dirname($source) . '/copy';
+    $loaded = (string) file_get_contents($dataPath);
+    $transaction = new FileSetTransaction($destination);
+    $transaction->expectSource($dataPath, $loaded);
+    $transaction->write($destination . '/copy.data.php', $loaded);
+    $transaction->stage();
+    file_put_contents($dataPath, $loaded . '// Concurrent external edit');
+    $before = folderState($source);
+    expect(fn() => $transaction->commit())->toThrow(FileSetTransactionFailure::class, 'changed after opening')
+        ->and(is_dir($destination))->toBeFalse()
+        ->and(folderState($source))->toBe($before);
+});
+
+it('reserves read dependencies until the proposal has finished', function () {
+    [$source, $dataPath] = transactionFolder();
+    $destination = dirname($source) . '/copy';
+    $loaded = (string) file_get_contents($dataPath);
+    $transaction = new FileSetTransaction($destination);
+    $transaction->expectSource($dataPath, $loaded);
+    $transaction->write($destination . '/copy.data.php', $loaded);
+    $transaction->stage();
+    $competing = new FileSetTransaction($source);
+    $competing->write($dataPath, $loaded . '// Concurrent proposal');
+    expect(fn() => $competing->commit())->toThrow(FileSetTransactionFailure::class, 'Another file transaction');
+    $transaction->rollBack();
+    $competing->commit();
+    expect(file_get_contents($dataPath))->toBe($loaded . '// Concurrent proposal')
+        ->and(is_dir($destination))->toBeFalse();
+});
+
 it('installs a new pair only when both files land, and leaves no folder when the second cannot', function () {
     [$folder, $dataPath, $partnerPath] = transactionFolder(withPair: false);
     $files = new FailingFileSetOperations(failures: ['move' => [$partnerPath]]);

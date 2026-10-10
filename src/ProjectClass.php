@@ -4,26 +4,21 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor;
 
-use Ichiloto\Editor\History\TracksPersistedState;
-
 /**
- * Represents one editable class entry inside the project database.
+ * A class record as its curves read: the terminal editor's experience and
+ * stat curve panes chart it. The record itself is edited through the shared
+ * record database (the `classes` schema); this only reads it, filling what
+ * the record leaves out the way the engine's ClassStore does.
  */
-final class ProjectClass
+final readonly class ProjectClass
 {
-    use TracksPersistedState;
-
     /**
      * @param array<string, mixed> $payload
      */
     public function __construct(
-        public readonly int $id,
+        public int $id,
         private array $payload,
-        bool $isDirty = false,
     ) {
-        if (! $isDirty) {
-            $this->captureBaseline();
-        }
     }
 
     /**
@@ -42,59 +37,10 @@ final class ProjectClass
     }
 
     /**
-     * Creates a blank class definition.
-     *
-     * @param int $id The class id.
-     * @param string $name The display name.
-     * @return self
-     */
-    public static function createBlank(int $id, string $name = 'New Class'): self
-    {
-        return new self(
-            id: $id,
-            payload: [
-                'id' => $id,
-                'name' => $name,
-                'description' => '',
-                'initialLevel' => 1,
-                'maxLevel' => 99,
-                'note' => '',
-                'traits' => [],
-                'experienceCurve' => [
-                    'baseValue' => 30,
-                    'extraValue' => 20,
-                    'accelerationA' => 30,
-                    'accelerationB' => 30,
-                ],
-                'parameterCurves' => [
-                    'totalHp' => ['baseValue' => 120, 'extraGrowth' => 500, 'flatIncrement' => 40],
-                    'totalMp' => ['baseValue' => 12, 'extraGrowth' => 100, 'flatIncrement' => 10],
-                    'attack' => ['baseValue' => 10, 'extraGrowth' => 50, 'flatIncrement' => 1],
-                    'defence' => ['baseValue' => 10, 'extraGrowth' => 30, 'flatIncrement' => 1],
-                    'magicAttack' => ['baseValue' => 10, 'extraGrowth' => 50, 'flatIncrement' => 1],
-                    'magicDefence' => ['baseValue' => 10, 'extraGrowth' => 30, 'flatIncrement' => 1],
-                    'speed' => ['baseValue' => 10, 'extraGrowth' => 20, 'flatIncrement' => 1],
-                    'grace' => ['baseValue' => 10, 'extraGrowth' => 15, 'flatIncrement' => 1],
-                    'evasion' => ['baseValue' => 5, 'extraGrowth' => 10, 'flatIncrement' => 1],
-                ],
-            ],
-            isDirty: true,
-        );
-    }
-
-    /**
      * Returns whether the class has unsaved changes.
      *
      * @return bool
      */
-    /**
-     * @inheritDoc
-     */
-    protected function buildPersistedPayload(): string
-    {
-        return serialize($this->toArray());
-    }
-
     /**
      * Returns the class name.
      *
@@ -225,92 +171,4 @@ final class ProjectClass
         ];
     }
 
-    /**
-     * Updates one editable class field.
-     *
-     * @param string $field The field identifier.
-     * @param mixed $value The replacement value.
-     * @return void
-     */
-    public function setField(string $field, mixed $value): void
-    {
-        if (in_array($field, ['name', 'description', 'note'], true)) {
-            $this->payload[$field] = (string) $value;
-            $this->touchState();
-            return;
-        }
-
-        if ($field === 'initialLevel') {
-            $this->payload['initialLevel'] = max(1, (int) $value);
-            $this->payload['maxLevel'] = max(
-                (int) ($this->payload['maxLevel'] ?? 99),
-                (int) $this->payload['initialLevel'],
-            );
-            $this->touchState();
-            return;
-        }
-
-        if ($field === 'maxLevel') {
-            $this->payload['maxLevel'] = max($this->getInitialLevel(), (int) $value);
-            $this->touchState();
-            return;
-        }
-
-        $experienceMap = [
-            'expBaseValue' => 'baseValue',
-            'expExtraValue' => 'extraValue',
-            'expAccelerationA' => 'accelerationA',
-            'expAccelerationB' => 'accelerationB',
-        ];
-
-        if (isset($experienceMap[$field])) {
-            if (! isset($this->payload['experienceCurve']) || ! is_array($this->payload['experienceCurve'])) {
-                $this->payload['experienceCurve'] = [];
-            }
-
-            $this->payload['experienceCurve'][$experienceMap[$field]] = max(0, (int) $value);
-            $this->touchState();
-            return;
-        }
-
-        $parameterMap = [
-            'totalHpBaseValue' => 'totalHp',
-            'totalMpBaseValue' => 'totalMp',
-            'attackBaseValue' => 'attack',
-            'defenceBaseValue' => 'defence',
-            'magicAttackBaseValue' => 'magicAttack',
-            'magicDefenceBaseValue' => 'magicDefence',
-            'speedBaseValue' => 'speed',
-            'graceBaseValue' => 'grace',
-            'evasionBaseValue' => 'evasion',
-        ];
-
-        if (isset($parameterMap[$field])) {
-            if (! isset($this->payload['parameterCurves']) || ! is_array($this->payload['parameterCurves'])) {
-                $this->payload['parameterCurves'] = [];
-            }
-
-            $curveKey = $parameterMap[$field];
-
-            if (! isset($this->payload['parameterCurves'][$curveKey]) || ! is_array($this->payload['parameterCurves'][$curveKey])) {
-                $this->payload['parameterCurves'][$curveKey] = [];
-            }
-
-            $this->payload['parameterCurves'][$curveKey]['baseValue'] = max(0, (int) $value);
-            $this->touchState();
-        }
-    }
-
-    /**
-     * Returns the normalized payload for persistence.
-     *
-     * @return array<string, mixed>
-     */
-    public function toArray(): array
-    {
-        $payload = $this->payload;
-        $payload['id'] = $this->id;
-
-        return $payload;
-    }
 }

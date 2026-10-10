@@ -8,6 +8,10 @@ use Ichiloto\Editor\Cutscenes\Source\SourceNode;
 use Ichiloto\Editor\Cutscenes\Source\SourcePreservationRefusal;
 use Ichiloto\Editor\Cutscenes\Source\SourceUnreadable;
 use Ichiloto\Editor\Cutscenes\Source\SourceVariable;
+use Ichiloto\Editor\Tests\Fixtures\SourceWriterBacked;
+use Ichiloto\Editor\Tests\Fixtures\SourceWriterUnit;
+
+require_once fixturePath('SourceWriterEnums.php');
 
 /**
  * Editing an authored PHP array file in place.
@@ -299,6 +303,42 @@ it('refuses to rewrite what it cannot express, and names the place', function ()
     expect(ArraySourceWriter::rewrite($document, $old, $new)->source)->toBe(str_replace("'plain' => 1", "'plain' => 2", $source));
 });
 
+it('retains existing non-tile list identity and comment rules without treating arbitrary coordinates as ids', function () {
+    $source = <<<'PHP'
+<?php
+return ['npcs' => [
+    // The named NPC moves with its source.
+    ['name' => 'Mira', 'column' => 0, 'row' => 0, 'text' => 'first'],
+    // The other NPC.
+    ['name' => 'Tari', 'column' => 1, 'row' => 0, 'text' => 'second'],
+], 'keyframes' => [
+    // This is an edited position, not a new tile identity.
+    ['column' => 0, 'row' => 0, 'duration' => 10],
+    ['column' => 1, 'row' => 0, 'duration' => 20],
+]];
+PHP;
+    $old = evaluateSource($source);
+    $new = $old;
+    $new['npcs'] = [$old['npcs'][1], $old['npcs'][0]];
+    $new['npcs'][1]['text'] = 'edited';
+    $new['npcs'][1]['column'] = 8;
+    $new['keyframes'][0]['column'] = 9;
+    $rewritten = ArraySourceWriter::rewrite(PhpArraySourceDocument::parse($source), $old, $new)->source;
+    expect(evaluateSource($rewritten))->toBe($new)
+        ->and($rewritten)->toContain("// The named NPC moves with its source.\n    ['name' => 'Mira', 'column' => 8, 'row' => 0, 'text' => 'edited']")
+        ->and($rewritten)->toContain("// This is an edited position, not a new tile identity.\n    ['column' => 9");
+});
+
+it('removes only an indented inline entry and its heading in other existing list consumers', function (string $key) {
+    $source = "<?php\nreturn ['$key' => [\n    // Removed entry owns this heading.\n    ['id'=>'first'], ['id'=>'second'], ['id'=>'third']]];\n";
+    $old = evaluateSource($source);
+    $new = $old;
+    array_shift($new[$key]);
+    $rewritten = ArraySourceWriter::rewrite(PhpArraySourceDocument::parse($source), $old, $new)->source;
+    expect(evaluateSource($rewritten))->toBe($new)
+        ->and($rewritten)->toBe(str_replace("    // Removed entry owns this heading.\n    ['id'=>'first'],", '', $source));
+})->with(['npcs', 'tracks', 'cues']);
+
 it('rewrites the real Last Legend summon timelines to themselves and back from any change', function () {
     $game = gameSourceRoot();
 
@@ -325,15 +365,24 @@ it('rewrites the real Last Legend summon timelines to themselves and back from a
         // patched in place and evaluates exactly.
         expect(ArraySourceWriter::rewrite($document, $evaluated, $evaluated)->source)->toBe($source);
 
+        // Every sequence the file authors: its own tracks, or each
+        // presentation's when it pairs terminal and graphical ones.
         $new = $evaluated;
-
-        foreach ($new['tracks'] as &$track) {
-            foreach ($track['keyframes'] as &$keyframe) {
-                $keyframe['frame'] = $keyframe['frame'] + 1;
+        $shift = static function (array $sequence): array {
+            foreach ($sequence['tracks'] ?? [] as $track => $authored) {
+                foreach ($authored['keyframes'] ?? [] as $keyframe => $key) {
+                    $sequence['tracks'][$track]['keyframes'][$keyframe]['frame'] = $key['frame'] + 1;
+                }
             }
+
+            return $sequence;
+        };
+        $new = $shift($new);
+        foreach (array_keys($new['presentations'] ?? []) as $presentation) {
+            $new['presentations'][$presentation] = $shift($new['presentations'][$presentation]);
         }
 
-        unset($track, $keyframe);
+        expect($new)->not->toBe($evaluated);
         $rewritten = ArraySourceWriter::rewrite($document, $evaluated, $new);
 
         expect(evaluateSource($rewritten->source))->toBe($new)
@@ -343,3 +392,206 @@ it('rewrites the real Last Legend summon timelines to themselves and back from a
 
     expect($seen)->toBeGreaterThan(0);
 })->group('engine');
+
+it('puts a keyed entry back where the new value orders it, so a removal and its undo leave the bytes', function () {
+    $source = "<?php\n\nreturn [\n  'kind' => 'armor',\n  // The armor's type.\n  'equipmentType' => 'Shield',\n  'price' => 10,\n  'inline' => ['type' => 'text', 'name' => '', 'text' => 'A note.'],\n];\n";
+    $full = evaluateSource($source);
+    $without = $full;
+    unset($without['equipmentType'], $without['inline']['name']);
+
+    $removed = ArraySourceWriter::rewrite(PhpArraySourceDocument::parse($source), $full, $without);
+    $restored = ArraySourceWriter::rewrite($removed, $without, $full);
+
+    expect($removed->source)->toBe("<?php\n\nreturn [\n  'kind' => 'armor',\n  'price' => 10,\n  'inline' => ['type' => 'text', 'text' => 'A note.'],\n];\n")
+        ->and(evaluateSource($restored->source))->toBe($full)
+        // The comment went with its entry, so only that is not back.
+        ->and($restored->source)->toBe(str_replace("  // The armor's type.\n", '', $source));
+});
+
+it('cuts the entries of an array written on one line with the separators that joined them', function (array $remove, string $expected, bool $restoresBytes) {
+    $source = "<?php\n\nreturn [['type' => 'text', 'name' => '', 'text' => 'A note.']];\n";
+    $old = evaluateSource($source);
+    $new = $old;
+
+    foreach ($remove as $key) {
+        unset($new[0][$key]);
+    }
+
+    $rewritten = ArraySourceWriter::rewrite(PhpArraySourceDocument::parse($source), $old, $new);
+
+    expect($rewritten->source)->toBe("<?php\n\nreturn [{$expected}];\n")
+        ->and(evaluateSource($rewritten->source))->toBe($new);
+
+    // Put back, the line reads as it did; an array left empty has no line
+    // to follow, so it opens onto lines of its own.
+    $restored = ArraySourceWriter::rewrite($rewritten, $new, $old)->source;
+
+    expect(evaluateSource($restored))->toBe($old)
+        ->and($restored === $source)->toBe($restoresBytes);
+})->with([
+    'the first' => [['type'], "['name' => '', 'text' => 'A note.']", true],
+    'one between' => [['name'], "['type' => 'text', 'text' => 'A note.']", true],
+    'the last two' => [['name', 'text'], "['type' => 'text']", true],
+    'every one' => [['type', 'name', 'text'], '[]', false],
+]);
+
+it('rewrites backed and unit enum literals without changing class spelling comments or key order', function (
+    string $import, string $expression, string $replacement, UnitEnum $first, UnitEnum $second,
+) {
+    $source = "<?php {$import}\nreturn array(\n"
+        . "  'before' => 'kept',\n  // Authored case heading.\n"
+        . "  'case' => {$expression}, // Authored tail.\n"
+        . "  'after' => strtoupper('kept'),\n);\n";
+    $document = PhpArraySourceDocument::parse($source);
+    $old = evaluateSource($source);
+    $new = $old;
+    $new['case'] = $second;
+    expect($old['case'])->toBe($first);
+    $rewritten = ArraySourceWriter::rewrite($document, $old, $new);
+    expect($rewritten->source)->toBe(str_replace($expression, $replacement, $source))
+        ->and(evaluateSource($rewritten->source))->toBe($new)
+        ->and(array_keys(evaluateSource($rewritten->source)))->toBe(['before', 'case', 'after'])
+        ->and($document->source)->toBe($source)
+        ->and(ArraySourceWriter::rewrite($rewritten, $new, $old)->source)->toBe($source);
+})->with([
+    'backed import' => ['use Ichiloto\Editor\Tests\Fixtures\SourceWriterBacked;',
+        'SourceWriterBacked::FIRST', 'SourceWriterBacked::SECOND', SourceWriterBacked::FIRST, SourceWriterBacked::SECOND],
+    'unit import' => ['use Ichiloto\Editor\Tests\Fixtures\SourceWriterUnit;',
+        'SourceWriterUnit::FIRST', 'SourceWriterUnit::SECOND', SourceWriterUnit::FIRST, SourceWriterUnit::SECOND],
+    'backed alias' => ['use Ichiloto\Editor\Tests\Fixtures\SourceWriterBacked as Choice;',
+        'Choice::FIRST', 'Choice::SECOND', SourceWriterBacked::FIRST, SourceWriterBacked::SECOND],
+    'case-insensitive alias' => ['use Ichiloto\Editor\Tests\Fixtures\SourceWriterBacked as Choice;',
+        'choice::FIRST', 'choice::SECOND', SourceWriterBacked::FIRST, SourceWriterBacked::SECOND],
+    'inline import' => ['use Ichiloto\Editor\Tests\Fixtures\SourceWriterBacked as Choice; /* kept */',
+        'Choice::FIRST', 'Choice::SECOND', SourceWriterBacked::FIRST, SourceWriterBacked::SECOND],
+    'commented import' => ['use /* class */ Ichiloto\Editor\Tests\Fixtures\SourceWriterUnit /* alias */ as Choice;',
+        'Choice::FIRST', 'Choice::SECOND', SourceWriterUnit::FIRST, SourceWriterUnit::SECOND],
+    'unit alias' => ['use Ichiloto\Editor\Tests\Fixtures\SourceWriterUnit as Choice;',
+        'Choice::FIRST', 'Choice::SECOND', SourceWriterUnit::FIRST, SourceWriterUnit::SECOND],
+    'namespace alias' => ['use Ichiloto\Editor\Tests\Fixtures as Fixtures;',
+        'Fixtures\SourceWriterUnit::FIRST', 'Fixtures\SourceWriterUnit::SECOND', SourceWriterUnit::FIRST, SourceWriterUnit::SECOND],
+    'backed fully qualified' => ['', '\Ichiloto\Editor\Tests\Fixtures\SourceWriterBacked::FIRST',
+        '\Ichiloto\Editor\Tests\Fixtures\SourceWriterBacked::SECOND', SourceWriterBacked::FIRST, SourceWriterBacked::SECOND],
+    'unit fully qualified' => ['', '\Ichiloto\Editor\Tests\Fixtures\SourceWriterUnit::FIRST',
+        '\Ichiloto\Editor\Tests\Fixtures\SourceWriterUnit::SECOND', SourceWriterUnit::FIRST, SourceWriterUnit::SECOND],
+    'inter-token comments' => ['use Ichiloto\Editor\Tests\Fixtures\SourceWriterBacked as Choice;',
+        "Choice /* class */ :: /* case */ FIRST", "Choice /* class */ :: /* case */ SECOND", SourceWriterBacked::FIRST, SourceWriterBacked::SECOND],
+    'inter-token newlines' => ['use Ichiloto\Editor\Tests\Fixtures\SourceWriterUnit as Choice;',
+        "Choice\n    ::\n    FIRST", "Choice\n    ::\n    SECOND", SourceWriterUnit::FIRST, SourceWriterUnit::SECOND],
+]);
+
+it('preserves byte-exact enum source on no-op and refuses scalar backing-value replacements', function (mixed $replacement) {
+    $source = "<?php\nuse Ichiloto\\Editor\\Tests\\Fixtures\\SourceWriterBacked as Choice;\n"
+        . "return ['case' => Choice::FIRST, 'kept' => 1];\n";
+    $document = PhpArraySourceDocument::parse($source);
+    $old = evaluateSource($source);
+    expect(ArraySourceWriter::rewrite($document, $old, $old))->toBe($document);
+    $new = $old;
+    $new['case'] = $replacement;
+    expect(fn() => ArraySourceWriter::rewrite($document, $old, $new))->toThrow(SourcePreservationRefusal::class, 'case')
+        ->and($document->source)->toBe($source);
+})->with([
+    'backing value' => ['second'],
+    'integer' => [1],
+]);
+
+it('preserves enum literal comments during explicit nullable and cross-enum data replacements', function (?UnitEnum $replacement) {
+    $source = "<?php\nuse Ichiloto\\Editor\\Tests\\Fixtures\\SourceWriterBacked as Choice;\n"
+        . "return ['case' => Choice /* class */ :: /* case */ FIRST, 'kept' => 1];\n";
+    $old = evaluateSource($source);
+    $new = $old;
+    $new['case'] = $replacement;
+    $document = PhpArraySourceDocument::parse($source);
+    $rewritten = ArraySourceWriter::rewrite($document, $old, $new);
+    expect(evaluateSource($rewritten->source))->toBe($new)
+        ->and($rewritten->source)->toContain('/* class */', '/* case */', "'kept' => 1")
+        ->and($document->source)->toBe($source);
+})->with(['nullable' => [null], 'another enum' => [SourceWriterUnit::SECOND]]);
+
+it('refuses computed enum values and noncase constants rather than flattening their expressions', function (string $expression) {
+    $source = "<?php\nuse Ichiloto\\Editor\\Tests\\Fixtures\\SourceWriterBacked as Choice;\n"
+        . "use Ichiloto\\Editor\\Tests\\Fixtures\\SourceWriterConstants as Constants;\n"
+        . "return ['case' => {$expression}, 'plain' => 1];\n";
+    $document = PhpArraySourceDocument::parse($source);
+    $old = evaluateSource($source);
+    $new = $old;
+    $new['case'] = SourceWriterBacked::SECOND;
+    expect($old['case'])->toBe(SourceWriterBacked::FIRST)
+        ->and(fn() => ArraySourceWriter::rewrite($document, $old, $new))->toThrow(SourcePreservationRefusal::class, 'case')
+        ->and($document->source)->toBe($source);
+    $new = $old;
+    $new['plain'] = 2;
+    expect(ArraySourceWriter::rewrite($document, $old, $new)->source)->toBe(str_replace("'plain' => 1", "'plain' => 2", $source));
+})->with([
+    "Choice::from('first')",
+    "Choice::tryFrom('first')",
+    'Choice::ALIAS',
+    'Constants::CASE_ALIAS',
+    'Constants::FIRST',
+    "constant(Choice::class . '::FIRST')",
+    'true ? Choice::FIRST : Choice::SECOND',
+    '(Choice::FIRST)',
+]);
+
+it('refuses unresolved class names and unknown constants without evaluating them', function (string $expression) {
+    $source = "<?php\nuse Ichiloto\\Editor\\Tests\\Fixtures\\SourceWriterBacked as Choice;\n"
+        . "return ['case' => {$expression}];\n";
+    $document = PhpArraySourceDocument::parse($source);
+    expect(fn() => ArraySourceWriter::rewrite($document, ['case' => SourceWriterBacked::FIRST], ['case' => SourceWriterBacked::SECOND]))
+        ->toThrow(SourcePreservationRefusal::class, 'case')
+        ->and($document->source)->toBe($source);
+})->with(['Choice::UNKNOWN_CASE', 'UnknownChoice::FIRST', '\UnloadedUnknownChoice::FIRST']);
+
+it('requires the loaded enum case to match the authored literal before rewriting it', function () {
+    $source = "<?php\nuse Ichiloto\\Editor\\Tests\\Fixtures\\SourceWriterBacked as Choice;\nreturn ['case' => Choice::FIRST];\n";
+    $document = PhpArraySourceDocument::parse($source);
+    expect(fn() => ArraySourceWriter::rewrite($document, ['case' => SourceWriterBacked::SECOND], ['case' => SourceWriterBacked::FIRST]))
+        ->toThrow(SourcePreservationRefusal::class, 'case')
+        ->and($document->source)->toBe($source);
+});
+
+it('does not mistake imports inside authored text or another namespace for actual enum imports', function (string $source) {
+    $document = PhpArraySourceDocument::parse($source);
+    $old = evaluateSource($source);
+    $new = $old;
+    $new['case'] = SourceWriterBacked::SECOND;
+    expect(fn() => ArraySourceWriter::rewrite($document, $old, $new))->toThrow(SourcePreservationRefusal::class, 'case')
+        ->and($document->source)->toBe($source);
+})->with([
+    'nowdoc' => <<<'PHP'
+    <?php
+    $documentation = <<<'TEXT'
+    use Ichiloto\Editor\Tests\Fixtures\SourceWriterBacked as Choice;
+    TEXT;
+    use Ichiloto\Editor\Tests\Fixtures\SourceWriterConstants as Choice;
+    return ['case' => Choice::FIRST, 'documentation' => $documentation];
+    PHP,
+    'comment' => <<<'PHP'
+    <?php
+    /*
+    use Ichiloto\Editor\Tests\Fixtures\SourceWriterBacked as Choice;
+    */
+    use Ichiloto\Editor\Tests\Fixtures\SourceWriterConstants as Choice;
+    return ['case' => Choice::FIRST];
+    PHP,
+    'previous namespace' => <<<'PHP'
+    <?php
+    namespace First;
+    use Ichiloto\Editor\Tests\Fixtures\SourceWriterBacked as Choice;
+    namespace Second;
+    use Ichiloto\Editor\Tests\Fixtures\SourceWriterConstants as Choice;
+    return ['case' => Choice::FIRST];
+    PHP,
+]);
+
+it('keeps existing backed enum value expressions editable without switching them to enum objects', function () {
+    $source = "<?php\nuse Ichiloto\\Editor\\Tests\\Fixtures\\SourceWriterBacked as Choice;\nreturn ['case' => Choice::FIRST->value];\n";
+    $document = PhpArraySourceDocument::parse($source);
+    $old = evaluateSource($source);
+    $new = ['case' => 'second'];
+    $rewritten = ArraySourceWriter::rewrite($document, $old, $new)->source;
+    expect($rewritten)->toBe(str_replace('Choice::FIRST->value', 'Choice::SECOND->value', $source))
+        ->and(evaluateSource($rewritten))->toBe($new)
+        ->and(fn() => ArraySourceWriter::rewrite($document, $old, ['case' => SourceWriterBacked::SECOND]))
+            ->toThrow(SourcePreservationRefusal::class, 'case');
+});

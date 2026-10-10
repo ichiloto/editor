@@ -101,6 +101,33 @@ final class WorldWriteCodec
     }
 
     /**
+     * Decodes the one-line form, refusing it whole when any segment cannot
+     * be read, so a typed write is never dropped without a word.
+     *
+     * @param string $value The encoded writes.
+     * @return array<int, array<string, mixed>> The writes.
+     * @throws \InvalidArgumentException Naming the first unreadable segment.
+     */
+    public static function decodeAllStrictly(string $value): array
+    {
+        $sets = [];
+
+        foreach (explode(';', $value) as $segment) {
+            if (trim($segment) === '') {
+                continue;
+            }
+
+            $sets[] = self::decode($segment) ?? throw new \InvalidArgumentException(sprintf(
+                'Write "%s" cannot be read: write type:name[:extras] with a type of %s.',
+                trim($segment),
+                implode(', ', self::TYPES),
+            ));
+        }
+
+        return $sets;
+    }
+
+    /**
      * Decodes one segment.
      *
      * @param string $segment The segment.

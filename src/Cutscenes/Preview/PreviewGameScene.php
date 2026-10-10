@@ -4,10 +4,17 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Cutscenes\Preview;
 
+use Closure;
+use Ichiloto\Engine\Animations\Field\FieldEffectManager;
+use Ichiloto\Engine\Animations\Field\FieldEffectAnchor;
+use Ichiloto\Engine\Animations\Field\FieldEffectSession;
+use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
+use Ichiloto\Engine\Animations\Timelines\CompiledEffectTimeline;
 use Ichiloto\Engine\Core\GameState;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicController;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicPresentationManager;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicStageManager;
+use Ichiloto\Engine\Cutscenes\Cinematics\CinematicSubjectResolver;
 use Ichiloto\Engine\Entities\Party;
 use Ichiloto\Engine\Events\Interpreter\EventExecutionSession;
 use Ichiloto\Engine\Events\Interpreter\EventInterpreter;
@@ -38,6 +45,12 @@ final class PreviewGameScene extends GameScene
 
     public PreviewMapManager $previewMap;
 
+    /** The id the effect an author previews plays under on the field. */
+    private const string SHOWN_EFFECT_ID = 'editor-preview';
+
+    /** @var array{0: Closure(EffectPresentation): CompiledEffectTimeline, 1: int}|null The effect an author previews, at its frame. */
+    private ?array $shownEffect = null;
+
     public function __construct(
         public readonly PreviewSceneManager $previewSceneManager,
         int $screenWidth,
@@ -48,7 +61,7 @@ final class PreviewGameScene extends GameScene
         $this->gameState = new GameState();
         $this->hasDeferredAutoSave = false;
         $this->currentMapId = $initialMapId;
-        $this->camera = new PreviewCamera($screenWidth, $screenHeight);
+        $this->camera = new PreviewCamera($this, $screenWidth, $screenHeight);
         $this->party = new Party();
         $this->knowledge = new KnowledgeProgressService(KnowledgeCatalog::fromProject());
         $this->bestiary = new Bestiary($this->knowledge);
@@ -60,9 +73,46 @@ final class PreviewGameScene extends GameScene
         $this->cinematicController = new CinematicController($this);
     }
 
+    /**
+     * Gives the scene the field's effects for a presentation, with the loaded
+     * map's installed, as the game's field has them: Terminal glyphs for the
+     * Terminal picture, graphical sprites for the graphical view.
+     */
+    public function installFieldEffects(EffectPresentation $presentation): void
+    {
+        $this->fieldEffects?->clear();
+        $this->fieldEffects = new FieldEffectManager(getcwd() . '/assets', $presentation);
+        $this->previewMap->installFieldEffects();
+        if ($this->shownEffect !== null) {
+            $this->showFieldEffect(...$this->shownEffect);
+        }
+    }
+
+    /**
+     * Shows an effect on the field at one of its frames, at the player the
+     * camera follows, as a cinematic's field animation presents one: an
+     * effect session this scene owns, compiled for the field's presentation
+     * and held at the frame for inspection, so no cue plays and no clock
+     * moves it. It stays shown, in whichever presentation the field is,
+     * until another is shown.
+     *
+     * @param Closure(EffectPresentation): CompiledEffectTimeline $compile The effect, compiled for a presentation.
+     */
+    public function showFieldEffect(Closure $compile, int $frame): void
+    {
+        $this->shownEffect = [$compile, $frame];
+        $presentation = $this->cinematicPresentation ?? throw new \LogicException('The preview scene has no cinematic presentation.');
+        $presentation->removeEffect(self::SHOWN_EFFECT_ID);
+        $session = new FieldEffectSession(self::SHOWN_EFFECT_ID, FieldEffectAnchor::createAtPosition(
+            new CinematicSubjectResolver($this)->position(['kind' => 'player'])),
+            $compile($this->isGraphicalFieldPresented() ? EffectPresentation::GRAPHICAL : EffectPresentation::TERMINAL));
+        $session->playback->seek($frame);
+        $session->playback->pause();
+        $presentation->presentEffect($session);
+    }
+
     public function installPlayer(PreviewPlayer $player): void
     {
-        $player->bindScene($this);
         $this->player = $player;
     }
 
@@ -82,7 +132,7 @@ final class PreviewGameScene extends GameScene
         return $camera;
     }
 
-    public function transferPlayer(Location $location, bool $useConfiguredTransition = true): void
+    public function transferPlayer(Location $location, bool $useConfiguredTransition = true): bool
     {
         $this->transfers[] = [
             'map' => $location->mapFilename,
@@ -106,10 +156,8 @@ final class PreviewGameScene extends GameScene
         try {
             $this->previewMap->loadForPreview($location->mapFilename);
         } catch (\Throwable) {
-            // An unknown destination is a validation finding, not a preview
-            // crash: the cinematic continues over undefined terrain and the
-            // final state still reports the map it asked for.
-            $this->previewMap->unload();
+            // The map manager clears failed geometry and records why; the
+            // cinematic can continue over explicitly diagnosed undefined terrain.
         }
 
         if ($this->player !== null && $this->camera->followsPlayer) {
@@ -118,6 +166,7 @@ final class PreviewGameScene extends GameScene
 
         $this->eventInterpreter?->resumeAfterTransfer();
         $this->autoSave();
+        return true;
     }
 
     public function onEventSessionStarted(EventExecutionSession $session): void

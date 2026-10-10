@@ -268,7 +268,9 @@ final class SettingsPaneLayout
 
     /**
      * Wraps a plain line of prose to a width, keeping its leading indent on
-     * every continuation line.
+     * every continuation line. Every line fits the width and no text is
+     * lost: an indent deeper than the pane allows is shortened, so the text
+     * keeps at least half the width (deeply nested source in a narrow pane).
      *
      * @param string $line The line, possibly indented.
      * @param int $contentWidth The pane's writable width.
@@ -277,13 +279,13 @@ final class SettingsPaneLayout
     public static function wrapProse(string $line, int $contentWidth): array
     {
         $contentWidth = max(1, $contentWidth);
-        $indent = strlen($line) - strlen(ltrim($line, ' '));
         $text = ltrim($line, ' ');
 
         if ($text === '' || mb_strwidth($line) <= $contentWidth) {
             return [$line];
         }
 
+        $indent = min(strlen($line) - strlen($text), intdiv($contentWidth, 2));
         $width = max(1, $contentWidth - $indent);
         $pad = str_repeat(' ', $indent);
 

@@ -191,7 +191,7 @@ it('leaves earned growth to the runtime, and says what the preview is assuming',
     callEditorMethod($editor, 'openDatabaseAtCategory', 'actors');
 
     $rowFor = static function (Editor $editor, string $label): array {
-        foreach (callEditorMethod($editor, 'getDatabaseActorSettingsFields') as $field) {
+        foreach (callEditorMethod($editor, 'getDatabaseSettingsFields') as $field) {
             if (($field['label'] ?? null) === $label) {
                 return $field;
             }
@@ -205,7 +205,7 @@ it('leaves earned growth to the runtime, and says what the preview is assuming',
         ->and($rowFor($editor, '  Assumed Growth')['options'])->toContain('growth.vigour')
         ->and($attack($editor))->not->toContain('growth');
 
-    callEditorMethod($editor, 'applyDatabaseFieldValue', '__actor_growth', 'growth.vigour');
+    callEditorMethod($editor, 'applyDatabaseFieldValueRecorded', array_values(array_filter(callEditorMethod($editor, 'getDatabaseSettingsFields'), static fn(array $row): bool => ($row['field'] ?? null) === '__actor_growth'))[0], 'growth.vigour');
 
     expect($attack($editor))->toContain('+7 growth')
         // Assuming it is a view of the pane. Nothing was granted, nothing

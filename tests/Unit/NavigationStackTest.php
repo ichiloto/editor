@@ -90,7 +90,7 @@ it('goes from an actor to its class and back again', function () {
     callEditorMethod($editor, 'dispatchInput', "\x07");
 
     expect(getEditorProperty($editor, 'databaseCategoryIndex'))->toBe(DatabaseCatalog::indexOf('classes'))
-        ->and(getEditorProperty($editor, 'databaseSelectedClassIndex'))->toBe(1);
+        ->and(getEditorProperty($editor, 'databaseSelectedRecordIndexes')['classes'] ?? 0)->toBe(1);
 
     /** @var NavigationStack $navigation */
     $navigation = getEditorProperty($editor, 'navigation');

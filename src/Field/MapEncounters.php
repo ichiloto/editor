@@ -14,11 +14,21 @@ use InvalidArgumentException;
  *
  * ```php
  * 'encounters' => [
- *     'troops' => ['Rat + Bat' => 5, 'Bat x 2' => 4],
+ *     'troops' => [
+ *         'Rat + Bat' => 5,
+ *         'Loch Ness' => ['weight' => 1, 'battleArena' => 'arena.secret-lake'],
+ *     ],
  *     'rate' => 22,
  *     'tiles' => 'encounter',
+ *     'battleArena' => 'arena.cryptic-ruins',
  * ],
  * ```
+ *
+ * A troop's entry is its weight, or a map holding its weight and the arena a
+ * graphical battle against it takes place in, which outranks the map's own
+ * `battleArena`; with neither, the battle presentation's default arena
+ * applies. Arenas are graphical presentation only: they change no weight,
+ * no fight and nothing the terminal shows.
  *
  * The engine reads it loosely -- a missing `rate` means fifteen steps, a
  * missing `tiles` means danger tiles only, a troop with a non-positive or
@@ -34,9 +44,10 @@ use InvalidArgumentException;
  * same troop: PHP would keep the last and discard the other without a word,
  * so the editor refuses the edit instead.
  *
- * Anything else inside the block -- a key a later engine will read -- is kept
- * exactly as it was found. A shape this model cannot hold is refused by name
- * rather than rewritten.
+ * Anything else inside the block or an entry -- a key a later engine will
+ * read -- is kept exactly as it was found, and an entry authored as a map
+ * stays one. A shape this model cannot hold is refused by name rather than
+ * rewritten.
  *
  * @package Ichiloto\Editor\Field
  */
@@ -54,12 +65,17 @@ final class MapEncounters
     /** The tile modes the engine understands. */
     public const array TILE_MODES = ['encounter', 'any'];
 
+    /** The key naming a graphical battle arena, on the block and on an entry. */
+    public const string ARENA_KEY = 'battleArena';
+
     /** The keys this model owns; everything else in the block is the author's. */
-    private const array OWNED_KEYS = ['troops', 'rate', 'tiles'];
+    private const array OWNED_KEYS = ['troops', 'rate', 'tiles', self::ARENA_KEY];
 
     /**
      * @param array<string, mixed>|null $block The authored block, or null when the map declares none.
-     * @param array<int, array{name: string, weight: mixed}> $rows The troop rows, in authored order.
+     * @param array<int, array{name: string, weight: mixed, arena: ?string, entry: ?array<string, mixed>}> $rows
+     *   The troop rows, in authored order: each one's weight and arena, and
+     *   the entry as authored when it was written as a map.
      * @param string|null $unsupported Why this block cannot be edited, or null.
      */
     private function __construct(
@@ -96,20 +112,36 @@ final class MapEncounters
             return new self($block, [], sprintf('the encounters troops are %s, not troop weights', get_debug_type($troops)));
         }
 
+        // An arena is a key or absent: a null written for one is no arena
+        // the engine can draw, and the editor will not quietly drop it.
+        $mapArena = $block[self::ARENA_KEY] ?? null;
+
+        if (array_key_exists(self::ARENA_KEY, $block) && ! is_string($mapArena)) {
+            return new self($block, [], sprintf('the map\'s battleArena is %s, not an arena key', get_debug_type($mapArena)));
+        }
+
         $rows = [];
 
-        foreach ($troops as $name => $weight) {
+        foreach ($troops as $name => $entry) {
             if (! is_string($name)) {
                 // The engine skips a troop it cannot name, and the editor
                 // cannot show a numeric key as a troop reference.
                 return new self($block, [], sprintf('a troop is keyed by %s (%s) rather than by name', get_debug_type($name), var_export($name, true)));
             }
 
+            $structured = is_array($entry);
+            $weight = $structured ? ($entry['weight'] ?? null) : $entry;
+            $arena = $structured ? ($entry[self::ARENA_KEY] ?? null) : null;
+
             if (! is_scalar($weight) && $weight !== null) {
                 return new self($block, [], sprintf('the troop "%s" has a weight that is %s', $name, get_debug_type($weight)));
             }
 
-            $rows[] = ['name' => $name, 'weight' => $weight];
+            if ($structured && array_key_exists(self::ARENA_KEY, $entry) && ! is_string($arena)) {
+                return new self($block, [], sprintf('the troop "%s" has a battleArena that is %s, not an arena key', $name, get_debug_type($arena)));
+            }
+
+            $rows[] = ['name' => $name, 'weight' => $weight, 'arena' => $arena, 'entry' => $structured ? $entry : null];
         }
 
         return new self($block, $rows, null);
@@ -142,11 +174,22 @@ final class MapEncounters
     /**
      * The troop rows, in authored order.
      *
-     * @return array<int, array{name: string, weight: mixed}>
+     * @return array<int, array{name: string, weight: mixed, arena: ?string, entry: ?array<string, mixed>}>
      */
     public function rows(): array
     {
         return $this->rows;
+    }
+
+    /**
+     * The arena the map's encounters take place in, or null when the battle
+     * presentation's default applies.
+     */
+    public function mapArena(): ?string
+    {
+        $arena = $this->block[self::ARENA_KEY] ?? null;
+
+        return is_string($arena) ? $arena : null;
     }
 
     /**
@@ -274,6 +317,35 @@ final class MapEncounters
     }
 
     /**
+     * The block with a different arena for the map's encounters; null leaves
+     * it to the battle presentation's default.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function withMapArena(?string $arena): ?array
+    {
+        return $this->rebuilt($this->rows, [self::ARENA_KEY => $arena]);
+    }
+
+    /**
+     * The block with one row's own arena changed; null leaves it to the map's.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function withArenaAt(int $index, ?string $arena): ?array
+    {
+        $rows = $this->rows;
+
+        if (! array_key_exists($index, $rows)) {
+            return $this->block;
+        }
+
+        $rows[$index]['arena'] = $arena;
+
+        return $this->rebuilt($rows);
+    }
+
+    /**
      * The block with one row's weight changed.
      *
      * @return array<string, mixed>|null
@@ -302,7 +374,7 @@ final class MapEncounters
         $this->assertFree($name, null);
         $rows = $this->rows;
         $position = $after === null ? count($rows) : min(count($rows), max(0, $after + 1));
-        array_splice($rows, $position, 0, [['name' => $name, 'weight' => max(1, $weight)]]);
+        array_splice($rows, $position, 0, [['name' => $name, 'weight' => max(1, $weight), 'arena' => null, 'entry' => null]]);
 
         return $this->rebuilt($rows);
     }
@@ -328,10 +400,12 @@ final class MapEncounters
 
     /**
      * Rebuilds the authored block around new rows, keeping every key this
-     * model does not own, and the order they were authored in.
+     * model does not own, and the order they were authored in. An entry
+     * authored as a map stays one, its other keys kept; a weight alone is
+     * written as a weight, and becomes a map only when it gains an arena.
      *
-     * @param array<int, array{name: string, weight: mixed}> $rows
-     * @param array<string, mixed> $changes Owned values to set.
+     * @param array<int, array{name: string, weight: mixed, arena: ?string, entry: ?array<string, mixed>}> $rows
+     * @param array<string, mixed> $changes Owned values to set; null removes one.
      * @return array<string, mixed>|null The block to write, or null to remove it.
      */
     private function rebuilt(array $rows, array $changes = []): ?array
@@ -350,16 +424,47 @@ final class MapEncounters
         $troops = [];
 
         foreach ($rows as $row) {
-            $troops[$row['name']] = $row['weight'] ?? 1;
+            $troops[$row['name']] = self::entryFor($row);
         }
 
         $block['troops'] = $troops;
 
         foreach ($changes as $key => $value) {
+            if ($value === null) {
+                unset($block[$key]);
+
+                continue;
+            }
+
             $block[$key] = $value;
         }
 
         return $block;
+    }
+
+    /**
+     * Writes one row as its entry: as authored, with its weight and arena.
+     *
+     * @param array{name: string, weight: mixed, arena: ?string, entry: ?array<string, mixed>} $row
+     */
+    private static function entryFor(array $row): mixed
+    {
+        $weight = $row['weight'] ?? 1;
+
+        if ($row['entry'] === null && $row['arena'] === null) {
+            return $weight;
+        }
+
+        $entry = $row['entry'] ?? [];
+        $entry['weight'] = $weight;
+
+        if ($row['arena'] === null) {
+            unset($entry[self::ARENA_KEY]);
+        } else {
+            $entry[self::ARENA_KEY] = $row['arena'];
+        }
+
+        return $entry;
     }
 
     /**

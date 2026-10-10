@@ -12,7 +12,7 @@ function gameSourceRoot(): ?string
     $pinned = getenv('ICHILOTO_GAME_SRC');
 
     return is_string($pinned) && $pinned !== '' && is_file($pinned . '/assets/Data/items.php')
-        ? rtrim($pinned, '/')
+        ? (realpath($pinned) ?: null)
         : null;
 }
 
@@ -243,6 +243,18 @@ function getEditorProperty(Editor $editor, string $property): mixed
 }
 
 /**
+ * Makes a temporary project's System category one the editor cannot write,
+ * as a real project's can be: its file returns a list, not the one map of
+ * settings the editor rewrites. Returns the category's key.
+ */
+function makeUnwritableCategory(string $root): string
+{
+    file_put_contents($root . '/assets/Data/system.php', "<?php\n\nreturn ['one setting', 'another'];\n");
+
+    return 'system';
+}
+
+/**
  * Invokes a private Editor method by reflection.
  */
 function callEditorMethod(Editor $editor, string $method, mixed ...$arguments): mixed
@@ -366,7 +378,98 @@ require_once __DIR__ . '/Support/ValidationFixtures.php';
 require_once __DIR__ . '/Support/FileSetFixtures.php';
 
 require_once __DIR__ . '/Support/MapFixtures.php';
+require_once __DIR__ . '/Support/LayeredMapFixtures.php';
+require_once __DIR__ . '/Support/MapGraphicsFixtures.php';
 
 require_once __DIR__ . '/Support/BattleEntryFixtures.php';
 
 require_once __DIR__ . '/Support/MapMetadataFixtures.php';
+
+require_once __DIR__ . '/Support/BattleFormationFixtures.php';
+
+/**
+ * Authors a project's skill catalogue as record files, one per skill and
+ * numbered in the given order, replacing any records already there: the
+ * fixture form of `assets/Data/Skills`.
+ *
+ * @param string $root The project root.
+ */
+function writeSkillRecords(string $root, \Ichiloto\Engine\Entities\Skills\Skill ...$skills): void
+{
+    $directory = $root . '/assets/Data/' . \Ichiloto\Engine\Entities\Skills\SkillCatalog::DIRECTORY;
+
+    if (! is_dir($directory)) {
+        mkdir($directory, 0777, true);
+    }
+
+    array_map(unlink(...), glob($directory . '/*.php') ?: []);
+
+    foreach (array_values($skills) as $index => $skill) {
+        $slug = trim(preg_replace('/[^a-z0-9]+/', '-', strtolower($skill->name)) ?? '', '-');
+        $data = var_export(\Ichiloto\Engine\Entities\Skills\SkillRecord::writeSkill($skill), true);
+        file_put_contents(
+            sprintf('%s/%04d-%s.php', $directory, $index + 1, $slug),
+            "<?php\n\nreturn ['class' => \\Ichiloto\\Engine\\Entities\\Skills\\Skill::class, 'data' => {$data}];\n",
+        );
+    }
+}
+
+/**
+ * Authors a project's inventory as record files, items under Items/,
+ * weapons under Weapons/, armors and accessories under Armors/, each folder
+ * numbered in the given order, with the items.php barrel that loads them,
+ * replacing any inventory already there: the fixture form of a project's
+ * items, weapons and armors.
+ *
+ * @param string $root The project root.
+ * @return list<string> Each definition's record file, relative to the project root, in the given order.
+ */
+function writeItemRecords(string $root, \Ichiloto\Engine\Entities\Inventory\InventoryItem ...$items): array
+{
+    $data = $root . '/assets/Data';
+
+    foreach (\Ichiloto\Engine\Entities\Inventory\ItemCatalog::DIRECTORIES as $folder) {
+        is_dir("$data/$folder") || mkdir("$data/$folder", 0777, true);
+        array_map(unlink(...), glob("$data/$folder/*.php") ?: []);
+    }
+
+    $numbers = [];
+    $files = [];
+
+    foreach ($items as $item) {
+        $folder = match (true) {
+            $item instanceof \Ichiloto\Engine\Entities\Inventory\Items\Item => 'Items',
+            $item instanceof \Ichiloto\Engine\Entities\Inventory\Weapons\Weapon => 'Weapons',
+            default => 'Armors',
+        };
+        $numbers[$folder] = ($numbers[$folder] ?? 0) + 1;
+        $slug = trim(preg_replace('/[^a-z0-9]+/', '-', strtolower($item->name)) ?? '', '-');
+        $file = sprintf('assets/Data/%s/%04d-%s.php', $folder, $numbers[$folder], $slug);
+        $record = var_export(\Ichiloto\Engine\Entities\Inventory\ItemRecord::writeItem($item), true);
+        file_put_contents("$root/$file", "<?php\n\nreturn ['class' => \\Ichiloto\\Engine\\Entities\\Inventory\\InventoryItem::class, 'data' => {$record}];\n");
+        $files[] = $file;
+    }
+
+    file_put_contents("$data/items.php", "<?php\n\nreturn \\Ichiloto\\Engine\\Entities\\Inventory\\ItemCatalog::loadProjectItems(dirname(__DIR__));\n");
+
+    return $files;
+}
+
+/**
+ * The definitions an old-style items.php source returns, so a fixture can
+ * keep its readable constructor code and be written as records.
+ *
+ * @return list<\Ichiloto\Engine\Entities\Inventory\InventoryItem>
+ */
+function itemsFromSource(string $source): array
+{
+    $path = (string) tempnam(sys_get_temp_dir(), 'ichiloto-items-');
+
+    try {
+        file_put_contents($path, $source);
+
+        return array_values((static fn(): mixed => require $path)());
+    } finally {
+        unlink($path);
+    }
+}

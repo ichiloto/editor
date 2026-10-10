@@ -19,15 +19,6 @@ enum RecordStorage: string
     case CONFIG_SUBTREE = 'config_subtree';
 
     /**
-     * A read-only inventory of the files in a directory, listed without being
-     * evaluated. Used where the "data" is really PHP source (the project's
-     * `Data/Types/*.php` enum declarations), which the editor must never
-     * `require` — doing so would declare classes into the editor's own
-     * process and can fatal on redeclaration.
-     */
-    case FILE_LISTING = 'file_listing';
-
-    /**
      * Records that live inside another asset's data (a map's `npcs`), read
      * from and written back through that asset rather than a file of their
      * own. The owner persists them; this category only edits them.

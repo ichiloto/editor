@@ -8,20 +8,25 @@ use Ichiloto\Editor\Database\InventoryCatalog;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
+use Ichiloto\Engine\Cutscenes\Summons\SummonCutsceneDefinition;
+use Ichiloto\Engine\Cutscenes\Summons\SummonCutsceneLibrary;
+use Ichiloto\Engine\Entities\Skills\SkillCatalog;
+use Ichiloto\Engine\Exceptions\InvalidSaveCompatibilityManifestException;
 use Ichiloto\Engine\IO\SaveCompatibility\ContentReferenceCategory;
-use RecursiveDirectoryIterator;
-use RecursiveIteratorIterator;
+use Ichiloto\Engine\IO\SaveCompatibility\SaveCompatibilityManifest;
 use Throwable;
 
 /** Validates the project-owned save compatibility manifest. */
 final class SaveCompatibilityValidator
 {
     private const string WHERE = 'assets/Data/save-compatibility.php';
+    private const string DECLARED_EDITS_HINT = 'Use a class for a project migration, or declared position edits: mapShifts (map, axis x or y, the 0-based line inserted at, a count of at least 1) for inserted rows and columns, relocations (map, cells, to) for cells authored content now occupies.';
 
     /**
      * @var InventoryCatalog|null The project's inventory identity, read once.
      */
     private ?InventoryCatalog $inventoryCatalog = null;
+    private ?SkillCatalog $skillCatalog = null;
 
     /** @return Issue[] */
     public function validate(ProjectWorkspace $workspace): array
@@ -272,7 +277,14 @@ final class SaveCompatibilityValidator
                 $issues[] = Issue::error($where, sprintf('Migration step %d to %d is in an impossible order.', $from, $to));
             }
 
-            if ($class === '') {
+            try {
+                $edits = SaveCompatibilityManifest::readDeclaredPositionEdits($entry, 'This migration');
+            } catch (InvalidSaveCompatibilityManifestException $exception) {
+                $issues[] = Issue::error($where, $exception->getMessage(), self::DECLARED_EDITS_HINT);
+                $edits = [];
+            }
+
+            if ($edits === null && $class === '') {
                 $issues[] = Issue::error($where, 'Migration class must be a non-empty class name.');
             }
 
@@ -312,7 +324,7 @@ final class SaveCompatibilityValidator
             ContentReferenceCategory::ONE_SHOT_EVENT => $this->oneShotEventIds($workspace),
             ContentReferenceCategory::QUEST => array_map(
                 static fn(object $quest): string => $quest->getId(),
-                $workspace->questDatabase->getQuests()
+                $workspace->getQuests()
             ),
             // The durable identity a save reconstructs an actor by, which
             // is the definition id where one is declared and the display
@@ -326,10 +338,11 @@ final class SaveCompatibilityValidator
             // label, so the catalogue of ids is what it has to be in.
             ContentReferenceCategory::ITEM => $this->inventoryCatalog($workspace)->idsIn('items'),
             ContentReferenceCategory::EQUIPMENT => $this->inventoryCatalog($workspace)->idsIn('weapons', 'armors'),
-            ContentReferenceCategory::ABILITY, ContentReferenceCategory::SPELL => array_map(
-                static fn(object $skill): string => $skill->getName(),
-                $workspace->skillDatabase->getSkills()
-            ),
+            // A save keeps abilities and spells in separate books, and the
+            // runtime restores each book from its own kind of skill,
+            // wherever the catalogue authors it.
+            ContentReferenceCategory::ABILITY => array_keys($this->skillCatalog($workspace)->getAbilities()),
+            ContentReferenceCategory::SPELL => array_keys($this->skillCatalog($workspace)->getSpells()),
             ContentReferenceCategory::STATE => $this->recordIdentities($workspace, 'states'),
             ContentReferenceCategory::ENEMY => $this->recordLabels($workspace, ['enemies']),
             ContentReferenceCategory::ACHIEVEMENT => $this->phpListIdentities(
@@ -349,6 +362,17 @@ final class SaveCompatibilityValidator
     private function inventoryCatalog(ProjectWorkspace $workspace): InventoryCatalog
     {
         return $this->inventoryCatalog ??= InventoryCatalog::fromWorkspace($workspace);
+    }
+
+    /**
+     * Returns the project's skill catalogue, read once per validation.
+     *
+     * @param ProjectWorkspace $workspace The project.
+     * @return SkillCatalog The catalogue.
+     */
+    private function skillCatalog(ProjectWorkspace $workspace): SkillCatalog
+    {
+        return $this->skillCatalog ??= $workspace->loadSkillCatalog();
     }
 
     /** @param string[] $categories @return string[] */
@@ -426,7 +450,12 @@ final class SaveCompatibilityValidator
         return $ids;
     }
 
-    /** @return string[] */
+    /**
+     * The summons the game defines, as the Engine's summon library loads them:
+     * one definition per directory, each a single record.
+     *
+     * @return string[]
+     */
     private function summonIds(ProjectWorkspace $workspace): array
     {
         $root = $workspace->projectRoot . '/assets/Cutscenes/Summons';
@@ -435,18 +464,10 @@ final class SaveCompatibilityValidator
             return [];
         }
 
-        $ids = [];
-        $iterator = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root));
-
-        foreach ($iterator as $file) {
-            if (! $file->isFile() || ! str_ends_with($file->getFilename(), '.data.php')) {
-                continue;
-            }
-
-            $ids = [...$ids, ...$this->phpListIdentities($file->getPathname())];
-        }
-
-        return array_values(array_unique($ids));
+        return array_values(array_unique(array_map(
+            static fn(SummonCutsceneDefinition $definition): string => $definition->id,
+            new SummonCutsceneLibrary($root)->load(),
+        )));
     }
 
     private function isOneShotEventIdentity(string $identity): bool

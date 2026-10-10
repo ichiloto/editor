@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use Ichiloto\Editor\Database\InventoryCatalog;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Database\RecordSchemaCatalog;
 use Ichiloto\Engine\Entities\Enumerations\ArmorType;
@@ -43,7 +44,7 @@ it('creates an armor that survives its own save', function () {
 
     expect($labels)->toContain('Iron Cuirass');
 
-    $armor = $reloaded->getRecords()[array_search('Iron Cuirass', $labels, true)]->toArray();
+    $armor = InventoryCatalog::readDefinition($reloaded->getRecords()[array_search('Iron Cuirass', $labels, true)]);
 
     expect($armor)->toBeInstanceOf(Armor::class)
         ->and($armor->equipmentType)->toBe(ArmorType::HEAVY_ARMOR)
@@ -66,15 +67,19 @@ it('creates a weapon and an item the same way', function () {
 
     expect($reloadedWeapons->getEntryLabels())->toContain('Bronze Axe')
         ->and($reloadedItems->getEntryLabels())->toContain('Bitterroot Tonic')
-        // Sharing items.php cuts both ways: creating in one category must
-        // not disturb the other's entries.
+        // Creating in one inventory category must not disturb another's
+        // entries.
         ->and($reloadedItems->getEntryLabels())->toContain('S-Potion');
 
-    $weapon = $reloadedWeapons->getRecords()[
+    $weapon = InventoryCatalog::readDefinition($reloadedWeapons->getRecords()[
         array_search('Bronze Axe', $reloadedWeapons->getEntryLabels(), true)
-    ]->toArray();
+    ]);
+    $item = InventoryCatalog::readDefinition($reloadedItems->getRecords()[
+        array_search('Bitterroot Tonic', $reloadedItems->getEntryLabels(), true)
+    ]);
 
-    expect($weapon)->toBeInstanceOf(Weapon::class);
+    expect($weapon)->toBeInstanceOf(Weapon::class)
+        ->and($item)->toBeInstanceOf(Item::class);
 });
 
 it('numbers a second new armor instead of colliding, in name and in identity', function () {
@@ -109,14 +114,15 @@ it('offers the equipment slots rather than a spelling test', function () {
         ->and($byLabel['Equipment Type']['options'] ?? null)->toContain('Small Shield');
 });
 
-it('sets the equipment type as the enum case, whatever the case typed', function () {
+it('sets the equipment type as the engine names it, whatever the case typed', function () {
     $root = makeTemporaryProject();
     $database = objectCategoryOn($root, 'armors');
     $index = $database->addRecord();
 
     $database->setField($index, 'equipmentType', 'heavy armor');
 
-    expect($database->getRecords()[$index]->toArray()->equipmentType)->toBe(ArmorType::HEAVY_ARMOR);
+    expect($database->getRecords()[$index]->get('equipmentType'))->toBe('Heavy Armor')
+        ->and(InventoryCatalog::readDefinition($database->getRecords()[$index])?->equipmentType)->toBe(ArmorType::HEAVY_ARMOR);
 });
 
 it('refuses to create rather than create what the save would drop', function () {

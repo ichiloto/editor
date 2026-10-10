@@ -147,9 +147,166 @@ Acceptance criteria for the presentation-authoring slice:
   stable IDs, same-path replacement PNGs, missing/invalid/out-of-root assets,
   unsupported PHP and failed writes. Unrelated data must remain unchanged.
 
+Effect timelines (planned, follows the Engine's effect presentation contract in
+its docs/effect-animation.md): an effect is either one flat sequence, still
+supported, or `presentations` with two complete, independent sequences,
+`terminal` and `graphical`. Each owns its own fps, length, rest frame, tracks and
+cues; both are required, never nested, merged or partially overridden. Within a
+sequence each track carries `presentation` (`all` by default, `terminal` or
+`graphical`; image tracks are inherently graphical), so a terminal glyph track
+and its PNG counterpart coexist without hiding glyphs wherever an image exists;
+narrative text is never suppressed by an image.
+
+Authoring requirements:
+- Both sequences and every track's `presentation` round-trip source-preserving
+  through the existing database and timeline editing paths; an effect authored
+  flat stays flat unless the author converts it.
+- Validation checks BOTH choices through the Engine's own load and compile for
+  each presentation: the terminal sequence without depending on any PNG, the
+  graphical one with its resources required and diagnosed when missing.
+- Rest-frame validity belongs to each image sequence: one image covers rest and
+  later independently timed tracks may be dormant (a second slash), so
+  validation never requires every image track to cover rest.
+- The TUI edits these as ordinary fields and keeps its terminal editing
+  behaviour; it gains no graphical workflow. Rich graphical sequence authoring
+  (previews, image track timing) belongs to the GUI editor.
+
+Status, 2026-10: validation, references and TUI authoring are in place.
+Validation compiles every effect a project uses (battle animations, field
+presentation, map field effects, tileset pieces, and the effect a
+`field_animation` names) through the Engine for both presentations, and
+reports an effect a waiting `field_animation` plays that loops. Cinematic
+`field_animation` commands pick an effect by its stable id, from the
+timelines the Engine lists. Summon timelines choose each track's
+`presentation`. The Cutscenes screen's Effect type creates, edits, deletes
+and previews standalone effect timelines under `assets/Animations` (Andrew's
+go, 2026-10-03): the summon editor's record pane, Timeline pane and undo,
+the existing source-preserving writer, no second format, and every save
+compiled by the Engine before it is written. A flat effect stays flat
+unless the author separates it; an effect with `presentations` is edited one
+sequence at a time and the other is kept as written. The preview plays the
+edited sequence through the Engine's shared playhead and composition, as
+battle or the field places it, with the caster on either side. Remaining
+for the GUI editor: drawing image frames, sheet and cell picking by eye, and
+image timing; the TUI only names them.
+
+Battle effect orientation and weapon roles (Engine contract in progress,
+2026-10): a battle track may declare `facing` (`east` or `west`), the
+direction its stroke is drawn in; playback mirrors it for an attack the other
+way, while undirected effects such as magic and rings stay fixed. Image
+keyframes may set `flipX` / `flipY` for an authored reverse stroke, such as a
+cross slash's second stroke. A basic attack's animation role follows the
+attacker's equipped weapon type (`attack-sword`, `attack-staff`, and so on;
+`attack-unarmed` with no weapon; neutral `attack` for other battlers), bound
+in the animation database's `roles`. Authoring requirements:
+- `facing`, `flipX` and `flipY` round-trip source-preserving with every other
+  timeline field; validation compiles them through the Engine for both
+  presentations, as it does every effect. The TUI edits them as ordinary
+  fields in effect timeline authoring, and its preview turns a stroke as
+  the battle does; no graphical workflow.
+- The animation database offers `roles` from the Engine's supported role
+  list, refuses a role bound twice before saving, and reports a weapon type
+  the project's weapons use that no animation is bound to.
+
+Status, 2026-10: the Editor side of both is in place. Effect timeline
+authoring edits `facing`, `flipX` and `flipY` (above). The animation database
+shows one on/off row per supported role, naming the animation that holds it,
+and writes only `roles` over the authored entry; validation reports an
+unsupported role, a role bound twice and a reached role with no animation.
+
 This scope does not replace the map source-integrity work or authorize a new GUI
 implementation. Keep runtime availability and TUI authoring completion separate
 until both have been verified.
+
+### Registered command lists (planned)
+
+The Engine lets a registered script command declare any number of `list`
+fields. The TUI record editor gives each command entry one nested list, so it
+edits a command's first list field as entries and shows any further list
+read-only, kept as written. This remains an implementation gap for project
+commands with more than one list; the Engine's `shop` and `inn` have at most
+one.
+
+Acceptance criteria:
+
+- Edit every declared list of a registered command through the existing
+  source-preserving sub-list path, each with its own add, remove and undo.
+- Keep the settings ids unambiguous when several lists share an entry.
+
+### Spell and ability authoring (planned)
+
+The Engine reads a project's skills from one catalogue spread across
+`assets/Data/skills.php`, `abilities.php` and `magic.php`: a skill is found by
+its name in any of them, and its kind comes from its class. The Editor's
+validation and reference pickers read that same catalogue, but the Skills
+database edits `skills.php` only. Spells and abilities authored in `magic.php`
+or `abilities.php` can be referenced and validated, not yet edited. This
+remains an implementation gap.
+
+Acceptance criteria:
+
+- Browse and edit every skill in the catalogue, whichever file authors it,
+  through the existing source-preserving database path. A new skill is written
+  to the file its kind belongs in by the project's convention, never duplicated.
+- Keep names unique across the three files; refuse a save that would define a
+  name twice, as validation already reports it.
+- Round-trip comments, expressions and unknown fields in all three files, and
+  refuse unsupported source rather than flattening it.
+
+### Database completion across TUI and GUI (in progress, 2026-10-04)
+
+Every Database category is edited through one shared service, so the
+terminal editor and the GUI editor read and write it the same way. The GUI
+session reaches a category through `DatabaseCategory`: schema-driven ones
+(`RecordSchemaCatalog` over `ProjectRecordDatabase`) through `RecordCategory`,
+actors through `ActorCategory` over `ActorAuthoring`, the actor service the
+terminal editor uses too.
+
+Progress: Classes, Quests, System, a new Configuration category, Actors,
+Types, Skills, Tilesets, Items, Weapons and Armors are done in both editors;
+the GUI session now serves every category.
+An identity freeze that also repairs other files is asked about and written
+at once in both editors: a document reports the file set it needs
+(`SourceSetRequired`) and the workspace's owner writes it as one
+`SourceSetCommand`. The session's map revisions count on across the reload,
+so a revision given before it never names the reloaded map.
+
+Order of work, each a complete slice before the next:
+
+1. Classes, Quests, System, Actors and Skills move onto the shared record
+   service. The terminal keeps its workflow and every field and preview it has
+   now (experience and stat curves, actor stats); the GUI gains the category.
+2. Data the record files hold but no editor reaches: done. Item effects,
+   scope, occasion and animation, and skill effects and kind, are edited. Enemy drops are done,
+   and every schema record's references, list entries included, are now
+   validated. Enemy `position` and `battleAnimation` are not authored: troops
+   own battle positions (`Troop` overwrites the enemy's), and no runtime code
+   reads an enemy's `battleAnimation`; attacks animate through their skills.
+   The rest of `system.php` is done (System and Configuration).
+3. Skills are one declarative record per numbered file under
+   `assets/Data/Skills` (done; `abilities.php` and `magic.php` are gone).
+   Items, weapons and armors are too, under `assets/Data/Items`, `Weapons`
+   and `Armors`, with `items.php` as their barrel (done). No catalogued
+   category stores `new Class(...)` entries any more, so the object-entry
+   write path (constructor-call entries in `ProjectRecordDatabase` and
+   `SharedFileTransaction`, with their identity addressing and refusals)
+   serves no category; removing it, while keeping the `PhpSourceDocument`
+   reading `ActorReferenceSource` uses, is open. Shared array lists keep
+   their synthetic coverage in `SharedListFoldTest`.
+4. Tilesets are done in both editors: sheets, missing art, above and table
+   tiles, shadows, and pieces keyed by id, stamped or connected, with their
+   tile layers. Tile identities are typed in both editors; picking them on a
+   sheet is GUI work for its visual authoring. Types is done: it edits
+   the elements `system.php` declares, which the element pickers now read
+   (they read an unused enum under `assets/Data/Types` before).
+5. The manual's category table has a GUI column (done) and states each category's
+   real coverage.
+
+Acceptance criteria:
+
+- Every category opens, edits, saves and undoes in both editors through the
+  same service, with source-preserving saves.
+- No field or preview the terminal editor offers today is lost.
 
 ### Phase 1 — The responsiveness sprint (quick wins, no redesign) ✅ *shipped 2026-08*
 > Status: implemented. `InputDecoder` (src/IO/InputDecoder.php, unit-tested)
@@ -681,6 +838,13 @@ Runtime-authored cue conditions use the same fail-closed world-condition
 vocabulary as trigger conditions; strict validation accepts and checks that
 shared contract even though nested cue-condition authoring remains deferred.
 
+October 10 G4 authoring adds explicit Story, Route and Unclassified (clear kind)
+choices to the same inspector in Terminal and GUI. Clearing removes only kind;
+omission retains legacy guidance without inferred classification or authored
+defaults. Invalid kinds are rejected even when the symbol is blank. Actual
+Terminal controls and the GUI session wire are checked; native picker pixels
+remain unobserved.
+
 ## Sequencing notes
 - Phase 1 is days of work and transforms perceived quality; do it first and
   ship it alone.
@@ -706,6 +870,16 @@ identical bytes, and clean saves are no-ops end to end: an untouched project
 saved wholesale is byte-for-byte unchanged (pinned by test against a
 disposable copy of the full game), and file-per-entry categories write only
 dirty, new, or deleted entries.
+
+October 10 source-history correction keeps the original map rewrite basis
+separate from the last successful save checkpoint. Removing a field, saving,
+undoing and saving again restores its original expression, reference, comments
+and key position. Layer undo restores edits without resetting that checkpoint,
+so incomplete route/rest drafts cannot bypass save validation. Ordered lists,
+external-source refusal and transactional read-back checks remain intact.
+Affected Editor families pass 406 tests / 2,636 assertions; the two existing
+conditional-cue validator regressions pass separately / three assertions.
+These are live-Engine synthetic checks, not native or whole-project acceptance.
 
 ## Map NPC authoring — shipped 2026-08
 
@@ -922,6 +1096,23 @@ Cinematic story cutscenes and summon presentations are authored on their own
 screen (`F4`), previewed through the engine itself, validated, and saved
 without rewriting a byte the author did not change.
 
+October 10 G4 checkpoint adds declared owned-stage effects through the existing
+Engine admission and canvas projection. GUI stage authoring uses shared record
+services, reference selectors and undo; stage ownership cannot fall back to
+battle or field surroundings. Paired Terminal sequences retain their independent
+admission and clock. Saved cutscene undo now retains source templates and their
+values separately from persisted conflict and changed-reference checkpoints:
+removed arrays, nowdocs and comments are restored for effects, summons and
+cinematics without weakening external-change or proposed-source refusal.
+The complete Editor Unit run against live Engine passes 2,084 tests / 13,807
+assertions under strict warning/risky/deprecation/notice/empty-suite gates,
+with 15 optional real-Game cases skipped because no Game source was pinned.
+The original production all-effects preview regression separately passes
+one test / 56 assertions on current Game; it was not weakened or replaced.
+GUI's complete offline release suite passes 140 tests. These checks do not
+close native visual acceptance, other platforms, or the separately assigned
+retained-underlay terminal/collision restoration correction.
+
 **A cutscene is a pair, and the pair is one asset.** `CutsceneAsset` reads
 `<id>.data.php` with `<id>.script.php` or `<id>.timeline.php`, knows which
 keys belong to which file, is dirty by content, and saves atomically:
@@ -998,14 +1189,34 @@ line and leaves comments, fully-qualified class names, nested constructors
 and emoji exactly as authored. A file it cannot read by argument name is
 refused rather than rewritten, and the ordinary writer takes over.
 
-**An actor is more than its class.** A durable definition id (with the row
-saying what a save resolves without one), actor-natural adjustments that keep
+**An actor is more than its class.** An explicit, immutable definition id
+(assigned at creation; missing legacy ids are validation errors and must be
+frozen from the current name before renaming), actor-natural adjustments that keep
 their sign and drop zeroes, and named natural variants with a default —
 where the rows edit whichever set the runtime has in force. Beside them, what
 each stat actually comes to, resolved by `StatResolver` and
 `EntityStatCapPolicy`: natural, nature, growth, gear, battle, then the cap,
 with what the cap threw away. Accuracy and Critical are absent by design;
 the runtime does not resolve them as layers.
+
+Legacy actor identity repair is shared by the TUI and CLI through
+`ActorIdentityMigration`. It offers a one-time freeze of the current name, not
+free-text identity retargeting. Read-only project plans include starting-party,
+skit, presentation and battle-entry-rule actor-reference repairs, even when
+IDs were frozen earlier. Confirmation applies all listed files transactionally;
+the reversible plan guards undo/redo against outside changes. Project repair
+writes immediately after confirmation, unlike the retained single-actor freeze
+which stays deferred until save when no other reference files need changing.
+Both TUI and CLI use that plan; unresolved references are validation errors.
+Actor-reference issues carry the shared `UNRESOLVED_ACTOR_REFERENCE` code so
+callers need not match diagnostic prose. Skit diagnostics identify the actual
+source filename, not its sorted record index. Migration failures retain their
+original exception as the cause and add file context only once.
+Existing actor saves now preserve authored source instead of regenerating the
+file: comments, imports and unchanged expressions survive repair and rename.
+Unsupported source edits and externally changed files are refused before writes.
+Display-name and filename lookup aliases are removed; only definition IDs bind
+references, independently of names, filenames and artwork.
 
 **A catalogue in a file that holds several.** `RecordProjection` is the seam
 for a data file shaped for the runtime rather than for an editor. A category

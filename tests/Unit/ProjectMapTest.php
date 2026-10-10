@@ -14,43 +14,6 @@ function fixtureMap(): ProjectMap
   return ProjectMap::fromDirectory($mapsRoot, $mapsRoot . '/test-map');
 }
 
-/**
- * Copies the fixture map into a scratch maps root for save tests.
- */
-function scratchMapCopy(): array
-{
-  $root = rememberTemporaryProject(sys_get_temp_dir() . '/ichiloto-editor-test-' . bin2hex(random_bytes(4)));
-  $mapsRoot = $root . '/assets/Maps';
-  $directory = $mapsRoot . '/test-map';
-  mkdir($directory, 0777, true);
-
-  foreach (['data', 'map', 'event'] as $part) {
-    copy(
-      fixturePath("sample-project/assets/Maps/test-map/test-map.{$part}.php"),
-      "{$directory}/test-map.{$part}.php",
-    );
-  }
-
-  return [$root, ProjectMap::fromDirectory($mapsRoot, $directory)];
-}
-
-/**
- * Removes a scratch tree created by scratchMapCopy().
- */
-function removeScratchTree(string $root): void
-{
-  $iterator = new RecursiveIteratorIterator(
-    new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS),
-    RecursiveIteratorIterator::CHILD_FIRST,
-  );
-
-  foreach ($iterator as $item) {
-    $item->isDir() ? rmdir($item->getPathname()) : unlink($item->getPathname());
-  }
-
-  rmdir($root);
-}
-
 it('parses the fixture map dimensions and styled tiles', function () {
   $map = fixtureMap();
 
@@ -165,6 +128,45 @@ it('rewrites event bounds as a filled rectangle', function () {
     ->and($map->getEventMarkerAt(5, 1))->toBeNull();
 });
 
+/** A four-by-two map whose event layer is the given rows. */
+function eventCellsMap(array $eventLines): ProjectMap
+{
+  return new ProjectMap(
+    mapId: 'town',
+    directory: '/virtual/Maps/town',
+    dataPath: '/virtual/Maps/town/town.data.php',
+    mapPath: '/virtual/Maps/town/town.map.php',
+    eventPath: '/virtual/Maps/town/town.event.php',
+    data: ['events' => []],
+    tileLines: ['....', '....'],
+    eventLines: $eventLines,
+  );
+}
+
+it('reads a marker painted in separate places as its exact cells', function () {
+  $map = eventCellsMap(['   D', 'D   ']);
+
+  expect($map->getEventArea('D')?->cells)->toBe([[3, 0], [0, 1]])
+    ->and($map->getEventArea('D')?->isRectangle)->toBeFalse()
+    ->and($map->getEventBounds('D'))->toBe(['x' => 0, 'y' => 0, 'width' => 4, 'height' => 2])
+    ->and($map->getEventArea('Z'))->toBeNull();
+});
+
+it('moves every cell of a marker together and refuses a move off the map or onto another marker', function () {
+  $map = eventCellsMap(['D  D', '   E']);
+  $before = $map->captureGridSnapshot();
+
+  expect($map->moveEventCells('D', 0, 1))->toContain('cover marker E at (3, 1)')
+    ->and($map->moveEventCells('D', 1, 0))->toContain('leave the map at (4, 0)')
+    ->and($map->captureGridSnapshot())->toBe($before);
+
+  $map = eventCellsMap(['D D ', '    ']);
+
+  expect($map->moveEventCells('D', 1, 1))->toBeNull()
+    ->and($map->getEventArea('D')?->cells)->toBe([[1, 1], [3, 1]])
+    ->and($map->getEventMarkerAt(0, 0))->toBeNull();
+});
+
 it('never treats metadata as a rename: the loaded path is identity', function () {
   $map = fixtureMap();
 
@@ -258,6 +260,109 @@ it('makes an unchanged save a byte-for-byte no-op', function () {
       expect(hash_file('sha256', $root . '/assets/Maps/test-map/' . $name))
         ->toBe($hash, "{$name} was rewritten by a no-change save.");
     }
+  } finally {
+    removeScratchTree($root);
+  }
+});
+
+/**
+ * Replaces the scratch map's tile grid and reloads it.
+ *
+ * @param string[] $rows The grid rows, styling tags included.
+ * @return array{0: string, 1: ProjectMap} The map file path and the reloaded map.
+ */
+function styledScratchMap(string $root, array $rows): array
+{
+  $mapsRoot = $root . '/assets/Maps';
+  $mapFile = $mapsRoot . '/test-map/test-map.map.php';
+  file_put_contents($mapFile, "<?php\n\nreturn <<<'ICHILOTO_MAP'\n" . implode("\n", $rows) . "\nICHILOTO_MAP;\n");
+
+  return [$mapFile, ProjectMap::fromDirectory($mapsRoot, $mapsRoot . '/test-map')];
+}
+
+it('colours every cell of an authored run, not only its first', function () {
+  [$root] = scratchMapCopy();
+
+  try {
+    [, $map] = styledScratchMap($root, [
+      '############',
+      '#<fg=gray>####</>      #',
+      '#          #',
+      '#          #',
+      '############',
+    ]);
+
+    foreach ([1, 2, 3, 4] as $x) {
+      expect($map->getTileColor($x, 1))->toBe('gray', "cell {$x} of the run");
+    }
+
+    expect($map->getTileColor(5, 1))->toBeNull()
+      ->and(substr_count($map->renderPreview(12, 5)[1], "\033[90m#\033[0m"))->toBe(4);
+  } finally {
+    removeScratchTree($root);
+  }
+});
+
+it('rebuilds an edited row as balanced runs and keeps untouched rows byte-identical', function () {
+  [$root] = scratchMapCopy();
+
+  try {
+    $rows = [
+      '############',
+      '#<fg=gray>####</>      #',
+      '# <fg=gray;options=bold>~~</> #  #',
+      '#          #',
+      '############',
+    ];
+    [$mapFile, $map] = styledScratchMap($root, $rows);
+
+    // Recolour a cell inside the run, and erase the run's last cell.
+    $map->setTileCell(2, 1, '#', '<fg=red>', '</>');
+    $map->setTileCell(4, 1, ' ', '', '');
+    $map->save();
+
+    $saved = explode("\n", (string) file_get_contents($mapFile));
+
+    expect($saved[4])->toBe('#<fg=gray>#</><fg=red>#</><fg=gray>#</>       #')
+      ->and($saved[5])->toBe($rows[2])
+      ->and($saved[3])->toBe($rows[0]);
+
+    $reloaded = ProjectMap::fromDirectory($root . '/assets/Maps', $root . '/assets/Maps/test-map');
+
+    expect([$reloaded->getTileColor(1, 1), $reloaded->getTileColor(2, 1), $reloaded->getTileColor(3, 1)])
+      ->toBe(['gray', 'red', 'gray'])
+      ->and($reloaded->getTileColor(4, 1))->toBeNull()
+      ->and($reloaded->getTileColor(5, 1))->toBeNull();
+  } finally {
+    removeScratchTree($root);
+  }
+});
+
+it('writes a row restored to its loaded cells back as its original bytes', function () {
+  [$root] = scratchMapCopy();
+
+  try {
+    $rows = [
+      '############',
+      '#<fg=gray>####</>      #',
+      '#          #',
+      '#          #',
+      '############',
+    ];
+    [$mapFile, $map] = styledScratchMap($root, $rows);
+    $original = (string) file_get_contents($mapFile);
+    $style = $map->getTileCellStyle(2, 1);
+
+    $map->setTileCell(2, 1, '#', '<fg=red>', '</>');
+    $map->setTileCell(2, 1, '#', $style['prefix'], $style['suffix']);
+    $map->setTileCell(9, 3, 'x', '', '');
+    $map->save();
+
+    $saved = explode("\n", (string) file_get_contents($mapFile));
+
+    expect($saved[4])->toBe($rows[1])
+      ->and($saved[6])->toBe('#        x #')
+      ->and(str_replace('#        x #', '#          #', (string) file_get_contents($mapFile)))->toBe($original);
   } finally {
     removeScratchTree($root);
   }

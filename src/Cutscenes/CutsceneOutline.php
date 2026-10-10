@@ -62,7 +62,7 @@ final class CutsceneOutline
             $key = 'tracks.' . $index;
             $outline->rows[] = [
                 'depth' => 1,
-                'text' => sprintf('%s %s · %d keyframe%s', strval($track['type'] ?? 'glyph'), strval($track['id'] ?? ('track ' . ($index + 1))), count($keyframes), count($keyframes) === 1 ? '' : 's'),
+                'text' => sprintf('%s %s · %d keyframe%s%s', strval($track['type'] ?? 'glyph'), strval($track['id'] ?? ('track ' . ($index + 1))), count($keyframes), count($keyframes) === 1 ? '' : 's', self::describeTrackScope($track)),
                 'frame' => [CutsceneSchemas::TRACKS_KEY],
                 'index' => $index,
                 'key' => $key,
@@ -81,7 +81,12 @@ final class CutsceneOutline
                 $content = is_string($keyframe['content'] ?? null) ? explode("\n", $keyframe['content'])[0] : '';
                 $outline->rows[] = [
                     'depth' => 2,
-                    'text' => sprintf('f%d +%d  %s', $frame, $duration, $content !== '' ? $content : (isset($keyframe['assetId']) ? 'asset ' . strval($keyframe['assetId']) : '(empty)')),
+                    'text' => sprintf('f%d +%d  %s', $frame, $duration, match (true) {
+                        $content !== '' => $content,
+                        isset($keyframe['assetId']) => 'asset ' . strval($keyframe['assetId']),
+                        isset($keyframe['sourceFrame']) => self::describeImageKeyframe($keyframe),
+                        default => '(empty)',
+                    }),
                     'frame' => [CutsceneSchemas::TRACKS_KEY],
                     'index' => $index,
                     'key' => $key . '.keyframes.' . $keyframeIndex,
@@ -113,6 +118,39 @@ final class CutsceneOutline
         }
 
         return $outline;
+    }
+
+    /**
+     * Returns where a track plays and which way it is drawn, when authored:
+     * one presentation only, or a battle stroke's facing.
+     *
+     * @param array<string, mixed> $track
+     */
+    private static function describeTrackScope(array $track): string
+    {
+        $scope = '';
+
+        if (is_string($track['presentation'] ?? null) && $track['presentation'] !== '') {
+            $scope .= ' · ' . $track['presentation'] . ' only';
+        }
+
+        if (is_string($track['facing'] ?? null) && $track['facing'] !== '') {
+            $scope .= ' · faces ' . $track['facing'];
+        }
+
+        return $scope;
+    }
+
+    /**
+     * Returns an image keyframe's sheet frame and flips.
+     *
+     * @param array<string, mixed> $keyframe
+     */
+    private static function describeImageKeyframe(array $keyframe): string
+    {
+        $flips = array_keys(array_filter(['flipX' => $keyframe['flipX'] ?? false, 'flipY' => $keyframe['flipY'] ?? false], static fn(mixed $flip): bool => $flip === true));
+
+        return sprintf('sheet frame %d', intval($keyframe['sourceFrame'])) . ($flips === [] ? '' : ' ' . implode(' ', $flips));
     }
 
     /**
@@ -441,7 +479,7 @@ final class CutsceneOutline
             'camera' => self::cameraSummary($command),
             'stage_actor' => strval((is_array($command['actor'] ?? null) ? $command['actor'] : $command)['id'] ?? '') . self::at(is_array($command['actor'] ?? null) ? $command['actor'] : $command),
             'show_actor', 'hide_actor', 'remove_actor' => strval($command['actorId'] ?? $command['id'] ?? ''),
-            'field_animation' => strval($command['animation'] ?? $command['id'] ?? '') . self::target($command['target'] ?? null),
+            'field_animation' => (is_scalar($command['effect'] ?? null) ? 'effect ' . strval($command['effect']) : strval($command['animation'] ?? $command['id'] ?? '')) . self::target($command['target'] ?? null),
             'transition' => strval($command['style'] ?? 'fade') . ' ' . strval($command['direction'] ?? 'out') . self::seconds($command, 'seconds'),
             'cinematic_music' => strval($command['track'] ?? $command['music'] ?? '') . (($command['loop'] ?? false) ? ' (loop)' : ''),
             default => '',

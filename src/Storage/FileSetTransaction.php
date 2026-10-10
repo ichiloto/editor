@@ -57,6 +57,9 @@ final class FileSetTransaction
      */
     private array $original = [];
 
+    /** @var array<string, array{contents: ?string, allowMissing: bool}> Read dependencies checked before any write. */
+    private array $expectedSources = [];
+
     /**
      * @var string[] Folders this transaction created, deepest last.
      */
@@ -103,6 +106,31 @@ final class FileSetTransaction
     public function remove(string $path): void
     {
         $this->targets[] = ['path' => $path, 'intent' => self::INTENT_REMOVE, 'contents' => null];
+    }
+
+    /** Requires the source used to build this proposal to remain unchanged. */
+    public function expectSource(string $path, ?string $contents, bool $allowMissing = false): void
+    {
+        $this->expectedSources[$path] = ['contents' => $contents, 'allowMissing' => $allowMissing];
+    }
+
+    /** Checks loaded bytes without staging, creating folders or adopting new baselines. */
+    public function assertSourcesUnchanged(): void
+    {
+        foreach ($this->expectedSources as $path => $expected) {
+            clearstatcache(true, $path);
+            $metadata = $this->files->isFile($path) ? $this->files->metadata($path) : null;
+            $contents = $this->files->read($path);
+            clearstatcache(true, $path);
+            $after = $this->files->isFile($path) ? $this->files->metadata($path) : null;
+            // Restore only a read-induced access-time change, never another author's metadata.
+            if ($metadata !== null && $after !== null && $after['accessedAt'] !== $metadata['accessedAt']
+                && array_diff_assoc($after, $metadata) === ['accessedAt' => $after['accessedAt']]
+                && ! $this->files->restoreMetadata($path, $metadata)) {
+                throw new FileSetTransactionFailure(sprintf('%s access metadata could not be preserved during source review', $path));
+            }
+            $this->assertExpectedSource($path, $expected, $contents);
+        }
     }
 
     /**
@@ -168,12 +196,7 @@ final class FileSetTransaction
             throw new FileSetTransactionFailure(sprintf('%s already exists', $this->folder));
         }
 
-        foreach ($this->targets as $target) {
-            $path = $target['path'];
-
-            if (isset($this->original[$path])) {
-                continue;
-            }
+        foreach (array_unique([...array_keys($this->expectedSources), ...$this->paths()]) as $path) {
 
             if ($this->files->isFile($path)) {
                 // Capture metadata before reading: even a read can update the
@@ -197,6 +220,10 @@ final class FileSetTransaction
             }
 
             $this->original[$path] = ['contents' => null, 'metadata' => null];
+        }
+
+        foreach ($this->expectedSources as $path => $expected) {
+            $this->assertExpectedSource($path, $expected, $this->original[$path]['contents']);
         }
 
         foreach ($foldersToCreate as $missing) {
@@ -264,6 +291,16 @@ final class FileSetTransaction
             $this->stage();
         }
 
+        // Callers may evaluate staged files before accepting them. Refuse an
+        // external edit made during that review, before installing anything.
+        try {
+            $this->assertSourcesUnchanged();
+        } catch (Throwable $error) {
+            $this->isFinished = true;
+            $this->discard();
+            throw $error;
+        }
+
         if ($backup !== null) {
             // Once, before any destructive work, for the whole set. The
             // accepted backup policy normally absorbs its own failures; a
@@ -288,6 +325,15 @@ final class FileSetTransaction
                     );
                 }
             }
+        }
+
+        // A backup callback may yield to an external author too.
+        try {
+            $this->assertSourcesUnchanged();
+        } catch (Throwable $error) {
+            $this->isFinished = true;
+            $this->discard();
+            throw $error;
         }
 
         $installed = [];
@@ -356,6 +402,24 @@ final class FileSetTransaction
 
         $this->isFinished = true;
         $this->discard();
+    }
+
+    /** @param array{contents: ?string, allowMissing: bool} $expected */
+    private function assertExpectedSource(string $path, array $expected, ?string $contents): void
+    {
+        if (($contents !== null && $contents === $expected['contents'])
+            || ($contents === null && $expected['contents'] === null
+                && ! $this->files->isFile($path) && ! $this->files->isDirectory($path))
+            || ($contents === null && $expected['allowMissing']
+                && ! $this->files->isFile($path) && ! $this->files->isDirectory($path))
+        ) {
+            return;
+        }
+
+        throw new FileSetTransactionFailure(sprintf(
+            '%s changed after opening; reload before editing, saving, copying or moving',
+            $path,
+        ));
     }
 
     /**
@@ -471,8 +535,8 @@ final class FileSetTransaction
         }
 
         $directories = array_values(array_unique(array_map(
-            static fn(array $target): string => rtrim(dirname($target['path']), DIRECTORY_SEPARATOR),
-            $this->targets,
+            static fn(string $path): string => rtrim(dirname($path), DIRECTORY_SEPARATOR),
+            [...$this->paths(), ...array_keys($this->expectedSources)],
         )));
 
         if ($directories === []) {

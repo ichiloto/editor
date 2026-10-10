@@ -1,0 +1,5032 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Ichiloto\Editor\Session;
+
+use Ichiloto\Editor\Backup\BackupSettings;
+use Ichiloto\Editor\Backup\BackupWriter;
+use Ichiloto\Editor\Canvas\CanvasClipboard;
+use Ichiloto\Editor\Canvas\CanvasEditor;
+use Ichiloto\Editor\Canvas\PhysicalOccupancyEditor;
+use Ichiloto\Editor\Canvas\Clipboard;
+use Ichiloto\Editor\Cutscenes\CutsceneAsset;
+use Ichiloto\Editor\Cutscenes\CutsceneRecordCategory;
+use Ichiloto\Editor\Cutscenes\CutsceneType;
+use Ichiloto\Editor\Database\CutsceneSchemas;
+use Ichiloto\Editor\Cutscenes\Preview\TimelinePreviewSession;
+use Ichiloto\Editor\ProjectDirectoryContext;
+use Ichiloto\Editor\Canvas\PieceRole;
+use Ichiloto\Editor\Canvas\PiecePlacer;
+use Ichiloto\Editor\Audio\AudioAudition;
+use Ichiloto\Editor\Cutscenes\Preview\PreviewGame;
+use Ichiloto\Editor\Canvas\CanvasTool;
+use Ichiloto\Editor\Canvas\ToolGeometry;
+use Ichiloto\Engine\Rendering\Tilesets\TileId;
+use Ichiloto\Engine\Field\MapPhysicalOccupancy;
+use Ichiloto\Engine\Rendering\Tilesets\TilesetPiece;
+use Ichiloto\Engine\Rendering\Transport\Exceptions\RendererProtocolException;
+use Ichiloto\Engine\Rendering\Transport\Exceptions\RendererTransportException;
+use Ichiloto\Engine\Rendering\Tilesets\Tileset;
+use Ichiloto\Engine\Rendering\Tilesets\TilesetSheet;
+use Ichiloto\Editor\Database\ConditionCodec;
+use Ichiloto\Editor\Database\ConditionEditor;
+use Ichiloto\Editor\Animations\LegacyAnimationConversion;
+use Ichiloto\Editor\Database\DatabaseCatalog;
+use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
+use Ichiloto\Engine\Animations\Timelines\EffectCadence;
+use Ichiloto\Editor\Database\ElementAffinityCodec;
+use Ichiloto\Editor\Database\ProjectRecordDatabase;
+use Ichiloto\Editor\Database\RecordItem;
+use Ichiloto\Editor\Database\RecordChange;
+use Ichiloto\Editor\Database\RecordRefusal;
+use Ichiloto\Editor\Database\ReferenceCatalog;
+use Ichiloto\Editor\Database\MovementRouteFields;
+use Ichiloto\Editor\Database\DatabaseCategory;
+use Ichiloto\Editor\Database\RecordCategory;
+use Ichiloto\Editor\Database\RecordPanes;
+use Ichiloto\Editor\Actors\ActorAuthoring;
+use Ichiloto\Editor\Actors\ActorCategory;
+use Ichiloto\Editor\Database\WorldWriteCodec;
+use Ichiloto\Editor\Database\WorldWriteEditor;
+use Ichiloto\Editor\Events\EventAuthoring;
+use Ichiloto\Editor\Events\EventRefusal;
+use Ichiloto\Editor\Events\EventTypeCatalog;
+use Ichiloto\Editor\Events\EventTypeDefinition;
+use Ichiloto\Editor\Field\NpcAuthoring;
+use Ichiloto\Editor\Field\WorldObjectAuthoring;
+use Ichiloto\Editor\Field\WorldObjectPreview;
+use Ichiloto\Editor\Field\FieldSpriteFields;
+use Ichiloto\Editor\Field\CharacterSheetPreview;
+use Ichiloto\Editor\Field\NpcChange;
+use Ichiloto\Editor\Field\NpcInspector;
+use Ichiloto\Editor\Field\NpcRefusal;
+use Ichiloto\Editor\Field\ProjectNpc;
+use Ichiloto\Editor\History\Command;
+use Ichiloto\Editor\History\CommandHistory;
+use Ichiloto\Editor\Inspector\InputControlType;
+use Ichiloto\Editor\Inspector\InputControl;
+use Ichiloto\Editor\Inspector\InspectorListEdit;
+use Ichiloto\Editor\Inspector\InspectorRefusal;
+use Ichiloto\Editor\Inspector\MapInspector;
+use Ichiloto\Editor\MapSourceRefusal;
+use Ichiloto\Editor\Playtest\PlaytestLauncher;
+use Ichiloto\Editor\Playtest\PlaytestOverlay;
+use Ichiloto\Editor\Playtest\PlaytestRun;
+use Ichiloto\Editor\Playtest\PlaytestStart;
+use Ichiloto\Editor\Maps\LayerEditor;
+use Ichiloto\Editor\Maps\LineInsertionPlanner;
+use Ichiloto\Editor\Maps\MapLayers;
+use Ichiloto\Editor\Maps\MapReferences;
+use Ichiloto\Editor\Maps\TilePalette;
+use Ichiloto\Editor\History\SourceSetCommand;
+use Ichiloto\Editor\History\CommandGroup;
+use Ichiloto\Editor\History\SourceSetRequired;
+use Ichiloto\Editor\ProjectMap;
+use Ichiloto\Editor\ProjectWorkspace;
+use Ichiloto\Editor\Storage\FileSetTransactionFailure;
+use Ichiloto\Editor\Storage\WorkspaceSave;
+use Ichiloto\Editor\Validation\MapGraphicsValidator;
+use Ichiloto\Editor\Validation\MapValidator;
+use Ichiloto\Engine\IO\Console\TerminalPresentationComposer;
+use Ichiloto\Engine\Rendering\Presentation\Canvas\PresentationCanvas;
+use Ichiloto\Engine\Rendering\Sprites\CharacterSheet;
+use Ichiloto\Engine\Rendering\Transport\RendererGridConfig;
+use Ichiloto\Engine\Rendering\Presentation\PresentationWorld;
+use Ichiloto\Engine\Battle\Presentation\BattlePresentationCatalog;
+use Ichiloto\Engine\Battle\Presentation\BattlerBindings;
+use Ichiloto\Editor\Database\PhpDataFile;
+use Ichiloto\Editor\Database\RecordSchemaCatalog;
+use Ichiloto\Engine\Battle\Presentation\BattleFormationBattler;
+use Ichiloto\Engine\Battle\Presentation\BattleFormationLayout;
+use Ichiloto\Engine\Battle\Presentation\BattlerSlot;
+use Ichiloto\Editor\Database\EngineDataBootstrap;
+use Ichiloto\Engine\Cutscenes\Summons\SummonCutsceneLibrary;
+use Ichiloto\Engine\Scenes\Arena\BattleTestChoices;
+use Ichiloto\Engine\Scenes\Arena\BattleTestLoadoutCatalog;
+use Ichiloto\Engine\Scenes\Arena\BattleTestSetup;
+use Ichiloto\Engine\Scenes\Arena\ProjectBattleTest;
+use Ichiloto\Engine\Util\Config\ConfigStore;
+use Ichiloto\Engine\Util\Stores\ItemStore;
+use Ichiloto\Engine\Util\Stores\EnemyStore;
+use Ichiloto\Engine\Battle\BattlePacing;
+use Ichiloto\Engine\Entities\Troop;
+use Ichiloto\Engine\Scenes\Battle\BattleConfig;
+use Ichiloto\Editor\Cutscenes\Preview\SummonBattlePreview;
+use Ichiloto\Editor\Cutscenes\Preview\EffectBattlePreview;
+use Ichiloto\Engine\Animations\Animation;
+use Ichiloto\Engine\Animations\AnimationLibrary;
+use Ichiloto\Engine\Animations\Timelines\CompiledEffectTimeline;
+use Ichiloto\Engine\Core\Vector2;
+use Ichiloto\Engine\Entities\Skills\SkillCatalog;
+use Ichiloto\Editor\Cutscenes\Preview\CinematicPreviewOrigin;
+use Ichiloto\Editor\Cutscenes\Preview\CinematicPreviewSession;
+use Ichiloto\Editor\Cutscenes\Preview\PreviewField;
+use Ichiloto\Engine\Battle\Presentation\BattleCommandTimeline;
+use Ichiloto\Engine\Cutscenes\Summons\SummonCompiledCutscene;
+use Ichiloto\Engine\Cutscenes\Summons\SummonCutsceneDefinition;
+use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasImage;
+use Closure;
+use InvalidArgumentException;
+use RuntimeException;
+use Throwable;
+use WeakReference;
+
+/**
+ * One open project as every editor interface edits it: its documents, the
+ * undo history across them, and saving. An interface owns what it shows and
+ * what is selected; it asks the session to read and change documents, and
+ * gets back plain data, a question for the author, or a refusal
+ * ({@see SessionRefusal}). Nothing here draws, prompts or reports a status.
+ *
+ * A change names the revision of the map it was made against; a change made
+ * against an older revision is refused, so a late or repeated request never
+ * overwrites newer work.
+ */
+final class EditorSession
+{
+    use MapPlacementSession;
+
+    /** The renderer a playtest started from a graphical editor uses: it owns no terminal to hand over. */
+    public const string PLAYTEST_RENDERER = 'gpui';
+
+    private ProjectWorkspace $workspace;
+
+    /** The playtest running in the background, or the last one, to report how it ended. */
+    private ?PlaytestRun $playtest = null;
+    /** Where that playtest began. */
+    private PlaytestStart $playtestStart = PlaytestStart::CELL;
+    /** The battle test running in its own window, and the troop it fights. */
+    private ?PlaytestRun $battleTestRun = null;
+
+    /** The block an author last copied or cut, for pasting on its layer. */
+    private ?Clipboard $clipboard = null;
+
+    /** The music or sound an author is hearing from a field, once one has been played. */
+    private ?AudioAudition $audition = null;
+    private ?string $battleTestTroop = null;
+    /**
+     * The summon battle previews last built, by presentation, and what each was built from, so seeking reuses them until either changes.
+     *
+     * @var array<string, array{key: string, preview: SummonBattlePreview}>
+     */
+    private array $summonBattlePreviews = [];
+    /**
+     * The effect battle previews last built, by presentation, and what each was built from.
+     *
+     * @var array<string, array{key: string, preview: EffectBattlePreview}>
+     */
+    private array $effectBattlePreviews = [];
+    /** Projects terminal pictures into renderer runs, keeping its parsed styles between frames. */
+    private ?TerminalPresentationComposer $terminalComposer = null;
+    /** The cinematic previewed as the terminal plays it, and which one it is. */
+    private ?CinematicPreviewSession $cinematicPreview = null;
+    private ?string $cinematicPreviewId = null;
+    /** The cinematic as it stood when its preview started, so an unchanged one keeps playing. */
+    private ?string $cinematicPreviewFingerprint = null;
+    /**
+     * The field an effect is previewed on, where it stands and at what size,
+     * and the effect's playhead in seconds. It and the cinematic preview are
+     * never open together: each installs the preview's Engine configuration.
+     */
+    private ?PreviewField $effectField = null;
+    private ?string $effectFieldKey = null;
+    private float $effectFieldSeconds = 0.0;
+
+    /** How actors are authored, with what this editor's actor panes show. */
+    private readonly ActorAuthoring $actorAuthoring;
+
+    /**
+     * Where each map's revisions count from. A map read afresh, when a file
+     * set written at once reloads the project or its undo puts the earlier
+     * one back, counts on from every revision given for it before, so one
+     * revision never names two states of a map.
+     *
+     * @var array<string, array{map: WeakReference<ProjectMap>, base: int, last: int}>
+     */
+    private array $mapRevisions = [];
+    private function __construct(
+        ProjectWorkspace $workspace,
+        private readonly CommandHistory $history,
+        private readonly BackupWriter $backups,
+    ) {
+        $this->workspace = $workspace;
+        $this->actorAuthoring = new ActorAuthoring(graphical: true);
+    }
+
+    /** Opens the project at a root, as the terminal editor opens it. */
+    public static function open(string $projectRoot): self
+    {
+        $workspace = ProjectWorkspace::fromProject($projectRoot, graphical: true);
+
+        return new self($workspace, new CommandHistory(),
+            new BackupWriter(BackupSettings::fromProject($workspace->projectRoot), $workspace->projectRoot));
+    }
+
+    /**
+     * The project's name, its maps and its database categories.
+     *
+     * @return array{name: string, root: string, maps: list<array<string, mixed>>, databases: list<array{key: string, label: string, description: string, implemented: bool}>}
+     */
+    public function describeProject(): array
+    {
+        return [
+            'name' => $this->workspace->projectName,
+            'root' => $this->workspace->projectRoot,
+            'maps' => $this->describeMaps(),
+            'databases' => array_map(static fn($category): array => [
+                'key' => $category->key,
+                'label' => $category->label,
+                'description' => $category->description,
+                'implemented' => $category->isImplemented,
+                'group' => 'Database',
+            ], DatabaseCatalog::getGraphicalCategories()),
+            // Cutscene types, edited through the same record RPCs under their record category keys.
+            'cutscenes' => array_map(static fn(CutsceneType $type): array => [
+                'key' => $type->getRecordCategory(),
+                'label' => $type->label(),
+                'description' => $type->describeCategory(),
+                'implemented' => true,
+                'group' => 'Cutscenes',
+            ], CutsceneType::cases()),
+        ];
+    }
+
+    /**
+     * Finds what the project names a text by: maps by id or name, events by
+     * marker, type or any value they hold (a chest's loot, a destination, a
+     * script), and NPCs by id or name, unsaved edits included. Case is
+     * ignored; a query of one character is an event marker, matched exactly,
+     * rather than every text that contains it.
+     *
+     * @return list<array{kind: 'map'|'event'|'npc', map: string, label: string, detail: string, marker?: string, index?: int, x?: int, y?: int}>
+     */
+    public function searchProject(string $query, int $limit = 100): array
+    {
+        $query = trim($query);
+        if ($query === '') {
+            return [];
+        }
+        $contains = static fn(string $text): bool => mb_stripos($text, $query) !== false;
+        $marker = mb_strlen($query) === 1;
+        $results = [];
+
+        foreach ($this->getMapsById() as $mapId => $map) {
+            $mapId = (string) $mapId;
+            $name = $map->getDisplayName();
+            if (! $marker && ($contains($mapId) || $contains($name))) {
+                $results[] = ['kind' => 'map', 'map' => $mapId, 'label' => $name, 'detail' => $mapId];
+            }
+
+            foreach (array_unique([...$map->getEventMarkers(), ...$map->getPlacedEventMarkers()]) as $eventMarker) {
+                $definition = $map->getEventDefinition($eventMarker);
+                $type = EventTypeCatalog::describeClass(is_string($definition['class'] ?? null) ? $definition['class'] : null);
+                $values = [];
+                // What the event holds, not the class that plays it.
+                $data = is_array($definition['data'] ?? null) ? $definition['data'] : [];
+                array_walk_recursive($data, static function (mixed $value) use (&$values): void {
+                    if (is_scalar($value)) {
+                        $values[] = (string) $value;
+                    }
+                });
+                $found = $marker
+                    ? $eventMarker === $query
+                    : $contains($type) || array_find($values, $contains) !== null;
+                if (! $found) {
+                    continue;
+                }
+                $cell = $map->getEventArea($eventMarker)?->cells[0] ?? null;
+                $results[] = ['kind' => 'event', 'map' => $mapId, 'label' => sprintf('%s %s', $eventMarker, $type),
+                    'detail' => sprintf('%s · %s', $name, $marker ? 'marker' : (array_find($values, $contains) ?? $type)),
+                    'marker' => $eventMarker, ...($cell === null ? [] : ['x' => (int) $cell[0], 'y' => (int) $cell[1]])];
+            }
+
+            foreach ($map->getNpcs()->all() as $index => $npc) {
+                if (! $marker && $contains($npc->getId()) || $contains($npc->getName())) {
+                    $results[] = ['kind' => 'npc', 'map' => $mapId, 'label' => $npc->getName(), 'detail' => sprintf('%s · %s', $name, $npc->getId()),
+                        'index' => (int) $index, 'x' => $npc->getX(), 'y' => $npc->getY()];
+                }
+            }
+
+            if (count($results) >= $limit) {
+                return array_slice($results, 0, $limit);
+            }
+        }
+
+        return $results;
+    }
+
+    /**
+     * Every map, by stable id, with what a list shows about it.
+     *
+     * @return list<array{id: string, name: string, dirty: bool, readOnly: ?string, revision: int}>
+     */
+    public function describeMaps(): array
+    {
+        return array_map(fn(ProjectMap $map): array => [
+            'id' => $map->mapId,
+            'name' => $map->getDisplayName(),
+            // Maps are listed under their region, so two maps with one name (an inn in each town) stay apart.
+            'region' => $map->getAuthoredRegion(),
+            'dirty' => $map->isDirty(),
+            'readOnly' => $map->getGridSourceIssue(),
+            'revision' => $this->getMapRevision($map),
+        ], $this->workspace->maps);
+    }
+
+    /**
+     * The kinds a new map can have: the project's tilesets, which its tiles
+     * and pieces come from.
+     *
+     * @return list<array{value: string, label: string}>
+     */
+    public function listMapKinds(): array
+    {
+        $kinds = new ReferenceCatalog($this->workspace)->labelsFor('tilesets');
+
+        return array_map(static fn(string $id, string $name): array => ['value' => $id, 'label' => $name], array_keys($kinds), $kinds);
+    }
+
+    /**
+     * Creates a blank map at the maps root, written to disk at once as the
+     * terminal editor creates one, named after `$name` (`new-map` when
+     * empty) with a numbered suffix when that is taken. Every open map keeps
+     * its unsaved changes and the undo history stays.
+     *
+     * @return array{map: string, maps: list<array<string, mixed>>}
+     * @throws SessionRefusal When the kind is unknown, the size is not a size, or the files cannot be written.
+     */
+    public function createMap(?string $name, ?string $kind, int $width, int $height): array
+    {
+        if ($kind !== null && ! in_array($kind, array_column($this->listMapKinds(), 'value'), true)) {
+            throw new SessionRefusal(sprintf('There is no map kind %s.', $kind));
+        }
+        $baseName = $name === null || trim($name) === '' ? null : ProjectMap::slugify($name, '');
+        if ($baseName === '') {
+            throw new SessionRefusal(sprintf('"%s" has no letters or digits to name a map with.', $name));
+        }
+        try {
+            $mapId = $this->workspace->createMap($baseName, kind: $kind, width: $width, height: $height);
+        } catch (MapSourceRefusal|RuntimeException $error) {
+            throw new SessionRefusal(sprintf('The map was not created: %s', $error->getMessage()), previous: $error);
+        }
+        $this->workspace = $this->workspace->withLoadedMap($mapId);
+
+        return ['map' => $mapId, 'maps' => $this->describeMaps()];
+    }
+
+    /**
+     * Copies the current authored map through the workspace's transactional
+     * duplicate operation. Unsaved source edits are included in the copy;
+     * the original and every other loaded document and undo step remain.
+     *
+     * @return array{map: string, maps: list<array<string, mixed>>}
+     * @throws SessionRefusal When the revision is stale or source cannot be copied safely.
+     */
+    public function duplicateMap(string $mapId, int $revision): array
+    {
+        $this->requireCurrentMap($mapId, $revision);
+        try {
+            $created = $this->workspace->duplicateMap((int) array_search($mapId, $this->workspace->mapIds, true))
+                ?? throw new RuntimeException('The map is no longer in the workspace.');
+        } catch (MapSourceRefusal|RuntimeException $error) {
+            throw new SessionRefusal(sprintf('%s was not duplicated: %s', $mapId, $error->getMessage()), previous: $error);
+        }
+        $this->workspace = $this->workspace->withLoadedMap($created);
+
+        return ['map' => $created, 'maps' => $this->describeMaps()];
+    }
+
+    /**
+     * Explicitly moves a map to its metadata-derived path after the author
+     * reviews that exact destination. As in the TUI, references are not
+     * migrated and a successful move clears undo history naming retired maps.
+     * Ordinary saves never call this operation.
+     *
+     * @return array<string, mixed>
+     * @throws SessionRefusal When the revision or reviewed path changed, or source cannot move safely.
+     */
+    public function moveMap(string $mapId, int $revision, ?string $destination = null, bool $confirmed = false): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        if ($map->getGridSourceIssue() !== null) {
+            throw new SessionRefusal(sprintf('%s is read-only: %s', $mapId, $map->getGridSourceIssue()));
+        }
+        $proposed = $map->getProposedMapId();
+        if ($destination !== null && $destination !== $proposed) {
+            throw new SessionRefusal('The derived destination changed; review the proposed move again.');
+        }
+        if ($proposed === $mapId) {
+            return ['status' => 'unchanged', 'map' => $mapId, 'destination' => $proposed, 'maps' => $this->describeMaps()];
+        }
+        if (! $confirmed) {
+            return [
+                'status' => 'question', 'map' => $mapId, 'revision' => $revision, 'destination' => $proposed,
+                'references' => new MapReferences($this->workspace)->describe($mapId),
+                'warning' => 'References are not migrated: doors, quests, saves and one-shot events naming the old id keep naming it. Moving clears the undo history. The original map folder is removed only after the new map validates.',
+            ];
+        }
+        if ($destination === null) {
+            throw new SessionRefusal('Review the proposed destination before confirming the move.');
+        }
+        try {
+            $moved = $map->moveTo($proposed);
+        } catch (MapSourceRefusal|RuntimeException $error) {
+            throw new SessionRefusal(sprintf('%s was not moved: %s', $mapId, $error->getMessage()), previous: $error);
+        }
+        $this->workspace = $this->workspace->withReplacedMap((int) array_search($mapId, $this->workspace->mapIds, true), $moved);
+        $this->history->clear();
+
+        return ['status' => 'moved', 'previousMap' => $mapId, 'map' => $moved->mapId, 'maps' => $this->describeMaps()];
+    }
+
+    /**
+     * Reviews a project-wide row or column insertion before writing it as
+     * one reversible source set. The plan owns coordinate rewrites and save
+     * shifts; both editor interfaces use the same planner and transaction.
+     *
+     * @return array<string, mixed>
+     * @throws SessionRefusal When the map or review is stale, edits are pending, or the plan cannot be applied safely.
+     */
+    public function insertMapLines(string $mapId, int $revision, string $axis, int $at, int $count, ?string $answer = null, ?string $confirm = null): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        if ($map->getGridSourceIssue() !== null) {
+            throw new SessionRefusal(sprintf('%s is read-only: %s', $mapId, $map->getGridSourceIssue()));
+        }
+        if ($answer === 'cancel') {
+            return ['status' => 'cancelled', 'map' => $mapId, 'revision' => $revision, 'changed' => false, 'maps' => $this->describeMaps()];
+        }
+        if ($this->workspace->hasUnsavedChanges()) {
+            throw new SessionRefusal('Save or undo pending edits before inserting map lines. No files were changed.');
+        }
+        try {
+            $plan = LineInsertionPlanner::planProject($this->workspace->projectRoot, $mapId, $axis, $at, $count);
+        } catch (InvalidArgumentException|RuntimeException $failure) {
+            throw new SessionRefusal($failure->getMessage(), previous: $failure);
+        }
+        $paths = array_map(fn(string $path): string => substr($path, strlen($this->workspace->projectRoot) + 1), $plan->getChangedPaths());
+        $description = $plan->insertion->description;
+        $required = new SourceSetRequired($plan->getSourceSet(), 'Insert ' . $plan->insertion->noun,
+            'this map line insertion', 'Insert ' . $description . '?', $paths);
+        $result = $this->writeSourceSet($required, $answer, static fn(): array => [], $confirm);
+        if (($result['status'] ?? null) === 'question') {
+            return [...$result, 'map' => $mapId, 'revision' => $revision, 'axis' => $axis, 'at' => $at, 'count' => $count,
+                'paths' => $paths, 'handEdits' => $plan->handEdits, 'notes' => $plan->notes,
+                'width' => $plan->width, 'height' => $plan->height];
+        }
+
+        return ['status' => 'inserted', 'map' => $mapId, 'revision' => $this->getMapRevision($this->requireMap($mapId)),
+            'changed' => true, 'maps' => $this->describeMaps()];
+    }
+
+    /**
+     * Deletes a map's files from disk at once, as the terminal editor does.
+     * While something still sends the player there ({@see MapReferences}),
+     * nothing is deleted until the author confirms: the answer is a question
+     * listing them. The undo history is cleared, since its steps may name
+     * the deleted map; every other map keeps its unsaved changes.
+     *
+     * @return array{status: 'deleted', map: string, maps: list<array<string, mixed>>}|array{status: 'question', map: string, references: list<string>}
+     * @throws SessionRefusal When the map is unknown or read-only, or its files cannot be removed.
+     */
+    public function deleteMap(string $mapId, bool $confirmed = false): array
+    {
+        $this->requireMap($mapId);
+        $references = new MapReferences($this->workspace)->describe($mapId);
+        if ($references !== [] && ! $confirmed) {
+            return ['status' => 'question', 'map' => $mapId, 'references' => $references];
+        }
+        try {
+            $this->workspace->deleteMap((int) array_search($mapId, $this->workspace->mapIds, true));
+        } catch (MapSourceRefusal|RuntimeException $error) {
+            throw new SessionRefusal(sprintf('%s was not deleted: %s', $mapId, $error->getMessage()), previous: $error);
+        }
+        $this->workspace = $this->workspace->withoutMap($mapId);
+        $this->history->clear();
+
+        return ['status' => 'deleted', 'map' => $mapId, 'maps' => $this->describeMaps()];
+    }
+
+
+    /**
+     * A map as an interface draws it: its layers' glyphs and colours, its
+     * events and its NPCs, at its current revision, unsaved changes included.
+     *
+     * @return array<string, mixed>
+     * @throws SessionRefusal When no map has the id.
+     */
+    public function readMap(string $mapId): array
+    {
+        $map = $this->requireMap($mapId);
+        $width = $map->getWidth();
+        $height = $map->getHeight();
+        $layers = [];
+
+        foreach ($map->getLayers() as $layer) {
+            $rows = [];
+            $colors = [];
+            for ($y = 0; $y < $height; $y++) {
+                $row = [];
+                for ($x = 0; $x < $width; $x++) {
+                    $row[] = $map->getLayerSymbol($layer['id'], $x, $y);
+                    $color = $map->getLayerColor($layer['id'], $x, $y);
+                    if ($color !== null) {
+                        $colors[] = [$x, $y, $color];
+                    }
+                }
+                $rows[] = $row;
+            }
+            $layers[] = [
+                'id' => $layer['id'],
+                'name' => $layer['name'],
+                'label' => MapLayers::formatLabel((string) $layer['name']),
+                'order' => $layer['order'],
+                'decoration' => (bool) $layer['decoration'],
+                'event' => $layer['id'] === MapLayers::EVENT,
+                'rows' => $rows,
+                'colors' => $colors,
+            ];
+        }
+
+        // Every event the map holds: defined ones in their data order, then
+        // markers painted without a definition, which the engine refuses to
+        // load until they are given a type or cleared.
+        $events = [];
+        foreach (array_unique([...$map->getEventMarkers(), ...$map->getPlacedEventMarkers()]) as $marker) {
+            $definition = $map->getEventDefinition($marker);
+            $area = $map->getEventArea($marker);
+            $events[] = [
+                'marker' => $marker,
+                'type' => EventTypeCatalog::describeClass(is_string($definition['class'] ?? null) ? $definition['class'] : null),
+                'defined' => $definition !== null,
+                'cells' => $area === null ? [] : array_map(static fn(array $cell): array => [$cell[0], $cell[1]], $area->cells),
+            ];
+        }
+
+        $npcs = [];
+        foreach ($map->getNpcs()->all() as $index => $npc) {
+            $npcs[] = [
+                'index' => $index,
+                'id' => $npc->getId(),
+                'name' => $npc->getName(),
+                'x' => $npc->getX(),
+                'y' => $npc->getY(),
+                'sprite' => $npc->getVisibleSprite(),
+            ];
+        }
+
+        return [
+            'id' => $map->mapId,
+            'name' => $map->getDisplayName(),
+            'width' => $width,
+            'height' => $height,
+            'revision' => $this->getMapRevision($map),
+            'dirty' => $map->isDirty(),
+            'readOnly' => $map->getGridSourceIssue(),
+            'baseLayer' => $map->getBaseLayerId(),
+            'layers' => $layers,
+            'events' => $events,
+            'npcs' => $npcs,
+            'worldObjects' => WorldObjectAuthoring::readEntries($map),
+            'tileLayers' => $map->describeTileLayers(),
+            'physicalOccupancy' => $map->hasMapDataField([MapPhysicalOccupancy::DATA_KEY]),
+            'occupancy' => PhysicalOccupancyEditor::readOccupancy($map),
+        ];
+    }
+
+    /**
+     * The map's world as the game uploads it to a graphical renderer: its
+     * glyph rows and, when its graphics load, its tileset and tile layers,
+     * unsaved edits included. `layerIds` maps each glyph layer's id to its
+     * world layer id. Graphics never decide whether a map shows: when the
+     * game would refuse them, the world holds glyphs only and
+     * `graphicsIssue` says why. Wall shadows come only to an interface whose
+     * renderer paints them and asks with `$tileShadows`, as a game renderer
+     * negotiates `tile_shadows`; any other receives the world without them.
+     *
+     * @return array{map: string, revision: int, assetRoot: string, operations: list<array<string, mixed>>, layerIds: array<string, string>, animated: bool, graphicsIssue: ?string}
+     * @throws SessionRefusal When the map is unknown or its layers cannot be presented.
+     */
+    public function readWorld(string $mapId, bool $tileShadows = false): array
+    {
+        $map = $this->requireMap($mapId);
+        $issue = null;
+        try {
+            $graphics = $map->loadGraphics();
+        } catch (InvalidArgumentException|MapSourceRefusal $error) {
+            $graphics = null;
+            $issue = $error->getMessage();
+        }
+        try {
+            $layerSet = $map->getLayerSet();
+            $world = PresentationWorld::getFromLayers($layerSet, 'map', $graphics, $map->getAssetRoot());
+        } catch (InvalidArgumentException|MapSourceRefusal $error) {
+            throw new SessionRefusal(sprintf('%s cannot be drawn: %s', $mapId, $error->getMessage()), previous: $error);
+        }
+        $layerIds = WorldObjectPreview::getLayerIds($map);
+
+        return [
+            'map' => $map->mapId,
+            'revision' => $this->getMapRevision($map),
+            'assetRoot' => $map->getAssetRoot(),
+            'operations' => $world->getOperations(true, $tileShadows),
+            'layerIds' => $layerIds,
+            'animated' => $world->animated,
+            'graphicsIssue' => $issue,
+        ];
+    }
+    /**
+     * The tile palette of the map's tileset ({@see TilePalette}): each tab's
+     * grid of tile identities and the world that draws it.
+     *
+     * @return array{tileset: string, name: string, assetRoot: string, tabs: list<array{name: string, ids: list<list<int>>, operations: list<array<string, mixed>>}>}
+     * @throws SessionRefusal When the map is unknown or has no usable tileset.
+     */
+    public function readTilePalette(string $mapId): array
+    {
+        $map = $this->requireMap($mapId);
+        try {
+            $tileset = $map->loadTileset() ?? throw new SessionRefusal(sprintf('%s names no tileset; choose one before placing tiles.', $mapId));
+            $tabs = [];
+            foreach (TilePalette::getTabs($tileset) as $tab) {
+                $world = TilePalette::buildWorld($tileset, $tab['ids'], $map->getAssetRoot(), 'palette:' . $tab['name']);
+                $tabs[] = [...$tab, 'operations' => $world->operations];
+            }
+        } catch (InvalidArgumentException $error) {
+            throw new SessionRefusal(sprintf('%s tileset cannot be used: %s', $mapId, $error->getMessage()), previous: $error);
+        }
+
+        return ['tileset' => $tileset->id, 'name' => $tileset->name, 'assetRoot' => $map->getAssetRoot(), 'tabs' => $tabs];
+    }
+    /**
+     * A tileset record as an author sees it, unsaved edits included: its
+     * sheets as the tile palette lays them out ({@see TilePalette}), the tiles
+     * it marks (drawn above characters, tables, the missing-art tile) and
+     * those that can be tables ({@see toggleTilesetMark()}), and its
+     * pieces, each with its glyph picture and its tiles drawn. A tileset the
+     * Engine would refuse still shows the sheets it can, and `issue` says
+     * what is wrong; a sheet that cannot be drawn is left out and named.
+     *
+     * @return array<string, mixed>
+     * @throws SessionRefusal When the record is unknown.
+     */
+    public function readTilesetPreview(int $index): array
+    {
+        $record = $this->requireRecordDatabase('tilesets')->getRecordByIndex($index)
+            ?? throw new SessionRefusal(sprintf('tilesets has no record %d.', $index));
+        $assetRoot = rtrim($this->workspace->projectRoot, '/') . '/assets';
+        $data = $record->toArray();
+        $data = is_array($data) ? $data : (array) $data;
+        $issue = null;
+        try {
+            $tileset = Tileset::fromArray($record->recordId, $data);
+        } catch (InvalidArgumentException $error) {
+            $issue = $error->getMessage();
+            // The sheets alone, so what can be seen still is.
+            $sheets = array_filter(is_array($data['sheets'] ?? null) ? $data['sheets'] : [], static fn(mixed $asset, mixed $sheet): bool => is_string($asset)
+                && TilesetSheet::tryFrom((string) $sheet) !== null && strtolower(pathinfo($asset, PATHINFO_EXTENSION)) === 'png', ARRAY_FILTER_USE_BOTH);
+            $tileset = new Tileset($record->recordId, trim((string) ($data['name'] ?? '')) ?: $record->recordId, $sheets);
+        }
+        $tabs = [];
+        $sheetIssues = \Ichiloto\Editor\Maps\TilesetAuthoring::getSheetIssues($tileset, $assetRoot);
+        $unreadable = array_values($sheetIssues);
+        foreach (TilePalette::getTabs($tileset) as $tab) {
+            try {
+                $world = TilePalette::buildWorld($tileset, $tab['ids'], $assetRoot, 'tileset-preview:' . $tab['name']);
+                $tabs[] = [...$tab, 'operations' => $world->operations];
+            } catch (\Throwable $error) {
+                $unreadable[] = sprintf('Tab %s cannot be drawn: %s', $tab['name'], $error->getMessage());
+            }
+        }
+        $pieces = [];
+        foreach ($tileset->pieces as $piece) {
+            try {
+                $world = TilePalette::buildPieceWorld($tileset, $piece, $assetRoot, 'tileset-piece:' . $piece->id);
+            } catch (\Throwable $error) {
+                $world = null;
+                $unreadable[] = sprintf('%s\'s tiles cannot be drawn: %s', $piece->name, $error->getMessage());
+            }
+            $pieces[] = [
+                'id' => $piece->id,
+                'name' => $piece->name,
+                'layerLabel' => MapLayers::formatLabel($piece->layer),
+                'connected' => $piece->connects !== null,
+                'width' => $piece->width,
+                'height' => $piece->height,
+                'tileLayers' => array_keys($piece->connects === null ? $piece->tiles : $piece->shapeTiles),
+                'picture' => PiecePlacer::buildPicture($piece),
+                'operations' => $world?->operations,
+                'connections' => \Ichiloto\Editor\Maps\ConnectedPiecePreview::describe($tileset, $piece, $assetRoot, $sheetIssues),
+            ];
+        }
+
+        return [
+            'palette' => ['tileset' => $tileset->id, 'name' => $tileset->name, 'assetRoot' => $assetRoot, 'tabs' => $tabs],
+            'missingArt' => $tileset->missingArt,
+            'above' => $tileset->above,
+            'tables' => $tileset->tables,
+            // The tiles shown that can be tables, so an interface offers the mark only where it holds.
+            'tableTiles' => array_values(array_filter(array_merge(...array_map(static fn(array $tab): array => array_merge(...$tab['ids']), $tabs) ?: [[]]),
+                static fn(int $tile): bool => TileId::getSheet($tile) === TilesetSheet::A2)),
+            'pieces' => $pieces,
+            'authoring' => \Ichiloto\Editor\Maps\TilesetAuthoring::describePieces($data, $this->readDatabaseRecord('tilesets', $index)['rows']),
+            'connectionShapes' => TilesetPiece::LINE_SHAPES,
+            'collisionTypes' => PhysicalOccupancyEditor::getCollisionChoices(),
+            'issue' => $issue,
+            'unreadable' => $unreadable,
+        ];
+    }
+
+    /**
+     * Sets or removes one explicitly selected piece recipe through its current
+     * record field, preserving source and shared undo. Wire cells are integers
+     * or null; a null value removes the recipe, never authors an explicit null.
+     *
+     * @param list<list<int|null>>|null $expected The recipe the caller last read.
+     * @param list<list<int|null>>|null $value The new recipe, or null to remove it.
+     */
+    public function setTilesetOccupancy(int $index, string $tilesetId, string $pieceId, ?array $expected, ?array $value): array
+    {
+        $record = $this->requireRecordDatabase('tilesets')->getRecordByIndex($index)
+            ?? throw new SessionRefusal(sprintf('tilesets has no record %d.', $index));
+        if ($record->recordId !== $tilesetId) {
+            throw new SessionRefusal('That tileset record changed; read the tileset list again.');
+        }
+        $data = (array) $record->toArray();
+        $piece = is_array($data['pieces'] ?? null) ? ($data['pieces'][$pieceId] ?? null) : null;
+        if (! is_array($piece)) {
+            throw new SessionRefusal(sprintf('%s is no longer in tileset %s; choose a piece again.', $pieceId, $tilesetId));
+        }
+        try {
+            if ($expected !== null) { \Ichiloto\Editor\Maps\PhysicalFootprintCodec::decodeRows($expected); }
+            $current = array_key_exists('occupancy', $piece)
+                ? \Ichiloto\Editor\Maps\PhysicalFootprintCodec::exportRows($piece['occupancy']) : null;
+        } catch (InvalidArgumentException $error) {
+            throw new SessionRefusal('The current or expected recipe cannot be compared safely. Repair its Physical Footprint record row first: '
+                . $error->getMessage(), previous: $error);
+        }
+        if ($current !== $expected) {
+            throw new SessionRefusal('That physical footprint changed; read the piece again before editing it.');
+        }
+        try {
+            $declaration = $value === null ? null : \Ichiloto\Editor\Maps\PhysicalFootprintCodec::decodeRows($value);
+            // Graphical rows and effect admission do not own logical footprint geometry.
+            unset($piece['tiles'], $piece['effect'], $piece['occupancy']);
+            if ($declaration !== null) { $piece['occupancy'] = $declaration; }
+            TilesetPiece::fromArray($pieceId, $piece, 'Tileset occupancy authoring');
+        } catch (InvalidArgumentException $error) {
+            throw new SessionRefusal($error->getMessage(), previous: $error);
+        }
+        $described = array_find(\Ichiloto\Editor\Maps\TilesetAuthoring::describePieces($data,
+            $this->readDatabaseRecord('tilesets', $index)['rows']), static fn(array $entry): bool => $entry['id'] === $pieceId);
+        $key = $described['occupancyKey'] ?? null;
+        if (! is_array($key)) {
+            throw new SessionRefusal('That physical footprint row cannot be edited; read the record again.');
+        }
+        $result = $this->applyDatabaseRecord('tilesets', $index, $key,
+            \Ichiloto\Editor\Maps\PhysicalFootprintCodec::encode($declaration));
+        if (($result['status'] ?? null) === 'question'
+            || (($result['changed'] ?? false) !== true && $current !== $value)) {
+            throw new SessionRefusal('The physical footprint was not applied. Resolve its source edit through the Physical Footprint record row first.');
+        }
+
+        return [...$result, 'occupancy' => $value];
+    }
+
+    /**
+     * Marks one tile of a tileset record as drawn above characters or as a
+     * table, or takes the mark away when it has it, as one undo step through
+     * the record's own Above Characters or Tables field, so every view of
+     * the record shows the same list. An autotile is marked by its kind,
+     * whatever shape it is, as the Engine reads the list; only A2 autotiles
+     * can be tables.
+     *
+     * @param 'above'|'tables' $mark
+     * @return array{changed: bool, marked: bool, records: list<string>}
+     * @throws SessionRefusal When the record or mark is unknown, or the tile cannot take the mark.
+     */
+    public function toggleTilesetMark(int $index, string $mark, int $tile): array
+    {
+        if (! in_array($mark, ['above', 'tables'], true)) {
+            throw new SessionRefusal(sprintf('%s is not a tile mark; a tile is marked above characters or as a table.', $mark));
+        }
+        if ($tile === TileId::EMPTY || ! TileId::isValid($tile)) {
+            throw new SessionRefusal(sprintf('%d is not a tile, so it cannot be marked.', $tile));
+        }
+        if ($mark === 'tables' && TileId::getSheet($tile) !== TilesetSheet::A2) {
+            throw new SessionRefusal(sprintf('Only A2 autotiles can be tables; tile %d is on sheet %s.', $tile, TileId::getSheet($tile)?->value ?? '?'));
+        }
+        $record = $this->requireRecordDatabase('tilesets')->getRecordByIndex($index)
+            ?? throw new SessionRefusal(sprintf('tilesets has no record %d.', $index));
+        $flag = TileId::getFlagId($tile);
+        $listed = array_values(array_filter(is_array($record->get($mark)) ? $record->get($mark) : [], is_int(...)));
+        $kept = array_values(array_filter($listed, static fn(int $listedTile): bool => TileId::getFlagId($listedTile) !== $flag));
+        $marked = count($kept) === count($listed);
+        $result = $this->applyDatabaseRecord('tilesets', $index, ['field' => $mark, 'frame' => []],
+            implode(', ', $marked ? [...$kept, $flag] : $kept));
+
+        return [...$result, 'marked' => $marked];
+    }
+
+    /**
+     * Each tile layer's tile identities by row, unsaved edits included, in
+     * drawing order: what a tile picker reads. A layer that cannot be read
+     * says why instead.
+     *
+     * @return array{map: string, revision: int, layers: list<array{name: string, rows: list<list<int>>, issue: ?string}>}
+     * @throws SessionRefusal When the map is unknown.
+     */
+    public function readTiles(string $mapId): array
+    {
+        $map = $this->requireMap($mapId);
+        $layers = [];
+        foreach ($map->getTileLayerNames() as $name) {
+            try {
+                $rows = $map->readTileEntries([$name], 0, 0, $map->getWidth(), $map->getHeight())[$name] ?? [];
+                $layers[] = ['name' => $name, 'rows' => array_map(static fn(array $row): array => array_map(intval(...), $row), $rows),
+                    'issue' => null];
+            } catch (MapSourceRefusal $refusal) {
+                $layers[] = ['name' => $name, 'rows' => [], 'issue' => $refusal->getMessage()];
+            }
+        }
+
+        return ['map' => $map->mapId, 'revision' => $this->getMapRevision($map), 'layers' => $layers];
+    }
+
+    /**
+     * Sets one tile in cells of a tile layer, `0` erasing, as one undo step,
+     * by {@see stampTiles()}.
+     *
+     * @param list<array{0: int, 1: int}> $cells The cells, as [x, y].
+     * @param array<string, string> $choices The role key chosen for a tile that could stand for several glyphs, by tile entry.
+     * @return array{status: 'applied', changed: int, glyphs: int, revision: int}|array{status: 'question', tile: string, roles: list<array{key: string, label: string}>}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, or refuses the tile.
+     */
+    public function paintTiles(string $mapId, int $revision, string $layerName, array $cells, int $tile, string $label = 'Place tiles',
+        array $choices = []): array
+    {
+        return $this->stampTiles($mapId, $revision, $layerName, array_map(static fn(array $cell): array => [$cell[0], $cell[1], $tile], $cells),
+            $label, $choices);
+    }
+
+    /**
+     * Sets each cell of a tile layer to its own tile as one undo step
+     * ({@see CanvasEditor::stampTiles()}): a block chosen in the palette or
+     * picked from the map, stamped where the author drags, or an erase and a
+     * stamp together that move it. A layer the map does not have yet is
+     * created. A tile that stands for a glyph brings or takes that glyph and
+     * its collision with it; a tile that could stand for several is asked
+     * about, and nothing changes until the edit is made again with the answer.
+     *
+     * @param list<array{0: int, 1: int, 2: int}> $cells Each cell as [x, y, tile].
+     * @param array<string, string> $choices The role key chosen for a tile that could stand for several glyphs, by tile entry.
+     * @return array{status: 'applied', changed: int, glyphs: int, revision: int}|array{status: 'question', tile: string, roles: list<array{key: string, label: string}>}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, or refuses a tile.
+     */
+    public function stampTiles(string $mapId, int $revision, string $layerName, array $cells, string $label = 'Place tiles',
+        array $choices = []): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        if ($map->getGridSourceIssue() !== null) {
+            throw new SessionRefusal(sprintf('%s is read-only: %s', $mapId, $map->getGridSourceIssue()));
+        }
+        try {
+            $applied = CanvasEditor::stampTiles($map, $layerName, $cells, $label, $choices);
+        } catch (MapSourceRefusal $refusal) {
+            throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+        }
+        if ($applied['unresolved'] !== []) {
+            $tile = (string) array_key_first($applied['unresolved']);
+
+            return ['status' => 'question', 'tile' => $tile, 'roles' => array_map(
+                static fn(PieceRole $role): array => ['key' => $role->key, 'label' => $role->label],
+                $applied['unresolved'][$tile],
+            )];
+        }
+        if ($applied['command'] !== null) {
+            $this->history->record($applied['command']);
+        }
+
+        return ['status' => 'applied', 'changed' => $applied['changed'], 'glyphs' => $applied['glyphs'], 'revision' => $this->getMapRevision($map)];
+    }
+
+    /**
+     * The cells a canvas tool paints, the one way every interface works them
+     * out ({@see CanvasTool::getShapeCells()}): a brush stroke's path widened
+     * by the brush, or a line or rectangle between two corners. Cells off the
+     * map are left out, so an interface previews and paints exactly these.
+     *
+     * @param array{0: int, 1: int} $from The anchor.
+     * @param array{0: int, 1: int} $to The cursor.
+     * @param list<array{0: int, 1: int}> $path A brush stroke's cells, in the order dragged; the cursor alone when empty.
+     * @return array{cells: list<array{0: int, 1: int}>}
+     * @throws SessionRefusal When the map, the tool or the brush width is unknown.
+     */
+    public function getToolShape(string $mapId, string $tool, array $from, array $to, int $brushSize, array $path = []): array
+    {
+        $map = $this->requireMap($mapId);
+        $canvasTool = CanvasTool::tryFrom($tool);
+        if ($canvasTool === null || $canvasTool === CanvasTool::SELECT) {
+            throw new SessionRefusal(sprintf('%s is not a painting tool.', $tool));
+        }
+        if (! in_array($brushSize, CanvasTool::BRUSH_SIZES, true)) {
+            throw new SessionRefusal(sprintf('The brush is %s cells wide.', implode(', ', CanvasTool::BRUSH_SIZES)));
+        }
+        [$anchor, $cursor] = [['x' => $from[0], 'y' => $from[1]], ['x' => $to[0], 'y' => $to[1]]];
+        $cells = $canvasTool === CanvasTool::BRUSH && $path !== []
+            ? ToolGeometry::expandByBrush(array_map(static fn(array $cell): array => ['x' => $cell[0], 'y' => $cell[1]], $path), $brushSize)
+            : $canvasTool->getShapeCells($anchor, $cursor, $brushSize);
+
+        return ['cells' => $this->listCellsOnMap($map, $cells)];
+    }
+
+    /**
+     * The region a flood fill paints from a cell: the cells joined to it
+     * across and down that hold the same glyph on a glyph layer, or the same
+     * tile on a tile layer, an autotile counting as its kind whatever shape
+     * its neighbours give it. A tile layer the map does not have yet is empty
+     * everywhere.
+     *
+     * @return array{cells: list<array{0: int, 1: int}>}
+     * @throws SessionRefusal When the map or the glyph layer is unknown, or not exactly one layer is named.
+     */
+    public function getFillRegion(string $mapId, int $x, int $y, ?string $layerId, ?string $tileLayer): array
+    {
+        $map = $this->requireMap($mapId);
+        if (($layerId === null) === ($tileLayer === null)) {
+            throw new SessionRefusal('Name the glyph layer or the tile layer to fill.');
+        }
+        if ($layerId !== null) {
+            if (! array_any($map->getLayers(), static fn(array $layer): bool => $layer['id'] === $layerId)) {
+                throw new SessionRefusal(sprintf('%s has no layer %s.', $mapId, $layerId));
+            }
+            $identityAt = static fn(int $x, int $y): string => $map->getLayerSymbol($layerId, $x, $y);
+        } else {
+            try {
+                $rows = in_array($tileLayer, $map->getTileLayerNames(), true)
+                    ? $map->readTileEntries([$tileLayer], 0, 0, $map->getWidth(), $map->getHeight())[$tileLayer] ?? []
+                    : [];
+            } catch (MapSourceRefusal $refusal) {
+                throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+            }
+            $identityAt = static function (int $x, int $y) use ($rows): string {
+                $tile = (int) ($rows[$y][$x] ?? TileId::EMPTY);
+
+                return TileId::isAutotile($tile) ? 'kind:' . TileId::getKind($tile) : (string) $tile;
+            };
+        }
+
+        return ['cells' => $this->listCellsOnMap($map, ToolGeometry::floodFill($identityAt, $map->getWidth(), $map->getHeight(), $x, $y))];
+    }
+
+    /**
+     * @param array<int, array{x: int, y: int}> $cells
+     * @return list<array{0: int, 1: int}>
+     */
+    private function listCellsOnMap(ProjectMap $map, array $cells): array
+    {
+        $listed = [];
+        foreach ($cells as ['x' => $x, 'y' => $y]) {
+            if ($x >= 0 && $y >= 0 && $x < $map->getWidth() && $y < $map->getHeight()) {
+                $listed[] = [$x, $y];
+            }
+        }
+
+        return $listed;
+    }
+
+    /**
+     * The pieces of the map's tileset an author places ({@see PiecePlacer}),
+     * in authored order: each with the gameplay layer its glyphs go on and
+     * whether the map has it, whether it is drawn as connected cells rather
+     * than stamped whole, its size, and a picture of what it draws. A map
+     * whose tileset offers none says why in `issue`.
+     *
+     * @return array{map: string, pieces: list<array<string, mixed>>, issue: ?string}
+     * @throws SessionRefusal When the map is unknown.
+     */
+    public function listPieces(string $mapId): array
+    {
+        $map = $this->requireMap($mapId);
+        try {
+            $pieces = PiecePlacer::loadPieces($map);
+        } catch (MapSourceRefusal $refusal) {
+            return ['map' => $map->mapId, 'pieces' => [], 'issue' => $refusal->getMessage()];
+        }
+        $described = [];
+        foreach ($pieces as $piece) {
+            try {
+                PiecePlacer::findLayer($map, $piece);
+                $layerIssue = null;
+            } catch (MapSourceRefusal $refusal) {
+                $layerIssue = $refusal->getMessage();
+            }
+            $described[] = [
+                'id' => $piece->id,
+                'name' => $piece->name,
+                'layer' => $piece->layer,
+                'layerLabel' => MapLayers::formatLabel($piece->layer),
+                'layerIssue' => $layerIssue,
+                'connected' => $piece->connects !== null,
+                'width' => $piece->width,
+                'height' => $piece->height,
+                'tileLayers' => array_keys($piece->connects === null ? $piece->tiles : $piece->shapeTiles),
+                'picture' => PiecePlacer::buildPicture($piece),
+                'occupancy' => PhysicalOccupancyEditor::exportRecipe($piece),
+            ];
+        }
+
+        return ['map' => $map->mapId, 'tileset' => $map->getMapDataField(['tileset']), 'pieces' => $described, 'issue' => null];
+    }
+
+    /**
+     * What placing a piece between two corners would write, for a preview
+     * ({@see PiecePlacer::getPreviewCells()}): each cell the piece writes, as
+     * [x, y, glyph, colour], cells off the map left out.
+     *
+     * @param array{0: int, 1: int} $from
+     * @param array{0: int, 1: int} $to
+     * @param string|null $color The colour of cells the piece leaves unstyled.
+     * @return array{cells: list<array{0: int, 1: int, 2: string, 3: ?string}>}
+     * @throws SessionRefusal When the map or the piece is unknown.
+     */
+    public function previewPiece(string $mapId, string $pieceId, array $from, array $to, ?string $color = null): array
+    {
+        $map = $this->requireMap($mapId);
+        $piece = $this->requirePiece($map, $pieceId);
+        $cells = [];
+        foreach (PiecePlacer::getPreviewCells($map, $piece, ['x' => $from[0], 'y' => $from[1]], ['x' => $to[0], 'y' => $to[1]], $color) as $y => $row) {
+            foreach ($row as $x => $cell) {
+                if ($cell !== null && $x >= 0 && $y >= 0 && $x < $map->getWidth() && $y < $map->getHeight()) {
+                    $cells[] = [$x, $y, $cell['symbol'], $cell['color']];
+                }
+            }
+        }
+
+        return ['cells' => $cells];
+    }
+
+    /**
+     * Places a piece between two corners as one undo step: an item piece
+     * stamped as whole copies across the area, a connected piece drawn along
+     * its outline ({@see PiecePlacer}). An area that cannot be placed whole
+     * changes nothing.
+     *
+     * @param array{0: int, 1: int} $from
+     * @param array{0: int, 1: int} $to
+     * @param string|null $color The colour of cells the piece leaves unstyled; null keeps each cell's own.
+     * @return array{status: 'applied', changed: bool, copies: int, cells: int, revision: int}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, the piece is unknown, or the placement is refused.
+     */
+    public function placePiece(string $mapId, int $revision, string $pieceId, array $from, array $to, ?string $color = null): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        if ($map->getGridSourceIssue() !== null) {
+            throw new SessionRefusal(sprintf('%s is read-only: %s', $mapId, $map->getGridSourceIssue()));
+        }
+        $piece = $this->requirePiece($map, $pieceId);
+        [$from, $to] = [['x' => $from[0], 'y' => $from[1]], ['x' => $to[0], 'y' => $to[1]]];
+        try {
+            if ($piece->connects === null) {
+                ['command' => $command, 'origins' => $origins] = PiecePlacer::stampArea($map, $piece, $from, $to, $color);
+                [$copies, $cells] = [count($origins), 0];
+            } else {
+                $drawn = PiecePlacer::getConnectedDrawCells($from, $to);
+                $command = PiecePlacer::drawConnected($map, $piece, $drawn, [], $color);
+                [$copies, $cells] = [0, count($drawn)];
+            }
+        } catch (MapSourceRefusal $refusal) {
+            throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+        }
+        if ($command !== null) {
+            $this->history->record($command);
+        }
+
+        return ['status' => 'applied', 'changed' => $command !== null, 'copies' => $copies, 'cells' => $cells, 'revision' => $this->getMapRevision($map)];
+    }
+
+    /** @throws SessionRefusal When the map's tileset has no piece with the id. */
+    private function requirePiece(ProjectMap $map, string $pieceId): TilesetPiece
+    {
+        try {
+            $pieces = PiecePlacer::loadPieces($map);
+        } catch (MapSourceRefusal $refusal) {
+            throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+        }
+
+        return $pieces[$pieceId] ?? throw new SessionRefusal(sprintf("%s is no longer in the map's tileset. Choose a piece again.", $pieceId));
+    }
+
+    /**
+     * The cells of a map whose glyph still shows in the graphical field, by
+     * the Engine's glyph fallback rule ({@see MapGraphicsValidator::listShownGlyphCells()}),
+     * unsaved edits included: what is left to tile. `available` is false for
+     * a map without a kind, or whose kind or tile layers cannot be read.
+     *
+     * @return array{map: string, revision: int, available: bool, cells: list<array{0: int, 1: int, 2: string, 3: string}>}
+     * @throws SessionRefusal When the map is unknown.
+     */
+    public function readCoverage(string $mapId): array
+    {
+        $map = $this->requireMap($mapId);
+        $cells = MapGraphicsValidator::listShownGlyphCells($map);
+
+        return [
+            'map' => $map->mapId,
+            'revision' => $this->getMapRevision($map),
+            'available' => $cells !== null,
+            'cells' => array_map(static fn(array $cell): array => [$cell['x'], $cell['y'], $cell['glyph'], $cell['layer']], $cells ?? []),
+        ];
+    }
+
+    /**
+     * The piece a layer's glyph plays at a cell ({@see CanvasEditor::findPlayedRole()}):
+     * what an eyedropper picks up with the glyph, so painting it again draws
+     * the same piece. Null role when no piece draws it or its tiles do not tell.
+     *
+     * @return array{glyph: string, role: ?array{key: string, label: string}}
+     * @throws SessionRefusal When the map or layer is unknown.
+     */
+    public function readPieceAt(string $mapId, string $layerId, int $x, int $y): array
+    {
+        $map = $this->requireMap($mapId);
+        if (! array_any($map->getLayers(), static fn(array $layer): bool => $layer['id'] === $layerId)) {
+            throw new SessionRefusal(sprintf('%s has no layer %s.', $mapId, $layerId));
+        }
+        $role = CanvasEditor::findPlayedRole($map, $layerId, $x, $y);
+
+        return [
+            'glyph' => $map->hasLayerCell($layerId, $x, $y) ? $map->getLayerSymbol($layerId, $x, $y) : ' ',
+            'role' => $role === null ? null : ['key' => $role->key, 'label' => $role->label],
+        ];
+    }
+
+    /**
+     * Copies a rectangle of a layer into the session's clipboard: its glyphs
+     * and styles, and the tiles that move with that layer ({@see CanvasClipboard::copy()}).
+     *
+     * @return array{layer: string, width: int, height: int}
+     * @throws SessionRefusal When the map, layer or rectangle is unknown, or a tile layer cannot be read.
+     */
+    public function copySelection(string $mapId, string $layerId, int $x, int $y, int $width, int $height): array
+    {
+        $map = $this->requireMap($mapId);
+        $this->requireSelection($map, $layerId, $x, $y, $width, $height);
+        try {
+            CanvasClipboard::copy($map, $layerId, $x, $y, $width, $height, $this->clipboard ??= new Clipboard());
+        } catch (MapSourceRefusal $refusal) {
+            throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+        }
+
+        return $this->describeClipboard();
+    }
+
+    /**
+     * Copies a rectangle of a layer into the session's clipboard and clears
+     * it, glyphs and the tiles that went with them, as one undo step.
+     *
+     * @return array{layer: string, width: int, height: int, changed: int, revision: int}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, or the layer or rectangle is unknown.
+     */
+    public function cutSelection(string $mapId, int $revision, string $layerId, int $x, int $y, int $width, int $height): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        if ($map->getGridSourceIssue() !== null) {
+            throw new SessionRefusal(sprintf('%s is read-only: %s', $mapId, $map->getGridSourceIssue()));
+        }
+        $this->requireSelection($map, $layerId, $x, $y, $width, $height);
+        try {
+            $cut = CanvasClipboard::cut($map, $layerId, $x, $y, $width, $height, $this->clipboard ??= new Clipboard());
+        } catch (MapSourceRefusal $refusal) {
+            throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+        }
+        if ($cut['command'] !== null) {
+            $this->history->record($cut['command']);
+        }
+
+        return [...$this->describeClipboard(), 'changed' => $cut['changed'], 'revision' => $this->getMapRevision($map)];
+    }
+
+    /**
+     * Stamps the session's clipboard with its top-left cell at a map cell as
+     * one undo step. A glyph that could be several pieces is asked about, and
+     * nothing changes until the paste is made again with the answer.
+     *
+     * @param array<string, ?string> $choices
+     * @return array{status: 'applied', changed: int, revision: int}|array{status: 'question', glyph: string, roles: list<array{key: string, label: string}>}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, the clipboard is empty or from another layer.
+     */
+    public function pasteSelection(string $mapId, int $revision, string $layerId, int $x, int $y, array $choices = []): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        if ($map->getGridSourceIssue() !== null) {
+            throw new SessionRefusal(sprintf('%s is read-only: %s', $mapId, $map->getGridSourceIssue()));
+        }
+        try {
+            $pasted = CanvasClipboard::paste($map, $layerId, $this->clipboard ??= new Clipboard(), $x, $y, $choices);
+        } catch (MapSourceRefusal $refusal) {
+            throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+        }
+        if ($pasted['unresolved'] !== []) {
+            $glyph = (string) array_key_first($pasted['unresolved']);
+
+            return ['status' => 'question', 'glyph' => $glyph, 'roles' => array_map(
+                static fn(PieceRole $role): array => ['key' => $role->key, 'label' => $role->label],
+                $pasted['unresolved'][$glyph],
+            )];
+        }
+        if ($pasted['command'] !== null) {
+            $this->history->record($pasted['command']);
+        }
+
+        return ['status' => 'applied', 'changed' => $pasted['changed'], 'revision' => $this->getMapRevision($map)];
+    }
+
+    /**
+     * What the session's clipboard holds: the layer it came from and its size; an empty layer when it holds nothing.
+     *
+     * @return array{layer: string, width: int, height: int}
+     */
+    public function describeClipboard(): array
+    {
+        $clipboard = $this->clipboard ?? new Clipboard();
+
+        return ['layer' => $clipboard->layer, 'width' => $clipboard->getWidth(), 'height' => $clipboard->getHeight()];
+    }
+
+    /** @throws SessionRefusal When the layer is not the map's, or the rectangle is empty or leaves the map. */
+    private function requireSelection(ProjectMap $map, string $layerId, int $x, int $y, int $width, int $height): void
+    {
+        if (! array_any($map->getLayers(), static fn(array $layer): bool => $layer['id'] === $layerId)) {
+            throw new SessionRefusal(sprintf('%s has no layer %s.', $map->mapId, $layerId));
+        }
+        if ($width < 1 || $height < 1 || $x < 0 || $y < 0 || $x + $width > $map->getWidth() || $y + $height > $map->getHeight()) {
+            throw new SessionRefusal(sprintf('A selection of %d x %d at (%d, %d) does not fit %s.', $width, $height, $x, $y, $map->mapId));
+        }
+    }
+
+    /**
+     * Draws the tiles of the glyphs already on a layer as one undo step
+     * ({@see CanvasEditor::drawTilesForGlyphs()}): every glyph a piece of the
+     * map's kind draws gets that piece's tiles. A glyph that could be several
+     * pieces is asked about, and nothing changes until the edit is made again
+     * with the answer in `$choices` (a role key, or null for no tiles).
+     *
+     * @param array<string, ?string> $choices
+     * @return array{status: 'applied', cells: int, revision: int}|array{status: 'question', glyph: string, roles: list<array{key: string, label: string}>}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, the layer is unknown or no piece draws its glyphs.
+     */
+    public function drawLayerTiles(string $mapId, int $revision, string $layerId, array $choices = []): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        if ($map->getGridSourceIssue() !== null) {
+            throw new SessionRefusal(sprintf('%s is read-only: %s', $mapId, $map->getGridSourceIssue()));
+        }
+        $layer = array_find($map->getLayers(), static fn(array $layer): bool => $layer['id'] === $layerId)
+            ?? throw new SessionRefusal(sprintf('%s has no layer %s.', $mapId, $layerId));
+        try {
+            $drawn = CanvasEditor::drawTilesForGlyphs($map, $layerId, $choices);
+        } catch (MapSourceRefusal | InvalidArgumentException | \RuntimeException $refusal) {
+            throw new SessionRefusal('Tiles were not drawn: ' . $refusal->getMessage(), previous: $refusal);
+        }
+        if ($drawn === null) {
+            throw new SessionRefusal(sprintf('The %s layer has no pieces in this map\'s kind to draw tiles for.', MapLayers::formatLabel((string) $layer['name'])));
+        }
+        if ($drawn['unresolved'] !== []) {
+            $glyph = (string) array_key_first($drawn['unresolved']);
+
+            return ['status' => 'question', 'glyph' => $glyph, 'roles' => array_map(
+                static fn(PieceRole $role): array => ['key' => $role->key, 'label' => $role->label],
+                $drawn['unresolved'][$glyph],
+            )];
+        }
+        if ($drawn['command'] !== null) {
+            $this->history->record($drawn['command']);
+        }
+
+        return ['status' => 'applied', 'cells' => $drawn['cells'], 'revision' => $this->getMapRevision($map)];
+    }
+
+    /**
+     * Paints one glyph over cells of a layer, with the tiles that follow it,
+     * as one undo step. A glyph that could be several pieces is asked about:
+     * nothing changes until the edit is made again with the answer in
+     * `$choices` (a role key, or null for no tiles).
+     *
+     * @param list<array{0: int, 1: int}> $cells The cells, as [x, y].
+     * @param string|null $color A colour name or `#rrggbb`; null keeps each cell's colour, '' paints none.
+     * @param array<string, ?string> $choices
+     * @return array{status: 'applied', changed: int, revision: int}|array{status: 'question', glyph: string, roles: list<array{key: string, label: string}>}
+     * @throws SessionRefusal When the map is unknown, stale or refuses the edit.
+     */
+    public function paint(string $mapId, int $revision, string $layerId, array $cells, string $symbol, ?string $color = null,
+        array $choices = [], string $label = 'Paint'): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        if ($map->getGridSourceIssue() !== null) {
+            throw new SessionRefusal(sprintf('%s is read-only: %s', $mapId, $map->getGridSourceIssue()));
+        }
+        if (! array_any($map->getLayers(), static fn(array $layer): bool => $layer['id'] === $layerId)) {
+            throw new SessionRefusal(sprintf('%s has no layer %s.', $mapId, $layerId));
+        }
+        $writes = array_map(static fn(array $cell): array => ['x' => (int) $cell[0], 'y' => (int) $cell[1],
+            'symbol' => $symbol, 'color' => $layerId === MapLayers::EVENT ? '' : $color], $cells);
+
+        try {
+            $plan = CanvasEditor::plan($map, $layerId, $writes, $choices, true);
+            if ($plan !== null && $plan['unresolved'] !== []) {
+                $glyph = (string) array_key_first($plan['unresolved']);
+
+                return ['status' => 'question', 'glyph' => $glyph, 'roles' => array_map(
+                    static fn(PieceRole $role): array => ['key' => $role->key, 'label' => $role->label],
+                    $plan['unresolved'][$glyph],
+                )];
+            }
+            $applied = CanvasEditor::apply($map, $layerId, $plan['writes'] ?? $writes, $label, $plan['tiles'] ?? []);
+        } catch (MapSourceRefusal $refusal) {
+            throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+        }
+        if ($applied['command'] !== null) {
+            $this->history->record($applied['command']);
+        }
+
+        return ['status' => 'applied', 'changed' => $applied['changed'], 'revision' => $this->getMapRevision($map)];
+    }
+
+    /**
+     * Adds an empty glyph layer, gameplay or decoration, at the next order,
+     * as one undo step. Layer edits answer as {@see editLayers()} describes.
+     *
+     * @return array{status: 'applied', revision: int, changed: bool, layer: ?string}
+     * @throws SessionRefusal When the map is unknown, stale or refuses the layer.
+     */
+    public function createLayer(string $mapId, int $revision, string $name, bool $decoration = false): array
+    {
+        return $this->editLayers($mapId, $revision, static fn(ProjectMap $map): array => LayerEditor::createLayer($map, $name, $decoration));
+    }
+
+    /** Explicit source-preserving conversion, recorded as one shared undo step. */
+    public function migratePhysicalOccupancy(string $mapId, int $revision): array
+    {
+        return $this->editLayers($mapId, $revision, static fn(ProjectMap $map): array =>
+            LayerEditor::migratePhysicalOccupancy($map));
+    }
+
+    /**
+     * @param list<array{0: int, 1: int}> $cells
+     * @return array{status: 'applied', changed: int, revision: int}
+     */
+    public function paintOccupancy(string $mapId, int $revision, array $cells, int $collision, string $label = 'Paint collision'): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        try {
+            $applied = PhysicalOccupancyEditor::applyPaint($map, $cells, $collision, $label);
+        } catch (MapSourceRefusal $refusal) {
+            throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+        }
+        if ($applied['command'] !== null) {
+            $this->history->record($applied['command']);
+        }
+
+        return ['status' => 'applied', 'changed' => $applied['changed'], 'revision' => $this->getMapRevision($map)];
+    }
+
+    /** @return array{cells: list<array{0: int, 1: int}>, map: string, revision: int} */
+    public function getOccupancyFillRegion(string $mapId, int $x, int $y, int $revision): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        try {
+            $cells = PhysicalOccupancyEditor::getFillRegion($map, $x, $y);
+        } catch (MapSourceRefusal $refusal) {
+            throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+        }
+
+        return ['cells' => $cells, 'map' => $mapId, 'revision' => $this->getMapRevision($map)];
+    }
+
+    /** @return array{cells: list<array{0: int, 1: int, 2: int}>} */
+    public function previewOccupancyPiece(string $mapId, int $revision, string $tilesetId, string $pieceId, array $expected, int $x, int $y): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        $piece = $this->requireOccupancyPiece($map, $tilesetId, $pieceId, $expected);
+        try {
+            $writes = PhysicalOccupancyEditor::getPieceWrites($map, $piece, $x, $y);
+        } catch (MapSourceRefusal | InvalidArgumentException $error) {
+            throw new SessionRefusal($error->getMessage(), previous: $error);
+        }
+
+        return ['cells' => array_map(static fn(array $write): array => [$write[0], $write[1], $write[2]->value], $writes)];
+    }
+
+    /** @return array{status: 'applied', changed: int, revision: int} */
+    public function stampOccupancyPiece(string $mapId, int $revision, string $tilesetId, string $pieceId, array $expected, int $x, int $y): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        $piece = $this->requireOccupancyPiece($map, $tilesetId, $pieceId, $expected);
+        try {
+            $applied = PhysicalOccupancyEditor::applyPiece($map, $piece, $x, $y);
+        } catch (MapSourceRefusal | InvalidArgumentException $error) {
+            throw new SessionRefusal($error->getMessage(), previous: $error);
+        }
+        if ($applied['command'] !== null) {
+            $this->history->record($applied['command']);
+        }
+
+        return ['status' => 'applied', 'changed' => $applied['changed'], 'revision' => $this->getMapRevision($map)];
+    }
+
+    private function requireOccupancyPiece(ProjectMap $map, string $tilesetId, string $pieceId, array $expected): TilesetPiece
+    {
+        if ($map->getMapDataField(['tileset']) !== $tilesetId) {
+            throw new SessionRefusal('The map tileset changed. Choose a physical footprint again. Nothing was changed.');
+        }
+        $piece = $this->requirePiece($map, $pieceId);
+        if (PhysicalOccupancyEditor::exportRecipe($piece) !== $expected) {
+            throw new SessionRefusal('The physical footprint changed. Reload the pieces before stamping. Nothing was changed.');
+        }
+
+        return $piece;
+    }
+
+    /**
+     * Renames a glyph layer as one undo step. A rename that changes the
+     * map's collisions is asked about; it is made when asked again confirmed.
+     *
+     * @return array{status: 'applied', revision: int, changed: bool, layer: ?string}|array{status: 'question', question: string}
+     * @throws SessionRefusal When the map is unknown, stale or refuses the rename.
+     */
+    public function renameLayer(string $mapId, int $revision, string $layerId, string $name, bool $confirm = false): array
+    {
+        return $this->editLayers($mapId, $revision, static fn(ProjectMap $map): array =>
+            LayerEditor::renameLayer($map, $layerId, $name, $confirm));
+    }
+
+    /**
+     * Removes a glyph layer and its cells as one undo step. A removal that
+     * changes the map's collisions is asked about first. The layer left is
+     * the map's base layer.
+     *
+     * @return array{status: 'applied', revision: int, changed: bool, layer: ?string}|array{status: 'question', question: string}
+     * @throws SessionRefusal When the map is unknown, stale or refuses the removal.
+     */
+    public function removeLayer(string $mapId, int $revision, string $layerId, bool $confirm = false): array
+    {
+        return $this->editLayers($mapId, $revision, static fn(ProjectMap $map): array =>
+            LayerEditor::removeLayer($map, $layerId, $confirm));
+    }
+
+    /**
+     * Moves a glyph layer to an order (00-99), or one step `above` or
+     * `below` among the layers, as one undo step; a layer holding that order
+     * takes this one's. A move that changes the map's collisions is asked
+     * about first.
+     *
+     * @return array{status: 'applied', revision: int, changed: bool, layer: ?string}|array{status: 'question', question: string}
+     * @throws SessionRefusal When the map is unknown, stale or refuses the move, or not exactly one of order and direction is given.
+     */
+    public function moveLayer(string $mapId, int $revision, string $layerId, ?int $order, ?string $direction = null, bool $confirm = false): array
+    {
+        return $this->editLayers($mapId, $revision, static fn(ProjectMap $map): array => LayerEditor::moveLayer($map, $layerId,
+            self::resolveOrder($order, $direction, static fn(string $step): int => LayerEditor::findAdjacentLayerOrder($map, $layerId, $step)),
+            $confirm));
+    }
+
+    /**
+     * Makes a glyph layer decoration, drawn without collision, or gameplay,
+     * as one undo step. A change that changes the map's collisions is asked
+     * about first.
+     *
+     * @return array{status: 'applied', revision: int, changed: bool, layer: ?string}|array{status: 'question', question: string}
+     * @throws SessionRefusal When the map is unknown, stale or refuses the change.
+     */
+    public function setLayerDecoration(string $mapId, int $revision, string $layerId, bool $decoration, bool $confirm = false): array
+    {
+        return $this->editLayers($mapId, $revision, static fn(ProjectMap $map): array =>
+            LayerEditor::setLayerDecoration($map, $layerId, $decoration, $confirm));
+    }
+
+    /**
+     * Adds an empty tile layer as one undo step, placed among the tile
+     * layers as one a tileset piece names is. `layer` is its name.
+     *
+     * @return array{status: 'applied', revision: int, changed: bool, layer: ?string}
+     * @throws SessionRefusal When the map is unknown, stale or refuses the layer.
+     */
+    public function createTileLayer(string $mapId, int $revision, string $name): array
+    {
+        return $this->editLayers($mapId, $revision, static fn(ProjectMap $map): array => LayerEditor::createTileLayer($map, $name));
+    }
+
+    /**
+     * Renames a tile layer and its settings as one undo step.
+     *
+     * @return array{status: 'applied', revision: int, changed: bool, layer: ?string}
+     * @throws SessionRefusal When the map is unknown, stale or refuses the rename.
+     */
+    public function renameTileLayer(string $mapId, int $revision, string $name, string $newName): array
+    {
+        return $this->editLayers($mapId, $revision, static fn(ProjectMap $map): array =>
+            LayerEditor::renameTileLayer($map, $name, $newName));
+    }
+
+    /**
+     * Removes a tile layer, its tiles and its settings as one undo step.
+     *
+     * @return array{status: 'applied', revision: int, changed: bool, layer: ?string}
+     * @throws SessionRefusal When the map is unknown, stale or has no such tile layer.
+     */
+    public function removeTileLayer(string $mapId, int $revision, string $name): array
+    {
+        return $this->editLayers($mapId, $revision, static fn(ProjectMap $map): array => LayerEditor::removeTileLayer($map, $name));
+    }
+
+    /**
+     * Moves a tile layer to a drawing order (00-99), or one step `above` or
+     * `below` among the tile layers, as one undo step; a tile layer holding
+     * that order takes this one's.
+     *
+     * @return array{status: 'applied', revision: int, changed: bool, layer: ?string}
+     * @throws SessionRefusal When the map is unknown, stale or refuses the move, or not exactly one of order and direction is given.
+     */
+    public function moveTileLayer(string $mapId, int $revision, string $name, ?int $order, ?string $direction = null): array
+    {
+        return $this->editLayers($mapId, $revision, static fn(ProjectMap $map): array => LayerEditor::moveTileLayer($map, $name,
+            self::resolveOrder($order, $direction, static fn(string $step): int => LayerEditor::findAdjacentTileLayerOrder($map, $name, $step))));
+    }
+
+    /**
+     * Sets a tile layer's offset across and down in field cells (each -0.5,
+     * 0 or 0.5) and the gameplay layer its tiles move with, or none, as one
+     * undo step, validated as the Engine reads them.
+     *
+     * @param array<int, mixed> $offset
+     * @return array{status: 'applied', revision: int, changed: bool, layer: ?string}
+     * @throws SessionRefusal When the map is unknown, stale or the Engine would refuse the settings.
+     */
+    public function setTileLayerSettings(string $mapId, int $revision, string $name, array $offset, ?string $movesWith): array
+    {
+        return $this->editLayers($mapId, $revision, static fn(ProjectMap $map): array =>
+            LayerEditor::setTileLayerSettings($map, $name, $offset, $movesWith));
+    }
+
+    /**
+     * Makes one layer edit on a map at its current revision and records it.
+     * It answers `applied` with the map's new revision, whether anything
+     * changed and the layer to work on (a glyph layer's id or a tile layer's
+     * name; null after removing a tile layer), or `question` when the edit
+     * would change the map's collisions: nothing changed then, and the edit
+     * is made by asking again confirmed.
+     *
+     * @param Closure(ProjectMap): array{command: ?Command, layer: ?string, question: ?string} $edit
+     * @return array{status: 'applied', revision: int, changed: bool, layer: ?string}|array{status: 'question', question: string}
+     * @throws SessionRefusal When the map is unknown or stale, or the edit is refused.
+     */
+    private function editLayers(string $mapId, int $revision, Closure $edit): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        try {
+            $result = $edit($map);
+        } catch (MapSourceRefusal $refusal) {
+            throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+        }
+        if ($result['question'] !== null) {
+            return ['status' => 'question', 'question' => $result['question']];
+        }
+        if ($result['command'] !== null) {
+            $this->history->record($result['command']);
+        }
+
+        return ['status' => 'applied', 'revision' => $this->getMapRevision($map), 'changed' => $result['command'] !== null,
+            'layer' => $result['layer']];
+    }
+
+    /**
+     * The order a move names: the order itself, or the order one step in a
+     * direction.
+     *
+     * @param Closure(string): int $findAdjacentOrder
+     * @throws SessionRefusal When not exactly one of order and direction is given.
+     */
+    private static function resolveOrder(?int $order, ?string $direction, Closure $findAdjacentOrder): int
+    {
+        if (($order === null) === ($direction === null)) {
+            throw new SessionRefusal(sprintf("Move a layer to an order, or '%s' or '%s', not both or neither.",
+                LayerEditor::ABOVE, LayerEditor::BELOW));
+        }
+
+        return $order ?? $findAdjacentOrder($direction);
+    }
+
+    /**
+     * The inspector rows of a map, and of one of its events when one is
+     * named, as an interface lists and edits them. Each row says how it is
+     * edited (`kind`) and carries the `key` an edit names it by.
+     *
+     * Kinds: `text`, `integer`, `float`, `boolean`, `options` (one of
+     * `options`, read as the matching `optionLabels` when it has them),
+     * `reference` (one of `references.list` for its `reference`),
+     * `conditions` (the condition line, `type:name[:extras]` joined by `;`),
+     * `destination` (a map from `references.list` for `maps` and a spawn
+     * point on it, set together through `setEventDestination`), or `info`
+     * for a row that is only read here: headings and counts. A typed row's
+     * `raw` is the value its edit starts from. A row inside a list an author
+     * adds to and removes from carries `list` (its entry's index), and
+     * `addInspectorListEntry`/`removeInspectorListEntry` apply to it.
+     *
+     * @return array{map: string, revision: int, event: ?string, rows: list<array<string, mixed>>}
+     * @throws SessionRefusal When the map or event is unknown.
+     */
+    public function readInspector(string $mapId, ?string $marker = null): array
+    {
+        $map = $this->requireMap($mapId);
+        if ($marker !== null && $map->getEventDefinition($marker) === null && $map->getEventArea($marker) === null) {
+            throw new SessionRefusal(sprintf('%s has no event %s.', $mapId, $marker));
+        }
+
+        return [
+            'map' => $mapId,
+            'revision' => $this->getMapRevision($map),
+            'event' => $marker,
+            'rows' => $this->describePlacementRows(array_map(self::describeRow(...), $this->collectInspectorFields($map, $marker)),
+                ['kind' => 'event', 'map' => $mapId, 'marker' => $marker]),
+        ];
+    }
+
+    /**
+     * Applies one inspector row's edit as one undo step. The row is found
+     * again by its key among the map's current rows, so the edit applies
+     * exactly as that row would in any interface.
+     *
+     * Changing the map's kind when it has tiles from its current kind asks
+     * first: nothing changes until the edit is made again with `$answer`
+     * `clear` (clear its tile layers and change) or `cancel`.
+     *
+     * @param array<string, mixed> $key The row's key, as `readInspector` gave it.
+     * @return array{status: 'applied', revision: int, changed: bool}|array{status: 'question', question: string, answers: list<array{key: string, label: string, description: string}>}
+     * @throws SessionRefusal When the map is unknown or stale, the row is gone or read-only, or the edit is refused.
+     */
+    public function applyInspector(string $mapId, int $revision, array $key, string $value, ?string $answer = null): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        $field = $this->requireInspectorField($map, $key);
+        $kind = self::describeRow($field)['kind'];
+
+        if ($kind === 'info') {
+            throw new SessionRefusal(sprintf('%s cannot be edited here.', trim((string) ($field['label'] ?? 'That row'))));
+        }
+
+        $inspector = $this->createMapInspector($map);
+        $cleared = 0;
+        if (($field['target'] ?? null) === 'map-kind') {
+            try {
+                $cleared = $inspector->countTileLayersClearedBy($map, $value);
+            } catch (InspectorRefusal $refusal) {
+                throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+            }
+            if ($cleared > 0 && $answer === null) {
+                return $this->describeMapKindQuestion($map, $value, $cleared);
+            }
+            if ($answer !== null && ! in_array($answer, ['clear', 'cancel'], true)) {
+                throw new SessionRefusal(sprintf('Answer clear or cancel, not %s.', $answer));
+            }
+            if ($answer === 'cancel') {
+                return ['status' => 'applied', 'revision' => $this->getMapRevision($map), 'changed' => false];
+            }
+        }
+
+        $command = $this->runEdit(static fn(): ?Command => ($field['target'] ?? null) === 'map-kind'
+            ? $inspector->changeMapKind($map, $value, $cleared > 0 && $answer === 'clear')
+            : $inspector->apply($map, $field, $value));
+
+        return ['status' => 'applied', 'revision' => $this->getMapRevision($map), 'changed' => $command !== null];
+    }
+
+    /**
+     * The event types an event can be, as `createEvent` and an event's Type
+     * row name them: by label.
+     *
+     * @return list<array{index: int, label: string, description: string, class: string}>
+     */
+    public function listEventTypes(): array
+    {
+        return array_map(static fn(int $index, EventTypeDefinition $type): array => [
+            'index' => $index,
+            'label' => $type->label,
+            'description' => $type->description,
+            'class' => $type->className,
+        ], array_keys(EventTypeCatalog::all()), EventTypeCatalog::all());
+    }
+
+    /**
+     * Places a new event of a type on cells as one undo step: its marker
+     * painted there and its definition written ({@see EventAuthoring}).
+     *
+     * @param list<array{0: int, 1: int}> $cells The cells it triggers on, as [x, y].
+     * @param string $type The type's label, as `listEventTypes` gives it.
+     * @param string|null $marker The marker to give it; null takes the first free one.
+     * @return array{marker: string, revision: int}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, or the cells, type or marker cannot be used.
+     */
+    public function createEvent(string $mapId, int $revision, array $cells, string $type, ?string $marker = null): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        $definition = EventTypeCatalog::findByLabel($type) ?? throw new SessionRefusal(sprintf('There is no event type %s.', $type));
+        $created = null;
+        $this->runEdit(static function () use ($map, $cells, $definition, $marker, &$created): Command {
+            $created = EventAuthoring::createEvent($map, $cells, $definition, $marker);
+
+            return $created['command'];
+        });
+
+        return ['marker' => $created['marker'], 'revision' => $this->getMapRevision($map)];
+    }
+
+    /**
+     * Deletes an event, its cells and its definition together, as one undo
+     * step.
+     *
+     * @return array{revision: int}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, or has no such event.
+     */
+    public function deleteEvent(string $mapId, int $revision, string $marker): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        $this->runEdit(static fn(): Command => EventAuthoring::deleteEvent($map, $marker));
+
+        return ['revision' => $this->getMapRevision($map)];
+    }
+
+    /**
+     * Moves every cell of an event by an offset, keeping its shape.
+     *
+     * @return array{revision: int, changed: bool}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, or a cell would leave the map or cover another event.
+     */
+    public function moveEvent(string $mapId, int $revision, string $marker, int $deltaX, int $deltaY): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        $command = $this->runEdit(static fn(): ?Command => EventAuthoring::moveEvent($map, $marker, $deltaX, $deltaY));
+
+        return ['revision' => $this->getMapRevision($map), 'changed' => $command !== null];
+    }
+
+    /**
+     * Repaints an event as exactly a rectangle.
+     *
+     * @return array{revision: int, changed: bool}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, or the rectangle is empty, leaves the map or covers another event.
+     */
+    public function setEventBounds(string $mapId, int $revision, string $marker, int $x, int $y, int $width, int $height): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        $command = $this->runEdit(static fn(): ?Command => EventAuthoring::setEventBounds($map, $marker, $x, $y, $width, $height));
+
+        return ['revision' => $this->getMapRevision($map), 'changed' => $command !== null];
+    }
+
+    /**
+     * Sets a transfer event's destination map and the spawn point on it as
+     * one undo step.
+     *
+     * @return array{revision: int, changed: bool}
+     * @throws SessionRefusal When either map is unknown, the map is stale or read-only, the event has no destination, or the spawn point is off the destination.
+     */
+    public function setEventDestination(string $mapId, int $revision, string $marker, string $destinationMapId, int $x, int $y): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        $destination = $this->requireMap($destinationMapId);
+        $command = $this->runEdit(fn(): ?Command => $this->createMapInspector($map)->setTransferDestination($map, $marker, $destination, $x, $y));
+
+        return ['revision' => $this->getMapRevision($map), 'changed' => $command !== null];
+    }
+
+    /**
+     * Adds an entry to the list an inspector row belongs to (a row with
+     * `list`), after that row's entry, as one undo step.
+     *
+     * @param array<string, mixed> $key The row's key, as `readInspector` gave it.
+     * @return array{revision: int, changed: bool, message: string}
+     * @throws SessionRefusal When the map is unknown or stale, the row is gone or in no list, or the list cannot take an entry.
+     */
+    public function addInspectorListEntry(string $mapId, int $revision, array $key): array
+    {
+        return $this->editInspectorList($mapId, $revision, $key,
+            static fn(MapInspector $inspector, ProjectMap $map, array $field): ?InspectorListEdit => $inspector->addListEntry($map, $field));
+    }
+
+    /**
+     * Removes the entry an inspector row belongs to, as one undo step.
+     *
+     * @param array<string, mixed> $key The row's key, as `readInspector` gave it.
+     * @return array{revision: int, changed: bool, message: string}
+     * @throws SessionRefusal When the map is unknown or stale, the row is gone or in no list, or the list cannot lose the entry.
+     */
+    public function removeInspectorListEntry(string $mapId, int $revision, array $key): array
+    {
+        return $this->editInspectorList($mapId, $revision, $key,
+            static fn(MapInspector $inspector, ProjectMap $map, array $field): ?InspectorListEdit => $inspector->removeListEntry($map, $field));
+    }
+
+    /**
+     * @param array<string, mixed> $key
+     * @param Closure(MapInspector, ProjectMap, array<string, mixed>): ?InspectorListEdit $edit
+     * @return array{revision: int, changed: bool, message: string}
+     */
+    private function editInspectorList(string $mapId, int $revision, array $key, Closure $edit): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        $field = $this->requireInspectorField($map, $key);
+        $inspector = $this->createMapInspector($map);
+        $result = null;
+        $this->runEdit(static function () use ($edit, $inspector, $map, $field, &$result): ?Command {
+            $result = $edit($inspector, $map, $field);
+
+            return $result?->command;
+        });
+
+        return ['revision' => $this->getMapRevision($map), 'changed' => $result?->command !== null, 'message' => $result?->summary ?? 'Nothing changed.'];
+    }
+
+    /**
+     * Runs one edit, records the command it returns, and turns any refusal
+     * into the session's.
+     *
+     * @param callable(): ?Command $edit
+     * @throws SessionRefusal
+     */
+    private function runEdit(callable $edit): ?Command
+    {
+        try {
+            $command = $edit();
+        } catch (InspectorRefusal $refusal) {
+            throw new SessionRefusal(implode("\n", [$refusal->getMessage(), ...$refusal->details]), previous: $refusal);
+        } catch (EventRefusal|MapSourceRefusal $refusal) {
+            throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+        }
+        if ($command !== null) {
+            $this->history->record($command);
+        }
+
+        return $command;
+    }
+
+    /**
+     * The inspector row a key names, among the map's current rows.
+     *
+     * @param array<string, mixed> $key
+     * @return array<string, mixed>
+     * @throws SessionRefusal When no current row has the key.
+     */
+    private function requireInspectorField(ProjectMap $map, array $key): array
+    {
+        $marker = is_string($key['marker'] ?? null) ? $key['marker'] : null;
+
+        // A key comes back as the interface stored it, which may not keep
+        // its members in the order they were given.
+        ksort($key);
+
+        return array_find($this->collectInspectorFields($map, $marker), static function (array $candidate) use ($key): bool {
+            $candidateKey = self::describeKey($candidate);
+            if ($candidateKey !== null) {
+                ksort($candidateKey);
+            }
+
+            return $candidateKey === $key;
+        }) ?? throw new SessionRefusal('That row is no longer in the inspector; read it again.');
+    }
+
+    /**
+     * What to ask before a kind change clears a map's tiles.
+     *
+     * @return array{status: 'question', question: string, answers: list<array{key: string, label: string, description: string}>}
+     */
+    private function describeMapKindQuestion(ProjectMap $map, string $tilesetId, int $layers): array
+    {
+        $labels = new ReferenceCatalog($this->workspace, $map)->labelsFor('tilesets');
+        $current = (string) $map->getMapDataField(['tileset']);
+        $currentLabel = $labels[$current] ?? $current;
+        $label = $labels[$tilesetId] ?? $tilesetId;
+
+        return [
+            'status' => 'question',
+            'question' => sprintf('Change %s\'s kind to %s?', $map->getDisplayName(), $label),
+            'answers' => [
+                ['key' => 'cancel', 'label' => 'Cancel', 'description' => sprintf('Keep its kind, %s, and its tiles.', $currentLabel)],
+                ['key' => 'clear', 'label' => sprintf('Clear %d tile %s and change', $layers, $layers === 1 ? 'layer' : 'layers'),
+                    'description' => sprintf('Its tiles come from %s and would show the wrong art as %s. Glyphs stay. Undo restores them.', $currentLabel, $label)],
+            ],
+        ];
+    }
+
+    /**
+     * The values a reference row is chosen from, with how each reads.
+     *
+     * @return list<array{value: string, label: string}>
+     * @throws SessionRefusal When the map is unknown or the category is not a reference.
+     */
+    /**
+     * The vocabulary conditions and world writes are built from, a part at a
+     * time ({@see ConditionEditor::getGrammar()}, {@see WorldWriteEditor::getGrammar()}).
+     *
+     * @return array{conditions: list<array<string, mixed>>, writes: list<array<string, mixed>>}
+     */
+    public function describeWorldStateGrammar(): array
+    {
+        return ['conditions' => ConditionEditor::getGrammar(), 'writes' => WorldWriteEditor::getGrammar()];
+    }
+
+    /**
+     * Writes conditions or world writes built a part at a time as the one
+     * line a conditions or writes row is set to, refusing an entry the
+     * engine could not read rather than dropping it.
+     *
+     * @param 'conditions'|'writes' $codec
+     * @param list<mixed> $entries Each an array as a row's `entries` lists them.
+     * @param list<string>|null $writeTypes The write types the row allows, when it restricts them.
+     * @return array{line: string, descriptions: list<string>}
+     * @throws SessionRefusal When an entry has no name, an unknown type or one the row does not allow.
+     */
+    public function encodeWorldState(string $codec, array $entries, ?array $writeTypes = null): array
+    {
+        $entries = array_values($entries);
+        foreach ($entries as $number => $entry) {
+            if (! is_array($entry) || trim((string) ($entry['name'] ?? '')) === '') {
+                throw new SessionRefusal(sprintf('Entry %d needs a name.', $number + 1));
+            }
+        }
+        try {
+            if ($codec === 'conditions') {
+                $line = ConditionCodec::encodeAll($entries);
+                $decoded = ConditionCodec::decodeAllStrictly($line);
+
+                return ['line' => $line, 'descriptions' => array_map(ConditionEditor::describe(...), $decoded)];
+            }
+            if ($codec === 'writes') {
+                $line = WorldWriteCodec::encodeAll($entries);
+                $decoded = WorldWriteCodec::decodeAllStrictly($line);
+                $refused = array_find($decoded, static fn(array $set): bool => $writeTypes !== null && ! in_array($set['type'], $writeTypes, true));
+                if ($refused !== null) {
+                    throw new SessionRefusal(sprintf('This row cannot write a %s; it allows %s.', $refused['type'], implode(', ', $writeTypes ?? [])));
+                }
+
+                return ['line' => $line, 'descriptions' => array_map(WorldWriteCodec::describe(...), $decoded)];
+            }
+        } catch (InvalidArgumentException $error) {
+            throw new SessionRefusal($error->getMessage(), previous: $error);
+        }
+
+        throw new SessionRefusal(sprintf('There is no %s codec; use conditions or writes.', $codec));
+    }
+
+    /**
+     * What an elemental affinity row is built from: the elements the game
+     * knows, and the named effects with their multipliers, which the
+     * terminal cycles and a graphical editor offers beside a typed one.
+     *
+     * @return array{elements: list<string>, effects: list<array{label: string, multiplier: float}>}
+     * @throws SessionRefusal When the project's element list cannot be read.
+     */
+    public function describeAffinityVocabulary(): array
+    {
+        try {
+            $elements = $this->workspace->getElementIdentities();
+        } catch (InvalidArgumentException $error) {
+            throw new SessionRefusal($error->getMessage(), previous: $error);
+        }
+        $effects = [];
+        foreach (ElementAffinityCodec::EFFECTS as $label => $multiplier) {
+            $effects[] = ['label' => $label, 'multiplier' => $multiplier];
+        }
+
+        return ['elements' => $elements, 'effects' => $effects];
+    }
+
+    /**
+     * Writes elemental affinities built a row at a time as the one line an
+     * affinity row is set to, refusing an element the game does not know,
+     * one named twice, or a multiplier that is not a number.
+     *
+     * @param list<mixed> $entries Each `{element, multiplier}`.
+     * @return array{line: string, descriptions: list<string>}
+     * @throws SessionRefusal When an entry cannot be stored as the Engine reads it.
+     */
+    public function encodeAffinities(array $entries): array
+    {
+        $elements = $this->describeAffinityVocabulary()['elements'];
+        $affinities = [];
+        foreach (array_values($entries) as $number => $entry) {
+            $element = is_array($entry) && is_string($entry['element'] ?? null) ? trim($entry['element']) : '';
+            $multiplier = is_array($entry) ? ($entry['multiplier'] ?? null) : null;
+            if (! in_array($element, $elements, true)) {
+                throw new SessionRefusal(sprintf('Entry %d needs an element the game knows: %s.', $number + 1, implode(', ', $elements)));
+            }
+            if (array_key_exists($element, $affinities)) {
+                throw new SessionRefusal(sprintf('%s is listed twice; keep one multiplier for it.', $element));
+            }
+            if (! is_int($multiplier) && ! is_float($multiplier) || ! is_finite((float) $multiplier)) {
+                throw new SessionRefusal(sprintf('%s needs a multiplier: 2 weak, 0.5 resist, 0 null, -1 absorb, or any number between.', $element));
+            }
+            $affinities[$element] = (float) $multiplier;
+        }
+        $line = ElementAffinityCodec::encodeAll($affinities);
+
+        return [
+            'line' => $line,
+            'descriptions' => array_map(
+                static fn(string $element, float $multiplier): string => sprintf('%s: %s', $element, ElementAffinityCodec::describe($multiplier)),
+                array_keys($affinities),
+                array_values($affinities),
+            ),
+        ];
+    }
+
+    /**
+     * A summon's or effect's timeline as a timeline editor lays it out: its
+     * frames per second and length, each track with its keyframes' frames and
+     * durations, and the cues, each value with the record row key that edits
+     * it through `database.apply`, as the record grid edits it. A cinematic is
+     * a command tree, not a timeline.
+     *
+     * @return array{fps: int, lengthFrames: int, tracks: list<array<string, mixed>>, cues: list<array<string, mixed>>}
+     * @throws SessionRefusal When the record is not a summon or effect the project has.
+     */
+    public function describeCutsceneTimeline(string $category, int $index): array
+    {
+        $asset = $this->requireTimelineCutscene($category, $index);
+        $tracks = $cues = [];
+        foreach ($this->readDatabaseRecord($category, $index, ['tracks'])['rows'] as $row) {
+            $field = (string) ($row['key']['field'] ?? '');
+            if (preg_match('/^track(\d+)(Id|Type|Presentation)$/', $field, $match) === 1) {
+                $tracks[(int) $match[1]][strtolower($match[2])] = (string) $row['value'];
+            } elseif (preg_match('/^track(\d+)(Asset|Sheetcolumns|Sheetrows|Fit|Attachment|Pivot|Anchor|Placementsubject|Placementattachment)$/', $field, $match) === 1) {
+                // An image track's art, and the keys that edit how it fills its cells and where it sits on its
+                // anchor: a battler point, or on the stage a subject and a named point on it.
+                $art = ['Asset' => 'asset', 'Sheetcolumns' => 'columns', 'Sheetrows' => 'rows', 'Fit' => 'fit', 'Attachment' => 'attachment', 'Pivot' => 'pivot',
+                    'Anchor' => 'anchor', 'Placementsubject' => 'subject', 'Placementattachment' => 'point'][$match[2]];
+                $tracks[(int) $match[1]]['art'][$art] = in_array($art, ['columns', 'rows'], true) ? max(1, (int) $row['value']) : (string) ($row['raw'] ?? $row['value']);
+                if (in_array($art, ['fit', 'attachment', 'pivot', 'subject', 'point'], true)) {
+                    $tracks[(int) $match[1]]['art'][$art . 'Key'] = $row['key'];
+                }
+                if (in_array($art, ['fit', 'attachment'], true)) {
+                    $tracks[(int) $match[1]]['art'][$art . 'Options'] = array_values(array_filter($row['options'] ?? [], static fn(mixed $option): bool => $option !== ''));
+                }
+            } elseif (preg_match('/^track(\d+)Keyframe(\d+)(Frame|Duration|SourceFrame)$/', $field, $match) === 1) {
+                $name = lcfirst($match[3]);
+                $tracks[(int) $match[1]]['keyframes'][(int) $match[2]][$name] = (int) $row['value'];
+                if ($name !== 'sourceFrame') {
+                    $tracks[(int) $match[1]]['keyframes'][(int) $match[2]][$name . 'Key'] = $row['key'];
+                }
+            }
+        }
+        foreach ($this->readDatabaseRecord($category, $index, ['cues'])['rows'] as $row) {
+            if (preg_match('/^cue(\d+)(Id|Frame|Type)$/', (string) ($row['key']['field'] ?? ''), $match) === 1) {
+                $value = $match[2] === 'Frame' ? (int) $row['value'] : (string) $row['value'];
+                $cues[(int) $match[1]][strtolower($match[2])] = $value;
+                if ($match[2] === 'Frame') {
+                    $cues[(int) $match[1]]['frameKey'] = $row['key'];
+                }
+            }
+        }
+        // Glyph tracks also have anchors, but those are not image art. Do not
+        // project image defaults or an image picker onto terminal-only tracks.
+        foreach ($tracks as &$track) {
+            if (($track['type'] ?? '') !== 'image') {
+                unset($track['art']);
+            }
+        }
+        unset($track);
+        $payload = $asset->payload();
+
+        return [
+            // An effect or summon with separate terminal and graphical sequences names the one shown; others name none.
+            'presentation' => $asset->getPresentationView()?->value,
+            'fps' => (int) ($payload['fps'] ?? 0),
+            'lengthFrames' => (int) ($payload['lengthFrames'] ?? 0),
+            'tracks' => array_values(array_map(fn(array $track, int $position): array => self::placeOnStage([...$track,
+                'keyframes' => array_values($track['keyframes'] ?? []),
+                ...(isset($track['art']) ? ['art' => [...$this->measureTrackArt($track['art']),
+                    'pivotDefaults' => self::getTimelinePivotDefaults($asset->type, $payload['tracks'][$position] ?? []),
+                ]] : [])], $payload['tracks'][$position] ?? null), $tracks, array_keys($tracks))),
+            'cues' => array_values($cues),
+            // Stage ownership survives switching to an independent Terminal sequence.
+            'ownedStage' => $asset->isOwnedStageEffect(),
+            'canHaveStage' => $asset->getPresentationView() !== EffectPresentation::TERMINAL
+                && ($asset->type === CutsceneType::EFFECT || $asset->hasPresentations()),
+            'stage' => is_array($payload['stage'] ?? null) ? $this->describeCutsceneStage($category, $index) : null,
+        ];
+    }
+
+    /**
+     * Consumer defaults are preview metadata, never authored values. A shared
+     * effect can play in field or battle; the client selects the context it is
+     * actually previewing. Stage tracks cannot acquire field/battler geometry.
+     *
+     * @return array<string, array{x: float, y: float}>
+     */
+    private static function getTimelinePivotDefaults(CutsceneType $type, array $track): array
+    {
+        $center = ['x' => 0.5, 'y' => 0.5];
+        if (($track['anchor'] ?? null) === 'stage') {
+            return ['stage' => $center];
+        }
+
+        return [
+            ...($type === CutsceneType::EFFECT
+                ? ['field' => new \Ichiloto\Engine\Rendering\Presentation\PresentationSpritePivot()->toArray()] : []),
+            'battle' => $center,
+        ];
+    }
+
+    /**
+     * A stage image's placement in stage units, and each keyframe's offset,
+     * as the Engine reads them with their absent defaults, so an editor can
+     * find the subject's box under a point of the art. Other tracks are as
+     * described.
+     *
+     * @param array<string, mixed> $described
+     * @return array<string, mixed>
+     */
+    private static function placeOnStage(array $described, mixed $authored): array
+    {
+        if (! is_array($authored) || ($authored['anchor'] ?? null) !== 'stage' || ! isset($described['art'])) {
+            return $described;
+        }
+
+        $placement = is_array($authored['placement'] ?? null) ? $authored['placement'] : [];
+        $described['art']['placement'] = [
+            'position' => self::readStagePoint($placement['position'] ?? null, ['x' => 0, 'y' => 0]),
+            'size' => is_array($placement['size'] ?? null) ? ['width' => (float) ($placement['size']['width'] ?? 0), 'height' => (float) ($placement['size']['height'] ?? 0)] : null,
+            // An image's own pivot is its cell's centre unless authored.
+            'pivot' => self::readStagePoint($authored['pivot'] ?? null, ['x' => 0.5, 'y' => 0.5]),
+        ];
+        foreach ($described['keyframes'] as $index => $keyframe) {
+            $described['keyframes'][$index]['offset'] = self::readStagePoint($authored['keyframes'][$index]['position'] ?? null, ['x' => 0, 'y' => 0]);
+        }
+
+        return $described;
+    }
+
+    /**
+     * @param array{x: int|float, y: int|float} $default
+     * @return array{x: float, y: float}
+     */
+    private static function readStagePoint(mixed $point, array $default): array
+    {
+        $point = is_array($point) ? $point : $default;
+
+        return ['x' => (float) ($point['x'] ?? $default['x']), 'y' => (float) ($point['y'] ?? $default['y'])];
+    }
+
+    /**
+     * A summon sequence's stage as a timeline editor lays it out: its canvas
+     * and the frames it is shown between, each subject with its named points
+     * (where they are in its box), and its camera and cover keys on the
+     * clock, each value with the row key that edits it.
+     *
+     * @return array<string, mixed>
+     */
+    private function describeCutsceneStage(string $category, int $index): array
+    {
+        $stage = ['subjects' => [], 'camera' => [], 'covers' => []];
+        foreach ($this->readDatabaseRecord($category, $index)['rows'] as $row) {
+            $name = ['stage.canvas' => 'canvas', 'stage.startFrame' => 'startFrame', 'stage.restoreFrame' => 'restoreFrame'][(string) ($row['key']['field'] ?? '')] ?? null;
+            if ($name !== null) {
+                $stage[$name] = $name === 'canvas' ? (string) $row['value'] : (int) $row['value'];
+                $stage[$name . 'Key'] = $row['key'];
+            }
+        }
+        foreach ($this->readDatabaseRecord($category, $index, [CutsceneSchemas::STAGE_SUBJECTS_KEY])['rows'] as $row) {
+            $field = (string) ($row['key']['field'] ?? '');
+            if (preg_match('/^subject(\d+)Id$/', $field, $match) === 1) {
+                $stage['subjects'][(int) $match[1]]['id'] = (string) $row['value'];
+            } elseif (preg_match('/^subject(\d+)Attachment(\d+)(Id|X|Y)$/', $field, $match) === 1) {
+                $name = strtolower($match[3]);
+                $stage['subjects'][(int) $match[1]]['points'][(int) $match[2]][$name] = $name === 'id' ? (string) $row['value'] : (float) $row['value'];
+                $stage['subjects'][(int) $match[1]]['points'][(int) $match[2]][$name . 'Key'] = $row['key'];
+            }
+        }
+        foreach ([CutsceneSchemas::STAGE_CAMERA_KEY => ['camera', 'camera'], CutsceneSchemas::STAGE_COVERS_KEY => ['cover', 'covers']] as $list => [$prefix, $name]) {
+            foreach ($this->readDatabaseRecord($category, $index, [$list])['rows'] as $row) {
+                if (preg_match('/^' . $prefix . '(\d+)(Id|Frame)$/', (string) ($row['key']['field'] ?? ''), $match) === 1) {
+                    $stage[$name][(int) $match[1]][strtolower($match[2])] = $match[2] === 'Frame' ? (int) $row['value'] : (string) $row['value'];
+                    if ($match[2] === 'Frame') {
+                        $stage[$name][(int) $match[1]]['frameKey'] = $row['key'];
+                    }
+                }
+            }
+        }
+
+        $authored = $this->requireTimelineCutscene($category, $index)->payload()['stage']['subjects'] ?? [];
+        foreach ($stage['subjects'] as $position => $subject) {
+            // Where the subject's box is, as the Engine reads it: its pivot is its bottom centre unless authored.
+            $data = is_array($authored[$position] ?? null) ? $authored[$position] : [];
+            $stage['subjects'][$position] += [
+                'position' => self::readStagePoint($data['position'] ?? null, ['x' => 0, 'y' => 0]),
+                'size' => ['width' => (float) ($data['size']['width'] ?? 0), 'height' => (float) ($data['size']['height'] ?? 0)],
+                'pivot' => self::readStagePoint($data['pivot'] ?? null, ['x' => 0.5, 'y' => 1]),
+            ];
+        }
+
+        return [...$stage,
+            'subjects' => array_values(array_map(static fn(array $subject): array => [...$subject, 'points' => array_values($subject['points'] ?? [])], $stage['subjects'])),
+            'camera' => array_values($stage['camera']),
+            'covers' => array_values($stage['covers'])];
+    }
+
+    /**
+     * One authored frame, with independent Terminal output and, for an
+     * owned graphical effect stage, the Engine's shared presentation canvas.
+     *
+     * @return array{frame: int, totalFrames: int, fps: int, lines: list<string>, terminalCanvas: array<string, mixed>, cues: list<array<string, mixed>>}
+     * @throws SessionRefusal When the record is not a summon or effect, or its timeline does not compile.
+     */
+    public function readCutscenePreview(string $category, int $index, int $frame, int $width, int $height): array
+    {
+        $asset = $this->requireTimelineCutscene($category, $index);
+        try {
+            $compiled = $asset->type === CutsceneType::EFFECT
+                ? $asset->compileEffect(EffectPresentation::TERMINAL, false, forStage: $asset->isOwnedStageEffect())
+                : $asset->compiledSummon();
+        } catch (Throwable $failure) {
+            throw new SessionRefusal(sprintf('%s does not compile: %s', $asset->id, $failure->getMessage()), previous: $failure);
+        }
+        $preview = new TimelinePreviewSession($compiled, $asset->type === CutsceneType::EFFECT ? null : false);
+        $requestedFrame = $frame;
+        $frame = max(0, min($frame, $preview->totalFrames() - 1));
+
+        $lines = array_values($asset->isOwnedStageEffect()
+            ? new \Ichiloto\Editor\Cutscenes\Preview\EffectPreviewStage(EffectPresentation::TERMINAL, false, forStage: true)
+                ->drawFrame($preview->activeSegments($frame), max(1, $width), max(1, $height))
+            : $preview->frame(max(1, $width), max(1, $height), $frame));
+        $stageCanvas = null;
+        $stageCanvasError = null;
+        if ($asset->isOwnedStageEffect() && $asset->getPresentationView() !== EffectPresentation::TERMINAL) {
+            try {
+                $graphical = $asset->compileEffect(EffectPresentation::GRAPHICAL, false, forStage: true);
+                $preview = new TimelinePreviewSession($graphical);
+                $frame = max(0, min($requestedFrame, $preview->totalFrames() - 1));
+                $stageCanvas = new \Ichiloto\Editor\Cutscenes\Preview\EffectPreviewStage(EffectPresentation::GRAPHICAL, false, forStage: true)
+                    ->renderCanvas($graphical, $this->workspace->projectRoot . '/assets', $frame,
+                        (int) $graphical->defaults['stage']['canvas']['width'], (int) $graphical->defaults['stage']['canvas']['height'])?->toArray();
+            } catch (Throwable $failure) {
+                // A graphical failure is visible in its tab, never a field
+                // fallback or a dependency of independent Terminal playback.
+                $stageCanvasError = $failure->getMessage();
+            }
+        }
+
+        return ['frame' => $frame, 'totalFrames' => $preview->totalFrames(), 'fps' => $preview->fps(),
+            'lines' => $lines, 'terminalCanvas' => $this->describeTerminalCanvas($lines, max(1, $width), max(1, $height)),
+            'stageCanvas' => $stageCanvas, 'stageCanvasError' => $stageCanvasError,
+            'cues' => array_values($preview->cuesAt($frame))];
+    }
+
+    /**
+     * Starts previewing a cinematic as it stands, unsaved edits included, as
+     * the terminal plays it: from the map event that triggers it, else its
+     * start map, in an isolated scene with silent audio, the way the
+     * Cutscenes workspace previews it. Nothing is written. A preview already
+     * running ends first, unless `keep` is asked and it is of this cinematic
+     * as it still stands: then it carries on where it is.
+     *
+     * @return array<string, mixed> The preview, as {@see describeCinematicPreview()}.
+     * @throws SessionRefusal When the cinematic is unknown or does not compile.
+     */
+    public function startCinematicPreview(int $index, int $width, int $height, bool $play = false, bool $keep = false): array
+    {
+        $type = CutsceneType::CINEMATIC;
+        $id = $this->workspace->cutscenes?->ids($type)[$index] ?? null;
+        $asset = ($id === null ? null : $this->workspace->cutscenes?->find($type, $id))
+            ?? throw new SessionRefusal(sprintf('There is no %s %d.', $type->noun(), $index));
+        $fingerprint = hash('xxh128', serialize($asset->payload()));
+        if ($keep && $this->cinematicPreview !== null && $this->cinematicPreviewId === $asset->id && $this->cinematicPreviewFingerprint === $fingerprint) {
+            if ($this->cinematicPreview->getScreenSize() !== [max(20, $width), max(8, $height)]) {
+                $this->cinematicPreview->resize($width, $height);
+            }
+            return $this->describeCinematicPreview();
+        }
+        $this->stopCinematicPreview();
+        $this->closeEffectField();
+        try {
+            $definition = $asset->cinematicDefinition();
+        } catch (Throwable $failure) {
+            throw new SessionRefusal(sprintf('%s does not compile: %s', $asset->id, $failure->getMessage()), previous: $failure);
+        }
+        $origin = CinematicPreviewOrigin::locate($this->workspace, $asset, $definition->startMap);
+        try {
+            $this->cinematicPreview = CinematicPreviewSession::start($this->workspace->projectRoot, $definition, [
+                'mapId' => $origin['mapId'], 'x' => $origin['x'], 'y' => $origin['y'], 'width' => max(20, $width), 'height' => max(8, $height),
+            ]);
+        } catch (Throwable $failure) {
+            throw new SessionRefusal(sprintf('%s cannot be previewed: %s', $asset->id, $failure->getMessage()), previous: $failure);
+        }
+        $this->cinematicPreviewId = $asset->id;
+        $this->cinematicPreviewFingerprint = $fingerprint;
+        if ($play) {
+            $this->cinematicPreview->play();
+        }
+
+        return $this->describeCinematicPreview();
+    }
+
+    /**
+     * Plays, pauses, steps, advances while playing, skips, or restarts the
+     * cinematic previewed. An advance is the time since the last one, so the
+     * preview keeps real time however often it is asked. An accepted skip
+     * plays the authored finalizer, even when the preview was paused.
+     *
+     * @param 'play'|'pause'|'step'|'tick'|'skip'|'restart' $action
+     * @return array<string, mixed> The preview, as {@see describeCinematicPreview()}.
+     * @throws SessionRefusal When no cinematic is previewed, the action is unknown, or a skip is refused.
+     */
+    public function controlCinematicPreview(string $action, float $seconds = 0.0): array
+    {
+        $preview = $this->cinematicPreview ?? throw new SessionRefusal('No cinematic is being previewed.');
+        if ($action === 'skip') {
+            if ($preview->skip()) {
+                $preview->play();
+            } elseif ($preview->failure() === null) {
+                throw new SessionRefusal('Skip refused: ' . ($preview->skipRefusalReason() ?? 'the Engine refused the skip.'));
+            }
+
+            // A finalizer failure is the preview's normal failure state, not a policy refusal.
+            return $this->describeCinematicPreview();
+        }
+        match ($action) {
+            'play' => $preview->play(),
+            'pause' => $preview->pause(),
+            'step' => $preview->step(),
+            'tick' => $preview->tick(max(0.0, min($seconds, 1.0))),
+            'restart' => $this->cinematicPreview = $preview->restart(),
+            default => throw new SessionRefusal(sprintf('A cinematic preview cannot %s.', $action)),
+        };
+
+        return $this->describeCinematicPreview();
+    }
+
+    /**
+     * Ends the cinematic preview, releasing its scene.
+     *
+     * @return array{stopped: bool} Whether one was running.
+     */
+    public function stopCinematicPreview(): array
+    {
+        $stopped = $this->cinematicPreview !== null;
+        $this->cinematicPreview?->dispose();
+        $this->cinematicPreview = null;
+        $this->cinematicPreviewId = null;
+        $this->cinematicPreviewFingerprint = null;
+
+        return ['stopped' => $stopped];
+    }
+
+    /**
+     * One exchange with the editor window's graphical view of the cinematic
+     * being previewed ({@see CinematicPreviewSession::exchangeScene()}): the
+     * window's renderer event lines in (its READY, frame acknowledgements and
+     * rejections, exactly as the game's renderer writes them), the frames it
+     * should apply out, in order, each its FRAME payload without envelope.
+     *
+     * The answer names the current epoch and grid. Feedback for another epoch,
+     * or without one, is discarded before it can reach the graphical host.
+     *
+     * @param list<string> $events
+     * @param string|null $sessionId The epoch the window is answering; null permits initial empty discovery.
+     * @return array{sessionId: non-empty-string, diagnostics: list<string>, grid: array{columns: int, rows: int, cellWidth: int, cellHeight: int}, messages: list<array{type: string, payload: array<string, mixed>}>}
+     * @throws SessionRefusal When no cinematic is previewed or a line is not a renderer event.
+     */
+    public function exchangeCinematicScene(array $events, ?string $sessionId = null): array
+    {
+        $preview = $this->cinematicPreview ?? throw new SessionRefusal('No cinematic is being previewed.');
+        $grid = $preview->getSceneGrid();
+        try {
+            return [
+                'sessionId' => $preview->getSceneSessionId(),
+                'diagnostics' => $preview->getDiagnostics(),
+                'grid' => ['columns' => $grid->columns, 'rows' => $grid->rows, 'cellWidth' => $grid->cellWidth, 'cellHeight' => $grid->cellHeight],
+                'messages' => $preview->exchangeScene($events, $sessionId),
+            ];
+        } catch (RendererProtocolException | RendererTransportException $error) {
+            throw new SessionRefusal('The graphical preview stopped: ' . $error->getMessage(), previous: $error);
+        }
+    }
+
+    /**
+     * Ends the graphical view of the cinematic being previewed, giving the
+     * Terminal picture back the preview's own screen.
+     *
+     * @return array{detached: bool}
+     */
+    public function detachCinematicScene(): array
+    {
+        $this->cinematicPreview?->detachScene();
+
+        return ['detached' => $this->cinematicPreview !== null];
+    }
+
+    /**
+     * Shows an effect, as edited, unsaved changes included, on the game's
+     * field at one of its frames: at the player, where a new game starts
+     * (System's player starting position), in an isolated field with silent
+     * audio, as a cinematic's field animation presents it. Nothing is
+     * written. The field stays open while it stands where it did, so the
+     * editor window's graphical view of it ({@see exchangeEffectFieldScene()})
+     * carries on; a cinematic preview running ends first.
+     *
+     * @return array{sessionId: non-empty-string, diagnostics: list<string>, frame: int, totalFrames: int, fps: int, mapId: string, lines: list<string>, issue: string|null}
+     * @throws SessionRefusal When the record is not an effect or it does not compile.
+     */
+    public function showEffectOnField(int $index, int $frame, int $width, int $height): array
+    {
+        $asset = $this->requireTimelineCutscene(CutsceneType::EFFECT->getRecordCategory(), $index);
+        try {
+            // The timeline editor's own playhead: the same frames and rate its Terminal preview steps through.
+            $timeline = new TimelinePreviewSession($asset->compiledEffect(EffectPresentation::TERMINAL, false), null);
+        } catch (Throwable $failure) {
+            throw new SessionRefusal(sprintf('%s does not compile: %s', $asset->id, $failure->getMessage()), previous: $failure);
+        }
+        $start = $this->workspace->getSystemField('startingPositions');
+        $player = is_array($start) && is_array($start['player'] ?? null) ? $start['player'] : [];
+        $mapId = is_string($player['destinationMap'] ?? null) ? trim($player['destinationMap']) : '';
+        $spawn = new Vector2(intval($player['spawnPoint']['x'] ?? 0), intval($player['spawnPoint']['y'] ?? 0));
+        $key = implode(':', [$mapId, (int) $spawn->x, (int) $spawn->y, max(20, $width), max(8, $height)]);
+        if ($this->effectField === null || $this->effectFieldKey !== $key) {
+            $this->stopCinematicPreview();
+            $this->closeEffectField();
+            $this->effectField = PreviewField::open($this->workspace->projectRoot, $mapId, $spawn, $width, $height,
+                fn(): float => $this->effectFieldSeconds);
+            $this->effectFieldKey = $key;
+        }
+        $frame = max(0, min($frame, $timeline->totalFrames() - 1));
+        $this->effectFieldSeconds = $frame / $timeline->fps();
+        try {
+            $this->effectField->showFieldEffect(static fn(EffectPresentation $presentation): CompiledEffectTimeline
+                => $asset->compiledEffect($presentation, false), $frame);
+        } catch (Throwable $failure) {
+            throw new SessionRefusal(sprintf('%s cannot be shown on the field: %s', $asset->id, $failure->getMessage()), previous: $failure);
+        }
+
+        return ['frame' => $frame, 'totalFrames' => $timeline->totalFrames(), 'fps' => $timeline->fps(), 'mapId' => $mapId,
+            'sessionId' => $this->effectField->sessionId, 'diagnostics' => $this->effectField->getDiagnostics(),
+            'lines' => array_values($this->effectField->frame()), 'issue' => $this->effectField->mapFailure];
+    }
+
+    /**
+     * One exchange with the editor window's graphical view of the field an
+     * effect is shown on, as {@see exchangeCinematicScene()} is for a cinematic.
+     *
+     * @param list<string> $events
+     * @param string|null $sessionId The epoch the window is answering; unqualified or stale events are discarded.
+     * @return array{sessionId: non-empty-string, diagnostics: list<string>, grid: array{columns: int, rows: int, cellWidth: int, cellHeight: int}, messages: list<array{type: string, payload: array<string, mixed>}>}
+     * @throws SessionRefusal When no effect is shown on the field or a line is not a renderer event.
+     */
+    public function exchangeEffectFieldScene(array $events, ?string $sessionId = null): array
+    {
+        $field = $this->effectField ?? throw new SessionRefusal('No effect is shown on the field.');
+        $grid = $field->getSceneGrid();
+        try {
+            return [
+                'sessionId' => $field->sessionId,
+                'diagnostics' => $field->getDiagnostics(),
+                'grid' => ['columns' => $grid->columns, 'rows' => $grid->rows, 'cellWidth' => $grid->cellWidth, 'cellHeight' => $grid->cellHeight],
+                'messages' => $field->exchangeScene($events, $sessionId),
+            ];
+        } catch (RendererProtocolException | RendererTransportException $error) {
+            throw new SessionRefusal('The graphical preview stopped: ' . $error->getMessage(), previous: $error);
+        }
+    }
+
+    /**
+     * Closes the field an effect is shown on, with its graphical view.
+     *
+     * @return array{closed: bool} Whether one was open.
+     */
+    public function closeEffectField(): array
+    {
+        $closed = $this->effectField !== null;
+        $this->effectField?->dispose();
+        $this->effectField = null;
+        $this->effectFieldKey = null;
+
+        return ['closed' => $closed];
+    }
+
+    /**
+     * A terminal picture as a renderer paints it: the Engine's styled runs on the
+     * picture's own grid, its colours kept and its control codes never counted as
+     * text. Cells take the share of the Engine's canvas the battle arena's do.
+     *
+     * @param list<string> $lines
+     * @return array<string, mixed>
+     */
+    private function describeTerminalCanvas(array $lines, int $columns, int $rows): array
+    {
+        $grid = new RendererGridConfig($columns, $rows, max(1, intdiv(PresentationCanvas::DEFAULT_WIDTH, $columns)),
+            max(1, intdiv(PresentationCanvas::DEFAULT_HEIGHT, $rows)));
+
+        return ($this->terminalComposer ??= new TerminalPresentationComposer())->createCanvasFromLines($lines, $grid)->toArray();
+    }
+
+    /**
+     * The cinematic previewed: which one, its terminal picture now, how long
+     * it has run, its status, whether it plays or has finished, and why it
+     * stopped or waits, when it does.
+     *
+     * @return array<string, mixed>
+     */
+    private function describeCinematicPreview(): array
+    {
+        $preview = $this->cinematicPreview ?? throw new SessionRefusal('No cinematic is being previewed.');
+
+        $lines = array_values($preview->frame());
+        [$columns, $rows] = $preview->getScreenSize();
+
+        return [
+            'id' => $this->cinematicPreviewId,
+            'sessionId' => $preview->getSceneSessionId(),
+            'diagnostics' => $preview->getDiagnostics(),
+            'lines' => $lines,
+            'terminalCanvas' => $this->describeTerminalCanvas($lines, $columns, $rows),
+            'elapsed' => $preview->elapsed(),
+            'status' => $preview->status(),
+            'playing' => $preview->isPlaying(),
+            'finished' => $preview->isFinished(),
+            'failure' => $preview->failure()['message'] ?? null,
+            'wait' => $preview->waitDescription(),
+        ];
+    }
+    /**
+     * A summon as the battle test plays it, at one command frame: the
+     * Engine's command preview of the summon as it stands, unsaved edits
+     * included, cast by the first member of the battle test party (else the
+     * starting party) its wielder policy allows, at the targets its linked
+     * action takes in the battle test troop (else the first troop), over the
+     * battle test arena, with the project's battle pacing, in one
+     * presentation: graphical, its canvas with the terminal arena's lines
+     * from the paired lane, or terminal alone, at the terminal sequence's own
+     * cadence, reading no graphical image. A frame of the summon's own
+     * timeline may be asked for instead of a command frame; each frame says
+     * which of the summon's frames it draws, so the timeline and the battle
+     * share one playhead. Enemies and the party are read as
+     * saved; nothing is resolved, spent or played aloud, and nothing is
+     * written. Seeking reuses the preview until the summon or its battle
+     * changes.
+     *
+     * @return array<string, mixed>
+     * @throws SessionRefusal When the summon does not compile, the battle cannot be set up or the frame is outside the command.
+     */
+    public function readSummonBattlePreview(int $index, int $frame, bool $reducedMotion = false,
+        EffectPresentation $presentation = EffectPresentation::GRAPHICAL, ?int $authoredFrame = null): array
+    {
+        $asset = $this->requireTimelineCutscene(CutsceneType::SUMMON->getRecordCategory(), $index);
+        $graphic = $presentation === EffectPresentation::GRAPHICAL;
+        try {
+            $definition = $asset->summonDefinition();
+            // The terminal arena plays the terminal compile alone, which needs no graphical image.
+            $graphical = $graphic ? $asset->compiledSummon(EffectPresentation::GRAPHICAL) : null;
+            $terminal = $asset->compiledSummon(EffectPresentation::TERMINAL);
+        } catch (Throwable $failure) {
+            throw new SessionRefusal(sprintf('%s does not compile: %s', $asset->id, $failure->getMessage()), previous: $failure);
+        }
+        $entry = $this->readBattleTestEntry();
+        $troop = $this->readPreviewTroop($entry);
+        $config = $this->workspace->config?->getRecord('ui.battle')->get('value');
+        $battleUi = is_array($config) ? $config : [];
+        $key = hash('xxh128', serialize([$asset->id, $definition->toDataArray(), $graphical?->toArray(), $terminal->toArray(),
+            $entry, $this->readStartingPartyReferences(), $troop, $battleUi, $graphic ? $this->readProposedBattlerBindings() : null]));
+        if (($this->summonBattlePreviews[$presentation->value]['key'] ?? null) !== $key) {
+            // The terminal arena needs no graphical layout, and reads no image.
+            $catalog = $graphic ? $this->requireBattleLayoutCatalog('preview summons on') : null;
+            $this->summonBattlePreviews[$presentation->value] = ['key' => $key, 'preview' => ProjectDirectoryContext::run($this->workspace->projectRoot,
+                fn(): SummonBattlePreview => $this->createSummonBattlePreview($definition, $graphical, $terminal, $entry, $troop,
+                    BattlePacing::fromBattleUiConfig($battleUi), $catalog, $presentation))];
+        }
+        $preview = $this->summonBattlePreviews[$presentation->value]['preview'];
+        // A frame of the summon's own timeline is drawn where the battle plays it.
+        $frame = $authoredFrame === null ? $frame : $preview->findCommandFrame($authoredFrame);
+        try {
+            $read = $preview->readFrame(max(0, min($frame, $preview->totalFrames - 1)), $reducedMotion);
+        } catch (Throwable $failure) {
+            throw new SessionRefusal(sprintf('%s cannot be previewed: %s', $asset->id, $failure->getMessage()), previous: $failure);
+        }
+
+        return [...$read, 'totalFrames' => $preview->totalFrames, 'fps' => BattleCommandTimeline::FPS,
+            'assetRoot' => $this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets',
+            'caster' => $preview->caster, 'targets' => $preview->targets, 'troop' => $troop['name'], 'phases' => $preview->phases];
+    }
+
+    /**
+     * The battle a summon preview plays in, built the way the battle test
+     * builds it, and the summon cast in it.
+     *
+     * @param array<string, mixed> $entry The battle test as system data holds it.
+     * @param array{name: string, data: array<string, mixed>} $troop
+     * @throws SessionRefusal When the battle cannot be set up or the summon cannot be cast in it.
+     */
+    private function createSummonBattlePreview(SummonCutsceneDefinition $definition, ?SummonCompiledCutscene $graphical,
+        SummonCompiledCutscene $terminal, array $entry, array $troop, BattlePacing $pacing, ?BattlePresentationCatalog $catalog,
+        EffectPresentation $presentation): SummonBattlePreview
+    {
+        try {
+            [$battle, $skills] = $this->createPreviewBattle($entry, $troop);
+
+            return SummonBattlePreview::create($definition, $graphical, $terminal, $battle, $skills, $pacing, $catalog,
+                $this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets', $presentation);
+        } catch (SessionRefusal $refusal) {
+            throw $refusal;
+        } catch (Throwable $failure) {
+            throw new SessionRefusal(sprintf('%s cannot be previewed in battle: %s', $definition->name, $failure->getMessage()), previous: $failure);
+        }
+    }
+
+    /**
+     * A battle effect as a battle plays it, at one command frame, in one
+     * presentation: in an action of the battle test party that the Engine's
+     * own animation selection plays it in (its attacks, skills, magic and
+     * items; a summon is previewed as a summon), with the animation's other
+     * effect beside it, the action's pose and the project's battle pacing.
+     * The effects are compiled as they stand, unsaved edits included, and the
+     * animations are read as they stand too. Every action that plays the
+     * effect is listed, so another can be chosen; a frame of the effect's own
+     * timeline may be asked for instead of a command frame. Nothing is
+     * resolved, spent or played aloud, and nothing is written.
+     *
+     * @return array<string, mixed>
+     * @throws SessionRefusal When the effect does not compile, no action of the party plays it, or the battle cannot be set up.
+     */
+    public function readEffectBattlePreview(int $index, int $frame, bool $reducedMotion = false,
+        EffectPresentation $presentation = EffectPresentation::GRAPHICAL, ?int $authoredFrame = null, int $binding = 0): array
+    {
+        $asset = $this->requireTimelineCutscene(CutsceneType::EFFECT->getRecordCategory(), $index);
+        $effects = $this->workspace->cutscenes?->assets(CutsceneType::EFFECT) ?? [];
+        $animations = array_values(array_map(static fn($record): mixed => $record->toArray(), $this->requireRecordDatabase('animations')->getRecords()));
+        $entry = $this->readBattleTestEntry();
+        $troop = $this->readPreviewTroop($entry);
+        $config = $this->workspace->config?->getRecord('ui.battle')->get('value');
+        $battleUi = is_array($config) ? $config : [];
+        $graphic = $presentation === EffectPresentation::GRAPHICAL;
+        $key = hash('xxh128', serialize([$asset->id, array_map(static fn(CutsceneAsset $effect): array => $effect->payload(), $effects), $animations,
+            $entry, $this->readStartingPartyReferences(), $troop, $battleUi, $binding, $graphic ? $this->readProposedBattlerBindings() : null]));
+        if (($this->effectBattlePreviews[$presentation->value]['key'] ?? null) !== $key) {
+            $catalog = $graphic ? $this->requireBattleLayoutCatalog('preview effects on') : null;
+            $this->effectBattlePreviews[$presentation->value] = ['key' => $key, 'preview' => ProjectDirectoryContext::run($this->workspace->projectRoot,
+                fn(): EffectBattlePreview => $this->createEffectBattlePreview($asset->id, $animations, $entry, $troop,
+                    BattlePacing::fromBattleUiConfig($battleUi), $catalog, $presentation, $binding))];
+        }
+        $preview = $this->effectBattlePreviews[$presentation->value]['preview'];
+        $frame = $authoredFrame === null ? $frame : $preview->findCommandFrame($authoredFrame);
+        try {
+            $read = $preview->readFrame(max(0, min($frame, $preview->totalFrames - 1)), $reducedMotion);
+        } catch (Throwable $failure) {
+            throw new SessionRefusal(sprintf('%s cannot be previewed: %s', $asset->id, $failure->getMessage()), previous: $failure);
+        }
+
+        return [...$read, 'totalFrames' => $preview->totalFrames, 'fps' => BattleCommandTimeline::FPS,
+            'assetRoot' => $this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets', 'lane' => $preview->lane,
+            'contexts' => $preview->contexts, 'binding' => $preview->binding,
+            'caster' => $preview->caster, 'targets' => $preview->targets, 'troop' => $troop['name'], 'phases' => $preview->phases];
+    }
+
+    /**
+     * The battle an effect preview plays in, and the effect played in it.
+     *
+     * @param list<mixed> $animations The animation records as they stand.
+     * @param array<string, mixed> $entry The battle test as system data holds it.
+     * @param array{name: string, data: array<string, mixed>} $troop
+     * @throws SessionRefusal When the battle cannot be set up or no action of it plays the effect.
+     */
+    private function createEffectBattlePreview(string $effectId, array $animations, array $entry, array $troop, BattlePacing $pacing,
+        ?BattlePresentationCatalog $catalog, EffectPresentation $presentation, int $binding): EffectBattlePreview
+    {
+        // The animations as authored now; an entry the Engine would not read plays nothing, as in battle.
+        $library = AnimationLibrary::createFromAnimations(array_values(array_filter(array_map(static function (mixed $data): ?Animation {
+            try {
+                return is_array($data) ? Animation::fromArray($data) : null;
+            } catch (Throwable) {
+                return null;
+            }
+        }, $animations))));
+        $compile = function (string $id, EffectPresentation $presentation): CompiledEffectTimeline {
+            $effect = $this->workspace->cutscenes?->find(CutsceneType::EFFECT, $id)
+                ?? throw new SessionRefusal(sprintf('The animation plays the effect %s, which does not exist.', $id));
+
+            return $effect->compiledEffect($presentation, true);
+        };
+        try {
+            [$battle, $skills] = $this->createPreviewBattle($entry, $troop);
+
+            return EffectBattlePreview::create($effectId, $battle, $skills, $library, $pacing, $catalog,
+                $this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets', $presentation, $compile, $binding);
+        } catch (SessionRefusal $refusal) {
+            throw $refusal;
+        } catch (Throwable $failure) {
+            throw new SessionRefusal(sprintf('%s cannot be previewed in battle: %s', $effectId, $failure->getMessage()), previous: $failure);
+        }
+    }
+    /**
+     * The battle a preview plays in, built the way the battle test builds it:
+     * its party, or the starting party, against its troop, with the skills
+     * they know.
+     *
+     * @param array<string, mixed> $entry The battle test as system data holds it.
+     * @param array{name: string, data: array<string, mixed>} $troop
+     * @return array{0: BattleConfig, 1: SkillCatalog}
+     */
+    private function createPreviewBattle(array $entry, array $troop): array
+    {
+        $actors = $this->workspace->actorDatabase->createActorStore();
+        $skills = $this->workspace->loadSkillCatalog();
+        $setup = ProjectBattleTest::fromArray($entry)->createSetup($actors, $this->readStartingPartyReferences());
+        $party = $setup->createParty($actors, $this->loadItemStore(), $skills);
+        $previousEnemies = ConfigStore::has(EnemyStore::class) ? ConfigStore::get(EnemyStore::class) : null;
+        try {
+            ConfigStore::put(EnemyStore::class, new EnemyStore());
+
+            return [new BattleConfig($party, Troop::fromArray($troop['data']), settings: $setup->getBattleSettings()), $skills];
+        } finally {
+            $previousEnemies === null ? ConfigStore::remove(EnemyStore::class) : ConfigStore::put(EnemyStore::class, $previousEnemies);
+        }
+    }
+
+    /**
+     * The troop a summon preview is cast at: the battle test's, as the
+     * battle test fights it, else the project's first; as it stands now.
+     *
+     * @param array<string, mixed> $entry The battle test as system data holds it.
+     * @return array{name: string, data: array<string, mixed>}
+     * @throws SessionRefusal When the project has no troops, or the battle test names one it does not have.
+     */
+    private function readPreviewTroop(array $entry): array
+    {
+        $named = is_string($entry['troop'] ?? null) ? trim($entry['troop']) : null;
+        foreach ($this->requireRecordDatabase('troops')->getRecords() as $record) {
+            $data = $record->toArray();
+            $name = is_array($data) ? trim(strval($data['name'] ?? '')) : '';
+            if ($name !== '' && ($named === null || $named === $name)) {
+                return ['name' => $name, 'data' => $data];
+            }
+        }
+
+        throw new SessionRefusal($named === null ? 'This project has no troop to cast a summon at.'
+            : sprintf('The battle test fights %s, which no troop is named.', $named));
+    }
+    /**
+     * An image track's art with the image's own size, read from the file the
+     * track names inside the asset root; none for a file that is missing or
+     * not an image, which the track's own validation reports.
+     *
+     * @param array<string, mixed> $art
+     * @return array<string, mixed>
+     */
+    private function measureTrackArt(array $art): array
+    {
+        $root = realpath($this->workspace->projectRoot . '/assets');
+        $path = $root === false || ($art['asset'] ?? '') === '' ? false : realpath($root . '/' . $art['asset']);
+        $size = $path !== false && str_starts_with($path, $root . DIRECTORY_SEPARATOR) ? @getimagesize($path) : false;
+
+        return [...$art, 'width' => $size === false ? null : $size[0], 'height' => $size === false ? null : $size[1]];
+    }
+
+    /**
+     * Chooses which of an effect's or summon's sequences its record shows and
+     * edits, terminal or graphical, as the TUI's sequence switch does.
+     * Nothing is written; the other sequence stays as it is.
+     *
+     * @return array{presentation: string}
+     * @throws SessionRefusal When the record has no separate sequences, or the sequence is unknown.
+     */
+    public function selectCutscenePresentation(string $category, int $index, string $presentation): array
+    {
+        $asset = $this->requireTimelineCutscene($category, $index);
+        $chosen = EffectPresentation::tryFrom($presentation)
+            ?? throw new SessionRefusal(sprintf('A sequence is terminal or graphical, not %s.', $presentation));
+        if (! $asset->hasPresentations()) {
+            throw new SessionRefusal(sprintf('%s has one sequence for every renderer.', $asset->id));
+        }
+        $asset->selectPresentation($chosen);
+        $this->workspace->cutscenes?->refreshRecords($asset->type);
+
+        return ['presentation' => $chosen->value];
+    }
+
+    /**
+     * Gives a summon or effect with one sequence for every renderer a
+     * terminal and a graphical sequence, each a copy of it, as one undo step,
+     * as the TUI's sequence choice does; the record then edits the terminal
+     * one. It reaches disk on save.
+     *
+     * @return array{changed: bool, presentation: string}
+     * @throws SessionRefusal When the record already has them or cannot be written.
+     */
+    public function separateCutsceneSequences(string $category, int $index): array
+    {
+        $asset = $this->requireTimelineCutscene($category, $index);
+        if ($asset->hasPresentations()) {
+            throw new SessionRefusal(sprintf('%s already has a terminal and a graphical sequence.', $asset->id));
+        }
+        try {
+            $command = $this->workspace->cutscenes?->changeAsset($asset->type, $index, sprintf('Separate %s sequences', $asset->type->noun()),
+                static function () use ($asset): void {
+                    $asset->selectPresentation(EffectPresentation::TERMINAL);
+                    $asset->splitIntoPresentations();
+                })['command'];
+        } catch (RuntimeException $failure) {
+            throw new SessionRefusal($failure->getMessage(), previous: $failure);
+        }
+        if ($command !== null) {
+            $this->history->record($command);
+        }
+
+        return ['changed' => $command !== null, 'presentation' => EffectPresentation::TERMINAL->value];
+    }
+
+    /**
+     * Gives a summon's graphical sequence a cinematic stage, or takes it
+     * away, as one undo step, as the TUI's Stage row does. It reaches disk
+     * on save.
+     *
+     * @return array{changed: bool, stage: bool}
+     * @throws SessionRefusal When the graphical sequence cannot safely own or release a stage.
+     */
+    public function setCutsceneStage(string $category, int $index, bool $present): array
+    {
+        $asset = $this->requireTimelineCutscene($category, $index);
+        if ($asset->type === CutsceneType::SUMMON && ! $asset->hasPresentations()) {
+            throw new SessionRefusal(sprintf('A stage is a summon\'s graphical sequence\'s own; separate %s\'s sequences first.', $asset->id));
+        }
+        try {
+            $command = $this->workspace->cutscenes?->changeAsset($asset->type, $index, $present ? 'Add stage' : 'Remove stage',
+                static function () use ($asset, $present): void {
+                    $asset->setStage($present);
+                })['command'];
+        } catch (RuntimeException $failure) {
+            throw new SessionRefusal($failure->getMessage(), previous: $failure);
+        }
+        if ($present && ! $asset->hasStage()) {
+            throw new SessionRefusal(sprintf('%s needs at least two frames to restore its stage before it ends.', $asset->id));
+        }
+        if ($command !== null) {
+            $this->history->record($command);
+        }
+
+        return ['changed' => $command !== null, 'stage' => $asset->hasStage()];
+    }
+
+    /** A summon or effect record's asset; a cinematic is a command tree, not a timeline. */
+    private function requireTimelineCutscene(string $category, int $index): CutsceneAsset
+    {
+        $type = CutsceneType::findByRecordCategory($category);
+        if ($type === null || $type === CutsceneType::CINEMATIC) {
+            throw new SessionRefusal(sprintf('%s is not a summon or effect category.', $category));
+        }
+        $id = $this->workspace->cutscenes?->ids($type)[$index] ?? null;
+
+        return ($id === null ? null : $this->workspace->cutscenes?->find($type, $id))
+            ?? throw new SessionRefusal(sprintf('There is no %s %d.', $type->noun(), $index));
+    }
+
+    /**
+     * The choices a reference row offers, read in the context it is edited
+     * in: the project's own references need no map, a map's own (its events,
+     * regions) are read from the map named, and a cutscene's own (a summon's
+     * cues) from the cutscene record named, as `{category, index}`.
+     *
+     * @param array{category?: mixed, index?: mixed, kind?: mixed, marker?: mixed, frame?: mixed, path?: mixed}|null $record
+     *   Database {category,index,frame}, NPC {kind:'npc',index,frame}, or event {kind:'event',marker,path}.
+     * @return list<array{value: string, label: string}>
+     * @throws SessionRefusal When the category, map or record is unknown.
+     */
+    public function listReferences(?string $mapId, string $category, ?array $record = null): array
+    {
+        if (! ReferenceCatalog::knows($category)) {
+            throw new SessionRefusal(sprintf('There is no reference category %s.', $category));
+        }
+        $cutscene = null;
+        $type = is_string($record['category'] ?? null) ? CutsceneType::findByRecordCategory($record['category']) : null;
+        if ($type !== null) {
+            $id = $this->workspace->cutscenes?->ids($type)[(int) ($record['index'] ?? -1)] ?? null;
+            $cutscene = ($id === null ? null : $this->workspace->cutscenes?->find($type, $id))
+                ?? throw new SessionRefusal(sprintf('There is no %s %s.', $type->noun(), strval($record['index'] ?? '')));
+        }
+        $catalog = new ReferenceCatalog($this->workspace, $mapId === null ? null : $this->requireMap($mapId), $cutscene);
+        if ($category === 'world_object_tile_layers') {
+            if ($mapId === null || !is_string($record['id'] ?? null)) { throw new SessionRefusal('A covered tile-layer picker needs its map-local object owner.'); }
+            $map = $this->requireMap($mapId);
+            $object = array_find(WorldObjectAuthoring::readEntries($map), static fn($entry): bool => $entry['id'] === $record['id'])
+                ?? throw new SessionRefusal('That world-object owner no longer exists.');
+            return array_map(static fn($layer): array => ['value' => $layer['name'], 'label' => $layer['name']],
+                array_values(array_filter($map->describeTileLayers()['layers'], static fn($layer): bool => $layer['owner'] === ($object['covers']['layer'] ?? null))));
+        }
+        if ($category === 'cinematic_movement_routes' && $record !== null) {
+            $catalog = $catalog->createMovementContext($this->getMovementOwnerCommands($mapId, $record));
+        }
+        $labels = $catalog->labelsFor($category);
+
+        return array_map(static fn(mixed $value): array => [
+            'value' => (string) $value,
+            'label' => (string) ($labels[$value] ?? $value),
+        ], array_values($catalog->valuesFor($category)));
+    }
+
+    /** Resolve only the real source owner supplied by the row, never the current selection. */
+    private function getMovementOwnerCommands(?string $mapId, array $owner): array
+    {
+        if (($owner['kind'] ?? '') === 'event') {
+            $map = $this->requireMap($mapId ?? throw new SessionRefusal('An event route reference requires its map.'));
+            $marker = is_string($owner['marker'] ?? null) ? $owner['marker'] : '';
+            $event = $map->getEventDefinition($marker)
+                ?? throw new SessionRefusal('That event route owner is no longer present.');
+            $path = self::requireFrame($owner['path'] ?? [], 'references.list');
+            return MovementRouteFields::getOwnerCommands($event, $path);
+        }
+        if (($owner['kind'] ?? '') === 'npc') {
+            $map = $this->requireMap($mapId ?? throw new SessionRefusal('An NPC route reference requires its map.'));
+            $database = (new NpcInspector($map, graphical: true))->records();
+        } else {
+            $category = is_string($owner['category'] ?? null) ? $owner['category'] : '';
+            $database = $this->requireRecordDatabase($category);
+        }
+        $index = filter_var($owner['index'] ?? null, FILTER_VALIDATE_INT);
+        $record = $index === false || $index === null ? null : $database->getRecordByIndex($index);
+        if ($record === null) { throw new SessionRefusal('That route command owner is no longer present.'); }
+        $frame = self::requireFrame($owner['frame'] ?? [], 'references.list');
+        if ($frame !== [] && $database->getFrameCommands($index, $frame) === null) {
+            throw new SessionRefusal('That route command frame is no longer present.');
+        }
+        return MovementRouteFields::getOwnerCommands((array) $record->toArray(),
+            MovementRouteFields::getFrameOwnerPath($database->schema, $frame));
+    }
+
+    /**
+     * A troop's graphical formation as an arranger draws it, composed by the
+     * Engine's BattleFormationLayout, the placement the battle itself uses:
+     * the battle canvas, the project's arenas with the one previewed and its
+     * backgrounds, the starting party in its slots, and each member's enemy,
+     * battle placement and (once placed) where its feet stand, the bounds its
+     * idle art is drawn in, that art, and its body span at battle scale. The
+     * arena is a preview only, as in RPG Maker's Troops tab: a troop is placed
+     * once for every arena, and choosing one writes nothing.
+     *
+     * @return array<string, mixed>
+     * @throws SessionRefusal When the troop is unknown or the project has no graphical battle.
+     */
+    public function readTroopFormation(int $index, ?string $arena = null): array
+    {
+        $record = $this->requireRecordDatabase('troops')->getRecordByIndex($index)
+            ?? throw new SessionRefusal(sprintf('troops has no record %d.', $index));
+        $catalog = $this->requireBattleLayoutCatalog('arrange troops on');
+
+        $members = $placed = $placedMembers = [];
+        foreach ($record->getSubList('enemies') as $memberIndex => $entry) {
+            $enemy = is_array($entry) ? (string) ($entry['enemy'] ?? '') : '';
+            $placement = is_array($entry) && is_array($entry['graphicalPlacement'] ?? null) ? $entry['graphicalPlacement'] : null;
+            $members[$memberIndex] = ['enemy' => $enemy, 'placement' => $placement, 'battler' => null];
+            if ($placement === null) {
+                continue;
+            }
+            try {
+                $placed[] = ['enemyId' => $enemy, 'slot' => BattlerSlot::fromArray($placement, 'Battle Placement')];
+                $placedMembers[] = $memberIndex;
+            } catch (\InvalidArgumentException $error) {
+                $members[$memberIndex]['issue'] = $error->getMessage();
+            }
+        }
+        [$formation, $view, $clearance] = $this->composeFormation($catalog, $arena, $placed);
+        foreach ($formation->enemies as $position => $battler) {
+            $members[$placedMembers[$position]]['battler'] = self::describeFormationBattler($battler, $clearance['enemies'][$position]);
+        }
+
+        return [...$view, 'members' => array_values($members)];
+    }
+
+    /**
+     * An enemy as Database > Enemies shows it: its terminal sprite, read the
+     * way the game reads it, and its battle art composed by the Engine's
+     * BattleFormationLayout at battle scale beside the starting party. Battle
+     * layouts define where the party stands, not enemies (troops place those),
+     * so the enemy stands opposite a party member, its slot mirrored across
+     * the canvas: a size comparison, not a battle position. It stands opposite
+     * the first member it stands clear beside by the Engine's formation
+     * clearance, else the first it fits on the canvas beside, so a creature
+     * taller than the lead's ground line is still shown whole, with what it
+     * does not clear. Both read the record as it is now, unsaved edits
+     * included. A project without a graphical battle still gets the sprite,
+     * with the reason there is no art.
+     *
+     * @return array<string, mixed>
+     * @throws SessionRefusal When the enemy is unknown.
+     */
+    public function readEnemyPreview(int $index, ?string $arena = null): array
+    {
+        $record = $this->requireRecordDatabase('enemies')->getRecordByIndex($index)
+            ?? throw new SessionRefusal(sprintf('enemies has no record %d.', $index));
+        $name = trim((string) $record->get('name'));
+        $preview = ['name' => $name, 'sprite' => $this->readEnemySprite($record->get('imagePath')), 'formation' => null, 'formationIssue' => null];
+
+        try {
+            $catalog = $this->requireBattleLayoutCatalog('preview enemies at battle scale on');
+            if ($catalog->ui->partySlots === []) {
+                throw new SessionRefusal('The battle layout has no party slot to stand an enemy beside.');
+            }
+            $composed = $firstRefusal = null;
+            foreach ($catalog->ui->partySlots as $party) {
+                $slot = new BattlerSlot($catalog->ui->width - $party->x, $party->y, $party->width, $party->height);
+                try {
+                    $candidate = $this->composeFormation($catalog, $arena, [['enemyId' => $name, 'slot' => $slot]]);
+                } catch (SessionRefusal $refusal) {
+                    $firstRefusal ??= $refusal;
+                    continue;
+                }
+                $composed ??= $candidate;
+                if ($candidate[2]['enemies'][0] === []) {
+                    $composed = $candidate;
+                    break;
+                }
+            }
+            if ($composed === null) {
+                throw $firstRefusal;
+            }
+            [$formation, $view, $clearance] = $composed;
+            $preview['formation'] = [...$view, 'members' => [[
+                'enemy' => $name,
+                'placement' => null,
+                'battler' => self::describeFormationBattler($formation->enemies[0], $clearance['enemies'][0]),
+            ]]];
+        } catch (SessionRefusal $refusal) {
+            $preview['formationIssue'] = $refusal->getMessage();
+        }
+
+        return $preview;
+    }
+
+    /**
+     * An actor as Database > Actors shows it in battle: its art composed by
+     * the Engine's BattleFormationLayout at battle scale in the lead party
+     * slot, the rest of the starting party beside it for comparison. It reads
+     * the art as it is now, unsaved edits included. An actor without a
+     * stable id has no battle art to bind, and says so.
+     *
+     * @return array{name: string, identity: ?string, formation: ?array<string, mixed>, formationIssue: ?string}
+     * @throws SessionRefusal When the actor is unknown.
+     */
+    public function readActorPreview(int $index, ?string $arena = null): array
+    {
+        $actor = array_values($this->workspace->actorDatabase->getActors())[$index]
+            ?? throw new SessionRefusal(sprintf('actors has no record %d.', $index));
+        $identity = $actor->hasDefinitionId() ? $actor->getDefinitionId() : null;
+        $preview = ['name' => $actor->getName(), 'identity' => $identity, 'formation' => null, 'formationIssue' => null];
+        if ($identity === null) {
+            $preview['formationIssue'] = 'This actor has no stable id yet, which its battle art is bound to. Repair actor identities first.';
+
+            return $preview;
+        }
+        try {
+            [, $view] = $this->composeFormation($this->requireBattleLayoutCatalog('preview actors at battle scale on'), $arena, [], $identity);
+            $preview['formation'] = [...$view, 'members' => []];
+        } catch (SessionRefusal $refusal) {
+            $preview['formationIssue'] = $refusal->getMessage();
+        }
+
+        return $preview;
+    }
+
+    /**
+     * An enemy's terminal sprite rows, read by the game's own rule
+     * (`Graphics/Enemies/<imagePath>.txt`), never from outside that folder.
+     *
+     * @return array{lines?: list<string>, issue?: string}
+     */
+    private function readEnemySprite(mixed $imagePath): array
+    {
+        if (! is_string($imagePath) || trim($imagePath) === '') {
+            return ['issue' => 'No sprite is chosen.'];
+        }
+        $root = $this->workspace->projectRoot;
+        $folder = realpath($root . '/assets/Graphics/Enemies');
+        $file = realpath($root . '/assets/Graphics/Enemies/' . $imagePath . '.txt');
+        if ($folder === false || $file === false || ! str_starts_with($file, $folder . DIRECTORY_SEPARATOR)) {
+            return ['issue' => sprintf('Graphics/Enemies/%s.txt is not a sprite in this project.', $imagePath)];
+        }
+
+        return ['lines' => array_values(array_map(strval(...), (array) ProjectDirectoryContext::run(
+            $root,
+            static fn(): array => (array) graphics('Enemies/' . $imagePath),
+        )))];
+    }
+
+    /**
+     * The project's battle presentation, when it lays battles out on a
+     * graphical canvas: its presentation code, with the battle art bound as
+     * data as it is now, unsaved edits included, so a preview shows the art
+     * being set.
+     */
+    private function requireBattleLayoutCatalog(string $purpose): BattlePresentationCatalog
+    {
+        $assets = $this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets';
+        try {
+            $catalog = BattlePresentationCatalog::loadCode($assets);
+            $bindings = $catalog === null ? null : $this->readProposedBattlerBindings();
+            if ($catalog !== null && $bindings !== null) {
+                $catalog = $catalog->bindBattlers(BattlerBindings::getFromArray($bindings, $assets));
+            }
+        } catch (\Throwable $error) {
+            throw new SessionRefusal('The battle presentation cannot be read: ' . $error->getMessage(), previous: $error);
+        }
+        if ($catalog?->ui === null) {
+            throw new SessionRefusal(sprintf('This project has no graphical battle layout to %s.', $purpose));
+        }
+
+        return $catalog;
+    }
+
+    /**
+     * The battler bindings file as a save would write it now: the file as
+     * saved, with every battle art category's unsaved edits folded in. Null
+     * when the project binds no battle art as data.
+     *
+     * @return array<array-key, mixed>|null
+     */
+    private function readProposedBattlerBindings(): ?array
+    {
+        $root = $this->workspace->projectRoot;
+        $file = PhpDataFile::load($root . DIRECTORY_SEPARATOR . RecordSchemaCatalog::BATTLERS_PATH, $root);
+        $payload = is_array($file->payload) ? $file->payload : null;
+        foreach (DatabaseCatalog::getEmbedded() as $category) {
+            $database = $this->workspace->getRecordDatabase($category->key);
+            if ($database !== null && $database->isDirty()) {
+                $payload = $database->foldInto($payload ?? []);
+            }
+        }
+
+        return $payload;
+    }
+
+    /**
+     * What converting a legacy cell-frame animation to a timeline would
+     * touch: its frames and cues, its current battle bindings, and the
+     * battle and field consumers that play it now.
+     *
+     * @return array<string, mixed> As {@see LegacyAnimationConversion::describe()}.
+     * @throws SessionRefusal When the record is unknown or has nothing to convert.
+     */
+    public function describeAnimationConversion(int $index): array
+    {
+        try {
+            return LegacyAnimationConversion::describe($this->workspace, $this->requireAnimationId($index));
+        } catch (InvalidArgumentException $error) {
+            throw new SessionRefusal($error->getMessage(), previous: $error);
+        }
+    }
+
+    /**
+     * Converts a legacy cell-frame animation to a timeline with the timing
+     * its consumer needs, asked first and written as one undo step: the new
+     * timeline and, when a battle is to play it, the record naming it. The
+     * question carries each file as it would be written. Nothing supplies a
+     * rate; the author's cadence, ticks and rest frame are the timeline's.
+     *
+     * @param 'battle_phase'|'fixed' $cadence
+     * @param 'sourceEffect'|'targetEffect'|null $binding
+     * @return array<string, mixed> The question with `preview` (path to source), or the write's result.
+     * @throws SessionRefusal When the conversion cannot be made as asked, edits are pending, or the files cannot be written.
+     */
+    public function convertAnimation(int $index, string $timelineId, string $cadence, ?int $fps, int $ticksPerFrame,
+        int $restFrame, bool $includeFlash, ?string $binding, ?string $answer = null, ?string $confirm = null): array
+    {
+        $id = $this->requireAnimationId($index);
+        try {
+            $plan = LegacyAnimationConversion::plan($this->workspace, $id, $timelineId, EffectCadence::parse($cadence),
+                $fps, $ticksPerFrame, $restFrame, $includeFlash, $binding);
+        } catch (InvalidArgumentException $error) {
+            throw new SessionRefusal($error->getMessage(), previous: $error);
+        }
+        $root = rtrim($this->workspace->projectRoot, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
+        $relative = static fn(string $path): string => str_starts_with($path, $root) ? substr($path, strlen($root)) : $path;
+        $paths = array_map($relative, $plan->getChangedPaths());
+        $name = strval($this->requireRecordDatabase('animations')->getRecordByIndex($index)?->get('name'));
+        $required = new SourceSetRequired($plan, sprintf('Convert %s to timeline %s', $name, $timelineId), 'this animation conversion',
+            sprintf('Convert %s to the timeline %s, writing %s?', $name, $timelineId, implode(' and ', $paths)), $paths);
+        $result = $this->writeSourceSet($required, $answer, fn(): array => $this->requireCategory('animations')->getRecordLabels(), $confirm);
+        if ($answer === null) {
+            $result['preview'] = array_combine($paths, array_values($plan->getProposedSources()));
+        }
+
+        return $result;
+    }
+
+    /** @throws SessionRefusal When the animations category has no record there. */
+    private function requireAnimationId(int $index): int
+    {
+        $id = $this->requireRecordDatabase('animations')->getRecordByIndex($index)?->get('id');
+
+        return is_int($id) ? $id : throw new SessionRefusal(sprintf('animations has no record %d with an id.', $index));
+    }
+
+    /**
+     * Where an actor's or enemy's battle art is set: its record in the
+     * battle art category when it has one, and otherwise whether the
+     * project's presentation code binds it, which the editor leaves to the
+     * code rather than rewriting program-shaped source.
+     *
+     * @param 'actors'|'enemies' $side
+     * @return array{category: string, index: ?int, owner: 'data'|'code'|null, note?: string}
+     * @throws SessionRefusal When the side is unknown or the presentation cannot be read.
+     */
+    public function describeBattlerArt(string $side, string $identity): array
+    {
+        $category = match ($side) {
+            'actors' => 'battler_actors',
+            'enemies' => 'battler_enemies',
+            default => throw new SessionRefusal(sprintf('Battle art is bound to actors or enemies, not %s.', $side)),
+        };
+        $database = $this->requireRecordDatabase($category);
+        foreach ($database->getRecords() as $index => $record) {
+            if ($record->getDisplayValue('identity') === $identity) {
+                return ['category' => $category, 'index' => $index, 'owner' => 'data'];
+            }
+        }
+        try {
+            $code = BattlePresentationCatalog::loadCode($this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets');
+        } catch (\Throwable $error) {
+            throw new SessionRefusal('The battle presentation cannot be read: ' . $error->getMessage(), previous: $error);
+        }
+        $party = $side === 'actors';
+        $owned = $code !== null && in_array($identity, [
+            ...array_keys($party ? $code->actors : $code->enemies),
+            ...array_keys($party ? $code->actorPoses : $code->enemyPoses),
+            ...array_keys(($party ? $code->scale?->actors : $code->scale?->enemies) ?? []),
+        ], true);
+
+        $described = ['category' => $category, 'index' => null, 'owner' => $owned ? 'code' : null];
+        if ($code === null) {
+            $described['note'] = 'This project has no graphical battle to set art for.';
+        } elseif ($owned) {
+            $described['note'] = sprintf('%s binds this art in code, which the editor does not rewrite. Once it moves to %s, it is set here.',
+                BattlePresentationCatalog::FILE, BattlerBindings::FILE);
+        }
+
+        return $described;
+    }
+
+    /**
+     * Composes enemies with the starting party over an arena, and describes
+     * what every formation view shares: the canvas, the arenas with the one
+     * previewed and its backgrounds, and the party in its slots. Also returns
+     * the Engine's clearance diagnostics for party and enemies, by position,
+     * which include each battler's own.
+     *
+     * @param list<array{enemyId: string, slot: BattlerSlot}> $enemies
+     * @return array{0: BattleFormationLayout, 1: array<string, mixed>, 2: array{party: list<list<string>>, enemies: list<list<string>>}}
+     */
+    private function composeFormation(BattlePresentationCatalog $catalog, ?string $arena, array $enemies, ?string $lead = null): array
+    {
+        $assetRoot = $this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets';
+        $names = [];
+        foreach ($this->workspace->actorDatabase->getActors() as $actor) {
+            $names[$actor->getDefinitionId()] = $actor->getName();
+        }
+        [$partyIds, $partySource] = $this->readPreviewParty();
+        if ($lead !== null) {
+            $partyIds = [$lead, ...array_filter($partyIds, static fn(string $id): bool => $id !== $lead)];
+        }
+        $partyIds = array_values(array_slice($partyIds, 0, count($catalog->ui->partySlots)));
+
+        try {
+            $formation = BattleFormationLayout::compose($catalog, $arena, $enemies, $partyIds, $assetRoot);
+        } catch (\InvalidArgumentException|\RuntimeException $error) {
+            throw new SessionRefusal('The formation cannot be composed: ' . $error->getMessage(), previous: $error);
+        }
+        $clearance = $formation->getClearanceDiagnostics($assetRoot);
+        $party = [];
+        foreach ($formation->party as $position => $battler) {
+            $party[] = ['name' => $names[$partyIds[$position]] ?? $partyIds[$position], ...self::describeFormationBattler($battler, $clearance['party'][$position])];
+        }
+        $arenas = [];
+        foreach ($formation->arenaChoices as $id => $name) {
+            $arenas[] = ['id' => (string) $id, 'name' => $name];
+        }
+        $chosen = $formation->arena === null ? false : array_search($formation->arena, $catalog->arenas, true);
+
+        return [$formation, [
+            'assetRoot' => $assetRoot,
+            'canvas' => ['width' => $formation->layout->width, 'height' => $formation->layout->height],
+            'arenas' => $arenas,
+            'arena' => $chosen === false ? null : (string) $chosen,
+            'backgrounds' => array_map(self::describeCanvasImage(...), $formation->backgrounds),
+            'party' => $party,
+            'partySource' => $partySource,
+        ], $clearance];
+    }
+
+    /**
+     * The party a battle preview stands beside its enemies: the battle
+     * test's when it sets one, as the battle test will fight with it, else
+     * the starting party; and which it is. A battle test that cannot be read
+     * is named, not quietly replaced.
+     *
+     * @return array{0: list<string>, 1: string}
+     */
+    private function readPreviewParty(): array
+    {
+        $starting = array_values(array_filter($this->readStartingPartyReferences(), is_string(...)));
+        try {
+            $setup = ProjectBattleTest::fromArray($this->readBattleTestEntry())->setup;
+        } catch (InvalidArgumentException) {
+            return [$starting, 'starting party (the battle test cannot be read)'];
+        }
+
+        return $setup === null ? [$starting, 'starting party']
+            : [array_map(static fn($member): string => $member->actorId, $setup->members), 'battle test'];
+    }
+
+    /**
+     * @param list<string> $diagnostics What the Engine reports about it in this formation.
+     * @return array<string, mixed> Where a battler stands and is drawn, its art, its body at battle scale and what it does not clear.
+     */
+    private static function describeFormationBattler(BattleFormationBattler $battler, array $diagnostics): array
+    {
+        $bounds = $battler->bounds;
+
+        return [
+            'ground' => ['x' => $battler->ground->x, 'y' => $battler->ground->y],
+            'bounds' => ['x' => $bounds->x, 'y' => $bounds->y, 'width' => $bounds->width, 'height' => $bounds->height],
+            'image' => $battler->image === null ? null : self::describeCanvasImage($battler->image),
+            'bodySpan' => $battler->bodySpan,
+            'horizontal' => $battler->horizontal,
+            'diagnostics' => array_values(array_map(strval(...), $diagnostics)),
+        ];
+    }
+
+    /** @return array<string, mixed> An image's asset, where it is drawn and the part of the asset it shows. */
+    private static function describeCanvasImage(CanvasImage $image): array
+    {
+        $destination = $image->destination;
+
+        return array_filter([
+            'asset' => $image->asset,
+            'x' => $destination->x, 'y' => $destination->y, 'width' => $destination->width, 'height' => $destination->height,
+            'source' => $image->sourceRect === null ? null : [
+                'x' => $image->sourceRect->x, 'y' => $image->sourceRect->y,
+                'width' => $image->sourceRect->width, 'height' => $image->sourceRect->height,
+            ],
+            'flipX' => $image->flipX ?: null,
+            'flipY' => $image->flipY ?: null,
+        ], static fn(mixed $value): bool => $value !== null);
+    }
+
+    /**
+     * A database category's records, as its list shows them, whether they
+     * can be edited and have unsaved changes, and which record operations
+     * the category takes.
+     *
+     * @return array{category: string, editable: bool, readOnly: ?string, dirty: bool, canCreate: bool, canDuplicate: bool, canDelete: bool, canReorder: bool, records: list<string>}
+     * @throws SessionRefusal When the category is unknown.
+     */
+    public function listDatabaseRecords(string $category): array
+    {
+        $database = $this->requireCategory($category);
+
+        return [
+            'category' => $category,
+            'editable' => $database->isEditable(),
+            'readOnly' => $database->getReadOnlyReason(),
+            // What its Save writes is unsaved: its records, or what their pages edit and save with them.
+            'dirty' => $this->isCategoryUnsaved($category),
+            // Every listed category with something to save, so a list of them can say which.
+            'unsavedCategories' => $this->listUnsavedCategories(),
+            'canCreate' => $database->supportsRecordCreation(),
+            'canDuplicate' => $database->supportsRecordDuplication(),
+            'canDelete' => $database->supportsRecordDeletion(),
+            // Only where the file keeps the order; a move elsewhere is refused with why.
+            'canReorder' => $database->supportsDurableReorder(),
+            'records' => $database->getRecordLabels(),
+        ];
+    }
+
+    /**
+     * One record's rows in a frame of its commands, described as the
+     * inspector's are, with the `key` an edit names a row by. At the root
+     * (`frame` []) the rows are the record's fields and its list's entries;
+     * a row that opens a command frame carries that `frame`, read again with
+     * it to edit the commands inside. A row of an item the record's lists
+     * hold carries `item` and `itemNoun`, and `childNoun` when the item holds
+     * a list of its own (a route's steps, a choice's options): add and
+     * remove act on it. The heading of a list beside the record's own (a
+     * quest's reward items) carries `listHeading`: adding to it adds that
+     * list's first entry. `listNoun` names an entry of the list an add with
+     * no row goes to. At the record itself, `panes` are the summaries the
+     * terminal shows beside it ({@see RecordPanes}): a class's curves, a
+     * skill's effects, a quest's rewards, each a title and its lines.
+     *
+     * @param array<int|string, mixed> $frame The frame; [] for the record itself.
+     * @return array{category: string, index: int, frame: list<int|string>, frameLabel: ?string, editable: bool, readOnly: ?string, listNoun: ?string, rows: list<array<string, mixed>>, panes: list<array{title: string, lines: list<string>}>}
+     * @throws SessionRefusal When the category, record or frame is unknown.
+     */
+    public function readDatabaseRecord(string $category, int $index, array $frame = []): array
+    {
+        $database = $this->requireCategory($category);
+        $frame = self::requireFrame($frame, 'database.record');
+        $fields = $this->collectRecordFields($database, $index, $frame);
+
+        return [
+            'category' => $category,
+            'index' => $index,
+            'frame' => $frame,
+            'frameLabel' => $database->describeFrame($frame),
+            'editable' => $database->isEditable(),
+            'readOnly' => $database->getReadOnlyReason(),
+            // What an entry of the list an add with no row goes to is called:
+            // the record's own list, or the open frame's.
+            'listNoun' => $database->getListNoun($frame),
+            // A row that names a field keeps its key whether or not it can be
+            // edited; a read-only one is an `info` row the edit refuses.
+            'rows' => $this->describePlacementRows(array_map(static fn(array $field): array => self::describeRecordRow(
+                $database,
+                $index,
+                $frame,
+                $field,
+                isset($field['field']) ? 'record' : null,
+            ), $fields), ['kind' => 'database', 'category' => $category, 'index' => $index]),
+            'panes' => $frame === [] ? array_values(RecordPanes::describe($this->workspace, $category, $index)) : [],
+        ];
+    }
+
+    /**
+     * Applies one record row's edit as one undo step. The row is found again
+     * by its key among the record's current rows in its frame. A value its
+     * field cannot take is refused with what is wrong with it.
+     *
+     * @param array<string, mixed> $key The row's key, as `database.record` gave it.
+     * @return array{changed: bool, records: list<string>, note?: string} Whether it changed, the labels afterwards (a rename shows), and what else it did.
+     * @throws SessionRefusal When the category or record is unknown or read-only, the row is gone or read-only, or the value is refused.
+     */
+    public function applyDatabaseRecord(string $category, int $index, array $key, string $value, ?string $answer = null, ?string $confirm = null): array
+    {
+        $database = $this->requireCategory($category);
+        $frame = self::requireFrame($key['frame'] ?? [], 'database.record');
+        $fieldId = $key['field'] ?? null;
+        // Field ids are unique within a frame, so the field and frame name the row.
+        $field = is_string($fieldId) ? array_find($this->collectRecordFields($database, $index, $frame),
+            static fn(array $candidate): bool => ($candidate['field'] ?? null) === $fieldId) : null;
+
+        if (! is_string($fieldId) || $field === null) {
+            throw new SessionRefusal('That row is no longer in the record; read it again.');
+        }
+        if (($field['editable'] ?? true) === false || self::describeRow([...$field, 'target' => 'record'])['kind'] === 'info') {
+            throw new SessionRefusal(sprintf('%s cannot be edited here.', trim((string) ($field['label'] ?? 'That row'))));
+        }
+
+        try {
+            $change = $this->changeRecord(static fn(): RecordChange => $database->applyField(
+                $index, $frame, $fieldId, $value, (string) ($field['label'] ?? 'Database field'),
+            ));
+        } catch (SourceSetRequired $required) {
+            return $this->writeSourceSet($required, $answer, fn(): array => $this->requireCategory($category)->getRecordLabels(), $confirm);
+        }
+
+        return array_filter(['changed' => $change->command !== null, 'records' => $database->getRecordLabels(), 'note' => $change->note],
+            static fn(mixed $value): bool => $value !== null);
+    }
+
+    /**
+     * Sets several of a record's rows as one action, undone and redone
+     * together: what one gesture changes, such as a click that sets the
+     * ground point of two images showing the same stance. Each value goes
+     * through the record's own field rules, as one row's edit does; if any is
+     * refused, those already made are taken back and nothing is recorded.
+     * An edit that needs a file set written at once is not made this way.
+     *
+     * @param list<array{key: array<string, mixed>, value: string}> $changes Each row's key, as `database.record` gave it, and its value.
+     * @return array{changed: bool, records: list<string>}
+     * @throws SessionRefusal When a row is gone or read-only, or a value is refused; nothing is changed.
+     */
+    public function applyDatabaseRecordValues(string $category, int $index, array $changes, string $label): array
+    {
+        $database = $this->requireCategory($category);
+        $made = [];
+        try {
+            foreach ($changes as $change) {
+                $key = is_array($change) && is_array($change['key'] ?? null) ? $change['key'] : throw new SessionRefusal('Each change needs the row key database.record gave.');
+                $frame = self::requireFrame($key['frame'] ?? [], 'database.record');
+                $fieldId = $key['field'] ?? null;
+                $field = is_string($fieldId) ? array_find($this->collectRecordFields($database, $index, $frame),
+                    static fn(array $candidate): bool => ($candidate['field'] ?? null) === $fieldId) : null;
+                if (! is_string($fieldId) || $field === null || ($field['editable'] ?? true) === false) {
+                    throw new SessionRefusal('That row is no longer in the record, or cannot be edited; read it again.');
+                }
+                try {
+                    $applied = $database->applyField($index, $frame, $fieldId, strval($change['value'] ?? ''), (string) ($field['label'] ?? $label));
+                } catch (RecordRefusal $refusal) {
+                    throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+                } catch (SourceSetRequired $required) {
+                    throw new SessionRefusal(sprintf('%s writes several files at once; set it on its own.', trim((string) ($field['label'] ?? 'That row'))), previous: $required);
+                }
+                if ($applied->command !== null) {
+                    $made[] = $applied->command;
+                }
+            }
+        } catch (SessionRefusal $refusal) {
+            foreach (array_reverse($made) as $command) {
+                $command->undo();
+            }
+            throw $refusal;
+        }
+        if ($made !== []) {
+            $this->history->record(new CommandGroup($label, $made));
+        }
+
+        return ['changed' => $made !== [], 'records' => $database->getRecordLabels()];
+    }
+
+    /**
+     * Asks before writing a file set an edit needs at once, then writes it
+     * as one undo step: the workspace is reloaded from the written files, so
+     * every map and category reads afresh. The question carries the plan's
+     * fingerprint, and writing requires it back: a plan made again from
+     * other choices or changed files is refused, so what is written is
+     * exactly what the author was shown.
+     *
+     * @param Closure(): list<string> $records The category's labels afterwards.
+     * @param string|null $confirm The fingerprint the question gave, when answering write.
+     * @return array{status: 'question', question: string, answers: list<array{key: string, label: string, description: string}>, confirm: string}|array{changed: bool, records: list<string>, reloaded?: true}
+     * @throws SessionRefusal When an answer is not one offered, the plan is not the one shown, edits are pending, or the files cannot be written.
+     */
+    private function writeSourceSet(SourceSetRequired $required, ?string $answer, Closure $records, ?string $confirm = null): array
+    {
+        if ($answer === null) {
+            return [
+                'status' => 'question',
+                'question' => $required->question,
+                'answers' => [
+                    ['key' => 'cancel', 'label' => 'Cancel', 'description' => 'Leave all files unchanged.'],
+                    ['key' => 'write', 'label' => sprintf('Write %d files now', count($required->paths)),
+                        'description' => sprintf('Writes %s now, not on Save. Undo restores the files.', implode(', ', $required->paths))],
+                ],
+                // Answering write names this, so what is written is what was asked about.
+                'confirm' => $required->plan->getFingerprint(),
+            ];
+        }
+        if (! in_array($answer, ['write', 'cancel'], true)) {
+            throw new SessionRefusal(sprintf('Answer write or cancel, not %s.', $answer));
+        }
+        if ($answer === 'cancel') {
+            return ['changed' => false, 'records' => $records()];
+        }
+        // The plan made now must be the one the author was shown: the same
+        // choices over the same files. Anything else is asked again.
+        if ($confirm === null || ! hash_equals($required->plan->getFingerprint(), $confirm)) {
+            throw new SessionRefusal(sprintf('The files or choices changed since %s was shown, so nothing was written. Review it again.', $required->subject));
+        }
+        if ($this->workspace->hasUnsavedChanges()) {
+            throw new SessionRefusal(sprintf('Save or undo pending edits before %s. No files were changed.', $required->subject));
+        }
+
+        $command = new SourceSetCommand($required->label, $required->subject, $required->plan, $this->workspace,
+            fn(): ProjectWorkspace => $this->workspace,
+            function (ProjectWorkspace $workspace): void { $this->workspace = $workspace; },
+        );
+
+        try {
+            $command->execute();
+        } catch (RuntimeException $failure) {
+            throw new SessionRefusal($failure->getMessage(), previous: $failure);
+        }
+        $this->history->record($command);
+
+        return ['changed' => true, 'records' => $records(), 'reloaded' => true];
+    }
+
+    /**
+     * Adds an item at a record row as one undo step: after the item the row
+     * belongs to, or with `$child` at the end of what that item holds (a
+     * route's steps, a choice's options). A key of `{frame}` alone adds at
+     * the end of that frame, or of the record's own list.
+     *
+     * @param array<string, mixed> $key A row's key, as `database.record` gave it, or `{frame}` alone.
+     * @return array{changed: bool, records: list<string>}
+     * @throws SessionRefusal When the category, record or frame is unknown or read-only, or the row's item cannot take it.
+     */
+    public function addDatabaseItem(string $category, int $index, array $key, bool $child = false): array
+    {
+        $database = $this->requireCategory($category);
+        $frame = self::requireFrame($key['frame'] ?? [], 'database.record');
+        $fieldId = $key['field'] ?? null;
+
+        if ($fieldId !== null && ! is_string($fieldId)) {
+            throw new SessionRefusal('A row key names its field as a string, as database.record gave it.');
+        }
+
+        $change = $this->changeRecord(static fn(): RecordChange => $database->addItem($index, $frame, $fieldId, $child));
+
+        return ['changed' => $change->command !== null, 'records' => $database->getRecordLabels()];
+    }
+
+    /**
+     * Removes the item a record row belongs to (an entry or command with
+     * everything under it, a route step, line or lane, a choice's option
+     * with its arm) as one undo step; a row that belongs to none changes
+     * nothing.
+     *
+     * @param array<string, mixed> $key A row's key, as `database.record` gave it.
+     * @return array{changed: bool, records: list<string>}
+     * @throws SessionRefusal When the category, record or frame is unknown or read-only, or the key names no row.
+     */
+    public function removeDatabaseItem(string $category, int $index, array $key): array
+    {
+        $database = $this->requireCategory($category);
+        $frame = self::requireFrame($key['frame'] ?? [], 'database.record');
+        $fieldId = $key['field'] ?? null;
+
+        if (! is_string($fieldId)) {
+            throw new SessionRefusal('Name the row whose item to remove by its key, as database.record gave it.');
+        }
+
+        $change = $this->changeRecord(static fn(): RecordChange => $database->removeItem($index, $frame, $fieldId));
+
+        return ['changed' => $change->command !== null, 'records' => $database->getRecordLabels()];
+    }
+
+    /**
+     * Creates a blank record at the end of a category, as one undo step:
+     * for an identity when one is given (an enemy's battle art, made for
+     * that enemy), refused when that identity already has one.
+     *
+     * @return array{index: int, records: list<string>} The new record's index, and the labels afterwards.
+     * @throws SessionRefusal When the category is unknown, read-only or takes no new records.
+     */
+    public function createDatabaseRecord(string $category, ?string $identity = null): array
+    {
+        $database = $this->requireCategory($category);
+        $change = $this->changeRecord(static fn(): RecordChange => $database->createRecord($identity));
+
+        return ['index' => (int) $change->index, 'records' => $database->getRecordLabels()];
+    }
+
+    /**
+     * Duplicates a record below itself under a fresh identity, as one undo step.
+     *
+     * @return array{index: int, records: list<string>} The copy's index, and the labels afterwards.
+     * @throws SessionRefusal When the category or record is unknown or read-only, or the record cannot be duplicated.
+     */
+    public function duplicateDatabaseRecord(string $category, int $index): array
+    {
+        $database = $this->requireCategory($category);
+        $change = $this->changeRecord(static fn(): RecordChange => $database->duplicateRecord($index));
+
+        return ['index' => (int) $change->index, 'records' => $database->getRecordLabels()];
+    }
+
+    /**
+     * Deletes a record as one undo step; the file changes on save.
+     *
+     * @return array{index: ?int, records: list<string>} The record to select next (null when none is left), and the labels afterwards.
+     * @throws SessionRefusal When the category or record is unknown or read-only, or the category keeps its entries.
+     */
+    public function deleteDatabaseRecord(string $category, int $index): array
+    {
+        $database = $this->requireCategory($category);
+        $change = $this->changeRecord(static fn(): RecordChange => $database->deleteRecord($index));
+
+        return ['index' => $change->index, 'records' => $database->getRecordLabels()];
+    }
+
+    /**
+     * Moves a record one place up or down, as one undo step, where the file
+     * keeps the order. A move past either end changes nothing.
+     *
+     * @param string $direction "up" or "down".
+     * @return array{index: int, changed: bool, records: list<string>} Where the record is now, whether it moved, and the labels afterwards.
+     * @throws SessionRefusal When the category or record is unknown or read-only, the direction is neither, or the file would not keep the order (with why).
+     */
+    public function moveDatabaseRecord(string $category, int $index, string $direction): array
+    {
+        $database = $this->requireCategory($category);
+        $step = match ($direction) {
+            'up' => -1,
+            'down' => 1,
+            default => throw new SessionRefusal(sprintf('A record moves "up" or "down", not "%s".', $direction)),
+        };
+        $change = $this->changeRecord(static fn(): RecordChange => $database->moveRecord($index, $step));
+
+        return ['index' => (int) $change->index, 'changed' => $change->command !== null, 'records' => $database->getRecordLabels()];
+    }
+
+    /**
+     * Saves one database category, backing up the files it overwrites
+     * first, as the terminal editor's save does. A category with nothing
+     * unsaved writes nothing (`saved` false). No database validation runs on
+     * save, so there are no warnings yet.
+     *
+     * @return array{saved: bool, warnings: list<string>, backupFailures: list<string>}
+     * @throws SessionRefusal When the category is unknown or read-only, or its source cannot take the save.
+     */
+    public function saveDatabase(string $category): array
+    {
+        $database = $this->requireCategory($category);
+        if (! $database->isEditable()) {
+            throw new SessionRefusal(sprintf('Read-only: %s.', $database->getReadOnlyReason() ?? 'this category cannot be written'));
+        }
+        // What the page edits beside the record (an enemy's battle art) is
+        // saved with it, first, so a save it refuses leaves the page unsaved.
+        $embedded = ['saved' => false, 'backupFailures' => []];
+        foreach (DatabaseCatalog::getEmbedded() as $definition) {
+            if (in_array($category, $definition->hosts, true) && $this->workspace->getRecordDatabase($definition->key)?->isDirty()) {
+                $saved = $this->saveDatabase($definition->key);
+                $embedded = ['saved' => true, 'backupFailures' => [...$embedded['backupFailures'], ...$saved['backupFailures']]];
+            }
+        }
+        if (! $database->isDirty()) {
+            return ['saved' => $embedded['saved'], 'warnings' => [], 'backupFailures' => $embedded['backupFailures']];
+        }
+        $paths = $database->getBackupPaths();
+        $failures = $this->backups->isEnabled() && $paths !== [] ? $this->backups->backup(...$paths)['failed'] : [];
+
+        try {
+            $database->save();
+        } catch (RecordRefusal $refusal) {
+            throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+        }
+
+        return ['saved' => true, 'warnings' => [], 'backupFailures' => [...$embedded['backupFailures'], ...array_values($failures)]];
+    }
+
+    /**
+     * Whether a category's Save has something to write: its own records, or
+     * what their pages edit beside them and save with them (an enemy's
+     * battle art, the battle scale), the same set `saveDatabase` writes.
+     */
+    private function isCategoryUnsaved(string $category): bool
+    {
+        if ($this->requireCategory($category)->isDirty()) {
+            return true;
+        }
+
+        return array_any(DatabaseCatalog::getEmbedded(), fn($definition): bool => in_array($category, $definition->hosts, true)
+            && ($this->workspace->getRecordDatabase($definition->key)?->isDirty() ?? false));
+    }
+
+    /**
+     * The listed Database and cutscene categories with something to save.
+     *
+     * @return list<string>
+     */
+    private function listUnsavedCategories(): array
+    {
+        $keys = [
+            ...array_map(static fn($category): string => $category->key, DatabaseCatalog::getGraphicalCategories()),
+            ...array_map(static fn(CutsceneType $type): string => $type->getRecordCategory(), CutsceneType::cases()),
+        ];
+
+        return array_values(array_filter($keys, function (string $key): bool {
+            try {
+                return $this->isCategoryUnsaved($key);
+            } catch (SessionRefusal) {
+                // A category this project cannot open has nothing to save.
+                return false;
+            }
+        }));
+    }
+
+    /**
+     * Makes one record change, records it, and turns a refusal into the session's.
+     *
+     * @param callable(): RecordChange $change
+     * @throws SessionRefusal
+     */
+    private function changeRecord(callable $change): RecordChange
+    {
+        try {
+            $applied = $change();
+        } catch (RecordRefusal $refusal) {
+            throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+        }
+        if ($applied->command !== null) {
+            $this->history->record($applied->command);
+        }
+
+        return $applied;
+    }
+
+    /**
+     * A record's rows in a frame, refusing a record or frame that is gone.
+     *
+     * @param list<int|string> $frame
+     * @return array<int, array<string, mixed>>
+     * @throws SessionRefusal
+     */
+    private function collectRecordFields(DatabaseCategory $database, int $index, array $frame): array
+    {
+        try {
+            return $database->getRecordRows($index, $frame);
+        } catch (RecordRefusal $refusal) {
+            throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+        }
+    }
+
+    /**
+     * One row of a record pane (a database record's or an NPC's) as plain
+     * data: described as an inspector row, its key naming the frame it lives
+     * in, with the frame it opens, its exact multi-line text, and the item
+     * it belongs to as the record's own rules locate it.
+     *
+     * @param array<int, int|string> $frame
+     * @param array<string, mixed> $field
+     * @param string|null $target The key's target, or null for a row no edit applies through.
+     * @return array<string, mixed>
+     */
+    private static function describeRecordRow(ProjectRecordDatabase|DatabaseCategory $records, int $index, array $frame, array $field, ?string $target): array
+    {
+        $row = self::describeRow([...$field, 'target' => $target]);
+
+        if (isset($row['key'])) {
+            $row['key']['frame'] = $frame;
+            $item = $records->locateItem($index, $frame, (string) ($field['field'] ?? ''));
+
+            if ($item !== null) {
+                $row['item'] = true;
+                $row['itemNoun'] = $item->noun;
+                if ($item->kind === RecordItem::LIST) {
+                    // A list's heading: entries are added to it, never removed with it.
+                    $row['listHeading'] = true;
+                }
+                if ($item->childNoun !== null) {
+                    $row['childNoun'] = $item->childNoun;
+                }
+            }
+        }
+        if (is_array($field['frame'] ?? null)) {
+            $row['frame'] = array_values($field['frame']);
+        }
+        $control = MapInspector::findControl($field);
+        if ($control?->type === InputControlType::MULTILINE) {
+            $row['multiline'] = true;
+            $row['value'] = $control->rawValue;
+        }
+
+        return $row;
+    }
+
+    /**
+     * A frame of a record's commands, as a request or a row key names it.
+     *
+     * @param string $reader What gave the frame, for the refusal.
+     * @return list<int|string>
+     * @throws SessionRefusal When the frame is not a list of indexes and keys.
+     */
+    private static function requireFrame(mixed $frame, string $reader): array
+    {
+        if (! is_array($frame) || ! array_is_list($frame) || ! array_all($frame, static fn(mixed $segment): bool => is_int($segment) || is_string($segment))) {
+            throw new SessionRefusal(sprintf('A frame must be a list of indexes and keys, as %s gave it.', $reader));
+        }
+
+        return $frame;
+    }
+
+    /** Reads a transient inspector for the map-owned declaration. */
+    public function readWorldObject(string $mapId, string $id): array
+    {
+        $map = $this->requireMap($mapId);
+        $authoring = $this->createWorldObjectAuthoring($map);
+        $index = $authoring->getIndex($id);
+        $records = $authoring->getRecords();
+        $object = WorldObjectAuthoring::readEntries($map)[$index];
+        $issue = $authoring->getSourceIssue();
+        $fields = $records->getSettingsFields($index);
+        foreach ($fields as &$field) {
+            $owner = isset($field['entry'][0]) && str_starts_with($field['field'] ?? '', 'variant')
+                ? $object['variants'][$field['entry'][0]] : $object;
+            $field = FieldSpriteFields::describeFields([$field], $owner, $map->getAssetRoot())[0];
+            if ($issue !== null) { $field['editable'] = false; }
+        }
+        unset($field);
+        return ['map' => $mapId, 'revision' => $this->getMapRevision($map), 'event' => null,
+            'worldObject' => ['id' => $id, 'variants' => array_column($object['variants'] ?? [], 'id'),
+                'anchor' => $object['anchor'], 'covers' => $object['covers'] ?? null, 'issue' => $issue],
+            'issue' => $issue,
+            'rows' => array_map(static fn($field): array => self::describeRecordRow($records, $index, [], $field, 'world-object'), $fields)];
+    }
+
+    public function createWorldObject(string $mapId, int $revision, string $id, int $x, int $y): array
+    {
+        return $this->changeWorldObject($mapId, $revision, static fn($authoring): ?Command => $authoring->createObject($id, $x, $y));
+    }
+
+    public function deleteWorldObject(string $mapId, int $revision, string $id): array
+    {
+        return $this->changeWorldObject($mapId, $revision, static fn($authoring): ?Command => $authoring->deleteObject($id));
+    }
+
+    public function applyWorldObject(string $mapId, int $revision, string $id, array $key, string $value): array
+    {
+        $field = is_string($key['field'] ?? null) ? $key['field'] : throw new SessionRefusal('Name a current world-object field.');
+        return $this->changeWorldObject($mapId, $revision, static fn($authoring): ?Command => $authoring->applyField($id, $field, $value));
+    }
+
+    public function changeWorldObjectItem(string $mapId, int $revision, string $id, array $key, bool $remove): array
+    {
+        $field = is_string($key['field'] ?? null) ? $key['field'] : throw new SessionRefusal('Name a current world-object list row.');
+        return $this->changeWorldObject($mapId, $revision, static fn($authoring): ?Command => $authoring->changeItem($id, $field, $remove));
+    }
+
+    public function placeWorldObject(string $mapId, int $revision, string $id, int $x, int $y, bool $coverage = false): array
+    {
+        return $this->changeWorldObject($mapId, $revision, static fn($authoring): ?Command => $authoring->placeObject($id, $x, $y, $coverage));
+    }
+
+    public function moveWorldObjectVariant(string $mapId, int $revision, string $id, string $variantId, int $offset): array
+    {
+        return $this->changeWorldObject($mapId, $revision, static fn($authoring): ?Command => $authoring->moveVariant($id, $variantId, $offset));
+    }
+
+    public function readWorldObjectPreview(string $mapId, array $variants = [], float $seconds = 0): array
+    {
+        try {
+            $map = $this->requireMap($mapId);
+            return [...WorldObjectPreview::describeWorld($map, $variants, $seconds), 'revision' => $this->getMapRevision($map)];
+        }
+        catch (InvalidArgumentException|MapSourceRefusal $error) { throw new SessionRefusal($error->getMessage(), previous: $error); }
+    }
+
+    private function createWorldObjectAuthoring(ProjectMap $map): WorldObjectAuthoring
+    {
+        return new WorldObjectAuthoring($map, new ReferenceCatalog($this->workspace, $map));
+    }
+
+    private function changeWorldObject(string $mapId, int $revision, callable $edit): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        try { $command = $edit($this->createWorldObjectAuthoring($map)); }
+        catch (InvalidArgumentException|\RuntimeException $error) { throw new SessionRefusal($error->getMessage(), previous: $error); }
+        if ($command !== null) { $this->history->record($command); }
+        return ['changed' => $command !== null, 'revision' => $this->getMapRevision($map)];
+    }
+
+    public function createNpc(string $mapId, int $revision, int $x, int $y, string $name): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+
+        return $this->applyNpcChange($map, fn(NpcAuthoring $authoring): NpcChange => $authoring->create($map, $x, $y, $name));
+    }
+
+    /**
+     * Moves an NPC's anchor to a tile; a move to where it stands changes nothing.
+     *
+     * @return array{revision: int, changed: bool, index: ?int, id: ?string, followedId: ?string, idReferences: list<string>}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, the NPC is unknown, or the tile is outside the map or taken.
+     */
+    public function moveNpc(string $mapId, int $revision, int $index, int $x, int $y): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+
+        return $this->applyNpcChange($map, fn(NpcAuthoring $authoring): NpcChange => $authoring->move($map, $index, $x, $y));
+    }
+
+    /**
+     * Duplicates an NPC under a fresh id, appended; `index` is the copy's.
+     *
+     * @return array{revision: int, changed: bool, index: ?int, id: ?string, followedId: ?string, idReferences: list<string>}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, or the NPC is unknown.
+     */
+    public function duplicateNpc(string $mapId, int $revision, int $index): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+
+        return $this->applyNpcChange($map, fn(NpcAuthoring $authoring): NpcChange => $authoring->duplicate($map, $index));
+    }
+
+    /**
+     * Deletes an NPC nothing names; `index` is null afterwards and `id` the deleted NPC's.
+     *
+     * @return array{revision: int, changed: bool, index: ?int, id: ?string, followedId: ?string, idReferences: list<string>}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, the NPC is unknown, or something names it (each on a line of its own).
+     */
+    public function deleteNpc(string $mapId, int $revision, int $index): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+
+        return $this->applyNpcChange($map, fn(NpcAuthoring $authoring): NpcChange => $authoring->delete($map, $index));
+    }
+
+    /**
+     * Gives an NPC authored without a stable id one, from its name.
+     *
+     * @return array{revision: int, changed: bool, index: ?int, id: ?string, followedId: ?string, idReferences: list<string>}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, the NPC is unknown, or it already has an id.
+     */
+    public function assignNpcId(string $mapId, int $revision, int $index): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+
+        return $this->applyNpcChange($map, fn(NpcAuthoring $authoring): NpcChange => $authoring->assignId($map, $index));
+    }
+
+    /**
+     * One NPC's rows in a frame of its commands, described as the
+     * inspector's are ({@see readInspector()}), with the `key` an edit names
+     * a row by. At the root (`frame` []) the rows are its fields under
+     * headings, with its identity notes and dialogue variants; a row that
+     * opens a script frame carries that `frame`, read again with it to edit
+     * the commands inside. Multi-line text carries `multiline` and its exact
+     * text as `value`. Visibility conditions and completion writes are
+     * `info` here: they are built in the terminal's own editors for now.
+     *
+     * @param array<int|string, mixed> $frame The frame; [] for the NPC itself.
+     * @return array{map: string, revision: int, index: int, frame: list<int|string>, frameLabel: ?string, npc: array<string, mixed>, rows: list<array<string, mixed>>}
+     * @throws SessionRefusal When the map, NPC or frame is unknown.
+     */
+    public function readNpc(string $mapId, int $index, array $frame = []): array
+    {
+        $frame = self::requireNpcFrame($frame);
+        $map = $this->requireMap($mapId);
+        $inspector = new NpcInspector($map, graphical: true, references: new ReferenceCatalog($this->workspace, $map));
+        $npc = $map->getNpcs()->get($index) ?? throw new SessionRefusal(sprintf('%s has no NPC %d.', $mapId, $index));
+        $fields = $this->collectNpcFields($inspector, $index, $frame);
+        $rows = array_map(static fn(array $field): array => self::describeNpcRow($inspector->records(), $index, $field, $frame), $fields);
+
+        return [
+            'map' => $mapId,
+            'revision' => $this->getMapRevision($map),
+            'index' => $index,
+            'frame' => $frame,
+            'frameLabel' => $frame === [] ? null : $inspector->records()->describeFramePath($frame),
+            'npc' => [
+                'index' => $index,
+                'id' => $npc->getId(),
+                'name' => $npc->getName(),
+                'x' => $npc->getX(),
+                'y' => $npc->getY(),
+                'sprite' => $npc->getVisibleSprite(),
+            ],
+            'rows' => $this->describePlacementRows($frame === [] ? self::insertNpcFieldSheetRow($rows, $npc, $map->getAssetRoot()) : $rows,
+                ['kind' => 'npc', 'map' => $mapId, 'index' => $index]),
+        ];
+    }
+
+    /** The field id of an NPC's graphical character sheet, a row only the graphical editor shows. */
+    private const string NPC_FIELD_SHEET = 'sprites2d.sheet';
+
+    /**
+     * An NPC's rows with its graphical character sheet after its terminal
+     * appearance: a picture picked from the project's images, set through
+     * {@see NpcAuthoring::setFieldSheet()}. The terminal editor's rows are
+     * its own; graphical art never changes them.
+     *
+     * @param list<array<string, mixed>> $rows
+     * @return list<array<string, mixed>>
+     */
+    private static function insertNpcFieldSheetRow(array $rows, ProjectNpc $npc, string $assetRoot): array
+    {
+        $sprites = $npc->toArray()['sprites2d'] ?? null;
+        $row = self::describeRow([
+            'label' => '  Field Sheet',
+            'field' => self::NPC_FIELD_SHEET,
+            'value' => is_array($sprites) && is_string($sprites['sheet'] ?? null) ? $sprites['sheet'] : '',
+            'reference' => 'png_assets',
+            'noneLabel' => 'None: the glyph shows',
+            'target' => 'npc',
+        ]);
+        $row['key'] = [...$row['key'], 'frame' => []];
+        $sheetRows = [];
+        if ($sprites !== null) {
+            $row['imagePreview'] = CharacterSheetPreview::describe($sprites, $assetRoot);
+            if (is_array($sprites) && is_string($sprites['sheet'] ?? null) && $sprites['sheet'] !== '') {
+                $characterIndex = $sprites['index'] ?? 0;
+                $layer = $sprites['layer'] ?? CharacterSheet::DEFAULT_LAYER;
+                $indexValue = is_scalar($characterIndex) ? strval($characterIndex) : '(invalid index)';
+                $layerValue = is_scalar($layer) ? strval($layer) : '(invalid layer)';
+                $sheetRows = [
+                    self::describeRow(['label' => '  Sheet Character Index', 'field' => 'sprites2d.index',
+                        'value' => $indexValue, 'target' => 'npc',
+                        'options' => CharacterSheetPreview::getIndexOptions($sprites['sheet'])]),
+                    self::describeRow(['label' => '  Graphical Layer', 'field' => 'sprites2d.layer',
+                        'value' => $layerValue, 'target' => 'npc',
+                        'control' => new InputControl(InputControlType::INTEGER, $layerValue)]),
+                ];
+                foreach ($sheetRows as &$sheetRow) {
+                    $sheetRow['key']['frame'] = [];
+                }
+                unset($sheetRow);
+            }
+        }
+        $appearance = array_keys(array_filter($rows, static fn(array $candidate): bool =>
+            in_array($candidate['key']['field'] ?? null, ['sprite', 'sprites.north', 'sprites.south', 'sprites.east', 'sprites.west'], true)));
+        $at = $appearance === [] ? count($rows) : max($appearance) + 1;
+
+        return [...array_slice($rows, 0, $at), $row, ...$sheetRows, ...array_slice($rows, $at)];
+    }
+
+    /**
+     * Applies one NPC row's edit as one undo step. The row is found again by
+     * its key among the NPC's current rows. A rename carries the id along
+     * (`followedId`) unless something names it (`idReferences`).
+     *
+     * @param array<string, mixed> $key The row's key, as `readNpc` gave it.
+     * @return array{revision: int, changed: bool, index: ?int, id: ?string, followedId: ?string, idReferences: list<string>}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, the row is gone or read-only, or the edit is refused.
+     */
+    public function applyNpc(string $mapId, int $revision, int $index, array $key, string $value): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        $inspector = new NpcInspector($map, graphical: true, references: new ReferenceCatalog($this->workspace, $map));
+        $frame = self::requireNpcFrame($key['frame'] ?? []);
+        $fieldId = $key['field'] ?? null;
+        if ($fieldId === self::NPC_FIELD_SHEET && $frame === []) {
+            return $this->applyNpcChange($map,
+                static fn(NpcAuthoring $authoring): NpcChange => $authoring->setFieldSheet($map, $index, $value === '' ? null : $value));
+        }
+        if (in_array($fieldId, ['sprites2d.index', 'sprites2d.layer'], true) && $frame === []) {
+            $integer = filter_var($value, FILTER_VALIDATE_INT);
+            if ($integer === false) {
+                throw new SessionRefusal('A sheet character index or graphical layer must be an integer.');
+            }
+
+            return $this->applyNpcChange($map, static fn(NpcAuthoring $authoring): NpcChange => $fieldId === 'sprites2d.index'
+                ? $authoring->setFieldSheetIndex($map, $index, $integer)
+                : $authoring->setFieldSheetLayer($map, $index, $integer));
+        }
+        // Field ids are unique within a frame, so the field and frame name the row.
+        $field = is_string($fieldId) ? array_find($this->collectNpcFields($inspector, $index, $frame),
+            static fn(array $candidate): bool => ($candidate['field'] ?? null) === $fieldId) : null;
+
+        if ($field === null) {
+            throw new SessionRefusal('That row is no longer on the NPC; read it again.');
+        }
+        if (self::describeNpcRow($inspector->records(), $index, $field, $frame)['kind'] === 'info') {
+            throw new SessionRefusal(sprintf('%s cannot be edited here.', trim((string) ($field['label'] ?? 'That row'))));
+        }
+
+        return $this->applyNpcChange($map,
+            static fn(NpcAuthoring $authoring): NpcChange => $authoring->applyField($inspector, $index, $frame, $field, $value));
+    }
+
+    /**
+     * Adds an item at an NPC row as one undo step: in a script frame a
+     * command after the row's (at the end when the key names no field) or a
+     * route step under its route; at the root a line in the row's dialogue
+     * variant, or a new variant. The key is a row's, or `{frame}` alone.
+     *
+     * @param array<string, mixed> $key
+     * @return array{revision: int, changed: bool, index: ?int, id: ?string, followedId: ?string, idReferences: list<string>}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, or the NPC or frame is unknown.
+     */
+    public function addNpcItem(string $mapId, int $revision, int $index, array $key): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        $inspector = new NpcInspector($map, graphical: true, references: new ReferenceCatalog($this->workspace, $map));
+        $frame = self::requireNpcFrame($key['frame'] ?? []);
+        $fieldId = is_string($key['field'] ?? null) ? $key['field'] : '';
+
+        return $this->applyNpcChange($map,
+            static fn(NpcAuthoring $authoring): NpcChange => $authoring->addSubItem($inspector, $index, $frame, $fieldId));
+    }
+
+    /**
+     * Removes the item an NPC row belongs to (a route step, command,
+     * dialogue line or variant) as one undo step; a row that belongs to none
+     * changes nothing.
+     *
+     * @param array<string, mixed> $key A row's key, as `readNpc` gave it.
+     * @return array{revision: int, changed: bool, index: ?int, id: ?string, followedId: ?string, idReferences: list<string>}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, or the NPC or frame is unknown.
+     */
+    public function removeNpcItem(string $mapId, int $revision, int $index, array $key): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        $inspector = new NpcInspector($map, graphical: true, references: new ReferenceCatalog($this->workspace, $map));
+        $frame = self::requireNpcFrame($key['frame'] ?? []);
+        $fieldId = is_string($key['field'] ?? null) ? $key['field'] : '';
+
+        return $this->applyNpcChange($map,
+            static fn(NpcAuthoring $authoring): NpcChange => $authoring->removeSubItem($inspector, $index, $frame, $fieldId));
+    }
+
+    /**
+     * Makes one NPC change, records it, and says what it did.
+     *
+     * @param callable(NpcAuthoring): NpcChange $change
+     * @return array{revision: int, changed: bool, index: ?int, id: ?string, followedId: ?string, idReferences: list<string>}
+     * @throws SessionRefusal When the change is refused or the map's source cannot take it.
+     */
+    private function applyNpcChange(ProjectMap $map, callable $change): array
+    {
+        try {
+            $applied = $change(new NpcAuthoring($this->workspace));
+        } catch (NpcRefusal $refusal) {
+            throw new SessionRefusal(implode("\n", [$refusal->getMessage(), ...$refusal->details]), previous: $refusal);
+        } catch (MapSourceRefusal $refusal) {
+            throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+        }
+        if ($applied->command !== null) {
+            $this->history->record($applied->command);
+        }
+
+        return [
+            'revision' => $this->getMapRevision($map),
+            'changed' => $applied->command !== null,
+            'index' => $applied->index,
+            'id' => $applied->npc?->getId(),
+            'followedId' => $applied->followedId,
+            'idReferences' => $applied->idReferences,
+        ];
+    }
+
+    /**
+     * An NPC's rows in a frame, refusing an NPC or frame that is gone.
+     *
+     * @param list<int|string> $frame
+     * @return array<int, array<string, mixed>>
+     * @throws SessionRefusal
+     */
+    private function collectNpcFields(NpcInspector $inspector, int $index, array $frame): array
+    {
+        if ($inspector->map->getNpcs()->get($index) === null) {
+            throw new SessionRefusal(sprintf('%s has no NPC %d.', $inspector->map->mapId, $index));
+        }
+
+        return $inspector->getFields($index, $frame)
+            ?? throw new SessionRefusal(sprintf('%s is no longer there; read the NPC again.', $inspector->records()->describeFramePath($frame)));
+    }
+
+    /**
+     * One NPC row as plain data, as any record pane's row is
+     * ({@see describeRecordRow()}). The id note is read here; assigning an
+     * id is its own request.
+     *
+     * @param array<string, mixed> $field
+     * @param list<int|string> $frame
+     * @return array<string, mixed>
+     */
+    private static function describeNpcRow(ProjectRecordDatabase $records, int $index, array $field, array $frame): array
+    {
+        $fieldId = $field['field'] ?? null;
+        // Keyed whether or not it can be edited; a read-only row is `info`.
+        $named = is_string($fieldId) && $fieldId !== NpcInspector::ASSIGN_ID_FIELD;
+
+        return self::describeRecordRow($records, $index, $frame, $field, $named ? 'npc' : null);
+    }
+
+    /**
+     * A frame of an NPC's commands, as a request or a row key names it.
+     *
+     * @return list<int|string>
+     * @throws SessionRefusal When the frame is not a list of indexes and keys.
+     */
+    private static function requireNpcFrame(mixed $frame): array
+    {
+        return self::requireFrame($frame, 'readNpc');
+    }
+
+    /**
+     * Undoes the last change, wherever it was made.
+     *
+     * @return array{label: ?string, maps: list<string>, revisions: array<string, int>, databases: list<string>} What was undone, the maps it changed and their revisions now, and the database categories it changed.
+     */
+    public function undo(): array
+    {
+        return $this->traverseHistory(fn(): ?Command => $this->history->undo());
+    }
+
+    /**
+     * Redoes the last undone change.
+     *
+     * @return array{label: ?string, maps: list<string>, revisions: array<string, int>, databases: list<string>}
+     */
+    public function redo(): array
+    {
+        return $this->traverseHistory(fn(): ?Command => $this->history->redo());
+    }
+
+    /**
+     * Saves one map through its transaction, after the warnings validation
+     * has for it, which never block a save.
+     *
+     * @return array{saved: string, warnings: list<string>, backupFailures: list<string>}
+     * @throws SessionRefusal When the map is unknown or refuses to save.
+     */
+    public function saveMap(string $mapId): array
+    {
+        $map = $this->requireMap($mapId);
+        $warnings = MapValidator::validate($map, $this->getMapsById());
+        $failures = [];
+
+        try {
+            $saved = $map->save(function (string ...$paths) use (&$failures): void {
+                if ($this->backups->isEnabled() && $paths !== []) {
+                    $failures = $this->backups->backup(...$paths)['failed'];
+                }
+            });
+        } catch (MapSourceRefusal|FileSetTransactionFailure $refusal) {
+            throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+        }
+
+        return ['saved' => $saved, 'warnings' => array_values($warnings), 'backupFailures' => array_values($failures)];
+    }
+
+    /**
+     * Plays the game in the background, in its own graphical window, as the terminal editor's playtest does: from a
+     * temporary overlay of the project that writes nothing into it, with the author's player settings (volume and
+     * mute included) and no saves. It starts on the open map at a cell, or at the game's title with the project's own
+     * starting position. The game reads maps from disk, so a playtest is refused while a map it plays from is unsaved:
+     * the start map, or, from the title, any map.
+     *
+     * @param PlaytestStart $start Where the playtest begins; from the title the map and cell are not used.
+     * @param string|null $renderer One of {@see describePlaytestOptions()}'s renderers; null is its default.
+     * @return array<string, mixed> The playtest, as {@see describePlaytest()}.
+     * @throws SessionRefusal When the map is unknown or unsaved, a playtest is running, the renderer cannot be
+     *     launched from here, or it cannot start.
+     */
+    public function startPlaytest(?string $mapId, ?int $x, ?int $y, PlaytestStart $start = PlaytestStart::CELL, ?string $renderer = null): array
+    {
+        if ($this->playtest?->isRunning() === true) {
+            throw new SessionRefusal('A playtest is already running; stop it or close its window first.');
+        }
+        $options = $this->describePlaytestOptions();
+        $renderer ??= $options['defaultRenderer'];
+        if (! in_array($renderer, $options['renderers'], true)) {
+            throw new SessionRefusal(sprintf('A playtest cannot use the %s renderer from here; choose one of %s.', $renderer, implode(', ', $options['renderers'])));
+        }
+        if ($start === PlaytestStart::CELL) {
+            if ($mapId === null || $x === null || $y === null) {
+                throw new SessionRefusal('Choose the cell to start on, or play from the title.');
+            }
+            $map = $this->requireMap($mapId);
+            if ($map->isDirty()) {
+                throw new SessionRefusal(sprintf('Save %s before playtesting it; the game reads the map on disk.', $mapId));
+            }
+            if ($x < 0 || $y < 0 || $x >= $map->getWidth() || $y >= $map->getHeight()) {
+                throw new SessionRefusal(sprintf('%d, %d is outside %s.', $x, $y, $mapId));
+            }
+        } else {
+            $unsaved = array_keys(array_filter($this->getMapsById(), static fn(ProjectMap $map): bool => $map->isDirty()));
+            if ($unsaved !== []) {
+                throw new SessionRefusal(sprintf('Save %s before playing from the title; the game reads every map on disk.', implode(', ', $unsaved)));
+            }
+        }
+        $overlay = null;
+        try {
+            $overlay = $start === PlaytestStart::CELL
+                ? PlaytestOverlay::create($this->workspace->projectRoot, (string) $mapId, (int) $x, (int) $y)
+                : PlaytestOverlay::createForTitle($this->workspace->projectRoot);
+            $launcher = PlaytestLauncher::discover(projectRoot: $this->workspace->projectRoot);
+            $log = sys_get_temp_dir() . DIRECTORY_SEPARATOR . uniqid('ichiloto-playtest-', true) . '.log';
+            $this->playtest = $launcher->start($overlay, $renderer, $log);
+            $this->playtestStart = $start;
+        } catch (RuntimeException $error) {
+            $overlay?->destroy();
+            throw new SessionRefusal(sprintf('The playtest could not start: %s', $error->getMessage()), previous: $error);
+        }
+
+        return $this->describePlaytest();
+    }
+
+    /**
+     * Where a playtest from this editor can begin, and the renderers it can launch, the first being the default. A
+     * graphical editor owns no terminal to hand over, so it launches only renderers that open a window of their own.
+     *
+     * @return array{starts: list<string>, renderers: list<string>, defaultRenderer: string}
+     */
+    public function describePlaytestOptions(): array
+    {
+        return [
+            'starts' => array_map(static fn(PlaytestStart $start): string => $start->value, PlaytestStart::cases()),
+            'renderers' => [self::PLAYTEST_RENDERER],
+            'defaultRenderer' => self::PLAYTEST_RENDERER,
+        ];
+    }
+
+    /**
+     * Whether a playtest is running, where it started, and how the last one
+     * ended: its exit code and, when it failed, the end of its output.
+     *
+     * @return array{running: bool, start: ?string, map: ?string, x: ?int, y: ?int, stopped: bool, exitCode: ?int, log: ?string}
+     */
+    public function describePlaytest(): array
+    {
+        $run = $this->playtest;
+        $running = $run?->isRunning() ?? false;
+        $exitCode = $running ? null : $run?->getExitCode();
+
+        return [
+            'running' => $running,
+            'start' => $run === null ? null : $this->playtestStart->value,
+            'map' => $run?->overlay->mapId,
+            'x' => $run?->overlay->spawnX,
+            'y' => $run?->overlay->spawnY,
+            'stopped' => $run?->wasStopped() ?? false,
+            'exitCode' => $exitCode,
+            // Only a run that ended on its own with an error says why.
+            'log' => $run !== null && ! $running && ! $run->wasStopped() && $exitCode !== 0 ? $run->readLogTail() : null,
+        ];
+    }
+
+    /**
+     * Ends a running playtest, game window and all.
+     *
+     * @return array<string, mixed> The playtest, as {@see describePlaytest()}.
+     */
+    public function stopPlaytest(): array
+    {
+        $this->playtest?->stop();
+
+        return $this->describePlaytest();
+    }
+
+    /**
+     * The project's battle test as the Battle Test dialog edits it, as RPG
+     * Maker's Troops > Battle Test does: the troop to preselect, the party
+     * and the arena, kept in system data as the Engine's ProjectBattleTest.
+     * With no party set the starting party stands in, as it will in the
+     * battle, and says so. Each member comes with what it may be given (the
+     * Engine's BattleTestChoices, the same as the in-game arena offers) and
+     * the setup with the Engine's own problems. Reads the record as it is
+     * now, unsaved edits included, or describes a draft the dialog is
+     * editing without writing it.
+     *
+     * @param array<string, mixed>|null $draft An entry to describe instead of the record's.
+     * @return array<string, mixed>
+     * @throws SessionRefusal When the project has no system settings.
+     */
+    public function describeBattleTest(?array $draft = null): array
+    {
+        $entry = $draft ?? $this->readBattleTestEntry();
+        $view = [
+            'battleTest' => $entry,
+            'troops' => array_values(array_map(strval(...), $this->listDatabaseRecords('troops')['records'])),
+            'arenas' => $this->readArenaChoices(),
+            'actors' => array_map(static fn($actor): array => ['id' => $actor->getDefinitionId(), 'name' => $actor->getName()],
+                array_values(array_filter($this->workspace->actorDatabase->getActors(), static fn($actor): bool => $actor->hasDefinitionId()))),
+            'maxMembers' => BattleTestSetup::MAX_MEMBERS,
+            'troop' => null, 'arena' => null, 'source' => 'starting party', 'members' => [], 'problems' => [], 'issue' => null,
+        ];
+        try {
+            $test = ProjectBattleTest::fromArray($entry);
+        } catch (InvalidArgumentException $invalid) {
+            return [...$view, 'issue' => 'The battle test cannot be read: ' . $invalid->getMessage()];
+        }
+
+        return ProjectDirectoryContext::run($this->workspace->projectRoot, function () use ($view, $test): array {
+            $actors = $this->workspace->actorDatabase->createActorStore();
+            $items = $this->loadItemStore();
+            $skills = $this->workspace->loadSkillCatalog();
+            $summons = new SummonCutsceneLibrary($this->workspace->projectRoot . '/assets/Cutscenes/Summons');
+            $view = [...$view, 'troop' => $test->troop, 'source' => $test->setup === null ? 'starting party' : 'battle test'];
+            try {
+                $setup = $test->createSetup($actors, $this->readStartingPartyReferences());
+            } catch (InvalidArgumentException $invalid) {
+                return [...$view, 'arena' => $test->arena, 'issue' => $invalid->getMessage()];
+            }
+            $choices = new BattleTestChoices($actors, $items, new BattleTestLoadoutCatalog($skills, $summons));
+            $names = array_column($view['actors'], 'name', 'id');
+            $members = [];
+            foreach ($setup->members as $index => $member) {
+                $described = ['actor' => $member->actorId, 'name' => $names[$member->actorId] ?? $member->actorId, 'level' => $member->level,
+                    'commands' => $member->commands === null ? null : array_column($member->commands, 'value'),
+                    'skills' => $member->skills, 'summons' => $member->summons, 'maxLevel' => null, 'equipment' => [], 'choices' => null];
+                if ($actors->get($member->actorId) !== null) {
+                    $described['maxLevel'] = $choices->getMaxLevel($member->actorId);
+                    $described['equipment'] = array_map(static fn(string $slot): array => ['slot' => $slot, 'item' => $member->equipment[$slot] ?? null,
+                        'choices' => $choices->getEquipmentChoices($member->actorId, $slot)], $choices->getSlotNames($member->actorId));
+                    $described['choices'] = array_combine(['commands', 'skills', 'magic', 'summons'], array_map(
+                        static fn(string $field): array => $choices->getLoadoutChoices($setup, $index, $field), ['commands', 'skills', 'magic', 'summons']));
+                }
+                $members[] = $described;
+            }
+
+            return [...$view, 'arena' => $setup->arena, 'members' => $members,
+                'problems' => $setup->getProblems($actors, $items, $skills, $summons)];
+        });
+    }
+
+    /**
+     * Sets the project's battle test, as the Battle Test dialog applies it:
+     * the whole entry written to system data through the record service in
+     * one undo step, read the Engine's way first so a shape it would not
+     * read is refused before anything changes. An empty entry removes it.
+     *
+     * @param array<string, mixed> $battleTest As the Engine's ProjectBattleTest writes it.
+     * @return array<string, mixed> The battle test, as {@see describeBattleTest()}.
+     * @throws SessionRefusal When the entry is not a battle test.
+     */
+    public function applyBattleTest(array $battleTest): array
+    {
+        try {
+            $entry = ProjectBattleTest::fromArray($battleTest)->toArray();
+        } catch (InvalidArgumentException $invalid) {
+            throw new SessionRefusal('That is not a battle test: ' . $invalid->getMessage(), previous: $invalid);
+        }
+        $row = array_find($this->readDatabaseRecord('system', 0)['rows'],
+            static fn(array $row): bool => ($row['key']['field'] ?? null) === ProjectBattleTest::SYSTEM_KEY)
+            ?? throw new SessionRefusal('System settings have no battle test.');
+        $this->applyDatabaseRecord('system', 0, $row['key'],
+            $entry === [] ? '' : (string) json_encode($entry, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
+
+        return $this->describeBattleTest();
+    }
+
+    /**
+     * Plays the battle test in the background in its own graphical window,
+     * as `ichiloto battle` does: the named troop, or the battle test's own,
+     * fought by the battle test's party in its arena. It runs from an
+     * overlay of the project carrying the battle test as it is now, unsaved
+     * edits included, and writes nothing into the project; anything else a
+     * battle reads from disk must be saved first.
+     *
+     * @param int|null $troopIndex The troop to fight; null for the battle test's troop.
+     * @return array<string, mixed> The battle test run, as {@see describeBattleTestRun()}.
+     * @throws SessionRefusal When no troop is chosen, the setup has problems, something is unsaved, one is running, or it cannot start.
+     */
+    public function startBattleTest(?int $troopIndex = null): array
+    {
+        if ($this->battleTestRun?->isRunning() === true) {
+            throw new SessionRefusal('A battle test is already running; stop it or close its window first.');
+        }
+        $troops = $this->requireRecordDatabase('troops');
+        $troop = $troopIndex === null
+            ? (ProjectBattleTest::fromArray($this->readBattleTestEntry())->troop ?? null)
+            : trim(strval(($troops->getRecordByIndex($troopIndex) ?? throw new SessionRefusal(sprintf('troops has no record %d.', $troopIndex)))->get('name')));
+        if ($troop === null || $troop === '') {
+            throw new SessionRefusal('Choose a troop to fight in the battle test.');
+        }
+        $unsaved = $this->listBattleUnsavedChanges();
+        if ($unsaved !== []) {
+            throw new SessionRefusal(sprintf('Save %s first; the battle reads them on disk.', implode(', ', $unsaved)));
+        }
+        $described = $this->describeBattleTest();
+        if ($described['issue'] !== null || $described['problems'] !== []) {
+            throw new SessionRefusal("The battle test party cannot be set up:\n" . implode("\n", array_filter([$described['issue'], ...$described['problems']])));
+        }
+        $overlay = null;
+        try {
+            $overlay = PlaytestOverlay::createForBattle($this->workspace->projectRoot, $this->readBattleTestEntry());
+            $launcher = PlaytestLauncher::discover(projectRoot: $this->workspace->projectRoot);
+            $log = sys_get_temp_dir() . DIRECTORY_SEPARATOR . uniqid('ichiloto-battle-test-', true) . '.log';
+            $this->battleTestRun = $launcher->startBattle($overlay, self::PLAYTEST_RENDERER, $log, $troop);
+            $this->battleTestTroop = $troop;
+        } catch (RuntimeException $error) {
+            $overlay?->destroy();
+            throw new SessionRefusal(sprintf('The battle test could not start: %s', $error->getMessage()), previous: $error);
+        }
+
+        return $this->describeBattleTestRun();
+    }
+
+    /**
+     * Whether a battle test is running, the troop it fights, and how the
+     * last one ended: its exit code and, when it failed, the end of its output.
+     *
+     * @return array{running: bool, troop: ?string, stopped: bool, exitCode: ?int, log: ?string}
+     */
+    public function describeBattleTestRun(): array
+    {
+        $run = $this->battleTestRun;
+        $running = $run?->isRunning() ?? false;
+        $exitCode = $running ? null : $run?->getExitCode();
+
+        return [
+            'running' => $running,
+            'troop' => $run === null ? null : $this->battleTestTroop,
+            'stopped' => $run?->wasStopped() ?? false,
+            'exitCode' => $exitCode,
+            'log' => $run !== null && ! $running && ! $run->wasStopped() && $exitCode !== 0 ? $run->readLogTail() : null,
+        ];
+    }
+
+    /**
+     * Ends a running battle test, window and all.
+     *
+     * @return array<string, mixed> The run, as {@see describeBattleTestRun()}.
+     */
+    public function stopBattleTest(): array
+    {
+        $this->battleTestRun?->stop();
+
+        return $this->describeBattleTestRun();
+    }
+
+    /** The system data's battle test as it stands, unsaved edits included; empty when there is none. */
+    private function readBattleTestEntry(): array
+    {
+        $system = $this->requireRecordDatabase('system')->getRecordByIndex(0)
+            ?? throw new SessionRefusal('The project has no system settings.');
+        $entry = $system->get(ProjectBattleTest::SYSTEM_KEY);
+
+        return is_array($entry) ? $entry : [];
+    }
+
+    /** @return list<mixed> The starting party as system data holds it now, unsaved edits included. */
+    private function readStartingPartyReferences(): array
+    {
+        $starting = $this->workspace->getSystemField('startingParty');
+
+        return is_array($starting) ? array_values($starting) : [];
+    }
+
+    /** @return list<array{id: string, name: string}> The battle presentation's arenas; none without one. */
+    private function readArenaChoices(): array
+    {
+        try {
+            $catalog = BattlePresentationCatalog::loadCode($this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets');
+        } catch (\Throwable) {
+            return [];
+        }
+        $choices = $catalog?->getArenaChoices() ?? [];
+
+        return array_map(static fn(string|int $id, string $name): array => ['id' => (string) $id, 'name' => $name], array_keys($choices), $choices);
+    }
+
+    /** The Engine's item store for this project, as authored data reads it. */
+    private function loadItemStore(): ItemStore
+    {
+        EngineDataBootstrap::ensure($this->workspace->projectRoot);
+
+        $items = ConfigStore::has(ItemStore::class) ? ConfigStore::get(ItemStore::class) : null;
+
+        return $items instanceof ItemStore ? $items
+            : throw new SessionRefusal('The project\'s items cannot be read, so a battle test party cannot be set up.');
+    }
+
+    /**
+     * What a battle reads from disk that has unsaved edits: every database
+     * but System (whose battle test the overlay carries) and every
+     * cutscene, since summons play them. Maps are not part of a battle.
+     *
+     * @return list<string>
+     */
+    private function listBattleUnsavedChanges(): array
+    {
+        $system = $this->workspace->getRecordDatabase('system');
+        $unsaved = [];
+        foreach ($this->workspace->listSaveableDatabases() as $label => $database) {
+            if ($database !== $system && $database->isDirty()) {
+                $unsaved[] = $label;
+            }
+        }
+        foreach ($this->workspace->cutscenes?->dirtyAssets() ?? [] as $asset) {
+            $unsaved[] = $asset->type->noun() . ' ' . $asset->id;
+        }
+
+        return $unsaved;
+    }
+
+    /** Ends what the session started that would outlive it: a running playtest or battle test. */
+    public function close(): void
+    {
+        $this->playtest?->stop();
+        $this->battleTestRun?->stop();
+        $this->audition?->stop();
+    }
+
+    /**
+     * Plays a music track or sound effect a field names, once through, to
+     * hear it ({@see AudioAudition}): the game's own players find and play
+     * the file. Another audition, or stopping, ends it.
+     *
+     * @param 'bgm'|'sfx' $kind The reference kind of the field.
+     * @return array{playing: array{kind: string, name: string}|null}
+     * @throws SessionRefusal When the kind is not audio, the file is missing or nothing on this computer can play it.
+     */
+    public function playAudio(string $kind, string $name): array
+    {
+        if ((ReferenceCatalog::describeMedia($kind)['kind'] ?? null) !== 'audio') {
+            throw new SessionRefusal(sprintf('%s is not music or a sound effect.', $kind));
+        }
+        $this->audition ??= new AudioAudition(new PreviewGame(), $this->workspace->projectRoot);
+        $refusal = $this->audition->play($kind, $name);
+        if ($refusal !== null) {
+            throw new SessionRefusal($refusal);
+        }
+
+        return $this->describeAudio();
+    }
+
+    /**
+     * Stops the audition, if one is playing.
+     *
+     * @return array{playing: null}
+     */
+    public function stopAudio(): array
+    {
+        $this->audition?->stop();
+
+        return ['playing' => null];
+    }
+
+    /**
+     * What the audition is playing, as kind and name; null once it has finished.
+     *
+     * @return array{playing: array{kind: string, name: string}|null}
+     */
+    public function describeAudio(): array
+    {
+        return ['playing' => $this->audition?->describePlaying()];
+    }
+
+    /** Whether any map or database has changes not yet saved. */
+    public function hasUnsavedChanges(): bool
+    {
+        return $this->workspace->hasUnsavedChanges();
+    }
+
+    /**
+     * Names every map, database and cutscene with changes not yet saved.
+     *
+     * @return list<string>
+     */
+    public function listUnsavedChanges(): array
+    {
+        return $this->workspace->listUnsavedChanges();
+    }
+
+    /**
+     * Saves every unsaved map, database and cutscene, as the terminal
+     * editor's Save All does, and names what is still unsaved after it: a
+     * map whose save would move its folder, or a document that failed.
+     *
+     * @return array{summary: string, skippedRenames: list<string>, failures: list<string>, warnings: list<string>, backupFailures: list<string>, unsaved: list<string>}
+     */
+    public function saveAll(): array
+    {
+        $result = WorkspaceSave::saveAll($this->workspace, $this->backups);
+
+        return [
+            'summary' => $result->summary,
+            'skippedRenames' => $result->skippedRenames,
+            'failures' => $result->failures,
+            'warnings' => $result->warnings,
+            'backupFailures' => $result->backupFailures,
+            'unsaved' => $this->workspace->listUnsavedChanges(),
+        ];
+    }
+
+    /**
+     * Runs one history step and names the maps and database categories it
+     * changed, so an interface reloads what it shows of them.
+     *
+     * @param callable(): ?Command $step
+     * @return array{label: ?string, maps: list<string>, revisions: array<string, int>, databases: list<string>}
+     */
+    private function traverseHistory(callable $step): array
+    {
+        $workspace = $this->workspace;
+        $before = array_map($this->getMapRevision(...), $this->getMapsById());
+        $databases = $this->listDatabaseVersions();
+        try { $command = $step(); }
+        catch (MapSourceRefusal $error) { throw new SessionRefusal($error->getMessage(), previous: $error); }
+        // A step that put another workspace in place (a file set written at
+        // once, or its undo) changed whatever it reloaded: everything.
+        $reloaded = $this->workspace !== $workspace;
+        $changed = $revisions = [];
+        foreach ($this->getMapsById() as $mapId => $map) {
+            $revision = $this->getMapRevision($map);
+            if ($reloaded || $revision !== ($before[$mapId] ?? null)) {
+                $changed[] = (string) $mapId;
+                $revisions[$mapId] = $revision;
+            }
+        }
+        $changedDatabases = $reloaded
+            ? array_keys($this->listDatabaseVersions())
+            : array_keys(array_diff_assoc($this->listDatabaseVersions(), $databases));
+
+        return ['label' => $command?->label, 'maps' => $changed, 'revisions' => $revisions, 'databases' => array_values(array_map('strval', $changedDatabases))];
+    }
+
+    /** @return array<string, string> Each category the session edits, by key, with its content version. */
+    private function listDatabaseVersions(): array
+    {
+        $cutscenes = [];
+        foreach ($this->workspace->cutscenes === null ? [] : CutsceneType::cases() as $type) {
+            $cutscenes[$type->getRecordCategory()] = $this->workspace->cutscenes->records($type)->getContentVersion();
+        }
+
+        return [
+            'actors' => $this->workspace->actorDatabase->getContentVersion(),
+            ...array_map(static fn(ProjectRecordDatabase $database): string => $database->getContentVersion(), $this->workspace->recordDatabases),
+            ...$cutscenes,
+        ];
+    }
+
+    /** @return array<int, array<string, mixed>> */
+    private function collectInspectorFields(ProjectMap $map, ?string $marker): array
+    {
+        $inspector = $this->createMapInspector($map);
+
+        return [...$inspector->getMapFields($map), ...($marker === null ? [] : $inspector->getEventFields($map, $marker))];
+    }
+
+    private function createMapInspector(ProjectMap $map): MapInspector
+    {
+        // A session serves graphical editors, which also author what only a
+        // graphical renderer shows.
+        return new MapInspector(new ReferenceCatalog($this->workspace, $map), graphical: true);
+    }
+
+    /**
+     * One inspector row as plain data.
+     *
+     * @param array<string, mixed> $field
+     * @return array<string, mixed>
+     */
+    private static function describeRow(array $field): array
+    {
+        $target = $field['target'] ?? null;
+        $control = MapInspector::findControl($field);
+        $choices = MapInspector::findChoiceValues($field);
+        $kind = match (true) {
+            ($field['editable'] ?? true) === false, $target === null => 'info',
+            // A row whose edit is one action (freezing an actor's identity),
+            // made by applying it with no value.
+            is_string($field['action'] ?? null) => 'action',
+            ($field['mapConditions'] ?? false) === true, ($field['conditions'] ?? false) === true => 'conditions',
+            ($field['worldWrites'] ?? false) === true => 'writes',
+            ($field['affinities'] ?? false) === true => 'affinities',
+            ($field['destination'] ?? false) === true => 'destination',
+            is_string($field['reference'] ?? null) => 'reference',
+            $choices !== null => 'options',
+            $control !== null => match ($control->type) {
+                InputControlType::INTEGER => 'integer',
+                InputControlType::FLOAT => 'float',
+                InputControlType::BOOLEAN => 'boolean',
+                default => 'text',
+            },
+            default => 'info',
+        };
+        $list = $field['list'] ?? $field['encounterList'] ?? $field['bgmVariantList'] ?? null;
+
+        // The terminal nests a row by indenting its label; an interface is given the depth instead.
+        $label = (string) ($field['label'] ?? '');
+        $depth = intdiv(strlen($label) - strlen(ltrim($label, ' ')), 2);
+        $key = self::describeKey($field);
+
+        return array_filter([
+            'label' => trim($label),
+            'mapPlacement' => $field['mapPlacement'] ?? null,
+            // A list entry's row: which entry (and nested entry) it is part of, and its name within it.
+            'entry' => is_array($field['entry'] ?? null) ? array_values($field['entry']) : null,
+            'entryLabel' => is_string($field['entryLabel'] ?? null) ? $field['entryLabel'] : null,
+            'name' => is_string($field['name'] ?? null) ? $field['name'] : null,
+            'depth' => $depth,
+            // A section heading: a row that only names the rows after it.
+            'heading' => $kind === 'info' && (string) ($field['value'] ?? '') === '' && $key === null && $list === null ? true : null,
+            'value' => (string) ($field['value'] ?? ''),
+            'raw' => match ($kind) {
+                'conditions' => is_string($field['encoded'] ?? null) ? $field['encoded'] : (string) ($field['value'] ?? ''),
+                'writes', 'affinities' => (string) ($field['value'] ?? ''),
+                'text', 'integer', 'float', 'boolean' => $control?->rawValue,
+                default => null,
+            },
+            'kind' => $kind,
+            'options' => $kind === 'options' ? $choices : null,
+            'optionLabels' => $kind === 'options' && is_array($field['choices'] ?? null)
+                ? array_values(array_map(static fn(array $choice): string => (string) $choice['label'], $field['choices'])) : null,
+            'reference' => match ($kind) {
+                'reference' => $field['reference'],
+                'destination' => 'maps',
+                default => null,
+            },
+            // What the value looks like, when the reference names a picture: shown with the row and in its picker.
+            'media' => $kind === 'reference' ? ReferenceCatalog::describeMedia((string) $field['reference']) : null,
+            'imagePreview' => is_array($field['imagePreview'] ?? null) ? $field['imagePreview'] : null,
+            // How the choice of nothing reads, where the row says (the Engine's own attack).
+            'noneLabel' => $kind === 'reference' && is_string($field['noneLabel'] ?? null) ? $field['noneLabel'] : null,
+            'action' => $kind === 'action' ? $field['action'] : null,
+            // A list picked a member at a time: each pick toggles one member.
+            'multi' => $kind === 'reference' && ($field['multi'] ?? false) === true ? true : null,
+            'list' => is_array($list) && $target !== null ? ['index' => (int) ($list['index'] ?? 0)] : null,
+            // Conditions and writes are built a part at a time from these.
+            'entries' => match ($kind) {
+                'conditions' => ConditionCodec::decodeAll(is_string($field['encoded'] ?? null) ? $field['encoded'] : (string) ($field['value'] ?? '')),
+                'writes' => WorldWriteCodec::decodeAll((string) ($field['value'] ?? '')),
+                // Affinities are built a row at a time: an element and its multiplier.
+                'affinities' => self::describeAffinityEntries((string) ($field['value'] ?? '')),
+                default => null,
+            },
+            'writeTypes' => $kind === 'writes' && is_array($field['writeTypes'] ?? null) ? array_values($field['writeTypes']) : null,
+            // One axis of a coordinate pair under the heading before it.
+            'axis' => in_array($field['axis'] ?? null, ['x', 'y'], true) ? $field['axis'] : null,
+            'key' => $key,
+        ], static fn(mixed $value): bool => $value !== null);
+    }
+
+    /**
+     * An affinity line as the rows it is built from.
+     *
+     * @return list<array{element: string, multiplier: float}>
+     */
+    private static function describeAffinityEntries(string $line): array
+    {
+        $entries = [];
+        foreach (ElementAffinityCodec::decodeAll($line) as $element => $multiplier) {
+            $entries[] = ['element' => $element, 'multiplier' => $multiplier];
+        }
+
+        return $entries;
+    }
+
+    /**
+     * What names a row for an edit: its target and the field, path, marker
+     * and index it edits. Null for a row no edit applies through.
+     *
+     * @param array<string, mixed> $field
+     * @return array<string, mixed>|null
+     */
+    private static function describeKey(array $field): ?array
+    {
+        if (! is_string($field['target'] ?? null)) {
+            return null;
+        }
+
+        return array_filter([
+            'target' => $field['target'],
+            'field' => isset($field['field']) ? (string) $field['field'] : null,
+            'path' => isset($field['path']) ? array_values(array_map('strval', (array) $field['path'])) : null,
+            'marker' => isset($field['marker']) ? (string) $field['marker'] : null,
+            'index' => isset($field['index']) ? (int) $field['index'] : null,
+            // A list heading has no path of its own; its list's names it.
+            'list' => is_array($field['list']['path'] ?? null) ? array_values(array_map('strval', $field['list']['path'])) : null,
+        ], static fn(mixed $value): bool => $value !== null);
+    }
+
+    /** @throws SessionRefusal */
+    private function requireRecordDatabase(string $category): ProjectRecordDatabase
+    {
+        // A cutscene type's assets are records too, edited through the library's own record category.
+        $cutscene = CutsceneType::findByRecordCategory($category);
+        if ($cutscene !== null) {
+            return $this->workspace->cutscenes?->records($cutscene)
+                ?? throw new SessionRefusal(sprintf('This project has no %s assets to edit.', $cutscene->noun()));
+        }
+        if (! DatabaseCatalog::knows($category)) {
+            throw new SessionRefusal(sprintf('There is no database category %s.', $category));
+        }
+
+        return $this->workspace->getRecordDatabase($category)
+            ?? throw new SessionRefusal(sprintf('The %s database has no records to edit here.', $category));
+    }
+
+    /**
+     * A Database category as this session edits it: actors through the
+     * actor service, with what this editor's actor panes show, and every
+     * schema-driven category through the shared record rules.
+     *
+     * @throws SessionRefusal When the category is unknown.
+     */
+    private function requireCategory(string $category): DatabaseCategory
+    {
+        if ($category === 'actors') {
+            return new ActorCategory($this->workspace, $this->actorAuthoring);
+        }
+        $cutscene = CutsceneType::findByRecordCategory($category);
+        if ($cutscene !== null) {
+            return new CutsceneRecordCategory($this->workspace->cutscenes
+                ?? throw new SessionRefusal(sprintf('This project has no %s assets to edit.', $cutscene->noun())), $cutscene);
+        }
+
+        return new RecordCategory($this->requireRecordDatabase($category));
+    }
+
+    /** @return array<string, ProjectMap> */
+    private function getMapsById(): array
+    {
+        return array_combine($this->workspace->mapIds, $this->workspace->maps);
+    }
+
+    /** @throws SessionRefusal */
+    private function requireMap(string $mapId): ProjectMap
+    {
+        return $this->getMapsById()[$mapId] ?? throw new SessionRefusal(sprintf('There is no map %s.', $mapId));
+    }
+
+    /** @throws SessionRefusal When the map changed since the revision the caller saw. */
+    /**
+     * A map's revision as an interface is given it: its own state version,
+     * counted on from every revision given for an earlier reading of it.
+     */
+    private function getMapRevision(ProjectMap $map): int
+    {
+        $known = $this->mapRevisions[$map->mapId] ?? null;
+
+        if ($known === null || $known['map']->get() !== $map) {
+            $known = [
+                'map' => WeakReference::create($map),
+                'base' => $known === null ? 0 : $known['last'] + 1 - $map->stateVersion(),
+                'last' => 0,
+            ];
+        }
+
+        $known['last'] = $known['base'] + $map->stateVersion();
+        $this->mapRevisions[$map->mapId] = $known;
+
+        return $known['last'];
+    }
+
+    private function requireCurrentMap(string $mapId, int $revision): ProjectMap
+    {
+        $map = $this->requireMap($mapId);
+        if ($this->getMapRevision($map) !== $revision) {
+            throw new SessionRefusal(sprintf('%s changed since revision %d; reload it and edit again.', $mapId, $revision));
+        }
+
+        return $map;
+    }
+}

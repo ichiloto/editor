@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Database;
 
 use Closure;
+use Ichiloto\Editor\Database\Projections\WholeFileProjection;
+use LogicException;
 
 /**
  * Declares one Database category: where its records live, what an entry is
@@ -29,10 +31,8 @@ final readonly class RecordSchema
      * @param string|null $listPayloadKey When set, the file returns the sub-list bare (event scripts).
      * @param string[] $configPath The config.php subtree roots, for CONFIG_SUBTREE storage.
      * @param Closure(mixed): bool|null $recordFilter Selects which of a shared file's entries belong here.
-     * @param bool $isAlwaysReadOnly Whether the category never writes, regardless of the file probe.
-     * @param string $readOnlyNote An honest explanation shown when the category cannot be edited.
-     */
-    /**
+     * @param Closure(string, string): mixed|null $makeBlank Makes a new record from its name and the project root;
+     *   it throws a RecordRefusal saying what the project lacks when it cannot.
      * @param RecordProjection|null $projection How this category's records are
      * read out of, and folded back into, a file that is not simply a list of
      * them -- one list inside a catalogue that holds several, or the nested
@@ -44,6 +44,26 @@ final readonly class RecordSchema
      * both exclusions, but they are not picked from the same list.
      * @param Closure(array<string, mixed>): string|null $labelFor The entry
      * label, when a record's name is made of its parts rather than stored.
+     * @param string|null $recordClass For one-file-per-record categories whose
+     * files return `['class' => $recordClass, 'data' => [...]]`: the record is
+     * the data, and saves write it back inside the same envelope.
+     * @param list<RecordSubList> $subLists Lists a record holds beside its own
+     * (`subList`), each shown inline under its own heading: a quest's reward
+     * items beside its objectives. Every list's prefix is its own.
+     * @param bool $identityFollowsLabel Whether the identity is its label's slug, kept
+     * in step on rename while nothing refers to it (a quest's id follows its name).
+     * @param bool $numberedFiles For one-file-per-record categories listed in file
+     * order (skills): a file is named `0001-<slug>.php`, a new or copied record
+     * takes the next number, and so goes last, as reopening lists it.
+     * @param Closure(array<array-key, mixed>, string): ?string|null $saveCheck Why the runtime could
+     * not read the file as a save would write it, given that whole payload and the project root, or
+     * null when it can. Edits on the way there are free; the save is refused before a byte is written.
+     * @param bool $identityGiven Whether a record only ever belongs to something another category
+     * names (an enemy's battle art), so one is made for that name or not at all, never under an
+     * invented one the file could not key.
+     * @param Closure(array<string, mixed>): string[]|null $commandListsFor The keys of the command lists
+     * one record offers, when they depend on what the record is: a summon's stage lists exist only
+     * where its stage does. Absent, every command list is offered.
      */
     public function __construct(
         public string $key,
@@ -60,12 +80,58 @@ final readonly class RecordSchema
         public ?Closure $recordFilter = null,
         public ?Closure $makeBlank = null,
         public array $commandLists = [],
-        public bool $isAlwaysReadOnly = false,
-        public string $readOnlyNote = '',
         public ?RecordProjection $projection = null,
         public ?Closure $fieldsFor = null,
         public ?Closure $labelFor = null,
+        public ?string $recordClass = null,
+        public array $subLists = [],
+        public bool $identityFollowsLabel = false,
+        public bool $numberedFiles = false,
+        public ?Closure $saveCheck = null,
+        public bool $identityGiven = false,
+        public ?Closure $commandListsFor = null,
+        /** @var Closure(array<string, mixed>): list<string>|null Selects the inline lists offered by this record's shape. */
+        public ?Closure $subListsFor = null,
+        /** Exclusive source owners refuse external edits rather than merging a stale snapshot. */
+        public bool $requireUnchangedSource = false,
+        /** Normalize dependent fields on an edited record before accepting the draft. */
+        public ?Closure $prepareEdit = null,
     ) {
+        if ($projection instanceof WholeFileProjection) {
+            // A field outside the keys the category owns would read blank and
+            // its edits would never reach the file.
+            $unowned = $projection->findUnownedKey([
+                ...array_map(static fn(RecordField $field): string => $field->key, $fields),
+                ...array_map(static fn(RecordSubList $list): string => $list->key, $this->getInlineSubLists()),
+            ]);
+
+            if ($unowned !== null) {
+                throw new LogicException(sprintf('The %s category edits "%s", a key its file projection does not own.', $key, $unowned));
+            }
+        }
+    }
+
+    /**
+     * The lists a record's rows show inline, its own first.
+     *
+     * @return list<RecordSubList>
+     */
+    public function getInlineSubLists(array|object|null $payload = null): array
+    {
+        $lists = $this->subList === null ? $this->subLists : [$this->subList, ...$this->subLists];
+        if ($payload === null || $this->subListsFor === null) { return $lists; }
+        $keys = ($this->subListsFor)((array) $payload);
+        return array_values(array_filter($lists, static fn(RecordSubList $list): bool => in_array($list->key, $keys, true)));
+    }
+
+    /** The inline list held under a payload key; the record's own when the key is null. */
+    public function findInlineSubList(?string $key, array|object|null $payload = null): ?RecordSubList
+    {
+        if ($key === null) {
+            return $this->subList;
+        }
+
+        return array_find($this->getInlineSubLists($payload), static fn(RecordSubList $list): bool => $list->key === $key);
     }
 
     /**
@@ -84,6 +150,25 @@ final readonly class RecordSchema
         $fields = ($this->fieldsFor)(is_array($payload) ? $payload : (array) $payload);
 
         return $fields;
+    }
+
+    /**
+     * Returns the command lists one record offers, by key: every one, unless
+     * the record's shape decides.
+     *
+     * @param array<string, mixed>|object $payload The record payload.
+     * @return array<string, RecordSubList> The lists.
+     */
+    public function commandListsFor(array|object $payload): array
+    {
+        if ($this->commandListsFor === null) {
+            return $this->commandLists;
+        }
+
+        /** @var string[] $keys */
+        $keys = ($this->commandListsFor)(is_array($payload) ? $payload : (array) $payload);
+
+        return array_intersect_key($this->commandLists, array_flip($keys));
     }
 
     /**

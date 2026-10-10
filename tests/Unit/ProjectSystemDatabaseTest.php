@@ -2,7 +2,9 @@
 
 declare(strict_types=1);
 
-use Ichiloto\Editor\ProjectSystemDatabase;
+use Ichiloto\Editor\Database\ProjectRecordDatabase;
+use Ichiloto\Editor\Database\RecordSchemaCatalog;
+use Ichiloto\Editor\Session\EditorSession;
 
 function scratchSystemProject(): string
 {
@@ -12,10 +14,15 @@ function scratchSystemProject(): string
     return $root;
 }
 
-it('round-trips every system field including extended and unknown ATB settings', function (): void {
-    $root = scratchSystemProject();
-    $path = $root . '/assets/Data/system.php';
-    $original = [
+function systemRecords(string $root): ProjectRecordDatabase
+{
+    return ProjectRecordDatabase::fromProject($root, RecordSchemaCatalog::forKey('system'));
+}
+
+/** @return array<string, mixed> */
+function productionSystem(): array
+{
+    return [
         'title' => 'Production Fixture',
         'currency' => ['amount' => 400, 'symbol' => 'G'],
         'startingParty' => ['Kaelion', 'Liora', 'Drazek', 'Seraphis'],
@@ -36,54 +43,140 @@ it('round-trips every system field including extended and unknown ATB settings',
                 'speedFactorPercent' => 100,
                 'openingVariance' => 24,
                 'openingSpeedFactorPercent' => 250,
-                'surpriseAttackChancePercent' => 8,
-                'backAttackChancePercent' => 6,
                 'futureTuningKey' => 17,
             ],
         ],
         'unknownSystemSetting' => ['preserve' => 'yes'],
     ];
-    file_put_contents($path, "<?php\n\nreturn " . var_export($original, true) . ";\n");
+}
 
-    $database = ProjectSystemDatabase::fromProject($root);
+it('round-trips every system field, extended and unknown ones included, byte for byte', function (): void {
+    $root = scratchSystemProject();
+    $path = $root . '/assets/Data/system.php';
+    file_put_contents($path, "<?php\n\n// Keep this header.\nreturn " . var_export(productionSystem(), true) . ";\n");
+    $source = (string) file_get_contents($path);
+
+    $database = systemRecords($root);
+    $database->setField(0, 'title', 'Changed');
+    $database->setField(0, 'title', 'Production Fixture');
     $database->save();
 
-    $saved = require $path;
-    $reloaded = ProjectSystemDatabase::fromProject($root);
-    $reloaded->save();
-    $reloadedAgain = require $path;
-
-    expect($saved)->toBe($original)
-        ->and($saved['battle']['activeTime'])->toBe($original['battle']['activeTime'])
-        ->and($saved['battle']['unknownBattleSetting'])->toBe(['future' => true])
-        ->and($saved['unknownSystemSetting'])->toBe(['preserve' => 'yes'])
-        ->and($reloadedAgain)->toBe($original);
+    expect((string) file_get_contents($path))->toBe($source);
 });
 
 it('merges an edited system field without removing unedited settings', function (): void {
     $root = scratchSystemProject();
     $path = $root . '/assets/Data/system.php';
-    $original = [
-        'title' => 'Production Fixture',
-        'battle' => [
-            'engine' => 'active_time',
-            'activeTime' => [
-                'mode' => 'wait',
-                'baseFillRate' => 35,
-                'speedFactorPercent' => 100,
-                'openingVariance' => 24,
-                'futureTuningKey' => 17,
-            ],
-        ],
-    ];
-    file_put_contents($path, "<?php\n\nreturn " . var_export($original, true) . ";\n");
+    file_put_contents($path, "<?php\n\nreturn " . var_export(productionSystem(), true) . ";\n");
 
-    $database = ProjectSystemDatabase::fromProject($root);
-    $database->setField('atbBaseFillRate', 42);
+    $database = systemRecords($root);
+    $database->setField(0, 'battle.activeTime.baseFillRate', '42');
+    $database->setField(0, 'startingPositions.player.spawnSprite.0', 'West');
+    $database->save();
+    $saved = require $path;
+    $expected = productionSystem();
+    $expected['battle']['activeTime']['baseFillRate'] = 42;
+    $expected['startingPositions']['player']['spawnSprite'] = ['West'];
+
+    expect($saved)->toBe($expected);
+});
+
+it('edits the starting party as actor ids and the starting inventory as items with quantities', function (): void {
+    $root = scratchSystemProject();
+    $path = $root . '/assets/Data/system.php';
+    file_put_contents($path, "<?php\n\nreturn " . var_export(productionSystem(), true) . ";\n");
+
+    $database = systemRecords($root);
+    $database->removeSubItem(0, 1, 'startingParty');
+    $stock = $database->addSubItem(0, listKey: 'startingInventory');
+    $database->setField(0, "stock{$stock}Item", 'Ether');
+    $database->setField(0, "stock{$stock}Quantity", '3');
     $database->save();
     $saved = require $path;
 
-    expect($saved['battle']['activeTime']['baseFillRate'])->toBe(42)
-        ->and($saved['battle']['activeTime']['openingVariance'])->toBe(24)
-        ->and($saved['battle']['activeTime']['futureTuningKey'])->toBe(17);
+    // A party member stays a bare id, as the file authors it.
+    expect($saved['startingParty'])->toBe(['Kaelion', 'Drazek', 'Seraphis'])
+        ->and($saved['startingInventory'])->toBe([['item' => 'S-Potion', 'quantity' => 10], ['item' => 'Ether', 'quantity' => 3]]);
+});
+
+it('keeps the file as the category\'s one record, only ever edited', function (): void {
+    $root = scratchSystemProject();
+    file_put_contents($root . '/assets/Data/system.php', "<?php\n\nreturn " . var_export(productionSystem(), true) . ";\n");
+    $database = systemRecords($root);
+
+    expect($database->getEntryLabels())->toBe(['Production Fixture'])
+        ->and($database->isEditable())->toBeTrue()
+        ->and($database->supportsRecordCreation())->toBeFalse()
+        ->and($database->supportsRecordDeletion())->toBeFalse()
+        ->and($database->duplicateRecordSupported())->toBeFalse()
+        ->and($database->addRecord())->toBeNull();
+});
+
+it('opens System in the GUI session with its lists under their headings', function (): void {
+    $session = EditorSession::open(makeTemporaryProject());
+    $records = $session->listDatabaseRecords('system');
+    $rows = $session->readDatabaseRecord('system', 0)['rows'];
+    $labels = array_column($rows, 'label');
+
+    expect($records['editable'])->toBeTrue()
+        ->and($records['canCreate'])->toBeFalse()
+        ->and($labels)->toContain('Title', 'Starting Gold', 'Start Map', 'Battle Engine', 'Starting Party', 'Starting Inventory');
+});
+
+it('keeps a value written as an enum case\'s value written that way, as the new case', function (): void {
+    $root = scratchSystemProject();
+    $path = $root . '/assets/Data/system.php';
+    file_put_contents($path, "<?php\n\nuse Ichiloto\\Engine\\Core\\Enumerations\\MovementHeading;\n\nreturn [\n  'title' => 'Fixture',\n  'startingPositions' => ['player' => ['spawnSprite' => [MovementHeading::SOUTH->value]]],\n];\n");
+
+    $database = systemRecords($root);
+    new \Ichiloto\Editor\Database\RecordAuthoring()->applyField($database, 0, [], 'startingPositions.player.spawnSprite.0', 'West', 'Start Facing');
+    $database->save();
+
+    expect((string) file_get_contents($path))->toContain('[MovementHeading::WEST->value]')
+        ->and((require $path)['startingPositions']['player']['spawnSprite'])->toBe(['West']);
+});
+
+it('refuses an edit to a value the file writes as an expression when it is made, not at save', function (): void {
+    $root = scratchSystemProject();
+    $path = $root . '/assets/Data/system.php';
+    file_put_contents($path, "<?php\n\nreturn ['title' => strtoupper('fixture'), 'currency' => ['amount' => 5]];\n");
+    $database = systemRecords($root);
+
+    expect(fn() => new \Ichiloto\Editor\Database\RecordAuthoring()->applyField($database, 0, [], 'title', 'Renamed', 'Title'))
+        ->toThrow(\Ichiloto\Editor\Database\RecordRefusal::class, 'expression')
+        ->and($database->getRecordByIndex(0)->get('title'))->toBe('FIXTURE')
+        ->and($database->isDirty())->toBeFalse();
+
+    // Values written as plain data stay editable beside it.
+    new \Ichiloto\Editor\Database\RecordAuthoring()->applyField($database, 0, [], 'currency.amount', '9', 'Starting Gold');
+    $database->save();
+
+    expect((string) file_get_contents($path))->toContain("strtoupper('fixture')", "'amount' => 9");
+});
+
+it('saves System and Types, which share system.php, each with only its own keys', function (): void {
+    $root = scratchSystemProject();
+    $path = $root . '/assets/Data/system.php';
+    file_put_contents($path, "<?php\n\nreturn " . var_export([...productionSystem(), 'elements' => ['Fire', 'Ice']], true) . ";\n");
+    $system = systemRecords($root);
+    $types = ProjectRecordDatabase::fromProject($root, RecordSchemaCatalog::forKey('types'));
+
+    $types->setField(0, ProjectRecordDatabase::subFieldId('element', 1, 'name'), 'Frost');
+    $system->setField(0, 'currency.amount', '900');
+    $system->save();
+    $types->save();
+    $saved = require $path;
+
+    expect($saved['currency']['amount'])->toBe(900)
+        ->and($saved['elements'])->toBe(['Fire', 'Frost'])
+        ->and($saved['unknownSystemSetting'])->toBe(['preserve' => 'yes'])
+        ->and(array_keys($system->getRecordByIndex(0)?->toArray() ?? []))->not->toContain('elements')
+        ->and(fn() => new Ichiloto\Editor\Database\RecordSchema(
+            key: 'stray',
+            entryNoun: 'stray',
+            storage: Ichiloto\Editor\Database\RecordStorage::LIST_FILE,
+            relativePath: 'assets/Data/system.php',
+            fields: [new Ichiloto\Editor\Database\RecordField('title', 'Title')],
+            projection: new Ichiloto\Editor\Database\Projections\WholeFileProjection(['elements']),
+        ))->toThrow(LogicException::class, 'The stray category edits "title", a key its file projection does not own.');
 });

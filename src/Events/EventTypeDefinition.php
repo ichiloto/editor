@@ -13,6 +13,11 @@ final class EventTypeDefinition
      * @param array<string, mixed> $defaultData
      * @param array<string, mixed> $defaultDefinitionFields Root fields added
      * beside `class` and `data` when a new event of this type is created.
+     * @param array<string, mixed> $optionalData Data keys an event of this
+     * type may hold and the Engine reads as unset when absent, with the
+     * value an inspector shows for one that is absent. They are offered on
+     * every such event and written only when an author sets one; clearing
+     * one removes it again.
      */
     public function __construct(
         public readonly string $label,
@@ -20,6 +25,29 @@ final class EventTypeDefinition
         public readonly string $description,
         public readonly array $defaultData,
         public readonly array $defaultDefinitionFields = [],
+        public readonly array $optionalData = [],
     ) {
+    }
+
+    /**
+     * The definition an event of this type has. An event already of this
+     * type keeps everything it holds and gains any default it lacks; any
+     * other event starts again from the defaults, since another type's data
+     * means nothing to this one.
+     *
+     * @param array<string, mixed>|null $current The event's definition now, if it has one.
+     * @return array<string, mixed>
+     */
+    public function buildDefinition(?array $current): array
+    {
+        $defaults = [
+            'class' => $this->className,
+            'data' => $this->defaultData,
+            ...$this->defaultDefinitionFields,
+        ];
+
+        return is_array($current) && ($current['class'] ?? null) === $this->className
+            ? array_replace_recursive($defaults, $current)
+            : $defaults;
     }
 }

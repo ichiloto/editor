@@ -42,7 +42,7 @@ function actorEditorOn(string $root): Editor
  */
 function actorRow(Editor $editor, string $fieldId): array
 {
-    foreach (callEditorMethod($editor, 'getDatabaseActorSettingsFields') as $field) {
+    foreach (callEditorMethod($editor, 'getDatabaseSettingsFields') as $field) {
         if (($field['field'] ?? null) === $fieldId) {
             return $field;
         }
@@ -51,25 +51,70 @@ function actorRow(Editor $editor, string $fieldId): array
     throw new RuntimeException(sprintf('No actor row "%s".', $fieldId));
 }
 
-it('authors a durable definition id, and says what a save resolves without one', function () {
+it('keeps explicit actor identity read-only while renaming display text', function () {
     [$root, $database, $actor] = actorUnderTest();
 
-    // A project that declares no id is resolved by name, which is exactly
-    // what strands a save when the actor is renamed.
-    expect($actor->hasDefinitionId())->toBeFalse()
+    expect($actor->hasDefinitionId())->toBeTrue()
         ->and($actor->getDefinitionId())->toBe('Kaelion');
 
     $editor = actorEditorOn($root);
-    expect(actorRow($editor, 'id')['displayDefault'])->toContain('Kaelion (the name;');
-
-    $database->setField(0, 'id', 'actor.kaelion');
-
-    expect($database->getActors()[0]->hasDefinitionId())->toBeTrue()
-        ->and($database->getActors()[0]->getDefinitionId())->toBe('actor.kaelion');
+    expect(actorRow($editor, 'id')['editable'])->toBeFalse();
+    expect(fn() => $database->setField(0, 'id', 'actor.kaelion'))->toThrow(RuntimeException::class, 'permanent');
+    expect(fn() => $database->setField(0, 'id', ''))->toThrow(RuntimeException::class, 'permanent');
 
     // Renaming now leaves the identity where it was.
     $database->setField(0, 'name', 'Kaelion the Elder');
-    expect($database->getActors()[0]->getDefinitionId())->toBe('actor.kaelion');
+    expect($database->getActors()[0]->getDefinitionId())->toBe('Kaelion');
+    $database->save();
+    $reloaded = ProjectActorDatabase::fromProject($root)->getActors()[0];
+    expect($reloaded->getName())->toBe('Kaelion the Elder')->and($reloaded->getDefinitionId())->toBe('Kaelion');
+});
+
+it('assigns an explicit immutable id to a new actor before its first save', function () {
+    [$root, $database] = actorUnderTest();
+    $index = $database->addActor('Liora');
+    $actor = $database->getActorByIndex($index);
+    expect($actor->hasDefinitionId())->toBeTrue()->and($actor->getDefinitionId())->toBe('Liora');
+    $database->setField($index, 'name', 'Liora Vey');
+    expect($actor->getDefinitionId())->toBe('Liora');
+    $database->save();
+    expect((require $actor->path)['data'])->toMatchArray(['id' => 'Liora', 'name' => 'Liora Vey']);
+});
+
+it('flags missing explicit ids and requires repairing identity before a legacy rename', function () {
+    [$root] = actorUnderTest();
+    $path = $root . '/assets/Data/Actors/Kaelion.php';
+    $payload = require $path;
+    unset($payload['data']['id']);
+    file_put_contents($path, '<?php return ' . var_export($payload, true) . ';');
+    $workspace = ProjectWorkspace::fromProject($root);
+    $actor = $workspace->actorDatabase->getActors()[0];
+    $validator = new \Ichiloto\Editor\Validation\ProjectValidator();
+    $issues = new ReflectionMethod($validator, 'checkActorDefinitions')->invoke($validator, $workspace);
+    expect(array_column($issues, 'message'))->toContain('Actor has no explicit stable id.');
+    expect(fn() => $actor->setField('name', 'Renamed'))->toThrow(RuntimeException::class, 'before renaming');
+    $actor->setField('id', 'Kaelion');
+    $actor->setField('name', 'Renamed');
+    expect($actor->getDefinitionId())->toBe('Kaelion');
+});
+
+it('undoes and redoes a legacy identity repair and display rename without retargeting the actor', function () {
+    [$root] = actorUnderTest();
+    $path = $root . '/assets/Data/Actors/Kaelion.php';
+    $payload = require $path;
+    unset($payload['data']['id']);
+    file_put_contents($path, '<?php return ' . var_export($payload, true) . ';');
+    $editor = actorEditorOn($root);
+    $actor = getEditorProperty($editor, 'workspace')->actorDatabase->getActors()[0];
+    callEditorMethod($editor, 'applyDatabaseFieldValueRecorded', actorRow($editor, 'id'), 'Kaelion');
+    callEditorMethod($editor, 'applyDatabaseFieldValueRecorded', actorRow($editor, 'name'), 'Kaelion the Elder');
+    callEditorMethod($editor, 'performUndo');
+    expect($actor->getName())->toBe('Kaelion')->and($actor->getDefinitionId())->toBe('Kaelion');
+    callEditorMethod($editor, 'performUndo');
+    expect($actor->hasDefinitionId())->toBeFalse()->and($actor->isDirty())->toBeFalse();
+    callEditorMethod($editor, 'performRedo');
+    callEditorMethod($editor, 'performRedo');
+    expect($actor->getName())->toBe('Kaelion the Elder')->and($actor->getDefinitionId())->toBe('Kaelion');
 });
 
 it('authors actor-natural adjustments, keeping their sign and dropping zeroes', function () {
@@ -221,7 +266,7 @@ it('shows the layers in the Inspector and edits the variant in force', function 
     $database->save();
 
     $editor = actorEditorOn($root);
-    $labels = array_column(callEditorMethod($editor, 'getDatabaseActorSettingsFields'), 'label');
+    $labels = array_column(callEditorMethod($editor, 'getDatabaseSettingsFields'), 'label');
 
     expect($labels)->toContain('Identity')
         ->toContain('Nature')
@@ -231,7 +276,7 @@ it('shows the layers in the Inspector and edits the variant in force', function 
     // The rows edit the default variant until another is chosen.
     expect(actorRow($editor, 'naturalVariants.awakened.attack')['value'])->toBe('12');
 
-    callEditorMethod($editor, 'applyDatabaseFieldValue', '__actor_variant', 'dormant');
+    callEditorMethod($editor, 'applyDatabaseFieldValueRecorded', actorRow($editor, '__actor_variant'), 'dormant');
 
     expect(actorRow($editor, 'naturalVariants.dormant.attack')['value'])->toBe('1');
 
@@ -242,6 +287,6 @@ it('shows the layers in the Inspector and edits the variant in force', function 
     expect($workspace->actorDatabase->isDirty())->toBeFalse();
 
     // Editing through the pane writes into that variant.
-    callEditorMethod($editor, 'applyDatabaseFieldValue', 'naturalVariants.dormant.attack', '7');
+    callEditorMethod($editor, 'applyDatabaseFieldValueRecorded', actorRow($editor, 'naturalVariants.dormant.attack'), '7');
     expect($workspace->actorDatabase->getActors()[0]->getNaturalVariants()['dormant'])->toBe(['attack' => 7]);
 });

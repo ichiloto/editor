@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 use Ichiloto\Editor\Cutscenes\CutsceneType;
-use Ichiloto\Editor\Cutscenes\Preview\SummonPreviewSession;
+use Ichiloto\Editor\Cutscenes\Preview\TimelinePreviewSession;
 use Ichiloto\Editor\Database\SummonAssignmentDiagnostics;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Editor\UI\CutscenesScreen;
@@ -37,7 +37,7 @@ it('opens, compiles and previews every Last Legend summon read-only, leaving eve
         expect($asset->isEditable())->toBeTrue($asset->id . ' is editable')
             ->and($asset->isDirty())->toBeFalse();
         $compiled = $asset->compiledSummon();
-        $preview = new SummonPreviewSession($compiled);
+        $preview = new TimelinePreviewSession($compiled);
         $preview->play();
 
         for ($tick = 0; $tick < 5000 && ! $preview->isCompleted(); $tick++) {
@@ -55,7 +55,7 @@ it('opens, compiles and previews every Last Legend summon read-only, leaving eve
         callEditorMethod($editor, 'selectCutsceneById', $id);
         setEditorProperty($editor, 'cutsceneFocus', CutscenesScreen::PANE_PREVIEW);
         pressKeys($editor, ' ', ' ', '.');
-        expect(getEditorProperty($editor, 'summonPreview'))->not->toBeNull();
+        expect(getEditorProperty($editor, 'timelinePreview'))->not->toBeNull();
         pressKeys($editor, 'x');
     }
 
@@ -109,7 +109,7 @@ it('authors a new summon in a disposable Last Legend copy end to end, with unrel
     $workspace = getEditorProperty($editor, 'workspace');
     $actor = $workspace->actorDatabase->getActors()[0];
     $actorName = $actor->getName();
-    $skill = $workspace->skillDatabase->getSkills()[0]->getName();
+    $skill = $workspace->getSkillNames()[0];
 
     // 1.–2. Create, name, link a real battle action.
     setEditorProperty($editor, 'cutsceneFocus', CutscenesScreen::PANE_LIST);
@@ -196,8 +196,8 @@ it('authors a new summon in a disposable Last Legend copy end to end, with unrel
     // 11. Preview through the Engine session: the cue fires once at 24.
     setEditorProperty($editor, 'cutsceneFocus', CutscenesScreen::PANE_PREVIEW);
     pressKeys($editor, ' ');
-    $preview = getEditorProperty($editor, 'summonPreview');
-    expect($preview)->toBeInstanceOf(SummonPreviewSession::class);
+    $preview = getEditorProperty($editor, 'timelinePreview');
+    expect($preview)->toBeInstanceOf(TimelinePreviewSession::class);
 
     for ($tick = 0; $tick < 200 && ! $preview->isCompleted(); $tick++) {
         $preview->tick($preview->secondsPerFrame());
@@ -266,4 +266,49 @@ it('authors a new summon in a disposable Last Legend copy end to end, with unrel
     // The actor file changed only by its summons list.
     $actorSource = file_get_contents($actor->path);
     expect($actorSource)->toContain("'ember-moth'");
+});
+
+it('opens and previews every Last Legend effect read-only, in each of its sequences, leaving every hash unchanged', function () {
+    $root = disposableLastLegend();
+
+    if ($root === null) {
+        $this->markTestSkipped('No Last Legend checkout is pinned (ICHILOTO_GAME_SRC).');
+    }
+
+    $before = authoredHashTree($root);
+    $editor = cutscenesEditor($root, 160, 50);
+    callEditorMethod($editor, 'switchCutsceneType', CutsceneType::EFFECT);
+    $library = libraryOf($editor);
+    $ids = $library->ids(CutsceneType::EFFECT);
+    $previewed = 0;
+
+    expect($ids)->not->toBe([])
+        ->and($library->issues(CutsceneType::EFFECT))->toBe([]);
+
+    foreach ($ids as $id) {
+        $asset = $library->find(CutsceneType::EFFECT, $id);
+        callEditorMethod($editor, 'selectCutsceneById', $id);
+
+        foreach ($asset->hasPresentations() ? \Ichiloto\Engine\Animations\Timelines\EffectPresentation::cases() : [null] as $presentation) {
+            if ($presentation !== null) {
+                $asset->selectPresentation($presentation);
+            }
+
+            setEditorProperty($editor, 'cutsceneFocus', CutscenesScreen::PANE_PREVIEW);
+            callEditorMethod($editor, 'disposeCinematicPreview');
+            callEditorMethod($editor, 'startTimelinePreview', false);
+            $preview = getEditorProperty($editor, 'timelinePreview');
+
+            // Each sequence plays where the project uses it: the preview's
+            // own context, chosen from those uses.
+            expect($preview)->toBeInstanceOf(TimelinePreviewSession::class, $id . ' previews')
+                ->and(renderEditorPlainFrame($editor, 160, 50))->toContain($id);
+            $previewed++;
+        }
+    }
+
+    pressKeys($editor, "\033OS");
+    expect($previewed)->toBeGreaterThanOrEqual(count($ids))
+        ->and($library->hasUnsavedChanges())->toBeFalse()
+        ->and(authoredHashTree($root))->toBe($before);
 });

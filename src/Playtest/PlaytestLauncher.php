@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Playtest;
 
+use Ichiloto\Editor\Console\ConsoleBinary;
 use RuntimeException;
 
 /**
@@ -23,11 +24,7 @@ final class PlaytestLauncher
     }
 
     /**
-     * Locates the console entry point.
-     *
-     * A project may install the console in its own vendor directory, a global
-     * install puts it on PATH, and this package may itself be installed under
-     * another Composer vendor tree.
+     * Locates the console entry point ({@see ConsoleBinary::discover()}).
      *
      * @param string|null $override An explicit path (`ICHILOTO_CONSOLE_BIN`).
      * @param string|null $projectRoot The project being edited, if known.
@@ -35,96 +32,7 @@ final class PlaytestLauncher
      */
     public static function discover(?string $override = null, ?string $projectRoot = null): self
     {
-        $candidates = self::candidates($override, $projectRoot);
-
-        foreach ($candidates as $candidate) {
-            if (is_file($candidate)) {
-                return new self($candidate);
-            }
-        }
-
-        throw new RuntimeException(sprintf(
-            "Could not find the ichiloto console binary — set ICHILOTO_CONSOLE_BIN to its path.\nLooked in:\n  %s",
-            implode("\n  ", $candidates),
-        ));
-    }
-
-    /**
-     * Returns where the console binary might be, best guess first.
-     *
-     * @param string|null $override An explicit path.
-     * @param string|null $projectRoot The project being edited, if known.
-     * @return string[] The paths to try.
-     */
-    private static function candidates(?string $override, ?string $projectRoot): array
-    {
-        return array_values(array_unique(array_filter([
-            $override,
-            (string) getenv('ICHILOTO_CONSOLE_BIN') ?: null,
-            // A project that requires ichiloto/console.
-            is_string($projectRoot) && $projectRoot !== ''
-                ? rtrim($projectRoot, DIRECTORY_SEPARATOR) . '/vendor/bin/ichiloto'
-                : null,
-            // This package installed under a vendor tree, the project's or
-            // the console's own.
-            ...self::vendorBinariesAbove(),
-            // Installed globally.
-            self::binaryOnPath(),
-        ])));
-    }
-
-    /**
-     * Returns every `vendor/bin/ichiloto` in a directory above this package.
-     *
-     * @return string[] The paths.
-     */
-    private static function vendorBinariesAbove(): array
-    {
-        $paths = [];
-        $directory = dirname(__DIR__, 2);
-
-        // Deep enough to climb out of `vendor/ichiloto/editor` and any
-        // directory nesting a project keeps above it.
-        for ($depth = 0; $depth < 8; $depth++) {
-            $paths[] = $directory . '/vendor/bin/ichiloto';
-            $parent = dirname($directory);
-
-            if ($parent === $directory) {
-                break;
-            }
-
-            $directory = $parent;
-        }
-
-        return $paths;
-    }
-
-    /**
-     * Returns the console binary found on PATH, if it is there.
-     *
-     * @return string|null The path, or null when PATH has no ichiloto.
-     */
-    private static function binaryOnPath(): ?string
-    {
-        $path = (string) getenv('PATH');
-
-        if ($path === '') {
-            return null;
-        }
-
-        foreach (explode(PATH_SEPARATOR, $path) as $directory) {
-            if ($directory === '') {
-                continue;
-            }
-
-            $candidate = rtrim($directory, DIRECTORY_SEPARATOR) . '/ichiloto';
-
-            if (is_file($candidate)) {
-                return $candidate;
-            }
-        }
-
-        return null;
+        return new self(ConsoleBinary::discover($override, $projectRoot)->path);
     }
 
     /**
@@ -141,6 +49,66 @@ final class PlaytestLauncher
             escapeshellarg($this->consoleBinary),
             escapeshellarg($overlay->root),
         );
+    }
+
+    /**
+     * Starts the playtest in the background with a renderer of its own, for
+     * an editor that owns no terminal to hand over: the play command runs
+     * without prompts, reading nothing and writing its output to a log.
+     *
+     * @param string $rendererId The renderer, such as `gpui`.
+     * @param string $logPath Where the play command's output goes.
+     * @throws RuntimeException When the process cannot start.
+     */
+    public function start(PlaytestOverlay $overlay, string $rendererId, string $logPath): PlaytestRun
+    {
+        return $this->spawn($overlay, ['play', '--no-tmux', '--no-interaction', '--renderer=' . $rendererId, '-d', $overlay->root], $logPath);
+    }
+
+    /**
+     * Starts a battle test in the background with a renderer of its own, as
+     * {@see start()} starts a playtest: `ichiloto battle` against a battle
+     * test overlay, fighting the named troop with the party and arena its
+     * system data's battle test sets.
+     *
+     * @param string $troop The troop to fight, by name.
+     * @throws RuntimeException When the process cannot start.
+     */
+    public function startBattle(PlaytestOverlay $overlay, string $rendererId, string $logPath, string $troop): PlaytestRun
+    {
+        return $this->spawn($overlay, ['battle', '--no-interaction', '--renderer=' . $rendererId, '-d', $overlay->root, '--troop', $troop], $logPath);
+    }
+
+    /**
+     * Runs a console command against an overlay, reading nothing and writing
+     * its output to a log.
+     *
+     * @param list<string> $arguments The command and its options.
+     */
+    private function spawn(PlaytestOverlay $overlay, array $arguments, string $logPath): PlaytestRun
+    {
+        $log = @fopen($logPath, 'ab');
+        if (! is_resource($log)) {
+            throw new RuntimeException("Unable to open the playtest log at {$logPath}.");
+        }
+
+        try {
+            $pipes = [];
+            $process = @proc_open(
+                [PHP_BINARY, $this->consoleBinary, ...$arguments],
+                [0 => ['file', '/dev/null', 'r'], 1 => $log, 2 => $log],
+                $pipes,
+                $overlay->root,
+            );
+        } finally {
+            fclose($log);
+        }
+
+        if (! is_resource($process)) {
+            throw new RuntimeException('The playtest could not be started.');
+        }
+
+        return new PlaytestRun($process, $overlay, $logPath);
     }
 
     /**

@@ -54,18 +54,18 @@ is what the code draws rather than a sketch of it:
  ┌─Assets [Focus]───────────────┐ ┌─Canvas─────────────────────┐ ┌─Inspector──────────────────────┐
  │ Maps                         │ │ Preview: test-map          │ │   Name: Test Map               │
  │ > test-map                   │ │ Test Map |  | 12 x 5 | vie │ │   Region:                      │
- │                              │ │ ############               │ │   Description: A tiny fixture  │
- │                              │ │ #  ~~~     #               │ │                map.            │
+ │                              │ │ ############               │ │   Kind: Not set                │
+ │                              │ │ #  ~~~     #               │ │   Description: A tiny fixture  │
+ │                              │ │ #          #               │ │                map.            │
  │                              │ │ #          #               │ │   Size                         │
- │                              │ │ #          #               │ │     X: 12                      │
- │                              │ │ ############               │ │     Y: 5                       │
+ │                              │ │ ############               │ │     X: 12                      │
+ │                              │ │                            │ │     Y: 5                       │
  │                              │ │                            │ │   Events · 1                   │
  │                              │ │                            │ │   Triggers · 0                 │
  │                              │ │                            │ │   Audio                        │
  │                              │ │                            │ │     Background Music: (None)   │
  │                              │ │                            │ │     Music Variants · None      │
- │                              │ │                            │ │   Encounters · off             │
- └─/:Filter  Del:Delete─────────┘ └─i:Paint  m:Map  e:Event────┘ └─Enter:Edit─────────────────────┘
+ └─/:Filter  Del:Delete─────────┘ └─i:Paint L:Layer ?:Help─────┘ └─Enter:Edit─────────────────────┘
  ┌─Status─────────────────────────────────────────────────────────────────────────────────────────┐
  │ Selected map: test-map | Focus: Assets | Mode: Map | Tool: Brush 1                             │
  │ Cursor: (0, 0) | Viewport: (0, 0) | Ready.                                                     │
@@ -78,6 +78,12 @@ is what the code draws rather than a sketch of it:
 - The `Status` footer carries the current selection, mode, active canvas tool,
   and, on its second line, the cursor, the viewport, and the most recent
   message.
+
+A message's colour says what happened: blue for an update, including every
+edit, which stays in memory until you save; green only when something reached
+disk (a save, or a command that writes files at once) or a check passed;
+yellow for a warning; red for an error. Edits never show green, so green
+always means saved, and the header's `*` shows what is still unsaved.
 
 Each panel writes its own keys into its bottom border, and shortens them on a
 narrow terminal rather than cutting one in half - so what a panel offers is
@@ -104,8 +110,7 @@ prefer. Arrow keys always act inside the focused panel.
 
 Every selection list wraps: `Down` on the last row selects the first, and
 `Up` on the first row selects the last. This holds for the asset list, the
-Database categories, entries, settings rows and animation frames, dialog and
-picker lists, the command palette, option-value cycling, and the Cutscenes
+Database categories, entries and settings rows, dialog and picker lists, the command palette, option-value cycling, and the Cutscenes
 lists. Map cursors, scrolling panes and text editing keep ordinary bounds -
 wrapping is for choosing from a list, not for walking a canvas.
 
@@ -148,7 +153,8 @@ exist.
 `Esc` backs out exactly one level, everywhere:
 
 - a field edit returns to the pane
-- a pending canvas anchor is dropped, then a selection is cleared
+- a connected piece's anchor is dropped, then piece placement ends, a pending
+  canvas anchor is dropped, then a selection is cleared
 - a filter query is cleared before its list closes
 - an overlay or dialog closes
 - the Database screen closes
@@ -163,8 +169,8 @@ carries a trailing `*`.
 Controls:
 
 - `Up` / `Down`: move the selection
-- `Shift+A`: create a new map
-- `Shift+D`: duplicate the selected map
+- `Shift+A`: create a new map, asking its [kind](#map-kind) first
+- `Shift+D`: duplicate the selected map, kind included
 - `Delete`: delete the selected map (destructive confirmation)
 - `/`: filter the list incrementally
 - `Enter`: focus the canvas on the selected map
@@ -179,6 +185,337 @@ asks first and defaults to Cancel.
 
 ## Canvas Panel
 
+### Authored Layers
+
+The TUI edits the terminal experience. Maps with `layers/` show numbered
+gameplay (`NN.name.map.php`) layers and Events, with NPC overlays in their
+authoring context. Graphical decoration (`NN.name.deco.php`) never appears on
+the terminal canvas or in its layer selection, palette or inspector. In Normal
+mode, `L` opens the layer picker: the map's gameplay layers and Events, each
+marked visible or hidden and the one being edited, and last NPCs, which enters
+NPC mode. Type to filter, move with the
+arrows or `j` / `k`, and press `Enter` to edit that layer (`Esc` keeps the
+current one). The canvas title shows the layer being edited, and only that
+layer is painted. `[` and `]` still step to the previous or next layer, `v`
+toggles the selected layer's visibility, and `d` dims inactive layers. Spaces
+above the base show through. Visibility and dimming are session settings, not
+map data.
+
+The normal canvas is editable immediately: press `i` and paint terminal glyphs.
+The separate read-only terminal-preview toggle has been removed; there is no
+graphical-marker view to switch away from.
+
+Use `Ctrl+P` and choose a Layers action to create, rename or remove a gameplay
+layer. The TUI cannot create,
+select, rename or remove graphical decoration layers. New gameplay layers
+preserve each row's width, including ragged
+maps. Renaming retains its numeric order. If the actual resolved collisions would
+change, the rename dialog names the change and requires `y` confirmation;
+shared `collisions.php` is never changed. Removal is confirmed and undoable.
+Creating a layer on a legacy map explicitly moves its terrain into
+`layers/00.terrain.map.php` in the same save transaction; ordinary legacy
+saves keep the original layout.
+
+The GUI offers **Separate collision** for an undeclared map. After explicit
+confirmation, the shared session captures its current resolved physical cells
+without changing glyphs, artwork or passage. This is one undo step, written only
+on save; opening or saving a legacy map never converts it automatically. Once
+converted, terminal appearance and layer edits no longer choose collision.
+Resize and row/column insertion preserve the declaration with geometry, adding
+`SOLID` physical cells independently of blank glyphs. Malformed or unsupported
+source edits refuse before mutation. The TUI receives no graphical conversion
+control; it preserves the declaration through its existing edit/save/history
+workflow.
+
+The GUI **Collision** tool displays the shared physical cells over either
+presentation. On converted maps its constrained collision-type picker and the
+existing pencil, line, outline, filled-rectangle and fill brushes edit passage
+as one undo step without changing glyphs or tiles. The overlay's numbers match
+the picker; right-click picks the physical cell's type. Fill follows equal
+physical cells and does not bridge missing cells in ragged rows. Unsupported
+types, stale revisions, malformed declarations and source-preservation failures
+refuse before any change. Escape, map/tool changes and brush changes retire
+pending region answers. Conversion remains explicit on legacy maps.
+
+In the GUI tileset inspector, **Physical footprint** is an optional reusable
+recipe, not an automatic consequence of placing a picture. Its cells use final
+collision types or **Leave unchanged**; adding a recipe initially leaves all
+cells unchanged. Edit it through the constrained grid or Physical Footprint
+record row, then save the tileset. The Collision tool's **Object footprint** mode
+selects a saved recipe and stamps it with one click as one undo step. Only map
+occupancy changes, never glyphs or tiles. Every non-null cell must fit the actual
+map, including ragged rows, or the entire stamp refuses. Stale map/recipe values
+and unsupported source expressions refuse before mutation. Removing a recipe
+does not erase collision already stamped into a map. The TUI preserves recipes
+through existing record edits without adding graphical authoring controls.
+Native acceptance of the physical brushes and footprint controls remains open.
+
+Gameplay and event layers use the same Paint/Normal modes, tools, mouse strokes,
+selection, colour, clipboard and undo. The layer inspector lists terminal layer
+visibility only. Ordinary glyph edits do not rewrite graphical decoration.
+Glyph-keyed crop tables (`tiles2d`) are no longer read by the Engine or edited
+here; a map that still has one keeps its bytes, and validation warns that it is
+no longer read. Canonical source safety, collision and grid checks remain in
+force for terminal edits. Untouched layer files are never written; unchanged
+rows retain their authored bytes, and all changed files are saved or rolled
+back together.
+
+### Inserting rows and columns
+
+In Map mode, `Ctrl+P` offers **Map: Insert rows above the cursor** and
+**Map: Insert columns left of the cursor**. Both first refuse while the project
+has unsaved changes: save or undo them first. A prompt asks how many to insert
+(a whole number of at least 1, `1` by default; `Up` / `Down` step it, `Enter`
+plans, `Esc` cancels). Inserting `N` rows at the cursor's row moves everything
+from that row down by `N`; inserting columns moves everything from the cursor's
+column right. The map grows by `N`.
+
+Nothing is written until you confirm. The confirmation lists every file the
+insertion writes, then every coordinate it could not rewrite, as
+`Hand edit: file path` with the reason, then whether saves follow. `Enter` on
+**Write N files now** writes them all at once, not on Save; `Esc` or **Cancel**
+leaves every file unchanged. One `Ctrl+Z` restores every written file byte for
+byte and reloads the workspace; `Ctrl+Y` writes them again.
+
+What moves, when it is in the map's space and at or beyond the line:
+
+- every grid: gameplay and decoration layers, the event layer (so event areas
+  follow) and the tile layers, whose new cells are empty (`0`); styled cells
+  keep their colour and rows that only move keep their bytes;
+- the map's NPC positions and wander areas (an area straddling the line
+  stretches), bed spawn points, legacy trigger areas and explicit event areas;
+- spawn points of transfers into the map from any map, legacy triggers into
+  it, and `startingPositions` in `assets/Data/system.php` that start on it;
+- script coordinates on the map: `move_player`, `move_route` waypoints (only
+  the axes a waypoint names; `steps` and `retrace` are relative), `camera` and
+  `field_animation` position targets, `stage_actor`, and `transfer` into the
+  map. Scripts start on their map; after a `transfer` elsewhere, later commands
+  are in that map's space and stay;
+- reusable scripts in `assets/Events/` started only from this map, and
+  cutscenes whose start map it is (their cast, script and finalizer).
+
+A regional `station` and tile-layer `offset` values are not map cells and never
+move.
+
+What is reported instead of rewritten: a coordinate written as a PHP expression
+or variable, or inside a list built with a spread (such as generated NPCs); a
+file that is not one returned array literal; a coordinate in a reusable script
+or cutscene that may run on this map or another one. The editor never guesses
+or flattens authored PHP; move those by hand after writing.
+
+Saves follow through the project's `assets/Data/save-compatibility.php`: the
+insertion raises `contentVersion` by one and appends a `mapShifts` step, so a
+saved player position on the map moves too. A project without that manifest is
+told that existing saves are not migrated.
+
+### Pieces
+
+A map offers the pieces of its [kind](#map-kind)'s tileset (see
+[Map Graphics](#map-graphics)): whole items such as a bed or a table, so a map
+is built from items instead of single glyphs. In Normal mode on the canvas, `P`
+opens the piece picker for the layer being edited: only the pieces whose glyphs
+go on that layer, titled after it (`Fixtures piece`), one entry per piece with
+its footprint in cells and the tile layers it writes, for example
+`1 x 2 · tiles: furniture`, or `connected` in place of the footprint for a
+[connected piece](#connected-pieces) such as a wall (`connected · tiles:
+walls`). In Event mode it offers the pieces of the layer Map mode edits, and
+choosing one returns to Map mode. Move with the arrows or `j` / `k`, press `/`
+to filter by name, `Enter` to choose and `Esc` to cancel. The command palette
+offers the same picker as `Pieces: Choose a piece to place`.
+
+`T` in Normal mode (or `Pieces: Draw tiles for this layer's glyphs` in the
+command palette) draws the tiles for the glyphs already on the layer being
+edited, as if each were painted again: every glyph a piece draws gets that
+piece's tiles, so a map authored before its pieces existed, or before it had
+a kind, draws correctly graphically without a per-map script. A glyph that
+could be several pieces asks which, as painting does, and the answer applies
+wherever its neighbours do not decide. The glyphs themselves, and glyphs no
+piece draws, are left as they are. It is one undo step, saved with the map.
+
+When the layer being edited has no pieces, the status line names the layers
+that do. When the map has no kind yet, or its tileset has no pieces or cannot
+be loaded, it says so and nothing opens. Placing a piece never chooses a map's
+tileset: it comes from the map's kind, set in the Inspector.
+
+Choosing a piece starts placing it, in Map mode. The canvas previews the
+piece's glyphs in reverse video with its top-left cell at the cursor, and the
+canvas border shows `PIECE <name>  Enter:Stamp  Esc:Done`. The arrows move the
+piece; a Normal-mode click moves the cursor, and the piece with it, to the
+clicked cell. `Enter` stamps the piece and keeps it for the next stamp; `Esc`
+ends placement. Entering Paint mode, choosing a tool or a layer, switching to
+Event or NPC mode and selecting another map also end it.
+
+A stamp is one undo step. It writes the piece's glyphs on the gameplay layer
+the piece names, whichever layer the canvas is editing, in the brush colour as
+painting does, and its tiles on the tile layers it names. A space glyph and a
+`0` tile leave their cells as they are, and every other cell takes the piece's
+whole tile. A field cell holds one whole RPG Maker tile, so an entry naming
+half a tile (`42L`) is refused: in a tileset piece the canvas offers no pieces
+and says which entry, in a tile layer the stamp changes nothing, and
+validation reports both. A tile layer the map does not have yet is created as
+`graphics/NN.name.tiles.php`, empty elsewhere, in the order of the gameplay
+layer it belongs to: before the first tile layer of a gameplay layer drawn
+above its own, so terrain tiles draw under building tiles and those under
+fixtures, and otherwise after them all. It takes the free order just below
+that layer; when there is none, that layer and every later one move up one
+order, and saving writes their new files and removes the old ones. The terminal never shows the tiles, but a map built from pieces
+draws correctly graphically without a second pass. A stamp that cannot be made
+whole changes nothing: the map has no gameplay layer with the piece's name,
+the footprint does not fit inside the map at the cursor (ragged rows
+included), or a tile layer it names cannot be read or does not match the map.
+Undo and redo restore glyphs and tiles exactly. `Ctrl+S` saves the changed
+terminal and tile layer files in the map's one transaction; untouched files
+are not written, and a changed tile layer is rewritten as a literal nowdoc
+that keeps its leading comment.
+
+A project adds pieces to its tileset (`assets/Data/Tilesets/<id>.php`) under
+`pieces`, keyed by id, each with a `name`, the gameplay `layer` for its
+`glyphs` (rows of one-cell characters) and optional `tiles` keyed by tile
+layer name, with rows over the same footprint:
+`'bed' => ['name' => 'Bed', 'layer' => 'fixtures', 'glyphs' => ['=', '='], 'tiles' => ['furniture' => ['32', '40']]]`.
+The Engine's `docs/graphical-field.md` (Pieces) holds the contract. Every
+stamp reads the tileset again, so the tileset stays the one source of pieces.
+
+#### Connected pieces
+
+A connected piece (`'connects' => 'lines'`), such as a wall or a fence, is
+drawn rather than stamped, one cell per map cell, and joins the cells of the
+same piece beside it. A cell belongs to the piece when its glyph on the
+piece's gameplay layer is one of the piece's shape glyphs, so walls typed by
+hand join too, while other glyphs (a `_`, say) are left alone and do not join.
+Each cell takes a shape from the member cells beside it: joined only across it
+is `horizontal`, only down it is `vertical`, and anything else (a corner, a
+junction, a lone post) is a `corner`. A line's end cells are joined on one
+side only, so a wall drawn across reads `----`, not `+--+`.
+
+While a connected piece is placed, the canvas border shows
+`PIECE <name>  Enter:Draw  Del:Erase  Esc:Done`, and `Esc:Unanchor` while an
+anchor is set.
+
+- `Enter` with no anchor draws the cell at the cursor and anchors there.
+- `Enter` with an anchor draws from the anchor to the cursor: a straight line
+  when they share a row or a column, otherwise the outline of the rectangle
+  with the anchor and the cursor as opposite corners, which is a room. The
+  anchor then moves to the cursor, so the next `Enter` carries on from there.
+- The erase keys (`Backspace`, and `Delete`) erase the piece's cell under the
+  cursor. A cell that is not part of the piece is left alone, and the status
+  line says so.
+- `Esc` drops the anchor when one is set; otherwise it ends placement.
+
+The canvas previews the cells `Enter` would draw, each with the glyph it would
+take, in reverse video. Every draw or erase is one undo step. It writes the
+drawn cells, then reshapes every drawn cell and every member cell beside a
+drawn or erased cell: its glyph becomes its shape's glyph and its entry on each
+of the piece's tile layers becomes that shape's tile. So drawing a wall that
+meets another turns the meeting cell into a corner, and erasing a cell
+straightens the corners beside it. Drawn cells take the brush colour; reshaped
+cells keep theirs. An erased cell becomes a space on the gameplay layer and
+`0` on the piece's tile layers. A draw that reaches a cell beyond the map
+(ragged rows included) changes nothing, and neither does a piece whose
+gameplay layer the map lacks. A missing tile layer is created as for a stamp,
+and undo, redo and `Ctrl+S` work exactly as they do for stamps. The tileset
+lists a connected piece with one glyph per shape and one tile entry per tile
+layer, or one per shape:
+`'wall' => ['name' => 'Wall', 'layer' => 'buildings', 'connects' => 'lines', 'glyphs' => ['horizontal' => '-', 'vertical' => '|', 'corner' => '+'], 'tiles' => ['walls' => '5888']]`.
+An A4 wall top can be the one entry for every shape, since the autotile shapes
+its own edges.
+
+### Map Graphics
+
+A map's [kind](#map-kind) names its tileset in its data file
+(`'tileset' => 'interior'`, read from `assets/Data/Tilesets/interior.php`),
+and the map may keep RPG Maker tile layers in
+`graphics/NN.name.tiles.php`. A tile layer holds one tile identity per map
+cell, so each of its rows is exactly as wide as the map's row in terminal
+columns. The TUI never displays tiles or paints single tiles; painting them
+belongs to the GUI editor. It writes tiles only when it stamps a
+[piece](#pieces) or edits glyphs the tiles follow, and otherwise keeps them
+intact:
+
+- Tiles follow a gameplay layer's glyphs however they are edited: typing,
+  painting, erasing, the line, rectangle and fill tools, the mouse, cutting and
+  pasting. A glyph that leaves a cell takes the tiles of the piece it drew
+  there; a glyph that arrives draws its piece's tiles, in the same undo step.
+  A piece's tiles over blank cells, such as a sofa's back over its seat, go
+  with the glyph nearest them. When a glyph belongs to several pieces (`-` for
+  a chair facing north or south), the neighbours decide when they hold the
+  rest of one piece, such as the left half of a table beside the right;
+  otherwise the editor asks which piece it is, or No tiles, and Esc leaves the
+  map as it was. The brush remembers the answer for its glyph until a glyph is
+  typed again, and the eyedropper picks up the piece a glyph draws. Tiles no
+  piece accounts for, such as a floor under a wall, stay where they are. A
+  piece that keeps the tiles beneath it, such as a window mounted on a wall
+  face, leaves them when it arrives; erasing it gives the cell back to the
+  piece those kept tiles stand for, such as the face's `#`, so the wall is
+  whole again. When they stand for several pieces, the editor asks which, or
+  none to leave the cell blank.
+
+- Glyphs follow the tiles that stand for them, the other way round. Any tile
+  a tileset piece draws stands for that piece's glyph on its gameplay layer,
+  such as a bed's tiles for `O` and `U` on fixtures or a wall's tile for `-`,
+  `|` and `+` on buildings. Placing such a tile in the GUI editor writes its
+  glyph where the piece puts it, with the rest of that
+  glyph's tiles and the piece's glyph cells that draw no tile (the lower half
+  of a window); erasing or covering one removes the glyph it stood for, with
+  its other tiles; a wall's cells take the shapes their neighbours give them.
+  On undeclared maps, glyph-derived collision follows in that same undo step;
+  converted maps retain their independently authored physical cells. Picked-up tiles
+  move in one step too. A tile two pieces draw is asked about. A tile whose
+  glyph would fall off the map is refused. Tiles no piece draws, such as a
+  rug or a picture, stand for nothing in the terminal and are placed freely.
+
+- Each tile layer moves with one gameplay layer: the one the map data names
+  (`'tileLayers' => ['floor' => ['movesWith' => 'buildings']]`), or else the
+  one whose tileset pieces write it, when only one does. Copying, cutting and
+  pasting a block on that gameplay layer carries its tiles cell for cell, in
+  the same undo step, so a moved chest or room keeps its art. Other tile
+  layers, and blocks on the event layer, leave tiles where they are.
+
+- Resizing the map crops or pads every tile layer with empty tiles (`0`) in the
+  same undo step and save as the terminal layers. A resized tile layer is
+  rewritten as a literal nowdoc that keeps its leading comment; an unchanged
+  one keeps its bytes. A resize is refused, changing nothing, while a tile
+  layer cannot be read or does not match the map.
+- Duplicating, moving and deleting a map take `graphics/` with it, in the same
+  transaction and rollback. Other files in `graphics/` are the author's and
+  stay.
+- A tile layer changed or added on disk after opening refuses the save, as
+  terminal layers do.
+
+Validation (`Ctrl+E`, or `ichiloto validate`) reads graphics as the Engine does.
+A missing or invalid tileset, graphics without a tileset, misnamed or
+duplicate-order tile layers, rows or cells that do not match the map, and
+invalid tile identities are errors. Unusable sheets and tiles from a sheet the
+tileset does not provide are warnings. The game shows terminal glyphs for
+anything it cannot draw.
+
+For a map with a kind, validation also warns about what the graphical field
+still shows as terminal glyphs, using the Engine's rule for which tiles hide
+which glyphs:
+
+- glyph cells no tile covers, grouped by glyph and layer, or a single warning
+  when the map has no tiles yet;
+- NPCs without a field sprite (`sprites2d`) whose glyph therefore shows; an
+  NPC with an empty sprite draws nothing and is not counted;
+- a copy of an NPC's own glyph in the map, which shows under its sprite;
+  remove the copy when the NPC is always there.
+- tiles a tileset piece draws whose glyph is no longer there, such as a
+  window's tile left after its `x` was removed outside the editor. Tiles no
+  piece draws, such as a house's walls over blank cells, are not judged;
+- cells showing the tileset's missing-art placeholder (its `missingArt`
+  tile), which mark art nobody could yet infer.
+
+These are art still to do, not faults: the game plays the same either way,
+so saving a map does not warn about them; `ichiloto validate` reports them.
+
+Text catalogues in `assets/Graphics/Tilesets/*.txt` appear as Facade brushes in
+`Ctrl+P`. Separate multi-row shapes with blank lines. Select a brush to target
+the gameplay `buildings` layer, then press `Enter` to stamp it as one undo
+step. In Paint mode (`i`), a left click also stamps; Normal-mode clicks only
+move the cursor. Mode and map changes clear the stamp brush; `b` returns to a
+glyph brush. Every stamp rereads its catalogue, so
+the catalogue remains the single source of shapes. Clipping never grows rows.
+
 The canvas previews the selected map and is where you paint. It is modal, in
 the vim tradition: in **Normal mode** letters are commands, and in **Paint
 mode** every printable key is a glyph. This is what guarantees that no
@@ -190,6 +527,37 @@ Normal. While painting, the Status pane shows `[PAINT]` beside the mode.
 Control-byte and function-key shortcuts (`Ctrl+S`, `F3`, ...) work in both
 modes, since they are not glyphs.
 
+### Terminal Editing and Pending Graphical GUI
+
+Keep walkable floors and solid walls readable as terminal gameplay glyphs.
+A readable notice or interactive fixture needs its gameplay glyph and
+interaction, not a graphical decoration marker. Graphical representations
+must not drive or change the terminal editing experience.
+
+1. Focus the canvas and choose a gameplay or event layer with `L`, or step
+   through them with `[` / `]`. Press `i` to paint; `Esc` returns to Normal
+   mode. `L`, brackets and
+   other printable characters remain paintable while in Paint mode.
+2. Use the existing glyph tools, colours, selections, clipboard and mouse
+   strokes. Continue authoring events and NPCs in their existing modes.
+3. Use `Ctrl+Z` / `Ctrl+Y` to undo/redo, including after changing layers.
+   `Ctrl+S` saves; `Ctrl+R` reloads the saved workspace and clears history.
+   Existing graphical source data remains preserved during ordinary glyph edits.
+
+**Removed TUI workflows:** painting decoration markers, choosing graphical
+layers, inspecting graphical crop tables and editing selected-cell crops are
+no longer terminal authoring features. Decoration data is not deleted, and
+its low-level APIs and source-preserving round trips remain available for the
+graphical editor. Glyph-keyed crop authoring (`tiles2d` and its cell
+overrides) has been removed along with the Engine's support for it; tilesets
+replace it.
+
+**Pending, not implemented:** richer renderers will use a separate,
+RPG Maker-like GUI editor for graphical materials, atlases and crop authoring.
+The planned `ichiloto edit` entry point will offer a TUI/GUI choice; that choice
+and the GUI itself are not delivered by this TUI boundary correction. See the
+[GUI editor plan](../../gui-editor/docs/plan.md).
+
 ### Normal mode
 
 | Key | Action |
@@ -199,6 +567,8 @@ modes, since they are not glyphs.
 | `e` | Switch to Event mode (paint event markers) |
 | `n` / `F3` | Toggle NPC mode (place and edit the map's NPCs) |
 | `c` | Open the character map |
+| `P` | Choose a tileset piece to place (see [Pieces](#pieces)) |
+| `T` | Draw the tiles for the glyphs already on this layer (see [Pieces](#pieces)) |
 | `o` | Open the brush colour picker (see [Colour](#colour)) |
 | `b` / `l` / `r` / `R` / `s` | Choose a tool: Brush, Line, Rectangle, Filled Rectangle, Select |
 | `f` | Flood fill from the cursor (same as `Ctrl+F`) |
@@ -210,18 +580,20 @@ modes, since they are not glyphs.
 | `u` / `U` | Undo / redo (same as `Ctrl+Z` / `Ctrl+Y`) |
 | `?` | Open the help overlay |
 | `Arrows` | Move the cursor |
-| `Enter` | Apply the active tool |
-| `Esc` | Pop one canvas level: a pending tool anchor, then the selection |
+| `Enter` | Apply the active tool, or stamp or draw the piece being placed |
+| `Esc` | Pop one canvas level: a connected piece's anchor, piece placement, a pending tool anchor, then the selection |
 
 Typing an unassigned printable key in Normal mode paints nothing; the status
 line points to `i` instead.
 
 ### Paint mode
 
-Every printable key paints its glyph at the cursor with the brush tool, or
-loads it into the brush under a shape or select tool. `Arrows` move,
-`Enter` applies the active tool, erase keys erase, and `Esc` returns to
-Normal mode. Entering NPC mode or moving focus off the canvas also returns
+Every printable key paints its glyph at the cursor with the brush tool. Under
+the Line or Rectangle tools a key chooses the glyph instead, and `Enter` sets
+the anchor and then draws; the canvas border says which. Selecting is a Normal
+mode job: entering Paint mode with the Select tool active switches to the
+brush, and choosing Select returns to Normal mode. `Arrows` move, `Enter`
+applies the active tool, erase keys erase, and `Esc` returns to Normal mode. Entering NPC mode or moving focus off the canvas also returns
 to Normal.
 
 ### Mouse
@@ -229,9 +601,19 @@ to Normal.
 The mouse honors the canvas's modality. In Normal mode a click **selects**:
 the cursor jumps to the clicked cell and the status line reads out its
 coordinates - the fastest way to find a tile's position for a spawn point or
-event without walking the cursor there. In Paint mode a left click paints
-the brush symbol and a right click erases, dragging paints a stroke, and in
-Event mode clicks keep their event-editing behavior.
+event without walking the cursor there. With the Select tool, dragging in
+Normal mode selects the rectangle from where the press began to where it is
+released; a click still only moves the cursor. In Paint mode a left click
+paints the brush symbol and a right click erases, dragging paints a stroke,
+and in Event mode clicks keep their event-editing behavior.
+
+The mouse follows the active tool. With Line, Rectangle or Filled Rectangle
+in Paint mode, the press sets the anchor, dragging moves the other end with
+the shape previewed on the canvas, and releasing draws it in one undo step,
+in the brush colour; dragging with the right button erases the shape. The
+same preview shows while a tool anchored with `Enter` waits for its second
+`Enter`. In Normal mode the canvas border names the tool keys
+(`b/l/r/R/s:Tool`).
 
 The wheel scrolls the viewport without moving the cursor - free look for
 surveying a map larger than the canvas (horizontal wheel scrolls sideways).
@@ -245,22 +627,23 @@ beside the viewport offset.
 `o` in Normal mode opens the brush colour picker: the 16 standard 4-bit
 ANSI colours (in the map format's Symfony colour names, where `gray` is
 bright black), rendered as live swatches, plus two brush states above them.
-The brush colour applies to every paint on the Map layer - brush dabs,
+The brush colour applies to every paint on every layer - brush dabs,
 shapes, flood fills - and is written as `<fg=...>` tags, exactly the
 styling authored by hand.
 
 - **Keep cell colour** (the default): painting changes the glyph and leaves
   each cell's existing styling byte-for-byte, authored options included.
 - **No colour**: painting strips styling and writes plain glyphs.
-- **A colour**: painting writes the glyph in that colour. Selecting a
-  colour under the brush tool also recolours the cell at the cursor in
-  place, keeping its glyph, as one undoable stroke.
+- **A colour**: painting writes the glyph in that colour. Choosing a
+  colour recolours in place, keeping the glyphs, as one undoable stroke:
+  with a selection active (`s`), every cell in the selection; otherwise,
+  under the brush tool, the cell at the cursor. Spaces stay uncoloured.
 
-The eyedropper (`k` / `Ctrl+K`) picks up a cell's colour along with its
-glyph; an uncoloured cell loads an uncoloured brush. A painted space is
+The eyedropper (`k` / `Ctrl+K`) picks up a cell's colour and the piece it
+draws along with its glyph; an uncoloured cell loads an uncoloured brush. A painted space is
 always uncoloured, so erasing never leaves invisible styling behind. Event
-markers are authoring geometry and carry no colour; the picker says so on
-the Event layer. The Status pane shows the brush colour beside the tool.
+markers remain authoring geometry, but can now carry colour through the same
+picker and undo workflow. The Status pane shows the brush colour beside the tool.
 
 ### NPC Mode
 
@@ -268,8 +651,10 @@ the Event layer. The Status pane shows the brush colour beside the tool.
 an overlay - sprites at their authored anchor, wide glyphs occupying the two
 columns the game gives them, styled sprites as the plain glyph - and nothing
 you do here paints a tile or an event marker. The selected NPC is shown in
-brackets. NPC mode sits on `n` in Normal mode and on `F3` everywhere, so no paintable
-character is taken from you (and not a control byte, since the terminal driver
+brackets, except an explicitly empty sprite: selection highlights its existing
+map cell without replacing the glyph or neighbouring cells. An unselected empty
+sprite draws no overlay. NPC mode sits on `n` in Normal mode and on `F3`
+everywhere, so no paintable character is taken from you (and not a control byte, since the terminal driver
 reserves the remaining ones).
 
 | Key | Action |
@@ -292,10 +677,13 @@ with a hint rather than painted under an NPC.
 
 `Enter` on an empty tile asks for the NPC's name first, and derives its stable
 `id` from that name - `Gate Guard` becomes `gate-guard`, numbered if the map
-already has one - because the id is what `move_route` and script diagnostics
-name, and it is **immutable after creation**: renaming the NPC, moving it, or
-changing its sprite never touches it. Duplicating assigns a fresh id from the
-name. An NPC authored without an id loads and edits normally, shows a
+already has one - because the id is what routes, dialogue events, cinematics
+and script diagnostics name. Renaming the NPC re-derives its id from the new
+name **while nothing refers to it**, so an NPC created as `New NPC` and named
+later gets the id its name suggests. Once an event, script, route or cinematic
+starting on the map names the id, it stays: a rename keeps it and the status
+says what names it. Moving the NPC or changing its sprite never touches it.
+Duplicating assigns a fresh id from the name. An NPC authored without an id loads and edits normally, shows a
 `! No stable id` row (`Enter` there assigns one from its name, the one time an
 id is ever written after creation, since nothing can yet name it), and
 validates with a warning that scripted movement cannot target it. Changing an
@@ -311,27 +699,53 @@ category uses - pickers, condition lines, world-write rows, command frames,
 | --- | --- |
 | Identity | `Id` (read-only), `Name` |
 | Placement | `X`, `Y` (the canvas moves it too) |
-| Appearance | `Sprite`, `Facing North/South/East/West` |
-| Movement | `Movement` (`fixed` / `wander`), and while wandering `Wander X/Y/Width/Height` |
+| Appearance | `Sprite`, `Facing North/South/East/West`, `Graphical Sprites` |
+| Movement | `Movement` (`fixed` / `wander`), `Direction Fix` (`false` / `true`), and while wandering `Wander X/Y/Width/Height` |
 | Visibility | `Visible When` - a condition line |
 | Interaction | `Script` (a command frame), then one `Dialogue variant N` heading per variant with its rows `When`, `Then Set`, `Script Commands`, `Line 1 Speaker`, `Line 1 Text`, … |
 | Completion Writes | `After Talking` - world-write rows |
 
 Rows read as the game will read them: an unset `Movement` shows `fixed`, an
-unset `Sprite` shows `@`. Fields the game does not read are listed in a
+unset `Direction Fix` shows `false`, an unset `Sprite` shows `@`. Fields the game does not read are listed in a
 `Preserved fields` row and written back untouched. Each dialogue variant is a
 heading (`Dialogue variant 2 · when switch:gate_open` once it has a
 condition) with short row labels under it, and long lines wrap, so what a
 character says is read in the pane rather than in the edit buffer.
 
+- **Map-owned appearance.** For a fixed interaction already drawn on a map
+  layer (such as a mounted notice on `fixtures`), clear the `Sprite` text
+  completely and press `Enter`. This stores `'sprite' => ''`, not a missing
+  field, and removes the duplicate NPC overlay. The NPC retains its stable id,
+  dialogue, conditions and blocking anchor. Select it at that anchor, through
+  `L`, or with `[` / `]`; selection highlights the underlying cell. Omitting
+  `sprite` still defaults to `@`. Whitespace-only or style-only sprite text
+  still warns: use genuinely empty text when the map owns the appearance.
 - **Movement.** `wander` roams one tile at a time; the wander bounds only
   appear while wandering, and loaded bounds are kept (not shown) for a fixed
   NPC. Omitting every bound leaves the game's unbounded wander. Patrol routes,
   pathfinding and followers are not engine features, so the editor does not
   offer them; scripted movement is a `move_route` command in an event script.
+- **Direction fix.** When the player talks to an NPC, the game turns it to
+  face the player before it speaks and turns it back to its previous heading
+  when the conversation ends, unless the conversation's own script turned,
+  moved or staged it. `Direction Fix` (RPG Maker's option of the same name)
+  set to `true` keeps its heading throughout instead, for a clerk behind a
+  counter or a guard watching a gate. It stores `'directionFix' => true`;
+  setting it back to `false` removes the key, the game's default. It affects
+  only the talk turn: wandering and `move_route` still turn the NPC. The
+  validator reports a `directionFix` that is not `true` or `false`.
 - **Directional sprites.** Optional glyphs shown when the NPC turns; the base
   sprite covers a heading you leave blank. Resting the Inspector cursor on a
   `Facing …` row previews that glyph on the canvas in the NPC's place.
+- **Graphical sprites are not edited in the TUI.** The `Graphical Sprites`
+  inspector action and its numeric PNG/crop/sheet dialog have been removed.
+  Existing NPC `sprites2d` data remains preserved when editing terminal glyphs,
+  and its model services and source-preserving validation remain available.
+  Graphical NPC authoring belongs in the pending
+  [GUI editor](../../gui-editor/README.md), not a terminal form. Terminal base
+  and directional glyphs, identity, dialogue, movement and conditions remain
+  editable as before. This correction does not claim that all other actor or
+  database artwork controls have been removed.
 - **Dialogue.** Pages are shown as variants: one variant with lines is written
   back as plain pages; add a second variant, or give one a `When` condition, a
   `Then Set`, or a `Script`, and the whole thing is written as conditional
@@ -385,11 +799,12 @@ a cut, and a paste each undo in a single `Ctrl+Z`. Repeated pastes are separate
 steps, so you can stamp freely.
 
 The clipboard is layer-tagged: a block lifted from the event layer refuses to
-land on tiles.
+land on tiles. A block lifted from a gameplay layer carries the graphical
+tiles that move with that layer, and a paste replaces the tiles under it.
 
-Current limit: the canvas draws no on-screen preview of a pending line,
-rectangle, or selection rectangle. The footer reports the anchor and selection
-size instead.
+A pending line or rectangle is previewed on the canvas in the brush glyph from
+its anchor to the cursor. A pending selection is not drawn; the footer reports
+its anchor and size.
 
 ## Inspector Panel
 
@@ -419,6 +834,40 @@ being edited stays on one line and scrolls sideways around the caret. The pane
 scrolls by rows, keeping the selected row's first line in view.
 
 The Destination row on an event is a reference: `Ctrl+G` follows it.
+
+### Map region
+
+`Region` is the place name the game shows for where the party is, such as
+Happyville or Garden of Roads. Enter opens a picker of the region names the
+project's maps already use, so a region is spelled one way everywhere; it is
+never typed. Choosing one changes only the map data's `region`: the map stays
+in its folder under `assets/Maps`.
+
+### Map kind
+
+`Kind`, under `Region`, is the setting the map draws: one of the project's
+tilesets in `assets/Data/Tilesets/`, shown by name, such as Interior,
+Exterior, World or Dungeon. Every tile and [piece](#pieces) on the map comes
+from its kind, so the tiles a map offers change only when its kind does.
+Enter opens the picker; the kind is stored as the map data's `tileset`.
+
+- A new map is asked its kind before it is created (`Shift+A` in the Assets
+  panel); `Esc` creates nothing. A duplicate keeps its original's kind. In a
+  project with no tilesets, a new map is created without a kind.
+- A map without a kind shows `Not set`, and `P` offers no pieces until it
+  has one. Choosing a kind keeps any tiles the map already has.
+- Changing one kind to another on a map with tiles asks first, since its
+  tiles name places on the old kind's sheets and would show the wrong art.
+  `Cancel`, the default, keeps everything; `Clear N tile layers and change`
+  clears its tile layers and their `tileLayers` settings. Glyphs, collision
+  and events stay.
+- A map without tiles changes kind at once.
+- Each change is one undo step and is written on save; saving a cleared map
+  removes its `graphics/` tile layer files.
+- A kind the project no longer has stays visible as
+  `id · not in assets/Data/Tilesets`.
+- In a project with tilesets, validation and the pre-save checks warn about a
+  map without a kind. A project without tilesets is not warned.
 
 ### Map audio and encounters
 
@@ -490,12 +939,23 @@ rows beneath it edit the engine's own `encounters` block:
   `;` glyphs) or `any` (every step, with danger tiles counting double).
   Its default, `encounter`, is likewise shown in parentheses and never
   written by browsing.
+- In the GUI editor, `Arena` picks the battle presentation's arena a graphical
+  fight here takes place in, `(default arena)` leaving it to the
+  presentation's default, and each troop row has an `Arena` of its own that
+  outranks the map's, `(map arena)` leaving it to the map. A troop with an
+  arena is written `'Loch Ness' => ['weight' => 1, 'battleArena' =>
+  'arena.secret-lake']`. Arenas are graphical presentation only: they change
+  no weight, no fight and nothing the terminal shows, so the terminal editor
+  keeps them exactly as written without offering them.
 
-A key inside the block the editor does not own - a field a later engine will
-read - is preserved untouched, and keeps the block alive even when the last
-troop is removed. A block shaped in a way the editor cannot hold exactly
-(troops keyed by number, a weight that is an array) is shown read-only with
-the shape named, and no edit anywhere rewrites it.
+A key inside the block or a troop's entry the editor does not own - a field a
+later engine will read - is preserved untouched, and keeps the block alive
+even when the last troop is removed; an entry written as a map stays one. A
+block shaped in a way the editor cannot hold exactly (troops keyed by number,
+a weight that is an array, an arena that is not a key) is shown read-only
+with the shape named, and no edit anywhere rewrites it. Validation reports an
+arena, in an encounter or a `start_battle` command, that the battle
+presentation does not declare, or that a project without one names.
 
 In Event mode, painting or selecting a marker with no definition opens the
 Event Type picker. **Story Script** creates the engine's
@@ -504,6 +964,15 @@ Event Type picker. **Story Script** creates the engine's
 Select `Script Id` and use the reference picker to choose an existing Common
 Event; the value is not free-typed. Conditions and completion writes use the
 same structured inspector-list controls as other event types.
+
+An event triggers on exactly the cells painted with its marker, in any shape:
+paint the same marker in two places, such as a town exit on the east edge
+and another on the south side, and they are one event. The cells between
+placements are not part of it. For a marker that fills a rectangle the
+inspector's Position and Size edit that rectangle. For any other shape it
+shows `Cells` (how many, in how many places) instead of Size: Position moves
+every cell together, keeping the shape, and is refused when a cell would
+leave the map or cover another marker; paint or erase cells to reshape it.
 
 ## Database Screen
 
@@ -538,6 +1007,20 @@ An actor's Inspector opens with **Identity**: a `Definition Id`, which is
 what a save resolves the actor by. A project that declares none is resolved
 by display name, so the row says so, and renaming such an actor strands
 every save that named it.
+
+The row's action freezes the current name as the permanent id. When that
+is the whole repair, it is one edit, written on Save. When other files name
+actors by what the repair changes (skits, maps, other actors), both editors
+first list every file it writes; confirming writes them all at once, not on
+Save, and Undo restores them. Pending edits are saved or undone first.
+
+**Attack Style** is the character's own weapon: the weapon type they fight
+with when no weapon is equipped, part of who they are and with no stats
+(`Unarmed`, the default, writes nothing). A battle's basic attack plays the
+animation bound to the equipped weapon's type, else to this style, else to
+`attack-unarmed`; equipment stays the stat-bearing upgrade. The row offers
+the Engine's weapon types, writes them as the Engine spells them, and
+validation reports a written style the Engine does not know.
 
 **Nature** is what this actor is, as distinct from the class it shares with
 others: an adjustment per canonical stat, applied on top of the class
@@ -586,82 +1069,156 @@ resolved-stat preview: the game does not resolve them as layered stats. They
 
 Whether a category can be written is *detected*, not assumed. On load the
 editor evaluates the authored file and asks two questions: can every value be
-written back out losslessly, and would a rewrite drop a comment? A category is
-editable only when both answers are safe. Anything else is browsable, and the
+written back out losslessly, and would a save drop a comment? A file of plain
+data (an array literal of values, with no objects) is saved by editing its own
+source, so comments, nowdocs and layout inside the data stay as written, a
+change the source cannot express is refused rather than flattened, and a file
+changed on disk since it was read is refused rather than overwritten. A category
+is editable only when both answers are safe. Anything else is browsable, and the
 status line says exactly why.
 
-| Category | Backing file | Status |
-| --- | --- | --- |
-| Actors | `assets/Data/Actors/*.php` | Editable |
-| Classes | `assets/Data/classes.php` | Editable |
-| Skills | `assets/Data/skills.php` | Editable |
-| Items | `assets/Data/items.php` | Editable - authored as `new Item(...)` calls, edited entry by entry |
-| Weapons | `assets/Data/items.php` | Editable - authored as `new Weapon(...)` calls, edited entry by entry |
-| Armors | `assets/Data/items.php` | Editable - authored as `new Armor(...)` calls, edited entry by entry |
-| Enemies | `assets/Data/enemies.php` | Editable - authored as `new Enemy(...)` calls, edited entry by entry |
-| Troops | `assets/Data/troops.php` | Editable |
-| Battle Entry | `assets/Data/battle-entry-rules.php` | Editable |
-| States | `assets/Data/states.php` | Editable |
-| Animations | `assets/Data/animations.php` | Editable |
-| Tilesets | - | Read-only - the engine has no tileset system |
-| Common Events | `assets/Events/*.php` | Editable |
-| Quests | `assets/Data/quests.php` | Editable |
-| Skits | `assets/Data/Skits/*.php` | Editable |
-| Knowledge | `assets/Data/knowledge.php` | Editable |
-| Knowledge Reports | `assets/Data/knowledge.php` | Editable |
-| Knowledge Types | `assets/Data/knowledge.php` | Editable |
-| Knowledge Enemies | `assets/Data/knowledge.php` | Editable |
-| Permanent Growth | `assets/Data/permanent-growth.php` | Editable |
-| Optimize Weights | `assets/Data/equipment-optimization.php` | Editable |
-| Optimize Outcomes | `assets/Data/equipment-optimization.php` | Editable |
-| Optimize Exclusions | `assets/Data/equipment-optimization.php` | Editable |
-| System | `assets/Data/system.php` | Editable |
-| Types | `assets/Data/Types/*.php` | Read-only - PHP enum declarations |
-| Terms | `config.php` (`vocab`, `messages`) | Editable when the config carries no inline comments |
+Both editors edit every category through the same service, so a value
+changed in one reads the same in the other, and both save it the same
+source-preserving way. The GUI shows a record's rows as the terminal does,
+with the summaries the terminal keeps in its side panes (a class's curves, a
+skill's effects, a quest's rewards) listed under them.
+
+| Category | Backing file | Terminal editor | GUI editor |
+| --- | --- | --- | --- |
+| Actors | `assets/Data/Actors/*.php` | Editable | Same, plus `images.field2d` artwork selected for the established actor id |
+| Classes | `assets/Data/classes.php` | Editable - levels, the experience curve, every stat curve, equipment types and skills learned | Same |
+| Skills | `assets/Data/Skills/*.php` | Editable - one data record per numbered file, attacks, abilities and spells alike, with their effects; `skills.php` loads them | Same |
+| Items | `assets/Data/Items/*.php` | Editable - one data record per numbered file, with scope, occasion, animation and effects; `items.php` loads Items, Weapons and Armors | Same |
+| Weapons | `assets/Data/Weapons/*.php` | Editable - one data record per numbered file, with type, stats, element, affinities and equipment metadata | Same |
+| Armors | `assets/Data/Armors/*.php` | Editable - one data record per numbered file, armor or accessory, with type, slot, stats and affinities | Same |
+| Enemies | `assets/Data/Enemies/*.php` | Editable - one data record per file, which `enemies.php` loads | Same |
+| Troops | `assets/Data/troops.php` | Editable | Same |
+| Battle Entry | `assets/Data/battle-entry-rules.php` | Editable | Same |
+| States | `assets/Data/states.php` | Editable | Same |
+| Animations | `assets/Data/animations.php` | Editable | Same |
+| Tilesets | `assets/Data/Tilesets/*.php` | Editable - name, RPG Maker sheets, missing-art tile, above and table tiles, shadow, and pieces by id with their glyphs and tiles | Same |
+| Common Events | `assets/Events/*.php` | Editable | Same |
+| Quests | `assets/Data/quests.php` | Editable - objectives (the target picked by type), reward items with quantities, prerequisites, optional; the id follows the name until something refers to it | Same |
+| Skits | `assets/Data/Skits/*.php` | Editable | Same |
+| Knowledge | `assets/Data/knowledge.php` | Editable | Same |
+| Knowledge Reports | `assets/Data/knowledge.php` | Editable | Same |
+| Knowledge Types | `assets/Data/knowledge.php` | Editable | Same |
+| Knowledge Enemies | `assets/Data/knowledge.php` | Editable | Same |
+| Permanent Growth | `assets/Data/permanent-growth.php` | Editable | Same |
+| Optimize Weights | `assets/Data/equipment-optimization.php` | Editable | Same |
+| Optimize Outcomes | `assets/Data/equipment-optimization.php` | Editable | Same |
+| Optimize Exclusions | `assets/Data/equipment-optimization.php` | Editable | Same |
+| System | `assets/Data/system.php` | Editable - title, starting gold, party, inventory and position, battle engine, openings and time gauge settings | Same |
+| Configuration | `config.php` (`save`, `accessibility`, `ui`, `graphics`, `audio`, `inn`) | Editable - one row per setting, typed by what it holds; field zoom is kept from 1 to 8 | Same |
+| Types | `assets/Data/system.php` | Editable - the project's elements, one per row; an empty list means the Engine's defaults. Weapon, armor and equipment types are the Engine's own | Same |
+| Terms | `config.php` (`vocab`, `messages`) | Literal terms editable; comments and unrelated expressions preserved | Same |
+| Player Field Appearance | `assets/Data/Entities/player.php` | Not shown: graphical ownership and art | Choose fixed-player, selected party leader, or absent legacy selector; fixed sheet picker with index/layer controls |
+| Field Resources | `assets/Data/Presentation/field.php` (`resources`) | Not shown: graphical resources | One record per named resource, keyed by its stable id: name, ground contact, image or sheet, and an optional occupancy stamp |
+| Actor Battle Art, Enemy Battle Art, Battle Scale | `assets/Data/Presentation/battlers.php` | Not shown: graphical battle art | Editable from the actor's or enemy's own page (see Battle Art) |
+
+Player Field Appearance edits only `graphicalSubject` and `sprites2d`, preserving
+the player's Terminal glyphs and unrelated authored source. Selecting
+`party-leader` retains inactive fixed art read-only and uses the selected actor's
+`images.field2d` role; missing leader art is diagnosed, never replaced with
+another actor. Actor and fixed-player sheet pickers share current-file
+four-direction previews. Clearing removes only the optional binding; undo/redo
+and save/reopen restore its settings. Unsupported expressions and external
+source conflicts are refused before overwriting files. These controls have
+automated coverage; native visual inspection remains pending.
+
+Field Resources are reusable whole images, such as a tree, that a map places by
+reference. A resource owns its art and its ground contact (the pivot, such as a
+trunk base) and may carry an occupancy stamp: cells relative to a placement's
+anchor and the physical type a brush gives each when it places the resource.
+The stamp is applied only by an explicit authoring placement; a resource never
+adds collision to a map by itself, and changing a stamp never changes cells an
+earlier placement stamped. Only the `resources` dictionary is edited; the
+catalogue's cues and action prompt are kept exactly as written. A new resource
+starts on the project's first image for the author to replace, an id is refused
+as it is typed if the Engine would refuse it, and a save the Engine would refuse
+writes nothing. A map's world object that names a resource shows a Field
+Resource picker in place of its own pivot and art, which the resource owns.
 
 Why a category can still turn out read-only: a file the editor cannot
-evaluate, a value it could not write back out, or a comment sitting inside
-the returned data are each a reason, and the status line names it. You can
+evaluate, a value it could not write back out, or a comment inside returned
+data that holds objects or is not an array literal are each a reason, and the status line names it. You can
 still browse everything: an enemy shows its level, every stat, its sprite,
 its battle rewards, and its element affinities.
 
-### How A File Of Constructor Calls Is Written
-
-`items.php` and `enemies.php` are not data, they are PHP code that *builds*
-data: `new Item(...)` and `new Enemy(...)` calls with named arguments,
-imports, comments, and enum expressions the author chose. Regenerating such
-a file from loaded values would reorder arguments, spell out defaults nobody
-wrote, and rewrite every entry to change one. So the editor does not
-regenerate it. It edits the author's own source, entry by entry:
-
-- **A changed value** is patched where its argument sits. Every other byte of
-  the file - the other arguments, the other entries, the comments between
-  them - is the same afterwards.
-- **A new entry** is written as a constructor call in the file's own
-  indentation, after the last entry.
-- **A deleted entry** is cut whole, with its separator.
-- **A deleted entry put back** by undo goes back exactly where it was when
-  the file has not been saved in between, and, when it has, is written back
-  ahead of the entry that follows it in the list - so the file reads in the
-  order the editor does.
-
-Every entry is found by the identity it declares - an item's stable id, an
-enemy's name - looked up in a fresh reading of the file at the moment of
-writing, never by where it happened to sit when it was loaded. That is what
-lets three categories share one file: Items, Weapons and Armors are three
-views of `items.php`, and saving one of them, or all of them with `Ctrl+A`,
-reads the file once, composes every dirty category's changes against that
-one reading, and writes it once.
-
-Where identity cannot prove the address, nothing is written and the status
-line says why: two entries in the file declaring one id, an entry declaring
-none, or a save that would leave two entries declaring one id. Give each
-entry a distinct id, reload, and save again.
+### How Data Files Are Written
 
 Files that are data - Troops, States, Permanent Growth - are regenerated as
 data, keeping everything from `<?php` to the top-level `return` byte for
 byte, and a file several categories share is folded from all of them into
 one payload before its one write.
+
+### One Record Per File
+
+An enemy is one file under `assets/Data/Enemies`, returning
+`['class' => Enemy::class, 'data' => [...]]` with plain values: name,
+level, sprite, stats, rewards, element affinities, state resistances, its
+knowledge subject, and action patterns that name a skill from the skill
+catalogue with a rating and an optional condition. Its drops are a list
+under the Drops heading: each picks an item, weapon or armor and gives its
+chance from 0 to 1. Validation reports a drop that names no item or one the
+project does not define, as it does for any record's references. `enemies.php` is the
+barrel that loads the folder, so the game and every other reader get the
+same enemies. Editing a value changes only that value in that enemy's file,
+keeping its imports and comments. A new enemy gets a file named after it
+and starts on the project's first enemy sprite; a duplicate gets a file and
+a name of its own. A file in the folder that is not an enemy record stays
+in the list, read-only, saying why.
+
+A skill is one file under `assets/Data/Skills`, returning
+`['class' => Skill::class, 'data' => [...]]`. Its kind is a value: `basic`
+(an attack), `special` (an ability) or `magic` (a spell, which also states
+its effect type). The rest is cost, cooldown, occasion, scope, how it is
+invoked, its animation, and its effects: a list under the Effects heading,
+each a type with that type's own values (a formula with its element and
+variance for damage and recovery, a state for adding one, the states to
+remove, or a stat and its stages). Changing an effect's type, or a skill's
+kind, drops the values only the old one read. Files are numbered
+(`0001-attack.php`) because menus list skills in file order; a new or copied
+skill takes the next number and goes last. `skills.php` is the barrel that
+loads the folder.
+
+Items, weapons and armors are one file each under `assets/Data/Items`,
+`Weapons` and `Armors`, returning `['class' => InventoryItem::class, 'data'
+=> [...]]` with a `kind` of `item`, `weapon`, `armor` or `accessory`, a
+stable id, and only the values the record sets: the Engine's defaults fill
+the rest. An item has its scope, occasion, battle animation and effects: a
+list under the Effects heading, each a type (HP or MP recovery, resurrection,
+HP damage, or a max HP or MP increase) with a value, a success rate and
+whether the value is an amount or a percentage. Equipment has its type,
+parameter changes, element and affinities, and its metadata (form, size,
+material, slot, availability, acquisition policy, special property). An
+armor that becomes an accessory drops its equipment type. Files are numbered
+because shops and menus list definitions in file order, items first, then
+weapons, then armors; a new or copied record takes the next number and goes
+last. `items.php` is the barrel that loads all three folders. A record the
+game cannot build, such as a sell rate outside 0 through 10000, is left out
+of the game and reported by validation against its own file, in the Engine's
+own words.
+
+Equipment is shown everywhere, in every renderer, by the one icon of its
+type (one for all swords, one for all daggers), which the game's theme
+binds. A weapon's or armor's own `icon` is legacy compatibility data: the
+Weapons and Armors records show it as a read-only `Legacy Icon` row and keep
+it exactly as written. A consumable item's `Icon` stays its own and
+editable.
+
+A tileset is one file under `assets/Data/Tilesets`, named by the id maps
+give it, so renaming a tileset keeps its file. It names its RPG Maker sheets
+(each picked from the project's PNGs), the tiles drawn above characters and
+those drawn as tables (tile identities, comma-separated), the shadow its raised
+tiles cast (casters, width and opacity, all three or none), the tile that marks
+missing art, and its pieces, keyed by piece id. A stamped piece has glyph
+rows, an optional effect, and tile rows on each tile layer; a connected piece
+(`Connects: lines`) has a glyph for each shape and a tile on each layer, one
+for every shape or one per shape (`horizontal: 5888, vertical: 5890, corner:
+5892`). A new piece gets an id no other piece has, and an id another piece
+already has is refused, since keys are what maps stamp by. Validation reports
+a tileset the Engine would refuse, whether or not a map uses it yet.
 
 ### Project-Owned Parameters
 
@@ -693,12 +1250,76 @@ pairs, and the line reads back exactly what was written:
 Status effects, read by the engine's `StateRegistry`.
 
 Fields: `Id`, `Name`, `Icon`, `Description`, `Duration Turns`, `Tick Formula`,
-`Prevents Action`, `Persists After Battle`.
+`Prevents Action`, `Persists After Battle`, `Disposition` (`harmful`, the
+default, `beneficial` or `neutral`: whether it harms or enhances its bearer,
+which battle poses follow).
 
 `Id` is the only field the engine requires. Optional fields disappear from the
 file when you clear them, so a state with no duration lasts until it is cured
 rather than being written as `0`. `Tick Formula` is the same formula language
 skill effects use, with `$target` bound to the afflicted battler.
+
+### Animations
+
+An animation names what plays on the caster and the target of a battle
+action: its **Caster Effect** and **Target Effect**, each one of the
+project's effect timelines (authored on the Cutscenes screen, where
+terminal glyph frames are timeline tracks), picked from a list. `Id` is
+read-only; a new animation takes the next number after the largest. Like
+every Database category, edits are undoable and only the values you change
+are rewritten in `assets/Data/animations.php`, so its comments stay.
+
+**Roles** say which battle actions play the animation when they name no
+animation of their own. Enter opens a picker of every role the Engine
+supports; each pick adds or removes one role:
+
+- `attack-sword`, `attack-staff`, `attack-flail` and the other weapon types:
+  a party member's basic attack with that weapon equipped;
+- `attack-unarmed`: a party member's basic attack with no weapon;
+- `attack`: enemy and other basic attacks;
+- `skill` and `restorative`: skills and restorative magic with no animation
+  of their own.
+
+A role plays only when exactly one animation holds it, so the picker names
+the animation that holds each role, and taking one held elsewhere is refused
+until it is removed there. Validation reports a role the Engine does not
+support (the runtime then skips the whole animation), a role held twice, and
+a role the project's battles reach with no animation: the neutral attack,
+the unarmed attack, and each weapon type its weapons use.
+
+An older animation that carries its own frames and cues keeps them exactly as
+written, shown read-only as **Legacy Frames** and **Legacy Cues** beside its
+**Legacy Position**; the Engine still plays them through its importer. New
+animation is authored as effect timelines.
+
+Such a record can be converted to a timeline: **Shift+T** in the terminal,
+or **Convert to timeline** on its page in the GUI editor. Both use the same
+conversion, which lists what plays the record now (skills, items, roles and
+field scripts) and asks for the timing its consumer needs. Nothing is filled
+in for it:
+
+- Who plays the timeline:
+  - a battle paced by its phases;
+  - a battle at a fixed rate;
+  - a field script at a fixed rate.
+- For a battle, whether the record names it as its **Target Effect** or its
+  **Caster Effect**.
+- The timeline's name, its frames per second (for a fixed rate), the ticks
+  each original frame lasts, and the rest frame shown with reduced motion.
+- Whether the record's flash cues become flash tracks. Battles have always
+  played them; field animations never did.
+
+Preview shows every file as it would be written: the new
+`assets/Animations/<name>/<name>.timeline.php`, and for a battle the record
+naming it. In the terminal it opens a review of those files: Up/Down read
+them a line at a time, Enter writes them, and Esc goes back to the choices.
+The pane follows the cursor, so the selected choice and every reviewed line
+are shown at any terminal size. Write applies exactly that preview as one
+undo step. A changed
+choice, or a file changed since, needs a fresh preview, and pending edits are
+saved or undone first. The record's legacy frames and cues stay as written,
+and field scripts keep playing the record until their own command names the
+timeline.
 
 ### Troops
 
@@ -715,6 +1336,45 @@ A troop may also declare a `Classification` - `ordinary` or `boss` - which
 battle-entry rules match against. An omitted classification is the engine's
 `ordinary` default; the picker shows that without writing the key into older
 data.
+
+### Counter Attacks
+
+An actor, an enemy, a state or a non-magic skill can grant a **Counter
+Attack**: the skill its bearer answers with when a physical hit lands on
+it, after the attacker has returned, never chaining into another counter.
+It is off unless chosen. The picker offers only skills the Engine accepts
+for a counter (a battle-usable basic or special skill aimed at one living
+opponent), and choosing none removes the grant, as the Engine reads one
+left out. A state grants it while active, and a skill once learned; spells
+do not grant one. Validation reports a grant the Engine would refuse, with
+the Engine's own reason.
+
+### Battle Art
+
+The art an actor or enemy fights with in a graphical battle is bound to it as
+data in `assets/Data/Presentation/battlers.php`, the Engine's battler
+bindings file. Per actor (by definition id) or enemy (by name) it holds:
+
+- Image: base artwork, picked from the project's PNGs.
+- Ground point: where the battler stands on its image, from 0 to 1 across and
+  down. It defaults to bottom centre.
+- Poses: each role the battle shows (idle, attack, guard, knockout and the
+  rest), a still or a sheet of frames with columns, rows, frames, frames per
+  second, looping and a rest frame.
+- Body profile: its size against the scale reference, and the share of its
+  image that size measures.
+
+The file can also name the scale reference: the actor every battler's size is
+measured against, and that actor's height. Image sizes are always read from
+the files, so replacing an image needs no edit here.
+
+This is graphical presentation, so it is set in the GUI editor, on the actor's
+or enemy's own page, and the terminal editor does not list it. Each battler
+has one owner. Art the project's `battle.php` registers in code stays there:
+the editor says so and does not rewrite program code. A battler's art is set
+here once it moves to `battlers.php`. A save that the battle could not read is
+refused before anything is written, and so is one that binds a battler
+`battle.php` also binds.
 
 ### Battle Entry
 
@@ -779,10 +1439,33 @@ The `vocab` and `messages` trees of the project's `config.php`, flattened to
 one row per term with its dotted path - `vocab.game.new_game`,
 `messages.confirm.quit`, and so on.
 
-Current limit: the category is read-only when `config.php` contains comments
-inside the returned array, because rewriting the file would drop them. Move
-such comments above the `return` statement and the category becomes editable -
-everything before `return` is preserved byte-for-byte on save.
+Terms and Configuration share one source-preserving configuration owner.
+Saving either writes all pending configuration edits in one atomic operation.
+Only edited literal values are patched; comments, spacing, enum references and
+unrelated executable expressions remain untouched. An opaque term expression
+is individually read-only, and ambiguous parent arrays or nonliteral returned
+configuration are refused rather than regenerated. A config changed on disk
+must be reloaded before saving, so newer external edits are not overwritten.
+
+### Configuration
+
+The rest of the project's `config.php`: the `save`, `accessibility`, `ui`,
+`graphics`, `audio` and `inn` settings, one row per setting with its dotted
+path. A switch is a switch, a number a number, and a setting authored as an
+enum case (a selection colour, a window position) is a choice of that enum,
+written back as the case. A setting the engine reads with a default is listed
+even where the file leaves it out, showing that default; choosing the default
+writes nothing.
+
+#### Field Zoom
+
+Open **Database > Configuration > graphics.field.zoom**. Enter a finite number
+from `1` through `8` (`2.5` is valid); the default is `1`. This writes the
+game's `config.php` at `graphics.field.zoom`, not `system.php` or
+`ichiloto.json`. It magnifies the GPUI field only: terminal maps, menus and UI
+sizing do not change. `Ctrl+S` saves, `Ctrl+Z` undoes, and `Ctrl+Y` redoes. Undoing the first
+edit restores an originally absent setting without leaving a default entry.
+The same pending Terms edits are included when this configuration is saved.
 
 ### Knowledge
 
@@ -979,6 +1662,25 @@ Supported command types, matching the engine's interpreter:
 | `recover_party` | None |
 | `branch` | Conditions, Then (fixed), Else (fixed) |
 
+Registered commands follow the built-in ones in the `Type` options: the
+Engine's `shop` and `inn`, then any the project declares in
+`assets/Data/script-commands.php` (see the Engine's story events guide). Their
+rows come from their declarations:
+
+| Type | Fields |
+| --- | --- |
+| `shop` | Buy Rate, Sell Rate, Merchandise (Item, Price) |
+| `inn` | Question, Speaker, Cost, Wake At X / Y, Rest Music, Result Variable |
+
+A command's first list, such as a shop's merchandise, is edited like a
+route's steps: with the settings cursor on one of its entry rows, `Shift+O`
+adds an entry and `Shift+X` removes one. A further list in a project command is shown
+read-only and kept as written. The Editor reads the declarations without
+running the project's handler code; the game checks the handlers when it
+starts. Validation reports a malformed declaration file, a registered command
+missing what its declaration requires, and any resource it names that the
+project does not have.
+
 A `knowledge` command records what the party has learned. `Operation` is
 chosen from the vocabulary the runtime itself defines, and each operation
 reads only the fields it needs, so the others are left empty and are not
@@ -1011,11 +1713,32 @@ the map data. Routes in this phase are sequential and awaited, so `Wait` must
 remain true. Set either seconds-per-step (with an optional per-step override)
 or speed in steps per second.
 
-Current limit: nested arms are shown but not edited. A `choice` command's
-`Options` and a `branch` command's `Then` / `Else` appear as fixed rows, and
-their contents round-trip untouched when you save. Editing a nested arm means
-editing the file directly - flattening a command tree into one settings pane
-would be unreadable, and dropping it on save would be worse.
+The shared route fields also preserve `waypoints` and `retrace` as distinct
+authored modes. A waypoint's omitted X or Y keeps the subject's coordinate for
+that leg; adding a point leaves both axes blank until authored, not zero.
+Incomplete new or changed routes refuse Save without discarding the draft or
+undo history. Unchanged legacy data survives unrelated edits.
+
+`Remember As` declares a session-local identity. `Recorded Route` selects only
+declarations in that script invocation and its referenced common events,
+including nested command arms, not other NPCs, dialogue variants, map events or
+cinematics. Ordinary NPC/map/common-event sessions and cinematics all support
+recording real subjects. Runtime verifies completion, subject/map/generation,
+endpoint and one-use consumption; the reference choice does not guarantee a
+conditional record has executed. Retrace uses actual successful movement, not
+authored reverse geometry, and records disappear at completion or cancellation.
+
+Graphical clients request these choices with the explicit owning row context:
+`references.list` keeps its optional `record` argument as `{category,index,frame}`
+for Database, `{kind:'npc',index,frame}` for NPC, or
+`{kind:'event',marker,path}` for an inline event, with the owning `map` for the
+latter two. Existing `{category,index}` cutscene requests remain compatible.
+Omitting the owner does not create a global recorded-route catalogue. This
+transport contract does not require graphical controls in the Terminal editor.
+
+A `choice` command's options and a `branch` command's `Then` / `Else` arms
+are not flattened into this list. Each arm opens as its own frame, described
+under [Command Frames](#command-frames).
 
 `start_battle` may occur in the middle of a script. The event suspends until
 the existing battle return path restores the field, then continues with the
@@ -1090,10 +1813,11 @@ Unparseable entries are dropped rather than written back as garbage.
 
 `F4` opens the Cutscenes screen over the main shell, the way `Ctrl+D` opens
 the Database; `F4` or `Esc` closes it, `Ctrl+D` from inside goes straight
-across to the Database, and `Ctrl+P` offers `Cutscenes: Cinematic` and
-`Cutscenes: Summon`. Five panes: **Types** (Cinematic or Summon), the asset
-**list**, the **record pane** (the asset's fields, grouped), the **Command
-Tree** (for a summon, the **Timeline**) and the **Preview**. `Tab` and
+across to the Database, and `Ctrl+P` offers `Cutscenes: Cinematic`,
+`Cutscenes: Summon` and `Cutscenes: Effect`. Five panes: **Types**
+(Cinematic, Summon or Effect), the asset **list**, the **record pane** (the
+asset's fields, grouped), the **Command Tree** (for a summon or an effect,
+the **Timeline**) and the **Preview**. `Tab` and
 `Shift+Tab` cycle the panes; `/` filters the list; `Shift+A` creates,
 `Shift+D` duplicates, `Delete` removes (with the places that reference the
 asset named first); `Ctrl+S` saves the selected asset, `Ctrl+A` saves every
@@ -1107,6 +1831,7 @@ Four things look alike and are not. Keep them apart:
 | Common Event | a reusable command list, called by id from maps and cinematics | Database › Common Events |
 | Cinematic Cutscene | a staged story sequence: cast, camera, parallel lanes, skip, finalizer | Cutscenes › Cinematic |
 | Summon Cutscene | a frame-driven battle presentation: tracks, keyframes, cues | Cutscenes › Summon |
+| Effect | an effect timeline battle animations, the field and cinematics play | Cutscenes › Effect |
 | Skit | an optional conversation overlay | Database › Skits |
 | Animation | a reusable visual asset a command plays | Database › Animations |
 
@@ -1119,9 +1844,12 @@ assets/Cutscenes/Cinematics/<id>/<id>.data.php
 assets/Cutscenes/Cinematics/<id>/<id>.script.php
 assets/Cutscenes/Summons/<id>/<id>.data.php
 assets/Cutscenes/Summons/<id>/<id>.timeline.php
+assets/Animations/<id>/<id>.timeline.php
 ```
 
-The stable id *is* the folder name; the display name is a field. A new
+An effect is its timeline file alone, exactly as the engine's effect library
+reads it: no data file, and an id of lowercase letters, digits, `_` and `-`
+(no dots). The stable id *is* the folder name; the display name is a field. A new
 asset's id is yours to choose until its first save makes the folder; after
 that it is read-only (duplicate under the new id and delete the old one to
 migrate). The list shows `*` for unsaved work and a folder the engine cannot
@@ -1195,12 +1923,20 @@ Lane 2`). `Esc` pops exactly one frame.
 | `camera` | Operation (`detach`, `attach`, `reset`, `focus`, `pan`, `route`, `track`, `shake`, `restore`), Target (kind, id or x/y), Seconds, Magnitude; a `route` owns Points |
 | `stage_actor` | the staged-actor fields |
 | `show_actor`, `hide_actor`, `remove_actor` | Actor (from the cast) |
-| `field_animation` | Animation, Target (kind, id or x/y), Seconds Per Frame |
+| `field_animation` | Effect (picker), or Animation and Seconds Per Frame; Target (kind, id or x/y) |
 | `title_card`, `narration` | Title, Text (multiline), Seconds |
 | `transition` | Style (`fade`, `wipe`, `none`), Direction (`in`, `out`), Seconds |
 | `clear_presentation` | none |
 | `cinematic_music` | Track, Loop, Fade In, Fade Out, On Completion (`continue`, `stop`, `restore_previous`) |
 | `move_route` | Subject (`player`, `npc`, `staged_actor`), NPC Id or Staged Actor, Seconds Per Step or Speed, Wait, Steps |
+
+A `field_animation` plays either an effect timeline from `assets/Animations`,
+chosen by its stable id, or a legacy animation from the Animations database.
+The effect owns its frame rate, so choosing an Effect removes the Animation
+and Seconds Per Frame rows and their values; clearing the Effect brings them
+back. Validation plays the effect through the Engine for both presentations
+and reports one that is missing, cannot be read, or loops: the command waits
+for its effect to end, and loops belong to a map's own field effects.
 
 Every other type from the Common Events table is available too, with the
 same rows. `Shift+O` adds: on a route, lane or point row, another step, lane
@@ -1224,7 +1960,9 @@ where a field is unset (a wait of 0.5s, a route step of 0.15s, a narration
 of 2.5s, a transition of 0.24s). A parallel block is as long as its longest
 lane; a branch or choice as its longest arm. Dialogue, choices, battles and
 common events cannot be timed from the asset and are marked `+input`,
-`+battle` and `+?` instead of guessed. `Up` / `Down` move over the rows and
+`+battle` and `+?` instead of guessed. A field effect is as long as its
+timeline, the longer of its two presentations, and is marked `+?` when its
+timeline cannot be read. `Up` / `Down` move over the rows and
 `Enter` opens the row's command in the tree; a running preview marks the
 rows it is on.
 
@@ -1262,6 +2000,14 @@ on the next step (the pane says so); a transfer loads the destination map.
 The preview starts from the map event that triggers the cinematic when one
 exists, otherwise from the start map at its first open tile. It writes
 nothing: not your saves, not your files.
+
+Missing or malformed preview maps are reported beside the controls; the stage
+remains usable on explicitly identified undefined terrain. The diagnostic
+follows the current map and clears after a successful transfer. GPUI restarts,
+resizes and reopened views reconnect to the new scene automatically, even when
+the grid is unchanged; a retired view cannot supply its picture or feedback to
+the replacement. An effect without a selected start map now previews on
+diagnosed undefined terrain instead of refusing to open.
 
 `Ctrl+T` plays the saved cinematic in the real game through the playtest
 overlay: the start map is copied into the throwaway root with one extra
@@ -1311,22 +2057,78 @@ strengths, weaknesses, free-form attributes, authoring metadata),
 **Availability** (conditions through the shared condition editor; an
 omitted policy is open and is written as nothing), **Wielders** (mode
 `all`, `roles` or `characters`, with roles picked from classes and
-characters from actors; tenancy `shared` or `exclusive`), **Playback**
+characters picked by stable actor id, as the battle matches them, so
+renaming an actor never changes who may call it; tenancy `shared` or
+`exclusive`), **Playback**
 (default speed, allow skip, loop preview, transitions in and out, effect
 timing by `end`, `cue` or `frame`, target presentation) and **Timeline**
-(format version, FPS, length in frames, editor metadata, and the Tracks
-and Cues frames). `allowSkip` is authored data; whether a battle honours it
-is the engine's business, and this manual claims nothing more.
+(the Sequence row, format version, FPS, length in frames, rest frame,
+editor metadata, and the Tracks and Cues frames). `allowSkip` is authored
+data; whether a battle honours it is the engine's business, and this manual
+claims nothing more.
+
+**Sequence** works as an effect's does: a summon whose timeline every
+renderer shares stays that way unless you choose `separate`, which gives it
+a terminal and a graphical sequence, each a copy of the shared one (undo
+puts the shared file back). The definition (identity, wielders, playback
+and the rest) stays one for both; the timeline rows, Tracks and Cues edit
+the sequence chosen, and the other is kept exactly as written. A key a
+sequence did not hold, such as a first rest frame, is written into that
+sequence.
+
+#### Stage
+
+A summon's graphical sequence may have a **stage**: a presentation space of
+its own, in stage units, shown in place of the arena from its start frame
+until its restore frame, when the arena, the formation and the battlers'
+current state return. The terminal sequence never has one. In the graphical
+sequence, the **Stage** row is `none` or `added`; adding gives the sequence
+the smallest stage the engine reads (a `1280, 720` canvas shown from the
+first frame to the last, its camera on the canvas's centre at its own
+scale), and `none` takes it away, each one undo step.
+
+With a stage, its rows are **Stage Canvas** (`width, height`), **Stage Start
+Frame**, **Stage Restore Frame** and **Stage Background** (`black`,
+`white` or `#RRGGBB`; empty is black), and three frames to open:
+
+- **Stage Subjects**: each subject has an id, a `Position` (`x, y`), a
+  `Size` (`width, height`, the box its art is fitted to, not a copy of an
+  image's size) and a `Pivot` (the point of that box at its position, `x,
+  y` from 0 to 1; empty is the bottom centre). `Shift+O` on a subject row
+  adds a named **point** to it, such as `chest` or `ground`: an id and an
+  `X` and `Y` from 0 to 1 across and down its box.
+- **Stage Camera**: keys in frame order from frame 0, each a `Focus`
+  (`x, y`, the stage point at the centre of the view), a `Zoom` from 0.125
+  to 4 and an `Easing` to the next key (`linear`, `hold` or `smoothstep`;
+  empty is linear).
+- **Stage Covers**: full-screen colour keys in frame order, from frame 0 to
+  a fully clear key on the last frame, each a `Color`, an `Opacity` from 0
+  to 1 and an `Easing`.
+
+An image track whose `Anchor` is `stage` is placed on the stage: its
+`Subject` and `Subject Point` are picked from the stage's subjects and
+their points (none: the stage origin, or the subject's pivot), with an
+`Offset` and a `Size` in stage units (empty: no offset, and the subject's
+size), and a `Z Index` among the stage's art. Battler rows (cells, facing,
+battler attachment) do not apply on the stage. Its keyframes add an
+`Offset` and an `Opacity` (empty is 1). The sequence's rest frame is also
+the stage's reduced-motion view, so it must fall inside the stage's frames
+with art showing; a save the engine refuses names the stage row it refuses,
+such as `stage.camera[initial].zoom`.
 
 #### Tracks, keyframes and cues
 
 Open `Tracks` and each track is a row (`Id`, `Type`: `glyph`, `text`,
-`flash`, `shake`) followed by its keyframes: frame, duration, position,
+`image`, `flash`, `shake`; `Presentation`: `all`, `terminal` or `graphical`, the
+renderers that draw it) followed by its keyframes: frame, duration, position,
 content, asset id, color, visible, z-index, blend mode, easing and a
-free-form payload. `Content` opens the **multiline editor** (`Enter` on the
+free-form payload; an image track has the image rows an effect's has.
+`Content` opens the **multiline editor** (`Enter` on the
 row), which keeps every space, backslash, blank line, tab and wide glyph
 exactly as typed or pasted; `Ctrl+S` there commits, `Esc` cancels. Open
-`Cues` for the cue rows: id, frame, type and payload. `Shift+O` adds a
+`Cues` for the cue rows: id, frame, type (including `restoreBattlefield`,
+which clears flash, shake and effect art and redraws the field) and
+payload. `Shift+O` adds a
 track, a keyframe under the cursor's track, or a cue; `Shift+X` and
 `Delete` remove. The Timeline pane lists tracks, keyframes and cues as
 rows: `[` / `]` reorder, `Shift+D` duplicates (a copied track or cue gets a
@@ -1369,10 +2171,103 @@ multi-pick over the project's summons where each pick toggles a member in
 or out, undoable and dirty-tracked, written as a list of stable ids (and
 removed entirely when emptied). Under it, one verdict row per assignment,
 judged by the same rules the validator applies: the summon must exist, the
-actor must be eligible under its wielder policy (by character, by role, or
-open to all), a story-locked summon cannot be a starting assignment, each
+actor must be eligible under its wielder policy (by character id, by role,
+or open to all), a story-locked summon cannot be a starting assignment, each
 id appears once, and an exclusive summon has at most one starting holder
 across the cast.
+
+### Effects
+
+An effect is edited like a summon's timeline, over the keys the engine's
+effect library reads and nothing else. The record pane groups **Identity**
+(the id), **Sequence**, **Timing** (FPS, length in frames, playback `once`
+or `loop`, loop from, rest frame), **Impact (battle)** (when a battle
+command's result lands: at the `end`, a `frame` or a `cue`) and
+**Timeline** (the Tracks and Cues frames). Tracks are `glyph`, `text`,
+`image`, `flash` or `shake`, each with its `Presentation` (`all`,
+`terminal` or `graphical`), an anchor (`target`, `caster` or `screen`) and,
+for a battle stroke drawn one way, `Facing` (`west` or `east`; the empty
+choice removes it, and the stroke stays as drawn). An image track names its
+PNG through the asset picker, its sheet columns and rows, its cell size, its
+`Fit` (`stretch` fills the cells; `contain` keeps the sheet cell's own
+proportions inside them; the empty choice removes it, so it stretches), its
+depth and its `Pivot` (the point of the sheet cell placed at the effect's
+position, two finite coordinates `x, y` from 0 to 1). The GUI's image-cell
+picker sets that point through the same undoable record edit. Empty removes
+the authored pivot: field images use bottom-centre (`0.5, 1`), while battle
+images keep their centred default (`0.5, 0.5`). Opening or saving an effect
+does not materialize either default in the file; an effect shared between
+field and battle keeps each consumer's default until a pivot is authored.
+The picker marks an explicit pivot, or the default for the current preview
+context when omitted, and labels which it is. While a shared effect's preview
+context is still loading, no default is guessed. Stage images retain their
+centred default. In battle only, `Attachment` selects `center`,
+`head` or `ground` on the battler; empty removes it and uses the centre.
+Field image tracks do not accept battler attachments. Image keyframes give
+the sheet frame, the position and, in battle,
+`Flip Horizontally` and `Flip Vertically` for an authored reverse stroke.
+Glyph and text keyframes give frame, duration, position `x` and `y`,
+content (the multiline editor), asset id, color, visibility, z-index and a
+payload. Cues are `playSound` on the field and any battle cue in battle.
+Impact timing, facing, image attachment, flips, flashes and shakes
+are battle-only;
+validation names the place that uses an effect where they are refused.
+
+**Sequence** says how the effect is drawn. A flat effect has one sequence
+for the terminal and graphical renderers alike, and stays flat unless you
+choose `separate`, which gives it a terminal and a graphical sequence, each
+a copy of the flat one (undo puts the flat file back). An effect with
+separate sequences is edited one at a time: choose `terminal` or
+`graphical`, and every row, the Timeline pane and the preview are that
+sequence's; the other is kept exactly as written. Undo returns to the
+sequence an edit was made in. The TUI has no graphical workflow: an image is
+chosen by path and its frames by number, and pictures belong to the GUI
+editor.
+
+An effect may instead own a graphical stage. In the GUI, its Stage, subject,
+attachment and camera controls use the same record services and Engine stage
+contract as summons. The stage owns its surroundings: it is never previewed
+against a fabricated battle or field. Its independent Terminal sequence keeps
+its own tracks, cues and clock without needing to decode graphical images.
+An incomplete stage can be edited and undone, but the Engine must admit it
+before Save; removing it preserves the sequence's tracks and cues.
+
+`Shift+O` on a Timeline row inserts the blank the effect's own lists take:
+an image keyframe after an image keyframe, starting where the selected one
+ends, and a track whose keyframe has a position `x` and `y`. A save is
+compiled by the engine in its declared stage, or for battle and the field
+when no stage is declared. Save is refused before writing unless each sequence
+has a valid context; a paired Terminal sequence retains its independent
+admission. `Delete` names everything that plays the effect first: battle
+animations, the field presentation's cues and action prompt, maps' field
+effects, tileset pieces, and the `field_animation` commands of map events,
+event scripts and cinematics.
+
+#### Effect preview
+
+`Space` on the Preview pane compiles the sequence being edited, unsaved,
+and plays it through the engine's shared effect playhead, with the summon
+preview's keys (step, keyframe boundaries, `Home` / `End`, speed, `R`, `L`,
+`X`); `O` loops, and an effect authored to loop starts looping, from its
+loop frame. The frame is drawn as a terminal consumer places it: through the
+engine's composition for that presentation, glyph and text at their anchor,
+`C` marking the caster and `T` the target (`screen` draws from the top
+left). Beside it, the context and what the terminal cannot draw: image
+frames with their flips, flashes and shakes, each with its subject.
+
+| Key (Preview focused, effect) | Action |
+| --- | --- |
+| `B` | Play as battle or as the field compiles it (recompiles; a refusal is reported) |
+| `D` | Put the battle caster on the other side |
+
+The preview starts as battle when a battle animation uses the effect or
+nothing on the field does. In battle a stroke with a facing is turned toward
+its target exactly as the battle turns it, so `D` shows both directions.
+An owned stage instead starts in its declared context; `B` does not change its
+ownership. The GUI GPUI tab paints the Engine's seekable stage canvas through
+the runtime's shared painter. A stage error is shown rather than replaced by
+a field frame, and late seek replies cannot overwrite a newer frame. The
+Terminal tab shows its separately authored sequence, not a graphical imitation.
 
 ### Validation
 
@@ -1413,7 +2308,7 @@ fields are preserved and are not errors.
 | --- | --- | --- |
 | Help | `?` | Generated from the binding table; scrolls with arrows |
 | Command palette | `Ctrl+P` | Fuzzy search over actions, tools, maps, categories, and event markers |
-| Character map | `@` | Insert glyphs the keyboard reserves; lists the map's symbols, the project's collision vocabulary, and the reserved glyphs |
+| Character map | `c` in Normal mode, or *Tool: Character Map* in the command palette | Insert glyphs the keyboard reserves; lists the map's symbols, the project's collision vocabulary, and the reserved glyphs |
 | Status detail | `Ctrl+E` | Full text of the last message, and the log file path |
 
 Current limit: the help overlay and command palette cannot open while a picker
@@ -1544,9 +2439,42 @@ spawn points outside the map. The warnings appear in the status footer;
 `Ctrl+E` shows the full text. The project-wide pass (`ichiloto validate`) also
 covers every NPC field, as described under [NPC Mode](#npc-mode).
 
+Skills are read as one catalogue from their record files, as the game reads
+them: a skill name defined twice, or a record the game cannot read, is an
+error naming its file, and save aliases for spells must point at spells and
+those for abilities at abilities.
+
+Save migration steps are read as the Engine reads them: each declares a
+project class, or declared position edits, `mapShifts` for inserted rows and
+columns and `relocations` for cells authored content now occupies (map,
+cells, and a landing that is not one of them). A malformed step is an error.
+Relocations are written by hand when an NPC or furniture moves onto open
+floor; add them to a new step, never to an earlier one.
+
+Reachability is checked as the game moves the player, from where the game
+starts and every way onto each map it can reach, never from where content
+stands: moving an NPC or rebuilding a room is fine unless it traps something.
+An event no reachable cell lies in, or an arrival outside the map or on a
+wall, is an error; a talkable NPC with no reachable cell beside it, and a map
+nothing reachable leads to yet, are warnings. Doors and edge triggers that
+name a map the project does not have are errors of their own.
+
+Effect timelines in `assets/Animations` are checked as each consumer plays
+them: an animation's `sourceEffect` and `targetEffect` in battle, and the field
+presentation's cue and action prompt effects, maps' `fieldEffects` and tileset
+pieces' effects on the field. Each is compiled for the terminal and for the
+graphical presentation, so an effect only one renderer would refuse is still
+an error; until it is fixed that presentation keeps its fallback.
+
+Screen transitions in `assets/Data/Presentation/transitions.php` are checked
+as the Engine plays them, including treatments nothing selects yet: a file the
+Engine refuses, a battle choice naming no treatment, or an image that is
+missing or cannot be loaded is an error. Until it is fixed the graphical
+renderers enter battle with a direct cut; the terminal intro is unaffected.
+
 An inventory id two definitions claim is reported once, naming every
 claimant with the category it was authored in, the aliases it brought, and
-its entry in `items.php` - the game refuses the whole catalogue until one
+its record file - the game refuses the whole catalogue until one
 of them is renamed, and until then nothing under any claimant is offered by
 a picker, resolved by a reference, or accepted as a save alias target.
 

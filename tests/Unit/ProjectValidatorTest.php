@@ -61,6 +61,38 @@ function writeConsistentSkits(string $root): void
     PHP);
 }
 
+/**
+ * Defines the enemies the temporary project's troops field.
+ *
+ * Same story again: the fixture's troops name a bigger project's enemies,
+ * and a troop whose enemy is not defined cannot load.
+ *
+ * @param string $root The project root.
+ * @return void
+ */
+function writeConsistentEnemies(string $root): void
+{
+    is_dir($root . '/assets/Data/Enemies') || mkdir($root . '/assets/Data/Enemies', 0777, true);
+
+    foreach (['regular-bat' => 'Regular Bat', 'sewer-rat' => 'Sewer Rat'] as $file => $name) {
+        file_put_contents($root . '/assets/Data/Enemies/' . $file . '.php', <<<PHP
+        <?php
+
+        return [
+          'class' => \\Ichiloto\\Engine\\Entities\\Enemies\\Enemy::class,
+          'data' => [
+            'name' => '{$name}',
+            'level' => 1,
+            'imagePath' => '{$file}',
+            'stats' => ['maxHp' => 10, 'maxMp' => 0, 'attack' => 3, 'defence' => 2, 'magicAttack' => 1, 'magicDefence' => 1, 'speed' => 4, 'grace' => 1, 'evasion' => 0],
+            'rewards' => ['experience' => 1, 'gold' => 1],
+          ],
+        ];
+
+        PHP);
+    }
+}
+
 /** Writes a save compatibility manifest into a disposable project. */
 function writeSaveCompatibilityManifest(string $root, string $source): void
 {
@@ -102,6 +134,7 @@ it('passes a project with nothing wrong with it', function () {
     $root = makeTemporaryProject();
     writeConsistentQuests($root);
     writeConsistentSkits($root);
+    writeConsistentEnemies($root);
 
     expect(validateProject($root))->toBe([]);
 });
@@ -110,6 +143,7 @@ it('accepts conditional event cues from the shared runtime contract', function (
     $root = makeTemporaryProject();
     writeConsistentQuests($root);
     writeConsistentSkits($root);
+    writeConsistentEnemies($root);
     editTestMapData(
         $root,
         static fn(string $source): string => str_replace(
@@ -126,6 +160,7 @@ it('validates conditional event cues with the shared condition vocabulary', func
     $root = makeTemporaryProject();
     writeConsistentQuests($root);
     writeConsistentSkits($root);
+    writeConsistentEnemies($root);
     editTestMapData(
         $root,
         static fn(string $source): string => str_replace(
@@ -148,10 +183,12 @@ it('finds the dangling references in the shipped sample project', function () {
     $issues = validateProject(fixturePath('sample-project'));
 
     // The map is named twice: a quest objective goes there, and the skit
-    // plays there.
+    // plays there. The rat is named twice too: a quest objective defeats it,
+    // and a troop fields it, as another troop fields the bat.
     expect(issuesMentioning($issues, 'happyville/town-center'))->toHaveCount(2)
         ->and(issuesMentioning($issues, 'S-Mana'))->toHaveCount(1)
-        ->and(issuesMentioning($issues, 'Sewer Rat'))->toHaveCount(1)
+        ->and(issuesMentioning($issues, 'Sewer Rat'))->toHaveCount(2)
+        ->and(issuesMentioning($issues, 'Regular Bat'))->toHaveCount(2)
         // The skit's own condition waits on a quest the fixture does define,
         // and a reference that resolves is not a finding.
         ->and(issuesMentioning($issues, 'breakfast-duty'))->toHaveCount(0);
@@ -216,6 +253,7 @@ it('validates generic summon availability, policies, identities, and linked acti
     $root = makeTemporaryProject();
     writeConsistentQuests($root);
     writeConsistentSkits($root);
+    writeConsistentEnemies($root);
     writeValidatorSummon($root, 'unsafe-summon', [
         'id' => 'unsafe-summon',
         'name' => 'Unsafe Summon',
@@ -234,7 +272,7 @@ it('validates generic summon availability, policies, identities, and linked acti
 
     expect(issuesMentioning($issues, 'unknown condition type "lunar_phase"'))->toHaveCount(1)
         ->and(issuesMentioning($issues, 'invalid tenancy "forever"'))->toHaveCount(1)
-        ->and(issuesMentioning($issues, 'eligible character "No Such Actor"'))->toHaveCount(1)
+        ->and(issuesMentioning($issues, "Unresolved actor reference 'No Such Actor'"))->toHaveCount(1)
         ->and(issuesMentioning($issues, 'links to action "Missing Action"'))->toHaveCount(1);
 });
 
@@ -242,6 +280,7 @@ it('rejects invalid summon starting assignments and duplicate exclusive holders'
     $root = makeTemporaryProject();
     writeConsistentQuests($root);
     writeConsistentSkits($root);
+    writeConsistentEnemies($root);
     writeValidatorSummon($root, 'bound-summon', [
         'id' => 'bound-summon',
         'name' => 'Bound Summon',
@@ -268,6 +307,7 @@ it('reports malformed availability and actor assignment payloads', function () {
     $root = makeTemporaryProject();
     writeConsistentQuests($root);
     writeConsistentSkits($root);
+    writeConsistentEnemies($root);
     writeValidatorSummon($root, 'malformed-summon', [
         'id' => 'malformed-summon',
         'name' => 'Malformed Summon',
@@ -287,6 +327,7 @@ it('reports malformed declared summon policy and condition fields without coerci
     $root = makeTemporaryProject();
     writeConsistentQuests($root);
     writeConsistentSkits($root);
+    writeConsistentEnemies($root);
     writeValidatorSummon($root, 'malformed-fields', [
         'id' => 'malformed-fields',
         'name' => 'Malformed Fields',
@@ -307,6 +348,7 @@ it('matches actor summon assignments to definition ids case-insensitively like r
     $root = makeTemporaryProject();
     writeConsistentQuests($root);
     writeConsistentSkits($root);
+    writeConsistentEnemies($root);
     writeValidatorSummon($root, 'signature-summon', [
         'id' => 'Signature-Summon',
         'name' => 'Signature Summon',
@@ -322,6 +364,7 @@ it('rejects non-list and duplicate actor summon assignments', function () {
     $root = makeTemporaryProject();
     writeConsistentQuests($root);
     writeConsistentSkits($root);
+    writeConsistentEnemies($root);
     writeValidatorSummon($root, 'shared-summon', [
         'id' => 'shared-summon',
         'name' => 'Shared Summon',
@@ -405,15 +448,11 @@ it('catches a marker placed on a map that defines no such event', function () {
         ->and($issues[0]->hint)->toContain('Unmapped event markers');
 });
 
-it('catches a marker that is not one solid rectangle', function () {
+it('accepts a marker painted in separate places, as the runtime triggers its exact cells', function () {
     $root = makeTemporaryProject();
     $path = $root . '/assets/Maps/test-map/test-map.event.php';
 
-    file_put_contents($path, <<<'PHP'
-    <?php
-
-    return " A  \nAAA \n    \n    ";
-    PHP);
+    file_put_contents($path, "<?php\n\nreturn <<<'ICHILOTO_EVENT_MAP'\n A  \nAAA \n    \n    \nICHILOTO_EVENT_MAP;\n");
 
     editTestMapData($root, static fn(string $source): string => str_replace(
         "'events' => [",
@@ -421,11 +460,10 @@ it('catches a marker that is not one solid rectangle', function () {
         $source
     ));
 
-    $issues = issuesMentioning(validateProject($root), 'does not occupy one solid rectangle');
+    $issues = validateProject($root);
 
-    expect($issues)->toHaveCount(1)
-        ->and($issues[0]->severity)->toBe(Severity::ERROR)
-        ->and($issues[0]->hint)->toContain('cross-shaped');
+    expect(issuesMentioning($issues, 'rectangle'))->toBe([])
+        ->and(issuesMentioning($issues, 'could not be read'))->toBe([]);
 });
 
 it('catches an event defined but never placed', function () {
@@ -586,6 +624,7 @@ it('accepts a complete sequential compatibility manifest with catalog-backed tar
     $root = makeTemporaryProject();
     writeConsistentQuests($root);
     writeConsistentSkits($root);
+    writeConsistentEnemies($root);
     writeSaveCompatibilityManifest($root, <<<'PHP'
     <?php
 
@@ -727,4 +766,342 @@ it('detects duplicate migration steps and impossible registration order', functi
     expect(issuesMentioning($issues, 'registered more than once'))->toHaveCount(1)
         ->and(issuesMentioning($issues, 'impossible order'))->toHaveCount(2)
         ->and(issuesMentioning($issues, 'Content migration step 2 to 3 is missing'))->toHaveCount(1);
+});
+
+it('warns that a tiles2d crop table is no longer read', function () {
+    $root = makeTemporaryProject();
+    editTestMapData($root, static fn(string $source): string => str_replace(
+        "'triggers' => [],",
+        "'triggers' => [],\n  'tiles2d' => ['asset' => 'Graphics/Tilesets/shared.png', 'symbols' => []],",
+        $source,
+    ));
+
+    $issues = issuesMentioning(validateProject($root), 'tiles2d');
+
+    expect($issues)->toHaveCount(1)
+        ->and($issues[0]->severity)->toBe(Severity::WARNING)
+        ->and($issues[0]->message)->toBe('Its tiles2d crop table is no longer read.');
+});
+
+/** Writes a catalogue of every kind of skill, one record each. */
+function writeSpreadSkillCatalog(string $root, Ichiloto\Engine\Entities\Skills\Skill ...$extra): void
+{
+    writeSkillRecords(
+        $root,
+        new Ichiloto\Engine\Entities\Skills\BasicSkill('Attack', 'Strikes.', '', 0, 0),
+        new Ichiloto\Engine\Entities\Skills\MagicSkill('Cleanse', 'Lifts a poison.', '', 3, 0),
+        new Ichiloto\Engine\Entities\Skills\SpecialSkill('Ward', 'Guards.', '', 2, 0),
+        new Ichiloto\Engine\Entities\Skills\MagicSkill('Burn I', 'Burns.', '', 5, 0),
+        ...$extra,
+    );
+}
+
+it('checks ability and spell alias targets against their own kind across every skill file', function () {
+    $root = makeTemporaryProject();
+    writeConsistentQuests($root);
+    writeConsistentSkits($root);
+    writeConsistentEnemies($root);
+    writeSpreadSkillCatalog($root);
+    writeSaveCompatibilityManifest($root, <<<'PHP'
+    <?php
+
+    return [
+      'contentVersion' => 0,
+      'migrations' => [],
+      'aliases' => [
+        'spells' => [
+          ['from' => 'Fire', 'to' => 'Burn I'],
+          ['from' => 'Purify', 'to' => 'Cleanse'],
+          ['from' => 'Guard', 'to' => 'Ward'],
+        ],
+        'abilities' => [
+          ['from' => 'Shield', 'to' => 'Ward'],
+          ['from' => 'Blaze', 'to' => 'Burn I'],
+        ],
+      ],
+      'tombstones' => [],
+    ];
+    PHP);
+
+    $missing = array_map(
+        static fn(Issue $issue): string => $issue->message,
+        issuesMentioning(validateProject($root), 'is not defined in the current'),
+    );
+
+    expect($missing)->toEqualCanonicalizing([
+        'Alias target "Ward" is not defined in the current spells catalog.',
+        'Alias target "Burn I" is not defined in the current abilities catalog.',
+    ]);
+});
+
+it('reports a skill name the catalogue defines twice', function () {
+    $root = makeTemporaryProject();
+    writeConsistentQuests($root);
+    writeConsistentSkits($root);
+    writeConsistentEnemies($root);
+    writeSpreadSkillCatalog($root, new Ichiloto\Engine\Entities\Skills\MagicSkill('Cleanse', 'Again.', '', 3, 0));
+
+    $issues = issuesMentioning(validateProject($root), '"Cleanse" is already defined by Skills/0002-cleanse.php');
+
+    expect($issues)->toHaveCount(1)
+        ->and($issues[0]->severity)->toBe(Severity::ERROR);
+});
+
+it('offers skills from every skill file as references', function () {
+    $root = makeTemporaryProject();
+    writeSpreadSkillCatalog($root);
+
+    expect(ProjectWorkspace::fromProject($root)->getSkillNames())->toBe(['Attack', 'Cleanse', 'Ward', 'Burn I']);
+});
+
+/** Writes a transitions catalogue whose one treatment draws the given image. */
+function writeTransitionCatalog(string $root, string $asset, string $battle = 'sweep'): void
+{
+    @mkdir($root . '/assets/Data/Presentation', 0777, true);
+    file_put_contents($root . '/assets/Data/Presentation/transitions.php', <<<PHP
+    <?php
+    use Ichiloto\Engine\Rendering\Presentation\PresentationColor;
+    use Ichiloto\Engine\Rendering\ScreenTransitionCatalog;
+    use Ichiloto\Engine\Rendering\ScreenTransitionTreatment;
+
+    \$bounds = ['x' => 0, 'y' => 0, 'width' => 160, 'height' => 90];
+    \$brush = ['type' => 'solid', 'color' => PresentationColor::rgb(0, 0, 0)->toArray()];
+    \$sweep = new ScreenTransitionTreatment(['id' => 'sweep', 'width' => 160, 'height' => 90,
+      'timings' => ['gather' => 0, 'cover' => 100, 'hold' => 0, 'reveal' => 100],
+      'coverBrush' => \$brush, 'phases' => [
+        'gather' => [],
+        'cover' => [['operation' => ['type' => 'image', 'asset' => '$asset', 'destination' => \$bounds]]],
+        'reveal' => [['operation' => ['type' => 'fill', 'destination' => \$bounds, 'brush' => \$brush]]],
+      ]]);
+
+    return new ScreenTransitionCatalog(['sweep' => \$sweep], battle: '$battle');
+    PHP);
+}
+
+it('accepts transitions the Engine can play', function () {
+    $root = makeTemporaryProject();
+    writeConsistentQuests($root);
+    writeConsistentSkits($root);
+    writeConsistentEnemies($root);
+    @mkdir($root . '/assets/Graphics/System', 0777, true);
+    $image = imagecreatetruecolor(4, 4);
+    imagepng($image, $root . '/assets/Graphics/System/Sweep.png');
+    writeTransitionCatalog($root, 'Graphics/System/Sweep.png');
+
+    expect(validateProject($root))->toBe([]);
+});
+
+it('reports transitions the Engine refuses, naming the direct cut it falls back to', function (string $asset, string $battle, ?string $source, string $expected) {
+    $root = makeTemporaryProject();
+    writeTransitionCatalog($root, $asset, $battle);
+
+    if ($source !== null) {
+        file_put_contents($root . '/assets/Data/Presentation/transitions.php', $source);
+    }
+
+    $issues = array_values(array_filter(
+        validateProject($root),
+        static fn(Issue $issue): bool => $issue->where === 'assets/Data/Presentation/transitions.php',
+    ));
+
+    expect($issues)->toHaveCount(1)
+        ->and($issues[0]->severity)->toBe(Severity::ERROR)
+        ->and($issues[0]->message)->toContain($expected)
+        ->and($issues[0]->hint)->toContain('direct cut');
+})->with([
+    'a missing image' => ['Graphics/System/Missing.png', 'sweep', null, 'Transition sweep:'],
+    'an unknown battle choice' => ['Graphics/System/Missing.png', 'gilded', null, 'Unknown battle transition treatment.'],
+    'the wrong return value' => ['Graphics/System/Missing.png', 'sweep', "<?php\nreturn [];\n", 'must return a ScreenTransitionCatalog'],
+]);
+
+/** Gives the disposable project what the game needs to walk its maps. */
+function writeReachableProject(string $root, string $grid, string $events, array $startAt = [1, 2]): void
+{
+    file_put_contents($root . '/assets/Maps/collisions.php', "<?php\nuse Ichiloto\\Engine\\Events\\Enumerations\\CollisionType;\n"
+        . "return ['#' => CollisionType::SOLID, ' ' => CollisionType::NONE, '~' => CollisionType::NONE];\n");
+    file_put_contents($root . '/assets/Data/system.php', '<?php return ' . var_export(['startingPositions' => ['player' => [
+        'destinationMap' => 'test-map', 'spawnPoint' => ['x' => $startAt[0], 'y' => $startAt[1]], 'spawnSprite' => ['South'],
+    ]]], true) . ';');
+    file_put_contents($root . '/assets/Maps/test-map/test-map.map.php', "<?php\n\nreturn <<<'ICHILOTO_MAP'\n{$grid}\nICHILOTO_MAP;\n");
+    file_put_contents($root . '/assets/Maps/test-map/test-map.event.php', "<?php\n\nreturn <<<'ICHILOTO_EVENT_MAP'\n{$events}\nICHILOTO_EVENT_MAP;\n");
+}
+
+/** @return list<string> */
+function reachabilityIssueLines(string $root): array
+{
+    return array_map(
+        static fn(Issue $issue): string => $issue->severity->value . ': ' . $issue->where . ': ' . $issue->message,
+        array_values(array_filter(validateProject($root), static fn(Issue $issue): bool =>
+            str_contains($issue->message, 'reach') || str_contains($issue->message, 'arrives')
+            || str_contains($issue->message, 'brings them onto'))),
+    );
+}
+
+it('reports an event the player can never reach, not where content stands', function () {
+    $root = makeTemporaryProject();
+    writeConsistentQuests($root);
+    writeConsistentSkits($root);
+    writeConsistentEnemies($root);
+    // The chest E sits in a sealed pocket.
+    writeReachableProject($root,
+        "############\n#  ~~~ ### #\n#      #E# #\n#      ### #\n############",
+        "            \n            \n        E   \n            \n            ");
+
+    expect(reachabilityIssueLines($root))->toBe([
+        'error: test-map: No cell of event E (ChestEventTrigger) at (8, 2) can be reached, so it never fires.',
+    ]);
+
+    // Moving the chest anywhere open is simply fine.
+    writeReachableProject($root,
+        "############\n#  ~~~ ### #\n#      # # #\n#      ### #\n############",
+        "            \n     E      \n            \n            \n            ");
+    expect(reachabilityIssueLines($root))->toBe([]);
+});
+
+it('notes a map nothing reaches yet as a warning, and checks edge trigger destinations', function () {
+    $root = makeTemporaryProject();
+    writeConsistentQuests($root);
+    writeConsistentSkits($root);
+    writeConsistentEnemies($root);
+    writeReachableProject($root,
+        "############\n#  ~~~     #\n#          #\n#          #\n############",
+        "            \n     E      \n            \n            \n            ");
+    mkdir($root . '/assets/Maps/vestige', 0777, true);
+    file_put_contents($root . '/assets/Maps/vestige/vestige.map.php', "<?php\n\nreturn <<<'ICHILOTO_MAP'\n   \nICHILOTO_MAP;\n");
+    file_put_contents($root . '/assets/Maps/vestige/vestige.event.php', "<?php\n\nreturn <<<'ICHILOTO_EVENT_MAP'\n   \nICHILOTO_EVENT_MAP;\n");
+    file_put_contents($root . '/assets/Maps/vestige/vestige.data.php', '<?php return ' . var_export(['name' => 'Vestige', 'triggers' => [
+        ['destinationMap' => 'nowhere', 'trigger_area' => ['x' => 0, 'y' => 0, 'width' => 1, 'height' => 1],
+            'spawn_point' => ['x' => 0, 'y' => 0]],
+    ]], true) . ';');
+
+    $issues = validateProject($root);
+
+    expect(reachabilityIssueLines($root))->toBe([
+        'warning: vestige: Nothing the player can reach from the start brings them onto it yet.',
+    ])->and(issuesMentioning($issues, 'Edge trigger 1 leads to "nowhere", which is not a map in this project.'))->toHaveCount(1);
+});
+
+/** Writes a field effect drawing one image cell from a 3 x 4 sheet. */
+function writeFieldEffect(string $root, string $id, string $asset): void
+{
+    @mkdir($root . "/assets/Animations/{$id}", 0777, true);
+    file_put_contents($root . "/assets/Animations/{$id}/{$id}.timeline.php", '<?php return ' . var_export([
+        'fps' => 5, 'lengthFrames' => 2, 'playback' => 'loop', 'restFrame' => 0,
+        'tracks' => [[
+            'id' => 'cue', 'type' => 'image', 'asset' => $asset, 'sheet' => ['columns' => 3, 'rows' => 4],
+            'cells' => ['width' => 1, 'height' => 1], 'depth' => 'front',
+            'keyframes' => [['frame' => 0, 'sourceFrame' => 0], ['frame' => 1, 'sourceFrame' => 1]],
+        ]],
+    ], true) . ';');
+}
+
+/** @return list<string> */
+function effectIssueLines(string $root): array
+{
+    return array_map(
+        static fn(Issue $issue): string => $issue->where . ': ' . $issue->message,
+        array_values(array_filter(validateProject($root), static fn(Issue $issue): bool =>
+            str_contains($issue->message, 'Effect ') || str_contains($issue->message, 'fieldEffects')
+            || str_contains($issue->message, 'field presentation'))),
+    );
+}
+
+it('checks every effect a consumer uses, as that consumer plays it, in both presentations', function () {
+    $root = makeTemporaryProject();
+    writeConsistentQuests($root);
+    writeConsistentSkits($root);
+    writeConsistentEnemies($root);
+    @mkdir($root . '/assets/Graphics/System', 0777, true);
+    $image = imagecreatetruecolor(9, 8);
+    imagepng($image, $root . '/assets/Graphics/System/Cue.png');
+    writeFieldEffect($root, 'cue-ok', 'Graphics/System/Cue.png');
+    writeFieldEffect($root, 'cue-missing-art', 'Graphics/System/Missing.png');
+    @mkdir($root . '/assets/Data/Presentation', 0777, true);
+    file_put_contents($root . '/assets/Data/Presentation/field.php', '<?php return ' . var_export([
+        'cues' => ['blue' => ['effect' => 'cue-ok'], 'yellow' => ['effect' => 'cue-missing-art']],
+        'actionPrompt' => ['effect' => 'no-such-effect'],
+    ], true) . ';');
+    $animations = require $root . '/assets/Data/animations.php';
+    $animations[0]['targetEffect'] = 'cue-ok';
+    file_put_contents($root . '/assets/Data/animations.php', '<?php return ' . var_export($animations, true) . ';');
+
+    $lines = effectIssueLines($root);
+
+    expect(array_filter($lines, static fn(string $line): bool => str_contains($line, 'cue-ok')))->toBe([])
+        ->and(implode("\n", $lines))
+        ->toContain('assets/Data/Presentation/field.php: yellow cue: Effect cue-missing-art cannot be played in field for the graphical presentation')
+        ->toContain('assets/Data/Presentation/field.php: action prompt: Effect no-such-effect cannot be played in field for the terminal presentation')
+        // A field image effect without terminal tracks still plays in the terminal: it keeps its glyph.
+        ->not->toContain('cue-missing-art cannot be played in field for the terminal presentation');
+});
+
+it('reports map field effects it cannot read', function () {
+    $root = makeTemporaryProject();
+    $path = $root . '/assets/Maps/test-map/test-map.data.php';
+    $data = require $path;
+    $data['fieldEffects'] = 'not a list';
+    file_put_contents($path, '<?php return ' . var_export($data, true) . ';');
+
+    expect(effectIssueLines($root))->toBe([
+        'test-map: Its fieldEffects cannot be read: fieldEffects must be a list of at most 256 map-owned effects.',
+    ]);
+});
+
+it('reports a record list entry that names nothing, or a definition the project lacks', function () {
+    $root = makeTemporaryProject();
+    writeConsistentQuests($root);
+    writeConsistentSkits($root);
+    writeConsistentEnemies($root);
+    $path = $root . '/assets/Data/Enemies/sewer-rat.php';
+    file_put_contents($path, str_replace(
+        "'rewards' => ['experience' => 1, 'gold' => 1],",
+        "'rewards' => ['experience' => 1, 'gold' => 1, 'items' => [['item' => '', 'rate' => 0.5], ['item' => 'Moon Tonic', 'rate' => 0.1], ['item' => 'S-Potion', 'rate' => 0.2]]],",
+        (string) file_get_contents($path),
+    ));
+
+    $issues = array_map(static fn(Issue $issue): string => $issue->where . ': ' . $issue->message, validateProject($root));
+
+    expect($issues)->toBe([
+        'enemy Sewer Rat, drop 1: Its item names no item.',
+        'enemy Sewer Rat, drop 2: Its item names the item "Moon Tonic", which the project does not define.',
+    ]);
+});
+
+it('checks a summon alias against the summons the project defines', function () {
+    $root = makeTemporaryProject();
+    writeConsistentQuests($root);
+    writeConsistentSkits($root);
+    writeConsistentEnemies($root);
+    writeSpreadSkillCatalog($root);
+    // One summon, defined as the Engine loads it: a directory holding its data and timeline records.
+    $summon = $root . '/assets/Cutscenes/Summons/ember';
+    mkdir($summon, 0777, true);
+    file_put_contents($summon . '/ember.data.php', "<?php\n\nreturn " . var_export([
+        'id' => 'ember', 'name' => 'Ember', 'linkedActionId' => 'Ember Call',
+        'availability' => ['conditions' => []],
+        'wielders' => ['mode' => 'characters', 'characters' => ['Kaelion'], 'tenancy' => 'exclusive'],
+    ], true) . ";\n");
+    file_put_contents($summon . '/ember.timeline.php', "<?php\n\nreturn ['fps' => 12, 'lengthFrames' => 1, 'tracks' => [], 'cues' => []];\n");
+    writeSaveCompatibilityManifest($root, <<<'PHP'
+    <?php
+
+    return [
+      'contentVersion' => 0,
+      'migrations' => [],
+      'aliases' => [
+        'summons' => [
+          ['from' => 'spark', 'to' => 'ember'],
+          ['from' => 'ash', 'to' => 'cinder'],
+        ],
+      ],
+      'tombstones' => [],
+    ];
+    PHP);
+
+    $missing = array_map(
+        static fn(Issue $issue): string => $issue->message,
+        issuesMentioning(validateProject($root), 'is not defined in the current'),
+    );
+
+    expect($missing)->toBe(['Alias target "cinder" is not defined in the current summons catalog.']);
 });

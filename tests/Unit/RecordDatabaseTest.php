@@ -24,7 +24,7 @@ it('refuses an object whose state it cannot put back', function (): void {
     expect(PhpValueExporter::findUnexportableClass(['bad' => $carriesState]))->toBe('stdClass');
 });
 
-it('keeps a data file header verbatim and regenerates only the returned value', function (): void {
+it('keeps a data file header verbatim and edits only the returned value', function (): void {
     $root = makeTemporaryProject();
     $path = $root . '/assets/Events/dresser-note.php';
 
@@ -36,7 +36,6 @@ it('keeps a data file header verbatim and regenerates only the returned value', 
 
     $contents = (string) file_get_contents($path);
     expect($contents)->toContain('// A small demo cutscene: reading the note on the dresser.');
-    expect($contents)->toContain("return [\n  [\n    'type' => 'text',");
     expect(require $path)->toBe([['type' => 'text', 'text' => 'Rewritten.']]);
 
     removeDirectoryRecursively($root);
@@ -123,15 +122,68 @@ it('keeps authored globals out of the isolated runner protocol', function (): vo
     }
 });
 
-it('refuses to rewrite a file whose data carries comments', function (): void {
+it('edits a data file whose data carries comments in its own source, keeping every comment', function (): void {
     $root = makeTemporaryProject();
     $path = $root . '/assets/Data/states.php';
-    file_put_contents($path, "<?php\n\nreturn [\n  // keep me\n  ['id' => 'poison'],\n];\n");
+    $source = "<?php\n\nreturn [\n  // keep me\n  ['id' => 'poison', 'turns' => 3], // and me\n  /* and this */ ['id' => 'sleep'],\n];\n";
+    file_put_contents($path, $source);
 
     $file = PhpDataFile::load($path);
+    expect($file->isEditable())->toBeTrue();
 
-    expect($file->isEditable())->toBeFalse();
-    expect($file->readOnlyReason)->toContain('comments inside its data');
+    $file->save([['id' => 'poison', 'turns' => 4], ['id' => 'sleep'], ['id' => 'burn']]);
+    $written = (string) file_get_contents($path);
+    expect($written)->toContain('// keep me', '// and me', '/* and this */', "'turns' => 4")
+        ->and(require $path)->toBe([['id' => 'poison', 'turns' => 4], ['id' => 'sleep'], ['id' => 'burn']]);
+
+    // A second save edits from what the first wrote.
+    $file->save([['id' => 'poison', 'turns' => 4], ['id' => 'sleep']]);
+    expect(require $path)->toBe([['id' => 'poison', 'turns' => 4], ['id' => 'sleep']])
+        ->and((string) file_get_contents($path))->toContain('// keep me', '// and me', '/* and this */');
+
+    // Another hand changed the file since it was read: the save refuses rather than overwrite it.
+    file_put_contents($path, (string) file_get_contents($path) . "// outside edit\n");
+    expect(fn() => $file->save([['id' => 'sleep']]))->toThrow(RuntimeException::class, 'changed outside the editor')
+        ->and((string) file_get_contents($path))->toEndWith("// outside edit\n");
+
+    removeDirectoryRecursively($root);
+});
+
+it('removes the enum read-only restriction while preserving its literal comments and refusing computed replacements', function (): void {
+    $root = makeTemporaryProject();
+    $path = $root . '/assets/Data/states.php';
+    $source = "<?php\n\nreturn [\n  // keep me\n  ['color' => \\" . Color::class . "::RED],\n];\n";
+    file_put_contents($path, $source);
+    $file = PhpDataFile::load($path);
+    expect($file->isEditable())->toBeTrue();
+    $file->save([['color' => Color::YELLOW]]);
+    expect(file_get_contents($path))->toBe(str_replace('::RED', '::YELLOW', $source));
+    $file->save([['color' => null]]);
+    expect(require $path)->toBe([['color' => null]])
+        ->and(file_get_contents($path))->toContain('// keep me');
+
+    $computed = str_replace('\\' . Color::class . '::RED', '(static fn() => \\' . Color::class . '::RED)()', $source);
+    file_put_contents($path, $computed);
+    $file = PhpDataFile::load($path);
+    expect($file->payload)->toBe([['color' => Color::RED]])
+        ->and(fn() => $file->composeContents([['color' => Color::YELLOW]]))->toThrow(RuntimeException::class)
+        ->and(file_get_contents($path))->toBe($computed);
+    removeDirectoryRecursively($root);
+});
+
+it('still refuses to regenerate commented data that is not an array literal', function (): void {
+    $root = makeTemporaryProject();
+    $path = $root . '/assets/Data/states.php';
+
+    foreach ([
+        "<?php\n\nreturn array_merge(\n  // keep me\n  [['id' => 'poison']],\n);\n",
+    ] as $source) {
+        file_put_contents($path, $source);
+        $file = PhpDataFile::load($path);
+
+        expect($file->isEditable())->toBeFalse()
+            ->and($file->readOnlyReason)->toContain('comments inside its data');
+    }
 
     removeDirectoryRecursively($root);
 });
@@ -255,15 +307,12 @@ it('adds and removes troop members', function (): void {
     removeDirectoryRecursively($root);
 });
 
-it('edits object-backed inventory categories by rebuilding the entry', function (): void {
+it('edits inventory categories one record file each', function (): void {
     $root = makeTemporaryProject();
 
     $items = loadRecordDatabase($root, 'items');
     $weapons = loadRecordDatabase($root, 'weapons');
 
-    // Entries authored as `new Item(...)` are rebuilt from the arguments they
-    // were built with, so they can be edited without rewriting the file into
-    // something else.
     expect($items->isEditable())->toBeTrue();
     expect($items->getEntryLabels())->toBe(['S-Potion', 'Antidote']);
     expect($weapons->getEntryLabels())->toBe(['Wooden Sword']);
@@ -274,17 +323,19 @@ it('edits object-backed inventory categories by rebuilding the entry', function 
     removeDirectoryRecursively($root);
 });
 
-it('writes an edited object entry back as the constructor call it was', function (): void {
+it('writes an edited inventory record back into its own file', function (): void {
     $root = makeTemporaryProject();
+    $antidote = (string) file_get_contents($root . '/assets/Data/Items/0002-antidote.php');
     $database = loadRecordDatabase($root, 'items');
 
     $database->setField(0, 'price', '75');
     $database->save();
 
-    $written = (string) file_get_contents($root . '/assets/Data/items.php');
+    $written = (string) file_get_contents($root . '/assets/Data/Items/0001-s-potion.php');
     $reloaded = loadRecordDatabase($root, 'items');
 
-    expect($written)->toContain('price: 75')
+    expect($written)->toContain("'price' => 75,")
+        ->and((string) file_get_contents($root . '/assets/Data/Items/0002-antidote.php'))->toBe($antidote)
         ->and($reloaded->getRecordByIndex(0)?->get('price'))->toBe(75)
         // Everything else survives the rewrite.
         ->and($reloaded->getEntryLabels())->toBe(['S-Potion', 'Antidote']);
@@ -294,12 +345,11 @@ it('writes an edited object entry back as the constructor call it was', function
 
 it('refuses every write path on a category it cannot rewrite', function (): void {
     $root = makeTemporaryProject();
-    $database = loadRecordDatabase($root, 'types');
+    $database = loadRecordDatabase($root, makeUnwritableCategory($root));
 
-    // Element and weapon types are PHP enum declarations, not data.
     expect($database->isEditable())->toBeFalse();
 
-    $database->setField(0, 'value', 'Tampered');
+    $database->setField(0, 'title', 'Tampered');
 
     expect($database->addRecord())->toBeNull();
     expect($database->removeRecord(0))->toBeNull();
@@ -350,7 +400,7 @@ it('writes enum cases back as fully-qualified references', function (): void {
     removeDirectoryRecursively($root);
 });
 
-it('turns terms read-only when the config carries inline comments', function (): void {
+it('edits literal terms while preserving inline config comments byte for byte', function (): void {
     $root = makeTemporaryProject();
     $path = $root . '/config.php';
     $contents = (string) file_get_contents($path);
@@ -358,31 +408,14 @@ it('turns terms read-only when the config carries inline comments', function ():
 
     $database = loadRecordDatabase($root, 'terms');
 
-    expect($database->isEditable())->toBeFalse();
-    expect($database->getReadOnlyReason())->toContain('comments inside its data');
-    // Rows still render, just without controls.
+    expect($database->isEditable())->toBeTrue();
+    expect($database->getReadOnlyReason())->toBeNull();
     expect($database->getEntryLabels())->not->toBeEmpty();
-
-    foreach ($database->getSettingsFields(0) as $field) {
-        expect($field)->not->toHaveKey('control');
-    }
-
-    removeDirectoryRecursively($root);
-});
-
-it('lists type tables without evaluating them and explains tilesets', function (): void {
-    $root = makeTemporaryProject();
-
-    $types = loadRecordDatabase($root, 'types');
-    $tilesets = loadRecordDatabase($root, 'tilesets');
-
-    expect($types->isEditable())->toBeFalse();
-    expect($types->getReadOnlyReason())->toContain('PHP enum declarations');
-    expect($types->getEntryLabels())->toBe(['equipment.php']);
-
-    expect($tilesets->isEditable())->toBeFalse();
-    expect($tilesets->getReadOnlyReason())->toContain('no tileset system');
-    expect($tilesets->getEntryLabels())->toBe([]);
+    $before = file_get_contents($path);
+    $old = $database->getRecordByIndex(0)->get('value');
+    $database->setField(0, 'value', 'New title');
+    $database->save();
+    expect(file_get_contents($path))->toBe(str_replace(var_export($old, true), "'New title'", $before));
 
     removeDirectoryRecursively($root);
 });

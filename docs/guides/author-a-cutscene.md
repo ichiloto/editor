@@ -50,12 +50,12 @@ The full vocabulary:
 | Type | Fields | Notes |
 | --- | --- | --- |
 | `text` | Speaker, Text | An empty speaker means narration |
-| `choice` | Prompt, Title, Options | Options are fixed here; see below |
+| `choice` | Prompt, Title, Options | Each option's commands open as a frame; see below |
 | `wait` | Seconds | Accepts fractions |
 | `set_switch` | Switch, Value | |
 | `set_variable` | Variable, Operation, Value | Operation is `set` or `add` |
 | `record_event` | Story Event | What conditions test with `event:` |
-| `give_item` | Item, Quantity | Item must exist in `items.php` |
+| `give_item` | Item, Quantity | Item must be an item, weapon or armor the project defines |
 | `give_gold` | Amount | Negative debits |
 | `recover_party` | none | Fully restores travelling members and clears battle-only states |
 | `play_sound` | Sound | |
@@ -92,14 +92,13 @@ being skipped.
 A `branch` command's `Conditions` row uses the shared condition grammar
 documented in [Wire a Quest](wire-a-quest.md). All conditions must hold.
 
-Current limit: the `Then` and `Else` arms are shown as fixed rows and edited by
-hand in the file. The same applies to a `choice` command's `Options`. Both
-round-trip untouched when you save from the editor, so it is safe to author the
-outer script here and the nested arms in your editor of choice.
-
-The reason is deliberate: flattening a command *tree* into one settings pane
-would be unreadable, and dropping the tree on save would be worse than not
-offering the edit.
+The `Then` and `Else` arms, and each option of a `choice`, are edited as
+frames rather than flattened into the outer list. A `branch` shows `Then
+Commands` and `Else Commands` rows, and a `choice` shows each option as a text
+row and a commands row. `Enter` on a commands row opens that arm's own command
+list, with the same rows and keys as the top level, at any depth. `Esc` steps
+back out one frame at a time. The manual's
+[Command Frames](../manual.md#command-frames) section has the details.
 
 ## Continue After A Transfer Or Battle
 
@@ -181,8 +180,7 @@ reports missing scripts, duplicate NPC IDs, missing route targets where map
 context is known, malformed route steps/timing, unknown commands, bad result
 variables, and invalid defeat policies.
 
-Current limits: the editor preserves but does not structurally edit nested
-choice/branch trees. Cutscene skipping and finalizers, camera and fade
+Current limits: cutscene skipping and finalizers, camera and fade
 commands, field-animation commands, parallel routes, patrol routes,
 pathfinding, and full NPC creation/placement remain deferred.
 

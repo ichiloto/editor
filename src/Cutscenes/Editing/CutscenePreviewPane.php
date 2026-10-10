@@ -7,16 +7,25 @@ namespace Ichiloto\Editor\Cutscenes\Editing;
 use Ichiloto\Editor\Cutscenes\CutsceneAsset;
 use Ichiloto\Editor\Cutscenes\CutsceneLaneOverview;
 use Ichiloto\Editor\Cutscenes\CutsceneType;
+use Ichiloto\Editor\Cutscenes\Preview\CinematicPreviewOrigin;
 use Ichiloto\Editor\Cutscenes\Preview\CinematicPreviewSession;
+use Ichiloto\Editor\Cutscenes\Preview\EffectPreviewStage;
 use Ichiloto\Editor\Cutscenes\Preview\PreviewSnapshot;
-use Ichiloto\Editor\Cutscenes\Preview\SummonPreviewSession;
+use Ichiloto\Editor\Cutscenes\Preview\TimelinePreviewSession;
 use Ichiloto\Editor\EditorWindow;
 use Ichiloto\Editor\Playtest\PlaytestLauncher;
 use Ichiloto\Editor\Playtest\PlaytestOverlay;
-use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Editor\Status\StatusLevel;
 use Ichiloto\Editor\UI\CutscenesScreen;
+use Ichiloto\Editor\Validation\EffectValidator;
+use Ichiloto\Engine\Animations\Timelines\EffectCadence;
+use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
+use Ichiloto\Engine\Animations\Timelines\EffectTimelineLibrary;
+use Ichiloto\Engine\Battle\BattlePacing;
+use Ichiloto\Engine\Battle\BattleTurnTimings;
+use Ichiloto\Engine\Battle\Enumerations\BattleActionCategory;
+use Ichiloto\Engine\Battle\Enumerations\BattlePace;
 use Throwable;
 
 /**
@@ -36,7 +45,7 @@ use Throwable;
 trait CutscenePreviewPane
 {
     private ?CinematicPreviewSession $cinematicPreview = null;
-    private ?SummonPreviewSession $summonPreview = null;
+    private ?TimelinePreviewSession $timelinePreview = null;
     /** One of: stage, lanes, log, compare, overview. */
     private string $cutscenePreviewView = 'stage';
     private float $cutscenePreviewLastTickAt = 0.0;
@@ -46,8 +55,20 @@ trait CutscenePreviewPane
     private int $cutscenePreviewScroll = 0;
     /** The row under the cursor in the duration overview. */
     private int $cutsceneOverviewCursor = 0;
+    /** The open project's effect timelines, read once, so the overview can time field effects. */
+    private ?EffectTimelineLibrary $cutsceneEffectLibrary = null;
     /** The asset payload the running preview was built from. */
     private string $cinematicPreviewFingerprint = '';
+    /** @var array<string, bool> Effect id => previewed as battle plays it (else as the field does), once the author chose. */
+    private array $effectPreviewInBattle = [];
+    /** Which side the caster stands on in an effect's battle preview. */
+    private bool $isEffectPreviewCasterOnLeft = true;
+    /** The kind of command a battle-paced effect is previewed inside, which sets how long its phase lasts. */
+    private BattleActionCategory $effectPreviewAction = BattleActionCategory::PHYSICAL_ATTACK;
+    /** The battle pace a battle-paced effect is previewed at; the project's own until the author changes it. */
+    private ?BattlePace $effectPreviewPace = null;
+    /** @var array<string, bool> Effect id => previewed as a command's source stage (else its target), once the author chose. */
+    private array $effectPreviewAsSource = [];
 
     /**
      * Whether the preview pane is taller than its resting strip: while a
@@ -56,7 +77,7 @@ trait CutscenePreviewPane
     private function isCutscenePreviewExpanded(): bool
     {
         return $this->cinematicPreview !== null
-            || $this->summonPreview !== null
+            || $this->timelinePreview !== null
             || $this->cutsceneFocus === CutscenesScreen::PANE_PREVIEW
             || $this->cutscenePreviewView !== 'stage';
     }
@@ -92,8 +113,8 @@ trait CutscenePreviewPane
      */
     private function handleCutscenePreviewInput(string $input): bool
     {
-        if ($this->selectedCutscene()?->type === CutsceneType::SUMMON) {
-            return $this->handleSummonPreviewInput($input);
+        if ($this->selectedCutscene()?->type !== null && $this->selectedCutscene()?->type !== CutsceneType::CINEMATIC) {
+            return $this->handleTimelinePreviewInput($input);
         }
 
         $preview = $this->cinematicPreview;
@@ -199,7 +220,7 @@ trait CutscenePreviewPane
         }
 
         if ($asset->type !== CutsceneType::CINEMATIC) {
-            $this->startSummonPreview(play: $play);
+            $this->startTimelinePreview(play: $play);
 
             return;
         }
@@ -252,7 +273,7 @@ trait CutscenePreviewPane
                     $origin['mapId'] !== null ? sprintf(' on %s at %d,%d', $origin['mapId'], $origin['x'], $origin['y']) : ' without a map',
                     $play ? 'playing' : 'paused',
                 ),
-            $failure !== null ? StatusLevel::ERROR : StatusLevel::SUCCESS,
+            $failure !== null ? StatusLevel::ERROR : StatusLevel::INFO,
         );
         $this->renderDatabasePanes(['preview', 'tree']);
     }
@@ -329,7 +350,7 @@ trait CutscenePreviewPane
         }
 
         if ($preview->skip()) {
-            $this->setStatus('Skip accepted: the finalizer is running.', StatusLevel::SUCCESS);
+            $this->setStatus('Skip accepted: the finalizer is running.', StatusLevel::INFO);
             $preview->play();
             $this->cutscenePreviewLastTickAt = microtime(true);
         } else {
@@ -501,7 +522,7 @@ trait CutscenePreviewPane
             return;
         }
 
-        $this->tickSummonPreview();
+        $this->tickTimelinePreview();
         $preview = $this->cinematicPreview;
 
         if ($preview === null || ! $preview->isPlaying()) {
@@ -525,7 +546,7 @@ trait CutscenePreviewPane
                 $failure !== null
                     ? sprintf('Preview failed: %s (J jumps to it)', $failure['message'])
                     : sprintf('Preview %s after %.1fs.', $preview->status(), $preview->elapsed()),
-                $failure !== null ? StatusLevel::ERROR : StatusLevel::SUCCESS,
+                $failure !== null ? StatusLevel::ERROR : StatusLevel::INFO,
             );
         }
     }
@@ -534,22 +555,66 @@ trait CutscenePreviewPane
     {
         $this->cinematicPreview?->dispose();
         $this->cinematicPreview = null;
-        $this->summonPreview = null;
+        $this->timelinePreview = null;
     }
 
-    // -- Summons -------------------------------------------------------------
+    // -- Summons and effects -------------------------------------------------
 
     /**
-     * Handles the preview keys while a summon is selected.
+     * Handles the preview keys while a summon or an effect is selected. An
+     * effect also takes B, playing it as battle or as the field compiles it,
+     * and D, putting its battle caster on the other side.
      */
-    private function handleSummonPreviewInput(string $input): bool
+    private function handleTimelinePreviewInput(string $input): bool
     {
-        $preview = $this->summonPreview;
+        $preview = $this->timelinePreview;
         $lower = strtolower($input);
+        $asset = $this->selectedCutscene();
+
+        if ($asset?->type === CutsceneType::EFFECT && in_array($lower, ['a', 'p', 's'], true) && $this->isEffectPreviewInBattle($asset)) {
+            // The battle command a battle-paced effect plays inside: its kind,
+            // the battle's pace and the stage, which together set its phase.
+            match ($lower) {
+                'a' => $this->effectPreviewAction = self::cycleCase(BattleActionCategory::cases(), $this->effectPreviewAction),
+                'p' => $this->effectPreviewPace = self::cycleCase(BattlePace::cases(), $this->getEffectPreviewPace()),
+                's' => $this->effectPreviewAsSource[$asset->id] = ! $this->isEffectPreviewSource($asset),
+            };
+            $this->startTimelinePreview(play: $preview?->isPlaying() ?? false);
+
+            return true;
+        }
+
+        if ($asset?->type === CutsceneType::EFFECT && ($input === 'b' || $input === 'd')) {
+            if ($asset->isOwnedStageEffect()) {
+                $this->setStatus('This effect owns its stage; it has no field target or battle caster.', StatusLevel::INFO);
+
+                return true;
+            }
+            if ($input === 'b') {
+                $this->effectPreviewInBattle[$asset->id] = ! $this->isEffectPreviewInBattle($asset);
+            } elseif ($this->isEffectPreviewInBattle($asset)) {
+                $this->isEffectPreviewCasterOnLeft = ! $this->isEffectPreviewCasterOnLeft;
+            }
+
+            if ($input === 'b') {
+                // Battle and the field compile the timeline differently, and
+                // either may refuse it: compile now and say so.
+                $this->startTimelinePreview(play: $preview?->isPlaying() ?? false);
+
+                return true;
+            }
+
+            $this->setStatus($this->isEffectPreviewInBattle($asset)
+                ? sprintf('Caster on the %s.', $this->isEffectPreviewCasterOnLeft ? 'left' : 'right')
+                : 'The field has no caster; B previews battle.', StatusLevel::INFO);
+            $this->renderDatabasePanes(['preview', 'tree']);
+
+            return true;
+        }
 
         if ($input === ' ' || $input === "\n" || $input === "\r") {
             if ($preview === null) {
-                $this->startSummonPreview(play: true);
+                $this->startTimelinePreview(play: true);
             } elseif ($preview->isPlaying()) {
                 $preview->pause();
                 $this->setStatus(sprintf('Paused at frame %d.', $preview->currentFrame()));
@@ -569,8 +634,8 @@ trait CutscenePreviewPane
 
         if ($input === '+' || $input === '-' || $lower === 'o' || $isHome || $isEnd) {
             if ($preview === null) {
-                $this->startSummonPreview(play: false);
-                $preview = $this->summonPreview;
+                $this->startTimelinePreview(play: false);
+                $preview = $this->timelinePreview;
             }
 
             if ($preview === null) {
@@ -597,8 +662,8 @@ trait CutscenePreviewPane
 
         if ($input === '.' || $input === ',' || $input === '>' || $input === '<' || $lower === 'r' || $lower === 'l' || $lower === 'x') {
             if ($preview === null) {
-                $this->startSummonPreview(play: false);
-                $preview = $this->summonPreview;
+                $this->startTimelinePreview(play: false);
+                $preview = $this->timelinePreview;
             }
 
             if ($preview === null) {
@@ -612,11 +677,11 @@ trait CutscenePreviewPane
                 $input === '<' => $preview->seekBoundary(-1),
                 $lower === 'r' => $preview->restart(),
                 $lower === 'l' => $this->cutscenePreviewView = $this->cutscenePreviewView === 'timeline' ? 'stage' : 'timeline',
-                default => $this->summonPreview = null,
+                default => $this->timelinePreview = null,
             };
 
             if ($lower === 'x') {
-                $this->setStatus('Summon preview closed.');
+                $this->setStatus('Preview closed.');
             } elseif ($lower === 'l') {
                 $this->setStatus(sprintf('Preview view: %s.', $this->cutscenePreviewView));
             } else {
@@ -632,49 +697,62 @@ trait CutscenePreviewPane
     }
 
     /**
-     * Compiles the selected summon as it stands and opens the Engine
-     * playback session over it.
+     * Compiles the selected summon, or the effect's sequence being edited
+     * for battle or the field, as it stands, and opens the Engine playback
+     * session over it. An effect plays as its timeline says, once or
+     * looping; a summon once until O loops it.
      */
-    private function startSummonPreview(bool $play): void
+    private function startTimelinePreview(bool $play): void
     {
         $asset = $this->selectedCutscene();
 
-        if (! $asset instanceof CutsceneAsset || $asset->type !== CutsceneType::SUMMON) {
+        if (! $asset instanceof CutsceneAsset || $asset->type === CutsceneType::CINEMATIC) {
             return;
         }
 
         try {
-            $compiled = $asset->compiledSummon();
+            $compiled = $asset->type === CutsceneType::EFFECT
+                ? $asset->compileEffect($asset->getPresentationView() ?? EffectPresentation::TERMINAL,
+                    $this->isEffectPreviewInBattle($asset), forStage: $asset->isOwnedStageEffect())
+                : $asset->compiledSummon();
         } catch (Throwable $throwable) {
-            $this->summonPreview = null;
-            $this->setErrorStatus($throwable, 'Summon preview');
+            $this->timelinePreview = null;
+            $this->setErrorStatus($throwable, ucfirst($asset->type->noun()) . ' preview');
             $this->renderDatabasePanes(['preview']);
 
             return;
         }
 
-        $this->summonPreview = new SummonPreviewSession($compiled);
+        // A battle-paced sequence spreads its frames over the phase it plays in.
+        $phaseSeconds = $asset->type === CutsceneType::EFFECT && $compiled->cadence === EffectCadence::BATTLE_PHASE
+            ? $this->getEffectPreviewPhaseSeconds($asset)
+            : null;
+        $this->timelinePreview = new TimelinePreviewSession($compiled, $asset->type === CutsceneType::EFFECT ? null : false, $phaseSeconds);
         $this->cinematicPreviewFingerprint = $this->cutscenePayloadFingerprint($asset);
         $this->cutscenePreviewLastTickAt = microtime(true);
         $this->cutscenePreviewScroll = 0;
 
         if ($play) {
-            $this->summonPreview->play();
+            $this->timelinePreview->play();
         }
 
         $this->setStatus(sprintf(
-            'Previewing %s: %d frames at %d fps (%s).',
+            'Previewing %s: %d frames %s (%s)%s.',
             $asset->id,
-            $this->summonPreview->totalFrames(),
-            $this->summonPreview->fps(),
+            $this->timelinePreview->totalFrames(),
+            $phaseSeconds === null
+                ? sprintf('at %d fps', $this->timelinePreview->fps())
+                : sprintf('over %.2fs, %s (A, P, S change it)', $phaseSeconds, $this->describeEffectPreviewPacing($asset)),
             $play ? 'playing' : 'paused',
-        ), StatusLevel::SUCCESS);
+            $asset->type === CutsceneType::EFFECT ? sprintf(', in %s', $asset->isOwnedStageEffect() ? 'its owned stage'
+                : ($this->isEffectPreviewInBattle($asset) ? 'battle' : 'the field')) : '',
+        ), StatusLevel::INFO);
         $this->renderDatabasePanes(['preview', 'tree']);
     }
 
-    private function tickSummonPreview(): void
+    private function tickTimelinePreview(): void
     {
-        $preview = $this->summonPreview;
+        $preview = $this->timelinePreview;
 
         if ($preview === null || ! $preview->isPlaying()) {
             return;
@@ -692,8 +770,103 @@ trait CutscenePreviewPane
         $this->renderDatabasePanes(['preview', 'tree']);
 
         if ($preview->isCompleted()) {
-            $this->setStatus(sprintf('Summon preview finished: %d frames, %d cue%s fired.', $preview->totalFrames(), count($preview->cueLog()), count($preview->cueLog()) === 1 ? '' : 's'), StatusLevel::SUCCESS);
+            $this->setStatus(sprintf('Preview finished: %d frames, %d cue%s fired.', $preview->totalFrames(), count($preview->cueLog()), count($preview->cueLog()) === 1 ? '' : 's'), StatusLevel::INFO);
         }
+    }
+
+    /**
+     * Whether the selected effect is previewed as battle plays it: as the
+     * author last chose, else battle when a battle animation uses it or
+     * nothing on the field does.
+     */
+    private function isEffectPreviewInBattle(CutsceneAsset $asset): bool
+    {
+        if ($asset->isOwnedStageEffect()) {
+            return false;
+        }
+        if (isset($this->effectPreviewInBattle[$asset->id])) {
+            return $this->effectPreviewInBattle[$asset->id];
+        }
+
+        $uses = $this->workspace instanceof ProjectWorkspace ? (EffectValidator::findUses($this->workspace)[$asset->id] ?? []) : [];
+        $fieldScripts = $this->workspace instanceof ProjectWorkspace
+            ? (EffectValidator::findScriptUses($this->workspace, $this->cutsceneLibrary()?->assets(CutsceneType::CINEMATIC) ?? [])[$asset->id] ?? [])
+            : [];
+
+        return $this->effectPreviewInBattle[$asset->id] = isset($uses['battle']) || (! isset($uses['field']) && $fieldScripts === []);
+    }
+
+    /**
+     * Whether the selected effect is previewed as a command's source stage:
+     * as the author last chose, else when every battle animation using it
+     * plays it as its source effect.
+     */
+    private function isEffectPreviewSource(CutsceneAsset $asset): bool
+    {
+        if (isset($this->effectPreviewAsSource[$asset->id])) {
+            return $this->effectPreviewAsSource[$asset->id];
+        }
+
+        $battleUses = $this->workspace instanceof ProjectWorkspace ? (EffectValidator::findUses($this->workspace)[$asset->id]['battle'] ?? []) : [];
+
+        return $this->effectPreviewAsSource[$asset->id] = $battleUses !== []
+            && array_all($battleUses, static fn(string $use): bool => str_ends_with($use, ' sourceEffect'));
+    }
+
+    /** The battle pace a paced effect is previewed at: the author's choice, else the project's. */
+    private function getEffectPreviewPace(): BattlePace
+    {
+        $battleUi = $this->workspace?->config?->getRecord('ui.battle')->get('value');
+
+        return $this->effectPreviewPace ??= BattlePacing::fromBattleUiConfig(is_array($battleUi) ? $battleUi : [])->getAnimationPace();
+    }
+
+    /**
+     * The seconds the battle phase lasts that a paced effect plays in, from
+     * the Engine's own turn timings: the action animation for a source
+     * stage, the effect animation for a target stage.
+     */
+    private function getEffectPreviewPhaseSeconds(CutsceneAsset $asset): float
+    {
+        $timings = BattleTurnTimings::fromTotalDuration($this->effectPreviewAction->totalDurationSeconds($this->getEffectPreviewPace()));
+
+        return $this->isEffectPreviewSource($asset) ? $timings->actionAnimation : $timings->effectAnimation;
+    }
+
+    /** The battle command a paced effect is previewed inside, as the author reads it. */
+    private function describeEffectPreviewPacing(CutsceneAsset $asset): string
+    {
+        return sprintf(
+            'the %s of a %s at %s pace',
+            $this->isEffectPreviewSource($asset) ? 'source' : 'target',
+            str_replace('_', ' ', $this->effectPreviewAction->value),
+            $this->getEffectPreviewPace()->value,
+        );
+    }
+
+    /**
+     * The case after the given one, wrapping to the first.
+     *
+     * @template T of \UnitEnum
+     * @param list<T> $cases
+     * @param T $current
+     * @return T
+     */
+    private static function cycleCase(array $cases, \UnitEnum $current): \UnitEnum
+    {
+        $index = array_search($current, $cases, true);
+
+        return $cases[(($index === false ? -1 : $index) + 1) % count($cases)];
+    }
+
+    /**
+     * The stage an effect's frame is drawn on: its sequence being edited,
+     * battle or the field, and the caster's side.
+     */
+    private function createEffectPreviewStage(CutsceneAsset $asset): EffectPreviewStage
+    {
+        return new EffectPreviewStage($asset->getPresentationView() ?? EffectPresentation::TERMINAL, $this->isEffectPreviewInBattle($asset),
+            $this->isEffectPreviewCasterOnLeft, forStage: $asset->isOwnedStageEffect());
     }
 
     /**
@@ -701,9 +874,9 @@ trait CutscenePreviewPane
      *
      * @return string[]
      */
-    private function activeSummonKeyframeKeys(CutsceneAsset $asset): array
+    private function findActiveTimelineKeys(CutsceneAsset $asset): array
     {
-        $preview = $this->summonPreview;
+        $preview = $this->timelinePreview;
 
         if ($preview === null) {
             return [];
@@ -802,7 +975,7 @@ trait CutscenePreviewPane
                 $this->terminal->resumeAfterChildProcess($this->lastTerminalSize);
             }
 
-            $this->setStatus(sprintf('Playtest finished (%s on %s at %d,%d).', $asset->id, $origin['mapId'], $origin['x'], $origin['y']), StatusLevel::SUCCESS);
+            $this->setStatus(sprintf('Playtest finished (%s on %s at %d,%d).', $asset->id, $origin['mapId'], $origin['x'], $origin['y']), StatusLevel::INFO);
         } catch (Throwable $throwable) {
             $this->setErrorStatus($throwable, 'Cinematic playtest');
         } finally {
@@ -813,9 +986,7 @@ trait CutscenePreviewPane
     }
 
     /**
-     * Where a preview or playtest starts: the map event that triggers the
-     * cinematic when one exists, otherwise the cinematic's start map (or the
-     * selected map) at its first open tile.
+     * Where a preview or playtest starts, shared with every editor; the selected map stands in for a start map.
      *
      * @return array{mapId: string|null, x: int, y: int, marker: string|null}
      */
@@ -823,67 +994,11 @@ trait CutscenePreviewPane
     {
         $workspace = $this->workspace;
 
-        if ($workspace instanceof ProjectWorkspace) {
-            foreach ($workspace->maps as $map) {
-                foreach ($map->getEventDefinitions() as $marker => $definition) {
-                    if (! is_array($definition) || ! str_contains(strval($definition['class'] ?? ''), 'CinematicEventTrigger')) {
-                        continue;
-                    }
-
-                    $data = is_array($definition['data'] ?? null) ? $definition['data'] : [];
-
-                    if (trim(strval($data['cinematicId'] ?? '')) !== $asset->id) {
-                        continue;
-                    }
-
-                    $bounds = $map->getEventBounds((string) $marker);
-
-                    if ($bounds !== null) {
-                        return ['mapId' => $map->mapId, 'x' => (int) $bounds['x'], 'y' => (int) $bounds['y'], 'marker' => (string) $marker];
-                    }
-                }
-            }
-        }
-
-        $map = null;
-
-        if ($startMap !== null && $workspace instanceof ProjectWorkspace) {
-            foreach ($workspace->maps as $candidate) {
-                if ($candidate->mapId === $startMap) {
-                    $map = $candidate;
-                }
-            }
-        }
-
-        $map ??= $this->getSelectedMap();
-
-        if (! $map instanceof ProjectMap) {
+        if (! $workspace instanceof ProjectWorkspace) {
             return ['mapId' => $startMap, 'x' => 1, 'y' => 1, 'marker' => null];
         }
 
-        [$x, $y] = $this->firstOpenTile($map);
-
-        return ['mapId' => $map->mapId, 'x' => $x, 'y' => $y, 'marker' => null];
-    }
-
-    /**
-     * The first tile that is not a wall-like glyph, row by row.
-     *
-     * @return array{0: int, 1: int}
-     */
-    private function firstOpenTile(ProjectMap $map): array
-    {
-        for ($y = 0; $y < $map->getHeight(); $y++) {
-            for ($x = 0; $x < $map->getWidth(); $x++) {
-                $symbol = $map->getTileSymbol($x, $y);
-
-                if ($symbol === ' ') {
-                    return [$x, $y];
-                }
-            }
-        }
-
-        return [0, 0];
+        return CinematicPreviewOrigin::locate($workspace, $asset, $startMap, $this->getSelectedMap());
     }
 
     /**
@@ -920,14 +1035,21 @@ trait CutscenePreviewPane
         if ($preview !== null) {
             $stale = $asset !== null && $this->cutscenePayloadFingerprint($asset) !== $this->cinematicPreviewFingerprint;
             $title = sprintf('Preview · %s · %.1fs%s', $preview->status(), $preview->elapsed(), $stale ? ' · edited since start (R restarts)' : '');
-        } elseif ($this->summonPreview !== null) {
+        } elseif ($this->timelinePreview !== null) {
             $stale = $asset !== null && $this->cutscenePayloadFingerprint($asset) !== $this->cinematicPreviewFingerprint;
-            $title = sprintf('Preview · frame %d/%d%s', $this->summonPreview->currentFrame(), $this->summonPreview->totalFrames(), $stale ? ' · edited since start (R restarts)' : '');
+            $title = sprintf('Preview · frame %d/%d%s', $this->timelinePreview->currentFrame(), $this->timelinePreview->totalFrames(), $stale ? ' · edited since start (R restarts)' : '');
         } elseif ($this->cutscenePreviewView !== 'stage') {
             $title = 'Preview · ' . $this->cutscenePreviewView;
         }
 
-        $help = $asset?->type === CutsceneType::SUMMON
+        $help = $asset?->type === CutsceneType::EFFECT
+            ? $this->fitHelp(
+                $layout['previewWidth'],
+                'Space:Play/Pause  . ,:Step  < >:Keyframes  Home/End  +/-:Speed  O:Loop  B:Battle/Field  D:Caster side  R:Restart  L:Timeline  X:Close',
+                'Space:Play  . ,:Step  < >:Keyframes  +/-:Speed  O:Loop  B:Battle/Field  D:Side',
+                'Space:Play  . ,:Step  B:Battle/Field',
+            )
+            : ($asset?->type === CutsceneType::SUMMON
             ? $this->fitHelp(
                 $layout['previewWidth'],
                 'Space:Play/Pause  . ,:Step  < >:Keyframes  Home/End  +/-:Speed  O:Loop  R:Restart  L:Timeline  X:Close',
@@ -939,11 +1061,11 @@ trait CutscenePreviewPane
                 'Space:Play/Pause  .:Step  K:Skip  R:Restart  X:Stop  J:Jump  C:Compare  V:Overview  L:View  Ctrl+T:Playtest',
                 'Space:Play  .:Step  K:Skip  R:Restart  J:Jump  C:Compare  L:View',
                 'Space:Play  .:Step  K:Skip  L:View',
-            );
+            ));
 
         $lines = match (true) {
             $asset === null => ['  Select a cutscene to preview it.'],
-            $asset->type === CutsceneType::SUMMON => $this->summonPreviewLines($asset, $contentWidth, $contentHeight),
+            $asset->type !== CutsceneType::CINEMATIC => $this->timelinePreviewLines($asset, $contentWidth, $contentHeight),
             $this->cutscenePreviewView === 'compare' => $this->cutsceneComparisonLines($contentWidth),
             $this->cutscenePreviewView === 'overview' => $this->cutsceneOverviewLines($asset, $contentWidth),
             $this->cutscenePreviewView === 'log' => $this->cutscenePreviewLogLines(),
@@ -1203,6 +1325,24 @@ trait CutscenePreviewPane
     }
 
     /**
+     * Returns the open project's effect timelines, or null with no project.
+     */
+    private function getEffectLibrary(): ?EffectTimelineLibrary
+    {
+        if (! $this->workspace instanceof ProjectWorkspace) {
+            return null;
+        }
+
+        $assetRoot = $this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets';
+
+        if ($this->cutsceneEffectLibrary?->assetRoot !== $assetRoot) {
+            $this->cutsceneEffectLibrary = new EffectTimelineLibrary($assetRoot);
+        }
+
+        return $this->cutsceneEffectLibrary;
+    }
+
+    /**
      * The overview rows of the selected cinematic: commands, then finalizer.
      *
      * @return array<int, array{depth: int, key: string, label: string, seconds: float, marks: string[], kind: string}>
@@ -1220,8 +1360,8 @@ trait CutscenePreviewPane
         $finalizer = is_array($payload['finalizer'] ?? null) ? $payload['finalizer'] : [];
 
         return [
-            ...CutsceneLaneOverview::of($commands)->rows,
-            ...CutsceneLaneOverview::of($finalizer, 'finalizer')->rows,
+            ...CutsceneLaneOverview::of($commands, effects: $this->getEffectLibrary())->rows,
+            ...CutsceneLaneOverview::of($finalizer, 'finalizer', $this->getEffectLibrary())->rows,
         ];
     }
 
@@ -1236,9 +1376,9 @@ trait CutscenePreviewPane
     {
         $payload = $asset->payload();
         $commands = is_array($payload[CutsceneAsset::COMMANDS_KEY] ?? null) ? $payload[CutsceneAsset::COMMANDS_KEY] : [];
-        $overview = CutsceneLaneOverview::of($commands);
+        $overview = CutsceneLaneOverview::of($commands, effects: $this->getEffectLibrary());
         $finalizer = is_array($payload['finalizer'] ?? null) ? $payload['finalizer'] : [];
-        $finalizerOverview = CutsceneLaneOverview::of($finalizer, 'finalizer');
+        $finalizerOverview = CutsceneLaneOverview::of($finalizer, 'finalizer', $this->getEffectLibrary());
         $preview = $this->cinematicPreview;
         $activeKeys = $preview !== null && ! $preview->isFinished() ? $preview->activeKeys() : [];
         $lines = [sprintf(
@@ -1308,21 +1448,29 @@ trait CutscenePreviewPane
     }
 
     /**
-     * The summon view: the Engine's playhead over the compiled timeline, a
-     * ruler with the keyframe bars and cues, the frame as the battle field
-     * would compose it, and the cues the playhead crossed.
+     * The summon and effect view: the Engine's playhead over the compiled
+     * timeline, a ruler with the keyframe bars and cues, the frame as the
+     * battle field would compose it (an effect's anchored to its caster and
+     * target), and the cues the playhead crossed.
      *
      * @return string[]
      */
-    private function summonPreviewLines(CutsceneAsset $asset, int $contentWidth, int $contentHeight): array
+    private function timelinePreviewLines(CutsceneAsset $asset, int $contentWidth, int $contentHeight): array
     {
-        $preview = $this->summonPreview;
+        $preview = $this->timelinePreview;
+        $stage = $asset->type === CutsceneType::EFFECT ? $this->createEffectPreviewStage($asset) : null;
 
         if ($preview === null) {
             return [
                 ...$this->describeCutsceneStanding($asset),
+                ...($stage === null ? [] : [sprintf('  Plays as %s, the %s sequence.%s',
+                    $stage->forStage ? 'an owned stage' : ($stage->forBattle ? 'battle' : 'the field'), $stage->presentation->value,
+                    $stage->forStage ? ' No field or battle surroundings.' : ($stage->forBattle
+                        ? sprintf(' %s is the caster, %s the target.', EffectPreviewStage::CASTER_MARKER, EffectPreviewStage::TARGET_MARKER)
+                        : sprintf(' %s is the target.', EffectPreviewStage::TARGET_MARKER)))]),
                 '',
-                '  Space: play through the Engine session  ·  . , : step  ·  < > : keyframe boundaries  ·  R: restart  ·  L: timeline/stage',
+                '  Space: play through the Engine session  ·  . , : step  ·  < > : keyframe boundaries  ·  R: restart  ·  L: timeline/stage'
+                    . ($stage === null || $stage->forStage ? '' : '  ·  B: battle/field  ·  D: caster side'),
             ];
         }
 
@@ -1345,12 +1493,28 @@ trait CutscenePreviewPane
         $stageWidth = max(20, $contentWidth - ($infoWidth > 0 ? $infoWidth + 1 : 0));
         $rulerLines = $preview->rulerLines($stageWidth);
         $stageHeight = max(4, $contentHeight - count($rulerLines) - 1);
-        $frame = $preview->frame($stageWidth, $stageHeight);
+        $frame = $stage?->drawFrame($preview->activeSegments(), $stageWidth, $stageHeight) ?? $preview->frame($stageWidth, $stageHeight);
         $info = [];
 
         if ($infoWidth > 0) {
             $info[] = sprintf(' %s · frame %d/%d · %.1fs', $preview->isPlaying() ? 'playing' : ($preview->isCompleted() ? 'completed' : 'paused'), $preview->currentFrame(), $preview->totalFrames(), $preview->elapsed());
             $info[] = sprintf(' %gx speed · %s', $preview->speed(), $preview->isLooping() ? 'looping' : 'once');
+
+            if ($stage !== null) {
+                $info[] = sprintf(' %s · %s sequence', $stage->forStage ? 'owned stage'
+                    : ($stage->forBattle ? sprintf('battle, caster %s', $stage->isCasterOnLeft ? 'left' : 'right') : 'field'), $stage->presentation->value);
+
+                if ($preview->phaseDurationSeconds !== null) {
+                    $info[] = sprintf(' paced over %.2fs:', $preview->phaseDurationSeconds);
+                    $info[] = '   ' . $this->describeEffectPreviewPacing($asset);
+                    $info[] = '   A action · P pace · S stage';
+                }
+                $info[] = ' Not drawn here:';
+
+                foreach ($stage->describeUndrawn($preview->activeSegments()) ?: ['(nothing)'] as $undrawn) {
+                    $info[] = '   ' . $undrawn;
+                }
+            }
             $info[] = ' Cues here: ' . (implode(', ', array_map(static fn(array $cue): string => strval($cue['id'] ?? '?'), $preview->cuesAt())) ?: '—');
             $info[] = ' Fired:';
 

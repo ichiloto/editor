@@ -6,8 +6,11 @@ namespace Ichiloto\Editor\Cutscenes;
 
 use Closure;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
+use Ichiloto\Editor\History\Command;
+use Ichiloto\Editor\History\GenericCommand;
 use Ichiloto\Editor\Database\RecordSchema;
 use Ichiloto\Editor\Database\RecordSchemaCatalog;
+use Ichiloto\Editor\Database\ReferenceCatalog;
 use RuntimeException;
 use Throwable;
 
@@ -31,6 +34,13 @@ use Throwable;
  */
 final class CutsceneLibrary
 {
+    private ?ReferenceCatalog $authoringReferences = null;
+
+    public function useAuthoringReferences(ReferenceCatalog $references): void
+    {
+        $this->authoringReferences = $references;
+        foreach ($this->databases as $database) { $database->useAuthoringReferences($references); }
+    }
     /**
      * @var array<string, CutsceneAsset[]> Assets by type value, in list order.
      */
@@ -109,14 +119,19 @@ final class CutsceneLibrary
             $hasData = is_file($dataPath);
             $hasPartner = is_file($partnerPath);
 
-            if (! $hasData || ! $hasPartner) {
+            if (($type->hasDataFile() && ! $hasData) || ! $hasPartner) {
+                // A folder of resources with no PHP at all, such as artwork several cutscenes share, is not a
+                // cutscene; the game passes over it as well. An empty folder or half a pair is reported.
+                if (! $hasData && ! $hasPartner && self::holdsOnlyResources($folder)) {
+                    continue;
+                }
                 $this->reportIncomplete($type, $folder, $entry, $hasData, $hasPartner);
 
                 continue;
             }
 
-            if (preg_match('/^[a-z0-9][a-z0-9._-]*$/', $entry) !== 1) {
-                $this->issues[$type->value][] = ['folder' => $entry, 'message' => sprintf('The folder name "%s" is not a stable id (lowercase letters, digits, ".", "_" and "-").', $entry)];
+            if (preg_match($type->getIdPattern(), $entry) !== 1) {
+                $this->issues[$type->value][] = ['folder' => $entry, 'message' => sprintf('The folder name "%s" is not a stable id (%s).', $entry, $type->describeIdCharacters())];
             }
 
             $lower = strtolower($entry);
@@ -143,13 +158,27 @@ final class CutsceneLibrary
         }
     }
 
+    /** Whether a folder holds something, none of it a PHP file, at any depth. */
+    private static function holdsOnlyResources(string $folder): bool
+    {
+        $found = false;
+        foreach (new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($folder, \FilesystemIterator::SKIP_DOTS)) as $file) {
+            if (str_ends_with($file->getFilename(), '.php')) {
+                return false;
+            }
+            $found = true;
+        }
+
+        return $found;
+    }
+
     /**
      * Reports a folder that holds part of a pair, and says which part.
      */
     private function reportIncomplete(CutsceneType $type, string $folder, string $entry, bool $hasData, bool $hasPartner): void
     {
         $files = array_values(array_filter(scandir($folder) ?: [], static fn(string $file): bool => str_ends_with($file, '.php')));
-        $missing = ! $hasData ? $entry . '.data.php' : $entry . $type->partnerSuffix();
+        $missing = $type->hasDataFile() && ! $hasData ? $entry . '.data.php' : $entry . $type->partnerSuffix();
         $misnamed = array_values(array_filter(
             $files,
             static fn(string $file): bool => (str_ends_with($file, '.data.php') || str_ends_with($file, $type->partnerSuffix()))
@@ -168,13 +197,9 @@ final class CutsceneLibrary
             return;
         }
 
-        $this->issues[$type->value][] = ['folder' => $entry, 'message' => sprintf(
-            'Folder "%s" is missing %s; a %s is a data file and a %s together.',
-            $entry,
-            $missing,
-            $type->noun(),
-            $type->partnerNoun(),
-        )];
+        $this->issues[$type->value][] = ['folder' => $entry, 'message' => $type->hasDataFile()
+            ? sprintf('Folder "%s" is missing %s; a %s is a data file and a %s together.', $entry, $missing, $type->noun(), $type->partnerNoun())
+            : sprintf('Folder "%s" is missing %s; an %s is its %s file.', $entry, $missing, $type->noun(), $type->partnerNoun())];
     }
 
     /**
@@ -264,9 +289,11 @@ final class CutsceneLibrary
      * Returns the record category editing a type's assets, built over the
      * library and written back into it on every change.
      */
-    public function records(CutsceneType $type): ProjectRecordDatabase
+    public function records(CutsceneType $type, bool $graphical = false): ProjectRecordDatabase
     {
-        return $this->databases[$type->value] ??= $this->buildRecords($type);
+        $key = $type->value . ($graphical ? ':graphical' : '');
+
+        return $this->databases[$key] ??= $this->buildRecords($type, $graphical);
     }
 
     /**
@@ -277,34 +304,149 @@ final class CutsceneLibrary
     public function refreshRecords(CutsceneType $type): void
     {
         $this->databases[$type->value] = $this->buildRecords($type);
+        unset($this->databases[$type->value . ':graphical']);
     }
 
-    private function buildRecords(CutsceneType $type): ProjectRecordDatabase
+    /**
+     * Changes one asset through its type's records, the one way every
+     * interface does: the change runs against the records, is taken into
+     * the asset at once, and comes back as the command that undoes and redoes
+     * it by restoring the asset's whole edit state, pinned to that asset
+     * whatever is selected when the history fires. Null when nothing changed.
+     *
+     * @template T
+     * @param int $index The asset's place among its type's records.
+     * @param callable(ProjectRecordDatabase, int): T $change The change, against the records and the record index.
+     * @param (Closure(CutsceneAsset): void)|null $restored Told when an undo or redo puts the asset back, for an interface to follow.
+     * @return array{command: ?Command, result: T}
+     * @throws RuntimeException When the asset is missing or read-only; nothing is changed.
+     * @throws Throwable Whatever the change throws; the records are rebuilt from the untouched asset.
+     */
+    public function changeAsset(CutsceneType $type, int $index, string $label, callable $change, ?Closure $restored = null, bool $graphical = false): array
     {
-        $schema = $this->schemaFor($type);
+        $id = $this->ids($type)[$index] ?? throw new RuntimeException(sprintf('There is no %s %d.', $type->noun(), $index));
+        $asset = $this->find($type, $id) ?? throw new RuntimeException(sprintf('There is no %s %s.', $type->noun(), $id));
+        if (! $asset->isEditable()) {
+            throw new RuntimeException(sprintf('%s is read-only: %s.', ucfirst($type->noun()), $asset->readOnlyReason()));
+        }
+        $asset->assertSourcesUnchanged();
+        $records = $this->records($type, $graphical);
+        $before = $asset->captureEditState();
+        try {
+            $result = $change($records, $index);
+            $records->save();
+            $asset->assertSourceAccepts();
+        } catch (Throwable $failure) {
+            $asset->restoreEditState($before);
+            throw $failure;
+        } finally {
+            $this->refreshRecords($type);
+        }
+        $after = $asset->captureEditState();
+        if ($after === $before) {
+            return ['command' => null, 'result' => $result];
+        }
+        return ['command' => $this->createRestoringCommand($label, $type, $id, $before, $after, $restored), 'result' => $result];
+    }
+
+    /**
+     * Creates a new asset of a type from its schema's blank, under the
+     * preferred id made free and safe (or the blank's own), and returns it
+     * with the command that undoes and redoes its creation. It reaches disk
+     * on save.
+     *
+     * @param (Closure(CutsceneAsset): void)|null $restored Told when an undo or redo puts the asset back.
+     * @return array{asset: CutsceneAsset, command: Command}
+     */
+    public function createAsset(CutsceneType $type, ?string $preferredId = null, ?Closure $restored = null): array
+    {
+        $blank = $this->records($type)->schema->blank;
+        $id = $this->freeId($type, $preferredId ?? strval($blank['id'] ?? ('new-' . $type->noun())));
+        $created = CutsceneAsset::create($type, $id, $this->rootFor($type), [...$blank, 'id' => $id], $this->projectRoot);
+        $this->adopt($created);
+
+        return ['asset' => $created, 'command' => $this->createPresenceCommand(sprintf('Create %s', $type->noun()), $created, $restored)];
+    }
+
+    /**
+     * Duplicates an asset under the preferred id made free and safe (or the
+     * original's with `-copy`), and returns the copy with the command that
+     * undoes and redoes the duplication. It reaches disk on save.
+     *
+     * @param (Closure(CutsceneAsset): void)|null $restored Told when an undo or redo puts the copy back.
+     * @return array{asset: CutsceneAsset, command: Command}
+     * @throws RuntimeException When the asset is missing.
+     */
+    public function duplicateAsset(CutsceneType $type, string $id, ?string $preferredId = null, ?Closure $restored = null): array
+    {
+        $copy = $this->duplicate($type, $id, $this->freeId($type, $preferredId ?? $id . '-copy'));
+
+        return ['asset' => $copy, 'command' => $this->createPresenceCommand(sprintf('Duplicate %s', $type->noun()), $copy, $restored)];
+    }
+
+    /** The command that takes a just-made asset away on undo and brings it back on redo. */
+    private function createPresenceCommand(string $label, CutsceneAsset $asset, ?Closure $restored): Command
+    {
+        $state = $asset->captureEditState();
+
+        return $this->createRestoringCommand($label, $asset->type, $asset->id, [...$state, 'deleted' => true], [...$state, 'deleted' => false], $restored);
+    }
+
+    /**
+     * The command that puts an asset into one edit state on redo and another
+     * on undo, pinned to the asset whatever is selected when it fires.
+     *
+     * @param array<string, mixed> $before
+     * @param array<string, mixed> $after
+     * @param (Closure(CutsceneAsset): void)|null $restored
+     */
+    private function createRestoringCommand(string $label, CutsceneType $type, string $id, array $before, array $after, ?Closure $restored): Command
+    {
+        $restore = function (array $state) use ($type, $id, $restored): void {
+            $asset = $this->find($type, $id);
+            if ($asset === null) {
+                return;
+            }
+            $asset->restoreEditState($state);
+            $this->refreshRecords($type);
+            if ($restored !== null) {
+                $restored($asset);
+            }
+        };
+
+        return new GenericCommand($label, static fn() => $restore($after), static fn() => $restore($before));
+    }
+
+    private function buildRecords(CutsceneType $type, bool $graphical = false): ProjectRecordDatabase
+    {
+        $schema = $this->schemaFor($type, $graphical);
         $entries = array_map(
             static fn(CutsceneAsset $asset): array => $asset->payload(),
             array_values(array_filter($this->assets($type), static fn(CutsceneAsset $asset): bool => ! $asset->isDeleted())),
         );
 
-        return ProjectRecordDatabase::overOwnedList(
+        $records = ProjectRecordDatabase::overOwnedList(
             $schema,
             $this->rootFor($type),
             $entries,
             function (array $written) use ($type): void {
                 $this->writeBack($type, $written);
             },
+            graphical: $graphical,
         );
+        if ($this->authoringReferences !== null) { $records->useAuthoringReferences($this->authoringReferences); }
+        return $records;
     }
 
     /**
      * Returns the schema a type's records are edited with.
      */
-    public function schemaFor(CutsceneType $type): RecordSchema
+    public function schemaFor(CutsceneType $type, bool $graphical = false): RecordSchema
     {
         return match ($type) {
-            CutsceneType::CINEMATIC => RecordSchemaCatalog::cinematics(),
+            CutsceneType::CINEMATIC => \Ichiloto\Editor\Database\CutsceneSchemas::cinematics($graphical),
             CutsceneType::SUMMON => RecordSchemaCatalog::summons(),
+            CutsceneType::EFFECT => \Ichiloto\Editor\Database\CutsceneSchemas::effects($graphical),
         };
     }
 
@@ -407,14 +549,11 @@ final class CutsceneLibrary
             throw new RuntimeException(sprintf('A %s "%s" already exists.', $type->noun(), $newId));
         }
 
-        if (preg_match('/^[a-z0-9][a-z0-9._-]*$/', $newId) !== 1) {
-            throw new RuntimeException(sprintf('"%s" is not a stable id (lowercase letters, digits, ".", "_" and "-").', $newId));
+        if (preg_match($type->getIdPattern(), $newId) !== 1) {
+            throw new RuntimeException(sprintf('"%s" is not a stable id (%s).', $newId, $type->describeIdCharacters()));
         }
 
-        $payload = $source->payload();
-        $payload['id'] = $newId;
-        unset($payload[CutsceneAsset::ORIGIN_KEY]);
-        $renamed = CutsceneAsset::create($type, $newId, $this->rootFor($type), $payload, $this->projectRoot);
+        $renamed = $source->copyAs($newId, $this->rootFor($type));
 
         foreach ($this->assets[$type->value] as $position => $asset) {
             if ($asset === $source) {
@@ -442,14 +581,12 @@ final class CutsceneLibrary
             throw new RuntimeException(sprintf('A %s "%s" already exists.', $type->noun(), $newId));
         }
 
-        if (preg_match('/^[a-z0-9][a-z0-9._-]*$/', $newId) !== 1) {
-            throw new RuntimeException(sprintf('"%s" is not a stable id (lowercase letters, digits, ".", "_" and "-").', $newId));
+        if (preg_match($type->getIdPattern(), $newId) !== 1) {
+            throw new RuntimeException(sprintf('"%s" is not a stable id (%s).', $newId, $type->describeIdCharacters()));
         }
 
-        $payload = $source->payload();
-        $payload['id'] = $newId;
-        unset($payload[CutsceneAsset::ORIGIN_KEY]);
-        $copy = CutsceneAsset::create($type, $newId, $this->rootFor($type), $payload, $this->projectRoot);
+        // Both files as they stand: every sequence, not only the one shown.
+        $copy = $source->copyAs($newId, $this->rootFor($type));
         $this->assets[$type->value][] = $copy;
         $this->refreshRecords($type);
 
@@ -461,7 +598,9 @@ final class CutsceneLibrary
      */
     public function freeId(CutsceneType $type, string $preferred): string
     {
-        $stem = strtolower(trim(preg_replace('/[^a-z0-9._-]+/i', '-', $preferred) ?? '', '-.'));
+        // An effect id holds no dots, as the Engine requires.
+        $allowed = $type === CutsceneType::EFFECT ? '/[^a-z0-9_-]+/i' : '/[^a-z0-9._-]+/i';
+        $stem = strtolower(trim(preg_replace($allowed, '-', $preferred) ?? '', '-.'));
 
         if ($stem === '' || preg_match('/^[a-z0-9]/', $stem) !== 1) {
             $stem = 'new-' . $type->noun();
@@ -498,7 +637,7 @@ final class CutsceneLibrary
                 }
 
                 try {
-                    $asset->save($backup);
+                    $asset->save($backup, $this->authoringReferences);
                     $saved[] = $type->noun() . ' ' . $asset->id;
                 } catch (Throwable $throwable) {
                     $failed[$type->noun() . ' ' . $asset->id] = $throwable->getMessage();
@@ -524,7 +663,7 @@ final class CutsceneLibrary
             throw new RuntimeException(sprintf('No %s "%s" to save.', $type->noun(), $id));
         }
 
-        $written = $asset->save($backup);
+        $written = $asset->save($backup, $this->authoringReferences);
         $this->forgetDeleted($type);
 
         return $written;
