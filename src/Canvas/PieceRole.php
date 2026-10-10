@@ -54,7 +54,12 @@ final readonly class PieceRole
                         $tiles[$layer] = [['dx' => 0, 'dy' => 0, 'entry' => $entries[$shape]]];
                     }
                 }
-                $roles[$glyph][] = new self($piece->id, $shape, $piece->name, $tiles, source: $sources[$shape] ?? $glyph);
+                // A connected shape is one cell, so it keeps its piece's kept layers at that cell alone.
+                $keeps = [];
+                foreach (array_diff($piece->keeps, $excludedLayers) as $layer) {
+                    $keeps[$layer] = [['dx' => 0, 'dy' => 0]];
+                }
+                $roles[$glyph][] = new self($piece->id, $shape, $piece->name, $tiles, keeps: $keeps, source: $sources[$shape] ?? $glyph);
             }
 
             return $roles;
