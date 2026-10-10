@@ -3,7 +3,6 @@
 declare(strict_types=1);
 
 use Ichiloto\Editor\Canvas\PhysicalOccupancyEditor;
-use Ichiloto\Editor\MapSourceRefusal;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Editor\Session\EditorSession;
 use Ichiloto\Editor\Session\SessionHost;
@@ -283,7 +282,8 @@ it('refuses external source replacement on painting fill and saved history witho
     $hashes = sourceHashTree($root);
     expect(fn() => $session->paintOccupancy('test-map', $before['revision'], [[1, 0]], 1))->toThrow(SessionRefusal::class)
         ->and(fn() => $session->getOccupancyFillRegion('test-map', 0, 0, $before['revision']))->toThrow(SessionRefusal::class)
-        ->and(fn() => $session->undo())->toThrow(MapSourceRefusal::class)
+        // The session reports a map source refusal as its own, as every session refusal reaches an interface.
+        ->and(fn() => $session->undo())->toThrow(SessionRefusal::class)
         ->and($session->readMap('test-map'))->toBe($before)
         ->and(sourceHashTree($root))->toBe($hashes);
     file_put_contents($path, $source);

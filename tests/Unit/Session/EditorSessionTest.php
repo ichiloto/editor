@@ -20,13 +20,16 @@ function sessionCell(array $map, string $layer, int $x, int $y): string
     return $found['rows'][$y][$x] ?? throw new RuntimeException("No cell {$x},{$y} on {$layer}.");
 }
 
-it('describes the project: its maps and every database category', function () {
+it('describes the project: its maps and every database category the graphical editor offers', function () {
     $session = EditorSession::open(makeTemporaryProject());
     $project = $session->describeProject();
+    $keys = array_column($project['databases'], 'key');
 
     expect(array_column($project['maps'], 'id'))->toContain('test-map')
         ->and($project['maps'][0])->toHaveKeys(['id', 'name', 'dirty', 'readOnly', 'revision'])
-        ->and(array_column($project['databases'], 'key'))->toBe(array_map(static fn($category): string => $category->key, DatabaseCatalog::all()));
+        ->and($keys)->toBe(array_map(static fn($category): string => $category->key, DatabaseCatalog::getGraphicalCategories()))
+        // Every terminal category is offered, in the terminal's order, before the graphical ones.
+        ->and(array_slice($keys, 0, count(DatabaseCatalog::all())))->toBe(array_map(static fn($category): string => $category->key, DatabaseCatalog::all()));
 });
 
 it('reads a map as an interface draws it: layers, glyphs, events and NPCs', function () {
