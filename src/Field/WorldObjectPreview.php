@@ -7,13 +7,32 @@ namespace Ichiloto\Editor\Field;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Engine\Rendering\Presentation\PresentationSprite;
 use Ichiloto\Engine\Rendering\Presentation\PresentationWorld;
+use Ichiloto\Engine\Rendering\Presentation\PresentationLayerPolicy;
+use Ichiloto\Editor\Maps\MapLayers;
 use Ichiloto\Engine\Rendering\Sprites\FieldSpriteRole;
 use Ichiloto\Engine\Rendering\FieldViewport;
+use Ichiloto\Engine\Animations\Field\FieldPoseAnimation;
 use InvalidArgumentException;
 
 /** Explicit authoring variant/time selection, without writes or fabricated game state. */
 final class WorldObjectPreview
 {
+    /**
+     * Each glyph layer's presentation layer id, keyed by the editor's layer id, so an interface can name the layers of
+     * the composed world as it names the map's own.
+     *
+     * @return array<string, string>
+     */
+    public static function getLayerIds(ProjectMap $map): array
+    {
+        $glyphLayers = array_values(array_filter($map->getLayers(), static fn(array $layer): bool => $layer['id'] !== MapLayers::EVENT));
+        $ids = [];
+        foreach ($map->getLayerSet()->layers as $index => $layer) {
+            $ids[(string) $glyphLayers[$index]['id']] = PresentationLayerPolicy::getMapLayerId($layer);
+        }
+        return $ids;
+    }
+
     public static function describeWorld(ProjectMap $map, array $variants = [], float $seconds = 0): array
     {
         if (!is_finite($seconds) || $seconds < 0 || $seconds > 3600) { throw new InvalidArgumentException('Preview time requires finite seconds in 0..3600.'); }
@@ -25,6 +44,7 @@ final class WorldObjectPreview
         if (array_diff(array_keys($variants), array_column($definitions, 'id')) !== []) { throw new InvalidArgumentException('Preview selection names an unknown map-local object.'); }
         if (array_any($variants, static fn($id): bool => !is_string($id))) { throw new InvalidArgumentException('Preview variants must name known variant ids.'); }
         $coverage = $sprites = $diagnostics = [];
+        $assetPaths = array_values($graphics?->tileset->sheets ?? []);
         foreach ($definitions as $object) {
             $selected = $variants[$object->id] ?? '';
             $definition = $object->sprites;
@@ -34,6 +54,7 @@ final class WorldObjectPreview
                 $definition = $variant['sprites'];
             }
             $role = $definition === null ? null : new FieldSpriteRole($definition, $map->getAssetRoot(), 'World-object authoring ' . $object->id);
+            if ($definition !== null) { $assetPaths[] = $definition instanceof FieldPoseAnimation ? $definition->image->asset : $definition->asset; }
             try {
                 $role?->advance($seconds);
                 $frame = $role?->getFrame($object->pivot);
@@ -57,7 +78,8 @@ final class WorldObjectPreview
         }
         $columns = min(512, $map->getWidth());
         $rows = min(256, $map->getHeight());
-        return ['map' => $map->mapId, 'assetRoot' => $map->getAssetRoot(),
+        return ['map' => $map->mapId, 'assetRoot' => $map->getAssetRoot(), 'layerIds' => self::getLayerIds($map),
+            'assetPaths' => array_values(array_unique($assetPaths)),
             'grid' => ['columns' => $columns, 'rows' => $rows,
                 'cellWidth' => FieldViewport::TILE_SIZE, 'cellHeight' => FieldViewport::TILE_SIZE],
             'update' => ['frame' => 1, 'baseGeneration' => 0, 'generation' => 1, 'reset' => true, 'present' => true,

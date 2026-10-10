@@ -89,7 +89,6 @@ use Ichiloto\Editor\Validation\MapGraphicsValidator;
 use Ichiloto\Editor\Validation\MapValidator;
 use Ichiloto\Engine\IO\Console\TerminalPresentationComposer;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\PresentationCanvas;
-use Ichiloto\Engine\Rendering\Presentation\PresentationLayerPolicy;
 use Ichiloto\Engine\Rendering\Sprites\CharacterSheet;
 use Ichiloto\Engine\Rendering\Transport\RendererGridConfig;
 use Ichiloto\Engine\Rendering\Presentation\PresentationWorld;
@@ -622,11 +621,7 @@ final class EditorSession
         } catch (InvalidArgumentException|MapSourceRefusal $error) {
             throw new SessionRefusal(sprintf('%s cannot be drawn: %s', $mapId, $error->getMessage()), previous: $error);
         }
-        $glyphLayers = array_values(array_filter($map->getLayers(), static fn(array $layer): bool => $layer['id'] !== MapLayers::EVENT));
-        $layerIds = [];
-        foreach ($layerSet->layers as $index => $layer) {
-            $layerIds[(string) $glyphLayers[$index]['id']] = PresentationLayerPolicy::getMapLayerId($layer);
-        }
+        $layerIds = WorldObjectPreview::getLayerIds($map);
 
         return [
             'map' => $map->mapId,
@@ -3943,7 +3938,10 @@ final class EditorSession
 
     public function readWorldObjectPreview(string $mapId, array $variants = [], float $seconds = 0): array
     {
-        try { return WorldObjectPreview::describeWorld($this->requireMap($mapId), $variants, $seconds); }
+        try {
+            $map = $this->requireMap($mapId);
+            return [...WorldObjectPreview::describeWorld($map, $variants, $seconds), 'revision' => $this->getMapRevision($map)];
+        }
         catch (InvalidArgumentException|MapSourceRefusal $error) { throw new SessionRefusal($error->getMessage(), previous: $error); }
     }
 

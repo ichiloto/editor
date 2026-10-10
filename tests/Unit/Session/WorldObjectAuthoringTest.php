@@ -127,6 +127,67 @@ it('uses Engine coverage and current-frame projection, retaining glyphs for miss
     expect($session->readWorldObjectPreview('test-map')['diagnostics'])->toBe([]);
 });
 
+it('exports canvas owner revision and layer identities with transient variants and current asset paths', function () {
+    [$root, $file, $session] = createWorldObjectProject();
+    applyWorldObjectRow($session, 'sprites2d.asset', 'Graphics/Props/Replaceable.png');
+    applyWorldObjectRow($session, 'covers.layer', 'terrain');
+    applyWorldObjectRow($session, 'covers.tileLayers', 'floor');
+    applyWorldObjectRow($session, 'sprites2d.layer', '950');
+    $view = $session->readWorldObject('test-map', 'fixture-prop');
+    $heading = array_find($view['rows'], static fn($row): bool => ($row['key']['field'] ?? '') === 'variantList');
+    $session->changeWorldObjectItem('test-map', $view['revision'], 'fixture-prop', $heading['key'], false);
+    applyWorldObjectRow($session, 'variant0Id', 'absent');
+    applyWorldObjectRow($session, 'variant0Conditions', 'switch:existing-condition');
+    $before = $session->readMap('test-map');
+    $source = file_get_contents($file);
+    $base = $session->readWorldObjectPreview('test-map');
+    $absent = $session->readWorldObjectPreview('test-map', ['fixture-prop' => 'absent'], .25);
+    $hasFloor = static function (array $preview): bool {
+        foreach ($preview['update']['operations'] as $op) {
+            if (($op['op'] ?? '') !== 'worldTiles' || $op['layerId'] !== 'tiles:floor') { continue; }
+            foreach ($op['rows'] as $row) {
+                if ($row['row'] === 1 && array_any($row['cells'], static fn(array $cell): bool => $cell['column'] === 1)) { return true; }
+            }
+        }
+        return false;
+    };
+    $sprite = array_find($base['update']['operations'], static fn($op): bool => ($op['kind'] ?? '') === 'sprite');
+    expect($base['revision'])->toBe($before['revision'])
+        ->and($base['layerIds'])->toBe($session->readWorld('test-map')['layerIds'])
+        ->and($base['assetPaths'])->toContain('Graphics/Props/Replaceable.png')
+        ->and($sprite['value']['id'])->toBe('world-object:test-map:fixture-prop')
+        ->and($sprite['value']['layer'])->toBe(950)
+        ->and($sprite['value']['pivot'])->toBe(['x' => .5, 'y' => 1.0])
+        ->and($hasFloor($base))->toBeFalse()
+        ->and($hasFloor($absent))->toBeFalse()
+        ->and(array_filter($absent['update']['operations'], static fn($op): bool => ($op['kind'] ?? '') === 'sprite'))->toBe([])
+        ->and($session->readMap('test-map'))->toBe($before)
+        ->and(file_get_contents($file))->toBe($source);
+    unlink($root . '/assets/Graphics/Props/Replaceable.png');
+    $missing = $session->readWorldObjectPreview('test-map');
+    expect($missing['assetPaths'])->toContain('Graphics/Props/Replaceable.png')
+        ->and($missing['diagnostics'])->toHaveCount(1)->and($hasFloor($missing))->toBeTrue();
+    writeTilesetTestPng($root . '/assets/Graphics/Props/Replaceable.png', 24, 32);
+    $session->saveMap('test-map');
+    $reopened = EditorSession::open($root);
+    expect($reopened->readWorldObjectPreview('test-map')['diagnostics'])->toBe([])
+        ->and($reopened->readMap('test-map')['worldObjects'][0]['sprites2d']['asset'])->toBe('Graphics/Props/Replaceable.png')
+        ->and($reopened->readMap('test-map')['worldObjects'][0]['anchor'])->toBe($before['worldObjects'][0]['anchor']);
+});
+
+it('keeps unavailable sheet dependencies visible to the transient canvas asset watch', function () {
+    [$root, , $session] = createWorldObjectProject();
+    $path = 'Graphics/Tilesets/Home_A2.png';
+    unlink($root . '/assets/' . $path);
+    $missing = $session->readWorldObjectPreview('test-map');
+    expect($missing['assetPaths'])->toContain($path)
+        ->and(array_filter($missing['update']['operations'], static fn(array $op): bool => ($op['layerId'] ?? '') === 'tiles:floor'))->toBe([]);
+    writeTilesetTestPng($root . '/assets/' . $path, 32, 24);
+    $restored = $session->readWorldObjectPreview('test-map');
+    expect($restored['assetPaths'])->toContain($path)
+        ->and(array_filter($restored['update']['operations'], static fn(array $op): bool => ($op['layerId'] ?? '') === 'tiles:floor'))->not->toBe([]);
+});
+
 it('routes real RPC ownership and cinematic object selectors without a global object database', function () {
     [$root, , $session] = createWorldObjectProject();
     $host = new SessionHost(fopen('php://memory', 'r+'), fopen('php://memory', 'r+'), fopen('php://memory', 'r+'));
