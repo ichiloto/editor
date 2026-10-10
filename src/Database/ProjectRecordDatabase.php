@@ -1142,8 +1142,10 @@ final class ProjectRecordDatabase
                 throw new RecordRefusal(sprintf('A new %s could not be made: %s', $this->schema->entryNoun, $failure->getMessage()), previous: $failure);
             }
 
-            // A data record's blank is its data; a constructor list's, the object.
-            if ($this->schema->recordClass !== null ? ! is_array($payload) : ! is_object($payload)) {
+            // A data record's blank is its data, whether it has a file of its own or is a row of a projected file;
+            // a constructor list's, the object.
+            $dataRecords = $this->schema->recordClass !== null || $this->schema->projection !== null;
+            if ($dataRecords ? ! is_array($payload) : ! is_object($payload)) {
                 throw new RecordRefusal($cannot);
             }
         }

@@ -71,6 +71,8 @@ it('opens every category, and creates, edits, saves and undoes in each writable 
     // A new enemy starts on the project's first enemy sprite.
     mkdir($root . '/assets/Graphics/Enemies', 0o777, true);
     file_put_contents($root . '/assets/Graphics/Enemies/blob.txt', "(oo)\n");
+    // A new field resource starts on the project's first image.
+    writeTilesetTestPng($root . '/assets/Graphics/Props/Coverage.png', 4, 4);
     $session = EditorSession::open($root);
     $writable = [];
 

@@ -1113,6 +1113,7 @@ skill's effects, a quest's rewards) listed under them.
 | Types | `assets/Data/system.php` | Editable - the project's elements, one per row; an empty list means the Engine's defaults. Weapon, armor and equipment types are the Engine's own | Same |
 | Terms | `config.php` (`vocab`, `messages`) | Literal terms editable; comments and unrelated expressions preserved | Same |
 | Player Field Appearance | `assets/Data/Entities/player.php` | Not shown: graphical ownership and art | Choose fixed-player, selected party leader, or absent legacy selector; fixed sheet picker with index/layer controls |
+| Field Resources | `assets/Data/Presentation/field.php` (`resources`) | Not shown: graphical resources | One record per named resource, keyed by its stable id: name, ground contact, image or sheet, and an optional occupancy stamp |
 | Actor Battle Art, Enemy Battle Art, Battle Scale | `assets/Data/Presentation/battlers.php` | Not shown: graphical battle art | Editable from the actor's or enemy's own page (see Battle Art) |
 
 Player Field Appearance edits only `graphicalSubject` and `sprites2d`, preserving
@@ -1124,6 +1125,19 @@ four-direction previews. Clearing removes only the optional binding; undo/redo
 and save/reopen restore its settings. Unsupported expressions and external
 source conflicts are refused before overwriting files. These controls have
 automated coverage; native visual inspection remains pending.
+
+Field Resources are reusable whole images, such as a tree, that a map places by
+reference. A resource owns its art and its ground contact (the pivot, such as a
+trunk base) and may carry an occupancy stamp: cells relative to a placement's
+anchor and the physical type a brush gives each when it places the resource.
+The stamp is applied only by an explicit authoring placement; a resource never
+adds collision to a map by itself, and changing a stamp never changes cells an
+earlier placement stamped. Only the `resources` dictionary is edited; the
+catalogue's cues and action prompt are kept exactly as written. A new resource
+starts on the project's first image for the author to replace, an id is refused
+as it is typed if the Engine would refuse it, and a save the Engine would refuse
+writes nothing. A map's world object that names a resource shows a Field
+Resource picker in place of its own pivot and art, which the resource owns.
 
 Why a category can still turn out read-only: a file the editor cannot
 evaluate, a value it could not write back out, or a comment inside returned
