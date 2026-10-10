@@ -873,6 +873,52 @@ final class ProjectMap
         return MapCollisionResolver::resolveMap($this->layers->getLayerSet(), $this->editableData, $dictionary)->collisionGrid;
     }
 
+    /**
+     * Paints declared physical cells only, independently of either presentation.
+     * Every cell is validated before the single source-preserving data mutation.
+     *
+     * @param list<array{0: int, 1: int}> $cells
+     * @return int The number of distinct cells whose collision changed.
+     */
+    public function paintPhysicalOccupancy(array $cells, CollisionType $collision): int
+    {
+        $this->assertEditable();
+        if ($collision === CollisionType::PASS_THROUGH) {
+            throw new MapSourceRefusal('PASS_THROUGH is not a final physical collision. Nothing was changed.');
+        }
+        $rows = $this->getDeclaredPhysicalOccupancy();
+        if ($rows === null) {
+            throw new MapSourceRefusal('Physical occupancy must be explicitly migrated before painting. Nothing was changed.');
+        }
+        if (! array_is_list($cells)) {
+            throw new MapSourceRefusal('Physical cells must be a list of [x, y] integer pairs. Nothing was changed.');
+        }
+        $unique = [];
+        foreach ($cells as $cell) {
+            if (! is_array($cell) || ! array_is_list($cell) || count($cell) !== 2
+                || ! is_int($cell[0]) || ! is_int($cell[1])) {
+                throw new MapSourceRefusal('Physical cells must be a list of [x, y] integer pairs. Nothing was changed.');
+            }
+            [$x, $y] = $cell;
+            if (! isset($rows[$y][$x])) {
+                throw new MapSourceRefusal("Physical cell {$x}, {$y} is outside the map. Nothing was changed.");
+            }
+            $unique["{$x},{$y}"] = [$x, $y];
+        }
+        $changed = 0;
+        foreach ($unique as [$x, $y]) {
+            if ($rows[$y][$x] !== $collision) {
+                $rows[$y][$x] = $collision;
+                $changed++;
+            }
+        }
+        if ($changed > 0) {
+            $this->setMapDataField([MapPhysicalOccupancy::DATA_KEY], $rows);
+        }
+
+        return $changed;
+    }
+
     /** Explicitly preserves current collisions independently of both presentations. */
     public function migratePhysicalOccupancy(): bool
     {

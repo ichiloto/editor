@@ -8,6 +8,7 @@ use Ichiloto\Editor\Backup\BackupSettings;
 use Ichiloto\Editor\Backup\BackupWriter;
 use Ichiloto\Editor\Canvas\CanvasClipboard;
 use Ichiloto\Editor\Canvas\CanvasEditor;
+use Ichiloto\Editor\Canvas\PhysicalOccupancyEditor;
 use Ichiloto\Editor\Canvas\Clipboard;
 use Ichiloto\Editor\Cutscenes\CutsceneAsset;
 use Ichiloto\Editor\Cutscenes\CutsceneRecordCategory;
@@ -584,6 +585,7 @@ final class EditorSession
             'npcs' => $npcs,
             'tileLayers' => $map->describeTileLayers(),
             'physicalOccupancy' => $map->hasMapDataField([MapPhysicalOccupancy::DATA_KEY]),
+            'occupancy' => PhysicalOccupancyEditor::readOccupancy($map),
         ];
     }
 
@@ -1309,6 +1311,38 @@ final class EditorSession
     {
         return $this->editLayers($mapId, $revision, static fn(ProjectMap $map): array =>
             LayerEditor::migratePhysicalOccupancy($map));
+    }
+
+    /**
+     * @param list<array{0: int, 1: int}> $cells
+     * @return array{status: 'applied', changed: int, revision: int}
+     */
+    public function paintOccupancy(string $mapId, int $revision, array $cells, int $collision, string $label = 'Paint collision'): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        try {
+            $applied = PhysicalOccupancyEditor::applyPaint($map, $cells, $collision, $label);
+        } catch (MapSourceRefusal $refusal) {
+            throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+        }
+        if ($applied['command'] !== null) {
+            $this->history->record($applied['command']);
+        }
+
+        return ['status' => 'applied', 'changed' => $applied['changed'], 'revision' => $this->getMapRevision($map)];
+    }
+
+    /** @return array{cells: list<array{0: int, 1: int}>, map: string, revision: int} */
+    public function getOccupancyFillRegion(string $mapId, int $x, int $y, int $revision): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        try {
+            $cells = PhysicalOccupancyEditor::getFillRegion($map, $x, $y);
+        } catch (MapSourceRefusal $refusal) {
+            throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+        }
+
+        return ['cells' => $cells, 'map' => $mapId, 'revision' => $this->getMapRevision($map)];
     }
 
     /**

@@ -182,6 +182,12 @@ final class SessionHost
                 self::readOptionalString($params, 'layer'),
                 self::readOptionalString($params, 'tileLayer'),
             ),
+            'canvas.fillOccupancy' => $session->getOccupancyFillRegion(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'x'),
+                self::requireInt($params, 'y'),
+                self::requireInt($params, 'revision'),
+            ),
             'pieces.list' => $session->listPieces(self::requireString($params, 'map')),
             'pieces.preview' => $session->previewPiece(
                 self::requireString($params, 'map'),
@@ -228,6 +234,13 @@ final class SessionHost
             'map.migrateOccupancy' => $session->migratePhysicalOccupancy(
                 self::requireString($params, 'map'),
                 self::requireInt($params, 'revision'),
+            ),
+            'map.paintOccupancy' => $session->paintOccupancy(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireCells($params),
+                self::requireInt($params, 'collision'),
+                array_key_exists('label', $params) ? self::requireString($params, 'label') : 'Paint collision',
             ),
             'layer.create' => $session->createLayer(
                 self::requireString($params, 'map'),

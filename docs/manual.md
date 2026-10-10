@@ -225,7 +225,18 @@ Resize and row/column insertion preserve the declaration with geometry, adding
 `SOLID` physical cells independently of blank glyphs. Malformed or unsupported
 source edits refuse before mutation. The TUI receives no graphical conversion
 control; it preserves the declaration through its existing edit/save/history
-workflow. Dedicated physical brushes remain a GUI authoring gap.
+workflow.
+
+The GUI **Collision** tool displays the shared physical cells over either
+presentation. On converted maps its constrained collision-type picker and the
+existing pencil, line, outline, filled-rectangle and fill brushes edit passage
+as one undo step without changing glyphs or tiles. The overlay's numbers match
+the picker; right-click picks the physical cell's type. Fill follows equal
+physical cells and does not bridge missing cells in ragged rows. Unsupported
+types, stale revisions, malformed declarations and source-preservation failures
+refuse before any change. Escape, map/tool changes and brush changes retire
+pending region answers. Conversion remains explicit on legacy maps. Dedicated
+object-footprint authoring and native acceptance of this tool remain open.
 
 Gameplay and event layers use the same Paint/Normal modes, tools, mouse strokes,
 selection, colour, clipboard and undo. The layer inspector lists terminal layer
