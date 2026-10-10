@@ -76,6 +76,15 @@ final class PlaytestOverlay
     }
 
     /**
+     * Builds an overlay that plays the game from its title with the project's own starting position: the opening
+     * as a player first meets it, still without touching the author's saves.
+     */
+    public static function createForTitle(string $projectRoot): self
+    {
+        return new self(self::build($projectRoot, static fn(array $system): array => $system, 'a playtest from the title'));
+    }
+
+    /**
      * Builds an overlay for a battle test: the author's project with its
      * system data's battle test replaced by the one given (unsaved edits
      * included), or removed when it is empty, so `ichiloto battle` reads the

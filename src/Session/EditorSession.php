@@ -73,6 +73,7 @@ use Ichiloto\Editor\MapSourceRefusal;
 use Ichiloto\Editor\Playtest\PlaytestLauncher;
 use Ichiloto\Editor\Playtest\PlaytestOverlay;
 use Ichiloto\Editor\Playtest\PlaytestRun;
+use Ichiloto\Editor\Playtest\PlaytestStart;
 use Ichiloto\Editor\Maps\LayerEditor;
 use Ichiloto\Editor\Maps\LineInsertionPlanner;
 use Ichiloto\Editor\Maps\MapLayers;
@@ -153,6 +154,8 @@ final class EditorSession
 
     /** The playtest running in the background, or the last one, to report how it ended. */
     private ?PlaytestRun $playtest = null;
+    /** Where that playtest began. */
+    private PlaytestStart $playtestStart = PlaytestStart::CELL;
     /** The battle test running in its own window, and the troop it fights. */
     private ?PlaytestRun $battleTestRun = null;
 
@@ -4321,34 +4324,54 @@ final class EditorSession
     }
 
     /**
-     * Plays the game from a map and cell in the background, in its own
-     * graphical window, as the terminal editor's playtest does: from a
-     * temporary overlay of the project that writes nothing into it, with
-     * the author's player settings (volume and mute included) and no saves.
-     * The game reads the map from disk, so a map with unsaved changes is
-     * refused until it is saved.
+     * Plays the game in the background, in its own graphical window, as the terminal editor's playtest does: from a
+     * temporary overlay of the project that writes nothing into it, with the author's player settings (volume and
+     * mute included) and no saves. It starts on the open map at a cell, or at the game's title with the project's own
+     * starting position. The game reads maps from disk, so a playtest is refused while a map it plays from is unsaved:
+     * the start map, or, from the title, any map.
      *
+     * @param PlaytestStart $start Where the playtest begins; from the title the map and cell are not used.
+     * @param string|null $renderer One of {@see describePlaytestOptions()}'s renderers; null is its default.
      * @return array<string, mixed> The playtest, as {@see describePlaytest()}.
-     * @throws SessionRefusal When the map is unknown or unsaved, a playtest is running, or it cannot start.
+     * @throws SessionRefusal When the map is unknown or unsaved, a playtest is running, the renderer cannot be
+     *     launched from here, or it cannot start.
      */
-    public function startPlaytest(string $mapId, int $x, int $y): array
+    public function startPlaytest(?string $mapId, ?int $x, ?int $y, PlaytestStart $start = PlaytestStart::CELL, ?string $renderer = null): array
     {
-        $map = $this->requireMap($mapId);
         if ($this->playtest?->isRunning() === true) {
             throw new SessionRefusal('A playtest is already running; stop it or close its window first.');
         }
-        if ($map->isDirty()) {
-            throw new SessionRefusal(sprintf('Save %s before playtesting it; the game reads the map on disk.', $mapId));
+        $options = $this->describePlaytestOptions();
+        $renderer ??= $options['defaultRenderer'];
+        if (! in_array($renderer, $options['renderers'], true)) {
+            throw new SessionRefusal(sprintf('A playtest cannot use the %s renderer from here; choose one of %s.', $renderer, implode(', ', $options['renderers'])));
         }
-        if ($x < 0 || $y < 0 || $x >= $map->getWidth() || $y >= $map->getHeight()) {
-            throw new SessionRefusal(sprintf('%d, %d is outside %s.', $x, $y, $mapId));
+        if ($start === PlaytestStart::CELL) {
+            if ($mapId === null || $x === null || $y === null) {
+                throw new SessionRefusal('Choose the cell to start on, or play from the title.');
+            }
+            $map = $this->requireMap($mapId);
+            if ($map->isDirty()) {
+                throw new SessionRefusal(sprintf('Save %s before playtesting it; the game reads the map on disk.', $mapId));
+            }
+            if ($x < 0 || $y < 0 || $x >= $map->getWidth() || $y >= $map->getHeight()) {
+                throw new SessionRefusal(sprintf('%d, %d is outside %s.', $x, $y, $mapId));
+            }
+        } else {
+            $unsaved = array_keys(array_filter($this->getMapsById(), static fn(ProjectMap $map): bool => $map->isDirty()));
+            if ($unsaved !== []) {
+                throw new SessionRefusal(sprintf('Save %s before playing from the title; the game reads every map on disk.', implode(', ', $unsaved)));
+            }
         }
         $overlay = null;
         try {
-            $overlay = PlaytestOverlay::create($this->workspace->projectRoot, $mapId, $x, $y);
+            $overlay = $start === PlaytestStart::CELL
+                ? PlaytestOverlay::create($this->workspace->projectRoot, (string) $mapId, (int) $x, (int) $y)
+                : PlaytestOverlay::createForTitle($this->workspace->projectRoot);
             $launcher = PlaytestLauncher::discover(projectRoot: $this->workspace->projectRoot);
             $log = sys_get_temp_dir() . DIRECTORY_SEPARATOR . uniqid('ichiloto-playtest-', true) . '.log';
-            $this->playtest = $launcher->start($overlay, self::PLAYTEST_RENDERER, $log);
+            $this->playtest = $launcher->start($overlay, $renderer, $log);
+            $this->playtestStart = $start;
         } catch (RuntimeException $error) {
             $overlay?->destroy();
             throw new SessionRefusal(sprintf('The playtest could not start: %s', $error->getMessage()), previous: $error);
@@ -4358,10 +4381,25 @@ final class EditorSession
     }
 
     /**
+     * Where a playtest from this editor can begin, and the renderers it can launch, the first being the default. A
+     * graphical editor owns no terminal to hand over, so it launches only renderers that open a window of their own.
+     *
+     * @return array{starts: list<string>, renderers: list<string>, defaultRenderer: string}
+     */
+    public function describePlaytestOptions(): array
+    {
+        return [
+            'starts' => array_map(static fn(PlaytestStart $start): string => $start->value, PlaytestStart::cases()),
+            'renderers' => [self::PLAYTEST_RENDERER],
+            'defaultRenderer' => self::PLAYTEST_RENDERER,
+        ];
+    }
+
+    /**
      * Whether a playtest is running, where it started, and how the last one
      * ended: its exit code and, when it failed, the end of its output.
      *
-     * @return array{running: bool, map: ?string, x: ?int, y: ?int, stopped: bool, exitCode: ?int, log: ?string}
+     * @return array{running: bool, start: ?string, map: ?string, x: ?int, y: ?int, stopped: bool, exitCode: ?int, log: ?string}
      */
     public function describePlaytest(): array
     {
@@ -4371,6 +4409,7 @@ final class EditorSession
 
         return [
             'running' => $running,
+            'start' => $run === null ? null : $this->playtestStart->value,
             'map' => $run?->overlay->mapId,
             'x' => $run?->overlay->spawnX,
             'y' => $run?->overlay->spawnY,

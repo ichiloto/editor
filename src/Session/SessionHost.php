@@ -7,6 +7,7 @@ namespace Ichiloto\Editor\Session;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Editor\Console\ConsoleBinary;
 use Ichiloto\Editor\Console\ProjectCreator;
+use Ichiloto\Editor\Playtest\PlaytestStart;
 use JsonException;
 use RuntimeException;
 use Throwable;
@@ -565,7 +566,8 @@ final class SessionHost
             'history.redo' => $session->redo(),
             'project.dirty' => ['dirty' => $session->hasUnsavedChanges(), 'unsaved' => $session->listUnsavedChanges()],
             'project.saveAll' => $session->saveAll(),
-            'playtest.start' => $session->startPlaytest(self::requireString($params, 'map'), self::requireInt($params, 'x'), self::requireInt($params, 'y')),
+            'playtest.start' => self::startPlaytest($session, $params),
+            'playtest.options' => $session->describePlaytestOptions(),
             'playtest.status' => $session->describePlaytest(),
             'playtest.stop' => $session->stopPlaytest(),
             'battleTest.describe' => $session->describeBattleTest(match (true) {
@@ -620,6 +622,27 @@ final class SessionHost
     private static function requireString(array $params, string $key): string
     {
         return is_string($params[$key] ?? null) ? $params[$key] : throw new InvalidRequest(sprintf('"%s" must be a string.', $key));
+    }
+
+    /**
+     * A playtest from a cell names its map and cell; one from the title names neither. A renderer, when named, is
+     * one the session offers.
+     *
+     * @param array<string, mixed> $params
+     */
+    private static function startPlaytest(EditorSession $session, array $params): array
+    {
+        $start = PlaytestStart::tryFrom(is_string($params['start'] ?? null) ? $params['start'] : PlaytestStart::CELL->value)
+            ?? throw new InvalidRequest('"start" must be "cell" or "title".');
+        $renderer = $params['renderer'] ?? null;
+        if ($renderer !== null && ! is_string($renderer)) {
+            throw new InvalidRequest('"renderer" must be a renderer id.');
+        }
+        if ($start === PlaytestStart::TITLE) {
+            return $session->startPlaytest(null, null, null, $start, $renderer);
+        }
+
+        return $session->startPlaytest(self::requireString($params, 'map'), self::requireInt($params, 'x'), self::requireInt($params, 'y'), $start, $renderer);
     }
 
     /** @param array<string, mixed> $params */

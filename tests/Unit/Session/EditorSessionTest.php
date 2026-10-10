@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Ichiloto\Editor\Database\DatabaseCatalog;
+use Ichiloto\Editor\Playtest\PlaytestStart;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Editor\Session\EditorSession;
 use Ichiloto\Editor\Session\SessionHost;
@@ -425,6 +426,38 @@ it('plays a saved map from a cell in the background and refuses an unsaved one',
         expect($session->describePlaytest())->toMatchArray(['running' => false, 'exitCode' => 2])
             ->and($session->describePlaytest()['log'])->toContain('no renderer installed')
             ->and($session->stopPlaytest()['running'])->toBeFalse();
+    } finally {
+        putenv('ICHILOTO_CONSOLE_BIN');
+    }
+});
+
+it('plays from the title with the project\'s own start, and only with renderers it can launch', function () {
+    $root = makeTemporaryProject();
+    file_put_contents($root . '/assets/Data/system.php', "<?php\n\nreturn ['startingPositions' => ['player' => ['destinationMap' => 'test-map', 'spawnPoint' => ['x' => 2, 'y' => 1]]]];\n");
+    // The fake game reports the start position its overlay gives it, then ends.
+    $console = $root . '/fake-console.php';
+    file_put_contents($console, '<?php $d = $argv[array_search("-d", $argv) + 1]; $s = require $d . "/assets/Data/system.php";'
+        . ' fwrite(STDERR, json_encode($s["startingPositions"]["player"]) . " " . implode(" ", array_slice($argv, 1)) . "\n"); exit(3);');
+    putenv('ICHILOTO_CONSOLE_BIN=' . $console);
+
+    try {
+        $session = EditorSession::open($root);
+        expect($session->describePlaytestOptions())->toBe(['starts' => ['cell', 'title'], 'renderers' => ['gpui'], 'defaultRenderer' => 'gpui'])
+            ->and(fn() => $session->startPlaytest(null, null, null, PlaytestStart::TITLE, 'terminal'))
+            ->toThrow(SessionRefusal::class, 'cannot use the terminal renderer from here');
+        $map = $session->readMap('test-map');
+        $session->paint('test-map', $map['revision'], $map['baseLayer'], [[1, 1]], '%');
+        expect(fn() => $session->startPlaytest(null, null, null, PlaytestStart::TITLE))
+            ->toThrow(SessionRefusal::class, 'Save test-map before playing from the title');
+        $session->saveMap('test-map');
+
+        expect($session->startPlaytest(null, null, null, PlaytestStart::TITLE))->toMatchArray(['start' => 'title', 'map' => null]);
+        $deadline = microtime(true) + 5;
+        while ($session->describePlaytest()['running'] && microtime(true) < $deadline) {
+            usleep(20000);
+        }
+        expect($session->describePlaytest()['log'])->toContain('{"destinationMap":"test-map","spawnPoint":{"x":2,"y":1}}')
+            ->toContain('--renderer=gpui');
     } finally {
         putenv('ICHILOTO_CONSOLE_BIN');
     }
