@@ -126,7 +126,7 @@ final class RecordSchemaCatalog
             self::terms(),
             self::configuration($graphical),
             self::types(),
-            self::tilesets(),
+            self::tilesets($graphical),
             self::battlerArt('actors'),
             self::battlerArt('enemies'),
             self::battleScaleReference(),
@@ -1571,7 +1571,7 @@ final class RecordSchemaCatalog
      *
      * @return RecordSchema
      */
-    private static function tilesets(): RecordSchema
+    private static function tilesets(bool $graphical = false): RecordSchema
     {
         $layer = new RecordField('layer', 'Tile Layer');
         $tilesFor = static fn(?string $valueField, RecordField $value, array $blank): RecordSubList => new RecordSubList(
@@ -1621,6 +1621,8 @@ final class RecordSchemaCatalog
                     new RecordField('id', 'Id'),
                     new RecordField('name', 'Name'),
                     new RecordField('layer', 'Glyph Layer'),
+                    ...($graphical ? [new RecordField('occupancy', 'Physical Footprint', codec: RecordFieldCodec::PHYSICAL_FOOTPRINT,
+                        removeWhenEmpty: true)] : []),
                     new RecordField(
                         'connects',
                         'Connects',

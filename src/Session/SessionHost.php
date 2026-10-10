@@ -69,6 +69,15 @@ final class SessionHost
         $params = is_array($request) && is_array($request['params'] ?? null) ? $request['params'] : [];
 
         try {
+            if (in_array($method, ['tileset.setOccupancy', 'occupancy.previewPiece', 'occupancy.stampPiece'], true)) {
+                // Preserve JSON object/list identity for this strict mask contract.
+                $wire = json_decode($line, false, 64, JSON_THROW_ON_ERROR);
+                foreach (['expected', 'value'] as $key) {
+                    if (($wire->params ?? null) instanceof \stdClass && property_exists($wire->params, $key)) {
+                        $params[$key] = $wire->params->{$key};
+                    }
+                }
+            }
             return ['id' => $id, 'result' => $this->dispatch($method, $params)];
         } catch (SessionRefusal $refusal) {
             return ['id' => $id, 'error' => ['kind' => 'refusal', 'message' => $refusal->getMessage()]];
@@ -141,6 +150,10 @@ final class SessionHost
                 is_bool($params['tileShadows'] ?? false) ? ($params['tileShadows'] ?? false) : throw new InvalidRequest('"tileShadows" must be a boolean.')),
             'tiles.palette' => $session->readTilePalette(self::requireString($params, 'map')),
             'tilesets.preview' => $session->readTilesetPreview(self::requireInt($params, 'index')),
+            'tileset.setOccupancy' => $session->setTilesetOccupancy(
+                self::requireInt($params, 'index'), self::requireFootprintId($params, 'tileset'), self::requireFootprintId($params, 'piece'),
+                self::requireFootprint($params, 'expected'), self::requireFootprint($params, 'value'),
+            ),
             'tilesets.mark' => $session->toggleTilesetMark(
                 self::requireInt($params, 'index'),
                 self::requireString($params, 'mark'),
@@ -241,6 +254,16 @@ final class SessionHost
                 self::requireCells($params),
                 self::requireInt($params, 'collision'),
                 array_key_exists('label', $params) ? self::requireString($params, 'label') : 'Paint collision',
+            ),
+            'occupancy.previewPiece' => $session->previewOccupancyPiece(
+                self::requireString($params, 'map'), self::requireInt($params, 'revision'),
+                self::requireString($params, 'tileset'), self::requireString($params, 'piece'),
+                self::requireRecipe($params), self::requireInt($params, 'x'), self::requireInt($params, 'y'),
+            ),
+            'occupancy.stampPiece' => $session->stampOccupancyPiece(
+                self::requireString($params, 'map'), self::requireInt($params, 'revision'),
+                self::requireString($params, 'tileset'), self::requireString($params, 'piece'),
+                self::requireRecipe($params), self::requireInt($params, 'x'), self::requireInt($params, 'y'),
             ),
             'layer.create' => $session->createLayer(
                 self::requireString($params, 'map'),
@@ -552,6 +575,33 @@ final class SessionHost
     }
 
     /** @param array<string, mixed> $params */
+    private static function requireFootprintId(array $params, string $key): string
+    {
+        $id = self::requireString($params, $key);
+        if (preg_match('/\A[a-z0-9][a-z0-9_-]*\z/', $id) !== 1) {
+            throw new InvalidRequest(sprintf('"%s" must be a stable lowercase tileset or piece id.', $key));
+        }
+
+        return $id;
+    }
+
+    /** @param array<string, mixed> $params @return list<list<int|null>>|null */
+    private static function requireFootprint(array $params, string $key): ?array
+    {
+        if (! array_key_exists($key, $params)) {
+            throw new InvalidRequest(sprintf('"%s" must be supplied as footprint rows or null.', $key));
+        }
+        if ($params[$key] === null) { return null; }
+        try {
+            $rows = \Ichiloto\Editor\Maps\PhysicalFootprintCodec::decodeRows($params[$key]);
+
+            return \Ichiloto\Editor\Maps\PhysicalFootprintCodec::exportRows($rows);
+        } catch (\InvalidArgumentException $error) {
+            throw new InvalidRequest(sprintf('"%s": %s', $key, $error->getMessage()), previous: $error);
+        }
+    }
+
+    /** @param array<string, mixed> $params */
     private static function requireString(array $params, string $key): string
     {
         return is_string($params[$key] ?? null) ? $params[$key] : throw new InvalidRequest(sprintf('"%s" must be a string.', $key));
@@ -561,6 +611,12 @@ final class SessionHost
     private static function requireInt(array $params, string $key): int
     {
         return is_int($params[$key] ?? null) ? $params[$key] : throw new InvalidRequest(sprintf('"%s" must be an integer.', $key));
+    }
+
+    private static function requireRecipe(array $params): array
+    {
+        return self::requireFootprint($params, 'expected')
+            ?? throw new InvalidRequest('"expected" must be the non-null physical footprint from pieces.list.');
     }
 
     /** @param array<string, mixed> $params */

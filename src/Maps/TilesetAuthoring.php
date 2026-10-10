@@ -45,10 +45,25 @@ final class TilesetAuthoring
             try {
                 // The glyph footprint remains author-owned even while tile rows are being repaired.
                 $glyphData = $dataPiece;
-                unset($glyphData['tiles'], $glyphData['effect']);
+                unset($glyphData['tiles'], $glyphData['effect'], $glyphData['occupancy']);
                 $blueprint = TilesetPiece::fromArray((string) $id, $glyphData, 'Tileset authoring');
             } catch (InvalidArgumentException $error) {
                 $issue = $error->getMessage();
+            }
+            $occupancy = null;
+            $occupancyIssue = null;
+            $occupancyDeclared = array_key_exists('occupancy', $dataPiece);
+            if ($occupancyDeclared) {
+                try {
+                    $occupancy = PhysicalFootprintCodec::exportRows($dataPiece['occupancy']);
+                } catch (InvalidArgumentException $error) {
+                    $occupancyIssue = $error->getMessage();
+                }
+                try {
+                    TilesetPiece::fromArray((string) $id, $glyphData + ['occupancy' => $dataPiece['occupancy']], 'Tileset authoring');
+                } catch (InvalidArgumentException $error) {
+                    $occupancyIssue = $error->getMessage();
+                }
             }
             $layers = [];
             foreach (array_keys(is_array($dataPiece['tiles'] ?? null) ? $dataPiece['tiles'] : []) as $layerIndex => $name) {
@@ -61,7 +76,9 @@ final class TilesetAuthoring
             $pieces[] = ['id' => (string) $id, 'name' => (string) ($dataPiece['name'] ?? $id),
                 'layer' => (string) ($dataPiece['layer'] ?? ''), 'connected' => $connected,
                 'width' => $blueprint?->width, 'height' => $blueprint?->height,
-                'key' => $keys[$prefix . 'Name'] ?? null, 'layers' => $layers, 'issue' => $issue];
+                'key' => $keys[$prefix . 'Name'] ?? null, 'layers' => $layers, 'issue' => $issue,
+                'occupancy' => $occupancy, 'occupancyKey' => $keys[$prefix . 'Occupancy'] ?? null,
+                'occupancyDeclared' => $occupancyDeclared, 'occupancyIssue' => $occupancyIssue];
         }
 
         return $pieces;

@@ -235,8 +235,20 @@ the picker; right-click picks the physical cell's type. Fill follows equal
 physical cells and does not bridge missing cells in ragged rows. Unsupported
 types, stale revisions, malformed declarations and source-preservation failures
 refuse before any change. Escape, map/tool changes and brush changes retire
-pending region answers. Conversion remains explicit on legacy maps. Dedicated
-object-footprint authoring and native acceptance of this tool remain open.
+pending region answers. Conversion remains explicit on legacy maps.
+
+In the GUI tileset inspector, **Physical footprint** is an optional reusable
+recipe, not an automatic consequence of placing a picture. Its cells use final
+collision types or **Leave unchanged**; adding a recipe initially leaves all
+cells unchanged. Edit it through the constrained grid or Physical Footprint
+record row, then save the tileset. The Collision tool's **Object footprint** mode
+selects a saved recipe and stamps it with one click as one undo step. Only map
+occupancy changes, never glyphs or tiles. Every non-null cell must fit the actual
+map, including ragged rows, or the entire stamp refuses. Stale map/recipe values
+and unsupported source expressions refuse before mutation. Removing a recipe
+does not erase collision already stamped into a map. The TUI preserves recipes
+through existing record edits without adding graphical authoring controls.
+Native acceptance of the physical brushes and footprint controls remains open.
 
 Gameplay and event layers use the same Paint/Normal modes, tools, mouse strokes,
 selection, colour, clipboard and undo. The layer inspector lists terminal layer

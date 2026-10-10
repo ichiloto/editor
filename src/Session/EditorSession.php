@@ -730,9 +730,66 @@ final class EditorSession
             'pieces' => $pieces,
             'authoring' => \Ichiloto\Editor\Maps\TilesetAuthoring::describePieces($data, $this->readDatabaseRecord('tilesets', $index)['rows']),
             'connectionShapes' => TilesetPiece::LINE_SHAPES,
+            'collisionTypes' => PhysicalOccupancyEditor::getCollisionChoices(),
             'issue' => $issue,
             'unreadable' => $unreadable,
         ];
+    }
+
+    /**
+     * Sets or removes one explicitly selected piece recipe through its current
+     * record field, preserving source and shared undo. Wire cells are integers
+     * or null; a null value removes the recipe, never authors an explicit null.
+     *
+     * @param list<list<int|null>>|null $expected The recipe the caller last read.
+     * @param list<list<int|null>>|null $value The new recipe, or null to remove it.
+     */
+    public function setTilesetOccupancy(int $index, string $tilesetId, string $pieceId, ?array $expected, ?array $value): array
+    {
+        $record = $this->requireRecordDatabase('tilesets')->getRecordByIndex($index)
+            ?? throw new SessionRefusal(sprintf('tilesets has no record %d.', $index));
+        if ($record->recordId !== $tilesetId) {
+            throw new SessionRefusal('That tileset record changed; read the tileset list again.');
+        }
+        $data = (array) $record->toArray();
+        $piece = is_array($data['pieces'] ?? null) ? ($data['pieces'][$pieceId] ?? null) : null;
+        if (! is_array($piece)) {
+            throw new SessionRefusal(sprintf('%s is no longer in tileset %s; choose a piece again.', $pieceId, $tilesetId));
+        }
+        try {
+            if ($expected !== null) { \Ichiloto\Editor\Maps\PhysicalFootprintCodec::decodeRows($expected); }
+            $current = array_key_exists('occupancy', $piece)
+                ? \Ichiloto\Editor\Maps\PhysicalFootprintCodec::exportRows($piece['occupancy']) : null;
+        } catch (InvalidArgumentException $error) {
+            throw new SessionRefusal('The current or expected recipe cannot be compared safely. Repair its Physical Footprint record row first: '
+                . $error->getMessage(), previous: $error);
+        }
+        if ($current !== $expected) {
+            throw new SessionRefusal('That physical footprint changed; read the piece again before editing it.');
+        }
+        try {
+            $declaration = $value === null ? null : \Ichiloto\Editor\Maps\PhysicalFootprintCodec::decodeRows($value);
+            // Graphical rows and effect admission do not own logical footprint geometry.
+            unset($piece['tiles'], $piece['effect'], $piece['occupancy']);
+            if ($declaration !== null) { $piece['occupancy'] = $declaration; }
+            TilesetPiece::fromArray($pieceId, $piece, 'Tileset occupancy authoring');
+        } catch (InvalidArgumentException $error) {
+            throw new SessionRefusal($error->getMessage(), previous: $error);
+        }
+        $described = array_find(\Ichiloto\Editor\Maps\TilesetAuthoring::describePieces($data,
+            $this->readDatabaseRecord('tilesets', $index)['rows']), static fn(array $entry): bool => $entry['id'] === $pieceId);
+        $key = $described['occupancyKey'] ?? null;
+        if (! is_array($key)) {
+            throw new SessionRefusal('That physical footprint row cannot be edited; read the record again.');
+        }
+        $result = $this->applyDatabaseRecord('tilesets', $index, $key,
+            \Ichiloto\Editor\Maps\PhysicalFootprintCodec::encode($declaration));
+        if (($result['status'] ?? null) === 'question'
+            || (($result['changed'] ?? false) !== true && $current !== $value)) {
+            throw new SessionRefusal('The physical footprint was not applied. Resolve its source edit through the Physical Footprint record row first.');
+        }
+
+        return [...$result, 'occupancy' => $value];
     }
 
     /**
@@ -974,10 +1031,11 @@ final class EditorSession
                 'height' => $piece->height,
                 'tileLayers' => array_keys($piece->connects === null ? $piece->tiles : $piece->shapeTiles),
                 'picture' => PiecePlacer::buildPicture($piece),
+                'occupancy' => PhysicalOccupancyEditor::exportRecipe($piece),
             ];
         }
 
-        return ['map' => $map->mapId, 'pieces' => $described, 'issue' => null];
+        return ['map' => $map->mapId, 'tileset' => $map->getMapDataField(['tileset']), 'pieces' => $described, 'issue' => null];
     }
 
     /**
@@ -1343,6 +1401,50 @@ final class EditorSession
         }
 
         return ['cells' => $cells, 'map' => $mapId, 'revision' => $this->getMapRevision($map)];
+    }
+
+    /** @return array{cells: list<array{0: int, 1: int, 2: int}>} */
+    public function previewOccupancyPiece(string $mapId, int $revision, string $tilesetId, string $pieceId, array $expected, int $x, int $y): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        $piece = $this->requireOccupancyPiece($map, $tilesetId, $pieceId, $expected);
+        try {
+            $writes = PhysicalOccupancyEditor::getPieceWrites($map, $piece, $x, $y);
+        } catch (MapSourceRefusal | InvalidArgumentException $error) {
+            throw new SessionRefusal($error->getMessage(), previous: $error);
+        }
+
+        return ['cells' => array_map(static fn(array $write): array => [$write[0], $write[1], $write[2]->value], $writes)];
+    }
+
+    /** @return array{status: 'applied', changed: int, revision: int} */
+    public function stampOccupancyPiece(string $mapId, int $revision, string $tilesetId, string $pieceId, array $expected, int $x, int $y): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        $piece = $this->requireOccupancyPiece($map, $tilesetId, $pieceId, $expected);
+        try {
+            $applied = PhysicalOccupancyEditor::applyPiece($map, $piece, $x, $y);
+        } catch (MapSourceRefusal | InvalidArgumentException $error) {
+            throw new SessionRefusal($error->getMessage(), previous: $error);
+        }
+        if ($applied['command'] !== null) {
+            $this->history->record($applied['command']);
+        }
+
+        return ['status' => 'applied', 'changed' => $applied['changed'], 'revision' => $this->getMapRevision($map)];
+    }
+
+    private function requireOccupancyPiece(ProjectMap $map, string $tilesetId, string $pieceId, array $expected): TilesetPiece
+    {
+        if ($map->getMapDataField(['tileset']) !== $tilesetId) {
+            throw new SessionRefusal('The map tileset changed. Choose a physical footprint again. Nothing was changed.');
+        }
+        $piece = $this->requirePiece($map, $pieceId);
+        if (PhysicalOccupancyEditor::exportRecipe($piece) !== $expected) {
+            throw new SessionRefusal('The physical footprint changed. Reload the pieces before stamping. Nothing was changed.');
+        }
+
+        return $piece;
     }
 
     /**

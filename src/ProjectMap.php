@@ -882,31 +882,55 @@ final class ProjectMap
      */
     public function paintPhysicalOccupancy(array $cells, CollisionType $collision): int
     {
-        $this->assertEditable();
         if ($collision === CollisionType::PASS_THROUGH) {
             throw new MapSourceRefusal('PASS_THROUGH is not a final physical collision. Nothing was changed.');
-        }
-        $rows = $this->getDeclaredPhysicalOccupancy();
-        if ($rows === null) {
-            throw new MapSourceRefusal('Physical occupancy must be explicitly migrated before painting. Nothing was changed.');
         }
         if (! array_is_list($cells)) {
             throw new MapSourceRefusal('Physical cells must be a list of [x, y] integer pairs. Nothing was changed.');
         }
-        $unique = [];
+        $writes = [];
         foreach ($cells as $cell) {
             if (! is_array($cell) || ! array_is_list($cell) || count($cell) !== 2
                 || ! is_int($cell[0]) || ! is_int($cell[1])) {
                 throw new MapSourceRefusal('Physical cells must be a list of [x, y] integer pairs. Nothing was changed.');
             }
-            [$x, $y] = $cell;
+            $writes[] = [$cell[0], $cell[1], $collision];
+        }
+
+        return $this->writePhysicalOccupancy($writes);
+    }
+
+    /** @param list<array{0: int, 1: int, 2: CollisionType}> $writes Atomic heterogeneous physical writes. */
+    public function writePhysicalOccupancy(array $writes): int
+    {
+        $this->assertEditable();
+        $rows = $this->getDeclaredPhysicalOccupancy();
+        if ($rows === null) {
+            throw new MapSourceRefusal('Physical occupancy must be explicitly migrated before painting. Nothing was changed.');
+        }
+        if (! array_is_list($writes)) {
+            throw new MapSourceRefusal('Physical writes must be a list of [x, y, CollisionType] entries. Nothing was changed.');
+        }
+        $unique = [];
+        foreach ($writes as $write) {
+            if (! is_array($write) || ! array_is_list($write) || count($write) !== 3
+                || ! is_int($write[0]) || ! is_int($write[1]) || ! $write[2] instanceof CollisionType) {
+                throw new MapSourceRefusal('Physical writes must be a list of [x, y, CollisionType] entries. Nothing was changed.');
+            }
+            [$x, $y, $collision] = $write;
+            if ($collision === CollisionType::PASS_THROUGH) {
+                throw new MapSourceRefusal('PASS_THROUGH is not a final physical collision. Nothing was changed.');
+            }
             if (! isset($rows[$y][$x])) {
                 throw new MapSourceRefusal("Physical cell {$x}, {$y} is outside the map. Nothing was changed.");
             }
-            $unique["{$x},{$y}"] = [$x, $y];
+            if (isset($unique["{$x},{$y}"]) && $unique["{$x},{$y}"][2] !== $collision) {
+                throw new MapSourceRefusal("Physical cell {$x}, {$y} has conflicting writes. Nothing was changed.");
+            }
+            $unique["{$x},{$y}"] = $write;
         }
         $changed = 0;
-        foreach ($unique as [$x, $y]) {
+        foreach ($unique as [$x, $y, $collision]) {
             if ($rows[$y][$x] !== $collision) {
                 $rows[$y][$x] = $collision;
                 $changed++;
