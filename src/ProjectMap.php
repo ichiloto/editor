@@ -24,6 +24,8 @@ use Ichiloto\Engine\Field\MapLayer;
 use Ichiloto\Engine\Field\MapLayerSource;
 use Ichiloto\Engine\Field\MapLayerSet;
 use Ichiloto\Engine\Field\MapCollisionResolver;
+use Ichiloto\Engine\Field\MapPhysicalOccupancy;
+use Ichiloto\Engine\Events\Enumerations\CollisionType;
 use Ichiloto\Engine\IO\Console\TerminalText;
 use Ichiloto\Engine\IO\Console\SgrStyleState;
 use Ichiloto\Engine\Rendering\Tilesets\Tileset;
@@ -860,7 +862,34 @@ final class ProjectMap
     public function validateLayerContracts(): void
     {
         $this->assertGridsAgree();
-        MapCollisionResolver::resolveLayers($this->layers->getLayerSet(), $this->loadCollisionDictionary());
+        $this->getResolvedCollisionMap();
+    }
+
+    /** @return int[][] The same physical cells the Engine installs at map load. */
+    public function getResolvedCollisionMap(): array
+    {
+        $dictionary = $this->hasMapDataField([MapPhysicalOccupancy::DATA_KEY]) ? [] : $this->loadCollisionDictionary();
+
+        return MapCollisionResolver::resolveMap($this->layers->getLayerSet(), $this->editableData, $dictionary)->collisionGrid;
+    }
+
+    /** Explicitly preserves current collisions independently of both presentations. */
+    public function migratePhysicalOccupancy(): bool
+    {
+        $this->assertEditable();
+        try {
+            if ($this->hasMapDataField([MapPhysicalOccupancy::DATA_KEY])) {
+                $this->getResolvedCollisionMap();
+
+                return false;
+            }
+            $occupancy = MapCollisionResolver::resolveLegacyOccupancy($this->layers->getLayerSet(), $this->loadCollisionDictionary());
+        } catch (InvalidArgumentException $error) {
+            throw new MapSourceRefusal(rtrim($error->getMessage(), '.') . '. Nothing was changed.', previous: $error);
+        }
+        $this->setMapDataField([MapPhysicalOccupancy::DATA_KEY], $occupancy->exportDeclaration());
+
+        return true;
     }
 
     /**
@@ -918,10 +947,10 @@ final class ProjectMap
         $this->assertEditable();
         $trial = clone $this->layers;
         $change($trial);
-        $dictionary = $this->loadCollisionDictionary();
+        $dictionary = $this->hasMapDataField([MapPhysicalOccupancy::DATA_KEY]) ? [] : $this->loadCollisionDictionary();
         try {
-            $before = MapCollisionResolver::resolveLayers($this->layers->getLayerSet(), $dictionary);
-            $after = MapCollisionResolver::resolveLayers($trial->getLayerSet(), $dictionary);
+            $before = MapCollisionResolver::resolveMap($this->layers->getLayerSet(), $this->editableData, $dictionary)->collisionGrid;
+            $after = MapCollisionResolver::resolveMap($trial->getLayerSet(), $this->editableData, $dictionary)->collisionGrid;
         } catch (InvalidArgumentException $error) {
             throw new MapSourceRefusal(rtrim($error->getMessage(), '.') . '. Nothing was changed.', previous: $error);
         }
@@ -1368,7 +1397,7 @@ final class ProjectMap
      * Captures the editable grid state for undoable whole-grid mutations
      * (resize, event bounds rewrites).
      *
-     * @return array{tiles: array, events: array, layers: array}
+     * @return array{tiles: array, events: array, layers: array, occupancy: ?array}
      */
     public function captureGridSnapshot(): array
     {
@@ -1376,21 +1405,28 @@ final class ProjectMap
             'tiles' => $this->layers->getBaseGrid()->cells,
             'events' => $this->layers->getEventGrid()->getSymbols(),
             'layers' => $this->layers->captureSnapshot(),
+            'occupancy' => $this->getDeclaredPhysicalOccupancy(),
         ];
     }
 
     /**
      * Restores a previously captured grid snapshot.
      *
-     * @param array{tiles: array, events: array, layers: array} $snapshot The captured state.
+     * Occupancy is restored with geometry, without reverting unrelated metadata.
+     * Older snapshots remain usable on maps without declared occupancy only.
+     *
+     * @param array{tiles: array, events: array, layers: array, occupancy?: ?array} $snapshot The captured state.
      * @return void
      */
     public function restoreGridSnapshot(array $snapshot): void
     {
         $this->assertEditable();
-        $this->layers->restoreSnapshot($snapshot['layers']);
-        $this->cachedWidth = null;
-        $this->touchState();
+        if (! array_key_exists('occupancy', $snapshot) && $this->hasMapDataField([MapPhysicalOccupancy::DATA_KEY])) {
+            throw new MapSourceRefusal('This grid snapshot has no physical occupancy state; nothing was changed.');
+        }
+        $layers = clone $this->layers;
+        $layers->restoreSnapshot($snapshot['layers']);
+        $this->applyGridState($layers, $snapshot['occupancy'] ?? null);
     }
 
     /**
@@ -1900,6 +1936,9 @@ final class ProjectMap
      * Resizes the map, its event overlay and its graphical tile layers while
      * preserving existing content. A tile layer the Engine cannot read
      * refuses the resize before anything changes.
+     * Declared physical cells are cropped or padded with SOLID, independently
+     * of blank terminal glyphs and empty graphical tiles. Absent occupancy
+     * stays absent; this operation never migrates a legacy map.
      *
      * @param int $width The new map width.
      * @param int $height The new map height.
@@ -1910,23 +1949,30 @@ final class ProjectMap
         $this->assertEditable();
         $width = max(1, $width);
         $height = max(1, $height);
+        $occupancy = $this->getDeclaredPhysicalOccupancy();
 
         if ($width === $this->getWidth() && $height === $this->getHeight()) {
             return;
         }
 
-        $this->layers->resize($width, $height);
-
-        $this->cachedWidth = null;
-        $this->touchState();
+        $layers = $this->copyEditableLayers();
+        $layers->resize($width, $height);
+        if ($occupancy !== null) {
+            $occupancy = array_map(static fn(array $row): array => array_pad(array_slice($row, 0, $width), $width, CollisionType::SOLID),
+                array_slice($occupancy, 0, $height));
+            $occupancy = array_pad($occupancy, $height, array_fill(0, $width, CollisionType::SOLID));
+        }
+        $this->applyGridState($layers, $occupancy);
     }
 
     /**
      * Inserts `$count` blank rows before row `$at` (axis `y`) or blank
      * columns before column `$at` (axis `x`) into every grid the map has:
-     * its terminal layers, its event layer and its tile layers. Only the
-     * grids change; the coordinates stored in data files move through the
-     * project-wide insertion plan.
+     * its terminal layers, its event layer and its tile layers. Declared
+     * physical occupancy moves with these grids; new physical cells are SOLID.
+     * Ragged rows follow terminal geometry: columns affect only rows reaching
+     * `$at`, and new rows take the adjacent row's width. Absent occupancy stays
+     * absent. Other data coordinates move through the project-wide insertion plan.
      *
      * @throws MapSourceRefusal When the line is outside the map or a tile layer cannot take it; nothing is changed.
      */
@@ -1943,8 +1989,67 @@ final class ProjectMap
                 $this->mapId, $count, $axis === 'y' ? 'rows' : 'columns', $at));
         }
 
-        $this->layers->insertLines($axis, $at, $count);
+        $occupancy = $this->getDeclaredPhysicalOccupancy();
+        $layers = $this->copyEditableLayers();
+        $layers->insertLines($axis, $at, $count);
+        if ($occupancy !== null) {
+            if ($axis === 'y') {
+                $beside = $occupancy[$at] ?? $occupancy[$at - 1] ?? [];
+                array_splice($occupancy, $at, 0, array_fill(0, $count, array_fill(0, count($beside), CollisionType::SOLID)));
+            } else {
+                foreach ($occupancy as &$row) {
+                    if (count($row) >= $at) {
+                        array_splice($row, $at, 0, array_fill(0, $count, CollisionType::SOLID));
+                    }
+                }
+                unset($row);
+            }
+        }
+        $this->applyGridState($layers, $occupancy);
+    }
 
+    /** @return list<list<CollisionType>>|null Null means undeclared, never invalid. */
+    private function getDeclaredPhysicalOccupancy(): ?array
+    {
+        if (! $this->hasMapDataField([MapPhysicalOccupancy::DATA_KEY])) {
+            return null;
+        }
+        try {
+            return new MapPhysicalOccupancy($this->editableData[MapPhysicalOccupancy::DATA_KEY], $this->layers->getLayerSet(), $this->mapId . ' occupancy')
+                ->exportDeclaration();
+        } catch (InvalidArgumentException $error) {
+            throw new MapSourceRefusal($error->getMessage() . ' Nothing was changed.', previous: $error);
+        }
+    }
+
+    /** A shallow clone alone would still share the mutable EditableGrid objects. */
+    private function copyEditableLayers(): MapLayers
+    {
+        $layers = clone $this->layers;
+        $layers->restoreSnapshot($this->layers->captureSnapshot());
+        return $layers;
+    }
+
+    /** Installs geometry and its declaration only after validation and source preflight. */
+    private function applyGridState(MapLayers $layers, mixed $occupancy): void
+    {
+        $next = $this->editableData;
+        if ($occupancy === null) {
+            unset($next[MapPhysicalOccupancy::DATA_KEY]);
+        } else {
+            try {
+                $next[MapPhysicalOccupancy::DATA_KEY] = new MapPhysicalOccupancy($occupancy, $layers->getLayerSet(), $this->mapId . ' occupancy')
+                    ->exportDeclaration();
+            } catch (InvalidArgumentException $error) {
+                throw new MapSourceRefusal($error->getMessage() . ' Nothing was changed.', previous: $error);
+            }
+        }
+        if ($next !== $this->editableData) {
+            $document = $this->assertDataPreservable($next);
+            $next = $this->alignDataWithSource($document->root(), $next);
+        }
+        $this->layers = $layers;
+        $this->editableData = $next;
         $this->cachedWidth = null;
         $this->touchState();
     }

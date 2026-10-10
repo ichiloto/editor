@@ -225,6 +225,10 @@ final class SessionHost
                 self::readChoices($params),
                 is_string($params['label'] ?? null) ? $params['label'] : 'Paint',
             ),
+            'map.migrateOccupancy' => $session->migratePhysicalOccupancy(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+            ),
             'layer.create' => $session->createLayer(
                 self::requireString($params, 'map'),
                 self::requireInt($params, 'revision'),

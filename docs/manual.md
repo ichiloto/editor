@@ -216,6 +216,17 @@ Creating a layer on a legacy map explicitly moves its terrain into
 `layers/00.terrain.map.php` in the same save transaction; ordinary legacy
 saves keep the original layout.
 
+The GUI offers **Separate collision** for an undeclared map. After explicit
+confirmation, the shared session captures its current resolved physical cells
+without changing glyphs, artwork or passage. This is one undo step, written only
+on save; opening or saving a legacy map never converts it automatically. Once
+converted, terminal appearance and layer edits no longer choose collision.
+Resize and row/column insertion preserve the declaration with geometry, adding
+`SOLID` physical cells independently of blank glyphs. Malformed or unsupported
+source edits refuse before mutation. The TUI receives no graphical conversion
+control; it preserves the declaration through its existing edit/save/history
+workflow. Dedicated physical brushes remain a GUI authoring gap.
+
 Gameplay and event layers use the same Paint/Normal modes, tools, mouse strokes,
 selection, colour, clipboard and undo. The layer inspector lists terminal layer
 visibility only. Ordinary glyph edits do not rewrite graphical decoration.
@@ -415,11 +426,12 @@ intact:
   a tileset piece draws stands for that piece's glyph on its gameplay layer,
   such as a bed's tiles for `O` and `U` on fixtures or a wall's tile for `-`,
   `|` and `+` on buildings. Placing such a tile in the GUI editor writes its
-  glyph, and so its collision, where the piece puts it, with the rest of that
+  glyph where the piece puts it, with the rest of that
   glyph's tiles and the piece's glyph cells that draw no tile (the lower half
   of a window); erasing or covering one removes the glyph it stood for, with
   its other tiles; a wall's cells take the shapes their neighbours give them.
-  Glyphs, collision and tiles change in one undo step, and picked-up tiles
+  On undeclared maps, glyph-derived collision follows in that same undo step;
+  converted maps retain their independently authored physical cells. Picked-up tiles
   move in one step too. A tile two pieces draw is asked about. A tile whose
   glyph would fall off the map is refused. Tiles no piece draws, such as a
   rug or a picture, stand for nothing in the terminal and are placed freely.

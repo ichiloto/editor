@@ -15,6 +15,7 @@ use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\Storage\SourceSetPlan;
 use Ichiloto\Engine\Field\MapGridSource;
 use Ichiloto\Engine\Field\MapLayerSource;
+use Ichiloto\Engine\Field\MapPhysicalOccupancy;
 use RuntimeException;
 use Throwable;
 
@@ -80,6 +81,20 @@ final class LineInsertionPlanner
             $watched[$path] = (string) file_get_contents($path);
         }
 
+        // Physical geometry is edited by ProjectMap, not the coordinate inventory.
+        // Keep its source-preserved proposal in this same reversible source set.
+        $map->assertSourcesUnchanged();
+        $mapData = $payloads[$map->dataPath];
+        if ($map->hasMapDataField([MapPhysicalOccupancy::DATA_KEY])) {
+            $mapData[MapPhysicalOccupancy::DATA_KEY] = $map->getMapDataField([MapPhysicalOccupancy::DATA_KEY]);
+        }
+        if ($map->getMapDataField([]) !== $map->data) {
+            $originals[$map->dataPath] = $watched[$map->dataPath];
+            $proposals[$map->dataPath] = $map->captureLayerSnapshot()['source'];
+            $before[$map->dataPath] = PhpDataFile::getComparableValue($payloads[$map->dataPath]);
+            $after[$map->dataPath] = PhpDataFile::getComparableValue($mapData);
+        }
+
         $commonEvents = [];
         foreach ($dataPaths as $path) {
             if (dirname($path) === $root . '/assets/Events') {
@@ -112,7 +127,8 @@ final class LineInsertionPlanner
             }
         }
         foreach ($inventory->getShifts() as $path => $shifts) {
-            $next = self::rewriteShifts($watched[$path], $payloads[$path], $shifts, $relative($path), $handEdits);
+            $next = self::rewriteShifts($proposals[$path] ?? $watched[$path],
+                $path === $map->dataPath ? $mapData : $payloads[$path], $shifts, $relative($path), $handEdits);
             if ($next !== null) {
                 $originals[$path] = $watched[$path];
                 $proposals[$path] = $next['source'];

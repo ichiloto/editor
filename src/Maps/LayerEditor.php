@@ -38,6 +38,16 @@ final class LayerEditor
     }
 
     /**
+     * Captures existing occupancy independently, without changing any rendered layer.
+     * @return LayerEdit
+     */
+    public static function migratePhysicalOccupancy(ProjectMap $map): array
+    {
+        return self::describeEdit(self::record($map, 'Physical occupancy migration',
+            static fn() => $map->migratePhysicalOccupancy()), null);
+    }
+
+    /**
      * Adds an empty glyph layer, gameplay or decoration, at the next order.
      *
      * @return LayerEdit

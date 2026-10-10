@@ -22,6 +22,7 @@ use Ichiloto\Editor\Cutscenes\Preview\PreviewGame;
 use Ichiloto\Editor\Canvas\CanvasTool;
 use Ichiloto\Editor\Canvas\ToolGeometry;
 use Ichiloto\Engine\Rendering\Tilesets\TileId;
+use Ichiloto\Engine\Field\MapPhysicalOccupancy;
 use Ichiloto\Engine\Rendering\Tilesets\TilesetPiece;
 use Ichiloto\Engine\Rendering\Transport\Exceptions\RendererProtocolException;
 use Ichiloto\Engine\Rendering\Transport\Exceptions\RendererTransportException;
@@ -582,6 +583,7 @@ final class EditorSession
             'events' => $events,
             'npcs' => $npcs,
             'tileLayers' => $map->describeTileLayers(),
+            'physicalOccupancy' => $map->hasMapDataField([MapPhysicalOccupancy::DATA_KEY]),
         ];
     }
 
@@ -1300,6 +1302,13 @@ final class EditorSession
     public function createLayer(string $mapId, int $revision, string $name, bool $decoration = false): array
     {
         return $this->editLayers($mapId, $revision, static fn(ProjectMap $map): array => LayerEditor::createLayer($map, $name, $decoration));
+    }
+
+    /** Explicit source-preserving conversion, recorded as one shared undo step. */
+    public function migratePhysicalOccupancy(string $mapId, int $revision): array
+    {
+        return $this->editLayers($mapId, $revision, static fn(ProjectMap $map): array =>
+            LayerEditor::migratePhysicalOccupancy($map));
     }
 
     /**

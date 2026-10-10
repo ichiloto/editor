@@ -7,6 +7,8 @@ namespace Ichiloto\Editor\Cutscenes\Preview;
 use Ichiloto\Engine\Events\Triggers\EventTriggerFactory;
 use Ichiloto\Engine\Core\Game;
 use Ichiloto\Engine\Field\MapManager;
+use Ichiloto\Engine\Field\MapCollisionResolver;
+use Ichiloto\Engine\Field\MapPhysicalOccupancy;
 use Ichiloto\Engine\Field\Player;
 use Ichiloto\Engine\Scenes\Game\GameScene;
 use Throwable;
@@ -51,11 +53,15 @@ final class PreviewMapManager extends MapManager
             $map = $this->readMapDataFromFile($mapId);
             $this->mapData = $map;
             $this->calculateMapDimensions();
-            $dictionaryPath = getcwd() . '/assets/Maps/collisions.php';
-            $dictionary = is_file($dictionaryPath) ? $this->loadCollisionDictionary($dictionaryPath) : [];
-            $this->collisionMap = $this->layers === null
-                ? $this->generateCollisionMap($this->tileMap, $dictionary)
-                : $this->generateLayerCollisionMap($this->layers, $dictionary);
+            if (array_key_exists(MapPhysicalOccupancy::DATA_KEY, $map)) {
+                $this->collisionMap = MapCollisionResolver::resolveMap($this->layers, $map)->collisionGrid;
+            } else {
+                $dictionaryPath = getcwd() . '/assets/Maps/collisions.php';
+                $dictionary = is_file($dictionaryPath) ? $this->loadCollisionDictionary($dictionaryPath) : [];
+                $this->collisionMap = $this->layers === null
+                    ? $this->generateCollisionMap($this->tileMap, $dictionary)
+                    : $this->generateLayerCollisionMap($this->layers, $dictionary);
+            }
             $this->gameScene->npcManager?->configure(is_array($map['npcs'] ?? null) ? $map['npcs'] : []);
             $this->installFieldEffects();
         } catch (Throwable $failure) {
