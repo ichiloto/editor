@@ -12,6 +12,7 @@ use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\Cutscenes\CutsceneAsset;
 use Ichiloto\Editor\Cutscenes\CutsceneType;
 use Ichiloto\Editor\ProjectWorkspace;
+use Ichiloto\Engine\Animations\Field\FieldPresentationCatalog;
 use Ichiloto\Engine\Animations\Timelines\EffectTimelineLibrary;
 use Ichiloto\Engine\Battle\CounterAttackRule;
 use Ichiloto\Engine\Battle\Presentation\BattlePresentationCatalog;
@@ -99,6 +100,7 @@ final class ReferenceCatalog
         'tilesets',
         'effects',
         'stage_timelines',
+        'field_resources',
         'map_regions',
         'animation_roles',
         'battle_arenas',
@@ -291,6 +293,7 @@ final class ReferenceCatalog
             // Effect timelines are folders the Engine lists by stable id.
             'effects' => new EffectTimelineLibrary($this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets')->findTimelineIds(),
             'stage_timelines' => $this->stageTimelineIds(),
+            'field_resources' => array_map(strval(...), array_keys($this->loadFieldResourceNames())),
             default => $this->recordValues($category),
         };
     }
@@ -303,6 +306,24 @@ final class ReferenceCatalog
      *
      * @return list<string>
      */
+    /**
+     * The project's named field resources (assets/Data/Presentation/field.php), by stable id, with their display
+     * names. A catalogue that cannot be read offers none; project validation reports why.
+     *
+     * @return array<string, string>
+     */
+    private function loadFieldResourceNames(): array
+    {
+        try {
+            $catalog = ProjectDirectoryContext::run($this->workspace->projectRoot,
+                fn(): FieldPresentationCatalog => FieldPresentationCatalog::load($this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets'));
+        } catch (Throwable) {
+            return [];
+        }
+
+        return array_map(static fn($resource): string => $resource->name, $catalog->resources);
+    }
+
     private function stageTimelineIds(): array
     {
         $library = new EffectTimelineLibrary($this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets');
@@ -637,6 +658,15 @@ final class ReferenceCatalog
 
         if ($category === 'battle_arenas') {
             return $this->loadArenaNames();
+        }
+
+        if ($category === 'field_resources') {
+            $labels = [];
+            foreach ($this->loadFieldResourceNames() as $id => $name) {
+                $labels[(string) $id] = sprintf('%s (%s)', $name, $id);
+            }
+
+            return $labels;
         }
 
         if ($category === 'animation_ids') {

@@ -19,6 +19,7 @@ use Ichiloto\Editor\MapSourceRefusal;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\Cutscenes\Source\PhpArraySourceDocument;
 use Ichiloto\Editor\Cutscenes\Source\SourceNode;
+use Ichiloto\Engine\Animations\Field\FieldPresentationCatalog;
 use Ichiloto\Engine\Field\WorldObjectDefinition;
 use InvalidArgumentException;
 
@@ -42,6 +43,8 @@ final readonly class WorldObjectAuthoring
         if (!$complete) {
             // Empty conditions are an unfinished authoring draft, never a runtime default.
             foreach ($entries as &$entry) {
+                // A placement of a named resource has no variants of its own to finish.
+                if (array_key_exists('resource', $entry)) { continue; }
                 $variants = $entry['variants'] ?? [];
                 if (!is_array($variants) || !array_is_list($variants) || count($variants) > WorldObjectDefinition::MAX_VARIANTS) {
                     throw new InvalidArgumentException('World-object variants exceed the Engine list contract.');
@@ -63,7 +66,18 @@ final readonly class WorldObjectAuthoring
             }
             unset($entry);
         }
-        return WorldObjectDefinition::readMap([WorldObjectDefinition::DATA_KEY => $entries], $map->getLayerSet(), tileOwners: $owners);
+        return WorldObjectDefinition::readMap([WorldObjectDefinition::DATA_KEY => $entries], $map->getLayerSet(), tileOwners: $owners,
+            catalog: self::loadCatalog($map, $entries));
+    }
+
+    /**
+     * The project's named field resources, read as the Engine reads them when a map names one: only then, so a map
+     * of inline objects never depends on the catalogue.
+     */
+    private static function loadCatalog(ProjectMap $map, array $entries): ?FieldPresentationCatalog
+    {
+        return array_any($entries, static fn($entry): bool => is_array($entry) && array_key_exists('resource', $entry))
+            ? FieldPresentationCatalog::load($map->getAssetRoot()) : null;
     }
 
     public function getSourceIssue(): ?string
@@ -101,12 +115,16 @@ final readonly class WorldObjectAuthoring
         $schema = new RecordSchema(key: 'world_objects', entryNoun: 'world object', storage: RecordStorage::MAP_OWNED,
             relativePath: '', fields: [], labelKey: 'id',
             fieldsFor: function (array $entry): array {
+                // A placement of a named resource takes its art and pivot from the resource; it chooses which one.
+                $presentation = array_key_exists('resource', $entry)
+                    ? [new RecordField('resource', 'Field Resource', reference: 'field_resources')]
+                    : [new RecordField('pivot.x', 'Image Pivot X (0..1)', InputControlType::FLOAT),
+                        new RecordField('pivot.y', 'Image Pivot Y (0..1)', InputControlType::FLOAT),
+                        ...FieldSpriteFields::getFields($entry, true)];
                 $fields = [new RecordField('id', 'Stable Map-local Id', isReadOnly: true),
                     new RecordField('anchor.x', 'Anchor X', InputControlType::INTEGER),
                     new RecordField('anchor.y', 'Anchor Y', InputControlType::INTEGER),
-                    new RecordField('pivot.x', 'Image Pivot X (0..1)', InputControlType::FLOAT),
-                    new RecordField('pivot.y', 'Image Pivot Y (0..1)', InputControlType::FLOAT),
-                    ...FieldSpriteFields::getFields($entry, true),
+                    ...$presentation,
                     new RecordField('covers.layer', 'Covered Gameplay Layer', options: ['', ...array_column(array_filter($this->map->getLayers(),
                         static fn($layer): bool => !$layer['decoration'] && $layer['id'] !== \Ichiloto\Editor\Maps\MapLayers::EVENT), 'name')],
                         removeWhenEmpty: true, displayDefault: '(no coverage)')];
@@ -117,7 +135,8 @@ final readonly class WorldObjectAuthoring
                 return $fields;
             },
             subLists: [$variants, $cells],
-            subListsFor: static fn(array $entry): array => isset($entry['covers']) ? ['variants', 'covers.cells'] : ['variants'],
+            subListsFor: static fn(array $entry): array => [...(array_key_exists('resource', $entry) ? [] : ['variants']),
+                ...(isset($entry['covers']) ? ['covers.cells'] : [])],
             prepareEdit: static function (array $entry, string $field): array {
                 if ($field === 'covers.layer') {
                     if (!isset($entry['covers']['layer'])) { unset($entry['covers']); }
