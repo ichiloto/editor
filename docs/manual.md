@@ -443,7 +443,12 @@ intact:
   otherwise the editor asks which piece it is, or No tiles, and Esc leaves the
   map as it was. The brush remembers the answer for its glyph until a glyph is
   typed again, and the eyedropper picks up the piece a glyph draws. Tiles no
-  piece accounts for, such as a floor under a wall, stay where they are.
+  piece accounts for, such as a floor under a wall, stay where they are. A
+  piece that keeps the tiles beneath it, such as a window mounted on a wall
+  face, leaves them when it arrives; erasing it gives the cell back to the
+  piece those kept tiles stand for, such as the face's `#`, so the wall is
+  whole again. When they stand for several pieces, the editor asks which, or
+  none to leave the cell blank.
 
 - Glyphs follow the tiles that stand for them, the other way round. Any tile
   a tileset piece draws stands for that piece's glyph on its gameplay layer,

@@ -62,6 +62,7 @@ trait GlyphTileCanvas
             return null;
         }
         $tiles = [...($plan['tiles'] ?? []), ...$tiles];
+        $writes = $plan['writes'] ?? $writes;
 
         $this->finalizeActiveStroke();
         try {
@@ -82,30 +83,31 @@ trait GlyphTileCanvas
      * glyphs are written, so the stroke records them with its glyphs when it
      * ends ({@see finalizeActiveStroke()}).
      *
-     * @param array<int, array{x: int, y: int, symbol: string}> $writes
+     * @param array<int, array{x: int, y: int, symbol: string, color?: string|null}> $writes
      * @param Closure(array<string, ?string>): void $retry Paints this step again with the author's choices.
-     * @return bool Whether the glyphs may be written: false when refused or waiting on a choice.
+     * @return array<int, array{x: int, y: int, symbol: string, color?: string|null, style?: array{prefix: string, suffix: string}}>|null
+     *     The glyphs the step writes ({@see CanvasEditor::plan()}), or null when refused or waiting on a choice.
      */
-    private function followStrokeWithTiles(ProjectMap $map, array $writes, Closure $retry): bool
+    private function followStrokeWithTiles(ProjectMap $map, array $writes, Closure $retry): ?array
     {
         try {
             $plan = $this->planGlyphTiles($map, $this->getActiveCanvasLayer(), $writes,
                 $this->getPaintPieceChoices((string) ($writes[0]['symbol'] ?? '')), true);
         } catch (MapSourceRefusal $refusal) {
             $this->setStatus($refusal->getMessage(), StatusLevel::WARN);
-            return false;
+            return null;
         }
         if ($plan === null) {
-            return true;
+            return $writes;
         }
         if ($plan['unresolved'] !== []) {
             $this->finalizeActiveStroke();
             $glyph = (string) array_key_first($plan['unresolved']);
             $this->askForGlyphPiece($glyph, $plan['unresolved'][$glyph], [], $retry);
-            return false;
+            return null;
         }
         if ($plan['tiles'] === []) {
-            return true;
+            return $plan['writes'];
         }
         if ($this->activeStrokeTiles === null || $this->activeStrokeTiles['map'] !== $map) {
             $this->activeStrokeTiles = ['map' => $map, 'sources' => $map->getTileLayerSources()];
@@ -114,10 +116,10 @@ trait GlyphTileCanvas
             $map->writeTileCells($plan['tiles']);
         } catch (MapSourceRefusal $refusal) {
             $this->setStatus($refusal->getMessage(), StatusLevel::WARN);
-            return false;
+            return null;
         }
 
-        return true;
+        return $plan['writes'];
     }
 
     /**
@@ -129,7 +131,7 @@ trait GlyphTileCanvas
      * @param array<int, array{x: int, y: int, symbol: string}> $writes
      * @param array<string, ?string> $choices
      * @param list<string> $excludedLayers Tile layers the edit sets itself.
-     * @return array{tiles: array<string, list<array{x: int, y: int, entry: string}>>, unresolved: array<string, list<PieceRole>>}|null
+     * @return array{tiles: array<string, list<array{x: int, y: int, entry: string}>>, unresolved: array<string, list<PieceRole>>, writes: array<int, array<string, mixed>>}|null
      * @throws MapSourceRefusal When a tile layer the pieces draw on cannot be read.
      */
     private function planGlyphTiles(ProjectMap $map, string $layerId, array $writes, array $choices, bool $repaint,

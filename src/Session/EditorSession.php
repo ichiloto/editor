@@ -1341,7 +1341,7 @@ final class EditorSession
                     $plan['unresolved'][$glyph],
                 )];
             }
-            $applied = CanvasEditor::apply($map, $layerId, $writes, $label, $plan['tiles'] ?? []);
+            $applied = CanvasEditor::apply($map, $layerId, $plan['writes'] ?? $writes, $label, $plan['tiles'] ?? []);
         } catch (MapSourceRefusal $refusal) {
             throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
         }

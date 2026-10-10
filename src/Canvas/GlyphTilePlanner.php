@@ -121,26 +121,37 @@ final readonly class GlyphTilePlanner
      * @param array<string, string> $assigned The role key a cell's glyph plays, by `x,y`, when the edit already knows
      *     it, such as a tile edit that placed that role's tile. It outranks proof and choice, and plans the cell even
      *     when its glyph stays the same, so a role whose tiles had gone missing gets them back.
-     * @return array{tiles: array<string, list<array{x: int, y: int, entry: string}>>, unresolved: array<string, list<PieceRole>>}
-     *     The tile cells to write, keyed by tile layer name, and the roles of each glyph that still needs a choice.
+     * @return array{tiles: array<string, list<array{x: int, y: int, entry: string}>>, unresolved: array<string, list<PieceRole>>, glyphs: list<array{x: int, y: int, symbol: string, role: PieceRole}>}
+     *     The tile cells to write, keyed by tile layer name; the roles of each glyph that still needs a choice; and
+     *     the cells an erase gives back to the role their kept underlay proves ({@see findUnderlayRole()}), which
+     *     the edit writes instead of a blank.
      */
     public function plan(array $changes, Closure $glyphAt, Closure $tileAt, array $choices = [], bool $repaint = false,
         array $assigned = []): array
     {
         $changes = array_values(array_filter($changes, static fn(array $change): bool => $repaint || $change['old'] !== $change['new']
             || isset($assigned["{$change['x']},{$change['y']}"])));
+        $unresolved = [];
+        $glyphs = [];
+        $underlay = [];
+        foreach ($changes as $index => $change) {
+            if ($change['new'] === ' ' && ($found = $this->findUnderlayRole($change, $tileAt, $choices, $unresolved)) !== null) {
+                [$changes[$index]['new'], $underlay[$index]] = $found;
+                $glyphs[] = ['x' => $change['x'], 'y' => $change['y'], 'symbol' => $found[0], 'role' => $found[1]];
+            }
+        }
         $changed = [];
         foreach ($changes as $change) {
             $changed["{$change['x']},{$change['y']}"] = $change['new'];
         }
         $overlay = [];
         $resolved = [];
-        $unresolved = [];
         $kept = [];
 
         foreach ($changes as $index => $change) {
             $key = $assigned["{$change['x']},{$change['y']}"] ?? null;
             $resolved[$index] = match (true) {
+                isset($underlay[$index]) => $underlay[$index],
                 $change['new'] === ' ' => null,
                 $key !== null => $this->findRole($change['new'], $key),
                 default => $this->resolveRole($change, $glyphAt, $tileAt, $changed, $choices, $unresolved),
@@ -192,7 +203,63 @@ final readonly class GlyphTilePlanner
             }
         }
 
-        return ['tiles' => $tiles, 'unresolved' => $unresolved];
+        return ['tiles' => $tiles, 'unresolved' => $unresolved, 'glyphs' => $glyphs];
+    }
+
+    /**
+     * The role an erased cell goes back to: when the role leaving it keeps a
+     * layer's existing tiles there, the role those kept tiles alone prove,
+     * one whose own tiles at the cell are all present and all on kept layers
+     * (the wall face a window was mounted on). Erasing gives the cell that
+     * role's glyph, so its terminal and collision role returns with the tiles
+     * that never left. Roles of another glyph proven the same way make the
+     * erase wait for the author's choice, keyed by the blank glyph; choosing
+     * none leaves the cell blank. Null when nothing is kept or nothing proven.
+     *
+     * @param array{x: int, y: int, old: string, new: string} $change
+     * @param array<string, ?string> $choices
+     * @param array<string, list<PieceRole>> $unresolved
+     * @return array{0: string, 1: PieceRole}|null The glyph and role the cell takes.
+     */
+    private function findUnderlayRole(array $change, Closure $tileAt, array $choices, array &$unresolved): ?array
+    {
+        [$x, $y] = [$change['x'], $change['y']];
+        $leaving = $this->findPlayedRole($change['old'], $x, $y, $tileAt);
+        $keptLayers = [];
+        foreach ($leaving?->keeps ?? [] as $layer => $cells) {
+            if (array_any($cells, static fn(array $cell): bool => $cell['dx'] === 0 && $cell['dy'] === 0)) {
+                $keptLayers[$layer] = true;
+            }
+        }
+        if ($leaving === null || $keptLayers === []) {
+            return null;
+        }
+        $proven = [];
+        foreach (array_keys($this->roles) as $glyph) {
+            $role = $this->findPlayedRole((string) $glyph, $x, $y, $tileAt);
+            if ($role !== null && $role->pieceId !== $leaving->pieceId && array_diff_key($role->getOwnEntries(), $keptLayers) === []) {
+                $proven[(string) $glyph] = $role;
+            }
+        }
+        if (count($proven) < 2) {
+            return $proven === [] ? null : [(string) array_key_first($proven), reset($proven)];
+        }
+        if (array_key_exists(' ', $choices)) {
+            foreach ($proven as $glyph => $role) {
+                if ($choices[' '] !== null && $this->findRole($glyph, $choices[' ']) === $role) {
+                    return [$glyph, $role];
+                }
+            }
+
+            return null;
+        }
+        $waiting = [];
+        foreach ([...($unresolved[' '] ?? []), ...array_values($proven)] as $role) {
+            $waiting[$role->key] = $role;
+        }
+        $unresolved[' '] = array_values($waiting);
+
+        return null;
     }
 
     /**

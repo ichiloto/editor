@@ -24,9 +24,10 @@ final readonly class PieceRole
      * @param array<string, list<array{dx: int, dy: int, entry: string}>> $tiles Tile entries relative to the glyph cell, keyed by tile layer name; never `0`.
      * @param array{int, int}|null $cell An item piece's cell, as row and column; null for a connected piece's shape.
      * @param array<string, list<array{dx: int, dy: int}>> $keeps Cells whose existing tiles stay, keyed by tile layer; these are not owned tiles to remove.
+     * @param string $source The glyph cell as the tileset authors it, with its style markup, if any.
      */
     public function __construct(public string $pieceId, string $part, public string $label, public array $tiles, public ?array $cell = null,
-        public array $keeps = [])
+        public array $keeps = [], public string $source = '')
     {
         $this->key = "{$pieceId}:{$part}";
     }
@@ -45,6 +46,7 @@ final readonly class PieceRole
         $excluded = array_flip($excludedLayers);
         if ($piece->connects !== null) {
             $roles = [];
+            $sources = $piece->getSourceShapeGrid();
             foreach ($piece->shapes as $shape => $glyph) {
                 $tiles = [];
                 foreach (array_diff_key($piece->shapeTiles, $excluded) as $layer => $entries) {
@@ -52,7 +54,7 @@ final readonly class PieceRole
                         $tiles[$layer] = [['dx' => 0, 'dy' => 0, 'entry' => $entries[$shape]]];
                     }
                 }
-                $roles[$glyph][] = new self($piece->id, $shape, $piece->name, $tiles);
+                $roles[$glyph][] = new self($piece->id, $shape, $piece->name, $tiles, source: $sources[$shape] ?? $glyph);
             }
 
             return $roles;
@@ -82,6 +84,7 @@ final readonly class PieceRole
             $attached[$nearest[0]][] = [$row, $column];
         }
         $roles = [];
+        $sources = $piece->getSourceGrid();
         foreach ($glyphCells as $index => [$row, $column]) {
             $tiles = [];
             $ownedCells = [[$row, $column], ...($attached[$index] ?? [])];
@@ -99,7 +102,8 @@ final readonly class PieceRole
                 }
             }
             $roles[$piece->glyphs[$row][$column]][] = new self($piece->id, "{$row}:{$column}",
-                self::describeCell($piece->name, $glyphCells, $row, $column), $tiles, [$row, $column], $keeps);
+                self::describeCell($piece->name, $glyphCells, $row, $column), $tiles, [$row, $column], $keeps,
+                $sources[$row][$column] ?? $piece->glyphs[$row][$column]);
         }
 
         return $roles;

@@ -239,7 +239,9 @@ final class PiecePlacer
                 $map->writeTileEntries($piece->tiles, $x, $y);
             }
         } else {
-            $map->writeTileCells(CanvasEditor::plan($map, $layer, $writes, assigned: $assigned)['tiles'] ?? []);
+            $plan = CanvasEditor::plan($map, $layer, $writes, assigned: $assigned);
+            $map->writeTileCells($plan['tiles'] ?? []);
+            $writes = $plan['writes'] ?? $writes;
         }
         $tilesAfter = $map->getTileLayerSources();
         [$stroke] = CanvasEditor::writeCells($map, $layer, $writes, $label);
@@ -288,9 +290,10 @@ final class PiecePlacer
             isset($drawnKeys["{$cell['x']},{$cell['y']}"]) ? $fallbackColor : null)), $cells);
         // Each shape draws its tiles, and a glyph the wall covers takes its own ({@see GlyphTilePlanner}).
         $tilesBefore = $map->getTileLayerSources();
-        $map->writeTileCells(CanvasEditor::plan($map, $layer, $writes)['tiles'] ?? []);
+        $plan = CanvasEditor::plan($map, $layer, $writes);
+        $map->writeTileCells($plan['tiles'] ?? []);
         $tilesAfter = $map->getTileLayerSources();
-        [$stroke] = CanvasEditor::writeCells($map, $layer, $writes, $label);
+        [$stroke] = CanvasEditor::writeCells($map, $layer, $plan['writes'] ?? $writes, $label);
 
         return $stroke->hasChanges() || $tilesAfter !== $tilesBefore
             ? CanvasEditor::combineStrokeWithTiles($label, $map, $stroke, $tilesBefore, $tilesAfter)
@@ -315,7 +318,7 @@ final class PiecePlacer
      *
      * @return array{style: array{prefix: string, suffix: string}}|array{color: string|null}
      */
-    private static function resolveCellPaint(string $source, ?string $fallbackColor): array
+    public static function resolveCellPaint(string $source, ?string $fallbackColor): array
     {
         $style = self::readCellStyle($source);
 

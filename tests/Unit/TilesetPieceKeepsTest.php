@@ -247,7 +247,7 @@ it('keeps underlay for an assigned same-glyph repaint and clips attached cells o
     ];
     $plan = planKeepsTestChanges($pieces, [['x' => 0, 'y' => 0, 'old' => '#', 'new' => '#']],
         [['#']], ['walls' => [['10']]], assigned: ['0,0' => 'mounted:0:0']);
-    expect($plan)->toBe(['tiles' => ['decor' => [['x' => 0, 'y' => 0, 'entry' => '5']]], 'unresolved' => []]);
+    expect($plan)->toBe(['tiles' => ['decor' => [['x' => 0, 'y' => 0, 'entry' => '5']]], 'unresolved' => [], 'glyphs' => []]);
 });
 
 it('leaves underlay intact when PiecePlacer stamps a piece containing only blank glyphs', function () {

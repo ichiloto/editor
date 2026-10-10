@@ -104,7 +104,7 @@ final class CanvasClipboard
         if ($plan !== null && $plan['unresolved'] !== []) {
             return ['command' => null, 'changed' => 0, 'unresolved' => $plan['unresolved']];
         }
-        $applied = CanvasEditor::apply($map, $layerId, $writes, $label, [...($plan['tiles'] ?? []), ...$tiles]);
+        $applied = CanvasEditor::apply($map, $layerId, $plan['writes'] ?? $writes, $label, [...($plan['tiles'] ?? []), ...$tiles]);
 
         return ['command' => $applied['command'], 'changed' => $applied['changed'], 'unresolved' => []];
     }

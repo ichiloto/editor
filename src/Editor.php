@@ -4236,24 +4236,29 @@ final class Editor
             $this->renderCanvasArea();
         };
 
-        if (! $this->followStrokeWithTiles($selectedMap, array_map(
-            static fn(array $point): array => ['x' => $point['x'], 'y' => $point['y'], 'symbol' => $symbol],
+        $color = $this->selectedPaintColor;
+        $writes = $this->followStrokeWithTiles($selectedMap, array_map(
+            static fn(array $point): array => ['x' => $point['x'], 'y' => $point['y'], 'symbol' => $symbol, 'color' => $color],
             $points,
-        ), $retry)) {
+        ), $retry);
+        if ($writes === null) {
             $this->activeMousePaintButton = null;
             $this->lastMousePaintPoint = null;
             return;
         }
 
-        foreach ($points as $point) {
+        // The planned glyphs: an erase may give a cell back to the wall face its window was mounted on.
+        foreach ($writes as $point) {
             if (! $selectedMap->hasLayerCell($this->getActiveCanvasLayer(), $point['x'], $point['y'])) {
                 continue;
             }
 
             $oldSymbol = $selectedMap->getLayerSymbol($this->getActiveCanvasLayer(), $point['x'], $point['y']);
             $oldStyle = $selectedMap->getLayerCellStyle($this->getActiveCanvasLayer(), $point['x'], $point['y']);
-            [$newPrefix, $newSuffix] = CanvasEditor::resolvePaintStyle($symbol, $this->selectedPaintColor, $oldStyle);
-            $selectedMap->setLayerCell($this->getActiveCanvasLayer(), $point['x'], $point['y'], $symbol, $newPrefix, $newSuffix);
+            [$newPrefix, $newSuffix] = isset($point['style'])
+                ? [$point['style']['prefix'], $point['style']['suffix']]
+                : CanvasEditor::resolvePaintStyle($point['symbol'], $point['color'] ?? null, $oldStyle);
+            $selectedMap->setLayerCell($this->getActiveCanvasLayer(), $point['x'], $point['y'], $point['symbol'], $newPrefix, $newSuffix);
             $newSymbol = $selectedMap->getLayerSymbol($this->getActiveCanvasLayer(), $point['x'], $point['y']);
             $this->activeStrokeCommand->appendCell(
                 $point['x'],

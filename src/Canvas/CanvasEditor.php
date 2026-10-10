@@ -37,8 +37,10 @@ final class CanvasEditor
      * @param bool $repaint Whether a glyph painted over itself may take another role.
      * @param list<string> $excludedLayers Tile layers the edit sets itself.
      * @param array<string, string> $assigned The role key a written cell's glyph plays, by `x,y`, when the edit knows it.
-     * @return array{tiles: array<string, list<array{x: int, y: int, entry: string}>>, unresolved: array<string, list<PieceRole>>}|null
-     *     The tiles and the glyphs still waiting on a choice, or null when the layer has no pieces to follow.
+     * @return array{tiles: array<string, list<array{x: int, y: int, entry: string}>>, unresolved: array<string, list<PieceRole>>, writes: array<int, array{x: int, y: int, symbol: string, color?: string|null, style?: array{prefix: string, suffix: string}}>}|null
+     *     The tiles, the glyphs still waiting on a choice, and the glyphs the edit writes: `$writes`, except where
+     *     an erase gives a cell back to the role its kept underlay proves, painted as its piece authors it. Null
+     *     when the layer has no pieces to follow, and the edit writes `$writes` as they are.
      * @throws MapSourceRefusal When a tile layer the pieces draw on cannot be read.
      */
     public static function plan(ProjectMap $map, string $layerId, array $writes, array $choices = [], bool $repaint = false,
@@ -56,7 +58,7 @@ final class CanvasEditor
             }
         }
 
-        return $planner->plan(
+        $plan = $planner->plan(
             $changes,
             static fn(int $x, int $y): ?string => $map->hasLayerCell($layerId, $x, $y) ? $map->getLayerSymbol($layerId, $x, $y) : null,
             self::createTileReader($map),
@@ -64,6 +66,15 @@ final class CanvasEditor
             $repaint,
             $assigned,
         );
+        $restored = [];
+        foreach ($plan['glyphs'] as $glyph) {
+            // The face comes back as its piece paints it, never in the colour of the piece that left.
+            $restored["{$glyph['x']},{$glyph['y']}"] = ['x' => $glyph['x'], 'y' => $glyph['y'], 'symbol' => $glyph['symbol']]
+                + PiecePlacer::resolveCellPaint($glyph['role']->source, '');
+        }
+        $plan['writes'] = array_map(static fn(array $write): array => $restored["{$write['x']},{$write['y']}"] ?? $write, $writes);
+
+        return $plan;
     }
 
     /**
