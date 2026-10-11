@@ -5,9 +5,14 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Validation;
 
 use Ichiloto\Editor\ProjectWorkspace;
+use Ichiloto\Engine\Field\MapGraphics;
+use Ichiloto\Engine\Field\MapLayerSource;
+use Ichiloto\Engine\Field\Reachability\MapReachabilityReport;
 use Ichiloto\Engine\Field\Reachability\ProjectReachability;
 use Ichiloto\Engine\Field\Reachability\ReachabilityProblem;
 use Ichiloto\Engine\Field\Reachability\ReachabilityProblemKind;
+use Ichiloto\Engine\Rendering\Tilesets\TileId;
+use Throwable;
 
 /**
  * Reports layouts that leave the player stuck or content out of reach, as the
@@ -22,12 +27,69 @@ final class ReachabilityValidator
     /** @return Issue[] */
     public function validate(ProjectWorkspace $workspace): array
     {
-        $project = ProjectReachability::analyze($workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets');
+        $assetRoot = $workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets';
+        $project = ProjectReachability::analyze($assetRoot);
+        $untiled = [];
+        foreach ($project->reports as $mapId => $report) {
+            $untiled[] = self::checkUntiledFloor($assetRoot, (string) $mapId, $report);
+        }
 
-        return array_values(array_filter(array_map(
+        return array_values(array_filter([...array_map(
             static fn(ReachabilityProblem $problem): ?Issue => self::toIssue($problem),
             $project->getAllProblems(),
-        )));
+        ), ...$untiled]));
+    }
+
+    /** How many reachable cells a warning names before summing up the rest. */
+    private const int CELLS_NAMED = 3;
+
+    /**
+     * Warns for cells the player can reach that no tile covers in a map with graphics: the field draws nothing
+     * there, so the player walks on the dark background, as on a map whose floor was never painted. A map without
+     * a kind, or whose graphics cannot be read, is left to the checks that own it.
+     */
+    private static function checkUntiledFloor(string $assetRoot, string $mapId, MapReachabilityReport $report): ?Issue
+    {
+        try {
+            $directory = $assetRoot . DIRECTORY_SEPARATOR . 'Maps' . DIRECTORY_SEPARATOR . $mapId;
+            $data = (static fn(string $file): mixed => require $file)($directory . DIRECTORY_SEPARATOR . basename($mapId) . '.data.php');
+            if (! is_array($data) || ! is_string($data['tileset'] ?? null)) {
+                return null;
+            }
+            $layers = MapLayerSource::loadFromDirectory($directory, $mapId);
+            $graphics = MapGraphics::loadFromDirectory($directory, $mapId, $data['tileset'], $layers, $assetRoot, $data['tileLayers'] ?? null);
+            $usable = $graphics?->tileset->getUsableSheets($assetRoot)['sheets'] ?? [];
+        } catch (Throwable) {
+            return null;
+        }
+        if ($graphics === null || $usable === []) {
+            return null;
+        }
+        $cells = [];
+        foreach ($layers->layers[0]->glyphs ?? [] as $y => $row) {
+            foreach ($row as $x => $_) {
+                if (! $report->isReachable($x, $y)) {
+                    continue;
+                }
+                foreach ($graphics->layers as $layer) {
+                    $tile = (int) ($layer->tiles[$y][$x] ?? TileId::EMPTY);
+                    if ($tile !== TileId::EMPTY && isset($usable[TileId::getSheet($tile)?->value ?? ''])) {
+                        continue 2;
+                    }
+                }
+                $cells[] = "({$x}, {$y})";
+            }
+        }
+        if ($cells === []) {
+            return null;
+        }
+        $named = array_slice($cells, 0, self::CELLS_NAMED);
+        $rest = count($cells) - count($named);
+
+        return Issue::warning($mapId, sprintf('%d %s the player can reach %s no tile, so the field shows the background there: %s%s.',
+            count($cells), count($cells) === 1 ? 'cell' : 'cells', count($cells) === 1 ? 'has' : 'have',
+            implode(', ', $named), $rest > 0 ? " and {$rest} more" : ''),
+            'Paint floor under them on a tile layer, or close them off if the player should not walk there.');
     }
 
     private static function toIssue(ReachabilityProblem $problem): ?Issue

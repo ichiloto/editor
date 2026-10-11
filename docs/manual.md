@@ -2490,7 +2490,9 @@ stands: moving an NPC or rebuilding a room is fine unless it traps something.
 An event no reachable cell lies in, or an arrival outside the map or on a
 wall, is an error; a talkable NPC with no reachable cell beside it, and a map
 nothing reachable leads to yet, are warnings. Doors and edge triggers that
-name a map the project does not have are errors of their own.
+name a map the project does not have are errors of their own. On a map with
+a kind, a cell the player can reach that no tile covers is a warning: the
+game shows the dark background there, so paint its floor or close it off.
 
 Effect timelines in `assets/Animations` are checked as each consumer plays
 them: an animation's `sourceEffect` and `targetEffect` in battle, and the field
