@@ -22,6 +22,7 @@ final class WorkspaceSaveResult
 
     /**
      * @param list<string> $skippedRenames Maps left unsaved because saving would move their folder.
+     * @param list<string> $skippedRelocations Maps left unsaved because saving them moves existing saves, which their own save reviews.
      * @param list<string> $failures Each document that could not be written, with why.
      * @param list<string> $warnings What validation noticed in the maps written, which never blocks a save.
      * @param list<string> $backupFailures Files whose backup failed; their save still ran.
@@ -31,6 +32,7 @@ final class WorkspaceSaveResult
         public readonly int $savedDatabases,
         public readonly int $savedCutscenes,
         public readonly array $skippedRenames,
+        public readonly array $skippedRelocations,
         public readonly array $failures,
         public readonly array $warnings,
         public readonly array $backupFailures,

@@ -2420,6 +2420,23 @@ matches.
 `Ctrl+A` saves every dirty map and every editable database in one pass.
 Read-only categories are never included - they hold no edits.
 
+### Saves follow what a map makes solid
+
+When a map is saved after an edit makes floor solid that the player can reach
+in the saved map (furniture, a wall, painted collision, trees), a save
+standing on such a cell would load inside it. With a save compatibility
+manifest (`assets/Data/save-compatibility.php`), `Ctrl+S` first shows each such
+cell and where saves on it will land: the nearest open floor the player can
+reach today, found by walking from the cell, never an event or NPC cell.
+**Save and move saves** writes the map and a `relocations` step that raises
+the manifest's content version by one; **Cancel** saves nothing. The step is
+its own undo: `Ctrl+Z` after the save removes it from the manifest, and undoing
+the edit itself is then saved as usual. `Ctrl+A` leaves such a map unsaved and
+names it, so its save is always reviewed on its own. A cell no open floor can
+be reached from refuses the save until a path is opened or the edit undone. A
+project without a manifest is saved at once, as before. The GUI editor shows
+the same review when it saves.
+
 Saving writes through a temporary file and a rename, so an interrupted save
 cannot truncate your work. When a save regenerates a data file, everything from
 `<?php` up to the top-level `return` is preserved byte-for-byte: file

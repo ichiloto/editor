@@ -7,6 +7,7 @@ namespace Ichiloto\Editor\Storage;
 use Ichiloto\Editor\Backup\BackupWriter;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Database\SharedFileTransaction;
+use Ichiloto\Editor\Maps\SaveRelocationPlanner;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Editor\Validation\MapValidator;
 use Throwable;
@@ -31,6 +32,7 @@ final class WorkspaceSave
         $savedMaps = 0;
         $savedDatabases = 0;
         $skippedRenames = [];
+        $skippedRelocations = [];
         $failures = [];
         $warnings = [];
         $mapsById = [];
@@ -46,6 +48,18 @@ final class WorkspaceSave
 
             if ($map->willMoveOnSave()) {
                 $skippedRenames[] = $map->mapId;
+                continue;
+            }
+
+            // Saves that would load inside what the map now makes solid are moved only once the author has seen where.
+            try {
+                $relocation = SaveRelocationPlanner::plan($map, $workspace->projectRoot);
+            } catch (Throwable $throwable) {
+                $failures[] = sprintf('%s: %s', $map->mapId, $throwable->getMessage());
+                continue;
+            }
+            if ($relocation !== null) {
+                $skippedRelocations[] = $map->mapId;
                 continue;
             }
 
@@ -107,6 +121,7 @@ final class WorkspaceSave
             savedDatabases: $savedDatabases,
             savedCutscenes: count($cutscenes['saved']),
             skippedRenames: $skippedRenames,
+            skippedRelocations: $skippedRelocations,
             failures: $failures,
             warnings: $warnings,
             backupFailures: array_values(array_unique($backupFailures)),

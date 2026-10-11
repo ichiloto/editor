@@ -57,6 +57,9 @@ use Ichiloto\Editor\Database\RecordSubList;
 use Ichiloto\Editor\Database\ReferencePicker;
 use Ichiloto\Editor\Debug\Debug;
 use Ichiloto\Editor\Maps\MapLinePlan;
+use Ichiloto\Editor\Maps\SaveManifestStep;
+use Ichiloto\Editor\Maps\SaveRelocationPlan;
+use Ichiloto\Editor\Maps\SaveRelocationPlanner;
 use Ichiloto\Editor\Maps\MapLayers;
 use Ichiloto\Editor\Events\EventAuthoring;
 use Ichiloto\Editor\Events\EventRefusal;
@@ -6403,6 +6406,11 @@ final class Editor
             $detailLines = [...$detailLines, ...array_map(static fn(string $mapId): string => '  ' . $mapId, $result->skippedRenames), ''];
         }
 
+        if ($result->skippedRelocations !== []) {
+            $detailLines[] = 'Skipped - saving would move existing saves off cells now solid (use Ctrl+S on the map to review where):';
+            $detailLines = [...$detailLines, ...array_map(static fn(string $mapId): string => '  ' . $mapId, $result->skippedRelocations), ''];
+        }
+
         if ($result->failures !== []) {
             $detailLines = [...$detailLines, 'Failed:', ...array_map(static fn(string $failure): string => '  ' . $failure, $result->failures), ''];
         }
@@ -6417,7 +6425,7 @@ final class Editor
 
         if ($result->failures !== []) {
             $this->setStatus($result->summary . sprintf(' %d failed (Ctrl+E for details).', count($result->failures)), StatusLevel::ERROR, $detailLines);
-        } elseif ($result->skippedRenames !== [] || $result->warnings !== [] || $result->backupFailures !== []) {
+        } elseif ($result->skippedRenames !== [] || $result->skippedRelocations !== [] || $result->warnings !== [] || $result->backupFailures !== []) {
             $this->setStatus($result->summary . ' See Ctrl+E for skipped saves and warnings.', StatusLevel::WARN, $detailLines);
         } else {
             $this->setStatus($result->summary, StatusLevel::SUCCESS);
@@ -6607,7 +6615,7 @@ final class Editor
      *
      * @return void
      */
-    private function performSaveSelectedMap(): void
+    private function performSaveSelectedMap(?SaveRelocationPlan $reviewed = null): void
     {
         if (! $this->workspace instanceof ProjectWorkspace) {
             return;
@@ -6619,14 +6627,37 @@ final class Editor
             return;
         }
 
+        try {
+            $relocation = SaveRelocationPlanner::plan($selectedMap, $this->workspace->projectRoot);
+        } catch (Throwable $throwable) {
+            $this->setErrorStatus($throwable, 'Save');
+            return;
+        }
+        if ($relocation !== null && ($reviewed === null || ! hash_equals($relocation->getFingerprint(), $reviewed->getFingerprint()))) {
+            $this->openSaveRelocationReview($relocation);
+            return;
+        }
+
         $warnings = MapValidator::validate($selectedMap, $this->getMapsById());
+        $step = null;
 
         try {
             $previousMapId = $selectedMap->mapId;
+            // Saves standing where the map is now solid move with it; the step is its own undo.
+            $step = $relocation?->apply();
             // The save backs up, once, exactly the files it is about to
             // replace -- so a clean map or an untouched member never
             // produces a backup copy.
-            $savedMapId = $selectedMap->save($this->backupBeforeSave(...));
+            try {
+                $savedMapId = $selectedMap->save($this->backupBeforeSave(...));
+            } catch (Throwable $failure) {
+                $relocation?->revert();
+                $step = null;
+                throw $failure;
+            }
+            if ($step !== null) {
+                $this->recordCommand($step);
+            }
 
             if ($savedMapId !== $previousMapId) {
                 // The folder moved: swap in a freshly parsed map instance and
@@ -6646,8 +6677,10 @@ final class Editor
                 $this->clampInspectorSelection();
             }
 
+            $moved = $step === null ? '' : sprintf(' Saves on %d cells it makes solid now move to open floor (save content version %d).',
+                array_sum(array_map(static fn(array $relocation): int => count($relocation['cells']), $relocation->relocations)), $relocation->contentVersion);
             if ($warnings === []) {
-                $this->setStatus(sprintf('Saved %s.', $savedMapId), StatusLevel::SUCCESS);
+                $this->setStatus(sprintf('Saved %s.%s', $savedMapId, $moved), StatusLevel::SUCCESS);
             } else {
                 $this->setStatus(
                     sprintf('Saved %s with %d warning%s (Ctrl+E for details).', $savedMapId, count($warnings), count($warnings) === 1 ? '' : 's'),
@@ -6659,6 +6692,32 @@ final class Editor
             $this->setErrorStatus($throwable, 'Save');
         }
 
+        $this->renderSelectionDependentArea();
+    }
+
+    /**
+     * Lists where saving the map moves existing saves, for confirmation:
+     * nothing is written until Write is chosen.
+     */
+    private function openSaveRelocationReview(SaveRelocationPlan $plan): void
+    {
+        $this->optionDialogField = ['saveRelocation' => $plan];
+        $this->eventOptionDialogMarker = null;
+        $this->eventOptionDialogPath = null;
+        $this->eventOptionDialogTitle = sprintf('Save %s and move existing saves', $plan->mapId);
+        $this->eventOptionDialogEntries = [
+            ['label' => 'Cancel', 'value' => 'cancel', 'description' => 'Save nothing.'],
+            ['label' => 'Save and move saves', 'value' => 'write',
+                'description' => sprintf('Saves the map and adds save content version %d to %s. Ctrl+Z removes that step.', $plan->contentVersion, SaveManifestStep::PATH)],
+            ...array_map(static fn(string $move): array => [
+                'label' => 'Move saves on ' . $move, 'value' => 'preview',
+                'description' => 'A save standing there would load inside what is now solid.',
+            ], $plan->describeMoves()),
+        ];
+        $this->selectedEventOptionIndex = 0;
+        $this->dialogFilter->clear();
+        $this->isEventOptionDialogOpen = true;
+        $this->setStatus(sprintf('%s is now solid where saves could stand. Review where they move before saving.', $plan->mapId), StatusLevel::WARN);
         $this->renderSelectionDependentArea();
     }
 
@@ -7294,6 +7353,14 @@ final class Editor
 
             if (is_array($field['glyphPiece'] ?? null)) {
                 $this->chooseGlyphPiece($field['glyphPiece'], (string) $selectedEntry['value']);
+                return;
+            }
+
+            if (($field['saveRelocation'] ?? null) instanceof SaveRelocationPlan) {
+                if ($selectedEntry['value'] === 'preview') { return; }
+                $plan = $field['saveRelocation'];
+                $this->closeEventOptionDialog();
+                $selectedEntry['value'] === 'write' ? $this->performSaveSelectedMap($plan) : $this->setStatus('Save cancelled. No files were changed.');
                 return;
             }
 

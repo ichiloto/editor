@@ -38,7 +38,7 @@ use Throwable;
  */
 final class MapLinePlanner
 {
-    private const string MANIFEST = 'assets/Data/save-compatibility.php';
+    private const string MANIFEST = SaveManifestStep::PATH;
     private const string SYSTEM = 'assets/Data/system.php';
 
     private function __construct()
@@ -342,24 +342,13 @@ final class MapLinePlanner
      */
     private static function planSaveMigration(string $source, mixed $manifest, MapLineEdit $edit, array &$handEdits): ?array
     {
-        $version = is_array($manifest) ? ($manifest['contentVersion'] ?? null) : null;
-        $migrations = is_array($manifest) ? ($manifest['migrations'] ?? []) : null;
-        $step = ['from' => $version, 'to' => is_int($version) ? $version + 1 : null, ...$edit->getManifestEdits()];
-        $reason = null;
-        if (! is_int($version) || $version < 0 || ! is_array($migrations) || ! array_is_list($migrations)) {
-            $reason = 'its contentVersion or migrations list is not valid, so saves cannot be migrated automatically';
-        } else {
-            $next = $manifest;
-            $next['contentVersion'] = $version + 1;
-            $next['migrations'] = [...$migrations, $step];
-            try {
-                return ['source' => ArraySourceWriter::rewrite(PhpArraySourceDocument::parse($source), $manifest, $next)->source, 'value' => $next];
-            } catch (SourceUnreadable|SourcePreservationRefusal $refusal) {
-                $reason = rtrim($refusal->getMessage(), '.');
-            }
+        $next = SaveManifestStep::append($source, $manifest, $edit->getManifestEdits());
+        if (is_array($next)) {
+            return $next;
         }
         $handEdits[] = ['file' => self::MANIFEST, 'where' => 'contentVersion and migrations',
-            'reason' => sprintf('%s; raise contentVersion by one and add the step %s by hand', $reason, var_export($step, true))];
+            'reason' => sprintf('%s; raise contentVersion by one and add the step %s by hand', $next,
+                var_export(SaveManifestStep::describe($manifest, $edit->getManifestEdits()), true))];
 
         return null;
     }

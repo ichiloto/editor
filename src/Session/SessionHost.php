@@ -361,7 +361,8 @@ final class SessionHost
                 array_key_exists('movesWith', $params) && (is_string($params['movesWith']) || $params['movesWith'] === null)
                     ? $params['movesWith'] : throw new InvalidRequest('"movesWith" must be a gameplay layer name or null.'),
             ),
-            'map.save' => $session->saveMap(self::requireString($params, 'map')),
+            'map.save' => $session->saveMap(self::requireString($params, 'map'),
+                self::readOptionalString($params, 'answer'), self::readOptionalString($params, 'confirm')),
             'mapPlacement.apply' => $session->applyMapPlacement(
                 is_array($params['context'] ?? null) ? $params['context'] : throw new InvalidRequest('A placement needs its owner.'),
                 self::requireKey($params),

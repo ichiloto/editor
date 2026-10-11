@@ -81,6 +81,8 @@ use Ichiloto\Editor\Maps\MapLayers;
 use Ichiloto\Editor\Maps\MapReferences;
 use Ichiloto\Editor\Maps\TilePalette;
 use Ichiloto\Editor\Maps\TreeBrush;
+use Ichiloto\Editor\Maps\SaveManifestStep;
+use Ichiloto\Editor\Maps\SaveRelocationPlanner;
 use Ichiloto\Editor\History\SourceSetCommand;
 use Ichiloto\Editor\History\CommandGroup;
 use Ichiloto\Editor\History\SourceSetRequired;
@@ -4415,11 +4417,38 @@ final class EditorSession
      * @return array{saved: string, warnings: list<string>, backupFailures: list<string>}
      * @throws SessionRefusal When the map is unknown or refuses to save.
      */
-    public function saveMap(string $mapId): array
+    public function saveMap(string $mapId, ?string $answer = null, ?string $confirm = null): array
     {
         $map = $this->requireMap($mapId);
+        try {
+            $relocation = SaveRelocationPlanner::plan($map, $this->workspace->projectRoot);
+        } catch (RuntimeException $failure) {
+            throw new SessionRefusal($failure->getMessage(), previous: $failure);
+        }
+        if ($relocation !== null) {
+            // Saves standing where the map is now solid move with the save, once the author has seen where.
+            if ($answer === null) {
+                return ['status' => 'question', 'map' => $mapId, 'question' => sprintf('Save %s and move existing saves off cells it makes solid?', $mapId),
+                    'answers' => [
+                        ['key' => 'cancel', 'label' => 'Cancel', 'description' => 'Save nothing.'],
+                        ['key' => 'write', 'label' => 'Save and move saves', 'description' => sprintf('Saves the map and writes %s. Undo removes the save step.', SaveManifestStep::PATH)],
+                    ],
+                    'relocations' => $relocation->relocations, 'moves' => $relocation->describeMoves(), 'contentVersion' => $relocation->contentVersion,
+                    'confirm' => $relocation->getFingerprint()];
+            }
+            if ($answer === 'cancel') {
+                return ['status' => 'cancelled', 'map' => $mapId, 'saved' => null];
+            }
+            if ($answer !== 'write') {
+                throw new SessionRefusal(sprintf('Answer write or cancel, not %s.', $answer));
+            }
+            if ($confirm === null || ! hash_equals($relocation->getFingerprint(), $confirm)) {
+                throw new SessionRefusal('The map or the save manifest changed since the save relocations were shown, so nothing was written. Review them again.');
+            }
+        }
         $warnings = MapValidator::validate($map, $this->getMapsById());
         $failures = [];
+        $step = $relocation?->apply();
 
         try {
             $saved = $map->save(function (string ...$paths) use (&$failures): void {
@@ -4428,10 +4457,16 @@ final class EditorSession
                 }
             });
         } catch (MapSourceRefusal|FileSetTransactionFailure $refusal) {
+            // The map is not saved, so neither is the step that moves saves for it.
+            $relocation?->revert();
             throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
         }
+        if ($step !== null) {
+            $this->history->record($step);
+        }
 
-        return ['saved' => $saved, 'warnings' => array_values($warnings), 'backupFailures' => array_values($failures)];
+        return ['saved' => $saved, 'warnings' => array_values($warnings), 'backupFailures' => array_values($failures),
+            'relocated' => $relocation?->describeMoves() ?? []];
     }
 
     /**
@@ -4878,7 +4913,7 @@ final class EditorSession
      * editor's Save All does, and names what is still unsaved after it: a
      * map whose save would move its folder, or a document that failed.
      *
-     * @return array{summary: string, skippedRenames: list<string>, failures: list<string>, warnings: list<string>, backupFailures: list<string>, unsaved: list<string>}
+     * @return array{summary: string, skippedRenames: list<string>, skippedRelocations: list<string>, failures: list<string>, warnings: list<string>, backupFailures: list<string>, unsaved: list<string>}
      */
     public function saveAll(): array
     {
@@ -4887,6 +4922,7 @@ final class EditorSession
         return [
             'summary' => $result->summary,
             'skippedRenames' => $result->skippedRenames,
+            'skippedRelocations' => $result->skippedRelocations,
             'failures' => $result->failures,
             'warnings' => $result->warnings,
             'backupFailures' => $result->backupFailures,
