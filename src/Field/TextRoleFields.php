@@ -26,8 +26,15 @@ final class TextRoleFields
 {
     public const string CATEGORY = 'text_roles';
 
-    /** The colour kinds a role's foreground may take. */
+    /** The colour kinds a role's foreground and glyph effects may take. */
     private const array COLOUR_KINDS = ['rgb', 'ansi16', 'ansi256'];
+
+    /** Whether a role's glyphs carry an outline and a shadow, as the Engine's plain descriptor holds both or neither. */
+    public const string NO_EFFECTS = 'None';
+    public const string OUTLINE_AND_SHADOW = 'Outline and shadow';
+
+    /** The colours a role names, each a typed descriptor reshaped when its kind changes. */
+    private const array COLOUR_PATHS = ['foreground', 'glyphEffects.outline.color', 'glyphEffects.shadow.color'];
 
     public static function getSchema(): RecordSchema
     {
@@ -68,20 +75,60 @@ final class TextRoleFields
     /** @return list<RecordField> */
     public static function getFields(array $entry): array
     {
-        $kind = $entry['foreground']['kind'] ?? 'rgb';
-        $colour = $kind === 'rgb'
-            ? [new RecordField('foreground.r', 'Red (0..255)', InputControlType::INTEGER),
-                new RecordField('foreground.g', 'Green (0..255)', InputControlType::INTEGER),
-                new RecordField('foreground.b', 'Blue (0..255)', InputControlType::INTEGER)]
-            : [new RecordField('foreground.index', 'Palette Index', InputControlType::INTEGER)];
-
         return [
             new RecordField('id', 'Stable Id'),
             new RecordField('fontSize', 'Font Size', InputControlType::FLOAT),
-            new RecordField('foreground.kind', 'Colour Kind', options: self::COLOUR_KINDS),
-            ...$colour,
-            // Glyph effects are typed PHP values; they are kept as authored, never rewritten here.
-            ...(array_key_exists('glyphEffects', $entry) ? [new RecordField('glyphEffects', 'Glyph Effects', isReadOnly: true)] : []),
+            ...self::getColourFields($entry, 'foreground', 'Colour'),
+            ...self::getEffectFields($entry),
+        ];
+    }
+
+    /**
+     * A role's glyph effects, as the Engine's plain descriptor holds them: an outline and a shadow, each with its
+     * colour. Effects written as constructed PHP values are shown and kept as authored, never rewritten here.
+     *
+     * @return list<RecordField>
+     */
+    private static function getEffectFields(array $entry): array
+    {
+        $effects = $entry['glyphEffects'] ?? null;
+        if ($effects !== null && ! is_array($effects)) {
+            return [new RecordField('glyphEffects', 'Glyph Effects', isReadOnly: true)];
+        }
+        $choice = new RecordField('effects', 'Glyph Effects', options: [self::NO_EFFECTS, self::OUTLINE_AND_SHADOW],
+            displayDefault: $effects === null ? self::NO_EFFECTS : self::OUTLINE_AND_SHADOW);
+        if ($effects === null) {
+            return [$choice];
+        }
+
+        return [
+            $choice,
+            new RecordField('glyphEffects.outline.width', 'Outline Width (0..4 px)', InputControlType::FLOAT),
+            ...self::getColourFields($entry, 'glyphEffects.outline.color', 'Outline Colour'),
+            new RecordField('glyphEffects.shadow.offsetX', 'Shadow Offset X (-8..8 px)', InputControlType::FLOAT),
+            new RecordField('glyphEffects.shadow.offsetY', 'Shadow Offset Y (-8..8 px)', InputControlType::FLOAT),
+            new RecordField('glyphEffects.shadow.sigma', 'Shadow Blur (0..4)', InputControlType::FLOAT),
+            new RecordField('glyphEffects.shadow.opacity', 'Shadow Opacity (0..1)', InputControlType::FLOAT),
+            ...self::getColourFields($entry, 'glyphEffects.shadow.color', 'Shadow Colour'),
+        ];
+    }
+
+    /**
+     * A colour's kind and the components that kind takes.
+     *
+     * @return list<RecordField>
+     */
+    private static function getColourFields(array $entry, string $path, string $label): array
+    {
+        $kind = self::readPath($entry, $path)['kind'] ?? 'rgb';
+
+        return [
+            new RecordField($path . '.kind', $label . ' Kind', options: self::COLOUR_KINDS),
+            ...($kind === 'rgb'
+                ? [new RecordField($path . '.r', $label . ' Red (0..255)', InputControlType::INTEGER),
+                    new RecordField($path . '.g', $label . ' Green (0..255)', InputControlType::INTEGER),
+                    new RecordField($path . '.b', $label . ' Blue (0..255)', InputControlType::INTEGER)]
+                : [new RecordField($path . '.index', $label . ' Palette Index', InputControlType::INTEGER)]),
         ];
     }
 
@@ -95,12 +142,53 @@ final class TextRoleFields
                 throw new RecordRefusal($error->getMessage(), previous: $error);
             }
         }
-        if ($field === 'foreground.kind') {
-            $kind = $entry['foreground']['kind'] ?? 'rgb';
-            $entry['foreground'] = $kind === 'rgb'
-                ? ['kind' => 'rgb', 'r' => 255, 'g' => 255, 'b' => 255]
-                : ['kind' => $kind, 'index' => $entry['foreground']['index'] ?? 15];
+        if ($field === 'effects') {
+            // The descriptor holds an outline and a shadow together, so effects come and go whole.
+            $choice = $entry['effects'] ?? null;
+            unset($entry['effects']);
+            if ($choice === self::OUTLINE_AND_SHADOW && ! is_array($entry['glyphEffects'] ?? null)) {
+                $entry['glyphEffects'] = self::makeEffects();
+            } elseif ($choice === self::NO_EFFECTS) {
+                unset($entry['glyphEffects']);
+            }
         }
+        foreach (self::COLOUR_PATHS as $path) {
+            if ($field === $path . '.kind') {
+                $colour = self::readPath($entry, $path);
+                $kind = $colour['kind'] ?? 'rgb';
+                $light = $path === 'foreground';
+                $entry = self::writePath($entry, $path, $kind === 'rgb'
+                    ? ['kind' => 'rgb', 'r' => $light ? 255 : 0, 'g' => $light ? 255 : 0, 'b' => $light ? 255 : 0]
+                    : ['kind' => $kind, 'index' => $colour['index'] ?? ($light ? 15 : 0)]);
+            }
+        }
+
+        return $entry;
+    }
+
+    /** Glyph effects as they first appear: no outline, and a hard one-pixel shadow down and to the right, in black. */
+    private static function makeEffects(): array
+    {
+        return ['outline' => ['width' => 0, 'color' => ['kind' => 'rgb', 'r' => 0, 'g' => 0, 'b' => 0]],
+            'shadow' => ['offsetX' => 1, 'offsetY' => 1, 'sigma' => 0, 'opacity' => 1,
+                'color' => ['kind' => 'rgb', 'r' => 0, 'g' => 0, 'b' => 0]]];
+    }
+
+    /** @return array<string, mixed> The value at a dotted path, or none. */
+    private static function readPath(array $entry, string $path): array
+    {
+        $value = $entry;
+        foreach (explode('.', $path) as $key) {
+            $value = is_array($value) ? $value[$key] ?? null : null;
+        }
+
+        return is_array($value) ? $value : [];
+    }
+
+    private static function writePath(array $entry, string $path, array $value): array
+    {
+        [$key, $rest] = array_pad(explode('.', $path, 2), 2, null);
+        $entry[$key] = $rest === null ? $value : self::writePath(is_array($entry[$key] ?? null) ? $entry[$key] : [], $rest, $value);
 
         return $entry;
     }

@@ -96,6 +96,47 @@ it('creates the text catalogue with its schema and a role set in the project\'s 
         ->and(fn() => applySignDatabaseRow($session, TextRoleFields::CATEGORY, 0, 'id', 'Sign Font'))->toThrow(SessionRefusal::class);
 });
 
+it('gives a role an outline and shadow as plain data the Engine loads, and takes them away whole', function () {
+    [$root, $session] = createSignProject();
+    $session->createDatabaseRecord(TextRoleFields::CATEGORY);
+    applySignDatabaseRow($session, TextRoleFields::CATEGORY, 0, 'id', 'sign');
+    applySignDatabaseRow($session, TextRoleFields::CATEGORY, 0, 'effects', TextRoleFields::OUTLINE_AND_SHADOW);
+    applySignDatabaseRow($session, TextRoleFields::CATEGORY, 0, 'glyphEffects.shadow.opacity', '0.5');
+    applySignDatabaseRow($session, TextRoleFields::CATEGORY, 0, 'glyphEffects.shadow.color.kind', 'ansi16');
+    applySignDatabaseRow($session, TextRoleFields::CATEGORY, 0, 'glyphEffects.outline.width', '1');
+    $session->saveDatabase(TextRoleFields::CATEGORY);
+
+    $effects = ProjectTextCatalog::load($root . '/assets')->getRole('sign')->glyphEffects;
+    expect($effects->shadowOpacity)->toBe(0.5)
+        ->and($effects->shadowOffsetX)->toBe(1.0)
+        ->and($effects->outlineWidth)->toBe(1.0)
+        ->and($effects->shadowColor->toArray())->toBe(['kind' => 'ansi16', 'index' => 0])
+        ->and((string) file_get_contents($root . '/assets/Data/Presentation/text.php'))->not->toContain('new ');
+    applySignDatabaseRow($session, TextRoleFields::CATEGORY, 0, 'effects', TextRoleFields::NO_EFFECTS);
+    $session->saveDatabase(TextRoleFields::CATEGORY);
+
+    expect(ProjectTextCatalog::load($root . '/assets')->getRole('sign')->glyphEffects)->toBeNull()
+        ->and(findSignDatabaseRow($session, TextRoleFields::CATEGORY, 0, 'glyphEffects.shadow.opacity'))->toBeNull();
+});
+
+it('keeps a text file built from constructor calls read-only, refusing an edit before writing anything', function () {
+    [$root] = createSignProject();
+    $path = $root . '/assets/Data/Presentation/text.php';
+    file_put_contents($path, "<?php\n\nuse Ichiloto\\Engine\\Rendering\\Presentation\\Canvas\\CanvasGlyphEffects;\n"
+        . "use Ichiloto\\Engine\\Rendering\\Presentation\\PresentationColor;\n\n"
+        . "return ['schema' => 'ichiloto.text/1', 'roles' => ['sign' => ['fonts' => [['asset' => 'Fonts/Open.ttf']], 'fontSize' => 12,"
+        . " 'foreground' => ['kind' => 'rgb', 'r' => 1, 'g' => 2, 'b' => 3], 'glyphEffects' => new CanvasGlyphEffects(1,"
+        . " PresentationColor::rgb(0, 0, 0), 1, 1, 0, 1, PresentationColor::rgb(0, 0, 0))]]];\n");
+    $source = (string) file_get_contents($path);
+    $session = EditorSession::open($root);
+
+    // Colours are built through their factories, so a rewritten file calling their constructor could not load.
+    expect($session->readDatabaseRecord(TextRoleFields::CATEGORY, 0)['readOnly'])->toContain('PresentationColor')
+        ->and(fn() => applySignDatabaseRow($session, TextRoleFields::CATEGORY, 0, 'fontSize', '14'))->toThrow(SessionRefusal::class)
+        ->and((string) file_get_contents($path))->toBe($source)
+        ->and(ProjectTextCatalog::load($root . '/assets')->getRole('sign')->glyphEffects->shadowOffsetX)->toBe(1.0);
+});
+
 it('places a sign with the text it shows under a translation key of its own id', function () {
     [$root, $session] = createSignProject();
     $session->createWorldObject('test-map', $session->readMap('test-map')['revision'], 'inn-sign', 1, 1, 'wood-sign', 'Inn');

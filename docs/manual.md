@@ -1148,7 +1148,11 @@ padding and widths in logical pixels. Switching what a resource shows keeps
 the image chosen. Text Roles name the project's own font files, first choice
 first, with a size and a colour: the Engine embeds no font, so a project uses
 whichever fonts it has the right to. A new role starts on the project's first
-font, and the file gains its schema id when it is first written.
+font, and the file gains its schema id when it is first written. A role's
+Glyph Effects give its letters an outline and a shadow together, each with its
+own colour: a one-pixel shadow down and to the right lifts letters off a board,
+and a light one cut the same way reads as engraving. Choosing None removes them.
+Effects written in the file as constructor calls are shown but never rewritten.
 
 A sign is placed as a world object naming a sign-board resource, with the
 text its board shows. Its label is translatable from the start: the text is
@@ -1162,7 +1166,8 @@ laid out by the window in its text role; until the label is laid out, the
 sign's cells show their glyphs.
 
 Why a category can still turn out read-only: a file the editor cannot
-evaluate, a value it could not write back out, or a comment inside returned
+evaluate, a value it could not write back out (such as an object only its own
+factory may build, which a rewritten file could not call), or a comment inside returned
 data that holds objects or is not an array literal are each a reason, and the status line names it. You can
 still browse everything: an enemy shows its level, every stat, its sprite,
 its battle rewards, and its element affinities.

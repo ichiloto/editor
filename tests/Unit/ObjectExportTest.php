@@ -35,6 +35,22 @@ final class UnrebuildableRecord
     }
 }
 
+/**
+ * A value built only through its own factory, as the Engine's colours are: its
+ * properties match its constructor, but no file may call that constructor.
+ */
+final class FactoryOnlyRecord
+{
+    private function __construct(public readonly string $name)
+    {
+    }
+
+    public static function named(string $name): self
+    {
+        return new self($name);
+    }
+}
+
 it('exports an object as the constructor call that rebuilds it', function () {
     $code = PhpValueExporter::export(new ExportableRecord('S-Potion', 50, ['heal']));
 
@@ -69,6 +85,13 @@ it('reports an object it cannot rebuild, and names it', function () {
     // that loses what the author wrote.
     expect($reason)->toContain('UnrebuildableRecord')
         ->and($reason)->toContain('cannot be rebuilt');
+});
+
+it('refuses an object only its own factory can build, rather than writing a call that cannot load', function () {
+    $reason = PhpValueExporter::describeUnexportable(['role' => ['colour' => FactoryOnlyRecord::named('black')]]);
+
+    expect($reason)->toContain('FactoryOnlyRecord')
+        ->and(PhpValueExporter::isExportable(FactoryOnlyRecord::named('black')))->toBeFalse();
 });
 
 it('accepts an object every argument of which can be read back', function () {
