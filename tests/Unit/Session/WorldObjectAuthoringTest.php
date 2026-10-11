@@ -115,16 +115,16 @@ it('uses Engine coverage and current-frame projection, retaining glyphs for miss
     $layer = $session->readMap('test-map')['layers'][0]['name'];
     applyWorldObjectRow($session, 'covers.layer', $layer);
     applyWorldObjectRow($session, 'sprites2d.asset', 'Graphics/Props/Replaceable.png');
-    $preview = $session->readWorldObjectPreview('test-map');
-    $sprite = array_find($preview['update']['operations'], static fn($op): bool => ($op['kind'] ?? '') === 'sprite');
+    $preview = drawAuthoringCanvas($session, 'test-map');
+    $sprite = array_find($preview['operations'], static fn($op): bool => ($op['kind'] ?? '') === 'sprite');
     expect($sprite['value']['id'])->toBe('world-object:test-map:fixture-prop')
         ->and($sprite['value']['pivot'])->toBe(['x' => .5, 'y' => 1.0]);
     unlink($root . '/assets/Graphics/Props/Replaceable.png');
-    $missing = $session->readWorldObjectPreview('test-map');
+    $missing = drawAuthoringCanvas($session, 'test-map');
     expect($missing['diagnostics'])->toHaveCount(1)
-        ->and(array_filter($missing['update']['operations'], static fn($op): bool => ($op['kind'] ?? '') === 'sprite'))->toBe([]);
+        ->and(array_filter($missing['operations'], static fn($op): bool => ($op['kind'] ?? '') === 'sprite'))->toBe([]);
     writeTilesetTestPng($root . '/assets/Graphics/Props/Replaceable.png', 24, 32);
-    expect($session->readWorldObjectPreview('test-map')['diagnostics'])->toBe([]);
+    expect(drawAuthoringCanvas($session, 'test-map')['diagnostics'])->toBe([]);
 });
 
 it('exports canvas owner revision and layer identities with transient variants and current asset paths', function () {
@@ -140,10 +140,10 @@ it('exports canvas owner revision and layer identities with transient variants a
     applyWorldObjectRow($session, 'variant0Conditions', 'switch:existing-condition');
     $before = $session->readMap('test-map');
     $source = file_get_contents($file);
-    $base = $session->readWorldObjectPreview('test-map');
-    $absent = $session->readWorldObjectPreview('test-map', ['fixture-prop' => 'absent'], .25);
+    $base = drawAuthoringCanvas($session, 'test-map');
+    $absent = drawAuthoringCanvas($session, 'test-map', ['fixture-prop' => 'absent'], .25);
     $hasFloor = static function (array $preview): bool {
-        foreach ($preview['update']['operations'] as $op) {
+        foreach ($preview['operations'] as $op) {
             if (($op['op'] ?? '') !== 'worldTiles' || $op['layerId'] !== 'tiles:floor') { continue; }
             foreach ($op['rows'] as $row) {
                 if ($row['row'] === 1 && array_any($row['cells'], static fn(array $cell): bool => $cell['column'] === 1)) { return true; }
@@ -151,7 +151,7 @@ it('exports canvas owner revision and layer identities with transient variants a
         }
         return false;
     };
-    $sprite = array_find($base['update']['operations'], static fn($op): bool => ($op['kind'] ?? '') === 'sprite');
+    $sprite = array_find($base['operations'], static fn($op): bool => ($op['kind'] ?? '') === 'sprite');
     expect($base['revision'])->toBe($before['revision'])
         ->and($base['layerIds'])->toBe($session->readWorld('test-map')['layerIds'])
         ->and($base['assetPaths'])->toContain('Graphics/Props/Replaceable.png')
@@ -160,17 +160,17 @@ it('exports canvas owner revision and layer identities with transient variants a
         ->and($sprite['value']['pivot'])->toBe(['x' => .5, 'y' => 1.0])
         ->and($hasFloor($base))->toBeFalse()
         ->and($hasFloor($absent))->toBeFalse()
-        ->and(array_filter($absent['update']['operations'], static fn($op): bool => ($op['kind'] ?? '') === 'sprite'))->toBe([])
+        ->and(array_filter($absent['operations'], static fn($op): bool => ($op['kind'] ?? '') === 'sprite'))->toBe([])
         ->and($session->readMap('test-map'))->toBe($before)
         ->and(file_get_contents($file))->toBe($source);
     unlink($root . '/assets/Graphics/Props/Replaceable.png');
-    $missing = $session->readWorldObjectPreview('test-map');
+    $missing = drawAuthoringCanvas($session, 'test-map');
     expect($missing['assetPaths'])->toContain('Graphics/Props/Replaceable.png')
         ->and($missing['diagnostics'])->toHaveCount(1)->and($hasFloor($missing))->toBeTrue();
     writeTilesetTestPng($root . '/assets/Graphics/Props/Replaceable.png', 24, 32);
     $session->saveMap('test-map');
     $reopened = EditorSession::open($root);
-    expect($reopened->readWorldObjectPreview('test-map')['diagnostics'])->toBe([])
+    expect(drawAuthoringCanvas($reopened, 'test-map')['diagnostics'])->toBe([])
         ->and($reopened->readMap('test-map')['worldObjects'][0]['sprites2d']['asset'])->toBe('Graphics/Props/Replaceable.png')
         ->and($reopened->readMap('test-map')['worldObjects'][0]['anchor'])->toBe($before['worldObjects'][0]['anchor']);
 });
@@ -179,13 +179,13 @@ it('keeps unavailable sheet dependencies visible to the transient canvas asset w
     [$root, , $session] = createWorldObjectProject();
     $path = 'Graphics/Tilesets/Home_A2.png';
     unlink($root . '/assets/' . $path);
-    $missing = $session->readWorldObjectPreview('test-map');
+    $missing = drawAuthoringCanvas($session, 'test-map');
     expect($missing['assetPaths'])->toContain($path)
-        ->and(array_filter($missing['update']['operations'], static fn(array $op): bool => ($op['layerId'] ?? '') === 'tiles:floor'))->toBe([]);
+        ->and(array_filter($missing['operations'], static fn(array $op): bool => ($op['layerId'] ?? '') === 'tiles:floor'))->toBe([]);
     writeTilesetTestPng($root . '/assets/' . $path, 32, 24);
-    $restored = $session->readWorldObjectPreview('test-map');
+    $restored = drawAuthoringCanvas($session, 'test-map');
     expect($restored['assetPaths'])->toContain($path)
-        ->and(array_filter($restored['update']['operations'], static fn(array $op): bool => ($op['layerId'] ?? '') === 'tiles:floor'))->not->toBe([]);
+        ->and(array_filter($restored['operations'], static fn(array $op): bool => ($op['layerId'] ?? '') === 'tiles:floor'))->not->toBe([]);
 });
 
 it('routes real RPC ownership and cinematic object selectors without a global object database', function () {
@@ -196,8 +196,11 @@ it('routes real RPC ownership and cinematic object selectors without a global ob
     expect(array_column($hello['result']['project']['databases'], 'key'))->not->toContain('world_objects');
     $view = $request('worldObjects.read', ['map' => 'test-map', 'id' => 'fixture-prop'])['result'];
     expect($request('worldObjects.place', ['map' => 'test-map', 'id' => 'fixture-prop', 'revision' => $view['revision'], 'x' => 2, 'y' => 1])['result']['changed'])->toBeTrue();
-    expect($request('worldObjects.preview', ['map' => 'test-map'])['result']['update']['reset'])->toBeTrue()
-        ->and($request('worldObjects.preview', ['map' => 'test-map', 'seconds' => 'wrong'])['error']['kind'])->toBe('request');
+    $opened = $request('canvas.exchange', ['map' => 'test-map', 'events' => []])['result'];
+    $drawn = $request('canvas.exchange', ['map' => 'test-map', 'events' => [canvasWindowReady()], 'sessionId' => $opened['sessionId']])['result'];
+    expect(findCanvasMessages($drawn, 'frame')[0]['payload']['reset'])->toBeTrue()
+        ->and($request('canvas.exchange', ['map' => 'test-map', 'events' => [], 'seconds' => 'wrong'])['error']['kind'])->toBe('request')
+        ->and($request('canvas.close', ['map' => 'test-map'])['result'])->toBe(['closed' => true]);
     expect(array_column($session->listReferences('test-map', 'map_world_objects'), 'value'))->toBe(['fixture-prop']);
     $camera = CutsceneSchemas::cinematicCommandVariants(true)['camera'](['operation' => 'focus', 'target' => ['kind' => 'world_object', 'id' => 'fixture-prop']]);
     expect(array_find($camera, static fn($field): bool => $field->key === 'target.id')->reference)->toBe('map_world_objects');
@@ -258,8 +261,8 @@ it('reorders explicit variants durably with undo and refuses invalid preview sel
     $session->redo();
     $session->saveMap('test-map');
     expect(EditorSession::open($root)->readWorldObject('test-map', 'fixture-prop')['worldObject']['variants'])->toBe(['first', 'second'])
-        ->and(fn() => $session->readWorldObjectPreview('test-map', ['fixture-prop'=>true]))->toThrow(SessionRefusal::class, 'known variant ids')
-        ->and(fn() => $session->readWorldObjectPreview('test-map', ['fixture-prop'=>'unknown']))->toThrow(SessionRefusal::class, 'known world-object variant');
+        ->and(fn() => drawAuthoringCanvas($session, 'test-map', ['fixture-prop'=>true]))->toThrow(SessionRefusal::class, 'known variant ids')
+        ->and(fn() => drawAuthoringCanvas($session, 'test-map', ['fixture-prop'=>'unknown']))->toThrow(SessionRefusal::class, 'known world-object variant');
 });
 
 it('preserves known layer references through renames and refuses dangling removal atomically', function () {

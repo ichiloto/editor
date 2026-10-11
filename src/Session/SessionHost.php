@@ -150,7 +150,7 @@ final class SessionHost
             'worldObjects.read' => $session->readWorldObject(self::requireString($params, 'map'), self::requireString($params, 'id')),
             'worldObjects.create' => $session->createWorldObject(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
                 self::requireString($params, 'id'), self::requireInt($params, 'x'), self::requireInt($params, 'y'),
-                self::optionalString($params, 'resource'), self::optionalString($params, 'text')),
+                self::readOptionalString($params, 'resource'), self::readOptionalString($params, 'text')),
             'worldObjects.delete' => $session->deleteWorldObject(self::requireString($params, 'map'), self::requireInt($params, 'revision'), self::requireString($params, 'id')),
             'worldObjects.apply' => $session->applyWorldObject(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
                 self::requireString($params, 'id'), self::requireArray($params, 'key'), self::requireString($params, 'value')),
@@ -161,8 +161,10 @@ final class SessionHost
                 is_bool($params['coverage'] ?? false) ? ($params['coverage'] ?? false) : throw new InvalidRequest('"coverage" must be a boolean.')),
             'worldObjects.moveVariant' => $session->moveWorldObjectVariant(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
                 self::requireString($params, 'id'), self::requireString($params, 'variant'), self::requireInt($params, 'offset')),
-            'worldObjects.preview' => $session->readWorldObjectPreview(self::requireString($params, 'map'),
-                isset($params['variants']) ? self::requireArray($params, 'variants') : [], isset($params['seconds']) ? self::requireNumber($params, 'seconds') : 0),
+            'canvas.exchange' => $session->exchangeAuthoringCanvas(self::requireString($params, 'map'), self::requireLines($params, 'events'),
+                isset($params['variants']) ? self::requireArray($params, 'variants') : [], isset($params['seconds']) ? self::requireNumber($params, 'seconds') : 0,
+                self::readOptionalString($params, 'sessionId')),
+            'canvas.close' => $session->closeAuthoringCanvas(self::requireString($params, 'map')),
             'map.world' => $session->readWorld(self::requireString($params, 'map'),
                 is_bool($params['tileShadows'] ?? false) ? ($params['tileShadows'] ?? false) : throw new InvalidRequest('"tileShadows" must be a boolean.')),
             'tiles.palette' => $session->readTilePalette(self::requireString($params, 'map')),
@@ -644,18 +646,6 @@ final class SessionHost
         }
 
         return $session->startPlaytest(self::requireString($params, 'map'), self::requireInt($params, 'x'), self::requireInt($params, 'y'), $start, $renderer);
-    }
-
-    /**
-     * A string parameter that may be absent or null.
-     *
-     * @param array<string, mixed> $params
-     */
-    private static function optionalString(array $params, string $key): ?string
-    {
-        $value = $params[$key] ?? null;
-
-        return $value === null || is_string($value) ? $value : throw new InvalidRequest(sprintf('"%s" must be a string when given.', $key));
     }
 
     /** @param array<string, mixed> $params */

@@ -40,8 +40,8 @@ function findPlacementRow(EditorSession $session, string $field): ?array
 
 it('previews a placed resource with the resource\'s own art, and watches that art', function () {
     [, , $session] = createResourcePlacementProject();
-    $preview = $session->readWorldObjectPreview('test-map');
-    $sprite = array_find($preview['update']['operations'], static fn($op): bool => ($op['kind'] ?? '') === 'sprite');
+    $preview = drawAuthoringCanvas($session, 'test-map');
+    $sprite = array_find($preview['operations'], static fn($op): bool => ($op['kind'] ?? '') === 'sprite');
 
     expect($preview['diagnostics'])->toBe([])
         ->and($sprite['value']['id'])->toBe('world-object:test-map:grove-001')

@@ -23,6 +23,7 @@ use Ichiloto\Engine\Field\MapGridSource;
 use Ichiloto\Engine\Field\MapLayer;
 use Ichiloto\Engine\Field\MapLayerSource;
 use Ichiloto\Engine\Field\MapLayerSet;
+use Ichiloto\Engine\Rendering\Presentation\PresentationLayerPolicy;
 use Ichiloto\Engine\Field\MapCollisionResolver;
 use Ichiloto\Engine\Field\MapPhysicalOccupancy;
 use Ichiloto\Engine\Events\Enumerations\CollisionType;
@@ -567,6 +568,23 @@ final class ProjectMap
     public function getLayerSet(): MapLayerSet
     {
         return $this->layers->getLayerSet();
+    }
+
+    /**
+     * Each glyph layer's presentation layer id, keyed by the editor's layer id, so an interface can name the layers of
+     * the composed world as it names the map's own.
+     *
+     * @return array<string, string>
+     */
+    public function getPresentationLayerIds(): array
+    {
+        $glyphLayers = array_values(array_filter($this->getLayers(), static fn(array $layer): bool => $layer['id'] !== MapLayers::EVENT));
+        $ids = [];
+        foreach ($this->getLayerSet()->layers as $index => $layer) {
+            $ids[(string) $glyphLayers[$index]['id']] = PresentationLayerPolicy::getMapLayerId($layer);
+        }
+
+        return $ids;
     }
 
     public function getStoredGridPaths(): array

@@ -55,7 +55,6 @@ use Ichiloto\Editor\Events\EventTypeCatalog;
 use Ichiloto\Editor\Events\EventTypeDefinition;
 use Ichiloto\Editor\Field\NpcAuthoring;
 use Ichiloto\Editor\Field\WorldObjectAuthoring;
-use Ichiloto\Editor\Field\WorldObjectPreview;
 use Ichiloto\Editor\Field\FieldSpriteFields;
 use Ichiloto\Editor\Field\CharacterSheetPreview;
 use Ichiloto\Editor\Field\NpcChange;
@@ -151,6 +150,9 @@ final class EditorSession
     public const string PLAYTEST_RENDERER = 'gpui';
 
     private ProjectWorkspace $workspace;
+
+    /** @var array<string, \Ichiloto\Editor\Field\AuthoringCanvasHost> Each open map's editing canvas, by map id. */
+    private array $authoringCanvases = [];
 
     /** The playtest running in the background, or the last one, to report how it ended. */
     private ?PlaytestRun $playtest = null;
@@ -624,7 +626,7 @@ final class EditorSession
         } catch (InvalidArgumentException|MapSourceRefusal $error) {
             throw new SessionRefusal(sprintf('%s cannot be drawn: %s', $mapId, $error->getMessage()), previous: $error);
         }
-        $layerIds = WorldObjectPreview::getLayerIds($map);
+        $layerIds = $map->getPresentationLayerIds();
 
         return [
             'map' => $map->mapId,
@@ -3939,13 +3941,52 @@ final class EditorSession
         return $this->changeWorldObject($mapId, $revision, static fn($authoring): ?Command => $authoring->moveVariant($id, $variantId, $offset));
     }
 
-    public function readWorldObjectPreview(string $mapId, array $variants = [], float $seconds = 0): array
+    /**
+     * One exchange with a map's editing canvas: the window's answers in, what it should apply out. The canvas draws
+     * the map as it stands in memory, unsaved edits included, through the Engine's frame composer, at a variant
+     * selection and preview time. One canvas lives per open map at its size; a resize starts a new one, whose new
+     * session id tells the window to start again, and answers meant for an earlier canvas are not applied to it.
+     *
+     * @param list<string> $events The window's answers, as renderer event lines.
+     * @param array<string, string> $variants
+     * @return array<string, mixed>
+     * @throws SessionRefusal When the map is unknown or cannot be composed, or the window reports an error.
+     */
+    public function exchangeAuthoringCanvas(string $mapId, array $events, array $variants = [], float $seconds = 0, ?string $sessionId = null): array
     {
-        try {
-            $map = $this->requireMap($mapId);
-            return [...WorldObjectPreview::describeWorld($map, $variants, $seconds), 'revision' => $this->getMapRevision($map)];
+        $map = $this->requireMap($mapId);
+        $host = $this->authoringCanvases[$mapId] ?? null;
+        if ($host === null || $host->grid != \Ichiloto\Editor\Field\AuthoringCanvasHost::getGrid($map)) {
+            $host?->dispose();
+            $host = $this->authoringCanvases[$mapId] = new \Ichiloto\Editor\Field\AuthoringCanvasHost($map, uniqid('canvas-', true));
         }
-        catch (InvalidArgumentException|MapSourceRefusal $error) { throw new SessionRefusal($error->getMessage(), previous: $error); }
+        try {
+            $messages = $host->exchange($sessionId === $host->sessionId ? $events : [], $variants, $seconds);
+        } catch (InvalidArgumentException|MapSourceRefusal|\Ichiloto\Engine\Rendering\Transport\Exceptions\RendererTransportException $error) {
+            throw new SessionRefusal($error->getMessage(), previous: $error);
+        }
+        $source = $host->getSource();
+
+        return ['sessionId' => $host->sessionId, 'map' => $map->mapId, 'revision' => $this->getMapRevision($map),
+            'assetRoot' => $map->getAssetRoot(), 'layerIds' => $map->getPresentationLayerIds(),
+            'grid' => ['columns' => $host->grid->columns, 'rows' => $host->grid->rows,
+                'cellWidth' => $host->grid->cellWidth, 'cellHeight' => $host->grid->cellHeight],
+            'messages' => $messages, 'assetPaths' => $source?->assetPaths ?? [], 'diagnostics' => $source?->diagnostics ?? [],
+            'graphicsIssue' => $source?->graphicsIssue];
+    }
+
+    /**
+     * Closes a map's editing canvas, releasing its signs' prepared labels and its renderer client.
+     *
+     * @return array{closed: bool}
+     */
+    public function closeAuthoringCanvas(string $mapId): array
+    {
+        $host = $this->authoringCanvases[$mapId] ?? null;
+        $host?->dispose();
+        unset($this->authoringCanvases[$mapId]);
+
+        return ['closed' => $host !== null];
     }
 
     private function createWorldObjectAuthoring(ProjectMap $map): WorldObjectAuthoring
@@ -4693,6 +4734,9 @@ final class EditorSession
     /** Ends what the session started that would outlive it: a running playtest or battle test. */
     public function close(): void
     {
+        foreach (array_keys($this->authoringCanvases) as $mapId) {
+            $this->closeAuthoringCanvas((string) $mapId);
+        }
         $this->playtest?->stop();
         $this->battleTestRun?->stop();
         $this->audition?->stop();

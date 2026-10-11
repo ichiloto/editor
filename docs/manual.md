@@ -1156,7 +1156,10 @@ the default, under a translation key of the sign's own id
 (`signs.<id>`), which translations supply. A sign without text, or text on
 what is not a sign, is refused before anything is written; changing a
 placement's resource to a sign gives it a label, and changing it away removes
-it. Neither the label nor the board changes the map's collision.
+it. Neither the label nor the board changes the map's collision. The GUI
+editor's Game view draws a placed sign's board and label as the game does,
+laid out by the window in its text role; until the label is laid out, the
+sign's cells show their glyphs.
 
 Why a category can still turn out read-only: a file the editor cannot
 evaluate, a value it could not write back out, or a comment inside returned
