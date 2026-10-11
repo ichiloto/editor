@@ -504,6 +504,12 @@ which glyphs:
   piece draws, such as a house's walls over blank cells, are not judged;
 - cells showing the tileset's missing-art placeholder (its `missingArt`
   tile), which mark art nobody could yet infer.
+- cells whose ground tiles (the A1 to A5 sheets) can show the background
+  through see-through edges in some animation frame, because no ground is
+  painted beneath them: the game shows that as a dark seam. Paint the map's
+  base or floor beneath on a lower tile layer. Upper-sheet props are
+  see-through by design and are not judged. This reads the sheets through
+  PHP's GD extension; without it, validation says it could not check.
 
 These are art still to do, not faults: the game plays the same either way,
 so saving a map does not warn about them; `ichiloto validate` reports them.

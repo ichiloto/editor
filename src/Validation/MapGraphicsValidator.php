@@ -14,6 +14,8 @@ use Ichiloto\Engine\Field\MapGraphics;
 use Ichiloto\Engine\Field\MapLayerSet;
 use Ichiloto\Engine\Field\MapTileLayer;
 use Ichiloto\Engine\Rendering\Sprites\PngAssetPreflight;
+use Ichiloto\Engine\Rendering\Tilesets\AutotileShape;
+use Ichiloto\Engine\Rendering\Tilesets\TileCoverage;
 use Ichiloto\Engine\Rendering\Tilesets\TileId;
 use Ichiloto\Engine\Rendering\Tilesets\Tileset;
 use Ichiloto\Engine\Rendering\Tilesets\TilesetSheet;
@@ -39,6 +41,8 @@ final class MapGraphicsValidator
     private const string GLYPH_FALLBACK = 'The game shows this map\'s terminal glyphs instead of its graphics.';
     /** How many cells a coverage warning names before summing up the rest. */
     private const int CELLS_NAMED = 3;
+    /** The sheets whose tiles are ground, judged for see-through edges. */
+    private const array GROUND_SHEETS = [TilesetSheet::A1, TilesetSheet::A2, TilesetSheet::A3, TilesetSheet::A4, TilesetSheet::A5];
 
     private function __construct()
     {
@@ -102,7 +106,8 @@ final class MapGraphicsValidator
             $shown[$cell['y']][$cell['x']] = $cell;
         }
 
-        $issues = [...self::checkStalePieceTiles($map, $tileset, $layers), ...self::checkMissingArtTiles($map, $tileset, $layers)];
+        $issues = [...self::checkStalePieceTiles($map, $tileset, $layers), ...self::checkMissingArtTiles($map, $tileset, $layers),
+            ...self::checkSeeThroughGround($map, $tileset, $layers)];
         foreach ($map->getNpcs()->all() as $npc) {
             $name = self::formatNpcName($npc);
             if (! array_key_exists('sprites2d', $npc->toArray())) {
@@ -324,6 +329,67 @@ final class MapGraphicsValidator
         }
 
         return $issues;
+    }
+
+    /**
+     * Warns for cells where ground tiles (the A1 to A5 sheets) leave the background showing: a tile with see-through
+     * edges that blend into the ground beneath it, with no ground authored beneath it, shows the background through
+     * those edges as a dark seam in the game. Every animation frame counts, by the Engine's own tile coverage. Upper
+     * sheet props and world objects are see-through by design and are not judged.
+     *
+     * @param list<MapTileLayer> $layers The readable tile layers.
+     * @return list<Issue>
+     */
+    private static function checkSeeThroughGround(ProjectMap $map, Tileset $tileset, array $layers): array
+    {
+        // Tiles from a sheet the Engine cannot use draw nothing, so their glyphs show; checkSheets() says why.
+        $usable = array_keys($tileset->getUsableSheets($map->getAssetRoot())['sheets'] ?? []);
+        if ($usable === []) {
+            return [];
+        }
+        usort($layers, static fn(MapTileLayer $a, MapTileLayer $b): int => $a->order <=> $b->order);
+        $grids = array_map(static fn(MapTileLayer $layer): array => AutotileShape::resolveLayer($layer->tiles), $layers);
+        // One reader per pass, so replaced artwork is read as it is now.
+        $coverage = new TileCoverage($tileset, $map->getAssetRoot());
+        $verdicts = [];
+        $cells = [];
+        foreach ($grids[0] ?? [] as $y => $row) {
+            foreach ($row as $x => $_) {
+                $stack = [];
+                foreach ($grids as $grid) {
+                    $tile = (int) ($grid[$y][$x] ?? TileId::EMPTY);
+                    $sheet = $tile === TileId::EMPTY ? null : TileId::getSheet($tile);
+                    if (in_array($sheet, self::GROUND_SHEETS, true) && in_array($sheet->value, $usable, true)) {
+                        $stack[] = $tile;
+                    }
+                }
+                if ($stack === []) {
+                    continue;
+                }
+                $signature = implode(',', $stack);
+                if (! isset($verdicts[$signature])) {
+                    $verdicts[$signature] = $coverage->findUncovered($stack);
+                    if ($verdicts[$signature]['diagnostic'] !== null) {
+                        // The artwork or GD cannot be read: say so once, never guess that the cells are covered.
+                        return [Issue::warning($map->mapId, 'Its ground could not be checked for see-through edges: '
+                            . $verdicts[$signature]['diagnostic'], 'Install PHP GD, or repair the sheet the tileset names.')];
+                    }
+                }
+                if ($verdicts[$signature]['uncoveredPixels'] > 0) {
+                    $cells[] = "({$x}, {$y})";
+                }
+            }
+        }
+        if ($cells === []) {
+            return [];
+        }
+        $named = array_slice($cells, 0, self::CELLS_NAMED);
+        $rest = count($cells) - count($named);
+
+        return [Issue::warning($map->mapId,
+            sprintf('%d %s the background through see-through ground tiles in some animation frame, a dark seam in the game: %s%s.',
+                count($cells), count($cells) === 1 ? 'cell can show' : 'cells can show', implode(', ', $named), $rest > 0 ? " and {$rest} more" : ''),
+            'Paint ground beneath them on a lower tile layer, such as the map\'s base or the floor they stand on; the game draws nothing under a tile.')];
     }
 
     private static function formatNpcName(ProjectNpc $npc): string
