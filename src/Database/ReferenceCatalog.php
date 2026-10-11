@@ -13,6 +13,7 @@ use Ichiloto\Editor\Cutscenes\CutsceneAsset;
 use Ichiloto\Editor\Cutscenes\CutsceneType;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Engine\Animations\Field\FieldPresentationCatalog;
+use Ichiloto\Engine\Rendering\Presentation\Text\ProjectTextCatalog;
 use Ichiloto\Engine\Animations\Timelines\EffectTimelineLibrary;
 use Ichiloto\Engine\Battle\CounterAttackRule;
 use Ichiloto\Engine\Battle\Presentation\BattlePresentationCatalog;
@@ -101,6 +102,8 @@ final class ReferenceCatalog
         'effects',
         'stage_timelines',
         'field_resources',
+        'text_roles',
+        'font_assets',
         'map_regions',
         'animation_roles',
         'battle_arenas',
@@ -294,6 +297,8 @@ final class ReferenceCatalog
             'effects' => new EffectTimelineLibrary($this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets')->findTimelineIds(),
             'stage_timelines' => $this->stageTimelineIds(),
             'field_resources' => array_map(strval(...), array_keys($this->loadFieldResourceNames())),
+            'text_roles' => $this->loadTextRoleIds(),
+            'font_assets' => self::getFontAssets($this->workspace->projectRoot),
             default => $this->recordValues($category),
         };
     }
@@ -322,6 +327,49 @@ final class ReferenceCatalog
         }
 
         return array_map(static fn($resource): string => $resource->name, $catalog->resources);
+    }
+
+    /**
+     * The project's text roles (assets/Data/Presentation/text.php), by stable id. A catalogue that cannot be read
+     * offers none; project validation reports why.
+     *
+     * @return list<string>
+     */
+    private function loadTextRoleIds(): array
+    {
+        try {
+            $catalog = ProjectTextCatalog::load($this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets');
+        } catch (Throwable) {
+            return [];
+        }
+
+        return $catalog === null ? [] : array_map(strval(...), array_keys($catalog->toArray()['roles']));
+    }
+
+    /**
+     * The project's font files under assets, as asset-root-relative paths: what a text role's fonts are chosen
+     * from. The project owns its fonts; nothing is offered from the machine.
+     *
+     * @return list<string>
+     */
+    public static function getFontAssets(string $projectRoot): array
+    {
+        $root = realpath(rtrim($projectRoot, '/') . '/assets');
+        if ($root === false) {
+            return [];
+        }
+        $paths = [];
+        $files = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($root, \FilesystemIterator::SKIP_DOTS));
+        foreach ($files as $file) {
+            $resolved = $file->getRealPath();
+            if ($file->isFile() && in_array(strtolower($file->getExtension()), ['ttf', 'otf', 'ttc', 'otc'], true)
+                && $resolved !== false && str_starts_with($resolved, $root . DIRECTORY_SEPARATOR)) {
+                $paths[] = str_replace(DIRECTORY_SEPARATOR, '/', substr($file->getPathname(), strlen($root) + 1));
+            }
+        }
+        sort($paths);
+
+        return $paths;
     }
 
     private function stageTimelineIds(): array

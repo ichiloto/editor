@@ -112,12 +112,16 @@ final readonly class WorldObjectAuthoring
         $cells = new RecordSubList(key: 'covers.cells', prefix: 'cell', singular: 'covered cell',
             fields: [new RecordField('x', 'X', InputControlType::INTEGER), new RecordField('y', 'Y', InputControlType::INTEGER)],
             blank: ['x' => 0, 'y' => 0], heading: 'Covered Cells');
+        $signs = self::readSignResources($this->map);
         $schema = new RecordSchema(key: 'world_objects', entryNoun: 'world object', storage: RecordStorage::MAP_OWNED,
             relativePath: '', fields: [], labelKey: 'id',
-            fieldsFor: function (array $entry): array {
-                // A placement of a named resource takes its art and pivot from the resource; it chooses which one.
+            fieldsFor: function (array $entry) use ($signs): array {
+                // A placement of a named resource takes its art and pivot from the resource; it chooses which one, and a
+                // sign placement the text its board shows: a translatable message, and the text where none is given.
                 $presentation = array_key_exists('resource', $entry)
-                    ? [new RecordField('resource', 'Field Resource', reference: 'field_resources')]
+                    ? [new RecordField('resource', 'Field Resource', reference: 'field_resources'),
+                        ...(isset($signs[$entry['resource']]) ? [new RecordField('label.default', 'Sign Text'),
+                            new RecordField('label.message', 'Sign Text Translation Key')] : [])]
                     : [new RecordField('pivot.x', 'Image Pivot X (0..1)', InputControlType::FLOAT),
                         new RecordField('pivot.y', 'Image Pivot Y (0..1)', InputControlType::FLOAT),
                         ...FieldSpriteFields::getFields($entry, true)];
@@ -137,7 +141,13 @@ final readonly class WorldObjectAuthoring
             subLists: [$variants, $cells],
             subListsFor: static fn(array $entry): array => [...(array_key_exists('resource', $entry) ? [] : ['variants']),
                 ...(isset($entry['covers']) ? ['covers.cells'] : [])],
-            prepareEdit: static function (array $entry, string $field): array {
+            prepareEdit: static function (array $entry, string $field) use ($signs): array {
+                if ($field === 'resource') {
+                    // A sign placement needs its label and only a sign accepts one; the board's name starts it.
+                    $sign = $signs[$entry['resource'] ?? ''] ?? null;
+                    if ($sign === null) { unset($entry['label']); }
+                    else { $entry['label'] ??= self::makeLabel((string) $entry['id'], $sign); }
+                }
                 if ($field === 'covers.layer') {
                     if (!isset($entry['covers']['layer'])) { unset($entry['covers']); }
                     else {
@@ -158,11 +168,59 @@ final readonly class WorldObjectAuthoring
         return $records;
     }
 
-    public function createObject(string $id, int $x, int $y): ?Command
+    /**
+     * Creates an object at a cell: an inline one with no art yet, or a placement of a named resource. A sign
+     * placement is given the text its board shows, under a translation key of its own id.
+     */
+    public function createObject(string $id, int $x, int $y, ?string $resource = null, ?string $text = null): ?Command
     {
         $entries = self::readEntries($this->map);
-        $entries[] = ['id' => $id, 'anchor' => ['x' => $x, 'y' => $y], 'pivot' => ['x' => .5, 'y' => 1.0], 'sprites2d' => null];
-        return $this->writeEntries($entries, 'Create world object');
+        if ($resource === null) {
+            if ($text !== null) { throw new InvalidArgumentException('Only a sign placement shows text.'); }
+            $entries[] = ['id' => $id, 'anchor' => ['x' => $x, 'y' => $y], 'pivot' => ['x' => .5, 'y' => 1.0], 'sprites2d' => null];
+            return $this->writeEntries($entries, 'Create world object');
+        }
+        $sign = self::readSignResources($this->map)[$resource] ?? null;
+        $entry = ['id' => $id, 'resource' => $resource, 'anchor' => ['x' => $x, 'y' => $y]];
+        if ($sign !== null) {
+            if ($text === null || trim($text) === '') { throw new InvalidArgumentException('A sign needs the text it shows.'); }
+            $entry['label'] = ['message' => self::getLabelMessage($id), 'default' => $text];
+        } elseif ($text !== null) {
+            throw new InvalidArgumentException('Only a sign placement shows text.');
+        }
+        $entries[] = $entry;
+        return $this->writeEntries($entries, $sign === null ? 'Place field resource' : 'Place sign');
+    }
+
+    /** A sign placement's translation key: its own map-local id under signs, so translators find each sign. */
+    public static function getLabelMessage(string $id): string
+    {
+        return 'signs.' . $id;
+    }
+
+    private static function makeLabel(string $id, string $name): array
+    {
+        return ['message' => self::getLabelMessage($id), 'default' => $name];
+    }
+
+    /**
+     * The project's sign resources, by id, with their names: the ones a placement labels. A catalogue that cannot be
+     * read offers none; validation says why.
+     *
+     * @return array<string, string>
+     */
+    private static function readSignResources(ProjectMap $map): array
+    {
+        try {
+            $catalog = FieldPresentationCatalog::load($map->getAssetRoot());
+        } catch (\Throwable) {
+            return [];
+        }
+        $signs = [];
+        foreach ($catalog->resources as $id => $resource) {
+            if ($resource->sign !== null) { $signs[(string) $id] = $resource->name; }
+        }
+        return $signs;
     }
 
     public function deleteObject(string $id): ?Command

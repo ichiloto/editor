@@ -132,7 +132,8 @@ final class RecordSchemaCatalog
             self::battlerArt('actors'),
             self::battlerArt('enemies'),
             self::battleScaleReference(),
-            ...($graphical ? [PlayerPresentationFields::getSchema(), \Ichiloto\Editor\Field\FieldResourceFields::getSchema()] : []),
+            ...($graphical ? [PlayerPresentationFields::getSchema(), \Ichiloto\Editor\Field\FieldResourceFields::getSchema(),
+                \Ichiloto\Editor\Field\TextRoleFields::getSchema()] : []),
         ];
 
         $keyed = [];

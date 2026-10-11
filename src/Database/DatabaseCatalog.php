@@ -55,7 +55,9 @@ final class DatabaseCatalog
         return [...self::all(), new DatabaseCategoryDefinition(PlayerPresentationFields::CATEGORY,
             'Player Field Appearance', 'Choose fixed player art or the selected party leader\'s field role.', true),
             new DatabaseCategoryDefinition(\Ichiloto\Editor\Field\FieldResourceFields::CATEGORY,
-            'Field Resources', 'Reusable whole images, such as trees, that maps place by reference.', true)];
+            'Field Resources', 'Reusable whole images, such as trees, that maps place by reference.', true),
+            new DatabaseCategoryDefinition(\Ichiloto\Editor\Field\TextRoleFields::CATEGORY,
+            'Text Roles', 'How text such as a sign\'s label is set: the project\'s fonts, size and colour.', true)];
     }
 
     /**

@@ -6,6 +6,7 @@ namespace Ichiloto\Editor\Field;
 
 use Ichiloto\Editor\Database\Projections\KeyedDictionaryProjection;
 use Ichiloto\Editor\Database\RecordField;
+use Ichiloto\Editor\Database\RecordFieldCodec;
 use Ichiloto\Editor\Database\RecordRefusal;
 use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\Database\RecordSchema;
@@ -65,16 +66,57 @@ final class FieldResourceFields
             'pivot' => ['x' => 0.5, 'y' => 1.0], 'sprites2d' => ['asset' => $images[0]]];
     }
 
+    /** What a resource shows: an image, or a sign board its placements label. */
+    public const string IMAGE = 'Image';
+    public const string SIGN = 'Sign board';
+    /** The font role a new sign board names until its author chooses one. */
+    public const string DEFAULT_FONT_ROLE = 'sign';
+
     /** @return list<RecordField> */
     public static function getFields(array $entry): array
     {
+        $sign = array_key_exists('sign', $entry);
+
         return [
             new RecordField('id', 'Stable Id'),
             new RecordField('name', 'Name'),
             new RecordField('pivot.x', 'Ground Contact X (0..1)', InputControlType::FLOAT),
             new RecordField('pivot.y', 'Ground Contact Y (0..1)', InputControlType::FLOAT),
-            ...FieldSpriteFields::getFields($entry),
+            // Not stored: choosing it reshapes the resource ({@see checkEdit()}).
+            new RecordField('presentation', 'Shows', options: [self::IMAGE, self::SIGN], displayDefault: $sign ? self::SIGN : self::IMAGE),
+            ...($sign ? self::getSignFields() : FieldSpriteFields::getFields($entry)),
         ];
+    }
+
+    /**
+     * A sign board: its image, cut into fixed end caps and a repeating centre so it widens to fit its label, the
+     * project font role its label is set in, and the label's padding and width limits. Cuts are source pixels;
+     * padding and widths are logical pixels.
+     *
+     * @return list<RecordField>
+     */
+    private static function getSignFields(): array
+    {
+        return [
+            RecordField::reference('sign.asset', 'Board Image', 'png_assets'),
+            RecordField::reference('sign.fontRole', 'Label Font Role', 'text_roles'),
+            new RecordField('sign.left', 'Left Cap Width (source px)', InputControlType::INTEGER),
+            new RecordField('sign.right', 'Right Cap Width (source px)', InputControlType::INTEGER),
+            new RecordField('sign.repeatWidth', 'Repeating Centre Width (source px)', InputControlType::INTEGER, removeWhenEmpty: true,
+                displayDefault: '(the whole centre)'),
+            new RecordField('sign.density', 'Pixel Density', InputControlType::INTEGER),
+            new RecordField('sign.padding', 'Label Padding (left, top, right, bottom)', codec: RecordFieldCodec::CSV_INTEGERS),
+            new RecordField('sign.minimumWidth', 'Minimum Width', InputControlType::INTEGER),
+            new RecordField('sign.maximumWidth', 'Maximum Width', InputControlType::INTEGER),
+            new RecordField('sign.layer', 'Field Layer', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '0'),
+        ];
+    }
+
+    /** A sign board as a resource first shows: the given image whole as its centre, for the author to cut. */
+    private static function makeSign(string $asset, string $fontRole): array
+    {
+        return ['asset' => $asset, 'fontRole' => $fontRole, 'left' => 0, 'right' => 0, 'density' => 1,
+            'padding' => [4, 2, 4, 2], 'minimumWidth' => 24, 'maximumWidth' => 192];
     }
 
     /**
@@ -95,6 +137,20 @@ final class FieldResourceFields
     /** A stable id is refused as it is typed, by the Engine's own rule, rather than at the save. */
     public static function checkEdit(array $entry, string $field): array
     {
+        if ($field === 'presentation') {
+            // A resource shows exactly one presentation, as the Engine admits it; switching keeps the image chosen.
+            $choice = $entry['presentation'] ?? null;
+            unset($entry['presentation']);
+            $image = $entry['sign']['asset'] ?? $entry['sprites2d']['asset'] ?? '';
+            if ($choice === self::SIGN && ! array_key_exists('sign', $entry)) {
+                unset($entry['sprites2d']);
+                // The project's sign role by convention; validation names it when the catalogue has none.
+                $entry['sign'] = self::makeSign($image, self::DEFAULT_FONT_ROLE);
+            } elseif ($choice === self::IMAGE && array_key_exists('sign', $entry)) {
+                unset($entry['sign']);
+                $entry['sprites2d'] = ['asset' => $image];
+            }
+        }
         if ($field === 'id') {
             try {
                 WorldObjectResource::assertId($entry['id'] ?? null);

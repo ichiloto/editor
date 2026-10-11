@@ -73,6 +73,9 @@ it('opens every category, and creates, edits, saves and undoes in each writable 
     file_put_contents($root . '/assets/Graphics/Enemies/blob.txt', "(oo)\n");
     // A new field resource starts on the project's first image.
     writeTilesetTestPng($root . '/assets/Graphics/Props/Coverage.png', 4, 4);
+    // A new text role starts on the project's first font; the editor never decodes it, so its bytes are synthetic.
+    mkdir($root . '/assets/Fonts', 0o777, true);
+    file_put_contents($root . '/assets/Fonts/Coverage.ttf', 'synthetic font');
     $session = EditorSession::open($root);
     $writable = [];
 

@@ -149,7 +149,8 @@ final class SessionHost
             'map.read' => $session->readMap(self::requireString($params, 'map')),
             'worldObjects.read' => $session->readWorldObject(self::requireString($params, 'map'), self::requireString($params, 'id')),
             'worldObjects.create' => $session->createWorldObject(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
-                self::requireString($params, 'id'), self::requireInt($params, 'x'), self::requireInt($params, 'y')),
+                self::requireString($params, 'id'), self::requireInt($params, 'x'), self::requireInt($params, 'y'),
+                self::optionalString($params, 'resource'), self::optionalString($params, 'text')),
             'worldObjects.delete' => $session->deleteWorldObject(self::requireString($params, 'map'), self::requireInt($params, 'revision'), self::requireString($params, 'id')),
             'worldObjects.apply' => $session->applyWorldObject(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
                 self::requireString($params, 'id'), self::requireArray($params, 'key'), self::requireString($params, 'value')),
@@ -643,6 +644,18 @@ final class SessionHost
         }
 
         return $session->startPlaytest(self::requireString($params, 'map'), self::requireInt($params, 'x'), self::requireInt($params, 'y'), $start, $renderer);
+    }
+
+    /**
+     * A string parameter that may be absent or null.
+     *
+     * @param array<string, mixed> $params
+     */
+    private static function optionalString(array $params, string $key): ?string
+    {
+        $value = $params[$key] ?? null;
+
+        return $value === null || is_string($value) ? $value : throw new InvalidRequest(sprintf('"%s" must be a string when given.', $key));
     }
 
     /** @param array<string, mixed> $params */

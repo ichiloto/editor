@@ -3907,9 +3907,9 @@ final class EditorSession
             'rows' => array_map(static fn($field): array => self::describeRecordRow($records, $index, [], $field, 'world-object'), $fields)];
     }
 
-    public function createWorldObject(string $mapId, int $revision, string $id, int $x, int $y): array
+    public function createWorldObject(string $mapId, int $revision, string $id, int $x, int $y, ?string $resource = null, ?string $text = null): array
     {
-        return $this->changeWorldObject($mapId, $revision, static fn($authoring): ?Command => $authoring->createObject($id, $x, $y));
+        return $this->changeWorldObject($mapId, $revision, static fn($authoring): ?Command => $authoring->createObject($id, $x, $y, $resource, $text));
     }
 
     public function deleteWorldObject(string $mapId, int $revision, string $id): array

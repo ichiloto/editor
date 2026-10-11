@@ -1113,7 +1113,8 @@ skill's effects, a quest's rewards) listed under them.
 | Types | `assets/Data/system.php` | Editable - the project's elements, one per row; an empty list means the Engine's defaults. Weapon, armor and equipment types are the Engine's own | Same |
 | Terms | `config.php` (`vocab`, `messages`) | Literal terms editable; comments and unrelated expressions preserved | Same |
 | Player Field Appearance | `assets/Data/Entities/player.php` | Not shown: graphical ownership and art | Choose fixed-player, selected party leader, or absent legacy selector; fixed sheet picker with index/layer controls |
-| Field Resources | `assets/Data/Presentation/field.php` (`resources`) | Not shown: graphical resources | One record per named resource, keyed by its stable id: name, ground contact, image or sheet, and an optional occupancy stamp |
+| Field Resources | `assets/Data/Presentation/field.php` (`resources`) | Not shown: graphical resources | One record per named resource, keyed by its stable id: name, ground contact, an image or a sign board, and an optional occupancy stamp |
+| Text Roles | `assets/Data/Presentation/text.php` (`roles`) | Not shown: graphical text | One record per text role: the project's fonts, first choice first, a size and a colour |
 | Actor Battle Art, Enemy Battle Art, Battle Scale | `assets/Data/Presentation/battlers.php` | Not shown: graphical battle art | Editable from the actor's or enemy's own page (see Battle Art) |
 
 Player Field Appearance edits only `graphicalSubject` and `sprites2d`, preserving
@@ -1138,6 +1139,24 @@ starts on the project's first image for the author to replace, an id is refused
 as it is typed if the Engine would refuse it, and a save the Engine would refuse
 writes nothing. A map's world object that names a resource shows a Field
 Resource picker in place of its own pivot and art, which the resource owns.
+
+A resource shows an image or a sign board (Shows). A sign board names its
+board image, cut into fixed left and right caps and a centre that repeats so
+the board widens to fit its label, the text role its label is set in, the
+label's padding and the board's width limits; cuts are in source pixels,
+padding and widths in logical pixels. Switching what a resource shows keeps
+the image chosen. Text Roles name the project's own font files, first choice
+first, with a size and a colour: the Engine embeds no font, so a project uses
+whichever fonts it has the right to. A new role starts on the project's first
+font, and the file gains its schema id when it is first written.
+
+A sign is placed as a world object naming a sign-board resource, with the
+text its board shows. Its label is translatable from the start: the text is
+the default, under a translation key of the sign's own id
+(`signs.<id>`), which translations supply. A sign without text, or text on
+what is not a sign, is refused before anything is written; changing a
+placement's resource to a sign gives it a label, and changing it away removes
+it. Neither the label nor the board changes the map's collision.
 
 Why a category can still turn out read-only: a file the editor cannot
 evaluate, a value it could not write back out, or a comment inside returned

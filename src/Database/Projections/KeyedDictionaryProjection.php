@@ -22,8 +22,10 @@ final readonly class KeyedDictionaryProjection implements RecordProjection
     /**
      * @param string $key The key holding this category's dictionary.
      * @param string $identityKey The record field the dictionary key is read into and written from.
+     * @param array<string, mixed> $fileKeys Keys a file must hold that its records do not, such as a schema id,
+     *     written when the file has none of its own; an authored value is never replaced.
      */
-    public function __construct(private string $key, private string $identityKey = 'id')
+    public function __construct(private string $key, private string $identityKey = 'id', private array $fileKeys = [])
     {
     }
 
@@ -59,9 +61,8 @@ final readonly class KeyedDictionaryProjection implements RecordProjection
         if ($dictionary === [] && ! array_key_exists($this->key, $whole)) {
             return $whole;
         }
-        $whole[$this->key] = $dictionary;
 
-        return $whole;
+        return [...$this->fileKeys, ...$whole, $this->key => $dictionary];
     }
 
     /**
