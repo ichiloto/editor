@@ -2435,7 +2435,9 @@ the edit itself is then saved as usual. `Ctrl+A` leaves such a map unsaved and
 names it, so its save is always reviewed on its own. A cell no open floor can
 be reached from refuses the save until a path is opened or the edit undone. A
 project without a manifest is saved at once, as before. The GUI editor shows
-the same review when it saves.
+the same review when it saves. A cell that a resize cuts off the map is not
+covered by this review; removing rows or columns lands saves through its own
+review instead.
 
 Saving writes through a temporary file and a rename, so an interrupted save
 cannot truncate your work. When a save regenerates a data file, everything from
