@@ -16,6 +16,8 @@ final class EditableGrid
     private array $originalCells;
     private array $lines;
     private array $separators;
+    /** Whether rows were removed: the rows left can equal the authored ones while the grid does not. */
+    private bool $rowsRemoved = false;
 
     public function __construct(private string $text, private ?string $source = null, private bool $legacyTags = false)
     {
@@ -104,7 +106,7 @@ final class EditableGrid
 
     public function getSource(): string
     {
-        if ($this->cells === $this->originalCells && $this->source !== null) {
+        if ($this->cells === $this->originalCells && ! $this->rowsRemoved && $this->source !== null) {
             return $this->source;
         }
         $text = '';
@@ -179,6 +181,30 @@ final class EditableGrid
         foreach ($this->cells as &$row) {
             if (count($row) >= $at) {
                 array_splice($row, $at, 0, array_fill(0, $count, $blank));
+            }
+        }
+        unset($row);
+    }
+
+    /**
+     * Removes rows `$at` to `$at + $count - 1` (axis `y`), or those columns
+     * from every row that reaches them (axis `x`). Every other cell keeps its
+     * glyph and style, and rows that only move keep their authored bytes.
+     */
+    public function removeLines(string $axis, int $at, int $count): void
+    {
+        if ($axis === 'y') {
+            array_splice($this->cells, $at, $count);
+            array_splice($this->originalCells, $at, $count);
+            array_splice($this->lines, $at, $count);
+            // The separator before each removed row goes with it; the first rows take the one after them.
+            array_splice($this->separators, max(0, $at - 1), $count);
+            $this->rowsRemoved = true;
+            return;
+        }
+        foreach ($this->cells as &$row) {
+            if (count($row) > $at) {
+                array_splice($row, $at, $count);
             }
         }
         unset($row);

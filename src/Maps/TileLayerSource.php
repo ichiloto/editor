@@ -113,6 +113,35 @@ final class TileLayerSource
     }
 
     /**
+     * Removes rows `$at` to `$at + $count - 1` (axis `y`), or those cells
+     * from every row that reaches them (axis `x`), as
+     * {@see EditableGrid::removeLines()} removes them from the terminal
+     * layers. The result is rewritten as {@see resize()} rewrites a layer.
+     *
+     * @param MapLayerSet $layers The map's terminal layers before the removal.
+     * @throws MapSourceRefusal When the layer cannot be read or does not match the map; nothing is changed.
+     */
+    public static function removeLines(string $source, string $displayPath, MapLayerSet $layers, string $axis, int $at, int $count, ?string $baseline = null): string
+    {
+        $layer = self::readMatchingLayer($source, $displayPath, $layers, 'removing rows or columns');
+
+        $entries = $layer->getEntries();
+        $rows = $entries;
+        if ($axis === 'y') {
+            array_splice($rows, $at, $count);
+        } else {
+            foreach ($rows as &$row) {
+                if (count($row) > $at) {
+                    array_splice($row, $at, $count);
+                }
+            }
+            unset($row);
+        }
+
+        return self::rewrite($rows, $entries, $source, $displayPath, $baseline);
+    }
+
+    /**
      * Writes a piece's tile entries into a tile layer with its top-left cell
      * at (x, y). A `0` entry leaves its cell as it was; every other entry
      * replaces the cell's entry with that whole tile. The result is

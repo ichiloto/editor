@@ -326,6 +326,30 @@ final class MapLayers
     }
 
     /**
+     * Removes rows `$at` to `$at + $count - 1` (axis `y`) or those columns
+     * (axis `x`) from every layer: the terminal layers, the event layer and
+     * the tile layers. Every tile layer is rewritten before anything changes,
+     * so one the Engine cannot read refuses the whole removal.
+     *
+     * @throws MapSourceRefusal When a tile layer cannot be read or does not match the map.
+     */
+    public function removeLines(string $axis, int $at, int $count): void
+    {
+        $tileSources = [];
+        if ($this->tileSources !== []) {
+            $set = $this->getLayerSet();
+            foreach ($this->tileSources as $path => $source) {
+                $tileSources[$path] = TileLayerSource::removeLines($source, $this->getDisplayPath($path), $set, $axis, $at, $count,
+                    $this->baselineSources[$path] ?? null);
+            }
+        }
+        foreach ($this->layers as $layer) {
+            $layer['grid']->removeLines($axis, $at, $count);
+        }
+        $this->tileSources = $tileSources;
+    }
+
+    /**
      * Writes tile entries into the named tile layers with their top-left
      * cell at (x, y), as one stamped piece: a `0` entry leaves its cell as it
      * was. A layer the map does not have yet is created in `graphics/` with

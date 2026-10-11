@@ -221,8 +221,8 @@ confirmation, the shared session captures its current resolved physical cells
 without changing glyphs, artwork or passage. This is one undo step, written only
 on save; opening or saving a legacy map never converts it automatically. Once
 converted, terminal appearance and layer edits no longer choose collision.
-Resize and row/column insertion preserve the declaration with geometry, adding
-`SOLID` physical cells independently of blank glyphs. Malformed or unsupported
+Resize and row/column insertion and removal preserve the declaration with
+geometry, adding `SOLID` physical cells independently of blank glyphs. Malformed or unsupported
 source edits refuse before mutation. The TUI receives no graphical conversion
 control; it preserves the declaration through its existing edit/save/history
 workflow.
@@ -260,7 +260,7 @@ force for terminal edits. Untouched layer files are never written; unchanged
 rows retain their authored bytes, and all changed files are saved or rolled
 back together.
 
-### Inserting rows and columns
+### Inserting and removing rows and columns
 
 In Map mode, `Ctrl+P` offers **Map: Insert rows above the cursor** and
 **Map: Insert columns left of the cursor**. Both first refuse while the project
@@ -287,7 +287,8 @@ What moves, when it is in the map's space and at or beyond the line:
 - spawn points of transfers into the map from any map, legacy triggers into
   it, and `startingPositions` in `assets/Data/system.php` that start on it;
 - script coordinates on the map: `move_player`, `move_route` waypoints (only
-  the axes a waypoint names; `steps` and `retrace` are relative), `camera` and
+  the axes a waypoint names; `retrace` is relative, and relative `steps` are
+  listed as a hand edit because a walk across the line ends elsewhere), `camera` and
   `field_animation` position targets, `stage_actor`, and `transfer` into the
   map. Scripts start on their map; after a `transfer` elsewhere, later commands
   are in that map's space and stay;
@@ -307,6 +308,27 @@ Saves follow through the project's `assets/Data/save-compatibility.php`: the
 insertion raises `contentVersion` by one and appends a `mapShifts` step, so a
 saved player position on the map moves too. A project without that manifest is
 told that existing saves are not migrated.
+
+**Map: Remove rows from the cursor down** and **Map: Remove columns from the
+cursor rightward** take the same count prompt and confirmation. Removing `N`
+rows from the cursor's row deletes those rows from every grid and moves
+everything below them up by `N`; columns move left. The map shrinks by `N` and
+keeps at least one line.
+
+Nothing authored may stand on a removed line: an event marker, an NPC, a
+spawn point or transfer into the map, a starting position, a world object's
+covered cell, or a script coordinate surely on the map. The removal is refused
+before anything is written and the refusal names each one, so move them first.
+An area that straddles the removed lines shrinks by the lines it loses; one
+wholly on them refuses the removal. Coordinates that may be on this map or
+another are listed as hand edits, as for an insertion.
+
+With a save manifest, the removal appends a `mapRemovals` step. A saved
+position beyond the removed lines moves back with the map; one standing on a
+removed line lands on the cell the confirmation names, the cell the player can
+reach today nearest the reachable part of the removed lines, given in the map's
+coordinates after the removal. The GUI lets you name another reachable cell
+instead.
 
 ### Pieces
 

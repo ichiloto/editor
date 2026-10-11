@@ -16,24 +16,27 @@ use Ichiloto\Editor\Storage\SourceSetPlan;
 use Ichiloto\Engine\Field\MapGridSource;
 use Ichiloto\Engine\Field\MapLayerSource;
 use Ichiloto\Engine\Field\MapPhysicalOccupancy;
+use Ichiloto\Engine\Field\Reachability\ProjectReachability;
 use RuntimeException;
 use Throwable;
 
 /**
- * Plans inserting blank rows or columns into a map so the whole project
- * stays consistent: the map's grids grow, and every coordinate in its space
- * at or beyond the line moves, in whichever file holds it
- * ({@see LineInsertionInventory}). Every changed file is rewritten through
+ * Plans inserting blank rows or columns into a map, or removing them, so the
+ * whole project stays consistent: the map's grids grow or shrink, and every
+ * coordinate in its space at or beyond the line moves, in whichever file
+ * holds it ({@see MapLineInventory}). Every changed file is rewritten through
  * the source-preserving writers; a coordinate the source cannot take as a
- * literal is reported for a hand edit instead of being flattened. When the
+ * literal is reported for a hand edit instead of being flattened. A removal
+ * is refused while anything authored stands on a removed line. When the
  * project has a save compatibility manifest, the plan raises its content
- * version with a declarative map shift step, so existing saves follow.
+ * version with a declarative map edit step, so existing saves follow; saves
+ * standing on removed lines land on a cell the author confirms.
  *
  * Planning reads the project from disk and writes nothing.
  *
  * @package Ichiloto\Editor\Maps
  */
-final class LineInsertionPlanner
+final class MapLinePlanner
 {
     private const string MANIFEST = 'assets/Data/save-compatibility.php';
     private const string SYSTEM = 'assets/Data/system.php';
@@ -48,18 +51,35 @@ final class LineInsertionPlanner
      *
      * @throws RuntimeException When the map or a data file cannot be read; nothing is written.
      */
-    public static function planProject(string $projectRoot, string $mapId, string $axis, int $at, int $count): LineInsertionPlan
+    public static function planInsertion(string $projectRoot, string $mapId, string $axis, int $at, int $count): MapLinePlan
     {
         $insertion = new LineInsertion($mapId, $axis, $at, $count);
 
-        return ProjectDirectoryContext::run($projectRoot, static fn(string $root): LineInsertionPlan => self::buildPlan($root, $insertion));
+        return ProjectDirectoryContext::run($projectRoot, static fn(string $root): MapLinePlan => self::buildPlan($root, $insertion));
     }
 
-    private static function buildPlan(string $root, LineInsertion $insertion): LineInsertionPlan
+    /**
+     * Plans the removal; callers show the plan, including where saves on the
+     * removed lines land, and obtain confirmation before applying it.
+     *
+     * @param array{int, int}|null $landing Where saves on the removed lines land, after the removal; null proposes the reachable cell nearest them.
+     * @throws RuntimeException When the map or a data file cannot be read, something authored stands on a removed line, or the landing is unusable; nothing is written.
+     */
+    public static function planRemoval(string $projectRoot, string $mapId, string $axis, int $at, int $count, ?array $landing = null): MapLinePlan
     {
-        $directory = $root . '/assets/Maps/' . $insertion->mapId;
+        $removal = new LineRemoval($mapId, $axis, $at, $count, $landing);
+
+        return ProjectDirectoryContext::run($projectRoot, static fn(string $root): MapLinePlan => self::buildPlan($root, $removal));
+    }
+
+    private static function buildPlan(string $root, MapLineEdit $edit): MapLinePlan
+    {
+        $directory = $root . '/assets/Maps/' . $edit->mapId;
         $map = ProjectMap::fromDirectory($root . '/assets/Maps', $directory);
-        $map->insertLines($insertion->axis, $insertion->at, $insertion->count);
+        [$width, $height] = [$map->getWidth(), $map->getHeight()];
+        $edit instanceof LineRemoval
+            ? $map->removeLines($edit->axis, $edit->at, $edit->count)
+            : $map->insertLines($edit->axis, $edit->at, $edit->count);
 
         $watched = $originals = $proposals = $before = $after = [];
         $gridPaths = self::findGridPaths($directory);
@@ -101,7 +121,7 @@ final class LineInsertionPlanner
                 $commonEvents[basename($path, '.php')] = ['file' => $path, 'commands' => $payloads[$path]];
             }
         }
-        $inventory = new LineInsertionInventory($insertion, $commonEvents);
+        $inventory = new MapLineInventory($edit, $commonEvents);
         foreach ($dataPaths as $path) {
             if (str_starts_with($path, $root . '/assets/Maps/') && is_array($payloads[$path])) {
                 $inventory->addMapData($path, substr(dirname($path), strlen($root . '/assets/Maps/')), $payloads[$path]);
@@ -120,10 +140,21 @@ final class LineInsertionPlanner
         }
         $inventory->addCommonEvents();
 
+        $blocked = [];
+        foreach ($inventory->getBlocked() as $path => $entries) {
+            foreach ($entries as $entry) {
+                $blocked[] = sprintf('%s %s (%s)', $relative($path), PhpArraySourceDocument::describePath($entry['path']), $entry['reason']);
+            }
+        }
+        if ($blocked !== []) {
+            throw new RuntimeException(sprintf('%s %s is refused; nothing was changed. Move these off the removed lines first: %s.',
+                $edit->verb, $edit->description, implode('; ', $blocked)));
+        }
+
         $handEdits = [];
         foreach ($inventory->getHandEdits() as $path => $edits) {
-            foreach ($edits as $edit) {
-                $handEdits[] = ['file' => $relative($path), 'where' => PhpArraySourceDocument::describePath($edit['path']), 'reason' => $edit['reason']];
+            foreach ($edits as $handEdit) {
+                $handEdits[] = ['file' => $relative($path), 'where' => PhpArraySourceDocument::describePath($handEdit['path']), 'reason' => $handEdit['reason']];
             }
         }
         foreach ($inventory->getShifts() as $path => $shifts) {
@@ -142,13 +173,18 @@ final class LineInsertionPlanner
         if (! array_key_exists($manifestPath, $payloads)) {
             $notes[] = sprintf('Existing saves are not migrated: the project has no %s.', self::MANIFEST);
         } else {
-            $next = self::planSaveMigration($watched[$manifestPath], $payloads[$manifestPath], $insertion, $handEdits);
+            if ($edit instanceof LineRemoval) {
+                $edit = $edit->withLanding(self::findLanding($root, $edit, $width, $height));
+                $notes[] = sprintf('Saves standing on the removed lines land at x %d, y %d.', ...$edit->landing);
+            }
+            $next = self::planSaveMigration($watched[$manifestPath], $payloads[$manifestPath], $edit, $handEdits);
             if ($next !== null) {
                 $originals[$manifestPath] = $watched[$manifestPath];
                 $proposals[$manifestPath] = $next['source'];
                 $before[$manifestPath] = PhpDataFile::getComparableValue($payloads[$manifestPath]);
                 $after[$manifestPath] = PhpDataFile::getComparableValue($next['value']);
-                $notes[] = sprintf('Saves move with the map: save content version %d adds this map shift.', $next['value']['contentVersion']);
+                $notes[] = sprintf('Saves move with the map: save content version %d adds this map %s.', $next['value']['contentVersion'],
+                    $edit instanceof LineRemoval ? 'removal' : 'shift');
             }
         }
 
@@ -157,11 +193,64 @@ final class LineInsertionPlanner
             static fn(string $path, string $staged): mixed => in_array($path, $gridPaths, true)
                 ? MapGridSource::parseSource((string) file_get_contents($staged), $path)
                 : PhpDataFile::getComparableValue(PhpDataFile::evaluateIsolated($staged, $root)),
-            'map line insertion',
+            'map line ' . ($edit instanceof LineRemoval ? 'removal' : 'insertion'),
             'Map and project data files',
         );
 
-        return new LineInsertionPlan($insertion, $sources, $handEdits, $notes, $map->getWidth(), $map->getHeight());
+        return new MapLinePlan($edit, $sources, $handEdits, $notes, $map->getWidth(), $map->getHeight());
+    }
+
+    /**
+     * Where saves standing on the removed lines land, in the map's
+     * coordinates after the removal: the author's cell when given, which
+     * must be one the player can reach today off the removed lines, or else
+     * the reachable cell nearest the reachable part of the removed lines.
+     *
+     * @return array{int, int}
+     * @throws RuntimeException When no reachable cell is left, or the given landing is not one.
+     */
+    private static function findLanding(string $root, LineRemoval $removal, int $width, int $height): array
+    {
+        $report = ProjectReachability::analyze($root . '/assets')->reports[$removal->mapId] ?? null;
+        $vertical = $removal->axis === 'y';
+        // Today's cell for a cell after the removal: lines from the removed ones on sit further along by the count.
+        $toToday = static fn(int $x, int $y): array => $vertical
+            ? [$x, $y >= $removal->at ? $y + $removal->count : $y]
+            : [$x >= $removal->at ? $x + $removal->count : $x, $y];
+        if ($removal->landing !== null) {
+            [$x, $y] = $toToday(...$removal->landing);
+            if ($x >= $width || $y >= $height || ! ($report?->isReachable($x, $y) ?? false)) {
+                throw new RuntimeException(sprintf('Saves cannot land at x %d, y %d: the player cannot reach that cell. Choose a reachable cell off the removed lines.',
+                    ...$removal->landing));
+            }
+
+            return $removal->landing;
+        }
+        $kept = $removed = [];
+        for ($y = 0; $y < $height; $y++) {
+            for ($x = 0; $x < $width; $x++) {
+                if (! ($report?->isReachable($x, $y) ?? false)) {
+                    continue;
+                }
+                if ($removal->isRemoved($vertical ? $y : $x)) {
+                    $removed[] = [$x, $y];
+                } else {
+                    $kept[] = [$x, $y];
+                }
+            }
+        }
+        if ($kept === []) {
+            throw new RuntimeException(sprintf('%s leaves no cell the player can reach, so saves on it have nowhere to land; nothing was changed.', $removal->mapId));
+        }
+        // Nearest the middle of where a saved player could stand on the removed lines, or of the lines themselves.
+        $middle = $removed !== []
+            ? [array_sum(array_column($removed, 0)) / count($removed), array_sum(array_column($removed, 1)) / count($removed)]
+            : ($vertical ? [($width - 1) / 2, $removal->at + ($removal->count - 1) / 2] : [$removal->at + ($removal->count - 1) / 2, ($height - 1) / 2]);
+        usort($kept, static fn(array $a, array $b): int => [abs($a[0] - $middle[0]) + abs($a[1] - $middle[1]), $a[1], $a[0]]
+            <=> [abs($b[0] - $middle[0]) + abs($b[1] - $middle[1]), $b[1], $b[0]]);
+        [$x, $y] = $kept[0];
+
+        return $vertical ? [$x, $y >= $removal->at ? $y - $removal->count : $y] : [$x >= $removal->at ? $x - $removal->count : $x, $y];
     }
 
     /**
@@ -246,16 +335,16 @@ final class LineInsertionPlanner
 
     /**
      * Raises the manifest's content version by one with a declarative map
-     * shift step, or reports why it must be done by hand.
+     * edit step, or reports why it must be done by hand.
      *
      * @param list<array{file: string, where: string, reason: string}> $handEdits
      * @return array{source: string, value: array<array-key, mixed>}|null
      */
-    private static function planSaveMigration(string $source, mixed $manifest, LineInsertion $insertion, array &$handEdits): ?array
+    private static function planSaveMigration(string $source, mixed $manifest, MapLineEdit $edit, array &$handEdits): ?array
     {
         $version = is_array($manifest) ? ($manifest['contentVersion'] ?? null) : null;
         $migrations = is_array($manifest) ? ($manifest['migrations'] ?? []) : null;
-        $step = ['from' => $version, 'to' => is_int($version) ? $version + 1 : null, 'mapShifts' => [$insertion->getManifestEntry()]];
+        $step = ['from' => $version, 'to' => is_int($version) ? $version + 1 : null, ...$edit->getManifestEdits()];
         $reason = null;
         if (! is_int($version) || $version < 0 || ! is_array($migrations) || ! array_is_list($migrations)) {
             $reason = 'its contentVersion or migrations list is not valid, so saves cannot be migrated automatically';
@@ -346,7 +435,7 @@ final class LineInsertionPlanner
                 try {
                     $payloads[$path] = PhpDataFile::evaluateIsolated($path, $root);
                 } catch (Throwable $failure) {
-                    throw new RuntimeException(sprintf('%s could not be read, so the rows or columns cannot be inserted safely: %s',
+                    throw new RuntimeException(sprintf('%s could not be read, so the rows or columns cannot be changed safely: %s',
                         substr($path, strlen($root) + 1), $failure->getMessage()), previous: $failure);
                 }
             }

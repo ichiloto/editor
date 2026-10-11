@@ -20,7 +20,7 @@ use Throwable;
 final class SaveCompatibilityValidator
 {
     private const string WHERE = 'assets/Data/save-compatibility.php';
-    private const string DECLARED_EDITS_HINT = 'Use a class for a project migration, or declared position edits: mapShifts (map, axis x or y, the 0-based line inserted at, a count of at least 1) for inserted rows and columns, relocations (map, cells, to) for cells authored content now occupies.';
+    private const string DECLARED_EDITS_HINT = 'Use a class for a project migration, or declared position edits: mapShifts (map, axis x or y, the 0-based line inserted at, a count of at least 1) for inserted rows and columns, mapRemovals (map, axis, the 0-based first removed line at, a count of at least 1, the cell to that saves on removed lines land on) for removed rows and columns, relocations (map, cells, to) for cells authored content now occupies.';
 
     /**
      * @var InventoryCatalog|null The project's inventory identity, read once.

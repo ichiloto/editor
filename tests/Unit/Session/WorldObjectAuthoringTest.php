@@ -291,7 +291,7 @@ it('moves only owned map coordinates in the existing insertion inventory and ref
         ->and($map->getWidth())->toBe(4);
     $data = $map->getMapDataField([]);
     $data['worldObjects'][0]['covers'] = ['layer'=>'terrain','cells'=>[[1,1],[3,1]],'tileLayers'=>['floor']];
-    $inventory = new Ichiloto\Editor\Maps\LineInsertionInventory(new Ichiloto\Editor\Maps\LineInsertion('test-map','x',1,2), []);
+    $inventory = new Ichiloto\Editor\Maps\MapLineInventory(new Ichiloto\Editor\Maps\LineInsertion('test-map','x',1,2), []);
     $inventory->addMapData('fixture.data.php','test-map',$data);
     $shifts = $inventory->getShifts()['fixture.data.php'];
     expect(array_column($shifts,'path'))->toContain(['worldObjects',0,'anchor','x'], ['worldObjects',0,'covers','cells',0,0], ['worldObjects',0,'covers','cells',1,0])

@@ -8,11 +8,13 @@ use Ichiloto\Editor\Events\CommandMapContext;
 use Ichiloto\Engine\Events\Triggers\SleepEventTrigger;
 
 /**
- * Finds every coordinate a row or column insertion moves, across the
- * project's evaluated data files.
+ * Finds every coordinate a row or column insertion or removal moves, across
+ * the project's evaluated data files.
  *
  * A coordinate moves when it is in the edited map's space and at or beyond
- * the insertion line. Some places are always in a known map's space: the
+ * the edited line. One surely on a removed line has nowhere to go: it is
+ * reported as blocking, so the removal is refused until the author moves it,
+ * never dropped or clamped. Some places are always in a known map's space: the
  * map's own NPCs, event areas and bed spawn points, a transfer's spawn point
  * into the map from any file, a starting position. Script coordinates are in
  * the space of the map the script is on at that command, which changes with
@@ -27,13 +29,16 @@ use Ichiloto\Engine\Events\Triggers\SleepEventTrigger;
  *
  * @package Ichiloto\Editor\Maps
  */
-final class LineInsertionInventory
+final class MapLineInventory
 {
     /** @var array<string, array<string, array{path: list<int|string>, value: int}>> Moves by file, keyed by path. */
     private array $shifts = [];
 
     /** @var array<string, array<string, array{path: list<int|string>, reason: string}>> Hand edits by file, keyed by path. */
     private array $handEdits = [];
+
+    /** @var array<string, array<string, array{path: list<int|string>, reason: string}>> What stands on a removed line, by file, keyed by path. */
+    private array $blocked = [];
 
     /** @var array<string, list<list<string>|null>> The contexts each reusable event script is started from. */
     private array $commonEventStarts = [];
@@ -45,11 +50,11 @@ final class LineInsertionInventory
     private array $transferContexts = [];
 
     /**
-     * @param LineInsertion $insertion The insertion.
+     * @param MapLineEdit $edit The insertion or removal.
      * @param array<string, array{file: string, commands: mixed}> $commonEvents Reusable event scripts by id.
      */
     public function __construct(
-        private readonly LineInsertion $insertion,
+        private readonly MapLineEdit $edit,
         private readonly array $commonEvents,
     ) {
     }
@@ -75,6 +80,16 @@ final class LineInsertionInventory
     }
 
     /**
+     * What stands on a removed line, by file; empty for an insertion.
+     *
+     * @return array<string, list<array{path: list<int|string>, reason: string}>>
+     */
+    public function getBlocked(): array
+    {
+        return array_map(array_values(...), $this->blocked);
+    }
+
+    /**
      * Adds one map's data file: its own coordinates when it is the edited
      * map, and everything in it that leads into the edited map.
      *
@@ -82,18 +97,24 @@ final class LineInsertionInventory
      */
     public function addMapData(string $file, string $mapId, array $data): void
     {
-        $isTarget = $mapId === $this->insertion->mapId;
+        $isTarget = $mapId === $this->edit->mapId;
         $here = [$mapId];
 
         if ($isTarget) {
             foreach (($data['worldObjects'] ?? []) as $index => $object) {
                 $this->shiftPoint($file, ['worldObjects', $index, 'anchor'], $object['anchor']);
                 foreach (($object['covers']['cells'] ?? []) as $cellIndex => $cell) {
-                    $axis = $this->insertion->axis === 'x' ? 0 : 1;
+                    $axis = $this->edit->axis === 'x' ? 0 : 1;
                     $coordinate = $cell[$axis];
-                    if (is_int($coordinate) && $coordinate >= $this->insertion->at) {
+                    if (is_int($coordinate) && $coordinate >= $this->edit->at) {
                         $path = ['worldObjects', $index, 'covers', 'cells', $cellIndex, $axis];
-                        $this->shifts[$file][self::formatKey($path)] = ['path' => $path, 'value' => $this->insertion->getShiftedCoordinate($coordinate)];
+                        $shifted = $this->edit->getShiftedCoordinate($coordinate);
+                        // An object is drawn whole; cutting the cells it covers would change what it hides.
+                        if ($shifted === null) {
+                            $this->reportBlocked($file, $path, sprintf('world object %s covers a cell on a removed line', strval($object['id'] ?? $index)));
+                        } else {
+                            $this->shifts[$file][self::formatKey($path)] = ['path' => $path, 'value' => $shifted];
+                        }
                     }
                 }
             }
@@ -128,7 +149,7 @@ final class LineInsertionInventory
             $destination = trim(strval($eventData['destinationMap'] ?? ''));
             $isBed = $destination === '' && $isTarget
                 && ltrim(strval($event['class'] ?? ''), '\\') === SleepEventTrigger::class;
-            if (is_array($eventData['spawnPoint'] ?? null) && ($destination === $this->insertion->mapId || $isBed)) {
+            if (is_array($eventData['spawnPoint'] ?? null) && ($destination === $this->edit->mapId || $isBed)) {
                 $this->shiftPoint($file, ['events', $marker, 'data', 'spawnPoint'], $eventData['spawnPoint']);
             }
             if (is_array($eventData['script'] ?? null) && $eventData['script'] !== []) {
@@ -149,7 +170,7 @@ final class LineInsertionInventory
             if ($isTarget && is_array($trigger['trigger_area'] ?? null)) {
                 $this->shiftArea($file, ['triggers', $index, 'trigger_area'], $trigger['trigger_area']);
             }
-            if (trim(strval($trigger['destinationMap'] ?? '')) === $this->insertion->mapId && is_array($trigger['spawn_point'] ?? null)) {
+            if (trim(strval($trigger['destinationMap'] ?? '')) === $this->edit->mapId && is_array($trigger['spawn_point'] ?? null)) {
                 $this->shiftPoint($file, ['triggers', $index, 'spawn_point'], $trigger['spawn_point']);
             }
         }
@@ -163,7 +184,7 @@ final class LineInsertionInventory
     public function addSystemData(string $file, array $system): void
     {
         foreach ((array) ($system['startingPositions'] ?? []) as $key => $position) {
-            if (is_array($position) && trim(strval($position['destinationMap'] ?? '')) === $this->insertion->mapId
+            if (is_array($position) && trim(strval($position['destinationMap'] ?? '')) === $this->edit->mapId
                 && is_array($position['spawnPoint'] ?? null)) {
                 $this->shiftPoint($file, ['startingPositions', $key, 'spawnPoint'], $position['spawnPoint']);
             }
@@ -276,7 +297,7 @@ final class LineInsertionInventory
 
             if ($type === 'transfer') {
                 $destination = trim(strval($command['map'] ?? ''));
-                if ($file !== null && $destination === $this->insertion->mapId) {
+                if ($file !== null && $destination === $this->edit->mapId) {
                     $this->shiftPoint($file, $at, $command);
                 }
                 $context = $destination !== '' ? [$destination] : null;
@@ -306,6 +327,11 @@ final class LineInsertionInventory
                     if (is_array($waypoint)) {
                         $this->shiftPointIn($file, [...$at, 'waypoints', $index], $waypoint, $context);
                     }
+                }
+                // Steps are relative, so they cannot be rewritten, but a walk across the edited lines now ends elsewhere.
+                if (array_key_exists('steps', $command) && ($context === null || in_array($this->edit->mapId, $context, true))) {
+                    $this->reportHandEdit($file, [...$at, 'steps'], sprintf('its relative steps may cross the %s lines; check where the route ends',
+                        $this->edit instanceof LineRemoval ? 'removed' : 'inserted'));
                 }
                 break;
             case 'camera':
@@ -357,15 +383,15 @@ final class LineInsertionInventory
      */
     private function shiftPointIn(string $file, array $path, array $point, ?array $context): void
     {
-        if ($context === [$this->insertion->mapId]) {
+        if ($context === [$this->edit->mapId]) {
             $this->shiftPoint($file, $path, $point);
             return;
         }
-        if ($context !== null && ! in_array($this->insertion->mapId, $context, true)) {
+        if ($context !== null && ! in_array($this->edit->mapId, $context, true)) {
             return;
         }
-        $key = $this->insertion->axis;
-        if (array_key_exists($key, $point) && (! is_int($point[$key]) || $point[$key] >= $this->insertion->at)) {
+        $key = $this->edit->axis;
+        if (array_key_exists($key, $point) && (! is_int($point[$key]) || $point[$key] >= $this->edit->at)) {
             $this->reportHandEdit($file, [...$path, $key], $context === null
                 ? 'it runs on a map that is not known here'
                 : sprintf('it may run on %s', implode(' or ', $context)));
@@ -373,24 +399,26 @@ final class LineInsertionInventory
     }
 
     /**
-     * Moves a point surely in the edited map's space. Only the insertion
-     * axis moves; a point naming only the other axis stays.
+     * Moves a point surely in the edited map's space. Only the edited axis
+     * moves; a point naming only the other axis stays. A point on a removed
+     * line blocks the removal.
      *
      * @param list<int|string> $path
      * @param array<string, mixed> $point
      */
     private function shiftPoint(string $file, array $path, array $point): void
     {
-        $key = $this->insertion->axis;
+        $key = $this->edit->axis;
         if (! array_key_exists($key, $point)) {
             return;
         }
         $value = $point[$key];
         if (is_int($value)) {
-            if ($value >= $this->insertion->at) {
-                $this->shifts[$file][self::formatKey([...$path, $key])] = [
-                    'path' => [...$path, $key], 'value' => $this->insertion->getShiftedCoordinate($value),
-                ];
+            $shifted = $this->edit->getShiftedCoordinate($value);
+            if ($shifted === null) {
+                $this->reportBlocked($file, [...$path, $key], 'it stands on a removed line');
+            } elseif ($shifted !== $value) {
+                $this->shifts[$file][self::formatKey([...$path, $key])] = ['path' => [...$path, $key], 'value' => $shifted];
             }
             return;
         }
@@ -399,14 +427,16 @@ final class LineInsertionInventory
 
     /**
      * Moves an area surely in the edited map's space: one starting at or
-     * beyond the line moves, one straddling it stretches.
+     * beyond the line moves, one straddling inserted lines stretches, one
+     * straddling removed lines shrinks, and one wholly on removed lines
+     * blocks the removal.
      *
      * @param list<int|string> $path
      * @param array<string, mixed> $area
      */
     private function shiftArea(string $file, array $path, array $area): void
     {
-        $startKey = $this->insertion->axis;
+        $startKey = $this->edit->axis;
         $sizeKey = $startKey === 'x' ? 'width' : 'height';
         $start = $area[$startKey] ?? 0;
         $size = $area[$sizeKey] ?? 1;
@@ -414,9 +444,14 @@ final class LineInsertionInventory
             $this->reportHandEdit($file, $path, 'its position or size is not a whole number');
             return;
         }
-        [$newStart, $newSize] = $this->insertion->getShiftedSpan($start, $size);
+        $span = $this->edit->getShiftedSpan($start, $size);
+        if ($span === null) {
+            $this->reportBlocked($file, $path, 'the whole area is on removed lines');
+            return;
+        }
+        [$newStart, $newSize] = $span;
         if ($newStart !== $start) {
-            $this->shiftPoint($file, $path, $area);
+            $this->shifts[$file][self::formatKey([...$path, $startKey])] = ['path' => [...$path, $startKey], 'value' => $newStart];
         }
         if ($newSize !== $size) {
             $this->shifts[$file][self::formatKey([...$path, $sizeKey])] = ['path' => [...$path, $sizeKey], 'value' => $newSize];
@@ -427,6 +462,12 @@ final class LineInsertionInventory
     private function reportHandEdit(string $file, array $path, string $reason): void
     {
         $this->handEdits[$file][self::formatKey($path)] = ['path' => $path, 'reason' => $reason];
+    }
+
+    /** @param list<int|string> $path */
+    private function reportBlocked(string $file, array $path, string $reason): void
+    {
+        $this->blocked[$file][self::formatKey($path)] = ['path' => $path, 'reason' => $reason];
     }
 
     /** @param list<int|string> $path */

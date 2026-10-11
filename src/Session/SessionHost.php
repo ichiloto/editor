@@ -146,6 +146,12 @@ final class SessionHost
                 self::requireString($params, 'axis'), self::requireInt($params, 'at'), self::requireInt($params, 'count'),
                 self::readOptionalString($params, 'answer'), self::readOptionalString($params, 'confirm'),
             ),
+            'map.removeLines' => $session->removeMapLines(
+                self::requireString($params, 'map'), self::requireInt($params, 'revision'),
+                self::requireString($params, 'axis'), self::requireInt($params, 'at'), self::requireInt($params, 'count'),
+                is_array($params['landing'] ?? null) ? $params['landing'] : null,
+                self::readOptionalString($params, 'answer'), self::readOptionalString($params, 'confirm'),
+            ),
             'map.read' => $session->readMap(self::requireString($params, 'map')),
             'worldObjects.read' => $session->readWorldObject(self::requireString($params, 'map'), self::requireString($params, 'id')),
             'worldObjects.create' => $session->createWorldObject(self::requireString($params, 'map'), self::requireInt($params, 'revision'),

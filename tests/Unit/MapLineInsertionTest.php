@@ -2,178 +2,18 @@
 
 declare(strict_types=1);
 
-use Ichiloto\Editor\Editor;
-use Ichiloto\Editor\Maps\LineInsertionPlanner;
 use Ichiloto\Editor\Maps\TileLayerSource;
 use Ichiloto\Editor\ProjectMap;
-use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Engine\Field\MapGridSource;
 
 /**
  * Inserting rows or columns into a map moves everything in its space at or
- * beyond the line, in every file, as one undoable write. The fixture is a
- * 6 x 5 layered map `home` with a styled terrain layer, a decoration layer,
- * events and a tile layer, and a legacy map `town` whose events and scripts
- * lead into it.
+ * beyond the line, in every file, as one undoable write. The fixture is
+ * {@see mapLineProject()}.
  */
 
-/** Writes the synthetic insertion project and returns its root. */
-function lineInsertionProject(): string
-{
-    $root = makeTemporaryProject('ichiloto-line-insertion-');
-    writeTestTileset($root);
-    $home = $root . '/assets/Maps/home';
-    mkdir($home . '/layers', 0o777, true);
-    $grids = [
-        'layers/01.terrain.map.php' => "<fg=green>######</>\n#....#\n#.<fg=red>~~</>.#\n#....#\n######",
-        'layers/02.detail.deco.php' => "      \n  d   \n      \n    d \n      ",
-        'home.event.php' => "      \n    W \n      \n D  S \n      ",
-    ];
-    foreach ($grids as $file => $text) {
-        file_put_contents($home . '/' . $file, MapGridSource::buildSource($text, 'AUTHORED', "// keep {$file}\n"));
-    }
-    writeTileLayer($home, '01.floor.tiles.php', implode("\n", array_map(
-        static fn(int $row): string => implode(' ', array_fill(0, 6, $row === 2 ? '5' : '2816')), range(0, 4))),
-        "// Painted in the GUI editor.\n");
-    file_put_contents($home . '/home.data.php', <<<'PHP'
-<?php
-
-// The house.
-return [
-  'name' => 'Home',
-  'region' => '',
-  'tileset' => 'home',
-  'station' => ['x' => 3, 'y' => 3],
-  'tileLayers' => ['floor' => ['offset' => [0, 3]]],
-  'npcs' => [
-    ['id' => 'cat', 'name' => 'Cat', 'sprite' => 'c', 'x' => 2, 'y' => 3,
-      'movement' => 'wander', 'wanderArea' => ['x' => 1, 'y' => 1, 'width' => 3, 'height' => 3]],
-    ['id' => 'mother', 'name' => 'Mother', 'sprite' => '@', 'x' => 4, 'y' => 0, 'script' => [
-      ['type' => 'move_player', 'x' => 1, 'y' => 4],
-      ['type' => 'transfer', 'map' => 'town', 'x' => 2, 'y' => 3],
-      ['type' => 'move_player', 'x' => 3, 'y' => 3],
-    ]],
-    ['id' => 'lamp', 'name' => 'Lamp', 'sprite' => 'i', 'x' => 1, 'y' => 2 + 1],
-  ],
-  'events' => [
-    'D' => [
-      'class' => 'Ichiloto\\Engine\\Events\\Triggers\\SleepEventTrigger',
-      'data' => ['spawnPoint' => ['x' => 1, 'y' => 4], 'spawnSprite' => ['South'], 'cost' => 0],
-    ],
-    'W' => [
-      'class' => 'Ichiloto\\Engine\\Events\\Triggers\\ScriptEventTrigger',
-      'data' => ['mode' => 'action', 'reusable' => true, 'scriptId' => 'home-only'],
-    ],
-    'S' => [
-      'class' => 'Ichiloto\\Engine\\Events\\Triggers\\ScriptEventTrigger',
-      'data' => ['mode' => 'action', 'reusable' => true, 'scriptId' => 'shared'],
-    ],
-  ],
-];
-PHP);
-
-    $town = $root . '/assets/Maps/town';
-    mkdir($town, 0o777, true);
-    file_put_contents($town . '/town.map.php', MapGridSource::buildSource("######\n#    #\n######", 'ICHILOTO_MAP'));
-    file_put_contents($town . '/town.event.php', MapGridSource::buildSource(" AB S \n      \n      ", 'ICHILOTO_EVENT_MAP'));
-    file_put_contents($town . '/town.data.php', <<<'PHP'
-<?php
-
-return [
-  'name' => 'Town',
-  'region' => '',
-  'npcs' => [
-    ['id' => 'guard', 'name' => 'Guard', 'sprite' => 'g', 'x' => 1, 'y' => 1, 'script' => [
-      ['type' => 'transfer', 'map' => 'home', 'x' => 1, 'y' => 3],
-      ['type' => 'move_player', 'x' => 2, 'y' => 4],
-      ['type' => 'move_route', 'subject' => 'player', 'waypoints' => [['x' => 5], ['y' => 4]]],
-    ]],
-  ],
-  'events' => [
-    'A' => [
-      'class' => 'Ichiloto\\Engine\\Events\\Triggers\\TransferPlayerTrigger',
-      'data' => ['destinationMap' => 'home', 'spawnPoint' => ['x' => 2, 'y' => 4], 'spawnSprite' => ['North']],
-    ],
-    'B' => [
-      'class' => 'Ichiloto\\Engine\\Events\\Triggers\\TransferPlayerTrigger',
-      'data' => ['destinationMap' => 'test-map', 'spawnPoint' => ['x' => 2, 'y' => 4], 'spawnSprite' => ['North']],
-    ],
-    'S' => [
-      'class' => 'Ichiloto\\Engine\\Events\\Triggers\\ScriptEventTrigger',
-      'data' => ['mode' => 'action', 'reusable' => true, 'scriptId' => 'shared'],
-    ],
-  ],
-];
-PHP);
-
-    file_put_contents($root . '/assets/Events/home-only.php', <<<'PHP'
-<?php
-
-// Runs only from home.
-return [
-  ['type' => 'move_player', 'x' => 3, 'y' => 4],
-  ['type' => 'camera', 'operation' => 'pan', 'target' => ['kind' => 'position', 'x' => 2, 'y' => 1], 'seconds' => 1.0],
-];
-PHP);
-    file_put_contents($root . '/assets/Events/shared.php', <<<'PHP'
-<?php
-
-return [
-  ['type' => 'move_player', 'x' => 3, 'y' => 4],
-];
-PHP);
-    file_put_contents($root . '/assets/Data/system.php', <<<'PHP'
-<?php
-
-return [
-  'startingPositions' => [
-    'player' => ['destinationMap' => 'home', 'spawnPoint' => ['x' => 1, 'y' => 4], 'spawnSprite' => ['South']],
-  ],
-];
-PHP);
-
-    return $root;
-}
-
-/** Plans an insertion on the fixture's home map. */
-function planLineInsertion(string $root, string $axis, int $at, int $count): Ichiloto\Editor\Maps\LineInsertionPlan
-{
-    return LineInsertionPlanner::planProject($root, 'home', $axis, $at, $count);
-}
-
-/** @return list<string> Each hand edit as `file where`. */
-function describeLineInsertionHandEdits(Ichiloto\Editor\Maps\LineInsertionPlan $plan): array
-{
-    return array_map(static fn(array $edit): string => $edit['file'] . ' ' . $edit['where'], $plan->handEdits);
-}
-
-/** @return list<string> The messages validation reports for the save manifest. */
-function describeSaveCompatibilityIssues(string $root): array
-{
-    return array_values(array_map(static fn($issue): string => $issue->message, array_filter(validateProject($root),
-        static fn($issue): bool => str_starts_with($issue->where, 'assets/Data/save-compatibility.php'))));
-}
-
-/** The editor over the fixture with `home` selected and the cursor on the canvas. */
-function lineInsertionEditor(string $root): Editor
-{
-    $editor = deletionEditor($root);
-    setEditorProperty($editor, 'focusedPane', 'canvas');
-    expect(getEditorProperty($editor, 'workspace')->getMapByIndex(0)->mapId)->toBe('home');
-
-    return $editor;
-}
-
-function openLineInsertPaletteItem(Editor $editor, string $label): void
-{
-    $items = callEditorMethod($editor, 'buildPaletteItems');
-    $item = array_values(array_filter($items, static fn($item) => $item->label === $label))[0] ?? null;
-    expect($item)->not->toBeNull();
-    ($item->action)();
-}
-
 it('splices blank rows into every grid, keeping styled cells and the rows that only move', function () {
-    $root = lineInsertionProject();
+    $root = mapLineProject();
     $plan = planLineInsertion($root, 'y', 2, 2);
     $plan->apply();
     $home = $root . '/assets/Maps/home';
@@ -198,7 +38,7 @@ it('splices blank rows into every grid, keeping styled cells and the rows that o
 });
 
 it('splices blank columns into every grid, keeping styled runs', function () {
-    $root = lineInsertionProject();
+    $root = mapLineProject();
     planLineInsertion($root, 'x', 1, 1)->apply();
     $home = $root . '/assets/Maps/home';
 
@@ -213,7 +53,7 @@ it('splices blank columns into every grid, keeping styled runs', function () {
 });
 
 it('moves points, stretches straddling areas and follows transfers into the map from every file', function () {
-    $root = lineInsertionProject();
+    $root = mapLineProject();
     $plan = planLineInsertion($root, 'y', 2, 2);
     $plan->apply();
     $home = require $root . '/assets/Maps/home/home.data.php';
@@ -248,11 +88,11 @@ it('moves points, stretches straddling areas and follows transfers into the map 
 });
 
 it('reports what it cannot rewrite instead of guessing or flattening it', function () {
-    $root = lineInsertionProject();
+    $root = mapLineProject();
     $shared = (string) file_get_contents($root . '/assets/Events/shared.php');
     $plan = planLineInsertion($root, 'y', 2, 2);
 
-    expect(describeLineInsertionHandEdits($plan))->toEqualCanonicalizing([
+    expect(describeMapLineHandEdits($plan))->toEqualCanonicalizing([
         'assets/Maps/home/home.data.php npcs.2.y',
         'assets/Events/shared.php 0.y',
     ])
@@ -268,7 +108,7 @@ it('reports what it cannot rewrite instead of guessing or flattening it', functi
 });
 
 it('raises the save content version with a declarative map shift step', function () {
-    $root = lineInsertionProject();
+    $root = mapLineProject();
     $plan = planLineInsertion($root, 'y', 2, 2);
     expect($plan->notes)->toBe(['Saves move with the map: save content version 1 adds this map shift.']);
     $plan->apply();
@@ -285,7 +125,7 @@ it('raises the save content version with a declarative map shift step', function
 });
 
 it('says existing saves are not migrated when the project has no save manifest', function () {
-    $root = lineInsertionProject();
+    $root = mapLineProject();
     unlink($root . '/assets/Data/save-compatibility.php');
 
     expect(planLineInsertion($root, 'x', 0, 1)->notes)
@@ -293,7 +133,7 @@ it('says existing saves are not migrated when the project has no save manifest',
 });
 
 it('moves a cutscene cast and script that start on the map, and a finalizer transfer into it', function () {
-    $root = lineInsertionProject();
+    $root = mapLineProject();
     $directory = $root . '/assets/Cutscenes/Cinematics/arrival';
     mkdir($directory, 0o777, true);
     file_put_contents($directory . '/arrival.data.php', "<?php\n\nreturn " . var_export([
@@ -317,14 +157,14 @@ it('moves a cutscene cast and script that start on the map, and a finalizer tran
 });
 
 it('inserts through the palette after a count and a confirmation, and one undo restores every file', function () {
-    $root = lineInsertionProject();
+    $root = mapLineProject();
     $before = sourceHashTree($root . '/assets');
-    $editor = lineInsertionEditor($root);
+    $editor = mapLineEditor($root);
     $workspace = getEditorProperty($editor, 'workspace');
     setEditorProperty($editor, 'cursorY', 2);
 
-    openLineInsertPaletteItem($editor, 'Map: Insert rows above the cursor');
-    expect(getEditorProperty($editor, 'modals')->has(Ichiloto\Editor\UI\Modal::LINE_INSERT))->toBeTrue();
+    openMapLinePaletteItem($editor, 'Map: Insert rows above the cursor');
+    expect(getEditorProperty($editor, 'modals')->has(Ichiloto\Editor\UI\Modal::MAP_LINES))->toBeTrue();
     pressKeys($editor, "\177", '2', "\r");
 
     expect(getEditorProperty($editor, 'isEventOptionDialogOpen'))->toBeTrue()
@@ -357,15 +197,15 @@ it('inserts through the palette after a count and a confirmation, and one undo r
 });
 
 it('cancels from the count prompt and from the confirmation without writing', function () {
-    $root = lineInsertionProject();
+    $root = mapLineProject();
     $before = sourceHashTree($root . '/assets');
-    $editor = lineInsertionEditor($root);
+    $editor = mapLineEditor($root);
 
-    openLineInsertPaletteItem($editor, 'Map: Insert columns left of the cursor');
+    openMapLinePaletteItem($editor, 'Map: Insert columns left of the cursor');
     pressKeys($editor, "\033");
-    expect(getEditorProperty($editor, 'modals')->has(Ichiloto\Editor\UI\Modal::LINE_INSERT))->toBeFalse();
+    expect(getEditorProperty($editor, 'modals')->has(Ichiloto\Editor\UI\Modal::MAP_LINES))->toBeFalse();
 
-    openLineInsertPaletteItem($editor, 'Map: Insert columns left of the cursor');
+    openMapLinePaletteItem($editor, 'Map: Insert columns left of the cursor');
     pressKeys($editor, "\177", '0', "\r");
     expect(getEditorProperty($editor, 'isEventOptionDialogOpen'))->toBeFalse()
         ->and(getEditorProperty($editor, 'statusMessage'))->toContain('at least 1');
@@ -375,20 +215,20 @@ it('cancels from the count prompt and from the confirmation without writing', fu
 });
 
 it('refuses to plan while the workspace has unsaved changes', function () {
-    $root = lineInsertionProject();
+    $root = mapLineProject();
     $before = sourceHashTree($root . '/assets');
-    $editor = lineInsertionEditor($root);
+    $editor = mapLineEditor($root);
     getEditorProperty($editor, 'workspace')->getMapByIndex(0)->setTileSymbol(1, 1, 'x');
 
-    openLineInsertPaletteItem($editor, 'Map: Insert rows above the cursor');
+    openMapLinePaletteItem($editor, 'Map: Insert rows above the cursor');
 
-    expect(getEditorProperty($editor, 'modals')->has(Ichiloto\Editor\UI\Modal::LINE_INSERT))->toBeFalse()
+    expect(getEditorProperty($editor, 'modals')->has(Ichiloto\Editor\UI\Modal::MAP_LINES))->toBeFalse()
         ->and(getEditorProperty($editor, 'statusMessage'))->toContain('Save or undo pending edits')
         ->and(sourceHashTree($root . '/assets'))->toBe($before);
 });
 
 it('offers the insert commands only on a map in Map mode', function () {
-    $editor = lineInsertionEditor(lineInsertionProject());
+    $editor = mapLineEditor(mapLineProject());
     $labels = static fn(): array => array_map(static fn($item): string => $item->label, callEditorMethod($editor, 'buildPaletteItems'));
 
     expect($labels())->toContain('Map: Insert rows above the cursor')
@@ -398,15 +238,15 @@ it('offers the insert commands only on a map in Map mode', function () {
 });
 
 it('reports coordinates in a list built with a spread instead of rewriting the wrong entry', function () {
-    $root = lineInsertionProject();
+    $root = mapLineProject();
     $path = $root . '/assets/Maps/home/home.data.php';
     file_put_contents($path, str_replace("  'npcs' => [\n", "  'npcs' => [\n    ...array_map(static fn(int \$y): array => ['id' => \"post-{\$y}\", 'name' => 'Post', 'sprite' => '|', 'x' => 5, 'y' => \$y], [3]),\n", (string) file_get_contents($path)));
     $source = (string) file_get_contents($path);
     $plan = planLineInsertion($root, 'y', 2, 1);
     $plan->apply();
 
-    expect(describeLineInsertionHandEdits($plan))->toContain('assets/Maps/home/home.data.php npcs.0.y')
-        ->and(describeLineInsertionHandEdits($plan))->toContain('assets/Maps/home/home.data.php npcs.1.y')
+    expect(describeMapLineHandEdits($plan))->toContain('assets/Maps/home/home.data.php npcs.0.y')
+        ->and(describeMapLineHandEdits($plan))->toContain('assets/Maps/home/home.data.php npcs.1.y')
         ->and(array_column(array_filter($plan->handEdits, static fn(array $edit): bool => $edit['where'] === 'npcs.1.y'), 'reason'))
         ->toBe(['it is inside an array built with a spread or a computed key'])
         // Everything else in the file still moves.
@@ -416,7 +256,7 @@ it('reports coordinates in a list built with a spread instead of rewriting the w
 });
 
 it('validates declarative map shift steps as the Engine reads them', function () {
-    $root = lineInsertionProject();
+    $root = mapLineProject();
     file_put_contents($root . '/assets/Data/save-compatibility.php', "<?php\n\nreturn " . var_export([
         'contentVersion' => 2,
         'migrations' => [
@@ -433,7 +273,7 @@ it('validates declarative map shift steps as the Engine reads them', function ()
 });
 
 it('validates declarative relocation steps as the Engine reads them', function () {
-    $root = lineInsertionProject();
+    $root = mapLineProject();
     $write = static fn(array $migrations, int $version) => file_put_contents($root . '/assets/Data/save-compatibility.php', "<?php\n\nreturn " . var_export([
         'contentVersion' => $version,
         'migrations' => $migrations,

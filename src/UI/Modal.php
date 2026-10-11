@@ -37,7 +37,7 @@ enum Modal: string
     /**
      * The count prompt for inserting rows or columns into the map.
      */
-    case LINE_INSERT = 'line_insert';
+    case MAP_LINES = 'map_lines';
     /**
      * The Ctrl+P command palette. Opens above the Database screen and the
      * main shell, below the safety modals.

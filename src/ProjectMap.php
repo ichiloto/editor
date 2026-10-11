@@ -2129,6 +2129,64 @@ final class ProjectMap
         $this->applyGridState($layers, $occupancy);
     }
 
+    /**
+     * Removes rows `$at` to `$at + $count - 1` (axis `y`) or those columns
+     * (axis `x`) from every grid the map has: its terminal layers, its event
+     * layer and its tile layers. Declared physical occupancy loses the same
+     * cells; absent occupancy stays absent. Ragged rows follow terminal
+     * geometry: columns affect only rows reaching them. An event marker on a
+     * removed line refuses the removal, so no event is dropped or cut. Other
+     * data coordinates move through the project-wide line plan.
+     *
+     * @throws MapSourceRefusal When the lines are outside the map, would leave it empty, hold an event marker, or a tile layer cannot lose them; nothing is changed.
+     */
+    public function removeLines(string $axis, int $at, int $count): void
+    {
+        $this->assertEditable();
+        $size = match ($axis) {
+            'x' => $this->getWidth(),
+            'y' => $this->getHeight(),
+            default => throw new MapSourceRefusal("Remove rows (y) or columns (x), not '{$axis}'."),
+        };
+        $noun = $axis === 'y' ? 'rows' : 'columns';
+        if ($count < 1 || $at < 0 || $at + $count > $size) {
+            throw new MapSourceRefusal(sprintf('%s has no %s %d to %d to remove; nothing was changed.', $this->mapId, $noun, $at + 1, $at + $count));
+        }
+        if ($count === $size) {
+            throw new MapSourceRefusal(sprintf('Removing every one of its %s would leave %s empty; nothing was changed.', $noun, $this->mapId));
+        }
+        $markers = [];
+        for ($line = $at; $line < $at + $count; $line++) {
+            for ($other = 0, $extent = $axis === 'y' ? $this->getWidth() : $this->getHeight(); $other < $extent; $other++) {
+                [$x, $y] = $axis === 'y' ? [$other, $line] : [$line, $other];
+                $marker = $this->hasLayerCell(MapLayers::EVENT, $x, $y) ? $this->getEventMarkerAt($x, $y) : null;
+                if ($marker !== null) {
+                    $markers[] = sprintf('event %s at x %d, y %d', $marker, $x, $y);
+                }
+            }
+        }
+        if ($markers !== []) {
+            throw new MapSourceRefusal(sprintf('Move these off the removed %s first; nothing was changed: %s.', $noun, implode('; ', $markers)));
+        }
+
+        $occupancy = $this->getDeclaredPhysicalOccupancy();
+        $layers = $this->copyEditableLayers();
+        $layers->removeLines($axis, $at, $count);
+        if ($occupancy !== null) {
+            if ($axis === 'y') {
+                array_splice($occupancy, $at, $count);
+            } else {
+                foreach ($occupancy as &$row) {
+                    if (count($row) > $at) {
+                        array_splice($row, $at, $count);
+                    }
+                }
+                unset($row);
+            }
+        }
+        $this->applyGridState($layers, $occupancy);
+    }
+
     /** @return list<list<CollisionType>>|null Null means undeclared, never invalid. */
     private function getDeclaredPhysicalOccupancy(): ?array
     {

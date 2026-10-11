@@ -56,7 +56,7 @@ use Ichiloto\Editor\Actors\ActorAuthoring;
 use Ichiloto\Editor\Database\RecordSubList;
 use Ichiloto\Editor\Database\ReferencePicker;
 use Ichiloto\Editor\Debug\Debug;
-use Ichiloto\Editor\Maps\LineInsertionPlan;
+use Ichiloto\Editor\Maps\MapLinePlan;
 use Ichiloto\Editor\Maps\MapLayers;
 use Ichiloto\Editor\Events\EventAuthoring;
 use Ichiloto\Editor\Events\EventRefusal;
@@ -129,7 +129,7 @@ final class Editor
 {
     use \Ichiloto\Editor\Canvas\LayerCanvas;
     use \Ichiloto\Editor\Canvas\PieceCanvas;
-    use \Ichiloto\Editor\Canvas\LineInsertCanvas;
+    use \Ichiloto\Editor\Canvas\MapLineCanvas;
     use \Ichiloto\Editor\Canvas\GlyphTileCanvas;
     use \Ichiloto\Editor\Inspector\MapKindField;
     use CutscenesWorkspace;
@@ -1219,7 +1219,7 @@ final class Editor
         $router->bindModal(Modal::DATABASE_ENTRY_DELETE_CONFIRMATION, $this->handleDatabaseEntryDeleteConfirmationInput(...));
         $router->bindModal(Modal::RENAME_CONFIRMATION, $this->handleRenameConfirmationInput(...));
         $router->bindModal(Modal::LAYER_EDIT, $this->handleLayerPromptInput(...));
-        $router->bindModal(Modal::LINE_INSERT, $this->handleLineInsertPromptInput(...));
+        $router->bindModal(Modal::MAP_LINES, $this->handleMapLinePromptInput(...));
         $router->bindModal(Modal::COMMAND_PALETTE, $this->handleCommandPaletteInput(...));
         $router->bindModal(Modal::HELP, $this->handleHelpInput(...));
         $router->bindModal(Modal::DATABASE, $this->handleDatabaseInput(...));
@@ -5452,7 +5452,7 @@ final class Editor
         $items = [
             ...$this->buildLayerPaletteItems(),
             ...$this->buildPiecePaletteItems(),
-            ...$this->buildLineInsertPaletteItems(),
+            ...$this->buildMapLinePaletteItems(),
             new PaletteItem('Save Map', 'Ctrl+S', fn() => $this->saveSelectedMap()),
             new PaletteItem('Move Map to Derived Path', '', fn() => $this->beginExplicitMapMove()),
             new PaletteItem('Save All', 'Ctrl+A', fn() => $this->saveAllAssets()),
@@ -7295,9 +7295,9 @@ final class Editor
                 return;
             }
 
-            if (($field['lineInsertion'] ?? null) instanceof LineInsertionPlan) {
+            if (($field['mapLines'] ?? null) instanceof MapLinePlan) {
                 if ($selectedEntry['value'] === 'preview') { return; }
-                $this->confirmLineInsertion($field['lineInsertion'], $selectedEntry['value'] === 'insert');
+                $this->confirmMapLines($field['mapLines'], $selectedEntry['value'] === 'write');
                 return;
             }
 
@@ -13767,8 +13767,8 @@ final class Editor
             return true;
         }
 
-        if ($this->modals->has(Modal::LINE_INSERT)) {
-            $this->renderLineInsertPrompt($layout);
+        if ($this->modals->has(Modal::MAP_LINES)) {
+            $this->renderMapLinePrompt($layout);
             return true;
         }
 

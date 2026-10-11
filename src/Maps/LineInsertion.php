@@ -13,7 +13,7 @@ use InvalidArgumentException;
  *
  * @package Ichiloto\Editor\Maps
  */
-final class LineInsertion
+final class LineInsertion implements MapLineEdit
 {
     public function __construct(
         public readonly string $mapId,
@@ -29,28 +29,29 @@ final class LineInsertion
         }
     }
 
-    /** `rows` or `columns`, singular for one. */
+    public string $verb {
+        get => 'Insert';
+    }
+
     public string $noun {
         get => ($this->axis === 'y' ? 'row' : 'column') . ($this->count === 1 ? '' : 's');
     }
 
-    /** What is inserted where, in words: 3 rows above row 5 of town. */
     public string $description {
         get => sprintf('%d %s %s %s %d of %s', $this->count, $this->noun,
             $this->axis === 'y' ? 'above' : 'left of', $this->axis === 'y' ? 'row' : 'column', $this->at + 1, $this->mapId);
     }
 
-    /** Where a coordinate on the insertion axis moves to. */
     public function getShiftedCoordinate(int $value): int
     {
         return $value >= $this->at ? $value + $this->count : $value;
     }
 
     /**
-     * Where a span on the insertion axis moves to: one starting at or beyond
-     * the line moves, one straddling it stretches, one before it stays.
+     * One starting at or beyond the line moves, one straddling it stretches,
+     * one before it stays.
      *
-     * @return array{int, int} The new start and size.
+     * @return array{int, int}
      */
     public function getShiftedSpan(int $start, int $size): array
     {
@@ -61,14 +62,9 @@ final class LineInsertion
         return $start + $size > $this->at ? [$start, $size + $this->count] : [$start, $size];
     }
 
-    /**
-     * The declarative save migration step entry the Engine applies to a
-     * saved player position.
-     *
-     * @return array{map: string, axis: string, at: int, by: int}
-     */
-    public function getManifestEntry(): array
+    /** @return array{mapShifts: list<array{map: string, axis: string, at: int, by: int}>} */
+    public function getManifestEdits(): array
     {
-        return ['map' => $this->mapId, 'axis' => $this->axis, 'at' => $this->at, 'by' => $this->count];
+        return ['mapShifts' => [['map' => $this->mapId, 'axis' => $this->axis, 'at' => $this->at, 'by' => $this->count]]];
     }
 }

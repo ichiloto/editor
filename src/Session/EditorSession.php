@@ -74,7 +74,9 @@ use Ichiloto\Editor\Playtest\PlaytestOverlay;
 use Ichiloto\Editor\Playtest\PlaytestRun;
 use Ichiloto\Editor\Playtest\PlaytestStart;
 use Ichiloto\Editor\Maps\LayerEditor;
-use Ichiloto\Editor\Maps\LineInsertionPlanner;
+use Ichiloto\Editor\Maps\LineRemoval;
+use Ichiloto\Editor\Maps\MapLinePlan;
+use Ichiloto\Editor\Maps\MapLinePlanner;
 use Ichiloto\Editor\Maps\MapLayers;
 use Ichiloto\Editor\Maps\MapReferences;
 use Ichiloto\Editor\Maps\TilePalette;
@@ -452,6 +454,33 @@ final class EditorSession
      */
     public function insertMapLines(string $mapId, int $revision, string $axis, int $at, int $count, ?string $answer = null, ?string $confirm = null): array
     {
+        return $this->editMapLines($mapId, $revision, $answer, $confirm, 'inserted', 'inserting map lines',
+            fn(): MapLinePlan => MapLinePlanner::planInsertion($this->workspace->projectRoot, $mapId, $axis, $at, $count));
+    }
+
+    /**
+     * Reviews a project-wide row or column removal before writing it as one
+     * reversible source set, as {@see insertMapLines()} does. Anything
+     * authored on a removed line refuses the removal. The review names where
+     * saves on the removed lines land; confirming repeats that landing.
+     *
+     * @param array{int, int}|null $landing Where saves on the removed lines land, after the removal; null proposes one.
+     * @return array<string, mixed>
+     * @throws SessionRefusal When the map or review is stale, edits are pending, or the removal cannot be applied safely.
+     */
+    public function removeMapLines(string $mapId, int $revision, string $axis, int $at, int $count, ?array $landing = null, ?string $answer = null, ?string $confirm = null): array
+    {
+        return $this->editMapLines($mapId, $revision, $answer, $confirm, 'removed', 'removing map lines',
+            fn(): MapLinePlan => MapLinePlanner::planRemoval($this->workspace->projectRoot, $mapId, $axis, $at, $count, $landing));
+    }
+
+    /**
+     * @param callable(): MapLinePlan $plan Plans the edit from the files on disk.
+     * @return array<string, mixed>
+     * @throws SessionRefusal
+     */
+    private function editMapLines(string $mapId, int $revision, ?string $answer, ?string $confirm, string $done, string $doing, callable $plan): array
+    {
         $map = $this->requireCurrentMap($mapId, $revision);
         if ($map->getGridSourceIssue() !== null) {
             throw new SessionRefusal(sprintf('%s is read-only: %s', $mapId, $map->getGridSourceIssue()));
@@ -460,25 +489,26 @@ final class EditorSession
             return ['status' => 'cancelled', 'map' => $mapId, 'revision' => $revision, 'changed' => false, 'maps' => $this->describeMaps()];
         }
         if ($this->workspace->hasUnsavedChanges()) {
-            throw new SessionRefusal('Save or undo pending edits before inserting map lines. No files were changed.');
+            throw new SessionRefusal(sprintf('Save or undo pending edits before %s. No files were changed.', $doing));
         }
         try {
-            $plan = LineInsertionPlanner::planProject($this->workspace->projectRoot, $mapId, $axis, $at, $count);
+            $plan = $plan();
         } catch (InvalidArgumentException|RuntimeException $failure) {
             throw new SessionRefusal($failure->getMessage(), previous: $failure);
         }
+        $edit = $plan->edit;
         $paths = array_map(fn(string $path): string => substr($path, strlen($this->workspace->projectRoot) + 1), $plan->getChangedPaths());
-        $description = $plan->insertion->description;
-        $required = new SourceSetRequired($plan->getSourceSet(), 'Insert ' . $plan->insertion->noun,
-            'this map line insertion', 'Insert ' . $description . '?', $paths);
+        $required = new SourceSetRequired($plan->getSourceSet(), $edit->verb . ' ' . $edit->noun,
+            'this map line ' . ($done === 'removed' ? 'removal' : 'insertion'), $edit->verb . ' ' . $edit->description . '?', $paths);
         $result = $this->writeSourceSet($required, $answer, static fn(): array => [], $confirm);
         if (($result['status'] ?? null) === 'question') {
-            return [...$result, 'map' => $mapId, 'revision' => $revision, 'axis' => $axis, 'at' => $at, 'count' => $count,
+            return [...$result, 'map' => $mapId, 'revision' => $revision, 'axis' => $edit->axis, 'at' => $edit->at, 'count' => $edit->count,
+                ...($edit instanceof LineRemoval ? ['landing' => $edit->landing] : []),
                 'paths' => $paths, 'handEdits' => $plan->handEdits, 'notes' => $plan->notes,
                 'width' => $plan->width, 'height' => $plan->height];
         }
 
-        return ['status' => 'inserted', 'map' => $mapId, 'revision' => $this->getMapRevision($this->requireMap($mapId)),
+        return ['status' => $done, 'map' => $mapId, 'revision' => $this->getMapRevision($this->requireMap($mapId)),
             'changed' => true, 'maps' => $this->describeMaps()];
     }
 

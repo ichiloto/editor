@@ -5,7 +5,7 @@ declare(strict_types=1);
 use Ichiloto\Editor\Database\PhpValueExporter;
 use Ichiloto\Editor\History\CommandHistory;
 use Ichiloto\Editor\History\GenericCommand;
-use Ichiloto\Editor\Maps\LineInsertionPlanner;
+use Ichiloto\Editor\Maps\MapLinePlanner;
 use Ichiloto\Editor\MapSourceRefusal;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\Session\EditorSession;
@@ -330,7 +330,7 @@ it('includes physical geometry in the project insertion source set with coordina
     } else {
         array_splice($expected, 1, 0, array_fill(0, 2, array_fill(0, 4, CollisionType::SOLID->value)));
     }
-    $plan = LineInsertionPlanner::planProject($root, 'test-map', $axis, 1, 2);
+    $plan = MapLinePlanner::planInsertion($root, 'test-map', $axis, 1, 2);
     expect(sourceHashTree($root))->toBe($before)->and($plan->getChangedPaths())->toContain($path);
     $plan->apply();
     $after = sourceHashTree($root);
@@ -355,7 +355,7 @@ it('refuses a project insertion with malformed or unrewritable occupancy before 
     writeGeometryOccupancyData($map->directory, $malformed ? null : $rows,
         expression: $malformed ? null : 'array_values(' . PhpValueExporter::export($rows, 1) . ')');
     $before = sourceHashTree($root);
-    expect(fn() => LineInsertionPlanner::planProject($root, 'test-map', 'y', 1, 1))->toThrow(MapSourceRefusal::class)
+    expect(fn() => MapLinePlanner::planInsertion($root, 'test-map', 'y', 1, 1))->toThrow(MapSourceRefusal::class)
         ->and(sourceHashTree($root))->toBe($before);
 })->with([false, true]);
 
@@ -365,7 +365,7 @@ it('preserves unrelated object expressions in isolated insertion readback with a
     file_put_contents($path, str_replace("'events' => [],", "'events' => [], 'futureObject' => new \\DateTimeImmutable('2001-02-03'),",
         (string) file_get_contents($path)));
     $before = sourceHashTree($root);
-    $plan = LineInsertionPlanner::planProject($root, 'test-map', 'x', 1, 1);
+    $plan = MapLinePlanner::planInsertion($root, 'test-map', 'x', 1, 1);
     $plan->apply();
     $map = loadOccupancyGeometryMap($root);
     expect($map->hasMapDataField(['occupancy']))->toBe($declared)
