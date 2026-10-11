@@ -1211,7 +1211,10 @@ crowns, as wide as the image above the trunk and narrowing upwards, over gray
 `|` trunks; the Game view leaves decoration layers out, so they never hide the
 images. A drawing that would take the map past its 128 world objects is
 refused with the number that still fit. Each drawing or erasing is one undo
-step and is written on Save.
+step and is written on Save. The GUI editor's Trees tool chooses the types and
+covers the region with any brush shape, Shift or the eraser erasing; in the
+terminal editor, `Ctrl+P` offers **Map: Draw trees in the selection**, which
+varies between every tree type, and **Map: Erase trees in the selection**.
 
 Why a category can still turn out read-only: a file the editor cannot
 evaluate, a value it could not write back out (such as an object only its own

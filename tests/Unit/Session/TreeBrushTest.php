@@ -166,3 +166,27 @@ it('refuses a type that is not a tree', function () {
     expect(fn() => $session->drawTrees('test-map', $session->readMap('test-map')['revision'], [[3, 3]], ['counter']))
         ->toThrow(SessionRefusal::class, "'counter' is not a tree type");
 });
+
+it('draws and erases trees over the terminal canvas selection, one undo step each', function () {
+    $editor = deletionEditor(createTreeBrushProject());
+    setEditorProperty($editor, 'focusedPane', 'canvas');
+    $map = static fn() => getEditorProperty($editor, 'workspace')->getMapByIndex(0);
+    expect($map()->mapId)->toBe('test-map');
+    $count = static fn(): int => count($map()->hasMapDataField(['worldObjects']) ? $map()->getMapDataField(['worldObjects']) : []);
+
+    setEditorProperty($editor, 'canvasSelection', ['x' => 1, 'y' => 1, 'width' => 10, 'height' => 6]);
+    openMapLinePaletteItem($editor, 'Map: Draw trees in the selection');
+    $planted = $count();
+    expect($planted)->toBeGreaterThan(2)
+        ->and(getEditorProperty($editor, 'statusMessage'))->toContain("Planted {$planted} trees");
+
+    openMapLinePaletteItem($editor, 'Map: Erase trees in the selection');
+    expect($count())->toBe(0);
+    pressKeys($editor, "\x1a");
+    expect($count())->toBe($planted);
+
+    setEditorProperty($editor, 'canvasSelection', null);
+    openMapLinePaletteItem($editor, 'Map: Draw trees in the selection');
+    expect(getEditorProperty($editor, 'statusMessage'))->toContain('Select a region of the canvas first')
+        ->and($count())->toBe($planted);
+});

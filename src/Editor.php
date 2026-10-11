@@ -130,6 +130,7 @@ final class Editor
     use \Ichiloto\Editor\Canvas\LayerCanvas;
     use \Ichiloto\Editor\Canvas\PieceCanvas;
     use \Ichiloto\Editor\Canvas\MapLineCanvas;
+    use \Ichiloto\Editor\Canvas\TreeCanvas;
     use \Ichiloto\Editor\Canvas\GlyphTileCanvas;
     use \Ichiloto\Editor\Inspector\MapKindField;
     use CutscenesWorkspace;
@@ -5453,6 +5454,7 @@ final class Editor
             ...$this->buildLayerPaletteItems(),
             ...$this->buildPiecePaletteItems(),
             ...$this->buildMapLinePaletteItems(),
+            ...$this->buildTreePaletteItems(),
             new PaletteItem('Save Map', 'Ctrl+S', fn() => $this->saveSelectedMap()),
             new PaletteItem('Move Map to Derived Path', '', fn() => $this->beginExplicitMapMove()),
             new PaletteItem('Save All', 'Ctrl+A', fn() => $this->saveAllAssets()),
