@@ -51,18 +51,63 @@ final class PlaytestLauncher
         );
     }
 
+    /** The renderer choice that lets the console pick: GPUI when it is installed and usable, otherwise the terminal. */
+    public const string AUTOMATIC = 'auto';
+
     /**
      * Starts the playtest in the background with a renderer of its own, for
      * an editor that owns no terminal to hand over: the play command runs
-     * without prompts, reading nothing and writing its output to a log.
+     * without prompts, reading nothing and writing its output to a log. It
+     * begins a new game at the overlay's starting position, skipping the
+     * title, or at the title; a terminal session opens in a terminal window of
+     * its own, which closes when the game ends.
      *
-     * @param string $rendererId The renderer, such as `gpui`.
+     * @param string $rendererId The renderer, such as `gpui`, or {@see AUTOMATIC}.
      * @param string $logPath Where the play command's output goes.
      * @throws RuntimeException When the process cannot start.
      */
-    public function start(PlaytestOverlay $overlay, string $rendererId, string $logPath): PlaytestRun
+    public function start(PlaytestOverlay $overlay, string $rendererId, string $logPath, PlaytestStart $start = PlaytestStart::CELL): PlaytestRun
     {
-        return $this->spawn($overlay, ['play', '--no-tmux', '--no-interaction', '--renderer=' . $rendererId, '-d', $overlay->root], $logPath);
+        return $this->spawn($overlay, ['play', '--no-tmux', '--no-interaction',
+            '--start=' . ($start === PlaytestStart::TITLE ? 'title' : 'new-game'), '--renderer=' . $rendererId,
+            '--terminal-window', '-d', $overlay->root], $logPath);
+    }
+
+    /**
+     * The renderers the project's Engine can launch, as the console reports
+     * them without starting any: each with its name, whether it is usable,
+     * and why not when it is not, and the one it prefers.
+     *
+     * @return array{renderers: list<array{id: string, displayName: string, available: bool, reason: ?string}>, preferredId: ?string}
+     * @throws RuntimeException When the console cannot report them.
+     */
+    public function listRenderers(string $projectRoot): array
+    {
+        $pipes = [];
+        $process = @proc_open([PHP_BINARY, $this->consoleBinary, 'renderer:list', '--directory=' . $projectRoot, '--json'],
+            [0 => ['file', '/dev/null', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, $projectRoot);
+        if (! is_resource($process)) {
+            throw new RuntimeException('The renderers could not be listed: the console did not start.');
+        }
+        $output = (string) stream_get_contents($pipes[1]);
+        $errors = trim((string) stream_get_contents($pipes[2]));
+        fclose($pipes[1]);
+        fclose($pipes[2]);
+        $exit = proc_close($process);
+        $report = json_decode($output, true);
+        if ($exit !== 0 || ! is_array($report) || ($report['schema'] ?? null) !== 'ichiloto.renderers/1' || ! is_array($report['renderers'] ?? null)) {
+            throw new RuntimeException('The renderers could not be listed' . ($errors === '' ? '.' : ': ' . $errors));
+        }
+        $renderers = [];
+        foreach ($report['renderers'] as $renderer) {
+            if (! is_array($renderer) || ! is_string($renderer['id'] ?? null) || ! is_bool($renderer['available'] ?? null)) {
+                throw new RuntimeException('The console reported a renderer the editor cannot read.');
+            }
+            $renderers[] = ['id' => $renderer['id'], 'displayName' => is_string($renderer['displayName'] ?? null) ? $renderer['displayName'] : $renderer['id'],
+                'available' => $renderer['available'], 'reason' => is_string($renderer['reason'] ?? null) ? $renderer['reason'] : null];
+        }
+
+        return ['renderers' => $renderers, 'preferredId' => is_string($report['preferredId'] ?? null) ? $report['preferredId'] : null];
     }
 
     /**

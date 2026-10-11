@@ -434,17 +434,27 @@ it('plays a saved map from a cell in the background and refuses an unsaved one',
 it('plays from the title with the project\'s own start, and only with renderers it can launch', function () {
     $root = makeTemporaryProject();
     file_put_contents($root . '/assets/Data/system.php', "<?php\n\nreturn ['startingPositions' => ['player' => ['destinationMap' => 'test-map', 'spawnPoint' => ['x' => 2, 'y' => 1]]]];\n");
-    // The fake game reports the start position its overlay gives it, then ends.
+    // The fake console lists GPUI as usable and the terminal as not; the fake game reports the start position its
+    // overlay gives it and how it was launched, then ends.
     $console = $root . '/fake-console.php';
-    file_put_contents($console, '<?php $d = $argv[array_search("-d", $argv) + 1]; $s = require $d . "/assets/Data/system.php";'
+    file_put_contents($console, '<?php if ($argv[1] === "renderer:list") { echo json_encode(["schema" => "ichiloto.renderers/1", "preferredId" => "gpui",'
+        . ' "renderers" => [["id" => "gpui", "displayName" => "GPUI", "available" => true, "reason" => null],'
+        . ' ["id" => "terminal", "displayName" => "Terminal", "available" => false, "reason" => "no terminal application found"]]]); exit(0); }'
+        . ' $d = $argv[array_search("-d", $argv) + 1]; $s = require $d . "/assets/Data/system.php";'
         . ' fwrite(STDERR, json_encode($s["startingPositions"]["player"]) . " " . implode(" ", array_slice($argv, 1)) . "\n"); exit(3);');
     putenv('ICHILOTO_CONSOLE_BIN=' . $console);
 
     try {
         $session = EditorSession::open($root);
-        expect($session->describePlaytestOptions())->toBe(['starts' => ['cell', 'title'], 'renderers' => ['gpui'], 'defaultRenderer' => 'gpui'])
+        expect($session->describePlaytestOptions())->toBe(['starts' => ['cell', 'title'], 'renderers' => [
+                ['id' => 'auto', 'label' => 'Automatic (GPUI)', 'available' => true, 'reason' => null],
+                ['id' => 'gpui', 'label' => 'GPUI', 'available' => true, 'reason' => null],
+                ['id' => 'terminal', 'label' => 'Terminal', 'available' => false, 'reason' => 'no terminal application found'],
+            ], 'defaultRenderer' => 'auto', 'issue' => null])
             ->and(fn() => $session->startPlaytest(null, null, null, PlaytestStart::TITLE, 'terminal'))
-            ->toThrow(SessionRefusal::class, 'cannot use the terminal renderer from here');
+            ->toThrow(SessionRefusal::class, 'Terminal cannot be used for a playtest: no terminal application found.')
+            ->and(fn() => $session->startPlaytest(null, null, null, PlaytestStart::TITLE, 'vulkan'))
+            ->toThrow(SessionRefusal::class, 'cannot use the vulkan renderer');
         $map = $session->readMap('test-map');
         $session->paint('test-map', $map['revision'], $map['baseLayer'], [[1, 1]], '%');
         expect(fn() => $session->startPlaytest(null, null, null, PlaytestStart::TITLE))
@@ -457,7 +467,16 @@ it('plays from the title with the project\'s own start, and only with renderers 
             usleep(20000);
         }
         expect($session->describePlaytest()['log'])->toContain('{"destinationMap":"test-map","spawnPoint":{"x":2,"y":1}}')
-            ->toContain('--renderer=gpui');
+            ->toContain('--start=title')->toContain('--renderer=auto')->toContain('--terminal-window');
+
+        // From a cell, a new game starts on that cell, skipping the title.
+        $session->startPlaytest('test-map', 1, 1);
+        $deadline = microtime(true) + 5;
+        while ($session->describePlaytest()['running'] && microtime(true) < $deadline) {
+            usleep(20000);
+        }
+        expect($session->describePlaytest()['log'])->toContain('{"destinationMap":"test-map","spawnPoint":{"x":1,"y":1}')
+            ->toContain('--start=new-game');
     } finally {
         putenv('ICHILOTO_CONSOLE_BIN');
     }

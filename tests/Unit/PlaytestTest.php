@@ -278,7 +278,7 @@ it('runs a playtest in the background with its renderer and stops the whole game
         $children = trim((string) shell_exec('pgrep -P ' . $pid));
 
         expect($run->isRunning())->toBeTrue()
-            ->and(file_get_contents($scratch . '/play.log'))->toContain('play --no-tmux --no-interaction --renderer=gpui -d ' . $overlay->root)
+            ->and(file_get_contents($scratch . '/play.log'))->toContain('play --no-tmux --no-interaction --start=new-game --renderer=gpui --terminal-window -d ' . $overlay->root)
             ->and($children)->not->toBe('');
 
         $run->stop();

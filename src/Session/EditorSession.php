@@ -4343,8 +4343,13 @@ final class EditorSession
         }
         $options = $this->describePlaytestOptions();
         $renderer ??= $options['defaultRenderer'];
-        if (! in_array($renderer, $options['renderers'], true)) {
-            throw new SessionRefusal(sprintf('A playtest cannot use the %s renderer from here; choose one of %s.', $renderer, implode(', ', $options['renderers'])));
+        $offered = array_find($options['renderers'], static fn(array $choice): bool => $choice['id'] === $renderer);
+        if ($offered === null) {
+            throw new SessionRefusal(sprintf('A playtest cannot use the %s renderer; choose one of %s.', $renderer,
+                implode(', ', array_column($options['renderers'], 'id'))));
+        }
+        if (! $offered['available']) {
+            throw new SessionRefusal(sprintf('%s cannot be used for a playtest: %s.', $offered['label'], $offered['reason'] ?? 'it is unavailable'));
         }
         if ($start === PlaytestStart::CELL) {
             if ($mapId === null || $x === null || $y === null) {
@@ -4370,7 +4375,7 @@ final class EditorSession
                 : PlaytestOverlay::createForTitle($this->workspace->projectRoot);
             $launcher = PlaytestLauncher::discover(projectRoot: $this->workspace->projectRoot);
             $log = sys_get_temp_dir() . DIRECTORY_SEPARATOR . uniqid('ichiloto-playtest-', true) . '.log';
-            $this->playtest = $launcher->start($overlay, $renderer, $log);
+            $this->playtest = $launcher->start($overlay, $renderer, $log, $start);
             $this->playtestStart = $start;
         } catch (RuntimeException $error) {
             $overlay?->destroy();
@@ -4381,17 +4386,33 @@ final class EditorSession
     }
 
     /**
-     * Where a playtest from this editor can begin, and the renderers it can launch, the first being the default. A
-     * graphical editor owns no terminal to hand over, so it launches only renderers that open a window of their own.
+     * Where a playtest from this editor can begin, and the renderers it can launch with. The first is Automatic, the
+     * default: the console picks GPUI when it is installed and usable, otherwise the terminal, in a terminal window
+     * of its own. Each installed renderer follows, with whether it is usable and why not when it is not. When the
+     * console cannot list them, Automatic is still offered and the issue says why.
      *
-     * @return array{starts: list<string>, renderers: list<string>, defaultRenderer: string}
+     * @return array{starts: list<string>, renderers: list<array{id: string, label: string, available: bool, reason: ?string}>,
+     *     defaultRenderer: string, issue: ?string}
      */
     public function describePlaytestOptions(): array
     {
+        $issue = null;
+        try {
+            $listed = PlaytestLauncher::discover(projectRoot: $this->workspace->projectRoot)->listRenderers($this->workspace->projectRoot);
+        } catch (RuntimeException $error) {
+            $listed = ['renderers' => [], 'preferredId' => null];
+            $issue = $error->getMessage();
+        }
+        $preferred = array_find($listed['renderers'], static fn(array $renderer): bool => $renderer['id'] === $listed['preferredId']);
+        $automatic = ['id' => PlaytestLauncher::AUTOMATIC,
+            'label' => $preferred === null ? 'Automatic' : sprintf('Automatic (%s)', $preferred['displayName']), 'available' => true, 'reason' => null];
+
         return [
             'starts' => array_map(static fn(PlaytestStart $start): string => $start->value, PlaytestStart::cases()),
-            'renderers' => [self::PLAYTEST_RENDERER],
-            'defaultRenderer' => self::PLAYTEST_RENDERER,
+            'renderers' => [$automatic, ...array_map(static fn(array $renderer): array => ['id' => $renderer['id'],
+                'label' => $renderer['displayName'], 'available' => $renderer['available'], 'reason' => $renderer['reason']], $listed['renderers'])],
+            'defaultRenderer' => PlaytestLauncher::AUTOMATIC,
+            'issue' => $issue,
         ];
     }
 
