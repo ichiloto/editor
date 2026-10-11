@@ -7,6 +7,7 @@ namespace Ichiloto\Editor\Validation;
 use Ichiloto\Editor\Canvas\GlyphTilePlanner;
 use Ichiloto\Editor\Canvas\PieceRole;
 use Ichiloto\Editor\Field\ProjectNpc;
+use Ichiloto\Editor\Field\WorldObjectAuthoring;
 use Ichiloto\Editor\Maps\MapLayers;
 use Ichiloto\Editor\Maps\TileLayerSource;
 use Ichiloto\Editor\ProjectMap;
@@ -200,7 +201,12 @@ final class MapGraphicsValidator
             return null;
         }
 
-        return [$tileset, $layers, new MapGraphics($tileset, $layers, owners: $owners)->getShownGlyphCells($layerSet, $map->getAssetRoot())];
+        // A world object that draws covers its glyph cells in the field, as the Engine's presentation applies it.
+        $covered = WorldObjectAuthoring::readRestingCoverage($map)['glyphs'] ?? [];
+        $shown = array_values(array_filter(new MapGraphics($tileset, $layers, owners: $owners)->getShownGlyphCells($layerSet, $map->getAssetRoot()),
+            static fn(array $cell): bool => ! isset($covered[$cell['layer']][$cell['y']][$cell['x']])));
+
+        return [$tileset, $layers, $shown];
     }
 
     /**

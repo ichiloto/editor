@@ -21,6 +21,8 @@ use Ichiloto\Editor\Cutscenes\Source\PhpArraySourceDocument;
 use Ichiloto\Editor\Cutscenes\Source\SourceNode;
 use Ichiloto\Engine\Animations\Field\FieldPresentationCatalog;
 use Ichiloto\Engine\Field\WorldObjectDefinition;
+use Ichiloto\Engine\Rendering\Sprites\FieldSpriteRole;
+use Throwable;
 use InvalidArgumentException;
 
 /** A transient record view. Only the map owns or persists these declarations. */
@@ -35,6 +37,46 @@ final readonly class WorldObjectAuthoring
             throw new InvalidArgumentException('worldObjects requires literal object records in a list; it cannot be flattened.');
         }
         return $entries;
+    }
+
+    /**
+     * The glyph and tile coverage of a map's world objects at rest, as the field applies it: an object covers its
+     * cells only while it can be drawn, so its base role's current frame resolves, or its sign board can be read.
+     * An object without art covers its cells by design. Validation uses it to judge what the field still shows as
+     * glyphs; a map whose objects cannot be read covers nothing, as its own validation reports why.
+     *
+     * @return array<string, array<string, array<int, array<int, true>>>>
+     */
+    public static function readRestingCoverage(ProjectMap $map): array
+    {
+        try {
+            $definitions = self::validateEntries($map, self::readEntries($map));
+        } catch (InvalidArgumentException|MapSourceRefusal) {
+            return [];
+        }
+        $coverage = [];
+        foreach ($definitions as $object) {
+            $sign = $object->resource?->sign;
+            if ($sign !== null) {
+                try {
+                    $sign->getBoard($map->getAssetRoot());
+                } catch (Throwable) {
+                    continue;
+                }
+            } elseif ($object->sprites !== null) {
+                $role = new FieldSpriteRole($object->sprites, $map->getAssetRoot(), 'World-object coverage ' . $object->id);
+                try {
+                    if ($role->getFrame($object->pivot) === null) {
+                        continue;
+                    }
+                } finally {
+                    $role->release();
+                }
+            }
+            $coverage = array_replace_recursive($coverage, $object->coverage);
+        }
+
+        return $coverage;
     }
 
     public static function validateEntries(ProjectMap $map, array $entries, bool $complete = true): array
