@@ -125,7 +125,9 @@ final class PreviewSceneHost
         }
         $this->scene->setPresentationContext(new ScenePresentationContext($this->grid, $this->client->supports(...),
             collectPresentations: fn(): array => $this->dialogue->getActivePresentations(), readTime: $this->readTime,
-            assetRoot: $this->assetRoot));
+            assetRoot: $this->assetRoot,
+            // Text such as a sign's label is laid out by this window, through this preview's own client: never the game's.
+            textPreparation: $this->client));
         // The graphical field draws its effects as sprites, as the game's does in a graphical window.
         if ($this->scene instanceof PreviewGameScene) {
             $this->scene->installFieldEffects(EffectPresentation::GRAPHICAL);
