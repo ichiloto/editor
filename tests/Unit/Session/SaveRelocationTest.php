@@ -88,6 +88,37 @@ it('saves at once when nothing reachable becomes solid, or when the project keep
     expect($session->saveMap('home'))->toHaveKey('saved');
 });
 
+it('moves no save off walkable grass or a save point, and moves saves off grass that becomes solid', function () {
+    $root = mapLineRemovalProject();
+    $session = EditorSession::open($root);
+    $paint = static function (array $cells, string $glyph) use ($session): void {
+        $map = $session->readMap('home');
+        $session->paint('home', $map['revision'], $map['baseLayer'], $cells, $glyph);
+    };
+
+    // New grass and a new save point are walkable: nothing to move.
+    $paint([[3, 1]], 'g');
+    $paint([[1, 1]], 'P');
+    expect($session->saveMap('home'))->toHaveKey('saved');
+
+    // Saved grass and save points the map keeps are not new blockers either.
+    $paint([[2, 1]], ' ');
+    expect($session->saveMap('home'))->toHaveKey('saved');
+
+    // Grass that becomes solid does move the saves on it.
+    $paint([[3, 1]], '#');
+    expect($session->saveMap('home')['relocations'])->toBe([['map' => 'home', 'cells' => [[3, 1]], 'to' => [2, 1]]]);
+});
+
+it('moves saves off floor an NPC now stands on, and lands them on no other NPC', function () {
+    $root = mapLineRemovalProject();
+    $session = EditorSession::open($root);
+    // The lamp moves from (1, 3) onto open floor at (3, 3); the cat still stands at (2, 3).
+    $session->moveNpc('home', $session->readMap('home')['revision'], 2, 3, 3);
+
+    expect($session->saveMap('home')['relocations'])->toBe([['map' => 'home', 'cells' => [[3, 3]], 'to' => [4, 2]]]);
+});
+
 it('leaves a map that would move saves out of Save All, for its own reviewed save', function () {
     [$root, $session] = openWalledHomeSession();
     $workspace = new ReflectionProperty(EditorSession::class, 'workspace')->getValue($session);

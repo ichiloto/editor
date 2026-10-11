@@ -1199,9 +1199,10 @@ region: the brush plants whole trees across it, choosing type and spot in an
 order fixed by the map and cell, so drawing the same region again plants
 nothing new and drawing beside existing trees fills the gaps between them.
 Crowns may overlap; trunks keep half a crown apart. A trunk goes only on
-passable ground that no event, NPC or other trunk takes, never outside the
+plain floor that no event, NPC or other trunk takes, never outside the
 region, and never where making it solid would cut a walkable area in two, so
-every cell the player could reach stays reachable. Each trunk becomes solid in
+every cell the player could reach stays reachable, grass, exits and save
+points included. Each trunk becomes solid in
 the map's own collision, never through its image, so the brush asks you to
 Separate collision first on a map that does not have it yet. Erasing removes
 the trees standing in the region and makes their trunk cells walkable again,
@@ -2422,11 +2423,14 @@ Read-only categories are never included - they hold no edits.
 
 ### Saves follow what a map makes solid
 
-When a map is saved after an edit makes floor solid that the player can reach
-in the saved map (furniture, a wall, painted collision, trees), a save
-standing on such a cell would load inside it. With a save compatibility
+When a map is saved after an edit takes floor that the player can reach in
+the saved map, a save standing on such a cell would load inside it. A cell is
+taken when it becomes something that blocks movement (furniture, a wall,
+painted collision, trees) or when an NPC is added or moved onto it. Walkable
+grass, exits and save points take nothing, and an NPC that stays put moves no
+save. With a save compatibility
 manifest (`assets/Data/save-compatibility.php`), `Ctrl+S` first shows each such
-cell and where saves on it will land: the nearest open floor the player can
+cell and where saves on it will land: the nearest plain floor the player can
 reach today, found by walking from the cell, never an event or NPC cell.
 **Save and move saves** writes the map and a `relocations` step that raises
 the manifest's content version by one; **Cancel** saves nothing. The step is

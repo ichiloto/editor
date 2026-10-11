@@ -6407,7 +6407,7 @@ final class Editor
         }
 
         if ($result->skippedRelocations !== []) {
-            $detailLines[] = 'Skipped - saving would move existing saves off cells now solid (use Ctrl+S on the map to review where):';
+            $detailLines[] = 'Skipped - saving would move existing saves off cells now solid or taken by an NPC (use Ctrl+S on the map to review where):';
             $detailLines = [...$detailLines, ...array_map(static fn(string $mapId): string => '  ' . $mapId, $result->skippedRelocations), ''];
         }
 
@@ -6643,7 +6643,7 @@ final class Editor
 
         try {
             $previousMapId = $selectedMap->mapId;
-            // Saves standing where the map is now solid move with it; the step is its own undo.
+            // Saves standing where the map is now solid or taken by an NPC move with it; the step is its own undo.
             $step = $relocation?->apply();
             // The save backs up, once, exactly the files it is about to
             // replace -- so a clean map or an untouched member never
@@ -6711,13 +6711,13 @@ final class Editor
                 'description' => sprintf('Saves the map and adds save content version %d to %s. Ctrl+Z removes that step.', $plan->contentVersion, SaveManifestStep::PATH)],
             ...array_map(static fn(string $move): array => [
                 'label' => 'Move saves on ' . $move, 'value' => 'preview',
-                'description' => 'A save standing there would load inside what is now solid.',
+                'description' => 'A save standing there would load inside what is now solid, or on an NPC.',
             ], $plan->describeMoves()),
         ];
         $this->selectedEventOptionIndex = 0;
         $this->dialogFilter->clear();
         $this->isEventOptionDialogOpen = true;
-        $this->setStatus(sprintf('%s is now solid where saves could stand. Review where they move before saving.', $plan->mapId), StatusLevel::WARN);
+        $this->setStatus(sprintf('%s now blocks cells where saves could stand. Review where they move before saving.', $plan->mapId), StatusLevel::WARN);
         $this->renderSelectionDependentArea();
     }
 

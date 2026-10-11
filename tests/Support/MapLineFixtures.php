@@ -168,12 +168,16 @@ function openMapLinePaletteItem(Editor $editor, string $label): void
     ($item->action)();
 }
 
-/** The map line project with a collision dictionary, so the player's reach on `home` is known. */
+/**
+ * The map line project with a collision dictionary, so the player's reach on
+ * `home` is known. `g` paints walkable encounter grass and `P` a save point.
+ */
 function mapLineRemovalProject(): string
 {
     $root = mapLineProject();
     file_put_contents($root . '/assets/Maps/collisions.php', "<?php\nuse Ichiloto\\Engine\\Events\\Enumerations\\CollisionType;\n"
-        . "return ['#' => CollisionType::SOLID, '.' => CollisionType::NONE, '~' => CollisionType::SOLID, ' ' => CollisionType::NONE];\n");
+        . "return ['#' => CollisionType::SOLID, '.' => CollisionType::NONE, '~' => CollisionType::SOLID, ' ' => CollisionType::NONE,"
+        . " 'g' => CollisionType::ENCOUNTER, 'P' => CollisionType::SAVE_POINT];\n");
     // The start and the town arrival stand in a gap in the bottom wall, so the floor is reachable from them.
     file_put_contents($root . '/assets/Maps/home/layers/01.terrain.map.php', MapGridSource::buildSource(
         "<fg=green>######</>\n#....#\n#.<fg=red>~~</>.#\n#....#\n#..###", 'AUTHORED', "// keep layers/01.terrain.map.php\n"));

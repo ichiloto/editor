@@ -27,10 +27,10 @@ use Throwable;
  * an occupancy stamp, its trunk. Drawing lays out the chosen types over the
  * region in an order fixed by the map and cell, so drawing the same region
  * again plants nothing new, and a region beside existing trees fills the gaps
- * between them instead of crowding them. A trunk goes only on passable ground
+ * between them instead of crowding them. A trunk goes only on plain floor
  * that no event, NPC or other trunk claims, and never where it would cut a
- * walkable area in two: every walkable cell the player could reach before
- * stays reachable. The map's own declared collision makes each trunk solid;
+ * walkable area in two: every cell the player could walk to before, grass,
+ * exits and save points included, stays reachable. The map's own declared collision makes each trunk solid;
  * the image never does.
  *
  * The terminal sees the same forest on the `canopy` decoration layer, which
@@ -194,21 +194,21 @@ final class TreeBrush
         foreach ($region as [$x, $y]) {
             $inRegion[$y][$x] = true;
         }
-        $passable = $this->readPassable();
+        [$walkable, $floor] = $this->readGround();
         $claimed = $this->readClaimedCells($entries);
         $anchors = $this->readTreeAnchors($entries);
         $planted = 0;
         foreach ($this->orderCells($region) as [$x, $y]) {
             $type = $types[$this->hash($x, $y, 'type') % count($types)];
-            if (! $this->canPlant($type, $x, $y, $inRegion, $passable, $claimed, $anchors)) {
+            if (! $this->canPlant($type, $x, $y, $inRegion, $walkable, $floor, $claimed, $anchors)) {
                 continue;
             }
             foreach ($type->occupancyStamp as $cell) {
                 [$cx, $cy] = [$x + $cell['x'], $y + $cell['y']];
                 $writes[] = [$cx, $cy, $cell['type']];
                 $claimed[$cy][$cx] = true;
-                if ($cell['type'] !== CollisionType::NONE) {
-                    unset($passable[$cy][$cx]);
+                if ($cell['type']->blocksMovement()) {
+                    unset($walkable[$cy][$cx], $floor[$cy][$cx]);
                 }
             }
             $anchors[] = [$x, $y, $type];
@@ -264,19 +264,22 @@ final class TreeBrush
 
     /**
      * Whether a tree fits with its anchor here: every stamped cell inside the
-     * region and on passable ground nothing claims, room from other trunks,
-     * and no solid cell cutting a walkable area in two.
+     * region and on plain floor nothing claims, room from other trunks, and no
+     * trunk cutting a walkable area in two. Trunks stand only on plain floor,
+     * so erasing a tree gives back exactly the floor it took; grass, exits and
+     * save points still count as walkable ground a trunk must not cut off.
      *
      * @param array<int, array<int, true>> $inRegion
-     * @param array<int, array<int, true>> $passable
+     * @param array<int, array<int, true>> $walkable
+     * @param array<int, array<int, true>> $floor
      * @param array<int, array<int, true>> $claimed
      * @param list<array{0: int, 1: int, 2: WorldObjectResource}> $anchors
      */
-    private function canPlant(WorldObjectResource $type, int $x, int $y, array $inRegion, array $passable, array $claimed, array $anchors): bool
+    private function canPlant(WorldObjectResource $type, int $x, int $y, array $inRegion, array $walkable, array $floor, array $claimed, array $anchors): bool
     {
         foreach ($type->occupancyStamp as $cell) {
             [$cx, $cy] = [$x + $cell['x'], $y + $cell['y']];
-            if (! isset($inRegion[$cy][$cx], $passable[$cy][$cx]) || isset($claimed[$cy][$cx])) {
+            if (! isset($inRegion[$cy][$cx], $floor[$cy][$cx]) || isset($claimed[$cy][$cx])) {
                 return false;
             }
         }
@@ -288,9 +291,8 @@ final class TreeBrush
                 return false;
             }
         }
-        $walkable = $passable;
         foreach ($type->occupancyStamp as $cell) {
-            if ($cell['type'] === CollisionType::NONE) {
+            if (! $cell['type']->blocksMovement()) {
                 continue;
             }
             [$cx, $cy] = [$x + $cell['x'], $y + $cell['y']];
@@ -346,19 +348,26 @@ final class TreeBrush
         return true;
     }
 
-    /** @return array<int, array<int, true>> Cells the player can stand on today. */
-    private function readPassable(): array
+    /**
+     * @return array{0: array<int, array<int, true>>, 1: array<int, array<int, true>>} The cells the
+     *     player can walk on today, and those of them that are plain floor.
+     */
+    private function readGround(): array
     {
-        $passable = [];
+        $walkable = $floor = [];
         foreach ($this->map->getResolvedCollisionMap() as $y => $row) {
             foreach ($row as $x => $value) {
-                if ($value === CollisionType::NONE->value) {
-                    $passable[$y][$x] = true;
+                $type = CollisionType::from($value);
+                if (! $type->blocksMovement()) {
+                    $walkable[$y][$x] = true;
+                }
+                if ($type === CollisionType::NONE) {
+                    $floor[$y][$x] = true;
                 }
             }
         }
 
-        return $passable;
+        return [$walkable, $floor];
     }
 
     /**
@@ -457,7 +466,7 @@ final class TreeBrush
         }
         foreach ($this->readTreeAnchors($entries) as [$x, $y, $type]) {
             foreach ($type->occupancyStamp as $cell) {
-                if ($cell['type'] !== CollisionType::NONE) {
+                if ($cell['type']->blocksMovement()) {
                     $glyphs[$y + $cell['y']][$x + $cell['x']] = '|';
                 }
             }

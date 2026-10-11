@@ -30,7 +30,7 @@ final class SaveRelocationPlan
 
     /** What the save also does, in words: for the question and the status line. */
     public string $description {
-        get => sprintf('Saves standing where %s is now solid move to open floor: save content version %d relocates %s.',
+        get => sprintf('Saves standing where %s is now solid or taken by an NPC move to open floor: save content version %d relocates %s.',
             $this->mapId, $this->contentVersion, implode('; ', $this->describeMoves()));
     }
 

@@ -4426,9 +4426,9 @@ final class EditorSession
             throw new SessionRefusal($failure->getMessage(), previous: $failure);
         }
         if ($relocation !== null) {
-            // Saves standing where the map is now solid move with the save, once the author has seen where.
+            // Saves standing where the map is now solid or taken by an NPC move with the save, once the author has seen where.
             if ($answer === null) {
-                return ['status' => 'question', 'map' => $mapId, 'question' => sprintf('Save %s and move existing saves off cells it makes solid?', $mapId),
+                return ['status' => 'question', 'map' => $mapId, 'question' => sprintf('Save %s and move existing saves off cells it makes solid or puts an NPC on?', $mapId),
                     'answers' => [
                         ['key' => 'cancel', 'label' => 'Cancel', 'description' => 'Save nothing.'],
                         ['key' => 'write', 'label' => 'Save and move saves', 'description' => sprintf('Saves the map and writes %s. Undo removes the save step.', SaveManifestStep::PATH)],

@@ -13,8 +13,9 @@ use Ichiloto\Engine\Field\MapGridSource;
  * `counter` resource with no trunk stamp, which is not a tree.
  *
  * @param bool $declared Whether the map declares its own collision.
+ * @param list<string>|null $rows Another 12 x 8 layout: `#` solid, `g` walkable encounter grass, anything else floor.
  */
-function createTreeBrushProject(bool $declared = true): string
+function createTreeBrushProject(bool $declared = true, ?array $rows = null): string
 {
     $root = makeTemporaryProject('editor-tree-brush-');
     $directory = $root . '/assets/Maps/test-map';
@@ -22,13 +23,17 @@ function createTreeBrushProject(bool $declared = true): string
         is_file($file) && unlink($file);
     }
     mkdir($directory . '/layers', 0o777, true);
-    $rows = ['############', '#..........#', '#.....#....#', '#.....#....#', '#.....#....#', '#.....#....#', '#..........#', '############'];
+    $rows ??= ['############', '#..........#', '#.....#....#', '#.....#....#', '#.....#....#', '#.....#....#', '#..........#', '############'];
     file_put_contents($directory . '/layers/01.terrain.map.php', MapGridSource::buildSource(implode("\n", $rows), 'MAP'));
     $events = array_fill(0, 8, str_repeat(' ', 12));
     $events[2][9] = 'E';
     file_put_contents($directory . '/test-map.event.php', MapGridSource::buildSource(implode("\n", $events), 'EVENTS'));
     $occupancy = array_map(static fn(string $row): array => array_map(
-        static fn(string $glyph): CollisionType => $glyph === '#' ? CollisionType::SOLID : CollisionType::NONE, str_split($row)), $rows);
+        static fn(string $glyph): CollisionType => match ($glyph) {
+            '#' => CollisionType::SOLID,
+            'g' => CollisionType::ENCOUNTER,
+            default => CollisionType::NONE,
+        }, str_split($row)), $rows);
     $data = ['name' => 'Forest', 'region' => '', 'events' => ['E' => ['class' => 'Ichiloto\\Engine\\Events\\Triggers\\ScriptEventTrigger',
         'data' => ['mode' => 'action', 'reusable' => true, 'script' => [['type' => 'show_text', 'text' => 'Hello']]]]],
         'npcs' => [['id' => 'ranger', 'name' => 'Ranger', 'sprite' => 'r', 'x' => 2, 'y' => 2]]];

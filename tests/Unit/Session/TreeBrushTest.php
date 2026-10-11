@@ -128,6 +128,20 @@ it('keeps the only gap through a wall open', function () {
         ->and($map->getResolvedCollisionMap()[6][6])->toBe(CollisionType::NONE->value);
 });
 
+it('counts grass as walkable ground, so a trunk never closes a path through it', function () {
+    // Two rooms joined only by grass, floor and grass at y 3.
+    $session = EditorSession::open(createTreeBrushProject(true, ['############', '#...###....#', '#...###....#', '#...g.g....#',
+        '#...###....#', '#...###....#', '#...###....#', '############']));
+    $map = getPhysicalOccupancyMap($session);
+
+    $drawn = $session->drawTrees('test-map', $session->readMap('test-map')['revision'], [[4, 3], [5, 3], [6, 3]], ['oak']);
+
+    // The floor cell between the grass would cut the rooms apart; the grass itself is no place for a trunk.
+    expect($drawn['planted'])->toBe(0)
+        ->and(array_slice($map->getResolvedCollisionMap()[3], 4, 3))
+        ->toBe([CollisionType::ENCOUNTER->value, CollisionType::NONE->value, CollisionType::ENCOUNTER->value]);
+});
+
 it('erases the trees standing in a region, clearing their trunks and crowns, and undo brings them back', function () {
     [$session, $map] = openTreeBrushSession();
     $drawn = $session->drawTrees('test-map', $session->readMap('test-map')['revision'], listRectangleCells(1, 1, 10, 6), ['oak']);
