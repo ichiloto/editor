@@ -1193,6 +1193,26 @@ editor's Game view draws a placed sign's board and label as the game does,
 laid out by the window in its text role; until the label is laid out, the
 sign's cells show their glyphs.
 
+Forests are drawn with the tree brush. A tree type is any image resource with
+an occupancy stamp, its trunk. Choose the types to vary between and drag over a
+region: the brush plants whole trees across it, choosing type and spot in an
+order fixed by the map and cell, so drawing the same region again plants
+nothing new and drawing beside existing trees fills the gaps between them.
+Crowns may overlap; trunks keep half a crown apart. A trunk goes only on
+passable ground that no event, NPC or other trunk takes, never outside the
+region, and never where making it solid would cut a walkable area in two, so
+every cell the player could reach stays reachable. Each trunk becomes solid in
+the map's own collision, never through its image, so the brush asks you to
+Separate collision first on a map that does not have it yet. Erasing removes
+the trees standing in the region and makes their trunk cells walkable again,
+unless another tree still stands there. The terminal sees the same forest on a
+`canopy` decoration layer the brush owns and redraws: bright green `(` `)`
+crowns, as wide as the image above the trunk and narrowing upwards, over gray
+`|` trunks; the Game view leaves decoration layers out, so they never hide the
+images. A drawing that would take the map past its 128 world objects is
+refused with the number that still fit. Each drawing or erasing is one undo
+step and is written on Save.
+
 Why a category can still turn out read-only: a file the editor cannot
 evaluate, a value it could not write back out (such as an object only its own
 factory may build, which a rewritten file could not call), or a comment inside returned

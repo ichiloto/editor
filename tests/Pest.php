@@ -383,6 +383,7 @@ require_once __DIR__ . '/Support/MapGraphicsFixtures.php';
 require_once __DIR__ . '/Support/AuthoringCanvasFixtures.php';
 require_once __DIR__ . '/Support/PhysicalOccupancyFixtures.php';
 require_once __DIR__ . '/Support/MapLineFixtures.php';
+require_once __DIR__ . '/Support/TreeBrushFixtures.php';
 
 require_once __DIR__ . '/Support/BattleEntryFixtures.php';
 

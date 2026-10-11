@@ -80,6 +80,7 @@ use Ichiloto\Editor\Maps\MapLinePlanner;
 use Ichiloto\Editor\Maps\MapLayers;
 use Ichiloto\Editor\Maps\MapReferences;
 use Ichiloto\Editor\Maps\TilePalette;
+use Ichiloto\Editor\Maps\TreeBrush;
 use Ichiloto\Editor\History\SourceSetCommand;
 use Ichiloto\Editor\History\CommandGroup;
 use Ichiloto\Editor\History\SourceSetRequired;
@@ -1422,6 +1423,45 @@ final class EditorSession
         }
 
         return ['status' => 'applied', 'changed' => $applied['changed'], 'revision' => $this->getMapRevision($map)];
+    }
+
+    /**
+     * The project's tree types for the tree brush, by id.
+     *
+     * @return array{map: string, types: array<string, string>}
+     * @throws SessionRefusal When the map is unknown or the field resources cannot be read.
+     */
+    public function listTreeTypes(string $mapId): array
+    {
+        try {
+            return ['map' => $mapId, 'types' => TreeBrush::listTypes($this->requireMap($mapId))];
+        } catch (MapSourceRefusal $refusal) {
+            throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+        }
+    }
+
+    /**
+     * Draws the chosen tree types over a region, or erases the trees in it,
+     * as one undo step ({@see TreeBrush}).
+     *
+     * @param list<array{0: int, 1: int}> $cells
+     * @param list<string> $types
+     * @return array{status: 'applied', planted: int, removed: int, revision: int}
+     * @throws SessionRefusal When the map is stale or read-only, has no collision of its own, or the drawing does not fit.
+     */
+    public function drawTrees(string $mapId, int $revision, array $cells, array $types, bool $erase = false): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        try {
+            $result = $erase ? TreeBrush::erase($map, $cells) : TreeBrush::draw($map, $types, $cells);
+        } catch (MapSourceRefusal $refusal) {
+            throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+        }
+        if ($result['command'] !== null) {
+            $this->history->record($result['command']);
+        }
+
+        return ['status' => 'applied', 'planted' => $result['planted'], 'removed' => $result['removed'], 'revision' => $this->getMapRevision($map)];
     }
 
     /** @return array{cells: list<array{0: int, 1: int}>, map: string, revision: int} */
