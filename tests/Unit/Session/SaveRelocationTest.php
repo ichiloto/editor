@@ -110,6 +110,25 @@ it('moves no save off walkable grass or a save point, and moves saves off grass 
     expect($session->saveMap('home')['relocations'])->toBe([['map' => 'home', 'cells' => [[3, 1]], 'to' => [2, 1]]]);
 });
 
+it('moves saves off walkable floor no route reaches today, since an older layout may have reached it', function () {
+    $root = mapLineRemovalProject();
+    $session = EditorSession::open($root);
+    $paint = static function (array $cells, string $glyph) use ($session): void {
+        $map = $session->readMap('home');
+        $session->paint('home', $map['revision'], $map['baseLayer'], $cells, $glyph);
+    };
+    // Walling in (4, 1) leaves it walkable on disk but cut off.
+    $paint([[3, 1], [4, 2]], '#');
+    $question = $session->saveMap('home');
+    $session->saveMap('home', 'write', $question['confirm']);
+
+    $paint([[4, 1]], '#');
+    $relocations = $session->saveMap('home')['relocations'];
+
+    expect(array_merge(...array_column($relocations, 'cells')))->toBe([[4, 1]])
+        ->and($relocations[0]['to'])->not->toBe([4, 1]);
+});
+
 it('moves saves off floor an NPC now stands on, and lands them on no other NPC', function () {
     $root = mapLineRemovalProject();
     $session = EditorSession::open($root);

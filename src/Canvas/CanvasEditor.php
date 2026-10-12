@@ -422,7 +422,13 @@ final class CanvasEditor
         // Then arriving: the glyph each placed tile stands for.
         foreach ($stamp as $position => $entry) {
             [$x, $y] = array_map(intval(...), explode(',', (string) $position));
-            $bound = self::chooseBinding($binding->findBindings($tileLayer, $entry), $tileLayer, $x, $y, $stamp, $glyphAt, $choices[$entry] ?? null);
+            $bindings = $binding->findBindings($tileLayer, $entry);
+            if ($binding->isFree($tileLayer, $entry)) {
+                // A free tile plays the role of the glyph already on its cell, or none: it never brings a glyph.
+                $bindings = array_values(array_filter($bindings, static fn(TileBinding $bound): bool =>
+                    $glyphAt($bound->layerId, $x - $bound->dx, $y - $bound->dy) === $bound->glyph));
+            }
+            $bound = self::chooseBinding($bindings, $tileLayer, $x, $y, $stamp, $glyphAt, $choices[$entry] ?? null);
             if ($bound instanceof TileBinding) {
                 $arrive($bound, $x - $bound->dx, $y - $bound->dy);
             } elseif ($bound !== null) {

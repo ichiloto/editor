@@ -376,6 +376,19 @@ it('warns for tiles a piece draws whose glyph is no longer there, and only those
     expect(array_filter(graphicsIssueLines($root), static fn(string $line): bool => str_contains($line, 'no longer there')))->toBe([]);
 });
 
+it('never judges a tile that a glyph-less piece also draws, wherever it stands', function () {
+    $root = mapGraphicsProject();
+    writeTestTileset($root, pieces: [
+        'window' => ['name' => 'Window', 'layer' => 'buildings', 'glyphs' => ['x'], 'tiles' => ['decor' => ['5']]],
+        // A cap the window's tile also tops, placed anywhere without a glyph.
+        'cap' => ['name' => 'Cap (visual)', 'layer' => 'buildings', 'glyphs' => [' '], 'tiles' => ['decor' => ['5']]],
+    ]);
+    // Window tiles stand on the x cells and, as caps, on blank cells beside them.
+    writeTileLayer($root . '/assets/Maps/test-map', '02.decor.tiles.php', "5 0 0 5\n0 5 5 5");
+
+    expect(array_filter(graphicsIssueLines($root), static fn(string $line): bool => str_contains($line, 'no longer there')))->toBe([]);
+});
+
 it('lists the cells showing the tileset\'s missing-art placeholder', function () {
     $root = mapGraphicsProject();
     writeTestTileset($root, missingArt: 255);

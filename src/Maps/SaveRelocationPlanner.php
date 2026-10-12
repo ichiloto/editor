@@ -9,6 +9,7 @@ use Ichiloto\Editor\ProjectDirectoryContext;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\Storage\SourceSetPlan;
 use Ichiloto\Engine\Events\Enumerations\CollisionType;
+use Ichiloto\Engine\Field\MapCollisionResolver;
 use Ichiloto\Engine\Field\MapSourceReader;
 use Ichiloto\Engine\Field\NpcPlacement;
 use Ichiloto\Engine\Field\Reachability\ProjectReachability;
@@ -17,8 +18,8 @@ use Throwable;
 
 /**
  * Plans the save relocations a map save needs: when the unsaved map takes a
- * cell the player can reach in the saved map, a save standing there would
- * load inside it. A cell is taken when its new type blocks movement (new
+ * cell the player could stand on in the saved map, reachable today or not, a
+ * save standing there would load inside it. A cell is taken when its new type blocks movement (new
  * furniture, a wall, painted collision; walkable grass, exits and save points
  * do not) or when an authored NPC now stands on it, added or moved. The plan
  * moves saves on each such cell to the nearest plain floor the player can
@@ -61,10 +62,14 @@ final class SaveRelocationPlanner
             && ! CollisionType::from($grid[$y][$x])->blocksMovement();
         // An NPC already standing there on disk is no change: reachability lets saves stand where a wanderer starts.
         $arrived = array_diff_key($npcs, self::readNpcCells(self::readSavedNpcs($root, $map->mapId)));
+        // Any cell walkable on disk may hold a save, even one no route reaches today: an older layout may have
+        // reached it, and a save made there must never load inside what now takes it.
+        $walkable = self::readSavedWalkableCells($root, $map->mapId);
         $blocked = [];
         foreach ($grid as $y => $row) {
             foreach (array_keys($row) as $x) {
-                if ($report->isReachable($x, $y) && (CollisionType::from($grid[$y][$x])->blocksMovement() || isset($arrived["{$x},{$y}"]))) {
+                if (($report->isReachable($x, $y) || isset($walkable["{$x},{$y}"]))
+                    && (CollisionType::from($grid[$y][$x])->blocksMovement() || isset($arrived["{$x},{$y}"]))) {
                     $blocked["{$x},{$y}"] = [$x, $y];
                 }
             }
@@ -185,6 +190,33 @@ final class SaveRelocationPlanner
     }
 
     /** @return array<mixed> The map's `npcs` entries as saved on disk. */
+    /**
+     * The cells of the map on disk that a player could stand on, by `x,y`:
+     * walkable by its saved collision, reachable or not. None when the
+     * project has no readable collision dictionary.
+     *
+     * @return array<string, true>
+     */
+    private static function readSavedWalkableCells(string $root, string $mapId): array
+    {
+        try {
+            $dictionary = MapSourceReader::loadCollisionDictionary($root . '/assets/Maps/collisions.php');
+        } catch (Throwable) {
+            $dictionary = [];
+        }
+        $source = MapSourceReader::readFiles(MapSourceReader::resolvePaths($root . '/assets/Maps', $mapId));
+        $walkable = [];
+        foreach (MapCollisionResolver::resolveMap($source['layers'], $source['data'], $dictionary)->collisionGrid as $y => $row) {
+            foreach ($row as $x => $value) {
+                if (! CollisionType::from($value)->blocksMovement()) {
+                    $walkable["{$x},{$y}"] = true;
+                }
+            }
+        }
+
+        return $walkable;
+    }
+
     private static function readSavedNpcs(string $root, string $mapId): array
     {
         $source = MapSourceReader::readFiles(MapSourceReader::resolvePaths($root . '/assets/Maps', $mapId));

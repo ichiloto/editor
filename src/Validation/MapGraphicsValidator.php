@@ -6,6 +6,7 @@ namespace Ichiloto\Editor\Validation;
 
 use Ichiloto\Editor\Canvas\GlyphTilePlanner;
 use Ichiloto\Editor\Canvas\PieceRole;
+use Ichiloto\Editor\Canvas\TileGlyphBinding;
 use Ichiloto\Editor\Field\ProjectNpc;
 use Ichiloto\Editor\Field\WorldObjectAuthoring;
 use Ichiloto\Editor\Maps\MapLayers;
@@ -231,6 +232,12 @@ final class MapGraphicsValidator
                         }
                     }
                 }
+            }
+        }
+        // A tile a glyph-less piece also draws, such as a stone wall cap, may stand on any cell.
+        foreach (TileGlyphBinding::findFreeEntries($tileset->pieces) as $tileLayer => $entries) {
+            foreach ($entries as $entry => $_) {
+                unset($drawn[$tileLayer][(int) $entry]);
             }
         }
 

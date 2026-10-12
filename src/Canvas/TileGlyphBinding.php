@@ -6,6 +6,7 @@ namespace Ichiloto\Editor\Canvas;
 
 use Ichiloto\Editor\Maps\MapLayers;
 use Ichiloto\Editor\ProjectMap;
+use Ichiloto\Engine\Rendering\Tilesets\TileId;
 use Ichiloto\Engine\Rendering\Tilesets\TilesetPiece;
 use InvalidArgumentException;
 use RuntimeException;
@@ -17,15 +18,19 @@ use RuntimeException;
  * wall's tile for `-`, `|` and `+` on buildings. Those tiles and their glyph
  * must change together, so the glyph, its collision and its tiles never
  * disagree. A tile no role draws, such as a rug or a picture, stands for
- * nothing in the terminal and is free to place anywhere.
+ * nothing in the terminal and is free to place anywhere. A tile that a
+ * glyph-less piece also draws, such as a stone wall cap that also tops the
+ * stone wall's own glyphs, is free too: placed on a cell it plays the role of
+ * the glyph already there, or none, and never brings a glyph of its own.
  */
 final readonly class TileGlyphBinding
 {
     /**
      * @param array<string, array<string, list<TileBinding>>> $bindings By tile layer name, then tile entry.
      * @param array<string, GlyphTilePlanner> $planners Each gameplay layer's planner, by layer id.
+     * @param array<string, array<string, true>> $free Tile entries a glyph-less piece draws, by tile layer name.
      */
-    private function __construct(private array $bindings, private array $planners) {}
+    private function __construct(private array $bindings, private array $planners, private array $free = []) {}
 
     /** The bindings of a map's tileset pieces, over the gameplay layers the map has. */
     public static function fromMap(ProjectMap $map): self
@@ -36,6 +41,7 @@ final readonly class TileGlyphBinding
             $pieces = [];
         }
         $bindings = $planners = [];
+        $free = self::findFreeEntries($pieces);
         foreach ($map->getLayers() as $layer) {
             if ($pieces === [] || $layer['id'] === MapLayers::EVENT || $layer['decoration']) {
                 continue;
@@ -56,7 +62,41 @@ final readonly class TileGlyphBinding
             }
         }
 
-        return new self($bindings, $planners);
+        return new self($bindings, $planners, $free);
+    }
+
+    /**
+     * The tile entries glyph-less pieces draw, such as a rug or a wall cap,
+     * by tile layer name. Such a tile may stand on any cell without its glyph.
+     *
+     * @param iterable<TilesetPiece> $pieces
+     * @return array<string, array<string, true>>
+     */
+    public static function findFreeEntries(iterable $pieces): array
+    {
+        $free = [];
+        foreach ($pieces as $piece) {
+            if ($piece->connects !== null || PieceRole::readPiece($piece) !== []) {
+                continue;
+            }
+            foreach ($piece->tiles as $tileLayer => $rows) {
+                foreach ($rows as $entries) {
+                    foreach ($entries as $entry) {
+                        if ($entry !== (string) TileId::EMPTY) {
+                            $free[$tileLayer][$entry] = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        return $free;
+    }
+
+    /** Whether a tile is free: one a glyph-less piece also draws, which needs no glyph of its own. */
+    public function isFree(string $tileLayer, string $entry): bool
+    {
+        return isset($this->free[$tileLayer][$entry]);
     }
 
     /** @return list<TileBinding> The glyphs a tile on a tile layer can stand for; none for a free tile. */

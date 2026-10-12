@@ -127,6 +127,41 @@ it('leaves glyphs alone for a tile that stands for nothing', function () {
         ->and(readSessionBuildingRows($session))->toBe([' /  ', ' xx ']);
 });
 
+/** Wood and stone walls, and a glyph-less cap that draws the stone wall's own tile. */
+function stoneCapSession(): EditorSession
+{
+    $root = mapGraphicsProject();
+    writeTestTileset($root, pieces: [
+        'wall' => ['name' => 'Wall', 'layer' => 'buildings', 'connects' => 'lines',
+            'glyphs' => ['horizontal' => '-', 'vertical' => '|', 'corner' => '+'], 'tiles' => ['walls' => '5888']],
+        'stone-wall' => ['name' => 'Stone wall', 'layer' => 'buildings', 'connects' => 'lines',
+            'glyphs' => ['horizontal' => '-', 'vertical' => '|', 'corner' => '+'], 'tiles' => ['walls' => '5936']],
+        'stone-cap' => ['name' => 'Stone cap (visual)', 'layer' => 'buildings', 'glyphs' => [' '], 'tiles' => ['walls' => ['5936']]],
+    ]);
+
+    return EditorSession::open($root);
+}
+
+it('lets a tile a glyph-less piece also draws stand on a blank cell without bringing a glyph', function () {
+    $session = stoneCapSession();
+
+    expect(stampSessionTiles($session, 'walls', [[0, 0, 5936], [3, 1, 5936]]))->toMatchArray(['status' => 'applied', 'changed' => 2, 'glyphs' => 0])
+        ->and(readSessionBuildingRows($session))->toBe([' /  ', ' xx ']);
+});
+
+it('tops a wall with the shared tile as the wall whose glyph is already there, keeping the glyph', function () {
+    $session = stoneCapSession();
+    // A wood wall running down the first column.
+    $session->paint('test-map', $session->readMap('test-map')['revision'], 'map:4', [[0, 0], [0, 1]], '|', null, ['|' => 'wall:vertical']);
+    expect(array_map(static fn(string $row): string => $row[0], readSessionBuildingRows($session)))->toBe(['|', '|'])
+        ->and(array_column(readSessionTiles($session, 'walls'), 0))->toBe([5888, 5888]);
+
+    // The wood wall's tiles leave with their role, and the stone wall arrives on the same glyphs.
+    stampSessionTiles($session, 'walls', [[0, 0, 5936], [0, 1, 5936]]);
+    expect(array_map(static fn(string $row): string => $row[0], readSessionBuildingRows($session)))->toBe(['|', '|'])
+        ->and(array_column(readSessionTiles($session, 'walls'), 0))->toBe([5936, 5936]);
+});
+
 it('asks which glyph a tile shared by several pieces stands for, changing nothing until answered', function () {
     $session = tilesCarryGlyphsSession();
 

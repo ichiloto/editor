@@ -466,6 +466,10 @@ intact:
   map as it was. The brush remembers the answer for its glyph until a glyph is
   typed again, and the eyedropper picks up the piece a glyph draws. Tiles no
   piece accounts for, such as a floor under a wall, stay where they are. A
+  tile that a glyph-less piece also draws, such as a stone wall cap that also
+  tops the stone wall, is free: placed on a cell it plays the piece of the
+  glyph already there, or none, so a cap beside a wall never becomes a wall,
+  and validation never asks for its glyph. A
   piece that keeps the tiles beneath it, such as a window mounted on a wall
   face, leaves them when it arrives; erasing it gives the cell back to the
   piece those kept tiles stand for, such as the face's `#`, so the wall is
@@ -2434,8 +2438,10 @@ Read-only categories are never included - they hold no edits.
 
 ### Saves follow what a map makes solid
 
-When a map is saved after an edit takes floor that the player can reach in
-the saved map, a save standing on such a cell would load inside it. A cell is
+When a map is saved after an edit takes floor that the player could stand on
+in the saved map, a save standing on such a cell would load inside it. That
+includes walkable floor no route reaches today, since an older layout may have
+reached it. A cell is
 taken when it becomes something that blocks movement (furniture, a wall,
 painted collision, trees) or when an NPC is added or moved onto it. Walkable
 grass, exits and save points take nothing, and an NPC that stays put moves no
