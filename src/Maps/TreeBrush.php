@@ -33,10 +33,14 @@ use Throwable;
  * exits and save points included, stays reachable. The map's own declared collision makes each trunk solid;
  * the image never does.
  *
- * The terminal sees the same forest on the `canopy` decoration layer, which
- * the brush owns: bright green `(` `)` crowns narrowing upwards over gray `|`
- * trunks, redrawn wherever trees are drawn or erased. The graphical field
- * leaves decoration layers out, so the crowns never hide the images.
+ * The terminal sees the same forest on the `canopy` gameplay layer, which the
+ * brush owns: bright green `(` `)` crowns narrowing upwards over gray `|`
+ * trunks, redrawn wherever trees are drawn or erased. Its glyphs never decide
+ * collision, which the map's own declared collision holds. Each tree covers
+ * the canopy cells it draws, so the graphical field shows the tree's image
+ * there instead of its glyphs, and the glyphs again if the image is
+ * unavailable. A canopy left as a decoration layer, which the terminal never
+ * draws, becomes gameplay on the next drawing.
  *
  * @package Ichiloto\Editor\Maps
  */
@@ -146,32 +150,39 @@ final class TreeBrush
         if (! $map->hasMapDataField([MapPhysicalOccupancy::DATA_KEY])) {
             throw new MapSourceRefusal('Trees need the map\'s own collision so their trunks can be solid. Separate collision first, then draw. Nothing was changed.');
         }
-        $entries = $map->hasMapDataField([WorldObjectDefinition::DATA_KEY]) ? $map->getMapDataField([WorldObjectDefinition::DATA_KEY]) : [];
+        $standing = $map->hasMapDataField([WorldObjectDefinition::DATA_KEY]) ? $map->getMapDataField([WorldObjectDefinition::DATA_KEY]) : [];
+        $entries = $standing;
         $writes = [];
         [$planted, $removed] = $change($entries, $writes);
-        if ($planted === 0 && $removed === 0) {
-            return ['command' => null, 'planted' => 0, 'removed' => 0];
-        }
         if (count($entries) > WorldObjectDefinition::MAX_OBJECTS) {
             $room = WorldObjectDefinition::MAX_OBJECTS - (count($entries) - $planted);
             throw new MapSourceRefusal(sprintf('A map holds at most %d world objects; this drawing needs %d more and only %d still fit. Draw a smaller region. Nothing was changed.',
                 WorldObjectDefinition::MAX_OBJECTS, $planted, max(0, $room)));
         }
-
-        try {
-            WorldObjectAuthoring::validateEntries($map, $entries, false);
-        } catch (InvalidArgumentException $invalid) {
-            throw new MapSourceRefusal($invalid->getMessage() . ' Nothing was changed.', previous: $invalid);
+        [$glyphs, $entries] = $this->layOutCanopy($entries);
+        $canopy = $this->findCanopyLayer();
+        // Drawing where nothing grows still brings a stale canopy up to date.
+        $stale = $canopy === null ? $glyphs !== []
+            : $canopy['decoration'] || $entries !== $standing || $this->findCanopyChanges($canopy['id'], $glyphs) !== [];
+        if ($planted === 0 && $removed === 0 && ! $stale) {
+            return ['command' => null, 'planted' => 0, 'removed' => 0];
         }
 
         $before = $map->captureLayerSnapshot();
         try {
-            if (! in_array(self::CANOPY_LAYER, array_column($map->getLayers(), 'name'), true)) {
-                $map->createLayer(self::CANOPY_LAYER, true);
+            if ($canopy === null) {
+                $map->createLayer(self::CANOPY_LAYER);
+            } elseif ($canopy['decoration']) {
+                $map->setLayerDecoration($canopy['id'], false);
+            }
+            try {
+                WorldObjectAuthoring::validateEntries($map, $entries, false);
+            } catch (InvalidArgumentException $invalid) {
+                throw new MapSourceRefusal($invalid->getMessage() . ' Nothing was changed.', previous: $invalid);
             }
             $map->setMapDataField([WorldObjectDefinition::DATA_KEY], $entries);
             $map->writePhysicalOccupancy($writes);
-            $this->drawCanopy($entries);
+            $this->drawCanopy($glyphs);
         } catch (Throwable $error) {
             $map->restoreLayerSnapshot($before);
             throw $error instanceof MapSourceRefusal ? $error : new MapSourceRefusal($error->getMessage() . ' Nothing was changed.', previous: $error);
@@ -444,34 +455,80 @@ final class TreeBrush
     }
 
     /**
-     * Redraws the canopy layer from the standing trees: each crown spans the
+     * Lays out the canopy from the standing trees: each crown spans the
      * image's width in the row above its trunk and narrows evenly to one or two
-     * cells at the top of the image, and its trunk cells read `|`.
+     * cells at the top of the image, and its trunk cells read `|`. Where crowns
+     * overlap, the cell goes to the tree drawn first, and a trunk always to its
+     * own tree. Each tree covers exactly the canopy cells it owns.
+     *
+     * @return array{0: array<int, array<int, string>>, 1: array} The canopy glyphs by row and column, and the entries with each tree's covers.
      */
-    private function drawCanopy(array $entries): void
+    private function layOutCanopy(array $entries): array
     {
-        $glyphs = [];
-        foreach ($this->readTreeAnchors($entries) as [$x, $y, $type]) {
-            $width = self::getCellsWide($type);
-            $left = $x - (int) round($type->pivot->x * $width - 0.5);
+        $glyphs = $owners = [];
+        $width = $this->map->getWidth();
+        $height = $this->map->getHeight();
+        $inside = static fn(int $x, int $y): bool => $x >= 0 && $y >= 0 && $x < $width && $y < $height;
+        $trees = [];
+        foreach ($entries as $index => $entry) {
+            $type = $this->types[$entry['resource'] ?? ''] ?? null;
+            if ($type !== null && is_int($entry['anchor']['x'] ?? null) && is_int($entry['anchor']['y'] ?? null)) {
+                $trees[$index] = [$entry['anchor']['x'], $entry['anchor']['y'], $type];
+            }
+        }
+        foreach ($trees as $index => [$x, $y, $type]) {
+            $wide = self::getCellsWide($type);
+            $left = $x - (int) round($type->pivot->x * $wide - 0.5);
             $rows = self::getCellsTall($type) - 1;
-            $narrowest = intdiv($width + 1, 2) - 1;
+            $narrowest = intdiv($wide + 1, 2) - 1;
             for ($row = 1; $row <= $rows; $row++) {
                 $inset = intdiv(($row - 1) * $narrowest, max(1, $rows - 1));
-                $span = $width - 2 * $inset;
+                $span = $wide - 2 * $inset;
                 for ($i = 0; $i < $span; $i++) {
-                    $glyphs[$y - $row][$left + $inset + $i] ??= $i < intdiv($span, 2) ? '(' : ')';
+                    [$cx, $cy] = [$left + $inset + $i, $y - $row];
+                    if ($inside($cx, $cy) && ! isset($glyphs[$cy][$cx])) {
+                        $glyphs[$cy][$cx] = $i < intdiv($span, 2) ? '(' : ')';
+                        $owners[$cy][$cx] = $index;
+                    }
                 }
             }
         }
-        foreach ($this->readTreeAnchors($entries) as [$x, $y, $type]) {
+        foreach ($trees as $index => [$x, $y, $type]) {
             foreach ($type->occupancyStamp as $cell) {
-                if ($cell['type']->blocksMovement()) {
-                    $glyphs[$y + $cell['y']][$x + $cell['x']] = '|';
+                [$cx, $cy] = [$x + $cell['x'], $y + $cell['y']];
+                if ($cell['type']->blocksMovement() && $inside($cx, $cy)) {
+                    $glyphs[$cy][$cx] = '|';
+                    $owners[$cy][$cx] = $index;
                 }
             }
         }
-        $layer = $this->findCanopyLayerId();
+        $cells = [];
+        ksort($owners);
+        foreach ($owners as $cy => $row) {
+            ksort($row);
+            foreach ($row as $cx => $index) {
+                $cells[$index][] = [$cx, $cy];
+            }
+        }
+        foreach ($trees as $index => $_) {
+            unset($entries[$index]['covers']);
+            if (isset($cells[$index])) {
+                $entries[$index]['covers'] = ['layer' => self::CANOPY_LAYER, 'cells' => $cells[$index], 'tileLayers' => []];
+            }
+        }
+
+        return [$glyphs, $entries];
+    }
+
+    /**
+     * The canopy cells whose glyph or style differs from the layout.
+     *
+     * @param array<int, array<int, string>> $glyphs
+     * @return list<array{0: int, 1: int, 2: string, 3: string, 4: string}> Each cell's x, y, glyph, style prefix and suffix.
+     */
+    private function findCanopyChanges(string $layer, array $glyphs): array
+    {
+        $changes = [];
         for ($y = 0, $height = $this->map->getHeight(); $y < $height; $y++) {
             for ($x = 0, $width = $this->map->getWidth(); $x < $width; $x++) {
                 if (! $this->map->hasLayerCell($layer, $x, $y)) {
@@ -484,19 +541,32 @@ final class TreeBrush
                     default => [self::CROWN_STYLE, '</>'],
                 };
                 if ($this->map->getLayerSymbol($layer, $x, $y) !== $glyph || $this->map->getLayerCellStyle($layer, $x, $y) !== ['prefix' => $prefix, 'suffix' => $suffix]) {
-                    $this->map->setLayerCell($layer, $x, $y, $glyph, $prefix, $suffix);
+                    $changes[] = [$x, $y, $glyph, $prefix, $suffix];
                 }
             }
         }
+
+        return $changes;
     }
 
-    private function findCanopyLayerId(): string
+    /** Redraws the canopy layer's cells that differ from the layout. */
+    private function drawCanopy(array $glyphs): void
+    {
+        $layer = $this->findCanopyLayer()['id'] ?? throw new MapSourceRefusal('The canopy layer is missing. Nothing was changed.');
+        foreach ($this->findCanopyChanges($layer, $glyphs) as [$x, $y, $glyph, $prefix, $suffix]) {
+            $this->map->setLayerCell($layer, $x, $y, $glyph, $prefix, $suffix);
+        }
+    }
+
+    /** @return array{id: string, decoration: bool}|null */
+    private function findCanopyLayer(): ?array
     {
         foreach ($this->map->getLayers() as $layer) {
             if ($layer['name'] === self::CANOPY_LAYER) {
-                return $layer['id'];
+                return $layer;
             }
         }
-        throw new MapSourceRefusal('The canopy layer is missing. Nothing was changed.');
+
+        return null;
     }
 }

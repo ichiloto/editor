@@ -1213,10 +1213,15 @@ the map's own collision, never through its image, so the brush asks you to
 Separate collision first on a map that does not have it yet. Erasing removes
 the trees standing in the region and makes their trunk cells walkable again,
 unless another tree still stands there. The terminal sees the same forest on a
-`canopy` decoration layer the brush owns and redraws: bright green `(` `)`
-crowns, as wide as the image above the trunk and narrowing upwards, over gray
-`|` trunks; the Game view leaves decoration layers out, so they never hide the
-images. A drawing that would take the map past its 128 world objects is
+`canopy` gameplay layer the brush owns and redraws, on top of the map's other
+layers: bright green `(` `)` crowns, as wide as the image above the trunk and
+narrowing upwards, over gray `|` trunks. Its glyphs never decide collision,
+which the map's own collision holds. Each tree covers the canopy cells it
+draws, a crown shared by two trees going to the tree drawn first, so the
+graphical field and the Game view show the tree's image there instead of its
+glyphs, and the glyphs again if the image cannot be shown. A canopy left as a
+decoration layer, which the terminal never draws, becomes gameplay the next
+time trees are drawn on the map, even where none are planted. A drawing that would take the map past its 128 world objects is
 refused with the number that still fit. Each drawing or erasing is one undo
 step and is written on Save. The GUI editor's Trees tool chooses the types and
 covers the region with any brush shape, Shift or the eraser erasing; in the

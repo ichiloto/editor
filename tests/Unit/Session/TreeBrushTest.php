@@ -5,12 +5,13 @@ declare(strict_types=1);
 use Ichiloto\Editor\Session\EditorSession;
 use Ichiloto\Editor\Session\SessionRefusal;
 use Ichiloto\Engine\Events\Enumerations\CollisionType;
+use Ichiloto\Engine\IO\Console\TerminalText;
 
 /**
  * The tree brush plants whole trees over a drawn region as one undo step:
  * trunks become solid in the map's own collision, never on events, NPCs or
  * walls, and never where they would cut a walkable area in two; the terminal
- * sees the same trees on the brush's canopy layer. The fixture is
+ * sees the same trees on the brush's canopy gameplay layer. The fixture is
  * {@see createTreeBrushProject()}.
  */
 
@@ -104,20 +105,68 @@ it('grows the same forest from the same region on another copy of the map', func
     expect($draw())->toBe($draw());
 });
 
-it('draws the trees for the terminal on its own canopy decoration layer', function () {
+it('draws the trees for the terminal on its own canopy gameplay layer, which the terminal shows', function () {
     [$session, $map] = openTreeBrushSession();
     $session->drawTrees('test-map', $session->readMap('test-map')['revision'], listRectangleCells(2, 4, 4, 6), ['oak']);
     $object = $session->readMap('test-map')['worldObjects'][0];
     [$x, $y] = [$object['anchor']['x'], $object['anchor']['y']];
     $layer = array_find($map->getLayers(), static fn(array $layer): bool => $layer['name'] === 'canopy');
+    $terminal = $map->getLayerSet()->getComposedGrid();
 
-    expect($layer['decoration'])->toBeTrue()
+    expect($layer['decoration'])->toBeFalse()
         ->and($map->getLayerSymbol($layer['id'], $x, $y))->toBe('|')
         ->and([$map->getLayerSymbol($layer['id'], $x - 1, $y - 1), $map->getLayerSymbol($layer['id'], $x, $y - 1), $map->getLayerSymbol($layer['id'], $x + 1, $y - 1)])
         ->toBe(['(', ')', ')'])
         ->and($map->getLayerColor($layer['id'], $x, $y - 1))->toBe('bright-green')
-        // The terrain the player walks on is untouched.
+        // What the terminal draws is the tree, over the terrain it stands on.
+        ->and(TerminalText::stripAnsi($terminal[$y][$x]))->toBe('|')
+        ->and(TerminalText::stripAnsi($terminal[$y - 1][$x - 1]))->toBe('(')
         ->and($map->getLayerSymbol($map->getBaseLayerId(), $x, $y))->toBe('.');
+});
+
+it('has each tree cover exactly the canopy cells it draws, so the graphical field shows its image there', function () {
+    [$session, $map] = openTreeBrushSession();
+    $session->drawTrees('test-map', $session->readMap('test-map')['revision'], listRectangleCells(1, 1, 10, 6), ['oak', 'pair']);
+    $layer = array_find($map->getLayers(), static fn(array $layer): bool => $layer['name'] === 'canopy')['id'];
+    $drawn = $covered = [];
+    for ($y = 0; $y < 8; $y++) {
+        for ($x = 0; $x < 12; $x++) {
+            if ($map->getLayerSymbol($layer, $x, $y) !== ' ') {
+                $drawn[] = "{$x},{$y}";
+            }
+        }
+    }
+    foreach ($session->readMap('test-map')['worldObjects'] as $object) {
+        expect($object['covers']['layer'])->toBe('canopy')
+            ->and($object['covers']['tileLayers'])->toBe([])
+            ->and($object['covers']['cells'])->toContain([$object['anchor']['x'], $object['anchor']['y']]);
+        foreach ($object['covers']['cells'] as [$x, $y]) {
+            $covered[] = "{$x},{$y}";
+        }
+    }
+
+    // Every drawn cell is covered once, by one tree, and nothing else is.
+    expect($covered)->toHaveCount(count(array_unique($covered)))
+        ->and($covered)->toEqualCanonicalizing($drawn);
+});
+
+it('makes a canopy left as decoration, which the terminal never draws, gameplay on the next drawing', function () {
+    [$session, $map] = openTreeBrushSession();
+    $session->drawTrees('test-map', $session->readMap('test-map')['revision'], listRectangleCells(1, 1, 10, 6), ['oak']);
+    $expected = $session->readMap('test-map')['worldObjects'];
+    $layer = array_find($map->getLayers(), static fn(array $layer): bool => $layer['name'] === 'canopy')['id'];
+    // As the brush once left it: a decoration layer, and trees covering nothing.
+    $map->setMapDataField(['worldObjects'], array_map(static function (array $object): array {
+        unset($object['covers']);
+        return $object;
+    }, $expected));
+    $map->setLayerDecoration($layer, true);
+
+    $again = $session->drawTrees('test-map', $session->readMap('test-map')['revision'], listRectangleCells(1, 1, 10, 6), ['oak']);
+
+    expect($again['planted'])->toBe(0)
+        ->and(array_find($map->getLayers(), static fn(array $layer): bool => $layer['name'] === 'canopy')['decoration'])->toBeFalse()
+        ->and($session->readMap('test-map')['worldObjects'])->toBe($expected);
 });
 
 it('keeps the only gap through a wall open', function () {
