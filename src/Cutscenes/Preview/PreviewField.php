@@ -78,7 +78,7 @@ final class PreviewField
             $field->scene = new PreviewGameScene(new PreviewSceneManager(), $field->screenWidth, $field->screenHeight, $mapId);
             $field->scene->installFieldEffects(EffectPresentation::TERMINAL);
             $camera = $field->scene->previewCamera();
-            $field->presentation = new PreviewPresentation($camera);
+            $field->presentation = new PreviewPresentation($field->screenWidth, $field->screenHeight);
             $player = new PreviewPlayer($field->scene, $spawn);
             $field->scene->installPlayer($player);
             try {
@@ -227,6 +227,7 @@ final class PreviewField
         $this->screenWidth = max(20, $width);
         $this->screenHeight = max(8, $height);
         $this->scene->previewCamera()->resize($this->screenWidth, $this->screenHeight);
+        $this->presentation->resizeScreen($this->screenWidth, $this->screenHeight);
     }
 
     /**

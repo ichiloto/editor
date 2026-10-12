@@ -196,3 +196,57 @@ it('keeps terminal text without graphical theme objects when the preview window 
         $preview->dispose();
     }
 });
+
+/** A second, plainer dialogue theme, so the measure is the preview's screen and not one theme's metrics. */
+function writePlainDialogueTheme(string $root): void
+{
+    file_put_contents($root . '/assets/Data/Presentation/dialogue.php', '<?php return ' . var_export([
+        'schema' => 'ichiloto.dialogue/1',
+        'theme' => ['schema' => 'ichiloto.menu/1', 'colors' => ['text' => [240, 240, 240]],
+            'frames' => ['dialogue' => ['asset' => 'Graphics/UI/narration-frame.png', 'cuts' => [4, 4, 4, 4]],
+                'nameplate' => ['asset' => 'Graphics/UI/narration-frame.png', 'cuts' => [4, 4, 4, 4]]]],
+    ], true) . ';');
+}
+
+it('pages graphical dialogue on the wide text screen, not the few physical cells the field camera counts', function (bool $plainTheme, string $speaker) {
+    if ($plainTheme) {
+        writePlainDialogueTheme($this->root);
+    }
+    $definition = CinematicDefinition::fromArrays(['id' => 'preview-talk', 'name' => 'Preview Talk', 'startMap' => 'skyfield-night'], [
+        // The line begins after READY has selected the graphical field, whose camera counts physical cells.
+        ['type' => 'wait', 'seconds' => 0.2],
+        ['type' => 'text', 'name' => $speaker, 'text' => "Second route selected\nThen the bridge."],
+        ['type' => 'choice', 'prompt' => 'Which way now?', 'options' => [
+            ['text' => 'Along the river bank', 'then' => []],
+            ['text' => 'Over the hill', 'then' => []],
+        ]],
+    ]);
+    $preview = CinematicPreviewSession::start($this->root, $definition, ['x' => 10, 'y' => 8, 'width' => 100, 'height' => 30]);
+
+    try {
+        $preview->step();
+        $first = getNarrationPreviewFrame($preview->exchangeScene([previewWindowReady()], $preview->getSceneSessionId()));
+        $preview->play();
+        $preview->tick(0.2);
+        $preview->tick(0.1);
+        $frame = getNarrationPreviewFrame($preview->exchangeScene([acknowledgeNarrationPreviewFrame($first)], $preview->getSceneSessionId()));
+        $prose = array_find(getNarrationPreviewObjects($frame, 'canvas_text'), static fn(array $layer): bool => str_ends_with($layer['id'], 'dialogue-text'));
+
+        // Each authored line stays whole; only the authored line break divides them.
+        expect($prose)->not->toBeNull()
+            ->and(array_column($prose['runs'], 'text'))->toBe(['Second route selected', 'Then the bridge.']);
+
+        // The Terminal picture places the same window on the text screen, whole.
+        $preview->detachScene();
+        $terminal = implode("\n", array_map(TerminalText::stripAnsi(...), $preview->frame()));
+        expect($terminal)->toContain('Second route selected', 'Then the bridge.');
+
+        $preview->confirm();
+        $preview->tick(0.1);
+        $terminal = implode("\n", array_map(TerminalText::stripAnsi(...), $preview->frame()));
+        expect($preview->getWaitKind())->toBe('choice')
+            ->and($terminal)->toContain('Which way now?', '> Along the river bank', 'Over the hill');
+    } finally {
+        $preview->dispose();
+    }
+})->with(['menu theme' => false, 'plain theme' => true])->with(['no speaker' => '', 'speaker' => 'Keeper']);

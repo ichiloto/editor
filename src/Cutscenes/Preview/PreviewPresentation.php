@@ -7,6 +7,7 @@ namespace Ichiloto\Editor\Cutscenes\Preview;
 use Closure;
 use Ichiloto\Engine\Core\Rect;
 use Ichiloto\Engine\Events\Interpreter\EventDialoguePresentationInterface;
+use Ichiloto\Engine\IO\Console\Console;
 use Ichiloto\Engine\IO\Console\TerminalText;
 use Ichiloto\Engine\Messaging\Dialogue\Presentation\DialogueContext;
 use Ichiloto\Engine\Messaging\Dialogue\Presentation\DialoguePageLayout;
@@ -26,6 +27,11 @@ use Ichiloto\Engine\UI\Interfaces\LayeredPresentationInterface;
  * own windows are ({@see getActivePresentations()}), so a graphical preview
  * draws it the game's way, and is drawn into the Terminal picture on its own
  * UI layer.
+ *
+ * Pages and boxes are measured on the preview's text screen, as the game's
+ * dialogue is on its console screen, never on the field camera: a graphical
+ * field's camera counts physical ground cells, which are far fewer than the
+ * text cells a page is laid out in.
  */
 final class PreviewPresentation implements EventDialoguePresentationInterface
 {
@@ -43,8 +49,19 @@ final class PreviewPresentation implements EventDialoguePresentationInterface
     /** @var array<int, array{kind: string, text: string, speaker: string}> */
     public array $log = [];
 
-    public function __construct(private readonly PreviewCamera $camera)
+    /**
+     * @param int $screenWidth The preview's text screen, in columns.
+     * @param int $screenHeight The preview's text screen, in rows.
+     */
+    public function __construct(private int $screenWidth, private int $screenHeight)
     {
+    }
+
+    /** Takes the preview's new text screen size; the next line is paged and placed on it. */
+    public function resizeScreen(int $width, int $height): void
+    {
+        $this->screenWidth = $width;
+        $this->screenHeight = $height;
     }
 
     public function beginText(string $text, string $name = ''): void
@@ -57,7 +74,7 @@ final class PreviewPresentation implements EventDialoguePresentationInterface
         $this->reset();
         $layout = $this->pageLayout === null ? null : ($this->pageLayout)($speaker, $context, '');
         $this->dialogue = new PreviewDialogueOwner(DialoguePaginationBuilder::buildPagination($text, $speaker, '', $context,
-            $this->camera->screen->getWidth(), $this->camera->screen->getHeight(), $layout));
+            $this->screenWidth, $this->screenHeight, $layout));
         $this->log[] = ['kind' => 'text', 'text' => $text, 'speaker' => $speaker];
     }
 
@@ -68,7 +85,7 @@ final class PreviewPresentation implements EventDialoguePresentationInterface
         $width = $this->getBoxWidth();
         $height = count($options) + count(TerminalText::wrapToWidth($prompt, $width - 4)) + ($title === '' ? 2 : 3);
         $this->choice = new PreviewChoiceOwner($title, $prompt, $options, 0, new Rect(
-            max(0, intdiv($this->camera->screen->getWidth() - $width, 2)), max(0, $this->camera->screen->getHeight() - $height - 1), $width, $height));
+            max(0, intdiv($this->screenWidth - $width, 2)), max(0, $this->screenHeight - $height - 1), $width, $height));
         $this->log[] = ['kind' => 'choice', 'text' => $prompt, 'speaker' => $title];
     }
 
@@ -232,13 +249,16 @@ final class PreviewPresentation implements EventDialoguePresentationInterface
         }
 
         $rows[] = $border;
-        $width = $this->camera->screen->getWidth();
-        $height = $this->camera->screen->getHeight();
-        $this->camera->draw($rows, max(0, intdiv($width - $boxWidth, 2)), max(0, $height - count($rows) - 1));
+        // A screen window, as the game's text box is: on the text screen, not clipped to the field camera.
+        $x = max(0, intdiv($this->screenWidth - $boxWidth, 2));
+        $y = max(0, $this->screenHeight - count($rows) - 1);
+        foreach (array_slice($rows, 0, $this->screenHeight) as $index => $row) {
+            Console::write(TerminalText::truncateToWidth($row, $this->screenWidth - $x), $x, min($y + $index, $this->screenHeight - 1));
+        }
     }
 
     private function getBoxWidth(): int
     {
-        return $this->dialogue?->pagination->windowWidth ?? max(12, min($this->camera->screen->getWidth(), 60));
+        return $this->dialogue?->pagination->windowWidth ?? max(12, min($this->screenWidth, 60));
     }
 }
