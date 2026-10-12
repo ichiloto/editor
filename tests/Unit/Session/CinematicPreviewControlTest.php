@@ -185,3 +185,54 @@ it('serves semantic skip and finalization over the protocol and refuses an absen
         $session->close();
     }
 });
+
+it('answers waiting dialogue and choices through the session, as the terminal editor does', function () {
+    $root = cutsceneProject();
+    file_put_contents($root . '/assets/Cutscenes/Cinematics/harbour-lanterns/harbour-lanterns.script.php', <<<'PHP_SOURCE'
+<?php
+
+return [
+  ['type' => 'text', 'name' => 'Keeper', 'text' => 'Mind the step.'],
+  ['type' => 'choice', 'prompt' => 'Go on?', 'options' => [
+    ['text' => 'Yes', 'then' => [['type' => 'set_switch', 'name' => 'went_on', 'value' => true]]],
+    ['text' => 'No', 'then' => [['type' => 'set_switch', 'name' => 'stayed', 'value' => true]]],
+  ]],
+];
+PHP_SOURCE);
+    $before = sourceHashTree($root);
+    $session = EditorSession::open($root);
+    try {
+        $session->startCinematicPreview(0, 40, 12);
+        $session->controlCinematicPreview('play');
+        expect($session->controlCinematicPreview('tick', 0.1))->toMatchArray(['status' => 'waiting', 'waitingFor' => 'dialogue']);
+
+        $session->controlCinematicPreview('confirm');
+        expect($session->controlCinematicPreview('tick', 0.1))->toMatchArray(['waitingFor' => 'choice']);
+
+        $session->controlCinematicPreview('choice', delta: 1);
+        $session->controlCinematicPreview('confirm');
+        $session->controlCinematicPreview('tick', 0.1);
+        expect(readControlledCinematic($session)->snapshot()->values['switch stayed'] ?? null)->toBeTrue()
+            ->and(readControlledCinematic($session)->snapshot()->values)->not->toHaveKey('switch went_on')
+            ->and(sourceHashTree($root))->toBe($before);
+    } finally {
+        $session->close();
+    }
+});
+
+it('takes the choice step from the host request', function () {
+    $root = cutsceneProject();
+    $host = new SessionHost(fopen('php://memory', 'r'), fopen('php://memory', 'w'), fopen('php://memory', 'w'));
+    $request = static fn(string $method, array $params = []): array =>
+        $host->handle(json_encode(['id' => 1, 'method' => $method, 'params' => $params]));
+    $request('hello', ['protocol' => SessionHost::PROTOCOL, 'project' => $root]);
+    $session = new ReflectionProperty($host, 'session')->getValue($host);
+    try {
+        $request('cutscenes.cinematicPreview', ['index' => 0, 'width' => 40, 'height' => 12]);
+        expect($request('cutscenes.cinematicControl', ['action' => 'choice', 'delta' => 1]))->toHaveKey('result')
+            ->and($request('cutscenes.cinematicControl', ['action' => 'confirm']))->toHaveKey('result')
+            ->and($request('cutscenes.cinematicControl', ['action' => 'dance'])['error']['kind'])->toBe('refusal');
+    } finally {
+        $session->close();
+    }
+});

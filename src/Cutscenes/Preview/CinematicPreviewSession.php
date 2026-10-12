@@ -253,6 +253,12 @@ final class CinematicPreviewSession
         return $this->presentation->moveHighlight($delta);
     }
 
+    /** What waits on the author: `dialogue`, `choice`, or null. */
+    public function getWaitKind(): ?string
+    {
+        return $this->presentation->getWaitKind();
+    }
+
     /**
      * Plays to the end without waiting on dialogue, choosing the first option
      * of every choice and resolving battles as configured.
@@ -407,7 +413,7 @@ final class CinematicPreviewSession
     public function waitDescription(): ?string
     {
         if ($this->status() === self::STATUS_BATTLE) {
-            return sprintf('Battle in progress — resolved as %s on the next step (preview assumption)', $this->battleOutcomeLabel());
+            return sprintf('Battle in progress: resolved as %s on the next step (preview assumption)', $this->battleOutcomeLabel());
         }
 
         return $this->presentation->describeWait();

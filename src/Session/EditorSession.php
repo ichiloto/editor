@@ -2406,15 +2406,17 @@ final class EditorSession
 
     /**
      * Plays, pauses, steps, advances while playing, skips, or restarts the
-     * cinematic previewed. An advance is the time since the last one, so the
+     * cinematic previewed, or answers what it waits on: `confirm` turns the
+     * dialogue's page or picks the highlighted option, `choice` moves that
+     * highlight by `delta`. An advance is the time since the last one, so the
      * preview keeps real time however often it is asked. An accepted skip
      * plays the authored finalizer, even when the preview was paused.
      *
-     * @param 'play'|'pause'|'step'|'tick'|'skip'|'restart' $action
+     * @param 'play'|'pause'|'step'|'tick'|'skip'|'restart'|'confirm'|'choice' $action
      * @return array<string, mixed> The preview, as {@see describeCinematicPreview()}.
      * @throws SessionRefusal When no cinematic is previewed, the action is unknown, or a skip is refused.
      */
-    public function controlCinematicPreview(string $action, float $seconds = 0.0): array
+    public function controlCinematicPreview(string $action, float $seconds = 0.0, int $delta = 0): array
     {
         $preview = $this->cinematicPreview ?? throw new SessionRefusal('No cinematic is being previewed.');
         if ($action === 'skip') {
@@ -2433,6 +2435,8 @@ final class EditorSession
             'step' => $preview->step(),
             'tick' => $preview->tick(max(0.0, min($seconds, 1.0))),
             'restart' => $this->cinematicPreview = $preview->restart(),
+            'confirm' => $preview->confirm(),
+            'choice' => $preview->moveChoice($delta),
             default => throw new SessionRefusal(sprintf('A cinematic preview cannot %s.', $action)),
         };
 
@@ -2628,6 +2632,7 @@ final class EditorSession
             'finished' => $preview->isFinished(),
             'failure' => $preview->failure()['message'] ?? null,
             'wait' => $preview->waitDescription(),
+            'waitingFor' => $preview->getWaitKind(),
         ];
     }
     /**

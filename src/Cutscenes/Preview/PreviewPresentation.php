@@ -132,6 +132,19 @@ final class PreviewPresentation implements EventDialoguePresentationInterface
     }
 
     /**
+     * What the author answers now: `choice` (move the highlight, then
+     * confirm), `dialogue` (confirm), or null when nothing waits.
+     */
+    public function getWaitKind(): ?string
+    {
+        return match (true) {
+            ! $this->isWaiting() => null,
+            $this->choice !== null => 'choice',
+            default => 'dialogue',
+        };
+    }
+
+    /**
      * A short line for the controls strip.
      */
     public function describeWait(): ?string
