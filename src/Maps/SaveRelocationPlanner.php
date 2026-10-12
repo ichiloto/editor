@@ -84,11 +84,18 @@ final class SaveRelocationPlanner
             && $passable($x, $y) && $report->isReachable($x, $y) && ! isset($events["{$x},{$y}"]);
         $groups = [];
         foreach ($blocked as [$x, $y]) {
-            $landing = self::findLanding($x, $y, $passable, $canLand, $grid)
-                ?? throw new RuntimeException(sprintf('Saves standing on x %d, y %d of %s would have no open floor to move to. Open a path to it, or undo the change, then save.',
-                    $x, $y, $map->mapId));
+            $landing = self::findLanding($x, $y, $passable, $canLand, $grid);
+            if ($landing === null && ! $report->isReachable($x, $y)) {
+                // A map the player reaches nowhere today holds no save a relocation could place.
+                continue;
+            }
+            $landing ?? throw new RuntimeException(sprintf('Saves standing on x %d, y %d of %s would have no open floor to move to. Open a path to it, or undo the change, then save.',
+                $x, $y, $map->mapId));
             $groups[implode(',', $landing)]['to'] = $landing;
             $groups[implode(',', $landing)]['cells'][] = [$x, $y];
+        }
+        if ($groups === []) {
+            return null;
         }
         $relocations = array_map(static fn(array $group): array => ['map' => $map->mapId, 'cells' => $group['cells'], 'to' => $group['to']], array_values($groups));
 
