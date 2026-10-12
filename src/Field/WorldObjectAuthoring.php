@@ -160,11 +160,16 @@ final readonly class WorldObjectAuthoring
             fieldsFor: function (array $entry) use ($signs): array {
                 // A placement of a named resource takes its art and pivot from the resource; it chooses which one, and a
                 // sign placement the text its board shows: a translatable message, and the text where none is given.
+                // An object with its own art may become a placement by choosing a resource, and a placement choosing
+                // none goes back to its own art.
+                $resource = new RecordField('resource', 'Field Resource', reference: 'field_resources', allowsNone: true,
+                    removeWhenEmpty: true, displayDefault: '(its own art)');
                 $presentation = array_key_exists('resource', $entry)
-                    ? [new RecordField('resource', 'Field Resource', reference: 'field_resources'),
+                    ? [$resource,
                         ...(isset($signs[$entry['resource']]) ? [new RecordField('label.default', 'Sign Text'),
                             new RecordField('label.message', 'Sign Text Translation Key')] : [])]
-                    : [new RecordField('pivot.x', 'Image Pivot X (0..1)', InputControlType::FLOAT),
+                    : [$resource,
+                        new RecordField('pivot.x', 'Image Pivot X (0..1)', InputControlType::FLOAT),
                         new RecordField('pivot.y', 'Image Pivot Y (0..1)', InputControlType::FLOAT),
                         ...FieldSpriteFields::getFields($entry, true)];
                 $fields = [new RecordField('id', 'Stable Map-local Id', isReadOnly: true),
@@ -189,6 +194,13 @@ final readonly class WorldObjectAuthoring
                     $sign = $signs[$entry['resource'] ?? ''] ?? null;
                     if ($sign === null) { unset($entry['label']); }
                     else { $entry['label'] ??= self::makeLabel((string) $entry['id'], $sign); }
+                    // A placement's art and pivot are its resource's; without one, the object holds its own, as a new one does.
+                    if (array_key_exists('resource', $entry)) {
+                        unset($entry['pivot'], $entry['sprites2d'], $entry['variants']);
+                    } else {
+                        $entry['pivot'] ??= ['x' => .5, 'y' => 1.0];
+                        $entry['sprites2d'] ??= null;
+                    }
                 }
                 if ($field === 'covers.layer') {
                     if (!isset($entry['covers']['layer'])) { unset($entry['covers']); }

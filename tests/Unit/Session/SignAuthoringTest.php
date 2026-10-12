@@ -176,3 +176,43 @@ it('gives a placement a label when its resource becomes a sign, and takes it awa
     $apply('resource', 'lamp');
     expect($session->readMap('test-map')['worldObjects'][0])->not->toHaveKey('label');
 });
+
+it('turns an object created at a cell into a sign placement through its Field Resource row, and back', function () {
+    [$root, $session] = createSignProject();
+    $session->createWorldObject('test-map', $session->readMap('test-map')['revision'], 'gate-sign', 1, 1);
+    $apply = static function (string $field, string $value) use ($session): void {
+        $row = findSignPlacementRow($session, 'gate-sign', $field) ?? throw new RuntimeException('Missing row ' . $field);
+        $session->applyWorldObject('test-map', $session->readWorldObject('test-map', 'gate-sign')['revision'], 'gate-sign', $row['key'], $value);
+    };
+
+    // A new object has no art yet, and still offers the resource it may place.
+    expect(findSignPlacementRow($session, 'gate-sign', 'resource'))->not->toBeNull();
+
+    $apply('resource', 'wood-sign');
+    $placed = $session->readMap('test-map')['worldObjects'][0];
+    expect($placed)->toMatchArray(['id' => 'gate-sign', 'resource' => 'wood-sign', 'anchor' => ['x' => 1, 'y' => 1],
+            'label' => ['message' => 'signs.gate-sign', 'default' => 'Wood Sign']])
+        ->and($placed)->not->toHaveKeys(['pivot', 'sprites2d']);
+
+    $apply('label.default', 'North Gate');
+    expect($session->readMap('test-map')['worldObjects'][0]['label']['default'])->toBe('North Gate');
+
+    // It saves as the same placement.
+    $session->saveMap('test-map');
+    $saved = (require $root . '/assets/Maps/test-map/test-map.data.php')['worldObjects'][0];
+    expect($saved)->toMatchArray(['id' => 'gate-sign', 'resource' => 'wood-sign',
+            'label' => ['message' => 'signs.gate-sign', 'default' => 'North Gate']])
+        ->and($saved)->not->toHaveKeys(['pivot', 'sprites2d']);
+
+    // Undo steps back through the text and the resource to the object as it was created.
+    $session->undo();
+    $session->undo();
+    expect($session->readMap('test-map')['worldObjects'][0])->toMatchArray(['id' => 'gate-sign', 'pivot' => ['x' => .5, 'y' => 1.0], 'sprites2d' => null])
+        ->and($session->readMap('test-map')['worldObjects'][0])->not->toHaveKeys(['resource', 'label']);
+
+    // Choosing no resource again makes it an object with no art, without its label.
+    $apply('resource', 'wood-sign');
+    $apply('resource', '');
+    expect($session->readMap('test-map')['worldObjects'][0])->toMatchArray(['pivot' => ['x' => .5, 'y' => 1.0], 'sprites2d' => null])
+        ->and($session->readMap('test-map')['worldObjects'][0])->not->toHaveKeys(['resource', 'label']);
+});

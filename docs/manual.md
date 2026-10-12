@@ -1167,6 +1167,10 @@ starts on the project's first image for the author to replace, an id is refused
 as it is typed if the Engine would refuse it, and a save the Engine would refuse
 writes nothing. A map's world object that names a resource shows a Field
 Resource picker in place of its own pivot and art, which the resource owns.
+Every world object offers that picker, a new one included: choosing a
+resource makes the object a placement of it, dropping its own pivot, art and
+variants, and choosing none gives it back an art of its own, starting empty
+on the ground, as a newly created object does.
 
 A resource shows an image or a sign board (Shows). A sign board names its
 board image, cut into fixed left and right caps and a centre that repeats so
@@ -1187,8 +1191,10 @@ text its board shows. Its label is translatable from the start: the text is
 the default, under a translation key of the sign's own id
 (`signs.<id>`), which translations supply. A sign without text, or text on
 what is not a sign, is refused before anything is written; changing a
-placement's resource to a sign gives it a label, and changing it away removes
-it. Neither the label nor the board changes the map's collision. The GUI
+placement's resource to a sign gives it a label, starting on the board's name
+for the author to change under Sign Text, and changing it away removes it. So
+a sign can also be made by creating an object at a cell and choosing its board
+as the Field Resource. Neither the label nor the board changes the map's collision. The GUI
 editor's Game view draws a placed sign's board and label as the game does,
 laid out by the window in its text role; until the label is laid out, the
 sign's cells show their glyphs.
