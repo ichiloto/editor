@@ -132,7 +132,7 @@ final class PreviewGameScene extends GameScene
         return $camera;
     }
 
-    public function transferPlayer(Location $location, bool $useConfiguredTransition = true): bool
+    public function transferPlayer(Location $location, bool $useConfiguredTransition = true, ?\Closure $onCommitted = null): bool
     {
         $this->transfers[] = [
             'map' => $location->mapFilename,
@@ -164,6 +164,10 @@ final class PreviewGameScene extends GameScene
             $this->camera->resetPosition($this->player);
         }
 
+        // The transfer has committed: its owner's completion runs before events resume or anything saves.
+        if ($onCommitted !== null) {
+            $onCommitted();
+        }
         $this->eventInterpreter?->resumeAfterTransfer();
         $this->autoSave();
         return true;
