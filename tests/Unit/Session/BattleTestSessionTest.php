@@ -84,9 +84,10 @@ it('plays a battle test from the project root with the battle test as it stands,
     $root = battleTestProject();
     $system = $root . '/assets/Data/system.php';
     $before = (string) file_get_contents($system);
-    // The stand-in console reports the launch context it was given.
+    // The stand-in console reports the launch context it was given, then its other arguments.
     $console = $root . '/fake-console.php';
-    file_put_contents($console, '<?php fwrite(STDERR, getenv("ICHILOTO_LAUNCH_CONTEXT") . " " . implode(" ", array_slice($argv, 1)) . "\n"); exit(4);');
+    file_put_contents($console, '<?php $c = preg_grep("/^--launch-context=/", $argv); fwrite(STDERR, substr((string) reset($c), 17) . " "'
+        . ' . implode(" ", array_diff(array_slice($argv, 1), $c)) . "\n"); exit(4);');
     putenv('ICHILOTO_CONSOLE_BIN=' . $console);
 
     try {

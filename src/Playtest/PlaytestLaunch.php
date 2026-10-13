@@ -14,8 +14,9 @@ use RuntimeException;
 /**
  * One playtest of the author's real project, *without writing a single byte
  * into it*: the game runs from the project's own root and reads its own
- * assets, and the Engine's launch context says where it starts and where its
- * player data lives.
+ * assets, and the Engine's launch context, which the play command carries to
+ * it (`--launch-context`), says where it starts and where its player data
+ * lives.
  *
  * The launch owns a fresh data root outside the project, holding a copy of
  * the author's player settings (so a playtest honours their volume and mute)
@@ -90,10 +91,9 @@ final class PlaytestLaunch
     }
 
     /**
-     * The environment the play command runs with: this one's, carrying the
-     * launch context, and without an inherited start mode that would compete
-     * with it. The Engine consumes the context once and clears it, so it never
-     * reaches a process the game starts.
+     * The environment the play command runs with: this one's, without an
+     * inherited start mode or launch context that would compete with the
+     * launch the play command is given ({@see buildPlayOption()}).
      *
      * @return array<string, string>
      */
@@ -101,10 +101,19 @@ final class PlaytestLaunch
     {
         $environment = getenv();
         $environment = is_array($environment) ? $environment : [];
-        unset($environment[GameStartupMode::ENVIRONMENT_VARIABLE]);
-        $environment[GameLaunchContext::ENVIRONMENT_VARIABLE] = self::encodeContext($this->context);
+        unset($environment[GameStartupMode::ENVIRONMENT_VARIABLE], $environment[GameLaunchContext::ENVIRONMENT_VARIABLE]);
 
         return $environment;
+    }
+
+    /**
+     * The play command's option carrying the launch: the Console checks the
+     * project's Engine can read it, keeps the game's logs in the data root,
+     * and hands it to the game process alone.
+     */
+    public function buildPlayOption(): string
+    {
+        return '--launch-context=' . self::encodeContext($this->context);
     }
 
     /**

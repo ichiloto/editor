@@ -440,7 +440,7 @@ it('plays from the title with the project\'s own start, and only with renderers 
     file_put_contents($console, '<?php if ($argv[1] === "renderer:list") { echo json_encode(["schema" => "ichiloto.renderers/1", "preferredId" => "gpui",'
         . ' "renderers" => [["id" => "gpui", "displayName" => "GPUI", "available" => true, "reason" => null],'
         . ' ["id" => "terminal", "displayName" => "Terminal", "available" => false, "reason" => "no terminal application found"]]]); exit(0); }'
-        . ' fwrite(STDERR, getenv("ICHILOTO_LAUNCH_CONTEXT") . " " . implode(" ", array_slice($argv, 1)) . "\n"); exit(3);');
+        . ' fwrite(STDERR, implode(" ", array_slice($argv, 1)) . "\n"); exit(3);');
     putenv('ICHILOTO_CONSOLE_BIN=' . $console);
 
     try {

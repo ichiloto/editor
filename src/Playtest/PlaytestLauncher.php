@@ -45,7 +45,7 @@ final class PlaytestLauncher
      */
     public function buildPlayArguments(PlaytestLaunch $launch): array
     {
-        return [PHP_BINARY, $this->consoleBinary, 'play', '--no-tmux', '-d', $launch->projectRoot];
+        return [PHP_BINARY, $this->consoleBinary, 'play', '--no-tmux', $launch->buildPlayOption(), '-d', $launch->projectRoot];
     }
 
     /** The renderer choice that lets the console pick: GPUI when it is installed and usable, otherwise the terminal. */
@@ -73,7 +73,7 @@ final class PlaytestLauncher
             $pipes = [];
             $process = @proc_open(
                 [PHP_BINARY, $this->consoleBinary, 'play', '--no-tmux', '--no-interaction', '--renderer=' . $rendererId,
-                    '--terminal-window', '-d', $launch->projectRoot],
+                    '--terminal-window', $launch->buildPlayOption(), '-d', $launch->projectRoot],
                 [0 => ['file', '/dev/null', 'r'], 1 => $log, 2 => $log],
                 $pipes,
                 $launch->projectRoot,

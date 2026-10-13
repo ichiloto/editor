@@ -88,7 +88,7 @@ it('says where each kind of playtest starts in the launch context the Engine rea
 
     try {
         foreach ($launches as $launch) {
-            putenv(GameLaunchContext::ENVIRONMENT_VARIABLE . '=' . $launch->buildEnvironment()[GameLaunchContext::ENVIRONMENT_VARIABLE]);
+            putenv(GameLaunchContext::ENVIRONMENT_VARIABLE . '=' . substr($launch->buildPlayOption(), strlen('--launch-context=')));
             $contexts[] = GameLaunchContext::consumeEnvironment();
         }
         [$title, $cinematic, $battle] = $contexts;
@@ -107,18 +107,22 @@ it('says where each kind of playtest starts in the launch context the Engine rea
     }
 });
 
-it('hands the play command the launch context without a start mode that would compete with it', function (): void {
+it('hands the play command the launch as its option, with no start mode or context of its own to compete', function (): void {
     $root = playtestProject();
     putenv(GameStartupMode::ENVIRONMENT_VARIABLE . '=title');
+    putenv(GameLaunchContext::ENVIRONMENT_VARIABLE . '={"mode":"title"}');
     $launch = PlaytestLaunch::fromCell($root, 'test-map', 1, 1);
 
     try {
         $environment = $launch->buildEnvironment();
 
         expect($environment)->not->toHaveKey(GameStartupMode::ENVIRONMENT_VARIABLE)
-            ->and(json_decode($environment[GameLaunchContext::ENVIRONMENT_VARIABLE], true))->toBe($launch->getContext());
+            ->and($environment)->not->toHaveKey(GameLaunchContext::ENVIRONMENT_VARIABLE)
+            ->and($launch->buildPlayOption())->toStartWith('--launch-context=')
+            ->and(json_decode(substr($launch->buildPlayOption(), strlen('--launch-context=')), true))->toBe($launch->getContext());
     } finally {
         putenv(GameStartupMode::ENVIRONMENT_VARIABLE);
+        putenv(GameLaunchContext::ENVIRONMENT_VARIABLE);
         $launch->destroy();
     }
 });
@@ -151,7 +155,7 @@ it('runs the play command in this terminal from the project root without tmux', 
 
     try {
         expect(PlaytestLauncher::discover(__FILE__)->buildPlayArguments($launch))
-            ->toBe([PHP_BINARY, __FILE__, 'play', '--no-tmux', '-d', realpath($root)]);
+            ->toBe([PHP_BINARY, __FILE__, 'play', '--no-tmux', $launch->buildPlayOption(), '-d', realpath($root)]);
     } finally {
         $launch->destroy();
     }
@@ -228,14 +232,13 @@ it('says where it looked when there is no console to find', function (): void {
 });
 
 /**
- * A stand-in console: it records its arguments and the launch context it was
- * given, starts a child that would outlive it, and either keeps running or
- * exits with the code given.
+ * A stand-in console: it records its arguments, starts a child that would
+ * outlive it, and either keeps running or exits with the code given.
  */
 function writeFakeConsole(string $directory, ?int $exitCode = null): string
 {
     $path = $directory . '/fake-console.php';
-    file_put_contents($path, '<?php echo implode(" ", array_slice($argv, 1)), "\n", getenv("ICHILOTO_LAUNCH_CONTEXT"), "\n"; '
+    file_put_contents($path, '<?php echo implode(" ", array_slice($argv, 1)), "\n"; '
         . ($exitCode === null
             ? '$child = proc_open(["sleep", "60"], [], $pipes); sleep(60);'
             : sprintf('fwrite(STDERR, "renderer missing\n"); exit(%d);', $exitCode)));
@@ -275,8 +278,8 @@ it('runs a playtest in the background with its renderer and stops the whole game
         $children = trim((string) shell_exec('pgrep -P ' . $pid));
 
         expect($run->isRunning())->toBeTrue()
-            ->and($run->readLogTail())->toContain('play --no-tmux --no-interaction --renderer=gpui --terminal-window -d ' . realpath($root))
-            ->and($run->readLogTail())->toContain(json_encode($launch->getContext(), JSON_UNESCAPED_SLASHES))
+            ->and($run->readLogTail())->toContain('play --no-tmux --no-interaction --renderer=gpui --terminal-window '
+                . $launch->buildPlayOption() . ' -d ' . realpath($root))
             ->and($children)->not->toBe('');
 
         $run->stop();
