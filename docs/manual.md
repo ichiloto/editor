@@ -588,7 +588,7 @@ replace it.
 RPG Maker-like GUI editor for graphical materials, atlases and crop authoring.
 The planned `ichiloto edit` entry point will offer a TUI/GUI choice; that choice
 and the GUI itself are not delivered by this TUI boundary correction. See the
-[GUI editor plan](../../gui-editor/docs/plan.md).
+[GUI editor plan](https://github.com/ichiloto/gui-editor/blob/develop/docs/plan.md).
 
 ### Normal mode
 
@@ -774,7 +774,7 @@ character says is read in the pane rather than in the edit buffer.
   Existing NPC `sprites2d` data remains preserved when editing terminal glyphs,
   and its model services and source-preserving validation remain available.
   Graphical NPC authoring belongs in the pending
-  [GUI editor](../../gui-editor/README.md), not a terminal form. Terminal base
+  [GUI editor](https://github.com/ichiloto/gui-editor/blob/develop/README.md), not a terminal form. Terminal base
   and directional glyphs, identity, dialogue, movement and conditions remain
   editable as before. This correction does not claim that all other actor or
   database artwork controls have been removed.
