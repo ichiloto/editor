@@ -4417,10 +4417,18 @@ final class EditorSession
 
     /**
      * Saves one map through its transaction, after the warnings validation
-     * has for it, which never block a save.
+     * has for it, which never block a save. When the save would take cells
+     * existing saves may stand on, nothing is written until the author has
+     * seen where those saves move: the first call asks, and `write` with the
+     * question's `confirm` saves the map and the relocation step together.
      *
-     * @return array{saved: string, warnings: list<string>, backupFailures: list<string>}
-     * @throws SessionRefusal When the map is unknown or refuses to save.
+     * @return array{saved: string, warnings: list<string>, backupFailures: list<string>, relocated: list<string>}
+     *     |array{status: 'question', map: string, question: string, answers: list<array{key: string, label: string, description: string}>,
+     *         relocations: list<array{map: string, cells: list<array{int, int}>, to: array{int, int}}>, moves: list<string>,
+     *         contentVersion: int, confirm: string}
+     *     |array{status: 'cancelled', map: string, saved: null}
+     * @throws SessionRefusal When the map is unknown or refuses to save, the answer is not write or cancel, or the
+     *     relocations changed since they were shown.
      */
     public function saveMap(string $mapId, ?string $answer = null, ?string $confirm = null): array
     {
