@@ -2,7 +2,6 @@
 
 declare(strict_types=1);
 
-use Ichiloto\Editor\Playtest\PlaytestOverlay;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Editor\Session\EditorSession;
 use Ichiloto\Editor\Session\SessionRefusal;
@@ -81,23 +80,35 @@ it('refuses to start without a troop, or while a database a battle reads is unsa
     expect(fn() => $session->startBattleTest(0))->toThrow(SessionRefusal::class, 'first; the battle reads them on disk');
 });
 
-it('plays a battle test from an overlay carrying the battle test as it stands, never writing the project', function () {
+it('plays a battle test from the project root with the battle test as it stands, never writing the project', function () {
     $root = battleTestProject();
     $system = $root . '/assets/Data/system.php';
     $before = (string) file_get_contents($system);
-    $entry = ['troop' => 'Pair', 'members' => [['actor' => 'Kaelion', 'level' => 3]]];
+    // The stand-in console reports the launch context it was given.
+    $console = $root . '/fake-console.php';
+    file_put_contents($console, '<?php fwrite(STDERR, getenv("ICHILOTO_LAUNCH_CONTEXT") . " " . implode(" ", array_slice($argv, 1)) . "\n"); exit(4);');
+    putenv('ICHILOTO_CONSOLE_BIN=' . $console);
 
-    $overlay = PlaytestOverlay::createForBattle($root, $entry);
-    $copied = require $overlay->root . '/assets/Data/system.php';
-    $emptied = PlaytestOverlay::createForBattle($root, []);
-    $none = require $emptied->root . '/assets/Data/system.php';
-    $overlay->destroy();
-    $emptied->destroy();
+    try {
+        $session = EditorSession::open($root);
+        // An unsaved party: the battle test fights with it as the dialog has it now.
+        $session->applyBattleTest(['members' => [['actor' => 'Kaelion', 'level' => 3]]]);
+        $session->startBattleTest(0);
+        $deadline = microtime(true) + 5;
+        while ($session->describeBattleTestRun()['running'] && microtime(true) < $deadline) {
+            usleep(20000);
+        }
+        $log = (string) $session->describeBattleTestRun()['log'];
+        $context = json_decode(substr($log, 0, strpos($log, ' play ')), true);
 
-    expect($copied[ProjectBattleTest::SYSTEM_KEY])->toBe($entry)
-        ->and($copied['startingParty'])->toBe(['Kaelion'])
-        ->and($none)->not->toHaveKey(ProjectBattleTest::SYSTEM_KEY)
-        ->and(file_get_contents($system))->toBe($before);
+        expect($context['battleTest'])->toEqual(['troop' => 'Pair', 'members' => [['actor' => 'Kaelion', 'level' => 3]]])
+            ->and($context)->not->toHaveKey('mode')
+            ->and($log)->toContain(' play --no-tmux --no-interaction --renderer=gpui --terminal-window -d ' . realpath($root))
+            ->and(is_dir($context['dataRoot']))->toBeFalse()
+            ->and(file_get_contents($system))->toBe($before);
+    } finally {
+        putenv('ICHILOTO_CONSOLE_BIN');
+    }
 });
 
 it('describes a draft the dialog is editing without writing it', function () {

@@ -70,7 +70,7 @@ use Ichiloto\Editor\Inspector\InspectorRefusal;
 use Ichiloto\Editor\Inspector\MapInspector;
 use Ichiloto\Editor\MapSourceRefusal;
 use Ichiloto\Editor\Playtest\PlaytestLauncher;
-use Ichiloto\Editor\Playtest\PlaytestOverlay;
+use Ichiloto\Editor\Playtest\PlaytestLaunch;
 use Ichiloto\Editor\Playtest\PlaytestRun;
 use Ichiloto\Editor\Playtest\PlaytestStart;
 use Ichiloto\Editor\Maps\LayerEditor;
@@ -4475,9 +4475,9 @@ final class EditorSession
     }
 
     /**
-     * Plays the game in the background, in its own graphical window, as the terminal editor's playtest does: from a
-     * temporary overlay of the project that writes nothing into it, with the author's player settings (volume and
-     * mute included) and no saves. It starts on the open map at a cell, or at the game's title with the project's own
+     * Plays the game in the background, in its own graphical window, as the terminal editor's playtest does: from the
+     * project's own root, writing nothing into it, with its player data in a data root of its own holding the
+     * author's player settings (volume and mute included) and none of their saves. It starts on the open map at a cell, or at the game's title with the project's own
      * starting position. The game reads maps from disk, so a playtest is refused while a map it plays from is unsaved:
      * the start map, or, from the title, any map.
      *
@@ -4519,17 +4519,16 @@ final class EditorSession
                 throw new SessionRefusal(sprintf('Save %s before playing from the title; the game reads every map on disk.', implode(', ', $unsaved)));
             }
         }
-        $overlay = null;
+        $launch = null;
         try {
-            $overlay = $start === PlaytestStart::CELL
-                ? PlaytestOverlay::create($this->workspace->projectRoot, (string) $mapId, (int) $x, (int) $y)
-                : PlaytestOverlay::createForTitle($this->workspace->projectRoot);
+            $launch = $start === PlaytestStart::CELL
+                ? PlaytestLaunch::fromCell($this->workspace->projectRoot, (string) $mapId, (int) $x, (int) $y)
+                : PlaytestLaunch::fromTitle($this->workspace->projectRoot);
             $launcher = PlaytestLauncher::discover(projectRoot: $this->workspace->projectRoot);
-            $log = sys_get_temp_dir() . DIRECTORY_SEPARATOR . uniqid('ichiloto-playtest-', true) . '.log';
-            $this->playtest = $launcher->start($overlay, $renderer, $log, $start);
+            $this->playtest = $launcher->start($launch, $renderer);
             $this->playtestStart = $start;
         } catch (RuntimeException $error) {
-            $overlay?->destroy();
+            $launch?->destroy();
             throw new SessionRefusal(sprintf('The playtest could not start: %s', $error->getMessage()), previous: $error);
         }
 
@@ -4582,9 +4581,9 @@ final class EditorSession
         return [
             'running' => $running,
             'start' => $run === null ? null : $this->playtestStart->value,
-            'map' => $run?->overlay->mapId,
-            'x' => $run?->overlay->spawnX,
-            'y' => $run?->overlay->spawnY,
+            'map' => $run?->launch->mapId,
+            'x' => $run?->launch->x,
+            'y' => $run?->launch->y,
             'stopped' => $run?->wasStopped() ?? false,
             'exitCode' => $exitCode,
             // Only a run that ended on its own with an error says why.
@@ -4699,10 +4698,10 @@ final class EditorSession
     /**
      * Plays the battle test in the background in its own graphical window,
      * as `ichiloto battle` does: the named troop, or the battle test's own,
-     * fought by the battle test's party in its arena. It runs from an
-     * overlay of the project carrying the battle test as it is now, unsaved
-     * edits included, and writes nothing into the project; anything else a
-     * battle reads from disk must be saved first.
+     * fought by the battle test's party in its arena. It runs from the
+     * project's own root with the battle test as it is now, unsaved edits
+     * included, as its launch, and writes nothing into the project; anything
+     * else a battle reads from disk must be saved first.
      *
      * @param int|null $troopIndex The troop to fight; null for the battle test's troop.
      * @return array<string, mixed> The battle test run, as {@see describeBattleTestRun()}.
@@ -4728,15 +4727,14 @@ final class EditorSession
         if ($described['issue'] !== null || $described['problems'] !== []) {
             throw new SessionRefusal("The battle test party cannot be set up:\n" . implode("\n", array_filter([$described['issue'], ...$described['problems']])));
         }
-        $overlay = null;
+        $launch = null;
         try {
-            $overlay = PlaytestOverlay::createForBattle($this->workspace->projectRoot, $this->readBattleTestEntry());
+            $launch = PlaytestLaunch::fromBattleTest($this->workspace->projectRoot, [...$this->readBattleTestEntry(), 'troop' => $troop]);
             $launcher = PlaytestLauncher::discover(projectRoot: $this->workspace->projectRoot);
-            $log = sys_get_temp_dir() . DIRECTORY_SEPARATOR . uniqid('ichiloto-battle-test-', true) . '.log';
-            $this->battleTestRun = $launcher->startBattle($overlay, self::PLAYTEST_RENDERER, $log, $troop);
+            $this->battleTestRun = $launcher->start($launch, self::PLAYTEST_RENDERER);
             $this->battleTestTroop = $troop;
         } catch (RuntimeException $error) {
-            $overlay?->destroy();
+            $launch?->destroy();
             throw new SessionRefusal(sprintf('The battle test could not start: %s', $error->getMessage()), previous: $error);
         }
 
@@ -4820,7 +4818,7 @@ final class EditorSession
 
     /**
      * What a battle reads from disk that has unsaved edits: every database
-     * but System (whose battle test the overlay carries) and every
+     * but System (whose battle test the launch carries) and every
      * cutscene, since summons play them. Maps are not part of a battle.
      *
      * @return list<string>

@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 use Ichiloto\Editor\MapSourceRefusal;
 use Ichiloto\Editor\Editor;
-use Ichiloto\Editor\Playtest\PlaytestOverlay;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Editor\Status\StatusLevel;
@@ -52,19 +51,6 @@ it('opens valid maps alongside multiple read-only invalid maps and reports each 
 
     $good->setTileSymbol(1, 1, 'x');
     expect($good->isDirty())->toBeTrue();
-});
-
-it('refuses a cinematic playtest event grid before evaluating its map data', function (): void {
-    $root = makeTemporaryProject('ichiloto-map-playtest-');
-    $directory = $root . '/assets/Maps/test-map';
-    $executed = $root . '/executed';
-    file_put_contents($root . '/assets/Data/system.php', '<?php return [];');
-    file_put_contents($directory . '/test-map.data.php', "<?php file_put_contents(" . var_export($executed, true) . ", 'data'); return []; ");
-    file_put_contents($directory . '/test-map.event.php', "<?php file_put_contents(" . var_export($executed, true) . ", 'event'); return 'bad'; ");
-
-    expect(fn () => PlaytestOverlay::createForCinematic($root, 'test-map', 1, 1, 'intro'))
-        ->toThrow(InvalidArgumentException::class, 'literal nowdoc');
-    expect(is_file($executed))->toBeFalse();
 });
 
 it('writes parseable map and event grids when authored rows resemble nowdoc closers', function (): void {

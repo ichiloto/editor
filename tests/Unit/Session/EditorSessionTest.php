@@ -434,14 +434,13 @@ it('plays a saved map from a cell in the background and refuses an unsaved one',
 it('plays from the title with the project\'s own start, and only with renderers it can launch', function () {
     $root = makeTemporaryProject();
     file_put_contents($root . '/assets/Data/system.php', "<?php\n\nreturn ['startingPositions' => ['player' => ['destinationMap' => 'test-map', 'spawnPoint' => ['x' => 2, 'y' => 1]]]];\n");
-    // The fake console lists GPUI as usable and the terminal as not; the fake game reports the start position its
-    // overlay gives it and how it was launched, then ends.
+    // The fake console lists GPUI as usable and the terminal as not; the fake game reports the launch context it
+    // was given and how it was launched, then ends.
     $console = $root . '/fake-console.php';
     file_put_contents($console, '<?php if ($argv[1] === "renderer:list") { echo json_encode(["schema" => "ichiloto.renderers/1", "preferredId" => "gpui",'
         . ' "renderers" => [["id" => "gpui", "displayName" => "GPUI", "available" => true, "reason" => null],'
         . ' ["id" => "terminal", "displayName" => "Terminal", "available" => false, "reason" => "no terminal application found"]]]); exit(0); }'
-        . ' $d = $argv[array_search("-d", $argv) + 1]; $s = require $d . "/assets/Data/system.php";'
-        . ' fwrite(STDERR, json_encode($s["startingPositions"]["player"]) . " " . implode(" ", array_slice($argv, 1)) . "\n"); exit(3);');
+        . ' fwrite(STDERR, getenv("ICHILOTO_LAUNCH_CONTEXT") . " " . implode(" ", array_slice($argv, 1)) . "\n"); exit(3);');
     putenv('ICHILOTO_CONSOLE_BIN=' . $console);
 
     try {
@@ -466,8 +465,10 @@ it('plays from the title with the project\'s own start, and only with renderers 
         while ($session->describePlaytest()['running'] && microtime(true) < $deadline) {
             usleep(20000);
         }
-        expect($session->describePlaytest()['log'])->toContain('{"destinationMap":"test-map","spawnPoint":{"x":2,"y":1}}')
-            ->toContain('--start=title')->toContain('--renderer=auto')->toContain('--terminal-window');
+        // The game plays the project's own root, at its title, with its data kept apart.
+        expect($session->describePlaytest()['log'])->toContain('{"mode":"title","dataRoot":"')
+            ->toContain('--renderer=auto')->toContain('--terminal-window')->toContain('-d ' . realpath($root))
+            ->not->toContain('--start');
 
         // From a cell, a new game starts on that cell, skipping the title.
         $session->startPlaytest('test-map', 1, 1);
@@ -475,8 +476,7 @@ it('plays from the title with the project\'s own start, and only with renderers 
         while ($session->describePlaytest()['running'] && microtime(true) < $deadline) {
             usleep(20000);
         }
-        expect($session->describePlaytest()['log'])->toContain('{"destinationMap":"test-map","spawnPoint":{"x":1,"y":1}')
-            ->toContain('--start=new-game');
+        expect($session->describePlaytest()['log'])->toContain('{"mode":"new-game","start":{"mapId":"test-map","x":1,"y":1},"dataRoot":"');
     } finally {
         putenv('ICHILOTO_CONSOLE_BIN');
     }

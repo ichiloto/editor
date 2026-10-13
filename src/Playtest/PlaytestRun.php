@@ -6,24 +6,27 @@ namespace Ichiloto\Editor\Playtest;
 
 /**
  * A playtest running in the background ({@see PlaytestLauncher::start()}).
- * It owns its overlay: once the game has exited, or has been stopped, the
- * overlay is removed. The play command starts the game as a child of its
- * own, which starts its renderer, so stopping ends the whole tree.
+ * It owns its launch: once the game has exited, or has been stopped, the end
+ * of its log is kept and the launch's data root is removed. The play command
+ * starts the game as a child of its own, which starts its renderer, so
+ * stopping ends the whole tree.
  */
 final class PlaytestRun
 {
     private ?int $exitCode = null;
     private bool $finished = false;
     private bool $stopped = false;
+    /** The log as the run left it, kept once its data root is gone. */
+    private ?string $finalLog = null;
 
     /**
      * @param resource $process The play command's process.
      */
-    public function __construct(private $process, public readonly PlaytestOverlay $overlay, public readonly string $logPath)
+    public function __construct(private $process, public readonly PlaytestLaunch $launch)
     {
     }
 
-    /** Whether the game is still running; a finished run removes its overlay. */
+    /** Whether the game is still running; a finished run removes its data root. */
     public function isRunning(): bool
     {
         if ($this->finished) {
@@ -52,7 +55,7 @@ final class PlaytestRun
         return $this->isRunning() ? null : $this->exitCode;
     }
 
-    /** Ends the game, its renderer and the play command, then removes the overlay. */
+    /** Ends the game, its renderer and the play command, then removes the data root. */
     public function stop(): void
     {
         if (! $this->isRunning()) {
@@ -78,7 +81,7 @@ final class PlaytestRun
     /** The end of the play command's output, for saying why a run failed. */
     public function readLogTail(int $lines = 12): string
     {
-        $content = is_file($this->logPath) ? (string) file_get_contents($this->logPath) : '';
+        $content = $this->finalLog ?? self::readLog($this->launch->getLogPath());
         $kept = array_slice(preg_split('/\R/', trim($content)) ?: [], -$lines);
 
         return implode("\n", $kept);
@@ -93,7 +96,13 @@ final class PlaytestRun
         if (! $closed) {
             proc_close($this->process);
         }
-        $this->overlay->destroy();
+        $this->finalLog = self::readLog($this->launch->getLogPath());
+        $this->launch->destroy();
+    }
+
+    private static function readLog(string $path): string
+    {
+        return is_file($path) ? (string) file_get_contents($path) : '';
     }
 
     /**

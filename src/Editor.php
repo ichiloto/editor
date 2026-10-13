@@ -79,7 +79,7 @@ use Ichiloto\Editor\IO\InputRouter;
 use Ichiloto\Editor\IO\KeyBinding;
 use Ichiloto\Editor\Navigation\NavigationEntry;
 use Ichiloto\Editor\Playtest\PlaytestLauncher;
-use Ichiloto\Editor\Playtest\PlaytestOverlay;
+use Ichiloto\Editor\Playtest\PlaytestLaunch;
 use Ichiloto\Editor\Navigation\NavigationStack;
 use Ichiloto\Editor\Runtime\EditorLoop;
 use Ichiloto\Editor\Runtime\TerminalHost;
@@ -4986,13 +4986,12 @@ final class Editor
     }
 
     /**
-     * Launches the game on the selected map, spawning at the cursor.
+     * Launches a new game on the selected map, starting at the cursor.
      *
-     * The author's project is never modified: `PlaytestOverlay` builds a
-     * temporary root of symlinks with a generated `system.php` and an isolated
-     * save directory, and the overlay is torn down when the game exits. The
-     * engine offers no starting-map override today, so this is the honest way
-     * to do it - see the Phase 6 deferral note in `docs/roadmap.md`.
+     * The author's project is never modified: the game runs from the project's
+     * own root, and a {@see PlaytestLaunch} gives the Engine the start cell and
+     * a data root of its own for settings, saves and logs, removed when the
+     * game exits.
      *
      * @return void
      */
@@ -5007,17 +5006,17 @@ final class Editor
         }
 
         if ($selectedMap->isDirty()) {
-            // The playtest reads the map through a symlink, so an unsaved
-            // edit simply would not appear. Say so rather than confuse.
+            // The playtest reads the map from disk, so an unsaved edit
+            // simply would not appear. Say so rather than confuse.
             $this->setStatus('Save this map (Ctrl+S) before playtesting - the game reads the file on disk.', StatusLevel::WARN);
             $this->renderFooter();
             return;
         }
 
-        $overlay = null;
+        $launch = null;
 
         try {
-            $overlay = PlaytestOverlay::create(
+            $launch = PlaytestLaunch::fromCell(
                 $this->workspace->projectRoot,
                 $selectedMap->mapId,
                 $this->cursorX,
@@ -5028,7 +5027,7 @@ final class Editor
             $this->terminal->suspendForChildProcess();
 
             try {
-                $launcher->run($overlay);
+                $launcher->run($launch);
             } finally {
                 $this->terminal->resumeAfterChildProcess($this->lastTerminalSize);
             }
@@ -5040,7 +5039,7 @@ final class Editor
         } catch (Throwable $throwable) {
             $this->setErrorStatus($throwable, 'Playtest');
         } finally {
-            $overlay?->destroy();
+            $launch?->destroy();
         }
 
         $this->requestFullRender();

@@ -14,7 +14,7 @@ use Ichiloto\Editor\Cutscenes\Preview\PreviewSnapshot;
 use Ichiloto\Editor\Cutscenes\Preview\TimelinePreviewSession;
 use Ichiloto\Editor\EditorWindow;
 use Ichiloto\Editor\Playtest\PlaytestLauncher;
-use Ichiloto\Editor\Playtest\PlaytestOverlay;
+use Ichiloto\Editor\Playtest\PlaytestLaunch;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Editor\Status\StatusLevel;
 use Ichiloto\Editor\UI\CutscenesScreen;
@@ -37,7 +37,7 @@ use Throwable;
  * failure it stopped on — with Play, Pause, Step, Skip, Restart and Stop,
  * a jump from a failure to the command that failed, a watched-versus-skipped
  * comparison, a duration overview, and a route into the real game through a
- * playtest overlay. The command tree stays the one thing being edited; the
+ * playtest launch. The command tree stays the one thing being edited; the
  * pane only reads it.
  *
  * @package Ichiloto\Editor\Cutscenes\Editing
@@ -915,8 +915,9 @@ trait CutscenePreviewPane
     }
 
     /**
-     * Plays the cinematic in the real game: a playtest overlay whose start
-     * map carries an automatic trigger for it on the spawn tile.
+     * Plays the cinematic in the real game: a new game starting on its
+     * origin cell, which the Engine plays the cinematic on once the player
+     * has arrived.
      */
     private function playtestSelectedCinematic(): void
     {
@@ -956,10 +957,10 @@ trait CutscenePreviewPane
             return;
         }
 
-        $overlay = null;
+        $launch = null;
 
         try {
-            $overlay = PlaytestOverlay::createForCinematic(
+            $launch = PlaytestLaunch::fromCinematic(
                 $this->workspace->projectRoot,
                 $origin['mapId'],
                 $origin['x'],
@@ -970,7 +971,7 @@ trait CutscenePreviewPane
             $this->terminal->suspendForChildProcess();
 
             try {
-                $launcher->run($overlay);
+                $launcher->run($launch);
             } finally {
                 $this->terminal->resumeAfterChildProcess($this->lastTerminalSize);
             }
@@ -979,7 +980,7 @@ trait CutscenePreviewPane
         } catch (Throwable $throwable) {
             $this->setErrorStatus($throwable, 'Cinematic playtest');
         } finally {
-            $overlay?->destroy();
+            $launch?->destroy();
         }
 
         $this->requestFullRender();

@@ -692,6 +692,11 @@ stay maintainable at similar scale:
 > `suspendForChildProcess()`/`resumeAfterChildProcess()` to hand the tty over
 > and take it back. The editor refuses to playtest a *dirty* map rather than
 > silently running the on-disk version.
+> *2026-10-13:* the Engine now takes a launch context (start mode, start cell,
+> cinematic, battle test and an isolated data root), and its asset loaders
+> refuse paths that resolve outside `assets`, which the overlay's symlinks
+> did. `PlaytestOverlay` is retired: every playtest runs from the real project
+> root through `PlaytestLaunch`, with no generated `system.php` or copied map.
 > **The manual is real**: `docs/manual.md` (531 lines) plus six task guides
 > under `docs/guides/` (1,096 lines total) — index, make-a-new-map,
 > add-an-npc, wire-a-quest, author-a-cutscene, write-a-skit — following the
@@ -1145,7 +1150,8 @@ presentation that waits for the author) and hands the asset to the engine's
 pause or step, read-only views of lanes, checkpoints, failures (mapped back
 to outline rows through the engine's own command paths) and final state, a
 watched-versus-skipped comparison, and a playtest overlay whose start map
-carries an automatic `CinematicEventTrigger`. `SummonPreviewSession` does
+carries an automatic `CinematicEventTrigger` (since 2026-10-13, a launch
+context naming the cinematic instead). `SummonPreviewSession` does
 the same over `SummonPlaybackSession`: the playhead, frame clock, active
 segments and cue schedule are the engine's; the editor draws the frame by
 the battle field's rules and logs the cues it crossed.

@@ -8,7 +8,9 @@ use Ichiloto\Editor\Console\ConsoleBinary;
 use RuntimeException;
 
 /**
- * Runs `ichiloto play` against a playtest overlay.
+ * Runs `ichiloto play` from the author's real project root for a
+ * {@see PlaytestLaunch}, which carries where the game starts and where its
+ * data lives in the Engine's launch context.
  *
  * `--no-tmux` is always passed: the editor already owns this terminal, and
  * letting the play command open or reuse a tmux session would detach the game
@@ -36,19 +38,14 @@ final class PlaytestLauncher
     }
 
     /**
-     * Returns the shell command that runs the playtest.
+     * The play command's arguments, from its interpreter on: the game in this
+     * terminal, from the project's own root.
      *
-     * @param PlaytestOverlay $overlay The overlay to play.
-     * @return string
+     * @return list<string>
      */
-    public function buildCommand(PlaytestOverlay $overlay): string
+    public function buildPlayArguments(PlaytestLaunch $launch): array
     {
-        return sprintf(
-            '%s %s play --no-tmux -d %s',
-            escapeshellcmd(PHP_BINARY),
-            escapeshellarg($this->consoleBinary),
-            escapeshellarg($overlay->root),
-        );
+        return [PHP_BINARY, $this->consoleBinary, 'play', '--no-tmux', '-d', $launch->projectRoot];
     }
 
     /** The renderer choice that lets the console pick: GPUI when it is installed and usable, otherwise the terminal. */
@@ -57,20 +54,40 @@ final class PlaytestLauncher
     /**
      * Starts the playtest in the background with a renderer of its own, for
      * an editor that owns no terminal to hand over: the play command runs
-     * without prompts, reading nothing and writing its output to a log. It
-     * begins a new game at the overlay's starting position, skipping the
-     * title, or at the title; a terminal session opens in a terminal window of
-     * its own, which closes when the game ends.
+     * without prompts, reading nothing and writing its output to the launch's
+     * log. A terminal session opens in a terminal window of its own, which
+     * closes when the game ends. Field playtests and battle tests start the
+     * same way; the launch context says which it is.
      *
      * @param string $rendererId The renderer, such as `gpui`, or {@see AUTOMATIC}.
-     * @param string $logPath Where the play command's output goes.
      * @throws RuntimeException When the process cannot start.
      */
-    public function start(PlaytestOverlay $overlay, string $rendererId, string $logPath, PlaytestStart $start = PlaytestStart::CELL): PlaytestRun
+    public function start(PlaytestLaunch $launch, string $rendererId): PlaytestRun
     {
-        return $this->spawn($overlay, ['play', '--no-tmux', '--no-interaction',
-            '--start=' . ($start === PlaytestStart::TITLE ? 'title' : 'new-game'), '--renderer=' . $rendererId,
-            '--terminal-window', '-d', $overlay->root], $logPath);
+        $log = @fopen($launch->getLogPath(), 'ab');
+        if (! is_resource($log)) {
+            throw new RuntimeException("Unable to open the playtest log at {$launch->getLogPath()}.");
+        }
+
+        try {
+            $pipes = [];
+            $process = @proc_open(
+                [PHP_BINARY, $this->consoleBinary, 'play', '--no-tmux', '--no-interaction', '--renderer=' . $rendererId,
+                    '--terminal-window', '-d', $launch->projectRoot],
+                [0 => ['file', '/dev/null', 'r'], 1 => $log, 2 => $log],
+                $pipes,
+                $launch->projectRoot,
+                $launch->buildEnvironment(),
+            );
+        } finally {
+            fclose($log);
+        }
+
+        if (! is_resource($process)) {
+            throw new RuntimeException('The playtest could not be started.');
+        }
+
+        return new PlaytestRun($process, $launch);
     }
 
     /**
@@ -111,62 +128,19 @@ final class PlaytestLauncher
     }
 
     /**
-     * Starts a battle test in the background with a renderer of its own, as
-     * {@see start()} starts a playtest: `ichiloto battle` against a battle
-     * test overlay, fighting the named troop with the party and arena its
-     * system data's battle test sets.
+     * Runs the playtest in this terminal, returning the play command's exit code.
      *
-     * @param string $troop The troop to fight, by name.
      * @throws RuntimeException When the process cannot start.
      */
-    public function startBattle(PlaytestOverlay $overlay, string $rendererId, string $logPath, string $troop): PlaytestRun
+    public function run(PlaytestLaunch $launch): int
     {
-        return $this->spawn($overlay, ['battle', '--no-interaction', '--renderer=' . $rendererId, '-d', $overlay->root, '--troop', $troop], $logPath);
-    }
-
-    /**
-     * Runs a console command against an overlay, reading nothing and writing
-     * its output to a log.
-     *
-     * @param list<string> $arguments The command and its options.
-     */
-    private function spawn(PlaytestOverlay $overlay, array $arguments, string $logPath): PlaytestRun
-    {
-        $log = @fopen($logPath, 'ab');
-        if (! is_resource($log)) {
-            throw new RuntimeException("Unable to open the playtest log at {$logPath}.");
-        }
-
-        try {
-            $pipes = [];
-            $process = @proc_open(
-                [PHP_BINARY, $this->consoleBinary, ...$arguments],
-                [0 => ['file', '/dev/null', 'r'], 1 => $log, 2 => $log],
-                $pipes,
-                $overlay->root,
-            );
-        } finally {
-            fclose($log);
-        }
-
+        $pipes = [];
+        $process = @proc_open($this->buildPlayArguments($launch), [0 => STDIN, 1 => STDOUT, 2 => STDERR], $pipes,
+            $launch->projectRoot, $launch->buildEnvironment());
         if (! is_resource($process)) {
             throw new RuntimeException('The playtest could not be started.');
         }
 
-        return new PlaytestRun($process, $overlay, $logPath);
-    }
-
-    /**
-     * Runs the playtest, returning the child process exit code.
-     *
-     * @param PlaytestOverlay $overlay The overlay to play.
-     * @return int
-     */
-    public function run(PlaytestOverlay $overlay): int
-    {
-        $exitCode = 0;
-        passthru($this->buildCommand($overlay), $exitCode);
-
-        return $exitCode;
+        return proc_close($process);
     }
 }

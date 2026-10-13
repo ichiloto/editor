@@ -2103,11 +2103,10 @@ the grid is unchanged; a retired view cannot supply its picture or feedback to
 the replacement. An effect without a selected start map now previews on
 diagnosed undefined terrain instead of refusing to open.
 
-`Ctrl+T` plays the saved cinematic in the real game through the playtest
-overlay: the start map is copied into the throwaway root with one extra
-event, an automatic single-use `CinematicEventTrigger` on the spawn tile,
-so the game launches the real asset through its real trigger the moment
-the playtest begins. Your map files are not modified.
+`Ctrl+T` plays the saved cinematic in the real game: a new game starts on
+the cinematic's origin cell, and the Engine plays the cinematic once the
+player has arrived, through the same controller a trigger would start it
+with. No map file is copied or modified for it.
 
 #### Skip and the finalizer
 
@@ -2622,26 +2621,22 @@ is printed in the `?` overlay.
 
 ## Playtesting
 
-`Ctrl+T` launches the game on the selected map, spawning at the canvas cursor.
-The editor hands the terminal to the game and takes it back when the game
-exits.
+`Ctrl+T` starts a new game on the selected map at the canvas cursor, past the
+title. The editor hands the terminal to the game and takes it back when the
+game exits.
 
-How it avoids touching your project: the editor builds a temporary project root
-of symlinks back to your real files, and replaces exactly two entries - a
-generated `assets/Data/system.php` carrying the playtest spawn, and an empty
-`.data/` so playtest saves cannot overwrite your save slots. Maps and every
-other asset are symlinks, so the playtest runs against your live files. The
-overlay is deleted when the game exits.
+How it avoids touching your project: the game runs from your project's own
+root and reads your live files, and the editor tells the Engine, through its
+launch context, where to start and where to keep the playtest's player data.
+That data lives in a fresh directory outside the project, holding a copy of
+your player settings (so your volume and mute carry over) and nothing else:
+settings changed during the playtest, its saves and its logs stay there, and
+your own saves are never read or written. The directory is deleted when the
+game exits. The Engine checks the start before the game takes any input, and
+refuses a cell that is outside the map, blocks movement or has an NPC on it.
 
 The map must be saved first: the game reads the file on disk, so the editor
 refuses to playtest a dirty map rather than silently running the old version.
-
-Current limits, both engine-side:
-
-- The engine offers no starting-map override, which is why the overlay exists.
-- The game still boots to its title screen, so a playtest is `Ctrl+T` then
-  "New Game". Booting straight into the field would need an engine hook in
-  `GameLoader::loadNewGame()` and `Game::start()`.
 
 `Ctrl+T` needs the console binary, which it looks for in this order: the
 project's own `vendor/bin/ichiloto`, any `vendor/bin/ichiloto` above the
