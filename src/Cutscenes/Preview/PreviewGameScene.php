@@ -153,8 +153,10 @@ final class PreviewGameScene extends GameScene
 
         $this->currentMapId = $location->mapFilename;
 
+        $loaded = false;
         try {
             $this->previewMap->loadForPreview($location->mapFilename);
+            $loaded = $location->mapFilename !== '';
         } catch (\Throwable) {
             // The map manager clears failed geometry and records why; the
             // cinematic can continue over explicitly diagnosed undefined terrain.
@@ -164,8 +166,10 @@ final class PreviewGameScene extends GameScene
             $this->camera->resetPosition($this->player);
         }
 
-        // The transfer has committed: its owner's completion runs before events resume or anything saves.
-        if ($onCommitted !== null) {
+        // Only a destination that actually loaded commits the transfer, so its owner's completion runs before
+        // events resume or anything saves. A map that failed keeps its diagnosed undefined-terrain preview but
+        // never completes the trigger that sent the player there.
+        if ($loaded && $onCommitted !== null) {
             $onCommitted();
         }
         $this->eventInterpreter?->resumeAfterTransfer();

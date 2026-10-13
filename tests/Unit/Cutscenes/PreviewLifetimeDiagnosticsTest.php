@@ -373,3 +373,30 @@ it('resizes a kept cinematic through its control description while preserving pl
     }
     expect(sourceHashTree($root))->toBe($before);
 });
+
+it('completes a transfer only when its destination map actually loads, keeping the undefined-terrain preview otherwise', function () {
+    $root = createPreviewContractProject('valid');
+    $session = EditorSession::open($root);
+    try {
+        $session->startCinematicPreview(0, 40, 12);
+        $scene = readPreviewContractField($session)->scene;
+        $completed = 0;
+        $complete = static function () use (&$completed): void { $completed++; };
+
+        // Maps resolve against the project, as the session's own preview calls do.
+        $transfer = static fn(string $map): bool => Ichiloto\Editor\ProjectDirectoryContext::run($root,
+            static fn(): bool => $scene->transferPlayer(new Ichiloto\Engine\Field\Location($map, new Ichiloto\Engine\Core\Vector2(2, 3), []), true, $complete));
+        $failed = $transfer('no-such-preview-map');
+
+        expect($failed)->toBeTrue()
+            ->and($completed)->toBe(0)
+            ->and(readPreviewContractField($session)->mapFailure)->not->toBeNull();
+
+        $transfer('harbour');
+
+        expect(readPreviewContractField($session)->mapFailure)->toBeNull()
+            ->and($completed)->toBe(1);
+    } finally {
+        $session->close();
+    }
+});
