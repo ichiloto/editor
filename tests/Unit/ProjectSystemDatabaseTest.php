@@ -120,7 +120,7 @@ it('opens System in the GUI session with its lists under their headings', functi
 
     expect($records['editable'])->toBeTrue()
         ->and($records['canCreate'])->toBeFalse()
-        ->and($labels)->toContain('Title', 'Starting Gold', 'Start Map', 'Battle Engine', 'Starting Party', 'Starting Inventory');
+        ->and($labels)->toContain('Title', 'Starting Gold', 'Start Map', 'Battle Engine', 'Level Up Restores HP/MP', 'Starting Party', 'Starting Inventory');
 });
 
 it('keeps a value written as an enum case\'s value written that way, as the new case', function (): void {
@@ -179,4 +179,46 @@ it('saves System and Types, which share system.php, each with only its own keys'
             fields: [new Ichiloto\Editor\Database\RecordField('title', 'Title')],
             projection: new Ichiloto\Editor\Database\Projections\WholeFileProjection(['elements']),
         ))->toThrow(LogicException::class, 'The stray category edits "title", a key its file projection does not own.');
+});
+
+it('sets whether a level up restores HP and MP, reading an absent rule as the Engine\'s default, and keeps the rest', function (): void {
+    $root = scratchSystemProject();
+    $path = $root . '/assets/Data/system.php';
+    file_put_contents($path, "<?php\n\nreturn " . var_export(productionSystem(), true) . ";\n");
+    $field = array_find(RecordSchemaCatalog::forKey('system')->fields,
+        static fn($field): bool => $field->key === 'progression.restoreVitalsOnLevelUp');
+
+    $database = systemRecords($root);
+    $database->setField(0, 'progression.restoreVitalsOnLevelUp', 'false');
+    $database->save();
+    $saved = require $path;
+
+    expect($field->displayDefault)->toBe('true')
+        ->and(Ichiloto\Engine\Progression\ProgressionSettings::fromSystemData(productionSystem())->restoreVitalsOnLevelUp)->toBeTrue()
+        ->and($saved)->toBe([...productionSystem(), 'progression' => ['restoreVitalsOnLevelUp' => false]])
+        ->and(Ichiloto\Engine\Progression\ProgressionSettings::fromSystemData($saved)->restoreVitalsOnLevelUp)->toBeFalse();
+
+    $database = systemRecords($root);
+    $database->setField(0, 'progression.restoreVitalsOnLevelUp', 'true');
+    $database->save();
+
+    expect((require $path)['progression'])->toBe(['restoreVitalsOnLevelUp' => true]);
+});
+
+it('reports progression rules the Engine would not read as an error', function (): void {
+    $root = makeTemporaryProject();
+    $path = $root . '/assets/Data/system.php';
+    $system = is_file($path) ? require $path : [];
+    $validate = static fn(): array => array_values(array_filter(
+        new Ichiloto\Editor\Validation\ProgressionValidator()->validate(Ichiloto\Editor\ProjectWorkspace::fromProject($root)),
+        static fn($issue): bool => str_contains($issue->where, 'progression')));
+
+    expect($validate())->toBe([]);
+
+    file_put_contents($path, "<?php\n\nreturn " . var_export([...$system, 'progression' => ['restoreVitalsOnLevelUp' => 'no']], true) . ";\n");
+    $issues = $validate();
+
+    expect($issues)->toHaveCount(1)
+        ->and($issues[0]->severity)->toBe(Ichiloto\Editor\Validation\Severity::ERROR)
+        ->and($issues[0]->message)->toContain('must be a boolean');
 });

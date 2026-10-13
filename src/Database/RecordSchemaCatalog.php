@@ -897,8 +897,8 @@ final class RecordSchemaCatalog
 
     /**
      * System — `assets/Data/system.php`, one map the engine reads at start:
-     * the title, starting gold, party, inventory and position, and battle
-     * settings. Its elements are the Types category's. The file is the category's one record,
+     * the title, starting gold, party, inventory and position, battle
+     * settings, and progression rules. Its elements are the Types category's. The file is the category's one record,
      * only ever edited. The starting party and inventory are lists of their
      * own; a party member is a bare actor id, as the file authors it.
      *
@@ -934,13 +934,15 @@ final class RecordSchemaCatalog
                 new RecordField('battle.activeTime.speedFactorPercent', 'Time Gauge Speed Factor %', InputControlType::INTEGER),
                 new RecordField('battle.activeTime.openingVariance', 'Time Gauge Opening Variance', InputControlType::INTEGER, removeWhenEmpty: true),
                 new RecordField('battle.activeTime.openingSpeedFactorPercent', 'Time Gauge Opening Speed %', InputControlType::INTEGER, removeWhenEmpty: true),
+                // The Engine's ProgressionSettings: a level gained refills HP and MP unless the project turns it off.
+                RecordField::boolean('progression.restoreVitalsOnLevelUp', 'Level Up Restores HP/MP', removeWhenEmpty: false, displayDefault: 'true'),
                 // Test settings, as RPG Maker keeps its Battle Test: normal play never reads them.
                 new RecordField(ProjectBattleTest::SYSTEM_KEY, 'Battle Test', removeWhenEmpty: true, codec: RecordFieldCodec::BATTLE_TEST),
             ],
             labelKey: 'title',
             identityKey: null,
             // The keys System owns; its elements are the Types category's.
-            projection: new WholeFileProjection(['title', 'currency', 'startingPositions', 'startingParty', 'startingInventory', 'battle', ProjectBattleTest::SYSTEM_KEY]),
+            projection: new WholeFileProjection(['title', 'currency', 'startingPositions', 'startingParty', 'startingInventory', 'battle', 'progression', ProjectBattleTest::SYSTEM_KEY]),
             subLists: [
                 new RecordSubList(
                     key: 'startingParty',
