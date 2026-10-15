@@ -322,3 +322,24 @@ it('rechecks reference proof on redo and preserves the redo entry when a new sou
     $session->redo();
     expect($session->readMap('test-map')['worldObjects'])->toBe([]);
 });
+
+it('carries terminal symbols for an object and its map-event variant through save and reopen', function () {
+    [$root, , $session] = createWorldObjectProject();
+    $view = $session->readWorldObject('test-map', 'fixture-prop');
+    $heading = array_find($view['rows'], static fn($row): bool => ($row['key']['field'] ?? null) === 'variantList');
+    $session->changeWorldObjectItem('test-map', $view['revision'], 'fixture-prop', $heading['key'], false);
+    // A chest: yellow while its one-shot event is open, white once it is done.
+    applyWorldObjectRow($session, 'variant0Conditions', 'map_event:test-map:C');
+    applyWorldObjectRow($session, 'variant0Sprites2dasset', 'Graphics/Props/Replaceable.png');
+    applyWorldObjectRow($session, 'variant0Terminal', '<fg=white>m</>');
+    applyWorldObjectRow($session, 'terminal', '<fg=yellow>m</>');
+    $session->saveMap('test-map');
+    $object = EditorSession::open($root)->readMap('test-map')['worldObjects'][0];
+    expect($object['terminal'])->toBe('<fg=yellow>m</>')
+        ->and($object['variants'][0]['terminal'])->toBe('<fg=white>m</>')
+        ->and($object['variants'][0]['conditions'])->toBe([['type' => 'map_event', 'name' => 'test-map', 'marker' => 'C']]);
+    // Left empty, a variant's symbol goes and the object's shows for it.
+    applyWorldObjectRow($session, 'variant0Terminal', '');
+    expect($session->readMap('test-map')['worldObjects'][0]['variants'][0])->not->toHaveKey('terminal');
+    expect(fn() => applyWorldObjectRow($session, 'terminal', 'mm'))->toThrow(SessionRefusal::class);
+});

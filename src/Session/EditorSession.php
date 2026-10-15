@@ -2997,6 +2997,19 @@ final class EditorSession
             return array_map(static fn($layer): array => ['value' => $layer['name'], 'label' => $layer['name']],
                 array_values(array_filter($map->describeTileLayers()['layers'], static fn($layer): bool => $layer['owner'] === ($object['covers']['layer'] ?? null))));
         }
+        if ($category === 'map_event_markers') {
+            // The events of the map a map event condition names, each read as what it is.
+            $named = is_string($record['map'] ?? null) ? $this->getMapsById()[$record['map']] ?? null : null;
+            if ($named === null) { return []; }
+            $events = $named->getMapDataField(['events']);
+            $choices = [];
+            foreach (is_array($events) ? $events : [] as $marker => $event) {
+                $kind = preg_replace('/(EventTrigger|Trigger)$/', '', basename(str_replace('\\', '/', strval($event['class'] ?? ''))));
+                $what = $event['data']['scriptId'] ?? $event['data']['cinematicId'] ?? $event['data']['destinationMap'] ?? null;
+                $choices[] = ['value' => (string) $marker, 'label' => trim(sprintf('%s · %s %s', $marker, $kind, is_string($what) ? $what : ''))];
+            }
+            return $choices;
+        }
         if ($category === 'cinematic_movement_routes' && $record !== null) {
             $catalog = $catalog->createMovementContext($this->getMovementOwnerCommands($mapId, $record));
         }

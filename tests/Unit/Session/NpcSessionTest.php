@@ -228,3 +228,14 @@ it('describes the condition and write vocabulary from the editors that build the
         }
     }
 });
+
+it('offers the events of the map a map event condition names, each read as what it is', function () {
+    $session = EditorSession::open(npcSessionProject([]));
+    $grammar = array_find($session->describeWorldStateGrammar()['conditions'], static fn(array $type): bool => $type['type'] === 'map_event');
+    $marker = $grammar['extras'][0];
+    expect($marker['category'])->toBe('map_event_markers')
+        ->and($marker['mapFrom'])->toBe('name')
+        ->and($session->listReferences('test-map', 'map_event_markers', ['map' => 'test-map']))
+        ->toContain(['value' => 'E', 'label' => 'E · Chest'])
+        ->and($session->listReferences('test-map', 'map_event_markers', ['map' => 'no-such-map']))->toBe([]);
+});

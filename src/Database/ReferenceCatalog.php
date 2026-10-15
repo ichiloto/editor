@@ -78,6 +78,8 @@ final class ReferenceCatalog
         'map_npcs',
         'map_world_objects',
         'world_object_tile_layers',
+        // A map event condition's marker, listed for the map that condition names.
+        'map_event_markers',
         'knowledge_subjects',
         'knowledge_reports',
         'knowledge_record_types',
@@ -256,6 +258,8 @@ final class ReferenceCatalog
             'map_npcs' => $this->getSubjectMap()?->getNpcs()->ids() ?? [],
             'map_world_objects' => $this->getSubjectMap() === null ? [] : array_column(\Ichiloto\Editor\Field\WorldObjectAuthoring::readEntries($this->getSubjectMap()), 'id'),
             'world_object_tile_layers' => $this->currentMap === null ? [] : array_column($this->currentMap->describeTileLayers()['layers'], 'name'),
+            // Only meaningful for a named map; the session lists them for the map a condition names.
+            'map_event_markers' => [],
             // Older references name an animation; current ones store its id.
             'animations' => array_map(
                 static fn(ProjectRecord $animation): string => strval($animation->get('name')),
