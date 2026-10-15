@@ -157,9 +157,16 @@ final class ArraySourceWriter
             return;
         }
 
-        // A scalar or null now sits here.
+        // A scalar or null now sits here. An array written as plain data (literals only, no comments) holds nothing
+        // authored beyond its values, so the new value takes its place; anything more stays refused below.
         match ($node->kind) {
             SourceNode::SCALAR => $this->edits[] = $this->replacementFor($node, $path, $new),
+            SourceNode::ARRAY => $this->isPlainData($node)
+                ? $this->edits[] = $this->replacementFor($node, $path, $new)
+                : throw new SourcePreservationRefusal(sprintf(
+                    'The value at %s is an array in the file and cannot be replaced by a single value without rewriting it.',
+                    PhpArraySourceDocument::describePath($path),
+                )),
             SourceNode::VARIABLE => $this->retargetVariable($node, $path, $new),
             SourceNode::EXPRESSION => throw new SourcePreservationRefusal(sprintf(
                 'The value at %s is written as an expression the editor cannot rewrite; change it in the file, or write it as plain data.',
@@ -170,6 +177,21 @@ final class ArraySourceWriter
                 PhpArraySourceDocument::describePath($path),
             )),
         };
+    }
+
+    /** Whether an array's source is only literal keys and values, with no comment, expression or variable in it. */
+    private function isPlainData(SourceNode $node): bool
+    {
+        foreach ($node->entries as $entry) {
+            $value = $entry->value;
+            if ($value->kind === SourceNode::ARRAY ? !$this->isPlainData($value) : $value->kind !== SourceNode::SCALAR) {
+                return false;
+            }
+        }
+        foreach (\PhpToken::tokenize('<?php ' . substr($this->document->source, $node->start, $node->end - $node->start)) as $token) {
+            if ($token->is([T_COMMENT, T_DOC_COMMENT])) { return false; }
+        }
+        return ! $node->hasOpaqueKey;
     }
 
     /**

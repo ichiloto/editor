@@ -323,23 +323,72 @@ it('rechecks reference proof on redo and preserves the redo entry when a new sou
     expect($session->readMap('test-map')['worldObjects'])->toBe([]);
 });
 
-it('carries terminal symbols for an object and its map-event variant through save and reopen', function () {
-    [$root, , $session] = createWorldObjectProject();
-    $view = $session->readWorldObject('test-map', 'fixture-prop');
-    $heading = array_find($view['rows'], static fn($row): bool => ($row['key']['field'] ?? null) === 'variantList');
-    $session->changeWorldObjectItem('test-map', $view['revision'], 'fixture-prop', $heading['key'], false);
-    // A chest: yellow while its one-shot event is open, white once it is done.
-    applyWorldObjectRow($session, 'variant0Conditions', 'map_event:test-map:C');
-    applyWorldObjectRow($session, 'variant0Sprites2dasset', 'Graphics/Props/Replaceable.png');
-    applyWorldObjectRow($session, 'variant0Terminal', '<fg=white>m</>');
-    applyWorldObjectRow($session, 'terminal', '<fg=yellow>m</>');
+function createTerminalChestProject(): array
+{
+    $root = mapGraphicsProject();
+    $file = $root . '/assets/Maps/test-map/test-map.data.php';
+    // A two-cell chest over the buildings layer's xx: yellow while closed, white once its event is done.
+    file_put_contents($file, str_replace("'events' => [],", "'events' => [], 'worldObjects' => [
+        ['id' => 'fixture-prop', 'anchor' => ['x' => 1, 'y' => 1], 'pivot' => ['x' => 0.5, 'y' => 1.0], 'sprites2d' => null,
+            'terminal' => ['color' => 'yellow'],
+            'covers' => ['layer' => 'buildings', 'cells' => [[1, 1], [2, 1]], 'tileLayers' => []],
+            'variants' => [
+                ['id' => 'opened', 'conditions' => [['type' => 'map_event', 'name' => 'test-map', 'marker' => 'E']], 'sprites2d' => null, 'terminal' => ['color' => 'white']],
+                ['id' => 'plain', 'conditions' => [['type' => 'switch', 'name' => 'plain']], 'sprites2d' => null, 'terminal' => null],
+                ['id' => 'inherits', 'conditions' => [['type' => 'switch', 'name' => 'inherits']], 'sprites2d' => null],
+            ]],
+    ],", (string) file_get_contents($file)));
+    return [$root, $file, EditorSession::open($root)];
+}
+
+function readWorldObjectRow(EditorSession $session, string $field): ?array
+{
+    return array_find($session->readWorldObject('test-map', 'fixture-prop')['rows'], static fn($row): bool => ($row['key']['field'] ?? null) === $field);
+}
+
+it('preserves every terminal presentation form, inheritance and explicit null through an unrelated edit', function () {
+    [$root, , $session] = createTerminalChestProject();
+    expect(readWorldObjectRow($session, 'terminal.mode')['value'])->toBe('its covered glyphs recoloured')
+        ->and(readWorldObjectRow($session, 'terminal.color')['value'])->toBe('yellow')
+        ->and(readWorldObjectRow($session, 'variant1Terminalmode')['value'])->toBe("map's own glyph")
+        ->and(readWorldObjectRow($session, 'variant2Terminalmode')['value'])->toBe("the object's");
+    applyWorldObjectRow($session, 'pivot.x', '0.25');
+    $session->saveMap('test-map');
+    $object = EditorSession::open($root)->readMap('test-map')['worldObjects'][0];
+    expect($object['terminal'])->toBe(['color' => 'yellow'])
+        ->and($object['variants'][0]['terminal'])->toBe(['color' => 'white'])
+        ->and($object['variants'][1])->toHaveKey('terminal')
+        ->and($object['variants'][1]['terminal'])->toBeNull()
+        ->and($object['variants'][2])->not->toHaveKey('terminal');
+});
+
+it('edits each terminal presentation form through its explicit choice and refuses an invalid symbol', function () {
+    [$root, , $session] = createTerminalChestProject();
+    // An anchor symbol starts from the glyph the anchor shows.
+    applyWorldObjectRow($session, 'terminal.mode', 'a symbol at the anchor');
+    expect(readWorldObjectRow($session, 'terminal.symbol')['value'])->toBe('<fg=white>x</>');
+    applyWorldObjectRow($session, 'terminal.symbol', '<fg=yellow>m</>');
+    applyWorldObjectRow($session, 'variant0Terminalcolor', 'bright-white');
+    applyWorldObjectRow($session, 'variant1Terminalmode', "the object's");
+    applyWorldObjectRow($session, 'variant2Terminalmode', "map's own glyph");
+    expect(fn() => applyWorldObjectRow($session, 'terminal.symbol', 'mm'))->toThrow(SessionRefusal::class);
     $session->saveMap('test-map');
     $object = EditorSession::open($root)->readMap('test-map')['worldObjects'][0];
     expect($object['terminal'])->toBe('<fg=yellow>m</>')
-        ->and($object['variants'][0]['terminal'])->toBe('<fg=white>m</>')
-        ->and($object['variants'][0]['conditions'])->toBe([['type' => 'map_event', 'name' => 'test-map', 'marker' => 'C']]);
-    // Left empty, a variant's symbol goes and the object's shows for it.
-    applyWorldObjectRow($session, 'variant0Terminal', '');
-    expect($session->readMap('test-map')['worldObjects'][0]['variants'][0])->not->toHaveKey('terminal');
-    expect(fn() => applyWorldObjectRow($session, 'terminal', 'mm'))->toThrow(SessionRefusal::class);
+        ->and($object['variants'][0]['terminal'])->toBe(['color' => 'bright-white'])
+        ->and($object['variants'][1])->not->toHaveKey('terminal')
+        ->and($object['variants'][2]['terminal'])->toBeNull();
+    // Back to the map's glyph: the object's key goes.
+    applyWorldObjectRow($session, 'terminal.mode', "map's own glyph");
+    expect($session->readMap('test-map')['worldObjects'][0])->not->toHaveKey('terminal');
+});
+
+it('checks an unfinished variant against its object\'s real coverage', function () {
+    [, , $session] = createTerminalChestProject();
+    $view = $session->readWorldObject('test-map', 'fixture-prop');
+    $heading = array_find($view['rows'], static fn($row): bool => ($row['key']['field'] ?? null) === 'variantList');
+    $session->changeWorldObjectItem('test-map', $view['revision'], 'fixture-prop', $heading['key'], false);
+    // A footprint colour on a draft variant is admitted because its object covers glyphs.
+    applyWorldObjectRow($session, 'variant3Terminalmode', 'its covered glyphs recoloured');
+    expect($session->readMap('test-map')['worldObjects'][0]['variants'][3]['terminal'])->toBe(['color' => 'white']);
 });

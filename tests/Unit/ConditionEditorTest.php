@@ -193,3 +193,13 @@ it('writes and reads a map event condition by its map and event marker', functio
     expect($grammar['nameCategory'])->toBe('maps')
         ->and(array_column($grammar['extras'], 'key'))->toBe(['marker']);
 });
+
+it('sets a map event condition\'s event as picked from its map', function () {
+    $editor = conditionEditorOn('map_event:town:A');
+    $editor->setMarker('C');
+    expect($editor->encoded())->toBe('map_event:town:C');
+    // Only a map event carries a marker.
+    $other = conditionEditorOn('switch:lamp');
+    $other->setMarker('C');
+    expect($other->encoded())->toBe('switch:lamp');
+});

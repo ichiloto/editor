@@ -99,8 +99,10 @@ final readonly class WorldObjectAuthoring
                     }
                     $checked = WorldObjectDefinition::readMap(['worldObjects' => [[
                         'id' => $variant['id'] ?? null, 'anchor' => $entry['anchor'], 'pivot' => $entry['pivot'], 'sprites2d' => $variant['sprites2d'],
+                        // A footprint colour recolours the parent's covered glyphs, so the variant is checked with them.
+                        ...(isset($entry['covers']) ? ['covers' => $entry['covers']] : []),
                         ...(array_key_exists('terminal', $variant) ? ['terminal' => $variant['terminal']] : []),
-                    ]]], $map->getLayerSet());
+                    ]]], $map->getLayerSet(), tileOwners: $owners);
                     $id = $checked[0]->id;
                     if (isset($ids[$id])) { throw new InvalidArgumentException('Duplicate world-object variant id.'); }
                     $ids[$id] = true;
@@ -150,8 +152,8 @@ final readonly class WorldObjectAuthoring
                 'conditions' => [], 'sprites2d' => null], heading: 'Ordered Variants', removeWhenEmpty: true,
             getFields: static fn(array $entry): array => [new RecordField('id', 'Variant Id'),
                 new RecordField('conditions', 'When (all conditions)', codec: RecordFieldCodec::CONDITIONS),
-                ...FieldSpriteFields::getFields($entry, true), self::createTerminalField('(the object\'s)')],
-            prepareEdit: static fn(array $entry, string $field): array => FieldSpriteFields::prepareEdit($entry, $field, true));
+                ...FieldSpriteFields::getFields($entry, true), ...self::getTerminalFields($entry, true)],
+            prepareEdit: fn(array $entry, string $field): array => FieldSpriteFields::prepareEdit($this->prepareTerminalEdit($entry, $field), $field, true));
         $cells = new RecordSubList(key: 'covers.cells', prefix: 'cell', singular: 'covered cell',
             fields: [new RecordField('x', 'X', InputControlType::INTEGER), new RecordField('y', 'Y', InputControlType::INTEGER)],
             blank: ['x' => 0, 'y' => 0], heading: 'Covered Cells');
@@ -177,7 +179,7 @@ final readonly class WorldObjectAuthoring
                     new RecordField('anchor.x', 'Anchor X', InputControlType::INTEGER),
                     new RecordField('anchor.y', 'Anchor Y', InputControlType::INTEGER),
                     ...$presentation,
-                    self::createTerminalField('(the map\'s glyph)'),
+                    ...self::getTerminalFields($entry, false),
                     new RecordField('covers.layer', 'Covered Gameplay Layer', options: ['', ...array_column(array_filter($this->map->getLayers(),
                         static fn($layer): bool => !$layer['decoration'] && $layer['id'] !== \Ichiloto\Editor\Maps\MapLayers::EVENT), 'name')],
                         removeWhenEmpty: true, displayDefault: '(no coverage)')];
@@ -190,7 +192,7 @@ final readonly class WorldObjectAuthoring
             subLists: [$variants, $cells],
             subListsFor: static fn(array $entry): array => [...(array_key_exists('resource', $entry) ? [] : ['variants']),
                 ...(isset($entry['covers']) ? ['covers.cells'] : [])],
-            prepareEdit: static function (array $entry, string $field) use ($signs): array {
+            prepareEdit: function (array $entry, string $field) use ($signs): array {
                 if ($field === 'resource') {
                     // A sign placement needs its label and only a sign accepts one; the board's name starts it.
                     $sign = $signs[$entry['resource'] ?? ''] ?? null;
@@ -211,12 +213,14 @@ final readonly class WorldObjectAuthoring
                         $entry['covers']['tileLayers'] ??= [];
                     }
                 }
-                return FieldSpriteFields::prepareEdit($entry, $field, true);
+                return FieldSpriteFields::prepareEdit($this->prepareTerminalEdit($entry, $field), $field, true);
             });
         foreach ($entries as &$entry) {
             if (isset($entry['covers'])) {
                 $entry['covers']['cells'] = array_map(static fn($cell): array => ['x' => $cell[0], 'y' => $cell[1]], $entry['covers']['cells']);
             }
+            $entry = self::readTerminalChoice($entry, false);
+            foreach ($entry['variants'] ?? [] as $index => $variant) { $entry['variants'][$index] = self::readTerminalChoice($variant, true); }
         }
         unset($entry);
         $records = ProjectRecordDatabase::overOwnedList($schema, $this->map->dataPath, $entries, static function (): void {}, graphical: true);
@@ -224,14 +228,81 @@ final readonly class WorldObjectAuthoring
         return $records;
     }
 
+    /** How an object or a variant presents in the Terminal, as an author chooses it. */
+    private const string TERMINAL_MAP_GLYPH = "map's own glyph";
+    private const string TERMINAL_INHERIT = "the object's";
+    private const string TERMINAL_SYMBOL = 'a symbol at the anchor';
+    private const string TERMINAL_COLOUR = 'its covered glyphs recoloured';
+    /** The terminal's named colours; an authored colour outside them stays selectable as written. */
+    private const array TERMINAL_COLOURS = ['white', 'yellow', 'red', 'green', 'blue', 'magenta', 'cyan', 'gray', 'black',
+        'bright-white', 'bright-yellow', 'bright-red', 'bright-green', 'bright-blue', 'bright-magenta', 'bright-cyan'];
+
     /**
-     * The one styled terminal cell an object shows at its anchor in the Terminal, as `<fg=yellow>m</>`: a chest
-     * yellow while closed and white once opened. Left empty, the field is removed, so the map's own glyph shows
-     * for the object, and a variant shows its object's.
+     * The Terminal presentation as the record shows it: which kind it is, and its symbol or colour. An object without
+     * one shows the map's glyph; a variant without one shows its object's, and an explicit null the map's glyph again.
+     * Stored data is written back exactly ({@see writeTerminalChoice()}): a string symbol, or `['color' => ...]`.
      */
-    private static function createTerminalField(string $default): RecordField
+    private static function readTerminalChoice(array $entry, bool $variant): array
     {
-        return new RecordField('terminal', 'Terminal Symbol', removeWhenEmpty: true, displayDefault: $default);
+        $exists = array_key_exists('terminal', $entry);
+        $terminal = $entry['terminal'] ?? null;
+        $entry['terminal'] = match (true) {
+            !$exists => ['mode' => $variant ? self::TERMINAL_INHERIT : self::TERMINAL_MAP_GLYPH],
+            is_string($terminal) => ['mode' => self::TERMINAL_SYMBOL, 'symbol' => $terminal],
+            is_array($terminal) => ['mode' => self::TERMINAL_COLOUR, 'color' => (string) ($terminal['color'] ?? '')],
+            default => ['mode' => self::TERMINAL_MAP_GLYPH],
+        };
+        return $entry;
+    }
+
+    private static function writeTerminalChoice(array $entry, bool $variant): array
+    {
+        $choice = $entry['terminal'] ?? null;
+        unset($entry['terminal']);
+        if (!is_array($choice) || !isset($choice['mode'])) { return $entry; }
+        return match ($choice['mode']) {
+            self::TERMINAL_SYMBOL => [...$entry, 'terminal' => (string) ($choice['symbol'] ?? '')],
+            self::TERMINAL_COLOUR => [...$entry, 'terminal' => ['color' => (string) ($choice['color'] ?? '')]],
+            // Inheriting is the absence of the key; a variant's map glyph is its explicit null.
+            self::TERMINAL_MAP_GLYPH => $variant ? [...$entry, 'terminal' => null] : $entry,
+            default => $entry,
+        };
+    }
+
+    /** @return list<RecordField> */
+    private static function getTerminalFields(array $entry, bool $variant): array
+    {
+        $choice = is_array($entry['terminal'] ?? null) ? $entry['terminal'] : [];
+        $modes = $variant ? [self::TERMINAL_INHERIT, self::TERMINAL_MAP_GLYPH, self::TERMINAL_SYMBOL, self::TERMINAL_COLOUR]
+            : [self::TERMINAL_MAP_GLYPH, self::TERMINAL_SYMBOL, self::TERMINAL_COLOUR];
+        $fields = [new RecordField('terminal.mode', 'Terminal Shows', options: $modes)];
+        if (($choice['mode'] ?? null) === self::TERMINAL_SYMBOL) {
+            $fields[] = new RecordField('terminal.symbol', 'Terminal Symbol (one styled cell)');
+        }
+        if (($choice['mode'] ?? null) === self::TERMINAL_COLOUR) {
+            $colour = (string) ($choice['color'] ?? '');
+            $fields[] = new RecordField('terminal.color', 'Terminal Colour',
+                options: array_values(array_unique([...self::TERMINAL_COLOURS, ...($colour === '' ? [] : [$colour])])));
+        }
+        return $fields;
+    }
+
+    /**
+     * A new kind starts from what the cell shows now: the anchor's own glyph as the symbol, and white as the colour,
+     * the Terminal's ordinary text; the author changes either at once.
+     */
+    private function prepareTerminalEdit(array $entry, string $field): array
+    {
+        if ($field !== 'terminal.mode') { return $entry; }
+        $mode = $entry['terminal']['mode'] ?? null;
+        if ($mode === self::TERMINAL_SYMBOL && !isset($entry['terminal']['symbol'])) {
+            $anchor = $entry['anchor'] ?? null;
+            $glyph = is_array($anchor) ? ($this->map->getLayerSet()->getComposedGrid()[$anchor['y']][$anchor['x']] ?? ' ') : ' ';
+            $glyph = \Ichiloto\Engine\IO\Console\TerminalText::stripAnsi($glyph);
+            $entry['terminal']['symbol'] = '<fg=white>' . (trim($glyph) === '' ? '*' : $glyph) . '</>';
+        }
+        if ($mode === self::TERMINAL_COLOUR && !isset($entry['terminal']['color'])) { $entry['terminal']['color'] = 'white'; }
+        return $entry;
     }
 
     /**
@@ -404,6 +475,8 @@ final readonly class WorldObjectAuthoring
         $entries = array_map(static fn($record): array => (array) $record->toArray(), $records->getRecords());
         foreach ($entries as &$entry) {
             if (isset($entry['covers'])) { $entry['covers']['cells'] = array_map(static fn($cell): array => [$cell['x'], $cell['y']], $entry['covers']['cells']); }
+            $entry = self::writeTerminalChoice($entry, false);
+            foreach ($entry['variants'] ?? [] as $index => $variant) { $entry['variants'][$index] = self::writeTerminalChoice($variant, true); }
         }
         unset($entry);
         return $this->writeEntries($entries, $label);

@@ -525,6 +525,7 @@ final class Editor
      * condition rather than to set a field.
      */
     private const string CONDITION_NAME_FIELD = '__condition_name';
+    private const string CONDITION_MARKER_FIELD = '__condition_marker';
 
     /**
      * The picker field id used when the map's NPC list is opened to select
@@ -10292,11 +10293,47 @@ final class Editor
             $input === 'X' => $this->conditionEditor->cycleExtra(-1),
             $input === '!' => $this->conditionEditor->toggleNegate(),
             $input === 'n' => $this->beginConditionName(),
+            $input === 'e' => $this->beginConditionMarker(),
             default => null,
         };
 
         unset($handled);
         $this->renderDatabasePanes(['settings']);
+    }
+
+    /**
+     * Starts choosing which event of its named map a map event condition
+     * waits on, from that map's own events.
+     *
+     * @return void
+     */
+    private function beginConditionMarker(): void
+    {
+        $condition = $this->conditionEditor->selected();
+
+        if ($condition === null || strval($condition['type'] ?? '') !== 'map_event') {
+            return;
+        }
+
+        $map = trim(strval($condition['name'] ?? ''));
+        if ($map === '') {
+            $this->setStatus('Choose the map first (n), then its event.', StatusLevel::WARN);
+
+            return;
+        }
+
+        $markers = $this->referenceCatalog()->listMapEventMarkers($map);
+
+        if (! $this->referencePicker->open(
+            self::CONDITION_MARKER_FIELD,
+            'Event',
+            'map_event_markers',
+            $markers['values'],
+            strval($condition['marker'] ?? ''),
+            $markers['labels'],
+        )) {
+            $this->setStatus(sprintf('%s has no events to choose from.', $map), StatusLevel::WARN);
+        }
     }
 
     /**
@@ -10675,6 +10712,17 @@ final class Editor
             // being edited; the field itself is written when that closes.
             if ($selected !== null) {
                 $this->conditionEditor->setName($selected);
+            }
+
+            $this->statusMessage = 'Building conditions.';
+            $this->renderDatabasePanes(['settings']);
+
+            return;
+        }
+
+        if ($fieldId === self::CONDITION_MARKER_FIELD) {
+            if ($selected !== null) {
+                $this->conditionEditor->setMarker($selected);
             }
 
             $this->statusMessage = 'Building conditions.';
@@ -13065,9 +13113,9 @@ final class Editor
                 ),
                 $this->conditionEditor->isOpen() => $this->fitHelp(
                     $layout['settingsWidth'],
-                    'a:Add  d:Del  t:Type  n:Name  x:Value  !:Not  Enter:Done  Esc:Cancel',
-                    'a:Add  d:Del  t:Type  n:Name  x:Value  !:Not  Enter:Done',
-                    'a/d:Add/Del  t:Type  n:Name  x:Value  !:Not',
+                    'a:Add  d:Del  t:Type  n:Name  e:Event  x:Value  !:Not  Enter:Done  Esc:Cancel',
+                    'a:Add  d:Del  t:Type  n:Name  e:Event  x:Value  !:Not  Enter:Done',
+                    'a/d:Add/Del  t:Type  n:Name  e:Event  x:Value  !:Not',
                     'a/d:Add/Del  t/n/x:Edit  ?:Help',
                     '?:Help',
                 ),

@@ -816,6 +816,27 @@ final class ReferenceCatalog
      * @param string $category The kind of reference.
      * @return bool True when it is.
      */
+    /**
+     * The events of a map a map event condition names, each read as what it is
+     * ("E · Chest"): what a marker is chosen from in both editors.
+     *
+     * @return array{values: list<string>, labels: array<string, string>}
+     */
+    public function listMapEventMarkers(string $mapId): array
+    {
+        $index = array_search($mapId, $this->workspace->mapIds, true);
+        $map = $index === false ? null : ($this->workspace->maps[$index] ?? null);
+        $events = $map?->getMapDataField(['events']);
+        $values = $labels = [];
+        foreach (is_array($events) ? $events : [] as $marker => $event) {
+            $kind = preg_replace('/(EventTrigger|Trigger)$/', '', basename(str_replace('\\', '/', strval($event['class'] ?? ''))));
+            $what = $event['data']['scriptId'] ?? $event['data']['cinematicId'] ?? $event['data']['destinationMap'] ?? null;
+            $values[] = (string) $marker;
+            $labels[(string) $marker] = trim(sprintf('%s · %s %s', $marker, $kind, is_string($what) ? $what : ''));
+        }
+        return ['values' => $values, 'labels' => $labels];
+    }
+
     public static function knows(string $category): bool
     {
         return in_array($category, self::CATEGORIES, true);
