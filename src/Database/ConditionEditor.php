@@ -71,7 +71,9 @@ final class ConditionEditor
             ],
             'item' => [['key' => 'quantity', 'label' => 'Quantity', 'kind' => 'integer', 'default' => 1]],
             'key_item' => [['key' => 'quantity', 'label' => 'Quantity', 'kind' => 'integer', 'default' => 1]],
-            'map_event' => [['key' => 'marker', 'label' => 'Event Marker', 'kind' => 'text', 'default' => 'A']],
+            'map_event' => [['key' => 'marker', 'label' => 'Event', 'kind' => 'text', 'default' => 'A',
+                // Chosen from the events of the map the condition names.
+                'category' => 'map_event_markers', 'mapFrom' => 'name']],
         ];
 
         return array_map(static fn(string $type): array => [
