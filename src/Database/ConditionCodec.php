@@ -18,8 +18,9 @@ use InvalidArgumentException;
  * identically.
  *
  * Wire form: entries separated by `;`, each `[!]type:name[:extras]`, where
- * extras depend on the type (quest status, switch `false`, item quantity, or
- * variable `op:value`). A leading `!` negates.
+ * extras depend on the type (quest status, switch `false`, item quantity,
+ * variable `op:value`, or a map event's marker after its map id). A leading
+ * `!` negates.
  */
 final class ConditionCodec
 {
@@ -79,6 +80,9 @@ final class ConditionCodec
             case 'variable':
                 $parts[] = strval($condition['op'] ?? '==');
                 $parts[] = strval($condition['value'] ?? 0);
+                break;
+            case 'map_event':
+                $parts[] = strval($condition['marker'] ?? '');
                 break;
         }
 
@@ -187,6 +191,14 @@ final class ConditionCodec
                 $condition['op'] = $parts[2] ?? '==';
                 $rawValue = $parts[3] ?? '0';
                 $condition['value'] = is_numeric($rawValue) ? intval($rawValue) : $rawValue;
+                break;
+            case 'map_event':
+                // A map event is named by its map and its one-shot event marker; without a marker it is unreadable.
+                $marker = $parts[2] ?? '';
+                if ($marker === '') {
+                    return null;
+                }
+                $condition['marker'] = $marker;
                 break;
         }
 

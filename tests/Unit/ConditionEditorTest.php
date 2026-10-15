@@ -158,8 +158,9 @@ it('builds a whole condition from nothing', function () {
     $editor->open('conditions', 'Conditions', []);
     $editor->add();
 
-    // A new condition starts as a switch; four steps on is the key item.
-    $editor->cycleType(4);
+    // A new condition starts as a switch; the key item is as many steps on as the Engine lists it.
+    $types = ConditionCodec::types();
+    $editor->cycleType(array_search('key_item', $types, true) - array_search('switch', $types, true));
     $editor->setName('Rusty Key');
 
     expect($editor->encoded())->toBe('key_item:Rusty Key');
@@ -178,4 +179,17 @@ it('offers a project\'s own quests to a quest condition', function () {
     $values = new Ichiloto\Editor\Database\ReferenceCatalog($workspace)->valuesFor($reference['category']);
 
     expect($values)->toContain('breakfast-duty');
+});
+
+it('writes and reads a map event condition by its map and event marker', function () {
+    $condition = ['type' => 'map_event', 'name' => 'garden-of-roads/lanternrest-wayhouse', 'marker' => 'C', 'negate' => true];
+    $line = ConditionCodec::encode($condition);
+    expect($line)->toBe('!map_event:garden-of-roads/lanternrest-wayhouse:C')
+        ->and(ConditionCodec::decode($line))->toBe($condition)
+        ->and(ConditionCodec::decode('map_event:garden-of-roads/lanternrest-wayhouse'))->toBeNull()
+        ->and(fn() => ConditionCodec::decodeAllStrictly('map_event:town'))->toThrow(InvalidArgumentException::class)
+        ->and(ConditionEditor::describe($condition))->toBe('NOT Map Event garden-of-roads/lanternrest-wayhouse event C is done');
+    $grammar = array_find(ConditionEditor::getGrammar(), static fn(array $type): bool => $type['type'] === 'map_event');
+    expect($grammar['nameCategory'])->toBe('maps')
+        ->and(array_column($grammar['extras'], 'key'))->toBe(['marker']);
 });

@@ -93,12 +93,13 @@ final readonly class WorldObjectAuthoring
                 }
                 $ids = [];
                 foreach ($variants as $variant) {
-                    if (!is_array($variant) || array_diff(array_keys($variant), ['id', 'conditions', 'sprites2d']) !== []
+                    if (!is_array($variant) || array_diff(array_keys($variant), ['id', 'conditions', 'sprites2d', 'terminal']) !== []
                         || !array_key_exists('sprites2d', $variant) || !array_key_exists('conditions', $variant)) {
                         throw new InvalidArgumentException('A variant requires id, conditions and explicit sprites2d.');
                     }
                     $checked = WorldObjectDefinition::readMap(['worldObjects' => [[
                         'id' => $variant['id'] ?? null, 'anchor' => $entry['anchor'], 'pivot' => $entry['pivot'], 'sprites2d' => $variant['sprites2d'],
+                        ...(array_key_exists('terminal', $variant) ? ['terminal' => $variant['terminal']] : []),
                     ]]], $map->getLayerSet());
                     $id = $checked[0]->id;
                     if (isset($ids[$id])) { throw new InvalidArgumentException('Duplicate world-object variant id.'); }
@@ -149,7 +150,7 @@ final readonly class WorldObjectAuthoring
                 'conditions' => [], 'sprites2d' => null], heading: 'Ordered Variants', removeWhenEmpty: true,
             getFields: static fn(array $entry): array => [new RecordField('id', 'Variant Id'),
                 new RecordField('conditions', 'When (all conditions)', codec: RecordFieldCodec::CONDITIONS),
-                ...FieldSpriteFields::getFields($entry, true)],
+                ...FieldSpriteFields::getFields($entry, true), self::createTerminalField('(the object\'s)')],
             prepareEdit: static fn(array $entry, string $field): array => FieldSpriteFields::prepareEdit($entry, $field, true));
         $cells = new RecordSubList(key: 'covers.cells', prefix: 'cell', singular: 'covered cell',
             fields: [new RecordField('x', 'X', InputControlType::INTEGER), new RecordField('y', 'Y', InputControlType::INTEGER)],
@@ -176,6 +177,7 @@ final readonly class WorldObjectAuthoring
                     new RecordField('anchor.x', 'Anchor X', InputControlType::INTEGER),
                     new RecordField('anchor.y', 'Anchor Y', InputControlType::INTEGER),
                     ...$presentation,
+                    self::createTerminalField('(the map\'s glyph)'),
                     new RecordField('covers.layer', 'Covered Gameplay Layer', options: ['', ...array_column(array_filter($this->map->getLayers(),
                         static fn($layer): bool => !$layer['decoration'] && $layer['id'] !== \Ichiloto\Editor\Maps\MapLayers::EVENT), 'name')],
                         removeWhenEmpty: true, displayDefault: '(no coverage)')];
@@ -220,6 +222,16 @@ final readonly class WorldObjectAuthoring
         $records = ProjectRecordDatabase::overOwnedList($schema, $this->map->dataPath, $entries, static function (): void {}, graphical: true);
         $records->useAuthoringReferences($this->references);
         return $records;
+    }
+
+    /**
+     * The one styled terminal cell an object shows at its anchor in the Terminal, as `<fg=yellow>m</>`: a chest
+     * yellow while closed and white once opened. Left empty, the field is removed, so the map's own glyph shows
+     * for the object, and a variant shows its object's.
+     */
+    private static function createTerminalField(string $default): RecordField
+    {
+        return new RecordField('terminal', 'Terminal Symbol', removeWhenEmpty: true, displayDefault: $default);
     }
 
     /**

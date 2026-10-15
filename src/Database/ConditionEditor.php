@@ -32,6 +32,7 @@ final class ConditionEditor
         'variable' => ['Variable', null],
         'item' => ['Item', 'inventory'],
         'key_item' => ['Key Item', 'inventory'],
+        'map_event' => ['Map Event', 'maps'],
     ];
 
     /** The quest statuses a condition can require; the first is the default. */
@@ -70,6 +71,7 @@ final class ConditionEditor
             ],
             'item' => [['key' => 'quantity', 'label' => 'Quantity', 'kind' => 'integer', 'default' => 1]],
             'key_item' => [['key' => 'quantity', 'label' => 'Quantity', 'kind' => 'integer', 'default' => 1]],
+            'map_event' => [['key' => 'marker', 'label' => 'Event Marker', 'kind' => 'text', 'default' => '']],
         ];
 
         return array_map(static fn(string $type): array => [
@@ -407,6 +409,7 @@ final class ConditionEditor
                 : 'is held',
             'variable' => sprintf('%s %s', strval($condition['op'] ?? '=='), strval($condition['value'] ?? 0)),
             'event' => 'happened',
+            'map_event' => sprintf('event %s is done', strval($condition['marker'] ?? '')),
             default => '',
         };
 
