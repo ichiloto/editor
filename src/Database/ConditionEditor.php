@@ -344,6 +344,25 @@ final class ConditionEditor
     }
 
     /**
+     * Sets which event a map event condition waits on, chosen from the events
+     * of the map it names.
+     *
+     * @param string $marker The event's marker.
+     * @return void
+     */
+    public function setMarker(string $marker): void
+    {
+        $condition = $this->selected();
+
+        if ($condition === null || strval($condition['type'] ?? '') !== 'map_event' || trim($marker) === '') {
+            return;
+        }
+
+        $condition['marker'] = trim($marker);
+        $this->conditions[$this->selectedIndex()] = $condition;
+    }
+
+    /**
      * Sets a variable condition's value.
      *
      * @param string $value The value as typed.

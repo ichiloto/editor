@@ -595,3 +595,16 @@ it('keeps existing backed enum value expressions editable without switching them
         ->and(fn() => ArraySourceWriter::rewrite($document, $old, ['case' => SourceWriterBacked::SECOND]))
             ->toThrow(SourcePreservationRefusal::class, 'case');
 });
+
+it('replaces a plain-data array with a single value and keeps an array holding a comment', function () {
+    $plain = "<?php\n\nreturn [\n    'keep' => 1, // stays\n    'terminal' => ['color' => 'yellow'],\n];\n";
+    $document = PhpArraySourceDocument::parse($plain);
+    $old = evaluateSource($plain);
+    $rewritten = ArraySourceWriter::rewrite($document, $old, [...$old, 'terminal' => '<fg=yellow>m</>'])->source;
+    expect($rewritten)->toBe(str_replace("['color' => 'yellow']", "'<fg=yellow>m</>'", $plain));
+
+    $commented = "<?php\n\nreturn [\n    'terminal' => [\n        // chosen with Andrew\n        'color' => 'yellow',\n    ],\n];\n";
+    $old = evaluateSource($commented);
+    expect(fn() => ArraySourceWriter::rewrite(PhpArraySourceDocument::parse($commented), $old, ['terminal' => null]))
+        ->toThrow(SourcePreservationRefusal::class, 'cannot be replaced by a single value');
+});
