@@ -22,6 +22,7 @@ use Ichiloto\Editor\Field\MapEncounters;
 use Ichiloto\Editor\History\Command;
 use Ichiloto\Editor\History\GenericCommand;
 use Ichiloto\Editor\ProjectMap;
+use Ichiloto\Engine\Core\Enumerations\MovementHeading;
 use Ichiloto\Engine\Events\Enumerations\ChestType;
 use Ichiloto\Engine\Events\Enumerations\LootType;
 use Ichiloto\Engine\Events\Triggers\EventCueKind;
@@ -712,6 +713,9 @@ final readonly class MapInspector
         if ($path === ['cue', 'kind']) {
             return $this->applyEventCueKind($map, $marker, $value);
         }
+        if (is_string($field['facingHeading'] ?? null)) {
+            return $this->applyEventFacing($map, $marker, $field['facingHeading'], $value === true);
+        }
         $held = $map->hasEventField($marker, $path);
         $oldValue = $map->getEventField($marker, $path);
         // Optional data cleared is removed, as it was before it was set.
@@ -728,6 +732,32 @@ final readonly class MapInspector
         $apply();
 
         return new GenericCommand(sprintf('%s edit', $field['label'] ?? 'Event field'), $apply, $restore);
+    }
+
+    /**
+     * Adds or removes one heading the player may face to start the event. The headings keep compass order, and an
+     * event left with none drops the key, so it starts whichever way the player faces, as before it was set.
+     */
+    private function applyEventFacing(ProjectMap $map, string $marker, string $name, bool $chosen): ?Command
+    {
+        $held = $map->hasEventField($marker, ['facing']);
+        $old = $map->getEventField($marker, ['facing']);
+        $names = array_map(static fn(MovementHeading $heading): string => $heading->value, self::listFacingHeadings());
+        if ($old !== null && (! is_array($old) || ! array_is_list($old) || array_diff($old, $names) !== [])) {
+            throw new InspectorRefusal('The event facing must list North, East, South or West before a heading can be changed.');
+        }
+        $current = $old ?? [];
+        $next = array_values(array_filter($names, static fn(string $heading): bool => $heading === $name ? $chosen : in_array($heading, $current, true)));
+        if ($next === $current || ($next === [] && ! $held)) {
+            return null;
+        }
+        $apply = $next === [] ? static fn() => $map->removeEventField($marker, ['facing'])
+            : static fn() => $map->setEventField($marker, ['facing'], $next);
+        $restore = $held ? static fn() => $map->setEventField($marker, ['facing'], $old)
+            : static fn() => $map->removeEventField($marker, ['facing']);
+        $apply();
+
+        return new GenericCommand('Facing edit', $apply, $restore);
     }
 
     /** Kind edits own the cue's optional parent so undo also restores its omission. */
@@ -1211,7 +1241,7 @@ final readonly class MapInspector
             if ($hasPresentation) { $fields = [...$fields, ...$this->buildInnPresentationFields($marker, $presentation)]; }
         }
 
-        $rootFields = array_diff_key($definition, ['class' => true, 'data' => true]);
+        $rootFields = array_diff_key($definition, ['class' => true, 'data' => true, 'facing' => true]);
         // Cue is a generic trigger capability, including for definitions
         // created before the field existed. Supplying an empty editor-only
         // default exposes the opt-in without changing the stored event until
@@ -1239,9 +1269,39 @@ final readonly class MapInspector
             ...$fields,
             ...$this->decorateEventInspectorFields(
                 $marker,
-                [...$this->flattenInspectorFields($rootFields, []), ...$cueKindFields],
+                [...$this->flattenInspectorFields($rootFields, []), ...$cueKindFields, ...self::buildEventFacingFields($definition)],
             ),
         ];
+    }
+
+    /**
+     * Which way the player faces to start the event: one row per heading, none chosen for any. A facing the Engine
+     * would refuse stays as one row that names it, for the author to repair in the source, never flattened.
+     *
+     * @param array<array-key, mixed> $definition
+     * @return list<array<string, mixed>>
+     */
+    private static function buildEventFacingFields(array $definition): array
+    {
+        $facing = $definition['facing'] ?? [];
+        $names = array_map(static fn(MovementHeading $heading): string => $heading->value, self::listFacingHeadings());
+        if (! is_array($facing) || ! array_is_list($facing) || array_diff($facing, $names) !== []) {
+            return [['label' => 'Facing', 'value' => '(not North, East, South or West)', 'editable' => false, 'path' => ['facing']]];
+        }
+
+        return array_map(static fn(string $name): array => [
+            'label' => "Facing {$name}",
+            'value' => in_array($name, $facing, true) ? 'true' : 'false',
+            'control' => new InputControl(InputControlType::BOOLEAN, in_array($name, $facing, true) ? 'true' : 'false'),
+            'path' => ['facing', $name],
+            'facingHeading' => $name,
+        ], $names);
+    }
+
+    /** @return list<MovementHeading> The headings an event may require, in compass order. */
+    private static function listFacingHeadings(): array
+    {
+        return array_values(array_filter(MovementHeading::cases(), static fn(MovementHeading $heading): bool => $heading !== MovementHeading::NONE));
     }
 
     /** Inline routes use the same schema/coercion as command records; the map remains their owner. */

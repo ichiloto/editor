@@ -2,6 +2,7 @@
 
 namespace Ichiloto\Editor\Validation;
 
+use Ichiloto\Engine\Core\Enumerations\MovementHeading;
 use Ichiloto\Editor\Database\BattleEntryActorResolver;
 use Ichiloto\Editor\Database\BattleEntryRuleContract;
 use Ichiloto\Editor\Database\InventoryCatalog;
@@ -3821,6 +3822,7 @@ class ProjectValidator
         $issues = [
           ...$issues,
           ...$this->checkEventCue($definition['cue'] ?? null, $where, $known),
+          ...$this->checkEventFacing($definition, $where),
           ...$this->checkConditions((array) ($definition['conditions'] ?? []), $where, $known),
           ...$this->checkDialogueVariants((array) ($data['dialogue'] ?? []), $where, $known),
           ...$this->checkCommands(
@@ -4110,13 +4112,13 @@ class ProjectValidator
     array $npcIdsByMap,
   ): array {
     $issues = [];
-    $allowedRootFields = ['class', 'data', 'conditions', 'sets', 'whenBlocked', 'cue'];
+    $allowedRootFields = ['class', 'data', 'conditions', 'sets', 'whenBlocked', 'cue', 'facing'];
 
     foreach (array_diff(array_keys($definition), $allowedRootFields) as $field) {
       $issues[] = Issue::error(
         $where,
         sprintf('ScriptEventTrigger uses unsupported root field "%s".', $field),
-        'Use class, data, conditions, sets, whenBlocked, or cue.'
+        'Use class, data, conditions, sets, whenBlocked, cue, or facing.'
       );
     }
 
@@ -4198,6 +4200,25 @@ class ProjectValidator
    *
    * @return Issue[] The issues found.
    */
+  /**
+   * An event's optional facing: the player headings it engages from, as the Engine reads them.
+   *
+   * @param array<array-key, mixed> $definition The event definition.
+   * @return Issue[] The issues found.
+   */
+  protected function checkEventFacing(array $definition, string $where): array
+  {
+    if (! array_key_exists('facing', $definition)) {
+      return [];
+    }
+    $facing = $definition['facing'];
+    $valid = is_array($facing) && array_is_list($facing) && array_all($facing, static fn(mixed $name): bool => is_string($name)
+      && ($heading = MovementHeading::tryFrom($name)) !== null && $heading !== MovementHeading::NONE);
+
+    return $valid ? [] : [Issue::error($where, 'Its facing must list player headings: North, East, South or West.',
+      'Choose the headings the player faces to start it, or none for any.')];
+  }
+
   protected function checkEventCue(mixed $cue, string $where, array $known): array
   {
     if ($cue === null) {
