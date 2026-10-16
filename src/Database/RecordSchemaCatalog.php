@@ -77,6 +77,9 @@ use Ichiloto\Engine\Entities\Character;
  */
 final class RecordSchemaCatalog
 {
+    /** A skill's battle message where none is authored: the Engine shows the action's name. */
+    public const string SKILL_MESSAGE_DEFAULT = '%2';
+
     /**
      * The event-script command types built into the engine's interpreter.
      *
@@ -1271,7 +1274,7 @@ final class RecordSchemaCatalog
             new RecordField('scope.number', 'Scope Number', options: array_map(static fn(ItemScopeNumber $number): string => $number->value, ItemScopeNumber::cases())),
             new RecordField('scope.status', 'Scope Status', options: array_map(static fn(ItemScopeStatus $status): string => $status->value, ItemScopeStatus::cases())),
             new RecordField('scope.targetCount', 'Target Count', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: 'Auto'),
-            new RecordField('invocation.message', 'Invoke Text'),
+            new RecordField('invocation.message', 'Battle Message', displayDefault: self::SKILL_MESSAGE_DEFAULT),
             new RecordField('invocation.speed', 'Invoke Speed', InputControlType::INTEGER),
             new RecordField('invocation.accuracy', 'Accuracy', InputControlType::INTEGER),
             new RecordField('invocation.repeat', 'Repeat', InputControlType::INTEGER),
@@ -1334,7 +1337,7 @@ final class RecordSchemaCatalog
                 'cooldown' => 0,
                 'occasion' => Occasion::BATTLE_SCREEN->value,
                 'scope' => ['side' => ItemScopeSide::ENEMY->value, 'number' => ItemScopeNumber::ONE->value, 'status' => ItemScopeStatus::ALIVE->value],
-                'invocation' => ['message' => '$1 uses $2!', 'speed' => 0, 'accuracy' => 100, 'repeat' => 1, 'apGain' => 10],
+                'invocation' => ['message' => self::SKILL_MESSAGE_DEFAULT, 'speed' => 0, 'accuracy' => 100, 'repeat' => 1, 'apGain' => 10],
                 'effects' => [],
             ],
             subList: new RecordSubList(
