@@ -363,14 +363,14 @@ it('flattens the config vocab and messages trees into editable terms', function 
     $database = loadRecordDatabase($root, 'terms');
 
     expect($database->isEditable())->toBeTrue();
-    expect($database->getEntryLabels())->toBe([
-        'vocab.game.new_game',
-        'vocab.game.continue',
-        'vocab.currency.name',
-        'vocab.currency.symbol',
-        'messages.file',
-        'messages.confirm.quit',
-    ]);
+    // The project's own terms in file order, then every other message the Engine says, offered with its default.
+    $own = ['vocab.game.new_game', 'vocab.game.continue', 'vocab.currency.name', 'vocab.currency.symbol', 'messages.file', 'messages.confirm.quit'];
+    $labels = $database->getEntryLabels();
+    expect(array_slice($labels, 0, count($own)))->toBe($own)
+        ->and(array_slice($labels, count($own)))->toEqualCanonicalizing(array_values(array_diff(
+            array_map(static fn(string $path): string => 'messages.' . $path, array_keys(Ichiloto\Engine\Localization\EngineMessageTerms::listTerms())),
+            $own,
+        )));
 
     $database->setField(0, 'value', 'Begin');
     $database->setField(2, 'value', 'Zenny');

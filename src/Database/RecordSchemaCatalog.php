@@ -1525,6 +1525,11 @@ final class RecordSchemaCatalog
             labelKey: 'path',
             identityKey: 'path',
             configPath: ['vocab', 'messages'],
+            // A message the Engine says reads as its default until the project rewords it.
+            fieldsFor: static fn(array $row): array => [
+                new RecordField('path', 'Term', isReadOnly: true),
+                new RecordField('value', 'Value', displayDefault: array_key_exists('default', $row) ? ProjectRecord::stringify($row['default']) : null),
+            ],
         );
     }
 

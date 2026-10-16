@@ -15,6 +15,7 @@ use Ichiloto\Editor\Database\InnPresentationFields;
 use Ichiloto\Editor\Storage\FileSetOperations;
 use Ichiloto\Editor\Storage\FileSetTransaction;
 use Ichiloto\Editor\Storage\FilesystemFileSetOperations;
+use Ichiloto\Engine\Localization\EngineMessageTerms;
 use Ichiloto\Engine\Rendering\FieldViewport;
 use RuntimeException;
 use Throwable;
@@ -74,11 +75,32 @@ final class ProjectConfig
             $this->originalValues[$path] = $value;
             // A setting the engine knows carries the default it reads when
             // the file holds none, which is what the setting reads as here.
-            $this->records[$path] = new ProjectRecord(array_key_exists($path, self::ENGINE_DEFAULTS)
-                ? ['path' => $path, 'value' => $value, 'default' => self::ENGINE_DEFAULTS[$path]]
-                : ['path' => $path, 'value' => $value]);
+            $term = self::listEngineMessageTerms()[$path] ?? null;
+            $this->records[$path] = new ProjectRecord(match (true) {
+                array_key_exists($path, self::ENGINE_DEFAULTS) => ['path' => $path, 'value' => $value, 'default' => self::ENGINE_DEFAULTS[$path]],
+                // A message the Engine says carries its default, what it accepts and what it is for.
+                $term !== null => ['path' => $path, 'value' => $value, 'default' => $term['default'],
+                    'placeholders' => $term['placeholders'], 'description' => $term['description']],
+                default => ['path' => $path, 'value' => $value],
+            });
         }
         return $this->records[$path];
+    }
+
+    /**
+     * Every message the Engine says, by its path in config.php, as the Engine's own catalog lists it: each one is
+     * offered in Terms with its default even where the project leaves it out, so any game can reword it.
+     *
+     * @return array<string, array{default: string, placeholders: array<string, string>, description: string}>
+     */
+    private static function listEngineMessageTerms(): array
+    {
+        $terms = [];
+        foreach (EngineMessageTerms::listTerms() as $path => $term) {
+            $terms['messages.' . $path] = $term;
+        }
+
+        return $terms;
     }
 
     /** @return list<ProjectRecord> */
@@ -104,7 +126,7 @@ final class ProjectConfig
         }
         // A setting the engine knows is offered even where the file leaves it
         // out, so it can be set without being typed in by hand.
-        foreach (array_keys(self::ENGINE_DEFAULTS) as $path) {
+        foreach ([...array_keys(self::ENGINE_DEFAULTS), ...array_keys(self::listEngineMessageTerms())] as $path) {
             $root = explode('.', $path)[0];
             if (in_array($root, $roots, true) && ! in_array($path, array_map(static fn(ProjectRecord $record): mixed => $record->get('path'), $records), true) && $this->issue === null) {
                 $records[] = $this->getRecord($path);

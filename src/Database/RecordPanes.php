@@ -40,6 +40,7 @@ final class RecordPanes
         return match ($category) {
             'actors' => self::describeActor($workspace->actorDatabase->getActorByIndex($index)),
             'classes' => self::describeClass(($row = $data()) === null ? null : ProjectClass::fromArray($row, $index + 1)),
+            'terms' => self::describeTerm($data()),
             'skills' => self::describeSkill($data(), $workspace->getRecordDatabase('skills')?->getRecordByIndex($index)?->recordId),
             'quests' => self::describeQuest(($row = $data()) === null ? null : new ProjectQuest($row)),
             'system' => self::describeSystem($workspace),
@@ -159,6 +160,35 @@ final class RecordPanes
      * @param array<string, mixed>|null $data The skill's record data.
      * @return array<'cue'|'frames'|'preview', array{title: string, lines: list<string>}>
      */
+    /**
+     * A term as the Engine says it: what it is for, its default, the placeholders it fills in, and for a battle
+     * callout what a battle will show.
+     *
+     * @param array<array-key, mixed>|null $data
+     * @return array<string, array{title: string, lines: list<string>}>
+     */
+    private static function describeTerm(?array $data): array
+    {
+        if ($data === null || ! array_key_exists('default', $data) || ! is_array($data['placeholders'] ?? null)) {
+            return [];
+        }
+        $value = $data['value'] ?? null;
+        $text = is_string($value) ? $value : strval($data['default']);
+        $lines = [
+            strval($data['description'] ?? ''),
+            '',
+            sprintf('Default: %s', trim(strval($data['default'])) === '' ? '(blank)' : strval($data['default'])),
+            ...array_map(static fn(string $token, string $meaning): string => sprintf('%s = %s', $token, $meaning),
+                array_keys($data['placeholders']), array_values($data['placeholders'])),
+        ];
+        if (str_starts_with(strval($data['path'] ?? ''), 'messages.battle.announcements.')) {
+            $shown = BattleAnnouncement::format($text, 'Actor', 'Action');
+            $lines = [...$lines, '', $shown === '' ? 'Shows: nothing, the command is used silently' : sprintf('Shows: %s', $shown)];
+        }
+
+        return ['preview' => ['title' => 'Term', 'lines' => $lines]];
+    }
+
     /**
      * What a skill's battle message will show, formatted by the Engine as a battle formats it, with how to write one.
      *
