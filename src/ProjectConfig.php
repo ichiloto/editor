@@ -75,7 +75,7 @@ final class ProjectConfig
             $this->originalValues[$path] = $value;
             // A setting the engine knows carries the default it reads when
             // the file holds none, which is what the setting reads as here.
-            $term = self::listEngineMessageTerms()[$path] ?? null;
+            $term = $this->listEngineMessageTerms()[$path] ?? null;
             $this->records[$path] = new ProjectRecord(match (true) {
                 array_key_exists($path, self::ENGINE_DEFAULTS) => ['path' => $path, 'value' => $value, 'default' => self::ENGINE_DEFAULTS[$path]],
                 // A message the Engine says carries its default, what it accepts and what it is for.
@@ -93,10 +93,17 @@ final class ProjectConfig
      *
      * @return array<string, array{default: string, placeholders: array<string, string>, description: string}>
      */
-    private static function listEngineMessageTerms(): array
+    private function listEngineMessageTerms(): array
     {
         $terms = [];
         foreach (EngineMessageTerms::listTerms() as $path => $term) {
+            // A message that inherits the project's own vocabulary wording reads as that wording here, as the game
+            // reads it, taken from this project's file, never from another project's loaded runtime state.
+            $inherited = isset($term['vocabularyDefault']) ? self::getValue($this->payload, 'vocab.' . $term['vocabularyDefault']) : null;
+            if (is_string($inherited)) {
+                $term['default'] = $inherited;
+            }
+            unset($term['vocabularyDefault']);
             $terms['messages.' . $path] = $term;
         }
 
@@ -126,7 +133,7 @@ final class ProjectConfig
         }
         // A setting the engine knows is offered even where the file leaves it
         // out, so it can be set without being typed in by hand.
-        foreach ([...array_keys(self::ENGINE_DEFAULTS), ...array_keys(self::listEngineMessageTerms())] as $path) {
+        foreach ([...array_keys(self::ENGINE_DEFAULTS), ...array_keys($this->listEngineMessageTerms())] as $path) {
             $root = explode('.', $path)[0];
             if (in_array($root, $roots, true) && ! in_array($path, array_map(static fn(ProjectRecord $record): mixed => $record->get('path'), $records), true) && $this->issue === null) {
                 $records[] = $this->getRecord($path);
