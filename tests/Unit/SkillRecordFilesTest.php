@@ -68,3 +68,25 @@ it('authors effects by type, keeping only what each type reads', function () {
         ->and($lunge?->effects[0]?->stateId)->toBe('poison')
         ->and(SkillCatalog::load($root . '/assets')->getProblems())->toBe([]);
 });
+
+it('seeds a new skill with the action-name battle message and previews what each message shows, as a battle formats it', function () {
+    $root = skillRecordsProject();
+    $skills = loadRecordDatabase($root, 'skills');
+    $created = (new RecordAuthoring())->createRecord($skills);
+    $skills->setField(0, 'invocation.message', '%1 swings at the foe!');
+    $skills->setField(1, 'invocation.message', '');
+    $skills->save();
+    $workspace = Ichiloto\Editor\ProjectWorkspace::fromProject($root);
+    $lines = static fn(int $index): string => implode("\n", array_merge(...array_map(
+        static fn(array $pane): array => array_map('strval', (array) ($pane['lines'] ?? $pane[1] ?? [])),
+        array_values(Ichiloto\Editor\Database\RecordPanes::describe($workspace, 'skills', $index)),
+    )));
+
+    expect(loadRecordDatabase($root, 'skills')->getRecordByIndex($created->index)?->get('invocation')['message'])->toBe('%2')
+        ->and(array_find(Ichiloto\Editor\Database\RecordSchemaCatalog::forKey('skills')->fields,
+            static fn($field): bool => $field->key === 'invocation.message')->label)->toBe('Battle Message')
+        ->and($lines(0))->toContain('Shows: Actor swings at the foe!')
+        ->and($lines(1))->toContain('Shows: nothing, the skill is used silently')
+        ->and($lines(2))->toContain('Shows: Ember')
+        ->and($lines(2))->toContain('%1 = who acts, %2 = this skill, blank = no message');
+});

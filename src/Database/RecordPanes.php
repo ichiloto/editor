@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Database;
 
+use Ichiloto\Engine\Battle\Presentation\BattleAnnouncement;
 use Ichiloto\Editor\ProjectActor;
 use Ichiloto\Editor\ProjectClass;
 use Ichiloto\Editor\ProjectQuest;
@@ -158,6 +159,27 @@ final class RecordPanes
      * @param array<string, mixed>|null $data The skill's record data.
      * @return array<'cue'|'frames'|'preview', array{title: string, lines: list<string>}>
      */
+    /**
+     * What a skill's battle message will show, formatted by the Engine as a battle formats it, with how to write one.
+     *
+     * @param array<array-key, mixed> $invocation
+     * @return list<string>
+     */
+    private static function describeBattleMessage(array $invocation, string $name): array
+    {
+        $message = $invocation['message'] ?? RecordSchemaCatalog::SKILL_MESSAGE_DEFAULT;
+        if (! is_string($message)) {
+            return ['Battle message: (not text)'];
+        }
+        $shown = BattleAnnouncement::format($message, 'Actor', $name === '' ? 'Skill' : $name);
+
+        return [
+            sprintf('Battle message: %s', trim($message) === '' ? '(blank)' : $message),
+            $shown === '' ? 'Shows: nothing, the skill is used silently' : sprintf('Shows: %s', $shown),
+            '%1 = who acts, %2 = this skill, blank = no message',
+        ];
+    }
+
     private static function describeSkill(?array $data, ?string $file): array
     {
         if ($data === null) {
@@ -192,7 +214,7 @@ final class RecordPanes
                 sprintf('Cooldown: %d', intval($data['cooldown'] ?? 0)),
                 '',
                 sprintf('Scope: %s / %s / %s', strval($scope['side'] ?? ''), strval($scope['number'] ?? ''), strval($scope['status'] ?? '')),
-                sprintf('Invoke: %s', strval($invocation['message'] ?? '')),
+                ...self::describeBattleMessage($invocation, strval($data['name'] ?? '')),
                 '',
                 'Effects',
                 ...$effects,
