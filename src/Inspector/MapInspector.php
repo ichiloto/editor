@@ -24,6 +24,7 @@ use Ichiloto\Editor\History\GenericCommand;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Engine\Core\Enumerations\MovementHeading;
 use Ichiloto\Engine\Events\Enumerations\ChestType;
+use Ichiloto\Engine\Events\Enumerations\EventEngagement;
 use Ichiloto\Engine\Events\Enumerations\LootType;
 use Ichiloto\Engine\Events\Triggers\EventCueKind;
 use Ichiloto\Engine\Field\MapGraphics;
@@ -64,6 +65,12 @@ final readonly class MapInspector
         ['label' => 'Unclassified (clear kind)', 'value' => '', 'description' => 'Omit kind, preserving legacy unclassified guidance and the rest of the cue.'],
         ['label' => 'Story', 'value' => EventCueKind::STORY->value, 'description' => 'Story guidance that persists at the screen edge.'],
         ['label' => 'Route', 'value' => EventCueKind::ROUTE->value, 'description' => 'Route guidance that belongs to its map cell.'],
+    ];
+
+    /** Where the player stands to start an event, as an author picks it. */
+    public const array EVENT_ENGAGEMENT_CHOICES = [
+        ['label' => 'Stand on it', 'value' => 'inside', 'description' => 'The player starts it from one of its cells, as events always have.'],
+        ['label' => 'Face it from next to it', 'value' => 'facing', 'description' => 'Placed on an object: the player starts it from the next cell, facing the object.'],
     ];
 
     /** A chest event's presentations, as an author picks one. */
@@ -713,6 +720,9 @@ final readonly class MapInspector
         if ($path === ['cue', 'kind']) {
             return $this->applyEventCueKind($map, $marker, $value);
         }
+        if ($path === ['engagement']) {
+            return $this->applyEventEngagement($map, $marker, $value);
+        }
         if (is_string($field['facingHeading'] ?? null)) {
             return $this->applyEventFacing($map, $marker, $field['facingHeading'], $value === true);
         }
@@ -732,6 +742,31 @@ final readonly class MapInspector
         $apply();
 
         return new GenericCommand(sprintf('%s edit', $field['label'] ?? 'Event field'), $apply, $restore);
+    }
+
+    /**
+     * Sets where the player stands to start the event. Standing on it is what an event without the key does, so
+     * choosing it drops the key, and undo restores the event as it was.
+     */
+    private function applyEventEngagement(ProjectMap $map, string $marker, mixed $value): ?Command
+    {
+        $engagement = is_string($value) ? EventEngagement::tryFrom($value) : null;
+        if ($engagement === null) {
+            throw new InspectorRefusal('Choose to stand on the event or to face it from next to it.');
+        }
+        $held = $map->hasEventField($marker, ['engagement']);
+        $old = $map->getEventField($marker, ['engagement']);
+        $next = $engagement === EventEngagement::INSIDE ? null : $engagement->value;
+        if ($old === $next || ($next === null && ! $held)) {
+            return null;
+        }
+        $apply = $next === null ? static fn() => $map->removeEventField($marker, ['engagement'])
+            : static fn() => $map->setEventField($marker, ['engagement'], $next);
+        $restore = $held ? static fn() => $map->setEventField($marker, ['engagement'], $old)
+            : static fn() => $map->removeEventField($marker, ['engagement']);
+        $apply();
+
+        return new GenericCommand('Engagement edit', $apply, $restore);
     }
 
     /**
@@ -1241,7 +1276,7 @@ final readonly class MapInspector
             if ($hasPresentation) { $fields = [...$fields, ...$this->buildInnPresentationFields($marker, $presentation)]; }
         }
 
-        $rootFields = array_diff_key($definition, ['class' => true, 'data' => true, 'facing' => true]);
+        $rootFields = array_diff_key($definition, ['class' => true, 'data' => true, 'facing' => true, 'engagement' => true]);
         // Cue is a generic trigger capability, including for definitions
         // created before the field existed. Supplying an empty editor-only
         // default exposes the opt-in without changing the stored event until
@@ -1269,7 +1304,8 @@ final readonly class MapInspector
             ...$fields,
             ...$this->decorateEventInspectorFields(
                 $marker,
-                [...$this->flattenInspectorFields($rootFields, []), ...$cueKindFields, ...self::buildEventFacingFields($definition)],
+                [...$this->flattenInspectorFields($rootFields, []), ...$cueKindFields, self::buildEventEngagementField($definition),
+                    ...self::buildEventFacingFields($definition)],
             ),
         ];
     }
@@ -1296,6 +1332,29 @@ final readonly class MapInspector
             'path' => ['facing', $name],
             'facingHeading' => $name,
         ], $names);
+    }
+
+    /**
+     * Where the player stands to start the event: on its cells, or next to them facing one, for an event placed on an
+     * object. An engagement the Engine would refuse is named rather than offered, never rewritten.
+     *
+     * @param array<array-key, mixed> $definition
+     * @return array<string, mixed>
+     */
+    private static function buildEventEngagementField(array $definition): array
+    {
+        $engagement = $definition['engagement'] ?? EventEngagement::INSIDE->value;
+        if (! is_string($engagement) || EventEngagement::tryFrom($engagement) === null) {
+            return ['label' => 'Engagement', 'value' => '(not inside or facing)', 'editable' => false, 'path' => ['engagement']];
+        }
+
+        return [
+            'label' => 'Engagement',
+            'value' => $engagement,
+            'selectedValue' => $engagement,
+            'optionLabels' => array_column(self::EVENT_ENGAGEMENT_CHOICES, 'label', 'value'),
+            'path' => ['engagement'],
+        ];
     }
 
     /** @return list<MovementHeading> The headings an event may require, in compass order. */
@@ -1503,6 +1562,7 @@ final readonly class MapInspector
 
             $choices = match ($path) {
                 ['cue', 'kind'] => self::EVENT_CUE_KIND_CHOICES,
+                ['engagement'] => self::EVENT_ENGAGEMENT_CHOICES,
                 ['data', 'chestType'] => self::CHEST_TYPE_CHOICES,
                 ['data', 'lootType'] => self::LOOT_TYPE_CHOICES,
                 default => null,

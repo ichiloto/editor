@@ -3,6 +3,7 @@
 namespace Ichiloto\Editor\Validation;
 
 use Ichiloto\Engine\Core\Enumerations\MovementHeading;
+use Ichiloto\Engine\Events\Enumerations\EventEngagement;
 use Ichiloto\Editor\Database\BattleEntryActorResolver;
 use Ichiloto\Editor\Database\BattleEntryRuleContract;
 use Ichiloto\Editor\Database\InventoryCatalog;
@@ -3823,6 +3824,7 @@ class ProjectValidator
           ...$issues,
           ...$this->checkEventCue($definition['cue'] ?? null, $where, $known),
           ...$this->checkEventFacing($definition, $where),
+          ...$this->checkEventEngagement($definition, $where),
           ...$this->checkConditions((array) ($definition['conditions'] ?? []), $where, $known),
           ...$this->checkDialogueVariants((array) ($data['dialogue'] ?? []), $where, $known),
           ...$this->checkCommands(
@@ -4112,13 +4114,13 @@ class ProjectValidator
     array $npcIdsByMap,
   ): array {
     $issues = [];
-    $allowedRootFields = ['class', 'data', 'conditions', 'sets', 'whenBlocked', 'cue', 'facing'];
+    $allowedRootFields = ['class', 'data', 'conditions', 'sets', 'whenBlocked', 'cue', 'facing', 'engagement'];
 
     foreach (array_diff(array_keys($definition), $allowedRootFields) as $field) {
       $issues[] = Issue::error(
         $where,
         sprintf('ScriptEventTrigger uses unsupported root field "%s".', $field),
-        'Use class, data, conditions, sets, whenBlocked, cue, or facing.'
+        'Use class, data, conditions, sets, whenBlocked, cue, facing, or engagement.'
       );
     }
 
@@ -4217,6 +4219,23 @@ class ProjectValidator
 
     return $valid ? [] : [Issue::error($where, 'Its facing must list player headings: North, East, South or West.',
       'Choose the headings the player faces to start it, or none for any.')];
+  }
+
+  /**
+   * An event's optional engagement: standing on its cells, or next to them facing one.
+   *
+   * @param array<array-key, mixed> $definition The event definition.
+   * @return Issue[] The issues found.
+   */
+  protected function checkEventEngagement(array $definition, string $where): array
+  {
+    if (! array_key_exists('engagement', $definition)) {
+      return [];
+    }
+    $engagement = $definition['engagement'];
+
+    return is_string($engagement) && EventEngagement::tryFrom($engagement) !== null ? [] : [Issue::error($where,
+      'Its engagement must be inside or facing.', 'Choose to stand on the event, or to face it from next to it.')];
   }
 
   protected function checkEventCue(mixed $cue, string $where, array $known): array
