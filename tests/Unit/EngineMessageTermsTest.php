@@ -76,3 +76,16 @@ it('describes a term as the Engine does, and shows what a battle callout will di
     [, $file] = findTerm($workspace, 'messages.file');
     expect(implode("\n", RecordPanes::describe($workspace, 'terms', $file)['preview']['lines']))->not->toContain('Shows:');
 });
+
+it('shows a message that inherits the project\'s vocabulary wording with that project\'s own wording as its default', function () {
+    $inheriting = makeTemporaryProject('editor-terms-');
+    file_put_contents($inheriting . '/config.php', "<?php\nreturn [\n  'vocab' => ['shop' => ['exp_total' => 'EXP So Far']],\n  'messages' => [],\n];\n");
+    $plain = createTermsProject();
+
+    [$terms, $index] = findTerm(ProjectWorkspace::fromProject($inheriting), 'messages.exp_total');
+    expect($terms->getRecordByIndex($index)?->get('default'))->toBe('EXP So Far');
+    // Another project opened afterwards reads the Engine's own default, not the first project's wording.
+    [$terms, $index] = findTerm(ProjectWorkspace::fromProject($plain), 'messages.exp_total');
+    expect($terms->getRecordByIndex($index)?->get('default'))->toBe(EngineMessageTerms::listTerms()['exp_total']['default'])
+        ->and($terms->getRecordByIndex($index)?->get('default'))->not->toBe('EXP So Far');
+});
