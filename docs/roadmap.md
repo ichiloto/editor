@@ -301,6 +301,18 @@ Order of work, each a complete slice before the next:
    (they read an unused enum under `assets/Data/Types` before).
 5. The manual's category table has a GUI column (done) and states each category's
    real coverage.
+6. Troops as RPG Maker's Troops tab (in progress, 2026-10-17). Done in both
+   editors through `TroopAuthoring`: add a member by choosing its enemy,
+   remove, clear, auto-name, `Battle Music`, keys the editor does not show
+   (`id`, `events`) kept, a new troop or member never assuming a game's
+   enemy, and validation of a member with no battle placement. The GUI page
+   (canvas, member and enemy lists, member-driven inspector) works without a
+   graphical battle too. Waiting on Engine contracts requested on
+   2026-10-17: the enemy arrangement rule (Align, and the starting terminal
+   position and battle placement of a new member, today the blank
+   `[15, 7]` and none), battle event pages (conditions, span, commands
+   through the shared command editor) and arenas as authorable data. Battle
+   events do not run in the Engine yet.
 
 Acceptance criteria:
 
