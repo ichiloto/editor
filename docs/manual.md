@@ -1038,7 +1038,12 @@ landmarks the Engine would refuse.
 
 `Atlas` places the map in the atlas (Engine `docs/maps.md`). `Scope` is
 `Local` (a town, a house, a dungeon; what a map is when it says nothing) or
-`Global`, the overworld geography itself. A local map's `Parent Entry` is the
+`Global`, the overworld geography itself. `Terminal View` is how the
+Terminal's map draws it: `Places` (blank ground, a square for each location and
+a chevron for each route, for outdoors) or `Floorplan` (rooms and corridors as
+simple outlines, for interiors). It shows what the Engine reads for the map's
+scope until an author chooses otherwise, and choosing that again says nothing;
+graphical maps are unaffected. A local map's `Parent Entry` is the
 landmark on another map that is its entrance there: a house's on its town, the
 town's on the world. It is picked from the landmarks other maps declare, those
 whose door leads to this map first; a global map has no parent. `Global Map`

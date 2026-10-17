@@ -108,3 +108,19 @@ it('chooses a landmark category from the Engine generics and the project\'s own,
     expect(readLandmarkEntries($session)[0])->not->toHaveKey('category');
     $session->deleteDatabaseRecord(MapCategoryFields::CATEGORY, $index);
 });
+
+it('chooses how the Terminal draws a map, saying nothing when it is the Engine\'s default for the scope', function () {
+    [, , $session] = createAtlasProject();
+    $view = findAtlasRow($session, 'terminalView');
+    expect($view['options'])->toBe(Ichiloto\Engine\Field\MapAtlasDefinition::TERMINAL_VIEWS)
+        ->and($view['value'])->toBe(Ichiloto\Editor\Field\MapAtlas::readTerminalView([]));
+    $other = array_values(array_diff(Ichiloto\Engine\Field\MapAtlasDefinition::TERMINAL_VIEWS, [$view['value']]))[0];
+    applyLandmarkRow($session, ['target' => 'map-atlas', 'field' => 'terminalView'], $other);
+    expect(getSessionMap($session)->getMapDataField(['atlas']))->toBe(['terminalView' => $other]);
+    applyLandmarkRow($session, ['target' => 'map-atlas', 'field' => 'terminalView'], $view['value']);
+    expect(getSessionMap($session)->hasMapDataField(['atlas']))->toBeFalse();
+    // A global map reads the Engine's own default for global maps.
+    expect(findAtlasRow($session, 'terminalView', 'world')['value'])->toBe(Ichiloto\Editor\Field\MapAtlas::readTerminalView(['scope' => 'global']));
+    $session->undo();
+    expect(getSessionMap($session)->getMapDataField(['atlas']))->toBe(['terminalView' => $other]);
+});

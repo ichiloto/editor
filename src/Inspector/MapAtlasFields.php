@@ -8,14 +8,16 @@ use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\Field\MapAtlas;
 use Ichiloto\Editor\Field\MapLandmarks;
 use Ichiloto\Editor\ProjectMap;
+use Ichiloto\Engine\Field\MapAtlasDefinition;
 use Ichiloto\Engine\Field\MapLandmarkCatalog;
 use InvalidArgumentException;
 use Throwable;
 
 /**
  * The inspector rows that place a map in the atlas, the same in the Terminal and a graphical editor: its scope
- * (local, or the global overworld geography), and for a local map its entry on the parent map, chosen from the
- * landmarks other maps declare. The global map the chain reaches is shown as the Engine resolves it.
+ * (local, or the global overworld geography), how the Terminal draws it (places or a floorplan), and for a local
+ * map its entry on the parent map, chosen from the landmarks other maps declare. The global map the chain reaches
+ * is shown as the Engine resolves it.
  */
 final class MapAtlasFields
 {
@@ -41,6 +43,21 @@ final class MapAtlasFields
             ['label' => '  Scope', 'value' => $scope, 'editable' => true, 'choices' => $choices,
                 'options' => array_column($choices, 'value'), 'target' => self::TARGET, 'field' => 'scope'],
         ];
+        try {
+            $view = MapAtlas::readTerminalView($block);
+        } catch (InvalidArgumentException $error) {
+            $view = null;
+            $fields[] = ['label' => '  ! Problem', 'value' => $error->getMessage(), 'editable' => false];
+        }
+        if ($view !== null) {
+            $explained = ['places' => 'Blank ground, a square for each location and a chevron for each route.',
+                'floorplan' => 'Rooms and corridors drawn as simple outlines, for interiors.'];
+            $known = array_map(static fn(string $value): array => ['label' => ucfirst($value), 'value' => $value,
+                'description' => $explained[$value] ?? ''], MapAtlasDefinition::TERMINAL_VIEWS);
+            // A short enum: picked or stepped through. What the Terminal draws; graphical maps are unaffected.
+            $fields[] = ['label' => '  Terminal View', 'value' => $view, 'editable' => true, 'choices' => $known,
+                'options' => array_column($known, 'value'), 'target' => self::TARGET, 'field' => 'terminalView'];
+        }
         if ($scope !== MapAtlas::GLOBAL) {
             $parent = is_array($block['parent'] ?? null) ? $block['parent'] : null;
             $current = $parent === null ? '' : MapAtlas::encodeParent((string) ($parent['map'] ?? ''), (string) ($parent['landmark'] ?? ''));
@@ -62,6 +79,7 @@ final class MapAtlasFields
         $block = MapAtlas::readBlock($map);
         $next = match ((string) ($field['field'] ?? '')) {
             'scope' => MapAtlas::setScope($block, (string) $value),
+            'terminalView' => MapAtlas::setTerminalView($block, (string) $value),
             'parent' => MapAtlas::setParent($block, ...(MapAtlas::decodeParent((string) $value) ?? [null, null])),
             default => $block,
         };

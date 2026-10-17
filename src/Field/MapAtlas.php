@@ -56,6 +56,35 @@ final class MapAtlas
     }
 
     /**
+     * How the Terminal draws the map, as the Engine reads the block: the authored choice, or its default for the
+     * map's scope.
+     *
+     * @param array<string, mixed> $block
+     * @throws InvalidArgumentException When the block is invalid.
+     */
+    public static function readTerminalView(array $block): string
+    {
+        return MapAtlasDefinition::readMap($block === [] ? [] : [self::KEY => $block])->terminalView;
+    }
+
+    /**
+     * Sets how the Terminal draws the map: places (squares for locations, chevrons for routes) or a floorplan of
+     * rooms and corridors. Choosing what the Engine would read anyway for the map's scope says nothing.
+     *
+     * @param array<string, mixed> $block
+     * @return array<string, mixed>
+     */
+    public static function setTerminalView(array $block, string $view): array
+    {
+        if (!in_array($view, MapAtlasDefinition::TERMINAL_VIEWS, true)) {
+            throw new InvalidArgumentException('Choose a listed Terminal view.');
+        }
+        $without = $block;
+        unset($without['terminalView']);
+        return $view === self::readTerminalView($without) ? $without : [...$block, 'terminalView' => $view];
+    }
+
+    /**
      * Sets or clears the parent entry: a stable landmark on the parent map.
      *
      * @param array<string, mixed> $block
