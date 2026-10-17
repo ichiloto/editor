@@ -21,7 +21,8 @@ function formationClearanceProject(int $y): string
         (string) file_get_contents($layout),
     ));
     $troops = $root . '/assets/Data/troops.php';
-    file_put_contents($troops, str_replace("'y' => 300,", "'y' => {$y},", (string) file_get_contents($troops)));
+    // Every member placed: the clearance check is what these tests are about.
+    file_put_contents($troops, str_replace(["'y' => 300,", "            ['enemy' => 'Regular Bat', 'position' => [15, 20]],\n"], ["'y' => {$y},", ""], (string) file_get_contents($troops)));
     $session = EditorSession::open($root);
     $index = $session->createDatabaseRecord('battler_enemies', 'Regular Bat')['index'];
     setBattlerRow($session, $index, 'artwork.image', 'Graphics/Enemies/Bat.png');
@@ -67,4 +68,13 @@ it('shows an enemy preview beside a party member it stands clear of, with what i
 
     expect($battler['diagnostics'])->toBe([])
         ->and($battler['image']['asset'])->toBe('Graphics/Enemies/Bat.png');
+});
+
+it('reports a member with no battle placement, which the graphical battle refuses to start without', function () {
+    $issues = array_values(array_filter(new TroopFormationValidator()->validate(ProjectWorkspace::fromProject(troopFormationProject())),
+        static fn(Issue $issue): bool => str_contains($issue->message, 'no battle placement')));
+
+    expect($issues)->toHaveCount(1)
+        ->and($issues[0]->where)->toBe('assets/Data/troops.php: Pair')
+        ->and($issues[0]->message)->toContain('Regular Bat (member 2)');
 });

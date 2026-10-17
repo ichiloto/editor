@@ -101,6 +101,7 @@ use Ichiloto\Engine\Battle\Presentation\BattlePresentationCatalog;
 use Ichiloto\Engine\Battle\Presentation\BattlerBindings;
 use Ichiloto\Editor\Database\PhpDataFile;
 use Ichiloto\Editor\Database\RecordSchemaCatalog;
+use Ichiloto\Editor\Database\TroopAuthoring;
 use Ichiloto\Engine\Battle\Presentation\BattleFormationBattler;
 use Ichiloto\Engine\Battle\Presentation\BattleFormationLayout;
 use Ichiloto\Engine\Battle\Presentation\BattlerSlot;
@@ -203,6 +204,9 @@ final class EditorSession
     /** How actors are authored, with what this editor's actor panes show. */
     private readonly ActorAuthoring $actorAuthoring;
 
+    /** How a troop's members are composed, as the terminal editor composes them. */
+    private readonly TroopAuthoring $troopAuthoring;
+
     /**
      * Where each map's revisions count from. A map read afresh, when a file
      * set written at once reloads the project or its undo puts the earlier
@@ -219,6 +223,7 @@ final class EditorSession
     ) {
         $this->workspace = $workspace;
         $this->actorAuthoring = new ActorAuthoring(graphical: true);
+        $this->troopAuthoring = new TroopAuthoring();
     }
 
     /** Opens the project at a root, as the terminal editor opens it. */
@@ -3083,6 +3088,117 @@ final class EditorSession
         }
 
         return [...$view, 'members' => array_values($members)];
+    }
+
+    /**
+     * A troop as its Troops page shows it, the way RPG Maker's Troops tab
+     * does: its members with the enemy each fights, its terminal position
+     * and its battle placement; the project's enemies a member can be added
+     * from; and its graphical formation over a previewed arena
+     * ({@see readTroopFormation()}), or why there is none, so a game with
+     * only a terminal battle still composes its troops here. Align waits for
+     * the Engine's rule for arranging enemies, and says so.
+     *
+     * @return array{members: list<array<string, mixed>>, enemies: list<string>, formation: ?array<string, mixed>, formationIssue: ?string, align: array{available: bool, reason: ?string}}
+     * @throws SessionRefusal When the troop is unknown.
+     */
+    public function readTroopPage(int $index, ?string $arena = null): array
+    {
+        $record = $this->requireRecordDatabase('troops')->getRecordByIndex($index)
+            ?? throw new SessionRefusal(sprintf('troops has no record %d.', $index));
+        $members = [];
+        foreach ($record->getSubList(TroopAuthoring::MEMBERS) as $entry) {
+            $position = is_array($entry['position'] ?? null) && array_is_list($entry['position']) ? array_values($entry['position']) : null;
+            $members[] = [
+                'enemy' => strval($entry['enemy'] ?? ''),
+                'position' => $position,
+                'placement' => is_array($entry['graphicalPlacement'] ?? null) ? $entry['graphicalPlacement'] : null,
+            ];
+        }
+        $page = [
+            'members' => $members,
+            'enemies' => $this->listEnemyNames(),
+            'formation' => null,
+            'formationIssue' => null,
+            'align' => ['available' => false, 'reason' => 'Align needs the Engine\'s rule for arranging enemies, which it does not have yet.'],
+        ];
+        try {
+            $page['formation'] = $this->readTroopFormation($index, $arena);
+        } catch (SessionRefusal $refusal) {
+            $page['formationIssue'] = $refusal->getMessage();
+        }
+
+        return $page;
+    }
+
+    /**
+     * Adds a member fighting one of the project's enemies to a troop, as one
+     * undo step ({@see TroopAuthoring::addMember()}).
+     *
+     * @return array{changed: bool, member: int, records: list<string>}
+     * @throws SessionRefusal When the troop is unknown or read-only, or the project has no such enemy.
+     */
+    public function addTroopMember(int $index, string $enemy): array
+    {
+        $troops = $this->requireRecordDatabase('troops');
+        $enemies = $this->listEnemyNames();
+        $change = $this->changeRecord(fn(): RecordChange => $this->troopAuthoring->addMember($troops, $index, $enemy, $enemies));
+
+        return ['changed' => true, 'member' => (int) $change->index, 'records' => $troops->getEntryLabels()];
+    }
+
+    /**
+     * Removes one member of a troop, as one undo step.
+     *
+     * @return array{changed: bool, records: list<string>}
+     * @throws SessionRefusal When the troop or member is unknown, or the troop is read-only.
+     */
+    public function removeTroopMember(int $index, int $member): array
+    {
+        $troops = $this->requireRecordDatabase('troops');
+        $change = $this->changeRecord(fn(): RecordChange => $this->troopAuthoring->removeMember($troops, $index, $member));
+
+        return ['changed' => $change->command !== null, 'records' => $troops->getEntryLabels()];
+    }
+
+    /**
+     * Removes every member of a troop, as one undo step.
+     *
+     * @return array{changed: bool, records: list<string>}
+     * @throws SessionRefusal When the troop is unknown or read-only.
+     */
+    public function clearTroopMembers(int $index): array
+    {
+        $troops = $this->requireRecordDatabase('troops');
+        $change = $this->changeRecord(fn(): RecordChange => $this->troopAuthoring->clearMembers($troops, $index));
+
+        return ['changed' => $change->command !== null, 'records' => $troops->getEntryLabels()];
+    }
+
+    /**
+     * Names a troop after its members, as one undo step.
+     *
+     * @return array{changed: bool, name: string, records: list<string>, note?: string}
+     * @throws SessionRefusal When the troop is unknown or read-only, has no member, or the name is refused.
+     */
+    public function nameTroopAfterMembers(int $index): array
+    {
+        $troops = $this->requireRecordDatabase('troops');
+        $change = $this->changeRecord(fn(): RecordChange => $this->troopAuthoring->nameAfterMembers($troops, $index));
+        $record = $troops->getRecordByIndex($index);
+
+        return array_filter([
+            'changed' => $change->command !== null,
+            'name' => $record === null ? '' : $troops->getEntryLabel($record),
+            'records' => $troops->getEntryLabels(),
+            'note' => $change->note,
+        ], static fn(mixed $value): bool => $value !== null);
+    }
+
+    /** @return list<string> The project's enemies, by the name a troop member names them by. */
+    private function listEnemyNames(): array
+    {
+        return array_values(array_map(strval(...), new ReferenceCatalog($this->workspace)->valuesFor('enemies')));
     }
 
     /**

@@ -298,7 +298,7 @@ it('adds and removes troop members', function (): void {
     expect($database->countSubItems(1))->toBe(2);
 
     $removed = $database->removeSubItem(1, 1);
-    expect($removed)->toBe(['enemy' => 'Regular Bat', 'position' => [15, 7]]);
+    expect($removed)->toBe(['enemy' => '', 'position' => [15, 7]]);
     expect($database->countSubItems(1))->toBe(1);
 
     $database->insertSubItem(1, 1, $removed);

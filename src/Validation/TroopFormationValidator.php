@@ -65,7 +65,10 @@ final class TroopFormationValidator
             $where = sprintf('assets/Data/troops.php: %s', $troop);
             $placed = $members = [];
             foreach ($record->getSubList('enemies') as $index => $entry) {
-                if (!is_array($entry) || !is_array($entry['graphicalPlacement'] ?? null)) {
+                if (!is_array($entry['graphicalPlacement'] ?? null)) {
+                    // The graphical battle needs a slot for every member and refuses to start without one.
+                    $issues[] = Issue::error($where, sprintf('%s (member %d) has no battle placement, so a graphical battle with this troop cannot start.',
+                        strval($entry['enemy'] ?? ''), $index + 1), 'Place it on the troop\'s formation canvas.');
                     continue;
                 }
                 try {

@@ -60,6 +60,18 @@ function enemyPreviewProject(): string
     return $root;
 }
 
+/** The troop formation project with a second enemy, a wisp, beside its bat. */
+function troopPageProject(): string
+{
+    $root = enemyPreviewProject();
+    file_put_contents($root . '/assets/Data/Enemies/marsh-wisp.php', "<?php\n\nuse Ichiloto\\Engine\\Entities\\Enemies\\Enemy;\n\nreturn ['class' => Enemy::class, 'data' => "
+        . var_export(['name' => 'Marsh Wisp', 'level' => 1, 'imagePath' => 'wisp', 'rewards' => ['experience' => 1, 'gold' => 1], 'stats' => [
+            'maxHp' => 5, 'maxMp' => 0, 'attack' => 1, 'defence' => 1, 'magicAttack' => 1, 'magicDefence' => 1, 'speed' => 1, 'grace' => 1, 'evasion' => 1,
+        ]], true) . "];\n");
+
+    return $root;
+}
+
 /** The Regular Bat the troop formation project's troop fights, as its one enemy record, with its terminal sprite. */
 function writeRegularBatEnemy(string $root): void
 {

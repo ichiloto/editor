@@ -1021,7 +1021,10 @@ Controls:
 - `Shift+A`: create a new entry in the current category
 - `Delete`: delete the selected entry (destructive confirmation)
 - `Shift+O`: append a sub-list entry (objective, beat, member, command, or
-  movement-route step when a route-step row is selected)
+  movement-route step when a route-step row is selected); a troop member is
+  added by choosing its enemy first
+- `Shift+C` / `Shift+N` (Troops): clear the troop's members, or name the troop
+  after them
 - `Shift+X`: remove the last sub-list entry at the selected level
 - `/`: filter the entry list
 - `Ctrl+S`: save the current category
@@ -1423,8 +1426,25 @@ list of members flattened into the settings pane as `Member 1 Enemy`,
 engine default (`allowed`); choose `forbidden` for a battle that must be won or
 resolved by its authored continuation.
 
-`Shift+O` appends a member, `Shift+X` removes the last one. The `Enemy` value
-must match a name in the Enemies category.
+Members are composed as in RPG Maker's Troops tab. `Shift+O` opens the
+project's enemies (type to narrow, `Enter` to choose) and adds a member
+fighting the one chosen, with the cursor on it; `Esc` adds nothing.
+`Shift+X` or `Del` removes the member the cursor is on, `Shift+C` clears every
+member and `Shift+N` names the troop after its members (`Regular Bat x 2,
+Marsh Wisp`), numbering a name another troop already has. Each is one undo
+step. A new troop starts with no members.
+
+A new member starts at the blank terminal position and has no `Battle
+Placement` yet. Set its terminal `X`/`Y` here; its graphical placement is set
+on the GUI editor's troop canvas or typed into the row. A member without a
+battle placement is reported by validation, since the graphical battle will
+not start without one. Arranging members automatically (Align) waits for the
+Engine's arrangement rule.
+
+`Battle Music` names a track in `assets/Audio/BGM` that the battle plays in
+place of the project's battle theme; left unset, the project's theme plays.
+Keys the editor does not show, such as a troop's `id` and its battle `events`,
+are kept as they are.
 
 A troop may also declare a `Classification` - `ordinary` or `boss` - which
 battle-entry rules match against. An omitted classification is the engine's
