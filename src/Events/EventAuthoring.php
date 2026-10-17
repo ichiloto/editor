@@ -8,7 +8,9 @@ use Ichiloto\Editor\History\Command;
 use Ichiloto\Editor\History\GenericCommand;
 use Ichiloto\Editor\MapSourceRefusal;
 use Ichiloto\Editor\Maps\MapLayers;
+use Ichiloto\Editor\Field\MapLandmarks;
 use Ichiloto\Editor\ProjectMap;
+use Ichiloto\Engine\Field\MapLandmarkKind;
 
 /**
  * An event's life on a map as every editor interface authors it: created at
@@ -94,6 +96,15 @@ final class EventAuthoring
             return null;
         }
 
+        // A route landmark marks a transfer and any other marks something else: the type cannot cross that line
+        // under a landmark that describes the event.
+        $landmark = MapLandmarks::findAnchoredEntry($map, ['event' => $marker]);
+        $kind = MapLandmarkKind::tryFrom((string) ($landmark['kind'] ?? ''));
+        if ($kind !== null && $kind->isRoute() !== MapLandmarks::isTransfer($definition)) {
+            throw new EventRefusal(sprintf('Event %s is the %s landmark %s; change or remove the landmark before making it a %s.',
+                $marker, $kind->value, $landmark['id'] ?? '?', $type->label));
+        }
+
         $map->setEventDefinition($marker, $definition);
 
         return new GenericCommand(
@@ -122,6 +133,11 @@ final class EventAuthoring
     {
         self::assertEditable($map);
         self::assertEventExists($map, $marker);
+        // A landmark names its event and never copies its cells, so the event cannot go while one describes it.
+        $references = MapLandmarks::describeAnchorReferences($map, ['event' => $marker]);
+        if ($references !== []) {
+            throw new EventRefusal(sprintf('Event %s anchors %s; remove that landmark first.', $marker, implode(', ', $references)));
+        }
 
         return self::recordEdit($map, 'Event delete', static function () use ($map, $marker): void {
             $map->removeEventDefinition($marker);

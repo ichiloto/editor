@@ -18,7 +18,8 @@ final readonly class WorldObjectReferences
 
     public function describeReferences(ProjectMap $map, string $id): array
     {
-        $found = $scripts = [];
+        $found = MapLandmarks::describeAnchorReferences($map, ['object' => $id]);
+        $scripts = [];
         $cinematics = $this->workspace->cutscenes?->assets(CutsceneType::CINEMATIC) ?? [];
         $knownFiles = array_merge([], ...array_map(static fn($asset): array => $asset->paths(), $cinematics));
         foreach (glob($this->workspace->projectRoot . '/' . CutsceneType::CINEMATIC->relativeRoot() . '/*/*.php') ?: [] as $path) {

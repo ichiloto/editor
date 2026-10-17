@@ -68,6 +68,7 @@ use Ichiloto\Editor\Inspector\InputControl;
 use Ichiloto\Editor\Inspector\InspectorListEdit;
 use Ichiloto\Editor\Inspector\InspectorRefusal;
 use Ichiloto\Editor\Inspector\MapInspector;
+use Ichiloto\Editor\Inspector\MapLandmarkFields;
 use Ichiloto\Editor\MapSourceRefusal;
 use Ichiloto\Editor\Playtest\PlaytestLauncher;
 use Ichiloto\Editor\Playtest\PlaytestLaunch;
@@ -1966,7 +1967,7 @@ final class EditorSession
         ksort($key);
 
         return array_find($this->collectInspectorFields($map, $marker), static function (array $candidate) use ($key): bool {
-            $candidateKey = self::describeKey($candidate);
+            $candidateKey = MapInspector::describeRowKey($candidate);
             if ($candidateKey !== null) {
                 ksort($candidateKey);
             }
@@ -4105,7 +4106,9 @@ final class EditorSession
             'worldObject' => ['id' => $id, 'variants' => array_column($object['variants'] ?? [], 'id'),
                 'anchor' => $object['anchor'], 'covers' => $object['covers'] ?? null, 'issue' => $issue],
             'issue' => $issue,
-            'rows' => array_map(static fn($field): array => self::describeRecordRow($records, $index, [], $field, 'world-object'), $fields)];
+            'rows' => [...array_map(static fn($field): array => self::describeRecordRow($records, $index, [], $field, 'world-object'), $fields),
+                // What the object is on the minimap: a map landmark row, applied through the map's inspector.
+                ...array_map(self::describeRow(...), MapLandmarkFields::describeObjectFields($map, $id))]];
     }
 
     public function createWorldObject(string $mapId, int $revision, string $id, int $x, int $y, ?string $resource = null, ?string $text = null): array
@@ -4120,6 +4123,9 @@ final class EditorSession
 
     public function applyWorldObject(string $mapId, int $revision, string $id, array $key, string $value): array
     {
+        if (($key['target'] ?? null) === MapLandmarkFields::OBJECT_TARGET) {
+            return $this->applyWorldObjectLandmark($mapId, $revision, $id, $key, $value);
+        }
         $field = is_string($key['field'] ?? null) ? $key['field'] : throw new SessionRefusal('Name a current world-object field.');
         return $this->changeWorldObject($mapId, $revision, static fn($authoring): ?Command => $authoring->applyField($id, $field, $value));
     }
@@ -4186,6 +4192,28 @@ final class EditorSession
         unset($this->authoringCanvases[$mapId]);
 
         return ['closed' => $host !== null];
+    }
+
+    /**
+     * Applies a world object's minimap row, found again among its current rows, as one undo step.
+     *
+     * @param array<string, mixed> $key
+     * @return array{changed: bool, revision: int}
+     * @throws SessionRefusal When the map is stale, the row is gone or the edit is refused.
+     */
+    private function applyWorldObjectLandmark(string $mapId, int $revision, string $id, array $key, string $value): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        ksort($key);
+        $field = array_find(MapLandmarkFields::describeObjectFields($map, $id), static function (array $candidate) use ($key): bool {
+            $candidateKey = MapInspector::describeRowKey($candidate);
+            if ($candidateKey !== null) { ksort($candidateKey); }
+            return $candidateKey === $key;
+        }) ?? throw new SessionRefusal('That row is no longer in the inspector; read it again.');
+        $inspector = $this->createMapInspector($map);
+        $command = $this->runEdit(static fn(): ?Command => $inspector->apply($map, $field, $value));
+
+        return ['changed' => $command !== null, 'revision' => $this->getMapRevision($map)];
     }
 
     private function createWorldObjectAuthoring(ProjectMap $map): WorldObjectAuthoring
@@ -5155,12 +5183,12 @@ final class EditorSession
             },
             default => 'info',
         };
-        $list = $field['list'] ?? $field['encounterList'] ?? $field['bgmVariantList'] ?? null;
+        $list = $field['list'] ?? $field['encounterList'] ?? $field['bgmVariantList'] ?? $field['landmarkList'] ?? null;
 
         // The terminal nests a row by indenting its label; an interface is given the depth instead.
         $label = (string) ($field['label'] ?? '');
         $depth = intdiv(strlen($label) - strlen(ltrim($label, ' ')), 2);
-        $key = self::describeKey($field);
+        $key = MapInspector::describeRowKey($field);
 
         return array_filter([
             'label' => trim($label),
@@ -5225,30 +5253,6 @@ final class EditorSession
         }
 
         return $entries;
-    }
-
-    /**
-     * What names a row for an edit: its target and the field, path, marker
-     * and index it edits. Null for a row no edit applies through.
-     *
-     * @param array<string, mixed> $field
-     * @return array<string, mixed>|null
-     */
-    private static function describeKey(array $field): ?array
-    {
-        if (! is_string($field['target'] ?? null)) {
-            return null;
-        }
-
-        return array_filter([
-            'target' => $field['target'],
-            'field' => isset($field['field']) ? (string) $field['field'] : null,
-            'path' => isset($field['path']) ? array_values(array_map('strval', (array) $field['path'])) : null,
-            'marker' => isset($field['marker']) ? (string) $field['marker'] : null,
-            'index' => isset($field['index']) ? (int) $field['index'] : null,
-            // A list heading has no path of its own; its list's names it.
-            'list' => is_array($field['list']['path'] ?? null) ? array_values(array_map('strval', $field['list']['path'])) : null,
-        ], static fn(mixed $value): bool => $value !== null);
     }
 
     /** @throws SessionRefusal */

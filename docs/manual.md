@@ -989,6 +989,47 @@ with the shape named, and no edit anywhere rewrites it. Validation reports an
 arena, in an encounter or a `start_battle` command, that the battle
 presentation does not declare, or that a project without one names.
 
+### Minimap landmarks
+
+`Minimap Landmarks` authors the map's `landmarks` list, the places the
+minimap marks (Engine `docs/maps.md`, "Active-map landmarks and discovery").
+A landmark names its anchor and never copies its cells: an event by marker, a
+world object by id, or a legacy transfer that carries an `id`. Moving the
+event or object moves the landmark.
+
+- `Unnamed Route Markers` counts the transfers no landmark describes. Every
+  transfer is marked on the minimap at once without a name; describing one
+  names it, keeps it secret or makes it an entrance or exit.
+- On an event, the `Minimap` row says what the event is on the minimap. A
+  transfer steps through `Unnamed route marker`, `Passage`, `Entrance` and
+  `Exit`; any other event through `Not on the minimap`, `Building` and
+  `Landmark`. Choosing a kind describes the event; choosing the first option
+  removes the description. In the GUI editor a selected world object has the
+  same row.
+- `Landmarks` is the Inspector's usual list. `Shift+O` describes the next
+  place no landmark describes yet; `Del`/`Shift+X` removes a landmark.
+  `Anchor` is picked from the map's events, world objects and legacy
+  transfers that no other landmark uses, and `Kind` from the kinds that
+  anchor may be. Moving a landmark between a transfer and anything else makes
+  it a passage or a landmark accordingly.
+- The id, shown on the landmark's heading, is fixed: saves remember what the
+  party has learned by it. An object's own id is used when it is a valid
+  landmark id; otherwise the next free `landmark-N`.
+- `Name` is the label the minimap shows once the place is known; clearing it
+  removes the name. A first name takes the Engine's map-scoped translation
+  key, shown and editable as `Name Translation Key`.
+- `Secret` hides the marker until play reveals it explicitly; a secret says
+  nothing about approach. Otherwise `Learned On Approach` and `Approach
+  Distance (cells)` set how near the party must come, `(engine default: 3)`
+  until set. `Revealed When` builds the world conditions that reveal it
+  through play with the shared conditions editor; an empty list removes them.
+
+Every edit is checked by the Engine's own validator against the map as it
+stands and is one undo step. An event or world object a landmark anchors
+cannot be deleted, and an anchored event cannot change between a transfer and
+any other type, until the landmark is changed or removed. Validation reports
+landmarks the Engine would refuse.
+
 In Event mode, painting or selecting a marker with no definition opens the
 Event Type picker. **Story Script** creates the engine's
 `ScriptEventTrigger`. Its inspector exposes `Script Id`, `Mode`

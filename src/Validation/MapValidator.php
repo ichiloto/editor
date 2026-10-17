@@ -4,7 +4,10 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Validation;
 
+use Ichiloto\Editor\Field\MapLandmarks;
+use Ichiloto\Editor\Inspector\MapLandmarkFields;
 use Ichiloto\Editor\ProjectMap;
+use InvalidArgumentException;
 
 /**
  * Runs the advisory pre-save checks over a map.
@@ -32,10 +35,27 @@ final class MapValidator
             ...self::findDanglingDestinations($map, $mapsById),
             ...self::findOutOfRangeSpawnPoints($map, $mapsById),
             ...self::findRetiredData($map),
+            ...self::findLandmarkProblems($map),
             ...array_map(static fn(Issue $issue): string => $issue->message, MapGraphicsValidator::validate($map)),
         ];
     }
 
+
+    /**
+     * Finds minimap landmarks the engine would refuse, by its own check.
+     *
+     * @return string[]
+     */
+    private static function findLandmarkProblems(ProjectMap $map): array
+    {
+        try {
+            $problem = MapLandmarkFields::findProblem($map, MapLandmarks::readMap($map)->entries);
+        } catch (InvalidArgumentException $error) {
+            $problem = $error->getMessage();
+        }
+
+        return $problem === null ? [] : ['Minimap landmarks: ' . $problem];
+    }
 
     /**
      * Finds map data the engine no longer reads.

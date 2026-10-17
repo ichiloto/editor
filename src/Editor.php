@@ -7412,8 +7412,8 @@ final class Editor
             }
 
             try {
-                $this->applyInspectorFieldValue($field, (string) $selectedEntry['value']);
-                $this->closeEventOptionDialog(sprintf('Set %s to %s.', mb_strtolower($title), $selectedEntry['label']));
+                $applied = $this->applyInspectorFieldValue($field, (string) $selectedEntry['value']);
+                $this->closeEventOptionDialog($applied ? sprintf('Set %s to %s.', mb_strtolower($title), $selectedEntry['label']) : '');
             } catch (Throwable $throwable) {
                 $this->closeEventOptionDialog('');
                 $this->setErrorStatus($throwable, sprintf('%s selection', $title));
@@ -7996,6 +7996,12 @@ final class Editor
             return;
         }
 
+        // A short enum also lists its options and is stepped through below; a longer list is picked from.
+        if (is_array($field['choices'] ?? null) && $field['choices'] !== [] && ! isset($field['options'])) {
+            $this->openInspectorChoiceDialog($field);
+            return;
+        }
+
         if ($this->isChestTypeField($field)) {
             $this->openEventOptionDialog(
                 (string) ($field['marker'] ?? ''),
@@ -8041,7 +8047,7 @@ final class Editor
         }
 
         if (($field['mapConditions'] ?? false) === true) {
-            $this->openMapVariantConditionEditor($field);
+            $this->openMapConditionEditor($field);
 
             return;
         }
@@ -8176,11 +8182,11 @@ final class Editor
     private function applyInspectorAdjustment(array $field, string $rawValue): void
     {
         try {
-            $this->applyInspectorFieldValue($field, $rawValue);
+            $applied = $this->applyInspectorFieldValue($field, $rawValue);
             $this->clampCursor();
             $this->clampCanvasOffsets();
             $this->clampInspectorSelection();
-            $this->setStatus(sprintf('%s updated.', $field['label'] ?? 'Field'), StatusLevel::INFO);
+            if ($applied) { $this->setStatus(sprintf('%s updated.', $field['label'] ?? 'Field'), StatusLevel::INFO); }
         } catch (Throwable $throwable) {
             $this->setErrorStatus($throwable, sprintf('%s edit', $field['label'] ?? 'Field'));
         }
@@ -8344,11 +8350,11 @@ final class Editor
         }
 
         try {
-            $this->applyInspectorFieldValue($field, $this->inspectorEditBuffer);
+            $applied = $this->applyInspectorFieldValue($field, $this->inspectorEditBuffer);
             $this->clampCursor();
             $this->clampCanvasOffsets();
             $this->clampInspectorSelection();
-            $this->setStatus(sprintf('%s updated.', $field['label'] ?? 'Field'), StatusLevel::INFO);
+            if ($applied) { $this->setStatus(sprintf('%s updated.', $field['label'] ?? 'Field'), StatusLevel::INFO); }
         } catch (Throwable $throwable) {
             $this->setErrorStatus($throwable, sprintf('%s edit', $field['label'] ?? 'Field'));
         }
@@ -8364,25 +8370,49 @@ final class Editor
      *
      * @param array<string, mixed> $field The inspector field descriptor.
      * @param string $rawValue The raw edited value.
-     * @return void
+     * @return bool False when the edit was refused, whose reason is then the status; callers announce success only on true.
      */
-    private function applyInspectorFieldValue(array $field, string $rawValue): void
+    private function applyInspectorFieldValue(array $field, string $rawValue): bool
     {
         $selectedMap = $this->getSelectedMap();
 
         if (! $selectedMap instanceof ProjectMap) {
-            return;
+            return false;
         }
 
         try {
             $command = $this->createMapInspector()->apply($selectedMap, $field, $rawValue);
         } catch (InspectorRefusal $refusal) {
             $this->setStatus($refusal->getMessage(), $refusal->details === [] ? StatusLevel::WARN : StatusLevel::ERROR, $refusal->details);
-            return;
+            return false;
         }
 
         if ($command !== null) {
             $this->recordCommand($command);
+            $this->reselectInspectorField(MapInspector::describeRowKey($field));
+        }
+
+        return true;
+    }
+
+    /**
+     * Keeps the cursor on the row an edit was made through: an edit can add or remove rows above it (describing an
+     * event lists its landmark among the map's rows), and the cursor follows the row, not its old position.
+     *
+     * @param array<string, mixed>|null $key The row's key ({@see MapInspector::describeRowKey()}).
+     */
+    private function reselectInspectorField(?array $key): void
+    {
+        if ($key === null) { return; }
+        ksort($key);
+        foreach ($this->getInspectorFields() as $index => $candidate) {
+            $candidateKey = MapInspector::describeRowKey($candidate);
+            if ($candidateKey === null) { continue; }
+            ksort($candidateKey);
+            if ($candidateKey === $key) {
+                $this->selectedInspectorFieldIndex = $index;
+                return;
+            }
         }
     }
     /**
@@ -10545,8 +10575,10 @@ final class Editor
             $selectedMap = $this->getSelectedMap();
 
             if ($selectedMap instanceof ProjectMap) {
-                $this->applyMapBgmVariantValue($selectedMap, $field, ConditionCodec::decodeAll($encoded));
-                $this->setStatus(sprintf('%s updated.', $label), StatusLevel::INFO);
+                // The row applies the line as any interface sends it: its target owns the list it changes.
+                if ($this->applyInspectorFieldValue($field, $encoded)) {
+                    $this->setStatus(sprintf('%s updated.', $label), StatusLevel::INFO);
+                }
             }
 
             $this->renderSelectionDependentArea();
@@ -11161,25 +11193,6 @@ final class Editor
     }
 
     /**
-     * Writes one music variant row as one undo step (see
-     * {@see MapInspector::applyMapBgmVariantValue()}).
-     *
-     * @param array<string, mixed> $field The inspector field descriptor.
-     */
-    private function applyMapBgmVariantValue(ProjectMap $map, array $field, mixed $value): void
-    {
-        try {
-            $command = $this->createMapInspector()->applyMapBgmVariantValue($map, $field, $value);
-        } catch (InspectorRefusal $refusal) {
-            $this->setStatus($refusal->getMessage(), StatusLevel::WARN);
-            return;
-        }
-
-        if ($command !== null) {
-            $this->recordCommand($command);
-        }
-    }
-    /**
      * Returns the variant row the inspector cursor is inside, or null.
      *
      * @return array{map: ProjectMap, variants: MapBgmVariants, index: int}|null
@@ -11250,29 +11263,22 @@ final class Editor
     }
 
     /**
-     * Opens the shared Condition editor on a music variant's conditions,
-     * hosted in the Inspector pane.
+     * Opens the shared Condition editor on a map row's conditions (a music
+     * variant's, a landmark's reveal), hosted in the Inspector pane. The row
+     * carries its conditions, the editor's title and its hint; the result
+     * applies back through the row.
      *
      * @param array<string, mixed> $field The inspector field descriptor.
      */
-    private function openMapVariantConditionEditor(array $field): void
+    private function openMapConditionEditor(array $field): void
     {
-        $selectedMap = $this->getSelectedMap();
-
-        if (! $selectedMap instanceof ProjectMap) {
-            return;
-        }
-
-        $variants = MapBgmVariants::fromMap($selectedMap);
-        $index = (int) ($field['index'] ?? 0);
-
         $this->mapConditionField = $field;
         $this->conditionEditor->open(
             (string) ($field['field'] ?? 'conditions'),
-            sprintf('Variant %d Conditions', $index + 1),
-            $variants->conditionsAt($index),
+            (string) ($field['conditionsTitle'] ?? trim((string) ($field['label'] ?? 'Conditions'))),
+            ConditionCodec::decodeAll((string) ($field['encoded'] ?? '')),
         );
-        $this->statusMessage = 'Building conditions. An empty list always matches.';
+        $this->statusMessage = (string) ($field['conditionsHint'] ?? 'Building conditions.');
         $this->renderInspectorArea();
     }
 
@@ -12639,6 +12645,30 @@ final class Editor
         $this->renderSelectionDependentArea();
 
         return true;
+    }
+
+    /**
+     * Opens the list a row's value is chosen from, as it describes its choices; the chosen value applies through
+     * the row like any other inspector edit.
+     *
+     * @param array<string, mixed> $field
+     */
+    private function openInspectorChoiceDialog(array $field): void
+    {
+        $title = trim((string) ($field['label'] ?? 'Choice'));
+        $this->optionDialogField = $field;
+        $this->eventOptionDialogMarker = null;
+        $this->eventOptionDialogPath = null;
+        $this->eventOptionDialogTitle = $title;
+        $this->eventOptionDialogEntries = array_values(array_map(static fn(array $choice): array => [
+            'label' => (string) ($choice['label'] ?? $choice['value'] ?? ''),
+            'value' => (string) ($choice['value'] ?? ''),
+            'description' => (string) ($choice['description'] ?? ''),
+        ], $field['choices']));
+        $this->selectedEventOptionIndex = $this->resolveEventOptionSelectionIndex((string) ($field['value'] ?? ''));
+        $this->isEventOptionDialogOpen = true;
+        $this->statusMessage = sprintf('Choose %s.', mb_strtolower($title));
+        $this->renderSelectionDependentArea();
     }
 
     private function isChestTypeField(array $field): bool
