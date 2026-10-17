@@ -139,3 +139,16 @@ PHP);
     expect((require $file)['icons'])->toBe(['notification.save' => 'Graphics/Icons/Save.png'])
         ->and(file_get_contents($file))->toContain('// Bound by another page.');
 });
+
+it('sets the corner map\'s opacity as a number the Engine checks, and writes it as one', function () {
+    [, $file, $session] = createMenuThemeProject();
+    $row = array_find($session->readDatabaseRecord(MenuThemeFields::CATEGORY, findThemeSetting($session, 'atlas.cornerOpacity'))['rows'],
+        static fn(array $row): bool => ($row['key']['field'] ?? null) === 'value');
+    expect($row['kind'])->toBe('float')->and($row['label'])->toBe('Opacity (0 clear, 1 solid)');
+    expect(fn() => setThemeSetting($session, 'atlas.cornerOpacity', '1.5'))->toThrow(SessionRefusal::class);
+    setThemeSetting($session, 'atlas.cornerOpacity', '0.5');
+    $session->saveDatabase(MenuThemeFields::CATEGORY);
+    expect((require $file)['atlas']['cornerOpacity'])->toBe(0.5)
+        ->and(MapAtlasTheme::fromArray((require $file)['atlas'])->cornerOpacity)->toBe(0.5)
+        ->and(file_get_contents($file))->toContain('// Breathing room.');
+});

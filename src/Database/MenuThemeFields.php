@@ -11,7 +11,7 @@ use Ichiloto\Engine\UI\Presentation\MapAtlasTheme;
 /**
  * Menu Theme: the settings of the game's shared menu presentation catalog, one row per setting by its path, as
  * Configuration edits config.php. It offers the minimap atlas (the compact and larger corner sizes, their margin,
- * the marker size and the frame the atlas is drawn in) and the icon bindings, among them a marker per atlas role
+ * the marker size, the frame the atlas is drawn in and the corner map's opacity) and the icon bindings, among them a marker per atlas role
  * and place category. These are graphical presentation, so the category is the graphical editor's; the Terminal's
  * maps keep their own symbols.
  * MenuPresentationSettings owns the file, its defaults and the values the Engine accepts.
@@ -62,6 +62,8 @@ final class MenuThemeFields
                     => new RecordField('value', 'Value', options: MapAtlasTheme::FRAME_ROLES, displayDefault: $default),
                 is_int($kind) => new RecordField('value', self::describeRange((string) ($row['path'] ?? '')),
                     InputControlType::INTEGER, displayDefault: $default),
+                // A fraction such as the corner map's opacity: a number, checked by the Engine with its neighbours.
+                is_float($kind) => new RecordField('value', self::describeRange($path), InputControlType::FLOAT, displayDefault: $default),
                 default => new RecordField('value', 'Value', displayDefault: $default),
             },
         ];
@@ -78,6 +80,11 @@ final class MenuThemeFields
             default => null,
         };
 
-        return $range === null ? 'Value' : sprintf('Pixels (%d..%d)', ...$range);
+        return match (true) {
+            $range !== null => sprintf('Pixels (%d..%d)', ...$range),
+            // Opacity's own meaning: how much of what lies beneath shows through.
+            $path === 'atlas.cornerOpacity' => 'Opacity (0 clear, 1 solid)',
+            default => 'Value',
+        };
     }
 }
