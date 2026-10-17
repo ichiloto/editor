@@ -1228,7 +1228,9 @@ automated coverage; native visual inspection remains pending.
 Menu Theme edits the game's shared menu presentation catalog by setting, as
 Configuration edits `config.php`. It offers the minimap atlas: the compact and
 larger corner sizes, their margin, the marker size and the frame (`quiet` or
-`panel`) the atlas is drawn in, all in logical pixels of the GPUI atlas. Each
+`panel`) the atlas is drawn in, all in logical pixels of the GPUI atlas, and
+the corner map's opacity, from 0 (clear) to 1 (solid); markers and the opened
+map stay solid. Each
 setting the catalog leaves out shows the Engine's default, and choosing that
 default writes nothing. A value is checked by the Engine with its neighbours,
 so the larger corner must first be widened before the compact one may exceed
