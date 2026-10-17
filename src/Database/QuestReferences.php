@@ -67,8 +67,8 @@ final class QuestReferences
     {
         $found = [];
 
-        foreach ($this->workspace->questDatabase->getQuests() as $quest) {
-            if (! $quest instanceof ProjectQuest || $quest->getId() === $questId) {
+        foreach ($this->workspace->getQuests() as $quest) {
+            if ($quest->getId() === $questId) {
                 continue;
             }
 

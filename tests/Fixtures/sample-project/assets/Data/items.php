@@ -1,12 +1,7 @@
 <?php
 
-use Ichiloto\Engine\Entities\Enumerations\WeaponType;
-use Ichiloto\Engine\Entities\Inventory\Items\Item;
-use Ichiloto\Engine\Entities\Inventory\Weapons\Weapon;
-use Ichiloto\Engine\Entities\ParameterChanges;
+use Ichiloto\Engine\Entities\Inventory\ItemCatalog;
 
-return [
-  new Item('S-Potion', 'A potion that restores 50 HP.', '🧪', 50),
-  new Item('Antidote', 'Cures Poison.', '🧪', 80),
-  new Weapon('Wooden Sword', 'A wooden sword.', '🗡️', 100, 1, equipmentType: WeaponType::SWORD, parameterChanges: new ParameterChanges(attack: 1)),
-];
+// Items, weapons and armors are authored one per file in Items/, Weapons/ and
+// Armors/, numbered in the order shops and menus list them.
+return ItemCatalog::loadProjectItems(dirname(__DIR__));

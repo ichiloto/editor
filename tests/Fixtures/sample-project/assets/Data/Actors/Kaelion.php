@@ -5,6 +5,7 @@ use Ichiloto\Engine\Entities\Character;
 return [
   'class' => Character::class,
   'data' => [
+    'id' => 'Kaelion',
     'name' => 'Kaelion',
     'description' => 'A brave and steadfast swordsman.',
     'level' => 1,

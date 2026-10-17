@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor;
 
+use Ichiloto\Editor\Database\InventoryCatalog;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Throwable;
 
@@ -310,10 +311,10 @@ final class EquipmentOptimizationPolicy
             }
 
             foreach ($database->getRecords() as $record) {
-                $payload = $record->toArray();
+                $equipment = InventoryCatalog::readDefinition($record);
 
-                if ($payload instanceof \Ichiloto\Engine\Entities\Inventory\Equipment) {
-                    $candidates[] = $payload;
+                if ($equipment instanceof \Ichiloto\Engine\Entities\Inventory\Equipment) {
+                    $candidates[] = $equipment;
                 }
             }
         }

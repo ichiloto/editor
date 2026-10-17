@@ -6,6 +6,11 @@ use Ichiloto\Editor\Database\InventoryCatalog;
 use Ichiloto\Editor\ProjectActorDatabase;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Editor\Validation\Severity;
+use Ichiloto\Engine\Entities\Enumerations\WeaponType;
+use Ichiloto\Engine\Entities\Inventory\Armor;
+use Ichiloto\Engine\Entities\Inventory\EquipmentSlotType;
+use Ichiloto\Engine\Entities\Inventory\Items\Item;
+use Ichiloto\Engine\Entities\Inventory\Weapons\Weapon;
 
 /**
  * Identity, when a project has got it wrong.
@@ -30,20 +35,13 @@ function contestedInventoryProject(): string
 {
     $root = makeTemporaryProject('ichiloto-identity-');
 
-    file_put_contents($root . '/assets/Data/items.php', <<<'PHP'
-    <?php
-
-    use Ichiloto\Engine\Entities\Enumerations\WeaponType;
-    use Ichiloto\Engine\Entities\Inventory\Items\Item;
-    use Ichiloto\Engine\Entities\Inventory\Weapons\Weapon;
-
-    return [
-      new Item(id: 'thing.contested', name: 'First Claimant', description: 'x', icon: 'i', price: 1, aliases: ['Old First']),
-      new Item(id: 'item.untouched', name: 'Untouched', description: 'x', icon: 'i', price: 1, aliases: ['Old Untouched']),
-      // A weapon claiming the same id: the conflict spans categories.
-      new Weapon(id: 'thing.contested', name: 'Second Claimant', description: 'x', icon: '/', price: 1, equipmentType: WeaponType::SWORD, aliases: ['Old Second']),
-    ];
-    PHP);
+    writeItemRecords(
+        $root,
+        new Item(id: 'thing.contested', name: 'First Claimant', description: 'x', icon: 'i', price: 1, aliases: ['Old First']),
+        new Item(id: 'item.untouched', name: 'Untouched', description: 'x', icon: 'i', price: 1, aliases: ['Old Untouched']),
+        // A weapon claiming the same id: the conflict spans categories.
+        new Weapon(id: 'thing.contested', name: 'Second Claimant', description: 'x', icon: '/', price: 1, equipmentType: WeaponType::SWORD, aliases: ['Old Second']),
+    );
 
     return $root;
 }
@@ -123,16 +121,11 @@ it('names every claimant of a contested id, across categories', function () {
 it('keeps resolving a catalogue that is merely large', function () {
     // The fail-closed rule must cost nothing to a project that is correct.
     $root = makeTemporaryProject('ichiloto-identity-');
-    file_put_contents($root . '/assets/Data/items.php', <<<'PHP'
-    <?php
-
-    use Ichiloto\Engine\Entities\Inventory\Items\Item;
-
-    return [
-      new Item(id: 'item.one', name: 'One', description: 'x', icon: 'i', price: 1, aliases: ['Uno']),
-      new Item(id: 'item.two', name: 'Two', description: 'x', icon: 'i', price: 1, aliases: ['Dos']),
-    ];
-    PHP);
+    writeItemRecords(
+        $root,
+        new Item(id: 'item.one', name: 'One', description: 'x', icon: 'i', price: 1, aliases: ['Uno']),
+        new Item(id: 'item.two', name: 'Two', description: 'x', icon: 'i', price: 1, aliases: ['Dos']),
+    );
 
     $catalog = InventoryCatalog::fromWorkspace(ProjectWorkspace::fromProject($root));
 
@@ -189,34 +182,29 @@ it('validates an actor alias against the identity a save reconstructs by', funct
 function multiClaimantProject(array $categories): string
 {
     $root = makeTemporaryProject('ichiloto-identity-');
-    $entries = [
-        "new Item(id: 'item.plain', name: 'Plain', description: 'x', icon: 'i', price: 1, aliases: ['Old Plain']),",
-    ];
-    $sources = [
-        'items' => "new Item(id: 'gear.shared', name: 'Shared Item', description: 'x', icon: 'i', price: 1, aliases: ['Old Item Alias']),",
-        'weapons' => "new Weapon(id: 'gear.shared', name: 'Shared Weapon', description: 'x', icon: '/', price: 1, equipmentType: WeaponType::SWORD, aliases: ['Old Weapon Alias']),",
-        'armors' => "new Armor(id: 'gear.shared', name: 'Shared Armor', semanticSlot: EquipmentSlotType::BODY, description: 'x', icon: '[', price: 1, aliases: ['Old Armor Alias']),",
+    $definitions = [
+        'items' => new Item(id: 'gear.shared', name: 'Shared Item', description: 'x', icon: 'i', price: 1, aliases: ['Old Item Alias']),
+        'weapons' => new Weapon(id: 'gear.shared', name: 'Shared Weapon', description: 'x', icon: '/', price: 1, equipmentType: WeaponType::SWORD, aliases: ['Old Weapon Alias']),
+        'armors' => new Armor(id: 'gear.shared', name: 'Shared Armor', semanticSlot: EquipmentSlotType::BODY, description: 'x', icon: '[', price: 1, aliases: ['Old Armor Alias']),
     ];
 
-    foreach ($categories as $category) {
-        $entries[] = $sources[$category];
-    }
-
-    file_put_contents($root . '/assets/Data/items.php', sprintf(<<<'PHP'
-    <?php
-
-    use Ichiloto\Engine\Entities\Enumerations\WeaponType;
-    use Ichiloto\Engine\Entities\Inventory\Armor;
-    use Ichiloto\Engine\Entities\Inventory\EquipmentSlotType;
-    use Ichiloto\Engine\Entities\Inventory\Items\Item;
-    use Ichiloto\Engine\Entities\Inventory\Weapons\Weapon;
-
-    return [
-      %s
-    ];
-    PHP, implode("\n  ", $entries)));
+    writeItemRecords(
+        $root,
+        new Item(id: 'item.plain', name: 'Plain', description: 'x', icon: 'i', price: 1, aliases: ['Old Plain']),
+        ...array_map(static fn(string $category): object => $definitions[$category], $categories),
+    );
 
     return $root;
+}
+
+/** Where a claimant of the multi-claimant project is authored. */
+function multiClaimantSource(string $category): string
+{
+    return match ($category) {
+        'items' => 'assets/Data/Items/0002-shared-item.php',
+        'weapons' => 'assets/Data/Weapons/0001-shared-weapon.php',
+        default => 'assets/Data/Armors/0001-shared-armor.php',
+    };
 }
 
 it('retains every claimant of a contested id with its category, aliases and source, and resolves none of them', function (array $categories) {
@@ -237,7 +225,7 @@ it('retains every claimant of a contested id with its category, aliases and sour
 
         expect($claimant->name)->toBe('Shared ' . $noun)
             ->and($claimant->aliases)->toBe(['Old ' . $noun . ' Alias'])
-            ->and($claimant->source)->toBe(sprintf('assets/Data/items.php entry %d', $position + 2));
+            ->and($claimant->source)->toBe(multiClaimantSource($claimant->category));
     }
 
     // Nothing of any claimant resolves or is offered.
@@ -300,7 +288,7 @@ it('names every claimant and its category in one diagnostic, and refuses the id 
     foreach ($categories as $position => $category) {
         $noun = rtrim($category, 's');
 
-        expect($message)->toContain(sprintf('Shared %s (%s; aliases: Old %s Alias; assets/Data/items.php entry %d)', ucfirst($noun), $noun, ucfirst($noun), $position + 2));
+        expect($message)->toContain(sprintf('Shared %s (%s; aliases: Old %s Alias; %s)', ucfirst($noun), $noun, ucfirst($noun), multiClaimantSource($category)));
     }
 
     expect(implode("\n", $errors))

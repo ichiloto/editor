@@ -48,7 +48,8 @@ function hydrateThroughAcceptedEngine(string $engineRoot, string $ruleFile, stri
  */
 function parityActorsDirectory(array $actors): string
 {
-    $directory = sys_get_temp_dir() . '/ichiloto-parity-actors-' . bin2hex(random_bytes(4));
+    // Registered, so the suite removes it after the test whatever its outcome.
+    $directory = rememberTemporaryProject(sys_get_temp_dir() . '/ichiloto-parity-actors-' . bin2hex(random_bytes(4)));
     mkdir($directory, 0755, true);
 
     foreach ($actors as $fileStem => [$name, $id]) {
@@ -159,6 +160,18 @@ it('matches the accepted engine verdict and first diagnostic for the whole corpu
             $engine = hydrateThroughAcceptedEngine($engineRoot, $ruleFile);
             $problems = BattleEntryRuleContract::problems(require $ruleFile, $ruleFile);
 
+            // Runtime now removes only the invalid-actor rule instead of aborting
+            // startup; authoring still rejects it with the same root diagnostic.
+            if ($case === 'actor-empty-identity') {
+                expect($engine['ok'] ?? false)->toBeTrue()
+                    ->and($engine['order'] ?? null)->toBe([])
+                    ->and($problems)->toHaveCount(1)
+                    ->and($engine['diagnostics'] ?? null)->toBe([
+                        $problems[0] . ' This battle-entry rule is disabled; correct its actor reference.',
+                    ]);
+                continue;
+            }
+
             if (($engine['ok'] ?? false) === true) {
                 expect($problems)->toBe([], sprintf(
                     '%s: the engine accepted what the editor refused: %s',
@@ -192,36 +205,49 @@ it('resolves actor identities exactly as the accepted engine store does', functi
     try {
         $ruleFile = $directory . '/rules.php';
 
-        // Resolution: id, display name, and file stem all reach the same
-        // durable identity; an unknown reference is refused with the same
-        // wording; a healthy store accepts all three reference kinds.
-        file_put_contents($ruleFile, "<?php\nreturn ['rules' => [['id' => 'one', 'actors' => [['actor' => 'actor.rook', 'presence' => 'any'], ['actor' => 'Rook', 'presence' => 'active'], ['actor' => 'RookFile', 'presence' => 'reserve']], 'effects' => [['type' => 'stat_stage', 'actor' => 'ROOK', 'stat' => 'speed', 'delta' => 1]]]]];");
-        $healthy = parityActorsDirectory(['RookFile' => ['Rook', 'actor.rook'], 'Vale' => ['Vale', null]]);
+        // ID-only resolution removes inferred display-name and filename aliases.
+        file_put_contents($ruleFile, "<?php\nreturn ['rules' => [['id' => 'one', 'actors' => [['actor' => 'actor.rook', 'presence' => 'any']], 'effects' => [['type' => 'stat_stage', 'actor' => 'ACTOR.ROOK', 'stat' => 'speed', 'delta' => 1]]]]];");
+        $healthy = parityActorsDirectory(['RookFile' => ['Rook', 'actor.rook'], 'Vale' => ['Vale', 'Vale']]);
         $engine = hydrateThroughAcceptedEngine($engineRoot, $ruleFile, $healthy);
         $resolver = parityResolver($healthy);
 
         expect($engine['ok'] ?? false)->toBeTrue()
             ->and($resolver->problems())->toBe([])
             ->and(BattleEntryRuleContract::problems(require $ruleFile, $ruleFile, $resolver))->toBe([])
-            ->and($resolver->canonicalId('ROOK'))->toBe('actor.rook')
-            ->and($resolver->canonicalId('RookFile'))->toBe('actor.rook');
+            ->and($resolver->canonicalId('ACTOR.ROOK'))->toBe('actor.rook')
+            ->and($resolver->canonicalId('ROOK'))->toBeNull()
+            ->and($resolver->canonicalId('RookFile'))->toBeNull();
 
-        // Unknown actor: same verdict, same wording.
+        // Unknown actor: rule disabled, startup-wide failure removed. Authoring
+        // remains strict, with the same root diagnostic and no alias fallback.
         file_put_contents($ruleFile, "<?php\nreturn ['rules' => [['id' => 'one', 'actors' => [['actor' => 'Nobody', 'presence' => 'any']], 'effects' => [['type' => 'stat_stage', 'actor' => 'Rook', 'stat' => 'speed', 'delta' => 1]]]]];");
         $engine = hydrateThroughAcceptedEngine($engineRoot, $ruleFile, $healthy);
         $problems = BattleEntryRuleContract::problems(require $ruleFile, $ruleFile, $resolver);
 
-        expect($engine['ok'] ?? true)->toBeFalse()
-            ->and($problems[0] ?? null)->toBe(strval($engine['error'] ?? ''));
+        expect($engine['ok'] ?? false)->toBeTrue()
+            ->and($engine['order'] ?? null)->toBe([])
+            ->and($problems)->not->toBeEmpty()
+            ->and($engine['diagnostics'] ?? null)->toBe([
+                $problems[0] . ' This battle-entry rule is disabled; correct its actor reference.',
+            ]);
 
-        // A contested reference refuses the store itself, with the same
-        // wording the resolver reports.
-        $contested = parityActorsDirectory(['Kael' => ['Kael', null], 'Impostor' => ['Kael', 'actor.impostor']]);
+        // A shared name is not a contested identity anymore.
+        file_put_contents($ruleFile, "<?php return ['rules' => []];");
+        $contested = parityActorsDirectory(['Kael' => ['Kael', 'Kael'], 'Impostor' => ['Kael', 'actor.impostor']]);
         $engine = hydrateThroughAcceptedEngine($engineRoot, $ruleFile, $contested);
         $resolver = parityResolver($contested);
 
-        expect($engine['phase'] ?? null)->toBe('store')
-            ->and($resolver->problems())->toContain(strval($engine['error'] ?? ''));
+        expect($engine['ok'] ?? false)->toBeTrue()
+            ->and($resolver->problems())->toBe([])
+            ->and($resolver->canonicalId('Kael'))->toBe('Kael');
+
+        // Runtime file compatibility is provisional; authoring still requires explicit repair.
+        $missing = parityActorsDirectory(['Missing' => ['Display Name', null]]);
+        $engine = hydrateThroughAcceptedEngine($engineRoot, $ruleFile, $missing);
+        $resolver = parityResolver($missing);
+        expect($engine['ok'] ?? false)->toBeTrue()
+            ->and($resolver->problems())->not->toBeEmpty()
+            ->and($resolver->canonicalId('Display Name'))->toBeNull();
 
         // Two definitions sharing an identity refuse the store the same way.
         $duplicated = parityActorsDirectory(['EchoOne' => ['Echo', 'actor.echo'], 'EchoTwo' => ['Echo Again', 'actor.echo']]);

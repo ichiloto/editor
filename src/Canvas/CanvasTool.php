@@ -36,6 +36,32 @@ enum CanvasTool: string
      */
     case SELECT = 'select';
 
+    /** The square brush widths an author chooses between, in cells. */
+    public const array BRUSH_SIZES = [1, 2, 3, 5];
+
+    /**
+     * The cells the tool paints between an anchor and the cursor: the brush's
+     * square at the cursor, a line, or a rectangle's outline, each widened by
+     * the brush; a filled rectangle is already solid, so it is not widened,
+     * which would only spill past its corners. A selection paints nothing.
+     *
+     * @param array{x: int, y: int} $anchor
+     * @param array{x: int, y: int} $cursor
+     * @return list<array{x: int, y: int}>
+     */
+    public function getShapeCells(array $anchor, array $cursor, int $brushSize): array
+    {
+        $cells = match ($this) {
+            self::BRUSH => [$cursor],
+            self::LINE => ToolGeometry::line($anchor['x'], $anchor['y'], $cursor['x'], $cursor['y']),
+            self::RECTANGLE => ToolGeometry::rectangleOutline($anchor['x'], $anchor['y'], $cursor['x'], $cursor['y']),
+            self::FILLED_RECTANGLE => ToolGeometry::rectangleFilled($anchor['x'], $anchor['y'], $cursor['x'], $cursor['y']),
+            self::SELECT => [],
+        };
+
+        return array_values($this === self::FILLED_RECTANGLE ? $cells : ToolGeometry::expandByBrush($cells, $brushSize));
+    }
+
     /**
      * Returns the short user-facing tool label.
      *

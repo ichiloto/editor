@@ -53,13 +53,14 @@ final class CommandHistory
      */
     public function undo(): ?Command
     {
-        $command = array_pop($this->undoStack);
+        $command = end($this->undoStack);
 
         if (! $command instanceof Command) {
             return null;
         }
 
         $command->undo();
+        array_pop($this->undoStack);
         $this->redoStack[] = $command;
 
         return $command;
@@ -72,13 +73,14 @@ final class CommandHistory
      */
     public function redo(): ?Command
     {
-        $command = array_pop($this->redoStack);
+        $command = end($this->redoStack);
 
         if (! $command instanceof Command) {
             return null;
         }
 
         $command->execute();
+        array_pop($this->redoStack);
         $this->undoStack[] = $command;
 
         return $command;

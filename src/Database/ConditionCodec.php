@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Database;
 
 use Ichiloto\Engine\Core\WorldConditionType;
+use InvalidArgumentException;
 
 /**
  * Encodes and decodes the engine's world-condition arrays as a single
@@ -17,8 +18,9 @@ use Ichiloto\Engine\Core\WorldConditionType;
  * identically.
  *
  * Wire form: entries separated by `;`, each `[!]type:name[:extras]`, where
- * extras depend on the type (quest status, switch `false`, item quantity, or
- * variable `op:value`). A leading `!` negates.
+ * extras depend on the type (quest status, switch `false`, item quantity,
+ * variable `op:value`, or a map event's marker after its map id). A leading
+ * `!` negates.
  */
 final class ConditionCodec
 {
@@ -79,6 +81,9 @@ final class ConditionCodec
                 $parts[] = strval($condition['op'] ?? '==');
                 $parts[] = strval($condition['value'] ?? 0);
                 break;
+            case 'map_event':
+                $parts[] = strval($condition['marker'] ?? '');
+                break;
         }
 
         $negate = ($condition['negate'] ?? false) === true ? '!' : '';
@@ -105,6 +110,34 @@ final class ConditionCodec
             if ($condition !== null) {
                 $conditions[] = $condition;
             }
+        }
+
+        return $conditions;
+    }
+
+    /**
+     * Decodes the one-line form, refusing it whole when any segment cannot
+     * be read: for an interface that submits the line as typed, where a
+     * dropped segment would be a condition lost without a word.
+     *
+     * @param string $value The encoded conditions.
+     * @return array<int, array<string, mixed>>
+     * @throws InvalidArgumentException Naming the first unreadable segment.
+     */
+    public static function decodeAllStrictly(string $value): array
+    {
+        $conditions = [];
+
+        foreach (explode(';', $value) as $segment) {
+            if (trim($segment) === '') {
+                continue;
+            }
+
+            $conditions[] = self::decode($segment) ?? throw new InvalidArgumentException(sprintf(
+                'Condition "%s" cannot be read: write [!]type:name[:extras] with a type of %s.',
+                trim($segment),
+                implode(', ', self::types()),
+            ));
         }
 
         return $conditions;
@@ -158,6 +191,14 @@ final class ConditionCodec
                 $condition['op'] = $parts[2] ?? '==';
                 $rawValue = $parts[3] ?? '0';
                 $condition['value'] = is_numeric($rawValue) ? intval($rawValue) : $rawValue;
+                break;
+            case 'map_event':
+                // A map event is named by its map and its one-shot event marker; without a marker it is unreadable.
+                $marker = $parts[2] ?? '';
+                if ($marker === '') {
+                    return null;
+                }
+                $condition['marker'] = $marker;
                 break;
         }
 

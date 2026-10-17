@@ -10,7 +10,8 @@ namespace Ichiloto\Editor\Canvas;
  * paste per stamp.
  *
  * The clipboard is session-scoped and layer-tagged so a block copied from
- * the event layer never lands silently on the tile layer.
+ * the event layer never lands silently on the tile layer. A block lifted
+ * off a gameplay layer carries the tiles that move with it, cell for cell.
  */
 final class Clipboard
 {
@@ -24,6 +25,8 @@ final class Clipboard
      * The layer the block was lifted from (a PaintStrokeCommand LAYER_* value).
      */
     public private(set) string $layer = '';
+    /** @var array<string, list<list<string>>> Tile entries by row, keyed by tile layer name. */
+    private array $tiles = [];
 
     /**
      * Stores a block of symbols.
@@ -31,13 +34,15 @@ final class Clipboard
      * @param array<int, array<int, string>> $rows Rows of symbols, top-left first.
      * @param string $layer The source layer.
      * @param array<int, array<int, array{prefix: string, suffix: string}>> $styles Optional tile styles, aligned with rows.
+     * @param array<string, list<list<string>>> $tiles The tile entries that move with the block, by row, keyed by tile layer name.
      * @return void
      */
-    public function store(array $rows, string $layer, array $styles = []): void
+    public function store(array $rows, string $layer, array $styles = [], array $tiles = []): void
     {
         $this->rows = array_values(array_map(static fn(array $row): array => array_values($row), $rows));
         $this->styles = array_values(array_map(static fn(array $row): array => array_values($row), $styles));
         $this->layer = $layer;
+        $this->tiles = $tiles;
     }
 
     /**
@@ -50,6 +55,7 @@ final class Clipboard
         $this->rows = [];
         $this->styles = [];
         $this->layer = '';
+        $this->tiles = [];
     }
 
     /**
@@ -131,5 +137,31 @@ final class Clipboard
         }
 
         return $placements;
+    }
+
+    /**
+     * Projects the block's tiles onto a map at the given top-left origin,
+     * every cell included, so a paste replaces the tiles under the block as
+     * it replaces the glyphs.
+     *
+     * @return array<string, list<array{x: int, y: int, entry: string}>> The clipped cells, keyed by tile layer name.
+     */
+    public function projectTiles(int $originX, int $originY, int $width, int $height): array
+    {
+        $cells = [];
+        foreach ($this->tiles as $name => $rows) {
+            $cells[$name] = [];
+            foreach ($rows as $rowIndex => $row) {
+                foreach ($row as $columnIndex => $entry) {
+                    $x = $originX + $columnIndex;
+                    $y = $originY + $rowIndex;
+                    if ($x >= 0 && $y >= 0 && $x < $width && $y < $height) {
+                        $cells[$name][] = ['x' => $x, 'y' => $y, 'entry' => $entry];
+                    }
+                }
+            }
+        }
+
+        return $cells;
     }
 }

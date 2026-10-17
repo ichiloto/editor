@@ -6,6 +6,8 @@ return [
     'name' => 'Slash',
     'position' => 'center',
     'maxFrames' => 2,
+    // Every attack the fixture reaches: enemies, the unarmed, and its sword.
+    'roles' => ['attack', 'attack-unarmed', 'attack-sword'],
     'frames' => [
       [
         'index' => 1,

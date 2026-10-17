@@ -266,7 +266,7 @@ it('refuses to edit an encounter block it cannot hold, and says which shape', fu
     'a block that is not an array' => ['every few steps', 'is string, not an array'],
     'troops that are not troop weights' => [['troops' => 'Bat x 2'], 'troops are string'],
     'a troop keyed by number' => [['troops' => [5 => 'Bat x 2']], 'keyed by int'],
-    'a weight that is an array' => [['troops' => ['Bat x 2' => ['weight' => 3]]], 'weight that is array'],
+    'a weight that is an array' => [['troops' => ['Bat x 2' => ['weight' => [3]]]], 'weight that is array'],
 ]);
 
 // -- Validation --------------------------------------------------------------
@@ -451,8 +451,8 @@ it('reads what the engine will make of a block without changing it', function ()
 
     $authored = MapEncounters::of(['troops' => ['Bat x 2' => 3, 'Lone Rat' => 1], 'rate' => 22, 'tiles' => 'any']);
     expect($authored->rows())->toBe([
-        ['name' => 'Bat x 2', 'weight' => 3],
-        ['name' => 'Lone Rat', 'weight' => 1],
+        ['name' => 'Bat x 2', 'weight' => 3, 'arena' => null, 'entry' => null],
+        ['name' => 'Lone Rat', 'weight' => 1, 'arena' => null, 'entry' => null],
     ])
         ->and($authored->rate())->toBe(22)
         ->and($authored->authoredRate())->toBe(22)

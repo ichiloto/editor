@@ -175,10 +175,13 @@ or a fixture.
 4. Edit the dialogue rows: each line has a speaker `name` and its `text`.
    Leave the name empty for narration with no title.
 
-The five event types are `Dialogue`, `Transfer Player`, `Shop`, `Sleep`, and
-`Chest`. A `Transfer Player` event links two maps: after choosing the type,
-`Enter` on `Destination` jumps to the target map to pick the arrival tile in
-context, and returns you afterwards; `Ctrl+G` follows the link any time and
+The seven event types are `Story Script`, `Cinematic`, `Dialogue`,
+`Transfer Player`, `Shop`, `Sleep`, and `Chest`. `Story Script` runs a Common
+Event ([Author a Cutscene](author-a-cutscene.md)) and `Cinematic` launches a
+cinematic ([Author a Cinematic Cutscene](author-a-cinematic-cutscene.md)).
+A `Transfer Player` event links two maps: after choosing the type, `Enter` on
+`Destination` jumps to the target map to pick the arrival tile in context, and
+returns you afterwards; `Ctrl+G` follows the link any time and
 `Ctrl+B` comes back.
 
 Painting a glyph or a marker is an ordinary canvas edit, so `Ctrl+Z` removes it

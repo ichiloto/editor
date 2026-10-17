@@ -9,6 +9,8 @@ namespace Ichiloto\Editor\Field;
  *
  * The runtime contract, verbatim from `NpcManager::configure()`: `name`,
  * `x`, `y` required; `sprite` (default `@`); `movement` `fixed`|`wander`;
+ * `directionFix` (bool, default false: true keeps the heading when the
+ * player talks to it instead of turning to face the player);
  * optional `wanderArea` {x,y,width,height}, unbounded when omitted;
  * `dialogue` (plain pages or conditional variants); `script` (event
  * commands, which take precedence over dialogue when non-empty);
@@ -17,9 +19,10 @@ namespace Ichiloto\Editor\Field;
  * (directional glyphs, either case of key accepted on load).
  *
  * The payload is kept verbatim: a key this class does not know survives
- * load, edit, save, and reload untouched. Identity is immutable after
- * creation — nothing here renames an id, because doors and routes that name
- * it would not follow.
+ * load, edit, save, and reload untouched. A field edit never changes the id:
+ * the editor gives an NPC a new id only through {@see withId()}, while
+ * nothing refers to it yet, because doors and routes that name an id would
+ * not follow.
  *
  * @package Ichiloto\Editor\Field
  */
@@ -29,8 +32,8 @@ final class ProjectNpc
      * The fields the runtime reads, in the order a fresh entry is written.
      */
     public const array KNOWN_FIELDS = [
-        'id', 'name', 'sprite', 'x', 'y', 'movement', 'wanderArea', 'sprites',
-        'conditions', 'dialogue', 'script', 'sets',
+        'id', 'name', 'sprite', 'x', 'y', 'movement', 'directionFix', 'wanderArea', 'sprites',
+        'conditions', 'dialogue', 'script', 'sets', 'sprites2d',
     ];
 
     public const array MOVEMENTS = ['fixed', 'wander'];
@@ -113,13 +116,18 @@ final class ProjectNpc
 
     /**
      * Returns a sprite as the terminal shows it: style tags stripped,
-     * measured the way the engine measures it, `@` when nothing is left.
+     * measured the way the engine measures it. An explicit empty sprite
+     * draws no overlay; style-only source retains the diagnostic fallback.
      *
      * @param string $sprite The sprite as authored.
      * @return string The visible glyph(s).
      */
     public static function visibleGlyph(string $sprite): string
     {
+        if ($sprite === '') {
+            return '';
+        }
+
         $stripped = self::strippedGlyph($sprite);
 
         return $stripped === '' ? '@' : $stripped;
@@ -392,6 +400,21 @@ final class ProjectNpc
      * @param string $id The new id.
      * @return self The copy.
      */
+    /**
+     * Returns a copy under another id, in the id's place, for an NPC whose
+     * name changed while nothing refers to it yet.
+     *
+     * @param string $id The new id.
+     * @return self The NPC under that id.
+     */
+    public function withId(string $id): self
+    {
+        $payload = $this->payload;
+        $payload['id'] = $id;
+
+        return new self($payload);
+    }
+
     public function asCopyWithId(string $id): self
     {
         $payload = $this->payload;

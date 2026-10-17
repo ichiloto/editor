@@ -22,14 +22,12 @@ use Ichiloto\Editor\Validation\Severity;
 /**
  * Returns a project whose weapon carries a special property.
  *
- * @return array{0: string, 1: string} The project root and items path.
+ * @return array{0: string, 1: string} The project root and the weapon's record file.
  */
 function projectOwnedProject(): array
 {
     $root = makeTemporaryProject('ichiloto-owned-');
-    $path = $root . '/assets/Data/items.php';
-
-    file_put_contents($path, <<<'PHP'
+    $path = $root . '/' . writeItemRecords($root, ...itemsFromSource(<<<'PHP'
     <?php
 
     use Ichiloto\Engine\Entities\Enumerations\WeaponType;
@@ -54,7 +52,7 @@ function projectOwnedProject(): array
         ],
       ),
     ];
-    PHP);
+    PHP))[0];
 
     return [$root, $path];
 }
@@ -134,7 +132,14 @@ it('keeps what the line cannot carry', function () {
     expect(ParameterMapCodec::merge(
         ['percent' => 10, 'tiers' => ['minor', 'major']],
         ['percent' => 20, 'capPerHit' => 40],
-    ))->toBe(['percent' => 20, 'capPerHit' => 40, 'tiers' => ['minor', 'major']]);
+    ))->toBe(['percent' => 20, 'tiers' => ['minor', 'major'], 'capPerHit' => 40]);
+
+    // A hidden value stays where it was authored, so an unchanged line
+    // leaves the map exactly as stored.
+    $stored = ['label' => 'x', 'tiers' => ['a'], 'percent' => 10, 'nested' => ['b' => 1]];
+
+    expect(ParameterMapCodec::merge($stored, ['label' => 'x', 'percent' => 10]))->toBe($stored)
+        ->and(ParameterMapCodec::merge(['first' => [1], 'percent' => 10], ['percent' => 5]))->toBe(['first' => [1], 'percent' => 5]);
 });
 
 it('authors special-property parameters without losing the nested ones', function () {
@@ -153,7 +158,7 @@ it('authors special-property parameters without losing the nested ones', functio
     $weapons->setField(0, 'specialProperty.parameters', 'percent=25, capPerHit=40, appliesTo=magical');
     $weapons->save();
 
-    $property = (static fn(): mixed => require $path)()[0]->specialProperty;
+    $property = (static fn(): mixed => require $path)()['data']['specialProperty'];
 
     expect($property['type'])->toBe('lifesteal')
         ->and($property['parameters']['percent'])->toBe(25)
@@ -164,7 +169,7 @@ it('authors special-property parameters without losing the nested ones', functio
 
 it('reports a special property the runtime carries but nothing can read', function () {
     $root = makeTemporaryProject('ichiloto-owned-');
-    file_put_contents($root . '/assets/Data/items.php', <<<'PHP'
+    writeItemRecords($root, ...itemsFromSource(<<<'PHP'
     <?php
 
     use Ichiloto\Engine\Entities\Enumerations\WeaponType;
@@ -190,7 +195,7 @@ it('reports a special property the runtime carries but nothing can read', functi
         specialProperty: ['type' => 'lifesteal', 'parameters' => 'quite a lot'],
       ),
     ];
-    PHP);
+    PHP));
 
     $issues = new \Ichiloto\Editor\Validation\ProjectValidator()
         ->validate(ProjectWorkspace::fromProject($root));
@@ -495,7 +500,7 @@ it('keeps floats floats and hidden shapes intact through both surfaces', functio
     $weapons->setField(0, 'specialProperty.parameters', 'percent=10, capPerHit=40, appliesTo=physical, weight=1.0, big=1.0E+20, tag="1e5", " odd key "=-0.0');
     $weapons->save();
 
-    $parameters = (static fn(): mixed => require $path)()[0]->specialProperty['parameters'];
+    $parameters = (static fn(): mixed => require $path)()['data']['specialProperty']['parameters'];
 
     expect($parameters['weight'])->toBe(1.0)
         ->and($parameters['big'])->toBe(1.0E+20)

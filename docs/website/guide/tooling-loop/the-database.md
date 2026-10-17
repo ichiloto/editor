@@ -10,6 +10,33 @@ readTime: 4
 
 Every field edit, entry creation, and deletion is undoable. Undo is identity-pinned, so `Ctrl+Z` applies to the entry you edited even after you have moved on to another one.
 
+## Animation references
+
+Skills and Items have an **Animation** resource picker. It shows each
+animation's name and numeric id and stores the id, so renaming an animation
+does not break the reference. Skill `Ctrl+G` follows that id to the animation.
+The edit participates in the existing undo/redo and safe-save paths; an
+unsupported source form is refused rather than flattened. Skill saves now patch
+only changed constructor arguments, preserving effects, weapon requirements,
+comments and other authored expressions. This replaces the old skill exporter,
+which incorrectly regenerated non-damage effects as damage effects. Changing a
+skill's class or regenerating effects without their original source is refused
+before writing; edit those expressions in source instead.
+
+An unsupported skill expression is read-only, not a reason to block other
+skills in the same file. Refusals identify the skill. The form omits Type
+and any fields the selected constructor cannot save, including Effect Type
+on non-magic skills. Leading documentation and same-line trailing comments
+travel with a skill when it is moved, deleted or restored.
+
+Choose **(Legacy fallback)** for a skill or **(None)** for an item to clear
+the reference, removing the authored argument rather than writing a null
+placeholder. Skills then retain their
+deprecated name-based selection, which project validation reports as a
+warning when it matches. Items without a reference retain their existing
+no-animation behavior. A missing explicit id omits the animation, not the
+gameplay effect, and does not silently substitute a name-matched animation.
+
 ## Repeating fields
 
 Quest objectives, skit beats, troop members, and event commands are all *sub-lists*, flattened into the field pane as numbered rows. Two keys manage them everywhere:
@@ -33,17 +60,15 @@ The types are `quest`, `switch`, `event`, `item`, `key_item`, and `variable`. Un
 
 Whether a category can be written is *detected*, not assumed. When a category loads, the editor asks two questions about its file: can every value be written back out losslessly, and would a rewrite drop a comment? Only when both answers are safe does the category accept edits.
 
-Editable today: Actors, Classes, Skills, Troops, States, Animations, Quests, Skits, Common Events, System, and Terms.
+Editable today: Actors, Classes, Skills, Items, Weapons, Armors, Enemies, Troops, States, Animations, Quests, Skits, Common Events, System, and Terms.
 
-Browsable but not writable: Items, Weapons, Armors, and Enemies.
+Enemies are one data file each under `assets/Data/Enemies`, and `enemies.php` loads them. An enemy's action patterns name skills from your skill catalogue, so you pick the skill rather than rebuild it.
 
-The reason is worth understanding, because it is a property of your project rather than a missing feature. `items.php` and `enemies.php` are not data files — they are PHP that *builds* data, constructing effect objects inline and sharing skills between enemies through local variables. Regenerating such a file from the values the editor loaded would mean inventing source, and anything the editor did not recognise would be silently lost.
-
-So the editor shows you the values and refuses to write. An enemy displays its level, every stat, its sprite, its battle rewards, and its element affinities — you simply edit the file itself when you want to change them.
+Items, weapons and armors are one data file each under `assets/Data/Items`, `Weapons` and `Armors`, numbered in the order shops list them, and `items.php` loads all three. An item's effects are a list you edit row by row; a change to one record touches only its own file, keeping your imports and comments.
 
 Re-author one of those files as a plain array and the editor picks it up as editable automatically. Nothing in the editor needs to change.
 
-`Types` is read-only for a related reason: those files are PHP enum declarations, not data the engine loads. `Tilesets` is empty because the engine has no tileset system — map tiles are painted directly on the canvas.
+`Types` holds your elements: the list in `system.php` that the game knows every element by, and that skills, equipment and affinities pick from. System and Types share `system.php`, and each saves only its own settings. `Tilesets` edits each tileset's sheets, tile flags, shadow and the pieces maps are built from, one file per tileset.
 
 ## What saving preserves
 

@@ -72,6 +72,29 @@ final class SharedFileTransaction
      */
     public static function commit(array $databases): bool
     {
+        return self::compose($databases, write: true);
+    }
+
+    /**
+     * Works out exactly what {@see commit()} would write, refusing what it
+     * would refuse, and writes nothing: an edit the file's own source cannot
+     * take is refused when it is made, not when it is saved.
+     *
+     * @param array<array-key, object> $databases The categories sharing one file.
+     * @throws SourceIdentityConflict When an entry cannot be addressed with certainty.
+     * @throws RuntimeException When the write would be refused.
+     */
+    public static function preview(array $databases): void
+    {
+        self::compose($databases, write: false);
+    }
+
+    /**
+     * @param array<array-key, object> $databases
+     * @param bool $write Whether to write the result and adopt it, or only work it out.
+     */
+    private static function compose(array $databases, bool $write): bool
+    {
         $dirty = array_values(array_filter(
             $databases,
             static fn(object $database): bool => $database instanceof ProjectRecordDatabase
@@ -84,14 +107,24 @@ final class SharedFileTransaction
             return false;
         }
 
+        foreach ($dirty as $database) {
+            $database->assertUnchangedSource();
+        }
+
         $first = $dirty[0];
         $path = $first->backingFilePath();
         $file = PhpDataFile::load($path, $first->projectRoot());
 
+        if ($write) {
+            self::checkSave($databases, $dirty, $file);
+        }
+
         // One snapshot of the source, and every category's wants resolved
         // against it before a byte is written.
-        if (self::commitToSource($dirty, $file)) {
-            self::adopt($dirty);
+        if (self::commitToSource($dirty, $file, $write)) {
+            if ($write) {
+                self::adopt($dirty);
+            }
 
             return true;
         }
@@ -113,10 +146,43 @@ final class SharedFileTransaction
             $payload = $database->foldInto($payload);
         }
 
+        if (! $write) {
+            $file->composeContents($payload);
+
+            return false;
+        }
+
         $file->save($payload);
         self::adopt($dirty);
 
         return true;
+    }
+
+    /**
+     * Refuses a save the runtime could not read: the file as every dirty
+     * category would leave it is put to each sharing category's own check.
+     *
+     * @param array<array-key, object> $databases The categories sharing the file.
+     * @param ProjectRecordDatabase[] $dirty The dirty ones.
+     * @throws RecordRefusal With the first check's reason.
+     */
+    private static function checkSave(array $databases, array $dirty, PhpDataFile $file): void
+    {
+        $checks = array_filter($databases, static fn(object $database): bool => $database instanceof ProjectRecordDatabase
+            && $database->schema->saveCheck !== null);
+        if ($checks === []) {
+            return;
+        }
+        $payload = is_array($file->payload) ? $file->payload : [];
+        foreach ($dirty as $database) {
+            $payload = $database->foldInto($payload);
+        }
+        foreach ($checks as $database) {
+            $reason = ($database->schema->saveCheck)($payload, (string) $database->projectRoot());
+            if ($reason !== null) {
+                throw new RecordRefusal($reason);
+            }
+        }
     }
 
     /**
@@ -127,7 +193,7 @@ final class SharedFileTransaction
      * @param PhpDataFile $file The file, read once.
      * @return bool True when the file was written this way.
      */
-    private static function commitToSource(array $dirty, PhpDataFile $file): bool
+    private static function commitToSource(array $dirty, PhpDataFile $file, bool $write = true): bool
     {
         if (! is_file($file->path)) {
             return false;
@@ -198,7 +264,9 @@ final class SharedFileTransaction
             $document = $document->withNewEntry($insertion['class'], $insertion['arguments']);
         }
 
-        AtomicFile::write($file->path, $document->source);
+        if ($write) {
+            AtomicFile::write($file->path, $document->source);
+        }
 
         return true;
     }

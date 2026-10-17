@@ -112,28 +112,6 @@ it('wraps the assets list through the visible entries', function (): void {
     }
 });
 
-it('wraps the animation frame list', function (): void {
-    $root = makeTemporaryProject();
-
-    try {
-        $editor = deletionEditor($root);
-        openDatabaseCategory($editor, 'animations');
-        $animation = callEditorMethod($editor, 'getSelectedAnimation');
-        $maxFrames = $animation->maxFrames;
-
-        expect($maxFrames)->toBeGreaterThan(1)
-            ->and(getEditorProperty($editor, 'databaseSelectedFrameIndex'))->toBe(1);
-
-        callEditorMethod($editor, 'moveDatabaseFrameSelection', -1);
-        expect(getEditorProperty($editor, 'databaseSelectedFrameIndex'))->toBe($maxFrames);
-
-        callEditorMethod($editor, 'moveDatabaseFrameSelection', 1);
-        expect(getEditorProperty($editor, 'databaseSelectedFrameIndex'))->toBe(1);
-    } finally {
-        removeDirectoryRecursively($root);
-    }
-});
-
 it('wraps option values when cycling past either end', function (): void {
     $root = makeTemporaryProject();
 

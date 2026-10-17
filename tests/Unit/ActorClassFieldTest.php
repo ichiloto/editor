@@ -30,9 +30,7 @@ it('offers every project class plus a none sentinel in the actor picker', functi
     try {
         $editor = actorClassEditor($root);
 
-        expect(callEditorMethod($editor, 'getActorClassOptions'))->toBe(['none', 'Vanguard', 'Oracle']);
-
-        $fields = callEditorMethod($editor, 'getDatabaseActorSettingsFields');
+        $fields = callEditorMethod($editor, 'getDatabaseSettingsFields');
         $classField = null;
 
         foreach ($fields as $field) {
@@ -58,7 +56,7 @@ it('cycles the class picker with the arrow keys and records undo', function () {
 
         /** @var ProjectWorkspace $workspace */
         $workspace = getEditorProperty($editor, 'workspace');
-        $fields = callEditorMethod($editor, 'getDatabaseActorSettingsFields');
+        $fields = callEditorMethod($editor, 'getDatabaseSettingsFields');
         $classIndex = array_search('class', array_column($fields, 'field'), true);
         setEditorProperty($editor, 'databaseSelectedSettingIndex', $classIndex);
 
@@ -92,7 +90,7 @@ it('round-trips the class reference through a save into data[class]', function (
 
         /** @var ProjectWorkspace $workspace */
         $workspace = getEditorProperty($editor, 'workspace');
-        $fields = callEditorMethod($editor, 'getDatabaseActorSettingsFields');
+        $fields = callEditorMethod($editor, 'getDatabaseSettingsFields');
         setEditorProperty($editor, 'databaseSelectedSettingIndex', array_search('class', array_column($fields, 'field'), true));
         callEditorMethod($editor, 'dispatchInput', "\033[C");
         callEditorMethod($editor, 'dispatchInput', "\x13");

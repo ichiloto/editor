@@ -41,7 +41,7 @@ That frame is the editor rendering itself at 100x24 — the manual's copy of it 
 - **NPCs** — first-class map NPCs (`F3`): placement, sprites and directional sprites, fixed or bounded wander, visibility conditions, dialogue with conditional variants, inline scripts, and completion writes.
 - **Events** — the engine's trigger types placed and configured on the canvas: Dialogue, Transfer Player, Shop, Sleep, Chest, Story Script, and Cinematic.
 - **Database** (`Ctrl+D` / `F2`) — actors, classes, skills, quests, animations, states, troops, skits, event scripts, terms and system settings authored; items, weapons, armors and enemies browsed with the reason they are read-only stated.
-- **Cutscenes** (`F4`) — cinematic and summon cutscenes as paired-file assets: metadata, cast, a nested command tree with parallel lanes, skip policy and finalizer, summon tracks, keyframes and cues — previewed through the engine's own interpreter and playback session before a byte is written.
+- **Cutscenes** (`F4`) — cinematic and summon cutscenes as paired-file assets: metadata, cast, a nested command tree with parallel lanes, skip policy and finalizer, summon tracks, keyframes and cues, and standalone effect timelines under `assets/Animations` — previewed through the engine's own interpreter and playback session before a byte is written.
 - **Safety** — everything is undoable and identity-pinned; dirty state is tracked by content, so undoing back to the saved state is clean again; saves are atomic and pair-aware; references are picked from what the project actually has, never spelled from memory.
 - **Validation** — one `ProjectValidator` behind the editor and `ichiloto validate`, judging content by what the engine will actually do with it.
 - **Playtest** (`Ctrl+T`) — the real game, launched from the cursor against a throwaway overlay, so a playtest can never write into the project.
@@ -95,6 +95,11 @@ Editor development currently tracks Engine `dev-develop` for the shared
 cinematic route-validation API. `composer.lock` pins the published Engine
 revision used by local tests and CI.
 
+`dev-develop` is for unreleased integration. Before publishing an Editor
+release, require a compatible released Engine version, refresh the lockfile,
+and verify a clean Console installation with Composer's default stable
+dependency settings.
+
 Install and verify from the `editor` repo:
 
 ```bash
@@ -107,9 +112,23 @@ Set `ICHILOTO_GAME_SRC=/path/to/game` to include a game project in the
 production-verification tests. `docs/manual.md` is covered by
 `tests/Unit/ManualCoverageTest.php`; registered keybindings must be documented.
 
+For layered-map integration tests against an unpublished sibling Engine,
+set `ICHILOTO_ENGINE_SRC=/path/to/engine`. The test bootstrap prepends that
+checkout's source directory, including in isolated data-evaluation children;
+it does not modify `vendor`, dependency versions or the lockfile.
+Use `vendor/bin/phpstan analyse -c tests/phpstan-engine.php
+--autoload-file=tests/bootstrap.php` with the same environment to analyse
+against that checkout instead of the installed Engine sources.
+
 ## Project Links
 
 - Engine repository: [github.com/ichiloto/engine](https://github.com/ichiloto/engine)
 - Console repository: [github.com/ichiloto/console](https://github.com/ichiloto/console)
 - Website repository: [github.com/ichiloto/website-v2](https://github.com/ichiloto/website-v2)
 - Editor issues: [github.com/ichiloto/editor/issues](https://github.com/ichiloto/editor/issues)
+
+## Contributing and Git workflow
+
+Read [GIT_WORKFLOW.md](GIT_WORKFLOW.md) and install the Git guards with
+`sh scripts/install-git-guards.sh` before contributing. All changes integrate
+into `develop`; `main` is updated only by a PR from this repository's `develop`.

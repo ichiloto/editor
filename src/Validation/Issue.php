@@ -14,12 +14,14 @@ final readonly class Issue
    * @param string $where What it is about: a map id, a data file, a quest.
    * @param string $message What is wrong.
    * @param string $hint What to do about it.
+   * @param string|null $code Optional stable identity for consumers; never derived from message prose.
    */
   public function __construct(
     public Severity $severity,
     public string $where,
     public string $message,
     public string $hint = '',
+    public ?string $code = null,
   )
   {
   }
@@ -30,11 +32,12 @@ final readonly class Issue
    * @param string $where What it is about.
    * @param string $message What is wrong.
    * @param string $hint What to do about it.
+   * @param string|null $code Optional stable identity for consumers.
    * @return self The issue.
    */
-  public static function error(string $where, string $message, string $hint = ''): self
+  public static function error(string $where, string $message, string $hint = '', ?string $code = null): self
   {
-    return new self(Severity::ERROR, $where, $message, $hint);
+    return new self(Severity::ERROR, $where, $message, $hint, $code);
   }
 
   /**

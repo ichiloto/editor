@@ -29,16 +29,20 @@ creation is not undoable.
 
 1. `Tab` to the `Inspector`.
 2. Move to `Name` and press `Enter`, type the display name, press `Enter`.
-3. Set `Region` the same way — it groups maps, and becomes part of the map id.
+3. Set `Region` the same way. Like the name, it is metadata; see below.
 4. Under `Size`, move to `X` and `Y` and use `Left` / `Right` to resize, or
    `Enter` to type a number.
 
 Resizing is undoable. Shrinking a map discards the tiles outside the new bounds,
-so `Ctrl+Z` is your friend if you overshoot.
+in its terminal layers and in any graphical tile layers in `graphics/`, so
+`Ctrl+Z` is your friend if you overshoot.
 
-Current behavior: the map id is derived from the region and name. Changing
-either means the map's *folder* moves on the next save, and the editor asks for
-explicit confirmation before it does.
+The name and region are metadata. Saving keeps the map in its folder, so its
+id, which doors, quests and saves refer to, does not change. To move the folder
+to a path derived from the region and name, choose *Move Map to Derived Path*
+from the command palette (`Ctrl+P`). It shows the current and proposed ids and
+asks for `y`. References to the old id are not updated. See
+[Stable map identities](../manual.md#stable-map-identities).
 
 ## Paint The Tile Layer
 

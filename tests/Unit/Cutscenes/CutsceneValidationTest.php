@@ -360,6 +360,83 @@ it('validates a reused Common Event independently in every calling map context',
         ->and($npcFailures[0])->toContain('not on map "empty-quay"');
 });
 
+it('keeps knowledge battle continuation and movement checks for every common-event owner', function (string $owner) {
+    $root = cutsceneProject();
+    writeValidationCommonEvent($root, 'owned-invalid', [
+        ['type' => 'knowledge', 'operation' => 'teleport'],
+        ['type' => 'knowledge', 'operation' => 'observe', 'subject' => 'unknown-subject', 'confidence' => 1.4],
+        ['type' => 'start_battle', 'troop' => 'missing-troop', 'resultVariable' => '', 'escapePolicy' => 'sometimes'],
+        ['type' => 'move_route', 'subject' => 'player', 'steps' => [['direction' => 'right', 'count' => -1]]],
+    ]);
+    writeValidationCommonEvent($root, 'owned-wrapper', [
+        ['type' => 'sequence', 'commands' => [['type' => 'common_event', 'id' => 'owned-invalid']]],
+    ]);
+    if ($owner !== 'legacy') {
+        forbidHarbourCinematicSkip($root);
+        insertHarbourCommands($root, [['type' => 'common_event', 'id' => 'owned-wrapper']]);
+    }
+    if ($owner !== 'cinematic') {
+        $path = $root . '/assets/Maps/harbour/harbour.data.php';
+        $data = require $path;
+        $data['events']['L'] = [
+            'class' => 'Ichiloto\\Engine\\Events\\Triggers\\ScriptEventTrigger',
+            'data' => ['scriptId' => 'owned-wrapper', 'mode' => 'action', 'reusable' => false],
+        ];
+        file_put_contents($path, "<?php\nreturn " . var_export($data, true) . ";\n");
+    }
+    $messages = issueMessages(validateProject($root));
+    foreach ($owner === 'mixed' ? ['cinematic harbour-lanterns', 'harbour event L'] : [
+        $owner === 'cinematic' ? 'cinematic harbour-lanterns' : 'harbour event L',
+    ] as $prefix) {
+        $owned = implode("\n", array_filter($messages, static fn(string $message): bool => str_starts_with($message, $prefix)));
+        expect($owned)->toContain('knowledge operation "teleport"')
+            ->toContain('knowledge observe command names no observation')
+            ->toContain('knowledge confidence "1.4" is not between 0 and 1')
+            ->toContain('resultVariable is empty or malformed')
+            ->toContain('invalid escapePolicy')
+            ->toContain('invalid count');
+    }
+})->with(['cinematic', 'legacy', 'mixed']);
+
+it('returns nested legacy transfer context to the caller without leaking across entry points', function () {
+    $validator = new ProjectValidator();
+    $transfer = ['type' => 'transfer', 'map' => 'destination', 'x' => 0, 'y' => 0];
+    new ReflectionProperty($validator, 'commonEventScripts')->setValue($validator, [
+        'inner' => [$transfer],
+        'outer' => [['type' => 'sequence', 'commands' => [['type' => 'common_event', 'id' => 'inner']]]],
+    ]);
+    $route = static fn(string $npc): array => [
+        'type' => 'move_route', 'subject' => 'npc', 'npcId' => $npc, 'steps' => [['direction' => 'right']],
+    ];
+    $known = ['maps' => ['origin', 'destination'], 'common_events' => ['inner', 'outer']];
+    $maps = ['origin' => ['origin-npc'], 'destination' => ['destination-npc']];
+    $check = new ReflectionMethod($validator, 'checkCommands');
+    $messages = issueMessages($check->invoke($validator, [
+        ['type' => 'sequence', 'commands' => [['type' => 'common_event', 'id' => 'outer']]],
+        $route('destination-npc'), $route('origin-npc'),
+    ], 'nested legacy', $known, $maps['origin'], 'origin', $maps));
+    expect($messages)->toHaveCount(1)
+        ->and($messages[0])->toContain('NPC id "origin-npc", which is not on map "destination"');
+    expect($check->invoke($validator, [$route('origin-npc')], 'independent caller', $known, $maps['origin'], 'origin', $maps))->toBe([]);
+});
+
+it('validates legacy alternative arms from their incoming map and joins their possible destinations', function () {
+    $validator = new ProjectValidator();
+    $route = static fn(string $npc): array => [
+        'type' => 'move_route', 'subject' => 'npc', 'npcId' => $npc, 'steps' => [['direction' => 'right']],
+    ];
+    $maps = ['origin' => ['origin-npc', 'shared'], 'destination' => ['destination-npc', 'shared']];
+    $issues = new ReflectionMethod($validator, 'checkCommands')->invoke($validator, [
+        ['type' => 'branch', 'then' => [
+            ['type' => 'transfer', 'map' => 'destination'], $route('destination-npc'),
+        ], 'else' => [$route('origin-npc')]],
+        $route('shared'),
+        $route('destination-npc'),
+    ], 'branch context', ['maps' => array_keys($maps)], $maps['origin'], 'origin', $maps);
+    expect($issues)->toHaveCount(1)
+        ->and($issues[0]->message)->toContain('NPC id "destination-npc"');
+});
+
 it('checks the map triggers that launch cinematics', function () {
     $root = cutsceneProject();
     $mapData = <<<'PHP_SOURCE'

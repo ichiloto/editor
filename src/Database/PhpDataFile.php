@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Database;
 
+use Ichiloto\Editor\Cutscenes\Source\ArraySourceWriter;
+use Ichiloto\Editor\Cutscenes\Source\PhpArraySourceDocument;
+use Ichiloto\Editor\Cutscenes\Source\SourceUnreadable;
 use Ichiloto\Editor\IO\AtomicFile;
 use Ichiloto\Editor\ProjectDirectoryContext;
 use RuntimeException;
@@ -12,18 +15,24 @@ use Throwable;
 /**
  * One authored PHP data file, loaded with its source header preserved.
  *
- * The editor's contract with an author's file is deliberately narrow: it
- * regenerates **only the returned expression**. Everything from `<?php` up to
- * the top-level `return` — the file docblock, `use` imports, blank lines, the
- * explanatory comment above a cutscene — is kept byte-for-byte and re-emitted
- * verbatim on save.
+ * A file that returns an array literal of data (scalars, arrays and enum
+ * cases, not arbitrary objects) is saved by editing its own source:
+ * only the values that changed are rewritten where they sit, so comments,
+ * nowdocs, variables and layout inside the data survive, and a change that
+ * cannot be expressed there is refused rather than flattened. A save also
+ * refuses when the file changed on disk since it was read. Any other file
+ * keeps everything from `<?php` up to the top-level `return` byte-for-byte
+ * and regenerates only the returned expression.
  *
  * A file is editable only when both hold:
  *  - every leaf of the returned value is a scalar, array, or enum case
  *    (a `new Item(...)` payload cannot be regenerated without inventing
  *    source, so those files are browsed, never written); and
- *  - no comment sits *inside* the returned expression, because a rewrite
- *    would silently drop it.
+ *  - any comment *inside* the returned expression sits where the source is
+ *    edited in place: plain data, or a list of constructor calls whose
+ *    arguments the record database edits one at a time. A save that would
+ *    instead regenerate the returned expression is refused, since it would
+ *    drop the comment.
  *
  * When either fails the file reports a read-only reason instead, and the
  * editor surfaces that reason rather than risking the author's work.
@@ -36,13 +45,17 @@ final class PhpDataFile
      * @param string $header The verbatim source preceding the top-level `return`.
      * @param bool $exists Whether the file is present on disk.
      * @param string|null $readOnlyReason Why the file cannot be rewritten.
+     * @param string|null $source The file's bytes as read, which a save edits.
+     * @param bool $hasInteriorComment Whether a comment sits inside the returned data.
      */
     private function __construct(
         public readonly string $path,
-        public readonly mixed $payload,
+        public private(set) mixed $payload,
         public readonly string $header,
         public readonly bool $exists,
         public readonly ?string $readOnlyReason,
+        private ?string $source = null,
+        private bool $hasInteriorComment = false,
     ) {
     }
 
@@ -119,6 +132,22 @@ final class PhpDataFile
     }
 
     /**
+     * An isolated payload with object identity stripped but authored values
+     * kept, so a staged file can be compared with the value it was planned
+     * to read back as.
+     */
+    public static function getComparableValue(mixed $value): mixed
+    {
+        if (is_object($value)) {
+            $fields = get_object_vars($value);
+            $class = $fields['__PHP_Incomplete_Class_Name'] ?? $value::class;
+            unset($fields['__PHP_Incomplete_Class_Name']);
+            return ['__class' => $class, ...array_map(self::getComparableValue(...), $fields)];
+        }
+        return is_array($value) ? array_map(self::getComparableValue(...), $value) : $value;
+    }
+
+    /**
      * A stable comparison value that includes an object's class and state.
      *
      * Isolated payloads are decoded with object construction disabled. The
@@ -155,6 +184,13 @@ final class PhpDataFile
             $autoload = $localAutoload;
         }
 
+        // Child evaluation must use the same source roots as this process,
+        // including a development Engine selected by the test bootstrap.
+        $prefixes = [];
+        foreach (\Composer\Autoload\ClassLoader::getRegisteredLoaders() as $loader) {
+            $prefixes = array_replace($prefixes, $loader->getPrefixesPsr4());
+        }
+
         $runner = <<<'PHP'
         <?php
 
@@ -162,10 +198,14 @@ final class PhpDataFile
         $workingDirectory = $arguments[1];
         $autoload = $arguments[2];
         $resultMarker = $arguments[3];
-        $paths = array_slice($arguments, 4);
+        $prefixes = json_decode($arguments[4], true, flags: JSON_THROW_ON_ERROR);
+        $paths = array_slice($arguments, 5);
 
         if ($autoload !== '') {
-            require $autoload;
+            $loader = require $autoload;
+            foreach ($prefixes as $prefix => $directories) {
+                $loader->setPsr4($prefix, $directories);
+            }
         }
 
         if ($workingDirectory !== '' && is_dir($workingDirectory)) {
@@ -247,7 +287,7 @@ final class PhpDataFile
         $runner = str_replace('/*__ICHILOTO_AUTHORED_REQUIRES__*/', $authoredRequires, $runner);
         $pipes = [];
         $resultMarker = 'ICHILOTO_EVAL_RESULT:' . bin2hex(random_bytes(16)) . ':';
-        $arguments = [PHP_BINARY, '-r', substr($runner, strlen("<?php\n")), $workingDirectory ?? '', $autoload ?? '', $resultMarker, ...$paths];
+        $arguments = [PHP_BINARY, '-r', substr($runner, strlen("<?php\n")), $workingDirectory ?? '', $autoload ?? '', $resultMarker, json_encode($prefixes, JSON_THROW_ON_ERROR), ...$paths];
         $process = proc_open(
             $arguments,
             [
@@ -455,7 +495,7 @@ final class PhpDataFile
             return new self($path, $payload, $header, true, sprintf('%s contains %s', basename($path), $reason));
         }
 
-        if ($hasInteriorComment) {
+        if ($hasInteriorComment && ! self::isEditedInPlace($source, $payload)) {
             return new self(
                 $path,
                 $payload,
@@ -465,7 +505,40 @@ final class PhpDataFile
             );
         }
 
-        return new self($path, $payload, $header, true, null);
+        return new self($path, $payload, $header, true, null, $source, $hasInteriorComment);
+    }
+
+    /**
+     * Whether saves edit the file's own source rather than regenerate it:
+     * plain data, or a list of constructor calls edited argument by argument.
+     */
+    private static function isEditedInPlace(string $source, mixed $payload): bool
+    {
+        if (! self::holdsNonEnumObject($payload) && self::parseArraySource($source) !== null) {
+            return true;
+        }
+
+        return array_filter(PhpSourceDocument::parse($source)->entryClasses(), static fn(string $class): bool => trim($class) !== '') !== [];
+    }
+
+    /** Enum cases use the same source-preserving literal path as other data. */
+    private static function holdsNonEnumObject(mixed $value): bool
+    {
+        if (is_object($value)) {
+            return ! $value instanceof \UnitEnum;
+        }
+
+        return is_array($value) && array_any($value, self::holdsNonEnumObject(...));
+    }
+
+    /** The file as an editable array literal, or null when it is not one. */
+    private static function parseArraySource(string $source): ?PhpArraySourceDocument
+    {
+        try {
+            return PhpArraySourceDocument::parse($source);
+        } catch (SourceUnreadable) {
+            return null;
+        }
     }
 
     /**
@@ -486,6 +559,31 @@ final class PhpDataFile
      */
     public function save(mixed $payload): void
     {
+        $contents = $this->composeContents($payload, checkDisk: true);
+        $directory = dirname($this->path);
+
+        if (! is_dir($directory) && ! mkdir($directory, 0777, true) && ! is_dir($directory)) {
+            throw new RuntimeException("Unable to create {$directory}.");
+        }
+
+        AtomicFile::write($this->path, $contents);
+        // The file now reads as this payload, so the next save edits from here.
+        $this->payload = $payload;
+        $this->source = $contents;
+    }
+
+    /**
+     * Returns what saving a value would write, refusing what the file's own
+     * source cannot take, without writing anything: an edit can be refused
+     * when it is made rather than when it is saved.
+     *
+     * @param mixed $payload The value to return from the file.
+     * @param bool $checkDisk Whether a file changed outside the editor is refused too, as a save does.
+     * @return string The file's contents.
+     * @throws RuntimeException When the file or the value cannot be written.
+     */
+    public function composeContents(mixed $payload, bool $checkDisk = false): string
+    {
         if (! $this->isEditable()) {
             throw new RuntimeException(sprintf('Refusing to overwrite %s: %s.', $this->path, $this->readOnlyReason));
         }
@@ -496,16 +594,29 @@ final class PhpDataFile
             throw new RuntimeException(sprintf('Refusing to write %s: %s.', $this->path, $reason));
         }
 
-        $directory = dirname($this->path);
+        $document = $this->source === null ? null : self::parseArraySource($this->source);
 
-        if (! is_dir($directory) && ! mkdir($directory, 0777, true) && ! is_dir($directory)) {
-            throw new RuntimeException("Unable to create {$directory}.");
+        // Data, including enum cases, is edited in its own source; objects keep the regeneration
+        // (or the constructor-argument edits) their files were written for.
+        if ($document !== null && is_array($this->payload) && is_array($payload)
+            && ! self::holdsNonEnumObject($this->payload) && ! self::holdsNonEnumObject($payload)) {
+            if ($checkDisk && @file_get_contents($this->path) !== $this->source) {
+                throw new RuntimeException(sprintf(
+                    'Refusing to overwrite %s: it changed outside the editor since it was read. Reload it first.',
+                    $this->path,
+                ));
+            }
+            $contents = ArraySourceWriter::rewrite($document, $this->payload, $payload)->source;
+        } elseif ($this->hasInteriorComment) {
+            throw new RuntimeException(sprintf(
+                'Refusing to rewrite %s: it has comments inside its data, which rewriting it would drop. Edit the entries one value at a time, or edit the file directly.',
+                $this->path,
+            ));
+        } else {
+            $contents = $this->header . 'return ' . PhpValueExporter::export($payload) . ";\n";
         }
 
-        AtomicFile::write(
-            $this->path,
-            $this->header . 'return ' . PhpValueExporter::export($payload) . ";\n",
-        );
+        return $contents;
     }
 
     /**

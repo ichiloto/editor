@@ -4,7 +4,10 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Validation;
 
+use Ichiloto\Editor\Field\MapLandmarks;
+use Ichiloto\Editor\Inspector\MapLandmarkFields;
 use Ichiloto\Editor\ProjectMap;
+use InvalidArgumentException;
 
 /**
  * Runs the advisory pre-save checks over a map.
@@ -29,28 +32,41 @@ final class MapValidator
     {
         return [
             ...self::findMarkersWithoutDefinitions($map),
-            ...self::findNonRectangularMarkers($map),
             ...self::findDanglingDestinations($map, $mapsById),
             ...self::findOutOfRangeSpawnPoints($map, $mapsById),
+            ...self::findRetiredData($map),
+            ...self::findLandmarkProblems($map),
+            ...array_map(static fn(Issue $issue): string => $issue->message, MapGraphicsValidator::validate($map)),
         ];
     }
 
+
     /**
-     * Finds marker shapes the runtime cannot turn into one trigger area.
+     * Finds minimap landmarks the engine would refuse, by its own check.
      *
      * @return string[]
      */
-    private static function findNonRectangularMarkers(ProjectMap $map): array
+    private static function findLandmarkProblems(ProjectMap $map): array
     {
-        $warnings = [];
-
-        foreach ($map->getPlacedEventMarkers() as $marker) {
-            if (! $map->isEventMarkerSolidRectangle($marker)) {
-                $warnings[] = sprintf('Event marker %s must occupy one solid rectangle.', $marker);
-            }
+        try {
+            $problem = MapLandmarkFields::findProblem($map, MapLandmarks::readMap($map)->entries);
+        } catch (InvalidArgumentException $error) {
+            $problem = $error->getMessage();
         }
 
-        return $warnings;
+        return $problem === null ? [] : ['Minimap landmarks: ' . $problem];
+    }
+
+    /**
+     * Finds map data the engine no longer reads.
+     *
+     * @return string[]
+     */
+    private static function findRetiredData(ProjectMap $map): array
+    {
+        return array_key_exists('tiles2d', $map->getEditableData())
+            ? ['tiles2d is no longer read; the map shows its terminal glyphs until it has a tileset.']
+            : [];
     }
 
     /**

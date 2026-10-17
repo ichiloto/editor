@@ -232,7 +232,7 @@ it('defaults the unsaved-changes guard to Cancel: Enter does not discard', funct
 it('steps integer inspector fields with the Left/Right idiom and records undo', function () {
   $editor = uxEditor();
   setEditorProperty($editor, 'focusedPane', 'inspector');
-  setEditorProperty($editor, 'selectedInspectorFieldIndex', 4); // Size X (width)
+  setEditorProperty($editor, 'selectedInspectorFieldIndex', 5); // Size X (width)
 
   /** @var ProjectWorkspace $workspace */
   $workspace = getEditorProperty($editor, 'workspace');
@@ -249,7 +249,7 @@ it('steps integer inspector fields with the Left/Right idiom and records undo', 
 
 it('builds boolean and float controls for event data values', function () {
   $editor = uxEditor();
-  $fields = callEditorMethod($editor, 'flattenInspectorFields', ['locked' => true, 'rate' => 1.5], ['data']);
+  $fields = callEditorMethod($editor, 'createMapInspector')->buildEventDataFields('A', ['data' => ['locked' => true, 'rate' => 1.5]]);
   $byLabel = array_column($fields, null, 'label');
 
   expect($byLabel['Locked']['control']->type)->toBe(InputControlType::BOOLEAN)
@@ -309,7 +309,7 @@ it('scrolls the inspector so a deep selection stays visible', function () {
   $selectedHeight = $layout->spans[$last][1];
 
   expect(count($layout->lines))->toBeGreaterThan($visibleRows)
-    ->and($layout->spans[2][1])->toBeGreaterThan(5)
+    ->and($layout->spans[3][1])->toBeGreaterThan(5)
     ->and($layout->rowOfField($last) + $selectedHeight - 1)->toBe($visibleRows - 1)
     ->and($layout->offset)->toBe($layout->spans[$last][0] + $selectedHeight - $visibleRows)
     ->and(callEditorMethod($editor, 'getInspectorLines')[0])->not->toContain('Name: Test Map');

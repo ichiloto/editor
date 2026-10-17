@@ -9,38 +9,6 @@ use Ichiloto\Editor\Validation\SaveCompatibilityValidator;
 use Ichiloto\Editor\Validation\Severity;
 
 /**
- * Writes an items.php whose entries are the given PHP constructor snippets.
- *
- * @param string $root The project root.
- * @param string[] $entries The constructor expressions.
- * @return void
- */
-function writeInventorySource(string $root, array $entries): void
-{
-    file_put_contents(
-        $root . '/assets/Data/items.php',
-        "<?php\n\nreturn [\n" . implode(",\n", array_map(static fn(string $e): string => '  ' . $e, $entries)) . ",\n];\n",
-    );
-}
-
-/**
- * An Item constructor expression with named arguments.
- *
- * @param array<string, string> $arguments The named arguments, already as PHP.
- * @return string The expression.
- */
-function itemExpression(array $arguments): string
-{
-    $parts = [];
-
-    foreach ($arguments as $name => $value) {
-        $parts[] = sprintf('%s: %s', $name, $value);
-    }
-
-    return 'new \Ichiloto\Engine\Entities\Inventory\Items\Item(' . implode(', ', $parts) . ')';
-}
-
-/**
  * Returns the real game project root, with its own class autoloader
  * registered, or null when this checkout has no game beside it.
  *
@@ -130,16 +98,16 @@ function writeCompatibilityManifest(string $root, array $manifest): void
 
 it('resolves a stable id, a display name, and a declared alias to one definition', function () {
     $root = makeTemporaryProject('ichiloto-inventory-');
-    writeInventorySource($root, [
-        itemExpression([
-            'id' => "'item.s-potion'",
-            'name' => "'S-Potion'",
-            'description' => "'Restores 50 HP.'",
-            'icon' => "'🧪'",
-            'price' => '50',
-            'aliases' => "['Old Potion Name']",
-        ]),
-    ]);
+    writeItemRecords($root,
+        new \Ichiloto\Engine\Entities\Inventory\Items\Item(
+            id: 'item.s-potion',
+            name: 'S-Potion',
+            description: 'Restores 50 HP.',
+            icon: '🧪',
+            price: 50,
+            aliases: ['Old Potion Name'],
+        ),
+    );
 
     $catalog = inventoryCatalog($root);
 
@@ -186,10 +154,10 @@ it('agrees with the engine store about every reference in the real catalogue', f
 
 it('fails closed on an ambiguous reference instead of guessing a definition', function () {
     $root = makeTemporaryProject('ichiloto-inventory-');
-    writeInventorySource($root, [
-        itemExpression(['id' => "'item.one'", 'name' => "'First'", 'description' => "''", 'icon' => "'a'", 'price' => '1', 'aliases' => "['Shared Name']"]),
-        itemExpression(['id' => "'item.two'", 'name' => "'Second'", 'description' => "''", 'icon' => "'b'", 'price' => '2', 'aliases' => "['shared name']"]),
-    ]);
+    writeItemRecords($root,
+        new \Ichiloto\Engine\Entities\Inventory\Items\Item(id: 'item.one', name: 'First', description: '', icon: 'a', price: 1, aliases: ['Shared Name']),
+        new \Ichiloto\Engine\Entities\Inventory\Items\Item(id: 'item.two', name: 'Second', description: '', icon: 'b', price: 2, aliases: ['shared name']),
+    );
 
     $catalog = inventoryCatalog($root);
 
@@ -209,9 +177,9 @@ it('fails closed on an ambiguous reference instead of guessing a definition', fu
 
 it('derives the engine legacy id for a definition authored without one', function () {
     $root = makeTemporaryProject('ichiloto-inventory-');
-    writeInventorySource($root, [
-        itemExpression(['name' => "'Old Charm'", 'description' => "''", 'icon' => "'c'", 'price' => '3']),
-    ]);
+    writeItemRecords($root,
+        new \Ichiloto\Engine\Entities\Inventory\Items\Item(name: 'Old Charm', description: '', icon: 'c', price: 3),
+    );
 
     $catalog = inventoryCatalog($root);
 
@@ -228,9 +196,9 @@ it('derives the engine legacy id for a definition authored without one', functio
 
 it('accepts an alias target that is a stable definition id', function () {
     $root = makeTemporaryProject('ichiloto-inventory-');
-    writeInventorySource($root, [
-        itemExpression(['id' => "'item.s-potion'", 'name' => "'S-Potion'", 'description' => "''", 'icon' => "'🧪'", 'price' => '50']),
-    ]);
+    writeItemRecords($root,
+        new \Ichiloto\Engine\Entities\Inventory\Items\Item(id: 'item.s-potion', name: 'S-Potion', description: '', icon: '🧪', price: 50),
+    );
     writeCompatibilityManifest($root, [
         'contentVersion' => 0,
         'migrations' => [],
@@ -245,9 +213,9 @@ it('accepts an alias target that is a stable definition id', function () {
 
 it('still fails an alias target that names nothing in the catalogue', function () {
     $root = makeTemporaryProject('ichiloto-inventory-');
-    writeInventorySource($root, [
-        itemExpression(['id' => "'item.s-potion'", 'name' => "'S-Potion'", 'description' => "''", 'icon' => "'🧪'", 'price' => '50']),
-    ]);
+    writeItemRecords($root,
+        new \Ichiloto\Engine\Entities\Inventory\Items\Item(id: 'item.s-potion', name: 'S-Potion', description: '', icon: '🧪', price: 50),
+    );
     writeCompatibilityManifest($root, [
         'contentVersion' => 0,
         'migrations' => [],
@@ -304,9 +272,9 @@ it('validates the real project clean, and its equipment aliases resolve to defin
 
 it('offers inventory references as stable ids labelled with their names', function () {
     $root = makeTemporaryProject('ichiloto-inventory-');
-    writeInventorySource($root, [
-        itemExpression(['id' => "'item.s-potion'", 'name' => "'S-Potion'", 'description' => "''", 'icon' => "'🧪'", 'price' => '50']),
-    ]);
+    writeItemRecords($root,
+        new \Ichiloto\Engine\Entities\Inventory\Items\Item(id: 'item.s-potion', name: 'S-Potion', description: '', icon: '🧪', price: 50),
+    );
 
     $catalog = new \Ichiloto\Editor\Database\ReferenceCatalog(ProjectWorkspace::fromProject($root));
 
@@ -352,11 +320,11 @@ it('puts the picker cursor on the definition a field already holds, however it i
 
 it('accepts an id, a name or an alias wherever content names an item, and refuses the rest', function () {
     $root = makeTemporaryProject('ichiloto-inventory-');
-    writeInventorySource($root, [
-        itemExpression(['id' => "'item.s-potion'", 'name' => "'S-Potion'", 'description' => "''", 'icon' => "'🧪'", 'price' => '50', 'aliases' => "['Potion']"]),
-        itemExpression(['id' => "'item.twin'", 'name' => "'First Twin'", 'description' => "''", 'icon' => "'a'", 'price' => '1', 'aliases' => "['Shared']"]),
-        itemExpression(['id' => "'item.twin-two'", 'name' => "'Second Twin'", 'description' => "''", 'icon' => "'b'", 'price' => '1', 'aliases' => "['shared']"]),
-    ]);
+    writeItemRecords($root,
+        new \Ichiloto\Engine\Entities\Inventory\Items\Item(id: 'item.s-potion', name: 'S-Potion', description: '', icon: '🧪', price: 50, aliases: ['Potion']),
+        new \Ichiloto\Engine\Entities\Inventory\Items\Item(id: 'item.twin', name: 'First Twin', description: '', icon: 'a', price: 1, aliases: ['Shared']),
+        new \Ichiloto\Engine\Entities\Inventory\Items\Item(id: 'item.twin-two', name: 'Second Twin', description: '', icon: 'b', price: 1, aliases: ['shared']),
+    );
 
     $mapPath = $root . '/assets/Maps/test-map/test-map.data.php';
     $map = require $mapPath;
@@ -392,9 +360,9 @@ it('accepts an id, a name or an alias wherever content names an item, and refuse
 
 it('validates what a chest gives out', function () {
     $root = makeTemporaryProject('ichiloto-inventory-');
-    writeInventorySource($root, [
-        itemExpression(['id' => "'item.s-potion'", 'name' => "'S-Potion'", 'description' => "''", 'icon' => "'🧪'", 'price' => '50']),
-    ]);
+    writeItemRecords($root,
+        new \Ichiloto\Engine\Entities\Inventory\Items\Item(id: 'item.s-potion', name: 'S-Potion', description: '', icon: '🧪', price: 50),
+    );
     $mapPath = $root . '/assets/Maps/test-map/test-map.data.php';
     $map = require $mapPath;
     $map['events']['E']['data'] = ['lootType' => 'item', 'loot' => 'item.absent'];
