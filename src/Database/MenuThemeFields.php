@@ -55,9 +55,24 @@ final class MenuThemeFields
             match (true) {
                 ($row['path'] ?? null) === MenuPresentationSettings::ATLAS . '.frameRole'
                     => new RecordField('value', 'Value', options: MapAtlasTheme::FRAME_ROLES, displayDefault: $default),
-                is_int($kind) => new RecordField('value', 'Value', InputControlType::INTEGER, displayDefault: $default),
+                is_int($kind) => new RecordField('value', self::describeRange((string) ($row['path'] ?? '')),
+                    InputControlType::INTEGER, displayDefault: $default),
                 default => new RecordField('value', 'Value', displayDefault: $default),
             },
         ];
+    }
+
+    /** A number's label with the logical-pixel range the Engine accepts for it, so an author sees it before a refusal. */
+    private static function describeRange(string $path): string
+    {
+        $range = match ($path) {
+            'atlas.compactWidth', 'atlas.compactHeight', 'atlas.largeWidth', 'atlas.largeHeight'
+                => [MapAtlasTheme::MIN_EXTENT, MapAtlasTheme::MAX_EXTENT],
+            'atlas.margin' => [0, MapAtlasTheme::MAX_MARGIN],
+            'atlas.markerSize' => [MapAtlasTheme::MIN_MARKER_SIZE, MapAtlasTheme::MAX_MARKER_SIZE],
+            default => null,
+        };
+
+        return $range === null ? 'Value' : sprintf('Pixels (%d..%d)', ...$range);
     }
 }

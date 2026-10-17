@@ -54,6 +54,9 @@ it('offers every atlas setting with the Engine default, authored ones first, onl
     $frame = array_find($session->readDatabaseRecord(MenuThemeFields::CATEGORY, findThemeSetting($session, 'atlas.frameRole'))['rows'],
         static fn(array $row): bool => ($row['key']['field'] ?? null) === 'value');
     expect($frame['options'])->toBe(MapAtlasTheme::FRAME_ROLES);
+    $margin = array_find($session->readDatabaseRecord(MenuThemeFields::CATEGORY, findThemeSetting($session, 'atlas.margin'))['rows'],
+        static fn(array $row): bool => ($row['key']['field'] ?? null) === 'value');
+    expect($margin['label'])->toBe(sprintf('Pixels (0..%d)', MapAtlasTheme::MAX_MARGIN));
     // The Terminal edits no graphical presentation.
     expect(array_map(static fn($category): string => $category->key, DatabaseCatalog::all()))->not->toContain(MenuThemeFields::CATEGORY)
         ->and(array_map(static fn($category): string => $category->key, DatabaseCatalog::getGraphicalCategories()))->toContain(MenuThemeFields::CATEGORY);
