@@ -274,14 +274,24 @@ final class RecordSchemaCatalog
                     removeWhenEmpty: true,
                     displayDefault: 'ordinary',
                 ),
+                // A troop's own battle music (a boss theme) outranks the
+                // project's battle theme; left unset, the battle plays that.
+                new RecordField(
+                    'bgm',
+                    'Battle Music',
+                    removeWhenEmpty: true,
+                    reference: 'bgm',
+                    allowsNone: true,
+                    displayDefault: 'Project battle theme',
+                ),
             ],
             labelKey: 'name',
             identityKey: 'name',
+            // A new troop starts empty, as in RPG Maker: its members are
+            // chosen from the project's own enemies, never assumed.
             blank: [
                 'name' => 'New Troop',
-                'enemies' => [
-                    ['enemy' => 'Regular Bat', 'position' => [15, 7]],
-                ],
+                'enemies' => [],
             ],
             subList: new RecordSubList(
                 key: 'enemies',
@@ -295,7 +305,8 @@ final class RecordSchemaCatalog
                     // and its contain limits, never the terminal position above.
                     new RecordField('graphicalPlacement', 'Battle Placement', codec: RecordFieldCodec::BATTLER_SLOT, removeWhenEmpty: true),
                 ],
-                blank: ['enemy' => 'Regular Bat', 'position' => [15, 7]],
+                // The enemy is chosen when a member is added (TroopAuthoring).
+                blank: ['enemy' => '', 'position' => [15, 7]],
             ),
         );
     }

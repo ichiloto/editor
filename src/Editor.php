@@ -54,6 +54,7 @@ use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\Database\SummonAssignmentDiagnostics;
 use Ichiloto\Editor\Actors\ActorAuthoring;
 use Ichiloto\Editor\Database\RecordSubList;
+use Ichiloto\Editor\Database\TroopAuthoring;
 use Ichiloto\Editor\Database\ReferencePicker;
 use Ichiloto\Editor\Debug\Debug;
 use Ichiloto\Editor\Maps\MapLinePlan;
@@ -532,6 +533,12 @@ final class Editor
      * one, rather than to fill a field.
      */
     private const string NPC_SELECT_FIELD = '__npc_select';
+
+    /**
+     * The picker field id used when the enemy list is opened to add a troop
+     * member fighting the one chosen.
+     */
+    private const string TROOP_MEMBER_ENEMY_FIELD = '__troop_member_enemy';
 
     /** How actors are authored: their rows, their edits, and what their panes show. */
     private readonly ActorAuthoring $actorAuthoring;
@@ -2999,6 +3006,26 @@ final class Editor
             return;
         }
 
+        // A troop member is added by choosing its enemy first, as RPG Maker's
+        // Troops tab adds one; Shift+N names the troop after its members and
+        // Shift+C clears them.
+        if ($this->getSelectedDatabaseCategoryDefinition()->key === 'troops') {
+            if ($this->isShiftLetterShortcut($input, 'O')) {
+                $this->openTroopMemberPicker();
+                return;
+            }
+
+            if ($this->isShiftLetterShortcut($input, 'N')) {
+                $this->nameTroopAfterMembers();
+                return;
+            }
+
+            if ($this->isShiftLetterShortcut($input, 'C')) {
+                $this->clearTroopMembers();
+                return;
+            }
+        }
+
         // Shift+O/Shift+X are the one sub-list idiom: quest objectives, skit
         // beats, troop members, and event-script commands all use them.
         if (($this->getSelectedRecordDatabase()?->schema->getInlineSubLists() ?? []) !== [] && $this->isShiftLetterShortcut($input, 'O')) {
@@ -5308,7 +5335,10 @@ final class Editor
             $lines[] = '                     to a timeline, previewed first';
         }
         $lines[] = '  Shift+O / Shift+X  add or remove an objective, beat,';
-        $lines[] = '                     troop member or script command';
+        $lines[] = '                     troop member or script command;';
+        $lines[] = '                     a troop member starts from its enemy';
+        $lines[] = '  Shift+C / Shift+N  clear a troop\'s members, or name';
+        $lines[] = '                     the troop after them';
         $lines[] = '  Del                the same, on the settings field';
         $lines[] = '                     the cursor is on';
         $lines[] = '  Enter              edit, or open the picker on a field';
@@ -8901,6 +8931,82 @@ final class Editor
         }
     }
 
+    /** Opens the project's enemies to add a member to the selected troop, fighting the one chosen. */
+    private function openTroopMemberPicker(): void
+    {
+        $catalog = $this->referenceCatalog();
+        if (! $this->referencePicker->open(self::TROOP_MEMBER_ENEMY_FIELD, 'Enemy', 'enemies', $catalog->valuesFor('enemies'), '', $catalog->labelsFor('enemies'))) {
+            $this->setStatus('This project defines no enemies to add to a troop.', StatusLevel::WARN);
+            $this->renderDatabaseArea();
+
+            return;
+        }
+
+        $this->statusMessage = 'Choose the enemy the new member fights.';
+        $this->renderDatabasePanes(['settings']);
+    }
+
+    /** Adds a member fighting the enemy named to the selected troop, and puts the cursor on it. */
+    private function addTroopMember(string $enemy): void
+    {
+        $database = $this->getSelectedRecordDatabase();
+        if (! $database instanceof ProjectRecordDatabase) {
+            return;
+        }
+
+        $recordIndex = $this->getSelectedRecordIndex();
+        $enemies = $this->referenceCatalog()->valuesFor('enemies');
+        $change = $this->applyRecordChange(static fn(): RecordChange => new TroopAuthoring()->addMember($database, $recordIndex, $enemy, $enemies));
+        if ($change === null) {
+            return;
+        }
+
+        $member = (int) $change->index;
+        $this->databaseFocus = self::DATABASE_FOCUS_SETTINGS;
+        $this->selectDatabaseFieldById(ProjectRecordDatabase::subFieldId('member', $member, 'enemy'));
+        $this->setStatus(sprintf('Added %s as member %d.', $enemy, $member + 1), StatusLevel::INFO);
+        $this->renderDatabaseArea();
+    }
+
+    /** Names the selected troop after its members. */
+    private function nameTroopAfterMembers(): void
+    {
+        $database = $this->getSelectedRecordDatabase();
+        if (! $database instanceof ProjectRecordDatabase) {
+            return;
+        }
+
+        $recordIndex = $this->getSelectedRecordIndex();
+        $change = $this->applyRecordChange(static fn(): RecordChange => new TroopAuthoring()->nameAfterMembers($database, $recordIndex));
+        if ($change === null) {
+            return;
+        }
+
+        $record = $database->getRecordByIndex($recordIndex);
+        $name = $record === null ? '' : $database->getEntryLabel($record);
+        $this->setStatus($change->command === null ? sprintf('The troop is already named %s.', $name) : sprintf('Named the troop %s.%s', $name, $change->note === null ? '' : ' ' . $change->note), StatusLevel::INFO);
+        $this->renderDatabaseArea();
+    }
+
+    /** Removes every member of the selected troop; undo brings them back. */
+    private function clearTroopMembers(): void
+    {
+        $database = $this->getSelectedRecordDatabase();
+        if (! $database instanceof ProjectRecordDatabase) {
+            return;
+        }
+
+        $recordIndex = $this->getSelectedRecordIndex();
+        $change = $this->applyRecordChange(static fn(): RecordChange => new TroopAuthoring()->clearMembers($database, $recordIndex));
+        if ($change === null) {
+            return;
+        }
+
+        $this->clampDatabaseSettingSelection();
+        $this->setStatus($change->command === null ? 'The troop has no members to clear.' : 'Cleared the troop\'s members. Undo brings them back.', StatusLevel::INFO);
+        $this->renderDatabaseArea();
+    }
+
     /** New beats start with a resource choice, never an invented speaker. */
     private function selectNewSkitActor(int $entryIndex): void
     {
@@ -10666,6 +10772,12 @@ final class Editor
 
         if ($fieldId === self::NPC_SELECT_FIELD) {
             $this->selectNpcFromList($selected);
+
+            return;
+        }
+
+        if ($fieldId === self::TROOP_MEMBER_ENEMY_FIELD) {
+            $selected === null ? $this->renderDatabasePanes(['settings']) : $this->addTroopMember($selected);
 
             return;
         }
@@ -13120,6 +13232,14 @@ final class Editor
                     '?:Help',
                 ),
                 $this->isDatabaseEditing => 'Enter:Apply  Esc:Cancel',
+                $this->getSelectedDatabaseCategoryDefinition()->key === 'troops' => $this->fitHelp(
+                    $layout['settingsWidth'],
+                    'Enter:Edit  Shift+O:Add  Shift+X/Del:Remove  Shift+C:Clear  Shift+N:Auto-name',
+                    'Enter:Edit  Shift+O:Add  Del:Remove  Shift+C:Clear  Shift+N:Name',
+                    'Enter:Edit  Shift+O/Del:Add/Del  Shift+C/N',
+                    'Enter:Edit  ?:Help',
+                    'Enter:Edit',
+                ),
                 $this->hasDatabaseSubList() => $this->fitHelp(
                     $layout['settingsWidth'],
                     'Enter:Edit  Shift+O:Add  Shift+X/Del:Remove',
