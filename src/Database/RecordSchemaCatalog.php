@@ -136,7 +136,7 @@ final class RecordSchemaCatalog
             self::battlerArt('enemies'),
             self::battleScaleReference(),
             ...($graphical ? [PlayerPresentationFields::getSchema(), \Ichiloto\Editor\Field\FieldResourceFields::getSchema(),
-                \Ichiloto\Editor\Field\TextRoleFields::getSchema()] : []),
+                \Ichiloto\Editor\Field\TextRoleFields::getSchema(), MenuThemeFields::getSchema()] : []),
         ];
 
         $keyed = [];

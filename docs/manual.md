@@ -1191,6 +1191,7 @@ skill's effects, a quest's rewards) listed under them.
 | Player Field Appearance | `assets/Data/Entities/player.php` | Not shown: graphical ownership and art | Choose fixed-player, selected party leader, or absent legacy selector; fixed sheet picker with index/layer controls |
 | Field Resources | `assets/Data/Presentation/field.php` (`resources`) | Not shown: graphical resources | One record per named resource, keyed by its stable id: name, ground contact, an image or a sign board, and an optional occupancy stamp |
 | Text Roles | `assets/Data/Presentation/text.php` (`roles`) | Not shown: graphical text | One record per text role: the project's fonts, first choice first, a size and a colour |
+| Menu Theme | `assets/Data/Presentation/menus.php` (`atlas`) | Not shown: graphical presentation | One row per setting: the minimap atlas's corner sizes, margin, marker size and frame |
 | Actor Battle Art, Enemy Battle Art, Battle Scale | `assets/Data/Presentation/battlers.php` | Not shown: graphical battle art | Editable from the actor's or enemy's own page (see Battle Art) |
 
 Player Field Appearance edits only `graphicalSubject` and `sprites2d`, preserving
@@ -1202,6 +1203,18 @@ four-direction previews. Clearing removes only the optional binding; undo/redo
 and save/reopen restore its settings. Unsupported expressions and external
 source conflicts are refused before overwriting files. These controls have
 automated coverage; native visual inspection remains pending.
+
+Menu Theme edits the game's shared menu presentation catalog by setting, as
+Configuration edits `config.php`. It offers the minimap atlas: the compact and
+larger corner sizes, their margin, the marker size and the frame (`quiet` or
+`panel`) the atlas is drawn in, all in logical pixels of the GPUI atlas. Each
+setting the catalog leaves out shows the Engine's default, and choosing that
+default writes nothing. A value is checked by the Engine with its neighbours,
+so the larger corner must first be widened before the compact one may exceed
+it. Only changed leaves are written; comments and settings other pages own are
+kept. A project without `menus.php` shows the category read-only and says why.
+The Terminal's opened map keeps its own layout, so the Terminal editor does not
+list this category.
 
 Field Resources are reusable whole images, such as a tree, that a map places by
 reference. A resource owns its art and its ground contact (the pivot, such as a

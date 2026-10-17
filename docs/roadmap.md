@@ -158,8 +158,15 @@ Detailed effort and dependencies remain in the coordinating plan.
 Runtime presentation support is not complete Editor authoring support. The TUI
 must expose the same editable data and operations as a future graphical Editor;
 graphical previews are an enhancement, not a prerequisite for authoring a game.
-The current database/reference catalogues do not yet expose the shared menu
-theme or PNG portrait selection. This remains an implementation gap.
+The graphical Database's Menu Theme category edits the shared menu theme
+(`assets/Data/Presentation/menus.php`) through its source-preserving owner
+`MenuPresentationSettings`, which shares `ProjectSettingsFile` with
+`config.php`. It offers only the minimap atlas so far (corner sizes, margin,
+marker size, frame), with the Engine's defaults and validation. The palette,
+metrics, row metrics and artwork, frames, icon roles (including the atlas's
+`map.*` markers), cursor, portraits and notifications, and PNG portrait
+selection, remain an implementation gap; each joins Menu Theme through that
+owner as the Engine exposes its rules.
 
 Acceptance criteria for the presentation-authoring slice:
 
