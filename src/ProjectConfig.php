@@ -43,7 +43,7 @@ final class ProjectConfig extends ProjectSettingsFile
         foreach (EngineMessageTerms::listTerms() as $path => $term) {
             // A message that inherits the project's own vocabulary wording reads as that wording here, as the game
             // reads it, taken from this project's file, never from another project's loaded runtime state.
-            $inherited = isset($term['vocabularyDefault']) ? self::getValue($this->payload, 'vocab.' . $term['vocabularyDefault']) : null;
+            $inherited = isset($term['vocabularyDefault']) ? $this->readValue($this->payload, 'vocab.' . $term['vocabularyDefault']) : null;
             if (is_string($inherited)) {
                 $term['default'] = $inherited;
             }

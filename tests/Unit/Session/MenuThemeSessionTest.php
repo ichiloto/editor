@@ -50,7 +50,7 @@ it('offers every atlas setting with the Engine default, authored ones first, onl
     $labels = $session->listDatabaseRecords(MenuThemeFields::CATEGORY)['records'];
     $engine = array_map(static fn(string $key): string => 'atlas.' . $key, array_keys(get_object_vars(new MapAtlasTheme())));
     expect($labels[0])->toBe('atlas.margin')
-        ->and($labels)->toEqualCanonicalizing($engine);
+        ->and(array_values(array_filter($labels, static fn(string $label): bool => str_starts_with($label, 'atlas.'))))->toEqualCanonicalizing($engine);
     $frame = array_find($session->readDatabaseRecord(MenuThemeFields::CATEGORY, findThemeSetting($session, 'atlas.frameRole'))['rows'],
         static fn(array $row): bool => ($row['key']['field'] ?? null) === 'value');
     expect($frame['options'])->toBe(MapAtlasTheme::FRAME_ROLES);
@@ -94,4 +94,48 @@ it('is read-only, saying why, in a project without a menu theme', function () {
     expect($listing['editable'])->toBeFalse()
         ->and($listing['readOnly'])->toContain(MenuPresentationSettings::RELATIVE_PATH)
         ->and($listing['records'])->toBe([]);
+});
+
+it('binds atlas marker images by role, the project\'s own categories included, and unbinds them by removing the key', function () {
+    [$root, $file, $session] = createMenuThemeProject(<<<'PHP'
+<?php
+return [
+  'schema' => 'ichiloto.menu/1',
+  'icons' => [
+    'notification.save' => 'Graphics/Icons/Save.png', // Bound by another page.
+  ],
+];
+PHP);
+    writeTilesetTestPng($root . '/assets/Graphics/Icons/Save.png', 8, 8);
+    writeTilesetTestPng($root . '/assets/Graphics/Icons/School.png', 8, 8);
+    // A project category, unsaved, already has a marker role to bind.
+    $index = $session->createDatabaseRecord(Ichiloto\Editor\Field\MapCategoryFields::CATEGORY)['index'];
+    $id = array_find($session->readDatabaseRecord(Ichiloto\Editor\Field\MapCategoryFields::CATEGORY, $index)['rows'],
+        static fn(array $row): bool => ($row['key']['field'] ?? null) === 'id');
+    $session->applyDatabaseRecord(Ichiloto\Editor\Field\MapCategoryFields::CATEGORY, $index, $id['key'], 'bard-school');
+
+    $labels = $session->listDatabaseRecords(MenuThemeFields::CATEGORY)['records'];
+    $roles = Ichiloto\Engine\UI\Presentation\MapAtlasPresentation::listIconRoles(Ichiloto\Engine\Field\MapCategoryCatalog::fromArray([
+        'schema' => Ichiloto\Engine\Field\MapCategoryCatalog::SCHEMA,
+        'categories' => ['bard-school' => ['name' => ['message' => 'm', 'default' => 'Bard School'], 'base' => 'inn']]]));
+    expect($labels)->toContain('icons.notification.save')
+        ->and(array_values(array_filter($labels, static fn(string $label): bool => str_starts_with($label, 'icons.map.'))))
+        ->toEqualCanonicalizing(array_map(static fn(string $role): string => 'icons.' . $role, $roles))
+        ->and($labels)->toContain('icons.map.category.bard-school');
+    $marker = array_find($session->readDatabaseRecord(MenuThemeFields::CATEGORY, findThemeSetting($session, 'icons.map.category.bard-school'))['rows'],
+        static fn(array $row): bool => ($row['key']['field'] ?? null) === 'value');
+    expect($marker['kind'])->toBe('reference')->and($marker['reference'])->toBe('png_assets')
+        ->and($marker['noneLabel'])->toBe('(Engine pictogram)');
+
+    expect(fn() => setThemeSetting($session, 'icons.map.category.bard-school', 'Graphics/Icons/Missing.png'))->toThrow(SessionRefusal::class);
+    setThemeSetting($session, 'icons.map.category.bard-school', 'Graphics/Icons/School.png');
+    $session->saveDatabase(MenuThemeFields::CATEGORY);
+    expect((require $file)['icons'])->toBe(['notification.save' => 'Graphics/Icons/Save.png', 'map.category.bard-school' => 'Graphics/Icons/School.png'])
+        ->and(file_get_contents($file))->toContain('// Bound by another page.');
+
+    // Choosing none again removes the binding: the Engine's pictogram shows.
+    setThemeSetting($session, 'icons.map.category.bard-school', '');
+    $session->saveDatabase(MenuThemeFields::CATEGORY);
+    expect((require $file)['icons'])->toBe(['notification.save' => 'Graphics/Icons/Save.png'])
+        ->and(file_get_contents($file))->toContain('// Bound by another page.');
 });

@@ -1212,7 +1212,7 @@ skill's effects, a quest's rewards) listed under them.
 | Player Field Appearance | `assets/Data/Entities/player.php` | Not shown: graphical ownership and art | Choose fixed-player, selected party leader, or absent legacy selector; fixed sheet picker with index/layer controls |
 | Field Resources | `assets/Data/Presentation/field.php` (`resources`) | Not shown: graphical resources | One record per named resource, keyed by its stable id: name, ground contact, an image or a sign board, and an optional occupancy stamp |
 | Text Roles | `assets/Data/Presentation/text.php` (`roles`) | Not shown: graphical text | One record per text role: the project's fonts, first choice first, a size and a colour |
-| Menu Theme | `assets/Data/Presentation/menus.php` (`atlas`) | Not shown: graphical presentation | One row per setting: the minimap atlas's corner sizes, margin, marker size and frame |
+| Menu Theme | `assets/Data/Presentation/menus.php` (`atlas`, `icons`) | Not shown: graphical presentation | One row per setting: the minimap atlas's corner sizes, margin, marker size and frame, and an image per icon role |
 | Actor Battle Art, Enemy Battle Art, Battle Scale | `assets/Data/Presentation/battlers.php` | Not shown: graphical battle art | Editable from the actor's or enemy's own page (see Battle Art) |
 
 Player Field Appearance edits only `graphicalSubject` and `sprites2d`, preserving
@@ -1234,8 +1234,15 @@ default writes nothing. A value is checked by the Engine with its neighbours,
 so the larger corner must first be widened before the compact one may exceed
 it. Only changed leaves are written; comments and settings other pages own are
 kept. A project without `menus.php` shows the category read-only and says why.
-The Terminal's opened map keeps its own layout, so the Terminal editor does not
-list this category.
+Menu Theme also binds icon images by role (`icons`): every role the catalogue
+already binds, and every marker the atlas draws, offered even before one is
+bound: `map.player`, each landmark kind, and `map.category.<id>` for each place
+category, the project's own included as soon as its Place Categories record
+exists. Each is a project image chosen with the shared picker; `(Engine
+pictogram)` leaves the Engine's generic marker, and choosing it for a bound
+role removes the binding. An image the Engine cannot draw is refused. The
+Terminal's maps keep their own symbols, so the Terminal editor does not list
+this category.
 
 Place Categories name the kinds of place a game marks on its maps beyond the
 Engine's generic `inn`, `shop`, `home` and `organization`: a school, a temple,
