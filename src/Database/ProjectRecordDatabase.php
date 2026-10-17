@@ -13,7 +13,9 @@ use Throwable;
 
 use Ichiloto\Editor\History\TracksPersistedState;
 use Ichiloto\Editor\ProjectDirectoryContext;
+use Ichiloto\Editor\MenuPresentationSettings;
 use Ichiloto\Editor\ProjectConfig;
+use Ichiloto\Editor\ProjectSettingsFile;
 use Ichiloto\Editor\Database\Projections\WholeFileProjection;
 use Ichiloto\Editor\Inspector\InputControl;
 use Ichiloto\Editor\Inspector\InputControlType;
@@ -75,11 +77,11 @@ final class ProjectRecordDatabase
         if ($record->toArray() === $draft->toArray()) { return; }
         if ($this->schema->storage === RecordStorage::CONFIG_SUBTREE) {
             $path = strval($draft->get('path'));
-            $this->config?->assertAcceptableValue($path, $draft->get('value'), complete: false);
+            $this->settings?->assertAcceptableValue($path, $draft->get('value'), complete: false);
             if ($path === ProjectConfig::INN_PRESENTATION) {
                 InnPresentationFields::assertValid($draft->get('value'), $this->authoringReferences, complete: false);
             }
-            $this->config?->assertSourceAcceptsValue($path, $draft->get('value'));
+            $this->settings?->assertSourceAcceptsValue($path, $draft->get('value'));
         } elseif (is_array($draft->toArray())) {
             InnPresentationFields::assertChangedCommandsValid((array) $record->toArray(), $draft->toArray(), $this->authoringReferences, complete: false);
             if ($this->schema->storage === RecordStorage::DIRECTORY) {
@@ -115,7 +117,7 @@ final class ProjectRecordDatabase
         private array $stagedDeletions = [],
         private ?\Closure $writeBack = null,
         private ?string $projectRoot = null,
-        private ?ProjectConfig $config = null,
+        private ?ProjectSettingsFile $settings = null,
         private ?\Closure $identityReferences = null,
     ) {
         $this->learnKeyOrder();
@@ -339,7 +341,7 @@ final class ProjectRecordDatabase
      * @param RecordSchema $schema The category schema.
      * @return self
      */
-    public static function fromProject(string $projectRoot, RecordSchema $schema, ?ProjectConfig $config = null, bool $graphical = false): self
+    public static function fromProject(string $projectRoot, RecordSchema $schema, ?ProjectSettingsFile $settings = null, bool $graphical = false): self
     {
         // The categories evaluate authored files that construct engine
         // objects, and creating an entry constructs them too. The runtime
@@ -352,7 +354,7 @@ final class ProjectRecordDatabase
         $database = match ($schema->storage) {
             RecordStorage::LIST_FILE => self::loadListFile($path, $schema, $projectRoot),
             RecordStorage::DIRECTORY => self::loadDirectory($path, $schema, $projectRoot),
-            RecordStorage::CONFIG_SUBTREE => self::loadConfigSubtree($path, $schema, $projectRoot, $config),
+            RecordStorage::CONFIG_SUBTREE => self::loadConfigSubtree($path, $schema, $projectRoot, $settings),
             RecordStorage::MAP_OWNED => throw new RuntimeException('Map-owned records are built over their owner, not loaded from a path.'),
         };
         $database->graphical = $graphical;
@@ -413,7 +415,7 @@ final class ProjectRecordDatabase
 
     public function isDirty(): bool
     {
-        if ($this->config !== null) {
+        if ($this->settings !== null) {
             foreach ($this->records as $record) {
                 if ($record->isDirty()) { return true; }
             }
@@ -534,7 +536,7 @@ final class ProjectRecordDatabase
         }
 
         $isEditable = $this->isEditable() && $record->isEditable();
-        $configIssue = $this->config?->getFieldIssue($record->getDisplayValue('path'));
+        $configIssue = $this->settings?->getFieldIssue($record->getDisplayValue('path'));
         $isEditable = $isEditable && $configIssue === null;
         $fields = [];
 
@@ -751,7 +753,7 @@ final class ProjectRecordDatabase
         if (! $record instanceof ProjectRecord || ! $this->isEditable() || ! $record->isEditable()) {
             return;
         }
-        if ($this->config !== null && ($issue = $this->config->getFieldIssue($record->getDisplayValue('path'))) !== null) {
+        if ($this->settings !== null && ($issue = $this->settings->getFieldIssue($record->getDisplayValue('path'))) !== null) {
             throw new \Ichiloto\Editor\Cutscenes\Source\SourcePreservationRefusal($issue);
         }
 
@@ -808,7 +810,7 @@ final class ProjectRecordDatabase
             if ($this->schema->storage === RecordStorage::CONFIG_SUBTREE) {
                 // A setting the file leaves out already reads as its default:
                 // choosing that default writes nothing.
-                if ($record->get('value') === null && ! $this->config?->holds(strval($record->get('path'))) && $value == $record->get('default')) {
+                if ($record->get('value') === null && ! $this->settings?->holds(strval($record->get('path'))) && $value == $record->get('default')) {
                     return;
                 }
             }
@@ -1631,8 +1633,8 @@ final class ProjectRecordDatabase
         if (! $this->isEditable()) {
             throw new RuntimeException(sprintf('%s is read-only: %s.', $this->schema->entryNoun, $this->readOnlyReason));
         }
-        if ($this->config !== null) {
-            $this->config->save();
+        if ($this->settings !== null) {
+            $this->settings->save();
             return;
         }
 
@@ -1777,17 +1779,29 @@ final class ProjectRecordDatabase
     }
 
     /**
-     * Loads a category stored as a flattened config.php subtree.
+     * Loads a category stored as flattened settings of a project settings file: config.php, or the menu
+     * presentation catalog. The file's one owner is shared by every category over it.
      *
-     * @param string $path The config.php path.
+     * @param string $path The settings file path.
      * @param RecordSchema $schema The category schema.
      * @return self
      */
-    private static function loadConfigSubtree(string $path, RecordSchema $schema, ?string $projectRoot = null, ?ProjectConfig $config = null): self
+    private static function loadConfigSubtree(string $path, RecordSchema $schema, ?string $projectRoot = null, ?ProjectSettingsFile $settings = null): self
     {
-        $config ??= new ProjectConfig($projectRoot ?? dirname($path));
-        return new self($schema, $path, $config->getTermRecords($schema->configPath),
-            readOnlyReason: $config->getReadOnlyReason(), config: $config);
+        $projectRoot ??= dirname($path);
+        $settings ??= self::createSettingsFile($projectRoot, $schema->relativePath);
+        return new self($schema, $path, $settings->getSettingRecords($schema->configPath),
+            readOnlyReason: $settings->getReadOnlyReason(), settings: $settings);
+    }
+
+    /** The owner of a settings file, by where it lives in a project. */
+    public static function createSettingsFile(string $projectRoot, string $relativePath): ProjectSettingsFile
+    {
+        return match ($relativePath) {
+            'config.php' => new ProjectConfig($projectRoot),
+            MenuPresentationSettings::RELATIVE_PATH => new MenuPresentationSettings($projectRoot),
+            default => throw new RuntimeException(sprintf('%s has no settings owner.', $relativePath)),
+        };
     }
 
     /**
@@ -2795,7 +2809,7 @@ final class ProjectRecordDatabase
         match ($this->schema->storage) {
             RecordStorage::LIST_FILE => SharedFileTransaction::preview([$this]),
             RecordStorage::DIRECTORY => $record->file?->composeContents($this->composeRecordFilePayload($record)),
-            RecordStorage::CONFIG_SUBTREE => $this->config?->getSource(),
+            RecordStorage::CONFIG_SUBTREE => $this->settings?->getSource(),
             default => null,
         };
     }

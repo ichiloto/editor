@@ -53,6 +53,7 @@ final readonly class ProjectWorkspace
         public array                    $recordDatabases = [],
         public ?CutsceneLibrary         $cutscenes = null,
         public ?ProjectConfig           $config = null,
+        public ?MenuPresentationSettings $menuPresentation = null,
         public ?ProjectScriptCommands   $scriptCommands = null,
     ) {
         // A quest's id follows its name until something refers to it, and
@@ -207,6 +208,9 @@ final readonly class ProjectWorkspace
         // failure instead of the author's enemies.
         EngineDataBootstrap::ensure($projectRoot);
         $projectConfig = new ProjectConfig($projectRoot);
+        // Each settings file has one owner, shared by every category over it.
+        $menuPresentation = new MenuPresentationSettings($projectRoot);
+        $settingsFiles = ['config.php' => $projectConfig, MenuPresentationSettings::RELATIVE_PATH => $menuPresentation];
         // Before any schema is built: the command editor offers, and Engine
         // validation accepts, exactly this project's registered commands.
         $scriptCommands = ProjectScriptCommands::fromProject($projectRoot);
@@ -221,11 +225,13 @@ final readonly class ProjectWorkspace
             mapIds: array_map(static fn(ProjectMap $map): string => $map->mapId, $maps),
             actorDatabase: ProjectActorDatabase::fromProject($projectRoot),
             recordDatabases: array_map(
-                static fn(RecordSchema $schema): ProjectRecordDatabase => ProjectRecordDatabase::fromProject($projectRoot, $schema, $projectConfig, $graphical),
+                static fn(RecordSchema $schema): ProjectRecordDatabase => ProjectRecordDatabase::fromProject($projectRoot, $schema,
+                    $settingsFiles[$schema->relativePath] ?? null, $graphical),
                 RecordSchemaCatalog::all($graphical),
             ),
             cutscenes: CutsceneLibrary::fromProject($projectRoot),
             config: $projectConfig,
+            menuPresentation: $menuPresentation,
             scriptCommands: $scriptCommands,
         );
     }
@@ -328,6 +334,7 @@ final readonly class ProjectWorkspace
 
         return $this->actorDatabase->isDirty()
             || ($this->config?->isDirty() ?? false)
+            || ($this->menuPresentation?->isDirty() ?? false)
             || ($this->cutscenes?->hasUnsavedChanges() ?? false);
     }
 
@@ -365,7 +372,7 @@ final readonly class ProjectWorkspace
      * Read-only record categories are left out: they hold no edits, and
      * asking them to save would raise instead of doing nothing.
      *
-     * @return array<string, ProjectActorDatabase|ProjectConfig|ProjectRecordDatabase>
+     * @return array<string, ProjectActorDatabase|ProjectSettingsFile|ProjectRecordDatabase>
      */
     public function listSaveableDatabases(): array
     {
@@ -375,6 +382,10 @@ final readonly class ProjectWorkspace
 
         if ($this->config !== null) {
             $databases['Project configuration'] = $this->config;
+        }
+
+        if ($this->menuPresentation !== null) {
+            $databases['Menu theme'] = $this->menuPresentation;
         }
 
         foreach ($this->recordDatabases as $categoryKey => $recordDatabase) {
@@ -456,6 +467,7 @@ final readonly class ProjectWorkspace
             recordDatabases: $this->recordDatabases,
             cutscenes: $this->cutscenes,
             config: $this->config,
+            menuPresentation: $this->menuPresentation,
             scriptCommands: $this->scriptCommands,
         );
     }
