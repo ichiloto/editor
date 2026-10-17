@@ -4108,7 +4108,7 @@ final class EditorSession
             'issue' => $issue,
             'rows' => [...array_map(static fn($field): array => self::describeRecordRow($records, $index, [], $field, 'world-object'), $fields),
                 // What the object is on the minimap: a map landmark row, applied through the map's inspector.
-                ...array_map(self::describeRow(...), MapLandmarkFields::describeObjectFields($map, $id))]];
+                ...array_map(self::describeRow(...), new MapLandmarkFields(new ReferenceCatalog($this->workspace, $map))->describeObjectFields($map, $id))]];
     }
 
     public function createWorldObject(string $mapId, int $revision, string $id, int $x, int $y, ?string $resource = null, ?string $text = null): array
@@ -4205,7 +4205,7 @@ final class EditorSession
     {
         $map = $this->requireCurrentMap($mapId, $revision);
         ksort($key);
-        $field = array_find(MapLandmarkFields::describeObjectFields($map, $id), static function (array $candidate) use ($key): bool {
+        $field = array_find(new MapLandmarkFields(new ReferenceCatalog($this->workspace, $map))->describeObjectFields($map, $id), static function (array $candidate) use ($key): bool {
             $candidateKey = MapInspector::describeRowKey($candidate);
             if ($candidateKey !== null) { ksort($candidateKey); }
             return $candidateKey === $key;

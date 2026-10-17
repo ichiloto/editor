@@ -100,3 +100,29 @@ it('builds reveal conditions with the shared editor and reports a refusal withou
         ->and($toasts->pendingCount())->toBe(0)
         ->and(mapDataOf($editor)['landmarks'][0])->not->toHaveKey('approachDistance');
 });
+
+it('places a map in the atlas from the Terminal: scope stepped, parent entry picked from a list', function () {
+    [$root] = createAtlasProject();
+    $editor = metadataEditor($root);
+    $select = static function (string $field) use ($editor): void {
+        foreach (callEditorMethod($editor, 'getInspectorFields') as $index => $row) {
+            if (($row['target'] ?? null) === 'map-atlas' && ($row['field'] ?? null) === $field) {
+                setEditorProperty($editor, 'selectedInspectorFieldIndex', $index);
+                return;
+            }
+        }
+        throw new RuntimeException('No atlas row edits ' . $field);
+    };
+    $select('parent');
+    callEditorMethod($editor, 'activateInspectorField');
+    $entries = getEditorProperty($editor, 'eventOptionDialogEntries');
+    expect(array_column($entries, 'label'))->toBe(['(none)', 'World · town-gate']);
+    setEditorProperty($editor, 'selectedEventOptionIndex', 1);
+    callEditorMethod($editor, 'applySelectedEventOption');
+    expect(mapDataOf($editor)['atlas'])->toBe(['parent' => ['map' => 'world', 'landmark' => 'town-gate']])
+        ->and(inspectorValueOf($editor, 'Global Map'))->toBe('world at town-gate');
+
+    $select('scope');
+    callEditorMethod($editor, 'activateInspectorField');
+    expect(mapDataOf($editor)['atlas'])->toBe(['scope' => 'global']);
+});

@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Validation;
 
+use Ichiloto\Editor\Field\MapAtlas;
 use Ichiloto\Editor\Field\MapLandmarks;
 use Ichiloto\Editor\Inspector\MapLandmarkFields;
 use Ichiloto\Editor\ProjectMap;
+use Ichiloto\Engine\Field\MapCategoryCatalog;
 use InvalidArgumentException;
 
 /**
@@ -36,10 +38,28 @@ final class MapValidator
             ...self::findOutOfRangeSpawnPoints($map, $mapsById),
             ...self::findRetiredData($map),
             ...self::findLandmarkProblems($map),
+            ...self::findAtlasProblems($map, $mapsById),
             ...array_map(static fn(Issue $issue): string => $issue->message, MapGraphicsValidator::validate($map)),
         ];
     }
 
+
+    /**
+     * Finds an atlas scope or parent chain the engine would refuse, by its own check over the project's maps.
+     *
+     * @param array<string, ProjectMap> $mapsById
+     * @return string[]
+     */
+    private static function findAtlasProblems(ProjectMap $map, array $mapsById): array
+    {
+        try {
+            MapAtlas::resolveGlobal($map, MapAtlas::readBlock($map), static fn(string $id): ?ProjectMap => $mapsById[$id] ?? null,
+                MapCategoryCatalog::load($map->getAssetRoot()));
+            return [];
+        } catch (InvalidArgumentException $error) {
+            return ['Atlas: ' . $error->getMessage()];
+        }
+    }
 
     /**
      * Finds minimap landmarks the engine would refuse, by its own check.
@@ -49,7 +69,8 @@ final class MapValidator
     private static function findLandmarkProblems(ProjectMap $map): array
     {
         try {
-            $problem = MapLandmarkFields::findProblem($map, MapLandmarks::readMap($map)->entries);
+            $problem = MapLandmarkFields::findProblem($map, MapLandmarks::readMap($map)->entries,
+                MapCategoryCatalog::load($map->getAssetRoot()));
         } catch (InvalidArgumentException $error) {
             $problem = $error->getMessage();
         }

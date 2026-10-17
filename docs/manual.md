@@ -1015,6 +1015,10 @@ event or object moves the landmark.
 - The id, shown on the landmark's heading, is fixed: saves remember what the
   party has learned by it. An object's own id is used when it is a valid
   landmark id; otherwise the next free `landmark-N`.
+- `Category` says what the place offers, whatever its kind: the Engine's
+  `inn`, `shop`, `home` and `organization`, or a category of the project's
+  own (see Place Categories). An entrance into a shop is a route with the
+  shop category. `(none)` leaves the marker to the kind.
 - `Name` is the label the minimap shows once the place is known; clearing it
   removes the name. A first name takes the Engine's map-scoped translation
   key, shown and editable as `Name Translation Key`.
@@ -1029,6 +1033,22 @@ stands and is one undo step. An event or world object a landmark anchors
 cannot be deleted, and an anchored event cannot change between a transfer and
 any other type, until the landmark is changed or removed. Validation reports
 landmarks the Engine would refuse.
+
+### Atlas
+
+`Atlas` places the map in the atlas (Engine `docs/maps.md`). `Scope` is
+`Local` (a town, a house, a dungeon; what a map is when it says nothing) or
+`Global`, the overworld geography itself. A local map's `Parent Entry` is the
+landmark on another map that is its entrance there: a house's on its town, the
+town's on the world. It is picked from the landmarks other maps declare, those
+whose door leads to this map first; a global map has no parent. `Global Map`
+shows where the chain of parents reaches the global map, as the Engine
+resolves it. No coordinates are copied: moving the parent's door moves the
+entry. An edit the Engine would refuse (a cycle, a missing landmark, too deep
+a chain) changes nothing and says why. A landmark another map names as its
+entry cannot be removed until that map chooses another, and deleting or moving
+a map lists the maps that name it as parent. Validation reports an atlas the
+Engine would refuse.
 
 In Event mode, painting or selecting a marker with no definition opens the
 Event Type picker. **Story Script** creates the engine's
@@ -1188,6 +1208,7 @@ skill's effects, a quest's rewards) listed under them.
 | Configuration | `config.php` (`save`, `accessibility`, `ui`, `graphics`, `audio`, `inn`) | Editable - one row per setting, typed by what it holds; field zoom is kept from 1 to 8 | Same |
 | Types | `assets/Data/system.php` | Editable - the project's elements, one per row; an empty list means the Engine's defaults. Weapon, armor and equipment types are the Engine's own | Same |
 | Terms | `config.php` (`vocab`, `messages`) | Literal terms editable; comments and unrelated expressions preserved | Same |
+| Place Categories | `assets/Data/map-categories.php` (`categories`) | Editable - one record per category: stable id, name and translation key, and the generic category it specializes | Same |
 | Player Field Appearance | `assets/Data/Entities/player.php` | Not shown: graphical ownership and art | Choose fixed-player, selected party leader, or absent legacy selector; fixed sheet picker with index/layer controls |
 | Field Resources | `assets/Data/Presentation/field.php` (`resources`) | Not shown: graphical resources | One record per named resource, keyed by its stable id: name, ground contact, an image or a sign board, and an optional occupancy stamp |
 | Text Roles | `assets/Data/Presentation/text.php` (`roles`) | Not shown: graphical text | One record per text role: the project's fonts, first choice first, a size and a colour |
@@ -1215,6 +1236,15 @@ it. Only changed leaves are written; comments and settings other pages own are
 kept. A project without `menus.php` shows the category read-only and says why.
 The Terminal's opened map keeps its own layout, so the Terminal editor does not
 list this category.
+
+Place Categories name the kinds of place a game marks on its maps beyond the
+Engine's generic `inn`, `shop`, `home` and `organization`: a school, a temple,
+a guild. Each record has a stable id, a name with its translation key, and the
+generic category it specializes, whose marker it shows until the Menu Theme
+gives it one of its own. A new category starts as a kind of `inn`, the
+Engine's first generic category, for the author to change. Its id may change
+until a landmark uses it; while one does, the id stays and the category cannot
+be deleted.
 
 Field Resources are reusable whole images, such as a tree, that a map places by
 reference. A resource owns its art and its ground contact (the pivot, such as a

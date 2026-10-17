@@ -7,6 +7,7 @@ namespace Ichiloto\Editor\Field;
 use Ichiloto\Editor\Events\EventTypeCatalog;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Engine\Events\Triggers\TransferPlayerTrigger;
+use Ichiloto\Engine\Field\MapCategoryCatalog;
 use Ichiloto\Engine\Field\MapLandmarkAnchors;
 use Ichiloto\Engine\Field\MapLandmarkCatalog;
 use Ichiloto\Engine\Field\MapLandmarkKind;
@@ -39,13 +40,14 @@ final readonly class MapLandmarks
     }
 
     /**
-     * What the map's landmarks may anchor to, read by the Engine's own adapter from the map as it stands: placed
-     * events (an event without cells has nothing to mark), world objects at their anchor cell, and legacy
-     * transfers. Only a legacy transfer with a stable `id` can be chosen as an anchor.
+     * The map as the Engine's map readers take it, unsaved edits included: its data with each placed event
+     * resolved to its marker and cells (an event without cells has nothing to mark), and its composed logical cell
+     * grid. Landmark anchors and atlas parents are both read from this one view.
      *
+     * @return array{data: array<string, mixed>, tiles: array<int, array<int, string>>}
      * @throws InvalidArgumentException When world objects cannot be read.
      */
-    public static function readAnchors(ProjectMap $map): MapLandmarkAnchors
+    public static function readResolvedSource(ProjectMap $map): array
     {
         $events = [];
         foreach ($map->getEventDefinitions() as $marker => $definition) {
@@ -55,8 +57,20 @@ final readonly class MapLandmarks
         }
         $triggers = $map->getEditableData()['triggers'] ?? [];
 
-        return MapLandmarkAnchors::readMap(['events' => $events, 'worldObjects' => WorldObjectAuthoring::readEntries($map),
-            'triggers' => is_array($triggers) ? $triggers : []]);
+        return ['data' => [...$map->getEditableData(), 'id' => $map->mapId, 'events' => $events,
+            'worldObjects' => WorldObjectAuthoring::readEntries($map), 'triggers' => is_array($triggers) ? $triggers : []],
+            'tiles' => $map->getLayerSet()->getComposedGrid()];
+    }
+
+    /**
+     * What the map's landmarks may anchor to, read by the Engine's own adapter from the map as it stands. Only a
+     * legacy transfer with a stable `id` can be chosen as an anchor.
+     *
+     * @throws InvalidArgumentException When world objects cannot be read.
+     */
+    public static function readAnchors(ProjectMap $map): MapLandmarkAnchors
+    {
+        return MapLandmarkAnchors::readMap(self::readResolvedSource($map)['data']);
     }
 
     /** @return list<int> The number of real cells on each row, so ragged maps keep their shape. */
@@ -69,11 +83,12 @@ final readonly class MapLandmarks
      * Checks declarations against the map as it stands, through the Engine's validator.
      *
      * @param list<array<string, mixed>> $entries
+     * @param MapCategoryCatalog|null $categories The project's place categories; null accepts the Engine's generic ones only.
      * @throws InvalidArgumentException With the Engine's reason when the map would not load them.
      */
-    public static function validateEntries(ProjectMap $map, array $entries): MapLandmarkCatalog
+    public static function validateEntries(ProjectMap $map, array $entries, ?MapCategoryCatalog $categories = null): MapLandmarkCatalog
     {
-        return MapLandmarkCatalog::readDeclarations($entries, self::readAnchors($map), self::readRowWidths($map));
+        return MapLandmarkCatalog::readDeclarations($entries, self::readAnchors($map), self::readRowWidths($map), $categories);
     }
 
     /** Whether an event definition moves the player to another map: the only kind of event a route marks. */
@@ -245,6 +260,20 @@ final readonly class MapLandmarks
     }
 
     /**
+     * Says what a place offers (an inn, a shop, the project's own kinds), or removes the category when none is
+     * chosen. A category is independent of the kind: an entrance into a shop is a route with the shop category.
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function setCategory(int $index, ?string $category): array
+    {
+        $entries = $this->entries;
+        if ($category === null || $category === '') { unset($entries[$index]['category']); }
+        else { $entries[$index]['category'] = $category; }
+        return $entries;
+    }
+
+    /**
      * Names a landmark, or removes its name when the text is blank. A first name takes the Engine's map-scoped
      * translation key; a name already keyed keeps its key.
      *
@@ -358,6 +387,31 @@ final readonly class MapLandmarks
         $index = $landmarks->findAnchorIndex($anchor);
         return $index === null ? [] : [sprintf('%s landmark %s (%s)', $map->mapId, $landmarks->entries[$index]['id'] ?? $index,
             $landmarks->entries[$index]['kind'] ?? 'no kind')];
+    }
+
+    /**
+     * Where landmarks name a place category: what keeps the category from being deleted.
+     *
+     * @param iterable<ProjectMap> $maps
+     * @return list<string>
+     */
+    public static function describeCategoryReferences(iterable $maps, string $category): array
+    {
+        $found = [];
+        foreach ($maps as $map) {
+            try {
+                $entries = self::readMap($map)->entries;
+            } catch (InvalidArgumentException $error) {
+                $found[] = sprintf('%s landmarks: %s', $map->mapId, $error->getMessage());
+                continue;
+            }
+            foreach ($entries as $entry) {
+                if (($entry['category'] ?? null) === $category) {
+                    $found[] = sprintf('landmark %s on %s', $entry['id'] ?? '?', $map->mapId);
+                }
+            }
+        }
+        return $found;
     }
 
     /**

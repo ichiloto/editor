@@ -19,6 +19,7 @@ use Ichiloto\Editor\Events\EventTypeCatalog;
 use Ichiloto\Editor\Events\EventTypeDefinition;
 use Ichiloto\Editor\Field\MapBgmVariants;
 use Ichiloto\Editor\Field\MapEncounters;
+use Ichiloto\Editor\Field\MapAtlas;
 use Ichiloto\Editor\Field\MapLandmarks;
 use Ichiloto\Editor\History\Command;
 use Ichiloto\Editor\History\GenericCommand;
@@ -167,7 +168,8 @@ final readonly class MapInspector
                 'editable' => false,
             ],
             ...$this->mapRuntimeFields($map),
-            ...MapLandmarkFields::describeMapFields($map),
+            ...MapAtlasFields::describeMapFields($map, $this->references),
+            ...$this->getLandmarkFields()->describeMapFields($map),
         ];
     }
 
@@ -248,7 +250,7 @@ final readonly class MapInspector
             $fields = \Ichiloto\Editor\Maps\MapPlacement::describeEventFields($definition, $fields);
         }
 
-        return [...$fields, ...MapLandmarkFields::describeEventFields($map, $marker)];
+        return [...$fields, ...$this->getLandmarkFields()->describeEventFields($map, $marker)];
     }
 
     /**
@@ -310,6 +312,7 @@ final readonly class MapInspector
             'event-type' => $this->applyEventType($map, (string) $field['marker'], $rawValue),
             'event-bounds' => $this->applyEventBounds($map, (string) $field['marker'], (string) $field['field'], (int) $value),
             MapLandmarkFields::TARGET, MapLandmarkFields::EVENT_TARGET, MapLandmarkFields::OBJECT_TARGET => $this->applyLandmarkValue($map, $field, $value),
+            MapAtlasFields::TARGET => $this->applyAtlasValue($map, $field, $value),
             default => null,
         };
     }
@@ -324,12 +327,38 @@ final readonly class MapInspector
     private function applyLandmarkValue(ProjectMap $map, array $field, mixed $value): ?Command
     {
         try {
-            $entries = MapLandmarkFields::applyValue($map, $field, $value);
+            $entries = $this->getLandmarkFields()->applyValue($map, $field, $value);
         } catch (InvalidArgumentException $error) {
             throw new InspectorRefusal($error->getMessage(), previous: $error);
         }
 
         return $entries === null ? null : $this->writeLandmarks($map, $entries, trim((string) ($field['label'] ?? 'Landmark')));
+    }
+
+    /** The landmark rows, over the project's place categories and maps as this inspector reads them. */
+    private function getLandmarkFields(): MapLandmarkFields
+    {
+        return new MapLandmarkFields($this->references);
+    }
+
+    /**
+     * Applies one atlas row's edit: the block it leaves is checked by the Engine through the parent chain, as the
+     * project's maps stand, then written as one undo step; an empty block removes the key.
+     *
+     * @param array<string, mixed> $field
+     * @throws InspectorRefusal When the edit cannot be made or the atlas would not resolve.
+     */
+    private function applyAtlasValue(ProjectMap $map, array $field, mixed $value): ?Command
+    {
+        try {
+            $block = MapAtlasFields::applyValue($map, $field, $value);
+            if ($block === null) { return null; }
+            MapAtlas::resolveGlobal($map, $block, $this->references->findMap(...), $this->references->getMapCategoryCatalog());
+        } catch (InvalidArgumentException $error) {
+            throw new InspectorRefusal($error->getMessage(), previous: $error);
+        }
+
+        return $this->writeMapData($map, [MapAtlas::KEY], $block === [] ? null : $block, 'Atlas ' . strtolower(trim((string) ($field['label'] ?? 'edit'))));
     }
 
     /**
@@ -340,7 +369,7 @@ final readonly class MapInspector
      */
     private function writeLandmarks(ProjectMap $map, array $entries, string $label): ?Command
     {
-        $problem = MapLandmarkFields::findProblem($map, $entries);
+        $problem = $this->getLandmarkFields()->findCurrentProblem($map, $entries);
         if ($problem !== null) {
             throw new InspectorRefusal($problem);
         }
@@ -454,7 +483,7 @@ final readonly class MapInspector
         }
 
         if (($field['target'] ?? null) === MapLandmarkFields::TARGET && is_array($field['landmarkList'] ?? null)) {
-            return $this->editLandmarkList($map, static fn(): array => MapLandmarkFields::addEntry($map), 'add');
+            return $this->editLandmarkList($map, fn(): array => $this->getLandmarkFields()->addEntry($map), 'add');
         }
 
         if (($field['target'] ?? null) === 'map-bgm-variants' && is_array($field['bgmVariantList'] ?? null)) {
@@ -508,7 +537,7 @@ final readonly class MapInspector
         }
 
         if (($field['target'] ?? null) === MapLandmarkFields::TARGET && is_array($field['landmarkList'] ?? null)) {
-            return $this->editLandmarkList($map, static fn(): array => MapLandmarkFields::removeEntry($map, $field), 'remove');
+            return $this->editLandmarkList($map, fn(): array => $this->getLandmarkFields()->removeEntry($map, $field), 'remove');
         }
 
         if (($field['target'] ?? null) === 'map-bgm-variants' && is_array($field['bgmVariantList'] ?? null)) {

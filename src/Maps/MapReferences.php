@@ -5,12 +5,14 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Maps;
 
 use Ichiloto\Editor\Cutscenes\CutsceneType;
+use Ichiloto\Editor\Field\MapAtlas;
 use Ichiloto\Editor\ProjectWorkspace;
 
 /**
  * Finding what sends the player to a map by its id: the game's starting
- * position, transfer events on every map (unsaved edits included), and
- * cinematic `transfer` commands at any depth. Knowing them lets an editor
+ * position, transfer events on every map (unsaved edits included), maps
+ * naming it as their atlas parent, and cinematic `transfer` commands at any
+ * depth. Knowing them lets an editor
  * warn before deleting a map something still expects; the project validator
  * reports any that remain dangling.
  */
@@ -43,6 +45,8 @@ final readonly class MapReferences
                 }
             }
         }
+        // A local map that names this one as its atlas parent loses its place above.
+        array_push($found, ...MapAtlas::describeParentReferences($this->workspace->maps, $mapId));
         foreach (CutsceneType::cases() as $type) {
             foreach ($this->workspace->cutscenes?->assets($type) ?? [] as $asset) {
                 if (self::hasTransferTo($asset->commands(), $mapId)) {

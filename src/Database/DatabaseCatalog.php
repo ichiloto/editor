@@ -31,6 +31,7 @@ final class DatabaseCatalog
             new DatabaseCategoryDefinition('states', 'States', 'Define status effects and conditions.', true),
             new DatabaseCategoryDefinition('animations', 'Animations', 'Create reusable keyframed effects.', true),
             new DatabaseCategoryDefinition('tilesets', 'Tilesets', 'Assign tiles and terrain behavior.', true),
+            new DatabaseCategoryDefinition(\Ichiloto\Editor\Field\MapCategoryFields::CATEGORY, 'Place Categories', 'Name the kinds of place a game marks on its maps beyond inn, shop, home and organization.', true),
             new DatabaseCategoryDefinition('common_events', 'Common Events', 'Author cutscene and event command lists.', true),
             new DatabaseCategoryDefinition('quests', 'Quests', 'Author quests, objectives, and rewards.', true),
             new DatabaseCategoryDefinition('skits', 'Skits', 'Write optional party banter scenes.', true),

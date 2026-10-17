@@ -422,12 +422,17 @@ final readonly class RecordAuthoring
      * undo honest. The change's index is the record to select next: the
      * one before it, or null when none is left.
      *
-     * @throws RecordRefusal When the category is read-only, the record is gone, or the category keeps its entries.
+     * @throws RecordRefusal When the category is read-only, the record is gone, something still names it, or the
+     *     category keeps its entries.
      */
     public function deleteRecord(ProjectRecordDatabase $database, int $index): RecordChange
     {
         $this->requireRecord($database, $index);
         $label = $database->getEntryLabels()[$index] ?? '';
+        $references = $database->describeDeletionReferences($index);
+        if ($references !== []) {
+            throw new RecordRefusal(sprintf('%s %s is still used: %s.', ucfirst($database->schema->entryNoun), $label, implode('; ', $references)));
+        }
         $removed = $database->removeRecord($index)
             ?? throw new RecordRefusal('This category does not support entry deletion yet.');
         $remaining = count($database->getRecords());

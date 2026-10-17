@@ -31,26 +31,47 @@ PHP, (string) file_get_contents($file)));
 }
 
 /** The map inspector row whose key has these members, read fresh. */
-function findLandmarkRow(EditorSession $session, array $key, ?string $marker = null): array
+function findLandmarkRow(EditorSession $session, array $key, ?string $marker = null, string $mapId = 'test-map'): array
 {
-    $rows = $session->readInspector('test-map', $marker)['rows'];
+    $rows = $session->readInspector($mapId, $marker)['rows'];
     return array_find($rows, static fn(array $row): bool => array_intersect_assoc($key, $row['key'] ?? []) === $key && array_diff_key($key, $row['key'] ?? []) === [])
         ?? throw new RuntimeException('Missing inspector row ' . json_encode($key));
 }
 
-function applyLandmarkRow(EditorSession $session, array $key, string $value, ?string $marker = null): array
+function applyLandmarkRow(EditorSession $session, array $key, string $value, ?string $marker = null, string $mapId = 'test-map'): array
 {
-    $row = findLandmarkRow($session, $key, $marker);
-    return $session->applyInspector('test-map', $session->readMap('test-map')['revision'], $row['key'], $value);
+    $row = findLandmarkRow($session, $key, $marker, $mapId);
+    return $session->applyInspector($mapId, $session->readMap($mapId)['revision'], $row['key'], $value);
 }
 
 /** The map's declarations as the Editor holds them, unsaved edits included. */
-function readLandmarkEntries(EditorSession $session): array
+function readLandmarkEntries(EditorSession $session, string $mapId = 'test-map'): array
 {
-    return Ichiloto\Editor\Field\MapLandmarks::readMap(getSessionMap($session))->entries;
+    return Ichiloto\Editor\Field\MapLandmarks::readMap(getSessionMap($session, $mapId))->entries;
 }
 
-function getSessionMap(EditorSession $session): Ichiloto\Editor\ProjectMap
+function getSessionMap(EditorSession $session, string $mapId = 'test-map'): Ichiloto\Editor\ProjectMap
 {
-    return new ReflectionMethod(EditorSession::class, 'requireMap')->invoke($session, 'test-map');
+    return new ReflectionMethod(EditorSession::class, 'requireMap')->invoke($session, $mapId);
+}
+
+/**
+ * The landmark project with a second, global map "world" whose transfer T leads into test-map and is declared as
+ * the landmark town-gate, and the session over both.
+ *
+ * @return array{string, string, EditorSession}
+ */
+function createAtlasProject(string $testMapAtlas = ''): array
+{
+    [$root, $file] = createLandmarkProject($testMapAtlas);
+    $world = $root . '/assets/Maps/world';
+    copyDirectoryRecursively($root . '/assets/Maps/test-map', $world);
+    rename($world . '/test-map.data.php', $world . '/world.data.php');
+    rename($world . '/test-map.event.php', $world . '/world.event.php');
+    $source = str_replace(["'name' => 'Test Map'", "// Map-owned presentation stays authored.\n"],
+        ["'name' => 'World', 'atlas' => ['scope' => 'global'], 'landmarks' => [['id' => 'town-gate', 'kind' => 'entrance', 'anchor' => ['event' => 'T']]]", ''],
+        (string) file_get_contents($world . '/world.data.php'));
+    file_put_contents($world . '/world.data.php', $source);
+
+    return [$root, $file, EditorSession::open($root)];
 }
