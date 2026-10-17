@@ -19,6 +19,7 @@ use Ichiloto\Editor\Events\EventTypeCatalog;
 use Ichiloto\Editor\Events\EventTypeDefinition;
 use Ichiloto\Editor\Field\MapBgmVariants;
 use Ichiloto\Editor\Field\MapEncounters;
+use Ichiloto\Editor\Field\MapLandmarks;
 use Ichiloto\Editor\History\Command;
 use Ichiloto\Editor\History\GenericCommand;
 use Ichiloto\Editor\ProjectMap;
@@ -31,6 +32,7 @@ use Ichiloto\Engine\Field\MapGraphics;
 use Ichiloto\Engine\Rendering\Tilesets\Tileset;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandReference;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandRegistry;
+use Closure;
 use InvalidArgumentException;
 use Throwable;
 
@@ -165,6 +167,7 @@ final readonly class MapInspector
                 'editable' => false,
             ],
             ...$this->mapRuntimeFields($map),
+            ...MapLandmarkFields::describeMapFields($map),
         ];
     }
 
@@ -245,7 +248,7 @@ final readonly class MapInspector
             $fields = \Ichiloto\Editor\Maps\MapPlacement::describeEventFields($definition, $fields);
         }
 
-        return $fields;
+        return [...$fields, ...MapLandmarkFields::describeEventFields($map, $marker)];
     }
 
     /**
@@ -306,8 +309,67 @@ final readonly class MapInspector
             'event' => $this->applyEventField($map, $field, $value),
             'event-type' => $this->applyEventType($map, (string) $field['marker'], $rawValue),
             'event-bounds' => $this->applyEventBounds($map, (string) $field['marker'], (string) $field['field'], (int) $value),
+            MapLandmarkFields::TARGET, MapLandmarkFields::EVENT_TARGET, MapLandmarkFields::OBJECT_TARGET => $this->applyLandmarkValue($map, $field, $value),
             default => null,
         };
+    }
+
+    /**
+     * Applies one minimap landmark row's edit: the declarations it leaves are checked by the Engine against the map
+     * as it stands, then written as one undo step.
+     *
+     * @param array<string, mixed> $field
+     * @throws InspectorRefusal When the edit cannot be made or the map would not load the result.
+     */
+    private function applyLandmarkValue(ProjectMap $map, array $field, mixed $value): ?Command
+    {
+        try {
+            $entries = MapLandmarkFields::applyValue($map, $field, $value);
+        } catch (InvalidArgumentException $error) {
+            throw new InspectorRefusal($error->getMessage(), previous: $error);
+        }
+
+        return $entries === null ? null : $this->writeLandmarks($map, $entries, trim((string) ($field['label'] ?? 'Landmark')));
+    }
+
+    /**
+     * Writes a map's landmark declarations once the Engine accepts them; none removes the key.
+     *
+     * @param list<array<string, mixed>> $entries
+     * @throws InspectorRefusal When the map would not load them.
+     */
+    private function writeLandmarks(ProjectMap $map, array $entries, string $label): ?Command
+    {
+        $problem = MapLandmarkFields::findProblem($map, $entries);
+        if ($problem !== null) {
+            throw new InspectorRefusal($problem);
+        }
+
+        return $this->writeMapData($map, [MapLandmarks::KEY], $entries === [] ? null : $entries, 'Landmark ' . lcfirst($label));
+    }
+
+    /**
+     * What names a row so it can be found again among a map's current rows: its target and the members that tell
+     * it from its neighbours. Null for a row nothing is applied through. Every interface finds a row by this.
+     *
+     * @param array<string, mixed> $field
+     * @return array<string, mixed>|null
+     */
+    public static function describeRowKey(array $field): ?array
+    {
+        if (! is_string($field['target'] ?? null)) {
+            return null;
+        }
+
+        return array_filter([
+            'target' => $field['target'],
+            'field' => isset($field['field']) ? (string) $field['field'] : null,
+            'path' => isset($field['path']) ? array_values(array_map('strval', (array) $field['path'])) : null,
+            'marker' => isset($field['marker']) ? (string) $field['marker'] : null,
+            'index' => isset($field['index']) ? (int) $field['index'] : null,
+            // A list heading has no path of its own; its list's names it.
+            'list' => is_array($field['list']['path'] ?? null) ? array_values(array_map('strval', $field['list']['path'])) : null,
+        ], static fn(mixed $value): bool => $value !== null);
     }
 
     /**
@@ -391,6 +453,10 @@ final readonly class MapInspector
                 sprintf('Added %s to the encounter table.', $available[0]));
         }
 
+        if (($field['target'] ?? null) === MapLandmarkFields::TARGET && is_array($field['landmarkList'] ?? null)) {
+            return $this->editLandmarkList($map, static fn(): array => MapLandmarkFields::addEntry($map), 'add');
+        }
+
         if (($field['target'] ?? null) === 'map-bgm-variants' && is_array($field['bgmVariantList'] ?? null)) {
             $variants = $this->requireEditableBgmVariants($map);
 
@@ -439,6 +505,10 @@ final readonly class MapInspector
             return new InspectorListEdit($this->writeMapData($map, [MapEncounters::KEY], $block, 'Encounter troop remove'), $block === null
                 ? sprintf('Removed %s; this map no longer has random encounters.', $rows[$index]['name'])
                 : sprintf('Removed %s from the encounter table.', $rows[$index]['name']));
+        }
+
+        if (($field['target'] ?? null) === MapLandmarkFields::TARGET && is_array($field['landmarkList'] ?? null)) {
+            return $this->editLandmarkList($map, static fn(): array => MapLandmarkFields::removeEntry($map, $field), 'remove');
         }
 
         if (($field['target'] ?? null) === 'map-bgm-variants' && is_array($field['bgmVariantList'] ?? null)) {
@@ -969,6 +1039,21 @@ final readonly class MapInspector
         return $value;
     }
 
+    /**
+     * @param Closure(): array{entries: list<array<string, mixed>>, summary: string} $edit
+     * @throws InspectorRefusal When the list cannot take the edit or the map would not load the result.
+     */
+    private function editLandmarkList(ProjectMap $map, Closure $edit, string $action): InspectorListEdit
+    {
+        try {
+            $result = $edit();
+        } catch (InvalidArgumentException $error) {
+            throw new InspectorRefusal($error->getMessage(), previous: $error);
+        }
+
+        return new InspectorListEdit($this->writeLandmarks($map, $result['entries'], $action), $result['summary']);
+    }
+
     /** @throws InspectorRefusal When the map's encounters cannot be edited here. */
     private function requireEditableEncounters(ProjectMap $map): MapEncounters
     {
@@ -1237,6 +1322,8 @@ final readonly class MapInspector
                 'editable' => $issue === null,
                 'mapConditions' => $issue === null,
                 'encoded' => $issue === null ? ConditionCodec::encodeAll($conditions) : null,
+                'conditionsTitle' => sprintf('Variant %d Conditions', $index + 1),
+                'conditionsHint' => 'Building conditions. An empty list always matches.',
             ];
         }
 
