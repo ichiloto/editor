@@ -61,6 +61,8 @@ final readonly class ProjectWorkspace
         $this->getRecordDatabase('quests')?->useIdentityReferences(
             fn(string $questId): bool => new QuestReferences($this)->exist($questId),
         );
+        // Marker roles follow the place categories as their page holds them, unsaved edits included.
+        $this->menuPresentation?->useCategoryCatalog(fn(): \Ichiloto\Engine\Field\MapCategoryCatalog => new ReferenceCatalog($this)->getMapCategoryCatalog());
         // A place category stays while a landmark names it.
         $this->getRecordDatabase(\Ichiloto\Editor\Field\MapCategoryFields::CATEGORY)?->useDeletionReferences(
             fn(string $category): array => \Ichiloto\Editor\Field\MapLandmarks::describeCategoryReferences($this->maps, $category),

@@ -10,9 +10,10 @@ use Ichiloto\Engine\UI\Presentation\MapAtlasTheme;
 
 /**
  * Menu Theme: the settings of the game's shared menu presentation catalog, one row per setting by its path, as
- * Configuration edits config.php. It starts with the minimap atlas: the compact and larger corner sizes, their
- * margin, the marker size and the frame the atlas is drawn in. These are graphical presentation (logical pixels of
- * the GPUI atlas), so the category is the graphical editor's; the Terminal's opened map keeps its own layout.
+ * Configuration edits config.php. It offers the minimap atlas (the compact and larger corner sizes, their margin,
+ * the marker size and the frame the atlas is drawn in) and the icon bindings, among them a marker per atlas role
+ * and place category. These are graphical presentation, so the category is the graphical editor's; the Terminal's
+ * maps keep their own symbols.
  * MenuPresentationSettings owns the file, its defaults and the values the Engine accepts.
  */
 final class MenuThemeFields
@@ -34,7 +35,7 @@ final class MenuThemeFields
             ],
             labelKey: 'path',
             identityKey: 'path',
-            configPath: [MenuPresentationSettings::ATLAS],
+            configPath: [MenuPresentationSettings::ATLAS, MenuPresentationSettings::ICONS],
             fieldsFor: self::getFields(...),
         );
     }
@@ -50,9 +51,13 @@ final class MenuThemeFields
         $default = array_key_exists('default', $row) ? ProjectRecord::stringify($row['default']) : null;
         $kind = array_key_exists('default', $row) ? $row['default'] : ($row['value'] ?? null);
 
+        $path = (string) ($row['path'] ?? '');
         return [
             new RecordField('path', 'Setting', isReadOnly: true),
             match (true) {
+                // An icon is a project image chosen with the shared picker; none leaves the Engine's own treatment.
+                MenuPresentationSettings::isIcon($path) => RecordField::reference('value', 'Image', 'png_assets', allowsNone: true,
+                    noneLabel: array_key_exists('default', $row) ? '(Engine pictogram)' : '(none)'),
                 ($row['path'] ?? null) === MenuPresentationSettings::ATLAS . '.frameRole'
                     => new RecordField('value', 'Value', options: MapAtlasTheme::FRAME_ROLES, displayDefault: $default),
                 is_int($kind) => new RecordField('value', self::describeRange((string) ($row['path'] ?? '')),

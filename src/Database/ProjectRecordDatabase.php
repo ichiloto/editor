@@ -368,12 +368,26 @@ final class ProjectRecordDatabase
      */
     public function getRecords(): array
     {
+        $this->syncSettingRecords();
         return array_values($this->records);
     }
 
     public function getRecordByIndex(int $index): ?ProjectRecord
     {
+        $this->syncSettingRecords();
         return $this->records[$index] ?? null;
+    }
+
+    /**
+     * A settings file's category lists what its owner offers now: the settings the Engine knows can grow while the
+     * project is open (a marker role for a place category just created). The owner keeps each setting's one record,
+     * so pending edits and undo are unaffected.
+     */
+    private function syncSettingRecords(): void
+    {
+        if ($this->settings !== null && $this->schema->storage === RecordStorage::CONFIG_SUBTREE && $this->settings->getReadOnlyReason() === null) {
+            $this->records = $this->settings->getSettingRecords($this->schema->configPath);
+        }
     }
 
     /**

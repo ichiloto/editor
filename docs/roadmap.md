@@ -161,17 +161,15 @@ graphical previews are an enhancement, not a prerequisite for authoring a game.
 The graphical Database's Menu Theme category edits the shared menu theme
 (`assets/Data/Presentation/menus.php`) through its source-preserving owner
 `MenuPresentationSettings`, which shares `ProjectSettingsFile` with
-`config.php`. It offers only the minimap atlas so far (corner sizes, margin,
-marker size, frame), with the Engine's defaults and validation. The palette,
-metrics, row metrics and artwork, frames, icon roles, cursor, portraits and
-notifications, and PNG portrait selection, remain an implementation gap; each
-joins Menu Theme through that owner as the Engine exposes its rules. Icon roles
-include the atlas markers: `map.player`, the route and place kinds (`map.*`),
-and a dedicated marker per place category, `map.category.<id>`, for the
-Engine's generic categories and each project category on the Place Categories
-page (Last Legend's `bsa`). Until a game binds one, the Engine's shared generic
-pictogram for the category's base is shown; binding a game's own marker
-requires this icon authoring.
+`config.php`. It offers the minimap atlas (corner sizes, margin, marker size, frame) and icon
+bindings, with the Engine's defaults and validation. The palette, metrics, row
+metrics and artwork, frames, cursor, portraits and notifications, and PNG
+portrait selection, remain an implementation gap; each
+joins Menu Theme through that owner as the Engine exposes its rules. Icon
+binding is authored for the roles the catalogue already binds and for every
+atlas marker role the Engine draws (`map.player`, each kind, `map.category.<id>`
+for generic and project categories); adding other new semantic roles waits on
+the Engine listing them.
 
 Acceptance criteria for the presentation-authoring slice:
 

@@ -77,6 +77,23 @@ abstract class ProjectSettingsFile
     }
 
     /**
+     * The keys a setting's path walks, root first. A path joins them with dots; a file whose keys hold dots of their
+     * own (icon roles such as map.player) says where a key begins.
+     *
+     * @return list<string>
+     */
+    protected function splitPath(string $path): array
+    {
+        return explode('.', $path);
+    }
+
+    /** Whether choosing nothing for a setting removes its key, rather than writing an empty value the Engine refuses. */
+    protected function isRemovedWhenEmpty(string $path): bool
+    {
+        return false;
+    }
+
+    /**
      * Keys a whole-value edit renames rather than replaces, so the renamed entries keep their authored comments.
      *
      * @return list<array{path: list<string>, key: string}>
@@ -89,7 +106,7 @@ abstract class ProjectSettingsFile
     public function getRecord(string $path): ProjectRecord
     {
         if (! isset($this->records[$path])) {
-            $value = self::getValue($this->payload, $path);
+            $value = $this->readValue($this->payload, $path);
             $this->originalValues[$path] = $value;
             $setting = $this->listEngineSettings()[$path] ?? null;
             $this->records[$path] = new ProjectRecord($setting === null
@@ -109,12 +126,14 @@ abstract class ProjectSettingsFile
     public function getSettingRecords(array $roots): array
     {
         $records = [];
-        $visit = function (array $tree, string $prefix, bool $ambiguous = false) use (&$visit, &$records): void {
+        $visit = function (array $tree, array $segments, bool $ambiguous = false) use (&$visit, &$records): void {
             foreach ($tree as $key => $value) {
-                $path = $prefix . '.' . $key;
-                $hasDottedKey = $ambiguous || str_contains((string) $key, '.');
+                $keys = [...$segments, (string) $key];
+                $path = implode('.', $keys);
+                // A key the path cannot be split back into is ambiguous with a nested path.
+                $hasDottedKey = $ambiguous || $this->splitPath($path) !== $keys;
                 if ($this->isWholeValue($path) && ! $hasDottedKey) { $records[] = $this->getRecord($path); }
-                elseif (is_array($value)) { $visit($value, $path, $hasDottedKey); }
+                elseif (is_array($value)) { $visit($value, $keys, $hasDottedKey); }
                 elseif (! is_object($value) || $value instanceof \UnitEnum) {
                     if ($hasDottedKey) {
                         $this->fieldIssues[$path] = $path . ' contains a dotted literal key, ambiguous with a nested path; it is preserved read-only.';
@@ -124,10 +143,10 @@ abstract class ProjectSettingsFile
             }
         };
         foreach ($roots as $root) {
-            if (is_array($this->payload[$root] ?? null)) { $visit($this->payload[$root], $root); }
+            if (is_array($this->payload[$root] ?? null)) { $visit($this->payload[$root], [$root]); }
         }
         foreach (array_keys($this->listEngineSettings()) as $path) {
-            $root = explode('.', $path)[0];
+            $root = $this->splitPath($path)[0];
             if (in_array($root, $roots, true) && ! in_array($path, array_map(static fn(ProjectRecord $record): mixed => $record->get('path'), $records), true) && $this->issue === null) {
                 $records[] = $this->getRecord($path);
             }
@@ -154,7 +173,7 @@ abstract class ProjectSettingsFile
     /** Whether the file authors a setting at all, as opposed to leaving it to its default. */
     public function holds(string $path): bool
     {
-        return $this->document?->nodeAt(explode('.', $path)) !== null;
+        return $this->document?->nodeAt($this->splitPath($path)) !== null;
     }
 
     public function isDirty(): bool
@@ -180,7 +199,7 @@ abstract class ProjectSettingsFile
     /** The value a setting holds now, pending edits included, or what the file holds where none was read. */
     protected function getCurrentValue(string $path): mixed
     {
-        return isset($this->records[$path]) ? $this->records[$path]->get('value') : self::getValue($this->payload, $path);
+        return isset($this->records[$path]) ? $this->records[$path]->get('value') : $this->readValue($this->payload, $path);
     }
 
     private function composeSource(array $overrides = []): string
@@ -194,10 +213,16 @@ abstract class ProjectSettingsFile
                 $old = $this->payload;
                 $new = $old;
                 $next = &$new;
-                foreach (explode('.', $path) as $segment) { $next = &$next[$segment]; }
+                foreach ($this->splitPath($path) as $segment) { $next = &$next[$segment]; }
                 $next = $value;
                 unset($next);
                 $document = ArraySourceWriter::rewrite($document, $old, $new, $this->listKeyRenames($path, $this->originalValues[$path], $value));
+                continue;
+            }
+            if ($value === null && $this->isRemovedWhenEmpty($path)) {
+                // An authored key chosen away is removed, keeping its neighbours and their comments.
+                $this->createFieldEdit($document, $path, '1');
+                $document = $document->withEdits([$document->removeEntryEdit($this->splitPath($path))]);
                 continue;
             }
             $edit = $this->createFieldEdit($document, $path, PhpValueExporter::export($value));
@@ -224,7 +249,7 @@ abstract class ProjectSettingsFile
             $evaluated = PhpDataFile::evaluateIsolated($staged[$this->path], $this->projectRoot);
             foreach ($this->records as $path => $record) {
                 if ($record->get('value') === $this->originalValues[$path]) { continue; }
-                if (self::getValue(is_array($evaluated) ? $evaluated : [], $path) !== $record->get('value')) {
+                if ($this->readValue(is_array($evaluated) ? $evaluated : [], $path) !== $record->get('value')) {
                     throw new SourcePreservationRefusal('The staged ' . $this->relativePath . ' does not preserve ' . $path . '.');
                 }
             }
@@ -240,7 +265,7 @@ abstract class ProjectSettingsFile
     private function createFieldEdit(?PhpArraySourceDocument $document, string $path, string $literal, bool $allowArray = false): array
     {
         if ($this->issue !== null || $document === null) { throw new SourcePreservationRefusal($this->issue ?? $this->relativePath . ' cannot be preserved.'); }
-        $segments = explode('.', $path);
+        $segments = $this->splitPath($path);
         $walked = [];
         $node = $document->root();
         foreach ($segments as $index => $key) {
@@ -259,16 +284,16 @@ abstract class ProjectSettingsFile
         }
         // An enum case is written as one: replacing it with another case of
         // its enum keeps the file reading the same kind of value.
-        if ($node->kind !== SourceNode::SCALAR && ! ($allowArray && $node->kind === SourceNode::ARRAY) && ! self::getValue($this->payload, $path) instanceof \UnitEnum) {
+        if ($node->kind !== SourceNode::SCALAR && ! ($allowArray && $node->kind === SourceNode::ARRAY) && ! $this->readValue($this->payload, $path) instanceof \UnitEnum) {
             throw new SourcePreservationRefusal($path . ' is an authored expression, not an editable literal.');
         }
         return $document->replaceValueEdit($walked, $literal);
     }
 
-    protected static function getValue(array $payload, string $path): mixed
+    protected function readValue(array $payload, string $path): mixed
     {
         $value = $payload;
-        foreach (explode('.', $path) as $key) { $value = is_array($value) ? ($value[$key] ?? null) : null; }
+        foreach ($this->splitPath($path) as $key) { $value = is_array($value) ? ($value[$key] ?? null) : null; }
         return $value;
     }
 
