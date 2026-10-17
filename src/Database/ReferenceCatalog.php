@@ -1085,6 +1085,45 @@ final class ReferenceCatalog
         return $names;
     }
 
+    /** A project map by id, unsaved edits included, as the workspace holds it. */
+    public function findMap(string $mapId): ?ProjectMap
+    {
+        $index = array_search($mapId, $this->workspace->mapIds, true);
+        return is_int($index) ? ($this->workspace->maps[$index] ?? null) : null;
+    }
+
+    /** @return list<ProjectMap> Every project map, unsaved edits included. */
+    public function listMaps(): array
+    {
+        return array_values($this->workspace->maps);
+    }
+
+    /**
+     * The project's place categories as the Engine reads them: its generic ones and those the project declares,
+     * as its Place Categories page holds them.
+     *
+     * @throws \InvalidArgumentException When the project's catalogue cannot be read.
+     */
+    public function getMapCategoryCatalog(): \Ichiloto\Engine\Field\MapCategoryCatalog
+    {
+        // The project's own categories as the Place Categories page holds them, unsaved edits included.
+        $database = $this->workspace->getRecordDatabase(\Ichiloto\Editor\Field\MapCategoryFields::CATEGORY);
+        if ($database === null) {
+            return \Ichiloto\Engine\Field\MapCategoryCatalog::load(dirname($this->workspace->getMapsRoot()));
+        }
+        if (($reason = $database->getReadOnlyReason()) !== null) {
+            throw new \InvalidArgumentException($reason);
+        }
+        $records = [];
+        foreach ($database->getRecords() as $record) {
+            $row = (array) $record->toArray();
+            $id = (string) ($row['id'] ?? '');
+            unset($row['id']);
+            $records[$id] = $row;
+        }
+        return new \Ichiloto\Engine\Field\MapCategoryCatalog($records);
+    }
+
     /**
      * Returns the arenas the project's battle presentation declares, key =>
      * display name, in authored order: none for a project without one, or

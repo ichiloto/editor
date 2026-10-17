@@ -129,6 +129,7 @@ final class RecordSchemaCatalog
             self::optimizeExclusions(),
             self::commonEvents($graphical),
             self::terms(),
+            \Ichiloto\Editor\Field\MapCategoryFields::getSchema(),
             self::configuration($graphical),
             self::types(),
             self::tilesets($graphical),

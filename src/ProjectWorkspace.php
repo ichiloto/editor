@@ -61,6 +61,10 @@ final readonly class ProjectWorkspace
         $this->getRecordDatabase('quests')?->useIdentityReferences(
             fn(string $questId): bool => new QuestReferences($this)->exist($questId),
         );
+        // A place category stays while a landmark names it.
+        $this->getRecordDatabase(\Ichiloto\Editor\Field\MapCategoryFields::CATEGORY)?->useDeletionReferences(
+            fn(string $category): array => \Ichiloto\Editor\Field\MapLandmarks::describeCategoryReferences($this->maps, $category),
+        );
         $references = new ReferenceCatalog($this);
         foreach ($this->recordDatabases as $database) { $database->useAuthoringReferences($references); }
         $this->cutscenes?->useAuthoringReferences($references);

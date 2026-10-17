@@ -47,6 +47,8 @@ final class ProjectRecordDatabase
      * @var list<int>
      */
     private array $retiredIdentities = [];
+    /** @var (\Closure(string): list<string>)|null What keeps a record from being deleted ({@see useDeletionReferences()}). */
+    private ?\Closure $deletionReferences = null;
     private ?ReferenceCatalog $authoringReferences = null;
     private bool $graphical = false;
 
@@ -820,6 +822,12 @@ final class ProjectRecordDatabase
                     : $this->assertValueUnclaimed($record, $field, $value);
             }
             $previousIdentity = $this->schema->identityKey === null ? null : $record->get($this->schema->identityKey);
+            // An identity something still names stays, so the reference keeps resolving.
+            if ($field->key === $this->schema->identityKey && $this->deletionReferences !== null && strval($value) !== strval($previousIdentity)
+                && ($references = ($this->deletionReferences)(strval($previousIdentity))) !== []) {
+                throw new RecordRefusal(sprintf('%s %s is still used, so its id stays: %s.', ucfirst($this->schema->entryNoun),
+                    strval($previousIdentity), implode('; ', $references)));
+            }
             $before = $record->toArray();
             $draft = clone $record;
             if ($this->schema->key === PlayerPresentationFields::CATEGORY) {
@@ -1018,6 +1026,32 @@ final class ProjectRecordDatabase
     public function useIdentityReferences(\Closure $isReferenced): void
     {
         $this->identityReferences = $isReferenced;
+    }
+
+    /**
+     * Says what in the project still names a record by its identity, which keeps the record from being deleted
+     * (a place category a landmark uses). The workspace supplies it: what refers to a record lives across the
+     * project.
+     *
+     * @param \Closure(string): list<string> $describe Where each reference lives, in words.
+     */
+    public function useDeletionReferences(\Closure $describe): void
+    {
+        $this->deletionReferences = $describe;
+    }
+
+    /**
+     * What still names the record at an index by its identity, in words; empty when it may go.
+     *
+     * @return list<string>
+     */
+    public function describeDeletionReferences(int $index): array
+    {
+        $record = array_values($this->records)[$index] ?? null;
+        if ($this->deletionReferences === null || ! $record instanceof ProjectRecord || $this->schema->identityKey === null) {
+            return [];
+        }
+        return ($this->deletionReferences)((string) $record->get($this->schema->identityKey));
     }
 
     /**
