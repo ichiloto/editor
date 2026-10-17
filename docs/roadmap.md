@@ -117,6 +117,42 @@ preview; helpful empty states; live resize handling.
 
 ## The plan
 
+### Scenario blueprint authoring
+
+Planned 15 October 2026; not implemented. The coordinating
+[Scenario Director village plan](../../engine/docs/roadmap.md#scenario-director-village-implementation-plan)
+owns milestone order and gates. This section owns **SD3**, using the free Engine
+contracts from SD0–SD2; GUI panels are tracked in the GUI plan.
+
+- [ ] Project the proposed single scenario catalog through existing record
+  schemas/source-preserving PHP services: world/conflict, factions, origins,
+  situations, placement references and policies. Preserve unrelated source and
+  refuse unsupported edits before mutation.
+- [ ] Add shared list/read/create/revise/validate/preview operations to
+  EditorSession and SessionHost, with expected revisions, structured diagnostics
+  and explicit capability description. Resource references use real selectors.
+- [ ] Qualify linked edits and grouped undo in the same backing catalog with
+  SharedFileTransaction/history. That mechanism does not provide arbitrary
+  multi-file atomic saves; a map-plus-catalog transaction needs shared
+  qualification before it can be offered.
+- [ ] Expose gameplay records, conditions, consequences and textual region
+  selection through the TUI. No graphical art or GUI licence is a prerequisite.
+- [ ] Provide an isolated campaign-preview service over the real Engine runtime.
+  Start with synthetic proposals; connect the Director later without changing
+  document ownership. Preview does not write installation assets or canon.
+- [ ] Verify round trips, stale revisions, refusal, undo/redo, external changes,
+  cross-frontend field preservation and cancelled preview cleanup with synthetic
+  projects. Author both village origins without manual PHP.
+
+Basic contracts/editing/validation remain free. Maintained Director generation,
+coherence and generation-testing workflows belong to the optional addon; native
+visual authoring belongs to the GUI frontend. No second AI parser, writer or
+document session may bypass these services.
+
+**SD3 gate:** author the origins and custody/negotiation situation through the
+TUI and host, undo/redo linked changes, save/reopen safely and execute a preview.
+Detailed effort and dependencies remain in the coordinating plan.
+
 ### Renderer-neutral presentation authoring (planned)
 
 Runtime presentation support is not complete Editor authoring support. The TUI
