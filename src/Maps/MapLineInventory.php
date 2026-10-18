@@ -41,7 +41,7 @@ final class MapLineInventory
     /** @var array<string, array<string, array{path: list<int|string>, reason: string}>> What stands on a removed line, by file, keyed by path. */
     private array $blocked = [];
 
-    /** @var array<string, list<list<string>|null>> The contexts each reusable event script is started from. */
+    /** @var array<string, array<string, list<string>|null>> The contexts each reusable event script is started from, each once. */
     private array $commonEventStarts = [];
 
     /** @var array<string, list<string>> The maps whose events start each cutscene. */
@@ -158,7 +158,7 @@ final class MapLineInventory
             if (is_array($eventData['script'] ?? null) && $eventData['script'] !== []) {
                 $this->walkCommands($eventData['script'], ['events', $marker, 'data', 'script'], $here, $file);
             } elseif (trim(strval($eventData['scriptId'] ?? '')) !== '') {
-                $this->commonEventStarts[trim(strval($eventData['scriptId']))][] = $here;
+                $this->addCommonEventStart(trim(strval($eventData['scriptId'])), $here);
             }
             $cinematicId = trim(strval($eventData['cinematicId'] ?? ''));
             if ($cinematicId !== '') {
@@ -221,14 +221,44 @@ final class MapLineInventory
     /**
      * Adds every reusable event script, each starting on every map that
      * runs it. Add every map and cutscene first, so those starts are known.
+     * A reusable event script runs others on the maps it is on, so every
+     * script's starts are followed through the scripts that run it before
+     * anything moves. Starts only grow and the maps are finite, so following
+     * them ends, also when scripts run each other in a cycle.
      */
     public function addCommonEvents(): void
     {
-        $starts = $this->commonEventStarts;
+        do {
+            $known = $this->commonEventStarts;
+            foreach ($this->commonEvents as $id => $event) {
+                $this->walkCommands($event['commands'], [], $this->getCommonEventStart($id), null, [$id]);
+            }
+        } while ($this->commonEventStarts !== $known);
+
         foreach ($this->commonEvents as $id => $event) {
-            $start = isset($starts[$id]) ? self::mergeContexts($starts[$id]) : [];
-            $this->walkCommands($event['commands'], [], $start, $event['file'], [$id]);
+            $this->walkCommands($event['commands'], [], $this->getCommonEventStart($id), $event['file'], [$id]);
         }
+    }
+
+    /**
+     * Records a context a reusable event script is started from.
+     *
+     * @param list<string>|null $context
+     */
+    private function addCommonEventStart(string $id, ?array $context): void
+    {
+        $context = $context === null ? null : self::mergeContexts([$context]);
+        $this->commonEventStarts[$id][json_encode($context, JSON_THROW_ON_ERROR)] = $context;
+    }
+
+    /**
+     * The maps a reusable event script may start on; none when nothing known runs it.
+     *
+     * @return list<string>|null
+     */
+    private function getCommonEventStart(string $id): ?array
+    {
+        return isset($this->commonEventStarts[$id]) ? self::mergeContexts(array_values($this->commonEventStarts[$id])) : [];
     }
 
     /**
@@ -280,7 +310,7 @@ final class MapLineInventory
 
             if ($type === 'common_event') {
                 $id = trim(strval($command['id'] ?? ''));
-                $this->commonEventStarts[$id][] = $context;
+                $this->addCommonEventStart($id, $context);
                 if (isset($this->commonEvents[$id]) && ! in_array($id, $stack, true)) {
                     $context = $this->walkCommands($this->commonEvents[$id]['commands'], [], $context, null, [...$stack, $id]);
                 }

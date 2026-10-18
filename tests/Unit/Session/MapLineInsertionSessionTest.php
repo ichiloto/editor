@@ -261,3 +261,35 @@ it('exposes strict request validation, review, cancel, apply and undo through th
         ->and($request('history.undo')['result']['label'])->toBe('Insert row')
         ->and(sourceHashTree($root))->toBe($before);
 });
+
+it('moves coordinates in event scripts reached only through another event script the map runs', function () {
+    $root = mapInsertionSessionProject();
+    $directory = $root . '/assets/Maps/test-map';
+    $path = $directory . '/test-map.data.php';
+    file_put_contents($path, str_replace("'events' => ['D' =>", <<<'PHP'
+'events' => ['E' => ['class' => 'Ichiloto\Engine\Events\Triggers\ScriptEventTrigger', 'data' => ['mode' => 'action', 'reusable' => true, 'scriptId' => 'outer']],
+        'D' =>
+PHP, (string) file_get_contents($path)));
+    file_put_contents($directory . '/test-map.event.php', MapGridSource::buildSource("  E \n D  ", 'EVENTS', "// Authored event notes.\n"));
+    file_put_contents($root . '/assets/Events/outer.php', "<?php\nreturn [['type' => 'common_event', 'id' => 'inner']];\n");
+    // The inner script runs the outer one again; following them must still end.
+    file_put_contents($root . '/assets/Events/inner.php', <<<'PHP'
+<?php
+return [
+    ['type' => 'move_player', 'x' => 3, 'y' => 1],
+    ['type' => 'move_route', 'subject' => 'player', 'waypoints' => [['at' => ['kind' => 'npc', 'id' => 'visitor'], 'offset' => ['x' => 1]]]],
+    ['type' => 'common_event', 'id' => 'outer'],
+];
+PHP);
+    $session = EditorSession::open($root);
+    $question = $session->insertMapLines('test-map', $session->readMap('test-map')['revision'], 'y', 1, 2);
+
+    expect($question['paths'])->toContain('assets/Events/inner.php')
+        ->and(writeReviewedMapInsertion($session, $question)['status'])->toBe('inserted')
+        ->and(require $root . '/assets/Events/inner.php')->toBe([
+            ['type' => 'move_player', 'x' => 3, 'y' => 3],
+            // A position relative to a subject moves with its subject and is never rewritten.
+            ['type' => 'move_route', 'subject' => 'player', 'waypoints' => [['at' => ['kind' => 'npc', 'id' => 'visitor'], 'offset' => ['x' => 1]]]],
+            ['type' => 'common_event', 'id' => 'outer'],
+        ]);
+});
