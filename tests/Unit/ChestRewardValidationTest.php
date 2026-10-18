@@ -10,6 +10,7 @@ use Ichiloto\Editor\Validation\ChestRewardValidator;
 use Ichiloto\Editor\Validation\Issue;
 use Ichiloto\Editor\Validation\ProjectValidator;
 use Ichiloto\Editor\Validation\Severity;
+use Ichiloto\Engine\Entities\Actions\ChestOpeningAction;
 use Ichiloto\Engine\Entities\Inventory\Items\Item;
 use Ichiloto\Engine\Events\Enumerations\LootType;
 
@@ -184,7 +185,9 @@ it('offers only the loot types the Engine\'s chest can give', function () {
     expect($offered)->toBe(['item', 'gold', 'weapon', 'armor', 'accessory']);
 
     foreach (LootType::cases() as $type) {
-        expect(in_array($type->value, $offered, true))->toBe(ChestLoot::isGrantable($type));
+        // The Engine answers which kinds its chest gives; the Editor asks it rather than keeping its own list.
+        expect(in_array($type->value, $offered, true))->toBe(ChestOpeningAction::supportsLootType($type))
+            ->and(ChestLoot::isGrantable($type))->toBe(ChestOpeningAction::supportsLootType($type));
     }
 });
 

@@ -5,26 +5,22 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Events;
 
 use BackedEnum;
+use Ichiloto\Engine\Entities\Actions\ChestOpeningAction;
 use Ichiloto\Engine\Events\Enumerations\LootType;
 
 /**
  * What a chest event's loot means to the Engine, for every editor surface
  * that authors or checks one.
  *
- * The rules are the Engine's, mirrored rather than reinvented.
+ * The rules are the Engine's, read from it rather than reinvented.
  * `ChestEventTrigger::configure()` reads the trigger data after a JSON round
  * trip, so a `LootType` case and its string value are the same declaration;
  * it reads the type with `LootType::tryFrom()`, exactly and case-sensitively,
- * and reads a missing, blank or unknown type as an item. `ChestOpeningAction`
- * then grants gold as an amount and resolves every other kind through the
- * `ItemStore`, so only gold and inventory kinds can be given. A skill, spell
- * or experience chest names something the item store does not hold.
- *
- * The Engine does not yet publish which kinds its chest grants, so the set
- * below mirrors `ChestOpeningAction`. It is the one place the Editor states
- * it: the validator, the inspector's loot type choices and the GUI editor
- * all read it from here, and it is replaced by the Engine's own answer once
- * that contract exists.
+ * and reads a missing, blank or unknown type as an item. Which kinds a chest
+ * can give is the Engine's answer, `ChestOpeningAction::supportsLootType()`:
+ * gold as an amount and the inventory kinds from the `ItemStore`. The
+ * validator, the inspector's loot type choices and the GUI editor all ask
+ * through here, so they follow the Engine as it grows.
  *
  * @package Ichiloto\Editor\Events
  */
@@ -32,15 +28,6 @@ final class ChestLoot
 {
     /** The trigger class a chest event declares, matched the way the validator matches trigger classes. */
     public const string TRIGGER = 'ChestEventTrigger';
-
-    /** The kinds `ChestOpeningAction` grants: gold as an amount, the rest from the item store. */
-    private const array GRANTABLE = [
-        LootType::GOLD,
-        LootType::ITEM,
-        LootType::WEAPON,
-        LootType::ARMOR,
-        LootType::ACCESSORY,
-    ];
 
     private function __construct()
     {
@@ -88,14 +75,6 @@ final class ChestLoot
      */
     public static function isGrantable(LootType $type): bool
     {
-        return in_array($type, self::GRANTABLE, true);
-    }
-
-    /**
-     * Tells whether the Engine's chest gives this kind from the item store.
-     */
-    public static function isInventory(LootType $type): bool
-    {
-        return $type !== LootType::GOLD && self::isGrantable($type);
+        return ChestOpeningAction::supportsLootType($type);
     }
 }
