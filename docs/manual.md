@@ -2148,7 +2148,9 @@ backslashes, trailing spaces and wide glyphs all survive, a data-only edit
 leaves the script or timeline file byte-identical, a no-op save writes
 nothing, and multi-line text is written as a nowdoc. A value shared through
 one source variable is edited in place when only the selected entry uses it,
-and otherwise retargeted to a new variable so nothing else changes.
+and otherwise retargeted to a new variable so nothing else changes. A
+variable the file builds with its own code is never replaced by a copy of
+its result: an edit under it is refused, naming the variable.
 
 A save is one transaction over the pair, and so is a first save, an
 overwrite and a deletion. Each proposed file is staged beside its
@@ -2659,9 +2661,16 @@ the map (validation warns when it is not).
 What the editor cannot rewrite reversibly it refuses, precisely: a value
 written as an expression - `'script' => require …` in place - cannot take an
 edit without destroying the expression, so that one edit is refused with the
-map, file and path named, and nothing changes. The refusal is that narrow: a
-value written as a *variable reference* can be repointed (the entry gets the
-literal; the shared variable stays for its other users), an opaque sibling
+map, file and path named, and nothing changes. A value written as a
+*variable* follows how the file writes that variable. One written as data
+(assigned once, by a literal, and named nowhere else but by plain
+references) is edited where it is assigned when only this entry names it;
+when several entries share it, the edited entry gets its own copy and the
+variable stays for the others, unless the shared value holds comments,
+variables or expressions a copy would lose, which is refused. A variable the
+file builds with its own code (a `require`, a call, a loop that fills it) is
+refused the same way as an expression: its code is never swapped for a
+literal of what it produced. The refusal is that narrow: an opaque sibling
 never blocks an edit beside it, and browsing, previewing and validation
 always work. Only a data file whose whole source cannot be parsed for
 preservation makes the map's *data* read-only - the grids stay editable, and

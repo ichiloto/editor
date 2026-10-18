@@ -18,15 +18,19 @@ use Ichiloto\Editor\Database\PhpValueExporter;
  * is cut with its heading, and a list is aligned so that an entry moved
  * keeps its bytes and an entry edited keeps everything but the changed
  * field. A value written as a variable is retargeted rather than expanded:
- * a nowdoc referenced once is edited between its markers, and one shared by
- * several entries is left alone while the edited entry gets a new, safely
- * named variable of its own. Text with line breaks is always written as a
- * nowdoc, so ASCII art stays readable and exact -- trailing spaces,
- * backslashes, Unicode and all.
+ * a nowdoc referenced once is edited between its markers, and a literal
+ * named once is edited where it is assigned, as the data it is. One shared
+ * by several entries is left alone for them while the edited entry gets a
+ * value of its own -- a new, safely named variable for text -- when the
+ * shared value is plain data a copy holds in full. Text with line breaks
+ * is always written as a nowdoc, so ASCII art stays readable and exact --
+ * trailing spaces, backslashes, Unicode and all.
  *
  * What it cannot express -- a change under an expression, under a key it
- * could not read, a list turned into a map -- it refuses by path, so nothing
- * is written that a reader would not have written by hand.
+ * could not read, a list turned into a map, under a variable the file builds
+ * with its own code -- it refuses by path, so nothing is written that a
+ * reader would not have written by hand. A variable built in code is never
+ * replaced by a literal of what the code produced.
  *
  * @package Ichiloto\Editor\Cutscenes\Source
  */
@@ -75,6 +79,9 @@ final class ArraySourceWriter
 
     /** @var array<int, array{0: int, 1: int, 2: string}> */
     private array $edits = [];
+
+    /** @var list<string> The variables written as data the diff is inside, innermost last. */
+    private array $hosts = [];
 
     /** @var array<string, true> Variable names claimed by this plan. */
     private array $claimedVariables = [];
@@ -137,6 +144,12 @@ final class ArraySourceWriter
             return;
         }
 
+        if ($node->kind === SourceNode::VARIABLE) {
+            $this->diffVariable($node, $old, $new, $path);
+
+            return;
+        }
+
         if (is_array($new)) {
             $this->diffArray($node, is_array($old) ? $old : null, $new, $path);
 
@@ -167,7 +180,6 @@ final class ArraySourceWriter
                     'The value at %s is an array in the file and cannot be replaced by a single value without rewriting it.',
                     PhpArraySourceDocument::describePath($path),
                 )),
-            SourceNode::VARIABLE => $this->retargetVariable($node, $path, $new),
             SourceNode::EXPRESSION => throw new SourcePreservationRefusal(sprintf(
                 'The value at %s is written as an expression the editor cannot rewrite; change it in the file, or write it as plain data.',
                 PhpArraySourceDocument::describePath($path),
@@ -209,9 +221,7 @@ final class ArraySourceWriter
                 ));
             }
 
-            // A scalar or a variable holding what is now an array: the
-            // reference is replaced by the literal, and any variable stays
-            // for whatever else names it.
+            // A scalar holding what is now an array: the literal takes its place.
             $this->edits[] = $this->replacementFor($node, $path, $new);
 
             return;
@@ -952,16 +962,71 @@ final class ArraySourceWriter
      */
     private function replacementFor(SourceNode $node, array $path, mixed $value): array
     {
-        return $this->document->replaceValueEdit($path, $this->literalFor($value, $path));
+        // An entry sharing its line with its neighbours keeps a value that fits there on that line.
+        $entry = $this->document->entryAt($path);
+        $inline = $entry !== null && $this->document->lineIndentBefore($entry->start) === null && $this->fitsOnOneLine($value);
+
+        return $this->document->replaceValueEdit($path, $this->literalFor($value, $path, $inline));
     }
 
     /**
-     * Retargets a value written as a variable reference.
+     * Changes a value written as a variable reference.
+     *
+     * A variable the file builds with its own code is refused: replacing the
+     * reference with a literal of its result would leave the code running
+     * for nothing. A literal only this entry names is diffed where it is
+     * assigned. Otherwise the variable is left for whatever else names it
+     * and this entry is retargeted.
+     *
+     * @param array<int, int|string> $path
+     */
+    private function diffVariable(SourceNode $node, mixed $old, mixed $new, array $path): void
+    {
+        $name = $node->variable ?? '';
+
+        if ($this->document->isBuiltInCode($node)) {
+            throw new SourcePreservationRefusal(sprintf(
+                'The value at %s is $%s, which the file\'s own code builds or uses, so the editor will not replace it with a copy of its value. Change it in the file, or write it as plain data.',
+                PhpArraySourceDocument::describePath($path),
+                $name,
+            ));
+        }
+
+        $written = $this->document->resolveNode($node);
+
+        if ($written !== $node) {
+            $this->hosts[] = $name;
+
+            try {
+                $this->diff($written, $old, $new, $path);
+            } finally {
+                array_pop($this->hosts);
+            }
+
+            return;
+        }
+
+        $variable = $this->document->variable($name);
+
+        if ($variable?->value !== null && ! $this->isPlainData($variable->value)) {
+            throw new SourcePreservationRefusal(sprintf(
+                'The value at %s is $%s, which %d values share and which holds comments, variables or expressions a copy of it would lose. Change it in the file.',
+                PhpArraySourceDocument::describePath($path),
+                $name,
+                $this->document->referenceCount($name),
+            ));
+        }
+
+        $this->retargetVariable($node, $path, $new);
+    }
+
+    /**
+     * Retargets a value written as a variable reference to data.
      *
      * A string edited under a nowdoc named nowhere else is edited between
      * the nowdoc's markers. Anything else leaves the variable alone -- other
      * entries name it -- and this entry gets a variable of its own for
-     * text, or the literal itself for a number or flag.
+     * text, or the literal itself for a number, flag or array.
      *
      * @param array<int, int|string> $path
      */
@@ -982,7 +1047,7 @@ final class ArraySourceWriter
             }
 
             $fresh = $this->claimVariable($name);
-            $this->edits[] = $this->document->defineVariableEdit($fresh, $new);
+            $this->edits[] = $this->document->defineVariableEdit($fresh, $new, $this->findHost());
             $this->edits[] = $this->document->replaceValueEdit($path, '$' . $fresh);
 
             return;
@@ -1001,7 +1066,7 @@ final class ArraySourceWriter
     {
         if (is_string($value) && str_contains($value, "\n")) {
             $fresh = $this->claimVariable(self::stemFor($path));
-            $this->edits[] = $this->document->defineVariableEdit($fresh, $value);
+            $this->edits[] = $this->document->defineVariableEdit($fresh, $value, $this->findHost());
 
             return '$' . $fresh;
         }
@@ -1081,6 +1146,15 @@ final class ArraySourceWriter
             static fn(string $line): string => $line === '' ? $line : '  ' . $line,
             $lines,
         ));
+    }
+
+    /**
+     * Returns the variable written as data the diff is inside, which any
+     * variable it defines must precede.
+     */
+    private function findHost(): ?string
+    {
+        return $this->hosts === [] ? null : $this->hosts[count($this->hosts) - 1];
     }
 
     /**

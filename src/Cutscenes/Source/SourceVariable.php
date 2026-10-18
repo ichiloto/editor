@@ -9,6 +9,11 @@ namespace Ichiloto\Editor\Cutscenes\Source;
  * `return`: the ASCII block a keyframe shows, the shared value several
  * entries name.
  *
+ * Text and literal kinds are written as data: assigned once and named
+ * nowhere else in the file but by plain references. Anything else is
+ * `OTHER`, a value the file builds with its own code (a call, a `require`,
+ * a loop that fills it), which the editor reads but never rewrites.
+ *
  * @package Ichiloto\Editor\Cutscenes\Source
  */
 final readonly class SourceVariable
@@ -16,6 +21,8 @@ final readonly class SourceVariable
     public const string NOWDOC = 'nowdoc';
     public const string HEREDOC = 'heredoc';
     public const string STRING = 'string';
+    /** An array or non-text scalar literal, with its parsed value. */
+    public const string LITERAL = 'literal';
     public const string OTHER = 'other';
 
     /**
@@ -27,6 +34,7 @@ final readonly class SourceVariable
      * @param int|null $contentEnd The offset just past the last content byte (before the newline that precedes the closing label).
      * @param string $closingIndent The whitespace before the closing label, which PHP strips from every content line.
      * @param string|null $label The nowdoc or heredoc label.
+     * @param SourceNode|null $value The assigned array or scalar literal, for a literal variable.
      */
     public function __construct(
         public string $name,
@@ -37,6 +45,7 @@ final readonly class SourceVariable
         public ?int $contentEnd = null,
         public string $closingIndent = '',
         public ?string $label = null,
+        public ?SourceNode $value = null,
     ) {
     }
 }

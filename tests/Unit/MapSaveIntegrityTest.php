@@ -250,20 +250,31 @@ it('refuses an edit inside an opaque expression, naming the map, file and path, 
         ->and(tripletState($map))->toBe($before, 'and wrote nothing');
 });
 
-it('replaces a variable-backed value with plain data while the shared variable survives for its other users', function () {
+it('refuses an edit to a value the file builds in code, naming the variable, and writes nothing', function () {
     $root = authoredMapProject();
     $map = authoredMap($root);
+    $before = tripletState($map);
+    $script = $map->getEventField('W', ['data', 'script']);
 
-    // W's script is written as `$watchScript`. Replacing the value is safe:
-    // the entry gets the literal, the prelude variable stays untouched for
-    // anything else that names it.
-    $map->setEventField('W', ['data', 'script'], [['type' => 'text', 'name' => 'X', 'text' => 'Rewritten.']]);
-    $map->save();
-    $data = (string) file_get_contents($map->dataPath);
+    // W's script is `$watchScript`, which the file fills with a `require`.
+    // Writing the edited script as a literal would leave that code running
+    // for nothing, so the edit is refused before anything is written.
+    $refusal = null;
 
-    expect($data)->toContain("\$watchScript = require dirname(__DIR__, 2) . '/Events/harbour-watch.php';")
-        ->and($data)->toContain('Rewritten.')
-        ->and($map->getEventField('W', ['data', 'script']))->toBe([['type' => 'text', 'name' => 'X', 'text' => 'Rewritten.']]);
+    try {
+        $map->setEventField('W', ['data', 'script'], [['type' => 'text', 'name' => 'X', 'text' => 'Rewritten.']]);
+    } catch (MapSourceRefusal $thrown) {
+        $refusal = $thrown;
+    }
+
+    expect($refusal)->not->toBeNull()
+        ->and($refusal->getMessage())->toContain('test-map.data.php')
+        ->and($refusal->getMessage())->toContain('events.W.data.script')
+        ->and($refusal->getMessage())->toContain('$watchScript')
+        ->and($refusal->getMessage())->toContain('own code builds or uses')
+        ->and($map->getEventField('W', ['data', 'script']))->toBe($script)
+        ->and($map->isDirty())->toBeFalse()
+        ->and(tripletState($map))->toBe($before, 'and wrote nothing');
 });
 
 it('keeps opaque siblings byte-identical while a safe edit lands beside them', function () {
