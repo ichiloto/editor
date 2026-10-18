@@ -233,3 +233,21 @@ it('judges events made inside the change set: a chest with no reward is refused,
     expect($saved['status'])->toBe('saved')
         ->and((require $root . '/assets/Maps/test-map/test-map.data.php')['events']['C']['data']['loot'])->toBe('item.tonic');
 });
+
+it('asks a batch to choose the piece a glyph plays when several draw it, and paints it once chosen', function () {
+    $root = changeSetProject();
+    writeTestTileset($root, pieces: [
+        'window' => ['name' => 'Window', 'layer' => 'buildings', 'glyphs' => ['x'], 'tiles' => ['decor' => ['5']]],
+        'crate' => ['name' => 'Crate', 'layer' => 'buildings', 'glyphs' => ['x'], 'tiles' => ['decor' => ['6']]],
+    ]);
+    $buildings = changeSetLayer(EditorSession::open($root), 'buildings');
+    $paint = ['method' => 'map.paint', 'params' => ['map' => 'test-map', 'layer' => $buildings, 'cells' => [[3, 1]], 'symbol' => 'x']];
+
+    $asked = ChangeBatch::apply($root, [$paint], checkOnly: true);
+    expect($asked['status'])->toBe('failed')
+        ->and($asked['message'])->toContain('Glyph x could be several pieces; give the change "choices": {"x": key}');
+
+    $paint['params']['choices'] = ['x' => 'crate:0:0'];
+    expect(ChangeBatch::apply($root, [$paint])['status'])->toBe('saved')
+        ->and(MapGridSource::readFile($root . '/assets/Maps/test-map/graphics/02.decor.tiles.php'))->toBe("0 5 0 0\n0 5 5 6");
+});

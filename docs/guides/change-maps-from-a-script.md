@@ -78,6 +78,9 @@ for you:
   the coordinates they shift). Give the change an `"answer"` beside `params`;
   the batch confirms what the question showed. A question without an answer
   refuses the batch.
+- **Pieces.** When several pieces draw a glyph you paint, the batch is
+  refused with their role keys. Answer as the editors do, in the change's
+  params: `"choices": {"x": "crate:0:0"}`, or `null` for no tiles.
 
 Edits are made in order and held in memory. Inserting or removing rows, and
 creating or duplicating a map, write their files when they run; a refused

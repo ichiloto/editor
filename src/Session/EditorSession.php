@@ -4212,13 +4212,18 @@ final class EditorSession
      * one undo step: its anchor, the cells it covers, and the glyphs on those
      * cells of its covered layer, with the tiles those glyphs draw. The cells
      * it leaves become blank. Furniture moved this way leaves no glyph
-     * behind; an event that describes it moves with `event.move`.
+     * behind; an event that describes it moves with `event.move`. Each glyph
+     * keeps the piece it plays where it stands, read from its tiles, and a
+     * glyph no piece draws there (the object's own art presents it) moves
+     * without tiles. A role still in doubt is asked about as painting asks,
+     * and answered in `$choices` by glyph.
      *
-     * @return array{changed: bool, revision: int}
+     * @param array<string, ?string> $choices
+     * @return array{changed: bool, revision: int}|array{status: 'question', glyph: string, roles: list<array{key: string, label: string}>}
      * @throws SessionRefusal When the map is unknown, stale or read-only, the object is unknown, or a destination cell
      *     leaves the map, holds another glyph or is covered by another object.
      */
-    public function moveWorldObject(string $mapId, int $revision, string $id, int $dx, int $dy): array
+    public function moveWorldObject(string $mapId, int $revision, string $id, int $dx, int $dy, array $choices = []): array
     {
         $map = $this->requireCurrentMap($mapId, $revision);
         if ($map->getGridSourceIssue() !== null) {
@@ -4242,6 +4247,7 @@ final class EditorSession
             $from = array_map(static fn(array $cell): array => [(int) $cell[0], (int) $cell[1]], $entry['covers']['cells']);
             $to = array_map(static fn(array $cell): array => [$cell[0] + $dx, $cell[1] + $dy], $from);
             $writes = [];
+            $assigned = [];
             foreach ($from as $cell) {
                 if (! in_array($cell, $to, true)) {
                     $writes[] = ['x' => $cell[0], 'y' => $cell[1], 'symbol' => ' ', 'color' => ''];
@@ -4257,12 +4263,23 @@ final class EditorSession
                 [$fromX, $fromY] = $from[$index];
                 $writes[] = ['x' => $x, 'y' => $y, 'symbol' => $map->getLayerSymbol($layerId, $fromX, $fromY),
                     'color' => $map->getLayerColor($layerId, $fromX, $fromY) ?? ''];
+                $role = CanvasEditor::findPlayedRole($map, $layerId, $fromX, $fromY);
+                if ($role !== null) {
+                    $assigned["{$x},{$y}"] = $role->key;
+                } else {
+                    // A glyph no piece's tiles draw here (the object's own art presents it) moves without tiles.
+                    $choices = [$map->getLayerSymbol($layerId, $fromX, $fromY) => null, ...$choices];
+                }
             }
             try {
-                $plan = CanvasEditor::plan($map, $layerId, $writes, [], true);
+                $plan = CanvasEditor::plan($map, $layerId, $writes, $choices, true, assigned: $assigned);
                 if ($plan !== null && $plan['unresolved'] !== []) {
-                    throw new SessionRefusal(sprintf('Glyph %s of %s could be several pieces; paint it where it goes, then move the object.',
-                        (string) array_key_first($plan['unresolved']), $id));
+                    $glyph = (string) array_key_first($plan['unresolved']);
+
+                    return ['status' => 'question', 'glyph' => $glyph, 'roles' => array_map(
+                        static fn(PieceRole $role): array => ['key' => $role->key, 'label' => $role->label],
+                        $plan['unresolved'][$glyph],
+                    )];
                 }
                 $glyphs = CanvasEditor::apply($map, $layerId, $plan['writes'] ?? $writes, 'Move world object', $plan['tiles'] ?? [])['command'];
             } catch (MapSourceRefusal $refusal) {

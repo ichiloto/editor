@@ -20,7 +20,9 @@ use JsonException;
  * Two conveniences keep a batch writable by hand: a change naming a `map`
  * without a `revision` edits the map as it stands at that step, and a change
  * whose method asks a question (inserting rows, for one) is answered with
- * the change's own `answer`, confirming what the question showed.
+ * the change's own `answer`, confirming what the question showed. A glyph
+ * that several pieces could draw is answered as the editors answer it, by
+ * `choices` in the change's params; the refusal names the keys.
  */
 final class ChangeBatch
 {
@@ -114,6 +116,12 @@ final class ChangeBatch
 
         try {
             $result = $this->request($method, $params);
+            if (($result['status'] ?? null) === 'question' && is_string($result['glyph'] ?? null)) {
+                // A glyph several pieces draw is answered in the change's own params, as an editor answers it.
+                return ['method' => $method, 'message' => sprintf('Glyph %s could be several pieces; give the change "choices": {"%s": key}, one of %s.',
+                    $result['glyph'], $result['glyph'], implode(', ', array_map(static fn(array $role): string => "{$role['key']} ({$role['label']})",
+                        (array) ($result['roles'] ?? []))))];
+            }
             if (($result['status'] ?? null) === 'question') {
                 $answer = is_array($change) ? ($change['answer'] ?? null) : null;
                 if (! is_string($answer)) {

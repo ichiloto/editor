@@ -177,7 +177,7 @@ final class SessionHost
                 self::requireString($params, 'id'), self::requireInt($params, 'x'), self::requireInt($params, 'y'),
                 is_bool($params['coverage'] ?? false) ? ($params['coverage'] ?? false) : throw new InvalidRequest('"coverage" must be a boolean.')),
             'worldObjects.move' => $session->moveWorldObject(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
-                self::requireString($params, 'id'), self::requireInt($params, 'dx'), self::requireInt($params, 'dy')),
+                self::requireString($params, 'id'), self::requireInt($params, 'dx'), self::requireInt($params, 'dy'), self::readChoices($params)),
             'worldObjects.moveVariant' => $session->moveWorldObjectVariant(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
                 self::requireString($params, 'id'), self::requireString($params, 'variant'), self::requireInt($params, 'offset')),
             'canvas.exchange' => $session->exchangeAuthoringCanvas(self::requireString($params, 'map'), self::requireLines($params, 'events'),

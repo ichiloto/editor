@@ -424,3 +424,25 @@ it('moves a world object with its covered glyphs as one undo step, leaving no gl
         ->toThrow(SessionRefusal::class, 'test-map has no world object no-such-prop.')
         ->and($buildings())->toBe(" /  \n xx ");
 });
+
+it('moves each covered glyph as the piece it plays, and one the object presents without tiles', function (string $decor, string $moved) {
+    [$root, $file] = createWorldObjectProject();
+    writeTestTileset($root, pieces: [
+        'window' => ['name' => 'Window', 'layer' => 'buildings', 'glyphs' => ['x'], 'tiles' => ['decor' => ['5']]],
+        'crate' => ['name' => 'Crate', 'layer' => 'buildings', 'glyphs' => ['x'], 'tiles' => ['decor' => ['6']]],
+    ]);
+    writeTileLayer($root . '/assets/Maps/test-map', '02.decor.tiles.php', $decor);
+    file_put_contents($file, str_replace("'sprites2d' => null],", "'sprites2d' => null,
+            'covers' => ['layer' => 'buildings', 'cells' => [[1, 1], [2, 1]], 'tileLayers' => []]],", (string) file_get_contents($file)));
+    $session = EditorSession::open($root);
+
+    expect($session->moveWorldObject('test-map', $session->readMap('test-map')['revision'], 'fixture-prop', 1, 0)['changed'])->toBeTrue();
+    $session->saveMap('test-map');
+
+    expect(Ichiloto\Engine\Field\MapGridSource::readFile($root . '/assets/Maps/test-map/graphics/02.decor.tiles.php'))->toBe($moved);
+})->with([
+    // Its tiles show each x is a window: the windows move with them.
+    'pieces' => ["0 0 0 0\n0 5 5 0", "0 0 0 0\n0 0 5 5"],
+    // No tile tells which piece: the object presents them, and no tiles follow.
+    'object art' => ["0 0 0 0\n0 0 0 0", "0 0 0 0\n0 0 0 0"],
+]);
