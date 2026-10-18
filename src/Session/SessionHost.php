@@ -556,6 +556,7 @@ final class SessionHost
                 self::requireInt($params, 'x'),
                 self::requireInt($params, 'y'),
                 is_string($params['name'] ?? null) ? $params['name'] : '',
+                self::readOptionalString($params, 'id'),
             ),
             'npc.move' => $session->moveNpc(
                 self::requireString($params, 'map'),
@@ -566,7 +567,8 @@ final class SessionHost
             ),
             'npc.duplicate' => $session->duplicateNpc(self::requireString($params, 'map'), self::requireInt($params, 'revision'), self::requireInt($params, 'index')),
             'npc.delete' => $session->deleteNpc(self::requireString($params, 'map'), self::requireInt($params, 'revision'), self::requireInt($params, 'index')),
-            'npc.assignId' => $session->assignNpcId(self::requireString($params, 'map'), self::requireInt($params, 'revision'), self::requireInt($params, 'index')),
+            'npc.assignId' => $session->assignNpcId(self::requireString($params, 'map'), self::requireInt($params, 'revision'), self::requireInt($params, 'index'),
+                self::readOptionalString($params, 'id')),
             'npc.read' => $session->readNpc(
                 self::requireString($params, 'map'),
                 self::requireInt($params, 'index'),

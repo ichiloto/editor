@@ -4286,11 +4286,18 @@ final class EditorSession
         return ['changed' => $command !== null, 'revision' => $this->getMapRevision($map)];
     }
 
-    public function createNpc(string $mapId, int $revision, int $x, int $y, string $name): array
+    /**
+     * Creates a fixed NPC at a tile under the id given, or one derived from its name.
+     *
+     * @param string|null $id The stable id; null derives one from the name.
+     * @return array{revision: int, changed: bool, index: ?int, id: ?string, followedId: ?string, idReferences: list<string>}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, the tile is outside the map or taken, or the id is not one or is taken.
+     */
+    public function createNpc(string $mapId, int $revision, int $x, int $y, string $name, ?string $id = null): array
     {
         $map = $this->requireCurrentMap($mapId, $revision);
 
-        return $this->applyNpcChange($map, fn(NpcAuthoring $authoring): NpcChange => $authoring->create($map, $x, $y, $name));
+        return $this->applyNpcChange($map, fn(NpcAuthoring $authoring): NpcChange => $authoring->create($map, $x, $y, $name, $id));
     }
 
     /**
@@ -4333,16 +4340,19 @@ final class EditorSession
     }
 
     /**
-     * Gives an NPC authored without a stable id one, from its name.
+     * Gives an NPC authored without a stable id the one given, or one from
+     * its name. An existing id changes through the NPC's Id row
+     * ({@see applyNpc()}), which refuses while anything names it.
      *
+     * @param string|null $id The stable id; null derives one from the name.
      * @return array{revision: int, changed: bool, index: ?int, id: ?string, followedId: ?string, idReferences: list<string>}
-     * @throws SessionRefusal When the map is unknown, stale or read-only, the NPC is unknown, or it already has an id.
+     * @throws SessionRefusal When the map is unknown, stale or read-only, the NPC is unknown, it already has an id, or the id is not one or is taken.
      */
-    public function assignNpcId(string $mapId, int $revision, int $index): array
+    public function assignNpcId(string $mapId, int $revision, int $index, ?string $id = null): array
     {
         $map = $this->requireCurrentMap($mapId, $revision);
 
-        return $this->applyNpcChange($map, fn(NpcAuthoring $authoring): NpcChange => $authoring->assignId($map, $index));
+        return $this->applyNpcChange($map, fn(NpcAuthoring $authoring): NpcChange => $authoring->assignId($map, $index, $id));
     }
 
     /**
@@ -4442,8 +4452,10 @@ final class EditorSession
 
     /**
      * Applies one NPC row's edit as one undo step. The row is found again by
-     * its key among the NPC's current rows. A rename carries the id along
-     * (`followedId`) unless something names it (`idReferences`).
+     * its key among the NPC's current rows. A rename carries an id its old
+     * name derived along (`followedId`) unless something names it
+     * (`idReferences`). The Id row sets the id itself, refused while
+     * anything names the current one.
      *
      * @param array<string, mixed> $key The row's key, as `readNpc` gave it.
      * @return array{revision: int, changed: bool, index: ?int, id: ?string, followedId: ?string, idReferences: list<string>}

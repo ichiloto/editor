@@ -2241,8 +2241,8 @@ final class Editor
      * Gives an NPC authored without a stable id one, derived from its name
      * and unique on its map, so movement routes can target it.
      *
-     * Only an id-less NPC is eligible: an existing id is immutable, since
-     * routes and diagnostics that name it would not follow a change.
+     * Only an id-less NPC is eligible: an existing id changes through its
+     * Id row, which refuses while routes or scripts name it.
      *
      * @return void
      */
