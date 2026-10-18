@@ -92,12 +92,20 @@ for you:
   refused with their role keys. Answer as the editors do, in the change's
   params: `"choices": {"x": "crate:0:0"}`, or `null` for no tiles.
 
-Edits are made in order and held in memory. Inserting or removing rows, and
-creating or duplicating a map, write their files when they run; a refused
-batch undoes them. Inserting or removing rows needs no pending edits, so put
-it first, or in its own batch. Saving, moving or deleting a map is refused
-inside a batch: the batch saves, and moving or deleting a map clears the undo
-history it relies on.
+Edits are made in order and held in memory, and every later change reads
+them: a field resource, database record or world object made earlier in the
+batch is usable by the changes after it, before anything is written.
+Inserting or removing rows, and creating or duplicating a map, write their
+files when they run; a refused batch undoes them. Inserting or removing rows
+needs no pending edits, so put it first, or in its own batch.
+
+The batch alone writes. When it is valid, `changes.commit` saves everything
+it changed: databases (field resources, common events and the rest) and
+cutscenes first, then maps, each through its own transaction. So
+`database.save`, `map.save` and `project.saveAll` are refused inside a batch;
+leave them out. Moving or deleting a map is refused too, since it clears the
+undo history a refused batch relies on. Deleting a database record inside a
+batch removes its file only when the batch is written.
 
 ## Finding Ids And Keys
 
