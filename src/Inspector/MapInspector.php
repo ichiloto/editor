@@ -169,6 +169,7 @@ final readonly class MapInspector
             ],
             ...$this->mapRuntimeFields($map),
             ...MapAtlasFields::describeMapFields($map, $this->references),
+            ...MapTerrainFields::describeMapFields($map),
             ...$this->getLandmarkFields()->describeMapFields($map),
         ];
     }
@@ -313,6 +314,7 @@ final readonly class MapInspector
             'event-bounds' => $this->applyEventBounds($map, (string) $field['marker'], (string) $field['field'], (int) $value),
             MapLandmarkFields::TARGET, MapLandmarkFields::EVENT_TARGET, MapLandmarkFields::OBJECT_TARGET => $this->applyLandmarkValue($map, $field, $value),
             MapAtlasFields::TARGET => $this->applyAtlasValue($map, $field, $value),
+            MapTerrainFields::TARGET => $this->applyTerrainValue($map, $field, $value),
             default => null,
         };
     }
@@ -333,6 +335,27 @@ final readonly class MapInspector
         }
 
         return $entries === null ? null : $this->writeLandmarks($map, $entries, trim((string) ($field['label'] ?? 'Landmark')));
+    }
+
+    /**
+     * Applies one terrain row's edit: the atlas block it leaves is checked by the Engine against the map's source
+     * layers as they stand, then written as one undo step; an empty block removes the key.
+     *
+     * @param array<string, mixed> $field
+     * @throws InspectorRefusal When the edit cannot be made or the Engine would refuse the terrain.
+     */
+    private function applyTerrainValue(ProjectMap $map, array $field, mixed $value): ?Command
+    {
+        try {
+            $block = MapTerrainFields::applyValue($map, $field, $value);
+        } catch (InvalidArgumentException $error) {
+            throw new InspectorRefusal($error->getMessage(), previous: $error);
+        }
+        if ($block === null) { return null; }
+        $problem = MapTerrainFields::findProblem($map, $block);
+        if ($problem !== null) { throw new InspectorRefusal($problem); }
+
+        return $this->writeMapData($map, [MapAtlas::KEY], $block === [] ? null : $block, 'Atlas terrain');
     }
 
     /** The landmark rows, over the project's place categories and maps as this inspector reads them. */
