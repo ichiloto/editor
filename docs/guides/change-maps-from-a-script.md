@@ -1,0 +1,209 @@
+# Change Maps From A Script
+
+This guide is for agents and scripts that change a project's maps without a
+window. Every map change goes through the Editor, the same source-preserving
+session the GUI editor uses, so it is written only when the project it leaves
+is valid. Never edit map files (`*.data.php`, `*.event.php`, `layers/`,
+`graphics/`) by hand: that path skips every check below, and it is how raw
+glyphs, events left behind by moved furniture and chests with no reward
+reached the game.
+
+## The Two Commands
+
+```bash
+ichiloto map:apply changes.json --directory path/to/game
+```
+
+Applies a batch of changes as one change set. It writes them only when every
+map they change has no errors and nothing new is broken anywhere else.
+Otherwise it writes nothing, undoes what it did, and prints each problem with
+its map, cells and fix. It exits `0` once written, `1` when refused.
+
+| Option | Does |
+| --- | --- |
+| `--check` | Reports what writing would find, and writes nothing. |
+| `--relocate-saves` | Lets saves that may stand on cells the change makes solid move to open floor, as an author confirms in the editors. Without it such a change is refused. |
+| `--json` | Prints the outcome as JSON: `status`, `maps`, `saved`, `issues`, `blocking`, `relocated`, `reason`. |
+
+```bash
+ichiloto validate --directory path/to/game --map happyville/bsa-annex --map happyville/home
+```
+
+Reports only what is wrong on the named maps and exits `1` on any of their
+errors. Use it to gate a commit on the maps it touched. Without `--map` it
+checks the whole project.
+
+## What Counts As An Error
+
+An error is a defect the player would meet. The editors still save an
+author's map with errors as a draft and show them; validation and
+`map:apply` fail until they are fixed.
+
+- A gameplay glyph showing in the graphical field: a cell no tile covers, an
+  NPC without a field sprite, an NPC standing on a copy of its own glyph, a
+  map without a kind in a project with tilesets.
+- Floor the player can reach with no tile, so the field shows the background.
+- An event the player can never reach, or an arrival on a cell they cannot
+  stand on.
+- A chest whose reward the Engine cannot give, or that has none chosen.
+- An event marker with no definition, a door or edge to a map that does not
+  exist, a spawn point outside its map.
+- Every other error `ichiloto validate` reports: unknown references, invalid
+  scripts and the rest.
+
+Warnings never refuse a change: tiles a piece draws whose glyph is gone, the
+missing-art placeholder, see-through ground, a map nothing reaches yet.
+
+A change to a map that already has an error is refused until that error is
+fixed too. Put the fix in the same batch.
+
+## The Batch
+
+A batch is a JSON list of editor session requests, or `{"changes": [...]}`:
+
+```json
+{"changes": [
+  {"method": "event.move", "params": {"map": "happyville/bsa-annex", "marker": "F", "dx": 8, "dy": 0}}
+]}
+```
+
+Each change is a request of the session protocol: the GUI editor's own
+requests, listed in `src/Session/SessionHost.php`. Two things are filled in
+for you:
+
+- **Revisions.** A change naming a `map` without a `revision` edits that map
+  as it stands at that step. Give a `revision` only when the batch must refuse
+  a map that changed.
+- **Questions.** Some requests ask before they act (inserting rows reviews
+  the coordinates they shift). Give the change an `"answer"` beside `params`;
+  the batch confirms what the question showed. A question without an answer
+  refuses the batch.
+
+Edits are made in order and held in memory. Inserting or removing rows, and
+creating or duplicating a map, write their files when they run; a refused
+batch undoes them. Inserting or removing rows needs no pending edits, so put
+it first, or in its own batch. Saving, moving or deleting a map is refused
+inside a batch: the batch saves, and moving or deleting a map clears the undo
+history it relies on.
+
+## Finding Ids And Keys
+
+Read before you write. Over the protocol (see Driving The Session Directly)
+or with the GUI editor open, these reads give every id a change needs:
+
+| Read | Gives |
+| --- | --- |
+| `maps.list` | Map ids and revisions. |
+| `map.read {map}` | Layers (`id`, `name`), `baseLayer`, events, NPCs and world objects, unsaved changes included. |
+| `inspector.read {map, event?}` | The map's rows, and an event's rows when `event` names its marker. Each row's `key` goes back unchanged to `inspector.apply`, `inspector.add` or `inspector.remove`. |
+| `worldObjects.read {map, id}` | A world object's rows, for `worldObjects.apply`. |
+| `npc.read {map, index, frame?}` | An NPC's rows, for `npc.apply`. |
+| `pieces.list {map}` | The pieces the map's tileset can stamp. |
+| `event.types` | Event type labels for `event.create`. |
+| `references.list {map, category}` | The values a reference row accepts, such as `inventory` ids. |
+
+Layers are named by `id` in edits. An event row key looks like
+`{"target": "event", "marker": "C", "path": ["data", "loot"]}`.
+
+## Which Request Makes Which Change
+
+| Change | Request |
+| --- | --- |
+| Paint glyphs | `map.paint {map, layer, cells, symbol, color?}`; a whole block of rows at once with `map.paintRegion {map, layer, x, y, rows}` |
+| Draw the tiles a layer's glyphs need | `layer.drawTiles {map, layer}` |
+| Paint or stamp tiles | `tiles.paint`, `tiles.stamp` |
+| Stamp a tileset piece | `pieces.place {map, piece, from, to, color?}` |
+| Layers | `layer.create`, `layer.rename`, `layer.remove`, `layer.reorder`, `layer.decoration`; tile layers `tileLayer.*` |
+| Collision | `map.paintOccupancy`, `occupancy.stampPiece` |
+| Resize | `map.insertLines`, `map.removeLines` (with an `answer`), or the map's size rows |
+| Events | `event.create {map, cells, type, marker?}`, `event.move {map, marker, dx, dy}`, `event.bounds`, `event.destination`, `event.delete`; fields with `inspector.apply` |
+| World objects | `worldObjects.create`, `worldObjects.move {map, id, dx, dy}`, `worldObjects.place`, `worldObjects.apply`, `worldObjects.add`, `worldObjects.remove`, `worldObjects.delete` |
+| NPCs | `npc.create`, `npc.move`, `npc.apply`, `npc.add`, `npc.remove`, `npc.duplicate`, `npc.delete` |
+| Map fields (name, kind, music, encounters, atlas, landmarks) | `inspector.apply` with the map row's key |
+| New map | `map.create {name, kind, width, height}` |
+
+`worldObjects.move` moves an object with what shows it in the terminal: its
+anchor, the cells it covers and their glyphs, with the tiles those glyphs
+draw. Moving only the anchor (`worldObjects.place`) leaves its glyphs behind.
+
+## Worked Example: Move A World Object And Its Event
+
+Lockers move two cells right, and the inspection event that describes them
+moves with them:
+
+```json
+{"changes": [
+  {"method": "worldObjects.move", "params": {"map": "town/annex", "id": "annex-lockers", "dx": 2, "dy": 0}},
+  {"method": "event.move", "params": {"map": "town/annex", "marker": "F", "dx": 2, "dy": 0}}
+]}
+```
+
+Run it with `--check` first. When the lockers would land on another glyph or
+another object's cells, the move is refused and names the cell. When the event
+would sit where the player cannot reach it, the batch is refused with that
+error.
+
+## Worked Example: Stamp A Piece
+
+Read `pieces.list` for the piece's id, then stamp it with its top-left at
+`from`. With `to` on the same cell it stamps one copy; a larger area stamps as
+many whole copies as fit, and a connected piece (a wall) is drawn along the
+area's outline:
+
+```json
+{"changes": [
+  {"method": "pieces.place", "params": {"map": "town/inn", "piece": "bookshelf", "from": [4, 2], "to": [4, 2]}}
+]}
+```
+
+The piece writes its glyphs and its tiles together, so nothing shows as a raw
+glyph. Stamping on cells that make the floor solid may need
+`--relocate-saves`.
+
+## Worked Example: Place A Chest With A Reward
+
+Create the event, then set what it gives. The reward is an inventory id from
+`references.list {map, category: "inventory"}`:
+
+```json
+{"changes": [
+  {"method": "event.create", "params": {"map": "town/cellar", "cells": [[10, 5]], "type": "Chest", "marker": "C"}},
+  {"method": "inspector.apply", "params": {"map": "town/cellar",
+    "key": {"target": "event", "marker": "C", "path": ["data", "lootType"]}, "value": "item"}},
+  {"method": "inspector.apply", "params": {"map": "town/cellar",
+    "key": {"target": "event", "marker": "C", "path": ["data", "loot"]}, "value": "item.tonic"}}
+]}
+```
+
+Without the last change the batch is refused: the chest has no item chosen.
+
+## Driving The Session Directly
+
+For a long piece of work, an agent can hold one session open instead of
+writing batches: start `ichiloto edit:host --directory path/to/game`, send one
+JSON request per line on its standard input and read one response per line
+from its standard output. The first request is
+`{"id": 1, "method": "hello", "params": {"protocol": 1, "project": "<project root>"}}`.
+Then:
+
+1. `changes.begin` opens a change set. It needs no pending edits.
+2. Make the edits, passing each map's current `revision` (every edit returns
+   the new one), and read back what you need.
+3. `project.validate {maps?}` reports the issues the project would have now,
+   unsaved edits included.
+4. `changes.commit {relocateSaves?, check?}` writes the change set when it is
+   valid, or refuses it, writes nothing and undoes it. `changes.cancel`
+   undoes it. Closing the host with a change set open cancels it.
+
+A response is `{"id", "result"}` or `{"id", "error": {"kind", "message"}}`.
+`map.save` and `project.saveAll` are the author's draft saves: they write a
+map with errors. Agents commit change sets instead.
+
+## Before You Run
+
+- Do not apply a batch to a project an author has open in an editor with
+  unsaved changes to the same maps. The editor's own save refuses a file that
+  changed since it read it, so nothing is overwritten silently, but the
+  author's edits then have to be redone.
+- `map:apply` validates the whole project twice, before and after. Expect it
+  to take as long as `ichiloto validate` does, twice.
