@@ -178,6 +178,9 @@ final readonly class WorldObjectAuthoring
                 $fields = [new RecordField('id', 'Stable Map-local Id', isReadOnly: true),
                     new RecordField('anchor.x', 'Anchor X', InputControlType::INTEGER),
                     new RecordField('anchor.y', 'Anchor Y', InputControlType::INTEGER),
+                    // Every placement, resource or inline, may show only while saved world state holds; none means always.
+                    new RecordField('conditions', 'Visible When (all conditions)', removeWhenEmpty: true,
+                        codec: RecordFieldCodec::CONDITIONS, displayDefault: '(always)'),
                     ...$presentation,
                     ...self::getTerminalFields($entry, false),
                     new RecordField('covers.layer', 'Covered Gameplay Layer', options: ['', ...array_column(array_filter($this->map->getLayers(),

@@ -446,3 +446,25 @@ it('moves each covered glyph as the piece it plays, and one the object presents 
     // No tile tells which piece: the object presents them, and no tiles follow.
     'object art' => ["0 0 0 0\n0 0 0 0", "0 0 0 0\n0 0 0 0"],
 ]);
+
+it('authors an inline object\'s placement conditions beside its variants, keeping the rest of the source', function () {
+    [$root, $file, $session] = createWorldObjectProject();
+    applyWorldObjectRow($session, 'conditions', 'switch:existing-condition');
+    applyWorldObjectRow($session, 'anchor.x', '2');
+    $object = $session->readMap('test-map')['worldObjects'][0];
+    expect($object['conditions'])->toBe([['type' => 'switch', 'name' => 'existing-condition']])
+        ->and($object['anchor'])->toBe(['x' => 2, 'y' => 1]);
+    $session->saveMap('test-map');
+    expect(file_get_contents($file))->toContain('/* map-owned identity */', "'preserved' => abs(7)")
+        ->and(EditorSession::open($root)->readMap('test-map')['worldObjects'][0]['conditions'])
+        ->toBe([['type' => 'switch', 'name' => 'existing-condition']]);
+});
+
+it('refuses a placement condition the Engine cannot evaluate before changing the map', function () {
+    [, $file, $session] = createWorldObjectProject();
+    $before = $session->readMap('test-map')['worldObjects'];
+    $source = file_get_contents($file);
+    expect(fn() => applyWorldObjectRow($session, 'conditions', 'no-such-predicate:anything'))->toThrow(SessionRefusal::class);
+    expect($session->readMap('test-map')['worldObjects'])->toBe($before)
+        ->and(file_get_contents($file))->toBe($source);
+});

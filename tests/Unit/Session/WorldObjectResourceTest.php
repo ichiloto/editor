@@ -84,3 +84,22 @@ it('refuses a resource the catalogue does not name, before writing anything', fu
         ->and($session->readMap('test-map'))->toBe($map)
         ->and((string) file_get_contents($file))->toBe($before);
 });
+
+it('shows a resource placement only while its authored conditions hold, and always when it has none', function () {
+    [$root, $file, $session] = createResourcePlacementProject();
+    expect(findPlacementRow($session, 'conditions'))->toMatchArray(['kind' => 'conditions']);
+    $row = findPlacementRow($session, 'conditions');
+    $session->applyWorldObject('test-map', $session->readWorldObject('test-map', 'grove-001')['revision'], 'grove-001', $row['key'], 'switch:grove-grown');
+
+    expect($session->readMap('test-map')['worldObjects'][0]['conditions'])->toBe([['type' => 'switch', 'name' => 'grove-grown']]);
+    $session->saveMap('test-map');
+    expect((string) file_get_contents($file))->toContain("'preserved' => abs(7)")
+        ->and(EditorSession::open($root)->readMap('test-map')['worldObjects'][0]['conditions'])->toBe([['type' => 'switch', 'name' => 'grove-grown']]);
+
+    // Clearing the list removes the key, which the Engine reads as always visible; it never writes an empty or null list.
+    $row = findPlacementRow($session, 'conditions');
+    $session->applyWorldObject('test-map', $session->readWorldObject('test-map', 'grove-001')['revision'], 'grove-001', $row['key'], '');
+    expect($session->readMap('test-map')['worldObjects'][0])->not->toHaveKey('conditions');
+    $session->undo();
+    expect($session->readMap('test-map')['worldObjects'][0]['conditions'])->toBe([['type' => 'switch', 'name' => 'grove-grown']]);
+});

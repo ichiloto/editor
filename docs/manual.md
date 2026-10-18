@@ -1309,7 +1309,12 @@ Resource picker in place of its own pivot and art, which the resource owns.
 Every world object offers that picker, a new one included: choosing a
 resource makes the object a placement of it, dropping its own pivot, art and
 variants, and choosing none gives it back an art of its own, starting empty
-on the ground, as a newly created object does.
+on the ground, as a newly created object does. Every world object, a placement
+of a resource or one with its own art, also has Visible When: the saved world
+conditions under which the game shows it, all of which must hold. None means
+always shown; clearing the list removes it from the map. Hiding an object
+changes only what is drawn: its cells, collision and events stay as authored,
+and the map's own glyphs show where it stood.
 
 A resource shows an image or a sign board (Shows). A sign board names its
 board image, cut into fixed left and right caps and a centre that repeats so
