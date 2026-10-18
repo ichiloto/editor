@@ -135,6 +135,7 @@ Layers are named by `id` in edits. An event row key looks like
 | A Story Script event's inline commands | `inspector.read {map, event, frame: ["script"]}`, then `inspector.apply`/`add`/`remove` with the frame's row keys; the first command goes on the `frameEmpty` row |
 | Dialogue pages with conditions and writes, talk-to id | the event's `variantList`, `variantNConditions`, `variantNSets`, `variantNLineM...` rows; the Talk-To Id row sets `npcId` |
 | Where a transfer arrives facing | the Spawn Facing row, or `event.destination {..., heading}` |
+| A route waypoint or staged actor placed relative to a subject | the waypoint's or actor's Relative To row (player, npc, world_object, staged_actor, party_actor, marker), then its id row and Offset X / Offset Y rows: `database.apply` in a cinematic (`database.record {category: "cutscenes/cinematic", index, frame: ["commands"]}`), `npc.apply` in an NPC script, `inspector.apply` in an event script. A relative point follows its subject and is not shifted by row or column inserts |
 | A map's region-map cell | `inspector.apply` with `{target: map-station, field: station}`, value `x, y`, empty removes it |
 | World objects | `worldObjects.create`, `worldObjects.move {map, id, dx, dy}`, `worldObjects.place`, `worldObjects.apply`, `worldObjects.add`, `worldObjects.remove`, `worldObjects.delete` |
 | NPCs | `npc.create`, `npc.move`, `npc.apply`, `npc.add`, `npc.remove`, `npc.duplicate`, `npc.delete` |
