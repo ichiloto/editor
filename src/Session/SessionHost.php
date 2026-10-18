@@ -437,6 +437,7 @@ final class SessionHost
                 self::requireString($params, 'destination'),
                 self::requireInt($params, 'x'),
                 self::requireInt($params, 'y'),
+                self::readOptionalString($params, 'heading'),
             ),
             'database.records' => $session->listDatabaseRecords(self::requireString($params, 'category')),
             'troops.page' => $session->readTroopPage(self::requireInt($params, 'index'),

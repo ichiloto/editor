@@ -37,6 +37,7 @@ use Ichiloto\Engine\Events\Enumerations\LootType;
 use Ichiloto\Engine\Events\Triggers\DialogueEventTrigger;
 use Ichiloto\Engine\Events\Triggers\EventCueKind;
 use Ichiloto\Engine\Events\Triggers\ShopEventTrigger;
+use Ichiloto\Engine\Field\PlayerSpriteSet;
 use Ichiloto\Engine\Messaging\Dialogue\ConditionalDialogue;
 use Ichiloto\Engine\Messaging\Dialogue\Presentation\DialogueContext;
 use Ichiloto\Engine\Field\MapGraphics;
@@ -494,12 +495,14 @@ final readonly class MapInspector
 
     /**
      * Sets a transfer event's destination: the map and the spawn point on
-     * it, as one undo step.
+     * it, and when given the heading the player faces there, as one undo
+     * step. Without a heading the spawn facing stays as it is.
      *
      * @param ProjectMap $destination The map it leads to.
-     * @throws InspectorRefusal When the event is not a transfer or the spawn point is off the destination map.
+     * @param string|null $heading North, East, South or West; null leaves the facing unchanged.
+     * @throws InspectorRefusal When the event is not a transfer, the spawn point is off the destination map, or the heading is not one.
      */
-    public function setTransferDestination(ProjectMap $map, string $marker, ProjectMap $destination, int $x, int $y): ?Command
+    public function setTransferDestination(ProjectMap $map, string $marker, ProjectMap $destination, int $x, int $y, ?string $heading = null): ?Command
     {
         $current = $map->getEventDefinition($marker);
 
@@ -512,9 +515,15 @@ final readonly class MapInspector
                 $x, $y, $destination->mapId, $destination->getWidth(), $destination->getHeight()));
         }
 
+        $facing = $heading === null ? null : (self::findSpawnHeading($heading)
+            ?? throw new InspectorRefusal(sprintf('%s is not a spawn facing; choose %s.', $heading, implode(', ', self::listSpawnHeadingNames()))));
+
         $next = $current;
         $next['data']['destinationMap'] = $destination->mapId;
         $next['data']['spawnPoint'] = [...(is_array($current['data']['spawnPoint'] ?? null) ? $current['data']['spawnPoint'] : []), 'x' => $x, 'y' => $y];
+        if ($facing !== null) {
+            $next['data']['spawnSprite'] = [$facing->value];
+        }
 
         if ($next === $current) {
             return null;
@@ -958,6 +967,9 @@ final readonly class MapInspector
         if (is_string($field['facingHeading'] ?? null)) {
             return $this->applyEventFacing($map, $marker, $field['facingHeading'], $value === true);
         }
+        if (($field['spawnHeading'] ?? false) === true) {
+            return $this->applySpawnHeading($map, $marker, $value);
+        }
         $held = $map->hasEventField($marker, $path);
         $oldValue = $map->getEventField($marker, $path);
         // Optional data cleared is removed, as it was before it was set.
@@ -1025,6 +1037,74 @@ final readonly class MapInspector
         $apply();
 
         return new GenericCommand('Facing edit', $apply, $restore);
+    }
+
+    /**
+     * Sets the heading the player faces on arrival. The Engine reads a
+     * spawn sprite that names one heading as that heading, so it is written
+     * as the one name; sprite art authored there is replaced.
+     */
+    private function applySpawnHeading(ProjectMap $map, string $marker, mixed $value): ?Command
+    {
+        $heading = is_string($value) ? self::findSpawnHeading($value) : null;
+        if ($heading === null) {
+            throw new InspectorRefusal(sprintf('Choose %s for the spawn facing.', implode(', ', self::listSpawnHeadingNames())));
+        }
+        $path = ['data', 'spawnSprite'];
+        $old = $map->getEventField($marker, $path);
+        $next = [$heading->value];
+        if ($old === $next) {
+            return null;
+        }
+        $held = $map->hasEventField($marker, $path);
+        $apply = static fn() => $map->setEventField($marker, $path, $next);
+        $restore = $held ? static fn() => $map->setEventField($marker, $path, $old) : static fn() => $map->removeEventField($marker, $path);
+        $apply();
+
+        return new GenericCommand('Spawn facing edit', $apply, $restore);
+    }
+
+    /** The heading a spawn facing names, or null for none of North, East, South or West. */
+    public static function findSpawnHeading(string $name): ?MovementHeading
+    {
+        return array_find(self::listFacingHeadings(), static fn(MovementHeading $heading): bool => $heading->value === $name);
+    }
+
+    /** @return list<string> The headings a spawn faces, in compass order. */
+    public static function listSpawnHeadingNames(): array
+    {
+        return array_map(static fn(MovementHeading $heading): string => $heading->value, self::listFacingHeadings());
+    }
+
+    /**
+     * An event's data rows with the spawn facing after its spawn point: a
+     * heading picked from the Engine's headings. Sprite art authored in its
+     * place is named and kept until a heading is chosen.
+     *
+     * @param list<array<string, mixed>> $fields
+     * @return list<array<string, mixed>>
+     */
+    private static function insertSpawnHeadingField(array $fields, string $marker, mixed $spawnSprite): array
+    {
+        $heading = is_array($spawnSprite) || is_string($spawnSprite) ? PlayerSpriteSet::headingFromName($spawnSprite) : null;
+        $art = is_array($spawnSprite) ? implode(' ', array_map(static fn(mixed $row): string => is_scalar($row) ? (string) $row : '?', $spawnSprite)) : (is_scalar($spawnSprite) ? (string) $spawnSprite : '');
+        $row = [
+            'label' => 'Spawn Facing',
+            'value' => $heading?->value ?? sprintf('(sprite art: %s)', $art),
+            'selectedValue' => $heading?->value ?? '',
+            'choices' => array_map(static fn(string $name): array => ['label' => $name, 'value' => $name,
+                'description' => sprintf('The player arrives facing %s.', strtolower($name))], self::listSpawnHeadingNames()),
+            'options' => self::listSpawnHeadingNames(),
+            'path' => ['data', 'spawnSprite'],
+            'spawnHeading' => true,
+            'target' => 'event',
+            'marker' => $marker,
+        ];
+        $spawnRows = array_keys(array_filter($fields, static fn(array $field): bool => array_slice(array_values((array) ($field['path'] ?? [])), 0, 2) === ['data', 'spawnPoint']));
+        $at = $spawnRows === [] ? count($fields) : max($spawnRows) + 1;
+        array_splice($fields, $at, 0, [$row]);
+
+        return $fields;
     }
 
     /** Kind edits own the cue's optional parent so undo also restores its omission. */
@@ -1525,6 +1605,9 @@ final readonly class MapInspector
             $hasPresentation = array_key_exists('presentation', $optional) || array_key_exists('presentation', $eventData);
             $presentation = $eventData['presentation'] ?? null;
             if ($hasPresentation) { unset($eventData['presentation'], $optional['presentation']); }
+            $hasSpawnSprite = array_key_exists('spawnSprite', $eventData);
+            $spawnSprite = $eventData['spawnSprite'] ?? null;
+            unset($eventData['spawnSprite']);
             $pages = self::readDialoguePages($shown);
             $fields = array_map(static function (array $field) use ($optional): array {
                 $path = array_values((array) ($field['path'] ?? []));
@@ -1538,6 +1621,7 @@ final readonly class MapInspector
                 $this->flattenInspectorFields([...self::withPageEmotions($eventData, $pages), ...array_diff_key($optional, $eventData)], ['data']),
             ));
             $fields = $this->describePageEmotions($fields, $pages);
+            if ($hasSpawnSprite) { $fields = self::insertSpawnHeadingField($fields, $marker, $spawnSprite); }
             if ($hasPresentation) { $fields = [...$fields, ...$this->buildInnPresentationFields($marker, $presentation)]; }
         }
 

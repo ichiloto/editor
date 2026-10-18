@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Events;
 
+use Ichiloto\Engine\Core\Enumerations\MovementHeading;
 use Ichiloto\Engine\Events\Triggers\ChestEventTrigger;
 use Ichiloto\Engine\Events\Triggers\CinematicEventTrigger;
 use Ichiloto\Engine\Events\Triggers\DialogueEventTrigger;
@@ -84,9 +85,8 @@ final class EventTypeCatalog
                         'x' => 0,
                         'y' => 0,
                     ],
-                    'spawnSprite' => [
-                        '🧍',
-                    ],
+                    // A heading the player faces on arrival, as PlayerSpriteSet reads it.
+                    'spawnSprite' => [MovementHeading::SOUTH->value],
                 ],
                 defaultDefinitionFields: ['cue' => ['symbol' => '', 'color' => 'bright-yellow']],
             ),
@@ -111,9 +111,8 @@ final class EventTypeCatalog
                         'x' => 0,
                         'y' => 0,
                     ],
-                    'spawnSprite' => [
-                        '🧍',
-                    ],
+                    // A heading the player faces on arrival, as PlayerSpriteSet reads it.
+                    'spawnSprite' => [MovementHeading::SOUTH->value],
                     'confirmDialogue' => [
                         'name' => '',
                         'text' => 'Rest here?',

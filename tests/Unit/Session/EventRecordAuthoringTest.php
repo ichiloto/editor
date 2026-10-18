@@ -10,7 +10,8 @@ use Ichiloto\Editor\Session\SessionRefusal;
  * An event's record rows through the session, as a GUI editor or an agent
  * authors them: the fields every trigger reads on every event type, a Story
  * Script's inline commands in the shared command editor, a Dialogue event's
- * conditional pages and talk-to id, and the map's region station. Every edit is checked against the written source: authored
+ * conditional pages and talk-to id, the map's region station and a spawn
+ * facing. Every edit is checked against the written source: authored
  * comments, expressions and untouched keys stay as they were.
  */
 
@@ -268,6 +269,36 @@ it('pins a map to a cell of its region map as one x, y pair, and takes the pin a
     $request('inspector.apply', ['map' => 'test-map', 'revision' => $applied['revision'], 'key' => $station['key'], 'value' => '']);
     $request('map.save', ['map' => 'test-map']);
     expect(require eventRecordDataPath($root))->not->toHaveKey('station');
+});
+
+it('picks the heading a transfer arrives facing, with its destination or alone, from the Engine\'s headings', function () {
+    $root = eventRecordProject();
+    $request = eventRecordHost($root);
+    $read = $request('inspector.read', ['map' => 'test-map', 'event' => 'T'])['result'];
+    $facing = eventRecordRow($read, 'data.spawnSprite');
+
+    expect($facing)->toMatchArray(['kind' => 'options', 'label' => 'Spawn Facing', 'value' => '(sprite art: @)', 'options' => ['North', 'East', 'South', 'West']])
+        ->and($request('inspector.apply', ['map' => 'test-map', 'revision' => $read['revision'], 'key' => $facing['key'], 'value' => 'Up'])['error']['message'])
+            ->toContain('choose one of');
+
+    $revision = $request('inspector.apply', ['map' => 'test-map', 'revision' => $read['revision'], 'key' => $facing['key'], 'value' => 'North'])['result']['revision'];
+    expect(eventRecordRow($request('inspector.read', ['map' => 'test-map', 'event' => 'T'])['result'], 'data.spawnSprite')['value'])->toBe('North');
+
+    // With the destination: omitted, the facing stays; given, it is checked and set with the spawn point as one step.
+    $moved = $request('event.destination', ['map' => 'test-map', 'revision' => $revision, 'marker' => 'T', 'destination' => 'test-map', 'x' => 2, 'y' => 2])['result'];
+    expect($moved['changed'])->toBeTrue()
+        ->and(eventRecordRow($request('inspector.read', ['map' => 'test-map', 'event' => 'T'])['result'], 'data.spawnSprite')['value'])->toBe('North');
+    expect($request('event.destination', ['map' => 'test-map', 'revision' => $moved['revision'], 'marker' => 'T', 'destination' => 'test-map', 'x' => 3, 'y' => 2, 'heading' => 'None'])['error']['message'])
+        ->toContain('not a spawn facing');
+    $request('event.destination', ['map' => 'test-map', 'revision' => $moved['revision'], 'marker' => 'T', 'destination' => 'test-map', 'x' => 3, 'y' => 2, 'heading' => 'West']);
+    $request('map.save', ['map' => 'test-map']);
+
+    expect((require eventRecordDataPath($root))['events']['T']['data'])->toBe(['destinationMap' => 'test-map', 'spawnPoint' => ['x' => 3, 'y' => 2], 'spawnSprite' => ['West']])
+        ->and($request('history.undo')['result']['label'])->toBe('Destination change')
+        ->and(eventRecordRow($request('inspector.read', ['map' => 'test-map', 'event' => 'T'])['result'], 'data.spawnSprite')['value'])->toBe('North');
+
+    $created = $request('event.create', ['map' => 'test-map', 'revision' => $request('map.read', ['map' => 'test-map'])['result']['revision'], 'cells' => [[2, 3]], 'type' => 'Transfer Player'])['result'];
+    expect(eventRecordRow($request('inspector.read', ['map' => 'test-map', 'event' => $created['marker']])['result'], 'data.spawnSprite')['value'])->toBe('South');
 });
 
 it('places a Story Script\'s inline route on the map through its frame rows, at the commands\' place in the event data', function () {

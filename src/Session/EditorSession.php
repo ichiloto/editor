@@ -1899,16 +1899,18 @@ final class EditorSession
 
     /**
      * Sets a transfer event's destination map and the spawn point on it as
-     * one undo step.
+     * one undo step, with the heading the player faces there when given;
+     * without one the spawn facing stays as it is.
      *
+     * @param string|null $heading North, East, South or West, as the Spawn Facing row offers them; null leaves it.
      * @return array{revision: int, changed: bool}
-     * @throws SessionRefusal When either map is unknown, the map is stale or read-only, the event has no destination, or the spawn point is off the destination.
+     * @throws SessionRefusal When either map is unknown, the map is stale or read-only, the event has no destination, the spawn point is off the destination, or the heading is not one.
      */
-    public function setEventDestination(string $mapId, int $revision, string $marker, string $destinationMapId, int $x, int $y): array
+    public function setEventDestination(string $mapId, int $revision, string $marker, string $destinationMapId, int $x, int $y, ?string $heading = null): array
     {
         $map = $this->requireCurrentMap($mapId, $revision);
         $destination = $this->requireMap($destinationMapId);
-        $command = $this->runEdit(fn(): ?Command => $this->createMapInspector($map)->setTransferDestination($map, $marker, $destination, $x, $y));
+        $command = $this->runEdit(fn(): ?Command => $this->createMapInspector($map)->setTransferDestination($map, $marker, $destination, $x, $y, $heading));
 
         return ['revision' => $this->getMapRevision($map), 'changed' => $command !== null];
     }
