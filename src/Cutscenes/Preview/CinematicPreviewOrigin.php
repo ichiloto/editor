@@ -33,8 +33,8 @@ final class CinematicPreviewOrigin
                     continue;
                 }
 
-                // Where the runtime places the marker: its first cell.
-                $first = $map->getEventArea((string) $marker)?->firstCell;
+                // Where the runtime places the marker: the first cell it triggers on, painted or its subject's.
+                $first = $map->getEventTriggerArea((string) $marker)?->firstCell;
 
                 if ($first !== null) {
                     return ['mapId' => $map->mapId, 'x' => (int) $first->x, 'y' => (int) $first->y, 'marker' => (string) $marker];

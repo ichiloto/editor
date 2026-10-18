@@ -9,6 +9,7 @@ use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Engine\Events\Triggers\TransferPlayerTrigger;
 use Ichiloto\Engine\Field\MapCategoryCatalog;
 use Ichiloto\Engine\Field\MapLandmarkAnchors;
+use Ichiloto\Engine\Field\Validation\MapEventResolver;
 use Ichiloto\Engine\Field\MapLandmarkCatalog;
 use Ichiloto\Engine\Field\MapLandmarkKind;
 use InvalidArgumentException;
@@ -40,21 +41,17 @@ final readonly class MapLandmarks
     }
 
     /**
-     * The map as the Engine's map readers take it, unsaved edits included: its data with each placed event
-     * resolved to its marker and cells (an event without cells has nothing to mark), and its composed logical cell
-     * grid. Landmark anchors and atlas parents are both read from this one view.
+     * The map as the Engine's map readers take it, unsaved edits included: its data with each event resolved to
+     * its marker and cells by the Engine's own resolver (painted cells, or a bound subject's cells; an event the
+     * resolver refuses has nothing to mark, and validation says why), and its composed logical cell grid.
+     * Landmark anchors and atlas parents are both read from this one view.
      *
      * @return array{data: array<string, mixed>, tiles: array<int, array<int, string>>}
      * @throws InvalidArgumentException When world objects cannot be read.
      */
     public static function readResolvedSource(ProjectMap $map): array
     {
-        $events = [];
-        foreach ($map->getEventDefinitions() as $marker => $definition) {
-            $area = $map->getEventArea((string) $marker);
-            if ($area === null || !is_array($definition)) { continue; }
-            $events[] = [...$definition, 'marker' => (string) $marker, 'area' => $area->toArray()];
-        }
+        $events = MapEventResolver::inspect($map->getEditableData(), $map->getEventLayerCells(), $map->mapId)->events;
         $triggers = $map->getEditableData()['triggers'] ?? [];
 
         return ['data' => [...$map->getEditableData(), 'id' => $map->mapId, 'events' => $events,

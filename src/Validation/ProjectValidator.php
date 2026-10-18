@@ -2915,10 +2915,22 @@ class ProjectValidator
     $keyOfArray = [];
     $pendingKey = null;
     $occurrences = [];
+    // Whether each open bracket or parenthesis opened an array: `[...]`, or
+    // `array(...)` as var_export writes it, beside the parentheses of calls.
+    $opened = [];
+    $previous = null;
 
     foreach ($tokens as $index => $token) {
+      if (is_array($token) && in_array($token[0], [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], true)) {
+        continue;
+      }
+      $after = $previous;
+      $previous = $token;
+
       if (! is_array($token)) {
-        if ($token === '[') {
+        $opens = $token === '[' || ($token === '(' && is_array($after) && $after[0] === T_ARRAY);
+        if ($opens) {
+          $opened[] = true;
           $depth++;
           // The key this array was written against, so a nested block knows
           // its own name.
@@ -2928,10 +2940,18 @@ class ProjectValidator
           continue;
         }
 
-        if ($token === ']') {
-          unset($keyOfArray[$depth]);
-          $depth = max(0, $depth - 1);
-          $pendingKey = null;
+        if ($token === '(') {
+          $opened[] = false;
+
+          continue;
+        }
+
+        if ($token === ']' || $token === ')') {
+          if (array_pop($opened) === true) {
+            unset($keyOfArray[$depth]);
+            $depth = max(0, $depth - 1);
+            $pendingKey = null;
+          }
 
           continue;
         }

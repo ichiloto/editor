@@ -6,6 +6,7 @@ namespace Ichiloto\Editor\Validation;
 
 use Ichiloto\Editor\Database\InventoryCatalog;
 use Ichiloto\Editor\ProjectMap;
+use Ichiloto\Engine\Animations\Field\FieldPresentationCatalog;
 use Ichiloto\Engine\Field\Validation\MapCompletenessValidator;
 use Ichiloto\Engine\Field\Validation\MapValidationIssue;
 use Ichiloto\Engine\Rendering\Tilesets\Tileset;
@@ -51,6 +52,8 @@ final class MapCompletenessCheck
                 MapGraphicsValidator::readGraphics($map),
                 $map->getAssetRoot(),
                 $resolve,
+                // The resources as this session holds them: one added in the same change set resolves.
+                self::readFieldCatalog($map),
                 requiresGraphics: glob($map->getAssetRoot() . '/' . Tileset::DIRECTORY . '/*.php') !== [],
             );
         } catch (Throwable $failure) {
@@ -67,6 +70,19 @@ final class MapCompletenessCheck
         }
 
         return self::describeIssues($map, $found);
+    }
+
+    /**
+     * The field presentation the map's world objects name resources from, as
+     * its workspace holds it; null when it names none, so a map of inline
+     * objects never depends on the catalogue.
+     */
+    private static function readFieldCatalog(ProjectMap $map): ?FieldPresentationCatalog
+    {
+        $objects = $map->getEditableData()['worldObjects'] ?? [];
+
+        return is_array($objects) && array_any($objects, static fn(mixed $entry): bool => is_array($entry) && array_key_exists('resource', $entry))
+            ? $map->getFieldCatalog() : null;
     }
 
     /**

@@ -119,7 +119,7 @@ final class TreeBrush
     private static function loadCatalog(ProjectMap $map): FieldPresentationCatalog
     {
         try {
-            return FieldPresentationCatalog::load($map->getAssetRoot());
+            return $map->getFieldCatalog();
         } catch (Throwable $error) {
             throw new MapSourceRefusal('The field resources cannot be read, so no tree can be drawn: ' . $error->getMessage(), previous: $error);
         }
