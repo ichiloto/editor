@@ -433,6 +433,14 @@ final class SessionHost
                 self::requireInt($params, 'dx'),
                 self::requireInt($params, 'dy'),
             ),
+            'event.subject' => $session->setEventSubject(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireString($params, 'marker'),
+                array_key_exists('subject', $params) && (is_string($params['subject']) || $params['subject'] === null)
+                    ? $params['subject'] : throw new InvalidRequest('"subject" must be a world object id, or null to unbind.'),
+                array_key_exists('cells', $params) ? self::requireCells($params) : [],
+            ),
             'event.bounds' => $session->setEventBounds(
                 self::requireString($params, 'map'),
                 self::requireInt($params, 'revision'),

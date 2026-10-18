@@ -1917,6 +1917,28 @@ final class EditorSession
     }
 
     /**
+     * Binds an event to the world object it describes, or unbinds it onto
+     * cells of its own, as one undo step ({@see EventAuthoring::bindEventSubject()}).
+     * A bound event's area is its subject's, so it moves with the object and
+     * cannot be moved or reshaped itself.
+     *
+     * @param string|null $objectId The world object's id; null unbinds the event.
+     * @param list<array{0: int, 1: int}> $cells Where an unbound event triggers, as [x, y]; unused when binding.
+     * @return array{revision: int, changed: bool}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, the event or object is unknown, or the
+     *     cells cannot take the event.
+     */
+    public function setEventSubject(string $mapId, int $revision, string $marker, ?string $objectId, array $cells = []): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        $command = $this->runEdit(static fn(): ?Command => $objectId === null
+            ? EventAuthoring::unbindEventSubject($map, $marker, $cells)
+            : EventAuthoring::bindEventSubject($map, $marker, $objectId));
+
+        return ['revision' => $this->getMapRevision($map), 'changed' => $command !== null];
+    }
+
+    /**
      * Repaints an event as exactly a rectangle.
      *
      * @return array{revision: int, changed: bool}
