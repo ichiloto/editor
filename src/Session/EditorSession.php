@@ -5218,15 +5218,16 @@ final class EditorSession
                 $relocations = [...$relocations, ...$plan->describeMoves()];
             }
         }
-        if ($blocking !== [] || $checkOnly || ($relocations !== [] && ! $relocateSaves)) {
+        $reason = match (true) {
+            $blocking !== [] => sprintf('%d error%s the player would meet.', count($blocking), count($blocking) === 1 ? '' : 's'),
+            $relocations !== [] && ! $relocateSaves => 'Saves may stand where a changed map is now solid; allow them to move to open floor, or change the map.',
+            default => null,
+        };
+        if ($reason !== null || $checkOnly) {
             $unrestored = $this->rollBackChanges($changes);
 
-            return ['status' => $blocking === [] && $checkOnly ? 'checked' : 'refused', ...$outcome, 'relocated' => $relocations,
-                'reason' => match (true) {
-                    $blocking !== [] => sprintf('%d error%s the player would meet.', count($blocking), count($blocking) === 1 ? '' : 's'),
-                    $checkOnly => null,
-                    default => 'Saves stand where a changed map is now solid; allow them to move to open floor, or change the map.',
-                }, ...($unrestored > 0 ? ['unrestored' => $unrestored] : [])];
+            return ['status' => $reason === null ? 'checked' : 'refused', ...$outcome, 'relocated' => $relocations, 'reason' => $reason,
+                ...($unrestored > 0 ? ['unrestored' => $unrestored] : [])];
         }
 
         $this->changeSet = null;
