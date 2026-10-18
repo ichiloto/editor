@@ -50,7 +50,7 @@ final class MapAtlasFields
             $fields[] = ['label' => '  ! Problem', 'value' => $error->getMessage(), 'editable' => false];
         }
         if ($view !== null) {
-            $explained = ['places' => 'Blank ground, a square for each location and a chevron for each route.',
+            $explained = ['places' => 'Simplified terrain and buildings from the map\'s Terrain classifications, with a square for each location and a chevron for each route.',
                 'floorplan' => 'Rooms and corridors drawn as simple outlines, for interiors.'];
             $known = array_map(static fn(string $value): array => ['label' => ucfirst($value), 'value' => $value,
                 'description' => $explained[$value] ?? ''], MapAtlasDefinition::TERMINAL_VIEWS);

@@ -1039,9 +1039,10 @@ landmarks the Engine would refuse.
 `Atlas` places the map in the atlas (Engine `docs/maps.md`). `Scope` is
 `Local` (a town, a house, a dungeon; what a map is when it says nothing) or
 `Global`, the overworld geography itself. `Terminal View` is how the
-Terminal's map draws it: `Places` (blank ground, a square for each location and
-a chevron for each route, for outdoors) or `Floorplan` (rooms and corridors as
-simple outlines, for interiors). It shows what the Engine reads for the map's
+Terminal's map draws it: `Places` (simplified terrain and buildings from the
+map's Terrain classifications, with a square for each location and a chevron
+for each route, for outdoors) or `Floorplan` (rooms and corridors as simple
+outlines, for interiors). It shows what the Engine reads for the map's
 scope until an author chooses otherwise, and choosing that again says nothing;
 graphical maps are unaffected. A local map's `Parent Entry` is the
 landmark on another map that is its entrance there: a house's on its town, the
@@ -1105,8 +1106,9 @@ file changes on the next save. Undo before saving costs nothing.
 ### Terrain
 
 `Terrain` classifies the map's own cells for its atlas, so the Terminal's map
-can show simplified ground, roads, water, vegetation, highland, buildings and
-boundaries around its place markers (Engine `MapAtlasTerrain`). It lists each
+can show simplified terrain (the Engine's `MapAtlasTerrain` roles, such as
+ground, roads, water, vegetation, obstacles, highland, buildings and
+boundaries) around its place markers. It lists each
 source layer in the order the map composes them. `Other Glyphs` gives every
 non-blank glyph of that layer one role; each glyph the layer holds, blank
 ground included, has a row of its own with its cell count, and a glyph's own
