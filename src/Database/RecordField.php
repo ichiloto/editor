@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Database;
 
+use Ichiloto\Editor\Dialogue\DialogueLineSpeaker;
 use Ichiloto\Editor\Inspector\InputControlType;
+use Ichiloto\Engine\Messaging\Dialogue\Presentation\DialogueContext;
 
 /**
  * One editable field on a Database record.
@@ -60,7 +62,21 @@ final readonly class RecordField
         public ?string $blankLabel = null,
         public ?array $writeTypes = null,
         public bool $uniqueAcrossRecords = false,
+        /** For a line's emotion, how the line names its speaker, whose catalogue emotions it is chosen from. */
+        public ?DialogueLineSpeaker $dialogueSpeaker = null,
     ) {
+    }
+
+    /**
+     * Returns a dialogue line's emotion: chosen among the emotions the line's speaker has in the game's dialogue
+     * catalogue, as the rule says who speaks. Absent, the Engine shows Neutral.
+     *
+     * @param DialogueLineSpeaker $speaker How the line names its speaker.
+     * @return self The field.
+     */
+    public static function emotion(DialogueLineSpeaker $speaker): self
+    {
+        return new self('emotion', 'Emotion', removeWhenEmpty: true, displayDefault: DialogueContext::DEFAULT_EMOTION, dialogueSpeaker: $speaker);
     }
 
     /**
@@ -126,6 +142,7 @@ final readonly class RecordField
             $this->displayDefault,
             $this->blankLabel,
             $this->writeTypes,
+            dialogueSpeaker: $this->dialogueSpeaker,
         );
     }
 

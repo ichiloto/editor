@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Inspector;
 
 use Ichiloto\Editor\Database\ConditionCodec;
+use Ichiloto\Editor\Dialogue\DialogueEmotionFields;
+use Ichiloto\Editor\Dialogue\DialogueLineSpeaker;
 use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\Database\InnPresentationFields;
 use Ichiloto\Editor\Database\MovementRouteFields;
@@ -28,7 +30,11 @@ use Ichiloto\Engine\Core\Enumerations\MovementHeading;
 use Ichiloto\Engine\Events\Enumerations\ChestType;
 use Ichiloto\Engine\Events\Enumerations\EventEngagement;
 use Ichiloto\Engine\Events\Enumerations\LootType;
+use Ichiloto\Engine\Events\Triggers\DialogueEventTrigger;
 use Ichiloto\Engine\Events\Triggers\EventCueKind;
+use Ichiloto\Engine\Events\Triggers\ShopEventTrigger;
+use Ichiloto\Engine\Messaging\Dialogue\ConditionalDialogue;
+use Ichiloto\Engine\Messaging\Dialogue\Presentation\DialogueContext;
 use Ichiloto\Engine\Field\MapGraphics;
 use Ichiloto\Engine\Rendering\Tilesets\Tileset;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandReference;
@@ -1401,6 +1407,7 @@ final readonly class MapInspector
             $hasPresentation = array_key_exists('presentation', $optional) || array_key_exists('presentation', $eventData);
             $presentation = $eventData['presentation'] ?? null;
             if ($hasPresentation) { unset($eventData['presentation'], $optional['presentation']); }
+            $pages = self::readDialoguePages($definition);
             $fields = array_map(static function (array $field) use ($optional): array {
                 $path = array_values((array) ($field['path'] ?? []));
                 if (count($path) === 2 && array_key_exists((string) $path[1], $optional)) {
@@ -1410,8 +1417,9 @@ final readonly class MapInspector
                 return $field;
             }, $this->decorateEventInspectorFields(
                 $marker,
-                $this->flattenInspectorFields([...$eventData, ...array_diff_key($optional, $eventData)], ['data']),
+                $this->flattenInspectorFields([...self::withPageEmotions($eventData, $pages), ...array_diff_key($optional, $eventData)], ['data']),
             ));
+            $fields = $this->describePageEmotions($fields, $pages);
             if ($hasPresentation) { $fields = [...$fields, ...$this->buildInnPresentationFields($marker, $presentation)]; }
         }
 
@@ -1673,6 +1681,85 @@ final readonly class MapInspector
             : static fn() => $map->removeEventField($marker, $presentationPath);
         $apply();
         return new GenericCommand($label, $apply, $undo);
+    }
+
+    /**
+     * The dialogue pages an event shows as the Engine reads them (a Dialogue event's, a shop's merchant lines), by
+     * their path under the event: each a line whose `name` speaks it and whose `emotion` picks the speaker's artwork.
+     * A list of conditional variants holds its pages under each variant's `lines`.
+     *
+     * @return array<string, array{path: list<string>, page: array<string, mixed>}> By the emotion row's path.
+     */
+    private static function readDialoguePages(array $definition): array
+    {
+        $class = ltrim((string) ($definition['class'] ?? ''), '\\');
+        $dialogue = $definition['data']['dialogue'] ?? null;
+        if (! in_array($class, [DialogueEventTrigger::class, ShopEventTrigger::class], true) || ! is_array($dialogue)) {
+            return [];
+        }
+        $pages = [];
+        $variants = ConditionalDialogue::isVariantList($dialogue);
+        foreach ($dialogue as $index => $entry) {
+            $lines = $variants ? ($entry['lines'] ?? null) : [$entry];
+            foreach (is_array($lines) ? $lines : [] as $line => $page) {
+                if (! is_array($page)) { continue; }
+                $path = $variants ? ['data', 'dialogue', (string) $index, 'lines', (string) $line] : ['data', 'dialogue', (string) $index];
+                $pages[implode('/', [...$path, 'emotion'])] = ['path' => $path, 'page' => $page];
+            }
+        }
+
+        return $pages;
+    }
+
+    /**
+     * The event data as its rows show it: each dialogue page offers its emotion, Neutral where it names none, which
+     * stays out of the stored event until an author chooses one.
+     */
+    private static function withPageEmotions(array $eventData, array $pages): array
+    {
+        $data = ['data' => $eventData];
+        foreach ($pages as $page) {
+            $entry = &$data;
+            foreach ($page['path'] as $segment) { $entry = &$entry[$segment]; }
+            if (! array_key_exists('emotion', $entry)) {
+                // Shown after the speaker it is chosen for.
+                $position = array_search('name', array_keys($entry), true);
+                $at = $position === false ? 0 : $position + 1;
+                $entry = [...array_slice($entry, 0, $at, true), 'emotion' => DialogueContext::DEFAULT_EMOTION, ...array_slice($entry, $at, null, true)];
+            }
+            unset($entry);
+        }
+
+        return $data['data'];
+    }
+
+    /**
+     * A dialogue page's emotion row offers the emotions its speaker's identity has, and says so when the page holds
+     * one that identity lacks; one the page leaves out is optional, removed again when chosen away.
+     *
+     * @param list<array<string, mixed>> $fields
+     * @param array<string, array{path: list<string>, page: array<string, mixed>}> $pages
+     * @return list<array<string, mixed>>
+     */
+    private function describePageEmotions(array $fields, array $pages): array
+    {
+        if ($pages === []) {
+            return $fields;
+        }
+        $described = [];
+        foreach ($fields as $field) {
+            $page = $pages[implode('/', array_map(strval(...), (array) ($field['path'] ?? [])))] ?? null;
+            if ($page === null) {
+                $described[] = $field;
+                continue;
+            }
+            $emotion = $page['page']['emotion'] ?? null;
+            $field['optional'] = ! array_key_exists('emotion', $page['page']);
+            array_push($described, ...DialogueEmotionFields::describeRows($field, $emotion,
+                $this->references->describeDialogueEmotions(DialogueLineSpeaker::forText(), $page['page'])));
+        }
+
+        return $described;
     }
 
     /**

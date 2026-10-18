@@ -5236,6 +5236,8 @@ final class EditorSession
             'writeTypes' => $kind === 'writes' && is_array($field['writeTypes'] ?? null) ? array_values($field['writeTypes']) : null,
             // One axis of a coordinate pair under the heading before it.
             'axis' => in_array($field['axis'] ?? null, ['x', 'y'], true) ? $field['axis'] : null,
+            // A row that warns about the rows before it, such as a line's emotion its speaker lacks.
+            'tone' => ($field['tone'] ?? null) === 'warning' ? 'warning' : null,
             'key' => $key,
         ], static fn(mixed $value): bool => $value !== null);
     }

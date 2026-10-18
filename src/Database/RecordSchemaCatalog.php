@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Database;
 
+use Ichiloto\Editor\Dialogue\DialogueLineSpeaker;
+use Ichiloto\Editor\Dialogue\DialoguePortraitFields;
+use Ichiloto\Editor\Dialogue\DialogueSpeakerFields;
 use Ichiloto\Editor\Field\PlayerPresentationFields;
 
 use Closure;
@@ -130,6 +133,8 @@ final class RecordSchemaCatalog
             self::commonEvents($graphical),
             self::terms(),
             \Ichiloto\Editor\Field\MapCategoryFields::getSchema(),
+            DialoguePortraitFields::getSchema(),
+            DialogueSpeakerFields::getSchema(),
             self::configuration($graphical),
             self::types(),
             self::tilesets($graphical),
@@ -1409,6 +1414,7 @@ final class RecordSchemaCatalog
                 fields: [
                     RecordField::reference('actor', 'Actor', 'actor_ids', allowsNone: true, noneLabel: '(Non-actor speaker)'),
                     new RecordField('speaker', 'Non-actor Speaker', removeWhenEmpty: true),
+                    RecordField::emotion(DialogueLineSpeaker::forSkitBeat()),
                     new RecordField('text', 'Text'),
                 ],
                 blank: ['actor' => '', 'text' => 'Say something.'],
@@ -2025,6 +2031,7 @@ final class RecordSchemaCatalog
                                 noneLabel: "(the NPC's name)",
                                 blankLabel: '(No speaker)',
                             ),
+                            RecordField::emotion(DialogueLineSpeaker::forNpcLine()),
                             new RecordField('text', 'Text'),
                         ],
                         blank: ['text' => 'Something to say.'],
@@ -2132,6 +2139,7 @@ final class RecordSchemaCatalog
         return [
             'text' => [
                 new RecordField('name', 'Speaker', removeWhenEmpty: false),
+                RecordField::emotion(DialogueLineSpeaker::forText()),
                 new RecordField('text', 'Text'),
             ],
             'choice' => [

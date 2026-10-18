@@ -7,6 +7,10 @@ namespace Ichiloto\Editor\Database;
 use Ichiloto\Editor\Field\PlayerPresentationFields;
 
 use Ichiloto\Editor\IO\AtomicFile;
+use Ichiloto\Editor\Cutscenes\Source\PhpArraySourceDocument;
+use Ichiloto\Editor\Cutscenes\Source\SourceNode;
+use Ichiloto\Editor\Cutscenes\Source\SourceUnreadable;
+use Ichiloto\Editor\Dialogue\DialogueEmotionFields;
 
 use BackedEnum;
 use Throwable;
@@ -534,6 +538,25 @@ final class ProjectRecordDatabase
     }
 
     /**
+     * The rows one field of a list entry shows: its own, and for a dialogue line's emotion the speaker's catalogue
+     * emotions as its choices, with a warning row when the line holds one the speaker lacks.
+     *
+     * @param array<string, mixed> $row The field's row.
+     * @param array<string, mixed> $entry The entry it belongs to.
+     * @param array<string, mixed> $owner The record holding the entry.
+     * @return list<array<string, mixed>>
+     */
+    private function describeEntryField(RecordField $field, array $row, array $entry, array $owner): array
+    {
+        if ($field->dialogueSpeaker === null || $this->authoringReferences === null) {
+            return [$row];
+        }
+
+        return DialogueEmotionFields::describeRows($row, self::readNested($entry, $field->key),
+            $this->authoringReferences->describeDialogueEmotions($field->dialogueSpeaker, $entry, $owner));
+    }
+
+    /**
      * Builds the settings-pane field descriptors for one record.
      *
      * Descriptors match the editor's existing contract: a `control` makes a
@@ -590,7 +613,7 @@ final class ProjectRecordDatabase
             }
 
             foreach ($record->getEntries($subList) as $entryIndex => $entry) {
-                $fields = [...$fields, ...$this->describeSubEntryFields($subList, $entryIndex, $entry, $isEditable, [])];
+                $fields = [...$fields, ...$this->describeSubEntryFields($subList, $entryIndex, $entry, $isEditable, [], (array) $record->toArray())];
             }
         }
 
@@ -608,23 +631,24 @@ final class ProjectRecordDatabase
      * @param array<string, mixed> $entry The entry payload.
      * @param bool $isEditable Whether edits are accepted.
      * @param array<int, int|string> $basePath The frame path this entry's list lives at.
+     * @param array<string, mixed> $owner The record the entry belongs to, whose own name an NPC's line speaks under.
      * @return array<int, array<string, mixed>> The field descriptors.
      */
-    private function describeSubEntryFields(RecordSubList $subList, int $entryIndex, array $entry, bool $isEditable, array $basePath): array
+    private function describeSubEntryFields(RecordSubList $subList, int $entryIndex, array $entry, bool $isEditable, array $basePath, array $owner = []): array
     {
         $fields = [];
 
         // Each row names the entry it belongs to and its own name within it, so an
         // interface can show one selected entry's rows, labelled as that entry's.
         foreach ($subList->fieldsFor($entry) as $field) {
-            $fields[] = [...self::describeField(
+            $fields = [...$fields, ...$this->describeEntryField($field, [...self::describeField(
                 $field,
                 self::displayValue($field, self::readNested($entry, $field->key)),
                 self::subFieldId($subList->prefix, $entryIndex, $field->key),
                 $isEditable,
                 sprintf('%s %d %s', ucfirst($subList->singular), $entryIndex + 1, $field->label),
             ), 'entry' => [$entryIndex], 'entryLabel' => sprintf('%s %d', ucfirst($subList->singular), $entryIndex + 1), 'name' => $field->label, 'sourceKey' => $field->key,
-                'dataPath' => [...($basePath === [] ? explode('.', $subList->key) : $basePath), $entryIndex, ...explode('.', $field->key)]];
+                'dataPath' => [...($basePath === [] ? explode('.', $subList->key) : $basePath), $entryIndex, ...explode('.', $field->key)]], $entry, $owner)];
         }
 
         $variant = $subList->variantKey !== null ? strval($entry[$subList->variantKey] ?? '') : '';
@@ -705,7 +729,7 @@ final class ProjectRecordDatabase
             }
 
             foreach ($nestedList->fieldsFor($nestedEntry) as $field) {
-                $fields[] = ['entry' => [$entryIndex, $nestedIndex], 'entryLabel' => sprintf('%s %d', ucfirst($nestedList->singular), $nestedIndex + 1),
+                $fields = [...$fields, ...$this->describeEntryField($field, ['entry' => [$entryIndex, $nestedIndex], 'entryLabel' => sprintf('%s %d', ucfirst($nestedList->singular), $nestedIndex + 1),
                     'name' => $field->label, 'sourceKey' => $field->key,
                     'dataPath' => [...($basePath === [] ? explode('.', $subList->key) : $basePath), $entryIndex, ...explode('.', $nestedList->key), $nestedIndex, ...explode('.', $field->key)]] + self::describeField(
                     $field,
@@ -726,7 +750,7 @@ final class ProjectRecordDatabase
                         $nestedIndex + 1,
                         $field->label,
                     ),
-                );
+                ), $nestedEntry, $owner)];
             }
 
             foreach ($nestedList->armsFor($nestedEntry) as $armKey => $armLabel) {
@@ -1867,7 +1891,8 @@ final class ProjectRecordDatabase
         }
 
         if ($schema->projection !== null && $file->exists) {
-            $projectionIssue = self::projectionPreservationIssueFor($schema->projection, $file->payload);
+            $projectionIssue = self::projectionPreservationIssueFor($schema->projection, $file->payload)
+                ?? self::findOwnedKeySourceIssue($schema->projection, $file);
 
             if ($projectionIssue !== null) {
                 return sprintf('%s %s', basename($file->path), $projectionIssue);
@@ -1879,6 +1904,53 @@ final class ProjectRecordDatabase
 
             if ($reason !== null) {
                 return $reason;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Why a projection's own keys cannot be written as data in the file's source: the file builds one, or an array
+     * inside one, in a variable with its own code (a loop, a required file), which a save would replace with a
+     * literal of what the code produced while the code went on running for nothing.
+     */
+    private static function findOwnedKeySourceIssue(RecordProjection $projection, PhpDataFile $file): ?string
+    {
+        if (! $projection instanceof OwnsFileKeys || ! is_file($file->path) || ! is_array($file->payload)) {
+            return null;
+        }
+        try {
+            $document = PhpArraySourceDocument::parse((string) file_get_contents($file->path));
+        } catch (SourceUnreadable) {
+            // A file that is not one returned array is saved by regeneration, which PhpDataFile already guards.
+            return null;
+        }
+        foreach ($projection->listOwnedKeys() as $key) {
+            $node = $document->nodeAt([$key]);
+            $variable = $node === null ? null : self::findArrayVariable($node, $file->payload[$key] ?? null);
+            if ($variable !== null) {
+                return sprintf('builds "%s" with its own PHP code in $%s, which the editor will not replace with plain data; write it as data to edit it here', $key, $variable);
+            }
+        }
+
+        return null;
+    }
+
+    /** The first variable under a source node that holds an array in the evaluated value, or null. */
+    private static function findArrayVariable(SourceNode $node, mixed $value): ?string
+    {
+        if ($node->kind === SourceNode::VARIABLE) {
+            return is_array($value) ? ($node->variable ?? '') : null;
+        }
+        if ($node->kind !== SourceNode::ARRAY || ! is_array($value)) {
+            return null;
+        }
+        foreach ($node->entries as $position => $entry) {
+            $key = $node->isList ? $position : $entry->key;
+            $found = (is_int($key) || is_string($key)) && array_key_exists($key, $value) ? self::findArrayVariable($entry->value, $value[$key]) : null;
+            if ($found !== null) {
+                return $found;
             }
         }
 
@@ -3989,7 +4061,7 @@ final class ProjectRecordDatabase
 
         foreach ($commands as $entryIndex => $entry) {
             if (is_array($entry)) {
-                $fields = [...$fields, ...$this->describeSubEntryFields($subList, $entryIndex, $entry, $isEditable, $framePath)];
+                $fields = [...$fields, ...$this->describeSubEntryFields($subList, $entryIndex, $entry, $isEditable, $framePath, (array) $record->toArray())];
             }
         }
 
