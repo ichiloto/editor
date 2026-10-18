@@ -131,6 +131,11 @@ Layers are named by `id` in edits. An event row key looks like
 | Resize | `map.insertLines`, `map.removeLines` (with an `answer`), or the map's size rows |
 | Events | `event.create {map, cells, type, marker?}`, `event.move {map, marker, dx, dy}`, `event.bounds`, `event.destination`, `event.delete`; fields with `inspector.apply` |
 | Bind an event to the object it describes | `event.subject {map, marker, subject}`; `subject: null` with `cells` unbinds it |
+| An event's conditions, writes, blocked message, cue conditions | `inspector.apply` with `{target: event-record, marker, field, frame: []}`, `field` one of `conditions`, `sets`, `whenBlocked`, `cue.conditions`; the value is a condition or write line (`conditions.grammar`), empty removes it |
+| A Story Script event's inline commands | `inspector.read {map, event, frame: ["script"]}`, then `inspector.apply`/`add`/`remove` with the frame's row keys; the first command goes on the `frameEmpty` row |
+| Dialogue pages with conditions and writes, talk-to id | the event's `variantList`, `variantNConditions`, `variantNSets`, `variantNLineM...` rows; the Talk-To Id row sets `npcId` |
+| Where a transfer arrives facing | the Spawn Facing row, or `event.destination {..., heading}` |
+| A map's region-map cell | `inspector.apply` with `{target: map-station, field: station}`, value `x, y`, empty removes it |
 | World objects | `worldObjects.create`, `worldObjects.move {map, id, dx, dy}`, `worldObjects.place`, `worldObjects.apply`, `worldObjects.add`, `worldObjects.remove`, `worldObjects.delete` |
 | NPCs | `npc.create`, `npc.move`, `npc.apply`, `npc.add`, `npc.remove`, `npc.duplicate`, `npc.delete` |
 | Map fields (name, kind, music, encounters, atlas, landmarks) | `inspector.apply` with the map row's key |
