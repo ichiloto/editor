@@ -2139,7 +2139,7 @@ final class RecordSchemaCatalog
             variants: self::eventCommandVariants($graphical),
             variantKey: 'type',
             nestedLists: [
-                'move_route' => MovementRouteFields::getPointList(...),
+                'move_route' => static fn(array $entry): ?RecordSubList => MovementRouteFields::getPointList($entry, graphical: $graphical),
                 ...self::getRegisteredCommandLists($graphical),
             ],
             prepareEdit: static fn(array $entry, string $field): array => MovementRouteFields::prepareEdit(

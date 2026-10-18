@@ -10,6 +10,7 @@ use Ichiloto\Editor\Field\NpcAuthoring;
 use Ichiloto\Editor\Field\NpcInspector;
 use Ichiloto\Editor\History\CommandGroup;
 use Ichiloto\Editor\Maps\MapPlacement;
+use Ichiloto\Editor\Maps\MapSubjectCells;
 use Ichiloto\Editor\Cutscenes\CutsceneType;
 use Ichiloto\Editor\Cutscenes\Source\PhpArraySourceDocument;
 
@@ -125,6 +126,30 @@ trait MapPlacementSession
         return ['changed' => $commands !== [], 'revision' => $this->getMapRevision($map)];
     }
 
+    /**
+     * The map a relative point's subject is read on, as its owner's references are chosen: an event's or NPC's own
+     * map, or a cinematic's declared start map. A reusable script names none.
+     *
+     * @return array{MapSubjectCells|null, string} The map's subjects, and why there are none.
+     */
+    private function readPlacementSubjects(array $owner): array
+    {
+        if ($owner['kind'] !== 'database') {
+            return [MapSubjectCells::readMap($this->requireMap($owner['map'])), ''];
+        }
+        $type = CutsceneType::findByRecordCategory($owner['category']);
+        if ($type !== CutsceneType::CINEMATIC) {
+            return [null, 'This script runs on whichever map calls it; its relative points are shown from that map only.'];
+        }
+        $id = $this->workspace->cutscenes?->ids($type)[$owner['index']] ?? null;
+        $asset = $id === null ? null : $this->workspace->cutscenes?->find($type, $id);
+        $map = $asset === null ? null : new ReferenceCatalog($this->workspace, null, $asset)->getSubjectMap();
+
+        return $map === null
+            ? [null, 'Declare the cinematic\'s Start Map to show where its relative points land.']
+            : [MapSubjectCells::readMap($map), ''];
+    }
+
     /** Attach a review of the actual owner, never a second editable model. */
     private function describePlacementRows(array $rows, array $owner): array
     {
@@ -182,9 +207,14 @@ trait MapPlacementSession
         foreach ($paths as $path) {
             $sources[$path] = is_file($path) ? hash_file('sha256', $path) : null;
         }
+        $subjects = null;
         foreach ($rows as &$row) {
             if (!isset($row['mapPlacement'])) {
                 continue;
+            }
+            if (array_any($row['mapPlacement']['points'] ?? [], static fn(array $point): bool => isset($point['relative']))) {
+                $subjects ??= $this->readPlacementSubjects($owner);
+                $row['mapPlacement'] = MapPlacement::resolveRelativePoints($row['mapPlacement'], ...$subjects);
             }
             $placement = &$row['mapPlacement'];
             $placement['review'] = ['version' => $version, 'sources' => $sources];

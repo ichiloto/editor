@@ -54,11 +54,24 @@ final class ProjectRecordDatabase
     /** @var (\Closure(string): list<string>)|null What keeps a record from being deleted ({@see useDeletionReferences()}). */
     private ?\Closure $deletionReferences = null;
     private ?ReferenceCatalog $authoringReferences = null;
+    /** @var (\Closure(ProjectRecord): ?ReferenceCatalog)|null */
+    private ?\Closure $recordReferences = null;
     private bool $graphical = false;
 
     public function useAuthoringReferences(ReferenceCatalog $references): void
     {
         $this->authoringReferences = $references;
+    }
+
+    /**
+     * Scopes the references one record chooses from to that record, where it owns some of its own: a cinematic's
+     * map-local subjects are on the map it starts on.
+     *
+     * @param \Closure(ProjectRecord): ?ReferenceCatalog $scope
+     */
+    public function useRecordReferences(\Closure $scope): void
+    {
+        $this->recordReferences = $scope;
     }
 
     private function coerceReferenceField(ProjectRecord $record, RecordField $field, string $rawValue, array $ownerPath = []): mixed
@@ -71,10 +84,11 @@ final class ProjectRecordDatabase
             throw new \InvalidArgumentException(sprintf('%s cannot be edited as a line: %s. Nothing was changed.', $field->label, $issue));
         }
         $value = self::coerce($field, $rawValue);
-        if ($this->authoringReferences !== null && in_array($field->reference, ['actor_ids', 'stage_timelines', 'cinematic_movement_routes', 'map_world_objects'], true) && $value !== null) {
+        $references = ($this->recordReferences === null ? null : ($this->recordReferences)($record)) ?? $this->authoringReferences;
+        if ($references !== null && in_array($field->reference, ['actor_ids', 'stage_timelines', 'cinematic_movement_routes', 'map_world_objects'], true) && $value !== null) {
             $choices = $field->reference === 'cinematic_movement_routes'
-                ? $this->authoringReferences->getMovementRouteIds($record, $ownerPath)
-                : $this->authoringReferences->valuesFor($field->reference);
+                ? $references->getMovementRouteIds($record, $ownerPath)
+                : $references->valuesFor($field->reference);
             foreach (is_array($value) ? $value : [$value] as $selected) {
                 if (! in_array($selected, $choices, true)) {
                     throw new \InvalidArgumentException(sprintf('Unknown %s "%s"; choose a project resource.', $field->reference, strval($selected)));

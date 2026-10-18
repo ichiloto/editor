@@ -189,6 +189,11 @@ trait CutsceneValidation
         }
 
         $context = ['castIds' => $castIds, 'checkpoints' => $checkpoints, 'npcIds' => $npcIds, 'mapId' => $startMap !== '' ? $startMap : null, 'npcIdsByMap' => $npcIdsByMap, 'seenCheckpoints' => []];
+        foreach ((array) ($data['cast'] ?? []) as $entry) {
+            if (is_array($entry) && is_array($entry['at'] ?? null)) {
+                $issues = [...$issues, ...$this->checkCinematicSubject(['subject' => $entry['at']], $where . ' cast', $context)];
+            }
+        }
         $issues = [...$issues, ...$this->walkCinematicCommands($commands, $where, $known, $context)];
         $issues = [...$issues, ...$this->walkCinematicCommands($finalizer, $where . ' finalizer', $known, $context)];
 
@@ -270,6 +275,11 @@ trait CutsceneValidation
                 }
             }
 
+            // A relative position names its subject as the command runs: before this actor is staged.
+            foreach (self::listRelativeSubjects($command) as $reference) {
+                $issues = [...$issues, ...$this->checkCinematicSubject(['subject' => $reference], $where, $context)];
+            }
+
             if ($type === 'stage_actor') {
                 $id = trim(strval($command['id'] ?? $command['actorId'] ?? ''));
 
@@ -332,6 +342,25 @@ trait CutsceneValidation
         }
 
         return $issues;
+    }
+
+    /**
+     * The map subjects a command's relative positions name: each relative waypoint's, or an independent staged
+     * actor's.
+     *
+     * @param array<string, mixed> $command
+     * @return list<array<string, mixed>>
+     */
+    protected static function listRelativeSubjects(array $command): array
+    {
+        $points = match ($command['type'] ?? null) {
+            'move_route' => (array) ($command['waypoints'] ?? []),
+            'stage_actor' => [is_array($command['actor'] ?? null) ? $command['actor'] : $command],
+            default => [],
+        };
+
+        return array_values(array_map(static fn(array $point): array => $point['at'],
+            array_filter($points, static fn(mixed $point): bool => is_array($point) && is_array($point['at'] ?? null))));
     }
 
     /**

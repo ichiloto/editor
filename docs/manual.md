@@ -291,7 +291,11 @@ What moves, when it is in the map's space and at or beyond the line:
   listed as a hand edit because a walk across the line ends elsewhere), `camera` and
   `field_animation` position targets, `stage_actor`, and `transfer` into the
   map. Scripts start on their map; after a `transfer` elsewhere, later commands
-  are in that map's space and stay;
+  are in that map's space and stay. A waypoint, staged actor or cast member
+  placed relative to a subject (`at` with an optional `offset`) is never
+  rewritten: it follows its subject. When the edited lines fall between the
+  subject and the point, or may (a player or staged actor subject), its
+  offset is listed as a hand edit;
 - reusable scripts in `assets/Events/` started only from this map, and
   cutscenes whose start map it is (their cast, script and finalizer).
 
@@ -1999,6 +2003,24 @@ authored modes. A waypoint's omitted X or Y keeps the subject's coordinate for
 that leg; adding a point leaves both axes blank until authored, not zero.
 Incomplete new or changed routes refuse Save without discarding the draft or
 undo history. Unchanged legacy data survives unrelated edits.
+
+A waypoint, an independent `stage_actor` and a staged cast member may instead
+stand relative to a map subject, the Engine's `at`/`offset` position. `Relative
+To` chooses the subject kind from the Engine's exported list: the player, an NPC,
+a world object (graphical editor only, as for every subject picker), a staged
+actor (cinematics only), a party actor or an event marker. A named subject's id
+is picked from what exists (the map's NPCs, world objects and markers, the
+cinematic's cast); the player and the leading party actor take none. `Offset X`
+and `Offset Y` are whole cells, zero when left out. Choosing a subject removes
+the point's X and Y; clearing it from a waypoint is refused rather than inventing
+a coordinate. A visual bound to a real subject inherits its position and is never
+offered a subject or offset; binding one removes them. A subject still waiting
+for its id refuses Save. The map placement view shows each relative point at its
+subject's cell on the owner's map (an event's or NPC's own map, a cinematic's
+Start Map), or says why it cannot: the player, party actors and staged actors are
+placed only while the scene runs, and a common event runs on whichever map calls
+it. A relative point is changed through its subject and offset, never by a map
+click.
 
 `Remember As` declares a session-local identity. `Recorded Route` selects only
 declarations in that script invocation and its referenced common events,

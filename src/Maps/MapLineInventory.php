@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Maps;
 
+use Ichiloto\Editor\Database\RelativePositionFields;
 use Ichiloto\Editor\Events\CommandMapContext;
 use Ichiloto\Engine\Events\Triggers\SleepEventTrigger;
 
@@ -52,10 +53,12 @@ final class MapLineInventory
     /**
      * @param MapLineEdit $edit The insertion or removal.
      * @param array<string, array{file: string, commands: mixed}> $commonEvents Reusable event scripts by id.
+     * @param MapSubjectCells|null $subjects Where the edited map's subjects stood before the edit.
      */
     public function __construct(
         private readonly MapLineEdit $edit,
         private readonly array $commonEvents,
+        private readonly ?MapSubjectCells $subjects = null,
     ) {
     }
 
@@ -207,7 +210,7 @@ final class MapLineInventory
             : self::mergeContexts(array_map(static fn(string $map): array => [$map], $this->cinematicTriggerMaps[$id] ?? []));
         foreach ((array) ($data['cast'] ?? []) as $index => $entry) {
             if (is_array($entry)) {
-                $this->shiftPointIn($dataFile, ['cast', $index], $entry, $start);
+                $this->shiftPositionIn($dataFile, ['cast', $index], $entry, $start);
             }
         }
         $this->transferContexts = [];
@@ -325,7 +328,7 @@ final class MapLineInventory
             case 'move_route':
                 foreach ((array) ($command['waypoints'] ?? []) as $index => $waypoint) {
                     if (is_array($waypoint)) {
-                        $this->shiftPointIn($file, [...$at, 'waypoints', $index], $waypoint, $context);
+                        $this->shiftPositionIn($file, [...$at, 'waypoints', $index], $waypoint, $context);
                     }
                 }
                 // Steps are relative, so they cannot be rewritten, but a walk across the edited lines now ends elsewhere.
@@ -347,8 +350,8 @@ final class MapLineInventory
                 break;
             case 'stage_actor':
                 is_array($command['actor'] ?? null)
-                    ? $this->shiftPointIn($file, [...$at, 'actor'], $command['actor'], $context)
-                    : $this->shiftPointIn($file, $at, $command, $context);
+                    ? $this->shiftPositionIn($file, [...$at, 'actor'], $command['actor'], $context)
+                    : $this->shiftPositionIn($file, $at, $command, $context);
                 break;
         }
     }
@@ -369,6 +372,45 @@ final class MapLineInventory
         $kind = strtolower(trim(strval($reference['kind'] ?? $reference['subject'] ?? '')));
         if ($kind === 'position') {
             $this->shiftPointIn($file, $referencePath, $reference, $context);
+        }
+    }
+
+    /**
+     * Moves a staged position: a map cell like any other point, or one relative to a map subject, which moves with
+     * its subject and is never rewritten. A relative offset counts cells, so when the edited lines fall between the
+     * subject and the point, or may, the point is reported for a hand edit.
+     *
+     * @param list<int|string> $path
+     * @param array<string, mixed> $point
+     * @param list<string>|null $context
+     */
+    private function shiftPositionIn(string $file, array $path, array $point, ?array $context): void
+    {
+        if (! RelativePositionFields::isRelative($point)) {
+            $this->shiftPointIn($file, $path, $point, $context);
+            return;
+        }
+        if ($context !== null && ! in_array($this->edit->mapId, $context, true)) {
+            return;
+        }
+        $axis = $this->edit->axis;
+        $offset = is_array($point['offset'] ?? null) && is_int($point['offset'][$axis] ?? null) ? $point['offset'][$axis] : 0;
+        if ($offset === 0) {
+            return;
+        }
+        $lines = $this->edit instanceof LineRemoval ? 'removed' : 'inserted';
+        $position = RelativePositionFields::describePosition($point);
+        $cell = $context === [$this->edit->mapId] && is_array($point['at'] ?? null)
+            ? ($this->subjects?->resolveCell($point['at'])['cell'] ?? null) : null;
+        if ($cell === null) {
+            $this->reportHandEdit($file, [...$path, 'offset', $axis], sprintf('it stands %s, and the %s lines may fall between them; check its offset', $position, $lines));
+            return;
+        }
+        $from = $cell[$axis === 'x' ? 0 : 1];
+        $shiftedFrom = $this->edit->getShiftedCoordinate($from);
+        $shiftedTo = $this->edit->getShiftedCoordinate($from + $offset);
+        if ($shiftedFrom === null || $shiftedTo === null || $shiftedTo - $shiftedFrom !== $offset) {
+            $this->reportHandEdit($file, [...$path, 'offset', $axis], sprintf('it stands %s, and the %s lines fall between them; check its offset', $position, $lines));
         }
     }
 
