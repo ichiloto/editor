@@ -5,6 +5,7 @@ declare(strict_types=1);
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Editor\Validation\Issue;
 use Ichiloto\Editor\Validation\ProjectValidator;
+use Ichiloto\Editor\Validation\ScriptMapState;
 
 /**
  * Project validation over cutscenes: paired folders, the Engine's own
@@ -435,6 +436,83 @@ it('validates legacy alternative arms from their incoming map and joins their po
     ], 'branch context', ['maps' => array_keys($maps)], $maps['origin'], 'origin', $maps);
     expect($issues)->toHaveCount(1)
         ->and($issues[0]->message)->toContain('NPC id "destination-npc"');
+});
+
+/**
+ * The Engine ticks parallel lanes together on the game's one current map,
+ * and a transfer in any lane moves every lane, so a lane can run on the map
+ * it started on or on any map a sibling lane transfers to. Lane order in the
+ * file does not decide which.
+ */
+function parallelLaneIssues(array $commands): array
+{
+    $validator = new ProjectValidator();
+    $maps = [
+        'origin' => ['origin-npc', 'shared'],
+        'destination' => ['destination-npc', 'shared'],
+        'third' => ['third-npc', 'shared'],
+    ];
+
+    return issueMessages(new ReflectionMethod($validator, 'checkCommands')->invoke(
+        $validator, $commands, 'parallel context', ['maps' => array_keys($maps)], $maps['origin'], 'origin', $maps,
+    ));
+}
+
+function parallelLaneRoute(string $npc): array
+{
+    return ['type' => 'move_route', 'subject' => 'npc', 'npcId' => $npc, 'steps' => [['direction' => 'right']]];
+}
+
+it('checks every legacy parallel lane against each map a sibling lane can move it to, in either lane order', function (bool $transferFirst) {
+    $transfer = [['type' => 'transfer', 'map' => 'destination', 'x' => 0, 'y' => 0]];
+    $routes = [parallelLaneRoute('origin-npc'), parallelLaneRoute('shared')];
+    $lanes = $transferFirst ? [$transfer, $routes] : [$routes, $transfer];
+
+    $messages = parallelLaneIssues([['type' => 'parallel', 'lanes' => $lanes]]);
+
+    expect($messages)->toHaveCount(1)
+        ->and($messages[0])->toContain('NPC id "origin-npc", which is not on map "origin or destination"');
+})->with(['transfer lane first' => true, 'transfer lane last' => false]);
+
+it('checks every cinematic parallel lane against each map a sibling lane can move it to', function (bool $transferFirst) {
+    $validator = new ProjectValidator();
+    $maps = ['origin' => ['origin-npc', 'shared'], 'destination' => ['destination-npc', 'shared']];
+    $context = [
+        'castIds' => [], 'checkpoints' => [], 'map' => ScriptMapState::startOn('origin', $maps['origin']),
+        'npcIdsByMap' => $maps, 'seenCheckpoints' => [],
+    ];
+    $transfer = [['type' => 'transfer', 'map' => 'destination', 'x' => 0, 'y' => 0]];
+    $routes = [parallelLaneRoute('origin-npc'), parallelLaneRoute('shared')];
+    $walk = new ReflectionMethod($validator, 'walkCinematicCommands');
+    $issues = $walk->invokeArgs($validator, [
+        [['type' => 'parallel', 'lanes' => $transferFirst ? [$transfer, $routes] : [$routes, $transfer]], parallelLaneRoute('destination-npc')],
+        'cinematic lanes', ['maps' => array_keys($maps)], &$context,
+    ]);
+
+    expect(issueMessages($issues))->toBe(['cinematic lanes: It addresses NPC "origin-npc", which is not on origin or destination.'])
+        ->and($context['map']->mapIds)->toBe(['destination']);
+})->with(['transfer lane first' => true, 'transfer lane last' => false]);
+
+it('leaves a legacy parallel block on any map its transferring lanes can finish on', function () {
+    $transfer = static fn(string $map): array => ['type' => 'transfer', 'map' => $map, 'x' => 0, 'y' => 0];
+
+    expect(parallelLaneIssues([
+        ['type' => 'parallel', 'lanes' => [[parallelLaneRoute('shared')], ['commands' => [$transfer('destination')]]]],
+        parallelLaneRoute('destination-npc'),
+    ]))->toBe([]);
+
+    $messages = parallelLaneIssues([
+        ['type' => 'parallel', 'lanes' => [[$transfer('destination')], [$transfer('third')]]],
+        parallelLaneRoute('shared'),
+        parallelLaneRoute('third-npc'),
+    ]);
+    expect($messages)->toHaveCount(1)
+        ->and($messages[0])->toContain('NPC id "third-npc", which is not on map "destination or third"');
+
+    expect(parallelLaneIssues([
+        ['type' => 'parallel', 'lanes' => [[parallelLaneRoute('shared')], [parallelLaneRoute('origin-npc')]]],
+        parallelLaneRoute('origin-npc'),
+    ]))->toBe([]);
 });
 
 it('checks the map triggers that launch cinematics', function () {

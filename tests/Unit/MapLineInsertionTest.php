@@ -87,6 +87,31 @@ it('moves points, stretches straddling areas and follows transfers into the map 
         ->and(file_get_contents($root . '/assets/Events/home-only.php'))->toStartWith("<?php\n\n// Runs only from home.\n");
 });
 
+it('follows a transfer in one parallel lane into every lane and past the block', function () {
+    $root = mapLineProject();
+    $path = $root . '/assets/Maps/town/town.data.php';
+    $town = require $path;
+    $town['npcs'][0]['script'] = [
+        ['type' => 'parallel', 'lanes' => [
+            [['type' => 'wait', 'seconds' => 1.0], ['type' => 'transfer', 'map' => 'home', 'x' => 1, 'y' => 3]],
+            ['id' => 'walk', 'commands' => [['type' => 'move_player', 'x' => 2, 'y' => 3]]],
+        ]],
+        ['type' => 'move_player', 'x' => 1, 'y' => 3],
+    ];
+    file_put_contents($path, "<?php\n\nreturn " . var_export($town, true) . ";\n");
+
+    $plan = planLineInsertion($root, 'y', 2, 2);
+    $plan->apply();
+    $script = (require $path)['npcs'][0]['script'];
+
+    // The second lane can run before or after the first lane's transfer.
+    expect(describeMapLineHandEdits($plan))->toContain('assets/Maps/town/town.data.php npcs.0.script.0.lanes.1.commands.0.y')
+        ->and($script[0]['lanes'][0][1])->toMatchArray(['map' => 'home', 'y' => 5])
+        ->and($script[0]['lanes'][1]['commands'][0])->toMatchArray(['y' => 3])
+        // Once every lane is done the player is on home.
+        ->and($script[1])->toBe(['type' => 'move_player', 'x' => 1, 'y' => 5]);
+});
+
 it('reports what it cannot rewrite instead of guessing or flattening it', function () {
     $root = mapLineProject();
     $shared = (string) file_get_contents($root . '/assets/Events/shared.php');
