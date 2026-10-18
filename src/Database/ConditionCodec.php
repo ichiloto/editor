@@ -24,6 +24,57 @@ use InvalidArgumentException;
  */
 final class ConditionCodec
 {
+    /** The keys the line carries per type, beyond type, name and negate. */
+    private const array CARRIED_KEYS = [
+        'quest' => ['status'],
+        'switch' => ['value'],
+        'event' => [],
+        'map_event' => ['marker'],
+        'variable' => ['op', 'value'],
+        'item' => ['quantity'],
+        'key_item' => ['quantity'],
+    ];
+
+    /**
+     * Why an authored condition list cannot go through the condition line,
+     * or null when the line carries it faithfully.
+     *
+     * Committing the line writes only what it carries, so a list that is not
+     * a list, a condition type the line cannot express, a quest status it
+     * would rewrite, or an authored key outside its vocabulary would be lost
+     * on commit. Such a list is refused by name instead.
+     *
+     * @param mixed $conditions The list as authored.
+     */
+    public static function findCarryIssue(mixed $conditions): ?string
+    {
+        if (! is_array($conditions) || ! array_is_list($conditions)) {
+            return sprintf('the conditions are %s, not a list', is_array($conditions) ? 'a keyed array' : get_debug_type($conditions));
+        }
+
+        foreach ($conditions as $index => $condition) {
+            if (! is_array($condition)) {
+                return sprintf('condition %d is %s, not an array', $index + 1, get_debug_type($condition));
+            }
+
+            if (self::decode(self::encode($condition)) === null) {
+                return sprintf('condition %d holds a shape the condition editor cannot carry', $index + 1);
+            }
+
+            $type = strval($condition['type'] ?? '');
+            if ($type === 'quest' && ! in_array($condition['status'] ?? 'completed', ['completed', 'active'], true)) {
+                return sprintf('condition %d has a quest status the condition editor would rewrite', $index + 1);
+            }
+
+            $extra = array_diff(array_keys($condition), ['type', 'name', 'negate', ...(self::CARRIED_KEYS[$type] ?? [])]);
+            if ($extra !== []) {
+                return sprintf('condition %d carries "%s", which the condition editor would drop', $index + 1, implode('", "', array_map(strval(...), $extra)));
+            }
+        }
+
+        return null;
+    }
+
     /**
      * Returns the condition types the engine's evaluator understands.
      *

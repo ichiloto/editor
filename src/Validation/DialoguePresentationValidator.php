@@ -112,6 +112,7 @@ final class DialoguePresentationValidator
             $this->visitTextCommands((array) $record->toArray(), $relative($record->sourcePath ?? 'assets/Events/' . $record->recordId . '.php'), $check);
         }
         foreach ($workspace->maps as $map) {
+            $found = count($issues);
             $data = $map->getEditableData();
             $where = $relative($map->dataPath);
             foreach (array_values((array) ($data['npcs'] ?? [])) as $index => $npc) {
@@ -133,6 +134,7 @@ final class DialoguePresentationValidator
                 }
                 $this->visitTextCommands($event, $eventWhere, $check);
             }
+            array_splice($issues, $found, count($issues) - $found, Issue::attributeToMap(array_slice($issues, $found), $map->mapId));
         }
         foreach ($workspace->cutscenes?->assets(CutsceneType::CINEMATIC) ?? [] as $cinematic) {
             if (! $cinematic->isDeleted()) {

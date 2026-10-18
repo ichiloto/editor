@@ -335,7 +335,8 @@ final class CutsceneSchemas
             ],
             variantKey: 'kind',
             nestedLists: $graphical ? ['staged_actor' => StagedActorFields::getSuppressionList(...)] : [],
-            prepareEdit: $graphical ? StagedActorFields::prepareEdit(...) : null,
+            prepareEdit: static fn(array $entry, string $field): array => StagedActorFields::preparePositionEdit(
+                $graphical ? StagedActorFields::prepareEdit($entry, $field) : $entry, $field),
         );
     }
 
@@ -347,12 +348,19 @@ final class CutsceneSchemas
      */
     public static function stagedActorFields(bool $graphical = false, array $entry = []): array
     {
+        $axes = [new RecordField('x', 'X', InputControlType::INTEGER), new RecordField('y', 'Y', InputControlType::INTEGER)];
+        // A visual bound to a real subject inherits its position: it is never placed relative to another subject,
+        // and the graphical editor that binds it offers no coordinates either.
+        $position = match (true) {
+            ! isset($entry['subject']) => RelativePositionFields::getFields($entry, $axes, cinematic: true, graphical: $graphical),
+            $graphical => [],
+            default => $axes,
+        };
         $fields = [
             new RecordField('id', 'Id'),
             new RecordField('sprite', 'Sprite', InputControlType::MULTILINE, codec: RecordFieldCodec::LINES, removeWhenEmpty: true),
             new RecordField('asset', 'Asset', removeWhenEmpty: true),
-            new RecordField('x', 'X', InputControlType::INTEGER),
-            new RecordField('y', 'Y', InputControlType::INTEGER),
+            ...$position,
             new RecordField('facing', 'Facing', options: self::FACINGS, removeWhenEmpty: true, displayDefault: 'south'),
             RecordField::boolean('visible', 'Visible', removeWhenEmpty: false, displayDefault: 'true'),
             RecordField::boolean('collision', 'Collision'),
@@ -368,7 +376,7 @@ final class CutsceneSchemas
 
         if (isset($entry['subject'])) {
             $fields = array_values(array_filter($fields, static fn(RecordField $field): bool
-                => ! in_array($field->key, ['x', 'y', 'facing', 'collision'], true)));
+                => ! in_array($field->key, ['facing', 'collision'], true)));
         }
 
         return [...$fields, ...StagedActorFields::getFields($entry)];
@@ -392,7 +400,7 @@ final class CutsceneSchemas
             variants: self::cinematicCommandVariants($graphical),
             variantKey: 'type',
             nestedLists: [
-                'move_route' => MovementRouteFields::getPointList(...),
+                'move_route' => static fn(array $entry): ?RecordSubList => MovementRouteFields::getPointList($entry, cinematic: true, graphical: $graphical),
                 'parallel' => self::laneList(),
                 'camera' => static fn(array $entry): ?RecordSubList => strtolower(strval($entry['operation'] ?? '')) === 'route' ? self::cameraPointList($graphical) : null,
                 ...RecordSchemaCatalog::getRegisteredCommandLists($graphical),
@@ -406,6 +414,7 @@ final class CutsceneSchemas
             prepareEdit: static function (array $entry, string $field) use ($graphical): array {
                 $entry = InnPresentationFields::prepareEdit($entry, $field);
                 $entry = $graphical ? StagedActorFields::prepareEdit($entry, $field) : $entry;
+                $entry = StagedActorFields::preparePositionEdit($entry, $field);
                 return MovementRouteFields::prepareEdit($entry, $field);
             },
         );
@@ -500,7 +509,7 @@ final class CutsceneSchemas
             ],
             'stage_actor' => static fn(array $entry): array => $graphical
                 ? StagedActorFields::getCommandFields($entry)
-                : self::stagedActorFields(),
+                : self::stagedActorFields(entry: $entry),
             'show_actor' => [new RecordField('actorId', 'Actor', reference: 'cinematic_cast')],
             'hide_actor' => [new RecordField('actorId', 'Actor', reference: 'cinematic_cast')],
             'remove_actor' => [new RecordField('actorId', 'Actor', reference: 'cinematic_cast')],

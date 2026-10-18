@@ -31,9 +31,11 @@ final class EventTypeDefinition
 
     /**
      * The definition an event of this type has. An event already of this
-     * type keeps everything it holds and gains any default it lacks; any
-     * other event starts again from the defaults, since another type's data
-     * means nothing to this one.
+     * type keeps everything it holds and gains any default it lacks. Any
+     * other event starts its data again from the defaults, since another
+     * type's data means nothing to this one, and keeps its root fields
+     * (conditions, writes, its cue, facing and engagement), which every
+     * trigger reads whatever its class.
      *
      * @param array<string, mixed>|null $current The event's definition now, if it has one.
      * @return array<string, mixed>
@@ -46,8 +48,12 @@ final class EventTypeDefinition
             ...$this->defaultDefinitionFields,
         ];
 
-        return is_array($current) && ($current['class'] ?? null) === $this->className
+        if (! is_array($current)) {
+            return $defaults;
+        }
+
+        return ($current['class'] ?? null) === $this->className
             ? array_replace_recursive($defaults, $current)
-            : $defaults;
+            : [...$defaults, ...array_diff_key($current, ['class' => true, 'data' => true])];
     }
 }

@@ -385,6 +385,7 @@ require_once __DIR__ . '/Support/PhysicalOccupancyFixtures.php';
 require_once __DIR__ . '/Support/MapLineFixtures.php';
 require_once __DIR__ . '/Support/TreeBrushFixtures.php';
 require_once __DIR__ . '/Support/MapLandmarkFixtures.php';
+require_once __DIR__ . '/Support/EventRecordFixtures.php';
 
 require_once __DIR__ . '/Support/BattleEntryFixtures.php';
 
@@ -393,6 +394,8 @@ require_once __DIR__ . '/Support/MapMetadataFixtures.php';
 require_once __DIR__ . '/Support/BattleFormationFixtures.php';
 
 require_once __DIR__ . '/Support/DialogueFixtures.php';
+
+require_once __DIR__ . '/Support/NpcFixtures.php';
 
 /**
  * Authors a project's skill catalogue as record files, one per skill and
@@ -485,6 +488,18 @@ function itemsFromSource(string $source): array
  * The synthetic sample project's inventory, read once: what map save
  * warnings check a chest's reward against.
  */
+/**
+ * The messages of the pre-save checks of a map, whatever their severity.
+ *
+ * @param array<string, Ichiloto\Editor\ProjectMap> $mapsById
+ * @return list<string>
+ */
+function mapValidatorMessages(Ichiloto\Editor\ProjectMap $map, array $mapsById): array
+{
+    return array_map(static fn(Ichiloto\Editor\Validation\Issue $issue): string => $issue->message,
+        Ichiloto\Editor\Validation\MapValidator::validate($map, $mapsById, mapValidatorInventory()));
+}
+
 function mapValidatorInventory(): \Ichiloto\Editor\Database\InventoryCatalog
 {
     static $catalog = null;

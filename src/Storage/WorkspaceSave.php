@@ -10,6 +10,7 @@ use Ichiloto\Editor\Database\SharedFileTransaction;
 use Ichiloto\Editor\Maps\SaveRelocationPlanner;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Editor\Validation\MapValidator;
+use Ichiloto\Editor\Validation\Severity;
 use Throwable;
 
 /**
@@ -35,6 +36,7 @@ final class WorkspaceSave
         $skippedRelocations = [];
         $failures = [];
         $warnings = [];
+        $errors = [];
         $mapsById = [];
 
         foreach ($workspace->maps as $map) {
@@ -65,8 +67,12 @@ final class WorkspaceSave
                 continue;
             }
 
-            foreach (MapValidator::validate($map, $mapsById, $inventory) as $warning) {
+            $issues = MapValidator::validate($map, $mapsById, $inventory);
+            foreach (MapValidator::describeIssues(MapValidator::selectSeverity($issues, Severity::WARNING)) as $warning) {
                 $warnings[] = sprintf('%s: %s', $map->mapId, $warning);
+            }
+            foreach (MapValidator::describeIssues(MapValidator::selectSeverity($issues, Severity::ERROR)) as $error) {
+                $errors[] = sprintf('%s: %s', $map->mapId, $error);
             }
 
             try {
@@ -127,6 +133,7 @@ final class WorkspaceSave
             failures: $failures,
             warnings: $warnings,
             backupFailures: array_values(array_unique($backupFailures)),
+            errors: $errors,
         );
     }
 }

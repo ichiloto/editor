@@ -76,6 +76,7 @@ use Ichiloto\Editor\Playtest\PlaytestRun;
 use Ichiloto\Editor\Playtest\PlaytestStart;
 use Ichiloto\Editor\Maps\LayerEditor;
 use Ichiloto\Editor\Maps\LineRemoval;
+use Ichiloto\Editor\Maps\MapFolder;
 use Ichiloto\Editor\Maps\MapLinePlan;
 use Ichiloto\Editor\Maps\MapLinePlanner;
 use Ichiloto\Editor\Maps\MapLayers;
@@ -92,7 +93,10 @@ use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Editor\Storage\FileSetTransactionFailure;
 use Ichiloto\Editor\Storage\WorkspaceSave;
 use Ichiloto\Editor\Validation\MapGraphicsValidator;
+use Ichiloto\Editor\Validation\Issue;
 use Ichiloto\Editor\Validation\MapValidator;
+use Ichiloto\Editor\Validation\ProjectValidator;
+use Ichiloto\Editor\Validation\Severity;
 use Ichiloto\Engine\IO\Console\TerminalPresentationComposer;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\PresentationCanvas;
 use Ichiloto\Engine\Rendering\Sprites\CharacterSheet;
@@ -217,6 +221,16 @@ final class EditorSession
      * @var array<string, array{map: WeakReference<ProjectMap>, base: int, last: int}>
      */
     private array $mapRevisions = [];
+
+    /**
+     * The open change set ({@see beginChanges()}): what validation reported
+     * when it began, each map's revision then, and how many undo steps came
+     * before it. Null when none is open.
+     *
+     * @var array{baseline: list<Issue>, revisions: array<string, int>, steps: int, dropped: int}|null
+     */
+    private ?array $changeSet = null;
+
     private function __construct(
         ProjectWorkspace $workspace,
         private readonly CommandHistory $history,
@@ -361,25 +375,31 @@ final class EditorSession
     }
 
     /**
-     * Creates a blank map at the maps root, written to disk at once as the
-     * terminal editor creates one, named after `$name` (`new-map` when
-     * empty) with a numbered suffix when that is taken. Every open map keeps
-     * its unsaved changes and the undo history stays.
+     * Creates a blank map, written to disk at once as the terminal editor
+     * creates one. Without `$mapId` it goes at the maps root, named after
+     * `$name` (`new-map` when empty) with a numbered suffix when that is
+     * taken. With one it goes at exactly that folder path, which may nest
+     * inside another map's folder ({@see MapFolder}), named `$name` or after
+     * the id's last segment. Every open map keeps its unsaved changes and the
+     * undo history stays.
      *
+     * @param string|null $mapId The new map's id; null derives one from the name.
      * @return array{map: string, maps: list<array<string, mixed>>}
-     * @throws SessionRefusal When the kind is unknown, the size is not a size, or the files cannot be written.
+     * @throws SessionRefusal When the kind is unknown, the size is not a size, the id is not a free map folder path, or the files cannot be written.
      */
-    public function createMap(?string $name, ?string $kind, int $width, int $height): array
+    public function createMap(?string $name, ?string $kind, int $width, int $height, ?string $mapId = null): array
     {
         if ($kind !== null && ! in_array($kind, array_column($this->listMapKinds(), 'value'), true)) {
             throw new SessionRefusal(sprintf('There is no map kind %s.', $kind));
         }
         $baseName = $name === null || trim($name) === '' ? null : ProjectMap::slugify($name, '');
-        if ($baseName === '') {
+        if ($mapId === null && $baseName === '') {
             throw new SessionRefusal(sprintf('"%s" has no letters or digits to name a map with.', $name));
         }
         try {
-            $mapId = $this->workspace->createMap($baseName, kind: $kind, width: $width, height: $height);
+            $mapId = $mapId === null
+                ? $this->workspace->createMap($baseName, kind: $kind, width: $width, height: $height)
+                : $this->workspace->createMapAt($mapId, $name === null || trim($name) === '' ? null : trim($name), kind: $kind, width: $width, height: $height);
         } catch (MapSourceRefusal|RuntimeException $error) {
             throw new SessionRefusal(sprintf('The map was not created: %s', $error->getMessage()), previous: $error);
         }
@@ -390,17 +410,20 @@ final class EditorSession
 
     /**
      * Copies the current authored map through the workspace's transactional
-     * duplicate operation. Unsaved source edits are included in the copy;
-     * the original and every other loaded document and undo step remain.
+     * duplicate operation, beside it under the next free `-copy` name or at
+     * the folder path `$to` names ({@see MapFolder}). Unsaved source edits
+     * are included in the copy; the original and every other loaded document
+     * and undo step remain.
      *
+     * @param string|null $to The copy's id; null takes the next free sibling.
      * @return array{map: string, maps: list<array<string, mixed>>}
-     * @throws SessionRefusal When the revision is stale or source cannot be copied safely.
+     * @throws SessionRefusal When the revision is stale, the id is not a free map folder path, or source cannot be copied safely.
      */
-    public function duplicateMap(string $mapId, int $revision): array
+    public function duplicateMap(string $mapId, int $revision, ?string $to = null): array
     {
         $this->requireCurrentMap($mapId, $revision);
         try {
-            $created = $this->workspace->duplicateMap((int) array_search($mapId, $this->workspace->mapIds, true))
+            $created = $this->workspace->duplicateMap((int) array_search($mapId, $this->workspace->mapIds, true), mapId: $to)
                 ?? throw new RuntimeException('The map is no longer in the workspace.');
         } catch (MapSourceRefusal|RuntimeException $error) {
             throw new SessionRefusal(sprintf('%s was not duplicated: %s', $mapId, $error->getMessage()), previous: $error);
@@ -411,30 +434,48 @@ final class EditorSession
     }
 
     /**
-     * Explicitly moves a map to its metadata-derived path after the author
-     * reviews that exact destination. As in the TUI, references are not
-     * migrated and a successful move clears undo history naming retired maps.
-     * Ordinary saves never call this operation.
+     * Explicitly moves a map after the author reviews that exact
+     * destination: its metadata-derived path, or the folder path `$to` names
+     * ({@see MapFolder}), which may nest inside another map's folder. The
+     * first call asks, naming the destination and its references; the
+     * confirming call repeats `$to` and gives the reviewed `$destination`.
+     * As in the TUI, references are not migrated and a successful move
+     * clears undo history naming retired maps. Ordinary saves never call
+     * this operation.
      *
+     * @param string|null $destination The destination the author reviewed, repeated to confirm.
+     * @param string|null $to The id to move to; null proposes the metadata-derived path.
      * @return array<string, mixed>
-     * @throws SessionRefusal When the revision or reviewed path changed, or source cannot move safely.
+     * @throws SessionRefusal When the revision or reviewed path changed, the id is not a free map folder path, or source cannot move safely.
      */
-    public function moveMap(string $mapId, int $revision, ?string $destination = null, bool $confirmed = false): array
+    public function moveMap(string $mapId, int $revision, ?string $destination = null, bool $confirmed = false, ?string $to = null): array
     {
+        $this->refuseDuringChangeSet('Moving a map clears the undo history');
         $map = $this->requireCurrentMap($mapId, $revision);
         if ($map->getGridSourceIssue() !== null) {
             throw new SessionRefusal(sprintf('%s is read-only: %s', $mapId, $map->getGridSourceIssue()));
         }
-        $proposed = $map->getProposedMapId();
+        $proposed = $to ?? $map->getProposedMapId();
         if ($destination !== null && $destination !== $proposed) {
-            throw new SessionRefusal('The derived destination changed; review the proposed move again.');
+            throw new SessionRefusal($to === null
+                ? 'The derived destination changed; review the proposed move again.'
+                : 'The reviewed destination is not the id to move to; review the move again.');
         }
         if ($proposed === $mapId) {
             return ['status' => 'unchanged', 'map' => $mapId, 'destination' => $proposed, 'maps' => $this->describeMaps()];
         }
+        if ($to !== null) {
+            // Refused before the question, so an author never reviews a move that cannot happen.
+            try {
+                MapFolder::requireFreeFolder($this->workspace->getMapsRoot(), $to);
+            } catch (InvalidArgumentException $error) {
+                throw new SessionRefusal(sprintf('%s was not moved: %s', $mapId, $error->getMessage()), previous: $error);
+            }
+        }
         if (! $confirmed) {
             return [
                 'status' => 'question', 'map' => $mapId, 'revision' => $revision, 'destination' => $proposed,
+                ...($to === null ? [] : ['to' => $to]),
                 'references' => new MapReferences($this->workspace)->describe($mapId),
                 'warning' => 'References are not migrated: doors, quests, saves and one-shot events naming the old id keep naming it. Moving clears the undo history. The original map folder is removed only after the new map validates.',
             ];
@@ -533,6 +574,7 @@ final class EditorSession
      */
     public function deleteMap(string $mapId, bool $confirmed = false): array
     {
+        $this->refuseDuringChangeSet('Deleting a map clears the undo history');
         $this->requireMap($mapId);
         $references = new MapReferences($this->workspace)->describe($mapId);
         if ($references !== [] && ! $confirmed) {
@@ -1374,6 +1416,56 @@ final class EditorSession
         $writes = array_map(static fn(array $cell): array => ['x' => (int) $cell[0], 'y' => (int) $cell[1],
             'symbol' => $symbol, 'color' => $layerId === MapLayers::EVENT ? '' : $color], $cells);
 
+        return $this->paintWrites($map, $layerId, $writes, $choices, $label);
+    }
+
+    /**
+     * Paints a rectangle of glyphs from its rows, one terminal cell per
+     * character with its top-left at x, y, and the tiles that follow each
+     * glyph, as one undo step: a room's rows rewritten in one edit. A space
+     * paints a blank cell. Questions and colours are answered as by
+     * {@see paint()}, `$choices` keyed by glyph.
+     *
+     * @param list<string> $rows The glyph rows, top to bottom.
+     * @param array<string, ?string> $choices
+     * @return array{status: 'applied', changed: int, revision: int}|array{status: 'question', glyph: string, roles: list<array{key: string, label: string}>}
+     * @throws SessionRefusal When the map is unknown, stale or refuses the edit, or a row leaves the map.
+     */
+    public function paintRegion(string $mapId, int $revision, string $layerId, int $x, int $y, array $rows, ?string $color = null,
+        array $choices = [], string $label = 'Paint region'): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        if ($map->getGridSourceIssue() !== null) {
+            throw new SessionRefusal(sprintf('%s is read-only: %s', $mapId, $map->getGridSourceIssue()));
+        }
+        if (! array_any($map->getLayers(), static fn(array $layer): bool => $layer['id'] === $layerId)) {
+            throw new SessionRefusal(sprintf('%s has no layer %s.', $mapId, $layerId));
+        }
+        $writes = [];
+        foreach (array_values($rows) as $dy => $row) {
+            foreach (mb_str_split($row) as $dx => $symbol) {
+                [$cellX, $cellY] = [$x + $dx, $y + $dy];
+                if ($cellX < 0 || $cellY < 0 || $cellX >= $map->getWidth() || $cellY >= $map->getHeight()) {
+                    throw new SessionRefusal(sprintf('Row %d reaches %d, %d, outside %s (%d x %d); nothing was painted.',
+                        $dy + 1, $cellX, $cellY, $mapId, $map->getWidth(), $map->getHeight()));
+                }
+                $writes[] = ['x' => $cellX, 'y' => $cellY, 'symbol' => $symbol, 'color' => $layerId === MapLayers::EVENT ? '' : $color];
+            }
+        }
+
+        return $this->paintWrites($map, $layerId, $writes, $choices, $label);
+    }
+
+    /**
+     * Paints glyph writes on a layer with the tiles that follow them, as one undo step.
+     *
+     * @param list<array{x: int, y: int, symbol: string, color: ?string}> $writes
+     * @param array<string, ?string> $choices
+     * @return array{status: 'applied', changed: int, revision: int}|array{status: 'question', glyph: string, roles: list<array{key: string, label: string}>}
+     * @throws SessionRefusal When the map refuses the edit.
+     */
+    private function paintWrites(ProjectMap $map, string $layerId, array $writes, array $choices, string $label): array
+    {
         try {
             $plan = CanvasEditor::plan($map, $layerId, $writes, $choices, true);
             if ($plan !== null && $plan['unresolved'] !== []) {
@@ -1707,6 +1799,7 @@ final class EditorSession
      * `options`, read as the matching `optionLabels` when it has them),
      * `reference` (one of `references.list` for its `reference`),
      * `conditions` (the condition line, `type:name[:extras]` joined by `;`),
+     * `writes` (the world-state write line, in the same form),
      * `destination` (a map from `references.list` for `maps` and a spawn
      * point on it, set together through `setEventDestination`), or `info`
      * for a row that is only read here: headings and counts. A typed row's
@@ -1714,21 +1807,37 @@ final class EditorSession
      * adds to and removes from carries `list` (its entry's index), and
      * `addInspectorListEntry`/`removeInspectorListEntry` apply to it.
      *
-     * @return array{map: string, revision: int, event: ?string, rows: list<array<string, mixed>>}
-     * @throws SessionRefusal When the map or event is unknown.
+     * An event's record rows (what every trigger reads beside its class and
+     * data: its conditions, completion writes, blocked message and cue
+     * conditions, and a type's lists: a Dialogue event's pages, a Story
+     * Script's inline commands) are keyed with the `frame` they are in, []
+     * at the event, and carry `item` when they belong to an entry adding and
+     * removing apply to. A row that opens a frame of commands carries that
+     * `frame`; reading the event again with it lists that frame's rows
+     * alone, edited through the same calls.
+     *
+     * @param list<int|string> $frame A frame of the event's inline commands; [] for the map and event rows.
+     * @return array{map: string, revision: int, event: ?string, frame: list<int|string>, frameLabel: ?string, rows: list<array<string, mixed>>}
+     * @throws SessionRefusal When the map, event or frame is unknown.
      */
-    public function readInspector(string $mapId, ?string $marker = null): array
+    public function readInspector(string $mapId, ?string $marker = null, array $frame = []): array
     {
+        $frame = self::requireFrame($frame, 'readInspector');
         $map = $this->requireMap($mapId);
         if ($marker !== null && $map->getEventDefinition($marker) === null && $map->getEventArea($marker) === null) {
             throw new SessionRefusal(sprintf('%s has no event %s.', $mapId, $marker));
+        }
+        if ($frame !== [] && $marker === null) {
+            throw new SessionRefusal('A frame of commands belongs to an event; name the event.');
         }
 
         return [
             'map' => $mapId,
             'revision' => $this->getMapRevision($map),
             'event' => $marker,
-            'rows' => $this->describePlacementRows(array_map(self::describeRow(...), $this->collectInspectorFields($map, $marker)),
+            'frame' => $frame,
+            'frameLabel' => $frame === [] || $marker === null ? null : $this->createMapInspector($map)->describeEventFrame($map, $marker, $frame),
+            'rows' => $this->describePlacementRows(array_map(self::describeRow(...), $this->collectInspectorFields($map, $marker, $frame)),
                 ['kind' => 'event', 'map' => $mapId, 'marker' => $marker]),
         ];
     }
@@ -1742,8 +1851,12 @@ final class EditorSession
      * first: nothing changes until the edit is made again with `$answer`
      * `clear` (clear its tile layers and change) or `cancel`.
      *
+     * When the edit changes other maps too (renaming a landmark renames the
+     * atlas entry of every map naming it), `revisions` gives each of those
+     * maps' new revision.
+     *
      * @param array<string, mixed> $key The row's key, as `readInspector` gave it.
-     * @return array{status: 'applied', revision: int, changed: bool}|array{status: 'question', question: string, answers: list<array{key: string, label: string, description: string}>}
+     * @return array{status: 'applied', revision: int, changed: bool, revisions?: array<string, int>}|array{status: 'question', question: string, answers: list<array{key: string, label: string, description: string}>}
      * @throws SessionRefusal When the map is unknown or stale, the row is gone or read-only, or the edit is refused.
      */
     public function applyInspector(string $mapId, int $revision, array $key, string $value, ?string $answer = null): array
@@ -1775,11 +1888,20 @@ final class EditorSession
             }
         }
 
+        $before = array_map($this->getMapRevision(...), $this->getMapsById());
         $command = $this->runEdit(static fn(): ?Command => ($field['target'] ?? null) === 'map-kind'
             ? $inspector->changeMapKind($map, $value, $cleared > 0 && $answer === 'clear')
             : $inspector->apply($map, $field, $value));
+        // A row may change other maps in the same step: a landmark rename carries the atlas entries naming it.
+        $others = [];
+        foreach ($this->getMapsById() as $otherId => $other) {
+            if ($other !== $map && $this->getMapRevision($other) !== ($before[$otherId] ?? null)) {
+                $others[(string) $otherId] = $this->getMapRevision($other);
+            }
+        }
 
-        return ['status' => 'applied', 'revision' => $this->getMapRevision($map), 'changed' => $command !== null];
+        return ['status' => 'applied', 'revision' => $this->getMapRevision($map), 'changed' => $command !== null,
+            ...($others === [] ? [] : ['revisions' => $others])];
     }
 
     /**
@@ -1852,6 +1974,28 @@ final class EditorSession
     }
 
     /**
+     * Binds an event to the world object it describes, or unbinds it onto
+     * cells of its own, as one undo step ({@see EventAuthoring::bindEventSubject()}).
+     * A bound event's area is its subject's, so it moves with the object and
+     * cannot be moved or reshaped itself.
+     *
+     * @param string|null $objectId The world object's id; null unbinds the event.
+     * @param list<array{0: int, 1: int}> $cells Where an unbound event triggers, as [x, y]; unused when binding.
+     * @return array{revision: int, changed: bool}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, the event or object is unknown, or the
+     *     cells cannot take the event.
+     */
+    public function setEventSubject(string $mapId, int $revision, string $marker, ?string $objectId, array $cells = []): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        $command = $this->runEdit(static fn(): ?Command => $objectId === null
+            ? EventAuthoring::unbindEventSubject($map, $marker, $cells)
+            : EventAuthoring::bindEventSubject($map, $marker, $objectId));
+
+        return ['revision' => $this->getMapRevision($map), 'changed' => $command !== null];
+    }
+
+    /**
      * Repaints an event as exactly a rectangle.
      *
      * @return array{revision: int, changed: bool}
@@ -1867,16 +2011,18 @@ final class EditorSession
 
     /**
      * Sets a transfer event's destination map and the spawn point on it as
-     * one undo step.
+     * one undo step, with the heading the player faces there when given;
+     * without one the spawn facing stays as it is.
      *
+     * @param string|null $heading North, East, South or West, as the Spawn Facing row offers them; null leaves it.
      * @return array{revision: int, changed: bool}
-     * @throws SessionRefusal When either map is unknown, the map is stale or read-only, the event has no destination, or the spawn point is off the destination.
+     * @throws SessionRefusal When either map is unknown, the map is stale or read-only, the event has no destination, the spawn point is off the destination, or the heading is not one.
      */
-    public function setEventDestination(string $mapId, int $revision, string $marker, string $destinationMapId, int $x, int $y): array
+    public function setEventDestination(string $mapId, int $revision, string $marker, string $destinationMapId, int $x, int $y, ?string $heading = null): array
     {
         $map = $this->requireCurrentMap($mapId, $revision);
         $destination = $this->requireMap($destinationMapId);
-        $command = $this->runEdit(fn(): ?Command => $this->createMapInspector($map)->setTransferDestination($map, $marker, $destination, $x, $y));
+        $command = $this->runEdit(fn(): ?Command => $this->createMapInspector($map)->setTransferDestination($map, $marker, $destination, $x, $y, $heading));
 
         return ['revision' => $this->getMapRevision($map), 'changed' => $command !== null];
     }
@@ -1961,12 +2107,13 @@ final class EditorSession
     private function requireInspectorField(ProjectMap $map, array $key): array
     {
         $marker = is_string($key['marker'] ?? null) ? $key['marker'] : null;
+        $frame = self::requireFrame($key['frame'] ?? [], 'readInspector');
 
         // A key comes back as the interface stored it, which may not keep
         // its members in the order they were given.
         ksort($key);
 
-        return array_find($this->collectInspectorFields($map, $marker), static function (array $candidate) use ($key): bool {
+        return array_find($this->collectInspectorFields($map, $marker, $frame), static function (array $candidate) use ($key): bool {
             $candidateKey = MapInspector::describeRowKey($candidate);
             if ($candidateKey !== null) {
                 ksort($candidateKey);
@@ -2978,7 +3125,8 @@ final class EditorSession
      * cues) from the cutscene record named, as `{category, index}`.
      *
      * @param array{category?: mixed, index?: mixed, kind?: mixed, marker?: mixed, frame?: mixed, path?: mixed}|null $record
-     *   Database {category,index,frame}, NPC {kind:'npc',index,frame}, or event {kind:'event',marker,path}.
+     *   Database {category,index,frame}, NPC {kind:'npc',index,frame}, or event {kind:'event',marker,path} for a
+     *   row of its data, {kind:'event',marker,frame} for one of its record rows.
      * @return list<array{value: string, label: string}>
      * @throws SessionRefusal When the category, map or record is unknown.
      */
@@ -3028,6 +3176,16 @@ final class EditorSession
             $marker = is_string($owner['marker'] ?? null) ? $owner['marker'] : '';
             $event = $map->getEventDefinition($marker)
                 ?? throw new SessionRefusal('That event route owner is no longer present.');
+            if (array_key_exists('frame', $owner)) {
+                // A row of the event's record rows names its frame, as an NPC's does.
+                $records = $this->createMapInspector($map)->createEventRecordPane($marker, $event)->records();
+                $frame = self::requireFrame($owner['frame'], 'references.list');
+                if ($frame !== [] && $records->getFrameCommands(0, $frame) === null) {
+                    throw new SessionRefusal('That route command frame is no longer present.');
+                }
+                return MovementRouteFields::getOwnerCommands((array) ($records->getRecordByIndex(0)?->toArray() ?? []),
+                    MovementRouteFields::getFrameOwnerPath($records->schema, $frame));
+            }
             $path = self::requireFrame($owner['path'] ?? [], 'references.list');
             return MovementRouteFields::getOwnerCommands($event, $path);
         }
@@ -3925,6 +4083,7 @@ final class EditorSession
      */
     public function saveDatabase(string $category): array
     {
+        $this->refuseDuringChangeSet('Saving a database');
         $database = $this->requireCategory($category);
         if (! $database->isEditable()) {
             throw new SessionRefusal(sprintf('Read-only: %s.', $database->getReadOnlyReason() ?? 'this category cannot be written'));
@@ -4141,6 +4300,106 @@ final class EditorSession
         return $this->changeWorldObject($mapId, $revision, static fn($authoring): ?Command => $authoring->placeObject($id, $x, $y, $coverage));
     }
 
+    /**
+     * Moves a world object by a step with what shows it in the terminal, as
+     * one undo step: its anchor, the cells it covers, and the glyphs on those
+     * cells of its covered layer, with the tiles those glyphs draw. The cells
+     * it leaves become blank. Furniture moved this way leaves no glyph
+     * behind; an event that describes it moves with `event.move`. Each glyph
+     * keeps the piece it plays where it stands, read from its tiles, and a
+     * glyph no piece draws there (the object's own art presents it) moves
+     * without tiles. A role still in doubt is asked about as painting asks,
+     * and answered in `$choices` by glyph.
+     *
+     * @param array<string, ?string> $choices
+     * @return array{changed: bool, revision: int}|array{status: 'question', glyph: string, roles: list<array{key: string, label: string}>}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, the object is unknown, or a destination cell
+     *     leaves the map, holds another glyph or is covered by another object.
+     */
+    public function moveWorldObject(string $mapId, int $revision, string $id, int $dx, int $dy, array $choices = []): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        if ($map->getGridSourceIssue() !== null) {
+            throw new SessionRefusal(sprintf('%s is read-only: %s', $mapId, $map->getGridSourceIssue()));
+        }
+        if ($dx === 0 && $dy === 0) {
+            return ['changed' => false, 'revision' => $this->getMapRevision($map)];
+        }
+        try {
+            $entry = array_find(WorldObjectAuthoring::readEntries($map), static fn(array $entry): bool => ($entry['id'] ?? null) === $id)
+                ?? throw new InvalidArgumentException(sprintf('%s has no world object %s.', $mapId, $id));
+        } catch (InvalidArgumentException $error) {
+            throw new SessionRefusal($error->getMessage(), previous: $error);
+        }
+
+        $commands = [];
+        $layerName = $entry['covers']['layer'] ?? null;
+        if (is_string($layerName)) {
+            $layerId = array_find($map->getLayers(), static fn(array $layer): bool => $layer['name'] === $layerName)['id']
+                ?? throw new SessionRefusal(sprintf('World object %s covers layer %s, which %s does not have.', $id, $layerName, $mapId));
+            $from = array_map(static fn(array $cell): array => [(int) $cell[0], (int) $cell[1]], $entry['covers']['cells']);
+            $to = array_map(static fn(array $cell): array => [$cell[0] + $dx, $cell[1] + $dy], $from);
+            $writes = [];
+            $assigned = [];
+            foreach ($from as $cell) {
+                if (! in_array($cell, $to, true)) {
+                    $writes[] = ['x' => $cell[0], 'y' => $cell[1], 'symbol' => ' ', 'color' => ''];
+                }
+            }
+            foreach ($to as $index => [$x, $y]) {
+                if ($x < 0 || $y < 0 || $x >= $map->getWidth() || $y >= $map->getHeight()) {
+                    throw new SessionRefusal(sprintf('Moving %s by %d, %d reaches %d, %d, outside %s.', $id, $dx, $dy, $x, $y, $mapId));
+                }
+                if (! in_array([$x, $y], $from, true) && ($held = $map->getLayerSymbol($layerId, $x, $y)) !== ' ') {
+                    throw new SessionRefusal(sprintf('%d, %d on the %s layer holds %s; clear it before moving %s there.', $x, $y, $layerName, $held, $id));
+                }
+                [$fromX, $fromY] = $from[$index];
+                $writes[] = ['x' => $x, 'y' => $y, 'symbol' => $map->getLayerSymbol($layerId, $fromX, $fromY),
+                    'color' => $map->getLayerColor($layerId, $fromX, $fromY) ?? ''];
+                $role = CanvasEditor::findPlayedRole($map, $layerId, $fromX, $fromY);
+                if ($role !== null) {
+                    $assigned["{$x},{$y}"] = $role->key;
+                } else {
+                    // A glyph no piece's tiles draw here (the object's own art presents it) moves without tiles.
+                    $choices = [$map->getLayerSymbol($layerId, $fromX, $fromY) => null, ...$choices];
+                }
+            }
+            try {
+                $plan = CanvasEditor::plan($map, $layerId, $writes, $choices, true, assigned: $assigned);
+                if ($plan !== null && $plan['unresolved'] !== []) {
+                    $glyph = (string) array_key_first($plan['unresolved']);
+
+                    return ['status' => 'question', 'glyph' => $glyph, 'roles' => array_map(
+                        static fn(PieceRole $role): array => ['key' => $role->key, 'label' => $role->label],
+                        $plan['unresolved'][$glyph],
+                    )];
+                }
+                $glyphs = CanvasEditor::apply($map, $layerId, $plan['writes'] ?? $writes, 'Move world object', $plan['tiles'] ?? [])['command'];
+            } catch (MapSourceRefusal $refusal) {
+                throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+            }
+            if ($glyphs !== null) {
+                $commands[] = $glyphs;
+            }
+        }
+        try {
+            $object = $this->createWorldObjectAuthoring($map)->moveObject($id, $dx, $dy);
+        } catch (InvalidArgumentException|\RuntimeException $error) {
+            foreach (array_reverse($commands) as $command) {
+                $command->undo();
+            }
+            throw new SessionRefusal($error->getMessage(), previous: $error);
+        }
+        if ($object !== null) {
+            $commands[] = $object;
+        }
+        if ($commands !== []) {
+            $this->history->record(new CommandGroup('Move world object', $commands));
+        }
+
+        return ['changed' => $commands !== [], 'revision' => $this->getMapRevision($map)];
+    }
+
     public function moveWorldObjectVariant(string $mapId, int $revision, string $id, string $variantId, int $offset): array
     {
         return $this->changeWorldObject($mapId, $revision, static fn($authoring): ?Command => $authoring->moveVariant($id, $variantId, $offset));
@@ -4230,11 +4489,18 @@ final class EditorSession
         return ['changed' => $command !== null, 'revision' => $this->getMapRevision($map)];
     }
 
-    public function createNpc(string $mapId, int $revision, int $x, int $y, string $name): array
+    /**
+     * Creates a fixed NPC at a tile under the id given, or one derived from its name.
+     *
+     * @param string|null $id The stable id; null derives one from the name.
+     * @return array{revision: int, changed: bool, index: ?int, id: ?string, followedId: ?string, idReferences: list<string>}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, the tile is outside the map or taken, or the id is not one or is taken.
+     */
+    public function createNpc(string $mapId, int $revision, int $x, int $y, string $name, ?string $id = null): array
     {
         $map = $this->requireCurrentMap($mapId, $revision);
 
-        return $this->applyNpcChange($map, fn(NpcAuthoring $authoring): NpcChange => $authoring->create($map, $x, $y, $name));
+        return $this->applyNpcChange($map, fn(NpcAuthoring $authoring): NpcChange => $authoring->create($map, $x, $y, $name, $id));
     }
 
     /**
@@ -4277,16 +4543,19 @@ final class EditorSession
     }
 
     /**
-     * Gives an NPC authored without a stable id one, from its name.
+     * Gives an NPC authored without a stable id the one given, or one from
+     * its name. An existing id changes through the NPC's Id row
+     * ({@see applyNpc()}), which refuses while anything names it.
      *
+     * @param string|null $id The stable id; null derives one from the name.
      * @return array{revision: int, changed: bool, index: ?int, id: ?string, followedId: ?string, idReferences: list<string>}
-     * @throws SessionRefusal When the map is unknown, stale or read-only, the NPC is unknown, or it already has an id.
+     * @throws SessionRefusal When the map is unknown, stale or read-only, the NPC is unknown, it already has an id, or the id is not one or is taken.
      */
-    public function assignNpcId(string $mapId, int $revision, int $index): array
+    public function assignNpcId(string $mapId, int $revision, int $index, ?string $id = null): array
     {
         $map = $this->requireCurrentMap($mapId, $revision);
 
-        return $this->applyNpcChange($map, fn(NpcAuthoring $authoring): NpcChange => $authoring->assignId($map, $index));
+        return $this->applyNpcChange($map, fn(NpcAuthoring $authoring): NpcChange => $authoring->assignId($map, $index, $id));
     }
 
     /**
@@ -4386,8 +4655,10 @@ final class EditorSession
 
     /**
      * Applies one NPC row's edit as one undo step. The row is found again by
-     * its key among the NPC's current rows. A rename carries the id along
-     * (`followedId`) unless something names it (`idReferences`).
+     * its key among the NPC's current rows. A rename carries an id its old
+     * name derived along (`followedId`) unless something names it
+     * (`idReferences`). The Id row sets the id itself, refused while
+     * anything names the current one.
      *
      * @param array<string, mixed> $key The row's key, as `readNpc` gave it.
      * @return array{revision: int, changed: bool, index: ?int, id: ?string, followedId: ?string, idReferences: list<string>}
@@ -4552,6 +4823,10 @@ final class EditorSession
      */
     public function undo(): array
     {
+        if ($this->changeSet !== null && $this->history->count() <= $this->changeSet['steps']) {
+            throw new SessionRefusal('Undo would reach back before the change set began; cancel the change set instead.');
+        }
+
         return $this->traverseHistory(fn(): ?Command => $this->history->undo());
     }
 
@@ -4566,13 +4841,16 @@ final class EditorSession
     }
 
     /**
-     * Saves one map through its transaction, after the warnings validation
-     * has for it, which never block a save. When the save would take cells
-     * existing saves may stand on, nothing is written until the author has
-     * seen where those saves move: the first call asks, and `write` with the
-     * question's `confirm` saves the map and the relocation step together.
+     * Saves one map through its transaction, after the checks validation
+     * has for it, which never block this save: a map with errors (defects
+     * the player would meet) saves as a draft, and validation fails until
+     * they are fixed. {@see commitChanges()} is the write that refuses them.
+     * When the save would take cells existing saves may stand on, nothing is
+     * written until the author has seen where those saves move: the first
+     * call asks, and `write` with the question's `confirm` saves the map and
+     * the relocation step together.
      *
-     * @return array{saved: string, warnings: list<string>, backupFailures: list<string>, relocated: list<string>}
+     * @return array{saved: string, warnings: list<string>, errors: list<array<string, ?string>>, backupFailures: list<string>, relocated: list<string>}
      *     |array{status: 'question', map: string, question: string, answers: list<array{key: string, label: string, description: string}>,
      *         relocations: list<array{map: string, cells: list<array{int, int}>, to: array{int, int}}>, moves: list<string>,
      *         contentVersion: int, confirm: string}
@@ -4582,6 +4860,7 @@ final class EditorSession
      */
     public function saveMap(string $mapId, ?string $answer = null, ?string $confirm = null): array
     {
+        $this->refuseDuringChangeSet('Saving a map');
         $map = $this->requireMap($mapId);
         try {
             $relocation = SaveRelocationPlanner::plan($map, $this->workspace->projectRoot);
@@ -4609,7 +4888,7 @@ final class EditorSession
                 throw new SessionRefusal('The map or the save manifest changed since the save relocations were shown, so nothing was written. Review them again.');
             }
         }
-        $warnings = MapValidator::validate($map, $this->getMapsById(), MapValidator::readInventoryCatalog($this->workspace));
+        $issues = MapValidator::validate($map, $this->getMapsById(), MapValidator::readInventoryCatalog($this->workspace));
         $failures = [];
         $step = $relocation?->apply();
 
@@ -4628,8 +4907,9 @@ final class EditorSession
             $this->history->record($step);
         }
 
-        return ['saved' => $saved, 'warnings' => array_values($warnings), 'backupFailures' => array_values($failures),
-            'relocated' => $relocation?->describeMoves() ?? []];
+        return ['saved' => $saved, 'warnings' => MapValidator::describeIssues(MapValidator::selectSeverity($issues, Severity::WARNING)),
+            'errors' => array_map(static fn(Issue $issue): array => $issue->describe(), MapValidator::selectSeverity($issues, Severity::ERROR)),
+            'backupFailures' => array_values($failures), 'relocated' => $relocation?->describeMoves() ?? []];
     }
 
     /**
@@ -5000,6 +5280,10 @@ final class EditorSession
     /** Ends what the session started that would outlive it: a running playtest or battle test. */
     public function close(): void
     {
+        // Changes never committed leave the project as it was.
+        if ($this->changeSet !== null) {
+            $this->cancelChanges();
+        }
         foreach (array_keys($this->authoringCanvases) as $mapId) {
             $this->closeAuthoringCanvas((string) $mapId);
         }
@@ -5078,6 +5362,7 @@ final class EditorSession
      */
     public function saveAll(): array
     {
+        $this->refuseDuringChangeSet('Saving everything');
         $result = WorkspaceSave::saveAll($this->workspace, $this->backups);
 
         return [
@@ -5086,9 +5371,213 @@ final class EditorSession
             'skippedRelocations' => $result->skippedRelocations,
             'failures' => $result->failures,
             'warnings' => $result->warnings,
+            'errors' => $result->errors,
             'backupFailures' => $result->backupFailures,
             'unsaved' => $this->workspace->listUnsavedChanges(),
         ];
+    }
+
+    /**
+     * Validates the project as it stands in this session, unsaved edits
+     * included, by the same checks as `ichiloto validate`.
+     *
+     * @param list<string>|null $mapIds Only the issues about these maps; null for every issue.
+     * @return array{issues: list<array<string, ?string>>, errors: int, warnings: int}
+     */
+    public function validateProject(?array $mapIds = null): array
+    {
+        $issues = new ProjectValidator()->validate($this->workspace);
+        if ($mapIds !== null) {
+            $issues = array_values(array_filter($issues, static fn(Issue $issue): bool => in_array($issue->map, $mapIds, true)));
+        }
+
+        return [
+            'issues' => array_map(static fn(Issue $issue): array => $issue->describe(), $issues),
+            'errors' => count(MapValidator::selectSeverity($issues, Severity::ERROR)),
+            'warnings' => count(MapValidator::selectSeverity($issues, Severity::WARNING)),
+        ];
+    }
+
+    /**
+     * Opens a change set: edits made from here on are written only by
+     * {@see commitChanges()}, and only when the project they leave is valid.
+     * This is the write path for anyone changing maps without an author
+     * reviewing each save (another agent, a script): what the player would
+     * meet is refused before it is written. An author's own saves stay
+     * drafts ({@see saveMap()}).
+     *
+     * Edits that write files at once (creating or duplicating a map,
+     * inserting or removing rows) may run inside it; a refused or cancelled
+     * change set undoes them. Saving, moving or deleting a map is refused
+     * while it is open.
+     *
+     * @return array{status: 'open', errors: int, warnings: int}
+     * @throws SessionRefusal When a change set is already open or edits are unsaved.
+     */
+    public function beginChanges(): array
+    {
+        if ($this->changeSet !== null) {
+            throw new SessionRefusal('A change set is already open; commit or cancel it first.');
+        }
+        if ($this->workspace->hasUnsavedChanges()) {
+            throw new SessionRefusal('Save or undo pending edits before a change set begins, so it holds only its own changes.');
+        }
+        $baseline = new ProjectValidator()->validate($this->workspace);
+        $this->changeSet = [
+            'baseline' => $baseline,
+            'revisions' => array_map($this->getMapRevision(...), $this->getMapsById()),
+            'steps' => $this->history->count(),
+            'dropped' => $this->history->countDropped(),
+        ];
+
+        return ['status' => 'open', 'errors' => count(MapValidator::selectSeverity($baseline, Severity::ERROR)),
+            'warnings' => count(MapValidator::selectSeverity($baseline, Severity::WARNING))];
+    }
+
+    /**
+     * Writes the open change set when the project it leaves is valid, and
+     * otherwise writes nothing and undoes it.
+     *
+     * Validation runs over the project as saving would leave it. The change
+     * set is refused when a map it changed has any error (a defect the player
+     * would meet), whether the change set made it or found it there, or when
+     * it leaves a new error anywhere else (a door on another map now leading
+     * nowhere). Warnings never refuse it. Its maps are saved through their
+     * own transactions, then any other unsaved change it made.
+     *
+     * @param bool $relocateSaves Whether saves standing where a changed map is now solid may move to open floor;
+     *     without it such a change set is refused, naming where they would move.
+     * @param bool $checkOnly Whether to only report what committing would find, then undo the change set.
+     * @return array{status: 'saved'|'refused'|'checked', maps: list<string>, saved: list<string>, issues: list<array<string, ?string>>,
+     *     blocking: int, relocated: list<string>, reason?: ?string, unrestored?: int}
+     * @throws SessionRefusal When no change set is open, or a save fails part way (the message names what was written).
+     */
+    public function commitChanges(bool $relocateSaves = false, bool $checkOnly = false): array
+    {
+        $changes = $this->changeSet ?? throw new SessionRefusal('No change set is open; begin one first.');
+        $changed = $this->listChangedMaps($changes);
+        $issues = new ProjectValidator()->validate($this->workspace);
+        $before = array_fill_keys(array_map(self::identifyIssue(...), $changes['baseline']), true);
+        $blocking = array_values(array_filter($issues, static fn(Issue $issue): bool => $issue->severity === Severity::ERROR
+            && (in_array($issue->map, $changed, true) || ! isset($before[self::identifyIssue($issue)]))));
+        $reported = array_values(array_filter($issues, static fn(Issue $issue): bool => in_array($issue->map, $changed, true)
+            || in_array($issue, $blocking, true)));
+        $outcome = ['maps' => $changed, 'saved' => [], 'issues' => array_map(static fn(Issue $issue): array => $issue->describe(), $reported),
+            'blocking' => count($blocking), 'relocated' => []];
+
+        $relocations = [];
+        foreach ($changed as $mapId) {
+            $map = $this->getMapsById()[$mapId] ?? null;
+            $plan = $map instanceof ProjectMap && $map->isDirty() ? SaveRelocationPlanner::plan($map, $this->workspace->projectRoot) : null;
+            if ($plan !== null) {
+                $relocations = [...$relocations, ...$plan->describeMoves()];
+            }
+        }
+        $reason = match (true) {
+            $blocking !== [] => sprintf('%d error%s the player would meet.', count($blocking), count($blocking) === 1 ? '' : 's'),
+            $relocations !== [] && ! $relocateSaves => 'Saves may stand where a changed map is now solid; allow them to move to open floor, or change the map.',
+            default => null,
+        };
+        if ($reason !== null || $checkOnly) {
+            $unrestored = $this->rollBackChanges($changes);
+
+            return ['status' => $reason === null ? 'checked' : 'refused', ...$outcome, 'relocated' => $relocations, 'reason' => $reason,
+                ...($unrestored > 0 ? ['unrestored' => $unrestored] : [])];
+        }
+
+        $this->changeSet = null;
+        foreach ($changed as $mapId) {
+            if (! ($this->getMapsById()[$mapId] ?? null)?->isDirty()) {
+                continue;
+            }
+            try {
+                $result = $this->saveMap($mapId);
+                if (($result['status'] ?? null) === 'question') {
+                    $result = $this->saveMap($mapId, 'write', $result['confirm']);
+                    $outcome['relocated'] = [...$outcome['relocated'], ...($result['relocated'] ?? [])];
+                }
+            } catch (SessionRefusal $refusal) {
+                throw new SessionRefusal(sprintf('%s was not saved: %s%s', $mapId, $refusal->getMessage(), $outcome['saved'] === []
+                    ? ' Nothing was written.' : ' Already saved: ' . implode(', ', $outcome['saved']) . '.'), previous: $refusal);
+            }
+            $outcome['saved'][] = $mapId;
+        }
+        if ($this->workspace->hasUnsavedChanges()) {
+            $rest = $this->saveAll();
+            if ($rest['failures'] !== []) {
+                throw new SessionRefusal('The maps were saved, but not everything else: ' . implode('; ', $rest['failures']));
+            }
+        }
+
+        return ['status' => 'saved', ...$outcome];
+    }
+
+    /**
+     * Cancels the open change set, undoing every edit it made, those that
+     * wrote files at once included.
+     *
+     * @return array{status: 'cancelled', unrestored?: int}
+     * @throws SessionRefusal When no change set is open.
+     */
+    public function cancelChanges(): array
+    {
+        $unrestored = $this->rollBackChanges($this->changeSet ?? throw new SessionRefusal('No change set is open.'));
+
+        return ['status' => 'cancelled', ...($unrestored > 0 ? ['unrestored' => $unrestored] : [])];
+    }
+
+    /**
+     * The maps a change set changed: every map whose revision moved since it
+     * began, and every map it made.
+     *
+     * @param array{revisions: array<string, int>} $changes
+     * @return list<string>
+     */
+    private function listChangedMaps(array $changes): array
+    {
+        $changed = [];
+        foreach ($this->getMapsById() as $mapId => $map) {
+            if (($changes['revisions'][$mapId] ?? null) !== $this->getMapRevision($map)) {
+                $changed[] = (string) $mapId;
+            }
+        }
+
+        return $changed;
+    }
+
+    /**
+     * Undoes every step of a change set and removes the maps it made, then
+     * closes it.
+     *
+     * @param array{revisions: array<string, int>, steps: int, dropped: int} $changes
+     * @return int How many of its earliest steps could no longer be undone, dropped from a full undo history.
+     */
+    private function rollBackChanges(array $changes): int
+    {
+        $unrestored = $this->history->countDropped() - $changes['dropped'];
+        $this->changeSet = null;
+        while ($this->history->count() > max(0, $changes['steps'] - $unrestored)) {
+            $this->undo();
+        }
+        foreach (array_diff(array_keys($this->getMapsById()), array_keys($changes['revisions'])) as $made) {
+            $this->deleteMap((string) $made, confirmed: true);
+        }
+
+        return $unrestored;
+    }
+
+    /** An issue's identity, to tell an issue found before a change set from one it made. */
+    private static function identifyIssue(Issue $issue): string
+    {
+        return implode("\0", [$issue->severity->value, $issue->where, $issue->message, $issue->code ?? '', $issue->map ?? '']);
+    }
+
+    /** Refuses what a change set cannot hold or undo while one is open. */
+    private function refuseDuringChangeSet(string $doing): void
+    {
+        if ($this->changeSet !== null) {
+            throw new SessionRefusal(sprintf('%s is not part of a change set; commit or cancel it first.', $doing));
+        }
     }
 
     /**
@@ -5138,10 +5627,22 @@ final class EditorSession
         ];
     }
 
-    /** @return array<int, array<string, mixed>> */
-    private function collectInspectorFields(ProjectMap $map, ?string $marker): array
+    /**
+     * The rows an inspector read lists: the map's and its event's, or one
+     * frame of the event's inline commands alone.
+     *
+     * @param list<int|string> $frame
+     * @return array<int, array<string, mixed>>
+     * @throws SessionRefusal When the frame is gone.
+     */
+    private function collectInspectorFields(ProjectMap $map, ?string $marker, array $frame = []): array
     {
         $inspector = $this->createMapInspector($map);
+
+        if ($frame !== [] && $marker !== null) {
+            return $inspector->getEventFrameFields($map, $marker, $frame)
+                ?? throw new SessionRefusal('That frame of commands is no longer on the event; read the event again.');
+        }
 
         return [...$inspector->getMapFields($map), ...($marker === null ? [] : $inspector->getEventFields($map, $marker))];
     }
@@ -5200,7 +5701,8 @@ final class EditorSession
             'depth' => $depth,
             // A section heading: a row that only names the rows after it.
             'heading' => $kind === 'info' && (string) ($field['value'] ?? '') === '' && $key === null && $list === null ? true : null,
-            'value' => (string) ($field['value'] ?? ''),
+            // Multi-line text is read whole, as it is edited.
+            'value' => $control?->type === InputControlType::MULTILINE ? $control->rawValue : (string) ($field['value'] ?? ''),
             'raw' => match ($kind) {
                 'conditions' => is_string($field['encoded'] ?? null) ? $field['encoded'] : (string) ($field['value'] ?? ''),
                 'writes', 'affinities' => (string) ($field['value'] ?? ''),
@@ -5239,6 +5741,13 @@ final class EditorSession
             // A row about the rows before it: a warning (a line's emotion its speaker lacks) or an
             // error (a chest whose reward the Engine cannot give).
             'tone' => in_array($field['tone'] ?? null, ['warning', 'error'], true) ? $field['tone'] : null,
+            // A record row: the frame of commands it opens, and the item adding and removing at it apply to.
+            'frame' => is_array($field['frame'] ?? null) && $target !== null ? array_values($field['frame']) : null,
+            'item' => ($field['item'] ?? false) === true ? true : null,
+            'itemNoun' => is_string($field['itemNoun'] ?? null) ? $field['itemNoun'] : null,
+            'listHeading' => ($field['listHeading'] ?? false) === true ? true : null,
+            'childNoun' => is_string($field['childNoun'] ?? null) ? $field['childNoun'] : null,
+            'multiline' => $control?->type === InputControlType::MULTILINE ? true : null,
             'key' => $key,
         ], static fn(mixed $value): bool => $value !== null);
     }

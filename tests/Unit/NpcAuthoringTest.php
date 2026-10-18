@@ -547,7 +547,7 @@ it('refuses to delete an NPC that a move_route names, and says where', function 
 // -- Inspector: every field through the shared pane ----------------------
 
 it('edits name, sprite, coordinates and movement, hiding wander bounds while fixed', function () {
-    [$root, $path] = npcProject([['id' => 'a', 'name' => 'Ann', 'sprite' => 'A', 'x' => 2, 'y' => 1]]);
+    [$root, $path] = npcProject([['id' => 'ann', 'name' => 'Ann', 'sprite' => 'A', 'x' => 2, 'y' => 1]]);
     $editor = npcEditor($root);
     $map = npcMap($editor);
     callEditorMethod($editor, 'selectNpc', 0);
@@ -562,7 +562,7 @@ it('edits name, sprite, coordinates and movement, hiding wander bounds while fix
     setNpcField($editor, 'movement', 'wander');
 
     $npc = $map->getNpcs()->get(0);
-    // Nothing names Ann, so her id follows her new name.
+    // Nothing names Ann and her id is the one her name derived, so it follows her new name.
     expect($npc?->getId())->toBe('annabel')
         ->and($npc?->getName())->toBe('Annabel')
         ->and($npc?->getSprite())->toBe('<fg=green>a</>')
@@ -981,7 +981,7 @@ it('saves nothing for a clean inspection, and only the map data file for an NPC 
 });
 
 it('places the saved checkpoint in the middle of history and follows it with undo and redo', function () {
-    [$root] = npcProject([['id' => 'a', 'name' => 'Ann', 'sprite' => 'A', 'x' => 2, 'y' => 1]]);
+    [$root] = npcProject([['id' => 'ann', 'name' => 'Ann', 'sprite' => 'A', 'x' => 2, 'y' => 1]]);
     $editor = npcEditor($root);
     $map = npcMap($editor);
     callEditorMethod($editor, 'selectNpc', 0);

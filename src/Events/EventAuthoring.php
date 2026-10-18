@@ -9,6 +9,7 @@ use Ichiloto\Editor\History\GenericCommand;
 use Ichiloto\Editor\MapSourceRefusal;
 use Ichiloto\Editor\Maps\MapLayers;
 use Ichiloto\Editor\Field\MapLandmarks;
+use Ichiloto\Editor\Field\WorldObjectAuthoring;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Engine\Field\MapLandmarkKind;
 
@@ -24,6 +25,9 @@ use Ichiloto\Engine\Field\MapLandmarkKind;
  */
 final class EventAuthoring
 {
+    /** The kind of subject an event binds to, as the Engine's event subjects name it. */
+    private const string SUBJECT_KIND = 'world_object';
+
     /**
      * Places a new event of a type on cells: its marker painted there and
      * its definition written, as one undo step.
@@ -157,6 +161,7 @@ final class EventAuthoring
     public static function moveEvent(ProjectMap $map, string $marker, int $deltaX, int $deltaY, string $label = 'Event move'): ?Command
     {
         self::assertEditable($map);
+        self::refuseBoundEvent($map, $marker);
 
         if ($deltaX === 0 && $deltaY === 0) {
             return null;
@@ -172,6 +177,89 @@ final class EventAuthoring
     }
 
     /**
+     * Binds an event to the world object it describes, by the Engine's event
+     * subject: the object's covered cells (its anchor when it covers none)
+     * become the event's area, so moving or replacing the object takes the
+     * event with it. The event's painted cells and any authored area go, in
+     * one undo step; its marker stays its identity. Null when it is already
+     * bound to that object.
+     *
+     * @throws EventRefusal When the map has no such event or world object.
+     * @throws MapSourceRefusal When the map is read-only or its data cannot take the subject.
+     */
+    public static function bindEventSubject(ProjectMap $map, string $marker, string $objectId): ?Command
+    {
+        self::assertEditable($map);
+        self::assertEventExists($map, $marker);
+        if (array_find(WorldObjectAuthoring::readEntries($map), static fn(array $entry): bool => ($entry['id'] ?? null) === $objectId) === null) {
+            throw new EventRefusal(sprintf('%s has no world object %s.', $map->mapId, $objectId));
+        }
+        if ($map->getEventDefinition($marker) === null) {
+            throw new EventRefusal(sprintf('Event %s has no definition to bind; give it a type first.', $marker));
+        }
+
+        return self::recordEdit($map, 'Bind event subject', static function () use ($map, $marker, $objectId): void {
+            foreach ($map->getEventArea($marker)?->cells ?? [] as [$x, $y]) {
+                $map->setEventSymbol($x, $y, ' ');
+            }
+            if (array_key_exists('area', $map->getEventDefinition($marker) ?? [])) {
+                $map->removeEventField($marker, ['area']);
+            }
+            $map->setEventField($marker, ['subject'], ['kind' => self::SUBJECT_KIND, 'id' => $objectId]);
+        });
+    }
+
+    /**
+     * Unbinds an event from its subject and paints its marker on cells of
+     * its own, as one undo step.
+     *
+     * @param list<array{0: int, 1: int}> $cells The cells it triggers on, as [x, y].
+     * @throws EventRefusal When the event has no subject, or a cell leaves the map or holds another event.
+     * @throws MapSourceRefusal When the map is read-only or its data cannot drop the subject.
+     */
+    public static function unbindEventSubject(ProjectMap $map, string $marker, array $cells): Command
+    {
+        self::assertEditable($map);
+        if (! array_key_exists('subject', $map->getEventDefinition($marker) ?? [])) {
+            throw new EventRefusal(sprintf('Event %s has no subject to unbind.', $marker));
+        }
+        if ($cells === []) {
+            throw new EventRefusal(sprintf('Choose the cells event %s triggers on once it has no subject.', $marker));
+        }
+        foreach ($cells as [$x, $y]) {
+            if ($x < 0 || $y < 0 || $x >= $map->getWidth() || $y >= $map->getHeight()) {
+                throw new EventRefusal(sprintf('%d, %d is outside %s.', $x, $y, $map->mapId));
+            }
+            $held = $map->getLayerSymbol(MapLayers::EVENT, $x, $y);
+            if (trim($held) !== '' && $held !== $marker) {
+                throw new EventRefusal(sprintf('%d, %d already holds event %s.', $x, $y, $held));
+            }
+        }
+
+        return self::recordEdit($map, 'Unbind event subject', static function () use ($map, $marker, $cells): void {
+            $map->removeEventField($marker, ['subject']);
+            foreach ($cells as [$x, $y]) {
+                $map->setEventSymbol($x, $y, $marker);
+            }
+        }) ?? throw new EventRefusal(sprintf('Event %s could not be unbound.', $marker));
+    }
+
+    /**
+     * Refuses to move or reshape an event bound to a subject: its area is the
+     * subject's, so it moves when the object does.
+     *
+     * @throws EventRefusal When the event has a subject.
+     */
+    private static function refuseBoundEvent(ProjectMap $map, string $marker): void
+    {
+        $subject = $map->getEventDefinition($marker)['subject'] ?? null;
+        if ($subject !== null) {
+            throw new EventRefusal(sprintf('Event %s moves with its subject %s; move the world object, or unbind the event first.',
+                $marker, is_array($subject) && is_string($subject['id'] ?? null) ? $subject['id'] : '(malformed)'));
+        }
+    }
+
+    /**
      * Repaints an event as exactly a rectangle. Null when it already was.
      *
      * @throws EventRefusal When the event is not placed, or the rectangle is empty, leaves the map or covers another event.
@@ -180,6 +268,7 @@ final class EventAuthoring
         string $label = 'Event bounds edit'): ?Command
     {
         self::assertEditable($map);
+        self::refuseBoundEvent($map, $marker);
 
         if ($map->getEventArea($marker) === null) {
             throw new EventRefusal(sprintf('Marker %s is not placed.', $marker));

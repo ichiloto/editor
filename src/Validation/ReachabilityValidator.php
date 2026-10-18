@@ -4,9 +4,8 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Validation;
 
+use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
-use Ichiloto\Engine\Field\MapGraphics;
-use Ichiloto\Engine\Field\MapLayerSource;
 use Ichiloto\Engine\Field\Reachability\MapReachabilityReport;
 use Ichiloto\Engine\Field\Reachability\ProjectReachability;
 use Ichiloto\Engine\Field\Reachability\ReachabilityProblem;
@@ -21,17 +20,28 @@ use Throwable;
  * Where content stands is the author's; only what a player would meet is
  * reported. Unknown destinations and unreadable maps are left to the checks
  * that own them (doors, references, map reading), so nothing is said twice.
+ *
+ * Maps with unsaved changes are given to the analysis as they stand in the
+ * workspace, so it judges what saving would leave, as every other check
+ * reads the workspace.
  */
 final class ReachabilityValidator
 {
     /** @return Issue[] */
     public function validate(ProjectWorkspace $workspace): array
     {
-        $assetRoot = $workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets';
-        $project = ProjectReachability::analyze($assetRoot);
+        $unsaved = [];
+        foreach ($workspace->maps as $map) {
+            if ($map->isDirty()) {
+                $unsaved[$map->mapId] = ['data' => $map->getEditableData(), 'layers' => $map->getLayerSet(), 'eventLayer' => $map->getEventLayerCells()];
+            }
+        }
+        $project = ProjectReachability::analyze($workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets', $unsaved);
+        $maps = array_column(array_map(static fn(ProjectMap $map): array => ['id' => $map->mapId, 'map' => $map], $workspace->maps), 'map', 'id');
         $untiled = [];
         foreach ($project->reports as $mapId => $report) {
-            $untiled[] = self::checkUntiledFloor($assetRoot, (string) $mapId, $report);
+            $map = $maps[(string) $mapId] ?? null;
+            $untiled[] = $map === null ? null : self::checkUntiledFloor($map, $report);
         }
 
         return array_values(array_filter([...array_map(
@@ -44,21 +54,17 @@ final class ReachabilityValidator
     private const int CELLS_NAMED = 3;
 
     /**
-     * Warns for cells the player can reach that no tile covers in a map with graphics: the field draws nothing
+     * Reports cells the player can reach that no tile covers in a map with graphics: the field draws nothing
      * there, so the player walks on the dark background, as on a map whose floor was never painted. A map without
      * a kind, or whose graphics cannot be read, is left to the checks that own it.
      */
-    private static function checkUntiledFloor(string $assetRoot, string $mapId, MapReachabilityReport $report): ?Issue
+    private static function checkUntiledFloor(ProjectMap $map, MapReachabilityReport $report): ?Issue
     {
+        $mapId = $map->mapId;
         try {
-            $directory = $assetRoot . DIRECTORY_SEPARATOR . 'Maps' . DIRECTORY_SEPARATOR . $mapId;
-            $data = (static fn(string $file): mixed => require $file)($directory . DIRECTORY_SEPARATOR . basename($mapId) . '.data.php');
-            if (! is_array($data) || ! is_string($data['tileset'] ?? null)) {
-                return null;
-            }
-            $layers = MapLayerSource::loadFromDirectory($directory, $mapId);
-            $graphics = MapGraphics::loadFromDirectory($directory, $mapId, $data['tileset'], $layers, $assetRoot, $data['tileLayers'] ?? null);
-            $usable = $graphics?->tileset->getUsableSheets($assetRoot)['sheets'] ?? [];
+            $layers = $map->getLayerSet();
+            $graphics = MapGraphicsValidator::readGraphics($map);
+            $usable = $graphics?->tileset->getUsableSheets($map->getAssetRoot())['sheets'] ?? [];
         } catch (Throwable) {
             return null;
         }
@@ -86,24 +92,24 @@ final class ReachabilityValidator
         $named = array_slice($cells, 0, self::CELLS_NAMED);
         $rest = count($cells) - count($named);
 
-        return Issue::warning($mapId, sprintf('%d %s the player can reach %s no tile, so the field shows the background there: %s%s.',
+        // The player walks on the dark background there: a defect they see, so an error.
+        return new Issue(Severity::ERROR, $mapId, sprintf('%d %s the player can reach %s no tile, so the field shows the background there: %s%s.',
             count($cells), count($cells) === 1 ? 'cell' : 'cells', count($cells) === 1 ? 'has' : 'have',
             implode(', ', $named), $rest > 0 ? " and {$rest} more" : ''),
-            'Paint floor under them on a tile layer, or close them off if the player should not walk there.');
+            'Paint floor under them on a tile layer, or close them off if the player should not walk there.', map: $mapId);
     }
 
     private static function toIssue(ReachabilityProblem $problem): ?Issue
     {
-        return match ($problem->kind) {
-            ReachabilityProblemKind::UNREADABLE_MAP, ReachabilityProblemKind::UNKNOWN_DESTINATION => null,
-            ReachabilityProblemKind::UNREACHABLE_EVENT => Issue::error($problem->mapId, $problem->message,
-                'Open a way to it, or move the event where the player can stand.'),
-            ReachabilityProblemKind::BLOCKED_ENTRANCE => Issue::error($problem->mapId, $problem->message,
-                'Point the arrival at open floor the player can stand on.'),
-            ReachabilityProblemKind::UNREACHABLE_NPC => Issue::warning($problem->mapId, $problem->message,
-                'Leave a free cell beside it, or move what stands in the way.'),
-            ReachabilityProblemKind::NO_ENTRANCE => Issue::warning($problem->mapId, $problem->message,
-                'Fine for a map kept for content still to come; connect it when it is ready.'),
+        [$severity, $hint] = match ($problem->kind) {
+            ReachabilityProblemKind::UNREADABLE_MAP, ReachabilityProblemKind::UNKNOWN_DESTINATION => [null, ''],
+            ReachabilityProblemKind::UNREACHABLE_EVENT => [Severity::ERROR, 'Open a way to it, or move the event where the player can stand.'],
+            ReachabilityProblemKind::BLOCKED_ENTRANCE => [Severity::ERROR, 'Point the arrival at open floor the player can stand on.'],
+            ReachabilityProblemKind::UNREACHABLE_NPC => [Severity::WARNING, 'Leave a free cell beside it, or move what stands in the way.'],
+            ReachabilityProblemKind::NO_ENTRANCE => [Severity::WARNING, 'Fine for a map kept for content still to come; connect it when it is ready.'],
         };
+
+        return $severity === null ? null
+            : new Issue($severity, $problem->mapId, $problem->message, $hint, map: $problem->mapId === '' ? null : $problem->mapId);
     }
 }

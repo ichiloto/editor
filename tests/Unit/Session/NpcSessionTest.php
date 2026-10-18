@@ -12,35 +12,6 @@ use Ichiloto\Editor\Session\SessionRefusal;
  * one NPC's rows read and edited by the key the session gave.
  */
 
-/**
- * A throwaway project whose 12x5 fixture map carries the given NPCs.
- *
- * @param array<int, mixed> $npcs The npcs block.
- */
-function npcSessionProject(array $npcs): string
-{
-    $root = makeTemporaryProject('ichiloto-npc-session-');
-    $path = $root . '/assets/Maps/test-map/test-map.data.php';
-    $data = require $path;
-    $data['npcs'] = $npcs;
-    file_put_contents($path, "<?php\n\nreturn " . var_export($data, true) . ";\n");
-
-    return $root;
-}
-
-/** The ids of the map's NPCs as the session reads them. */
-function npcSessionIds(EditorSession $session): array
-{
-    return array_column($session->readMap('test-map')['npcs'], 'id');
-}
-
-/** The row with a field id in an NPC read. */
-function npcSessionRow(array $read, string $fieldId): array
-{
-    return array_find($read['rows'], static fn(array $row): bool => ($row['key']['field'] ?? null) === $fieldId)
-        ?? throw new RuntimeException("No NPC row {$fieldId}.");
-}
-
 it('creates, moves, duplicates and deletes NPCs, each one undo step against a current revision', function () {
     $session = EditorSession::open(npcSessionProject([['id' => 'ann', 'name' => 'Ann', 'x' => 2, 'y' => 1]]));
     $revision = $session->readMap('test-map')['revision'];
@@ -84,7 +55,7 @@ it('refuses NPC changes the rules forbid, naming what stands in the way', functi
         ->and(fn() => $session->duplicateNpc('test-map', $revision, 9))->toThrow(SessionRefusal::class, 'test-map has no NPC 9.')
         ->and(fn() => $session->deleteNpc('test-map', $revision, 0))
             ->toThrow(SessionRefusal::class, "Ann is named by NPC Bob script - resolve those before deleting.\n- NPC Bob script")
-        ->and(fn() => $session->assignNpcId('test-map', $revision, 0))->toThrow(SessionRefusal::class, 'ids do not change')
+        ->and(fn() => $session->assignNpcId('test-map', $revision, 0))->toThrow(SessionRefusal::class, 'change it through its Id row')
         ->and($session->moveNpc('test-map', $revision, 0, 2, 1))->toMatchArray(['changed' => false, 'revision' => $revision])
         ->and($session->hasUnsavedChanges())->toBeFalse()
         ->and($session->undo()['label'])->toBeNull();
@@ -99,14 +70,14 @@ it('reads an NPC\'s rows and edits one by its key, the id following a rename', f
         ->and($name)->toMatchArray(['kind' => 'text', 'key' => ['target' => 'npc', 'field' => 'name', 'frame' => []]])
         ->and(npcSessionRow($read, 'x')['kind'])->toBe('integer')
         ->and(npcSessionRow($read, 'movement'))->toMatchArray(['kind' => 'options', 'options' => ['fixed', 'wander']])
-        ->and(npcSessionRow($read, 'id')['kind'])->toBe('info')
+        ->and(npcSessionRow($read, 'id'))->toMatchArray(['kind' => 'text', 'raw' => 'ann'])
         ->and(array_column($read['rows'], 'label'))->toContain('Identity')
         ->and(npcSessionRow($read, 'commandListScript')['frame'])->toBe(['script']);
 
     $applied = $session->applyNpc('test-map', $read['revision'], 0, $name['key'], 'Annabel');
     expect($applied)->toMatchArray(['changed' => true, 'id' => 'annabel', 'followedId' => 'annabel', 'idReferences' => []])
-        ->and(fn() => $session->applyNpc('test-map', $applied['revision'], 0, npcSessionRow($read, 'id')['key'], 'x'))
-            ->toThrow(SessionRefusal::class, 'Id cannot be edited here.')
+        ->and(fn() => $session->applyNpc('test-map', $applied['revision'], 0, npcSessionRow($read, 'id')['key'], 'Not An Id'))
+            ->toThrow(SessionRefusal::class, '"Not An Id" is not an NPC id')
         ->and(fn() => $session->applyNpc('test-map', $applied['revision'], 0, ['field' => 'nope'], 'x'))
             ->toThrow(SessionRefusal::class, 'no longer on the NPC')
         ->and(fn() => $session->applyNpc('test-map', $applied['revision'], 0, npcSessionRow($read, 'x')['key'], '40'))

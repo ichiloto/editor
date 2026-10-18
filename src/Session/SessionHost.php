@@ -50,7 +50,14 @@ final class SessionHost
             $this->write($this->handle($line));
         }
         // The editor has gone: nothing it started may outlive it.
+        $this->close();
+    }
+
+    /** Closes the session: nothing it started outlives it, and a change set it left open is undone. */
+    public function close(): void
+    {
         $this->session?->close();
+        $this->session = null;
     }
 
     /**
@@ -134,11 +141,14 @@ final class SessionHost
                 is_string($params['kind'] ?? null) ? $params['kind'] : null,
                 self::requireInt($params, 'width'),
                 self::requireInt($params, 'height'),
+                self::readOptionalString($params, 'id'),
             ),
-            'map.duplicate' => $session->duplicateMap(self::requireString($params, 'map'), self::requireInt($params, 'revision')),
+            'map.duplicate' => $session->duplicateMap(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
+                self::readOptionalString($params, 'to')),
             'map.move' => $session->moveMap(
                 self::requireString($params, 'map'), self::requireInt($params, 'revision'),
                 self::readOptionalString($params, 'destination'), ($params['confirm'] ?? false) === true,
+                self::readOptionalString($params, 'to'),
             ),
             'map.delete' => $session->deleteMap(self::requireString($params, 'map'), ($params['confirm'] ?? false) === true),
             'map.insertLines' => $session->insertMapLines(
@@ -169,6 +179,8 @@ final class SessionHost
             'worldObjects.place' => $session->placeWorldObject(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
                 self::requireString($params, 'id'), self::requireInt($params, 'x'), self::requireInt($params, 'y'),
                 is_bool($params['coverage'] ?? false) ? ($params['coverage'] ?? false) : throw new InvalidRequest('"coverage" must be a boolean.')),
+            'worldObjects.move' => $session->moveWorldObject(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
+                self::requireString($params, 'id'), self::requireInt($params, 'dx'), self::requireInt($params, 'dy'), self::readChoices($params)),
             'worldObjects.moveVariant' => $session->moveWorldObjectVariant(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
                 self::requireString($params, 'id'), self::requireString($params, 'variant'), self::requireInt($params, 'offset')),
             'canvas.exchange' => $session->exchangeAuthoringCanvas(self::requireString($params, 'map'), self::requireLines($params, 'events'),
@@ -273,6 +285,17 @@ final class SessionHost
                 self::readChoices($params),
                 is_string($params['label'] ?? null) ? $params['label'] : 'Paint',
             ),
+            'map.paintRegion' => $session->paintRegion(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireString($params, 'layer'),
+                self::requireInt($params, 'x'),
+                self::requireInt($params, 'y'),
+                self::requireLines($params, 'rows'),
+                array_key_exists('color', $params) && (is_string($params['color']) || $params['color'] === null) ? $params['color'] : null,
+                self::readChoices($params),
+                is_string($params['label'] ?? null) ? $params['label'] : 'Paint region',
+            ),
             'map.migrateOccupancy' => $session->migratePhysicalOccupancy(
                 self::requireString($params, 'map'),
                 self::requireInt($params, 'revision'),
@@ -375,6 +398,7 @@ final class SessionHost
             'inspector.read' => $session->readInspector(
                 self::requireString($params, 'map'),
                 is_string($params['event'] ?? null) ? $params['event'] : null,
+                is_array($params['frame'] ?? []) ? ($params['frame'] ?? []) : throw new InvalidRequest('"frame" must be a list of indexes and keys.'),
             ),
             'inspector.apply' => $session->applyInspector(
                 self::requireString($params, 'map'),
@@ -413,6 +437,14 @@ final class SessionHost
                 self::requireInt($params, 'dx'),
                 self::requireInt($params, 'dy'),
             ),
+            'event.subject' => $session->setEventSubject(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireString($params, 'marker'),
+                array_key_exists('subject', $params) && (is_string($params['subject']) || $params['subject'] === null)
+                    ? $params['subject'] : throw new InvalidRequest('"subject" must be a world object id, or null to unbind.'),
+                array_key_exists('cells', $params) ? self::requireCells($params) : [],
+            ),
             'event.bounds' => $session->setEventBounds(
                 self::requireString($params, 'map'),
                 self::requireInt($params, 'revision'),
@@ -429,6 +461,7 @@ final class SessionHost
                 self::requireString($params, 'destination'),
                 self::requireInt($params, 'x'),
                 self::requireInt($params, 'y'),
+                self::readOptionalString($params, 'heading'),
             ),
             'database.records' => $session->listDatabaseRecords(self::requireString($params, 'category')),
             'troops.page' => $session->readTroopPage(self::requireInt($params, 'index'),
@@ -546,6 +579,7 @@ final class SessionHost
                 self::requireInt($params, 'x'),
                 self::requireInt($params, 'y'),
                 is_string($params['name'] ?? null) ? $params['name'] : '',
+                self::readOptionalString($params, 'id'),
             ),
             'npc.move' => $session->moveNpc(
                 self::requireString($params, 'map'),
@@ -556,7 +590,8 @@ final class SessionHost
             ),
             'npc.duplicate' => $session->duplicateNpc(self::requireString($params, 'map'), self::requireInt($params, 'revision'), self::requireInt($params, 'index')),
             'npc.delete' => $session->deleteNpc(self::requireString($params, 'map'), self::requireInt($params, 'revision'), self::requireInt($params, 'index')),
-            'npc.assignId' => $session->assignNpcId(self::requireString($params, 'map'), self::requireInt($params, 'revision'), self::requireInt($params, 'index')),
+            'npc.assignId' => $session->assignNpcId(self::requireString($params, 'map'), self::requireInt($params, 'revision'), self::requireInt($params, 'index'),
+                self::readOptionalString($params, 'id')),
             'npc.read' => $session->readNpc(
                 self::requireString($params, 'map'),
                 self::requireInt($params, 'index'),
@@ -585,6 +620,13 @@ final class SessionHost
             'history.redo' => $session->redo(),
             'project.dirty' => ['dirty' => $session->hasUnsavedChanges(), 'unsaved' => $session->listUnsavedChanges()],
             'project.saveAll' => $session->saveAll(),
+            'project.validate' => $session->validateProject(array_key_exists('maps', $params) ? self::requireLines($params, 'maps') : null),
+            'changes.begin' => $session->beginChanges(),
+            'changes.commit' => $session->commitChanges(
+                is_bool($params['relocateSaves'] ?? false) ? ($params['relocateSaves'] ?? false) : throw new InvalidRequest('"relocateSaves" must be a boolean.'),
+                is_bool($params['check'] ?? false) ? ($params['check'] ?? false) : throw new InvalidRequest('"check" must be a boolean.'),
+            ),
+            'changes.cancel' => $session->cancelChanges(),
             'playtest.start' => self::startPlaytest($session, $params),
             'playtest.options' => $session->describePlaytestOptions(),
             'playtest.status' => $session->describePlaytest(),

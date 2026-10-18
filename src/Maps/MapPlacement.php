@@ -6,11 +6,16 @@ namespace Ichiloto\Editor\Maps;
 
 use Ichiloto\Engine\Events\Interpreter\MovementRouteRunner;
 use Ichiloto\Editor\Cutscenes\Source\PhpArraySourceDocument;
+use Ichiloto\Editor\Database\RelativePositionFields;
 use Ichiloto\Editor\Cutscenes\Source\SourceNode;
 
 /** Map-space views of schema-owned command fields, never a runtime simulation. */
 final class MapPlacement
 {
+    /** The source keys a subject-relative point is authored with. */
+    private const array RELATIVE_KEYS = [RelativePositionFields::KIND_FIELD, RelativePositionFields::ID_FIELD,
+        RelativePositionFields::OFFSET_X_FIELD, RelativePositionFields::OFFSET_Y_FIELD];
+
     /** Decorate the existing event paths, including inline scripts and nested arms. */
     public static function describeEventFields(array $definition, array $fields): array
     {
@@ -91,9 +96,17 @@ final class MapPlacement
                 $coordinates = ['x' => null, 'y' => null];
                 foreach ((array) $entry['waypoints'] as $i => $waypoint) {
                     if (!is_array($waypoint)) { break; }
+                    if (RelativePositionFields::isRelative($waypoint)) {
+                        // The route ends wherever its subject stands; resolveRelativePoints() reads that cell.
+                        $coordinates = ['x' => null, 'y' => null];
+                        $steps[] = ['point' => [null, null], 'fields' => [], 'relative' => self::readRelative($waypoint),
+                            'label' => sprintf('Waypoint %d (%s)', $i + 1, RelativePositionFields::describePosition($waypoint))];
+                        continue;
+                    }
                     $axes = array_intersect_key($nested[$i] ?? [], $waypoint, array_flip(['x', 'y']));
                     $coordinates = array_replace($coordinates, array_intersect_key($waypoint, $coordinates));
                     $steps[] = ['point' => [$coordinates['x'], $coordinates['y']], 'fields' => $keys($axes),
+                        'axes' => array_intersect_key($waypoint, $coordinates),
                         'label' => 'Waypoint ' . ($i + 1) . ' (authored target only)'];
                 }
             } elseif (array_key_exists('retrace', $entry)) {
@@ -127,7 +140,8 @@ final class MapPlacement
             $fields[$own['subject']]['mapPlacement'] = ['kind' => isset($entry['waypoints']) ? 'waypoints' : 'route', 'points' => $steps, 'issue' => $issue,
                 'subject' => $entry['subject'] ?? 'player', 'subjectId' => $entry['npcId'] ?? $entry['actorId'] ?? null,
                 'sourcePaths' => array_values(array_column(array_filter($fields, static fn(array $field): bool =>
-                    in_array($field['sourceKey'] ?? '', ['type', 'subject', 'npcId', 'actorId', 'direction', 'count', 'faceOnly', 'x', 'y', 'retrace', 'remember'], true)), 'dataPath'))];
+                    in_array($field['sourceKey'] ?? '', ['type', 'subject', 'npcId', 'actorId', 'direction', 'count', 'faceOnly', 'x', 'y', 'retrace', 'remember',
+                        ...self::RELATIVE_KEYS], true)), 'dataPath'))];
         }
         $point = static function (array $indexes, array $position, string $kind, ?string $map = null) use (&$fields, $keys, $own): void {
             if (!isset($indexes['x'], $indexes['y'])) {
@@ -141,6 +155,21 @@ final class MapPlacement
                     [...$indexes, ...array_intersect_key($own, array_flip(['type', 'target.kind', 'operation']))])),
                 'issue' => $valid ? null : 'Map placement needs explicit non-negative integer x/y coordinates; relative or invalid axes are not inferred.'];
         };
+        $isStagedActor = $type === 'stage_actor' || ($type === '' && ($entry['kind'] ?? null) === 'staged_actor');
+        $wrapped = $type === 'stage_actor' && is_array($entry['actor'] ?? null);
+        $actor = $wrapped ? $entry['actor'] : $entry;
+        $prefix = $wrapped ? 'actor.' : '';
+        // An independent staged actor relative to a subject is shown where that subject puts it. A bound visual
+        // inherits its real subject's position and declares none.
+        if ($isStagedActor && !isset($actor['subject']) && RelativePositionFields::isRelative($actor)
+            && isset($own[$prefix . RelativePositionFields::KIND_FIELD])) {
+            $relative = array_intersect_key($own, array_flip(array_map(static fn(string $key): string => $prefix . $key, self::RELATIVE_KEYS)));
+            $fields[$own[$prefix . RelativePositionFields::KIND_FIELD]]['mapPlacement'] = ['kind' => 'stage', 'map' => null,
+                'points' => [['point' => [null, null], 'fields' => [], 'relative' => self::readRelative($actor),
+                    'label' => sprintf('Staged actor (%s)', RelativePositionFields::describePosition($actor))]],
+                'sourcePaths' => array_values(array_map(static fn(int $i): array => $fields[$i]['dataPath'] ?? [], $relative)),
+                'issue' => null];
+        }
         if (in_array($type, ['transfer', 'move_player'], true)) {
             $point(array_intersect_key($own, array_flip(['x', 'y', 'map'])), $entry, $type === 'transfer' ? 'transfer' : 'position', is_string($entry['map'] ?? null) ? $entry['map'] : null);
         }
@@ -189,6 +218,49 @@ final class MapPlacement
             }
         }
         return $fields;
+    }
+
+    /** @return array{at: array<string, mixed>, offset: array{x: int, y: int}} */
+    private static function readRelative(array $entry): array
+    {
+        $offset = is_array($entry['offset'] ?? null) ? $entry['offset'] : [];
+
+        return ['at' => is_array($entry['at'] ?? null) ? $entry['at'] : [],
+            'offset' => ['x' => is_int($offset['x'] ?? null) ? $offset['x'] : 0, 'y' => is_int($offset['y'] ?? null) ? $offset['y'] : 0]];
+    }
+
+    /**
+     * Shows each subject-relative point at its subject's cell plus the offset, on the map the owner's script runs
+     * on, or says why it has none there. A waypoint after it that keeps an axis keeps that resolved axis.
+     *
+     * @param MapSubjectCells|null $subjects The map the owner's script runs on; null when it names none.
+     * @param string $unavailable Why no map is known, when none is.
+     */
+    public static function resolveRelativePoints(array $placement, ?MapSubjectCells $subjects, string $unavailable): array
+    {
+        if (!array_any($placement['points'] ?? [], static fn(array $point): bool => isset($point['relative']))) {
+            return $placement;
+        }
+        if ($subjects !== null) {
+            $placement['map'] = $subjects->mapId;
+        }
+        $coordinates = [null, null];
+        foreach ($placement['points'] as &$point) {
+            if (isset($point['relative'])) {
+                $resolved = $subjects?->resolveCell($point['relative']['at']) ?? ['cell' => null, 'issue' => $unavailable];
+                $cell = $resolved['cell'];
+                $coordinates = $cell === null ? [null, null]
+                    : [$cell[0] + $point['relative']['offset']['x'], $cell[1] + $point['relative']['offset']['y']];
+                $point['point'] = $coordinates;
+                $point['issue'] = $resolved['issue'];
+            } elseif ($placement['kind'] === 'waypoints' && isset($point['axes'])) {
+                $coordinates = [$point['axes']['x'] ?? $coordinates[0], $point['axes']['y'] ?? $coordinates[1]];
+                $point['point'] = $coordinates;
+            }
+        }
+        unset($point);
+
+        return $placement;
     }
 
     private static function isMapPoint(mixed $position): bool
@@ -244,6 +316,9 @@ final class MapPlacement
             throw new \InvalidArgumentException($placement['issue']);
         }
         $selected = $placement['points'][$point] ?? throw new \InvalidArgumentException('Choose an authored point first.');
+        if (isset($selected['relative'])) {
+            throw new \InvalidArgumentException('This point follows its subject; change its subject or offset instead of placing it.');
+        }
         $fields = $selected['fields'];
         if ($placement['kind'] === 'waypoints') {
             // A click changes only authored axes. Omitted axes retain the prior runtime coordinate.

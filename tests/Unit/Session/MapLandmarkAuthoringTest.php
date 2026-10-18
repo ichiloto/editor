@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 use Ichiloto\Editor\Session\EditorSession;
 use Ichiloto\Editor\Session\SessionRefusal;
-use Ichiloto\Editor\Validation\MapValidator;
 use Ichiloto\Engine\Field\MapLandmarkCatalog;
 
 it('describes an event from its own minimap row, as one undo step each way, and saves literal source', function () {
@@ -148,10 +147,10 @@ it('follows an anchor that moves without copying its cells, on ragged maps too',
 it('reports declarations the Engine refuses, and still lets an author repair them', function () {
     [, , $session] = createLandmarkProject("'landmarks' => [['id' => 'gate', 'kind' => 'building', 'anchor' => ['event' => 'T']]],");
     $map = getSessionMap($session);
-    expect(MapValidator::validate($map, ['test-map' => $map], mapValidatorInventory()))->toContain('Minimap landmarks: A transfer landmark must use passage, entrance or exit so ordinary routes remain visible.');
+    expect(mapValidatorMessages($map, ['test-map' => $map]))->toContain('Minimap landmarks: A transfer landmark must use passage, entrance or exit so ordinary routes remain visible.');
     expect(findLandmarkRow($session, ['target' => 'map-landmarks', 'field' => 'kind', 'index' => 0])['options'])->toBe(['passage', 'entrance', 'exit']);
     applyLandmarkRow($session, ['target' => 'map-landmarks', 'field' => 'kind', 'index' => 0], 'entrance');
-    expect(MapValidator::validate($map, ['test-map' => $map], mapValidatorInventory()))->not->toContain('Minimap landmarks: A transfer landmark must use passage, entrance or exit so ordinary routes remain visible.');
+    expect(mapValidatorMessages($map, ['test-map' => $map]))->not->toContain('Minimap landmarks: A transfer landmark must use passage, entrance or exit so ordinary routes remain visible.');
 });
 
 it('describes a selected world object from its own inspector, through the same rows', function () {

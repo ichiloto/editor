@@ -392,3 +392,57 @@ it('checks an unfinished variant against its object\'s real coverage', function 
     applyWorldObjectRow($session, 'variant3Terminalmode', 'its covered glyphs recoloured');
     expect($session->readMap('test-map')['worldObjects'][0]['variants'][3]['terminal'])->toBe(['color' => 'white']);
 });
+
+it('moves a world object with its covered glyphs as one undo step, leaving no glyph behind', function () {
+    [$root, $file] = createWorldObjectProject();
+    file_put_contents($file, str_replace("'sprites2d' => null],", "'sprites2d' => null,
+            'covers' => ['layer' => 'buildings', 'cells' => [[1, 1], [2, 1]], 'tileLayers' => []]],", (string) file_get_contents($file)));
+    $session = EditorSession::open($root);
+    $buildings = static fn(): string => implode("\n", array_map(static fn(int $y): string => implode('', array_map(
+        static fn(int $x): string => getSessionMap($session)->getLayerSymbol(array_find(getSessionMap($session)->getLayers(),
+            static fn(array $layer): bool => $layer['name'] === 'buildings')['id'], $x, $y), range(0, 3))), range(0, 1)));
+    $object = static fn(): array => array_find($session->readMap('test-map')['worldObjects'], static fn(array $entry): bool => $entry['id'] === 'fixture-prop');
+
+    $moved = $session->moveWorldObject('test-map', $session->readMap('test-map')['revision'], 'fixture-prop', 1, 0);
+
+    expect($moved['changed'])->toBeTrue()
+        ->and($buildings())->toBe(" /  \n  xx")
+        ->and($object()['anchor'])->toBe(['x' => 2, 'y' => 1])
+        ->and($object()['covers']['cells'])->toBe([[2, 1], [3, 1]]);
+
+    $session->undo();
+    expect($buildings())->toBe(" /  \n xx ")
+        ->and($object()['anchor'])->toBe(['x' => 1, 'y' => 1])
+        ->and($object()['covers']['cells'])->toBe([[1, 1], [2, 1]]);
+
+    $revision = $session->readMap('test-map')['revision'];
+    expect(fn() => $session->moveWorldObject('test-map', $revision, 'fixture-prop', 0, -1))
+        ->toThrow(SessionRefusal::class, '1, 0 on the buildings layer holds /; clear it before moving fixture-prop there.')
+        ->and(fn() => $session->moveWorldObject('test-map', $revision, 'fixture-prop', 2, 0))
+        ->toThrow(SessionRefusal::class, 'outside test-map')
+        ->and(fn() => $session->moveWorldObject('test-map', $revision, 'no-such-prop', 1, 0))
+        ->toThrow(SessionRefusal::class, 'test-map has no world object no-such-prop.')
+        ->and($buildings())->toBe(" /  \n xx ");
+});
+
+it('moves each covered glyph as the piece it plays, and one the object presents without tiles', function (string $decor, string $moved) {
+    [$root, $file] = createWorldObjectProject();
+    writeTestTileset($root, pieces: [
+        'window' => ['name' => 'Window', 'layer' => 'buildings', 'glyphs' => ['x'], 'tiles' => ['decor' => ['5']]],
+        'crate' => ['name' => 'Crate', 'layer' => 'buildings', 'glyphs' => ['x'], 'tiles' => ['decor' => ['6']]],
+    ]);
+    writeTileLayer($root . '/assets/Maps/test-map', '02.decor.tiles.php', $decor);
+    file_put_contents($file, str_replace("'sprites2d' => null],", "'sprites2d' => null,
+            'covers' => ['layer' => 'buildings', 'cells' => [[1, 1], [2, 1]], 'tileLayers' => []]],", (string) file_get_contents($file)));
+    $session = EditorSession::open($root);
+
+    expect($session->moveWorldObject('test-map', $session->readMap('test-map')['revision'], 'fixture-prop', 1, 0)['changed'])->toBeTrue();
+    $session->saveMap('test-map');
+
+    expect(Ichiloto\Engine\Field\MapGridSource::readFile($root . '/assets/Maps/test-map/graphics/02.decor.tiles.php'))->toBe($moved);
+})->with([
+    // Its tiles show each x is a window: the windows move with them.
+    'pieces' => ["0 0 0 0\n0 5 5 0", "0 0 0 0\n0 0 5 5"],
+    // No tile tells which piece: the object presents them, and no tiles follow.
+    'object art' => ["0 0 0 0\n0 0 0 0", "0 0 0 0\n0 0 0 0"],
+]);

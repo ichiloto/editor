@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Events;
 
+use Ichiloto\Engine\Core\Enumerations\MovementHeading;
 use Ichiloto\Engine\Events\Triggers\ChestEventTrigger;
 use Ichiloto\Engine\Events\Triggers\CinematicEventTrigger;
 use Ichiloto\Engine\Events\Triggers\DialogueEventTrigger;
@@ -14,6 +15,12 @@ use Ichiloto\Engine\Events\Triggers\TransferPlayerTrigger;
 
 /**
  * Lists valid event types that can be assigned in the editor.
+ *
+ * A type owns its class and its data. The root fields every trigger reads
+ * whatever its class (`conditions`, `sets`, `whenBlocked`, `cue` and its
+ * `conditions`, `facing`, `engagement`) belong to no type: they are offered
+ * on every event and written only when an author sets them
+ * ({@see EventRecordPane}).
  */
 final class EventTypeCatalog
 {
@@ -41,12 +48,7 @@ final class EventTypeCatalog
                     'mode' => 'action',
                     'reusable' => false,
                 ],
-                defaultDefinitionFields: [
-                    'conditions' => [],
-                    'sets' => [],
-                    'whenBlocked' => '',
-                    'cue' => ['symbol' => '', 'color' => 'bright-yellow'],
-                ],
+                defaultDefinitionFields: ['cue' => ['symbol' => '', 'color' => 'bright-yellow']],
             ),
             new EventTypeDefinition(
                 label: 'Cinematic',
@@ -57,12 +59,7 @@ final class EventTypeCatalog
                     'mode' => 'auto',
                     'reusable' => false,
                 ],
-                defaultDefinitionFields: [
-                    'conditions' => [],
-                    'sets' => [],
-                    'whenBlocked' => '',
-                    'cue' => ['symbol' => '', 'color' => 'bright-yellow'],
-                ],
+                defaultDefinitionFields: ['cue' => ['symbol' => '', 'color' => 'bright-yellow']],
             ),
             new EventTypeDefinition(
                 label: 'Dialogue',
@@ -88,9 +85,8 @@ final class EventTypeCatalog
                         'x' => 0,
                         'y' => 0,
                     ],
-                    'spawnSprite' => [
-                        '🧍',
-                    ],
+                    // A heading the player faces on arrival, as PlayerSpriteSet reads it.
+                    'spawnSprite' => [MovementHeading::SOUTH->value],
                 ],
                 defaultDefinitionFields: ['cue' => ['symbol' => '', 'color' => 'bright-yellow']],
             ),
@@ -115,9 +111,8 @@ final class EventTypeCatalog
                         'x' => 0,
                         'y' => 0,
                     ],
-                    'spawnSprite' => [
-                        '🧍',
-                    ],
+                    // A heading the player faces on arrival, as PlayerSpriteSet reads it.
+                    'spawnSprite' => [MovementHeading::SOUTH->value],
                     'confirmDialogue' => [
                         'name' => '',
                         'text' => 'Rest here?',

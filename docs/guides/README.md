@@ -20,6 +20,13 @@ Read these in order the first time:
 7. [Author a Summon Cutscene](author-a-summon-cutscene.md) — a frame-driven
    battle presentation: tracks, keyframes, cues, and the actor assignment.
 
+## For Agents And Scripts
+
+- [Change Maps From A Script](change-maps-from-a-script.md): every map change
+  an agent or script makes goes through the editor session, as a batch with
+  `ichiloto map:apply` or over `ichiloto edit:host`, and is written only when
+  the project it leaves is valid.
+
 ## What The Editor Can Do Today
 
 - Create, paint, duplicate, and delete maps, with full undo.

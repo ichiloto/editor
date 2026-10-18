@@ -2,8 +2,6 @@
 
 namespace Ichiloto\Editor\Validation;
 
-use Ichiloto\Engine\Core\Enumerations\MovementHeading;
-use Ichiloto\Engine\Events\Enumerations\EventEngagement;
 use Ichiloto\Editor\Database\BattleEntryActorResolver;
 use Ichiloto\Editor\Database\BattleEntryRuleContract;
 use Ichiloto\Editor\Database\InventoryCatalog;
@@ -14,7 +12,6 @@ use Ichiloto\Editor\Database\ProjectRecord;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\Database\SummonAssignmentDiagnostics;
-use Ichiloto\Editor\Events\ChestLoot;
 use Ichiloto\Editor\Events\CommandMapContext;
 use Ichiloto\Editor\Events\ProjectScriptCommands;
 use Ichiloto\Editor\Field\MapEncounters;
@@ -1646,26 +1643,29 @@ class ProjectValidator
 
     foreach ($workspace->maps as $map) {
       if (($sourceIssue = $map->getGridSourceIssue()) !== null) {
-        $issues[] = Issue::error(
+        $issues[] = new Issue(Severity::ERROR,
           $map->mapId,
           "Map source is read-only: {$sourceIssue}",
           'Repair the source by hand, then reopen the project. Other maps remain editable.',
+          map: $map->mapId,
         );
         continue;
       }
 
       $issues = [
         ...$issues,
-        ...$this->checkLayers($map),
-        ...MapGraphicsValidator::validate($map),
-        ...MapGraphicsValidator::validateCoverage($map),
-        ...$this->checkRetiredMapData($map),
-        ...$this->checkEventMarkers($map),
-        ...$this->checkDoors($map, $workspace->mapIds),
-        ...$this->checkEncounters($map, $troops),
-        ...$this->checkNpcs($map, $workspace),
-        ...$this->checkDuplicateKeys($map),
-        ...$this->checkMapSource($map),
+        ...Issue::attributeToMap([
+          ...$this->checkLayers($map),
+          ...MapGraphicsValidator::validate($map),
+          ...MapGraphicsValidator::validateCoverage($map),
+          ...$this->checkRetiredMapData($map),
+          ...MapCompletenessCheck::validate($map, $this->inventoryCatalog),
+          ...$this->checkDoors($map, $workspace->mapIds),
+          ...$this->checkEncounters($map, $troops),
+          ...$this->checkNpcs($map, $workspace),
+          ...$this->checkDuplicateKeys($map),
+          ...$this->checkMapSource($map),
+        ], $map->mapId),
       ];
     }
 
@@ -1721,37 +1721,6 @@ class ProjectValidator
     )];
   }
 
-  /**
-   * Checks that placed markers and event definitions agree.
-   *
-   * @param ProjectMap $map The map.
-   * @return Issue[] The issues found.
-   */
-  protected function checkEventMarkers(ProjectMap $map): array
-  {
-    $issues = [];
-    $defined = array_keys((array) ($map->data['events'] ?? []));
-    $placed = $map->getPlacedEventMarkers();
-
-    foreach (array_diff($placed, $defined) as $marker) {
-      $issues[] = Issue::error(
-        $map->mapId,
-        sprintf('The event layer places marker "%s", which the map does not define.', $marker),
-        'The engine throws "Unmapped event markers" when the map loads. Define it, or clear the marker.'
-      );
-    }
-
-    foreach (array_diff($defined, $placed) as $marker) {
-      $issues[] = Issue::warning(
-        $map->mapId,
-        sprintf('Marker "%s" is defined but never placed on the event layer.', $marker),
-        'Nothing can trigger it. Place it, or remove the definition.'
-      );
-    }
-
-
-    return $issues;
-  }
 
   /**
    * Checks that doors lead somewhere.
@@ -1764,7 +1733,7 @@ class ProjectValidator
   {
     $issues = [];
 
-    foreach ((array) ($map->data['events'] ?? []) as $marker => $event) {
+    foreach ((array) ($map->getEditableData()['events'] ?? []) as $marker => $event) {
       if (! is_array($event)) {
         continue;
       }
@@ -1794,7 +1763,7 @@ class ProjectValidator
     }
 
     // Edge triggers lead off the map the same way doors do.
-    foreach (array_values((array) ($map->data['triggers'] ?? [])) as $index => $trigger) {
+    foreach (array_values((array) ($map->getEditableData()['triggers'] ?? [])) as $index => $trigger) {
       $destination = is_array($trigger) ? trim(strval($trigger['destinationMap'] ?? '')) : '';
 
       if ($destination === '') {
@@ -1828,7 +1797,7 @@ class ProjectValidator
    */
   protected function checkEncounters(ProjectMap $map, array $troops): array
   {
-    $authored = $map->data['encounters'] ?? null;
+    $authored = $map->getEditableData()['encounters'] ?? null;
 
     if ($authored === null) {
       return [];
@@ -2007,7 +1976,7 @@ class ProjectValidator
    */
   protected function checkEncounterTiles(ProjectMap $map, MapEncounters $encounters): array
   {
-    $tiles = $map->data['encounters']['tiles'] ?? null;
+    $tiles = $map->getEditableData()['encounters']['tiles'] ?? null;
 
     if ($tiles === null) {
       return [];
@@ -2068,14 +2037,14 @@ class ProjectValidator
    */
   protected function checkNpcs(ProjectMap $map, ProjectWorkspace $workspace): array
   {
-    if (! array_key_exists('npcs', $map->data) || $map->data['npcs'] === null) {
+    if (! array_key_exists('npcs', $map->getEditableData()) || $map->getEditableData()['npcs'] === null) {
       return [];
     }
 
-    if (! is_array($map->data['npcs'])) {
+    if (! is_array($map->getEditableData()['npcs'])) {
       return [Issue::error(
         $map->mapId,
-        sprintf('The npcs block is %s, not a list of NPC entries.', get_debug_type($map->data['npcs'])),
+        sprintf('The npcs block is %s, not a list of NPC entries.', get_debug_type($map->getEditableData()['npcs'])),
         'The game reads npcs as a list; every NPC on this map is dropped until it is one.'
       )];
     }
@@ -2085,7 +2054,7 @@ class ProjectValidator
     $height = $map->getHeight();
     $anchors = [];
 
-    foreach ($map->data['npcs'] as $index => $entry) {
+    foreach ($map->getEditableData()['npcs'] as $index => $entry) {
       $ordinal = is_int($index) ? $index + 1 : strval($index);
 
       if (! is_array($entry)) {
@@ -2618,7 +2587,7 @@ class ProjectValidator
   protected function checkNpcCollisions(ProjectMap $map, ProjectWorkspace $workspace, array $anchors): array
   {
     $issues = [];
-    $definitions = (array) ($map->data['events'] ?? []);
+    $definitions = (array) ($map->getEditableData()['events'] ?? []);
     $spawns = $this->spawnTilesOn($map, $workspace);
     $occupiedBy = ['fixed' => [], 'any' => []];
 
@@ -2732,7 +2701,7 @@ class ProjectValidator
     }
 
     foreach ($workspace->maps as $source) {
-      foreach ((array) ($source->data['events'] ?? []) as $marker => $definition) {
+      foreach ((array) ($source->getEditableData()['events'] ?? []) as $marker => $definition) {
         if (! is_array($definition)) {
           continue;
         }
@@ -2773,7 +2742,7 @@ class ProjectValidator
     $seen = [];
     $issues = [];
 
-    foreach ((array) ($map->data['npcs'] ?? []) as $index => $npc) {
+    foreach ((array) ($map->getEditableData()['npcs'] ?? []) as $index => $npc) {
       if (! is_array($npc)) {
         continue;
       }
@@ -2891,7 +2860,7 @@ class ProjectValidator
 
     $names = [];
 
-    foreach ((array) ($map->data['npcs'] ?? []) as $npc) {
+    foreach ((array) ($map->getEditableData()['npcs'] ?? []) as $npc) {
       if (! is_array($npc) || trim(strval($npc['id'] ?? '')) !== '') {
         continue;
       }
@@ -3636,6 +3605,18 @@ class ProjectValidator
       );
     }
 
+    foreach ((array) ($command['waypoints'] ?? []) as $waypoint) {
+      $at = is_array($waypoint) && is_array($waypoint['at'] ?? null) ? $waypoint['at'] : null;
+      $atNpc = $at !== null && ($at['kind'] ?? null) === 'npc' ? trim(strval($at['id'] ?? '')) : '';
+      if (! $cinematic && $atNpc !== '' && $npcIds !== null && ! in_array($atNpc, $npcIds, true)) {
+        $issues[] = Issue::error(
+          $where,
+          sprintf('A route waypoint is relative to NPC id "%s", which is not on map "%s".', $atNpc, $mapId ?? '(unknown)'),
+          'Choose an NPC on the map the route runs on.'
+        );
+      }
+    }
+
     $wait = $command['wait'] ?? true;
 
     if (! is_bool($wait) || ! $wait) {
@@ -3806,95 +3787,103 @@ class ProjectValidator
     $eventScripts = $this->commonEventScripts;
 
     foreach ($workspace->maps as $map) {
+      $issues = [...$issues, ...Issue::attributeToMap($this->checkMapContentReferences($map, $known, $npcIdsByMap, $eventScripts), $map->mapId)];
+    }
+
+    return $issues;
+  }
+
+  /**
+   * Checks what one map's music, events and NPCs name.
+   *
+   * @param array<string, string[]> $known The known reference values.
+   * @param array<string, string[]> $npcIdsByMap Stable NPC ids by map id.
+   * @param array<string, array<int, mixed>> $eventScripts Script payloads by id.
+   * @return Issue[] The issues found.
+   */
+  protected function checkMapContentReferences(ProjectMap $map, array $known, array $npcIdsByMap, array $eventScripts): array
+  {
+    $issues = [
+      ...$this->checkReference(strval($map->getEditableData()['bgm'] ?? ''), 'bgm', 'track', $map->mapId, $known),
+      ...$this->checkBgmVariants($map, $known),
+    ];
+
+    foreach ((array) ($map->getEditableData()['events'] ?? []) as $marker => $definition) {
+      if (! is_array($definition)) {
+        continue;
+      }
+
+      $where = sprintf('%s event %s', $map->mapId, strval($marker));
+      $data = (array) ($definition['data'] ?? []);
+      $class = strval($definition['class'] ?? '');
+      $currentNpcIds = $npcIdsByMap[$map->mapId] ?? [];
+
       $issues = [
         ...$issues,
-        ...$this->checkReference(strval($map->data['bgm'] ?? ''), 'bgm', 'track', $map->mapId, $known),
-        ...$this->checkBgmVariants($map, $known),
+        ...$this->checkEventCue($definition['cue'] ?? null, $where, $known),
+        ...$this->checkConditions((array) ($definition['conditions'] ?? []), $where, $known),
+        ...$this->checkDialogueVariants((array) ($data['dialogue'] ?? []), $where, $known),
+        ...$this->checkCommands(
+          (array) ($data['script'] ?? []),
+          $where,
+          $known,
+          $currentNpcIds,
+          $map->mapId,
+          $npcIdsByMap,
+        ),
+        ...$this->checkReference(strval($data['bgm'] ?? ''), 'bgm', 'track', $where, $known),
+        ...$this->checkReference(strval($data['sfx'] ?? ''), 'sfx', 'sound', $where, $known),
       ];
 
-      foreach ((array) ($map->data['events'] ?? []) as $marker => $definition) {
-        if (! is_array($definition)) {
-          continue;
-        }
+      if (str_contains($class, 'CinematicEventTrigger')) {
+        $issues = [...$issues, ...$this->checkCinematicTrigger($definition, $where, $known)];
+      }
 
-        $where = sprintf('%s event %s', $map->mapId, strval($marker));
-        $data = (array) ($definition['data'] ?? []);
-        $class = strval($definition['class'] ?? '');
-        $currentNpcIds = $npcIdsByMap[$map->mapId] ?? [];
-
+      if (str_contains($class, self::SCRIPT_TRIGGER)) {
         $issues = [
           ...$issues,
-          ...$this->checkEventCue($definition['cue'] ?? null, $where, $known),
-          ...$this->checkEventFacing($definition, $where),
-          ...$this->checkEventEngagement($definition, $where),
-          ...$this->checkConditions((array) ($definition['conditions'] ?? []), $where, $known),
-          ...$this->checkDialogueVariants((array) ($data['dialogue'] ?? []), $where, $known),
-          ...$this->checkCommands(
-            (array) ($data['script'] ?? []),
+          ...$this->checkScriptTrigger(
+            $definition,
             $where,
             $known,
+            $eventScripts,
             $currentNpcIds,
             $map->mapId,
             $npcIdsByMap,
           ),
-          ...$this->checkReference(strval($data['bgm'] ?? ''), 'bgm', 'track', $where, $known),
-          ...$this->checkReference(strval($data['sfx'] ?? ''), 'sfx', 'sound', $where, $known),
         ];
+      }
 
-        if (str_contains($class, 'CinematicEventTrigger')) {
-          $issues = [...$issues, ...$this->checkCinematicTrigger($definition, $where, $known)];
-        }
-
-        if (str_contains($class, self::SCRIPT_TRIGGER)) {
+      foreach ((array) ($data['items'] ?? []) as $stock) {
+        if (is_array($stock)) {
           $issues = [
             ...$issues,
-            ...$this->checkScriptTrigger(
-              $definition,
-              $where,
-              $known,
-              $eventScripts,
-              $currentNpcIds,
-              $map->mapId,
-              $npcIdsByMap,
-            ),
+            ...$this->checkReference(strval($stock['item'] ?? ''), 'inventory', 'item', $where, $known),
           ];
         }
+      }
+    }
 
-        foreach ((array) ($data['items'] ?? []) as $stock) {
-          if (is_array($stock)) {
-            $issues = [
-              ...$issues,
-              ...$this->checkReference(strval($stock['item'] ?? ''), 'inventory', 'item', $where, $known),
-            ];
-          }
-        }
-
-        if (ChestLoot::isChest($definition)) {
-          $issues = [...$issues, ...$this->checkChestLoot($map->mapId, strval($marker), $data)];
-        }
+    foreach ((array) ($map->getEditableData()['npcs'] ?? []) as $npc) {
+      if (! is_array($npc)) {
+        continue;
       }
 
-      foreach ((array) ($map->data['npcs'] ?? []) as $npc) {
-        if (! is_array($npc)) {
-          continue;
-        }
-
-        $where = sprintf('%s NPC %s', $map->mapId, strval($npc['name'] ?? '(unnamed)'));
-        $issues = [
-          ...$issues,
-          ...$this->checkConditions((array) ($npc['conditions'] ?? []), $where, $known),
-          ...$this->checkDialogueVariants((array) ($npc['dialogue'] ?? []), $where, $known),
-          ...$this->checkCommands(
-            (array) ($npc['script'] ?? []),
-            $where,
-            $known,
-            $npcIdsByMap[$map->mapId] ?? [],
-            $map->mapId,
-            $npcIdsByMap,
-          ),
-          ...$this->checkStateWrites((array) ($npc['sets'] ?? []), $where),
-        ];
-      }
+      $where = sprintf('%s NPC %s', $map->mapId, strval($npc['name'] ?? '(unnamed)'));
+      $issues = [
+        ...$issues,
+        ...$this->checkConditions((array) ($npc['conditions'] ?? []), $where, $known),
+        ...$this->checkDialogueVariants((array) ($npc['dialogue'] ?? []), $where, $known),
+        ...$this->checkCommands(
+          (array) ($npc['script'] ?? []),
+          $where,
+          $known,
+          $npcIdsByMap[$map->mapId] ?? [],
+          $map->mapId,
+          $npcIdsByMap,
+        ),
+        ...$this->checkStateWrites((array) ($npc['sets'] ?? []), $where),
+      ];
     }
 
     return $issues;
@@ -3914,11 +3903,11 @@ class ProjectValidator
    */
   protected function checkBgmVariants(ProjectMap $map, array $known): array
   {
-    if (! array_key_exists('bgmVariants', $map->data)) {
+    if (! array_key_exists('bgmVariants', $map->getEditableData())) {
       return [];
     }
 
-    $variants = $map->data['bgmVariants'];
+    $variants = $map->getEditableData()['bgmVariants'];
     $where = $map->mapId;
 
     if (! is_array($variants) || ! array_is_list($variants)) {
@@ -4018,21 +4007,6 @@ class ProjectValidator
     return $issues;
   }
 
-  /**
-   * Checks that a chest can give what it holds, by the Engine's chest rule
-   * the inspectors and the map save warnings also read.
-   *
-   * @param string $mapId The map the chest is on.
-   * @param string $marker The chest event's marker.
-   * @param array<string, mixed> $data The chest's data.
-   * @return Issue[] The issues found.
-   */
-  protected function checkChestLoot(string $mapId, string $marker, array $data): array
-  {
-    return $this->inventoryCatalog instanceof InventoryCatalog
-      ? new ChestRewardValidator($this->inventoryCatalog)->validate($mapId, $marker, $data)
-      : [];
-  }
 
   /**
    * Checks ScriptEventTrigger's runtime-recognized fields and script picker.
@@ -4142,41 +4116,7 @@ class ProjectValidator
    *
    * @return Issue[] The issues found.
    */
-  /**
-   * An event's optional facing: the player headings it engages from, as the Engine reads them.
-   *
-   * @param array<array-key, mixed> $definition The event definition.
-   * @return Issue[] The issues found.
-   */
-  protected function checkEventFacing(array $definition, string $where): array
-  {
-    if (! array_key_exists('facing', $definition)) {
-      return [];
-    }
-    $facing = $definition['facing'];
-    $valid = is_array($facing) && array_is_list($facing) && array_all($facing, static fn(mixed $name): bool => is_string($name)
-      && ($heading = MovementHeading::tryFrom($name)) !== null && $heading !== MovementHeading::NONE);
 
-    return $valid ? [] : [Issue::error($where, 'Its facing must list player headings: North, East, South or West.',
-      'Choose the headings the player faces to start it, or none for any.')];
-  }
-
-  /**
-   * An event's optional engagement: standing on its cells, or next to them facing one.
-   *
-   * @param array<array-key, mixed> $definition The event definition.
-   * @return Issue[] The issues found.
-   */
-  protected function checkEventEngagement(array $definition, string $where): array
-  {
-    if (! array_key_exists('engagement', $definition)) {
-      return [];
-    }
-    $engagement = $definition['engagement'];
-
-    return is_string($engagement) && EventEngagement::tryFrom($engagement) !== null ? [] : [Issue::error($where,
-      'Its engagement must be inside or facing.', 'Choose to stand on the event, or to face it from next to it.')];
-  }
 
   protected function checkEventCue(mixed $cue, string $where, array $known): array
   {
@@ -4245,7 +4185,7 @@ class ProjectValidator
     foreach ($workspace->maps as $map) {
       $idsByMap[$map->mapId] = [];
 
-      foreach ((array) ($map->data['npcs'] ?? []) as $npc) {
+      foreach ((array) ($map->getEditableData()['npcs'] ?? []) as $npc) {
         if (! is_array($npc)) {
           continue;
         }

@@ -197,12 +197,26 @@ final class MapAtlas
      */
     public static function describeParentReferences(iterable $maps, string $mapId, ?string $landmarkId = null): array
     {
+        return array_map(static function (ProjectMap $map): string {
+            $landmark = $map->getMapDataField([self::KEY, 'parent', 'landmark']);
+            return sprintf('the atlas parent of %s (entry %s)', $map->mapId, is_string($landmark) ? $landmark : '?');
+        }, self::findChildMaps($maps, $mapId, $landmarkId));
+    }
+
+    /**
+     * The maps that name a map as their atlas parent, or a landmark on it as their entry.
+     *
+     * @param iterable<ProjectMap> $maps
+     * @return list<ProjectMap>
+     */
+    public static function findChildMaps(iterable $maps, string $mapId, ?string $landmarkId = null): array
+    {
         $found = [];
         foreach ($maps as $map) {
             $parent = $map->getMapDataField([self::KEY, 'parent']);
             if (!is_array($parent) || ($parent['map'] ?? null) !== $mapId) { continue; }
             if ($landmarkId !== null && ($parent['landmark'] ?? null) !== $landmarkId) { continue; }
-            $found[] = sprintf('the atlas parent of %s (entry %s)', $map->mapId, is_string($parent['landmark'] ?? null) ? $parent['landmark'] : '?');
+            $found[] = $map;
         }
         return $found;
     }

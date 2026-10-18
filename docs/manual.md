@@ -291,7 +291,11 @@ What moves, when it is in the map's space and at or beyond the line:
   listed as a hand edit because a walk across the line ends elsewhere), `camera` and
   `field_animation` position targets, `stage_actor`, and `transfer` into the
   map. Scripts start on their map; after a `transfer` elsewhere, later commands
-  are in that map's space and stay;
+  are in that map's space and stay. A waypoint, staged actor or cast member
+  placed relative to a subject (`at` with an optional `offset`) is never
+  rewritten: it follows its subject. When the edited lines fall between the
+  subject and the point, or may (a player or staged actor subject), its
+  offset is listed as a hand edit;
 - reusable scripts in `assets/Events/` started only from this map, and
   cutscenes whose start map it is (their cast, script and finalizer).
 
@@ -710,16 +714,22 @@ with a hint rather than painted under an NPC.
 `Enter` on an empty tile asks for the NPC's name first, and derives its stable
 `id` from that name - `Gate Guard` becomes `gate-guard`, numbered if the map
 already has one - because the id is what routes, dialogue events, cinematics
-and script diagnostics name. Renaming the NPC re-derives its id from the new
-name **while nothing refers to it**, so an NPC created as `New NPC` and named
-later gets the id its name suggests. Once an event, script, route or cinematic
-starting on the map names the id, it stays: a rename keeps it and the status
-says what names it. Moving the NPC or changing its sprite never touches it.
-Duplicating assigns a fresh id from the name. An NPC authored without an id loads and edits normally, shows a
-`! No stable id` row (`Enter` there assigns one from its name, the one time an
-id is ever written after creation, since nothing can yet name it), and
-validates with a warning that scripted movement cannot target it. Changing an
-existing id is an identity migration, which the editor does not offer.
+and script diagnostics name. Renaming the NPC re-derives an id its old name
+derived from the new name **while nothing refers to it**, so an NPC created as
+`New NPC` and named later gets the id its name suggests. Once an event, script,
+route or cinematic starting on the map names the id, it stays: a rename keeps
+it and the status says what names it. Moving the NPC or changing its sprite
+never touches it. Duplicating assigns a fresh id from the name.
+
+The `Id` row sets the id directly, for an NPC whose id should differ from its
+name (one character met as several NPCs, such as `djin-contract-trial` for
+`Djin`). The id is lowercase letters and digits joined by single hyphens and
+unique on the map. Changing it is refused, with each reference listed, while
+anything names the current id: references are not migrated, so change them
+first. A chosen id stays when the NPC is renamed. An NPC authored without an
+id loads and edits normally, shows a `! No stable id` row (`Enter` there
+assigns one from its name; the `Id` row takes a chosen one), and validates
+with a warning that scripted movement cannot target it.
 
 #### The NPC Inspector
 
@@ -1012,9 +1022,14 @@ event or object moves the landmark.
   transfers that no other landmark uses, and `Kind` from the kinds that
   anchor may be. Moving a landmark between a transfer and anything else makes
   it a passage or a landmark accordingly.
-- The id, shown on the landmark's heading, is fixed: saves remember what the
-  party has learned by it. An object's own id is used when it is a valid
-  landmark id; otherwise the next free `landmark-N`.
+- `Id` is the landmark's stable id, shown on its heading. A new landmark
+  takes an object's own id when it is a valid landmark id, otherwise the next
+  free `landmark-N`; the row renames it to any id the Engine accepts that no
+  other landmark on the map has. Other maps name a landmark as their atlas
+  entry, and a rename changes their `atlas.parent.landmark` in the same undo
+  step; when one of those maps cannot take the edit, nothing is renamed. The
+  name's translation key stays. Saves remember what the party has learned by
+  id, so a save that learned the landmark under its old id learns it again.
 - `Category` says what the place offers, whatever its kind: the Engine's
   `inn`, `shop`, `home` and `organization`, or a category of the project's
   own (see Place Categories). An entrance into a shop is a route with the
@@ -1989,6 +2004,24 @@ that leg; adding a point leaves both axes blank until authored, not zero.
 Incomplete new or changed routes refuse Save without discarding the draft or
 undo history. Unchanged legacy data survives unrelated edits.
 
+A waypoint, an independent `stage_actor` and a staged cast member may instead
+stand relative to a map subject, the Engine's `at`/`offset` position. `Relative
+To` chooses the subject kind from the Engine's exported list: the player, an NPC,
+a world object (graphical editor only, as for every subject picker), a staged
+actor (cinematics only), a party actor or an event marker. A named subject's id
+is picked from what exists (the map's NPCs, world objects and markers, the
+cinematic's cast); the player and the leading party actor take none. `Offset X`
+and `Offset Y` are whole cells, zero when left out. Choosing a subject removes
+the point's X and Y; clearing it from a waypoint is refused rather than inventing
+a coordinate. A visual bound to a real subject inherits its position and is never
+offered a subject or offset; binding one removes them. A subject still waiting
+for its id refuses Save. The map placement view shows each relative point at its
+subject's cell on the owner's map (an event's or NPC's own map, a cinematic's
+Start Map), or says why it cannot: the player, party actors and staged actors are
+placed only while the scene runs, and a common event runs on whichever map calls
+it. A relative point is changed through its subject and offset, never by a map
+click.
+
 `Remember As` declares a session-local identity. `Recorded Route` selects only
 declarations in that script invocation and its referenced common events,
 including nested command arms, not other NPCs, dialogue variants, map events or
@@ -2716,6 +2749,16 @@ command palette. It shows the current and proposed ids, requires an explicit
 `y`, rejects collisions, and fails closed rather than half-moving. References
 are **not** migrated: anything naming the old id keeps naming it, and the
 prompt says so before you confirm.
+
+A map may live inside another map's folder (a building's rooms inside it) or
+inside a folder that is no map. The editor session creates, copies and moves
+a map at a folder path the author chooses: `map.create` takes `id`, and
+`map.duplicate` and `map.move` take `to`. A chosen path is checked before
+anything is written: each part between slashes is lowercase letters and digits
+joined by single hyphens, nothing may already stand there, and no map nested
+directly in a map's folder may be called `layers` or `graphics`. A move to a
+chosen path is reviewed exactly as a derived one is. Deleting a nested map
+also removes the folders above it that it leaves empty.
 
 ### Dirty means "differs from the last save"
 

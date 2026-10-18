@@ -416,7 +416,7 @@ final class SaveCompatibilityValidator
                 continue;
             }
 
-            foreach (array_keys(is_array($map->data['events'] ?? null) ? $map->data['events'] : []) as $marker) {
+            foreach (array_keys(is_array($map->getEditableData()['events'] ?? null) ? $map->getEditableData()['events'] : []) as $marker) {
                 if (is_string($marker)) {
                     $ids[] = $map->mapId . ':' . $marker;
                 }

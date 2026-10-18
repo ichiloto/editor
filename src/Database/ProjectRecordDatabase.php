@@ -54,6 +54,8 @@ final class ProjectRecordDatabase
     /** @var (\Closure(string): list<string>)|null What keeps a record from being deleted ({@see useDeletionReferences()}). */
     private ?\Closure $deletionReferences = null;
     private ?ReferenceCatalog $authoringReferences = null;
+    /** @var (\Closure(ProjectRecord): ?ReferenceCatalog)|null */
+    private ?\Closure $recordReferences = null;
     private bool $graphical = false;
 
     public function useAuthoringReferences(ReferenceCatalog $references): void
@@ -61,13 +63,32 @@ final class ProjectRecordDatabase
         $this->authoringReferences = $references;
     }
 
+    /**
+     * Scopes the references one record chooses from to that record, where it owns some of its own: a cinematic's
+     * map-local subjects are on the map it starts on.
+     *
+     * @param \Closure(ProjectRecord): ?ReferenceCatalog $scope
+     */
+    public function useRecordReferences(\Closure $scope): void
+    {
+        $this->recordReferences = $scope;
+    }
+
     private function coerceReferenceField(ProjectRecord $record, RecordField $field, string $rawValue, array $ownerPath = []): mixed
     {
+        $authored = (array) $record->toArray();
+        foreach ($ownerPath === [] ? explode('.', $field->key) : $ownerPath as $segment) {
+            $authored = is_array($authored) ? ($authored[$segment] ?? null) : null;
+        }
+        if (($issue = self::findCarryIssue($field, $authored)) !== null) {
+            throw new \InvalidArgumentException(sprintf('%s cannot be edited as a line: %s. Nothing was changed.', $field->label, $issue));
+        }
         $value = self::coerce($field, $rawValue);
-        if ($this->authoringReferences !== null && in_array($field->reference, ['actor_ids', 'stage_timelines', 'cinematic_movement_routes', 'map_world_objects'], true) && $value !== null) {
+        $references = ($this->recordReferences === null ? null : ($this->recordReferences)($record)) ?? $this->authoringReferences;
+        if ($references !== null && in_array($field->reference, ['actor_ids', 'stage_timelines', 'cinematic_movement_routes', 'map_world_objects'], true) && $value !== null) {
             $choices = $field->reference === 'cinematic_movement_routes'
-                ? $this->authoringReferences->getMovementRouteIds($record, $ownerPath)
-                : $this->authoringReferences->valuesFor($field->reference);
+                ? $references->getMovementRouteIds($record, $ownerPath)
+                : $references->valuesFor($field->reference);
             foreach (is_array($value) ? $value : [$value] as $selected) {
                 if (! in_array($selected, $choices, true)) {
                     throw new \InvalidArgumentException(sprintf('Unknown %s "%s"; choose a project resource.', $field->reference, strval($selected)));
@@ -75,6 +96,21 @@ final class ProjectRecordDatabase
             }
         }
         return $value;
+    }
+
+    /**
+     * Why a condition or write list cannot be edited through its line
+     * without losing part of it, by the codec that owns the line; null when
+     * it can, or the field holds another kind of value or none.
+     */
+    private static function findCarryIssue(RecordField $field, mixed $authored): ?string
+    {
+        return match (true) {
+            $authored === null => null,
+            $field->codec === RecordFieldCodec::CONDITIONS => ConditionCodec::findCarryIssue($authored),
+            $field->codec === RecordFieldCodec::WORLD_WRITES => WorldWriteCodec::findCarryIssue($authored),
+            default => null,
+        };
     }
 
     /** Proves a proposed payload is valid and source-editable without changing the actual record. */
@@ -580,7 +616,8 @@ final class ProjectRecordDatabase
         $fields = [];
 
         foreach ($this->schema->fieldsFor($record->toArray()) as $field) {
-            $fields[] = self::describeField($field, self::displayValue($field, $record->get($field->key)), $field->key, $isEditable);
+            $fields[] = self::describeField($field, self::displayValue($field, $record->get($field->key)), $field->key, $isEditable,
+                authored: $record->get($field->key));
         }
         if ($this->schema->key === PlayerPresentationFields::CATEGORY) {
             $fields = PlayerPresentationFields::describeFields($fields, (array) $record->toArray(), $this->authoringReferences?->getAssetRoot());
@@ -647,6 +684,7 @@ final class ProjectRecordDatabase
                 self::subFieldId($subList->prefix, $entryIndex, $field->key),
                 $isEditable,
                 sprintf('%s %d %s', ucfirst($subList->singular), $entryIndex + 1, $field->label),
+                self::readNested($entry, $field->key),
             ), 'entry' => [$entryIndex], 'entryLabel' => sprintf('%s %d', ucfirst($subList->singular), $entryIndex + 1), 'name' => $field->label, 'sourceKey' => $field->key,
                 'dataPath' => [...($basePath === [] ? explode('.', $subList->key) : $basePath), $entryIndex, ...explode('.', $field->key)]], $entry, $owner)];
         }
@@ -750,6 +788,7 @@ final class ProjectRecordDatabase
                         $nestedIndex + 1,
                         $field->label,
                     ),
+                    self::readNested($nestedEntry, $field->key),
                 ), $nestedEntry, $owner)];
             }
 
@@ -3406,15 +3445,22 @@ final class ProjectRecordDatabase
      * @param string $fieldId The settings-field identifier.
      * @param bool $isEditable Whether the category and record accept edits.
      * @param string|null $label An override label (used for sub-list rows).
+     * @param mixed $authored The field's authored value, for a list its line may not carry whole.
      * @return array<string, mixed>
      */
-    private static function describeField(RecordField $field, string $value, string $fieldId, bool $isEditable, ?string $label = null): array
+    private static function describeField(RecordField $field, string $value, string $fieldId, bool $isEditable, ?string $label = null,
+        mixed $authored = null): array
     {
         $descriptor = [
             'label' => $label ?? $field->label,
             'value' => $value,
             'field' => $fieldId,
         ];
+
+        if (($issue = self::findCarryIssue($field, $authored)) !== null) {
+            // Shown as authored and left alone: committing the line would lose what it cannot carry.
+            return [...$descriptor, 'value' => '! ' . $issue, 'editable' => false];
+        }
 
         if (! $isEditable || $field->isReadOnly) {
             // Said outright, so the pane never opens an editor on a value the
@@ -4011,6 +4057,35 @@ final class ProjectRecordDatabase
         // Descended from the sub-list into a command arm: commands from here
         // down. The catalog's shared command list is what every arm holds.
         return RecordSchemaCatalog::eventCommandList('commands', $this->graphical);
+    }
+
+    /**
+     * The frame enclosing one, and the field id prefix of the row in it that
+     * opened the frame: the record's own list row, or the command (or
+     * sub-list entry) that holds the arm, for an interface to land back on.
+     *
+     * A record-level list is [key]; a list member's arm ends
+     * [i, listKey, j, armKey] (an option's `then`, a lane's `commands`); a
+     * branch, sequence or variant arm ends [i, arm].
+     *
+     * @param array<int, int|string> $framePath The frame, not the root.
+     * @return array{frame: list<int|string>, landing: string}
+     */
+    public function describeEnclosingFrame(array $framePath): array
+    {
+        $framePath = array_values($framePath);
+        $count = count($framePath);
+        $chunk = $count === 1 && is_string($framePath[0])
+            ? 1
+            : ((is_string($framePath[$count - 3] ?? null) && is_int($framePath[$count - 2] ?? null) && is_string($framePath[$count - 1] ?? null) && is_int($framePath[$count - 4] ?? null)) ? 4 : 2);
+        $enclosing = array_slice($framePath, 0, max(0, $count - $chunk));
+        $enclosingList = $enclosing !== [] && is_string($enclosing[0]) ? ($this->schema->commandLists[$enclosing[0]] ?? null) : null;
+        $landing = $chunk === 1
+            ? 'commandList' . ucfirst(strval($framePath[0] ?? ''))
+            : (($enclosing === [] ? ($this->schema->subList?->prefix ?? 'command') : ($enclosingList?->prefix ?? 'command'))
+                . intval($framePath[$count - $chunk] ?? 0));
+
+        return ['frame' => $enclosing, 'landing' => $landing];
     }
 
     /**

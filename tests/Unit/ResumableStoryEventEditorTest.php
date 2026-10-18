@@ -41,7 +41,8 @@ it('creates ScriptEventTrigger through the active event type catalog and inspect
             'mode' => 'action',
             'reusable' => false,
         ])
-        ->and($definition)->toHaveKeys(['conditions', 'sets', 'whenBlocked', 'cue'])
+        // Conditions, writes and the blocked message are every trigger's, written only once set.
+        ->and($definition)->not->toHaveKeys(['conditions', 'sets', 'whenBlocked'])
         ->and($definition['cue'])->toBe(['symbol' => '', 'color' => 'bright-yellow']);
 
     $fields = callEditorMethod($editor, 'createMapInspector')->buildEventDataFields('E', $definition);

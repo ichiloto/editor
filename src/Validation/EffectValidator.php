@@ -155,12 +155,12 @@ final class EffectValidator
 
         foreach ($workspace->maps as $map) {
             try {
-                foreach (FieldEffectManager::readDeclarations($map->data['fieldEffects'] ?? null) as $declaration) {
+                foreach (FieldEffectManager::readDeclarations($map->getEditableData()['fieldEffects'] ?? null) as $declaration) {
                     $use($declaration['effect'], false, sprintf('%s field effect %s', $map->mapId, $declaration['id']));
                 }
             } catch (Throwable $failure) {
-                $issues[] = Issue::error($map->mapId, 'Its fieldEffects cannot be read: ' . $failure->getMessage(),
-                    'Until this is fixed, the map shows none of its field effects; gameplay is unchanged.');
+                $issues[] = new Issue(Severity::ERROR, $map->mapId, 'Its fieldEffects cannot be read: ' . $failure->getMessage(),
+                    'Until this is fixed, the map shows none of its field effects; gameplay is unchanged.', map: $map->mapId);
             }
         }
 
@@ -223,7 +223,7 @@ final class EffectValidator
         };
 
         foreach ($workspace->maps as $map) {
-            foreach ((array) ($map->data['events'] ?? []) as $marker => $definition) {
+            foreach ((array) ($map->getEditableData()['events'] ?? []) as $marker => $definition) {
                 if (is_array($definition) && str_ends_with(strval($definition['class'] ?? ''), 'SleepEventTrigger')) {
                     $name(((array) ($definition['data'] ?? []))['presentation'] ?? null, sprintf('map %s event %s', $map->mapId, strval($marker)));
                 }
@@ -305,10 +305,10 @@ final class EffectValidator
         };
 
         foreach ($workspace->maps as $map) {
-            foreach ((array) ($map->data['events'] ?? []) as $marker => $definition) {
+            foreach ((array) ($map->getEditableData()['events'] ?? []) as $marker => $definition) {
                 $collect($definition, sprintf('map %s event %s', $map->mapId, strval($marker)));
             }
-            foreach ((array) ($map->data['npcs'] ?? []) as $index => $npc) {
+            foreach ((array) ($map->getEditableData()['npcs'] ?? []) as $index => $npc) {
                 $id = is_array($npc) && is_string($npc['id'] ?? null) ? $npc['id'] : strval($index);
                 $collect($npc, sprintf('map %s NPC %s', $map->mapId, $id));
             }

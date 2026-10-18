@@ -209,8 +209,7 @@ final readonly class MapLandmarks
      * Describes a place: a declaration for an anchor no landmark describes yet. A route starts as the passage its
      * automatic marker already is, so describing it changes nothing on the minimap until an author edits it; any
      * other anchor starts as the kind chosen, or a landmark. Its id is the anchor's own stable id where that is a
-     * valid landmark id, otherwise the next free `landmark-N`, and never changes afterwards: saves remember
-     * discoveries by it.
+     * valid landmark id, otherwise the next free `landmark-N`, until the author chooses another ({@see setId()}).
      *
      * @return array{entries: list<array<string, mixed>>, id: string}
      */
@@ -248,6 +247,31 @@ final readonly class MapLandmarks
         if ($kind === null || !in_array($kind, $this->findKindsFor($anchor), true)) {
             $entries[$index]['kind'] = ($this->isRouteAnchor($anchor) ? MapLandmarkKind::PASSAGE : MapLandmarkKind::LANDMARK)->value;
         }
+        return $entries;
+    }
+
+    /**
+     * Gives a landmark the stable id an author chose: one the Engine accepts, used by no other landmark on the map.
+     * Its translation key stays, since translations are filed under it. Saves remember discoveries by id, so a save
+     * that learned the landmark under its old id learns it again; other maps whose atlas entry it is follow the
+     * rename ({@see MapAtlas::findChildMaps()}).
+     *
+     * @return list<array<string, mixed>>
+     * @throws InvalidArgumentException When the id is not one the Engine accepts, or another landmark here has it.
+     */
+    public function setId(int $index, string $id): array
+    {
+        $id = trim($id);
+        if (preg_match(MapLandmarkCatalog::ID_PATTERN, $id) !== 1) {
+            throw new InvalidArgumentException(sprintf('"%s" is not a landmark id: a lowercase letter, then up to 63 lowercase letters, digits, dots, underscores or hyphens.', $id));
+        }
+        foreach ($this->entries as $other => $entry) {
+            if ($other !== $index && ($entry['id'] ?? null) === $id) {
+                throw new InvalidArgumentException(sprintf('Another landmark on %s is already %s.', $this->map->mapId, $id));
+            }
+        }
+        $entries = $this->entries;
+        $entries[$index]['id'] = $id;
         return $entries;
     }
 

@@ -5,10 +5,12 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Session;
 
 use Ichiloto\Editor\Database\ReferenceCatalog;
+use Ichiloto\Editor\Events\EventRecordPane;
 use Ichiloto\Editor\Field\NpcAuthoring;
 use Ichiloto\Editor\Field\NpcInspector;
 use Ichiloto\Editor\History\CommandGroup;
 use Ichiloto\Editor\Maps\MapPlacement;
+use Ichiloto\Editor\Maps\MapSubjectCells;
 use Ichiloto\Editor\Cutscenes\CutsceneType;
 use Ichiloto\Editor\Cutscenes\Source\PhpArraySourceDocument;
 
@@ -33,7 +35,7 @@ trait MapPlacementSession
         $rows = match ($kind) {
             'database' => $this->readDatabaseRecord(strval($context['category'] ?? ''), $index, $frame)['rows'],
             'npc' => $this->readNpc($map->mapId, $index, $frame)['rows'],
-            'event' => $this->readInspector($map->mapId, strval($key['marker'] ?? ''))['rows'],
+            'event' => $this->readInspector($map->mapId, strval($key['marker'] ?? ''), $frame)['rows'],
             default => throw new SessionRefusal('Unknown map-placement owner.'),
         };
         $row = array_find($rows, static fn(array $row): bool => MapPlacement::areValuesEqual($row['key'] ?? null, $key));
@@ -81,7 +83,8 @@ trait MapPlacementSession
         }
         $changes = [];
         foreach ($values as $field => $value) {
-            $found = array_find($rows, static fn(array $candidate): bool => $kind === 'event'
+            // An event's data rows are named by their path, its record rows (and every other owner's) by their field.
+            $found = array_find($rows, static fn(array $candidate): bool => $kind === 'event' && ($candidate['key']['target'] ?? null) !== EventRecordPane::TARGET
                 ? json_encode($candidate['key']['path'] ?? null, JSON_THROW_ON_ERROR) === $field
                 : ($candidate['key']['field'] ?? null) === $field);
             if ($found === null || ($found['kind'] ?? 'info') === 'info') {
@@ -121,6 +124,30 @@ trait MapPlacementSession
             $this->history->record(new CommandGroup('Place on map', $commands));
         }
         return ['changed' => $commands !== [], 'revision' => $this->getMapRevision($map)];
+    }
+
+    /**
+     * The map a relative point's subject is read on, as its owner's references are chosen: an event's or NPC's own
+     * map, or a cinematic's declared start map. A reusable script names none.
+     *
+     * @return array{MapSubjectCells|null, string} The map's subjects, and why there are none.
+     */
+    private function readPlacementSubjects(array $owner): array
+    {
+        if ($owner['kind'] !== 'database') {
+            return [MapSubjectCells::readMap($this->requireMap($owner['map'])), ''];
+        }
+        $type = CutsceneType::findByRecordCategory($owner['category']);
+        if ($type !== CutsceneType::CINEMATIC) {
+            return [null, 'This script runs on whichever map calls it; its relative points are shown from that map only.'];
+        }
+        $id = $this->workspace->cutscenes?->ids($type)[$owner['index']] ?? null;
+        $asset = $id === null ? null : $this->workspace->cutscenes?->find($type, $id);
+        $map = $asset === null ? null : new ReferenceCatalog($this->workspace, null, $asset)->getSubjectMap();
+
+        return $map === null
+            ? [null, 'Declare the cinematic\'s Start Map to show where its relative points land.']
+            : [MapSubjectCells::readMap($map), ''];
     }
 
     /** Attach a review of the actual owner, never a second editable model. */
@@ -180,9 +207,14 @@ trait MapPlacementSession
         foreach ($paths as $path) {
             $sources[$path] = is_file($path) ? hash_file('sha256', $path) : null;
         }
+        $subjects = null;
         foreach ($rows as &$row) {
             if (!isset($row['mapPlacement'])) {
                 continue;
+            }
+            if (array_any($row['mapPlacement']['points'] ?? [], static fn(array $point): bool => isset($point['relative']))) {
+                $subjects ??= $this->readPlacementSubjects($owner);
+                $row['mapPlacement'] = MapPlacement::resolveRelativePoints($row['mapPlacement'], ...$subjects);
             }
             $placement = &$row['mapPlacement'];
             $placement['review'] = ['version' => $version, 'sources' => $sources];

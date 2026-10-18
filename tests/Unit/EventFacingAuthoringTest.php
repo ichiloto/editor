@@ -122,7 +122,7 @@ it('names a facing the Engine would refuse instead of offering headings that wou
     expect($rows)->toHaveCount(1)
         ->and($rows[0]['editable'])->toBeFalse()
         ->and(implode("\n", array_map(static fn($issue): string => $issue->message, new ProjectValidator()->validate(ProjectWorkspace::fromProject($root)))))
-        ->toContain('Its facing must list player headings');
+        ->toContain('Event facing accepts North, East, South and West only.');
 });
 
 it('accepts a facing on any trigger kind without calling it an unsupported field', function (string $class) {
