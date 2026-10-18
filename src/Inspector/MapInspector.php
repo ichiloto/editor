@@ -1876,7 +1876,7 @@ final readonly class MapInspector
     private function buildMovementRouteFields(array $route, array $path, ?array $parentList): array
     {
         $fields = [];
-        $points = MovementRouteFields::getPointList($route);
+        $points = MovementRouteFields::getPointList($route, graphical: $this->graphical);
         foreach ($this->projectMovementRoute($route)->getSettingsFields(0) as $row) {
             if (! isset($row['dataPath']) || ($row['sourceKey'] ?? '') === 'type') { continue; }
             $relative = array_slice($row['dataPath'], 2);

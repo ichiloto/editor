@@ -819,3 +819,20 @@ it('shares actual recorded movement with common events only within the owning ex
         $field->dispose();
     }
 })->with([false, true]);
+
+it('offers world objects as a waypoint subject in a map event route the graphical editor reads, as in cinematics', function () {
+    $root = makeTemporaryProject('ichiloto-event-relative-');
+    $path = $root . '/assets/Maps/test-map/test-map.data.php';
+    $data = require $path;
+    $data['events']['S'] = ['class' => \Ichiloto\Engine\Events\Triggers\ScriptEventTrigger::class, 'data' => ['script' => [
+        ['type' => 'move_route', 'subject' => 'player', 'waypoints' => [['x' => 2]]],
+    ]]];
+    file_put_contents($path, "<?php\n\nreturn " . var_export($data, true) . ";\n");
+
+    $rows = EditorSession::open($root)->readInspector('test-map', 'S', ['script'])['rows'];
+    $kinds = array_find($rows, static fn(array $row): bool => trim((string) ($row['label'] ?? '')) === 'Relative To'
+        || ($row['name'] ?? null) === 'Relative To');
+
+    expect($kinds)->not->toBeNull()
+        ->and($kinds['options'] ?? [])->toContain('world_object');
+});
