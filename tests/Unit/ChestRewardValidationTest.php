@@ -163,8 +163,12 @@ it('reports every chest in the project report and leaves other events alone', fu
     ]);
 
     $where = array_map(static fn(Issue $issue): string => $issue->where, listChestRewardIssues($root));
+    $malformed = array_values(array_filter(validateProject($root), static fn(Issue $issue): bool => $issue->code === 'event.definition'));
 
-    expect($where)->toBe(['test-map event A', 'test-map event B', 'test-map event E']);
+    expect($where)->toBe(['test-map event A', 'test-map event B'])
+        // A chest with no data at all is a malformed event, by the Engine's event rule.
+        ->and(array_map(static fn(Issue $issue): string => $issue->where, $malformed))->toBe(['test-map event E'])
+        ->and($malformed[0]->severity)->toBe(Severity::ERROR);
 });
 
 it('diagnoses a new chest on its inspector row and as a save error, and still saves it as authored', function () {
@@ -201,13 +205,13 @@ it('diagnoses a new chest on its inspector row and as a save error, and still sa
     $saved = $session->saveMap('test-map');
 
     expect($saved['saved'])->toBe('test-map')
-        ->and(array_filter(array_column($saved['errors'], 'message'), static fn(string $error): bool => str_starts_with($error, sprintf('Chest %s: ', $marker))))->toHaveCount(1)
+        ->and(array_filter($saved['errors'], static fn(array $error): bool => $error['where'] === "test-map event {$marker}"
+            && $error['code'] === ChestRewardValidator::CODE))->toHaveCount(1)
         ->and((require $root . '/assets/Maps/test-map/test-map.data.php')['events'][$marker]['data']['loot'])->toBe('');
 
     $loot = array_find($session->readInspector('test-map', $marker)['rows'], static fn(array $row): bool => trim($row['label']) === 'Loot');
     $session->applyInspector('test-map', $session->readMap('test-map')['revision'], $loot['key'], 'item.tonic');
 
     expect(array_column($session->readInspector('test-map', $marker)['rows'], 'label'))->not->toContain('Reward Error')
-        ->and(array_filter(array_column($session->saveMap('test-map')['errors'], 'message'),
-            static fn(string $error): bool => str_starts_with($error, sprintf('Chest %s:', $marker))))->toBe([]);
+        ->and(array_filter($session->saveMap('test-map')['errors'], static fn(array $error): bool => $error['where'] === "test-map event {$marker}"))->toBe([]);
 });

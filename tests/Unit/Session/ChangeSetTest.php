@@ -89,7 +89,7 @@ it('refuses a change set that leaves a raw glyph showing, writes nothing and und
     expect($outcome['status'])->toBe('refused')
         ->and($outcome['blocking'])->toBe(1)
         ->and($outcome['reason'])->toBe('1 error the player would meet.')
-        ->and(changeSetMessages($outcome))->toBe(['1 cell of x on the buildings layer has no tile, so the glyph shows in the graphical field: (3, 1).'])
+        ->and(changeSetMessages($outcome))->toBe(["Gameplay glyph 'x' on buildings has no graphical presentation. At (3, 1)."])
         ->and($outcome['issues'][0]['map'])->toBe('test-map')
         ->and($outcome['issues'][0]['hint'])->not->toBe('')
         ->and(sourceHashTree($root . '/assets'))->toBe($before)
@@ -106,7 +106,7 @@ it('refuses a change set on a map that already shows a raw glyph until that is f
 
     $refused = $session->commitChanges();
     expect($refused['status'])->toBe('refused')
-        ->and(changeSetMessages($refused))->toBe(['1 cell of x on the buildings layer has no tile, so the glyph shows in the graphical field: (2, 1).']);
+        ->and(changeSetMessages($refused))->toBe(["Gameplay glyph 'x' on buildings has no graphical presentation. At (2, 1)."]);
 
     // Fixing the defect in the same change set lets it through.
     $session->beginChanges();
@@ -159,7 +159,7 @@ it('undoes what a refused change set wrote at once, such as inserted rows', func
     ]);
 
     expect($outcome['status'])->toBe('refused')
-        ->and(changeSetMessages($outcome))->toContain('1 cell of x on the buildings layer has no tile, so the glyph shows in the graphical field: (3, 1).')
+        ->and(changeSetMessages($outcome))->toContain("Gameplay glyph 'x' on buildings has no graphical presentation. At (3, 1).")
         ->and(sourceHashTree($root . '/assets'))->toBe($before);
 });
 

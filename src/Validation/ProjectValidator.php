@@ -2,8 +2,6 @@
 
 namespace Ichiloto\Editor\Validation;
 
-use Ichiloto\Engine\Core\Enumerations\MovementHeading;
-use Ichiloto\Engine\Events\Enumerations\EventEngagement;
 use Ichiloto\Editor\Database\BattleEntryActorResolver;
 use Ichiloto\Editor\Database\BattleEntryRuleContract;
 use Ichiloto\Editor\Database\InventoryCatalog;
@@ -14,7 +12,6 @@ use Ichiloto\Editor\Database\ProjectRecord;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\Database\SummonAssignmentDiagnostics;
-use Ichiloto\Editor\Events\ChestLoot;
 use Ichiloto\Editor\Events\CommandMapContext;
 use Ichiloto\Editor\Events\ProjectScriptCommands;
 use Ichiloto\Editor\Field\MapEncounters;
@@ -1662,7 +1659,7 @@ class ProjectValidator
           ...MapGraphicsValidator::validate($map),
           ...MapGraphicsValidator::validateCoverage($map),
           ...$this->checkRetiredMapData($map),
-          ...$this->checkEventMarkers($map),
+          ...MapCompletenessCheck::validate($map, $this->inventoryCatalog),
           ...$this->checkDoors($map, $workspace->mapIds),
           ...$this->checkEncounters($map, $troops),
           ...$this->checkNpcs($map, $workspace),
@@ -1724,37 +1721,6 @@ class ProjectValidator
     )];
   }
 
-  /**
-   * Checks that placed markers and event definitions agree.
-   *
-   * @param ProjectMap $map The map.
-   * @return Issue[] The issues found.
-   */
-  protected function checkEventMarkers(ProjectMap $map): array
-  {
-    $issues = [];
-    $defined = array_keys((array) ($map->getEditableData()['events'] ?? []));
-    $placed = $map->getPlacedEventMarkers();
-
-    foreach (array_diff($placed, $defined) as $marker) {
-      $issues[] = Issue::error(
-        $map->mapId,
-        sprintf('The event layer places marker "%s", which the map does not define.', $marker),
-        'The engine throws "Unmapped event markers" when the map loads. Define it, or clear the marker.'
-      );
-    }
-
-    foreach (array_diff($defined, $placed) as $marker) {
-      $issues[] = Issue::warning(
-        $map->mapId,
-        sprintf('Marker "%s" is defined but never placed on the event layer.', $marker),
-        'Nothing can trigger it. Place it, or remove the definition.'
-      );
-    }
-
-
-    return $issues;
-  }
 
   /**
    * Checks that doors lead somewhere.
@@ -3843,8 +3809,6 @@ class ProjectValidator
       $issues = [
         ...$issues,
         ...$this->checkEventCue($definition['cue'] ?? null, $where, $known),
-        ...$this->checkEventFacing($definition, $where),
-        ...$this->checkEventEngagement($definition, $where),
         ...$this->checkConditions((array) ($definition['conditions'] ?? []), $where, $known),
         ...$this->checkDialogueVariants((array) ($data['dialogue'] ?? []), $where, $known),
         ...$this->checkCommands(
@@ -3885,10 +3849,6 @@ class ProjectValidator
             ...$this->checkReference(strval($stock['item'] ?? ''), 'inventory', 'item', $where, $known),
           ];
         }
-      }
-
-      if (ChestLoot::isChest($definition)) {
-        $issues = [...$issues, ...$this->checkChestLoot($map->mapId, strval($marker), $data)];
       }
     }
 
@@ -4035,21 +3995,6 @@ class ProjectValidator
     return $issues;
   }
 
-  /**
-   * Checks that a chest can give what it holds, by the Engine's chest rule
-   * the inspectors and the map save warnings also read.
-   *
-   * @param string $mapId The map the chest is on.
-   * @param string $marker The chest event's marker.
-   * @param array<string, mixed> $data The chest's data.
-   * @return Issue[] The issues found.
-   */
-  protected function checkChestLoot(string $mapId, string $marker, array $data): array
-  {
-    return $this->inventoryCatalog instanceof InventoryCatalog
-      ? new ChestRewardValidator($this->inventoryCatalog)->validate($mapId, $marker, $data)
-      : [];
-  }
 
   /**
    * Checks ScriptEventTrigger's runtime-recognized fields and script picker.
@@ -4159,41 +4104,7 @@ class ProjectValidator
    *
    * @return Issue[] The issues found.
    */
-  /**
-   * An event's optional facing: the player headings it engages from, as the Engine reads them.
-   *
-   * @param array<array-key, mixed> $definition The event definition.
-   * @return Issue[] The issues found.
-   */
-  protected function checkEventFacing(array $definition, string $where): array
-  {
-    if (! array_key_exists('facing', $definition)) {
-      return [];
-    }
-    $facing = $definition['facing'];
-    $valid = is_array($facing) && array_is_list($facing) && array_all($facing, static fn(mixed $name): bool => is_string($name)
-      && ($heading = MovementHeading::tryFrom($name)) !== null && $heading !== MovementHeading::NONE);
 
-    return $valid ? [] : [Issue::error($where, 'Its facing must list player headings: North, East, South or West.',
-      'Choose the headings the player faces to start it, or none for any.')];
-  }
-
-  /**
-   * An event's optional engagement: standing on its cells, or next to them facing one.
-   *
-   * @param array<array-key, mixed> $definition The event definition.
-   * @return Issue[] The issues found.
-   */
-  protected function checkEventEngagement(array $definition, string $where): array
-  {
-    if (! array_key_exists('engagement', $definition)) {
-      return [];
-    }
-    $engagement = $definition['engagement'];
-
-    return is_string($engagement) && EventEngagement::tryFrom($engagement) !== null ? [] : [Issue::error($where,
-      'Its engagement must be inside or facing.', 'Choose to stand on the event, or to face it from next to it.')];
-  }
 
   protected function checkEventCue(mixed $cue, string $where, array $known): array
   {

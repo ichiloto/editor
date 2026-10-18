@@ -1499,6 +1499,17 @@ final class ProjectMap
      *
      * @return string[]
      */
+    /**
+     * The event layer's cells as its source holds them, row by row, unsaved
+     * edits included: what the Engine reads as the map's event layer.
+     *
+     * @return list<list<string>>
+     */
+    public function getEventLayerCells(): array
+    {
+        return array_values(array_map(array_values(...), $this->layers->getEventGrid()->getSymbols()));
+    }
+
     public function getPlacedEventMarkers(): array
     {
         $markers = [];

@@ -23,6 +23,18 @@ function validateProject(string $root): array
 }
 
 /**
+ * Rewrites the sample map's legacy `<blue>` row in the current style, so the
+ * Engine can load it: the Engine knows no `blue` style, reads the tag as
+ * glyphs, and refuses the map's event layer as narrower than its tiles.
+ * Tests of legacy-tag preservation keep the fixture as it is.
+ */
+function writeLoadableSampleMap(string $root): void
+{
+    $path = $root . '/assets/Maps/test-map/test-map.map.php';
+    file_put_contents($path, str_replace(['<blue>', '</blue>'], ['<fg=blue>', '</>'], (string) file_get_contents($path)));
+}
+
+/**
  * Returns the issues whose message contains the given text.
  *
  * @param Issue[] $issues The issues.

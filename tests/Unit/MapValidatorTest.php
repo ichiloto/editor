@@ -6,6 +6,9 @@ use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\Validation\Issue;
 use Ichiloto\Editor\Validation\MapValidator;
 use Ichiloto\Editor\Validation\Severity;
+use Ichiloto\Engine\Events\Triggers\DialogueEventTrigger;
+use Ichiloto\Engine\Events\Triggers\SleepEventTrigger;
+use Ichiloto\Engine\Events\Triggers\TransferPlayerTrigger;
 
 /**
  * Builds an in-memory map with the given data and event rows.
@@ -28,7 +31,7 @@ it('accepts a clean map without warnings', function () {
   $map = validatorMap('town', [
     'name' => 'Town',
     'events' => [
-      'E' => ['class' => 'SomeTrigger', 'data' => []],
+      'E' => ['class' => DialogueEventTrigger::class, 'data' => []],
     ],
   ], ['E   ', '    ']);
 
@@ -43,8 +46,9 @@ it('reports an event marker without a definition as an error the map still saves
   expect($issues)->toHaveCount(1)
     ->and($issues[0]->severity)->toBe(Severity::ERROR)
     ->and($issues[0]->map)->toBe('town')
-    ->and($issues[0]->message)->toContain('marker E')
-    ->and($issues[0]->message)->toContain('no definition')
+    // The Engine's rule: its map loader refuses the marker.
+    ->and($issues[0]->code)->toBe('event.unmapped')
+    ->and($issues[0]->message)->toContain('E')
     ->and($issues[0]->hint)->not->toBe('');
 });
 
@@ -52,7 +56,7 @@ it('accepts a marker painted in any shape, as the runtime triggers its exact cel
   $map = validatorMap('town', [
     'name' => 'Town',
     'events' => [
-      'E' => ['class' => 'SomeTrigger', 'data' => []],
+      'E' => ['class' => DialogueEventTrigger::class, 'data' => []],
     ],
   ], [' E E', 'EE  ']);
 
@@ -63,7 +67,7 @@ it('reports a transfer to a map that does not exist as an error', function () {
   $map = validatorMap('town', [
     'name' => 'Town',
     'events' => [
-      'T' => ['class' => 'Transfer', 'data' => ['destinationMap' => 'vanished-map']],
+      'T' => ['class' => TransferPlayerTrigger::class, 'data' => ['destinationMap' => 'vanished-map']],
     ],
   ], ['T   ', '    ']);
 
@@ -81,7 +85,7 @@ it('reports a spawn point outside the destination map as an error', function () 
     'name' => 'Town',
     'events' => [
       'T' => [
-        'class' => 'Transfer',
+        'class' => TransferPlayerTrigger::class,
         'data' => [
           'destinationMap' => 'cave',
           'spawnPoint' => ['x' => 40, 'y' => 1],
@@ -102,8 +106,8 @@ it('validates spawn points against this map when no destination is set', functio
   $map = validatorMap('town', [
     'name' => 'Town',
     'events' => [
-      'S' => ['class' => 'Spawn', 'data' => ['spawnPoint' => ['x' => 1, 'y' => 1]]],
-      'B' => ['class' => 'Spawn', 'data' => ['spawnPoint' => ['x' => 9, 'y' => 9]]],
+      'S' => ['class' => SleepEventTrigger::class, 'data' => ['spawnPoint' => ['x' => 1, 'y' => 1]]],
+      'B' => ['class' => SleepEventTrigger::class, 'data' => ['spawnPoint' => ['x' => 9, 'y' => 9]]],
     ],
   ], ['SB  ', '    ']);
 
@@ -118,7 +122,7 @@ it('collects multiple findings in one pass', function () {
   $map = validatorMap('town', [
     'name' => 'Town',
     'events' => [
-      'T' => ['class' => 'Transfer', 'data' => ['destinationMap' => 'gone']],
+      'T' => ['class' => TransferPlayerTrigger::class, 'data' => ['destinationMap' => 'gone']],
     ],
   ], ['TX  ', '    ']);
 

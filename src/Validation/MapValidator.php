@@ -44,8 +44,8 @@ final class MapValidator
     public static function validate(ProjectMap $map, array $mapsById, ?InventoryCatalog $inventory): array
     {
         return Issue::attributeToMap([
-            ...self::findMarkersWithoutDefinitions($map),
-            ...self::findChestRewardProblems($map, $inventory),
+            ...MapCompletenessCheck::validate($map, $inventory),
+            ...self::findUncheckedChests($map, $inventory),
             ...self::findDanglingDestinations($map, $mapsById),
             ...self::findOutOfRangeSpawnPoints($map, $mapsById),
             ...self::findRetiredData($map),
@@ -144,53 +144,16 @@ final class MapValidator
     }
 
     /**
-     * Finds chests whose reward the Engine cannot grant, by the Engine's chest
-     * rule the inspectors and the project report also read.
+     * Says so when the map has chests and the inventory could not be read,
+     * so what they give was not checked.
      *
      * @return list<Issue>
      */
-    private static function findChestRewardProblems(ProjectMap $map, ?InventoryCatalog $inventory): array
+    private static function findUncheckedChests(ProjectMap $map, ?InventoryCatalog $inventory): array
     {
-        $chests = array_filter(self::getEventDefinitions($map), ChestLoot::isChest(...));
-
-        if ($chests === []) {
-            return [];
-        }
-
-        if (! $inventory instanceof InventoryCatalog) {
-            return [Issue::warning($map->mapId, 'The inventory could not be read, so what the chests give was not checked.')];
-        }
-
-        $validator = new ChestRewardValidator($inventory);
-        $issues = [];
-
-        foreach ($chests as $marker => $definition) {
-            foreach ($validator->validate($map->mapId, strval($marker), (array) ($definition['data'] ?? [])) as $issue) {
-                $issues[] = new Issue($issue->severity, $issue->where, sprintf('Chest %s: %s', $marker, $issue->message), $issue->hint, $issue->code);
-            }
-        }
-
-        return $issues;
-    }
-
-    /**
-     * Finds event markers painted on the grid with no event definition.
-     *
-     * @param ProjectMap $map The map being saved.
-     * @return list<Issue>
-     */
-    private static function findMarkersWithoutDefinitions(ProjectMap $map): array
-    {
-        $issues = [];
-
-        foreach ($map->getPlacedEventMarkers() as $marker) {
-            if ($map->getEventDefinition($marker) === null) {
-                $issues[] = Issue::error($map->mapId, sprintf('Event marker %s has no definition.', $marker),
-                    'The game refuses to load the map. Define the event, or clear the marker.');
-            }
-        }
-
-        return $issues;
+        return $inventory === null && array_filter(self::getEventDefinitions($map), ChestLoot::isChest(...)) !== []
+            ? [Issue::warning($map->mapId, 'The inventory could not be read, so what the chests give was not checked.')]
+            : [];
     }
 
     /**

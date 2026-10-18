@@ -40,6 +40,9 @@ function createEngagementProject(?string $engagementSource = null): string
       ],
     ];
     PHP);
+    // The event layer places R, the event this fixture defines.
+    $events = $root . '/assets/Maps/test-map/test-map.event.php';
+    file_put_contents($events, str_replace('     E      ', '     R      ', (string) file_get_contents($events)));
 
     return $root;
 }
@@ -114,7 +117,7 @@ it('names an engagement the Engine would refuse, and the validator reports it', 
     $messages = array_map(static fn($issue): string => $issue->message, new ProjectValidator()->validate($workspace));
 
     expect($row['editable'])->toBeFalse()
-        ->and(implode("\n", $messages))->toContain('Its engagement must be inside or facing')
+        ->and(implode("\n", $messages))->toContain('Event engagement must be inside or facing.')
         ->and(array_filter($messages, static fn(string $message): bool => str_contains($message, 'unsupported root field')))->toBe([]);
 });
 

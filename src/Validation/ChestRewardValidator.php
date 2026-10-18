@@ -62,8 +62,9 @@ final readonly class ChestRewardValidator
     /**
      * Resolves an inventory reference for the Engine's check: the stable id,
      * null when nothing answers to it, and a failure when more than one does.
+     * The map completeness check gives the Engine the same resolver.
      */
-    private function resolveInventoryReference(string $reference): ?string
+    public function resolveInventoryReference(string $reference): ?string
     {
         return $this->inventory->isAmbiguous($reference)
             ? $this->inventory->requireDefinitionId($reference, 'validating chest reward')
