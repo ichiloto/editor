@@ -86,8 +86,8 @@ final class NpcInspector
         $notes = [];
 
         if ($npc !== null && $npc->getId() === null) {
-            // Legacy entry: nothing can name an id it never had, so giving
-            // it one is the one identity write that is safe after creation.
+            // Legacy entry: nothing can name an id it never had, so one is
+            // given from the name at once; the Id row takes a chosen one.
             $notes[] = [
                 'label' => '  ! No stable id',
                 'value' => 'move_route cannot target it; Enter assigns one from the name',

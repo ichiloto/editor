@@ -710,16 +710,22 @@ with a hint rather than painted under an NPC.
 `Enter` on an empty tile asks for the NPC's name first, and derives its stable
 `id` from that name - `Gate Guard` becomes `gate-guard`, numbered if the map
 already has one - because the id is what routes, dialogue events, cinematics
-and script diagnostics name. Renaming the NPC re-derives its id from the new
-name **while nothing refers to it**, so an NPC created as `New NPC` and named
-later gets the id its name suggests. Once an event, script, route or cinematic
-starting on the map names the id, it stays: a rename keeps it and the status
-says what names it. Moving the NPC or changing its sprite never touches it.
-Duplicating assigns a fresh id from the name. An NPC authored without an id loads and edits normally, shows a
-`! No stable id` row (`Enter` there assigns one from its name, the one time an
-id is ever written after creation, since nothing can yet name it), and
-validates with a warning that scripted movement cannot target it. Changing an
-existing id is an identity migration, which the editor does not offer.
+and script diagnostics name. Renaming the NPC re-derives an id its old name
+derived from the new name **while nothing refers to it**, so an NPC created as
+`New NPC` and named later gets the id its name suggests. Once an event, script,
+route or cinematic starting on the map names the id, it stays: a rename keeps
+it and the status says what names it. Moving the NPC or changing its sprite
+never touches it. Duplicating assigns a fresh id from the name.
+
+The `Id` row sets the id directly, for an NPC whose id should differ from its
+name (one character met as several NPCs, such as `djin-contract-trial` for
+`Djin`). The id is lowercase letters and digits joined by single hyphens and
+unique on the map. Changing it is refused, with each reference listed, while
+anything names the current id: references are not migrated, so change them
+first. A chosen id stays when the NPC is renamed. An NPC authored without an
+id loads and edits normally, shows a `! No stable id` row (`Enter` there
+assigns one from its name; the `Id` row takes a chosen one), and validates
+with a warning that scripted movement cannot target it.
 
 #### The NPC Inspector
 
@@ -1012,9 +1018,14 @@ event or object moves the landmark.
   transfers that no other landmark uses, and `Kind` from the kinds that
   anchor may be. Moving a landmark between a transfer and anything else makes
   it a passage or a landmark accordingly.
-- The id, shown on the landmark's heading, is fixed: saves remember what the
-  party has learned by it. An object's own id is used when it is a valid
-  landmark id; otherwise the next free `landmark-N`.
+- `Id` is the landmark's stable id, shown on its heading. A new landmark
+  takes an object's own id when it is a valid landmark id, otherwise the next
+  free `landmark-N`; the row renames it to any id the Engine accepts that no
+  other landmark on the map has. Other maps name a landmark as their atlas
+  entry, and a rename changes their `atlas.parent.landmark` in the same undo
+  step; when one of those maps cannot take the edit, nothing is renamed. The
+  name's translation key stays. Saves remember what the party has learned by
+  id, so a save that learned the landmark under its old id learns it again.
 - `Category` says what the place offers, whatever its kind: the Engine's
   `inn`, `shop`, `home` and `organization`, or a category of the project's
   own (see Place Categories). An entrance into a shop is a route with the
@@ -2716,6 +2727,16 @@ command palette. It shows the current and proposed ids, requires an explicit
 `y`, rejects collisions, and fails closed rather than half-moving. References
 are **not** migrated: anything naming the old id keeps naming it, and the
 prompt says so before you confirm.
+
+A map may live inside another map's folder (a building's rooms inside it) or
+inside a folder that is no map. The editor session creates, copies and moves
+a map at a folder path the author chooses: `map.create` takes `id`, and
+`map.duplicate` and `map.move` take `to`. A chosen path is checked before
+anything is written: each part between slashes is lowercase letters and digits
+joined by single hyphens, nothing may already stand there, and no map nested
+directly in a map's folder may be called `layers` or `graphics`. A move to a
+chosen path is reviewed exactly as a derived one is. Deleting a nested map
+also removes the folders above it that it leaves empty.
 
 ### Dirty means "differs from the last save"
 

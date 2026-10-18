@@ -141,11 +141,14 @@ final class SessionHost
                 is_string($params['kind'] ?? null) ? $params['kind'] : null,
                 self::requireInt($params, 'width'),
                 self::requireInt($params, 'height'),
+                self::readOptionalString($params, 'id'),
             ),
-            'map.duplicate' => $session->duplicateMap(self::requireString($params, 'map'), self::requireInt($params, 'revision')),
+            'map.duplicate' => $session->duplicateMap(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
+                self::readOptionalString($params, 'to')),
             'map.move' => $session->moveMap(
                 self::requireString($params, 'map'), self::requireInt($params, 'revision'),
                 self::readOptionalString($params, 'destination'), ($params['confirm'] ?? false) === true,
+                self::readOptionalString($params, 'to'),
             ),
             'map.delete' => $session->deleteMap(self::requireString($params, 'map'), ($params['confirm'] ?? false) === true),
             'map.insertLines' => $session->insertMapLines(
@@ -574,6 +577,7 @@ final class SessionHost
                 self::requireInt($params, 'x'),
                 self::requireInt($params, 'y'),
                 is_string($params['name'] ?? null) ? $params['name'] : '',
+                self::readOptionalString($params, 'id'),
             ),
             'npc.move' => $session->moveNpc(
                 self::requireString($params, 'map'),
@@ -584,7 +588,8 @@ final class SessionHost
             ),
             'npc.duplicate' => $session->duplicateNpc(self::requireString($params, 'map'), self::requireInt($params, 'revision'), self::requireInt($params, 'index')),
             'npc.delete' => $session->deleteNpc(self::requireString($params, 'map'), self::requireInt($params, 'revision'), self::requireInt($params, 'index')),
-            'npc.assignId' => $session->assignNpcId(self::requireString($params, 'map'), self::requireInt($params, 'revision'), self::requireInt($params, 'index')),
+            'npc.assignId' => $session->assignNpcId(self::requireString($params, 'map'), self::requireInt($params, 'revision'), self::requireInt($params, 'index'),
+                self::readOptionalString($params, 'id')),
             'npc.read' => $session->readNpc(
                 self::requireString($params, 'map'),
                 self::requireInt($params, 'index'),

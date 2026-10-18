@@ -8,6 +8,7 @@ use Ichiloto\Editor\Database\RecordAuthoring;
 use Ichiloto\Editor\Database\RecordChange;
 use Ichiloto\Editor\Database\RecordItem;
 use Ichiloto\Editor\Database\RecordRefusal;
+use Ichiloto\Editor\Database\Slug;
 use Ichiloto\Editor\History\Command;
 use Ichiloto\Editor\History\GenericCommand;
 use Ichiloto\Editor\MapSourceRefusal;
@@ -22,9 +23,11 @@ use Throwable;
  * through its record pane ({@see NpcInspector}).
  *
  * The rules live here: an NPC stands inside the map on a tile no other NPC
- * anchors to, a new NPC's stable id derives from its name, an NPC something
- * names is never deleted, and a renamed NPC takes the id its new name
- * derives only while nothing names its old one. Each operation applies its
+ * anchors to, a new NPC's stable id is the one its author chose or else
+ * derives from its name, an id is unique on its map and changes only while
+ * nothing names it, an NPC something names is never deleted, and a renamed
+ * NPC whose id its name derived takes the id its new name derives only
+ * while nothing names its old one; a chosen id stays. Each operation applies its
  * change to the map and returns an {@see NpcChange} whose command redoes and
  * undoes exactly the map's NPC collection; selection, prompts and status
  * belong to the interface. A change that cannot be made is an
@@ -48,18 +51,20 @@ final readonly class NpcAuthoring
     }
 
     /**
-     * Creates a fixed NPC at a tile, its stable id derived from its name.
+     * Creates a fixed NPC at a tile under the stable id its author chose, or
+     * one derived from its name.
      *
      * @param string $name The display name; blank takes {@see DEFAULT_NAME}.
-     * @throws NpcRefusal When the tile is outside the map or another NPC anchors there.
+     * @param string|null $id The id; null derives one from the name.
+     * @throws NpcRefusal When the tile is outside the map or another NPC anchors there, or the id is not one or is taken.
      * @throws MapSourceRefusal When the map's source cannot take the change.
      */
-    public function create(ProjectMap $map, int $x, int $y, string $name): NpcChange
+    public function create(ProjectMap $map, int $x, int $y, string $name, ?string $id = null): NpcChange
     {
         $before = $map->getNpcs();
         $this->assertPlaceable($map, $before, null, $x, $y);
         $name = trim($name) === '' ? self::DEFAULT_NAME : trim($name);
-        $npc = ProjectNpc::createAt($before->uniqueIdFor($name), $name, $x, $y);
+        $npc = ProjectNpc::createAt($id === null ? $before->uniqueIdFor($name) : self::requireChosenId($before, null, $id), $name, $x, $y);
         $after = $before->withAdded($npc);
         $map->setNpcs($after);
 
@@ -143,23 +148,25 @@ final readonly class NpcAuthoring
     }
 
     /**
-     * Gives an NPC authored without a stable id one, derived from its name
-     * and unique on its map, so movement routes can target it. An existing
-     * id never changes here: what names it would not follow.
+     * Gives an NPC authored without a stable id the one its author chose, or
+     * one derived from its name and unique on its map, so movement routes can
+     * target it. An existing id changes through {@see setId()}, which checks
+     * what names it.
      *
-     * @throws NpcRefusal When there is no such NPC or it already has an id.
+     * @param string|null $id The id; null derives one from the name.
+     * @throws NpcRefusal When there is no such NPC, it already has an id, or the chosen id is not one or is taken.
      * @throws MapSourceRefusal When the map's source cannot take the change.
      */
-    public function assignId(ProjectMap $map, int $index): NpcChange
+    public function assignId(ProjectMap $map, int $index, ?string $id = null): NpcChange
     {
         $before = $map->getNpcs();
         $npc = $this->requireNpc($map, $before, $index);
 
         if ($npc->getId() !== null) {
-            throw new NpcRefusal(sprintf('%s already has the stable id "%s"; ids do not change.', $npc->getName(), $npc->getId()));
+            throw new NpcRefusal(sprintf('%s already has the stable id "%s"; change it through its Id row.', $npc->getName(), $npc->getId()));
         }
 
-        $id = $before->uniqueIdFor($npc->getName());
+        $id = $id === null ? $before->uniqueIdFor($npc->getName()) : self::requireChosenId($before, $index, $id);
         $identified = $npc->asCopyWithId($id);
         $after = $before->withReplaced($index, $identified);
         $map->setNpcs($after);
@@ -168,10 +175,48 @@ final readonly class NpcAuthoring
     }
 
     /**
+     * Gives an NPC the stable id its author chose, refusing while anything
+     * names its current one: a route or script that silently stops resolving
+     * is worse than a refusal, and the refusal's details are what the author
+     * goes to change. An NPC without an id simply takes it.
+     *
+     * @throws NpcRefusal When there is no such NPC, the id is not one or is taken, or something names the current id.
+     * @throws MapSourceRefusal When the map's source cannot take the change.
+     */
+    public function setId(ProjectMap $map, int $index, string $id): NpcChange
+    {
+        $before = $map->getNpcs();
+        $npc = $this->requireNpc($map, $before, $index);
+        $id = self::requireChosenId($before, $index, $id);
+        $current = $npc->getId();
+
+        if ($current === $id) {
+            return new NpcChange(null, $index, $npc);
+        }
+
+        $references = $current === null ? [] : $this->references->describe($map, $current);
+
+        if ($references !== []) {
+            throw new NpcRefusal(
+                sprintf('%s keeps the id "%s": %s name%s it. Change those first.', $npc->getName(), $current, implode(', ', $references),
+                    count($references) === 1 ? 's' : ''),
+                array_map(static fn(string $reference): string => '- ' . $reference, $references),
+            );
+        }
+
+        $identified = $current === null ? $npc->asCopyWithId($id) : $npc->withId($id);
+        $after = $before->withReplaced($index, $identified);
+        $map->setNpcs($after);
+
+        return new NpcChange($this->createCommand($map, sprintf('NPC id %s', $id), $before, $after), $index, $identified);
+    }
+
+    /**
      * Applies one row's edit through the NPC's record pane. A new name
-     * carries the id with it while nothing names the old id; otherwise the
-     * id stays and the change says what names it. The rename and its id
-     * are one undo step. The X and Y rows move the NPC, under the same tile
+     * carries an id its old name derived with it while nothing names the old
+     * id; otherwise the id stays and the change says what names it. The
+     * rename and its id are one undo step. The Id row changes the id as
+     * {@see setId()} does. The X and Y rows move the NPC, under the same tile
      * rules as {@see move()}.
      *
      * @param array<int, int|string> $framePath The frame the row belongs to; [] for the NPC itself.
@@ -185,6 +230,15 @@ final readonly class NpcAuthoring
         $before = $map->getNpcs();
         $this->requireFrame($inspector, $before, $index, $framePath);
         $fieldId = (string) ($field['field'] ?? '');
+
+        if ($framePath === [] && $fieldId === 'id') {
+            try {
+                return $this->setId($map, $index, $rawValue);
+            } finally {
+                $inspector->refresh();
+            }
+        }
+
         $followedId = null;
         $idReferences = [];
 
@@ -207,7 +261,7 @@ final readonly class NpcAuthoring
             }
 
             if ($framePath === [] && $fieldId === 'name') {
-                [$after, $followedId, $idReferences] = $this->followNameWithId($map, $after, $index);
+                [$after, $followedId, $idReferences] = $this->followNameWithId($map, $before, $after, $index);
             }
         } catch (Throwable $failure) {
             // The rename and its id are one change: when the id cannot
@@ -310,18 +364,20 @@ final readonly class NpcAuthoring
     }
 
     /**
-     * Gives a renamed NPC the id its new name derives, unless something
-     * names its current id.
+     * Gives a renamed NPC the id its new name derives, when its id is the
+     * one its old name derived and nothing names it. An id an author chose
+     * is not the name's to change.
      *
      * @return array{0: NpcCollection, 1: ?string, 2: list<string>} The NPCs afterwards, the id taken, and what names the id kept.
      * @throws MapSourceRefusal When the map's source cannot take the change.
      */
-    private function followNameWithId(ProjectMap $map, NpcCollection $npcs, int $index): array
+    private function followNameWithId(ProjectMap $map, NpcCollection $before, NpcCollection $npcs, int $index): array
     {
         $npc = $npcs->get($index);
         $id = $npc?->getId();
+        $was = $before->get($index);
 
-        if ($npc === null || $id === null) {
+        if ($npc === null || $id === null || $was === null || $before->withRemoved($index)->uniqueIdFor($was->getName()) !== $id) {
             return [$npcs, null, []];
         }
 
@@ -341,6 +397,31 @@ final readonly class NpcAuthoring
         $map->setNpcs($renamed);
 
         return [$renamed, $derived, []];
+    }
+
+    /**
+     * An id an author chose for an NPC: the form ids the editor derives take
+     * (lowercase letters and digits joined by single hyphens), so routes and
+     * scripts name it without quoting, and no other NPC on the map has it.
+     *
+     * @param int|null $ownIndex The NPC taking it, when it is already on the map.
+     * @throws NpcRefusal When it is not such an id, or another NPC has it.
+     */
+    private static function requireChosenId(NpcCollection $npcs, ?int $ownIndex, string $id): string
+    {
+        $id = trim($id);
+
+        if ($id === '' || Slug::of($id) !== $id) {
+            throw new NpcRefusal(sprintf('"%s" is not an NPC id: lowercase letters and digits joined by single hyphens, such as "gate-guard".', $id));
+        }
+
+        foreach ($npcs->all() as $index => $npc) {
+            if ($index !== $ownIndex && $npc->getId() === $id) {
+                throw new NpcRefusal(sprintf('%s already has the id "%s" on this map.', $npc->getName(), $id));
+            }
+        }
+
+        return $id;
     }
 
     /**

@@ -15,6 +15,7 @@ use Ichiloto\Editor\Database\RecordSchema;
 use Ichiloto\Editor\Database\RecordSchemaCatalog;
 use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\Events\ProjectScriptCommands;
+use Ichiloto\Editor\Maps\MapFolder;
 use Ichiloto\Editor\Storage\FileSetOperations;
 use Ichiloto\Editor\Storage\FileSetTransaction;
 use Ichiloto\Editor\Storage\FilesystemFileSetOperations;
@@ -565,24 +566,45 @@ final readonly class ProjectWorkspace
     public function createMap(?string $baseName = null, ?FileSetOperations $files = null, ?string $kind = null, int $width = 48,
         int $height = 18): string
     {
-        if ($width < 1 || $height < 1) {
-            throw new MapSourceRefusal(sprintf('A map is at least 1 x 1 cells, not %d x %d.', $width, $height));
-        }
-        $mapsRoot = $this->getMapsRoot();
         $baseName = $this->getNextAvailableBaseName($baseName ?? 'new-map');
-        $directory = $mapsRoot . DIRECTORY_SEPARATOR . $baseName;
-        ProjectMap::createBlank($directory, $baseName, self::humanizeBaseName($baseName), $width, $height, $files, $kind);
 
-        return $baseName;
+        return $this->createMapAt($baseName, null, $files, $kind, $width, $height);
     }
 
     /**
-     * Duplicates the selected map with a smart sibling name.
+     * Creates a new blank map at the id an author chose: a folder path under the maps root, nested inside another
+     * map's folder or any other folder ({@see MapFolder}).
+     *
+     * @param string $mapId The new map's id.
+     * @param string|null $displayName Its name; null names it after the id's last segment.
+     * @return string The created map id.
+     * @throws MapSourceRefusal When the size is no size, the id is not a map folder path or its folder is taken, or
+     *     the files cannot be written.
+     */
+    public function createMapAt(string $mapId, ?string $displayName = null, ?FileSetOperations $files = null, ?string $kind = null,
+        int $width = 48, int $height = 18): string
+    {
+        if ($width < 1 || $height < 1) {
+            throw new MapSourceRefusal(sprintf('A map is at least 1 x 1 cells, not %d x %d.', $width, $height));
+        }
+        $directory = self::requireFreeMapFolder($this->getMapsRoot(), $mapId);
+        $baseName = basename($directory);
+        ProjectMap::createBlank($directory, $baseName, $displayName ?? self::humanizeBaseName($baseName), $width, $height, $files, $kind);
+
+        return $mapId;
+    }
+
+    /**
+     * Duplicates the selected map with a smart sibling name, or at the id an author chose ({@see MapFolder}). The
+     * copy is named after its id's last segment.
      *
      * @param int $selectedMapIndex The selected map index.
+     * @param string|null $mapId The copy's id; null takes the next free `-copy` sibling.
      * @return string|null The duplicated map id.
+     * @throws MapSourceRefusal When the map is read-only, the chosen id is not a map folder path or its folder is
+     *     taken, or the copy cannot be written.
      */
-    public function duplicateMap(int $selectedMapIndex, ?FileSetOperations $files = null): ?string
+    public function duplicateMap(int $selectedMapIndex, ?FileSetOperations $files = null, ?string $mapId = null): ?string
     {
         $selectedMap = $this->getMapByIndex($selectedMapIndex);
 
@@ -594,13 +616,17 @@ final readonly class ProjectWorkspace
             throw new MapSourceRefusal("{$selectedMap->mapId} is read-only: {$selectedMap->getGridSourceIssue()}");
         }
 
-        $parentDirectory = dirname($selectedMap->directory);
-        $originalBaseName = basename($selectedMap->directory);
-        $baseName = $this->getNextAvailableSiblingBaseName($parentDirectory, $originalBaseName . '-copy');
-        $directory = $parentDirectory . DIRECTORY_SEPARATOR . $baseName;
+        $mapsRoot = $this->getMapsRoot();
+        if ($mapId === null) {
+            $parentDirectory = dirname($selectedMap->directory);
+            $directory = $parentDirectory . DIRECTORY_SEPARATOR
+                . $this->getNextAvailableSiblingBaseName($parentDirectory, basename($selectedMap->directory) . '-copy');
+        } else {
+            $directory = self::requireFreeMapFolder($mapsRoot, $mapId);
+        }
+        $baseName = basename($directory);
         $selectedMap->duplicateTo($directory, $baseName, self::humanizeBaseName($baseName), $files);
 
-        $mapsRoot = $this->getMapsRoot();
         $relativeDirectory = substr($directory, strlen($mapsRoot) + 1);
 
         return str_replace(DIRECTORY_SEPARATOR, '/', $relativeDirectory);
@@ -637,13 +663,35 @@ final readonly class ProjectWorkspace
         }
         $transaction->commit();
 
-        foreach ([$selectedMap->directory . '/layers', $selectedMap->directory . '/' . MapGraphics::DIRECTORY, $selectedMap->directory] as $directory) {
+        foreach ([$selectedMap->directory . '/layers', $selectedMap->directory . '/' . MapGraphics::DIRECTORY] as $directory) {
             if (is_dir($directory) && array_diff(scandir($directory) ?: [], ['.', '..']) === []) {
                 @rmdir($directory);
             }
         }
+        // A nested map's folders up to the maps root go with it while they are empty, as a move leaves them.
+        $mapsRoot = $this->getMapsRoot();
+        for ($directory = $selectedMap->directory; str_starts_with($directory, $mapsRoot . DIRECTORY_SEPARATOR); $directory = dirname($directory)) {
+            if (is_dir($directory) && (array_diff(scandir($directory) ?: [], ['.', '..']) !== [] || ! @rmdir($directory))) {
+                break;
+            }
+        }
 
         return $selectedMap->mapId;
+    }
+
+    /**
+     * The folder a map with a chosen id is written to, refused as the map transaction refuses a source it cannot
+     * take.
+     *
+     * @throws MapSourceRefusal When the id is not a map folder path or its folder is taken.
+     */
+    private static function requireFreeMapFolder(string $mapsRoot, string $mapId): string
+    {
+        try {
+            return MapFolder::requireFreeFolder($mapsRoot, $mapId);
+        } catch (InvalidArgumentException $error) {
+            throw new MapSourceRefusal($error->getMessage(), previous: $error);
+        }
     }
 
     /**

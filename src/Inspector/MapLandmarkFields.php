@@ -13,6 +13,7 @@ use Ichiloto\Engine\Field\MapCategoryCatalog;
 use Ichiloto\Engine\Field\MapLandmarkCatalog;
 use Ichiloto\Engine\Field\MapLandmarkKind;
 use InvalidArgumentException;
+use LogicException;
 
 /**
  * The inspector rows that author a map's minimap landmarks, the same rows in the Terminal and in a graphical
@@ -31,6 +32,8 @@ final readonly class MapLandmarkFields
     public const string OBJECT_TARGET = 'object-landmark';
     /** The event row's value when no declaration describes the event. */
     public const string UNDESCRIBED = 'undescribed';
+    /** The field of a landmark's stable id row. */
+    public const string ID_FIELD = 'id';
 
     public function __construct(private ReferenceCatalog $references) {}
 
@@ -158,8 +161,31 @@ final readonly class MapLandmarkFields
                 : $landmarks->setApproachDistance($index, null),
             'approachDistance' => $landmarks->setApproachDistance($index, self::requireDistance($value)),
             'revealConditions' => $landmarks->setRevealConditions($index, is_array($value) ? $value : []),
+            // A rename reaches other maps too, so it is never one map's declarations alone.
+            self::ID_FIELD => throw new LogicException('A landmark is renamed through renameEntry(), with the maps that name it.'),
             default => null,
         };
+    }
+
+    /**
+     * What renaming a landmark leaves: the map's declarations, and the other maps whose atlas entry it is, which
+     * follow the rename in the same step. Null when the id is unchanged.
+     *
+     * @param array<string, mixed> $field The landmark's id row.
+     * @return array{entries: list<array<string, mixed>>, from: ?string, to: string, children: list<ProjectMap>}|null
+     * @throws InvalidArgumentException When the landmark is gone or the id is refused.
+     */
+    public function renameEntry(ProjectMap $map, array $field, string $id): ?array
+    {
+        $landmarks = MapLandmarks::readMap($map);
+        $index = (int) ($field['index'] ?? -1);
+        $entry = $landmarks->entries[$index] ?? throw new InvalidArgumentException('That landmark is no longer here; read the inspector again.');
+        $from = is_string($entry['id'] ?? null) ? $entry['id'] : null;
+        $entries = $landmarks->setId($index, $id);
+        $to = (string) $entries[$index]['id'];
+        if ($to === $from) { return null; }
+        return ['entries' => $entries, 'from' => $from, 'to' => $to,
+            'children' => $from === null ? [] : MapAtlas::findChildMaps($this->references->listMaps(), $map->mapId, $from)];
     }
 
     /**
@@ -295,8 +321,10 @@ final readonly class MapLandmarkFields
         $named = isset($entry['name']);
         $conditions = is_array($entry['revealConditions'] ?? null) ? $entry['revealConditions'] : [];
         $fields = [
-            // The id is the identity saves remember discoveries by: shown, never edited.
             $row(['label' => '  Landmark ' . $id, 'value' => $anchor === null ? '(no anchor)' : $landmarks->describeAnchor($anchor), 'editable' => false]),
+            // The identity saves remember discoveries by and other maps name as their atlas entry, which follow a rename.
+            $row(['label' => '    Id', 'value' => is_string($entry['id'] ?? null) ? $entry['id'] : '',
+                'control' => new InputControl(InputControlType::TEXT, is_string($entry['id'] ?? null) ? $entry['id'] : ''), 'field' => self::ID_FIELD]),
             $row(['label' => '    Anchor', 'value' => $anchorValue, 'editable' => true, 'choices' => $anchorChoices, 'field' => 'anchor']),
             $row(['label' => '    Kind', 'value' => (string) ($entry['kind'] ?? ''), 'editable' => true, 'field' => 'kind',
                 'choices' => array_map(static fn(MapLandmarkKind $kind): array => ['label' => self::describeKind($kind),

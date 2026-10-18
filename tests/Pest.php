@@ -394,6 +394,8 @@ require_once __DIR__ . '/Support/BattleFormationFixtures.php';
 
 require_once __DIR__ . '/Support/DialogueFixtures.php';
 
+require_once __DIR__ . '/Support/NpcFixtures.php';
+
 /**
  * Authors a project's skill catalogue as record files, one per skill and
  * numbered in the given order, replacing any records already there: the

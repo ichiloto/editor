@@ -1952,9 +1952,10 @@ final class RecordSchemaCatalog
      * The schema for a map's NPCs, edited in the map's Inspector.
      *
      * Every field the engine's `NpcManager::configure()` reads, in the groups
-     * an author thinks in. The id is shown but not editable: it is what
-     * routes and diagnostics name, and nothing that names it would follow a
-     * rename. Dialogue is edited as conditional variants -- the runtime's
+     * an author thinks in. The id is what routes and diagnostics name; it is
+     * edited through {@see \Ichiloto\Editor\Field\NpcAuthoring::setId()},
+     * which refuses while anything names it, since nothing that names it
+     * follows a rename. Dialogue is edited as conditional variants -- the runtime's
      * own model, of which plain pages are the one-variant case with no
      * conditions -- so the settings pane and the game agree about what a
      * given entry means. Scripts are the shared event-command list.
@@ -1970,7 +1971,7 @@ final class RecordSchemaCatalog
             relativePath: '',
             fields: [
                 // Identity
-                new RecordField('id', 'Id', isReadOnly: true),
+                new RecordField('id', 'Id'),
                 new RecordField('name', 'Name'),
                 // Placement
                 new RecordField('x', 'X', InputControlType::INTEGER),

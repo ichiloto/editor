@@ -142,7 +142,7 @@ it('assigns an id to an NPC without one, once', function () {
     expect($assigned->npc?->getId())->toBe('old-man')
         ->and($assigned->command?->label)->toBe('Assign NPC id old-man')
         ->and(fn() => $authoring->assignId($map, 0))
-            ->toThrow(NpcRefusal::class, 'Old Man already has the stable id "old-man"; ids do not change.');
+            ->toThrow(NpcRefusal::class, 'Old Man already has the stable id "old-man"; change it through its Id row.');
 });
 
 it('edits rows through the record pane, carrying the id with a rename unless something names it', function () {

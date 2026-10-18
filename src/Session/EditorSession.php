@@ -76,6 +76,7 @@ use Ichiloto\Editor\Playtest\PlaytestRun;
 use Ichiloto\Editor\Playtest\PlaytestStart;
 use Ichiloto\Editor\Maps\LayerEditor;
 use Ichiloto\Editor\Maps\LineRemoval;
+use Ichiloto\Editor\Maps\MapFolder;
 use Ichiloto\Editor\Maps\MapLinePlan;
 use Ichiloto\Editor\Maps\MapLinePlanner;
 use Ichiloto\Editor\Maps\MapLayers;
@@ -374,25 +375,31 @@ final class EditorSession
     }
 
     /**
-     * Creates a blank map at the maps root, written to disk at once as the
-     * terminal editor creates one, named after `$name` (`new-map` when
-     * empty) with a numbered suffix when that is taken. Every open map keeps
-     * its unsaved changes and the undo history stays.
+     * Creates a blank map, written to disk at once as the terminal editor
+     * creates one. Without `$mapId` it goes at the maps root, named after
+     * `$name` (`new-map` when empty) with a numbered suffix when that is
+     * taken. With one it goes at exactly that folder path, which may nest
+     * inside another map's folder ({@see MapFolder}), named `$name` or after
+     * the id's last segment. Every open map keeps its unsaved changes and the
+     * undo history stays.
      *
+     * @param string|null $mapId The new map's id; null derives one from the name.
      * @return array{map: string, maps: list<array<string, mixed>>}
-     * @throws SessionRefusal When the kind is unknown, the size is not a size, or the files cannot be written.
+     * @throws SessionRefusal When the kind is unknown, the size is not a size, the id is not a free map folder path, or the files cannot be written.
      */
-    public function createMap(?string $name, ?string $kind, int $width, int $height): array
+    public function createMap(?string $name, ?string $kind, int $width, int $height, ?string $mapId = null): array
     {
         if ($kind !== null && ! in_array($kind, array_column($this->listMapKinds(), 'value'), true)) {
             throw new SessionRefusal(sprintf('There is no map kind %s.', $kind));
         }
         $baseName = $name === null || trim($name) === '' ? null : ProjectMap::slugify($name, '');
-        if ($baseName === '') {
+        if ($mapId === null && $baseName === '') {
             throw new SessionRefusal(sprintf('"%s" has no letters or digits to name a map with.', $name));
         }
         try {
-            $mapId = $this->workspace->createMap($baseName, kind: $kind, width: $width, height: $height);
+            $mapId = $mapId === null
+                ? $this->workspace->createMap($baseName, kind: $kind, width: $width, height: $height)
+                : $this->workspace->createMapAt($mapId, $name === null || trim($name) === '' ? null : trim($name), kind: $kind, width: $width, height: $height);
         } catch (MapSourceRefusal|RuntimeException $error) {
             throw new SessionRefusal(sprintf('The map was not created: %s', $error->getMessage()), previous: $error);
         }
@@ -403,17 +410,20 @@ final class EditorSession
 
     /**
      * Copies the current authored map through the workspace's transactional
-     * duplicate operation. Unsaved source edits are included in the copy;
-     * the original and every other loaded document and undo step remain.
+     * duplicate operation, beside it under the next free `-copy` name or at
+     * the folder path `$to` names ({@see MapFolder}). Unsaved source edits
+     * are included in the copy; the original and every other loaded document
+     * and undo step remain.
      *
+     * @param string|null $to The copy's id; null takes the next free sibling.
      * @return array{map: string, maps: list<array<string, mixed>>}
-     * @throws SessionRefusal When the revision is stale or source cannot be copied safely.
+     * @throws SessionRefusal When the revision is stale, the id is not a free map folder path, or source cannot be copied safely.
      */
-    public function duplicateMap(string $mapId, int $revision): array
+    public function duplicateMap(string $mapId, int $revision, ?string $to = null): array
     {
         $this->requireCurrentMap($mapId, $revision);
         try {
-            $created = $this->workspace->duplicateMap((int) array_search($mapId, $this->workspace->mapIds, true))
+            $created = $this->workspace->duplicateMap((int) array_search($mapId, $this->workspace->mapIds, true), mapId: $to)
                 ?? throw new RuntimeException('The map is no longer in the workspace.');
         } catch (MapSourceRefusal|RuntimeException $error) {
             throw new SessionRefusal(sprintf('%s was not duplicated: %s', $mapId, $error->getMessage()), previous: $error);
@@ -424,31 +434,48 @@ final class EditorSession
     }
 
     /**
-     * Explicitly moves a map to its metadata-derived path after the author
-     * reviews that exact destination. As in the TUI, references are not
-     * migrated and a successful move clears undo history naming retired maps.
-     * Ordinary saves never call this operation.
+     * Explicitly moves a map after the author reviews that exact
+     * destination: its metadata-derived path, or the folder path `$to` names
+     * ({@see MapFolder}), which may nest inside another map's folder. The
+     * first call asks, naming the destination and its references; the
+     * confirming call repeats `$to` and gives the reviewed `$destination`.
+     * As in the TUI, references are not migrated and a successful move
+     * clears undo history naming retired maps. Ordinary saves never call
+     * this operation.
      *
+     * @param string|null $destination The destination the author reviewed, repeated to confirm.
+     * @param string|null $to The id to move to; null proposes the metadata-derived path.
      * @return array<string, mixed>
-     * @throws SessionRefusal When the revision or reviewed path changed, or source cannot move safely.
+     * @throws SessionRefusal When the revision or reviewed path changed, the id is not a free map folder path, or source cannot move safely.
      */
-    public function moveMap(string $mapId, int $revision, ?string $destination = null, bool $confirmed = false): array
+    public function moveMap(string $mapId, int $revision, ?string $destination = null, bool $confirmed = false, ?string $to = null): array
     {
         $this->refuseDuringChangeSet('Moving a map clears the undo history');
         $map = $this->requireCurrentMap($mapId, $revision);
         if ($map->getGridSourceIssue() !== null) {
             throw new SessionRefusal(sprintf('%s is read-only: %s', $mapId, $map->getGridSourceIssue()));
         }
-        $proposed = $map->getProposedMapId();
+        $proposed = $to ?? $map->getProposedMapId();
         if ($destination !== null && $destination !== $proposed) {
-            throw new SessionRefusal('The derived destination changed; review the proposed move again.');
+            throw new SessionRefusal($to === null
+                ? 'The derived destination changed; review the proposed move again.'
+                : 'The reviewed destination is not the id to move to; review the move again.');
         }
         if ($proposed === $mapId) {
             return ['status' => 'unchanged', 'map' => $mapId, 'destination' => $proposed, 'maps' => $this->describeMaps()];
         }
+        if ($to !== null) {
+            // Refused before the question, so an author never reviews a move that cannot happen.
+            try {
+                MapFolder::requireFreeFolder($this->workspace->getMapsRoot(), $to);
+            } catch (InvalidArgumentException $error) {
+                throw new SessionRefusal(sprintf('%s was not moved: %s', $mapId, $error->getMessage()), previous: $error);
+            }
+        }
         if (! $confirmed) {
             return [
                 'status' => 'question', 'map' => $mapId, 'revision' => $revision, 'destination' => $proposed,
+                ...($to === null ? [] : ['to' => $to]),
                 'references' => new MapReferences($this->workspace)->describe($mapId),
                 'warning' => 'References are not migrated: doors, quests, saves and one-shot events naming the old id keep naming it. Moving clears the undo history. The original map folder is removed only after the new map validates.',
             ];
@@ -1807,8 +1834,12 @@ final class EditorSession
      * first: nothing changes until the edit is made again with `$answer`
      * `clear` (clear its tile layers and change) or `cancel`.
      *
+     * When the edit changes other maps too (renaming a landmark renames the
+     * atlas entry of every map naming it), `revisions` gives each of those
+     * maps' new revision.
+     *
      * @param array<string, mixed> $key The row's key, as `readInspector` gave it.
-     * @return array{status: 'applied', revision: int, changed: bool}|array{status: 'question', question: string, answers: list<array{key: string, label: string, description: string}>}
+     * @return array{status: 'applied', revision: int, changed: bool, revisions?: array<string, int>}|array{status: 'question', question: string, answers: list<array{key: string, label: string, description: string}>}
      * @throws SessionRefusal When the map is unknown or stale, the row is gone or read-only, or the edit is refused.
      */
     public function applyInspector(string $mapId, int $revision, array $key, string $value, ?string $answer = null): array
@@ -1840,11 +1871,20 @@ final class EditorSession
             }
         }
 
+        $before = array_map($this->getMapRevision(...), $this->getMapsById());
         $command = $this->runEdit(static fn(): ?Command => ($field['target'] ?? null) === 'map-kind'
             ? $inspector->changeMapKind($map, $value, $cleared > 0 && $answer === 'clear')
             : $inspector->apply($map, $field, $value));
+        // A row may change other maps in the same step: a landmark rename carries the atlas entries naming it.
+        $others = [];
+        foreach ($this->getMapsById() as $otherId => $other) {
+            if ($other !== $map && $this->getMapRevision($other) !== ($before[$otherId] ?? null)) {
+                $others[(string) $otherId] = $this->getMapRevision($other);
+            }
+        }
 
-        return ['status' => 'applied', 'revision' => $this->getMapRevision($map), 'changed' => $command !== null];
+        return ['status' => 'applied', 'revision' => $this->getMapRevision($map), 'changed' => $command !== null,
+            ...($others === [] ? [] : ['revisions' => $others])];
     }
 
     /**
@@ -4418,11 +4458,18 @@ final class EditorSession
         return ['changed' => $command !== null, 'revision' => $this->getMapRevision($map)];
     }
 
-    public function createNpc(string $mapId, int $revision, int $x, int $y, string $name): array
+    /**
+     * Creates a fixed NPC at a tile under the id given, or one derived from its name.
+     *
+     * @param string|null $id The stable id; null derives one from the name.
+     * @return array{revision: int, changed: bool, index: ?int, id: ?string, followedId: ?string, idReferences: list<string>}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, the tile is outside the map or taken, or the id is not one or is taken.
+     */
+    public function createNpc(string $mapId, int $revision, int $x, int $y, string $name, ?string $id = null): array
     {
         $map = $this->requireCurrentMap($mapId, $revision);
 
-        return $this->applyNpcChange($map, fn(NpcAuthoring $authoring): NpcChange => $authoring->create($map, $x, $y, $name));
+        return $this->applyNpcChange($map, fn(NpcAuthoring $authoring): NpcChange => $authoring->create($map, $x, $y, $name, $id));
     }
 
     /**
@@ -4465,16 +4512,19 @@ final class EditorSession
     }
 
     /**
-     * Gives an NPC authored without a stable id one, from its name.
+     * Gives an NPC authored without a stable id the one given, or one from
+     * its name. An existing id changes through the NPC's Id row
+     * ({@see applyNpc()}), which refuses while anything names it.
      *
+     * @param string|null $id The stable id; null derives one from the name.
      * @return array{revision: int, changed: bool, index: ?int, id: ?string, followedId: ?string, idReferences: list<string>}
-     * @throws SessionRefusal When the map is unknown, stale or read-only, the NPC is unknown, or it already has an id.
+     * @throws SessionRefusal When the map is unknown, stale or read-only, the NPC is unknown, it already has an id, or the id is not one or is taken.
      */
-    public function assignNpcId(string $mapId, int $revision, int $index): array
+    public function assignNpcId(string $mapId, int $revision, int $index, ?string $id = null): array
     {
         $map = $this->requireCurrentMap($mapId, $revision);
 
-        return $this->applyNpcChange($map, fn(NpcAuthoring $authoring): NpcChange => $authoring->assignId($map, $index));
+        return $this->applyNpcChange($map, fn(NpcAuthoring $authoring): NpcChange => $authoring->assignId($map, $index, $id));
     }
 
     /**
@@ -4574,8 +4624,10 @@ final class EditorSession
 
     /**
      * Applies one NPC row's edit as one undo step. The row is found again by
-     * its key among the NPC's current rows. A rename carries the id along
-     * (`followedId`) unless something names it (`idReferences`).
+     * its key among the NPC's current rows. A rename carries an id its old
+     * name derived along (`followedId`) unless something names it
+     * (`idReferences`). The Id row sets the id itself, refused while
+     * anything names the current one.
      *
      * @param array<string, mixed> $key The row's key, as `readNpc` gave it.
      * @return array{revision: int, changed: bool, index: ?int, id: ?string, followedId: ?string, idReferences: list<string>}
