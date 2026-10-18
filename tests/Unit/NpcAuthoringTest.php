@@ -722,6 +722,25 @@ it('keeps the id of an NPC something already names when it is renamed, and says 
     ]]]], 'NPC Bob script'],
 ]);
 
+it('keeps the id of an NPC only an event script reached through common_event chains names, on rename and on its Id row', function (array $bob, array $events, array $scripts) {
+    [$root] = npcProject([
+        ['id' => 'mara', 'name' => 'Mara', 'sprite' => 'M', 'x' => 2, 'y' => 1],
+        ['id' => 'bob', 'name' => 'Bob', 'sprite' => 'B', 'x' => 6, 'y' => 3, ...$bob],
+    ], $events);
+    writeNpcEventScripts($root, $scripts);
+    $editor = npcEditor($root);
+    $map = npcMap($editor);
+
+    callEditorMethod($editor, 'selectNpc', 0);
+    setNpcField($editor, 'name', 'Old Mara');
+    expect($map->getNpcs()->get(0)?->getId())->toBe('mara')
+        ->and(getEditorProperty($editor, 'statusMessage'))->toContain('Its id stays mara')->toContain('event script b (via event script a)');
+
+    setNpcField($editor, 'id', 'mara-at-home');
+    expect($map->getNpcs()->get(0)?->getId())->toBe('mara')
+        ->and(getEditorProperty($editor, 'statusMessage'))->toContain('keeps the id "mara": event script b (via event script a)');
+})->with(npcEventScriptChains());
+
 it('reads Movement and Sprite as their runtime defaults when unset', function () {
     [$root] = npcProject([['name' => 'Legacy', 'x' => 2, 'y' => 1]]);
     $editor = npcEditor($root);

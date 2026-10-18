@@ -21,8 +21,10 @@ use Throwable;
  *
  * NPC ids are map-local, so a reference is only a reference from that map's
  * own context: its map-authored events and their scripts, its NPCs' inline
- * scripts and variant scripts, the reusable event scripts those trigger, and
- * the cinematics that start on the map.
+ * scripts and variant scripts, the cinematics that start on the map, and the
+ * reusable event scripts any of those reach, by an event's `scriptId` or a
+ * `common_event` command, followed from script to script as the interpreter
+ * runs them.
  *
  * @package Ichiloto\Editor\Field
  */
@@ -57,16 +59,20 @@ final class NpcReferences
             }
 
             $data = (array) ($definition['data'] ?? []);
+            $label = sprintf('%s event %s', $map->mapId, strval($marker));
+            $script = (array) ($data['script'] ?? []);
 
-            if (trim(strval($data['npcId'] ?? '')) === $npcId || $this->commandsName((array) ($data['script'] ?? []), $npcId)) {
-                $found[] = sprintf('%s event %s', $map->mapId, strval($marker));
+            if (trim(strval($data['npcId'] ?? '')) === $npcId || $this->commandsName($script, $npcId)) {
+                $found[] = $label;
             }
 
             $scriptId = trim(strval($data['scriptId'] ?? ''));
 
             if ($scriptId !== '') {
-                $usedScripts[$scriptId] = sprintf('%s event %s', $map->mapId, strval($marker));
+                $usedScripts[$scriptId] ??= $label;
             }
+
+            self::collectStartedScripts($script, $label, $usedScripts);
         }
 
         // The map's other NPCs: inline scripts and dialogue-variant scripts.
@@ -77,28 +83,17 @@ final class NpcReferences
                 $found[] = $label . ' script';
             }
 
+            self::collectStartedScripts($other->getScript(), $label . ' script', $usedScripts);
+
             foreach ($other->getDialogueAsVariants() as $index => $variant) {
-                if ($this->commandsName((array) ($variant['script'] ?? []), $npcId)) {
-                    $found[] = sprintf('%s dialogue variant %d', $label, $index + 1);
-                }
-            }
-        }
+                $variantLabel = sprintf('%s dialogue variant %d', $label, $index + 1);
+                $script = (array) ($variant['script'] ?? []);
 
-        // Reusable scripts this map triggers.
-        $database = $this->workspace->getRecordDatabase('common_events');
-
-        if ($database instanceof ProjectRecordDatabase) {
-            foreach ($database->getRecords() as $record) {
-                $script = (array) $record->toArray();
-                $scriptId = strval($script['__scriptId'] ?? '');
-
-                if (! isset($usedScripts[$scriptId])) {
-                    continue;
+                if ($this->commandsName($script, $npcId)) {
+                    $found[] = $variantLabel;
                 }
 
-                if ($this->commandsName((array) ($script['commands'] ?? []), $npcId)) {
-                    $found[] = sprintf('event script %s (via %s)', $scriptId, $usedScripts[$scriptId]);
-                }
+                self::collectStartedScripts($script, $variantLabel, $usedScripts);
             }
         }
 
@@ -115,12 +110,71 @@ final class NpcReferences
                 continue;
             }
 
-            if ($this->commandsName([...(array) ($data['cast'] ?? []), ...(array) ($data['finalizer'] ?? []), ...$commands], $npcId)) {
-                $found[] = sprintf('cinematic %s', $asset->id);
+            $cinematic = [...(array) ($data['cast'] ?? []), ...(array) ($data['finalizer'] ?? []), ...$commands];
+            $label = sprintf('cinematic %s', $asset->id);
+
+            if ($this->commandsName($cinematic, $npcId)) {
+                $found[] = $label;
+            }
+
+            self::collectStartedScripts($cinematic, $label, $usedScripts);
+        }
+
+        // Reusable scripts this map reaches, and the ones those start in turn.
+        // Each is read once, so scripts that start each other end the walk.
+        $database = $this->workspace->getRecordDatabase('common_events');
+        $scripts = [];
+
+        if ($database instanceof ProjectRecordDatabase) {
+            foreach ($database->getRecords() as $record) {
+                $script = (array) $record->toArray();
+                $scripts[strval($script['__scriptId'] ?? '')] ??= (array) ($script['commands'] ?? []);
+            }
+        }
+
+        $read = [];
+
+        while (($pending = array_diff_key($usedScripts, $read)) !== []) {
+            foreach ($pending as $scriptId => $via) {
+                $scriptId = strval($scriptId);
+                $read[$scriptId] = true;
+                $commands = $scripts[$scriptId] ?? [];
+                $label = sprintf('event script %s', $scriptId);
+
+                if ($this->commandsName($commands, $npcId)) {
+                    $found[] = sprintf('%s (via %s)', $label, $via);
+                }
+
+                self::collectStartedScripts($commands, $label, $usedScripts);
             }
         }
 
         return array_values(array_unique($found));
+    }
+
+    /**
+     * Notes the reusable event scripts commands start, however deeply nested,
+     * each under the first owner found starting it.
+     *
+     * @param array<int|string, mixed> $commands The commands.
+     * @param string $owner Where the commands live, in words.
+     * @param array<string, string> $started Owners by script id, added to.
+     */
+    private static function collectStartedScripts(array $commands, string $owner, array &$started): void
+    {
+        foreach ($commands as $node) {
+            if (! is_array($node)) {
+                continue;
+            }
+
+            $scriptId = trim(strval($node['id'] ?? ''));
+
+            if (($node['type'] ?? null) === 'common_event' && $scriptId !== '') {
+                $started[$scriptId] ??= $owner;
+            }
+
+            self::collectStartedScripts($node, $owner, $started);
+        }
     }
 
     /**

@@ -116,3 +116,31 @@ it('keeps a chosen id when the NPC is renamed, and still carries a derived one',
         ->and($followed)->toMatchArray(['id' => 'old-mara', 'followedId' => 'old-mara'])
         ->and(npcSessionIds($session))->toBe(['djin-contract-trial', 'old-mara']);
 });
+
+it('keeps and refuses to change an id only an event script reached through common_event chains names', function (array $bob, array $events, array $scripts) {
+    $root = npcIdentityProject([
+        ['id' => 'mara', 'name' => 'Mara', 'x' => 2, 'y' => 1],
+        ['id' => 'bob', 'name' => 'Bob', 'x' => 6, 'y' => 3, ...$bob],
+    ], $events);
+    writeNpcEventScripts($root, $scripts);
+    $session = EditorSession::open($root);
+    $read = $session->readNpc('test-map', 0);
+
+    expect(fn() => $session->applyNpc('test-map', $read['revision'], 0, npcSessionRow($read, 'id')['key'], 'mara-at-home'))
+        ->toThrow(SessionRefusal::class, 'Mara keeps the id "mara": event script b (via event script a) names it.')
+        ->and(npcSessionIds($session))->toBe(['mara', 'bob']);
+
+    $renamed = $session->applyNpc('test-map', $read['revision'], 0, npcSessionRow($read, 'name')['key'], 'Old Mara');
+    expect($renamed)->toMatchArray(['changed' => true, 'id' => 'mara', 'followedId' => null, 'idReferences' => ['event script b (via event script a)']])
+        ->and(npcSessionIds($session))->toBe(['mara', 'bob']);
+})->with(npcEventScriptChains());
+
+it('lets a derived id follow its name when no script this map reaches names it', function () {
+    $root = npcIdentityProject([['id' => 'mara', 'name' => 'Mara', 'x' => 2, 'y' => 1]]);
+    writeNpcEventScripts($root, npcEventScriptChains()['a cycle between a and b'][2]);
+    $session = EditorSession::open($root);
+    $read = $session->readNpc('test-map', 0);
+
+    expect($session->applyNpc('test-map', $read['revision'], 0, npcSessionRow($read, 'name')['key'], 'Old Mara'))
+        ->toMatchArray(['id' => 'old-mara', 'followedId' => 'old-mara', 'idReferences' => []]);
+});
