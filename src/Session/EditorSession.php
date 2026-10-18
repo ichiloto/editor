@@ -4609,7 +4609,7 @@ final class EditorSession
                 throw new SessionRefusal('The map or the save manifest changed since the save relocations were shown, so nothing was written. Review them again.');
             }
         }
-        $warnings = MapValidator::validate($map, $this->getMapsById());
+        $warnings = MapValidator::validate($map, $this->getMapsById(), MapValidator::readInventoryCatalog($this->workspace));
         $failures = [];
         $step = $relocation?->apply();
 
@@ -5236,8 +5236,9 @@ final class EditorSession
             'writeTypes' => $kind === 'writes' && is_array($field['writeTypes'] ?? null) ? array_values($field['writeTypes']) : null,
             // One axis of a coordinate pair under the heading before it.
             'axis' => in_array($field['axis'] ?? null, ['x', 'y'], true) ? $field['axis'] : null,
-            // A row that warns about the rows before it, such as a line's emotion its speaker lacks.
-            'tone' => ($field['tone'] ?? null) === 'warning' ? 'warning' : null,
+            // A row about the rows before it: a warning (a line's emotion its speaker lacks) or an
+            // error (a chest whose reward the Engine cannot give).
+            'tone' => in_array($field['tone'] ?? null, ['warning', 'error'], true) ? $field['tone'] : null,
             'key' => $key,
         ], static fn(mixed $value): bool => $value !== null);
     }

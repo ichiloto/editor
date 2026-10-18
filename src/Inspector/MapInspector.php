@@ -15,6 +15,7 @@ use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Database\RecordField;
 use Ichiloto\Editor\Database\RecordFieldCodec;
 use Ichiloto\Editor\Database\RecordSchemaCatalog;
+use Ichiloto\Editor\Events\ChestLoot;
 use Ichiloto\Editor\Events\EventAuthoring;
 use Ichiloto\Editor\Events\EventRefusal;
 use Ichiloto\Editor\Events\EventTypeCatalog;
@@ -26,6 +27,8 @@ use Ichiloto\Editor\Field\MapLandmarks;
 use Ichiloto\Editor\History\Command;
 use Ichiloto\Editor\History\GenericCommand;
 use Ichiloto\Editor\ProjectMap;
+use Ichiloto\Editor\Validation\ChestRewardValidator;
+use Ichiloto\Editor\Validation\Issue;
 use Ichiloto\Engine\Core\Enumerations\MovementHeading;
 use Ichiloto\Engine\Events\Enumerations\ChestType;
 use Ichiloto\Engine\Events\Enumerations\EventEngagement;
@@ -90,8 +93,11 @@ final readonly class MapInspector
         ['label' => 'Legendary', 'value' => ChestType::LEGENDARY->value, 'description' => 'Reserved for the most special chest rewards.'],
     ];
 
-    /** What a chest event can give, as an author picks one. */
-    public const array LOOT_TYPE_CHOICES = [
+    /**
+     * Every loot type as an author reads it. Only the ones the Engine's chest
+     * can give are offered ({@see listLootTypeChoices()}).
+     */
+    private const array LOOT_TYPE_CHOICES = [
         ['label' => 'Item', 'value' => LootType::ITEM->value, 'description' => 'Rewards an item from the project item database.'],
         ['label' => 'Gold', 'value' => LootType::GOLD->value, 'description' => 'Awards currency directly when the chest is opened.'],
         ['label' => 'Experience', 'value' => LootType::EXPERIENCE->value, 'description' => 'Awards experience directly when claimed.'],
@@ -101,6 +107,20 @@ final readonly class MapInspector
         ['label' => 'Armor', 'value' => LootType::ARMOR->value, 'description' => 'Rewards an armor identifier.'],
         ['label' => 'Accessory', 'value' => LootType::ACCESSORY->value, 'description' => 'Rewards an accessory identifier.'],
     ];
+
+    /**
+     * The loot types an author picks a chest's from: the kinds the Engine's
+     * chest can give, so a new choice never makes a chest that fails to open.
+     *
+     * @return list<array{label: string, value: string, description: string}>
+     */
+    public static function listLootTypeChoices(): array
+    {
+        return array_values(array_filter(
+            self::LOOT_TYPE_CHOICES,
+            static fn(array $choice): bool => ChestLoot::isGrantable(LootType::from($choice['value'])),
+        ));
+    }
 
     /**
      * @param ReferenceCatalog $references The project's references as the map sees them.
@@ -254,6 +274,7 @@ final readonly class MapInspector
 
         if ($definition !== null) {
             $fields = [...$fields, ...$this->buildEventDataFields($marker, $definition)];
+            $fields = $this->describeChestRewardFields($map, $marker, $definition, $fields);
             $fields = \Ichiloto\Editor\Maps\MapPlacement::describeEventFields($definition, $fields);
         }
 
@@ -706,6 +727,56 @@ final readonly class MapInspector
         };
 
         return $block === null ? null : $this->writeMapData($map, [MapBgmVariants::KEY], $block, sprintf('Music variant %d', $index + 1));
+    }
+
+    /**
+     * Places a chest's reward errors under the rows they are about.
+     *
+     * A chest whose reward the Engine cannot grant fails when opened, so the
+     * error is shown on the chest itself, from the same check the project
+     * report and the save warnings read. The chest stays editable and
+     * saveable: an unfinished chest is the author's draft.
+     *
+     * @param array<string, mixed> $definition The event definition.
+     * @param array<int, array<string, mixed>> $fields The event's rows so far.
+     * @return array<int, array<string, mixed>> The rows, with any reward errors after the last loot row.
+     */
+    private function describeChestRewardFields(ProjectMap $map, string $marker, array $definition, array $fields): array
+    {
+        if (! ChestLoot::isChest($definition)) {
+            return $fields;
+        }
+
+        try {
+            $messages = array_map(
+                static fn(Issue $issue): string => trim($issue->message . ' ' . $issue->hint),
+                new ChestRewardValidator($this->references->getInventoryCatalog())
+                    ->validate($map->mapId, $marker, (array) ($definition['data'] ?? [])),
+            );
+        } catch (Throwable $throwable) {
+            $messages = [sprintf('The inventory could not be read, so the reward cannot be checked: %s', $throwable->getMessage())];
+        }
+
+        if ($messages === []) {
+            return $fields;
+        }
+
+        $rows = array_map(static fn(string $message): array => [
+            'label' => 'Reward Error',
+            'value' => $message,
+            'editable' => false,
+            'tone' => 'error',
+            'name' => 'Reward Error',
+        ], $messages);
+        $lootRows = array_keys(array_filter($fields, static fn(array $field): bool => in_array(
+            array_values((array) ($field['path'] ?? [])),
+            [['data', 'lootType'], ['data', 'loot'], ['data', 'quantity']],
+            true,
+        ) && ($field['target'] ?? null) === 'event'));
+        $after = $lootRows === [] ? count($fields) : max($lootRows) + 1;
+        array_splice($fields, $after, 0, $rows);
+
+        return $fields;
     }
 
     /**
@@ -1772,8 +1843,8 @@ final readonly class MapInspector
     {
         $decorated = [];
         // A chest's loot is chosen from the database its loot type names, as the runtime reads an unset type: an item.
-        $lootType = LootType::tryFrom(strval(array_find($fields,
-            static fn(array $field): bool => array_values((array) ($field['path'] ?? [])) === ['data', 'lootType'])['value'] ?? '')) ?? LootType::ITEM;
+        $lootType = ChestLoot::readLootType(array_find($fields,
+            static fn(array $field): bool => array_values((array) ($field['path'] ?? [])) === ['data', 'lootType'])['value'] ?? null) ?? LootType::ITEM;
 
         foreach ($fields as $field) {
             $field['marker'] = $marker;
@@ -1790,7 +1861,7 @@ final readonly class MapInspector
                 ['cue', 'kind'] => self::EVENT_CUE_KIND_CHOICES,
                 ['engagement'] => self::EVENT_ENGAGEMENT_CHOICES,
                 ['data', 'chestType'] => self::CHEST_TYPE_CHOICES,
-                ['data', 'lootType'] => self::LOOT_TYPE_CHOICES,
+                ['data', 'lootType'] => self::listLootTypeChoices(),
                 default => null,
             };
 

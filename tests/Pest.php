@@ -480,3 +480,16 @@ function itemsFromSource(string $source): array
         unlink($path);
     }
 }
+
+/**
+ * The synthetic sample project's inventory, read once: what map save
+ * warnings check a chest's reward against.
+ */
+function mapValidatorInventory(): \Ichiloto\Editor\Database\InventoryCatalog
+{
+    static $catalog = null;
+
+    return $catalog ??= \Ichiloto\Editor\Database\InventoryCatalog::fromWorkspace(
+        \Ichiloto\Editor\ProjectWorkspace::fromProject(makeTemporaryProject('ichiloto-map-validator-')),
+    );
+}

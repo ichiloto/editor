@@ -4,13 +4,17 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Validation;
 
+use Ichiloto\Editor\Database\InventoryCatalog;
+use Ichiloto\Editor\Events\ChestLoot;
 use Ichiloto\Editor\Field\MapAtlas;
 use Ichiloto\Editor\Field\MapLandmarks;
 use Ichiloto\Editor\Inspector\MapLandmarkFields;
 use Ichiloto\Editor\Inspector\MapTerrainFields;
 use Ichiloto\Editor\ProjectMap;
+use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Engine\Field\MapCategoryCatalog;
 use InvalidArgumentException;
+use Throwable;
 
 /**
  * Runs the advisory pre-save checks over a map.
@@ -29,12 +33,15 @@ final class MapValidator
      *
      * @param ProjectMap $map The map being saved.
      * @param array<string, ProjectMap> $mapsById Every workspace map keyed by map id.
+     * @param InventoryCatalog|null $inventory The project's inventory, for what its chests give; null when it
+     *     could not be read ({@see readInventoryCatalog()}), which is itself reported.
      * @return string[] Human-readable warnings; empty when the map is clean.
      */
-    public static function validate(ProjectMap $map, array $mapsById): array
+    public static function validate(ProjectMap $map, array $mapsById, ?InventoryCatalog $inventory): array
     {
         return [
             ...self::findMarkersWithoutDefinitions($map),
+            ...self::findChestRewardProblems($map, $inventory),
             ...self::findDanglingDestinations($map, $mapsById),
             ...self::findOutOfRangeSpawnPoints($map, $mapsById),
             ...self::findRetiredData($map),
@@ -93,6 +100,49 @@ final class MapValidator
         return array_key_exists('tiles2d', $map->getEditableData())
             ? ['tiles2d is no longer read; the map shows its terminal glyphs until it has a tileset.']
             : [];
+    }
+
+    /**
+     * Reads the project's inventory for {@see validate()}, or null when it
+     * cannot be read: a save is never blocked by it.
+     */
+    public static function readInventoryCatalog(ProjectWorkspace $workspace): ?InventoryCatalog
+    {
+        try {
+            return InventoryCatalog::fromWorkspace($workspace);
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
+    /**
+     * Finds chests whose reward the Engine cannot grant, by the Engine's chest
+     * rule the inspectors and the project report also read.
+     *
+     * @return string[]
+     */
+    private static function findChestRewardProblems(ProjectMap $map, ?InventoryCatalog $inventory): array
+    {
+        $chests = array_filter(self::getEventDefinitions($map), ChestLoot::isChest(...));
+
+        if ($chests === []) {
+            return [];
+        }
+
+        if (! $inventory instanceof InventoryCatalog) {
+            return ['The inventory could not be read, so what the chests give was not checked.'];
+        }
+
+        $validator = new ChestRewardValidator($inventory);
+        $warnings = [];
+
+        foreach ($chests as $marker => $definition) {
+            foreach ($validator->validate($map->mapId, strval($marker), (array) ($definition['data'] ?? [])) as $issue) {
+                $warnings[] = sprintf('Chest %s: %s', $marker, $issue->message);
+            }
+        }
+
+        return $warnings;
     }
 
     /**

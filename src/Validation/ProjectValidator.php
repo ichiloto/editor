@@ -14,6 +14,7 @@ use Ichiloto\Editor\Database\ProjectRecord;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\Database\SummonAssignmentDiagnostics;
+use Ichiloto\Editor\Events\ChestLoot;
 use Ichiloto\Editor\Events\CommandMapContext;
 use Ichiloto\Editor\Events\ProjectScriptCommands;
 use Ichiloto\Editor\Field\MapEncounters;
@@ -3868,7 +3869,9 @@ class ProjectValidator
           }
         }
 
-        $issues = [...$issues, ...$this->checkChestLoot($data, $where, $known)];
+        if (ChestLoot::isChest($definition)) {
+          $issues = [...$issues, ...$this->checkChestLoot($map->mapId, strval($marker), $data)];
+        }
       }
 
       foreach ((array) ($map->data['npcs'] ?? []) as $npc) {
@@ -3897,19 +3900,6 @@ class ProjectValidator
     return $issues;
   }
 
-  /**
-   * Checks what a chest gives out.
-   *
-   * A chest names its loot by kind: an inventory definition, a skill, or an
-   * amount of gold or experience. An inventory reference that resolves to
-   * nothing opens a chest that gives nothing, which looks exactly like a
-   * chest an author meant to leave empty.
-   *
-   * @param array<string, mixed> $data The trigger's data.
-   * @param string $where Where it lives.
-   * @param array<string, string[]> $known What the project defines.
-   * @return Issue[] The issues found.
-   */
   /**
    * Checks a map's conditional music the way the engine reads it: an
    * ordered list whose first matching variant selects the track.
@@ -4028,71 +4018,20 @@ class ProjectValidator
     return $issues;
   }
 
-  protected function checkChestLoot(array $data, string $where, array $known): array
+  /**
+   * Checks that a chest can give what it holds, by the Engine's chest rule
+   * the inspectors and the map save warnings also read.
+   *
+   * @param string $mapId The map the chest is on.
+   * @param string $marker The chest event's marker.
+   * @param array<string, mixed> $data The chest's data.
+   * @return Issue[] The issues found.
+   */
+  protected function checkChestLoot(string $mapId, string $marker, array $data): array
   {
-    if (! array_key_exists('lootType', $data) && ! array_key_exists('loot', $data)) {
-      return [];
-    }
-
-    // A chest may declare its kind as the runtime enum or as its value.
-    $rawType = $data['lootType'] ?? '';
-    $lootType = strtolower(trim($rawType instanceof \BackedEnum ? strval($rawType->value) : (is_scalar($rawType) ? strval($rawType) : '')));
-    $loot = $data['loot'] ?? null;
-    $issues = [];
-    $kinds = ['item', 'gold', 'experience', 'skill', 'spell', 'weapon', 'armor', 'accessory'];
-
-    if ($lootType !== '' && ! in_array($lootType, $kinds, true)) {
-      $issues[] = Issue::error(
-        $where,
-        sprintf('Its loot type "%s" is not one the game knows.', $lootType),
-        'Choose item, gold, experience, skill, spell, weapon, armor, or accessory.'
-      );
-
-      return $issues;
-    }
-
-    if ($loot === null || (is_string($loot) && trim($loot) === '')) {
-      // An unconfigured chest is a chest an author has not finished, not a
-      // broken reference.
-      return $issues;
-    }
-
-    if (in_array($lootType, ['gold', 'experience'], true)) {
-      if (! is_numeric($loot)) {
-        $issues[] = Issue::error(
-          $where,
-          sprintf('It gives %s "%s", which is not an amount.', $lootType, strval(is_scalar($loot) ? $loot : get_debug_type($loot))),
-          'Write a whole number.'
-        );
-      }
-
-      return $issues;
-    }
-
-    if ($loot instanceof \BackedEnum) {
-      $loot = $loot->value;
-    }
-
-    if (! is_scalar($loot)) {
-      $issues[] = Issue::error(
-        $where,
-        sprintf('Its loot is %s, not a reference.', get_debug_type($loot)),
-        'Choose the loot from the picker.'
-      );
-
-      return $issues;
-    }
-
-    // Only inventory loot is resolved here. A chest may also give a skill
-    // or a spell, and the same check would apply, but skill loot is not this
-    // boundary's subject and enabling it now would report existing project
-    // content that this work is not permitted to change. The gap is recorded
-    // for whoever owns that content rather than left to be rediscovered.
-    return [...$issues, ...match ($lootType) {
-      'skill', 'spell' => [],
-      // No kind declared: the runtime reads the loot as an item.
-      default => $this->checkReference(strval($loot), 'inventory', 'item', $where, $known),
-    }];
+    return $this->inventoryCatalog instanceof InventoryCatalog
+      ? new ChestRewardValidator($this->inventoryCatalog)->validate($mapId, $marker, $data)
+      : [];
   }
 
   /**

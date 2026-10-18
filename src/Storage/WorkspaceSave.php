@@ -41,6 +41,8 @@ final class WorkspaceSave
             $mapsById[$map->mapId] = $map;
         }
 
+        $inventory = MapValidator::readInventoryCatalog($workspace);
+
         foreach ($workspace->maps as $map) {
             if (! $map->isDirty()) {
                 continue;
@@ -63,7 +65,7 @@ final class WorkspaceSave
                 continue;
             }
 
-            foreach (MapValidator::validate($map, $mapsById) as $warning) {
+            foreach (MapValidator::validate($map, $mapsById, $inventory) as $warning) {
                 $warnings[] = sprintf('%s: %s', $map->mapId, $warning);
             }
 
