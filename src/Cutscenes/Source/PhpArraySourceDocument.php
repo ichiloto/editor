@@ -20,6 +20,12 @@ use RuntimeException;
  * new entry on lines of its own in the array's indentation, a nowdoc's
  * content between its markers, a new variable before the `return`.
  *
+ * A variable written as data -- assigned once, by a literal, and named
+ * nowhere else but by plain references -- is part of the data: when one
+ * entry names it, a path through that entry reaches the variable's own
+ * literal, so it is edited where it is written. A variable the file builds
+ * with its own code is not data; it is kept and never rewritten.
+ *
  * It is deliberately narrow about what it reads. A file that is not a
  * header, top-level assignments and one returned array literal is refused
  * as unreadable, and a value it cannot classify -- a call, an arithmetic
@@ -39,6 +45,8 @@ final class PhpArraySourceDocument
      * @param array<string, SourceVariable> $variables Top-level assignments by name.
      * @param int $returnStart The offset of the `return` keyword.
      * @param int $statementEnd The offset just past the returned statement's `;`.
+     * @param array<string, int> $references How many values name each variable, in the returned array and in
+     *   the literals of other variables.
      */
     private function __construct(
         public readonly string $source,
@@ -46,6 +54,7 @@ final class PhpArraySourceDocument
         private readonly array $variables,
         private readonly int $returnStart,
         private readonly int $statementEnd,
+        private readonly array $references,
     ) {
     }
 
@@ -137,13 +146,119 @@ final class PhpArraySourceDocument
             }
         }
 
+        $references = [];
+        self::countReferences($rootParse['node'], $references);
+
+        foreach ($variables as $variable) {
+            if ($variable->value !== null) {
+                self::countReferences($variable->value, $references);
+            }
+        }
+
         return new self(
             $source,
             $rootParse['node'],
-            $variables,
+            self::classifyVariables($tokens, $variables, $references),
             $tokens[$returnAt]->pos,
             $tokens[$after]->pos + 1,
+            $references,
         );
+    }
+
+    /**
+     * Keeps a text or literal variable as data only while the file names it
+     * nowhere but in its one assignment and in plain references: a variable
+     * code also names (`$slots[$role] = ...`, `foreach ($slots as ...)`,
+     * `"{$slots}"`) is one that code may build or read, so it becomes
+     * `OTHER`, as does a literal naming itself.
+     *
+     * @param PhpToken[] $tokens
+     * @param array<string, SourceVariable> $variables
+     * @param array<string, int> $references
+     * @return array<string, SourceVariable>
+     */
+    private static function classifyVariables(array $tokens, array $variables, array $references): array
+    {
+        $occurrences = [];
+
+        foreach ($tokens as $token) {
+            if ($token->is(T_VARIABLE)) {
+                $name = substr($token->text, 1);
+                $occurrences[$name] = ($occurrences[$name] ?? 0) + 1;
+            }
+        }
+
+        foreach ($variables as $name => $variable) {
+            if ($variable->kind === SourceVariable::OTHER) {
+                continue;
+            }
+
+            $own = [];
+
+            if ($variable->value !== null) {
+                self::countReferences($variable->value, $own);
+            }
+
+            if (isset($own[$name]) || ($occurrences[$name] ?? 0) !== 1 + ($references[$name] ?? 0)) {
+                $variables[$name] = new SourceVariable($name, SourceVariable::OTHER, $variable->start, $variable->end);
+            }
+        }
+
+        return $variables;
+    }
+
+    /**
+     * Adds up the plain references to each variable under a node.
+     *
+     * @param array<string, int> $counts
+     */
+    private static function countReferences(SourceNode $node, array &$counts): void
+    {
+        if ($node->kind === SourceNode::VARIABLE) {
+            $counts[$node->variable ?? ''] = ($counts[$node->variable ?? ''] ?? 0) + 1;
+
+            return;
+        }
+
+        foreach ($node->entries as $entry) {
+            self::countReferences($entry->value, $counts);
+        }
+    }
+
+    /**
+     * Returns the literal a reference stands for when the file writes it as
+     * data that this reference alone names, so a change under it is made
+     * where it is written; any other node is itself.
+     */
+    public function resolveNode(SourceNode $node): SourceNode
+    {
+        if ($node->kind !== SourceNode::VARIABLE) {
+            return $node;
+        }
+
+        $variable = $this->variables[$node->variable ?? ''] ?? null;
+
+        if ($variable === null || $variable->kind !== SourceVariable::LITERAL || $variable->value === null || $this->referenceCount($variable->name) !== 1) {
+            return $node;
+        }
+
+        return $variable->value;
+    }
+
+    /**
+     * Returns whether a reference names a value the file builds with its own
+     * code -- or a variable it never assigns at the top level -- rather than
+     * one it writes as data.
+     */
+    public function isBuiltInCode(SourceNode $reference): bool
+    {
+        if ($reference->kind !== SourceNode::VARIABLE) {
+            return false;
+        }
+
+        $variable = $this->variables[$reference->variable ?? ''] ?? null;
+
+        return $variable === null || $variable->kind === SourceVariable::OTHER;
     }
 
     /**
@@ -189,6 +304,8 @@ final class PhpArraySourceDocument
         $entry = null;
 
         foreach ($path as $step) {
+            $node = $this->resolveNode($node);
+
             if ($node->kind !== SourceNode::ARRAY) {
                 return null;
             }
@@ -206,7 +323,8 @@ final class PhpArraySourceDocument
     }
 
     /**
-     * Returns the node a path addresses; the root for an empty path.
+     * Returns the node a path addresses; the root for an empty path. A
+     * reference to data only it names is the literal it stands for.
      *
      * @param array<int, int|string> $path The path.
      * @return SourceNode|null The node.
@@ -217,30 +335,18 @@ final class PhpArraySourceDocument
             return $this->root;
         }
 
-        return $this->entryAt($path)?->value;
+        $entry = $this->entryAt($path);
+
+        return $entry === null ? null : $this->resolveNode($entry->value);
     }
 
     /**
-     * Returns how many values in the returned array name a variable.
+     * Returns how many values name a variable: in the returned array and in
+     * the literals other variables are written as.
      */
     public function referenceCount(string $name): int
     {
-        return $this->countReferences($this->root, $name);
-    }
-
-    private function countReferences(SourceNode $node, string $name): int
-    {
-        if ($node->kind === SourceNode::VARIABLE) {
-            return $node->variable === $name ? 1 : 0;
-        }
-
-        $count = 0;
-
-        foreach ($node->entries as $entry) {
-            $count += $this->countReferences($entry->value, $name);
-        }
-
-        return $count;
+        return $this->references[$name] ?? 0;
     }
 
     /**
@@ -314,7 +420,7 @@ final class PhpArraySourceDocument
      */
     private function getIndentStep(SourceNode $array): string
     {
-        foreach (array_reverse($this->findAncestors($this->root, $array) ?? []) as $ancestor) {
+        foreach (array_reverse($this->findAncestorsAnywhere($array)) as $ancestor) {
             $opening = $this->getLineIndent($ancestor->start);
 
             foreach ($ancestor->entries as $entry) {
@@ -333,6 +439,23 @@ final class PhpArraySourceDocument
         }
 
         return '  ';
+    }
+
+    /**
+     * Returns the arrays enclosing a node in the returned array or in the
+     * literal a variable is written as, outermost first.
+     *
+     * @return array<int, SourceNode>
+     */
+    private function findAncestorsAnywhere(SourceNode $target): array
+    {
+        foreach ($this->variables as $variable) {
+            if ($variable->value !== null && ($ancestors = $this->findAncestors($variable->value, $target)) !== null) {
+                return $ancestors;
+            }
+        }
+
+        return $this->findAncestors($this->root, $target) ?? [];
     }
 
     /**
@@ -467,6 +590,13 @@ final class PhpArraySourceDocument
 
         if ($entry === null) {
             throw new RuntimeException(sprintf('No entry at %s to replace.', self::describePath($path)));
+        }
+
+        $value = $this->resolveNode($entry->value);
+
+        if ($value !== $entry->value) {
+            // Data only this entry names is replaced where it is written.
+            return [$value->start, $value->end, self::reindent($literal, $this->getLineIndent($value->start))];
         }
 
         return [$entry->value->start, $entry->value->end, self::reindent($literal, $this->lineIndentBefore($entry->start) ?? '')];
@@ -830,14 +960,24 @@ final class PhpArraySourceDocument
 
     /**
      * Plans a nowdoc assignment of a variable placed before the `return`,
-     * after the last existing assignment when there is one.
+     * after the last existing assignment when there is one, or ahead of the
+     * variable whose literal will name it.
      *
      * @param string $name The variable name, without `$`.
      * @param string $content The exact content.
+     * @param string|null $before The variable written as data whose literal will name it.
      * @return array{0: int, 1: int, 2: string} The edit.
      */
-    public function defineVariableEdit(string $name, string $content): array
+    public function defineVariableEdit(string $name, string $content, ?string $before = null): array
     {
+        $host = $before === null ? null : ($this->variables[$before] ?? null);
+
+        if ($host !== null) {
+            $at = $this->lineStartOf($host->start);
+
+            return [$at, $at, self::nowdocAssignment($name, $content) . "\n"];
+        }
+
         $at = $this->lineStartOf($this->returnStart);
         $lastVariable = null;
 
@@ -1086,14 +1226,22 @@ final class PhpArraySourceDocument
             return null;
         }
 
+        $value = null;
+
         if ($significant === 1 && $token->is(T_CONSTANT_ENCAPSED_STRING)) {
             $kind = SourceVariable::STRING;
             $contentStart = $token->pos;
             $contentEnd = $token->pos + strlen($token->text);
+        } elseif (($literal = self::readValue($tokens, $valueAt, $source, [';'])) !== null
+            && in_array($literal['node']->kind, [SourceNode::ARRAY, SourceNode::SCALAR], true)
+            && self::nextSignificant($tokens, $literal['next']) === $cursor
+        ) {
+            $kind = SourceVariable::LITERAL;
+            $value = $literal['node'];
         }
 
         return [
-            new SourceVariable($name, $kind, $start, $tokens[$cursor]->pos + 1, $contentStart, $contentEnd),
+            new SourceVariable($name, $kind, $start, $tokens[$cursor]->pos + 1, $contentStart, $contentEnd, value: $value),
             $cursor + 1,
         ];
     }

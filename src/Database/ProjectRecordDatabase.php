@@ -1912,8 +1912,8 @@ final class ProjectRecordDatabase
 
     /**
      * Why a projection's own keys cannot be written as data in the file's source: the file builds one, or an array
-     * inside one, in a variable with its own code (a loop, a required file), which a save would replace with a
-     * literal of what the code produced while the code went on running for nothing.
+     * inside one, in a variable with its own code (a loop, a required file), which the source writer refuses to
+     * replace with a literal of what the code produced. Variables written as data are edited where they are written.
      */
     private static function findOwnedKeySourceIssue(RecordProjection $projection, PhpDataFile $file): ?string
     {
@@ -1927,8 +1927,8 @@ final class ProjectRecordDatabase
             return null;
         }
         foreach ($projection->listOwnedKeys() as $key) {
-            $node = $document->nodeAt([$key]);
-            $variable = $node === null ? null : self::findArrayVariable($node, $file->payload[$key] ?? null);
+            $entry = $document->entryAt([$key]);
+            $variable = $entry === null ? null : self::findArrayVariable($document, $entry->value, $file->payload[$key] ?? null);
             if ($variable !== null) {
                 return sprintf('builds "%s" with its own PHP code in $%s, which the editor will not replace with plain data; write it as data to edit it here', $key, $variable);
             }
@@ -1937,18 +1937,19 @@ final class ProjectRecordDatabase
         return null;
     }
 
-    /** The first variable under a source node that holds an array in the evaluated value, or null. */
-    private static function findArrayVariable(SourceNode $node, mixed $value): ?string
+    /** The first variable under a source node that the file builds in code and that holds an array, or null. */
+    private static function findArrayVariable(PhpArraySourceDocument $document, SourceNode $node, mixed $value): ?string
     {
-        if ($node->kind === SourceNode::VARIABLE) {
+        if ($document->isBuiltInCode($node)) {
             return is_array($value) ? ($node->variable ?? '') : null;
         }
+        $node = $document->resolveNode($node);
         if ($node->kind !== SourceNode::ARRAY || ! is_array($value)) {
             return null;
         }
         foreach ($node->entries as $position => $entry) {
             $key = $node->isList ? $position : $entry->key;
-            $found = (is_int($key) || is_string($key)) && array_key_exists($key, $value) ? self::findArrayVariable($entry->value, $value[$key]) : null;
+            $found = (is_int($key) || is_string($key)) && array_key_exists($key, $value) ? self::findArrayVariable($document, $entry->value, $value[$key]) : null;
             if ($found !== null) {
                 return $found;
             }

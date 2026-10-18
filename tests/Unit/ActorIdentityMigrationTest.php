@@ -84,19 +84,28 @@ it('refuses unsupported source anywhere in the batch before writing any actor', 
     expect(sourceHashTree($root))->toBe($before);
 });
 
-it('refuses a variable backed data block without flattening it', function () {
+it('refuses a data block the file builds in code without flattening it', function () {
     [$root, $path] = createLegacyActorProject();
-    file_put_contents($path, "<?php \$data = ['name' => 'Kaelion']; return ['data' => \$data];");
+    file_put_contents($path, "<?php \$data = array_merge(['name' => 'Kaelion'], []); return ['data' => \$data];");
     $before = sourceHashTree($root);
     try {
         ActorIdentityMigration::migrateProject($root);
-        $this->fail('Variable-backed actor data must be refused.');
+        $this->fail('Actor data built in code must be refused.');
     } catch (RuntimeException $failure) {
         expect($failure->getPrevious())->toBeInstanceOf(\Ichiloto\Editor\Cutscenes\Source\SourcePreservationRefusal::class)
             ->and($failure->getMessage())->toContain('refusing to flatten')
             ->and(substr_count($failure->getMessage(), $path))->toBe(1);
     }
     expect(sourceHashTree($root))->toBe($before);
+});
+
+it('migrates a data block written in a variable as data where the variable is written', function () {
+    [$root, $path] = createLegacyActorProject();
+    file_put_contents($path, "<?php \$data = ['name' => 'Kaelion']; return ['data' => \$data];");
+    ActorIdentityMigration::migrateProject($root);
+
+    expect((string) file_get_contents($path))->toContain("return ['data' => \$data];")
+        ->and((require $path)['data'])->toBe(['name' => 'Kaelion', 'id' => 'Kaelion']);
 });
 
 it('rolls back all staged actors when readback cannot reproduce the authored value', function () {

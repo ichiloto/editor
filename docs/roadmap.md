@@ -1216,10 +1216,11 @@ folder, two folders differing only by case), hands each type to
 **Source preservation, at the token level.** `PhpArraySourceDocument` maps a
 returned-array file to byte spans — prelude variables, nowdocs and heredocs
 included — and `ArraySourceWriter` turns an array diff into the fewest
-edits: moves keep their bytes, a single-reference nowdoc is edited in place,
-a shared one is retargeted to a new variable, multi-line text is written as a
-nowdoc, and an expression it cannot express is refused by path rather than
-flattened. Every rewrite is evaluated and compared before it is written.
+edits: moves keep their bytes, a single-reference nowdoc or literal variable
+is edited where it is assigned, a shared one is retargeted (a new variable
+for text, a copy of plain data otherwise), multi-line text is written as a
+nowdoc, and an expression or a variable the file builds with its own code is
+refused by path rather than flattened. Every rewrite is evaluated and compared before it is written.
 
 **The tree is the truth; the rest are projections.** The command tree is
 edited through the record pane's frames (the same frames Common Events use,

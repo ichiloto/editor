@@ -608,3 +608,149 @@ it('replaces a plain-data array with a single value and keeps an array holding a
     expect(fn() => ArraySourceWriter::rewrite(PhpArraySourceDocument::parse($commented), $old, ['terminal' => null]))
         ->toThrow(SourcePreservationRefusal::class, 'cannot be replaced by a single value');
 });
+
+// -- Variables: written as data, or built in code ------------------------------
+
+/**
+ * Rewrites a source so it evaluates to a changed array, proving it does.
+ *
+ * @return string The rewritten source.
+ */
+function rewriteSource(string $source, callable $change): string
+{
+    $old = evaluateSource($source);
+    $new = $old;
+    $change($new);
+    $rewritten = ArraySourceWriter::rewrite(PhpArraySourceDocument::parse($source), $old, $new)->source;
+
+    expect(evaluateSource($rewritten))->toBe($new);
+
+    return $rewritten;
+}
+
+it('refuses a change under a variable the file builds in code, naming it, and keeps every change beside it', function (string $prelude, string $variable, array $path, mixed $value) {
+    $source = "<?php\n\n{$prelude}\n\nreturn [\n  'built' => \${$variable},\n  'plain' => 1,\n];\n";
+    $document = PhpArraySourceDocument::parse($source);
+    $old = evaluateSource($source);
+
+    $new = $old;
+    $target = &$new;
+    foreach ($path as $step) {
+        $target = &$target[$step];
+    }
+    $target = $value;
+    unset($target);
+
+    expect(static fn() => ArraySourceWriter::rewrite($document, $old, $new))
+        ->toThrow(SourcePreservationRefusal::class, '$' . $variable . ', which the file\'s own code builds or uses');
+
+    // Nothing under it was flattened by a no-op, and the plain entry beside it still edits.
+    expect(ArraySourceWriter::rewrite($document, $old, $old)->source)->toBe($source);
+    $new = $old;
+    $new['plain'] = 2;
+    expect(ArraySourceWriter::rewrite($document, $old, $new)->source)->toBe(str_replace("'plain' => 1", "'plain' => 2", $source));
+})->with([
+    'filled by a loop' => ["\$slots = [];\nforeach (['a', 'b'] as \$role) {\n  \$slots[\$role] = ['weapon' => ['attack' => 1]];\n}", 'slots', ['built', 'a', 'weapon', 'attack'], 3],
+    'a literal changed later' => ["\$slots = ['a' => ['attack' => 1]];\n\$slots['b'] = ['attack' => 2];", 'slots', ['built', 'a', 'attack'], 3],
+    'a literal code reads' => ["\$slots = ['a' => 1];\n\$count = count(\$slots);", 'slots', ['built', 'a'], 2],
+    'a call' => ["\$slots = array_fill_keys(['a', 'b'], 1);", 'slots', ['built', 'a'], 2],
+    'computed text' => ["\$slots = strtoupper('quiet');", 'slots', ['built'], 'LOUD'],
+    'interpolated text' => ["\$name = 'Mira';\n\$slots = <<<TXT\nHello {\$name}\nTXT;", 'slots', ['built'], 'Hello Tov'],
+    'replaced wholesale' => ["\$slots = [];\nforeach (['a'] as \$role) {\n  \$slots[\$role] = 1;\n}", 'slots', ['built'], ['b' => 2]],
+]);
+
+it('refuses a variable the file never assigns at the top level', function () {
+    $source = "<?php\n\nreturn (static function (): array {\n  return [];\n})() + [];\n";
+    expect(static fn() => PhpArraySourceDocument::parse($source))->toThrow(SourceUnreadable::class);
+
+    $source = "<?php\n\nreturn [\n  'built' => \$undefined ?? [],\n];\n";
+    $document = PhpArraySourceDocument::parse($source);
+    expect(static fn() => ArraySourceWriter::rewrite($document, ['built' => []], ['built' => ['a' => 1]]))
+        ->toThrow(SourcePreservationRefusal::class, 'expression');
+});
+
+it('edits a literal only one entry names where it is assigned, comments and reference intact', function () {
+    $source = <<<'PHP_SOURCE'
+<?php
+
+// Field cadence, kept apart for reading.
+$terminal = [
+  'fps' => 25,
+  'lengthFrames' => 18,
+  'tracks' => [[
+    'id' => 'aura',
+    'keyframes' => [
+      ['frame' => 0, 'duration' => 3, 'content' => '* *'],
+    ],
+  ]],
+  // No sound cues yet.
+  'cues' => [],
+];
+
+return [
+  'presentations' => [
+    'terminal' => $terminal,
+  ],
+];
+PHP_SOURCE;
+
+    $rewritten = rewriteSource($source, static function (array &$new): void {
+        $new['presentations']['terminal']['fps'] = 12;
+        $new['presentations']['terminal']['playback'] = 'once';
+        $new['presentations']['terminal']['tracks'][0]['keyframes'][] = ['frame' => 3, 'duration' => 3, 'content' => "+\n+"];
+        unset($new['presentations']['terminal']['lengthFrames']);
+    });
+
+    expect($rewritten)->toContain("    'terminal' => \$terminal,\n")
+        ->and($rewritten)->toContain("// Field cadence, kept apart for reading.\n")
+        ->and($rewritten)->toContain("  // No sound cues yet.\n  'cues' => [],\n")
+        ->and($rewritten)->toContain("  'fps' => 12,\n")
+        ->and($rewritten)->toContain("  'playback' => 'once',\n")
+        ->and($rewritten)->not->toContain('lengthFrames')
+        // New art is a nowdoc defined ahead of the literal that names it.
+        ->and(strpos($rewritten, "\$keyframes_1_content = <<<'ART'\n+\n+\nART;"))->toBeLessThan(strpos($rewritten, '$terminal = ['))
+        ->and($rewritten)->toContain("['frame' => 3, 'duration' => 3, 'content' => \$keyframes_1_content],");
+});
+
+it('edits a scalar literal only one entry names where it is assigned', function () {
+    $source = "<?php\n\n\$speed = 3;\n\nreturn [\n  'speed' => \$speed,\n];\n";
+    expect(rewriteSource($source, static function (array &$new): void { $new['speed'] = 4; }))
+        ->toBe(str_replace('$speed = 3;', '$speed = 4;', $source));
+});
+
+it('gives one entry its own copy of plain data several entries share, and refuses a copy that would lose source', function () {
+    $shared = "<?php\n\n\$found = ['type' => 'event', 'name' => 'cards_found'];\n\nreturn [\n  'brann' => ['conditions' => [\$found]],\n  'vale' => ['conditions' => [\$found]],\n];\n";
+    $rewritten = rewriteSource($shared, static function (array &$new): void {
+        $new['brann']['conditions'][0]['name'] = 'brann_found';
+    });
+
+    expect($rewritten)->toContain("\$found = ['type' => 'event', 'name' => 'cards_found'];")
+        ->and($rewritten)->toContain("'vale' => ['conditions' => [\$found]],")
+        ->and($rewritten)->toContain("'brann' => ['conditions' => [['type' => 'event', 'name' => 'brann_found']]],");
+
+    $commented = str_replace("['type' => 'event', 'name' => 'cards_found'];", "[\n  // The shared gate.\n  'type' => 'event',\n  'name' => 'cards_found',\n];", $shared);
+    $document = PhpArraySourceDocument::parse($commented);
+    $old = evaluateSource($commented);
+    $new = $old;
+    $new['brann']['conditions'][0]['name'] = 'brann_found';
+
+    expect(static fn() => ArraySourceWriter::rewrite($document, $old, $new))
+        ->toThrow(SourcePreservationRefusal::class, '$found, which 2 values share');
+});
+
+it('counts a literal named inside another literal as shared, so neither edit changes the other', function () {
+    $source = "<?php\n\n\$gate = ['type' => 'event', 'name' => 'met'];\n\$scene = ['when' => \$gate, 'line' => 'Hello'];\n\nreturn [\n  'scene' => \$scene,\n  'gate' => \$gate,\n];\n";
+    $document = PhpArraySourceDocument::parse($source);
+
+    expect($document->referenceCount('gate'))->toBe(2)
+        ->and($document->variable('scene')?->kind)->toBe(SourceVariable::LITERAL);
+
+    $rewritten = rewriteSource($source, static function (array &$new): void {
+        $new['scene']['when']['name'] = 'left';
+        $new['scene']['line'] = 'Goodbye';
+    });
+
+    expect($rewritten)->toContain("\$gate = ['type' => 'event', 'name' => 'met'];")
+        ->and($rewritten)->toContain("\$scene = ['when' => ['type' => 'event', 'name' => 'left'], 'line' => 'Goodbye'];")
+        ->and($rewritten)->toContain("  'gate' => \$gate,\n");
+});
