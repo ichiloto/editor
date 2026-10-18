@@ -3870,7 +3870,7 @@ class ProjectValidator
         }
 
         if (ChestLoot::isChest($definition)) {
-          $issues = [...$issues, ...$this->checkChestLoot($data, $where)];
+          $issues = [...$issues, ...$this->checkChestLoot($map->mapId, strval($marker), $data)];
         }
       }
 
@@ -4019,17 +4019,18 @@ class ProjectValidator
   }
 
   /**
-   * Checks that a chest can give what it holds, by the shared chest check
-   * the inspectors and the play preflight also read.
+   * Checks that a chest can give what it holds, by the Engine's chest rule
+   * the inspectors and the map save warnings also read.
    *
+   * @param string $mapId The map the chest is on.
+   * @param string $marker The chest event's marker.
    * @param array<string, mixed> $data The chest's data.
-   * @param string $where Where it lives.
    * @return Issue[] The issues found.
    */
-  protected function checkChestLoot(array $data, string $where): array
+  protected function checkChestLoot(string $mapId, string $marker, array $data): array
   {
     return $this->inventoryCatalog instanceof InventoryCatalog
-      ? new ChestRewardValidator($this->inventoryCatalog)->validate($data, $where)
+      ? new ChestRewardValidator($this->inventoryCatalog)->validate($mapId, $marker, $data)
       : [];
   }
 
