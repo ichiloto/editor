@@ -25,7 +25,9 @@ use Ichiloto\Editor\Field\MapEncounters;
 use Ichiloto\Editor\Field\MapAtlas;
 use Ichiloto\Editor\Field\MapLandmarks;
 use Ichiloto\Editor\History\Command;
+use Ichiloto\Editor\History\CommandGroup;
 use Ichiloto\Editor\History\GenericCommand;
+use Ichiloto\Editor\MapSourceRefusal;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\Validation\ChestRewardValidator;
 use Ichiloto\Editor\Validation\Issue;
@@ -355,6 +357,9 @@ final readonly class MapInspector
      */
     private function applyLandmarkValue(ProjectMap $map, array $field, mixed $value): ?Command
     {
+        if (($field['target'] ?? null) === MapLandmarkFields::TARGET && ($field['field'] ?? null) === MapLandmarkFields::ID_FIELD) {
+            return $this->renameLandmark($map, $field, (string) $value);
+        }
         try {
             $entries = $this->getLandmarkFields()->applyValue($map, $field, $value);
         } catch (InvalidArgumentException $error) {
@@ -362,6 +367,42 @@ final readonly class MapInspector
         }
 
         return $entries === null ? null : $this->writeLandmarks($map, $entries, trim((string) ($field['label'] ?? 'Landmark')));
+    }
+
+    /**
+     * Renames a landmark and, in the same undo step, the atlas entry of every map that names it, so no local map
+     * loses its place above. When any of those maps cannot take the edit, nothing is renamed.
+     *
+     * @param array<string, mixed> $field The landmark's id row.
+     * @throws InspectorRefusal When the id is refused, the map would not load the result, or a map naming it cannot follow.
+     */
+    private function renameLandmark(ProjectMap $map, array $field, string $id): ?Command
+    {
+        try {
+            $rename = $this->getLandmarkFields()->renameEntry($map, $field, $id);
+        } catch (InvalidArgumentException $error) {
+            throw new InspectorRefusal($error->getMessage(), previous: $error);
+        }
+        if ($rename === null) { return null; }
+
+        $problem = $this->getLandmarkFields()->findCurrentProblem($map, $rename['entries']);
+        if ($problem !== null) { throw new InspectorRefusal($problem); }
+
+        // The maps naming it first: one that cannot follow refuses the rename before the landmark itself changes.
+        $commands = [];
+        try {
+            foreach ($rename['children'] as $child) {
+                $commands[] = $this->writeMapData($child, [MapAtlas::KEY, 'parent', 'landmark'], $rename['to'], sprintf('%s atlas entry', $child->mapId));
+            }
+            $commands[] = $this->writeMapData($map, [MapLandmarks::KEY], $rename['entries'], 'Landmark id');
+        } catch (MapSourceRefusal $refusal) {
+            foreach (array_reverse(array_filter($commands)) as $command) { $command->undo(); }
+            throw new InspectorRefusal(sprintf('Landmark %s was not renamed: %s', $rename['from'], $refusal->getMessage()), previous: $refusal);
+        }
+
+        $commands = array_values(array_filter($commands));
+
+        return $commands === [] ? null : new CommandGroup(sprintf('Landmark rename %s to %s', $rename['from'] ?? '(no id)', $rename['to']), $commands);
     }
 
     /**

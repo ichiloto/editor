@@ -1784,8 +1784,12 @@ final class EditorSession
      * first: nothing changes until the edit is made again with `$answer`
      * `clear` (clear its tile layers and change) or `cancel`.
      *
+     * When the edit changes other maps too (renaming a landmark renames the
+     * atlas entry of every map naming it), `revisions` gives each of those
+     * maps' new revision.
+     *
      * @param array<string, mixed> $key The row's key, as `readInspector` gave it.
-     * @return array{status: 'applied', revision: int, changed: bool}|array{status: 'question', question: string, answers: list<array{key: string, label: string, description: string}>}
+     * @return array{status: 'applied', revision: int, changed: bool, revisions?: array<string, int>}|array{status: 'question', question: string, answers: list<array{key: string, label: string, description: string}>}
      * @throws SessionRefusal When the map is unknown or stale, the row is gone or read-only, or the edit is refused.
      */
     public function applyInspector(string $mapId, int $revision, array $key, string $value, ?string $answer = null): array
@@ -1817,11 +1821,20 @@ final class EditorSession
             }
         }
 
+        $before = array_map($this->getMapRevision(...), $this->getMapsById());
         $command = $this->runEdit(static fn(): ?Command => ($field['target'] ?? null) === 'map-kind'
             ? $inspector->changeMapKind($map, $value, $cleared > 0 && $answer === 'clear')
             : $inspector->apply($map, $field, $value));
+        // A row may change other maps in the same step: a landmark rename carries the atlas entries naming it.
+        $others = [];
+        foreach ($this->getMapsById() as $otherId => $other) {
+            if ($other !== $map && $this->getMapRevision($other) !== ($before[$otherId] ?? null)) {
+                $others[(string) $otherId] = $this->getMapRevision($other);
+            }
+        }
 
-        return ['status' => 'applied', 'revision' => $this->getMapRevision($map), 'changed' => $command !== null];
+        return ['status' => 'applied', 'revision' => $this->getMapRevision($map), 'changed' => $command !== null,
+            ...($others === [] ? [] : ['revisions' => $others])];
     }
 
     /**
