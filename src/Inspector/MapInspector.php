@@ -196,6 +196,8 @@ final readonly class MapInspector
             ],
             ...$this->mapRuntimeFields($map),
             ...MapAtlasFields::describeMapFields($map, $this->references),
+            // Where the region map pins it, beside where the atlas places it.
+            MapStationField::describeField($map),
             ...MapTerrainFields::describeMapFields($map),
             ...$this->getLandmarkFields()->describeMapFields($map),
         ];
@@ -346,6 +348,7 @@ final readonly class MapInspector
             MapLandmarkFields::TARGET, MapLandmarkFields::EVENT_TARGET, MapLandmarkFields::OBJECT_TARGET => $this->applyLandmarkValue($map, $field, $value),
             MapAtlasFields::TARGET => $this->applyAtlasValue($map, $field, $value),
             MapTerrainFields::TARGET => $this->applyTerrainValue($map, $field, $value),
+            MapStationField::TARGET => $this->applyStationValue($map, (string) $value),
             default => null,
         };
     }
@@ -387,6 +390,22 @@ final readonly class MapInspector
         if ($problem !== null) { throw new InspectorRefusal($problem); }
 
         return $this->writeMapData($map, [MapAtlas::KEY], $block === [] ? null : $block, 'Atlas terrain');
+    }
+
+    /**
+     * Pins the map to a cell of its region's map, or takes the pin away, as one undo step.
+     *
+     * @throws InspectorRefusal When the value is not an x, y pair of whole numbers.
+     */
+    private function applyStationValue(ProjectMap $map, string $value): ?Command
+    {
+        try {
+            $station = MapStationField::applyValue($map, $value);
+        } catch (InvalidArgumentException $error) {
+            throw new InspectorRefusal($error->getMessage(), previous: $error);
+        }
+
+        return $this->writeMapData($map, [MapStationField::KEY], $station, 'Station');
     }
 
     /** The landmark rows, over the project's place categories and maps as this inspector reads them. */

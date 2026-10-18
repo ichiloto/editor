@@ -10,7 +10,7 @@ use Ichiloto\Editor\Session\SessionRefusal;
  * An event's record rows through the session, as a GUI editor or an agent
  * authors them: the fields every trigger reads on every event type, a Story
  * Script's inline commands in the shared command editor, a Dialogue event's
- * conditional pages and talk-to id. Every edit is checked against the written source: authored
+ * conditional pages and talk-to id, and the map's region station. Every edit is checked against the written source: authored
  * comments, expressions and untouched keys stay as they were.
  */
 
@@ -245,6 +245,29 @@ it('turns a Dialogue event\'s pages into conditional variants without losing a l
         ->and($saved['data']['dialogue'][1])->toBe(['lines' => [['name' => '', 'text' => 'Before we met.']]])
         ->and($saved['sets'])->toBe([['type' => 'event', 'name' => 'met_guide', 'note' => 'kept by the author']])
         ->and($revision)->toBeInt();
+});
+
+it('pins a map to a cell of its region map as one x, y pair, and takes the pin away', function () {
+    $root = eventRecordProject();
+    $request = eventRecordHost($root);
+    $read = $request('inspector.read', ['map' => 'test-map'])['result'];
+    $station = eventRecordRow($read, 'station');
+
+    expect($station)->toMatchArray(['kind' => 'text', 'label' => 'Region Map Station', 'raw' => '', 'value' => '(placed from its doors)']);
+    foreach (['3', '3, 4, 5', 'a, b', '1.5, 2'] as $bad) {
+        expect($request('inspector.apply', ['map' => 'test-map', 'revision' => $read['revision'], 'key' => $station['key'], 'value' => $bad])['error']['message'])
+            ->toContain('two whole numbers');
+    }
+
+    $applied = $request('inspector.apply', ['map' => 'test-map', 'revision' => $read['revision'], 'key' => $station['key'], 'value' => ' -2, 7 '])['result'];
+    expect(eventRecordRow($request('inspector.read', ['map' => 'test-map'])['result'], 'station')['raw'])->toBe('-2, 7');
+    $request('map.save', ['map' => 'test-map']);
+    expect((require eventRecordDataPath($root))['station'])->toBe(['x' => -2, 'y' => 7])
+        ->and(file_get_contents(eventRecordDataPath($root)))->toContain('// Synthetic map for event record authoring.');
+
+    $request('inspector.apply', ['map' => 'test-map', 'revision' => $applied['revision'], 'key' => $station['key'], 'value' => '']);
+    $request('map.save', ['map' => 'test-map']);
+    expect(require eventRecordDataPath($root))->not->toHaveKey('station');
 });
 
 it('places a Story Script\'s inline route on the map through its frame rows, at the commands\' place in the event data', function () {
