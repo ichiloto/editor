@@ -373,12 +373,12 @@ it('validates what a chest gives out', function () {
 
     $lines = implode("\n", issueLines($root));
 
-    expect($lines)->toContain('It names the item "item.absent", which does not exist.')
-        ->and($lines)->toContain('It gives gold "lots", which is not an amount.')
-        ->and($lines)->toContain('Its loot type "treasure" is not one the game knows.')
-        // An unconfigured chest is unfinished authoring, not a broken
-        // reference.
-        ->and($lines)->not->toContain('event I');
+    expect($lines)->toContain('test-map event E: It gives the item "item.absent", which does not exist, so it fails when opened.')
+        ->and($lines)->toContain('test-map event G: It gives gold "lots", which is not an amount.')
+        ->and($lines)->toContain('test-map event H: Its loot type "treasure" is not one the Engine knows, so the game reads it as an item.')
+        // A chest with no item chosen fails when opened, so it is reported
+        // too; it still saves as the author left it.
+        ->and($lines)->toContain('test-map event I: It has no item chosen, so it fails when opened.');
 });
 
 it('keeps a key item\'s quantity through the condition line, both ways', function () {

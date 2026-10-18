@@ -6670,7 +6670,7 @@ final class Editor
             return;
         }
 
-        $warnings = MapValidator::validate($selectedMap, $this->getMapsById());
+        $warnings = MapValidator::validate($selectedMap, $this->getMapsById(), MapValidator::readInventoryCatalog($this->workspace));
         $step = null;
 
         try {
@@ -12712,7 +12712,7 @@ final class Editor
 
     private function getLootTypeOptionEntries(): array
     {
-        return MapInspector::LOOT_TYPE_CHOICES;
+        return MapInspector::listLootTypeChoices();
     }
     private function resolveEventOptionSelectionIndex(string $currentValue): int
     {

@@ -237,10 +237,10 @@ final class ReferenceCatalog
             // entitled to sell. What is offered -- and stored -- is the
             // stable definition id, which is the identity the runtime
             // resolves and the one thing a rename does not change.
-            'inventory' => $this->inventoryCatalog()->ids(),
-            'items' => $this->inventoryCatalog()->idsIn('items'),
-            'weapons' => $this->inventoryCatalog()->idsIn('weapons'),
-            'armors' => $this->inventoryCatalog()->idsIn('armors'),
+            'inventory' => $this->getInventoryCatalog()->ids(),
+            'items' => $this->getInventoryCatalog()->idsIn('items'),
+            'weapons' => $this->getInventoryCatalog()->idsIn('weapons'),
+            'armors' => $this->getInventoryCatalog()->idsIn('armors'),
             'bgm', 'sfx' => $this->audioValues($category),
             // The engine loads an enemy's image as
             // Graphics/Enemies/<value>.txt, appending the extension itself,
@@ -811,8 +811,8 @@ final class ReferenceCatalog
 
         $labels = [];
 
-        foreach ($this->inventoryCatalog()->definitions() as $id => $definition) {
-            $labels[$id] = $this->inventoryCatalog()->describe($id);
+        foreach ($this->getInventoryCatalog()->definitions() as $id => $definition) {
+            $labels[$id] = $this->getInventoryCatalog()->describe($id);
         }
 
         return $labels;
@@ -823,7 +823,7 @@ final class ReferenceCatalog
      *
      * @return InventoryCatalog The catalogue.
      */
-    private function inventoryCatalog(): InventoryCatalog
+    public function getInventoryCatalog(): InventoryCatalog
     {
         return $this->inventoryCatalog ??= InventoryCatalog::fromWorkspace($this->workspace);
     }

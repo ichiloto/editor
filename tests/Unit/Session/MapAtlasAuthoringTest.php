@@ -67,7 +67,7 @@ it('refuses a parent chain the Engine would refuse, and keeps entries other maps
 it('reports an atlas whose parent no longer exists', function () {
     [, , $session] = createAtlasProject("'atlas' => ['parent' => ['map' => 'world', 'landmark' => 'old-gate']],");
     $map = getSessionMap($session);
-    $problems = MapValidator::validate($map, ['test-map' => $map, 'world' => getSessionMap($session, 'world')]);
+    $problems = MapValidator::validate($map, ['test-map' => $map, 'world' => getSessionMap($session, 'world')], mapValidatorInventory());
     expect($problems)->toContain('Atlas: Atlas parent landmark does not exist on its referenced map.');
     expect(findAtlasRow($session, 'parent')['optionLabels'])->toContain('world#old-gate · no longer declared');
 });

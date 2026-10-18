@@ -419,7 +419,7 @@ it('includes graphics problems in the pre-save map warnings, unsaved resizes inc
     $map = loadLayeredMap($root);
     $map->setMapDataField(['tileset'], 'missing');
 
-    expect(MapValidator::validate($map, ['test-map' => $map]))->toContain('Tileset missing was not found at Data/Tilesets/missing.php.');
+    expect(MapValidator::validate($map, ['test-map' => $map], mapValidatorInventory()))->toContain('Tileset missing was not found at Data/Tilesets/missing.php.');
 
     $map->setMapDataField(['tileset'], 'home');
     $map->resize(6, 3);
@@ -430,7 +430,7 @@ it('includes graphics problems in the pre-save map warnings, unsaved resizes inc
     $map = loadLayeredMap($root);
     $coverage = array_map(static fn(Issue $issue): string => $issue->message, MapGraphicsValidator::validateCoverage($map));
     expect($coverage)->not->toBe([])
-        ->and(array_intersect(MapValidator::validate($map, ['test-map' => $map]), $coverage))->toBe([]);
+        ->and(array_intersect(MapValidator::validate($map, ['test-map' => $map], mapValidatorInventory()), $coverage))->toBe([]);
 });
 
 it('warns about a map without a kind only in a project that has tilesets', function () {
