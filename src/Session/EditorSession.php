@@ -4207,6 +4207,89 @@ final class EditorSession
         return $this->changeWorldObject($mapId, $revision, static fn($authoring): ?Command => $authoring->placeObject($id, $x, $y, $coverage));
     }
 
+    /**
+     * Moves a world object by a step with what shows it in the terminal, as
+     * one undo step: its anchor, the cells it covers, and the glyphs on those
+     * cells of its covered layer, with the tiles those glyphs draw. The cells
+     * it leaves become blank. Furniture moved this way leaves no glyph
+     * behind; an event that describes it moves with `event.move`.
+     *
+     * @return array{changed: bool, revision: int}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, the object is unknown, or a destination cell
+     *     leaves the map, holds another glyph or is covered by another object.
+     */
+    public function moveWorldObject(string $mapId, int $revision, string $id, int $dx, int $dy): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        if ($map->getGridSourceIssue() !== null) {
+            throw new SessionRefusal(sprintf('%s is read-only: %s', $mapId, $map->getGridSourceIssue()));
+        }
+        if ($dx === 0 && $dy === 0) {
+            return ['changed' => false, 'revision' => $this->getMapRevision($map)];
+        }
+        try {
+            $entry = array_find(WorldObjectAuthoring::readEntries($map), static fn(array $entry): bool => ($entry['id'] ?? null) === $id)
+                ?? throw new InvalidArgumentException(sprintf('%s has no world object %s.', $mapId, $id));
+        } catch (InvalidArgumentException $error) {
+            throw new SessionRefusal($error->getMessage(), previous: $error);
+        }
+
+        $commands = [];
+        $layerName = $entry['covers']['layer'] ?? null;
+        if (is_string($layerName)) {
+            $layerId = array_find($map->getLayers(), static fn(array $layer): bool => $layer['name'] === $layerName)['id']
+                ?? throw new SessionRefusal(sprintf('World object %s covers layer %s, which %s does not have.', $id, $layerName, $mapId));
+            $from = array_map(static fn(array $cell): array => [(int) $cell[0], (int) $cell[1]], $entry['covers']['cells']);
+            $to = array_map(static fn(array $cell): array => [$cell[0] + $dx, $cell[1] + $dy], $from);
+            $writes = [];
+            foreach ($from as $cell) {
+                if (! in_array($cell, $to, true)) {
+                    $writes[] = ['x' => $cell[0], 'y' => $cell[1], 'symbol' => ' ', 'color' => ''];
+                }
+            }
+            foreach ($to as $index => [$x, $y]) {
+                if ($x < 0 || $y < 0 || $x >= $map->getWidth() || $y >= $map->getHeight()) {
+                    throw new SessionRefusal(sprintf('Moving %s by %d, %d reaches %d, %d, outside %s.', $id, $dx, $dy, $x, $y, $mapId));
+                }
+                if (! in_array([$x, $y], $from, true) && ($held = $map->getLayerSymbol($layerId, $x, $y)) !== ' ') {
+                    throw new SessionRefusal(sprintf('%d, %d on the %s layer holds %s; clear it before moving %s there.', $x, $y, $layerName, $held, $id));
+                }
+                [$fromX, $fromY] = $from[$index];
+                $writes[] = ['x' => $x, 'y' => $y, 'symbol' => $map->getLayerSymbol($layerId, $fromX, $fromY),
+                    'color' => $map->getLayerColor($layerId, $fromX, $fromY) ?? ''];
+            }
+            try {
+                $plan = CanvasEditor::plan($map, $layerId, $writes, [], true);
+                if ($plan !== null && $plan['unresolved'] !== []) {
+                    throw new SessionRefusal(sprintf('Glyph %s of %s could be several pieces; paint it where it goes, then move the object.',
+                        (string) array_key_first($plan['unresolved']), $id));
+                }
+                $glyphs = CanvasEditor::apply($map, $layerId, $plan['writes'] ?? $writes, 'Move world object', $plan['tiles'] ?? [])['command'];
+            } catch (MapSourceRefusal $refusal) {
+                throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+            }
+            if ($glyphs !== null) {
+                $commands[] = $glyphs;
+            }
+        }
+        try {
+            $object = $this->createWorldObjectAuthoring($map)->moveObject($id, $dx, $dy);
+        } catch (InvalidArgumentException|\RuntimeException $error) {
+            foreach (array_reverse($commands) as $command) {
+                $command->undo();
+            }
+            throw new SessionRefusal($error->getMessage(), previous: $error);
+        }
+        if ($object !== null) {
+            $commands[] = $object;
+        }
+        if ($commands !== []) {
+            $this->history->record(new CommandGroup('Move world object', $commands));
+        }
+
+        return ['changed' => $commands !== [], 'revision' => $this->getMapRevision($map)];
+    }
+
     public function moveWorldObjectVariant(string $mapId, int $revision, string $id, string $variantId, int $offset): array
     {
         return $this->changeWorldObject($mapId, $revision, static fn($authoring): ?Command => $authoring->moveVariant($id, $variantId, $offset));

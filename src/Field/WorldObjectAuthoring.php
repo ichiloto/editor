@@ -470,6 +470,44 @@ final readonly class WorldObjectAuthoring
         return $this->writeEntries($entries, $coverage ? 'Toggle world-object coverage' : 'Place world-object anchor');
     }
 
+    /**
+     * Moves an object's anchor and the cells it covers by a step, keeping its
+     * shape. The glyphs on those cells are the map's to move with it
+     * ({@see EditorSession::moveWorldObject()}).
+     *
+     * @throws InvalidArgumentException When the object is unknown, or the step leaves the map or reaches cells another object covers.
+     */
+    public function moveObject(string $id, int $dx, int $dy): ?Command
+    {
+        $entries = self::readEntries($this->map);
+        $index = $this->getIndex($id);
+        $moved = static fn(array $cell): array => [$cell[0] + $dx, $cell[1] + $dy];
+        $entries[$index]['anchor'] = ['x' => $entries[$index]['anchor']['x'] + $dx, 'y' => $entries[$index]['anchor']['y'] + $dy];
+        if (isset($entries[$index]['covers'])) {
+            $layer = $entries[$index]['covers']['layer'];
+            $cells = array_map($moved, $entries[$index]['covers']['cells']);
+            foreach ($entries as $other => $entry) {
+                if ($other === $index || ($entry['covers']['layer'] ?? null) !== $layer) {
+                    continue;
+                }
+                $taken = array_values(array_filter($cells, static fn(array $cell): bool => in_array($cell, $entry['covers']['cells'], true)));
+                if ($taken !== []) {
+                    throw new InvalidArgumentException(sprintf('%d, %d on the %s layer is covered by world object %s; move it first.',
+                        $taken[0][0], $taken[0][1], $layer, $entry['id']));
+                }
+            }
+            $entries[$index]['covers']['cells'] = $cells;
+        }
+        foreach ([$entries[$index]['anchor'], ...array_map(static fn(array $cell): array => ['x' => $cell[0], 'y' => $cell[1]],
+            $entries[$index]['covers']['cells'] ?? [])] as $cell) {
+            if ($cell['x'] < 0 || $cell['y'] < 0 || $cell['x'] >= $this->map->getWidth() || $cell['y'] >= $this->map->getHeight()) {
+                throw new InvalidArgumentException(sprintf('Moving %s by %d, %d reaches %d, %d, outside the map.', $id, $dx, $dy, $cell['x'], $cell['y']));
+            }
+        }
+
+        return $this->writeEntries($entries, 'Move world object');
+    }
+
     private function writeRecords(ProjectRecordDatabase $records, string $label): ?Command
     {
         $entries = array_map(static fn($record): array => (array) $record->toArray(), $records->getRecords());
