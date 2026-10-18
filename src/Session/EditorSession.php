@@ -76,6 +76,7 @@ use Ichiloto\Editor\Playtest\PlaytestRun;
 use Ichiloto\Editor\Playtest\PlaytestStart;
 use Ichiloto\Editor\Maps\LayerEditor;
 use Ichiloto\Editor\Maps\LineRemoval;
+use Ichiloto\Editor\Maps\MapFolder;
 use Ichiloto\Editor\Maps\MapLinePlan;
 use Ichiloto\Editor\Maps\MapLinePlanner;
 use Ichiloto\Editor\Maps\MapLayers;
@@ -374,25 +375,31 @@ final class EditorSession
     }
 
     /**
-     * Creates a blank map at the maps root, written to disk at once as the
-     * terminal editor creates one, named after `$name` (`new-map` when
-     * empty) with a numbered suffix when that is taken. Every open map keeps
-     * its unsaved changes and the undo history stays.
+     * Creates a blank map, written to disk at once as the terminal editor
+     * creates one. Without `$mapId` it goes at the maps root, named after
+     * `$name` (`new-map` when empty) with a numbered suffix when that is
+     * taken. With one it goes at exactly that folder path, which may nest
+     * inside another map's folder ({@see MapFolder}), named `$name` or after
+     * the id's last segment. Every open map keeps its unsaved changes and the
+     * undo history stays.
      *
+     * @param string|null $mapId The new map's id; null derives one from the name.
      * @return array{map: string, maps: list<array<string, mixed>>}
-     * @throws SessionRefusal When the kind is unknown, the size is not a size, or the files cannot be written.
+     * @throws SessionRefusal When the kind is unknown, the size is not a size, the id is not a free map folder path, or the files cannot be written.
      */
-    public function createMap(?string $name, ?string $kind, int $width, int $height): array
+    public function createMap(?string $name, ?string $kind, int $width, int $height, ?string $mapId = null): array
     {
         if ($kind !== null && ! in_array($kind, array_column($this->listMapKinds(), 'value'), true)) {
             throw new SessionRefusal(sprintf('There is no map kind %s.', $kind));
         }
         $baseName = $name === null || trim($name) === '' ? null : ProjectMap::slugify($name, '');
-        if ($baseName === '') {
+        if ($mapId === null && $baseName === '') {
             throw new SessionRefusal(sprintf('"%s" has no letters or digits to name a map with.', $name));
         }
         try {
-            $mapId = $this->workspace->createMap($baseName, kind: $kind, width: $width, height: $height);
+            $mapId = $mapId === null
+                ? $this->workspace->createMap($baseName, kind: $kind, width: $width, height: $height)
+                : $this->workspace->createMapAt($mapId, $name === null || trim($name) === '' ? null : trim($name), kind: $kind, width: $width, height: $height);
         } catch (MapSourceRefusal|RuntimeException $error) {
             throw new SessionRefusal(sprintf('The map was not created: %s', $error->getMessage()), previous: $error);
         }
@@ -403,17 +410,20 @@ final class EditorSession
 
     /**
      * Copies the current authored map through the workspace's transactional
-     * duplicate operation. Unsaved source edits are included in the copy;
-     * the original and every other loaded document and undo step remain.
+     * duplicate operation, beside it under the next free `-copy` name or at
+     * the folder path `$to` names ({@see MapFolder}). Unsaved source edits
+     * are included in the copy; the original and every other loaded document
+     * and undo step remain.
      *
+     * @param string|null $to The copy's id; null takes the next free sibling.
      * @return array{map: string, maps: list<array<string, mixed>>}
-     * @throws SessionRefusal When the revision is stale or source cannot be copied safely.
+     * @throws SessionRefusal When the revision is stale, the id is not a free map folder path, or source cannot be copied safely.
      */
-    public function duplicateMap(string $mapId, int $revision): array
+    public function duplicateMap(string $mapId, int $revision, ?string $to = null): array
     {
         $this->requireCurrentMap($mapId, $revision);
         try {
-            $created = $this->workspace->duplicateMap((int) array_search($mapId, $this->workspace->mapIds, true))
+            $created = $this->workspace->duplicateMap((int) array_search($mapId, $this->workspace->mapIds, true), mapId: $to)
                 ?? throw new RuntimeException('The map is no longer in the workspace.');
         } catch (MapSourceRefusal|RuntimeException $error) {
             throw new SessionRefusal(sprintf('%s was not duplicated: %s', $mapId, $error->getMessage()), previous: $error);
@@ -424,31 +434,48 @@ final class EditorSession
     }
 
     /**
-     * Explicitly moves a map to its metadata-derived path after the author
-     * reviews that exact destination. As in the TUI, references are not
-     * migrated and a successful move clears undo history naming retired maps.
-     * Ordinary saves never call this operation.
+     * Explicitly moves a map after the author reviews that exact
+     * destination: its metadata-derived path, or the folder path `$to` names
+     * ({@see MapFolder}), which may nest inside another map's folder. The
+     * first call asks, naming the destination and its references; the
+     * confirming call repeats `$to` and gives the reviewed `$destination`.
+     * As in the TUI, references are not migrated and a successful move
+     * clears undo history naming retired maps. Ordinary saves never call
+     * this operation.
      *
+     * @param string|null $destination The destination the author reviewed, repeated to confirm.
+     * @param string|null $to The id to move to; null proposes the metadata-derived path.
      * @return array<string, mixed>
-     * @throws SessionRefusal When the revision or reviewed path changed, or source cannot move safely.
+     * @throws SessionRefusal When the revision or reviewed path changed, the id is not a free map folder path, or source cannot move safely.
      */
-    public function moveMap(string $mapId, int $revision, ?string $destination = null, bool $confirmed = false): array
+    public function moveMap(string $mapId, int $revision, ?string $destination = null, bool $confirmed = false, ?string $to = null): array
     {
         $this->refuseDuringChangeSet('Moving a map clears the undo history');
         $map = $this->requireCurrentMap($mapId, $revision);
         if ($map->getGridSourceIssue() !== null) {
             throw new SessionRefusal(sprintf('%s is read-only: %s', $mapId, $map->getGridSourceIssue()));
         }
-        $proposed = $map->getProposedMapId();
+        $proposed = $to ?? $map->getProposedMapId();
         if ($destination !== null && $destination !== $proposed) {
-            throw new SessionRefusal('The derived destination changed; review the proposed move again.');
+            throw new SessionRefusal($to === null
+                ? 'The derived destination changed; review the proposed move again.'
+                : 'The reviewed destination is not the id to move to; review the move again.');
         }
         if ($proposed === $mapId) {
             return ['status' => 'unchanged', 'map' => $mapId, 'destination' => $proposed, 'maps' => $this->describeMaps()];
         }
+        if ($to !== null) {
+            // Refused before the question, so an author never reviews a move that cannot happen.
+            try {
+                MapFolder::requireFreeFolder($this->workspace->getMapsRoot(), $to);
+            } catch (InvalidArgumentException $error) {
+                throw new SessionRefusal(sprintf('%s was not moved: %s', $mapId, $error->getMessage()), previous: $error);
+            }
+        }
         if (! $confirmed) {
             return [
                 'status' => 'question', 'map' => $mapId, 'revision' => $revision, 'destination' => $proposed,
+                ...($to === null ? [] : ['to' => $to]),
                 'references' => new MapReferences($this->workspace)->describe($mapId),
                 'warning' => 'References are not migrated: doors, quests, saves and one-shot events naming the old id keep naming it. Moving clears the undo history. The original map folder is removed only after the new map validates.',
             ];

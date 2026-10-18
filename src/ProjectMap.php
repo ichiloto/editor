@@ -31,6 +31,7 @@ use Ichiloto\Engine\IO\Console\TerminalText;
 use Ichiloto\Engine\IO\Console\SgrStyleState;
 use Ichiloto\Engine\Rendering\Tilesets\Tileset;
 use Ichiloto\Editor\Maps\EditableGrid;
+use Ichiloto\Editor\Maps\MapFolder;
 use Ichiloto\Editor\Maps\MapLayers;
 use Ichiloto\Editor\Maps\TileLayerSettings;
 use Closure;
@@ -2940,9 +2941,12 @@ final class ProjectMap
      * event identities that name the old id keep naming it, which is the
      * caller's warning to give.
      *
-     * @param string $newRelativeId The new project-relative map id.
+     * @param string $newRelativeId The new project-relative map id, a map
+     *   folder path nothing stands at yet ({@see MapFolder}).
      * @return self The relocated map, freshly loaded from its new path; the
      *   caller replaces this instance with it.
+     * @throws RuntimeException When the id is not a map folder path, its
+     *   folder is taken, or the move fails (rolled back).
      */
     public function moveTo(string $newRelativeId): self
     {
@@ -2960,10 +2964,10 @@ final class ProjectMap
         $this->assertGridSourcesCanonical();
 
         $mapsRoot = $this->getMapsRoot();
-        $directory = $mapsRoot . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $newRelativeId);
-
-        if (is_dir($directory)) {
-            throw new RuntimeException("Map path {$newRelativeId} already exists.");
+        try {
+            $directory = MapFolder::requireFreeFolder($mapsRoot, $newRelativeId);
+        } catch (InvalidArgumentException $error) {
+            throw new RuntimeException($error->getMessage(), previous: $error);
         }
 
         $previousDirectory = $this->directory;

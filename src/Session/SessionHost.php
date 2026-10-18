@@ -141,11 +141,14 @@ final class SessionHost
                 is_string($params['kind'] ?? null) ? $params['kind'] : null,
                 self::requireInt($params, 'width'),
                 self::requireInt($params, 'height'),
+                self::readOptionalString($params, 'id'),
             ),
-            'map.duplicate' => $session->duplicateMap(self::requireString($params, 'map'), self::requireInt($params, 'revision')),
+            'map.duplicate' => $session->duplicateMap(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
+                self::readOptionalString($params, 'to')),
             'map.move' => $session->moveMap(
                 self::requireString($params, 'map'), self::requireInt($params, 'revision'),
                 self::readOptionalString($params, 'destination'), ($params['confirm'] ?? false) === true,
+                self::readOptionalString($params, 'to'),
             ),
             'map.delete' => $session->deleteMap(self::requireString($params, 'map'), ($params['confirm'] ?? false) === true),
             'map.insertLines' => $session->insertMapLines(
