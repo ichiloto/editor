@@ -39,17 +39,27 @@ An error is a defect the player would meet. The editors still save an
 author's map with errors as a draft and show them; validation and
 `map:apply` fail until they are fixed.
 
-- A gameplay glyph showing in the graphical field: a cell no tile covers, an
-  NPC without a field sprite, an NPC standing on a copy of its own glyph, a
-  map without a kind in a project with tilesets.
-- Floor the player can reach with no tile, so the field shows the background.
-- An event the player can never reach, or an arrival on a cell they cannot
-  stand on.
-- A chest whose reward the Engine cannot give, or that has none chosen.
-- An event marker with no definition, a door or edge to a map that does not
-  exist, a spawn point outside its map.
-- Every other error `ichiloto validate` reports: unknown references, invalid
-  scripts and the rest.
+The map rules are the Engine's own (`MapCompletenessValidator`), the checks
+the game itself relies on; the Editor keeps no copy. Each finding carries the
+rule as its `code`:
+
+- `graphics.glyph`: a gameplay glyph with no graphical presentation, shown
+  raw in the field. `graphics.missing`: a map with no kind in a project with
+  tilesets.
+- `npc.art`, `object.art`, `object.reference`: an NPC or world object without
+  usable field art, or a world object resource that does not resolve.
+- `event.unmapped`, `event.area`, `event.subject`, `event.definition`,
+  `event.grid`: a marker with no definition, an event with no cells and no
+  subject, a subject that is missing or competes with painted cells, a
+  malformed event, an event layer that does not match the map.
+- `chest.reward`: a chest whose reward the Engine cannot give, or that has
+  none chosen.
+
+The Editor's project checks add the rest `ichiloto validate` reports, also as
+errors: floor the player can reach with no tile, an event the player can
+never reach, an arrival on a cell they cannot stand on, a door or edge to a
+map that does not exist, a spawn point outside its map, unknown references,
+invalid scripts.
 
 Warnings never refuse a change: tiles a piece draws whose glyph is gone, the
 missing-art placeholder, see-through ground, a map nothing reaches yet.
@@ -120,31 +130,39 @@ Layers are named by `id` in edits. An event row key looks like
 | Collision | `map.paintOccupancy`, `occupancy.stampPiece` |
 | Resize | `map.insertLines`, `map.removeLines` (with an `answer`), or the map's size rows |
 | Events | `event.create {map, cells, type, marker?}`, `event.move {map, marker, dx, dy}`, `event.bounds`, `event.destination`, `event.delete`; fields with `inspector.apply` |
+| Bind an event to the object it describes | `event.subject {map, marker, subject}`; `subject: null` with `cells` unbinds it |
 | World objects | `worldObjects.create`, `worldObjects.move {map, id, dx, dy}`, `worldObjects.place`, `worldObjects.apply`, `worldObjects.add`, `worldObjects.remove`, `worldObjects.delete` |
 | NPCs | `npc.create`, `npc.move`, `npc.apply`, `npc.add`, `npc.remove`, `npc.duplicate`, `npc.delete` |
 | Map fields (name, kind, music, encounters, atlas, landmarks) | `inspector.apply` with the map row's key |
-| New map | `map.create {name, kind, width, height}` |
+| New map | `map.create {name, kind, width, height, id?}`; `id` is its folder, such as `town/inn/cellar` |
+| Copy or move a map | `map.duplicate {map, to?}`; `map.move {map, to}` asks first, then `{map, to, destination, confirm: true}` |
+| Landmark id | `inspector.apply` with `{target: map-landmarks, index, field: id}`; other maps' atlas parents follow the rename |
+| NPC id | `npc.create {..., id?}`, `npc.assignId {..., id?}`, or the NPC's Id row with `npc.apply` |
 
 `worldObjects.move` moves an object with what shows it in the terminal: its
 anchor, the cells it covers and their glyphs, with the tiles those glyphs
 draw. Moving only the anchor (`worldObjects.place`) leaves its glyphs behind.
 
-## Worked Example: Move A World Object And Its Event
+## Worked Example: Bind An Event To Its Object, Then Move Them
 
-Lockers move two cells right, and the inspection event that describes them
-moves with them:
+An inspection event that describes lockers is bound to them once. From then
+on its area is the lockers' covered cells, so the event can never be left
+behind when they move:
 
 ```json
 {"changes": [
-  {"method": "worldObjects.move", "params": {"map": "town/annex", "id": "annex-lockers", "dx": 2, "dy": 0}},
-  {"method": "event.move", "params": {"map": "town/annex", "marker": "F", "dx": 2, "dy": 0}}
+  {"method": "event.subject", "params": {"map": "town/annex", "marker": "F", "subject": "annex-lockers"}},
+  {"method": "inspector.apply", "params": {"map": "town/annex",
+    "key": {"target": "event", "marker": "F", "path": ["engagement"]}, "value": "facing"}},
+  {"method": "worldObjects.move", "params": {"map": "town/annex", "id": "annex-lockers", "dx": 2, "dy": 0}}
 ]}
 ```
 
-Run it with `--check` first. When the lockers would land on another glyph or
-another object's cells, the move is refused and names the cell. When the event
-would sit where the player cannot reach it, the batch is refused with that
-error.
+Binding clears the event's painted cells. A bound event cannot be moved or
+reshaped by itself, and its object cannot be deleted while the event names
+it. Run the batch with `--check` first: a move onto another glyph or another
+object's cells is refused and names the cell, and moving furniture onto open
+floor usually needs `--relocate-saves`.
 
 ## Worked Example: Stamp A Piece
 
