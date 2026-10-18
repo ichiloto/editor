@@ -1149,3 +1149,17 @@ it('checks a summon alias against the summons the project defines', function () 
 
     expect($missing)->toBe(['Alias target "cinder" is not defined in the current summons catalog.']);
 });
+
+it('reads keys in long array syntax as nested, as var_export writes them, and still finds a real duplicate', function () {
+    $root = makeTemporaryProject();
+    $path = $root . '/assets/Maps/test-map/test-map.data.php';
+    $data = require $path;
+    $data['npcs'] = [['id' => 'a', 'name' => 'A', 'x' => 1, 'y' => 1], ['id' => 'b', 'name' => 'B', 'x' => 2, 'y' => 1]];
+    file_put_contents($path, "<?php\n\nreturn " . var_export($data, true) . ";\n");
+    $duplicates = static fn(): array => issuesMentioning(validateProject($root), 'is declared');
+
+    expect($duplicates())->toBe([]);
+
+    file_put_contents($path, str_replace("'region' =>", "'name' => array ( 0 => 'Shadowed' ),\n  'region' =>", (string) file_get_contents($path)));
+    expect(array_map(static fn(Issue $issue): string => $issue->message, $duplicates()))->toBe(['"name" is declared 2 times (lines 4, 5).']);
+});
