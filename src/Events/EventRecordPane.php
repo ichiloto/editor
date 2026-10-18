@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Events;
 
-use Ichiloto\Editor\Database\ConditionCodec;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Database\RecordAuthoring;
 use Ichiloto\Editor\Database\RecordField;
@@ -14,7 +13,6 @@ use Ichiloto\Editor\Database\RecordRefusal;
 use Ichiloto\Editor\Database\RecordSchema;
 use Ichiloto\Editor\Database\RecordSchemaCatalog;
 use Ichiloto\Editor\Database\ReferenceCatalog;
-use Ichiloto\Editor\Database\WorldWriteCodec;
 use Ichiloto\Editor\Dialogue\DialogueVariants;
 use Ichiloto\Editor\Inspector\InspectorRefusal;
 use Ichiloto\Engine\Core\WorldConditionEvaluator;
@@ -131,7 +129,7 @@ final class EventRecordPane
         }
 
         foreach ($this->records->getFrameSettingsFields(0, $frame) as $row) {
-            $rows[] = $this->describeRow($row, $frame, $payload);
+            $rows[] = $this->describeRow($row, $frame);
         }
 
         if ($frame === [] && in_array('script', $this->lifted, true) && ($payload['script'] ?? []) !== []
@@ -348,10 +346,9 @@ final class EventRecordPane
      *
      * @param array<string, mixed> $row
      * @param list<int|string> $frame
-     * @param array<string, mixed> $payload
      * @return array<string, mixed>
      */
-    private function describeRow(array $row, array $frame, array $payload): array
+    private function describeRow(array $row, array $frame): array
     {
         $row['target'] = self::TARGET;
         $row['marker'] = $this->marker;
@@ -366,25 +363,13 @@ final class EventRecordPane
             if ($item->childNoun !== null) { $row['childNoun'] = $item->childNoun; }
         }
 
-        $isConditions = ($row['conditions'] ?? false) === true;
-        $isWrites = ($row['worldWrites'] ?? false) === true;
-
-        if ($isConditions || $isWrites) {
-            $authored = is_array($row['dataPath'] ?? null) ? self::readPath($payload, $row['dataPath']) : self::readPath($payload, explode('.', $fieldId));
-            $issue = $authored === null ? null : ($isConditions ? ConditionCodec::findCarryIssue($authored) : WorldWriteCodec::findCarryIssue($authored));
-
-            if ($issue !== null) {
-                // Shown as authored and left alone: committing the line would lose what it cannot carry.
-                return [...array_diff_key($row, array_flip(['conditions', 'worldWrites'])), 'value' => '! ' . $issue, 'editable' => false];
-            }
-
-            if ($isConditions) {
-                // The map inspector's condition editor, in every interface that hosts one.
-                $row['mapConditions'] = true;
-                $row['encoded'] = (string) ($row['value'] ?? '');
-                $row['conditionsTitle'] = trim((string) ($row['label'] ?? 'Conditions'));
-                $row['conditionsHint'] = 'Building conditions. An empty list always holds.';
-            }
+        // A list its line cannot carry whole is already read-only, as the record layer describes it.
+        if (($row['conditions'] ?? false) === true) {
+            // The map inspector's condition editor, in every interface that hosts one.
+            $row['mapConditions'] = true;
+            $row['encoded'] = (string) ($row['value'] ?? '');
+            $row['conditionsTitle'] = trim((string) ($row['label'] ?? 'Conditions'));
+            $row['conditionsHint'] = 'Building conditions. An empty list always holds.';
         }
 
         if (is_array($row['mapPlacement']['sourcePaths'] ?? null)) {
@@ -435,22 +420,6 @@ final class EventRecordPane
         if ($frame !== [] && $this->records->getFrameCommands(0, $frame) === null) {
             throw new InspectorRefusal(sprintf('%s is no longer there; read the event again.', $this->describeFrame($frame)));
         }
-    }
-
-    /** @param list<int|string> $path */
-    private static function readPath(array $payload, array $path): mixed
-    {
-        $current = $payload;
-
-        foreach ($path as $segment) {
-            if (! is_array($current) || ! array_key_exists($segment, $current)) {
-                return null;
-            }
-
-            $current = $current[$segment];
-        }
-
-        return $current;
     }
 
     /**

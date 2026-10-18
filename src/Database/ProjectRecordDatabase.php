@@ -63,6 +63,13 @@ final class ProjectRecordDatabase
 
     private function coerceReferenceField(ProjectRecord $record, RecordField $field, string $rawValue, array $ownerPath = []): mixed
     {
+        $authored = (array) $record->toArray();
+        foreach ($ownerPath === [] ? explode('.', $field->key) : $ownerPath as $segment) {
+            $authored = is_array($authored) ? ($authored[$segment] ?? null) : null;
+        }
+        if (($issue = self::findCarryIssue($field, $authored)) !== null) {
+            throw new \InvalidArgumentException(sprintf('%s cannot be edited as a line: %s. Nothing was changed.', $field->label, $issue));
+        }
         $value = self::coerce($field, $rawValue);
         if ($this->authoringReferences !== null && in_array($field->reference, ['actor_ids', 'stage_timelines', 'cinematic_movement_routes', 'map_world_objects'], true) && $value !== null) {
             $choices = $field->reference === 'cinematic_movement_routes'
@@ -75,6 +82,21 @@ final class ProjectRecordDatabase
             }
         }
         return $value;
+    }
+
+    /**
+     * Why a condition or write list cannot be edited through its line
+     * without losing part of it, by the codec that owns the line; null when
+     * it can, or the field holds another kind of value or none.
+     */
+    private static function findCarryIssue(RecordField $field, mixed $authored): ?string
+    {
+        return match (true) {
+            $authored === null => null,
+            $field->codec === RecordFieldCodec::CONDITIONS => ConditionCodec::findCarryIssue($authored),
+            $field->codec === RecordFieldCodec::WORLD_WRITES => WorldWriteCodec::findCarryIssue($authored),
+            default => null,
+        };
     }
 
     /** Proves a proposed payload is valid and source-editable without changing the actual record. */
@@ -580,7 +602,8 @@ final class ProjectRecordDatabase
         $fields = [];
 
         foreach ($this->schema->fieldsFor($record->toArray()) as $field) {
-            $fields[] = self::describeField($field, self::displayValue($field, $record->get($field->key)), $field->key, $isEditable);
+            $fields[] = self::describeField($field, self::displayValue($field, $record->get($field->key)), $field->key, $isEditable,
+                authored: $record->get($field->key));
         }
         if ($this->schema->key === PlayerPresentationFields::CATEGORY) {
             $fields = PlayerPresentationFields::describeFields($fields, (array) $record->toArray(), $this->authoringReferences?->getAssetRoot());
@@ -647,6 +670,7 @@ final class ProjectRecordDatabase
                 self::subFieldId($subList->prefix, $entryIndex, $field->key),
                 $isEditable,
                 sprintf('%s %d %s', ucfirst($subList->singular), $entryIndex + 1, $field->label),
+                self::readNested($entry, $field->key),
             ), 'entry' => [$entryIndex], 'entryLabel' => sprintf('%s %d', ucfirst($subList->singular), $entryIndex + 1), 'name' => $field->label, 'sourceKey' => $field->key,
                 'dataPath' => [...($basePath === [] ? explode('.', $subList->key) : $basePath), $entryIndex, ...explode('.', $field->key)]], $entry, $owner)];
         }
@@ -750,6 +774,7 @@ final class ProjectRecordDatabase
                         $nestedIndex + 1,
                         $field->label,
                     ),
+                    self::readNested($nestedEntry, $field->key),
                 ), $nestedEntry, $owner)];
             }
 
@@ -3406,15 +3431,22 @@ final class ProjectRecordDatabase
      * @param string $fieldId The settings-field identifier.
      * @param bool $isEditable Whether the category and record accept edits.
      * @param string|null $label An override label (used for sub-list rows).
+     * @param mixed $authored The field's authored value, for a list its line may not carry whole.
      * @return array<string, mixed>
      */
-    private static function describeField(RecordField $field, string $value, string $fieldId, bool $isEditable, ?string $label = null): array
+    private static function describeField(RecordField $field, string $value, string $fieldId, bool $isEditable, ?string $label = null,
+        mixed $authored = null): array
     {
         $descriptor = [
             'label' => $label ?? $field->label,
             'value' => $value,
             'field' => $fieldId,
         ];
+
+        if (($issue = self::findCarryIssue($field, $authored)) !== null) {
+            // Shown as authored and left alone: committing the line would lose what it cannot carry.
+            return [...$descriptor, 'value' => '! ' . $issue, 'editable' => false];
+        }
 
         if (! $isEditable || $field->isReadOnly) {
             // Said outright, so the pane never opens an editor on a value the
