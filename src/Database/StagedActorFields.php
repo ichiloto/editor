@@ -7,6 +7,7 @@ namespace Ichiloto\Editor\Database;
 use Ichiloto\Editor\Field\CharacterSheetPreview;
 use Ichiloto\Editor\Field\FieldSpriteFields;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicCommandSchema;
+use Ichiloto\Engine\Cutscenes\Cinematics\CinematicStageManager;
 
 /** Graphical authoring controls; Engine remains the authority for accepted data. */
 final class StagedActorFields
@@ -88,6 +89,29 @@ final class StagedActorFields
         );
     }
 
+    /**
+     * Keeps an independent staged actor at either a map cell or a cell relative to a map subject, in both editors,
+     * as the Engine's stage binding validator accepts it.
+     */
+    public static function preparePositionEdit(array $entry, string $field): array
+    {
+        if (($entry['type'] ?? null) === 'stage_actor' && is_array($entry['actor'] ?? null) && str_starts_with($field, 'actor.')) {
+            $actor = self::preparePositionEdit(['type' => 'stage_actor', ...$entry['actor']], substr($field, strlen('actor.')));
+            if (! array_key_exists('type', $entry['actor'])) {
+                unset($actor['type']);
+            }
+            $entry['actor'] = $actor;
+
+            return $entry;
+        }
+        if (($entry['type'] ?? null) !== 'stage_actor' && ($entry['kind'] ?? null) !== 'staged_actor') {
+            return $entry;
+        }
+        return RelativePositionFields::prepareEdit($entry, $field, static function (array $actor): void {
+            CinematicStageManager::validateBinding($actor);
+        });
+    }
+
     /** Changing a representation clears only the fields owned by the old representation. */
     public static function prepareEdit(array $entry, string $field): array
     {
@@ -108,7 +132,7 @@ final class StagedActorFields
             if ($kind === null) {
                 unset($entry['subject'], $entry['suppress']);
             } else {
-                unset($entry['x'], $entry['y'], $entry['facing'], $entry['collision']);
+                unset($entry['x'], $entry['y'], $entry['at'], $entry['offset'], $entry['facing'], $entry['collision']);
                 if ($kind === 'player') {
                     unset($entry['subject']['id']);
                 }

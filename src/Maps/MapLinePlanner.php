@@ -77,6 +77,8 @@ final class MapLinePlanner
         $directory = $root . '/assets/Maps/' . $edit->mapId;
         $map = ProjectMap::fromDirectory($root . '/assets/Maps', $directory);
         [$width, $height] = [$map->getWidth(), $map->getHeight()];
+        // Relative points are judged against where their subjects stand before the edit moves them.
+        $subjects = MapSubjectCells::readMap($map);
         $edit instanceof LineRemoval
             ? $map->removeLines($edit->axis, $edit->at, $edit->count)
             : $map->insertLines($edit->axis, $edit->at, $edit->count);
@@ -121,7 +123,7 @@ final class MapLinePlanner
                 $commonEvents[basename($path, '.php')] = ['file' => $path, 'commands' => $payloads[$path]];
             }
         }
-        $inventory = new MapLineInventory($edit, $commonEvents);
+        $inventory = new MapLineInventory($edit, $commonEvents, $subjects);
         foreach ($dataPaths as $path) {
             if (str_starts_with($path, $root . '/assets/Maps/') && is_array($payloads[$path])) {
                 $inventory->addMapData($path, substr(dirname($path), strlen($root . '/assets/Maps/')), $payloads[$path]);

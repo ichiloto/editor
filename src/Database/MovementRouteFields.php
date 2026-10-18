@@ -80,21 +80,29 @@ final class MovementRouteFields
         ];
     }
 
-    public static function getPointList(array $entry): ?RecordSubList
+    /** A waypoint is a map cell (either axis may keep the current one) or a cell relative to a map subject. */
+    public static function getPointList(array $entry, bool $cinematic = false, bool $graphical = false): ?RecordSubList
     {
+        $axes = [
+            new RecordField('x', 'X', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '(Keep current X)'),
+            new RecordField('y', 'Y', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '(Keep current Y)'),
+        ];
         return match (self::getMode($entry)) {
             'steps' => RecordSchemaCatalog::routeStepList(),
             'waypoints' => new RecordSubList(
                 key: 'waypoints', prefix: 'waypoint', singular: 'waypoint',
-                fields: [
-                    new RecordField('x', 'X', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '(Keep current X)'),
-                    new RecordField('y', 'Y', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '(Keep current Y)'),
-                ],
+                fields: $axes,
                 blank: [],
                 prepareEdit: static function (array $point, string $field): array {
-                    self::assertPathOptions(['waypoints' => [$point]]);
+                    $validate = static fn(array $point) => self::assertPathOptions(['waypoints' => [$point]]);
+                    if (RelativePositionFields::isRelative($point) || $field === RelativePositionFields::KIND_FIELD) {
+                        $point = RelativePositionFields::prepareEdit($point, $field, $validate);
+                        if (RelativePositionFields::isRelative($point)) { return $point; }
+                    }
+                    $validate($point);
                     return $point;
                 },
+                getFields: static fn(array $point): array => RelativePositionFields::getFields($point, $axes, $cinematic, $graphical),
             ),
             default => null,
         };

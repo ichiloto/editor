@@ -3605,6 +3605,18 @@ class ProjectValidator
       );
     }
 
+    foreach ((array) ($command['waypoints'] ?? []) as $waypoint) {
+      $at = is_array($waypoint) && is_array($waypoint['at'] ?? null) ? $waypoint['at'] : null;
+      $atNpc = $at !== null && ($at['kind'] ?? null) === 'npc' ? trim(strval($at['id'] ?? '')) : '';
+      if (! $cinematic && $atNpc !== '' && $npcIds !== null && ! in_array($atNpc, $npcIds, true)) {
+        $issues[] = Issue::error(
+          $where,
+          sprintf('A route waypoint is relative to NPC id "%s", which is not on map "%s".', $atNpc, $mapId ?? '(unknown)'),
+          'Choose an NPC on the map the route runs on.'
+        );
+      }
+    }
+
     $wait = $command['wait'] ?? true;
 
     if (! is_bool($wait) || ! $wait) {
