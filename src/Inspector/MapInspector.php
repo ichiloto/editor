@@ -751,7 +751,7 @@ final readonly class MapInspector
             $messages = array_map(
                 static fn(Issue $issue): string => trim($issue->message . ' ' . $issue->hint),
                 new ChestRewardValidator($this->references->getInventoryCatalog())
-                    ->validate((array) ($definition['data'] ?? []), sprintf('%s event %s', $map->mapId, $marker)),
+                    ->validate($map->mapId, $marker, (array) ($definition['data'] ?? [])),
             );
         } catch (Throwable $throwable) {
             $messages = [sprintf('The inventory could not be read, so the reward cannot be checked: %s', $throwable->getMessage())];

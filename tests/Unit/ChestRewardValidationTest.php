@@ -41,7 +41,7 @@ function checkChestReward(array $data): array
     static $catalog = null;
     $catalog ??= InventoryCatalog::fromWorkspace(ProjectWorkspace::fromProject(chestRewardProject()));
 
-    return new ChestRewardValidator($catalog)->validate($data, 'test-map event C');
+    return new ChestRewardValidator($catalog)->validate('test-map', 'C', $data);
 }
 
 /**
@@ -70,25 +70,41 @@ function listChestRewardIssues(string $root): array
     ));
 }
 
-it('reports an item chest with no item chosen as an error', function (mixed $loot) {
-    $issues = checkChestReward(['lootType' => 'item', 'loot' => $loot, 'quantity' => 1]);
+// The rules are the Engine's (MapCompletenessValidator::validateChestReward); these tests pin what the
+// Editor adds: its inventory identity, where each finding belongs, and that every finding is an error.
 
-    expect($issues)->toHaveCount(1)
-        ->and($issues[0]->severity)->toBe(Severity::ERROR)
-        ->and($issues[0]->code)->toBe(ChestRewardValidator::CODE)
-        ->and($issues[0]->message)->toBe('It has no item chosen, so it fails when opened.');
+it('reports every chest the Engine cannot grant as an error on that chest', function (array $data) {
+    $issues = checkChestReward($data);
+
+    expect($issues)->not->toBeEmpty();
+    foreach ($issues as $issue) {
+        expect($issue->severity)->toBe(Severity::ERROR)
+            ->and($issue->code)->toBe(ChestRewardValidator::CODE)
+            ->and($issue->where)->toBe('test-map event C')
+            ->and($issue->message)->not->toBe('');
+    }
 })->with([
-    'blank' => [''],
-    'null' => [null],
-    'whitespace' => ['   '],
+    'blank item' => [['lootType' => 'item', 'loot' => '', 'quantity' => 1]],
+    'null item' => [['lootType' => 'item', 'loot' => null, 'quantity' => 1]],
+    'whitespace item' => [['lootType' => 'item', 'loot' => '   ', 'quantity' => 1]],
+    // The Engine reads a chest with no data as an empty item.
+    'no data' => [[]],
+    'unknown item' => [['lootType' => 'item', 'loot' => 'item.absent']],
+    'ambiguous item' => [['lootType' => 'item', 'loot' => 'Charm']],
+    'skill' => [['lootType' => 'skill', 'loot' => 'Twin Cut']],
+    'spell' => [['lootType' => 'spell', 'loot' => 'Twin Cut']],
+    'experience' => [['lootType' => 'experience', 'loot' => 10]],
+    'unknown type' => [['lootType' => 'treasure', 'loot' => 'Tonic']],
+    // LootType::tryFrom() is case-sensitive, so the Engine does not know this spelling.
+    'miscased type' => [['lootType' => 'Gold', 'loot' => 10]],
+    'no gold' => [['lootType' => 'gold', 'loot' => null, 'quantity' => 0]],
+    'negative gold' => [['lootType' => 'gold', 'loot' => -5]],
+    'gold not a number' => [['lootType' => 'gold', 'loot' => 'lots']],
+    'no items' => [['lootType' => 'item', 'loot' => 'Tonic', 'quantity' => 0]],
+    'quantity not a number' => [['lootType' => 'item', 'loot' => 'Tonic', 'quantity' => 'many']],
 ]);
 
-it('reports a chest with no loot at all, which the Engine reads as an empty item', function () {
-    expect(checkChestReward([]))->toHaveCount(1)
-        ->and(checkChestReward([])[0]->message)->toBe('It has no item chosen, so it fails when opened.');
-});
-
-it('resolves item loot by the Engine\'s id, name and alias rules', function (string $loot) {
+it('resolves item loot by the Editor\'s catalogue of the Engine\'s id, name and alias rules', function (string $loot) {
     expect(checkChestReward(['lootType' => 'item', 'loot' => $loot]))->toBe([]);
 })->with([
     'stable id' => ['item.tonic'],
@@ -97,87 +113,29 @@ it('resolves item loot by the Engine\'s id, name and alias rules', function (str
     'any case, padded' => ['  old tonic '],
 ]);
 
-it('reports item loot the item store cannot resolve', function () {
-    $missing = checkChestReward(['lootType' => 'item', 'loot' => 'item.absent']);
-    $ambiguous = checkChestReward(['lootType' => 'item', 'loot' => 'Charm']);
-
-    expect($missing)->toHaveCount(1)
-        ->and($missing[0]->severity)->toBe(Severity::ERROR)
-        ->and($missing[0]->message)->toBe('It gives the item "item.absent", which does not exist, so it fails when opened.')
-        ->and($ambiguous)->toHaveCount(1)
-        ->and($ambiguous[0]->message)->toContain('which more than one definition answers to');
-});
-
-it('reads a chest with no loot type as holding an item, as the Engine does', function () {
-    expect(checkChestReward(['loot' => 'Tonic']))->toBe([])
-        ->and(checkChestReward(['loot' => 'item.absent']))->toHaveCount(1);
-});
-
-it('accepts gold whose amount comes from its quantity when the loot is empty', function (array $data) {
+it('accepts what the Engine grants, including gold whose amount is its quantity', function (array $data) {
     expect(checkChestReward($data))->toBe([]);
 })->with([
-    'null loot' => [['lootType' => 'gold', 'loot' => null, 'quantity' => 30]],
-    'blank loot' => [['lootType' => 'gold', 'loot' => '', 'quantity' => 30]],
-    'no loot' => [['lootType' => 'gold', 'quantity' => 30]],
-    'amount as loot' => [['lootType' => 'gold', 'loot' => 50]],
-    'amount as text' => [['lootType' => 'gold', 'loot' => '50']],
-]);
-
-it('reports gold that gives nothing or takes money', function (array $data, string $message) {
-    $issues = checkChestReward($data);
-
-    expect($issues)->toHaveCount(1)
-        ->and($issues[0]->severity)->toBe(Severity::ERROR)
-        ->and($issues[0]->message)->toBe($message);
-})->with([
-    'no amount' => [['lootType' => 'gold', 'loot' => null, 'quantity' => 0], 'It gives 0 gold, so opening it gives nothing.'],
-    'negative' => [['lootType' => 'gold', 'loot' => -5], 'It gives -5 gold, which opening it takes from the party.'],
-    'not a number' => [['lootType' => 'gold', 'loot' => 'lots'], 'It gives gold "lots", which is not an amount.'],
+    'no loot type' => [['loot' => 'Tonic']],
+    'quantity as text' => [['lootType' => 'item', 'loot' => 'Tonic', 'quantity' => '3']],
+    'gold, null loot' => [['lootType' => 'gold', 'loot' => null, 'quantity' => 30]],
+    'gold, blank loot' => [['lootType' => 'gold', 'loot' => '', 'quantity' => 30]],
+    'gold, no loot' => [['lootType' => 'gold', 'quantity' => 30]],
+    'gold amount' => [['lootType' => 'gold', 'loot' => 50]],
+    'gold amount as text' => [['lootType' => 'gold', 'loot' => '50']],
 ]);
 
 it('treats a loot type case and its string value as the same declaration', function (LootType $type, array $data) {
-    $asCase = checkChestReward(['lootType' => $type, ...$data]);
-    $asString = checkChestReward(['lootType' => $type->value, ...$data]);
+    $describe = static fn(array $issues): array => array_map(static fn(Issue $issue): string => $issue->code . ' ' . $issue->message, $issues);
 
-    expect(array_map(static fn(Issue $issue): string => $issue->message, $asCase))
-        ->toBe(array_map(static fn(Issue $issue): string => $issue->message, $asString));
+    expect($describe(checkChestReward(['lootType' => $type, ...$data])))
+        ->toBe($describe(checkChestReward(['lootType' => $type->value, ...$data])));
 })->with([
     'gold' => [LootType::GOLD, ['loot' => null, 'quantity' => 10]],
     'item' => [LootType::ITEM, ['loot' => 'Tonic']],
     'blank item' => [LootType::ITEM, ['loot' => '']],
     'skill' => [LootType::SKILL, ['loot' => 'Twin Cut']],
 ]);
-
-it('reports a loot type the Engine\'s chest cannot give', function (string $type, string $kind) {
-    $issues = checkChestReward(['lootType' => $type, 'loot' => 'Twin Cut', 'quantity' => 1]);
-
-    expect($issues)->toHaveCount(1)
-        ->and($issues[0]->severity)->toBe(Severity::ERROR)
-        ->and($issues[0]->message)->toBe(sprintf('It gives %s, which the Engine\'s chests cannot give, so it fails when opened.', $kind));
-})->with([
-    'skill' => ['skill', 'a skill'],
-    'spell' => ['spell', 'a spell'],
-    'experience' => ['experience', 'experience'],
-]);
-
-it('reports a loot type the Engine does not know, exactly as the Engine spells it', function (string $type) {
-    $issues = checkChestReward(['lootType' => $type, 'loot' => 'Tonic']);
-
-    expect($issues)->toHaveCount(1)
-        ->and($issues[0]->message)->toBe(sprintf('Its loot type "%s" is not one the Engine knows, so the game reads it as an item.', $type));
-})->with([
-    'unknown' => ['treasure'],
-    // LootType::tryFrom() is case-sensitive: the Engine reads this as an item.
-    'miscased' => ['Gold'],
-]);
-
-it('reports a quantity that gives nothing or cannot be read', function () {
-    expect(checkChestReward(['lootType' => 'item', 'loot' => 'Tonic', 'quantity' => 0])[0]->message ?? null)
-        ->toBe('Its quantity is 0, so opening it gives nothing.')
-        ->and(checkChestReward(['lootType' => 'item', 'loot' => 'Tonic', 'quantity' => 'many'])[0]->message ?? null)
-        ->toBe('Its quantity "many" is not a whole number, so the game cannot read the chest.')
-        ->and(checkChestReward(['lootType' => 'item', 'loot' => 'Tonic', 'quantity' => '3']))->toBe([]);
-});
 
 it('offers only the loot types the Engine\'s chest can give', function () {
     $offered = array_column(MapInspector::listLootTypeChoices(), 'value');
@@ -232,8 +190,8 @@ it('diagnoses a new chest on its inspector row and as a save error, and still sa
     expect($error)->toMatchArray([
         'kind' => 'info',
         'tone' => 'error',
-        'value' => 'It has no item chosen, so it fails when opened. Choose the item from the picker. The chest saves as it is until then.',
     ])
+        ->and($error['value'] ?? '')->not->toBe('')
         // Under the rows it is about.
         ->and(array_search('Reward Error', $labels, true))->toBeGreaterThan(array_search('Loot', $labels, true))
         // Only kinds the Engine's chest can give are offered.
@@ -243,7 +201,7 @@ it('diagnoses a new chest on its inspector row and as a save error, and still sa
     $saved = $session->saveMap('test-map');
 
     expect($saved['saved'])->toBe('test-map')
-        ->and(array_column($saved['errors'], 'message'))->toContain(sprintf('Chest %s: It has no item chosen, so it fails when opened.', $marker))
+        ->and(array_filter(array_column($saved['errors'], 'message'), static fn(string $error): bool => str_starts_with($error, sprintf('Chest %s: ', $marker))))->toHaveCount(1)
         ->and((require $root . '/assets/Maps/test-map/test-map.data.php')['events'][$marker]['data']['loot'])->toBe('');
 
     $loot = array_find($session->readInspector('test-map', $marker)['rows'], static fn(array $row): bool => trim($row['label']) === 'Loot');

@@ -144,8 +144,8 @@ final class MapValidator
     }
 
     /**
-     * Finds chests whose reward the Engine cannot grant, by the shared chest
-     * check the inspectors and the project report also read.
+     * Finds chests whose reward the Engine cannot grant, by the Engine's chest
+     * rule the inspectors and the project report also read.
      *
      * @return list<Issue>
      */
@@ -165,7 +165,7 @@ final class MapValidator
         $issues = [];
 
         foreach ($chests as $marker => $definition) {
-            foreach ($validator->validate((array) ($definition['data'] ?? []), sprintf('%s event %s', $map->mapId, $marker)) as $issue) {
+            foreach ($validator->validate($map->mapId, strval($marker), (array) ($definition['data'] ?? [])) as $issue) {
                 $issues[] = new Issue($issue->severity, $issue->where, sprintf('Chest %s: %s', $marker, $issue->message), $issue->hint, $issue->code);
             }
         }

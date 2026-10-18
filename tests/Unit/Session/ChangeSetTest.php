@@ -221,7 +221,7 @@ it('judges events made inside the change set: a chest with no reward is refused,
 
     $refused = $session->commitChanges();
     expect($refused['status'])->toBe('refused')
-        ->and(changeSetMessages($refused))->toContain('It has no item chosen, so it fails when opened.')
+        ->and(array_column($refused['issues'], 'code'))->toContain('chest.reward')
         ->and(array_column($refused['issues'], 'map'))->each->toBe('test-map');
 
     $session->beginChanges();

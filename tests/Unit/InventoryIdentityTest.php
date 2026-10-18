@@ -373,12 +373,18 @@ it('validates what a chest gives out', function () {
 
     $lines = implode("\n", issueLines($root));
 
-    expect($lines)->toContain('test-map event E: It gives the item "item.absent", which does not exist, so it fails when opened.')
-        ->and($lines)->toContain('test-map event G: It gives gold "lots", which is not an amount.')
-        ->and($lines)->toContain('test-map event H: Its loot type "treasure" is not one the Engine knows, so the game reads it as an item.')
-        // A chest with no item chosen fails when opened, so it is reported
-        // too; it still saves as the author left it.
-        ->and($lines)->toContain('test-map event I: It has no item chosen, so it fails when opened.');
+    // The Engine's chest rule reports each of them on its own chest, under its rule identity; a chest
+    // with no item chosen fails when opened, so it is reported too and still saves as authored.
+    $chests = array_values(array_unique(array_map(
+        static fn($issue): string => $issue->where,
+        array_filter(new ProjectValidator()->validate(ProjectWorkspace::fromProject($root)),
+            static fn($issue): bool => $issue->code === \Ichiloto\Editor\Validation\ChestRewardValidator::CODE
+                && $issue->severity === Severity::ERROR),
+    )));
+    sort($chests);
+
+    expect($lines)->not->toBe('')
+        ->and($chests)->toBe(['test-map event E', 'test-map event G', 'test-map event H', 'test-map event I']);
 });
 
 it('keeps a key item\'s quantity through the condition line, both ways', function () {
