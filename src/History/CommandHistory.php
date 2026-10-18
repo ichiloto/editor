@@ -23,6 +23,9 @@ final class CommandHistory
      */
     private array $redoStack = [];
 
+    /** How many of the oldest steps were dropped to keep within the capacity. */
+    private int $dropped = 0;
+
     /**
      * @param int $capacity The maximum number of retained undo entries.
      */
@@ -43,6 +46,7 @@ final class CommandHistory
 
         if (count($this->undoStack) > max(1, $this->capacity)) {
             array_shift($this->undoStack);
+            $this->dropped++;
         }
     }
 
@@ -114,6 +118,15 @@ final class CommandHistory
     public function count(): int
     {
         return count($this->undoStack);
+    }
+
+    /**
+     * Counts the oldest steps dropped so far to keep within the capacity, so a
+     * caller undoing back to a point can tell whether every step since is still here.
+     */
+    public function countDropped(): int
+    {
+        return $this->dropped;
     }
 
     /**

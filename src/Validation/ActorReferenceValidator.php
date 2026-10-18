@@ -35,8 +35,10 @@ final class ActorReferenceValidator
                 $payloads[$path] = $record->toArray();
             }
         }
+        $mapIds = [];
         foreach ($workspace->maps as $map) {
             $payloads[$map->dataPath] = $map->getEditableData();
+            $mapIds[$map->dataPath] = $map->mapId;
         }
         // Summons as they stand, unsaved edits included; their wielders name actors.
         $root = rtrim($workspace->projectRoot, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
@@ -66,10 +68,10 @@ final class ActorReferenceValidator
                     $known = array_map(static fn(string $id): string => strtolower(trim($id)), $ids);
                 }
                 if (! is_string($value) || ! in_array($value, $known, true)) {
-                    $issues[] = Issue::error($where . ':' . implode('.', $reference['path']),
+                    $issues[] = new Issue(Severity::ERROR, $where . ':' . implode('.', $reference['path']),
                         'Unresolved actor reference ' . var_export($reference['reference'], true) . '; use an explicit stable actor id.',
                         'Review and confirm the project actor identity migration, or select an existing actor.',
-                        self::UNRESOLVED_ACTOR_REFERENCE);
+                        self::UNRESOLVED_ACTOR_REFERENCE, $mapIds[$where] ?? null);
                 }
             }
         }

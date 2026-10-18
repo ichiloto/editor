@@ -17,10 +17,14 @@ use InvalidArgumentException;
 use Throwable;
 
 /**
- * Runs the advisory pre-save checks over a map.
+ * Runs the pre-save checks over a map.
  *
- * Findings are warnings only — a save is never blocked, the author is just
- * told what will misbehave in the engine.
+ * A save is never blocked: the author's map saves as a draft and is told
+ * what is wrong. An error is a defect the player would meet (a raw glyph in
+ * the graphical field, a chest that gives nothing, a door to nowhere); a
+ * warning is something that works differently than written. Validation
+ * ({@see ProjectValidator}, `ichiloto validate`) fails on the errors until
+ * they are fixed.
  */
 final class MapValidator
 {
@@ -35,11 +39,11 @@ final class MapValidator
      * @param array<string, ProjectMap> $mapsById Every workspace map keyed by map id.
      * @param InventoryCatalog|null $inventory The project's inventory, for what its chests give; null when it
      *     could not be read ({@see readInventoryCatalog()}), which is itself reported.
-     * @return string[] Human-readable warnings; empty when the map is clean.
+     * @return list<Issue> What is wrong, each naming the map; empty when the map is clean.
      */
     public static function validate(ProjectMap $map, array $mapsById, ?InventoryCatalog $inventory): array
     {
-        return [
+        return Issue::attributeToMap([
             ...self::findMarkersWithoutDefinitions($map),
             ...self::findChestRewardProblems($map, $inventory),
             ...self::findDanglingDestinations($map, $mapsById),
@@ -47,8 +51,32 @@ final class MapValidator
             ...self::findRetiredData($map),
             ...self::findLandmarkProblems($map),
             ...self::findAtlasProblems($map, $mapsById),
-            ...array_map(static fn(Issue $issue): string => $issue->message, MapGraphicsValidator::validate($map)),
-        ];
+            ...MapGraphicsValidator::validate($map),
+            ...MapGraphicsValidator::validateCoverage($map),
+        ], $map->mapId);
+    }
+
+    /**
+     * Describes issues as one line each, the hint after the message.
+     *
+     * @param list<Issue> $issues
+     * @return list<string>
+     */
+    public static function describeIssues(array $issues): array
+    {
+        return array_map(static fn(Issue $issue): string => $issue->hint === '' ? $issue->message : "{$issue->message} {$issue->hint}",
+            array_values($issues));
+    }
+
+    /**
+     * Selects the issues of one severity.
+     *
+     * @param list<Issue> $issues
+     * @return list<Issue>
+     */
+    public static function selectSeverity(array $issues, Severity $severity): array
+    {
+        return array_values(array_filter($issues, static fn(Issue $issue): bool => $issue->severity === $severity));
     }
 
 
@@ -56,7 +84,7 @@ final class MapValidator
      * Finds an atlas scope or parent chain the engine would refuse, by its own check over the project's maps.
      *
      * @param array<string, ProjectMap> $mapsById
-     * @return string[]
+     * @return list<Issue>
      */
     private static function findAtlasProblems(ProjectMap $map, array $mapsById): array
     {
@@ -65,18 +93,18 @@ final class MapValidator
             MapAtlas::resolveGlobal($map, $block, static fn(string $id): ?ProjectMap => $mapsById[$id] ?? null,
                 MapCategoryCatalog::load($map->getAssetRoot()));
         } catch (InvalidArgumentException $error) {
-            return ['Atlas: ' . $error->getMessage()];
+            return [Issue::warning($map->mapId, 'Atlas: ' . $error->getMessage())];
         }
         // Terrain names the map's own source layers, which the parent chain does not read.
         $terrain = MapTerrainFields::findProblem($map, $block);
 
-        return $terrain === null ? [] : ['Atlas terrain: ' . $terrain];
+        return $terrain === null ? [] : [Issue::warning($map->mapId, 'Atlas terrain: ' . $terrain)];
     }
 
     /**
      * Finds minimap landmarks the engine would refuse, by its own check.
      *
-     * @return string[]
+     * @return list<Issue>
      */
     private static function findLandmarkProblems(ProjectMap $map): array
     {
@@ -87,18 +115,18 @@ final class MapValidator
             $problem = $error->getMessage();
         }
 
-        return $problem === null ? [] : ['Minimap landmarks: ' . $problem];
+        return $problem === null ? [] : [Issue::warning($map->mapId, 'Minimap landmarks: ' . $problem)];
     }
 
     /**
      * Finds map data the engine no longer reads.
      *
-     * @return string[]
+     * @return list<Issue>
      */
     private static function findRetiredData(ProjectMap $map): array
     {
         return array_key_exists('tiles2d', $map->getEditableData())
-            ? ['tiles2d is no longer read; the map shows its terminal glyphs until it has a tileset.']
+            ? [Issue::warning($map->mapId, 'tiles2d is no longer read; the map shows its terminal glyphs until it has a tileset.')]
             : [];
     }
 
@@ -119,7 +147,7 @@ final class MapValidator
      * Finds chests whose reward the Engine cannot grant, by the shared chest
      * check the inspectors and the project report also read.
      *
-     * @return string[]
+     * @return list<Issue>
      */
     private static function findChestRewardProblems(ProjectMap $map, ?InventoryCatalog $inventory): array
     {
@@ -130,38 +158,39 @@ final class MapValidator
         }
 
         if (! $inventory instanceof InventoryCatalog) {
-            return ['The inventory could not be read, so what the chests give was not checked.'];
+            return [Issue::warning($map->mapId, 'The inventory could not be read, so what the chests give was not checked.')];
         }
 
         $validator = new ChestRewardValidator($inventory);
-        $warnings = [];
+        $issues = [];
 
         foreach ($chests as $marker => $definition) {
             foreach ($validator->validate((array) ($definition['data'] ?? []), sprintf('%s event %s', $map->mapId, $marker)) as $issue) {
-                $warnings[] = sprintf('Chest %s: %s', $marker, $issue->message);
+                $issues[] = new Issue($issue->severity, $issue->where, sprintf('Chest %s: %s', $marker, $issue->message), $issue->hint, $issue->code);
             }
         }
 
-        return $warnings;
+        return $issues;
     }
 
     /**
      * Finds event markers painted on the grid with no event definition.
      *
      * @param ProjectMap $map The map being saved.
-     * @return string[]
+     * @return list<Issue>
      */
     private static function findMarkersWithoutDefinitions(ProjectMap $map): array
     {
-        $warnings = [];
+        $issues = [];
 
         foreach ($map->getPlacedEventMarkers() as $marker) {
             if ($map->getEventDefinition($marker) === null) {
-                $warnings[] = sprintf('Event marker %s has no definition.', $marker);
+                $issues[] = Issue::error($map->mapId, sprintf('Event marker %s has no definition.', $marker),
+                    'The game refuses to load the map. Define the event, or clear the marker.');
             }
         }
 
-        return $warnings;
+        return $issues;
     }
 
     /**
@@ -169,11 +198,11 @@ final class MapValidator
      *
      * @param ProjectMap $map The map being saved.
      * @param array<string, ProjectMap> $mapsById Every workspace map keyed by map id.
-     * @return string[]
+     * @return list<Issue>
      */
     private static function findDanglingDestinations(ProjectMap $map, array $mapsById): array
     {
-        $warnings = [];
+        $issues = [];
 
         foreach (self::getEventDefinitions($map) as $marker => $definition) {
             $destination = $definition['data']['destinationMap'] ?? null;
@@ -183,11 +212,12 @@ final class MapValidator
             }
 
             if (! isset($mapsById[$destination])) {
-                $warnings[] = sprintf('%s: destination map %s does not exist.', $marker, $destination);
+                $issues[] = Issue::error($map->mapId, sprintf('%s: destination map %s does not exist.', $marker, $destination),
+                    'Walking through it crashes the game. Choose a map the project has.');
             }
         }
 
-        return $warnings;
+        return $issues;
     }
 
     /**
@@ -195,11 +225,11 @@ final class MapValidator
      *
      * @param ProjectMap $map The map being saved.
      * @param array<string, ProjectMap> $mapsById Every workspace map keyed by map id.
-     * @return string[]
+     * @return list<Issue>
      */
     private static function findOutOfRangeSpawnPoints(ProjectMap $map, array $mapsById): array
     {
-        $warnings = [];
+        $issues = [];
 
         foreach (self::getEventDefinitions($map) as $marker => $definition) {
             $spawnPoint = $definition['data']['spawnPoint'] ?? null;
@@ -219,7 +249,7 @@ final class MapValidator
                 : $map;
 
             if ($x < 0 || $y < 0 || $x >= $targetMap->getWidth() || $y >= $targetMap->getHeight()) {
-                $warnings[] = sprintf(
+                $issues[] = Issue::error($map->mapId, sprintf(
                     '%s: spawn point (%d, %d) is outside %s (%d x %d).',
                     $marker,
                     $x,
@@ -227,11 +257,11 @@ final class MapValidator
                     $targetMap === $map ? 'this map' : $targetMap->mapId,
                     $targetMap->getWidth(),
                     $targetMap->getHeight(),
-                );
+                ), 'The player would arrive off the map. Choose a cell inside it.');
             }
         }
 
-        return $warnings;
+        return $issues;
     }
 
     /**

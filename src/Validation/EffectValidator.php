@@ -159,8 +159,8 @@ final class EffectValidator
                     $use($declaration['effect'], false, sprintf('%s field effect %s', $map->mapId, $declaration['id']));
                 }
             } catch (Throwable $failure) {
-                $issues[] = Issue::error($map->mapId, 'Its fieldEffects cannot be read: ' . $failure->getMessage(),
-                    'Until this is fixed, the map shows none of its field effects; gameplay is unchanged.');
+                $issues[] = new Issue(Severity::ERROR, $map->mapId, 'Its fieldEffects cannot be read: ' . $failure->getMessage(),
+                    'Until this is fixed, the map shows none of its field effects; gameplay is unchanged.', map: $map->mapId);
             }
         }
 

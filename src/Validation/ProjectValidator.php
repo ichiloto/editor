@@ -1646,26 +1646,29 @@ class ProjectValidator
 
     foreach ($workspace->maps as $map) {
       if (($sourceIssue = $map->getGridSourceIssue()) !== null) {
-        $issues[] = Issue::error(
+        $issues[] = new Issue(Severity::ERROR,
           $map->mapId,
           "Map source is read-only: {$sourceIssue}",
           'Repair the source by hand, then reopen the project. Other maps remain editable.',
+          map: $map->mapId,
         );
         continue;
       }
 
       $issues = [
         ...$issues,
-        ...$this->checkLayers($map),
-        ...MapGraphicsValidator::validate($map),
-        ...MapGraphicsValidator::validateCoverage($map),
-        ...$this->checkRetiredMapData($map),
-        ...$this->checkEventMarkers($map),
-        ...$this->checkDoors($map, $workspace->mapIds),
-        ...$this->checkEncounters($map, $troops),
-        ...$this->checkNpcs($map, $workspace),
-        ...$this->checkDuplicateKeys($map),
-        ...$this->checkMapSource($map),
+        ...Issue::attributeToMap([
+          ...$this->checkLayers($map),
+          ...MapGraphicsValidator::validate($map),
+          ...MapGraphicsValidator::validateCoverage($map),
+          ...$this->checkRetiredMapData($map),
+          ...$this->checkEventMarkers($map),
+          ...$this->checkDoors($map, $workspace->mapIds),
+          ...$this->checkEncounters($map, $troops),
+          ...$this->checkNpcs($map, $workspace),
+          ...$this->checkDuplicateKeys($map),
+          ...$this->checkMapSource($map),
+        ], $map->mapId),
       ];
     }
 
@@ -3806,95 +3809,109 @@ class ProjectValidator
     $eventScripts = $this->commonEventScripts;
 
     foreach ($workspace->maps as $map) {
+      $issues = [...$issues, ...Issue::attributeToMap($this->checkMapContentReferences($map, $known, $npcIdsByMap, $eventScripts), $map->mapId)];
+    }
+
+    return $issues;
+  }
+
+  /**
+   * Checks what one map's music, events and NPCs name.
+   *
+   * @param array<string, string[]> $known The known reference values.
+   * @param array<string, string[]> $npcIdsByMap Stable NPC ids by map id.
+   * @param array<string, array<int, mixed>> $eventScripts Script payloads by id.
+   * @return Issue[] The issues found.
+   */
+  protected function checkMapContentReferences(ProjectMap $map, array $known, array $npcIdsByMap, array $eventScripts): array
+  {
+    $issues = [
+      ...$this->checkReference(strval($map->data['bgm'] ?? ''), 'bgm', 'track', $map->mapId, $known),
+      ...$this->checkBgmVariants($map, $known),
+    ];
+
+    foreach ((array) ($map->data['events'] ?? []) as $marker => $definition) {
+      if (! is_array($definition)) {
+        continue;
+      }
+
+      $where = sprintf('%s event %s', $map->mapId, strval($marker));
+      $data = (array) ($definition['data'] ?? []);
+      $class = strval($definition['class'] ?? '');
+      $currentNpcIds = $npcIdsByMap[$map->mapId] ?? [];
+
       $issues = [
         ...$issues,
-        ...$this->checkReference(strval($map->data['bgm'] ?? ''), 'bgm', 'track', $map->mapId, $known),
-        ...$this->checkBgmVariants($map, $known),
+        ...$this->checkEventCue($definition['cue'] ?? null, $where, $known),
+        ...$this->checkEventFacing($definition, $where),
+        ...$this->checkEventEngagement($definition, $where),
+        ...$this->checkConditions((array) ($definition['conditions'] ?? []), $where, $known),
+        ...$this->checkDialogueVariants((array) ($data['dialogue'] ?? []), $where, $known),
+        ...$this->checkCommands(
+          (array) ($data['script'] ?? []),
+          $where,
+          $known,
+          $currentNpcIds,
+          $map->mapId,
+          $npcIdsByMap,
+        ),
+        ...$this->checkReference(strval($data['bgm'] ?? ''), 'bgm', 'track', $where, $known),
+        ...$this->checkReference(strval($data['sfx'] ?? ''), 'sfx', 'sound', $where, $known),
       ];
 
-      foreach ((array) ($map->data['events'] ?? []) as $marker => $definition) {
-        if (! is_array($definition)) {
-          continue;
-        }
+      if (str_contains($class, 'CinematicEventTrigger')) {
+        $issues = [...$issues, ...$this->checkCinematicTrigger($definition, $where, $known)];
+      }
 
-        $where = sprintf('%s event %s', $map->mapId, strval($marker));
-        $data = (array) ($definition['data'] ?? []);
-        $class = strval($definition['class'] ?? '');
-        $currentNpcIds = $npcIdsByMap[$map->mapId] ?? [];
-
+      if (str_contains($class, self::SCRIPT_TRIGGER)) {
         $issues = [
           ...$issues,
-          ...$this->checkEventCue($definition['cue'] ?? null, $where, $known),
-          ...$this->checkEventFacing($definition, $where),
-          ...$this->checkEventEngagement($definition, $where),
-          ...$this->checkConditions((array) ($definition['conditions'] ?? []), $where, $known),
-          ...$this->checkDialogueVariants((array) ($data['dialogue'] ?? []), $where, $known),
-          ...$this->checkCommands(
-            (array) ($data['script'] ?? []),
+          ...$this->checkScriptTrigger(
+            $definition,
             $where,
             $known,
+            $eventScripts,
             $currentNpcIds,
             $map->mapId,
             $npcIdsByMap,
           ),
-          ...$this->checkReference(strval($data['bgm'] ?? ''), 'bgm', 'track', $where, $known),
-          ...$this->checkReference(strval($data['sfx'] ?? ''), 'sfx', 'sound', $where, $known),
         ];
+      }
 
-        if (str_contains($class, 'CinematicEventTrigger')) {
-          $issues = [...$issues, ...$this->checkCinematicTrigger($definition, $where, $known)];
-        }
-
-        if (str_contains($class, self::SCRIPT_TRIGGER)) {
+      foreach ((array) ($data['items'] ?? []) as $stock) {
+        if (is_array($stock)) {
           $issues = [
             ...$issues,
-            ...$this->checkScriptTrigger(
-              $definition,
-              $where,
-              $known,
-              $eventScripts,
-              $currentNpcIds,
-              $map->mapId,
-              $npcIdsByMap,
-            ),
+            ...$this->checkReference(strval($stock['item'] ?? ''), 'inventory', 'item', $where, $known),
           ];
         }
-
-        foreach ((array) ($data['items'] ?? []) as $stock) {
-          if (is_array($stock)) {
-            $issues = [
-              ...$issues,
-              ...$this->checkReference(strval($stock['item'] ?? ''), 'inventory', 'item', $where, $known),
-            ];
-          }
-        }
-
-        if (ChestLoot::isChest($definition)) {
-          $issues = [...$issues, ...$this->checkChestLoot($data, $where)];
-        }
       }
 
-      foreach ((array) ($map->data['npcs'] ?? []) as $npc) {
-        if (! is_array($npc)) {
-          continue;
-        }
-
-        $where = sprintf('%s NPC %s', $map->mapId, strval($npc['name'] ?? '(unnamed)'));
-        $issues = [
-          ...$issues,
-          ...$this->checkConditions((array) ($npc['conditions'] ?? []), $where, $known),
-          ...$this->checkDialogueVariants((array) ($npc['dialogue'] ?? []), $where, $known),
-          ...$this->checkCommands(
-            (array) ($npc['script'] ?? []),
-            $where,
-            $known,
-            $npcIdsByMap[$map->mapId] ?? [],
-            $map->mapId,
-            $npcIdsByMap,
-          ),
-          ...$this->checkStateWrites((array) ($npc['sets'] ?? []), $where),
-        ];
+      if (ChestLoot::isChest($definition)) {
+        $issues = [...$issues, ...$this->checkChestLoot($data, $where)];
       }
+    }
+
+    foreach ((array) ($map->data['npcs'] ?? []) as $npc) {
+      if (! is_array($npc)) {
+        continue;
+      }
+
+      $where = sprintf('%s NPC %s', $map->mapId, strval($npc['name'] ?? '(unnamed)'));
+      $issues = [
+        ...$issues,
+        ...$this->checkConditions((array) ($npc['conditions'] ?? []), $where, $known),
+        ...$this->checkDialogueVariants((array) ($npc['dialogue'] ?? []), $where, $known),
+        ...$this->checkCommands(
+          (array) ($npc['script'] ?? []),
+          $where,
+          $known,
+          $npcIdsByMap[$map->mapId] ?? [],
+          $map->mapId,
+          $npcIdsByMap,
+        ),
+        ...$this->checkStateWrites((array) ($npc['sets'] ?? []), $where),
+      ];
     }
 
     return $issues;

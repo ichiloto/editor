@@ -50,7 +50,14 @@ final class SessionHost
             $this->write($this->handle($line));
         }
         // The editor has gone: nothing it started may outlive it.
+        $this->close();
+    }
+
+    /** Closes the session: nothing it started outlives it, and a change set it left open is undone. */
+    public function close(): void
+    {
         $this->session?->close();
+        $this->session = null;
     }
 
     /**
@@ -585,6 +592,13 @@ final class SessionHost
             'history.redo' => $session->redo(),
             'project.dirty' => ['dirty' => $session->hasUnsavedChanges(), 'unsaved' => $session->listUnsavedChanges()],
             'project.saveAll' => $session->saveAll(),
+            'project.validate' => $session->validateProject(array_key_exists('maps', $params) ? self::requireLines($params, 'maps') : null),
+            'changes.begin' => $session->beginChanges(),
+            'changes.commit' => $session->commitChanges(
+                is_bool($params['relocateSaves'] ?? false) ? ($params['relocateSaves'] ?? false) : throw new InvalidRequest('"relocateSaves" must be a boolean.'),
+                is_bool($params['check'] ?? false) ? ($params['check'] ?? false) : throw new InvalidRequest('"check" must be a boolean.'),
+            ),
+            'changes.cancel' => $session->cancelChanges(),
             'playtest.start' => self::startPlaytest($session, $params),
             'playtest.options' => $session->describePlaytestOptions(),
             'playtest.status' => $session->describePlaytest(),

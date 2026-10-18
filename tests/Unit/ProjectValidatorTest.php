@@ -981,7 +981,7 @@ it('notes a map nothing reaches yet as a warning, and checks edge trigger destin
     ])->and(issuesMentioning($issues, 'Edge trigger 1 leads to "nowhere", which is not a map in this project.'))->toHaveCount(1);
 });
 
-it('warns for floor the player can reach that no tile covers, and is satisfied once it is painted', function () {
+it('reports floor the player can reach that no tile covers as an error, and is satisfied once it is painted', function () {
     $root = makeTemporaryProject();
     writeConsistentQuests($root);
     writeConsistentSkits($root);
@@ -993,10 +993,10 @@ it('warns for floor the player can reach that no tile covers, and is satisfied o
     file_put_contents($data, str_replace("'triggers' => [],", "'triggers' => [], 'tileset' => 'home',", (string) file_get_contents($data)));
     // The walls and the first two floor cells are painted; the third floor cell is not.
     writeTileLayer($root . '/assets/Maps/test-map', '01.floor.tiles.php', "5 5 5 5 5\n5 2816 2816 0 5\n5 5 5 5 5");
-    $untiled = static fn(): array => array_values(array_map(static fn(Issue $issue): string => $issue->message,
+    $untiled = static fn(): array => array_values(array_map(static fn(Issue $issue): string => "{$issue->severity->value} {$issue->map}: {$issue->message}",
         issuesMentioning(validateProject($root), 'shows the background')));
 
-    expect($untiled())->toBe(['1 cell the player can reach has no tile, so the field shows the background there: (3, 1).']);
+    expect($untiled())->toBe(['error test-map: 1 cell the player can reach has no tile, so the field shows the background there: (3, 1).']);
     writeTileLayer($root . '/assets/Maps/test-map', '01.floor.tiles.php', "5 5 5 5 5\n5 2816 2816 2816 5\n5 5 5 5 5");
     expect($untiled())->toBe([]);
 });

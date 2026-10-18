@@ -26,6 +26,8 @@ final class WorkspaceSaveResult
      * @param list<string> $failures Each document that could not be written, with why.
      * @param list<string> $warnings What validation noticed in the maps written, which never blocks a save.
      * @param list<string> $backupFailures Files whose backup failed; their save still ran.
+     * @param list<string> $errors Defects the player would meet in the maps written, each with its fix: the maps
+     *     saved as drafts, and validation fails until they are fixed.
      */
     public function __construct(
         public readonly int $savedMaps,
@@ -36,6 +38,7 @@ final class WorkspaceSaveResult
         public readonly array $failures,
         public readonly array $warnings,
         public readonly array $backupFailures,
+        public readonly array $errors = [],
     ) {
     }
 }

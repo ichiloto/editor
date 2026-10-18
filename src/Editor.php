@@ -103,6 +103,7 @@ use Ichiloto\Editor\UI\TextFieldEditor;
 use Ichiloto\Editor\UI\TextFieldKeyResult;
 use Ichiloto\Editor\Storage\WorkspaceSave;
 use Ichiloto\Editor\Validation\MapValidator;
+use Ichiloto\Editor\Validation\Severity;
 use Ichiloto\Engine\Entities\Enumerations\ItemScopeNumber;
 use Ichiloto\Engine\Entities\Enumerations\ItemScopeSide;
 use Ichiloto\Engine\Entities\Enumerations\ItemScopeStatus;
@@ -6451,12 +6452,20 @@ final class Editor
             $detailLines = [...$detailLines, 'Backups failed (the save still ran):', ...array_map(static fn(string $path): string => '  ' . $path, $result->backupFailures), ''];
         }
 
+        if ($result->errors !== []) {
+            $detailLines = [...$detailLines, 'Errors the player would see (saved as drafts; validation fails until fixed):',
+                ...array_map(static fn(string $error): string => '  ' . $error, $result->errors), ''];
+        }
+
         if ($result->warnings !== []) {
             $detailLines = [...$detailLines, 'Validation warnings:', ...array_map(static fn(string $warning): string => '  ' . $warning, $result->warnings)];
         }
 
         if ($result->failures !== []) {
             $this->setStatus($result->summary . sprintf(' %d failed (Ctrl+E for details).', count($result->failures)), StatusLevel::ERROR, $detailLines);
+        } elseif ($result->errors !== []) {
+            $this->setStatus($result->summary . sprintf(' %d error%s the player would see (Ctrl+E for details).', count($result->errors),
+                count($result->errors) === 1 ? '' : 's'), StatusLevel::ERROR, $detailLines);
         } elseif ($result->skippedRenames !== [] || $result->skippedRelocations !== [] || $result->warnings !== [] || $result->backupFailures !== []) {
             $this->setStatus($result->summary . ' See Ctrl+E for skipped saves and warnings.', StatusLevel::WARN, $detailLines);
         } else {
@@ -6670,7 +6679,9 @@ final class Editor
             return;
         }
 
-        $warnings = MapValidator::validate($selectedMap, $this->getMapsById(), MapValidator::readInventoryCatalog($this->workspace));
+        $issues = MapValidator::validate($selectedMap, $this->getMapsById(), MapValidator::readInventoryCatalog($this->workspace));
+        $errors = MapValidator::describeIssues(MapValidator::selectSeverity($issues, Severity::ERROR));
+        $warnings = MapValidator::describeIssues(MapValidator::selectSeverity($issues, Severity::WARNING));
         $step = null;
 
         try {
@@ -6711,7 +6722,15 @@ final class Editor
 
             $moved = $step === null ? '' : sprintf(' Saves on %d cells it makes solid now move to open floor (save content version %d).',
                 array_sum(array_map(static fn(array $relocation): int => count($relocation['cells']), $relocation->relocations)), $relocation->contentVersion);
-            if ($warnings === []) {
+            if ($errors !== []) {
+                // Saved as a draft: the player would meet these, so validation fails until they are fixed.
+                $this->setStatus(
+                    sprintf('Saved %s as a draft with %d error%s the player would see (Ctrl+E for details).%s', $savedMapId, count($errors),
+                        count($errors) === 1 ? '' : 's', $moved),
+                    StatusLevel::ERROR,
+                    [...$errors, ...($warnings === [] ? [] : ['', 'Warnings:', ...$warnings])],
+                );
+            } elseif ($warnings === []) {
                 $this->setStatus(sprintf('Saved %s.%s', $savedMapId, $moved), StatusLevel::SUCCESS);
             } else {
                 $this->setStatus(

@@ -485,6 +485,18 @@ function itemsFromSource(string $source): array
  * The synthetic sample project's inventory, read once: what map save
  * warnings check a chest's reward against.
  */
+/**
+ * The messages of the pre-save checks of a map, whatever their severity.
+ *
+ * @param array<string, Ichiloto\Editor\ProjectMap> $mapsById
+ * @return list<string>
+ */
+function mapValidatorMessages(Ichiloto\Editor\ProjectMap $map, array $mapsById): array
+{
+    return array_map(static fn(Ichiloto\Editor\Validation\Issue $issue): string => $issue->message,
+        Ichiloto\Editor\Validation\MapValidator::validate($map, $mapsById, mapValidatorInventory()));
+}
+
 function mapValidatorInventory(): \Ichiloto\Editor\Database\InventoryCatalog
 {
     static $catalog = null;

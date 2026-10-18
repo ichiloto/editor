@@ -28,8 +28,8 @@ use Throwable;
 /**
  * Checks a map's graphics as the Engine reads them: its kind (the tileset it
  * names) and the tile layers in `graphics/`, unsaved resizes included. In a
- * project with tilesets every map should have a kind, so one without is
- * warned about.
+ * project with tilesets every map needs a kind: one without shows its raw
+ * terminal glyphs in the graphical field, an error.
  *
  * Unusable graphics never stop a map loading; the game shows its terminal
  * glyphs instead. Every file is checked, so one report names every problem
@@ -60,7 +60,7 @@ final class MapGraphicsValidator
         $tilesetId = $map->getMapDataField(['tileset']);
 
         if ($tilesetId === null && $sources === [] && ! is_dir($map->directory . '/' . MapGraphics::DIRECTORY)) {
-            return glob($map->getAssetRoot() . '/' . Tileset::DIRECTORY . '/*.php') === [] ? [] : [Issue::warning(
+            return glob($map->getAssetRoot() . '/' . Tileset::DIRECTORY . '/*.php') === [] ? [] : [Issue::error(
                 $map->mapId,
                 'It has no kind, so it has no tiles or pieces.',
                 sprintf('Set its Kind in the Inspector, one of the tilesets in assets/%s. %s', Tileset::DIRECTORY, self::GLYPH_FALLBACK),
@@ -84,15 +84,19 @@ final class MapGraphicsValidator
     }
 
     /**
-     * Warns for what a map with a kind still shows as terminal glyphs in the
-     * graphical field, by the Engine's glyph fallback rule: cells no tile
-     * covers, NPCs without a field sprite, copies of an NPC's glyph in the
-     * map showing under its sprite, tiles a tileset piece draws whose glyph
-     * is no longer there, and cells showing the tileset's missing-art
-     * placeholder. These are art still to do, not faults:
-     * the game plays the same, so project validation reports them and the
-     * pre-save checks do not. Graphics the Engine refuses are
-     * {@see validate()}'s to report; only the readable tile layers count here.
+     * Reports what a map with a kind still shows as terminal glyphs in the
+     * graphical field, by the Engine's glyph fallback rule, and what its art
+     * still lacks.
+     *
+     * A raw gameplay glyph the player sees in the graphical field is an
+     * error: a cell no tile covers, an NPC without a field sprite, and a copy
+     * of an NPC's glyph showing under its sprite. The map still saves as a
+     * draft; validation fails until it is presented. Art still to finish is a
+     * warning: tiles a tileset piece draws whose glyph is no longer there,
+     * cells showing the tileset's missing-art placeholder the author chose,
+     * and ground that can show the background through see-through edges.
+     * Graphics the Engine refuses are {@see validate()}'s to report; only the
+     * readable tile layers count here.
      *
      * @return list<Issue>
      */
@@ -115,7 +119,7 @@ final class MapGraphicsValidator
             if (! array_key_exists('sprites2d', $npc->toArray())) {
                 // An NPC without a terminal sprite draws nothing; its map glyph, if any, is the cell's.
                 if ($npc->getVisibleSprite() !== '') {
-                    $issues[] = Issue::warning($map->mapId,
+                    $issues[] = Issue::error($map->mapId,
                         sprintf('NPC %s has no field sprite, so its glyph %s shows in the graphical field.', $name, $npc->getVisibleSprite()),
                         'Give it an RPG Maker character sheet (sprites2d).');
                 }
@@ -128,7 +132,7 @@ final class MapGraphicsValidator
             $cell = $shown[$npc->getY()][$npc->getX()] ?? null;
             if ($cell !== null && $cell['glyph'] === $npc->getVisibleSprite()) {
                 unset($shown[$npc->getY()][$npc->getX()]);
-                $issues[] = Issue::warning($map->mapId,
+                $issues[] = Issue::error($map->mapId,
                     sprintf('NPC %s stands on a copy of its glyph %s on the %s layer, which shows under its sprite.',
                         $name, $cell['glyph'], $cell['layer']),
                     'Remove the copy from the map if the NPC is always there; otherwise give the cell its tile.');
@@ -141,7 +145,7 @@ final class MapGraphicsValidator
         }
 
         if ($layers === []) {
-            return [...$issues, Issue::warning($map->mapId,
+            return [...$issues, Issue::error($map->mapId,
                 sprintf('It has no tiles yet, so all %d of its glyph cells show in the graphical field.', count($cells)),
                 'Stamp tileset pieces with P, draw the tiles for glyphs already on a layer with T, or paint tiles in the GUI editor.')];
         }
@@ -155,7 +159,7 @@ final class MapGraphicsValidator
         foreach ($groups as $group) {
             $named = array_map(static fn(array $cell): string => "({$cell['x']}, {$cell['y']})", array_slice($group, 0, self::CELLS_NAMED));
             $rest = count($group) - count($named);
-            $issues[] = Issue::warning($map->mapId, sprintf('%d %s of %s on the %s layer %s no tile, so the glyph shows in the graphical field: %s%s.',
+            $issues[] = Issue::error($map->mapId, sprintf('%d %s of %s on the %s layer %s no tile, so the glyph shows in the graphical field: %s%s.',
                 count($group), count($group) === 1 ? 'cell' : 'cells', $group[0]['glyph'], $group[0]['layer'],
                 count($group) === 1 ? 'has' : 'have', implode(', ', $named), $rest > 0 ? " and {$rest} more" : ''), $hint);
         }

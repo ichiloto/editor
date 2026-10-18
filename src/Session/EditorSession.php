@@ -92,7 +92,10 @@ use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Editor\Storage\FileSetTransactionFailure;
 use Ichiloto\Editor\Storage\WorkspaceSave;
 use Ichiloto\Editor\Validation\MapGraphicsValidator;
+use Ichiloto\Editor\Validation\Issue;
 use Ichiloto\Editor\Validation\MapValidator;
+use Ichiloto\Editor\Validation\ProjectValidator;
+use Ichiloto\Editor\Validation\Severity;
 use Ichiloto\Engine\IO\Console\TerminalPresentationComposer;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\PresentationCanvas;
 use Ichiloto\Engine\Rendering\Sprites\CharacterSheet;
@@ -217,6 +220,16 @@ final class EditorSession
      * @var array<string, array{map: WeakReference<ProjectMap>, base: int, last: int}>
      */
     private array $mapRevisions = [];
+
+    /**
+     * The open change set ({@see beginChanges()}): what validation reported
+     * when it began, each map's revision then, and how many undo steps came
+     * before it. Null when none is open.
+     *
+     * @var array{baseline: list<Issue>, revisions: array<string, int>, steps: int, dropped: int}|null
+     */
+    private ?array $changeSet = null;
+
     private function __construct(
         ProjectWorkspace $workspace,
         private readonly CommandHistory $history,
@@ -421,6 +434,7 @@ final class EditorSession
      */
     public function moveMap(string $mapId, int $revision, ?string $destination = null, bool $confirmed = false): array
     {
+        $this->refuseDuringChangeSet('Moving a map clears the undo history');
         $map = $this->requireCurrentMap($mapId, $revision);
         if ($map->getGridSourceIssue() !== null) {
             throw new SessionRefusal(sprintf('%s is read-only: %s', $mapId, $map->getGridSourceIssue()));
@@ -533,6 +547,7 @@ final class EditorSession
      */
     public function deleteMap(string $mapId, bool $confirmed = false): array
     {
+        $this->refuseDuringChangeSet('Deleting a map clears the undo history');
         $this->requireMap($mapId);
         $references = new MapReferences($this->workspace)->describe($mapId);
         if ($references !== [] && ! $confirmed) {
@@ -3925,6 +3940,7 @@ final class EditorSession
      */
     public function saveDatabase(string $category): array
     {
+        $this->refuseDuringChangeSet('Saving a database');
         $database = $this->requireCategory($category);
         if (! $database->isEditable()) {
             throw new SessionRefusal(sprintf('Read-only: %s.', $database->getReadOnlyReason() ?? 'this category cannot be written'));
@@ -4552,6 +4568,10 @@ final class EditorSession
      */
     public function undo(): array
     {
+        if ($this->changeSet !== null && $this->history->count() <= $this->changeSet['steps']) {
+            throw new SessionRefusal('Undo would reach back before the change set began; cancel the change set instead.');
+        }
+
         return $this->traverseHistory(fn(): ?Command => $this->history->undo());
     }
 
@@ -4566,13 +4586,16 @@ final class EditorSession
     }
 
     /**
-     * Saves one map through its transaction, after the warnings validation
-     * has for it, which never block a save. When the save would take cells
-     * existing saves may stand on, nothing is written until the author has
-     * seen where those saves move: the first call asks, and `write` with the
-     * question's `confirm` saves the map and the relocation step together.
+     * Saves one map through its transaction, after the checks validation
+     * has for it, which never block this save: a map with errors (defects
+     * the player would meet) saves as a draft, and validation fails until
+     * they are fixed. {@see commitChanges()} is the write that refuses them.
+     * When the save would take cells existing saves may stand on, nothing is
+     * written until the author has seen where those saves move: the first
+     * call asks, and `write` with the question's `confirm` saves the map and
+     * the relocation step together.
      *
-     * @return array{saved: string, warnings: list<string>, backupFailures: list<string>, relocated: list<string>}
+     * @return array{saved: string, warnings: list<string>, errors: list<array<string, ?string>>, backupFailures: list<string>, relocated: list<string>}
      *     |array{status: 'question', map: string, question: string, answers: list<array{key: string, label: string, description: string}>,
      *         relocations: list<array{map: string, cells: list<array{int, int}>, to: array{int, int}}>, moves: list<string>,
      *         contentVersion: int, confirm: string}
@@ -4582,6 +4605,7 @@ final class EditorSession
      */
     public function saveMap(string $mapId, ?string $answer = null, ?string $confirm = null): array
     {
+        $this->refuseDuringChangeSet('Saving a map');
         $map = $this->requireMap($mapId);
         try {
             $relocation = SaveRelocationPlanner::plan($map, $this->workspace->projectRoot);
@@ -4609,7 +4633,7 @@ final class EditorSession
                 throw new SessionRefusal('The map or the save manifest changed since the save relocations were shown, so nothing was written. Review them again.');
             }
         }
-        $warnings = MapValidator::validate($map, $this->getMapsById(), MapValidator::readInventoryCatalog($this->workspace));
+        $issues = MapValidator::validate($map, $this->getMapsById(), MapValidator::readInventoryCatalog($this->workspace));
         $failures = [];
         $step = $relocation?->apply();
 
@@ -4628,8 +4652,9 @@ final class EditorSession
             $this->history->record($step);
         }
 
-        return ['saved' => $saved, 'warnings' => array_values($warnings), 'backupFailures' => array_values($failures),
-            'relocated' => $relocation?->describeMoves() ?? []];
+        return ['saved' => $saved, 'warnings' => MapValidator::describeIssues(MapValidator::selectSeverity($issues, Severity::WARNING)),
+            'errors' => array_map(static fn(Issue $issue): array => $issue->describe(), MapValidator::selectSeverity($issues, Severity::ERROR)),
+            'backupFailures' => array_values($failures), 'relocated' => $relocation?->describeMoves() ?? []];
     }
 
     /**
@@ -5000,6 +5025,10 @@ final class EditorSession
     /** Ends what the session started that would outlive it: a running playtest or battle test. */
     public function close(): void
     {
+        // Changes never committed leave the project as it was.
+        if ($this->changeSet !== null) {
+            $this->cancelChanges();
+        }
         foreach (array_keys($this->authoringCanvases) as $mapId) {
             $this->closeAuthoringCanvas((string) $mapId);
         }
@@ -5078,6 +5107,7 @@ final class EditorSession
      */
     public function saveAll(): array
     {
+        $this->refuseDuringChangeSet('Saving everything');
         $result = WorkspaceSave::saveAll($this->workspace, $this->backups);
 
         return [
@@ -5086,9 +5116,212 @@ final class EditorSession
             'skippedRelocations' => $result->skippedRelocations,
             'failures' => $result->failures,
             'warnings' => $result->warnings,
+            'errors' => $result->errors,
             'backupFailures' => $result->backupFailures,
             'unsaved' => $this->workspace->listUnsavedChanges(),
         ];
+    }
+
+    /**
+     * Validates the project as it stands in this session, unsaved edits
+     * included, by the same checks as `ichiloto validate`.
+     *
+     * @param list<string>|null $mapIds Only the issues about these maps; null for every issue.
+     * @return array{issues: list<array<string, ?string>>, errors: int, warnings: int}
+     */
+    public function validateProject(?array $mapIds = null): array
+    {
+        $issues = new ProjectValidator()->validate($this->workspace);
+        if ($mapIds !== null) {
+            $issues = array_values(array_filter($issues, static fn(Issue $issue): bool => in_array($issue->map, $mapIds, true)));
+        }
+
+        return [
+            'issues' => array_map(static fn(Issue $issue): array => $issue->describe(), $issues),
+            'errors' => count(MapValidator::selectSeverity($issues, Severity::ERROR)),
+            'warnings' => count(MapValidator::selectSeverity($issues, Severity::WARNING)),
+        ];
+    }
+
+    /**
+     * Opens a change set: edits made from here on are written only by
+     * {@see commitChanges()}, and only when the project they leave is valid.
+     * This is the write path for anyone changing maps without an author
+     * reviewing each save (another agent, a script): what the player would
+     * meet is refused before it is written. An author's own saves stay
+     * drafts ({@see saveMap()}).
+     *
+     * Edits that write files at once (creating or duplicating a map,
+     * inserting or removing rows) may run inside it; a refused or cancelled
+     * change set undoes them. Saving, moving or deleting a map is refused
+     * while it is open.
+     *
+     * @return array{status: 'open', errors: int, warnings: int}
+     * @throws SessionRefusal When a change set is already open or edits are unsaved.
+     */
+    public function beginChanges(): array
+    {
+        if ($this->changeSet !== null) {
+            throw new SessionRefusal('A change set is already open; commit or cancel it first.');
+        }
+        if ($this->workspace->hasUnsavedChanges()) {
+            throw new SessionRefusal('Save or undo pending edits before a change set begins, so it holds only its own changes.');
+        }
+        $baseline = new ProjectValidator()->validate($this->workspace);
+        $this->changeSet = [
+            'baseline' => $baseline,
+            'revisions' => array_map($this->getMapRevision(...), $this->getMapsById()),
+            'steps' => $this->history->count(),
+            'dropped' => $this->history->countDropped(),
+        ];
+
+        return ['status' => 'open', 'errors' => count(MapValidator::selectSeverity($baseline, Severity::ERROR)),
+            'warnings' => count(MapValidator::selectSeverity($baseline, Severity::WARNING))];
+    }
+
+    /**
+     * Writes the open change set when the project it leaves is valid, and
+     * otherwise writes nothing and undoes it.
+     *
+     * Validation runs over the project as saving would leave it. The change
+     * set is refused when a map it changed has any error (a defect the player
+     * would meet), whether the change set made it or found it there, or when
+     * it leaves a new error anywhere else (a door on another map now leading
+     * nowhere). Warnings never refuse it. Its maps are saved through their
+     * own transactions, then any other unsaved change it made.
+     *
+     * @param bool $relocateSaves Whether saves standing where a changed map is now solid may move to open floor;
+     *     without it such a change set is refused, naming where they would move.
+     * @param bool $checkOnly Whether to only report what committing would find, then undo the change set.
+     * @return array{status: 'saved'|'refused'|'checked', maps: list<string>, saved: list<string>, issues: list<array<string, ?string>>,
+     *     blocking: int, relocated: list<string>, reason?: ?string, unrestored?: int}
+     * @throws SessionRefusal When no change set is open, or a save fails part way (the message names what was written).
+     */
+    public function commitChanges(bool $relocateSaves = false, bool $checkOnly = false): array
+    {
+        $changes = $this->changeSet ?? throw new SessionRefusal('No change set is open; begin one first.');
+        $changed = $this->listChangedMaps($changes);
+        $issues = new ProjectValidator()->validate($this->workspace);
+        $before = array_fill_keys(array_map(self::identifyIssue(...), $changes['baseline']), true);
+        $blocking = array_values(array_filter($issues, static fn(Issue $issue): bool => $issue->severity === Severity::ERROR
+            && (in_array($issue->map, $changed, true) || ! isset($before[self::identifyIssue($issue)]))));
+        $reported = array_values(array_filter($issues, static fn(Issue $issue): bool => in_array($issue->map, $changed, true)
+            || in_array($issue, $blocking, true)));
+        $outcome = ['maps' => $changed, 'saved' => [], 'issues' => array_map(static fn(Issue $issue): array => $issue->describe(), $reported),
+            'blocking' => count($blocking), 'relocated' => []];
+
+        $relocations = [];
+        foreach ($changed as $mapId) {
+            $map = $this->getMapsById()[$mapId] ?? null;
+            $plan = $map instanceof ProjectMap && $map->isDirty() ? SaveRelocationPlanner::plan($map, $this->workspace->projectRoot) : null;
+            if ($plan !== null) {
+                $relocations = [...$relocations, ...$plan->describeMoves()];
+            }
+        }
+        if ($blocking !== [] || $checkOnly || ($relocations !== [] && ! $relocateSaves)) {
+            $unrestored = $this->rollBackChanges($changes);
+
+            return ['status' => $blocking === [] && $checkOnly ? 'checked' : 'refused', ...$outcome, 'relocated' => $relocations,
+                'reason' => match (true) {
+                    $blocking !== [] => sprintf('%d error%s the player would meet.', count($blocking), count($blocking) === 1 ? '' : 's'),
+                    $checkOnly => null,
+                    default => 'Saves stand where a changed map is now solid; allow them to move to open floor, or change the map.',
+                }, ...($unrestored > 0 ? ['unrestored' => $unrestored] : [])];
+        }
+
+        $this->changeSet = null;
+        foreach ($changed as $mapId) {
+            if (! ($this->getMapsById()[$mapId] ?? null)?->isDirty()) {
+                continue;
+            }
+            try {
+                $result = $this->saveMap($mapId);
+                if (($result['status'] ?? null) === 'question') {
+                    $result = $this->saveMap($mapId, 'write', $result['confirm']);
+                    $outcome['relocated'] = [...$outcome['relocated'], ...($result['relocated'] ?? [])];
+                }
+            } catch (SessionRefusal $refusal) {
+                throw new SessionRefusal(sprintf('%s was not saved: %s%s', $mapId, $refusal->getMessage(), $outcome['saved'] === []
+                    ? ' Nothing was written.' : ' Already saved: ' . implode(', ', $outcome['saved']) . '.'), previous: $refusal);
+            }
+            $outcome['saved'][] = $mapId;
+        }
+        if ($this->workspace->hasUnsavedChanges()) {
+            $rest = $this->saveAll();
+            if ($rest['failures'] !== []) {
+                throw new SessionRefusal('The maps were saved, but not everything else: ' . implode('; ', $rest['failures']));
+            }
+        }
+
+        return ['status' => 'saved', ...$outcome];
+    }
+
+    /**
+     * Cancels the open change set, undoing every edit it made, those that
+     * wrote files at once included.
+     *
+     * @return array{status: 'cancelled', unrestored?: int}
+     * @throws SessionRefusal When no change set is open.
+     */
+    public function cancelChanges(): array
+    {
+        $unrestored = $this->rollBackChanges($this->changeSet ?? throw new SessionRefusal('No change set is open.'));
+
+        return ['status' => 'cancelled', ...($unrestored > 0 ? ['unrestored' => $unrestored] : [])];
+    }
+
+    /**
+     * The maps a change set changed: every map whose revision moved since it
+     * began, and every map it made.
+     *
+     * @param array{revisions: array<string, int>} $changes
+     * @return list<string>
+     */
+    private function listChangedMaps(array $changes): array
+    {
+        $changed = [];
+        foreach ($this->getMapsById() as $mapId => $map) {
+            if (($changes['revisions'][$mapId] ?? null) !== $this->getMapRevision($map)) {
+                $changed[] = (string) $mapId;
+            }
+        }
+
+        return $changed;
+    }
+
+    /**
+     * Undoes every step of a change set and removes the maps it made, then
+     * closes it.
+     *
+     * @param array{revisions: array<string, int>, steps: int, dropped: int} $changes
+     * @return int How many of its earliest steps could no longer be undone, dropped from a full undo history.
+     */
+    private function rollBackChanges(array $changes): int
+    {
+        $unrestored = $this->history->countDropped() - $changes['dropped'];
+        $this->changeSet = null;
+        while ($this->history->count() > max(0, $changes['steps'] - $unrestored)) {
+            $this->undo();
+        }
+        foreach (array_diff(array_keys($this->getMapsById()), array_keys($changes['revisions'])) as $made) {
+            $this->deleteMap((string) $made, confirmed: true);
+        }
+
+        return $unrestored;
+    }
+
+    /** An issue's identity, to tell an issue found before a change set from one it made. */
+    private static function identifyIssue(Issue $issue): string
+    {
+        return implode("\0", [$issue->severity->value, $issue->where, $issue->message, $issue->code ?? '', $issue->map ?? '']);
+    }
+
+    /** Refuses what a change set cannot hold or undo while one is open. */
+    private function refuseDuringChangeSet(string $doing): void
+    {
+        if ($this->changeSet !== null) {
+            throw new SessionRefusal(sprintf('%s is not part of a change set; commit or cancel it first.', $doing));
+        }
     }
 
     /**

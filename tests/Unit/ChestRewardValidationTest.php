@@ -209,7 +209,7 @@ it('reports every chest in the project report and leaves other events alone', fu
     expect($where)->toBe(['test-map event A', 'test-map event B', 'test-map event E']);
 });
 
-it('diagnoses a new chest on its inspector row and in the save warnings, and still saves it as authored', function () {
+it('diagnoses a new chest on its inspector row and as a save error, and still saves it as authored', function () {
     $root = chestRewardProject();
     $session = Ichiloto\Editor\Session\EditorSession::open($root);
     $map = $session->readMap('test-map');
@@ -243,13 +243,13 @@ it('diagnoses a new chest on its inspector row and in the save warnings, and sti
     $saved = $session->saveMap('test-map');
 
     expect($saved['saved'])->toBe('test-map')
-        ->and($saved['warnings'])->toContain(sprintf('Chest %s: It has no item chosen, so it fails when opened.', $marker))
+        ->and(array_column($saved['errors'], 'message'))->toContain(sprintf('Chest %s: It has no item chosen, so it fails when opened.', $marker))
         ->and((require $root . '/assets/Maps/test-map/test-map.data.php')['events'][$marker]['data']['loot'])->toBe('');
 
     $loot = array_find($session->readInspector('test-map', $marker)['rows'], static fn(array $row): bool => trim($row['label']) === 'Loot');
     $session->applyInspector('test-map', $session->readMap('test-map')['revision'], $loot['key'], 'item.tonic');
 
     expect(array_column($session->readInspector('test-map', $marker)['rows'], 'label'))->not->toContain('Reward Error')
-        ->and(array_filter($session->saveMap('test-map')['warnings'],
-            static fn(string $warning): bool => str_starts_with($warning, sprintf('Chest %s:', $marker))))->toBe([]);
+        ->and(array_filter(array_column($session->saveMap('test-map')['errors'], 'message'),
+            static fn(string $error): bool => str_starts_with($error, sprintf('Chest %s:', $marker))))->toBe([]);
 });
