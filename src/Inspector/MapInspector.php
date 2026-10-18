@@ -17,6 +17,7 @@ use Ichiloto\Editor\Database\RecordFieldCodec;
 use Ichiloto\Editor\Database\RecordSchemaCatalog;
 use Ichiloto\Editor\Events\ChestLoot;
 use Ichiloto\Editor\Events\EventAuthoring;
+use Ichiloto\Editor\Events\EventRecordPane;
 use Ichiloto\Editor\Events\EventRefusal;
 use Ichiloto\Editor\Events\EventTypeCatalog;
 use Ichiloto\Editor\Events\EventTypeDefinition;
@@ -38,6 +39,7 @@ use Ichiloto\Engine\Events\Enumerations\LootType;
 use Ichiloto\Engine\Events\Triggers\DialogueEventTrigger;
 use Ichiloto\Engine\Events\Triggers\EventCueKind;
 use Ichiloto\Engine\Events\Triggers\ShopEventTrigger;
+use Ichiloto\Engine\Field\PlayerSpriteSet;
 use Ichiloto\Engine\Messaging\Dialogue\ConditionalDialogue;
 use Ichiloto\Engine\Messaging\Dialogue\Presentation\DialogueContext;
 use Ichiloto\Engine\Field\MapGraphics;
@@ -197,6 +199,8 @@ final readonly class MapInspector
             ],
             ...$this->mapRuntimeFields($map),
             ...MapAtlasFields::describeMapFields($map, $this->references),
+            // Where the region map pins it, beside where the atlas places it.
+            MapStationField::describeField($map),
             ...MapTerrainFields::describeMapFields($map),
             ...$this->getLandmarkFields()->describeMapFields($map),
         ];
@@ -304,6 +308,9 @@ final readonly class MapInspector
         if (($field['destination'] ?? false) === true) {
             throw new InspectorRefusal('A destination is set with its spawn point; choose both together.');
         }
+        if (($field['target'] ?? null) === EventRecordPane::TARGET) {
+            return $this->applyEventRecordField($map, $field, $rawValue);
+        }
 
         $control = self::findControl($field);
         $type = $control?->type ?? InputControlType::TEXT;
@@ -344,6 +351,7 @@ final readonly class MapInspector
             MapLandmarkFields::TARGET, MapLandmarkFields::EVENT_TARGET, MapLandmarkFields::OBJECT_TARGET => $this->applyLandmarkValue($map, $field, $value),
             MapAtlasFields::TARGET => $this->applyAtlasValue($map, $field, $value),
             MapTerrainFields::TARGET => $this->applyTerrainValue($map, $field, $value),
+            MapStationField::TARGET => $this->applyStationValue($map, (string) $value),
             default => null,
         };
     }
@@ -426,6 +434,22 @@ final readonly class MapInspector
         return $this->writeMapData($map, [MapAtlas::KEY], $block === [] ? null : $block, 'Atlas terrain');
     }
 
+    /**
+     * Pins the map to a cell of its region's map, or takes the pin away, as one undo step.
+     *
+     * @throws InspectorRefusal When the value is not an x, y pair of whole numbers.
+     */
+    private function applyStationValue(ProjectMap $map, string $value): ?Command
+    {
+        try {
+            $station = MapStationField::applyValue($map, $value);
+        } catch (InvalidArgumentException $error) {
+            throw new InspectorRefusal($error->getMessage(), previous: $error);
+        }
+
+        return $this->writeMapData($map, [MapStationField::KEY], $station, 'Station');
+    }
+
     /** The landmark rows, over the project's place categories and maps as this inspector reads them. */
     private function getLandmarkFields(): MapLandmarkFields
     {
@@ -489,6 +513,8 @@ final readonly class MapInspector
             'index' => isset($field['index']) ? (int) $field['index'] : null,
             // A list heading has no path of its own; its list's names it.
             'list' => is_array($field['list']['path'] ?? null) ? array_values(array_map('strval', $field['list']['path'])) : null,
+            // An event record row is named within the frame of commands it is in.
+            'frame' => is_array($field['eventFrame'] ?? null) ? array_values($field['eventFrame']) : null,
         ], static fn(mixed $value): bool => $value !== null);
     }
 
@@ -510,12 +536,14 @@ final readonly class MapInspector
 
     /**
      * Sets a transfer event's destination: the map and the spawn point on
-     * it, as one undo step.
+     * it, and when given the heading the player faces there, as one undo
+     * step. Without a heading the spawn facing stays as it is.
      *
      * @param ProjectMap $destination The map it leads to.
-     * @throws InspectorRefusal When the event is not a transfer or the spawn point is off the destination map.
+     * @param string|null $heading North, East, South or West; null leaves the facing unchanged.
+     * @throws InspectorRefusal When the event is not a transfer, the spawn point is off the destination map, or the heading is not one.
      */
-    public function setTransferDestination(ProjectMap $map, string $marker, ProjectMap $destination, int $x, int $y): ?Command
+    public function setTransferDestination(ProjectMap $map, string $marker, ProjectMap $destination, int $x, int $y, ?string $heading = null): ?Command
     {
         $current = $map->getEventDefinition($marker);
 
@@ -528,9 +556,15 @@ final readonly class MapInspector
                 $x, $y, $destination->mapId, $destination->getWidth(), $destination->getHeight()));
         }
 
+        $facing = $heading === null ? null : (self::findSpawnHeading($heading)
+            ?? throw new InspectorRefusal(sprintf('%s is not a spawn facing; choose %s.', $heading, implode(', ', self::listSpawnHeadingNames()))));
+
         $next = $current;
         $next['data']['destinationMap'] = $destination->mapId;
         $next['data']['spawnPoint'] = [...(is_array($current['data']['spawnPoint'] ?? null) ? $current['data']['spawnPoint'] : []), 'x' => $x, 'y' => $y];
+        if ($facing !== null) {
+            $next['data']['spawnSprite'] = [$facing->value];
+        }
 
         if ($next === $current) {
             return null;
@@ -582,6 +616,10 @@ final readonly class MapInspector
 
             return new InspectorListEdit($this->writeMapData($map, [MapBgmVariants::KEY], $variants->withVariantAdded(), 'Music variant add'),
                 sprintf('Added variant %d. Pick its track; it stays inactive until one is chosen.', $variants->count() + 1));
+        }
+
+        if (($field['target'] ?? null) === EventRecordPane::TARGET) {
+            return $this->editEventRecordItems($map, $field, false);
         }
 
         $list = self::findEventList($field) ?? throw new InspectorRefusal('Nothing here is a list to add to.');
@@ -641,6 +679,10 @@ final readonly class MapInspector
 
             return new InspectorListEdit($this->writeMapData($map, [MapBgmVariants::KEY], $variants->withVariantRemovedAt($index), 'Music variant remove'),
                 sprintf('Removed variant %d.', $index + 1));
+        }
+
+        if (($field['target'] ?? null) === EventRecordPane::TARGET) {
+            return $this->editEventRecordItems($map, $field, true);
         }
 
         $list = self::findEventList($field) ?? throw new InspectorRefusal('Nothing here is a list entry to remove.');
@@ -966,6 +1008,9 @@ final readonly class MapInspector
         if (is_string($field['facingHeading'] ?? null)) {
             return $this->applyEventFacing($map, $marker, $field['facingHeading'], $value === true);
         }
+        if (($field['spawnHeading'] ?? false) === true) {
+            return $this->applySpawnHeading($map, $marker, $value);
+        }
         $held = $map->hasEventField($marker, $path);
         $oldValue = $map->getEventField($marker, $path);
         // Optional data cleared is removed, as it was before it was set.
@@ -1033,6 +1078,74 @@ final readonly class MapInspector
         $apply();
 
         return new GenericCommand('Facing edit', $apply, $restore);
+    }
+
+    /**
+     * Sets the heading the player faces on arrival. The Engine reads a
+     * spawn sprite that names one heading as that heading, so it is written
+     * as the one name; sprite art authored there is replaced.
+     */
+    private function applySpawnHeading(ProjectMap $map, string $marker, mixed $value): ?Command
+    {
+        $heading = is_string($value) ? self::findSpawnHeading($value) : null;
+        if ($heading === null) {
+            throw new InspectorRefusal(sprintf('Choose %s for the spawn facing.', implode(', ', self::listSpawnHeadingNames())));
+        }
+        $path = ['data', 'spawnSprite'];
+        $old = $map->getEventField($marker, $path);
+        $next = [$heading->value];
+        if ($old === $next) {
+            return null;
+        }
+        $held = $map->hasEventField($marker, $path);
+        $apply = static fn() => $map->setEventField($marker, $path, $next);
+        $restore = $held ? static fn() => $map->setEventField($marker, $path, $old) : static fn() => $map->removeEventField($marker, $path);
+        $apply();
+
+        return new GenericCommand('Spawn facing edit', $apply, $restore);
+    }
+
+    /** The heading a spawn facing names, or null for none of North, East, South or West. */
+    public static function findSpawnHeading(string $name): ?MovementHeading
+    {
+        return array_find(self::listFacingHeadings(), static fn(MovementHeading $heading): bool => $heading->value === $name);
+    }
+
+    /** @return list<string> The headings a spawn faces, in compass order. */
+    public static function listSpawnHeadingNames(): array
+    {
+        return array_map(static fn(MovementHeading $heading): string => $heading->value, self::listFacingHeadings());
+    }
+
+    /**
+     * An event's data rows with the spawn facing after its spawn point: a
+     * heading picked from the Engine's headings. Sprite art authored in its
+     * place is named and kept until a heading is chosen.
+     *
+     * @param list<array<string, mixed>> $fields
+     * @return list<array<string, mixed>>
+     */
+    private static function insertSpawnHeadingField(array $fields, string $marker, mixed $spawnSprite): array
+    {
+        $heading = is_array($spawnSprite) || is_string($spawnSprite) ? PlayerSpriteSet::headingFromName($spawnSprite) : null;
+        $art = is_array($spawnSprite) ? implode(' ', array_map(static fn(mixed $row): string => is_scalar($row) ? (string) $row : '?', $spawnSprite)) : (is_scalar($spawnSprite) ? (string) $spawnSprite : '');
+        $row = [
+            'label' => 'Spawn Facing',
+            'value' => $heading?->value ?? sprintf('(sprite art: %s)', $art),
+            'selectedValue' => $heading?->value ?? '',
+            'choices' => array_map(static fn(string $name): array => ['label' => $name, 'value' => $name,
+                'description' => sprintf('The player arrives facing %s.', strtolower($name))], self::listSpawnHeadingNames()),
+            'options' => self::listSpawnHeadingNames(),
+            'path' => ['data', 'spawnSprite'],
+            'spawnHeading' => true,
+            'target' => 'event',
+            'marker' => $marker,
+        ];
+        $spawnRows = array_keys(array_filter($fields, static fn(array $field): bool => array_slice(array_values((array) ($field['path'] ?? [])), 0, 2) === ['data', 'spawnPoint']));
+        $at = $spawnRows === [] ? count($fields) : max($spawnRows) + 1;
+        array_splice($fields, $at, 0, [$row]);
+
+        return $fields;
     }
 
     /** Kind edits own the cue's optional parent so undo also restores its omission. */
@@ -1503,14 +1616,28 @@ final readonly class MapInspector
     /**
      * Builds editable inspector fields for event data.
      *
+     * The fields every trigger reads beside its class and data, and the lists
+     * a type keeps that edit as an NPC's do, are the event's record rows
+     * ({@see EventRecordPane}); the rest of its data and its cue are rows of
+     * their own.
+     *
      * @param string $marker The event marker.
      * @param array<string, mixed> $definition The event definition.
      * @return array<int, array<string, mixed>>
      */
     public function buildEventDataFields(string $marker, array $definition): array
     {
+        $pane = $this->createEventRecordPane($marker, $definition);
+        $shown = $definition;
+        foreach ($pane->listOwnedPaths() as $path) {
+            // Only this display copy changes: the record rows describe these.
+            $shown = self::withoutPath($shown, $path);
+        }
+        $recordRows = $pane->getFields() ?? [];
+        $cueRecordRows = array_values(array_filter($recordRows, static fn(array $row): bool => ($row['field'] ?? null) === 'cue.conditions'));
+        $recordRows = array_values(array_filter($recordRows, static fn(array $row): bool => ($row['field'] ?? null) !== 'cue.conditions'));
         $fields = [];
-        $eventData = $definition['data'] ?? [];
+        $eventData = $shown['data'] ?? [];
 
         if (is_array($eventData)) {
             // The type's optional data is offered as it reads when absent,
@@ -1519,7 +1646,10 @@ final readonly class MapInspector
             $hasPresentation = array_key_exists('presentation', $optional) || array_key_exists('presentation', $eventData);
             $presentation = $eventData['presentation'] ?? null;
             if ($hasPresentation) { unset($eventData['presentation'], $optional['presentation']); }
-            $pages = self::readDialoguePages($definition);
+            $hasSpawnSprite = array_key_exists('spawnSprite', $eventData);
+            $spawnSprite = $eventData['spawnSprite'] ?? null;
+            unset($eventData['spawnSprite']);
+            $pages = self::readDialoguePages($shown);
             $fields = array_map(static function (array $field) use ($optional): array {
                 $path = array_values((array) ($field['path'] ?? []));
                 if (count($path) === 2 && array_key_exists((string) $path[1], $optional)) {
@@ -1532,15 +1662,20 @@ final readonly class MapInspector
                 $this->flattenInspectorFields([...self::withPageEmotions($eventData, $pages), ...array_diff_key($optional, $eventData)], ['data']),
             ));
             $fields = $this->describePageEmotions($fields, $pages);
+            if ($hasSpawnSprite) { $fields = self::insertSpawnHeadingField($fields, $marker, $spawnSprite); }
             if ($hasPresentation) { $fields = [...$fields, ...$this->buildInnPresentationFields($marker, $presentation)]; }
         }
 
-        $rootFields = array_diff_key($definition, ['class' => true, 'data' => true, 'facing' => true, 'engagement' => true]);
+        // The subject an event is bound to and its area are set by their own operations, never as rows.
+        $rootFields = array_diff_key($shown, ['class' => true, 'data' => true, 'facing' => true, 'engagement' => true, 'subject' => true, 'area' => true]);
         // Cue is a generic trigger capability, including for definitions
         // created before the field existed. Supplying an empty editor-only
         // default exposes the opt-in without changing the stored event until
         // the author actually edits it.
-        $rootFields['cue'] ??= ['symbol' => '', 'color' => 'bright-yellow'];
+        if (! isset($rootFields['cue']) || $rootFields['cue'] === []) {
+            // A cue holding only its conditions is still offered its symbol and colour.
+            $rootFields['cue'] = ['symbol' => '', 'color' => 'bright-yellow'];
+        }
         $cueKindFields = [];
         if (is_array($rootFields['cue'])) {
             $hasKind = array_key_exists('kind', $rootFields['cue']);
@@ -1561,12 +1696,116 @@ final readonly class MapInspector
 
         return [
             ...$fields,
+            ...$recordRows,
             ...$this->decorateEventInspectorFields(
                 $marker,
-                [...$this->flattenInspectorFields($rootFields, []), ...$cueKindFields, self::buildEventEngagementField($definition),
-                    ...self::buildEventFacingFields($definition)],
+                [...$this->flattenInspectorFields($rootFields, []), ...$cueKindFields],
             ),
+            ...$cueRecordRows,
+            ...$this->decorateEventInspectorFields($marker, [self::buildEventEngagementField($definition), ...self::buildEventFacingFields($definition)]),
         ];
+    }
+
+    /**
+     * The rows of one frame of an event's inline commands, or null when the
+     * event or the frame is gone. The frame [] is the event's record rows.
+     *
+     * @param list<int|string> $frame
+     * @return list<array<string, mixed>>|null
+     */
+    public function getEventFrameFields(ProjectMap $map, string $marker, array $frame): ?array
+    {
+        $definition = $map->getEventDefinition($marker);
+
+        return $definition === null ? null : $this->createEventRecordPane($marker, $definition)->getFields($frame);
+    }
+
+    /** What an author reads for a frame of an event's inline commands. */
+    public function describeEventFrame(ProjectMap $map, string $marker, array $frame): string
+    {
+        return $this->createEventRecordPane($marker, $map->getEventDefinition($marker) ?? [])->describeFrame($frame);
+    }
+
+    /** The record rows of one event, over the project's references as this inspector reads them. */
+    public function createEventRecordPane(string $marker, array $definition): EventRecordPane
+    {
+        return new EventRecordPane($marker, $definition, $this->references, $this->graphical);
+    }
+
+    /**
+     * Applies one event record row's edit: the definition the pane leaves is
+     * written as one undo step.
+     *
+     * @param array<string, mixed> $field
+     * @throws InspectorRefusal When the event is gone or the pane refuses the edit.
+     */
+    private function applyEventRecordField(ProjectMap $map, array $field, string $rawValue): ?Command
+    {
+        $marker = (string) ($field['marker'] ?? '');
+        $current = $map->getEventDefinition($marker) ?? throw new InspectorRefusal(sprintf('%s has no event %s.', $map->mapId, $marker));
+        $next = $this->createEventRecordPane($marker, $current)->applyField(array_values((array) ($field['eventFrame'] ?? [])), (string) ($field['field'] ?? ''), $rawValue);
+
+        return $next === null ? null : $this->writeEventDefinition($map, $marker, $current, $next, sprintf('%s edit', trim((string) ($field['label'] ?? 'Event field'))));
+    }
+
+    /**
+     * Adds or removes the item an event record row belongs to (a command, a
+     * dialogue variant, a line, an option), as one undo step.
+     *
+     * @param array<string, mixed> $field
+     * @throws InspectorRefusal When the event or frame is gone, or the row's item cannot change so.
+     */
+    private function editEventRecordItems(ProjectMap $map, array $field, bool $remove): InspectorListEdit
+    {
+        $marker = (string) ($field['marker'] ?? '');
+        $current = $map->getEventDefinition($marker) ?? throw new InspectorRefusal(sprintf('%s has no event %s.', $map->mapId, $marker));
+        $pane = $this->createEventRecordPane($marker, $current);
+        $frame = array_values((array) ($field['eventFrame'] ?? []));
+        $fieldId = is_string($field['field'] ?? null) && $field['field'] !== '' ? $field['field'] : null;
+        $edit = $remove ? $pane->removeItem($frame, (string) $fieldId) : $pane->addItem($frame, $fieldId);
+
+        return new InspectorListEdit($edit['definition'] === null ? null
+            : $this->writeEventDefinition($map, $marker, $current, $edit['definition'], $remove ? 'Remove list entry' : 'Add list entry'), $edit['summary']);
+    }
+
+    /**
+     * Writes an event's whole definition and returns the command that puts
+     * either one back.
+     *
+     * @param array<string, mixed> $current
+     * @param array<string, mixed> $next
+     */
+    private function writeEventDefinition(ProjectMap $map, string $marker, array $current, array $next, string $label): Command
+    {
+        $map->setEventDefinition($marker, $next);
+
+        return new GenericCommand(
+            $label,
+            static fn() => $map->setEventDefinition($marker, $next),
+            static fn() => $map->setEventDefinition($marker, $current),
+        );
+    }
+
+    /**
+     * An array without the value at a path; parents it leaves empty stay.
+     *
+     * @param array<array-key, mixed> $array
+     * @param list<string> $path
+     * @return array<array-key, mixed>
+     */
+    private static function withoutPath(array $array, array $path): array
+    {
+        $key = array_shift($path);
+        if ($key === null || ! array_key_exists($key, $array)) {
+            return $array;
+        }
+        if ($path === []) {
+            unset($array[$key]);
+        } elseif (is_array($array[$key])) {
+            $array[$key] = self::withoutPath($array[$key], $path);
+        }
+
+        return $array;
     }
 
     /**

@@ -398,6 +398,7 @@ final class SessionHost
             'inspector.read' => $session->readInspector(
                 self::requireString($params, 'map'),
                 is_string($params['event'] ?? null) ? $params['event'] : null,
+                is_array($params['frame'] ?? []) ? ($params['frame'] ?? []) : throw new InvalidRequest('"frame" must be a list of indexes and keys.'),
             ),
             'inspector.apply' => $session->applyInspector(
                 self::requireString($params, 'map'),
@@ -460,6 +461,7 @@ final class SessionHost
                 self::requireString($params, 'destination'),
                 self::requireInt($params, 'x'),
                 self::requireInt($params, 'y'),
+                self::readOptionalString($params, 'heading'),
             ),
             'database.records' => $session->listDatabaseRecords(self::requireString($params, 'category')),
             'troops.page' => $session->readTroopPage(self::requireInt($params, 'index'),

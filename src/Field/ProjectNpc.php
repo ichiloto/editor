@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Field;
 
+use Ichiloto\Editor\Dialogue\DialogueVariants;
+
 /**
  * One map-local NPC, as the engine's `Field\Npc` will read it.
  *
@@ -281,17 +283,7 @@ final class ProjectNpc
      */
     public function getDialogueAsVariants(): array
     {
-        $dialogue = $this->getDialogue();
-
-        if ($dialogue === []) {
-            return [];
-        }
-
-        if ($this->hasDialogueVariants()) {
-            return $dialogue;
-        }
-
-        return [['lines' => $dialogue]];
+        return DialogueVariants::fold($this->getDialogue());
     }
 
     /**
@@ -303,18 +295,7 @@ final class ProjectNpc
      */
     public static function dialogueFromVariants(array $variants): array
     {
-        $variants = array_values(array_filter($variants, is_array(...)));
-
-        if (count($variants) === 1) {
-            $only = $variants[0];
-            $extras = array_diff(array_keys($only), ['lines']);
-
-            if ($extras === [] && is_array($only['lines'] ?? null)) {
-                return array_values($only['lines']);
-            }
-        }
-
-        return $variants;
+        return DialogueVariants::unfold($variants);
     }
 
     /**

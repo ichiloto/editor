@@ -188,21 +188,24 @@ it('sets a transfer\'s destination map and spawn point together, as one undo ste
 it('adds and removes entries of an event\'s list, the map\'s encounters and its music variants', function () {
     $session = EditorSession::open(metadataProject());
     $map = $session->readMap('test-map');
-    $created = $session->createEvent('test-map', $map['revision'], eventSessionFreeCells($map, 1), 'Dialogue');
+    // A shop's stock is a list of the event's own data. (A Dialogue event's pages are its record rows.)
+    $created = $session->createEvent('test-map', $map['revision'], eventSessionFreeCells($map, 1), 'Shop');
     $marker = $created['marker'];
-    $isDialogue = static fn(array $row): bool => ($row['key']['list'] ?? null) === ['data', 'dialogue'];
-    $heading = eventSessionRow($session->readInspector('test-map', $marker), $isDialogue);
+    $isStock = static fn(array $row): bool => ($row['key']['list'] ?? null) === ['data', 'items'];
+    $heading = eventSessionRow($session->readInspector('test-map', $marker), $isStock);
 
-    $added = $session->addInspectorListEntry('test-map', $created['revision'], $heading['key']);
-    $rows = array_filter($session->readInspector('test-map', $marker)['rows'], $isDialogue);
+    $first = $session->addInspectorListEntry('test-map', $created['revision'], $heading['key']);
+    $item = eventSessionRow($session->readInspector('test-map', $marker), static fn(array $row): bool => $isStock($row) && $row['kind'] === 'integer');
+    $added = $session->addInspectorListEntry('test-map', $first['revision'], $item['key']);
+    $rows = array_filter($session->readInspector('test-map', $marker)['rows'], $isStock);
 
     expect($heading['list'])->toBe(['index' => 0])
-        ->and($added)->toMatchArray(['changed' => true, 'message' => 'Added dialogue 2.'])
+        ->and($added)->toMatchArray(['changed' => true, 'message' => 'Added item 2.'])
         ->and(array_column($rows, 'list'))->toContain(['index' => 1]);
 
-    $second = array_find($rows, static fn(array $row): bool => ($row['list'] ?? null) === ['index' => 1] && $row['kind'] === 'text');
+    $second = array_find($rows, static fn(array $row): bool => ($row['list'] ?? null) === ['index' => 1] && $row['kind'] === 'integer');
     $removed = $session->removeInspectorListEntry('test-map', $added['revision'], $second['key']);
-    expect($removed['message'])->toBe('Removed dialogue 2.')
+    expect($removed['message'])->toBe('Removed item 2.')
         ->and(fn() => $session->addInspectorListEntry('test-map', $removed['revision'], eventSessionRowLabelled($session->readInspector('test-map'), 'Name')['key']))
             ->toThrow(SessionRefusal::class, 'Nothing here is a list to add to.');
 

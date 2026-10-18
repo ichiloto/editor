@@ -29,6 +29,55 @@ final class WorldWriteCodec
     /** The write types the engine's writer applies. */
     public const array TYPES = ['switch', 'event', 'variable', 'quest'];
 
+    /** The keys the line carries per type, beyond type and name. */
+    private const array CARRIED_KEYS = [
+        'switch' => ['value'],
+        'event' => [],
+        'variable' => ['op', 'value'],
+        'quest' => ['confirm'],
+    ];
+
+    /**
+     * Why an authored write list cannot go through the write line, or null
+     * when the line carries it faithfully: a list that is not a list, a write
+     * type or variable operation the line cannot express, a switch or quest
+     * flag that is not a boolean, or an authored key outside its vocabulary
+     * would be lost on commit, so such a list is refused by name instead.
+     *
+     * @param mixed $sets The list as authored.
+     */
+    public static function findCarryIssue(mixed $sets): ?string
+    {
+        if (! is_array($sets) || ! array_is_list($sets)) {
+            return sprintf('the writes are %s, not a list', is_array($sets) ? 'a keyed array' : get_debug_type($sets));
+        }
+
+        foreach ($sets as $index => $set) {
+            if (! is_array($set)) {
+                return sprintf('write %d is %s, not an array', $index + 1, get_debug_type($set));
+            }
+
+            $type = strval($set['type'] ?? '');
+            $flag = ['switch' => 'value', 'quest' => 'confirm'][$type] ?? null;
+            $lossy = match (true) {
+                self::decode(self::encode($set)) === null => 'holds a shape the write editor cannot carry',
+                $type === 'variable' && ! in_array($set['op'] ?? 'set', ['set', 'add'], true) => 'has a variable operation the write editor would rewrite',
+                $flag !== null && array_key_exists($flag, $set) && ! is_bool($set[$flag]) => sprintf('has a "%s" that is not true or false', $flag),
+                default => null,
+            };
+            if ($lossy !== null) {
+                return sprintf('write %d %s', $index + 1, $lossy);
+            }
+
+            $extra = array_diff(array_keys($set), ['type', 'name', ...(self::CARRIED_KEYS[$type] ?? [])]);
+            if ($extra !== []) {
+                return sprintf('write %d carries "%s", which the write editor would drop', $index + 1, implode('", "', array_map(strval(...), $extra)));
+            }
+        }
+
+        return null;
+    }
+
     /**
      * Encodes a list of writes into the one-line editable form.
      *
