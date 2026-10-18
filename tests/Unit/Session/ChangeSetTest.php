@@ -209,3 +209,27 @@ it('reads a batch file as a list of changes or as {"changes": [...]}', function 
         ->and(ChangeBatch::readFile($directory . '/object.json'))->toBe([['method' => 'maps.list', 'params' => []]])
         ->and(fn() => ChangeBatch::readFile($directory . '/broken.json'))->toThrow(Ichiloto\Editor\Session\InvalidRequest::class, 'list of changes');
 });
+
+it('judges events made inside the change set: a chest with no reward is refused, one with a reward is written', function () {
+    $root = changeSetProject();
+    writeItemRecords($root, new Ichiloto\Engine\Entities\Inventory\Items\Item(id: 'item.tonic', name: 'Tonic', description: '', icon: 't', price: 5));
+    $session = EditorSession::open($root);
+    $session->beginChanges();
+    $created = $session->createEvent('test-map', $session->readMap('test-map')['revision'], [[0, 0]], 'Chest', 'C');
+    $loot = static fn(string $field): array => ['target' => 'event', 'marker' => 'C', 'path' => ['data', $field]];
+    $session->applyInspector('test-map', $created['revision'], $loot('lootType'), 'item');
+
+    $refused = $session->commitChanges();
+    expect($refused['status'])->toBe('refused')
+        ->and(changeSetMessages($refused))->toContain('It has no item chosen, so it fails when opened.')
+        ->and(array_column($refused['issues'], 'map'))->each->toBe('test-map');
+
+    $session->beginChanges();
+    $created = $session->createEvent('test-map', $session->readMap('test-map')['revision'], [[0, 0]], 'Chest', 'C');
+    $revision = $session->applyInspector('test-map', $created['revision'], $loot('lootType'), 'item')['revision'];
+    $session->applyInspector('test-map', $revision, $loot('loot'), 'item.tonic');
+
+    $saved = $session->commitChanges();
+    expect($saved['status'])->toBe('saved')
+        ->and((require $root . '/assets/Maps/test-map/test-map.data.php')['events']['C']['data']['loot'])->toBe('item.tonic');
+});

@@ -1733,7 +1733,7 @@ class ProjectValidator
   protected function checkEventMarkers(ProjectMap $map): array
   {
     $issues = [];
-    $defined = array_keys((array) ($map->data['events'] ?? []));
+    $defined = array_keys((array) ($map->getEditableData()['events'] ?? []));
     $placed = $map->getPlacedEventMarkers();
 
     foreach (array_diff($placed, $defined) as $marker) {
@@ -1767,7 +1767,7 @@ class ProjectValidator
   {
     $issues = [];
 
-    foreach ((array) ($map->data['events'] ?? []) as $marker => $event) {
+    foreach ((array) ($map->getEditableData()['events'] ?? []) as $marker => $event) {
       if (! is_array($event)) {
         continue;
       }
@@ -1797,7 +1797,7 @@ class ProjectValidator
     }
 
     // Edge triggers lead off the map the same way doors do.
-    foreach (array_values((array) ($map->data['triggers'] ?? [])) as $index => $trigger) {
+    foreach (array_values((array) ($map->getEditableData()['triggers'] ?? [])) as $index => $trigger) {
       $destination = is_array($trigger) ? trim(strval($trigger['destinationMap'] ?? '')) : '';
 
       if ($destination === '') {
@@ -1831,7 +1831,7 @@ class ProjectValidator
    */
   protected function checkEncounters(ProjectMap $map, array $troops): array
   {
-    $authored = $map->data['encounters'] ?? null;
+    $authored = $map->getEditableData()['encounters'] ?? null;
 
     if ($authored === null) {
       return [];
@@ -2010,7 +2010,7 @@ class ProjectValidator
    */
   protected function checkEncounterTiles(ProjectMap $map, MapEncounters $encounters): array
   {
-    $tiles = $map->data['encounters']['tiles'] ?? null;
+    $tiles = $map->getEditableData()['encounters']['tiles'] ?? null;
 
     if ($tiles === null) {
       return [];
@@ -2071,14 +2071,14 @@ class ProjectValidator
    */
   protected function checkNpcs(ProjectMap $map, ProjectWorkspace $workspace): array
   {
-    if (! array_key_exists('npcs', $map->data) || $map->data['npcs'] === null) {
+    if (! array_key_exists('npcs', $map->getEditableData()) || $map->getEditableData()['npcs'] === null) {
       return [];
     }
 
-    if (! is_array($map->data['npcs'])) {
+    if (! is_array($map->getEditableData()['npcs'])) {
       return [Issue::error(
         $map->mapId,
-        sprintf('The npcs block is %s, not a list of NPC entries.', get_debug_type($map->data['npcs'])),
+        sprintf('The npcs block is %s, not a list of NPC entries.', get_debug_type($map->getEditableData()['npcs'])),
         'The game reads npcs as a list; every NPC on this map is dropped until it is one.'
       )];
     }
@@ -2088,7 +2088,7 @@ class ProjectValidator
     $height = $map->getHeight();
     $anchors = [];
 
-    foreach ($map->data['npcs'] as $index => $entry) {
+    foreach ($map->getEditableData()['npcs'] as $index => $entry) {
       $ordinal = is_int($index) ? $index + 1 : strval($index);
 
       if (! is_array($entry)) {
@@ -2621,7 +2621,7 @@ class ProjectValidator
   protected function checkNpcCollisions(ProjectMap $map, ProjectWorkspace $workspace, array $anchors): array
   {
     $issues = [];
-    $definitions = (array) ($map->data['events'] ?? []);
+    $definitions = (array) ($map->getEditableData()['events'] ?? []);
     $spawns = $this->spawnTilesOn($map, $workspace);
     $occupiedBy = ['fixed' => [], 'any' => []];
 
@@ -2735,7 +2735,7 @@ class ProjectValidator
     }
 
     foreach ($workspace->maps as $source) {
-      foreach ((array) ($source->data['events'] ?? []) as $marker => $definition) {
+      foreach ((array) ($source->getEditableData()['events'] ?? []) as $marker => $definition) {
         if (! is_array($definition)) {
           continue;
         }
@@ -2776,7 +2776,7 @@ class ProjectValidator
     $seen = [];
     $issues = [];
 
-    foreach ((array) ($map->data['npcs'] ?? []) as $index => $npc) {
+    foreach ((array) ($map->getEditableData()['npcs'] ?? []) as $index => $npc) {
       if (! is_array($npc)) {
         continue;
       }
@@ -2894,7 +2894,7 @@ class ProjectValidator
 
     $names = [];
 
-    foreach ((array) ($map->data['npcs'] ?? []) as $npc) {
+    foreach ((array) ($map->getEditableData()['npcs'] ?? []) as $npc) {
       if (! is_array($npc) || trim(strval($npc['id'] ?? '')) !== '') {
         continue;
       }
@@ -3826,11 +3826,11 @@ class ProjectValidator
   protected function checkMapContentReferences(ProjectMap $map, array $known, array $npcIdsByMap, array $eventScripts): array
   {
     $issues = [
-      ...$this->checkReference(strval($map->data['bgm'] ?? ''), 'bgm', 'track', $map->mapId, $known),
+      ...$this->checkReference(strval($map->getEditableData()['bgm'] ?? ''), 'bgm', 'track', $map->mapId, $known),
       ...$this->checkBgmVariants($map, $known),
     ];
 
-    foreach ((array) ($map->data['events'] ?? []) as $marker => $definition) {
+    foreach ((array) ($map->getEditableData()['events'] ?? []) as $marker => $definition) {
       if (! is_array($definition)) {
         continue;
       }
@@ -3892,7 +3892,7 @@ class ProjectValidator
       }
     }
 
-    foreach ((array) ($map->data['npcs'] ?? []) as $npc) {
+    foreach ((array) ($map->getEditableData()['npcs'] ?? []) as $npc) {
       if (! is_array($npc)) {
         continue;
       }
@@ -3931,11 +3931,11 @@ class ProjectValidator
    */
   protected function checkBgmVariants(ProjectMap $map, array $known): array
   {
-    if (! array_key_exists('bgmVariants', $map->data)) {
+    if (! array_key_exists('bgmVariants', $map->getEditableData())) {
       return [];
     }
 
-    $variants = $map->data['bgmVariants'];
+    $variants = $map->getEditableData()['bgmVariants'];
     $where = $map->mapId;
 
     if (! is_array($variants) || ! array_is_list($variants)) {
@@ -4261,7 +4261,7 @@ class ProjectValidator
     foreach ($workspace->maps as $map) {
       $idsByMap[$map->mapId] = [];
 
-      foreach ((array) ($map->data['npcs'] ?? []) as $npc) {
+      foreach ((array) ($map->getEditableData()['npcs'] ?? []) as $npc) {
         if (! is_array($npc)) {
           continue;
         }
