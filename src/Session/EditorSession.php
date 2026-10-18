@@ -1389,6 +1389,56 @@ final class EditorSession
         $writes = array_map(static fn(array $cell): array => ['x' => (int) $cell[0], 'y' => (int) $cell[1],
             'symbol' => $symbol, 'color' => $layerId === MapLayers::EVENT ? '' : $color], $cells);
 
+        return $this->paintWrites($map, $layerId, $writes, $choices, $label);
+    }
+
+    /**
+     * Paints a rectangle of glyphs from its rows, one terminal cell per
+     * character with its top-left at x, y, and the tiles that follow each
+     * glyph, as one undo step: a room's rows rewritten in one edit. A space
+     * paints a blank cell. Questions and colours are answered as by
+     * {@see paint()}, `$choices` keyed by glyph.
+     *
+     * @param list<string> $rows The glyph rows, top to bottom.
+     * @param array<string, ?string> $choices
+     * @return array{status: 'applied', changed: int, revision: int}|array{status: 'question', glyph: string, roles: list<array{key: string, label: string}>}
+     * @throws SessionRefusal When the map is unknown, stale or refuses the edit, or a row leaves the map.
+     */
+    public function paintRegion(string $mapId, int $revision, string $layerId, int $x, int $y, array $rows, ?string $color = null,
+        array $choices = [], string $label = 'Paint region'): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        if ($map->getGridSourceIssue() !== null) {
+            throw new SessionRefusal(sprintf('%s is read-only: %s', $mapId, $map->getGridSourceIssue()));
+        }
+        if (! array_any($map->getLayers(), static fn(array $layer): bool => $layer['id'] === $layerId)) {
+            throw new SessionRefusal(sprintf('%s has no layer %s.', $mapId, $layerId));
+        }
+        $writes = [];
+        foreach (array_values($rows) as $dy => $row) {
+            foreach (mb_str_split($row) as $dx => $symbol) {
+                [$cellX, $cellY] = [$x + $dx, $y + $dy];
+                if ($cellX < 0 || $cellY < 0 || $cellX >= $map->getWidth() || $cellY >= $map->getHeight()) {
+                    throw new SessionRefusal(sprintf('Row %d reaches %d, %d, outside %s (%d x %d); nothing was painted.',
+                        $dy + 1, $cellX, $cellY, $mapId, $map->getWidth(), $map->getHeight()));
+                }
+                $writes[] = ['x' => $cellX, 'y' => $cellY, 'symbol' => $symbol, 'color' => $layerId === MapLayers::EVENT ? '' : $color];
+            }
+        }
+
+        return $this->paintWrites($map, $layerId, $writes, $choices, $label);
+    }
+
+    /**
+     * Paints glyph writes on a layer with the tiles that follow them, as one undo step.
+     *
+     * @param list<array{x: int, y: int, symbol: string, color: ?string}> $writes
+     * @param array<string, ?string> $choices
+     * @return array{status: 'applied', changed: int, revision: int}|array{status: 'question', glyph: string, roles: list<array{key: string, label: string}>}
+     * @throws SessionRefusal When the map refuses the edit.
+     */
+    private function paintWrites(ProjectMap $map, string $layerId, array $writes, array $choices, string $label): array
+    {
         try {
             $plan = CanvasEditor::plan($map, $layerId, $writes, $choices, true);
             if ($plan !== null && $plan['unresolved'] !== []) {

@@ -280,6 +280,17 @@ final class SessionHost
                 self::readChoices($params),
                 is_string($params['label'] ?? null) ? $params['label'] : 'Paint',
             ),
+            'map.paintRegion' => $session->paintRegion(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireString($params, 'layer'),
+                self::requireInt($params, 'x'),
+                self::requireInt($params, 'y'),
+                self::requireLines($params, 'rows'),
+                array_key_exists('color', $params) && (is_string($params['color']) || $params['color'] === null) ? $params['color'] : null,
+                self::readChoices($params),
+                is_string($params['label'] ?? null) ? $params['label'] : 'Paint region',
+            ),
             'map.migrateOccupancy' => $session->migratePhysicalOccupancy(
                 self::requireString($params, 'map'),
                 self::requireInt($params, 'revision'),
