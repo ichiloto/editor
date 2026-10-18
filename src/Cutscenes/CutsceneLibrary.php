@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Cutscenes;
 
 use Closure;
+use Ichiloto\Editor\Database\ProjectRecord;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\History\Command;
 use Ichiloto\Editor\History\GenericCommand;
@@ -435,6 +436,11 @@ final class CutsceneLibrary
             graphical: $graphical,
         );
         if ($this->authoringReferences !== null) { $records->useAuthoringReferences($this->authoringReferences); }
+        // Each record is one asset, keyed by its id: its map-local choices are on the map that asset starts on.
+        $records->useRecordReferences(function (ProjectRecord $record) use ($type): ?ReferenceCatalog {
+            $asset = $this->find($type, $record->recordId);
+            return $asset === null ? null : $this->authoringReferences?->createCutsceneContext($asset);
+        });
         return $records;
     }
 

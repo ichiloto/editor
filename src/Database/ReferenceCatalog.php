@@ -293,7 +293,7 @@ final class ReferenceCatalog
             // named point on them (each image picks one on its own subject).
             'stage_subjects' => array_keys($this->getStageSubjects()),
             'stage_attachments' => array_keys($this->getStageAttachments()),
-            'event_markers' => $this->currentMap?->getEventMarkers() ?? [],
+            'event_markers' => $this->getSubjectMap()?->getEventMarkers() ?? [],
             // A map's kind is one of the project's tilesets, by file stem.
             'tilesets' => array_keys($this->loadTilesetNames()),
             // The scenes a graphical battle can take place in, by the key a
@@ -550,12 +550,15 @@ final class ReferenceCatalog
             ...($this->getSubjectMap()?->getNpcs()->ids() ?? []),
             ...$this->valuesFor('map_world_objects'),
             ...$this->valuesFor('actors'),
-            ...($this->currentMap?->getEventMarkers() ?? []),
+            ...($this->getSubjectMap()?->getEventMarkers() ?? []),
         ]));
     }
 
-    /** Without an explicitly selected map context, a cinematic owns references on its declared start map. */
-    private function getSubjectMap(): ?ProjectMap
+    /**
+     * The map whose NPCs, world objects and markers a subject reference names: the explicitly selected map, or
+     * without one a cinematic's declared start map.
+     */
+    public function getSubjectMap(): ?ProjectMap
     {
         if ($this->currentMap !== null) {
             return $this->currentMap;
@@ -585,6 +588,12 @@ final class ReferenceCatalog
             static fn(mixed $checkpoint): string => is_scalar($checkpoint) ? trim(strval($checkpoint)) : '',
             (array) ($this->currentCutscene->data()['checkpoints'] ?? []),
         ), static fn(string $checkpoint): bool => $checkpoint !== ''));
+    }
+
+    /** A cutscene's own references: its cast, and the map-local subjects on the map it declares it starts on. */
+    public function createCutsceneContext(CutsceneAsset $cutscene): self
+    {
+        return new self($this->workspace, $this->currentMap, $cutscene, $this->movementCommands);
     }
 
     /** A projection keeps the actual invocation as reference owner, rather than its one displayed command. */
