@@ -85,6 +85,58 @@ final class MapAtlas
     }
 
     /**
+     * The map's terrain classifications as authored: per source layer, plain glyphs mapped to Engine terrain roles
+     * and an optional role for the layer's other non-blank glyphs.
+     *
+     * @param array<string, mixed> $block
+     * @return array<string, array<string, mixed>>
+     */
+    public static function readTerrain(array $block): array
+    {
+        $terrain = $block['terrain'] ?? [];
+        return is_array($terrain) ? $terrain : [];
+    }
+
+    /**
+     * Classifies one plain glyph of a source layer, or leaves it unclassified when the role is null. A layer
+     * classifying nothing says nothing, and a map with no classifications has no terrain key.
+     *
+     * @param array<string, mixed> $block
+     * @return array<string, mixed>
+     */
+    public static function setTerrainSymbol(array $block, string $layer, string $glyph, ?string $role): array
+    {
+        $terrain = self::readTerrain($block);
+        $symbols = is_array($terrain[$layer]['symbols'] ?? null) ? $terrain[$layer]['symbols'] : [];
+        if ($role === null) { unset($symbols[$glyph]); } else { $symbols[$glyph] = $role; }
+        $binding = is_array($terrain[$layer] ?? null) ? $terrain[$layer] : [];
+        if ($symbols === []) { unset($binding['symbols']); } else { $binding['symbols'] = $symbols; }
+        return self::withTerrainBinding($block, $terrain, $layer, $binding);
+    }
+
+    /**
+     * Sets the role of a source layer's other non-blank glyphs, or removes it when the role is null.
+     *
+     * @param array<string, mixed> $block
+     * @return array<string, mixed>
+     */
+    public static function setTerrainDefault(array $block, string $layer, ?string $role): array
+    {
+        $terrain = self::readTerrain($block);
+        $binding = is_array($terrain[$layer] ?? null) ? $terrain[$layer] : [];
+        if ($role === null) { unset($binding['default']); } else { $binding['default'] = $role; }
+        return self::withTerrainBinding($block, $terrain, $layer, $binding);
+    }
+
+    /** @return array<string, mixed> */
+    private static function withTerrainBinding(array $block, array $terrain, string $layer, array $binding): array
+    {
+        if ($binding === []) { unset($terrain[$layer]); } else { $terrain[$layer] = $binding; }
+        if ($terrain === []) { unset($block['terrain']); } else { $block['terrain'] = $terrain; }
+        return $block;
+    }
+
+    /**
      * Sets or clears the parent entry: a stable landmark on the parent map.
      *
      * @param array<string, mixed> $block

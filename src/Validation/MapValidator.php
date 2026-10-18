@@ -7,6 +7,7 @@ namespace Ichiloto\Editor\Validation;
 use Ichiloto\Editor\Field\MapAtlas;
 use Ichiloto\Editor\Field\MapLandmarks;
 use Ichiloto\Editor\Inspector\MapLandmarkFields;
+use Ichiloto\Editor\Inspector\MapTerrainFields;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Engine\Field\MapCategoryCatalog;
 use InvalidArgumentException;
@@ -53,12 +54,16 @@ final class MapValidator
     private static function findAtlasProblems(ProjectMap $map, array $mapsById): array
     {
         try {
-            MapAtlas::resolveGlobal($map, MapAtlas::readBlock($map), static fn(string $id): ?ProjectMap => $mapsById[$id] ?? null,
+            $block = MapAtlas::readBlock($map);
+            MapAtlas::resolveGlobal($map, $block, static fn(string $id): ?ProjectMap => $mapsById[$id] ?? null,
                 MapCategoryCatalog::load($map->getAssetRoot()));
-            return [];
         } catch (InvalidArgumentException $error) {
             return ['Atlas: ' . $error->getMessage()];
         }
+        // Terrain names the map's own source layers, which the parent chain does not read.
+        $terrain = MapTerrainFields::findProblem($map, $block);
+
+        return $terrain === null ? [] : ['Atlas terrain: ' . $terrain];
     }
 
     /**

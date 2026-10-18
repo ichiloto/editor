@@ -124,3 +124,54 @@ it('chooses how the Terminal draws a map, saying nothing when it is the Engine\'
     $session->undo();
     expect(getSessionMap($session)->getMapDataField(['atlas']))->toBe(['terminalView' => $other]);
 });
+
+/** The terrain row editing this field at exactly this layer and glyph path. */
+function findTerrainRow($session, string $field, array $path): array
+{
+    return array_find($session->readInspector('test-map')['rows'], static fn(array $row): bool => ($row['key'] ?? null)
+        == ['target' => 'map-terrain', 'field' => $field, 'path' => $path]) ?? throw new RuntimeException('No terrain row ' . json_encode($path));
+}
+
+it('classifies a map\'s own layer glyphs as terrain for its atlas, never copying a grid', function () {
+    [, $file, $session] = createAtlasProject();
+    $terrainRow = static fn(string $field, array $path): array => findTerrainRow($session, $field, $path);
+    $apply = static fn(string $field, array $path, string $value): array => $session->applyInspector('test-map',
+        $session->readMap('test-map')['revision'], findTerrainRow($session, $field, $path)['key'], $value);
+
+    $dots = $terrainRow('symbol', ['terrain', '.']);
+    expect($dots['label'])->toBe("'.' · 8 cells")
+        ->and($dots['options'])->toBe(['', ...Ichiloto\Engine\Field\MapAtlasTerrain::ROLES]);
+    expect($terrainRow('symbol', ['buildings', ' '])['label'])->toBe('(blank) · 5 cells');
+
+    $apply('symbol', ['terrain', '.'], 'ground');
+    $apply('default', ['buildings'], 'building');
+    $apply('symbol', ['buildings', '/'], 'boundary');
+    expect(getSessionMap($session)->getMapDataField(['atlas', 'terrain']))->toBe([
+        'terrain' => ['symbols' => ['.' => 'ground']],
+        'buildings' => ['default' => 'building', 'symbols' => ['/' => 'boundary']],
+    ]);
+    expect(fn() => $apply('symbol', ['terrain', '.'], 'lava'))->toThrow(SessionRefusal::class);
+
+    $session->saveMap('test-map');
+    $map = getSessionMap($session);
+    $catalog = Ichiloto\Engine\Field\MapAtlasTerrain::readMap(require $file, $map->getLayerSet());
+    expect($catalog->getRole(1, 1))->toBe('building')->and($catalog->getRole(1, 0))->toBe('boundary')
+        ->and(file_get_contents($file))->toContain('// Map-owned presentation stays authored.');
+
+    // Clearing every classification removes the terrain, then the empty atlas.
+    $apply('symbol', ['buildings', '/'], '');
+    $apply('default', ['buildings'], '');
+    $apply('symbol', ['terrain', '.'], '');
+    expect(getSessionMap($session)->hasMapDataField(['atlas']))->toBeFalse();
+    $session->undo();
+    expect(getSessionMap($session)->getMapDataField(['atlas', 'terrain']))->toBe(['terrain' => ['symbols' => ['.' => 'ground']]]);
+});
+
+it('shows terrain bound to a layer the map no longer has, and clears it', function () {
+    [, , $session] = createAtlasProject("'atlas' => ['terrain' => ['old' => ['default' => 'water']]],");
+    $rows = $session->readInspector('test-map')['rows'];
+    expect(array_column(array_filter($rows, static fn(array $row): bool => $row['label'] === '! Problem'), 'value'))
+        ->toContain('Atlas terrain references missing source layer old.');
+    $session->applyInspector('test-map', $session->readMap('test-map')['revision'], findTerrainRow($session, 'layer', ['old'])['key'], '');
+    expect(getSessionMap($session)->hasMapDataField(['atlas']))->toBeFalse();
+});
