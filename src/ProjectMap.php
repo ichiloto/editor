@@ -70,6 +70,9 @@ final class ProjectMap
      */
     private ?string $dataSourceIssue = null;
 
+    /** @var (Closure(): \Ichiloto\Engine\Animations\Field\FieldPresentationCatalog)|null Its workspace's field presentation. */
+    private ?Closure $fieldCatalog = null;
+
     /**
      * The data file's raw bytes when its source cannot be parsed for
      * preservation, so a grid-only save still knows the data member is
@@ -401,6 +404,42 @@ final class ProjectMap
     public function getEditableData(): array
     {
         return $this->editableData;
+    }
+
+    /**
+     * The cells an event triggers on as the Engine resolves them, unsaved
+     * edits included: its painted marker cells, or its bound subject's cells.
+     * Null when the resolver gives it none; validation says why.
+     */
+    public function getEventTriggerArea(string $marker): ?CellArea
+    {
+        $events = \Ichiloto\Engine\Field\Validation\MapEventResolver::inspect($this->editableData, $this->getEventLayerCells(), $this->mapId)->events;
+        $event = array_find($events, static fn(array $event): bool => ($event['marker'] ?? null) === $marker);
+
+        return is_array($event['area'] ?? null) ? CellArea::fromArray($event['area'], "Event {$marker} area") : null;
+    }
+
+    /**
+     * Reads the field presentation this map's world objects name resources
+     * from through its workspace, unsaved edits included
+     * ({@see \Ichiloto\Editor\Database\ReferenceCatalog::getFieldPresentationCatalog()}).
+     *
+     * @param Closure(): \Ichiloto\Engine\Animations\Field\FieldPresentationCatalog $catalog
+     */
+    public function useFieldCatalog(Closure $catalog): void
+    {
+        $this->fieldCatalog = $catalog;
+    }
+
+    /**
+     * The field presentation this map's world objects name resources from: its
+     * workspace's, as that holds it, or the project's file for a map read on
+     * its own.
+     */
+    public function getFieldCatalog(): \Ichiloto\Engine\Animations\Field\FieldPresentationCatalog
+    {
+        return $this->fieldCatalog !== null ? ($this->fieldCatalog)()
+            : \Ichiloto\Engine\Animations\Field\FieldPresentationCatalog::load($this->getAssetRoot());
     }
 
     public function getLayers(): array

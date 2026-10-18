@@ -45,44 +45,6 @@ final class WorkspaceSave
 
         $inventory = MapValidator::readInventoryCatalog($workspace);
 
-        foreach ($workspace->maps as $map) {
-            if (! $map->isDirty()) {
-                continue;
-            }
-
-            if ($map->willMoveOnSave()) {
-                $skippedRenames[] = $map->mapId;
-                continue;
-            }
-
-            // Saves that would load inside what the map now makes solid are moved only once the author has seen where.
-            try {
-                $relocation = SaveRelocationPlanner::plan($map, $workspace->projectRoot);
-            } catch (Throwable $throwable) {
-                $failures[] = sprintf('%s: %s', $map->mapId, $throwable->getMessage());
-                continue;
-            }
-            if ($relocation !== null) {
-                $skippedRelocations[] = $map->mapId;
-                continue;
-            }
-
-            $issues = MapValidator::validate($map, $mapsById, $inventory);
-            foreach (MapValidator::describeIssues(MapValidator::selectSeverity($issues, Severity::WARNING)) as $warning) {
-                $warnings[] = sprintf('%s: %s', $map->mapId, $warning);
-            }
-            foreach (MapValidator::describeIssues(MapValidator::selectSeverity($issues, Severity::ERROR)) as $error) {
-                $errors[] = sprintf('%s: %s', $map->mapId, $error);
-            }
-
-            try {
-                $map->save($backup);
-                $savedMaps++;
-            } catch (Throwable $throwable) {
-                $failures[] = sprintf('%s: %s', $map->mapId, $throwable->getMessage());
-            }
-        }
-
         // Categories sharing one file are saved together, so the file is
         // written once with every dirty part folded in rather than once per
         // category, each rewriting what the last just wrote.
@@ -122,6 +84,45 @@ final class WorkspaceSave
 
         foreach ($cutscenes['failed'] as $asset => $reason) {
             $failures[] = sprintf('%s: %s', $asset, $reason);
+        }
+
+        // Maps last: what they name (a field resource, a cinematic, an item) is on disk before they are.
+        foreach ($workspace->maps as $map) {
+            if (! $map->isDirty()) {
+                continue;
+            }
+
+            if ($map->willMoveOnSave()) {
+                $skippedRenames[] = $map->mapId;
+                continue;
+            }
+
+            // Saves that would load inside what the map now makes solid are moved only once the author has seen where.
+            try {
+                $relocation = SaveRelocationPlanner::plan($map, $workspace->projectRoot);
+            } catch (Throwable $throwable) {
+                $failures[] = sprintf('%s: %s', $map->mapId, $throwable->getMessage());
+                continue;
+            }
+            if ($relocation !== null) {
+                $skippedRelocations[] = $map->mapId;
+                continue;
+            }
+
+            $issues = MapValidator::validate($map, $mapsById, $inventory);
+            foreach (MapValidator::describeIssues(MapValidator::selectSeverity($issues, Severity::WARNING)) as $warning) {
+                $warnings[] = sprintf('%s: %s', $map->mapId, $warning);
+            }
+            foreach (MapValidator::describeIssues(MapValidator::selectSeverity($issues, Severity::ERROR)) as $error) {
+                $errors[] = sprintf('%s: %s', $map->mapId, $error);
+            }
+
+            try {
+                $map->save($backup);
+                $savedMaps++;
+            } catch (Throwable $throwable) {
+                $failures[] = sprintf('%s: %s', $map->mapId, $throwable->getMessage());
+            }
         }
 
         return new WorkspaceSaveResult(

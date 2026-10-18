@@ -70,6 +70,8 @@ final readonly class ProjectWorkspace
         );
         $references = new ReferenceCatalog($this);
         foreach ($this->recordDatabases as $database) { $database->useAuthoringReferences($references); }
+        // A map's world objects name field resources as the Field Resources page holds them, unsaved edits included.
+        foreach ($this->maps as $map) { $map->useFieldCatalog($references->getFieldPresentationCatalog(...)); }
         $this->cutscenes?->useAuthoringReferences($references);
     }
 

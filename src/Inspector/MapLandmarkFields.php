@@ -70,13 +70,17 @@ final readonly class MapLandmarkFields
     /**
      * An event's minimap row: what the event is on the minimap, chosen among the kinds it may be. A transfer that
      * no landmark describes still shows as an unnamed route; choosing a kind describes it, and choosing the first
-     * option removes the description. An event without cells has nothing to mark.
+     * option removes the description. An event the map's resolver gives no cells (neither painted nor its
+     * subject's) has nothing to mark.
      *
      * @return list<array<string, mixed>>
      */
     public function describeEventFields(ProjectMap $map, string $marker): array
     {
-        return $map->getEventArea($marker) === null ? [] : $this->describeAnchorFields($map, ['event' => $marker]);
+        $resolved = array_any(MapLandmarks::readResolvedSource($map)['data']['events'],
+            static fn(array $event): bool => ($event['marker'] ?? null) === $marker);
+
+        return $resolved ? $this->describeAnchorFields($map, ['event' => $marker]) : [];
     }
 
     /**

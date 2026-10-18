@@ -139,7 +139,7 @@ final class EffectValidator
         }
 
         try {
-            $catalog = FieldPresentationCatalog::load($assetRoot);
+            $catalog = new ReferenceCatalog($workspace)->getFieldPresentationCatalog();
 
             foreach ($catalog->cues as $color => $cue) {
                 $use($cue['effect'], false, sprintf('%s: %s cue', self::FIELD_PRESENTATION, $color));

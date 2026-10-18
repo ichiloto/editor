@@ -5486,27 +5486,31 @@ final class EditorSession
         }
 
         $this->changeSet = null;
-        foreach ($changed as $mapId) {
-            if (! ($this->getMapsById()[$mapId] ?? null)?->isDirty()) {
+        // What the maps name (a field resource, a cinematic, a common event) is written before the maps, by the
+        // same Save All the editors use; a map whose save moves saves is then saved on its own, its moves allowed.
+        $unsaved = array_values(array_filter($changed, fn(string $mapId): bool => ($this->getMapsById()[$mapId] ?? null)?->isDirty() === true));
+        $rest = $this->saveAll();
+        if ($rest['failures'] !== []) {
+            throw new SessionRefusal('The change set was not fully saved: ' . implode('; ', $rest['failures']));
+        }
+        foreach ($unsaved as $mapId) {
+            $map = $this->getMapsById()[$mapId] ?? null;
+            if ($map === null) {
                 continue;
             }
-            try {
-                $result = $this->saveMap($mapId);
-                if (($result['status'] ?? null) === 'question') {
-                    $result = $this->saveMap($mapId, 'write', $result['confirm']);
-                    $outcome['relocated'] = [...$outcome['relocated'], ...($result['relocated'] ?? [])];
+            if ($map->isDirty()) {
+                try {
+                    $result = $this->saveMap($mapId);
+                    if (($result['status'] ?? null) === 'question') {
+                        $result = $this->saveMap($mapId, 'write', $result['confirm']);
+                        $outcome['relocated'] = [...$outcome['relocated'], ...($result['relocated'] ?? [])];
+                    }
+                } catch (SessionRefusal $refusal) {
+                    throw new SessionRefusal(sprintf('%s was not saved: %s Already saved: %s.', $mapId, $refusal->getMessage(),
+                        implode(', ', $outcome['saved']) ?: 'every other change'), previous: $refusal);
                 }
-            } catch (SessionRefusal $refusal) {
-                throw new SessionRefusal(sprintf('%s was not saved: %s%s', $mapId, $refusal->getMessage(), $outcome['saved'] === []
-                    ? ' Nothing was written.' : ' Already saved: ' . implode(', ', $outcome['saved']) . '.'), previous: $refusal);
             }
             $outcome['saved'][] = $mapId;
-        }
-        if ($this->workspace->hasUnsavedChanges()) {
-            $rest = $this->saveAll();
-            if ($rest['failures'] !== []) {
-                throw new SessionRefusal('The maps were saved, but not everything else: ' . implode('; ', $rest['failures']));
-            }
         }
 
         return ['status' => 'saved', ...$outcome];

@@ -122,7 +122,7 @@ final readonly class WorldObjectAuthoring
     private static function loadCatalog(ProjectMap $map, array $entries): ?FieldPresentationCatalog
     {
         return array_any($entries, static fn($entry): bool => is_array($entry) && array_key_exists('resource', $entry))
-            ? FieldPresentationCatalog::load($map->getAssetRoot()) : null;
+            ? $map->getFieldCatalog() : null;
     }
 
     public function getSourceIssue(): ?string
@@ -352,7 +352,7 @@ final readonly class WorldObjectAuthoring
     private static function readSignResources(ProjectMap $map): array
     {
         try {
-            $catalog = FieldPresentationCatalog::load($map->getAssetRoot());
+            $catalog = $map->getFieldCatalog();
         } catch (\Throwable) {
             return [];
         }

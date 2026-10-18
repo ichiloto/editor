@@ -333,13 +333,37 @@ final class ReferenceCatalog
     private function loadFieldResourceNames(): array
     {
         try {
-            $catalog = ProjectDirectoryContext::run($this->workspace->projectRoot,
-                fn(): FieldPresentationCatalog => FieldPresentationCatalog::load($this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets'));
+            $catalog = $this->getFieldPresentationCatalog();
         } catch (Throwable) {
             return [];
         }
 
         return array_map(static fn($resource): string => $resource->name, $catalog->resources);
+    }
+
+    /**
+     * The project's field presentation (assets/Data/Presentation/field.php) as the Engine reads it, with the
+     * Field Resources page's records as it holds them, unsaved edits included: what saving would leave. Every
+     * reader of field resources (pickers, world objects, validation) reads it, so a resource added in this
+     * session is usable at once.
+     *
+     * @throws \InvalidArgumentException When the catalogue is read-only or the Engine refuses it.
+     */
+    public function getFieldPresentationCatalog(): FieldPresentationCatalog
+    {
+        $assets = $this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets';
+        $database = $this->workspace->getRecordDatabase(\Ichiloto\Editor\Field\FieldResourceFields::CATEGORY);
+        if ($database === null) {
+            return ProjectDirectoryContext::run($this->workspace->projectRoot, static fn(): FieldPresentationCatalog => FieldPresentationCatalog::load($assets));
+        }
+        if (($reason = $database->getReadOnlyReason()) !== null) {
+            throw new \InvalidArgumentException($reason);
+        }
+        $file = PhpDataFile::load($database->backingFilePath(), $this->workspace->projectRoot);
+        $payload = $database->foldInto(is_array($file->payload) ? $file->payload : []);
+
+        return ProjectDirectoryContext::run($this->workspace->projectRoot,
+            static fn(): FieldPresentationCatalog => FieldPresentationCatalog::fromArray($payload, $assets));
     }
 
     /**
