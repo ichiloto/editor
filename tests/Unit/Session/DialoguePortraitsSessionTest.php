@@ -194,9 +194,10 @@ it('offers each page of a map Dialogue event the emotions of its speaker, kept o
 PHP, (string) file_get_contents($data)));
     $session = EditorSession::open($root);
     $rows = $session->readInspector('test-map', 'D')['rows'];
-    $first = array_find($rows, static fn(array $row): bool => ($row['label'] ?? '') === 'Dialogue #1 Emotion');
+    // Plain pages are one dialogue variant's lines, edited as an NPC's are.
+    $first = array_find($rows, static fn(array $row): bool => ($row['label'] ?? '') === 'Dialogue variant 1 Line 1 Emotion');
     expect($first['kind'])->toBe('options')->and($first['options'])->toBe(['Neutral', 'Worried'])->and($first['value'])->toBe('Neutral');
-    $warning = array_find($rows, static fn(array $row): bool => ($row['label'] ?? '') === 'Dialogue #2 Emotion Warning');
+    $warning = array_find($rows, static fn(array $row): bool => ($row['label'] ?? '') === 'Dialogue variant 1 Line 2 Emotion Warning');
     expect($warning['value'])->toContain('Kaelion has no "Sulky" emotion');
     expect(getSessionMap($session)->getEventDefinition('D')['data']['dialogue'][0])->not->toHaveKey('emotion');
 

@@ -1722,6 +1722,7 @@ final class EditorSession
      * `options`, read as the matching `optionLabels` when it has them),
      * `reference` (one of `references.list` for its `reference`),
      * `conditions` (the condition line, `type:name[:extras]` joined by `;`),
+     * `writes` (the world-state write line, in the same form),
      * `destination` (a map from `references.list` for `maps` and a spawn
      * point on it, set together through `setEventDestination`), or `info`
      * for a row that is only read here: headings and counts. A typed row's
@@ -1729,21 +1730,37 @@ final class EditorSession
      * adds to and removes from carries `list` (its entry's index), and
      * `addInspectorListEntry`/`removeInspectorListEntry` apply to it.
      *
-     * @return array{map: string, revision: int, event: ?string, rows: list<array<string, mixed>>}
-     * @throws SessionRefusal When the map or event is unknown.
+     * An event's record rows (what every trigger reads beside its class and
+     * data: its conditions, completion writes, blocked message and cue
+     * conditions, and a type's lists: a Dialogue event's pages, a Story
+     * Script's inline commands) are keyed with the `frame` they are in, []
+     * at the event, and carry `item` when they belong to an entry adding and
+     * removing apply to. A row that opens a frame of commands carries that
+     * `frame`; reading the event again with it lists that frame's rows
+     * alone, edited through the same calls.
+     *
+     * @param list<int|string> $frame A frame of the event's inline commands; [] for the map and event rows.
+     * @return array{map: string, revision: int, event: ?string, frame: list<int|string>, frameLabel: ?string, rows: list<array<string, mixed>>}
+     * @throws SessionRefusal When the map, event or frame is unknown.
      */
-    public function readInspector(string $mapId, ?string $marker = null): array
+    public function readInspector(string $mapId, ?string $marker = null, array $frame = []): array
     {
+        $frame = self::requireFrame($frame, 'readInspector');
         $map = $this->requireMap($mapId);
         if ($marker !== null && $map->getEventDefinition($marker) === null && $map->getEventArea($marker) === null) {
             throw new SessionRefusal(sprintf('%s has no event %s.', $mapId, $marker));
+        }
+        if ($frame !== [] && $marker === null) {
+            throw new SessionRefusal('A frame of commands belongs to an event; name the event.');
         }
 
         return [
             'map' => $mapId,
             'revision' => $this->getMapRevision($map),
             'event' => $marker,
-            'rows' => $this->describePlacementRows(array_map(self::describeRow(...), $this->collectInspectorFields($map, $marker)),
+            'frame' => $frame,
+            'frameLabel' => $frame === [] || $marker === null ? null : $this->createMapInspector($map)->describeEventFrame($map, $marker, $frame),
+            'rows' => $this->describePlacementRows(array_map(self::describeRow(...), $this->collectInspectorFields($map, $marker, $frame)),
                 ['kind' => 'event', 'map' => $mapId, 'marker' => $marker]),
         ];
     }
@@ -1976,12 +1993,13 @@ final class EditorSession
     private function requireInspectorField(ProjectMap $map, array $key): array
     {
         $marker = is_string($key['marker'] ?? null) ? $key['marker'] : null;
+        $frame = self::requireFrame($key['frame'] ?? [], 'readInspector');
 
         // A key comes back as the interface stored it, which may not keep
         // its members in the order they were given.
         ksort($key);
 
-        return array_find($this->collectInspectorFields($map, $marker), static function (array $candidate) use ($key): bool {
+        return array_find($this->collectInspectorFields($map, $marker, $frame), static function (array $candidate) use ($key): bool {
             $candidateKey = MapInspector::describeRowKey($candidate);
             if ($candidateKey !== null) {
                 ksort($candidateKey);
@@ -2993,7 +3011,8 @@ final class EditorSession
      * cues) from the cutscene record named, as `{category, index}`.
      *
      * @param array{category?: mixed, index?: mixed, kind?: mixed, marker?: mixed, frame?: mixed, path?: mixed}|null $record
-     *   Database {category,index,frame}, NPC {kind:'npc',index,frame}, or event {kind:'event',marker,path}.
+     *   Database {category,index,frame}, NPC {kind:'npc',index,frame}, or event {kind:'event',marker,path} for a
+     *   row of its data, {kind:'event',marker,frame} for one of its record rows.
      * @return list<array{value: string, label: string}>
      * @throws SessionRefusal When the category, map or record is unknown.
      */
@@ -3043,6 +3062,16 @@ final class EditorSession
             $marker = is_string($owner['marker'] ?? null) ? $owner['marker'] : '';
             $event = $map->getEventDefinition($marker)
                 ?? throw new SessionRefusal('That event route owner is no longer present.');
+            if (array_key_exists('frame', $owner)) {
+                // A row of the event's record rows names its frame, as an NPC's does.
+                $records = $this->createMapInspector($map)->createEventRecordPane($marker, $event)->records();
+                $frame = self::requireFrame($owner['frame'], 'references.list');
+                if ($frame !== [] && $records->getFrameCommands(0, $frame) === null) {
+                    throw new SessionRefusal('That route command frame is no longer present.');
+                }
+                return MovementRouteFields::getOwnerCommands((array) ($records->getRecordByIndex(0)?->toArray() ?? []),
+                    MovementRouteFields::getFrameOwnerPath($records->schema, $frame));
+            }
             $path = self::requireFrame($owner['path'] ?? [], 'references.list');
             return MovementRouteFields::getOwnerCommands($event, $path);
         }
@@ -5372,10 +5401,22 @@ final class EditorSession
         ];
     }
 
-    /** @return array<int, array<string, mixed>> */
-    private function collectInspectorFields(ProjectMap $map, ?string $marker): array
+    /**
+     * The rows an inspector read lists: the map's and its event's, or one
+     * frame of the event's inline commands alone.
+     *
+     * @param list<int|string> $frame
+     * @return array<int, array<string, mixed>>
+     * @throws SessionRefusal When the frame is gone.
+     */
+    private function collectInspectorFields(ProjectMap $map, ?string $marker, array $frame = []): array
     {
         $inspector = $this->createMapInspector($map);
+
+        if ($frame !== [] && $marker !== null) {
+            return $inspector->getEventFrameFields($map, $marker, $frame)
+                ?? throw new SessionRefusal('That frame of commands is no longer on the event; read the event again.');
+        }
 
         return [...$inspector->getMapFields($map), ...($marker === null ? [] : $inspector->getEventFields($map, $marker))];
     }
@@ -5434,7 +5475,8 @@ final class EditorSession
             'depth' => $depth,
             // A section heading: a row that only names the rows after it.
             'heading' => $kind === 'info' && (string) ($field['value'] ?? '') === '' && $key === null && $list === null ? true : null,
-            'value' => (string) ($field['value'] ?? ''),
+            // Multi-line text is read whole, as it is edited.
+            'value' => $control?->type === InputControlType::MULTILINE ? $control->rawValue : (string) ($field['value'] ?? ''),
             'raw' => match ($kind) {
                 'conditions' => is_string($field['encoded'] ?? null) ? $field['encoded'] : (string) ($field['value'] ?? ''),
                 'writes', 'affinities' => (string) ($field['value'] ?? ''),
@@ -5473,6 +5515,13 @@ final class EditorSession
             // A row about the rows before it: a warning (a line's emotion its speaker lacks) or an
             // error (a chest whose reward the Engine cannot give).
             'tone' => in_array($field['tone'] ?? null, ['warning', 'error'], true) ? $field['tone'] : null,
+            // A record row: the frame of commands it opens, and the item adding and removing at it apply to.
+            'frame' => is_array($field['frame'] ?? null) && $target !== null ? array_values($field['frame']) : null,
+            'item' => ($field['item'] ?? false) === true ? true : null,
+            'itemNoun' => is_string($field['itemNoun'] ?? null) ? $field['itemNoun'] : null,
+            'listHeading' => ($field['listHeading'] ?? false) === true ? true : null,
+            'childNoun' => is_string($field['childNoun'] ?? null) ? $field['childNoun'] : null,
+            'multiline' => $control?->type === InputControlType::MULTILINE ? true : null,
             'key' => $key,
         ], static fn(mixed $value): bool => $value !== null);
     }

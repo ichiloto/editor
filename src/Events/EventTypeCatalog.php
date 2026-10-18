@@ -14,6 +14,12 @@ use Ichiloto\Engine\Events\Triggers\TransferPlayerTrigger;
 
 /**
  * Lists valid event types that can be assigned in the editor.
+ *
+ * A type owns its class and its data. The root fields every trigger reads
+ * whatever its class (`conditions`, `sets`, `whenBlocked`, `cue` and its
+ * `conditions`, `facing`, `engagement`) belong to no type: they are offered
+ * on every event and written only when an author sets them
+ * ({@see EventRecordPane}).
  */
 final class EventTypeCatalog
 {
@@ -41,12 +47,7 @@ final class EventTypeCatalog
                     'mode' => 'action',
                     'reusable' => false,
                 ],
-                defaultDefinitionFields: [
-                    'conditions' => [],
-                    'sets' => [],
-                    'whenBlocked' => '',
-                    'cue' => ['symbol' => '', 'color' => 'bright-yellow'],
-                ],
+                defaultDefinitionFields: ['cue' => ['symbol' => '', 'color' => 'bright-yellow']],
             ),
             new EventTypeDefinition(
                 label: 'Cinematic',
@@ -57,12 +58,7 @@ final class EventTypeCatalog
                     'mode' => 'auto',
                     'reusable' => false,
                 ],
-                defaultDefinitionFields: [
-                    'conditions' => [],
-                    'sets' => [],
-                    'whenBlocked' => '',
-                    'cue' => ['symbol' => '', 'color' => 'bright-yellow'],
-                ],
+                defaultDefinitionFields: ['cue' => ['symbol' => '', 'color' => 'bright-yellow']],
             ),
             new EventTypeDefinition(
                 label: 'Dialogue',

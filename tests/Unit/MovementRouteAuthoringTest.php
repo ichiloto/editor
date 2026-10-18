@@ -87,10 +87,10 @@ it('transports exact route row owners through the real GUI host boundary without
             };
             expect($reply)->toHaveKey('result')->and(array_column($reply['result'], 'value'))->toBe($expected);
         }
-        $event = $request('inspector.read', ['map' => 'harbour', 'event' => 'S'])['result'];
-        $row = array_find($event['rows'], static fn(array $row): bool => ($row['reference'] ?? '') === 'cinematic_movement_routes');
-        expect($row)->not->toBeNull();
-        $reply = $list($event['map'], ['kind' => 'event', 'marker' => $row['key']['marker'], 'path' => $row['key']['path']]);
+        // A Story Script's inline commands are its record rows, in frames as an NPC's script is.
+        $event = $request('inspector.read', ['map' => 'harbour', 'event' => 'S', 'frame' => ['script', 2, 'commands']])['result'];
+        $row = routeAuthoringRow($event, 'Recorded Route');
+        $reply = $list($event['map'], ['kind' => 'event', 'marker' => $row['key']['marker'], 'frame' => $row['key']['frame']]);
         expect($reply)->toHaveKey('result')
             ->and(array_column($reply['result'], 'value'))->toBe(['root-recorded', 'common-recorded', 'cycle-recorded']);
 
@@ -118,6 +118,7 @@ it('lists only declarations reachable from the explicit live command owner inclu
     [$root] = makeRouteOwnerProject();
     $session = EditorSession::open($root);
     foreach ([['kind' => 'npc', 'index' => 0, 'frame' => ['script', 2, 'commands']],
+        ['kind' => 'event', 'marker' => 'S', 'frame' => ['script', 2, 'commands']],
         ['kind' => 'event', 'marker' => 'S', 'path' => ['data', 'script', '2', 'commands', '0', 'retrace']]] as $owner) {
         expect(array_column($session->listReferences('harbour', 'cinematic_movement_routes', $owner), 'value'))
             ->toBe(['root-recorded', 'common-recorded', 'cycle-recorded']);
@@ -172,10 +173,9 @@ it('writes and refuses NPC route references against the same invocation while pr
 it('writes inline route references from the actual event script and refuses siblings without changing source or history', function () {
     [$root, $mapPath] = makeRouteOwnerProject();
     $session = EditorSession::open($root);
-    $view = $session->readInspector('harbour', 'S');
-    $path = ['data', 'script', '2', 'commands', '0', 'retrace'];
-    $row = array_find($view['rows'], static fn(array $row): bool => ($row['key']['path'] ?? []) === $path);
-    expect($row)->not->toBeNull();
+    $frame = ['script', 2, 'commands'];
+    $view = $session->readInspector('harbour', 'S', $frame);
+    $row = routeAuthoringRow($view, 'Recorded Route');
     $original = file_get_contents($mapPath);
     expect(fn() => $session->applyInspector('harbour', $view['revision'], $row['key'], 'other-event'))
         ->toThrow(SessionRefusal::class, 'Unknown cinematic_movement_routes');
@@ -189,7 +189,7 @@ it('writes inline route references from the actual event script and refuses sibl
     expect(file_get_contents($mapPath))->toBe($original);
     $session->redo();
     $session->saveMap('harbour');
-    expect(EditorSession::open($root)->listReferences('harbour', 'cinematic_movement_routes', ['kind' => 'event', 'marker' => 'S', 'path' => $path]))
+    expect(EditorSession::open($root)->listReferences('harbour', 'cinematic_movement_routes', ['kind' => 'event', 'marker' => 'S', 'frame' => $frame]))
         ->toHaveCount(3);
 });
 

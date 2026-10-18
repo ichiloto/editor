@@ -4014,6 +4014,35 @@ final class ProjectRecordDatabase
     }
 
     /**
+     * The frame enclosing one, and the field id prefix of the row in it that
+     * opened the frame: the record's own list row, or the command (or
+     * sub-list entry) that holds the arm, for an interface to land back on.
+     *
+     * A record-level list is [key]; a list member's arm ends
+     * [i, listKey, j, armKey] (an option's `then`, a lane's `commands`); a
+     * branch, sequence or variant arm ends [i, arm].
+     *
+     * @param array<int, int|string> $framePath The frame, not the root.
+     * @return array{frame: list<int|string>, landing: string}
+     */
+    public function describeEnclosingFrame(array $framePath): array
+    {
+        $framePath = array_values($framePath);
+        $count = count($framePath);
+        $chunk = $count === 1 && is_string($framePath[0])
+            ? 1
+            : ((is_string($framePath[$count - 3] ?? null) && is_int($framePath[$count - 2] ?? null) && is_string($framePath[$count - 1] ?? null) && is_int($framePath[$count - 4] ?? null)) ? 4 : 2);
+        $enclosing = array_slice($framePath, 0, max(0, $count - $chunk));
+        $enclosingList = $enclosing !== [] && is_string($enclosing[0]) ? ($this->schema->commandLists[$enclosing[0]] ?? null) : null;
+        $landing = $chunk === 1
+            ? 'commandList' . ucfirst(strval($framePath[0] ?? ''))
+            : (($enclosing === [] ? ($this->schema->subList?->prefix ?? 'command') : ($enclosingList?->prefix ?? 'command'))
+                . intval($framePath[$count - $chunk] ?? 0));
+
+        return ['frame' => $enclosing, 'landing' => $landing];
+    }
+
+    /**
      * Splits a frame path into the record key it starts from and the rest.
      *
      * A path beginning with a string names a record-level command list (an

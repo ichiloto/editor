@@ -63,6 +63,7 @@ use Ichiloto\Editor\Maps\SaveRelocationPlan;
 use Ichiloto\Editor\Maps\SaveRelocationPlanner;
 use Ichiloto\Editor\Maps\MapLayers;
 use Ichiloto\Editor\Events\EventAuthoring;
+use Ichiloto\Editor\Events\EventRecordPane;
 use Ichiloto\Editor\Events\EventRefusal;
 use Ichiloto\Editor\Events\EventTypeCatalog;
 use Ichiloto\Editor\History\Command;
@@ -458,6 +459,22 @@ final class Editor
      * @var array<string, mixed>|null
      */
     private ?array $mapConditionField = null;
+
+    /**
+     * The map inspector field whose writes the shared write editor is
+     * building, or null when it is not hosting one.
+     *
+     * @var array<string, mixed>|null
+     */
+    private ?array $mapWriteField = null;
+
+    /**
+     * The frame of an event's inline commands the Inspector shows, by the
+     * event's marker; [] for the event's own rows.
+     *
+     * @var array{marker: string, frame: list<int|string>}|null
+     */
+    private ?array $eventInspectorFrame = null;
     /**
      * @var string[]|null
      */
@@ -1580,6 +1597,10 @@ final class Editor
 
         if ($this->mapConditionField !== null
             && ($this->conditionEditor->isOpen() || $this->referencePicker->isOpen())) {
+            return true;
+        }
+
+        if ($this->mapWriteField !== null && ($this->worldWriteEditor->isOpen() || $this->referencePicker->isOpen())) {
             return true;
         }
 
@@ -2757,6 +2778,27 @@ final class Editor
             }
 
             $this->renderInspectorArea();
+
+            return;
+        }
+
+        if ($this->mapWriteField !== null && ($this->worldWriteEditor->isOpen() || $this->referencePicker->isOpen())) {
+            // An event's completion writes, in the shared write editor the NPC pane hosts.
+            $this->referencePicker->isOpen()
+                ? $this->handleReferencePickerInput($input)
+                : $this->handleWorldWriteEditorInput($input);
+
+            if (! $this->worldWriteEditor->isOpen() && ! $this->referencePicker->isOpen()) {
+                $this->mapWriteField = null;
+            }
+
+            $this->renderInspectorArea();
+
+            return;
+        }
+
+        if (($input === "\033" || $input === "\x1b") && $this->getOpenEventInspectorFrame() !== []) {
+            $this->leaveEventInspectorFrame();
 
             return;
         }
@@ -8017,6 +8059,16 @@ final class Editor
             return;
         }
 
+        if (($field['target'] ?? null) === EventRecordPane::TARGET && is_array($field['frame'] ?? null)) {
+            $this->enterEventInspectorFrame((string) ($field['marker'] ?? ''), array_values($field['frame']));
+            return;
+        }
+
+        if (($field['worldWrites'] ?? false) === true) {
+            $this->openMapWriteEditor($field);
+            return;
+        }
+
         // A short enum also lists its options and is stepped through below; a longer list is picked from.
         if (is_array($field['choices'] ?? null) && $field['choices'] !== [] && ! isset($field['options'])) {
             $this->openInspectorChoiceDialog($field);
@@ -8906,27 +8958,14 @@ final class Editor
 
         $database = $this->activeRecordDatabase();
 
-        // A record-level list is [key]; a list member's arm ends
-        // [i, listKey, j, armKey] -- an option's `then`, a lane's
-        // `commands`; a branch, sequence or variant arm ends [i, arm].
-        $count = count($path);
-        $chunk = $count === 1 && is_string($path[0])
-            ? 1
-            : ((is_string($path[$count - 3] ?? null) && is_int($path[$count - 2] ?? null) && is_string($path[$count - 1] ?? null) && is_int($path[$count - 4] ?? null)) ? 4 : 2);
-        $enclosingCommand = $chunk === 1 ? null : intval($path[$count - $chunk]);
-        $this->databaseCommandFramePath = array_slice($path, 0, $count - $chunk);
-        $this->databaseSelectedSettingIndex = 0;
+        if (! $database instanceof ProjectRecordDatabase) {
+            $this->databaseCommandFramePath = [];
 
-        // Land back on the row the frame belonged to: the record's own list
-        // row, or the command (or sub-list entry) that holds the arm.
-        $enclosingList = $this->databaseCommandFramePath !== [] && is_string($this->databaseCommandFramePath[0])
-            ? ($database?->schema->commandLists[$this->databaseCommandFramePath[0]] ?? null)
-            : null;
-        $landing = $chunk === 1
-            ? 'commandList' . ucfirst(strval($path[0]))
-            : (($this->databaseCommandFramePath === []
-                ? ($database?->schema->subList?->prefix ?? 'command')
-                : ($enclosingList?->prefix ?? 'command')) . $enclosingCommand);
+            return;
+        }
+
+        ['frame' => $this->databaseCommandFramePath, 'landing' => $landing] = $database->describeEnclosingFrame($path);
+        $this->databaseSelectedSettingIndex = 0;
 
         foreach ($this->getDatabaseSettingsFields() as $index => $field) {
             if (str_starts_with((string) ($field['field'] ?? ''), $landing)) {
@@ -8935,7 +8974,7 @@ final class Editor
             }
         }
 
-        $this->setStatus(($database?->describeFramePath($this->databaseCommandFramePath) ?? 'Commands') . '.', StatusLevel::INFO);
+        $this->setStatus($database->describeFramePath($this->databaseCommandFramePath) . '.', StatusLevel::INFO);
         $this->renderDatabasePanes(['settings', 'cue']);
     }
 
@@ -9890,6 +9929,20 @@ final class Editor
         $label = $this->worldWriteEditor->label();
         $encoded = $this->worldWriteEditor->encoded();
         $this->worldWriteEditor->close();
+
+        if ($this->mapWriteField !== null) {
+            $field = $this->mapWriteField;
+            $this->mapWriteField = null;
+
+            // The row applies the line as any interface sends it: its target owns the list it changes.
+            if ($this->applyInspectorFieldValue($field, $encoded)) {
+                $this->setStatus(sprintf('%s updated.', $label), StatusLevel::INFO);
+            }
+
+            $this->renderSelectionDependentArea();
+
+            return;
+        }
 
         $field = null;
 
@@ -11349,7 +11402,108 @@ final class Editor
             return $fields;
         }
 
+        $frame = $this->getOpenEventInspectorFrame();
+        $frameFields = $frame === [] ? null : $inspector->getEventFrameFields($selectedMap, $marker, $frame);
+
+        if ($frameFields !== null) {
+            // A frame of the event's inline commands, alone under the trail that names it.
+            return [['label' => $inspector->describeEventFrame($selectedMap, $marker, $frame), 'value' => 'Esc goes back', 'editable' => false], ...$frameFields];
+        }
+
+        // A frame an edit or an undo took away leaves the event's own rows.
+        $this->eventInspectorFrame = null;
+
         return [...$fields, ...$inspector->getEventFields($selectedMap, $marker)];
+    }
+
+    /**
+     * The frame of the focused event's inline commands the Inspector shows:
+     * [] for the event's own rows, and once the cursor has moved to another
+     * event.
+     *
+     * @return list<int|string>
+     */
+    private function getOpenEventInspectorFrame(): array
+    {
+        $open = $this->eventInspectorFrame;
+
+        if ($open === null || $this->editingMode !== self::MODE_EVENT || $this->getFocusedEventMarker() !== $open['marker']) {
+            $this->eventInspectorFrame = null;
+
+            return [];
+        }
+
+        return $open['frame'];
+    }
+
+    /**
+     * Opens a frame of an event's inline commands in the Inspector: a Story
+     * Script's script, or an arm of one of its commands.
+     *
+     * @param list<int|string> $frame
+     */
+    private function enterEventInspectorFrame(string $marker, array $frame): void
+    {
+        $map = $this->getSelectedMap();
+
+        if (! $map instanceof ProjectMap || $this->createMapInspector()->getEventFrameFields($map, $marker, $frame) === null) {
+            return;
+        }
+
+        $this->eventInspectorFrame = ['marker' => $marker, 'frame' => $frame];
+        $this->selectedInspectorFieldIndex = 1;
+        $this->setStatus($this->createMapInspector()->describeEventFrame($map, $marker, $frame) . '. Esc goes back.', StatusLevel::INFO);
+        $this->renderInspectorArea();
+    }
+
+    /** Leaves the open frame of an event's commands for the one enclosing it, back on the row that opened it. */
+    private function leaveEventInspectorFrame(): void
+    {
+        $map = $this->getSelectedMap();
+        $open = $this->eventInspectorFrame;
+        $definition = $map instanceof ProjectMap && $open !== null ? $map->getEventDefinition($open['marker']) : null;
+
+        if ($open === null || $definition === null) {
+            $this->eventInspectorFrame = null;
+
+            return;
+        }
+
+        $pane = $this->createMapInspector()->createEventRecordPane($open['marker'], $definition);
+        ['frame' => $frame, 'landing' => $landing] = $pane->records()->describeEnclosingFrame($open['frame']);
+        $this->eventInspectorFrame = $frame === [] ? null : ['marker' => $open['marker'], 'frame' => $frame];
+        $this->selectedInspectorFieldIndex = 0;
+
+        foreach ($this->getInspectorFields() as $index => $field) {
+            if (($field['target'] ?? null) === EventRecordPane::TARGET && str_starts_with((string) ($field['field'] ?? ''), $landing)) {
+                $this->selectedInspectorFieldIndex = $index;
+                break;
+            }
+        }
+
+        $this->setStatus($frame === [] ? sprintf('Event %s.', $open['marker']) : $pane->describeFrame($frame) . '.', StatusLevel::INFO);
+        $this->renderInspectorArea();
+    }
+
+    /**
+     * Opens the shared write editor on a map inspector row's writes (an
+     * event's completion writes, a dialogue variant's), hosted in the
+     * Inspector pane; the result applies back through the row.
+     *
+     * @param array<string, mixed> $field The inspector field descriptor.
+     */
+    private function openMapWriteEditor(array $field): void
+    {
+        $this->mapWriteField = $field;
+        $writeTypes = $field['writeTypes'] ?? null;
+        $this->worldWriteEditor->open(
+            (string) ($field['field'] ?? 'sets'),
+            trim((string) ($field['label'] ?? 'Writes')),
+            WorldWriteCodec::decodeAll((string) ($field['value'] ?? '')),
+            is_array($writeTypes) ? $writeTypes : null,
+        );
+        $this->statusMessage = 'Building writes.';
+        $this->renderInspectorArea();
     }
 
     /** The map inspector over the project's references as the selected map sees them. */
@@ -12603,7 +12757,7 @@ final class Editor
         $category = (string) ($field['reference'] ?? '');
         $target = (string) ($field['target'] ?? '');
 
-        if ($category === '' || ! in_array($target, ['map', 'map-data', 'map-kind', 'map-encounters', 'map-bgm-variants'], true)) {
+        if ($category === '' || ! in_array($target, ['map', 'map-data', 'map-kind', 'map-encounters', 'map-bgm-variants', EventRecordPane::TARGET], true)) {
             return false;
         }
 
@@ -12635,7 +12789,7 @@ final class Editor
             ]);
         }
 
-        if (($field['optional'] ?? false) === true) {
+        if (($field['optional'] ?? false) === true || ($field['allowsNone'] ?? false) === true) {
             // Optional data is cleared by choosing nothing, which removes it.
             array_unshift($entries, [
                 'label' => 'None',
@@ -13577,7 +13731,7 @@ final class Editor
             return $this->cutsceneRecordPaneMetrics();
         }
 
-        if ($this->isNpcInspectorHosting() || $this->mapConditionField !== null) {
+        if ($this->isNpcInspectorHosting() || $this->mapConditionField !== null || $this->mapWriteField !== null) {
             return [
                 'width' => $this->getWindowContentWidth($layout['rightWidth']),
                 'rows' => max(1, $layout['contentHeight'] - 2),
@@ -13799,6 +13953,16 @@ final class Editor
 
             if ($this->conditionEditor->isOpen()) {
                 return $this->buildConditionEditorRows();
+            }
+        }
+
+        if ($this->mapWriteField !== null) {
+            if ($this->referencePicker->isOpen()) {
+                return $this->buildReferencePickerRows();
+            }
+
+            if ($this->worldWriteEditor->isOpen()) {
+                return $this->buildWorldWriteEditorRows();
             }
         }
 

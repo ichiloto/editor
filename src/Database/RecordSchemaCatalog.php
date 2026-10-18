@@ -36,6 +36,8 @@ use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandFieldKind;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandReference;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandRegistry;
 use Ichiloto\Engine\Events\Interpreter\EventInterpreter;
+use Ichiloto\Engine\Events\Triggers\DialogueEventTrigger;
+use Ichiloto\Engine\Events\Triggers\ScriptEventTrigger;
 use Ichiloto\Engine\Entities\Enemies\Enemy;
 use Ichiloto\Engine\Entities\Enemies\EnemyCatalog;
 use Ichiloto\Engine\Entities\Enumerations\ItemScopeNumber;
@@ -2004,45 +2006,111 @@ final class RecordSchemaCatalog
                 'movement' => 'fixed',
                 'dialogue' => [['text' => 'Hello.']],
             ],
-            subList: new RecordSubList(
-                key: 'dialogue',
-                prefix: 'variant',
-                singular: 'dialogue variant',
-                fields: [
-                    new RecordField('conditions', 'When', removeWhenEmpty: true, codec: RecordFieldCodec::CONDITIONS),
-                    new RecordField('sets', 'Then Set', removeWhenEmpty: true, codec: RecordFieldCodec::WORLD_WRITES),
-                ],
-                blank: ['lines' => [['text' => 'Something to say.']]],
-                nestedLists: [
-                    '*' => new RecordSubList(
-                        key: 'lines',
-                        prefix: 'line',
-                        singular: 'line',
-                        fields: [
-                            // The runtime titles a page with its `name`, the
-                            // NPC's own when the key is absent, and no title
-                            // at all for ''. Both are choices, by meaning,
-                            // never a name retyped that goes stale on rename.
-                            RecordField::reference(
-                                'name',
-                                'Speaker',
-                                'actors',
-                                allowsNone: true,
-                                noneLabel: "(the NPC's name)",
-                                blankLabel: '(No speaker)',
-                            ),
-                            RecordField::emotion(DialogueLineSpeaker::forNpcLine()),
-                            new RecordField('text', 'Text'),
-                        ],
-                        blank: ['text' => 'Something to say.'],
-                    ),
-                ],
+            subList: self::dialogueVariantList(
+                // The runtime titles a page with its `name`, the NPC's own
+                // when the key is absent, and no title at all for ''. Both
+                // are choices, by meaning, never a name retyped that goes
+                // stale on rename.
+                RecordField::reference(
+                    'name',
+                    'Speaker',
+                    'actors',
+                    allowsNone: true,
+                    noneLabel: "(the NPC's name)",
+                    blankLabel: '(No speaker)',
+                ),
+                DialogueLineSpeaker::forNpcLine(),
+                ['text' => 'Something to say.'],
                 // A variant's own script, edited as a frame like a branch arm.
-                commandArms: ['script' => 'Script'],
+                ['script' => 'Script'],
             ),
             // The NPC's inline script: the shared command vocabulary, in a
             // frame. The runtime runs it INSTEAD of dialogue when non-empty.
             commandLists: ['script' => self::eventCommandList('script', $graphical)],
+        );
+    }
+
+    /**
+     * Returns one map event as a record pane ({@see \Ichiloto\Editor\Events\EventRecordPane}).
+     *
+     * Every trigger class reads the same root fields (EventTriggerFactory):
+     * the conditions that make it available, the message shown while they
+     * do not hold, the writes made when it completes, and the conditions
+     * that delay its cue. They are offered on every event and written only
+     * when set. A Dialogue event also says who is talked to and speaks
+     * conditional pages, the same variants an NPC speaks; a Story Script
+     * runs an inline script with the shared command vocabulary. The pane
+     * lifts those two out of `data` so they edit as an NPC's do.
+     *
+     * @param string|null $className The event's trigger class.
+     */
+    public static function mapEvent(?string $className, bool $graphical = false): RecordSchema
+    {
+        $className = $className === null ? null : ltrim($className, '\\');
+        $dialogue = $className === DialogueEventTrigger::class;
+
+        return new RecordSchema(
+            key: 'map_event',
+            entryNoun: 'event',
+            storage: RecordStorage::MAP_OWNED,
+            relativePath: '',
+            fields: [
+                new RecordField('conditions', 'Available When', removeWhenEmpty: true, codec: RecordFieldCodec::CONDITIONS),
+                new RecordField('whenBlocked', 'When Blocked', removeWhenEmpty: true),
+                new RecordField('sets', 'Then Set', removeWhenEmpty: true, codec: RecordFieldCodec::WORLD_WRITES),
+                new RecordField('cue.conditions', 'Cue When', removeWhenEmpty: true, codec: RecordFieldCodec::CONDITIONS),
+                // Who a talk-to quest objective counts as talked to; the
+                // runtime falls back to the first speaker's name.
+                // Empty, it is not written.
+                ...($dialogue ? [new RecordField('npcId', 'Talk-To Id', removeWhenEmpty: true)] : []),
+            ],
+            labelKey: 'class',
+            identityKey: null,
+            // A map Dialogue event's page names its speaker as a text command does.
+            subList: $dialogue ? self::dialogueVariantList(
+                new RecordField('name', 'Speaker'),
+                DialogueLineSpeaker::forText(),
+                ['name' => '', 'text' => 'Something to say.'],
+            ) : null,
+            commandLists: $className === ScriptEventTrigger::class
+                ? ['script' => self::eventCommandList('script', $graphical)]
+                : [],
+        );
+    }
+
+    /**
+     * Returns conditional dialogue as the Engine's ConditionalDialogue reads
+     * it: variants, the first whose conditions hold spoken, each with the
+     * writes it makes and its lines. One mechanism for every speaker that
+     * has them; only how a line names its speaker, and which command lists a
+     * variant may run, differ.
+     *
+     * @param RecordField $speaker The line field naming who speaks.
+     * @param DialogueLineSpeaker $speakerRule How a line's emotion finds its speaker.
+     * @param array<string, mixed> $blankLine A new line.
+     * @param array<string, string> $commandArms The command lists a variant runs, key => label.
+     */
+    private static function dialogueVariantList(RecordField $speaker, DialogueLineSpeaker $speakerRule, array $blankLine, array $commandArms = []): RecordSubList
+    {
+        return new RecordSubList(
+            key: 'dialogue',
+            prefix: 'variant',
+            singular: 'dialogue variant',
+            fields: [
+                new RecordField('conditions', 'When', removeWhenEmpty: true, codec: RecordFieldCodec::CONDITIONS),
+                new RecordField('sets', 'Then Set', removeWhenEmpty: true, codec: RecordFieldCodec::WORLD_WRITES),
+            ],
+            blank: ['lines' => [$blankLine]],
+            nestedLists: [
+                '*' => new RecordSubList(
+                    key: 'lines',
+                    prefix: 'line',
+                    singular: 'line',
+                    fields: [$speaker, RecordField::emotion($speakerRule), new RecordField('text', 'Text')],
+                    blank: $blankLine,
+                ),
+            ],
+            commandArms: $commandArms,
         );
     }
 

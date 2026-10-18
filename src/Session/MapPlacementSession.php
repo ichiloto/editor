@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Session;
 
 use Ichiloto\Editor\Database\ReferenceCatalog;
+use Ichiloto\Editor\Events\EventRecordPane;
 use Ichiloto\Editor\Field\NpcAuthoring;
 use Ichiloto\Editor\Field\NpcInspector;
 use Ichiloto\Editor\History\CommandGroup;
@@ -33,7 +34,7 @@ trait MapPlacementSession
         $rows = match ($kind) {
             'database' => $this->readDatabaseRecord(strval($context['category'] ?? ''), $index, $frame)['rows'],
             'npc' => $this->readNpc($map->mapId, $index, $frame)['rows'],
-            'event' => $this->readInspector($map->mapId, strval($key['marker'] ?? ''))['rows'],
+            'event' => $this->readInspector($map->mapId, strval($key['marker'] ?? ''), $frame)['rows'],
             default => throw new SessionRefusal('Unknown map-placement owner.'),
         };
         $row = array_find($rows, static fn(array $row): bool => MapPlacement::areValuesEqual($row['key'] ?? null, $key));
@@ -81,7 +82,8 @@ trait MapPlacementSession
         }
         $changes = [];
         foreach ($values as $field => $value) {
-            $found = array_find($rows, static fn(array $candidate): bool => $kind === 'event'
+            // An event's data rows are named by their path, its record rows (and every other owner's) by their field.
+            $found = array_find($rows, static fn(array $candidate): bool => $kind === 'event' && ($candidate['key']['target'] ?? null) !== EventRecordPane::TARGET
                 ? json_encode($candidate['key']['path'] ?? null, JSON_THROW_ON_ERROR) === $field
                 : ($candidate['key']['field'] ?? null) === $field);
             if ($found === null || ($found['kind'] ?? 'info') === 'info') {
