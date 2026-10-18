@@ -2,10 +2,16 @@
 
 declare(strict_types=1);
 
+use Ichiloto\Editor\Cutscenes\CutsceneAsset;
+use Ichiloto\Editor\Cutscenes\CutsceneType;
+use Ichiloto\Editor\Cutscenes\Preview\CinematicPreviewOrigin;
 use Ichiloto\Editor\Playtest\PlaytestLaunch;
 use Ichiloto\Editor\Playtest\PlaytestLauncher;
+use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Engine\Core\GameLaunchContext;
 use Ichiloto\Engine\Core\GameStartupMode;
+use Ichiloto\Engine\Field\MapGridSource;
+use Ichiloto\Engine\Field\MapSourceReader;
 use Ichiloto\Engine\IO\LaunchDataRoot;
 
 /**
@@ -136,6 +142,39 @@ it('refuses a start the Engine would not read, leaving no data root behind', fun
         ->and(listPlaytestDataRoots())->toBe($before);
 });
 
+it('playtests a cinematic on a layered or a single-file start map the Engine reads from the project', function (bool $layered): void {
+    $root = cinematicStartMapProject($layered);
+    $mapDirectory = $root . '/assets/Maps/test-map';
+    // A layered map keeps its grids in layers/ and has no single map file; a legacy map is that file alone.
+    expect(is_file($mapDirectory . '/test-map.map.php'))->toBe(! $layered)
+        ->and(is_dir($mapDirectory . '/layers'))->toBe($layered);
+    $before = checksumTree($root);
+    $workspace = ProjectWorkspace::fromProject($root);
+    $asset = CutsceneAsset::create(CutsceneType::CINEMATIC, 'dawn-crossing', $root . '/assets/Cutscenes/Cinematics',
+        ['id' => 'dawn-crossing', 'name' => 'Dawn Crossing', 'startMap' => 'test-map', 'commands' => []], $root);
+    // The origin the Cutscenes pane and the session both playtest from.
+    $origin = CinematicPreviewOrigin::locate($workspace, $asset, 'test-map');
+    $launch = PlaytestLaunch::fromCinematic($root, (string) $origin['mapId'], $origin['x'], $origin['y'], $asset->id);
+
+    try {
+        putenv(GameLaunchContext::ENVIRONMENT_VARIABLE . '=' . substr($launch->buildPlayOption(), strlen('--launch-context=')));
+        $context = GameLaunchContext::consumeEnvironment();
+        // The game reads the start map from the project's own root, the way the field does.
+        $source = MapSourceReader::readFiles(MapSourceReader::resolvePaths($launch->projectRoot . '/assets/Maps', $context->start->mapId));
+
+        expect($origin['mapId'])->toBe('test-map')
+            ->and($context->cinematicId)->toBe('dawn-crossing')
+            ->and([$context->start->mapId, $context->start->x, $context->start->y])->toBe(['test-map', $origin['x'], $origin['y']])
+            ->and($source['layers']->legacy)->toBe(! $layered)
+            ->and(count($source['tiles']))->toBe($workspace->getMapByIndex(0)->getHeight())
+            ->and($source['tiles'][$origin['y']][$origin['x']] ?? null)->not->toBeNull()
+            ->and(checksumTree($root))->toBe($before);
+    } finally {
+        putenv(GameLaunchContext::ENVIRONMENT_VARIABLE);
+        $launch->destroy();
+    }
+})->with(['layered' => true, 'single file' => false]);
+
 it('plays a project whose system data holds PHP objects, since nothing is rewritten for a playtest', function (): void {
     $root = makeTemporaryProject();
     file_put_contents(
@@ -253,6 +292,26 @@ function playtestScratch(): string
     mkdir($scratch);
 
     return $scratch;
+}
+
+/**
+ * A playtest project whose start map the Engine's map reader accepts, either
+ * converted to layers (no single map file) or as that single file alone,
+ * with its event marker defined in the map data.
+ */
+function cinematicStartMapProject(bool $layered): string
+{
+    $root = $layered ? layeredMapProject() : makeTemporaryProject();
+    file_put_contents($root . '/assets/Data/system.php', "<?php\n\nreturn ['startingPositions' => ['player' => []]];\n");
+    $directory = $root . '/assets/Maps/test-map';
+    if (! $layered) {
+        file_put_contents($directory . '/test-map.map.php', MapGridSource::buildSource("####\n#  #", 'ICHILOTO_MAP'));
+        file_put_contents($directory . '/test-map.event.php', MapGridSource::buildSource("   E\n    ", 'ICHILOTO_EVENT_MAP'));
+    }
+    file_put_contents($directory . '/test-map.data.php', "<?php\n\nreturn ['name' => 'Test Map', 'region' => '', 'events' => ['E' => "
+        . "['class' => 'Ichiloto\\\\Engine\\\\Events\\\\Triggers\\\\ChestEventTrigger', 'data' => ['lootType' => 'item', 'loot' => 'S-Potion']]]];\n");
+
+    return $root;
 }
 
 function playtestProject(): string
