@@ -193,6 +193,34 @@ Acceptance criteria for the presentation-authoring slice:
   stable IDs, same-path replacement PNGs, missing/invalid/out-of-root assets,
   unsupported PHP and failed writes. Unrelated data must remain unchanged.
 
+Dialogue portraits and emotions (status, 2026-10-18): the Engine's dialogue
+catalogue (`assets/Data/Presentation/dialogue.php`, `ichiloto.dialogue/1`) is
+authored in both editors. Dialogue Portraits edits its identities (`actors`
+keyed by stable actor id, `resources` for non-actor characters) as one page,
+each with a dialogue portrait, a skit bust and keyed emotions with their own
+pictures, chosen with the shared PNG picker and stored asset-relative. Speaker
+Names edits `speakers`. Every line the Engine reads `emotion` from (event and
+cinematic `text`, NPC lines, skit beats, Dialogue and Shop event pages) offers
+the emotions of the identity its speaker resolves to through the Engine's own
+`resolveSpeakerId`; an emotion the identity lacks is kept and warned about, in
+the row and in validation. A catalogue that builds its identities with PHP code
+is read-only on Dialogue Portraits, saying so (Last Legend's builds them in a
+loop over directories, so its identities are authored there once the Game
+writes them as data); its literal speaker names stay editable. The GUI shows an
+identity's pictures and its emotions as a grid to choose from. Remaining:
+- Character forms (an identity's vampiric or transformed artwork beside its
+  usual, chosen from game state): waits on the Engine contract requested on
+  2026-10-18. A form will be another artwork set under the identity, reusing
+  `DialoguePortraitFields::getArtworkFields()` and the emotions list, and each
+  line's emotion choices will come from the identity's form as the Engine
+  resolves it.
+- The Engine's skit beat check reads emotions from `actors` only, so a
+  non-actor skit speaker shows Neutral whatever the beat asks for; reported to
+  the Engine.
+- The Engine states the catalogue's schema id and keys only inside
+  `DialoguePresentationCatalog::load()`; `DialogueCatalogFile` names them once
+  until the Engine exports them.
+
 Effect timelines (planned, follows the Engine's effect presentation contract in
 its docs/effect-animation.md): an effect is either one flat sequence, still
 supported, or `presentations` with two complete, independent sequences,

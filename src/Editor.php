@@ -2441,7 +2441,9 @@ final class Editor
     private function refreshNpcInspector(): void
     {
         $map = $this->getSelectedMap();
-        $this->npcInspector = $map instanceof ProjectMap ? new NpcInspector($map) : null;
+        // The references the session's NPC pane uses: choices that depend on the project, such as a line's emotions.
+        $this->npcInspector = $map instanceof ProjectMap && $this->workspace instanceof ProjectWorkspace
+            ? new NpcInspector($map, references: $this->referenceCatalog()) : null;
 
         if ($map instanceof ProjectMap && $this->selectedNpcIndex !== null && $map->getNpcs()->get($this->selectedNpcIndex) === null) {
             $this->selectedNpcIndex = $map->getNpcs()->count() > 0 ? min($this->selectedNpcIndex, $map->getNpcs()->count() - 1) : null;

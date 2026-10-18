@@ -1378,15 +1378,15 @@ it('heads each dialogue variant and shortens its rows, without touching field id
 
     expect($rows[0])->toBe(['label' => 'Dialogue variant 1', 'field' => null, 'editable' => false])
         ->and(callEditorMethod($editor, 'getInspectorFields')[array_search('Dialogue variant 1', array_column(callEditorMethod($editor, 'getInspectorFields'), 'label'), true)]['value'])->toBe('')
-        ->and(array_column(array_slice($rows, 1, 5), 'label'))->toBe(['When', 'Then Set', 'Script Commands', 'Line 1 Speaker', 'Line 1 Text'])
-        ->and(array_column(array_slice($rows, 1, 5), 'field'))->toBe(['variant0Conditions', 'variant0Sets', 'variant0Script', 'variant0Line0Name', 'variant0Line0Text'])
+        ->and(array_column(array_slice($rows, 1, 6), 'label'))->toBe(['When', 'Then Set', 'Script Commands', 'Line 1 Speaker', 'Line 1 Emotion', 'Line 1 Text'])
+        ->and(array_column(array_slice($rows, 1, 6), 'field'))->toBe(['variant0Conditions', 'variant0Sets', 'variant0Script', 'variant0Line0Name', 'variant0Line0Emotion', 'variant0Line0Text'])
         // The second variant's heading carries its condition line as its
         // value: "Dialogue variant 2 · when switch:gate_open" on a wide pane,
         // the "when …" wrapped under the heading on a narrow one.
-        ->and($rows[6]['label'])->toBe('Dialogue variant 2')
-        ->and($rows[6]['editable'])->toBeFalse()
+        ->and($rows[7]['label'])->toBe('Dialogue variant 2')
+        ->and($rows[7]['editable'])->toBeFalse()
         ->and(preg_replace('/\s+/', ' ', implode(' ', callEditorMethod($editor, 'getDatabaseSettingsLines'))))->toContain('Dialogue variant 2 when switch:gate_open')
-        ->and(array_column(array_slice($rows, 7, 5), 'field'))->toBe(['variant1Conditions', 'variant1Sets', 'variant1Script', 'variant1Line0Name', 'variant1Line0Text']);
+        ->and(array_column(array_slice($rows, 8, 6), 'field'))->toBe(['variant1Conditions', 'variant1Sets', 'variant1Script', 'variant1Line0Name', 'variant1Line0Emotion', 'variant1Line0Text']);
 });
 
 it('wraps a long dialogue line in the hosted Inspector, keeps the edited row single, and maps rows to fields', function () {

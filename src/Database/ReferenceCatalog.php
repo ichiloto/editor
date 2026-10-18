@@ -11,6 +11,12 @@ use Ichiloto\Editor\ProjectQuest;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\Cutscenes\CutsceneAsset;
 use Ichiloto\Editor\Cutscenes\CutsceneType;
+use Ichiloto\Editor\Dialogue\DialogueCatalogFile;
+use Ichiloto\Editor\Dialogue\DialogueEmotionFields;
+use Ichiloto\Editor\Dialogue\DialogueLineSpeaker;
+use Ichiloto\Editor\Dialogue\DialoguePortraitFields;
+use Ichiloto\Editor\Dialogue\DialogueSpeakerFields;
+use Ichiloto\Engine\Messaging\Dialogue\Presentation\DialoguePresentationCatalog;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Engine\Animations\Field\FieldPresentationCatalog;
 use Ichiloto\Engine\Rendering\Presentation\Text\ProjectTextCatalog;
@@ -109,6 +115,8 @@ final class ReferenceCatalog
         'map_regions',
         'animation_roles',
         'battle_arenas',
+        // The dialogue catalogue's identities, actor and non-actor, whose artwork lines show.
+        'dialogue_identities',
     ];
 
     /**
@@ -303,6 +311,7 @@ final class ReferenceCatalog
             'field_resources' => array_map(strval(...), array_keys($this->loadFieldResourceNames())),
             'text_roles' => $this->loadTextRoleIds(),
             'font_assets' => self::getFontAssets($this->workspace->projectRoot),
+            'dialogue_identities' => array_column($this->listDialogueIdentities(), 'id'),
             default => $this->recordValues($category),
         };
     }
@@ -721,6 +730,15 @@ final class ReferenceCatalog
             return $labels;
         }
 
+        if ($category === 'dialogue_identities') {
+            $labels = [];
+            foreach ($this->listDialogueIdentities() as $identity) {
+                $labels[$identity['id']] = $identity['label'];
+            }
+
+            return $labels;
+        }
+
         if ($category === 'animation_ids') {
             $labels = [];
             foreach ($this->animationRecords() as $animation) {
@@ -1104,6 +1122,82 @@ final class ReferenceCatalog
      *
      * @throws \InvalidArgumentException When the project's catalogue cannot be read.
      */
+    /**
+     * The project's dialogue catalogue as the Engine makes it, from its Dialogue Portraits and Speaker Names pages
+     * with their unsaved edits, or from the file when those pages are not open.
+     *
+     * @throws \InvalidArgumentException|\RuntimeException When the Engine would refuse the catalogue.
+     */
+    public function getDialoguePresentationCatalog(): DialoguePresentationCatalog
+    {
+        $whole = $this->getDialogueCatalogPayload();
+
+        return $whole === null ? DialoguePresentationCatalog::load($this->getAssetRoot()) : DialogueCatalogFile::createCatalog($whole);
+    }
+
+    /**
+     * The identities and speaker names of the project's dialogue catalogue as its Dialogue Portraits and Speaker
+     * Names pages hold them, unsaved edits included, in the catalogue's own shape; null when those pages are not
+     * open, where the file is the Engine's to read.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function getDialogueCatalogPayload(): ?array
+    {
+        $portraits = $this->workspace->getRecordDatabase(DialoguePortraitFields::CATEGORY);
+        $speakers = $this->workspace->getRecordDatabase(DialogueSpeakerFields::CATEGORY);
+        if ($portraits?->schema->projection === null || $speakers?->schema->projection === null) {
+            return null;
+        }
+        $rows = static fn(ProjectRecordDatabase $database): array => array_map(
+            static fn(ProjectRecord $record): array => (array) $record->toArray(), $database->getRecords());
+        $whole = $portraits->schema->projection->write(['schema' => DialogueCatalogFile::SCHEMA], $rows($portraits));
+
+        return $speakers->schema->projection->write($whole, $rows($speakers));
+    }
+
+    /**
+     * The catalogue's identities, actors first, each with how a picker shows it.
+     *
+     * @return list<array{id: string, label: string}>
+     */
+    private function listDialogueIdentities(): array
+    {
+        try {
+            $catalogue = $this->getDialoguePresentationCatalog();
+        } catch (Throwable) {
+            // Validation reports a catalogue that cannot be read; nothing can be chosen from it.
+            return [];
+        }
+        $identities = [];
+        foreach (array_keys($catalogue->actors) as $id) {
+            $identities[] = ['id' => (string) $id, 'label' => sprintf('%s (actor)', $id)];
+        }
+        foreach (array_keys($catalogue->resources) as $id) {
+            $identities[] = ['id' => (string) $id, 'label' => sprintf('%s (character)', $id)];
+        }
+
+        return $identities;
+    }
+
+    /**
+     * The emotions one line may show, as its speaker's catalogue identity names them: who speaks, the identity
+     * whose artwork shows (null when the speaker has none), the emotions offered, and why none beyond Neutral are
+     * offered when the catalogue cannot be read.
+     *
+     * @return array{speaker: string, identity: ?string, emotions: list<string>, issue: ?string}
+     */
+    public function describeDialogueEmotions(DialogueLineSpeaker $rule, array $line, array $owner = []): array
+    {
+        try {
+            $catalogue = $this->getDialoguePresentationCatalog();
+        } catch (Throwable $error) {
+            return DialogueEmotionFields::describeUnreadableCatalogue($rule, $line, $owner, $error);
+        }
+
+        return DialogueEmotionFields::describeChoices($rule, $line, $owner, $catalogue);
+    }
+
     public function getMapCategoryCatalog(): \Ichiloto\Engine\Field\MapCategoryCatalog
     {
         // The project's own categories as the Place Categories page holds them, unsaved edits included.

@@ -1230,6 +1230,8 @@ skill's effects, a quest's rewards) listed under them.
 | Configuration | `config.php` (`save`, `accessibility`, `ui`, `graphics`, `audio`, `inn`) | Editable - one row per setting, typed by what it holds; field zoom is kept from 1 to 8 | Same |
 | Types | `assets/Data/system.php` | Editable - the project's elements, one per row; an empty list means the Engine's defaults. Weapon, armor and equipment types are the Engine's own | Same |
 | Terms | `config.php` (`vocab`, `messages`) | Literal terms editable; comments and unrelated expressions preserved | Same |
+| Dialogue Portraits | `assets/Data/Presentation/dialogue.php` (`actors`, `resources`) | Editable - one record per speaker identity: what it speaks as (an actor, chosen, or a non-actor character with a stable id), its dialogue portrait and skit bust, and its emotions, each a name with its own portrait and bust, chosen as project images | Same, with each image shown beside its path |
+| Speaker Names | `assets/Data/Presentation/dialogue.php` (`speakers`) | Editable - one record per label lines are spoken under, and the dialogue portrait it shows | Same |
 | Place Categories | `assets/Data/map-categories.php` (`categories`) | Editable - one record per category: stable id, name and translation key, and the generic category it specializes | Same |
 | Player Field Appearance | `assets/Data/Entities/player.php` | Not shown: graphical ownership and art | Choose fixed-player, selected party leader, or absent legacy selector; fixed sheet picker with index/layer controls |
 | Field Resources | `assets/Data/Presentation/field.php` (`resources`) | Not shown: graphical resources | One record per named resource, keyed by its stable id: name, ground contact, an image or a sign board, and an optional occupancy stamp |
@@ -1845,7 +1847,9 @@ scans the directory and keys skits by their `id` field, not by filename, so
 renaming an `Id` in the editor does not require renaming the file.
 
 Fields: `Id`, `Title`, `Where (map id)`, `Conditions`, `Speed (chars/sec)`,
-then one pair of `Beat N Speaker` / `Beat N Text` rows per beat.
+then each beat's `Actor` or `Non-actor Speaker`, its `Emotion` and its `Text`.
+The emotion is chosen among the speaker's emotions (see
+[Dialogue Portraits and Emotions](#dialogue-portraits-and-emotions)).
 
 - `Where` gates the skit to one map id, matched case-insensitively. Leave it
   empty to make the skit available anywhere.
@@ -1857,6 +1861,43 @@ then one pair of `Beat N Speaker` / `Beat N Text` rows per beat.
 
 Current behavior: a skit plays at most once per save file, and the engine
 announces availability rather than interrupting - the player presses `T`.
+
+### Dialogue Portraits and Emotions
+
+The game's dialogue catalogue, `assets/Data/Presentation/dialogue.php`, says
+whose artwork a line shows. Two pages edit it.
+
+**Dialogue Portraits** holds one record per speaker identity. `Speaks As`
+says whether it is an actor's identity, chosen among the project's actors
+by stable id, or a non-actor character (a parent, a shopkeeper) with a
+stable id of its own. Each identity has a `Dialogue Portrait` (the dialogue
+box's) and a `Skit Bust` (the skit stage's), and an `Emotions` list: each
+emotion has a `Name` and its own portrait and bust. Images are chosen with
+the shared project image picker and stored as paths under `assets`; a missing
+emotion image falls back to Neutral's and then the identity's own, as the
+game draws it. `Shift+O` and `Shift+X` add and remove emotions.
+
+**Speaker Names** binds the labels lines are spoken under ("Mom", "Fira Nel")
+to an identity. A line spoken under a label shows that identity's artwork; a
+label the page does not list shows none. Several labels may share one
+identity.
+
+Every line the game reads an emotion for has an `Emotion` row: an event or
+cinematic `text` command, an NPC's dialogue line, a skit beat, and a map
+Dialogue or Shop event's page. It is chosen among the emotions of the line's
+speaker: an actor id names its identity directly, and a label is resolved
+through Speaker Names (an NPC line with no speaker of its own speaks under
+the NPC's name). `Neutral` is always offered and is what a line without an
+emotion shows. A line that holds an emotion its speaker lacks keeps it, and
+an `Emotion Warning` row under it says so; the game shows the identity's
+Neutral artwork until that emotion exists.
+
+A catalogue that builds its identities with PHP code (a loop over
+directories) is shown read-only on Dialogue Portraits, saying so, since a
+save would replace that code with its result; Speaker Names stays editable
+when its labels are plain data. Validation reports a speaker name bound to
+no identity, an image the game cannot draw, and a line emotion its speaker
+lacks.
 
 ### Common Events
 
