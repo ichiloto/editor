@@ -2589,46 +2589,6 @@ final class ProjectMap
     }
 
     /**
-     * Writes the sources saving would write into the map's folder under
-     * another maps root, replacing that folder's own files there, so a
-     * reader of map folders (the Engine's reachability analysis) sees the
-     * map as saving would leave it. This map's folder and its saved
-     * baseline are untouched; it stays as dirty as it was.
-     *
-     * @param string $mapsRoot The other maps root, holding a copy of the project's maps.
-     * @return string The folder written.
-     */
-    public function exportSources(string $mapsRoot): string
-    {
-        $this->assertEditable();
-        $this->assertGridSourcesCanonical();
-        $this->validateLayerContracts();
-        $target = $this->resolveSaveTarget();
-        $directory = rtrim($mapsRoot, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $target['mapId']);
-        $baseName = basename($directory);
-        $sources = [
-            $directory . DIRECTORY_SEPARATOR . basename($target['dataPath']) => $this->dataDocument === null
-                ? (string) $this->unparsedDataSource : $this->proposedDataSource(),
-            ...$this->layers->getSources($directory, $baseName),
-        ];
-        $transaction = new FileSetTransaction($directory, new FilesystemFileSetOperations());
-        foreach ($sources as $path => $source) {
-            $transaction->write($path, $source);
-        }
-        // The folder's other member files are the copy's old ones: a layer this map no longer has.
-        foreach ([...glob($directory . DIRECTORY_SEPARATOR . $baseName . '.*.php') ?: [],
-            ...glob($directory . DIRECTORY_SEPARATOR . 'layers' . DIRECTORY_SEPARATOR . '*.php') ?: [],
-            ...glob($directory . DIRECTORY_SEPARATOR . MapGraphics::DIRECTORY . DIRECTORY_SEPARATOR . '*.php') ?: []] as $stale) {
-            if (! isset($sources[$stale])) {
-                $transaction->remove($stale);
-            }
-        }
-        $transaction->commit();
-
-        return $directory;
-    }
-
-    /**
      * Adopts what a save (or a proven no-op) established as the new baseline.
      */
     private function adoptWritten(string $dataSource, string $mapPayload, string $eventPayload): void
