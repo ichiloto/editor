@@ -3373,7 +3373,7 @@ class ProjectValidator
     array $commonEventStack = [],
   ): array
   {
-    $context = ['npcIds' => $npcIds, 'mapId' => $mapId, 'npcIdsByMap' => $npcIdsByMap];
+    $context = ['map' => ScriptMapState::startOn($mapId, $npcIds), 'npcIdsByMap' => $npcIdsByMap];
 
     return $this->walkEventCommands($commands, $where, $known, $context, $commonEventStack);
   }
@@ -3383,14 +3383,13 @@ class ProjectValidator
    * Independent entry points receive a fresh context through checkCommands().
    * @param array<int, mixed> $commands
    * @param array<string, string[]> $known
-   * @param array{npcIds: string[]|null, mapId: string|null, npcIdsByMap: array<string, string[]>} $context
+   * @param array{map: ScriptMapState, npcIdsByMap: array<string, string[]>} $context
    * @param string[] $commonEventStack
    * @return Issue[]
    */
   protected function walkEventCommands(array $commands, string $where, array $known, array &$context, array $commonEventStack = []): array
   {
     $issues = [];
-    $npcIdsByMap = $context['npcIdsByMap'];
 
     foreach ($commands as $command) {
       if (! is_array($command)) {
@@ -3411,7 +3410,7 @@ class ProjectValidator
         );
       }
 
-      $issues = [...$issues, ...$this->checkSharedCommandSemantics($command, $where, $context['npcIds'], $context['mapId'])];
+      $issues = [...$issues, ...$this->checkSharedCommandSemantics($command, $where, $context['map']->npcIds, $context['map']->description)];
 
       $named = match ($type) {
         'give_item' => ['inventory', 'item', 'item'],
@@ -3488,20 +3487,19 @@ class ProjectValidator
       }
 
       if ($type === 'parallel') {
-        foreach ((array) ($command['lanes'] ?? []) as $lane) {
-          if (! is_array($lane)) {
-            continue;
-          }
+        [$laneIssues, $context['map']] = $this->walkParallelLanes(
+          $command,
+          $context['map'],
+          $context['npcIdsByMap'],
+          $commonEventStack,
+          function (array $laneCommands, ScriptMapState $laneStart) use (&$context, $where, $known, $commonEventStack): array {
+            $context['map'] = $laneStart;
+            $laneIssues = $this->walkEventCommands($laneCommands, $where, $known, $context, $commonEventStack);
 
-          $laneCommands = array_is_list($lane) ? $lane : (array) ($lane['commands'] ?? []);
-          $issues = [...$issues, ...$this->walkEventCommands(
-            $laneCommands,
-            $where,
-            $known,
-            $context,
-            $commonEventStack,
-          )];
-        }
+            return [$laneIssues, $context['map']];
+          },
+        );
+        $issues = [...$issues, ...$laneIssues];
       }
 
       // Alternative arms start on the same map, not at the end of a sibling arm.
@@ -3523,19 +3521,12 @@ class ProjectValidator
         if (CommandMapContext::canSkipArms($command)) {
           $branchContexts[] = $context;
         }
-        $this->mergeCommandMapContexts($context, $branchContexts);
+        // A command after a branch can address only NPCs present on every possible map.
+        $context['map'] = ScriptMapState::mergeStates(array_column($branchContexts, 'map'));
       }
 
       if ($type === 'transfer') {
-        $destination = trim(strval($command['map'] ?? ''));
-
-        if ($destination !== '' && array_key_exists($destination, $npcIdsByMap)) {
-          $context['mapId'] = $destination;
-          $context['npcIds'] = $npcIdsByMap[$destination];
-        } else {
-          $context['mapId'] = $destination !== '' ? $destination : $context['mapId'];
-          $context['npcIds'] = null;
-        }
+        $context['map'] = $context['map']->transferTo(trim(strval($command['map'] ?? '')), $context['npcIdsByMap']);
       }
     }
 
@@ -3543,17 +3534,51 @@ class ProjectValidator
   }
 
   /**
-   * A command after a branch can address only NPCs present on every possible map.
-   * Unknown map contents remain unknown rather than inventing an empty NPC list.
-   * @param array{mapId: string|null, npcIds: string[]|null, npcIdsByMap: array<string, string[]>} $context
-   * @param array<array{mapId: string|null, npcIds: string[]|null}> $branches
+   * Walks a parallel command's lanes as the Engine runs them: together, on
+   * the one current map, which a transfer in any lane changes for every lane.
+   * Each lane starts on the incoming map or any map a sibling lane transfers
+   * to, and its own transfers can be overtaken by a sibling's. The block ends
+   * where its transferring lanes can finish, or where it started when no
+   * lane transfers.
+   *
+   * @param array<string, mixed> $command The parallel command.
+   * @param array<string, string[]> $npcIdsByMap Each known map's NPCs.
+   * @param string[] $commonEventStack Reusable event scripts being followed.
+   * @param callable(array<int, mixed>, ScriptMapState): array{Issue[], ScriptMapState} $walkLane Walks one lane from its start state, returning its issues and end state.
+   * @return array{Issue[], ScriptMapState} The lanes' issues and the state after the block.
    */
-  protected function mergeCommandMapContexts(array &$context, array $branches): void
+  protected function walkParallelLanes(
+    array $command,
+    ScriptMapState $start,
+    array $npcIdsByMap,
+    array $commonEventStack,
+    callable $walkLane,
+  ): array
   {
-    $mapIds = array_unique(array_column($branches, 'mapId'));
-    $context['mapId'] = in_array(null, $mapIds, true) ? null : implode(' or ', $mapIds);
-    $npcLists = array_column($branches, 'npcIds');
-    $context['npcIds'] = in_array(null, $npcLists, true) ? null : array_values(array_intersect(...$npcLists));
+    $lanes = CommandMapContext::getLanes($command);
+    $findCommonEvent = fn(string $id): ?array => $this->commonEventScripts[$id] ?? null;
+    $destinations = array_map(
+      static fn(array $lane): array => CommandMapContext::listTransferDestinations($lane['commands'], $findCommonEvent, array_values($commonEventStack)),
+      $lanes,
+    );
+    $issues = [];
+    $ends = [];
+
+    foreach ($lanes as $index => $lane) {
+      $siblings = array_values(array_unique(array_merge([], ...array_values(array_diff_key($destinations, [$index => true])))));
+      $laneStart = ScriptMapState::mergeStates([
+        $start,
+        ...array_map(static fn(string $map): ScriptMapState => $start->arriveOn($map, $npcIdsByMap), $siblings),
+      ])->setConcurrentMaps([...$start->concurrentMaps, ...$siblings]);
+      [$laneIssues, $end] = $walkLane($lane['commands'], $laneStart);
+      $issues = [...$issues, ...$laneIssues];
+
+      if ($destinations[$index] !== []) {
+        $ends[] = $end;
+      }
+    }
+
+    return [$issues, $ends !== [] ? ScriptMapState::mergeStates($ends)->setConcurrentMaps($start->concurrentMaps) : $start];
   }
 
   /**

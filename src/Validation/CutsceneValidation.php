@@ -188,7 +188,7 @@ trait CutsceneValidation
             }
         }
 
-        $context = ['castIds' => $castIds, 'checkpoints' => $checkpoints, 'npcIds' => $npcIds, 'mapId' => $startMap !== '' ? $startMap : null, 'npcIdsByMap' => $npcIdsByMap, 'seenCheckpoints' => []];
+        $context = ['castIds' => $castIds, 'checkpoints' => $checkpoints, 'map' => ScriptMapState::startOn($startMap !== '' ? $startMap : null, $npcIds), 'npcIdsByMap' => $npcIdsByMap, 'seenCheckpoints' => []];
         foreach ((array) ($data['cast'] ?? []) as $entry) {
             if (is_array($entry) && is_array($entry['at'] ?? null)) {
                 $issues = [...$issues, ...$this->checkCinematicSubject(['subject' => $entry['at']], $where . ' cast', $context)];
@@ -205,7 +205,7 @@ trait CutsceneValidation
      *
      * @param array<int, mixed> $commands
      * @param array<string, string[]> $known
-     * @param array{castIds: string[], checkpoints: string[], npcIds: string[]|null, mapId: string|null, npcIdsByMap: array<string, string[]>, seenCheckpoints: string[]} $context
+     * @param array{castIds: string[], checkpoints: string[], map: ScriptMapState, npcIdsByMap: array<string, string[]>, seenCheckpoints: string[]} $context
      * @return Issue[]
      */
     protected function walkCinematicCommands(
@@ -238,7 +238,7 @@ trait CutsceneValidation
             }
 
             $issues = [...$issues, ...$this->checkSharedCommandSemantics(
-                $command, $where, $context['npcIds'], $context['mapId'], cinematic: true,
+                $command, $where, $context['map']->npcIds, $context['map']->description, cinematic: true,
             )];
 
             $named = match ($type) {
@@ -316,10 +316,20 @@ trait CutsceneValidation
             }
 
             if ($type === 'parallel') {
-                foreach ((array) ($command['lanes'] ?? []) as $lane) {
-                    $laneCommands = is_array($lane) && array_is_list($lane) ? $lane : (is_array($lane) ? (array) ($lane['commands'] ?? []) : []);
-                    $issues = [...$issues, ...$this->walkCinematicCommands($laneCommands, $where, $known, $context, $commonEventStack)];
-                }
+                // Lanes share the stage; only the map follows the Engine's lane timing.
+                [$laneIssues, $context['map']] = $this->walkParallelLanes(
+                    $command,
+                    $context['map'],
+                    $context['npcIdsByMap'],
+                    $commonEventStack,
+                    function (array $laneCommands, ScriptMapState $laneStart) use (&$context, $where, $known, $commonEventStack): array {
+                        $context['map'] = $laneStart;
+                        $laneIssues = $this->walkCinematicCommands($laneCommands, $where, $known, $context, $commonEventStack);
+
+                        return [$laneIssues, $context['map']];
+                    },
+                );
+                $issues = [...$issues, ...$laneIssues];
             }
 
             foreach (['then', 'else', 'cancel'] as $arm) {
@@ -335,9 +345,7 @@ trait CutsceneValidation
             }
 
             if ($type === 'transfer') {
-                $destination = trim(strval($command['map'] ?? ''));
-                $context['mapId'] = $destination !== '' ? $destination : $context['mapId'];
-                $context['npcIds'] = $destination !== '' && array_key_exists($destination, $context['npcIdsByMap']) ? $context['npcIdsByMap'][$destination] : null;
+                $context['map'] = $context['map']->transferTo(trim(strval($command['map'] ?? '')), $context['npcIdsByMap']);
             }
         }
 
@@ -371,7 +379,7 @@ trait CutsceneValidation
      * Event files, cast ids, current-map NPCs, and recursion safety.
      *
      * @param array<string, string[]> $known
-     * @param array{castIds: string[], checkpoints: string[], npcIds: string[]|null, mapId: string|null, npcIdsByMap: array<string, string[]>, seenCheckpoints: string[]} $context
+     * @param array{castIds: string[], checkpoints: string[], map: ScriptMapState, npcIdsByMap: array<string, string[]>, seenCheckpoints: string[]} $context
      * @param string[] $commonEventStack
      * @return Issue[]
      */
@@ -420,7 +428,7 @@ trait CutsceneValidation
      * NPC on the map the cinematic is on.
      *
      * @param array<string, mixed> $command
-     * @param array{castIds: string[], checkpoints: string[], npcIds: string[]|null, mapId: string|null, npcIdsByMap: array<string, string[]>, seenCheckpoints: string[]} $context
+     * @param array{castIds: string[], checkpoints: string[], map: ScriptMapState, npcIdsByMap: array<string, string[]>, seenCheckpoints: string[]} $context
      * @return Issue[]
      */
     protected function checkCinematicSubject(array $command, string $where, array $context): array
@@ -436,8 +444,8 @@ trait CutsceneValidation
         if ($kind === 'npc') {
             $npcId = trim(strval($fields['npcId'] ?? $fields['id'] ?? ''));
 
-            if ($npcId !== '' && $context['npcIds'] !== null && ! in_array($npcId, $context['npcIds'], true)) {
-                return [Issue::error($where, sprintf('It addresses NPC "%s", which is not on %s.', $npcId, $context['mapId'] ?? '(unknown map)'), 'Use a stable NPC id from the map the cinematic is on at that point.')];
+            if ($npcId !== '' && $context['map']->npcIds !== null && ! in_array($npcId, $context['map']->npcIds, true)) {
+                return [Issue::error($where, sprintf('It addresses NPC "%s", which is not on %s.', $npcId, $context['map']->description ?? '(unknown map)'), 'Use a stable NPC id from the map the cinematic is on at that point.')];
             }
         }
 
@@ -445,7 +453,7 @@ trait CutsceneValidation
     }
 
     /**
-     * @param array{castIds: string[], checkpoints: string[], npcIds: string[]|null, mapId: string|null, npcIdsByMap: array<string, string[]>, seenCheckpoints: string[]} $context
+     * @param array{castIds: string[], checkpoints: string[], map: ScriptMapState, npcIdsByMap: array<string, string[]>, seenCheckpoints: string[]} $context
      * @return Issue[]
      */
     protected function checkStagedActorReference(string $actorId, string $where, array $context): array

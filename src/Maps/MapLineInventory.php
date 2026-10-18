@@ -237,12 +237,17 @@ final class MapLineInventory
      * A reusable event script it runs is followed inline, without moving
      * anything, for the map it leaves the caller on and the scripts it runs.
      *
+     * A parallel block's lanes run together on one current map, as
+     * {@see CommandMapContext} describes, so each lane can also be on any
+     * map a sibling lane transfers to.
+     *
      * @param list<int|string> $path The list's path in its file.
      * @param list<string>|null $context
      * @param list<string> $stack Reusable event scripts being followed.
+     * @param list<string> $concurrent Maps a concurrent parallel lane can transfer to at any point.
      * @return list<string>|null
      */
-    private function walkCommands(mixed $commands, array $path, ?array $context, ?string $file, array $stack = []): ?array
+    private function walkCommands(mixed $commands, array $path, ?array $context, ?string $file, array $stack = [], array $concurrent = []): ?array
     {
         if (! is_array($commands)) {
             return $context;
@@ -259,19 +264,27 @@ final class MapLineInventory
             }
 
             if ($type === 'sequence') {
-                $context = $this->walkCommands($command['commands'] ?? [], [...$at, 'commands'], $context, $file, $stack);
+                $context = $this->walkCommands($command['commands'] ?? [], [...$at, 'commands'], $context, $file, $stack, $concurrent);
             }
 
             if ($type === 'parallel') {
+                $lanes = CommandMapContext::getLanes($command);
+                $findCommonEvent = fn(string $id): ?array => is_array($this->commonEvents[$id]['commands'] ?? null)
+                    ? $this->commonEvents[$id]['commands']
+                    : null;
+                $destinations = array_map(
+                    static fn(array $lane): array => CommandMapContext::listTransferDestinations($lane['commands'], $findCommonEvent, $stack),
+                    $lanes,
+                );
+                // The block ends where a transferring lane can leave it, or where it started.
                 $ends = [];
-                foreach ((array) ($command['lanes'] ?? []) as $laneIndex => $lane) {
-                    if (! is_array($lane)) {
-                        continue;
+                foreach ($lanes as $laneIndex => $lane) {
+                    $siblings = array_values(array_unique(array_merge([], ...array_values(array_diff_key($destinations, [$laneIndex => true])))));
+                    $start = self::mergeContexts([$context, ...array_map(self::getTransferContext(...), $siblings)]);
+                    $end = $this->walkCommands($lane['commands'], [...$at, ...$lane['path']], $start, $file, $stack, array_values(array_unique([...$concurrent, ...$siblings])));
+                    if ($destinations[$laneIndex] !== []) {
+                        $ends[] = $end;
                     }
-                    [$laneCommands, $lanePath] = array_is_list($lane)
-                        ? [$lane, [...$at, 'lanes', $laneIndex]]
-                        : [$lane['commands'] ?? [], [...$at, 'lanes', $laneIndex, 'commands']];
-                    $ends[] = $this->walkCommands($laneCommands, $lanePath, $context, $file, $stack);
                 }
                 if ($ends !== []) {
                     $context = self::mergeContexts($ends);
@@ -282,7 +295,7 @@ final class MapLineInventory
                 $id = trim(strval($command['id'] ?? ''));
                 $this->commonEventStarts[$id][] = $context;
                 if (isset($this->commonEvents[$id]) && ! in_array($id, $stack, true)) {
-                    $context = $this->walkCommands($this->commonEvents[$id]['commands'], [], $context, null, [...$stack, $id]);
+                    $context = $this->walkCommands($this->commonEvents[$id]['commands'], [], $context, null, [...$stack, $id], $concurrent);
                 }
             }
 
@@ -290,7 +303,7 @@ final class MapLineInventory
             if ($arms !== []) {
                 $ends = [];
                 foreach ($arms as $arm) {
-                    $ends[] = $this->walkCommands($arm['commands'], [...$at, ...$arm['path']], $context, $file, $stack);
+                    $ends[] = $this->walkCommands($arm['commands'], [...$at, ...$arm['path']], $context, $file, $stack, $concurrent);
                 }
                 if (CommandMapContext::canSkipArms($command)) {
                     $ends[] = $context;
@@ -303,7 +316,7 @@ final class MapLineInventory
                 if ($file !== null && $destination === $this->edit->mapId) {
                     $this->shiftPoint($file, $at, $command);
                 }
-                $context = $destination !== '' ? [$destination] : null;
+                $context = self::mergeContexts(array_map(self::getTransferContext(...), [$destination, ...$concurrent]));
                 $this->transferContexts[] = $context;
             }
         }
@@ -516,6 +529,17 @@ final class MapLineInventory
     private static function formatKey(array $path): string
     {
         return implode("\0", $path);
+    }
+
+    /**
+     * The context a transfer arrives in: its map, or an unknown map when it
+     * names none.
+     *
+     * @return list<string>|null
+     */
+    private static function getTransferContext(string $destination): ?array
+    {
+        return $destination !== '' ? [$destination] : null;
     }
 
     /**
