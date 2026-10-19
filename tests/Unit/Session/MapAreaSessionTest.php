@@ -163,7 +163,7 @@ it('renames and deletes areas, and binds an event to one, through the rows both 
     $session->createArea('test-map', $revision(), 'porch', ['cells' => [[1, 0]]]);
     $areaRow = static fn(int $index, string $field): array => findLandmarkRow($session, ['target' => 'map-areas', 'field' => $field, 'index' => $index]);
 
-    expect($areaRow(0, 'id'))->toMatchArray(['kind' => 'text', 'raw' => 'yard', 'depth' => 1])
+    expect($areaRow(0, 'id'))->toMatchArray(['kind' => 'text', 'raw' => 'yard', 'depth' => 1, 'list' => ['index' => 0], 'listAddsOnMap' => true])
         ->and($areaRow(1, 'cells')['value'])->toBe('1 cell in 1 place');
 
     $session->applyInspector('test-map', $revision(), $areaRow(0, 'id')['key'], 'garden');
