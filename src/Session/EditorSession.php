@@ -65,6 +65,7 @@ use Ichiloto\Editor\Field\NpcInspector;
 use Ichiloto\Editor\Field\NpcRefusal;
 use Ichiloto\Editor\Field\ProjectNpc;
 use Ichiloto\Editor\History\Command;
+use Ichiloto\Editor\History\GenericCommand;
 use Ichiloto\Editor\History\CommandHistory;
 use Ichiloto\Editor\Inspector\InputControlType;
 use Ichiloto\Editor\Inspector\InputControl;
@@ -87,6 +88,7 @@ use Ichiloto\Editor\Maps\MapReferences;
 use Ichiloto\Editor\Maps\TilePalette;
 use Ichiloto\Editor\Maps\TreeBrush;
 use Ichiloto\Editor\Maps\SaveManifestStep;
+use Ichiloto\Editor\Maps\SaveMigrationRegistration;
 use Ichiloto\Editor\Maps\SaveRelocationPlanner;
 use Ichiloto\Editor\History\SourceSetCommand;
 use Ichiloto\Editor\History\CommandGroup;
@@ -678,7 +680,7 @@ final class EditorSession
             'events' => $events,
             'npcs' => $npcs,
             'worldObjects' => WorldObjectAuthoring::readEntries($map),
-            'areas' => $this->describeAreas($map),
+            ...$this->describeMapAreas($map),
             'tileLayers' => $map->describeTileLayers(),
             'physicalOccupancy' => $map->hasMapDataField([MapPhysicalOccupancy::DATA_KEY]),
             'occupancy' => PhysicalOccupancyEditor::readOccupancy($map),
@@ -2116,6 +2118,21 @@ final class EditorSession
         $command = $this->runEdit(static fn(): ?Command => $change(new MapAreaAuthoring($map)));
 
         return ['revision' => $this->getMapRevision($map), 'changed' => $command !== null];
+    }
+
+    /**
+     * The map's areas for a map read: an unreadable areas block leaves the
+     * rest of the map readable, with its reason in `areasIssue`.
+     *
+     * @return array{areas: list<array<string, mixed>>, areasIssue?: string}
+     */
+    private function describeMapAreas(ProjectMap $map): array
+    {
+        try {
+            return ['areas' => $this->describeAreas($map)];
+        } catch (SessionRefusal $refusal) {
+            return ['areas' => [], 'areasIssue' => $refusal->getMessage()];
+        }
     }
 
     /**
@@ -5536,6 +5553,39 @@ final class EditorSession
     }
 
     /**
+     * Registers the project's own save migration class as the next step of
+     * its save compatibility manifest: the content version rises by exactly
+     * one and saves made before it run the class as they load. The step names
+     * the class alone, as the Engine reads a step as a class or as declared
+     * position edits, never both. The class must load from the project (its
+     * own vendor/autoload.php) and implement the Engine's
+     * ContentMigrationInterface; the staged manifest is read back as the game
+     * reads it before it is written. One undo step. Inside a change set it is
+     * undone with the change set, and a change set that also moves saves off
+     * map cells is refused whole.
+     *
+     * @return array{from: int, to: int, class: string, contentVersion: int}
+     * @throws SessionRefusal When the class is not named or would not load as a migration, or the manifest cannot be
+     *     read or rewritten; nothing is written.
+     */
+    public function registerSaveMigration(string $class): array
+    {
+        try {
+            $registration = SaveMigrationRegistration::plan($this->workspace->projectRoot, $this->workspace->projectId, $class);
+            $plan = $registration['plan'];
+            $plan->apply();
+        } catch (RuntimeException $refusal) {
+            throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+        }
+        $this->history->record(new GenericCommand('Register save migration', static fn() => $plan->apply(), static fn() => $plan->revert()));
+        if ($this->changeSet !== null) {
+            $this->changeSet['migrationRegistered'] = true;
+        }
+
+        return ['from' => $registration['from'], 'to' => $registration['to'], 'class' => $registration['class'], 'contentVersion' => $registration['to']];
+    }
+
+    /**
      * Opens a change set: edits made from here on are written only by
      * {@see commitChanges()}, and only when the project they leave is valid.
      * This is the write path for anyone changing maps without an author
@@ -5623,6 +5673,9 @@ final class EditorSession
         }
         $reason = match (true) {
             $blocking !== [] => sprintf('%d error%s the player would meet.', count($blocking), count($blocking) === 1 ? '' : 's'),
+            // A manifest step is a migration class or declared position edits, never both.
+            $relocations !== [] && ($changes['migrationRegistered'] ?? false) => 'This change set registers a save migration class and moves saves off cells a changed map now takes. '
+                . 'The Engine has no save migration step that does both, so the change set is not written. Register the migration and change the map in separate change sets.',
             $relocations !== [] && ! $relocateSaves => 'Saves may stand where a changed map is now solid; allow them to move to open floor, or change the map.',
             default => null,
         };

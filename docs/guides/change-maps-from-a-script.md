@@ -174,6 +174,24 @@ so an area made earlier in the batch can be bound and anchored to before
 anything is written. Row and column inserts move areas with the lines; a
 removal through one of an area's exact cells is refused until it is reshaped.
 
+## Save Migrations
+
+`saveCompatibility.appendStep {class}` registers the project's own save
+migration class as the next step of `assets/Data/save-compatibility.php`:
+`contentVersion` rises by exactly one, and the step is
+`['from' => N, 'to' => N + 1, 'class' => ...]`. The class must load through
+the project's own `vendor/autoload.php` and implement the Engine's
+`ContentMigrationInterface`; the staged manifest is read back as the game
+reads it, so a class that does not load or is not a migration is refused
+with nothing written, as is a manifest the source-preserving writer cannot
+rewrite. It is one undo step, and inside a batch it is undone with the batch.
+
+The Engine reads a step as a migration class or as declared position edits,
+never both. So a batch that registers a class and also changes a map in a
+way that moves saves (the relocations `changes.commit` reports) is refused
+whole, saying so; register the migration and change the map in separate
+batches.
+
 ## Which Request Makes Which Change
 
 | Change | Request |

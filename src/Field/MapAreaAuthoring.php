@@ -49,7 +49,12 @@ final readonly class MapAreaAuthoring
      */
     public static function readEntries(ProjectMap $map): array
     {
-        $entries = $map->getMapDataField([self::KEY]) ?? [];
+        // A map without the block has no areas yet; a block written as null is
+        // an authored declaration the Engine refuses, never an empty list.
+        if (! $map->hasMapDataField([self::KEY])) {
+            return [];
+        }
+        $entries = $map->getMapDataField([self::KEY]);
         if (! is_array($entries) || ! array_is_list($entries) || array_any($entries, static fn($entry): bool => ! is_array($entry))) {
             throw new MapAreaRefusal(sprintf('%s: areas must be a list of declarations; it cannot be edited as areas.', $map->mapId));
         }
