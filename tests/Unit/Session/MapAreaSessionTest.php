@@ -202,3 +202,19 @@ it('makes an area of selected cells under the first free id, writing a filled re
         ])
         ->and(fn() => EditorSession::readAreaShape(['cells' => 'everywhere']))->toThrow(SessionRefusal::class, 'Name the area');
 });
+
+it('refuses an areas block written as null or as something other than a list, leaving the source as it is', function (string $block) {
+    [, $file, $session] = createLandmarkProject("'areas' => {$block},");
+    $source = (string) file_get_contents($file);
+    $revision = $session->readMap('test-map')['revision'];
+
+    expect(fn() => $session->readAreas('test-map'))->toThrow(SessionRefusal::class, 'areas must be a list of declarations')
+        ->and(fn() => $session->createArea('test-map', $revision, 'yard', ['cells' => [[0, 1]]]))->toThrow(SessionRefusal::class, 'areas must be a list of declarations')
+        ->and(fn() => $session->createArea('test-map', $revision, null, ['cells' => [[0, 1]]]))->toThrow(SessionRefusal::class, 'areas must be a list of declarations')
+        ->and(array_filter($session->readInspector('test-map')['rows'], static fn(array $row): bool => ($row['key']['target'] ?? null) === 'map-areas'))->toBe([])
+        ->and(array_column(array_filter($session->readInspector('test-map')['rows'], static fn(array $row): bool => $row['label'] === '! Read-only'), 'value'))
+            ->toContain('test-map: areas must be a list of declarations; it cannot be edited as areas.')
+        ->and($session->readMap('test-map'))->toMatchArray(['areas' => [], 'areasIssue' => 'test-map: areas must be a list of declarations; it cannot be edited as areas.'])
+        ->and($session->hasUnsavedChanges())->toBeFalse()
+        ->and((string) file_get_contents($file))->toBe($source);
+})->with(['null' => ['null'], 'a string' => ["'yard'"], 'a keyed array' => ["['yard' => ['id' => 'yard']]"]]);

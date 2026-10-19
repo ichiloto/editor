@@ -678,7 +678,7 @@ final class EditorSession
             'events' => $events,
             'npcs' => $npcs,
             'worldObjects' => WorldObjectAuthoring::readEntries($map),
-            'areas' => $this->describeAreas($map),
+            ...$this->describeMapAreas($map),
             'tileLayers' => $map->describeTileLayers(),
             'physicalOccupancy' => $map->hasMapDataField([MapPhysicalOccupancy::DATA_KEY]),
             'occupancy' => PhysicalOccupancyEditor::readOccupancy($map),
@@ -2116,6 +2116,21 @@ final class EditorSession
         $command = $this->runEdit(static fn(): ?Command => $change(new MapAreaAuthoring($map)));
 
         return ['revision' => $this->getMapRevision($map), 'changed' => $command !== null];
+    }
+
+    /**
+     * The map's areas for a map read: an unreadable areas block leaves the
+     * rest of the map readable, with its reason in `areasIssue`.
+     *
+     * @return array{areas: list<array<string, mixed>>, areasIssue?: string}
+     */
+    private function describeMapAreas(ProjectMap $map): array
+    {
+        try {
+            return ['areas' => $this->describeAreas($map)];
+        } catch (SessionRefusal $refusal) {
+            return ['areas' => [], 'areasIssue' => $refusal->getMessage()];
+        }
     }
 
     /**
