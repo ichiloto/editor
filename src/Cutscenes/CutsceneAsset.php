@@ -707,9 +707,35 @@ final class CutsceneAsset
             return;
         }
 
+        // The files keep their authored key order, as a map's data does: the
+        // asset holds each side as its rewritten source reads back.
+        if ($this->type->hasDataFile()) {
+            $data = $this->alignWithProposedSource($this->dataDocument, $this->loadedData, $data, 'data');
+        }
+
+        $partner = $this->alignWithProposedSource($this->partnerDocument, $this->loadedPartner, $partner, $this->type->partnerNoun());
+
+        if ($data === $this->data && $partner === $this->partner) {
+            return;
+        }
+
         $this->data = $data;
         $this->partner = $partner;
         $this->touchState();
+    }
+
+    /**
+     * Returns one side of the pair in the key order its rewritten source
+     * writes it.
+     *
+     * @param array<array-key, mixed> $loaded What the file holds now.
+     * @param array<array-key, mixed> $value What the side should hold.
+     * @return array<array-key, mixed>
+     * @throws RuntimeException When the source cannot take the change; nothing is changed.
+     */
+    private function alignWithProposedSource(?PhpArraySourceDocument $document, array $loaded, array $value, string $noun): array
+    {
+        return PhpArraySourceDocument::parse($this->proposedSource($document, $loaded, $value, $noun))->alignValue($value);
     }
 
     /**

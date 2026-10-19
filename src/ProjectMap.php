@@ -6,7 +6,6 @@ namespace Ichiloto\Editor;
 
 use Ichiloto\Editor\Cutscenes\Source\ArraySourceWriter;
 use Ichiloto\Editor\Cutscenes\Source\PhpArraySourceDocument;
-use Ichiloto\Editor\Cutscenes\Source\SourceNode;
 use Ichiloto\Editor\Cutscenes\Source\SourcePreservationRefusal;
 use Ichiloto\Editor\Cutscenes\Source\SourceUnreadable;
 use Ichiloto\Editor\Database\PhpDataFile;
@@ -1741,29 +1740,8 @@ final class ProjectMap
         }
 
         $document = $this->assertDataPreservable($next);
-        $this->editableData = $this->alignDataWithSource($document->root(), $next);
+        $this->editableData = $document->alignValue($next);
         $this->touchState();
-    }
-
-    /** Field edits retain authored key positions; ordered lists retain their requested order. */
-    private function alignDataWithSource(SourceNode $node, array $data): array
-    {
-        if ($node->kind !== SourceNode::ARRAY || $node->hasOpaqueKey) {
-            return $data;
-        }
-
-        $ordered = [];
-        foreach ($node->entries as $index => $entry) {
-            $key = $node->isList ? $index : $entry->key;
-            if ($key === null || ! array_key_exists($key, $data)) {
-                continue;
-            }
-            $ordered[$key] = is_array($data[$key])
-                ? $this->alignDataWithSource($entry->value, $data[$key])
-                : $data[$key];
-        }
-
-        return $ordered + $data;
     }
 
     /**
@@ -2277,7 +2255,7 @@ final class ProjectMap
         $this->assertWorldObjectState($layers, $next);
         if ($next !== $this->editableData) {
             $document = $this->assertDataPreservable($next);
-            $next = $this->alignDataWithSource($document->root(), $next);
+            $next = $document->alignValue($next);
         }
         $this->layers = $layers;
         $this->editableData = $next;

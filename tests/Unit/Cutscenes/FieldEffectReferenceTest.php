@@ -95,11 +95,12 @@ it('edits a field effect in place of a legacy animation and its pace, and back',
     setCutsceneField($editor, 'command4Effect', '');
     setCutsceneField($editor, 'command4Animation', 'Slash');
 
+    // The animation the file still holds keeps its authored place.
     expect(libraryOf($editor)->find(CutsceneType::CINEMATIC, 'harbour-lanterns')?->commands()[4] ?? [])->toBe([
         'type' => 'field_animation',
+        'animation' => 'Slash',
         'target' => ['kind' => 'staged_actor', 'id' => 'boat-east'],
         'authoring' => ['note' => 'kept'],
-        'animation' => 'Slash',
     ]);
 });
 

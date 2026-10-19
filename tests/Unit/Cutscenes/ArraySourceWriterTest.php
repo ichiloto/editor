@@ -754,3 +754,19 @@ it('counts a literal named inside another literal as shared, so neither edit cha
         ->and($rewritten)->toContain("\$scene = ['when' => ['type' => 'event', 'name' => 'left'], 'line' => 'Goodbye'];")
         ->and($rewritten)->toContain("  'gate' => \$gate,\n");
 });
+
+it('plans a moving list entry\'s own removals inside the bytes it carries', function () {
+    $source = "<?php\n\nreturn [\n  'steps' => [\n    ['id' => 'a', 'points' => [['x' => 1], ['x' => 2], ['x' => 3]]],\n    ['id' => 'b'],\n    ['id' => 'c'],\n  ],\n];\n";
+    $old = evaluateSource($source);
+    // b and c keep their order, so a is the entry that moves, losing points as it goes.
+    $new = ['steps' => [['id' => 'b'], ['id' => 'c'], ['id' => 'a', 'points' => [['x' => 2]]]]];
+
+    expect(evaluateSource(ArraySourceWriter::rewrite(PhpArraySourceDocument::parse($source), $old, $new)->source))->toBe($new);
+});
+
+it('aligns a value with the key order its source writes, lists keeping their own', function () {
+    $document = PhpArraySourceDocument::parse("<?php\n\$route = ['remember' => 'here', 'waypoints' => [['y' => 1, 'x' => 2]]];\nreturn ['type' => 'move', 'route' => \$route, 'list' => [3, 1]];\n");
+
+    expect($document->alignValue(['list' => [1, 3], 'route' => ['waypoints' => [['x' => 2, 'y' => 1]], 'remember' => 'here'], 'extra' => true, 'type' => 'move']))
+        ->toBe(['type' => 'move', 'route' => ['remember' => 'here', 'waypoints' => [['y' => 1, 'x' => 2]]], 'list' => [1, 3], 'extra' => true]);
+});

@@ -755,6 +755,8 @@ final class ProjectActor
     public function save(): void
     {
         $source = $this->getProposedSource();
+        // The file keeps its authored key order: the actor holds what it reads back as.
+        $this->payload = PhpArraySourceDocument::parse($source)->alignValue($this->payload);
         $transaction = new FileSetTransaction(dirname($this->path));
         $transaction->write($this->path, $source);
         try {

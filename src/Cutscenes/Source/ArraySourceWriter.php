@@ -642,6 +642,41 @@ final class ArraySourceWriter
     }
 
     /**
+     * Plans the patches a value that moves needs, against its current place,
+     * and returns those inside its bytes, last first, for the move to apply
+     * to the bytes it carries. Everything the diff defers to the end --
+     * removals from arrays whose entries share their lines, insertions,
+     * appends -- is planned now, inside the moving bytes, rather than
+     * against bytes the move cuts. A variable defined for the value lives in
+     * the prelude and stays a global edit.
+     *
+     * @param array<int, int|string> $path The value's path.
+     * @return list<array{0: int, 1: int, 2: string}>
+     */
+    private function planPatchesWithin(SourceNode $value, mixed $oldValue, mixed $newValue, array $path, int $start, int $end): array
+    {
+        $deferred = [$this->appends, $this->inserts, $this->sharedLineRemovals];
+        [$this->appends, $this->inserts, $this->sharedLineRemovals] = [[], [], []];
+        $before = count($this->edits);
+        $this->diff($value, $oldValue, $newValue, $path);
+        $this->flushAppends();
+        [$this->appends, $this->inserts, $this->sharedLineRemovals] = $deferred;
+        $inner = [];
+
+        foreach (array_splice($this->edits, $before) as $edit) {
+            if ($edit[0] >= $start && $edit[1] <= $end) {
+                $inner[] = $edit;
+            } else {
+                $this->edits[] = $edit;
+            }
+        }
+
+        usort($inner, static fn(array $a, array $b): int => [$b[0], $b[1]] <=> [$a[0], $a[1]]);
+
+        return $inner;
+    }
+
+    /**
      * Plans removing an entry and re-inserting its own bytes -- with any
      * patches its new value needs applied inside them -- ahead of another
      * position.
@@ -653,28 +688,11 @@ final class ArraySourceWriter
         $entry = $list->entries[$from];
         [$start, $end] = $this->document->blockSpan($entry);
 
-        // Patches for the entry, planned against its current place ...
-        $before = count($this->edits);
-        $this->diff($entry->value, $oldValue, $newValue, [...$path, $from]);
-        $inner = [];
-        $outer = [];
-
-        foreach (array_splice($this->edits, $before) as $edit) {
-            if ($edit[0] >= $start && $edit[1] <= $end) {
-                $inner[] = $edit;
-            } else {
-                // A variable defined for it lives in the prelude and stays global.
-                $outer[] = $edit;
-            }
-        }
-
-        $this->edits = [...$this->edits, ...$outer];
-
-        // ... applied to its own bytes, from the end forward.
+        // Patches for the entry, planned against its current place, applied
+        // to its own bytes from the end forward.
         $block = substr($this->document->source, $start, $end - $start);
-        usort($inner, static fn(array $a, array $b): int => [$b[0], $b[1]] <=> [$a[0], $a[1]]);
 
-        foreach ($inner as [$editStart, $editEnd, $text]) {
+        foreach ($this->planPatchesWithin($entry->value, $oldValue, $newValue, [...$path, $from], $start, $end) as [$editStart, $editEnd, $text]) {
             $block = substr($block, 0, $editStart - $start) . $text . substr($block, $editEnd - $start);
         }
 
