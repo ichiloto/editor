@@ -5826,7 +5826,7 @@ final class EditorSession
             },
             default => 'info',
         };
-        $list = $field['list'] ?? $field['encounterList'] ?? $field['bgmVariantList'] ?? $field['landmarkList'] ?? null;
+        $list = $field['list'] ?? $field['encounterList'] ?? $field['bgmVariantList'] ?? $field['landmarkList'] ?? $field['areaList'] ?? null;
 
         // The terminal nests a row by indenting its label; an interface is given the depth instead.
         $label = (string) ($field['label'] ?? '');

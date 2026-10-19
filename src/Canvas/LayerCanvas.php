@@ -42,6 +42,9 @@ trait LayerCanvas
         if ($this->editingMode === self::MODE_NPC) {
             return ' [NPCs]';
         }
+        if ($this->editingMode === self::MODE_AREA) {
+            return ' [Areas]';
+        }
         foreach ($this->getTerminalCanvasLayers() as $layer) {
             if ($layer['id'] === $this->getActiveCanvasLayer()) {
                 return ' [' . MapLayers::formatLabel($layer['name']) . ']';

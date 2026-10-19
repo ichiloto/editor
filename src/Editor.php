@@ -134,6 +134,7 @@ use InvalidArgumentException;
 final class Editor
 {
     use \Ichiloto\Editor\Canvas\LayerCanvas;
+    use \Ichiloto\Editor\Canvas\AreaCanvas;
     use \Ichiloto\Editor\Canvas\PieceCanvas;
     use \Ichiloto\Editor\Canvas\MapLineCanvas;
     use \Ichiloto\Editor\Canvas\TreeCanvas;
@@ -160,6 +161,7 @@ final class Editor
     private const string MODE_MAP = 'map';
     private const string MODE_EVENT = 'event';
     private const string MODE_NPC = 'npc';
+    private const string MODE_AREA = 'area';
     /** The layer picker's NPCs entry, which enters NPC mode. */
     private const string NPC_LAYER_ENTRY = 'npcs';
     private const string DATABASE_CATEGORY_ACTORS = 'actors';
@@ -1375,6 +1377,7 @@ final class Editor
             KeyBinding::when($this->isNormalModeCommand('m'), fn() => $this->setEditingMode(self::MODE_MAP), 'm', 'Canvas: Map mode (paint tiles)'),
             KeyBinding::when($this->isNormalModeCommand('e'), fn() => $this->setEditingMode(self::MODE_EVENT), 'e', 'Canvas: Event mode (paint event markers)'),
             KeyBinding::when($this->isNormalModeCommand('n'), fn() => $this->setEditingMode(self::MODE_NPC), 'n', 'Canvas: NPC mode (place and edit the map\'s NPCs)'),
+            KeyBinding::when($this->isNormalModeCommand('a'), fn() => $this->setEditingMode(self::MODE_AREA), 'a', 'Canvas: Area mode (select cells for the map\'s named areas: Space a cell, r a rectangle\'s corners, Enter makes or applies)'),
             KeyBinding::when($this->isNormalModeCommand('c'), $this->openCharacterMap(...), 'c', 'Canvas: open the character map'),
             KeyBinding::when($this->isNormalModeCommand('o'), $this->openColorPicker(...), 'o', 'Canvas: colour picker (4-bit ANSI palette; sets the brush colour)'),
             KeyBinding::when($this->isNormalModeCommand('b'), fn() => $this->selectCanvasTool(CanvasTool::BRUSH), 'b', 'Canvas: Brush tool'),
@@ -1750,6 +1753,11 @@ final class Editor
             return;
         }
 
+        // Area mode owns its letters, and a typed area id owns every key.
+        if ($this->editingMode === self::MODE_AREA && $this->handleAreaModeInput($input)) {
+            return;
+        }
+
         if ($input === "\n" || $input === "\r") {
             $this->applyCanvasToolAtCursor();
             return;
@@ -1774,7 +1782,7 @@ final class Editor
                 return;
             }
 
-            if ($this->editingMode === self::MODE_NPC) {
+            if ($this->editingMode === self::MODE_NPC || $this->editingMode === self::MODE_AREA) {
                 $this->setEditingMode(self::MODE_MAP);
                 return;
             }
@@ -3478,10 +3486,11 @@ final class Editor
         $this->editingMode = $mode;
         $this->showEventOverlay = $mode === self::MODE_EVENT;
 
-        if ($mode === self::MODE_NPC) {
-            // NPC mode owns its own letter commands; Paint cannot persist.
+        if ($mode === self::MODE_NPC || $mode === self::MODE_AREA) {
+            // NPC and Area modes own their own letter commands; Paint cannot persist.
             $this->inputMode = self::INPUT_NORMAL;
         }
+        $this->resetAreaSelection();
         $this->selectedInspectorFieldIndex = 0;
         $this->isInspectorEditing = false;
         $this->inspectorEditBuffer = '';
@@ -3500,6 +3509,7 @@ final class Editor
         $this->statusMessage = match ($mode) {
             self::MODE_EVENT => 'Event mode active.',
             self::MODE_NPC => 'NPC mode active. Enter selects or creates, M moves, D duplicates, L lists, Del removes, Esc exits.',
+            self::MODE_AREA => 'Area mode active. Space selects a cell, r marks a rectangle\'s corners, Enter makes an area or picks one up, Del deletes, Esc exits.',
             default => 'Map mode active.',
         };
         $this->renderCanvasArea();
@@ -4749,6 +4759,9 @@ final class Editor
      */
     private function getCanvasPreviewCells(): array
     {
+        if ($this->editingMode === self::MODE_AREA) {
+            return $this->getAreaPreviewCells();
+        }
         $cells = $this->getPiecePreviewCells();
         if ($cells !== [] || ! is_array($this->canvasToolAnchor)
             || ! in_array($this->canvasTool, [CanvasTool::LINE, CanvasTool::RECTANGLE, CanvasTool::FILLED_RECTANGLE], true)) {
@@ -14680,6 +14693,13 @@ final class Editor
                 $this->isDestinationSpawnSelectionOpen => 'Arrows:Move  Enter:Select Spawn  Esc:Cancel',
                 // Longest that fits wins; the overlay (?) has the full table.
                 $this->editingMode === self::MODE_NPC && $this->npcCreationInProgress !== null => 'Enter:Create  Esc:Cancel',
+                $this->editingMode === self::MODE_AREA && $this->areaIdBuffer !== null => 'Type the id  Enter:Make  Esc:Cancel',
+                $this->editingMode === self::MODE_AREA => $this->fitHelp(
+                    $layout['centerWidth'],
+                    'Space:Cell  r:Rectangle  Enter:Make/Pick Up  n:Next  c:Clear  Del:Delete  Esc:Exit',
+                    'Space  r  Enter  n  c  Del  Esc:Exit',
+                    'Esc:Exit',
+                ),
                 $this->editingMode === self::MODE_NPC => $this->fitHelp(
                     $layout['centerWidth'],
                     'Enter:Select/Create  M:Move  D:Dup  L:List  Del:Delete  Esc:Exit',

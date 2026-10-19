@@ -155,3 +155,35 @@ it('moves area cells with inserted lines, and stops a removal through an area\'s
     expect(fn() => $session->removeMapLines('test-map', $session->readMap('test-map')['revision'], 'x', 2, 1))
         ->toThrow(SessionRefusal::class, 'areas.1.area.cells.1.0 (area porch has a cell on a removed line)');
 });
+
+it('renames and deletes areas, and binds an event to one, through the rows both editors share', function () {
+    [, , $session] = createLandmarkProject();
+    $revision = static fn(): int => $session->readMap('test-map')['revision'];
+    $session->createArea('test-map', $revision(), 'yard', ['x' => 0, 'y' => 1, 'width' => 2, 'height' => 1]);
+    $session->createArea('test-map', $revision(), 'porch', ['cells' => [[1, 0]]]);
+    $areaRow = static fn(int $index, string $field): array => findLandmarkRow($session, ['target' => 'map-areas', 'field' => $field, 'index' => $index]);
+
+    expect($areaRow(0, 'id'))->toMatchArray(['kind' => 'text', 'raw' => 'yard', 'depth' => 1])
+        ->and($areaRow(1, 'cells')['value'])->toBe('1 cell in 1 place');
+
+    $session->applyInspector('test-map', $revision(), $areaRow(0, 'id')['key'], 'garden');
+    $subject = findLandmarkRow($session, ['target' => 'event-subject', 'marker' => 'E'], 'E');
+    expect($subject['options'])->toBe(['', 'world_object:old-tower', 'area:garden', 'area:porch'])
+        ->and($subject['optionLabels'])->toBe(['Its own cells', 'World object old-tower', 'Area garden', 'Area porch']);
+
+    $session->applyInspector('test-map', $revision(), $subject['key'], 'area:garden');
+    expect(getSessionMap($session)->getEventTriggerArea('E')?->cells)->toBe([[0, 1], [1, 1]])
+        ->and(fn() => $session->removeInspectorListEntry('test-map', $revision(), $areaRow(0, 'cells')['key']))
+            ->toThrow(SessionRefusal::class, 'Area garden is named by test-map event E');
+
+    // Its own cells again: it keeps triggering where the area put it.
+    $session->applyInspector('test-map', $revision(), $subject['key'], '');
+    expect(getSessionMap($session)->getEventDefinition('E'))->not->toHaveKey('subject')
+        ->and(getSessionMap($session)->getEventArea('E')?->cells)->toBe([[0, 1], [1, 1]]);
+
+    $removed = $session->removeInspectorListEntry('test-map', $revision(), $areaRow(1, 'id')['key']);
+    expect($removed['message'])->toBe('Deleted area porch.')
+        ->and(array_column($session->readAreas('test-map')['areas'], 'id'))->toBe(['garden'])
+        ->and(fn() => $session->addInspectorListEntry('test-map', $revision(), findLandmarkRow($session, ['target' => 'map-areas'])['key']))
+            ->toThrow(SessionRefusal::class, 'Select cells on the map, then make an area of them.');
+});
