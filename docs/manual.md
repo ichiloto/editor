@@ -602,6 +602,7 @@ and the GUI itself are not delivered by this TUI boundary correction. See the
 | `m` | Switch to Map mode (paint tiles) |
 | `e` | Switch to Event mode (paint event markers) |
 | `n` / `F3` | Toggle NPC mode (place and edit the map's NPCs) |
+| `a` | Switch to Area mode (select cells for the map's named areas; see [Area Mode](#area-mode)) |
 | `c` | Open the character map |
 | `P` | Choose a tileset piece to place (see [Pieces](#pieces)) |
 | `T` | Draw the tiles for the glyphs already on this layer (see [Pieces](#pieces)) |
@@ -816,6 +817,34 @@ drop, coordinates off the map, an NPC on an event tile it would make
 unreachable, wander areas that leave the map or that the NPC starts outside,
 a script shadowing dialogue, unknown fields - as errors where the authored
 content cannot happen and warnings where it can but probably not as meant.
+
+### Area Mode
+
+A map's named areas are territory it owns, with no art, passage or discovery
+of their own: an event can be bound to an area as its subject, covering the
+area's cells, and a landmark can be anchored to one. `a` enters Area mode. The
+cells you select show in reverse video over the map's own glyphs; nothing
+here paints a tile or a marker.
+
+| Key | Action |
+| --- | --- |
+| `Space` | Add the cursor's cell to the selection, or take it away |
+| `r` | Mark one corner of a rectangle; move, then `r` again adds the whole rectangle |
+| `Enter` | With cells selected, make an area of them (type its id, then `Enter`), or apply them to the area picked up; with nothing selected, pick up the area under the cursor to change its cells |
+| `n` | Step to the next area sharing the cursor's cell |
+| `c` | Clear the selection |
+| `Del` | Delete the area picked up, or the one under the cursor - refused, naming them, while an event or landmark names it |
+| `Esc` | Drop a rectangle corner, then the selection, then leave Area mode |
+
+A selection that fills a rectangle exactly is written as one (`x`, `y`,
+`width`, `height`); any other selection is written as its exact cells. An id
+is lowercase letters, digits, `.`, `_` and `-`, starting with a letter. The
+Inspector lists the map's areas under **Areas**: rename one there, and the
+events and landmarks naming it follow in the same undo step, or remove it.
+An event's **Bound To** row chooses its own painted cells, a world object or an
+area; choosing its own cells again keeps it on the cells its subject gave it.
+Inserting or removing map rows and columns moves areas with the lines; a
+removal through one of an area's exact cells is refused until you reshape it.
 
 ### Canvas Tools
 

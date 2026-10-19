@@ -47,7 +47,8 @@ final readonly class MapAreaFields
         $fields = [['label' => sprintf('Areas · %d', count($areas)), 'value' => count($areas) === 0 ? 'Select cells on the map to make one' : '',
             'editable' => false, 'target' => self::TARGET]];
         foreach ($areas as $index => $area) {
-            $key = ['target' => self::TARGET, 'index' => $index, 'areaList' => ['index' => $index]];
+            // Entries are removed here and made on the map, from selected cells.
+            $key = ['target' => self::TARGET, 'index' => $index, 'areaList' => ['index' => $index], 'listAddsOnMap' => true];
             $references = MapAreaAuthoring::describeReferences($map, $area['id']);
             array_push($fields,
                 ['label' => '  Area', 'value' => $area['id'], 'control' => new InputControl(InputControlType::TEXT, $area['id']),

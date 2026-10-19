@@ -5869,6 +5869,8 @@ final class EditorSession
             // A list entry's row: which entry (and nested entry) it is part of, and its name within it.
             'entry' => is_array($field['entry'] ?? null) ? array_values($field['entry']) : null,
             'entryLabel' => is_string($field['entryLabel'] ?? null) ? $field['entryLabel'] : null,
+            // A list whose entries are made on the map (from selected cells), never added here.
+            'listAddsOnMap' => ($field['listAddsOnMap'] ?? false) === true ? true : null,
             'name' => is_string($field['name'] ?? null) ? $field['name'] : null,
             'depth' => $depth,
             // A section heading: a row that only names the rows after it.
