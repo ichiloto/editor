@@ -126,6 +126,29 @@ or with the GUI editor open, these reads give every id a change needs:
 Layers are named by `id` in edits. An event row key looks like
 `{"target": "event", "marker": "C", "path": ["data", "loot"]}`.
 
+## Condition And Write Lines
+
+A conditions or writes row takes one line. Entries are separated by `;`,
+never `&` or a comma, and each entry is `type:name` plus the parts its type
+takes:
+
+| Conditions | Writes |
+| --- | --- |
+| `[!]quest:id[:completed\|active]` | `quest:id[:confirm\|grant]` |
+| `[!]switch:name[:true\|false]` | `switch:name[:true\|false]` |
+| `[!]event:name` | `event:name` |
+| `[!]map_event:map:marker` | `variable:name[:set\|add][:value]` |
+| `[!]variable:name[:op[:value]]`, op one of `==` `!=` `>` `>=` `<` `<=` | |
+| `[!]item:id[:quantity]`, `[!]key_item:id[:quantity]` | |
+
+A leading `!` negates a condition. A name or value that holds `:`, `;` or
+`\` escapes it with a backslash: the event flag `deckers:won` is written
+`event:deckers\:won` (in JSON, `"event:deckers\\:won"`). A line is read only
+as written: a part its type does not take, an unknown type or a value the
+Engine would refuse makes the row refuse the whole line, and nothing changes.
+`event:a & !event:b` is refused, because the event condition takes nothing
+after its name; write `event:a; !event:b`.
+
 ## Which Request Makes Which Change
 
 | Change | Request |

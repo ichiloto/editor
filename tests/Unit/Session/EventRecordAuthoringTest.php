@@ -93,7 +93,7 @@ it('refuses condition and write lines the Engine would not read, and lists the l
     expect(fn() => $session->applyInspector('test-map', $read['revision'], eventRecordRow($read, 'conditions')['key'], 'switch:open; nonsense'))
         ->toThrow(SessionRefusal::class, 'Condition "nonsense" cannot be read')
         ->and(fn() => $session->applyInspector('test-map', $read['revision'], eventRecordRow($read, 'conditions')['key'], 'variable:count:~:3'))
-        ->toThrow(SessionRefusal::class, 'unsupported variable operator "~"')
+        ->toThrow(SessionRefusal::class, 'a variable compares with == != > >= < <=, not "~"')
         ->and(fn() => $session->applyInspector('test-map', $read['revision'], eventRecordRow($read, 'variant0Sets')['key'], 'teleport:home'))
         ->toThrow(SessionRefusal::class, 'Write "teleport:home" cannot be read');
 
