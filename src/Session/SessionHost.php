@@ -171,6 +171,14 @@ final class SessionHost
             'worldObjects.create' => $session->createWorldObject(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
                 self::requireString($params, 'id'), self::requireInt($params, 'x'), self::requireInt($params, 'y'),
                 self::readOptionalString($params, 'resource'), self::readOptionalString($params, 'text')),
+            'areas.read' => $session->readAreas(self::requireString($params, 'map')),
+            'areas.create' => $session->createArea(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
+                self::requireString($params, 'id'), self::requireArray($params, 'area')),
+            'areas.setArea' => $session->setArea(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
+                self::requireString($params, 'id'), self::requireArray($params, 'area')),
+            'areas.rename' => $session->renameArea(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
+                self::requireString($params, 'id'), self::requireString($params, 'to')),
+            'areas.delete' => $session->deleteArea(self::requireString($params, 'map'), self::requireInt($params, 'revision'), self::requireString($params, 'id')),
             'worldObjects.delete' => $session->deleteWorldObject(self::requireString($params, 'map'), self::requireInt($params, 'revision'), self::requireString($params, 'id')),
             'worldObjects.apply' => $session->applyWorldObject(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
                 self::requireString($params, 'id'), self::requireArray($params, 'key'), self::requireString($params, 'value')),
@@ -441,8 +449,8 @@ final class SessionHost
                 self::requireString($params, 'map'),
                 self::requireInt($params, 'revision'),
                 self::requireString($params, 'marker'),
-                array_key_exists('subject', $params) && (is_string($params['subject']) || $params['subject'] === null)
-                    ? $params['subject'] : throw new InvalidRequest('"subject" must be a world object id, or null to unbind.'),
+                array_key_exists('subject', $params) && (is_string($params['subject']) || is_array($params['subject']) || $params['subject'] === null)
+                    ? $params['subject'] : throw new InvalidRequest('"subject" must be {kind, id}, a world object id, or null to unbind.'),
                 array_key_exists('cells', $params) ? self::requireCells($params) : [],
             ),
             'event.bounds' => $session->setEventBounds(

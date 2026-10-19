@@ -6,6 +6,7 @@ namespace Ichiloto\Editor\Maps;
 
 use Ichiloto\Editor\Database\RelativePositionFields;
 use Ichiloto\Editor\Events\CommandMapContext;
+use Ichiloto\Editor\Field\MapAreaAuthoring;
 use Ichiloto\Engine\Events\Triggers\SleepEventTrigger;
 
 /**
@@ -104,6 +105,11 @@ final class MapLineInventory
         $here = [$mapId];
 
         if ($isTarget) {
+            foreach ((array) ($data[MapAreaAuthoring::KEY] ?? []) as $index => $entry) {
+                if (is_array($entry) && is_array($entry['area'] ?? null)) {
+                    $this->shiftNamedArea($file, [MapAreaAuthoring::KEY, $index, 'area'], $entry['area'], strval($entry['id'] ?? $index));
+                }
+            }
             foreach (($data['worldObjects'] ?? []) as $index => $object) {
                 $this->shiftPoint($file, ['worldObjects', $index, 'anchor'], $object['anchor']);
                 foreach (($object['covers']['cells'] ?? []) as $cellIndex => $cell) {
@@ -540,6 +546,41 @@ final class MapLineInventory
         }
         if ($newSize !== $size) {
             $this->shifts[$file][self::formatKey([...$path, $sizeKey])] = ['path' => [...$path, $sizeKey], 'value' => $newSize];
+        }
+    }
+
+    /**
+     * Moves a named area with the lines: a rectangle as an event's area
+     * moves, shrinking with removed lines; exact cells each move with their
+     * line. A cell on a removed line stops the removal, since dropping it
+     * would change the territory the area names; reshape the area first.
+     *
+     * @param list<int|string> $path
+     * @param array<string, mixed> $area
+     */
+    private function shiftNamedArea(string $file, array $path, array $area, string $id): void
+    {
+        if (! array_key_exists('cells', $area)) {
+            $this->shiftArea($file, $path, $area);
+            return;
+        }
+        $axis = $this->edit->axis === 'x' ? 0 : 1;
+        foreach ((array) $area['cells'] as $cellIndex => $cell) {
+            $coordinate = is_array($cell) ? ($cell[$axis] ?? null) : null;
+            if (! is_int($coordinate)) {
+                $this->reportHandEdit($file, [...$path, 'cells', $cellIndex], 'its position is not a whole number');
+                continue;
+            }
+            if ($coordinate < $this->edit->at) {
+                continue;
+            }
+            $cellPath = [...$path, 'cells', $cellIndex, $axis];
+            $shifted = $this->edit->getShiftedCoordinate($coordinate);
+            if ($shifted === null) {
+                $this->reportBlocked($file, $cellPath, sprintf('area %s has a cell on a removed line', $id));
+            } else {
+                $this->shifts[$file][self::formatKey($cellPath)] = ['path' => $cellPath, 'value' => $shifted];
+            }
         }
     }
 

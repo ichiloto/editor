@@ -60,14 +60,17 @@ final readonly class MapLandmarks
     }
 
     /**
-     * What the map's landmarks may anchor to, read by the Engine's own adapter from the map as it stands. Only a
-     * legacy transfer with a stable `id` can be chosen as an anchor.
+     * What the map's landmarks may anchor to, read by the Engine's own adapter from the map as it stands: its
+     * events, world objects, named areas, and legacy transfers with a stable `id`.
      *
      * @throws InvalidArgumentException When world objects cannot be read.
      */
     public static function readAnchors(ProjectMap $map): MapLandmarkAnchors
     {
-        return MapLandmarkAnchors::readMap(self::readResolvedSource($map)['data']);
+        $source = self::readResolvedSource($map);
+
+        // Named areas are read against the physical grid, as the runtime reads them.
+        return MapLandmarkAnchors::readMap($source['data'], $source['tiles']);
     }
 
     /** @return list<int> The number of real cells on each row, so ragged maps keep their shape. */
@@ -120,7 +123,7 @@ final readonly class MapLandmarks
         if (!is_array($anchor) || count($anchor) !== 1) { return null; }
         $kind = array_key_first($anchor);
         $id = $anchor[$kind];
-        return in_array($kind, ['event', 'object', 'trigger'], true) && (is_string($id) || is_int($id)) ? [$kind => (string) $id] : null;
+        return in_array($kind, MapLandmarkCatalog::ANCHOR_KINDS, true) && (is_string($id) || is_int($id)) ? [$kind => (string) $id] : null;
     }
 
     /** A selector's value for an anchor: its kind, a colon, then its id (a marker or an id may itself hold one). */
@@ -134,8 +137,8 @@ final readonly class MapLandmarks
     public static function decodeAnchor(string $value): array
     {
         [$kind, $id] = array_pad(explode(':', $value, 2), 2, '');
-        if (!in_array($kind, ['event', 'object', 'trigger'], true) || $id === '') {
-            throw new InvalidArgumentException('Choose a listed event, world object or legacy transfer.');
+        if (!in_array($kind, MapLandmarkCatalog::ANCHOR_KINDS, true) || $id === '') {
+            throw new InvalidArgumentException('Choose a listed event, world object, area or legacy transfer.');
         }
         return [$kind => $id];
     }
@@ -155,7 +158,7 @@ final readonly class MapLandmarks
             if ($anchor !== null && is_string($entry['id'] ?? null)) { $claimed[self::encodeAnchor($anchor)] = $entry['id']; }
         }
         $described = [];
-        foreach ([['event', $anchors->events], ['object', $anchors->objects], ['trigger', $anchors->triggers]] as [$kind, $table]) {
+        foreach ([['event', $anchors->events], ['object', $anchors->objects], [MapAreaAuthoring::ANCHOR_KIND, $anchors->areas], ['trigger', $anchors->triggers]] as [$kind, $table]) {
             foreach ($table as $id => $anchor) {
                 // A legacy transfer without an id is keyed by its position, which is no identity to keep.
                 if ($kind === 'trigger' && str_starts_with((string) $id, '@')) { continue; }
@@ -174,6 +177,7 @@ final readonly class MapLandmarks
         $kind = (string) array_key_first($anchor);
         $id = (string) $anchor[$kind];
         if ($kind === 'object') { return 'World object ' . $id; }
+        if ($kind === MapAreaAuthoring::ANCHOR_KIND) { return 'Area ' . $id; }
         if ($kind === 'trigger') { return 'Legacy transfer ' . $id; }
         $definition = $this->map->getEventDefinition($id);
         $type = EventTypeCatalog::describeClass(is_string($definition['class'] ?? null) ? $definition['class'] : null);
@@ -197,7 +201,7 @@ final readonly class MapLandmarks
     {
         $kind = (string) array_key_first($anchor);
         if ($kind === 'trigger') { return true; }
-        if ($kind === 'object') { return false; }
+        if ($kind === 'object' || $kind === MapAreaAuthoring::ANCHOR_KIND) { return false; }
         $definition = $this->map->getEventDefinition((string) $anchor[$kind]);
         return is_array($definition) && self::isTransfer($definition);
     }

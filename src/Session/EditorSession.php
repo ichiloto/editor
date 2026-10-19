@@ -22,6 +22,7 @@ use Ichiloto\Editor\Audio\AudioAudition;
 use Ichiloto\Editor\Cutscenes\Preview\PreviewGame;
 use Ichiloto\Editor\Canvas\CanvasTool;
 use Ichiloto\Editor\Canvas\ToolGeometry;
+use Ichiloto\Engine\Events\MapEventDefinition;
 use Ichiloto\Engine\Rendering\Tilesets\TileId;
 use Ichiloto\Engine\Field\MapPhysicalOccupancy;
 use Ichiloto\Engine\Rendering\Tilesets\TilesetPiece;
@@ -54,6 +55,8 @@ use Ichiloto\Editor\Events\EventRefusal;
 use Ichiloto\Editor\Events\EventTypeCatalog;
 use Ichiloto\Editor\Events\EventTypeDefinition;
 use Ichiloto\Editor\Field\NpcAuthoring;
+use Ichiloto\Editor\Field\MapAreaAuthoring;
+use Ichiloto\Editor\Field\MapAreaRefusal;
 use Ichiloto\Editor\Field\WorldObjectAuthoring;
 use Ichiloto\Editor\Field\FieldSpriteFields;
 use Ichiloto\Editor\Field\CharacterSheetPreview;
@@ -675,6 +678,7 @@ final class EditorSession
             'events' => $events,
             'npcs' => $npcs,
             'worldObjects' => WorldObjectAuthoring::readEntries($map),
+            'areas' => $this->describeAreas($map),
             'tileLayers' => $map->describeTileLayers(),
             'physicalOccupancy' => $map->hasMapDataField([MapPhysicalOccupancy::DATA_KEY]),
             'occupancy' => PhysicalOccupancyEditor::readOccupancy($map),
@@ -1977,25 +1981,125 @@ final class EditorSession
     }
 
     /**
-     * Binds an event to the world object it describes, or unbinds it onto
-     * cells of its own, as one undo step ({@see EventAuthoring::bindEventSubject()}).
-     * A bound event's area is its subject's, so it moves with the object and
-     * cannot be moved or reshaped itself.
+     * Binds an event to what it describes, a world object or a named map
+     * area, or unbinds it onto cells of its own, as one undo step
+     * ({@see EventAuthoring::bindEventSubject()}). A bound event's area is
+     * its subject's, so it moves with the object or the area and cannot be
+     * moved or reshaped itself.
      *
-     * @param string|null $objectId The world object's id; null unbinds the event.
+     * @param array{kind?: mixed, id?: mixed}|string|null $subject `{kind, id}`, kind one of the Engine's subject kinds;
+     *     a bare id names a world object; null unbinds the event.
      * @param list<array{0: int, 1: int}> $cells Where an unbound event triggers, as [x, y]; unused when binding.
      * @return array{revision: int, changed: bool}
-     * @throws SessionRefusal When the map is unknown, stale or read-only, the event or object is unknown, or the
+     * @throws SessionRefusal When the map is unknown, stale or read-only, the event or subject is unknown, or the
      *     cells cannot take the event.
      */
-    public function setEventSubject(string $mapId, int $revision, string $marker, ?string $objectId, array $cells = []): array
+    public function setEventSubject(string $mapId, int $revision, string $marker, array|string|null $subject, array $cells = []): array
     {
         $map = $this->requireCurrentMap($mapId, $revision);
-        $command = $this->runEdit(static fn(): ?Command => $objectId === null
+        // A bare id names a world object, as it always has.
+        [$kind, $id] = is_string($subject) ? [WorldObjectAuthoring::SUBJECT_KIND, $subject] : [$subject['kind'] ?? null, $subject['id'] ?? null];
+        if ($subject !== null && (! is_string($kind) || ! is_string($id))) {
+            throw new SessionRefusal('A subject is a world object id, or {kind, id} with kind one of ' . implode(', ', MapEventDefinition::SUBJECT_KINDS) . '.');
+        }
+        $command = $this->runEdit(static fn(): ?Command => $subject === null
             ? EventAuthoring::unbindEventSubject($map, $marker, $cells)
-            : EventAuthoring::bindEventSubject($map, $marker, $objectId));
+            : EventAuthoring::bindEventSubject($map, $marker, $kind, $id));
 
         return ['revision' => $this->getMapRevision($map), 'changed' => $command !== null];
+    }
+
+    /**
+     * The map's named areas, unsaved edits included: each id, its shape as
+     * written, the cells it covers, and what names it.
+     *
+     * @return array{revision: int, areas: list<array{id: string, area: array<string, mixed>, cells: list<array{int, int}>, references: list<string>}>}
+     * @throws SessionRefusal When the map is unknown or its areas cannot be read.
+     */
+    public function readAreas(string $mapId): array
+    {
+        $map = $this->requireMap($mapId);
+
+        return ['revision' => $this->getMapRevision($map), 'areas' => $this->describeAreas($map)];
+    }
+
+    /**
+     * Declares a named area: logical territory the map owns, which events
+     * bind to as their subject and landmarks anchor to. One undo step.
+     *
+     * @param array<string, mixed> $area The Engine's CellArea shape: `{cells: [[x, y], ...]}` or `{x, y, width, height}`.
+     * @return array{revision: int, changed: bool}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, the id is taken or not an area id, or the
+     *     area is empty, malformed or off the map.
+     */
+    public function createArea(string $mapId, int $revision, string $id, array $area): array
+    {
+        return $this->changeAreas($mapId, $revision, static fn(MapAreaAuthoring $areas): ?Command => $areas->createArea($id, $area));
+    }
+
+    /**
+     * Gives a named area a new shape, as one undo step. The events bound to
+     * it cover its new cells.
+     *
+     * @param array<string, mixed> $area The Engine's CellArea shape.
+     * @return array{revision: int, changed: bool}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, there is no such area, or the area is
+     *     empty, malformed or off the map.
+     */
+    public function setArea(string $mapId, int $revision, string $id, array $area): array
+    {
+        return $this->changeAreas($mapId, $revision, static fn(MapAreaAuthoring $areas): ?Command => $areas->setArea($id, $area));
+    }
+
+    /**
+     * Renames a named area, and every event and landmark naming it, as one
+     * undo step.
+     *
+     * @return array{revision: int, changed: bool}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, there is no such area, or the new id is
+     *     taken or not an area id.
+     */
+    public function renameArea(string $mapId, int $revision, string $id, string $to): array
+    {
+        return $this->changeAreas($mapId, $revision, static fn(MapAreaAuthoring $areas): ?Command => $areas->renameArea($id, $to));
+    }
+
+    /**
+     * Deletes a named area nothing names, as one undo step.
+     *
+     * @return array{revision: int, changed: bool}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, there is no such area, or an event or
+     *     landmark names it (the message names them).
+     */
+    public function deleteArea(string $mapId, int $revision, string $id): array
+    {
+        return $this->changeAreas($mapId, $revision, static fn(MapAreaAuthoring $areas): ?Command => $areas->deleteArea($id));
+    }
+
+    /**
+     * @param callable(MapAreaAuthoring): ?Command $change
+     * @return array{revision: int, changed: bool}
+     */
+    private function changeAreas(string $mapId, int $revision, callable $change): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        $command = $this->runEdit(static fn(): ?Command => $change(new MapAreaAuthoring($map)));
+
+        return ['revision' => $this->getMapRevision($map), 'changed' => $command !== null];
+    }
+
+    /**
+     * @return list<array{id: string, area: array<string, mixed>, cells: list<array{int, int}>, references: list<string>}>
+     * @throws SessionRefusal When the areas cannot be read.
+     */
+    private function describeAreas(ProjectMap $map): array
+    {
+        try {
+            return array_map(static fn(array $area): array => [...$area, 'references' => MapAreaAuthoring::describeReferences($map, $area['id'])],
+                MapAreaAuthoring::describeAreas($map));
+        } catch (MapAreaRefusal $refusal) {
+            throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+        }
     }
 
     /**
@@ -2090,7 +2194,7 @@ final class EditorSession
             $command = $edit();
         } catch (InspectorRefusal $refusal) {
             throw new SessionRefusal(implode("\n", [$refusal->getMessage(), ...$refusal->details]), previous: $refusal);
-        } catch (EventRefusal|MapSourceRefusal $refusal) {
+        } catch (EventRefusal|MapSourceRefusal|MapAreaRefusal $refusal) {
             throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
         }
         if ($command !== null) {

@@ -8,9 +8,11 @@ use Ichiloto\Editor\History\Command;
 use Ichiloto\Editor\History\GenericCommand;
 use Ichiloto\Editor\MapSourceRefusal;
 use Ichiloto\Editor\Maps\MapLayers;
+use Ichiloto\Editor\Field\MapAreaAuthoring;
 use Ichiloto\Editor\Field\MapLandmarks;
 use Ichiloto\Editor\Field\WorldObjectAuthoring;
 use Ichiloto\Editor\ProjectMap;
+use Ichiloto\Engine\Events\MapEventDefinition;
 use Ichiloto\Engine\Field\MapLandmarkKind;
 
 /**
@@ -25,9 +27,6 @@ use Ichiloto\Engine\Field\MapLandmarkKind;
  */
 final class EventAuthoring
 {
-    /** The kind of subject an event binds to, as the Engine's event subjects name it. */
-    private const string SUBJECT_KIND = 'world_object';
-
     /**
      * Places a new event of a type on cells: its marker painted there and
      * its definition written, as one undo step.
@@ -177,35 +176,41 @@ final class EventAuthoring
     }
 
     /**
-     * Binds an event to the world object it describes, by the Engine's event
-     * subject: the object's covered cells (its anchor when it covers none)
+     * Binds an event to what it describes, by the Engine's event subject: a
+     * world object, whose covered cells (its anchor when it covers none)
      * become the event's area, so moving or replacing the object takes the
-     * event with it. The event's painted cells and any authored area go, in
-     * one undo step; its marker stays its identity. Null when it is already
-     * bound to that object.
+     * event with it; or a named map area, whose cells it covers. The event's
+     * painted cells and any authored area go, in one undo step; its marker
+     * stays its identity. Null when it is already bound to that subject.
      *
-     * @throws EventRefusal When the map has no such event or world object.
+     * @param string $kind One of the Engine's subject kinds ({@see MapEventDefinition::SUBJECT_KINDS}).
+     * @throws EventRefusal When the map has no such event or subject, or the kind is not one.
      * @throws MapSourceRefusal When the map is read-only or its data cannot take the subject.
      */
-    public static function bindEventSubject(ProjectMap $map, string $marker, string $objectId): ?Command
+    public static function bindEventSubject(ProjectMap $map, string $marker, string $kind, string $id): ?Command
     {
         self::assertEditable($map);
         self::assertEventExists($map, $marker);
-        if (array_find(WorldObjectAuthoring::readEntries($map), static fn(array $entry): bool => ($entry['id'] ?? null) === $objectId) === null) {
-            throw new EventRefusal(sprintf('%s has no world object %s.', $map->mapId, $objectId));
+        $known = match ($kind) {
+            WorldObjectAuthoring::SUBJECT_KIND => array_column(WorldObjectAuthoring::readEntries($map), 'id'),
+            MapAreaAuthoring::SUBJECT_KIND => array_column(MapAreaAuthoring::readEntries($map), 'id'),
+            default => throw new EventRefusal(sprintf('An event subject is one of %s, not %s.', implode(', ', MapEventDefinition::SUBJECT_KINDS), $kind)),
+        };
+        if (! in_array($id, $known, true)) {
+            throw new EventRefusal(sprintf('%s has no %s %s.', $map->mapId, $kind === MapAreaAuthoring::SUBJECT_KIND ? 'area' : 'world object', $id));
         }
         if ($map->getEventDefinition($marker) === null) {
             throw new EventRefusal(sprintf('Event %s has no definition to bind; give it a type first.', $marker));
         }
 
-        return self::recordEdit($map, 'Bind event subject', static function () use ($map, $marker, $objectId): void {
+        return self::recordEdit($map, 'Bind event subject', static function () use ($map, $marker, $kind, $id): void {
             foreach ($map->getEventArea($marker)?->cells ?? [] as [$x, $y]) {
                 $map->setEventSymbol($x, $y, ' ');
             }
             if (array_key_exists('area', $map->getEventDefinition($marker) ?? [])) {
                 $map->removeEventField($marker, ['area']);
             }
-            $map->setEventField($marker, ['subject'], ['kind' => self::SUBJECT_KIND, 'id' => $objectId]);
+            $map->setEventField($marker, ['subject'], ['kind' => $kind, 'id' => $id]);
         });
     }
 
@@ -254,8 +259,10 @@ final class EventAuthoring
     {
         $subject = $map->getEventDefinition($marker)['subject'] ?? null;
         if ($subject !== null) {
-            throw new EventRefusal(sprintf('Event %s moves with its subject %s; move the world object, or unbind the event first.',
-                $marker, is_array($subject) && is_string($subject['id'] ?? null) ? $subject['id'] : '(malformed)'));
+            $id = is_array($subject) && is_string($subject['id'] ?? null) ? $subject['id'] : '(malformed)';
+            throw new EventRefusal(is_array($subject) && ($subject['kind'] ?? null) === MapAreaAuthoring::SUBJECT_KIND
+                ? sprintf('Event %s covers area %s; reshape the area, or unbind the event first.', $marker, $id)
+                : sprintf('Event %s moves with its subject %s; move the world object, or unbind the event first.', $marker, $id));
         }
     }
 
