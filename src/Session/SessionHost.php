@@ -171,6 +171,7 @@ final class SessionHost
             'worldObjects.create' => $session->createWorldObject(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
                 self::requireString($params, 'id'), self::requireInt($params, 'x'), self::requireInt($params, 'y'),
                 self::readOptionalString($params, 'resource'), self::readOptionalString($params, 'text')),
+            'saveCompatibility.appendStep' => $session->registerSaveMigration(self::requireString($params, 'class')),
             'areas.read' => $session->readAreas(self::requireString($params, 'map')),
             'areas.create' => $session->createArea(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
                 self::readOptionalString($params, 'id'), EditorSession::readAreaShape($params)),

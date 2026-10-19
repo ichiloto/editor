@@ -10,9 +10,10 @@ use Ichiloto\Editor\Cutscenes\Source\SourcePreservationRefusal;
 use Ichiloto\Editor\Cutscenes\Source\SourceUnreadable;
 
 /**
- * Appends one declarative step to the project's save compatibility manifest:
- * the content version rises by one and existing saves apply the step's
- * position edits (map shifts, removals, relocations) as they load. The
+ * Appends one step to the project's save compatibility manifest: the content
+ * version rises by one and existing saves apply the step as they load, its
+ * declared position edits (map shifts, removals, relocations) or the project
+ * migration class it names. The
  * manifest is rewritten through the source-preserving writer, so its
  * comments and layout survive; a manifest it cannot rewrite is reported, not
  * flattened.
@@ -51,6 +52,32 @@ final class SaveManifestStep
      */
     public static function append(string $source, mixed $manifest, array $edits): array|string
     {
+        return self::appendStep($source, $manifest, self::describe($manifest, $edits));
+    }
+
+    /**
+     * Appends a step that runs a project migration class. The Engine reads a
+     * step as a class or as declared position edits, never both, so the step
+     * names the class alone.
+     *
+     * @param string $source The manifest's source.
+     * @param mixed $manifest The manifest as evaluated.
+     * @param string $class The migration class, fully qualified.
+     * @return array{source: string, value: array<array-key, mixed>}|string The rewritten manifest, or why it cannot be.
+     */
+    public static function appendClass(string $source, mixed $manifest, string $class): array|string
+    {
+        $version = is_array($manifest) ? ($manifest['contentVersion'] ?? null) : null;
+
+        return self::appendStep($source, $manifest, ['from' => $version, 'to' => is_int($version) ? $version + 1 : null, 'class' => $class]);
+    }
+
+    /**
+     * @param array<string, mixed> $step
+     * @return array{source: string, value: array<array-key, mixed>}|string
+     */
+    private static function appendStep(string $source, mixed $manifest, array $step): array|string
+    {
         $version = is_array($manifest) ? ($manifest['contentVersion'] ?? null) : null;
         $migrations = is_array($manifest) ? ($manifest['migrations'] ?? []) : null;
         if (! is_int($version) || $version < 0 || ! is_array($migrations) || ! array_is_list($migrations)) {
@@ -58,7 +85,7 @@ final class SaveManifestStep
         }
         $next = $manifest;
         $next['contentVersion'] = $version + 1;
-        $next['migrations'] = [...$migrations, self::describe($manifest, $edits)];
+        $next['migrations'] = [...$migrations, $step];
         try {
             return ['source' => ArraySourceWriter::rewrite(PhpArraySourceDocument::parse($source), $manifest, $next)->source, 'value' => $next];
         } catch (SourceUnreadable|SourcePreservationRefusal $refusal) {
