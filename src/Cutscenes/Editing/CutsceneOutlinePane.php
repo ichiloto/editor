@@ -7,6 +7,7 @@ namespace Ichiloto\Editor\Cutscenes\Editing;
 use Atatusoft\Termutil\IO\Enumerations\Color;
 use Ichiloto\Editor\Cutscenes\CutsceneOutline;
 use Ichiloto\Editor\Cutscenes\CutsceneType;
+use Ichiloto\Editor\Database\CutsceneSchemas;
 use Ichiloto\Editor\ListNavigation;
 use Ichiloto\Editor\EditorWindow;
 use Ichiloto\Editor\Status\StatusLevel;
@@ -207,7 +208,7 @@ trait CutsceneOutlinePane
             $delta < 0 ? 'Move up' : 'Move down',
             static fn(array $payload): array => CutsceneOutline::withValueAt($payload, $entry['listPath'], $list),
         )) {
-            $this->setStatus(sprintf('Moved %s.', $delta < 0 ? 'up' : 'down'), StatusLevel::SUCCESS);
+            $this->setStatus(sprintf('Moved %s.', $delta < 0 ? 'up' : 'down'), StatusLevel::INFO);
             $this->focusCutsceneTreeKey($targetKey);
         }
     }
@@ -224,18 +225,27 @@ trait CutsceneOutlinePane
             return;
         }
 
-        $blank = match ($entry['row']['kind']) {
-            'track' => ['type' => 'glyph', 'id' => 'track', 'keyframes' => []],
-            'keyframe' => ['frame' => 0, 'duration' => 1, 'content' => '', 'position' => [0, 0]],
-            'cue' => ['id' => 'cue', 'frame' => 0, 'type' => 'applyEffect'],
-            default => ['type' => 'wait', 'seconds' => 0.5],
-        };
+        $blank = $entry['row']['kind'] === 'command'
+            ? ['type' => 'wait', 'seconds' => 0.5]
+            : $this->findTimelineBlank($entry['row']['kind'], $entry['payload'], $entry['listPath']);
+
+        if ($blank === null) {
+            $this->setStatus(sprintf('This %s list takes no new entries here.', $entry['row']['kind']), StatusLevel::WARN);
+
+            return;
+        }
         $list = CutsceneOutline::valueAt($entry['payload'], $entry['listPath']);
         $list = is_array($list) ? array_values($list) : [];
         $index = $entry['index'];
 
         if (in_array($entry['row']['kind'], ['track', 'cue'], true)) {
             $blank['id'] = $this->freeOutlineId($list, $blank['id']);
+        }
+
+        if ($entry['row']['kind'] === 'keyframe' && is_array($list[$index] ?? null)) {
+            // After a keyframe is after it in time: the new one starts where
+            // the selected one ends, never over it.
+            $blank['frame'] = intval($list[$index]['frame'] ?? 0) + max(1, intval($list[$index]['duration'] ?? 1));
         }
 
         array_splice($list, $index + 1, 0, [$blank]);
@@ -245,9 +255,38 @@ trait CutsceneOutlinePane
             'Add ' . $entry['row']['kind'],
             static fn(array $payload): array => CutsceneOutline::withValueAt($payload, $entry['listPath'], $list),
         )) {
-            $this->setStatus(sprintf('Added a %s after the selected one.', $entry['row']['kind']), StatusLevel::SUCCESS);
+            $this->setStatus(sprintf('Added a %s after the selected one.', $entry['row']['kind']), StatusLevel::INFO);
             $this->focusCutsceneTreeKey($targetKey);
         }
+    }
+
+    /**
+     * Returns the blank a timeline's list takes, as its schema owns it: a
+     * summon's and an effect's tracks, keyframes and cues differ, and an
+     * effect's image keyframes differ from its glyph ones.
+     *
+     * @param array<string, mixed> $payload
+     * @param array<int, int|string> $listPath The list the entry goes into.
+     * @return array<string, mixed>|null
+     */
+    private function findTimelineBlank(string $kind, array $payload, array $listPath): ?array
+    {
+        $asset = $this->selectedCutscene();
+        $schema = $asset === null ? null : $this->cutsceneLibrary()?->schemaFor($asset->type);
+
+        if ($schema === null) {
+            return null;
+        }
+
+        $list = match ($kind) {
+            'track' => $schema->commandLists[CutsceneSchemas::TRACKS_KEY] ?? null,
+            'cue' => $schema->commandLists[CutsceneSchemas::CUES_KEY] ?? null,
+            'keyframe' => ($schema->commandLists[CutsceneSchemas::TRACKS_KEY] ?? null)
+                ?->nestedListFor((array) CutsceneOutline::valueAt($payload, array_slice($listPath, 0, -1))),
+            default => null,
+        };
+
+        return $list?->blank;
     }
 
     /**
@@ -283,7 +322,7 @@ trait CutsceneOutlinePane
             'Duplicate ' . $entry['row']['kind'],
             static fn(array $payload): array => CutsceneOutline::withValueAt($payload, $entry['listPath'], $list),
         )) {
-            $this->setStatus(sprintf('Duplicated the %s.', $entry['row']['kind']), StatusLevel::SUCCESS);
+            $this->setStatus(sprintf('Duplicated the %s.', $entry['row']['kind']), StatusLevel::INFO);
             $this->focusCutsceneTreeKey($targetKey);
         }
     }
@@ -314,7 +353,7 @@ trait CutsceneOutlinePane
             'Remove ' . $kind,
             static fn(array $payload): array => CutsceneOutline::withValueAt($payload, $entry['listPath'], $list),
         )) {
-            $this->setStatus(sprintf('Removed the %s (Ctrl+Z restores it).', $kind), StatusLevel::SUCCESS);
+            $this->setStatus(sprintf('Removed the %s (Ctrl+Z restores it).', $kind), StatusLevel::INFO);
             $this->cutsceneTreeCursor = max(0, min($this->cutsceneTreeCursor, count($this->visibleCutsceneTreeRows()) - 1));
             $this->renderCutscenesArea();
         }
@@ -370,7 +409,7 @@ trait CutsceneOutlinePane
 
             return CutsceneOutline::withValueAt($payload, $target, $targetList);
         })) {
-            $this->setStatus(sprintf('Nested into the %s above.', strval($previous['type'] ?? 'block')), StatusLevel::SUCCESS);
+            $this->setStatus(sprintf('Nested into the %s above.', strval($previous['type'] ?? 'block')), StatusLevel::INFO);
             $this->focusCutsceneTreeKey($this->keyForPath([...$target, (int) $targetKey]));
         }
     }
@@ -438,7 +477,7 @@ trait CutsceneOutlinePane
 
             return CutsceneOutline::withValueAt($payload, $ownerList, $parent);
         })) {
-            $this->setStatus('Moved out of its block.', StatusLevel::SUCCESS);
+            $this->setStatus('Moved out of its block.', StatusLevel::INFO);
             $this->focusCutsceneTreeKey($this->keyForPath([...$ownerList, $ownerIndex + 1]));
         }
     }
@@ -476,7 +515,7 @@ trait CutsceneOutlinePane
             'Nudge frame',
             static fn(array $payload): array => CutsceneOutline::withValueAt($payload, $path, $next),
         )) {
-            $this->setStatus(sprintf('Frame %d.', $next), StatusLevel::SUCCESS);
+            $this->setStatus(sprintf('Frame %d.', $next), StatusLevel::INFO);
             $this->renderCutscenesArea();
         }
 
@@ -610,8 +649,8 @@ trait CutsceneOutlinePane
         $failedKey = $preview?->failure()['key'] ?? null;
         $selected = $this->selectedCutscene();
 
-        if ($selected?->type === CutsceneType::SUMMON) {
-            $activeKeys = $this->activeSummonKeyframeKeys($selected);
+        if ($selected !== null && $selected->type !== CutsceneType::CINEMATIC) {
+            $activeKeys = $this->findActiveTimelineKeys($selected);
         }
 
         foreach ($rows as $position => $row) {
@@ -634,7 +673,7 @@ trait CutsceneOutlinePane
         $contentHeight = max(1, $layout['treeHeight'] - 2);
         $scroll = max(0, min(max(0, count($lines) - $contentHeight), $this->cutsceneTreeCursor - intdiv($contentHeight, 2)));
         $asset = $this->selectedCutscene();
-        $title = $asset?->type === CutsceneType::SUMMON ? 'Timeline' : 'Command Tree';
+        $title = $asset === null || $asset->type === CutsceneType::CINEMATIC ? 'Command Tree' : 'Timeline';
 
         return new EditorWindow(
             title: $title,

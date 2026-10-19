@@ -67,8 +67,8 @@ final class QuestReferences
     {
         $found = [];
 
-        foreach ($this->workspace->questDatabase->getQuests() as $quest) {
-            if (! $quest instanceof ProjectQuest || $quest->getId() === $questId) {
+        foreach ($this->workspace->getQuests() as $quest) {
+            if ($quest->getId() === $questId) {
                 continue;
             }
 
@@ -145,7 +145,7 @@ final class QuestReferences
         $found = [];
 
         foreach ($this->workspace->maps as $map) {
-            foreach ((array) ($map->data['events'] ?? []) as $marker => $definition) {
+            foreach ((array) ($map->getEditableData()['events'] ?? []) as $marker => $definition) {
                 if (! is_array($definition)) {
                     continue;
                 }

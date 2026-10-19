@@ -85,37 +85,22 @@ it('reports an adjustment to something the runtime does not resolve as a stat', 
         ->toContain('variant awakened adjusts "luck"');
 });
 
-it('leaves the runtime to enforce its own bounds, and says so when a project cannot open', function () {
+it('leaves the runtime to enforce its own bounds, and reports the record it refuses', function () {
     $root = makeTemporaryProject('ichiloto-diag-');
+    $before = diagnosticsFor($root, Severity::ERROR);
     // The engine's own constructor refuses a sell rate outside 0 through
-    // 10000. It does that by throwing, which takes the whole file with it,
-    // so the project cannot be opened at all rather than opening with a
-    // quietly clamped value. The editor does not re-check the bound; it
-    // surfaces the engine's own words.
-    file_put_contents($root . '/assets/Data/items.php', <<<'PHP'
-    <?php
+    // 10000 rather than clamping it, and the game leaves that record out.
+    // The editor does not re-check the bound; it surfaces the engine's own
+    // words against the record's own file.
+    file_put_contents($root . '/assets/Data/Items/0099-odd-potion.php', "<?php\n\nreturn " . var_export([
+        'class' => \Ichiloto\Engine\Entities\Inventory\InventoryItem::class,
+        'data' => ['kind' => 'item', 'id' => 'item.odd', 'name' => 'Odd Potion', 'description' => 'Priced strangely.', 'icon' => 'i', 'price' => 10, 'sellRateBasisPoints' => 25000],
+    ], true) . ";\n");
 
-    use Ichiloto\Engine\Entities\Inventory\Items\Item;
+    // Reported once, and the rest of the inventory still reads.
+    $errors = array_values(array_diff(diagnosticsFor($root, Severity::ERROR), $before));
 
-    return [
-      new Item(
-        id: 'item.odd',
-        name: 'Odd Potion',
-        description: 'Priced strangely.',
-        icon: 'i',
-        price: 10,
-        sellRateBasisPoints: 25000,
-      ),
-    ];
-    PHP);
-
-    // Validation reports it once, accurately, rather than as a page of
-    // "does not exist" for every reference to an item.
-    $errors = diagnosticsFor($root, Severity::ERROR);
-
-    expect($errors)->toHaveCount(1)
-        ->and($errors[0])->toContain('The inventory could not be read')
-        ->and($errors[0])->toContain('sell rate must be between 0 and 10000');
+    expect($errors)->toBe(['assets/Data/Items/0099-odd-potion.php: Item sell rate must be between 0 and 10000 basis points.']);
 });
 
 it('reports a knowledge catalogue that points at what it does not declare', function () {
@@ -178,7 +163,7 @@ it('refuses a catalogue that would ship what only the author should know', funct
 
 it('reports a name two definitions both claim', function () {
     $root = makeTemporaryProject('ichiloto-diag-');
-    file_put_contents($root . '/assets/Data/items.php', <<<'PHP'
+    writeItemRecords($root, ...itemsFromSource(<<<'PHP'
     <?php
 
     use Ichiloto\Engine\Entities\Inventory\Items\Item;
@@ -187,7 +172,7 @@ it('reports a name two definitions both claim', function () {
       new Item(id: 'item.one', name: 'Elixir', description: 'One.', icon: 'i', price: 1),
       new Item(id: 'item.two', name: 'Tonic', description: 'Two.', icon: 'i', price: 1, aliases: ['Elixir']),
     ];
-    PHP);
+    PHP));
 
     expect(implode("\n", diagnosticsFor($root, Severity::ERROR)))
         ->toContain('"elixir" is claimed by');

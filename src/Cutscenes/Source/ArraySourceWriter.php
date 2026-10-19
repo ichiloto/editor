@@ -12,19 +12,25 @@ use Ichiloto\Editor\Database\PhpValueExporter;
  *
  * The values an author edits are arrays; the file is source. This walks both
  * together: a scalar that changed is rewritten where its literal sits, a
- * keyed entry that appeared is added on lines of its own, one that vanished
+ * keyed entry that appeared is added on lines of its own, ahead of the entry
+ * that follows it in the new value so the file reads in that order (at the
+ * end when nothing the file holds follows it), one that vanished
  * is cut with its heading, and a list is aligned so that an entry moved
  * keeps its bytes and an entry edited keeps everything but the changed
  * field. A value written as a variable is retargeted rather than expanded:
- * a nowdoc referenced once is edited between its markers, and one shared by
- * several entries is left alone while the edited entry gets a new, safely
- * named variable of its own. Text with line breaks is always written as a
- * nowdoc, so ASCII art stays readable and exact -- trailing spaces,
- * backslashes, Unicode and all.
+ * a nowdoc referenced once is edited between its markers, and a literal
+ * named once is edited where it is assigned, as the data it is. One shared
+ * by several entries is left alone for them while the edited entry gets a
+ * value of its own -- a new, safely named variable for text -- when the
+ * shared value is plain data a copy holds in full. Text with line breaks
+ * is always written as a nowdoc, so ASCII art stays readable and exact --
+ * trailing spaces, backslashes, Unicode and all.
  *
  * What it cannot express -- a change under an expression, under a key it
- * could not read, a list turned into a map -- it refuses by path, so nothing
- * is written that a reader would not have written by hand.
+ * could not read, a list turned into a map, under a variable the file builds
+ * with its own code -- it refuses by path, so nothing is written that a
+ * reader would not have written by hand. A variable built in code is never
+ * replaced by a literal of what the code produced.
  *
  * @package Ichiloto\Editor\Cutscenes\Source
  */
@@ -39,6 +45,31 @@ final class ArraySourceWriter
     private array $appends = [];
 
     /**
+     * Keyed entries queued ahead of an entry the file already holds, per
+     * entry: several inserted before one entry become one edit, in order.
+     *
+     * @var array<int, array{node: SourceNode, anchor: SourceEntry, entries: list<array{key: int|string|null, literal: string}>}>
+     */
+    private array $inserts = [];
+
+    /**
+     * Entries removed from arrays whose entries share their lines, per
+     * parent node, cut together at flush time so the separators that joined
+     * them go with them.
+     *
+     * @var array<int, array{node: SourceNode, indexes: list<int>}>
+     */
+    private array $sharedLineRemovals = [];
+
+    /**
+     * Arrays whose last surviving entry lost its comma with the entries
+     * after it, by node.
+     *
+     * @var array<int, true>
+     */
+    private array $separatorCuts = [];
+
+    /**
      * Entry indexes this rewrite removes (or moves away), per parent node,
      * so an append knows which entry will actually precede it.
      *
@@ -49,8 +80,14 @@ final class ArraySourceWriter
     /** @var array<int, array{0: int, 1: int, 2: string}> */
     private array $edits = [];
 
+    /** @var list<string> The variables written as data the diff is inside, innermost last. */
+    private array $hosts = [];
+
     /** @var array<string, true> Variable names claimed by this plan. */
     private array $claimedVariables = [];
+
+    /** @var array<string, string>|null Class imports in the returned array's scope. */
+    private ?array $classImports = null;
 
     private function __construct(private readonly PhpArraySourceDocument $document)
     {
@@ -67,8 +104,26 @@ final class ArraySourceWriter
      *   instance when nothing differs.
      * @throws SourcePreservationRefusal When a change cannot be expressed in the source.
      */
-    public static function rewrite(PhpArraySourceDocument $document, array $old, array $new): PhpArraySourceDocument
+    public static function rewrite(PhpArraySourceDocument $document, array $old, array $new, array $keyRenames = []): PhpArraySourceDocument
     {
+        foreach ($keyRenames as $rename) {
+            $path = $rename['path'];
+            $oldKey = array_pop($path);
+            $parent = &$old;
+            foreach ($path as $step) {
+                $parent = &$parent[$step];
+            }
+            if (! is_array($parent) || ! array_key_exists($oldKey, $parent) || array_key_exists($rename['key'], $parent)) {
+                throw new SourcePreservationRefusal('The key rename does not match the loaded data.');
+            }
+            $document = $document->withEdits([$document->renameKeyEdit($rename['path'], $rename['key'])]);
+            $renamed = [];
+            foreach ($parent as $key => $value) {
+                $renamed[$key === $oldKey ? $rename['key'] : $key] = $value;
+            }
+            $parent = $renamed;
+            unset($parent);
+        }
         if ($old === $new) {
             return $document;
         }
@@ -89,16 +144,42 @@ final class ArraySourceWriter
             return;
         }
 
+        if ($node->kind === SourceNode::VARIABLE) {
+            $this->diffVariable($node, $old, $new, $path);
+
+            return;
+        }
+
         if (is_array($new)) {
             $this->diffArray($node, is_array($old) ? $old : null, $new, $path);
 
             return;
         }
 
-        // A scalar or null now sits here.
+        if ($node->kind === SourceNode::EXPRESSION && ($edits = $this->findEnumCaseEdits($node, $old, $new)) !== null) {
+            array_push($this->edits, ...$edits);
+
+            return;
+        }
+
+        // An enum case's value, written as `Enum::CASE->value`, stays written
+        // that way: the new value is the matching case of the same enum.
+        if ($node->kind === SourceNode::EXPRESSION && ($literal = $this->findEnumValueExpression($node, $new)) !== null) {
+            $this->edits[] = $this->document->replaceValueEdit($path, $literal);
+
+            return;
+        }
+
+        // A scalar or null now sits here. An array written as plain data (literals only, no comments) holds nothing
+        // authored beyond its values, so the new value takes its place; anything more stays refused below.
         match ($node->kind) {
             SourceNode::SCALAR => $this->edits[] = $this->replacementFor($node, $path, $new),
-            SourceNode::VARIABLE => $this->retargetVariable($node, $path, $new),
+            SourceNode::ARRAY => $this->isPlainData($node)
+                ? $this->edits[] = $this->replacementFor($node, $path, $new)
+                : throw new SourcePreservationRefusal(sprintf(
+                    'The value at %s is an array in the file and cannot be replaced by a single value without rewriting it.',
+                    PhpArraySourceDocument::describePath($path),
+                )),
             SourceNode::EXPRESSION => throw new SourcePreservationRefusal(sprintf(
                 'The value at %s is written as an expression the editor cannot rewrite; change it in the file, or write it as plain data.',
                 PhpArraySourceDocument::describePath($path),
@@ -108,6 +189,21 @@ final class ArraySourceWriter
                 PhpArraySourceDocument::describePath($path),
             )),
         };
+    }
+
+    /** Whether an array's source is only literal keys and values, with no comment, expression or variable in it. */
+    private function isPlainData(SourceNode $node): bool
+    {
+        foreach ($node->entries as $entry) {
+            $value = $entry->value;
+            if ($value->kind === SourceNode::ARRAY ? !$this->isPlainData($value) : $value->kind !== SourceNode::SCALAR) {
+                return false;
+            }
+        }
+        foreach (\PhpToken::tokenize('<?php ' . substr($this->document->source, $node->start, $node->end - $node->start)) as $token) {
+            if ($token->is([T_COMMENT, T_DOC_COMMENT])) { return false; }
+        }
+        return ! $node->hasOpaqueKey;
     }
 
     /**
@@ -125,9 +221,7 @@ final class ArraySourceWriter
                 ));
             }
 
-            // A scalar or a variable holding what is now an array: the
-            // reference is replaced by the literal, and any variable stays
-            // for whatever else names it.
+            // A scalar holding what is now an array: the literal takes its place.
             $this->edits[] = $this->replacementFor($node, $path, $new);
 
             return;
@@ -135,7 +229,7 @@ final class ArraySourceWriter
 
         if ($node->hasOpaqueKey) {
             throw new SourcePreservationRefusal(sprintf(
-                'The array at %s has a key the editor cannot read, so it will not rewrite the array.',
+                'The array at %s has a key or spread the editor cannot read, so it will not rewrite the array.',
                 PhpArraySourceDocument::describePath($path),
             ));
         }
@@ -162,8 +256,12 @@ final class ArraySourceWriter
             return;
         }
 
-        // Keyed: recurse into keys both have, add the new ones, cut the gone.
-        foreach ($new as $key => $value) {
+        // Keyed: recurse into keys both have, add the new ones where the new
+        // value orders them, cut the gone.
+        $keys = array_keys($new);
+
+        foreach ($keys as $position => $key) {
+            $value = $new[$key];
             $entry = $node->entryFor($key);
 
             if ($entry !== null && array_key_exists($key, $old)) {
@@ -172,13 +270,22 @@ final class ArraySourceWriter
                 continue;
             }
 
-            $this->queueAppend($node, $key, $this->literalFor($value, [...$path, $key]));
+            $literal = $this->literalFor($value, [...$path, $key]);
+            $anchor = $this->findFollowingEntry($node, $old, array_slice($keys, $position + 1));
+
+            if ($anchor === null) {
+                $this->queueAppend($node, $key, $literal);
+
+                continue;
+            }
+
+            $this->inserts[spl_object_id($anchor)] ??= ['node' => $node, 'anchor' => $anchor, 'entries' => []];
+            $this->inserts[spl_object_id($anchor)]['entries'][] = ['key' => $key, 'literal' => $literal];
         }
 
         foreach ($node->entries as $index => $entry) {
             if ($entry->key !== null && ! array_key_exists($entry->key, $new)) {
-                $this->edits[] = $this->document->removeEntryEdit([...$path, $entry->key]);
-                $this->removedEntries[spl_object_id($node)][$index] = true;
+                $this->queueRemoval($node, $index, [...$path, $entry->key]);
             }
         }
     }
@@ -321,6 +428,12 @@ final class ArraySourceWriter
             $previousNew = $anchorNew;
         }
 
+        $this->emitListMatches($node, $old, $new, $path, $matchedOld, $matchedNew);
+    }
+
+    /** Emit aligned entries through the same source/comment ownership rules for every list. */
+    private function emitListMatches(SourceNode $node, array $old, array $new, array $path, array $matchedOld, array $matchedNew): void
+    {
         // 6. Which matched entries stay in place: the longest run of them
         //    whose old order agrees with their new order. The rest move.
         ksort($matchedNew);
@@ -349,27 +462,23 @@ final class ArraySourceWriter
 
         foreach ($old as $i => $entry) {
             if (! isset($matchedOld[$i])) {
-                $this->edits[] = $this->document->removeEntryEdit([...$path, $i]);
-                $this->removedEntries[spl_object_id($node)][$i] = true;
+                $this->queueRemoval($node, $i, [...$path, $i]);
             }
         }
 
+        $anchor = null;
+        $anchors = [];
+        for ($j = count($new) - 1; $j >= 0; $j--) {
+            $anchors[$j] = $anchor;
+            if (isset($kept[$j])) { $anchor = $kept[$j]; }
+        }
+        $inline = self::prefersInline($node);
         foreach ($new as $j => $item) {
             if (isset($kept[$j])) {
                 continue;
             }
 
-            $anchor = null;
-
-            for ($next = $j + 1; $next < $newCount; $next++) {
-                if (isset($kept[$next])) {
-                    $anchor = $kept[$next];
-
-                    break;
-                }
-            }
-
-            $position = $anchor ?? count($node->entries);
+            $position = $anchors[$j] ?? count($node->entries);
 
             if (isset($moved[$j])) {
                 $this->emitMove($node, $moved[$j], $old[$moved[$j]], $item, $path, $position);
@@ -378,7 +487,7 @@ final class ArraySourceWriter
             }
 
             if ($position >= count($node->entries)) {
-                $this->queueAppend($node, null, $this->literalFor($item, [...$path, $j], self::prefersInline($node)));
+                $this->queueAppend($node, null, $this->literalFor($item, [...$path, $j], $inline));
 
                 continue;
             }
@@ -387,9 +496,52 @@ final class ArraySourceWriter
                 $path,
                 $position,
                 null,
-                $this->literalFor($item, [...$path, $j], self::prefersInline($node)),
+                $this->literalFor($item, [...$path, $j], $inline),
             );
         }
+    }
+
+    /**
+     * Returns the entry a new key goes ahead of: the first of the keys after
+     * it in the new value that the file holds and keeps. Null puts the new
+     * key at the end.
+     *
+     * @param array<array-key, mixed> $old
+     * @param list<array-key> $following
+     */
+    private function findFollowingEntry(SourceNode $node, array $old, array $following): ?SourceEntry
+    {
+        foreach ($following as $key) {
+            $entry = $node->entryFor($key);
+
+            if ($entry !== null && array_key_exists($key, $old)) {
+                return $entry;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Removes an entry: at once, with its lines and heading, from an array
+     * written a line per entry; at flush time, with the separators that
+     * joined it, from one whose entries share their lines.
+     *
+     * @param array<int, int|string> $path The entry's path.
+     */
+    private function queueRemoval(SourceNode $node, int $index, array $path): void
+    {
+        $id = spl_object_id($node);
+        $this->removedEntries[$id][$index] = true;
+
+        if (! $this->document->sharesLines($node)) {
+            $this->edits[] = $this->document->removeEntryEdit($path);
+
+            return;
+        }
+
+        $this->sharedLineRemovals[$id] ??= ['node' => $node, 'indexes' => []];
+        $this->sharedLineRemovals[$id]['indexes'][] = $index;
     }
 
     /**
@@ -421,6 +573,25 @@ final class ArraySourceWriter
      */
     private function flushAppends(): void
     {
+        foreach ($this->sharedLineRemovals as $id => $removal) {
+            $indexes = $removal['indexes'];
+            sort($indexes);
+            $planned = $this->document->removeSharedLineEntriesEdits($removal['node'], $indexes);
+            array_push($this->edits, ...$planned['edits']);
+
+            if ($planned['separatorCut']) {
+                $this->separatorCuts[$id] = true;
+            }
+        }
+
+        $this->sharedLineRemovals = [];
+
+        foreach ($this->inserts as $insert) {
+            $this->edits[] = $this->document->insertEntriesBeforeEdit($insert['node'], $insert['anchor'], $insert['entries']);
+        }
+
+        $this->inserts = [];
+
         foreach ($this->appends as $id => $append) {
             $node = $append['node'];
             $removed = $this->removedEntries[$id] ?? [];
@@ -434,17 +605,8 @@ final class ArraySourceWriter
 
             if ($append['inline'] !== []) {
                 // After the last entry this rewrite keeps; right at the body
-                // start when it keeps none. The comma belongs to whichever
-                // entry the appended items now follow.
-                if ($lastSurviving !== null) {
-                    $anchor = $lastSurviving->separatorEnd;
-                    $prefix = $lastSurviving->separatorEnd === $lastSurviving->end ? ', ' : ' ';
-                } else {
-                    $anchor = (int) $node->bodyStart;
-                    $prefix = '';
-                }
-
-                $this->edits[] = [$anchor, $anchor, $prefix . implode(', ', $append['inline'])];
+                // start when it keeps none.
+                $this->edits[] = $this->document->planInlineAppend($node, $append['inline'], $lastSurviving, isset($this->separatorCuts[$id]));
             }
 
             if ($append['lines'] === []) {
@@ -480,6 +642,41 @@ final class ArraySourceWriter
     }
 
     /**
+     * Plans the patches a value that moves needs, against its current place,
+     * and returns those inside its bytes, last first, for the move to apply
+     * to the bytes it carries. Everything the diff defers to the end --
+     * removals from arrays whose entries share their lines, insertions,
+     * appends -- is planned now, inside the moving bytes, rather than
+     * against bytes the move cuts. A variable defined for the value lives in
+     * the prelude and stays a global edit.
+     *
+     * @param array<int, int|string> $path The value's path.
+     * @return list<array{0: int, 1: int, 2: string}>
+     */
+    private function planPatchesWithin(SourceNode $value, mixed $oldValue, mixed $newValue, array $path, int $start, int $end): array
+    {
+        $deferred = [$this->appends, $this->inserts, $this->sharedLineRemovals];
+        [$this->appends, $this->inserts, $this->sharedLineRemovals] = [[], [], []];
+        $before = count($this->edits);
+        $this->diff($value, $oldValue, $newValue, $path);
+        $this->flushAppends();
+        [$this->appends, $this->inserts, $this->sharedLineRemovals] = $deferred;
+        $inner = [];
+
+        foreach (array_splice($this->edits, $before) as $edit) {
+            if ($edit[0] >= $start && $edit[1] <= $end) {
+                $inner[] = $edit;
+            } else {
+                $this->edits[] = $edit;
+            }
+        }
+
+        usort($inner, static fn(array $a, array $b): int => [$b[0], $b[1]] <=> [$a[0], $a[1]]);
+
+        return $inner;
+    }
+
+    /**
      * Plans removing an entry and re-inserting its own bytes -- with any
      * patches its new value needs applied inside them -- ahead of another
      * position.
@@ -491,28 +688,11 @@ final class ArraySourceWriter
         $entry = $list->entries[$from];
         [$start, $end] = $this->document->blockSpan($entry);
 
-        // Patches for the entry, planned against its current place ...
-        $before = count($this->edits);
-        $this->diff($entry->value, $oldValue, $newValue, [...$path, $from]);
-        $inner = [];
-        $outer = [];
-
-        foreach (array_splice($this->edits, $before) as $edit) {
-            if ($edit[0] >= $start && $edit[1] <= $end) {
-                $inner[] = $edit;
-            } else {
-                // A variable defined for it lives in the prelude and stays global.
-                $outer[] = $edit;
-            }
-        }
-
-        $this->edits = [...$this->edits, ...$outer];
-
-        // ... applied to its own bytes, from the end forward.
+        // Patches for the entry, planned against its current place, applied
+        // to its own bytes from the end forward.
         $block = substr($this->document->source, $start, $end - $start);
-        usort($inner, static fn(array $a, array $b): int => [$b[0], $b[1]] <=> [$a[0], $a[1]]);
 
-        foreach ($inner as [$editStart, $editEnd, $text]) {
+        foreach ($this->planPatchesWithin($entry->value, $oldValue, $newValue, [...$path, $from], $start, $end) as [$editStart, $editEnd, $text]) {
             $block = substr($block, 0, $editStart - $start) . $text . substr($block, $editEnd - $start);
         }
 
@@ -660,6 +840,139 @@ final class ArraySourceWriter
     }
 
     /**
+     * Verified enum literals retain spacing and comments. Nullable and cross-enum
+     * edits are explicit data replacements; record schemas own admissible types.
+     * Aliases to cases and computed values are not case literals.
+     *
+     * @return list<array{0: int, 1: int, 2: string}>|null
+     */
+    private function findEnumCaseEdits(SourceNode $node, mixed $old, mixed $new): ?array
+    {
+        if (! $old instanceof \UnitEnum || ($new !== null && ! $new instanceof \UnitEnum)) {
+            return null;
+        }
+        $prefix = '<?php ';
+        $tokens = array_values(array_filter(\PhpToken::tokenize($prefix
+            . substr($this->document->source, $node->start, $node->end - $node->start)),
+            static fn(\PhpToken $token): bool => ! $token->is([T_OPEN_TAG, T_WHITESPACE, T_COMMENT, T_DOC_COMMENT])));
+        if (count($tokens) !== 3
+            || ! $tokens[0]->is([T_STRING, T_NAME_QUALIFIED, T_NAME_FULLY_QUALIFIED])
+            || ! $tokens[1]->is(T_DOUBLE_COLON) || ! $tokens[2]->is(T_STRING)
+            || $tokens[2]->text !== $old->name) {
+            return null;
+        }
+        $class = $this->resolveClassName($tokens[0]->text);
+        if ($class === null || strcasecmp($class, $old::class) !== 0) {
+            return null;
+        }
+        $edit = static function (\PhpToken $token, string $replacement) use ($node, $prefix): array {
+            $start = $node->start + $token->pos - strlen($prefix);
+
+            return [$start, $start + strlen($token->text), $replacement];
+        };
+        if ($new === null) {
+            return [$edit($tokens[0], 'null'), $edit($tokens[1], ''), $edit($tokens[2], '')];
+        }
+        $edits = [$edit($tokens[2], $new->name)];
+        if ($old::class !== $new::class) {
+            $edits[] = $edit($tokens[0], '\\' . $new::class);
+        }
+
+        return $edits;
+    }
+
+    /**
+     * The expression for a new value where the file writes an enum case's
+     * value as `Enum::CASE->value`: the same enum, the case holding the new
+     * value. Null when the expression is anything else, or no case holds it.
+     */
+    private function findEnumValueExpression(SourceNode $node, mixed $new): ?string
+    {
+        $text = trim(substr($this->document->source, $node->start, $node->end - $node->start));
+
+        if ((! is_string($new) && ! is_int($new))
+            || preg_match('/^(\\\\?[A-Za-z_][A-Za-z0-9_\\\\]*)::[A-Za-z_][A-Za-z0-9_]*->value$/', $text, $match) !== 1) {
+            return null;
+        }
+
+        $class = $this->resolveClassName($match[1]);
+
+        if ($class === null || ! is_subclass_of($class, \BackedEnum::class)) {
+            return null;
+        }
+
+        $case = $class::tryFrom($new);
+
+        return $case === null ? null : $match[1] . '::' . $case->name . '->value';
+    }
+
+    /** A class name as the file writes it, resolved through its own imports. */
+    private function resolveClassName(string $name): ?string
+    {
+        if (str_starts_with($name, '\\')) {
+            return ltrim($name, '\\');
+        }
+
+        $first = explode('\\', $name)[0];
+        $class = $this->getClassImports()[strtolower($first)] ?? null;
+
+        return $class === null ? null : $class . substr($name, strlen($first));
+    }
+
+    /** @return array<string, string> Simple class imports, never text inside strings or nested uses. */
+    private function getClassImports(): array
+    {
+        if ($this->classImports !== null) {
+            return $this->classImports;
+        }
+        $imports = [];
+        $tokens = array_values(array_filter(\PhpToken::tokenize($this->document->source),
+            static fn(\PhpToken $token): bool => ! $token->is([T_OPEN_TAG, T_WHITESPACE, T_COMMENT, T_DOC_COMMENT])));
+        $depth = 0;
+
+        foreach ($tokens as $index => $token) {
+            if ($token->pos >= $this->document->root()->start) {
+                break;
+            }
+            if ($token->is(['(', '[', '{', T_CURLY_OPEN, T_DOLLAR_OPEN_CURLY_BRACES])) {
+                $depth++;
+            } elseif ($token->is([')', ']', '}'])) {
+                $depth--;
+            }
+            if ($depth !== 0) {
+                continue;
+            }
+            if ($token->is(T_NAMESPACE)) {
+                $imports = [];
+                continue;
+            }
+            if (! $token->is(T_USE)) {
+                continue;
+            }
+            $class = $tokens[$index + 1] ?? null;
+            if ($class === null || ! $class->is([T_STRING, T_NAME_QUALIFIED, T_NAME_FULLY_QUALIFIED])) {
+                continue;
+            }
+            $end = $index + 2;
+            $name = ltrim($class->text, '\\');
+            $alias = substr((string) strrchr('\\' . $name, '\\'), 1);
+            if (($tokens[$end] ?? null)?->is(T_AS)) {
+                $explicitAlias = $tokens[$end + 1] ?? null;
+                if ($explicitAlias === null || ! $explicitAlias->is(T_STRING)) {
+                    continue;
+                }
+                $alias = $explicitAlias->text;
+                $end += 2;
+            }
+            if (($tokens[$end] ?? null)?->is(';')) {
+                $imports[strtolower($alias)] = $name;
+            }
+        }
+
+        return $this->classImports = $imports;
+    }
+
+    /**
      * Plans replacing a node with the literal for a value.
      *
      * @param array<int, int|string> $path
@@ -667,16 +980,71 @@ final class ArraySourceWriter
      */
     private function replacementFor(SourceNode $node, array $path, mixed $value): array
     {
-        return $this->document->replaceValueEdit($path, $this->literalFor($value, $path));
+        // An entry sharing its line with its neighbours keeps a value that fits there on that line.
+        $entry = $this->document->entryAt($path);
+        $inline = $entry !== null && $this->document->lineIndentBefore($entry->start) === null && $this->fitsOnOneLine($value);
+
+        return $this->document->replaceValueEdit($path, $this->literalFor($value, $path, $inline));
     }
 
     /**
-     * Retargets a value written as a variable reference.
+     * Changes a value written as a variable reference.
+     *
+     * A variable the file builds with its own code is refused: replacing the
+     * reference with a literal of its result would leave the code running
+     * for nothing. A literal only this entry names is diffed where it is
+     * assigned. Otherwise the variable is left for whatever else names it
+     * and this entry is retargeted.
+     *
+     * @param array<int, int|string> $path
+     */
+    private function diffVariable(SourceNode $node, mixed $old, mixed $new, array $path): void
+    {
+        $name = $node->variable ?? '';
+
+        if ($this->document->isBuiltInCode($node)) {
+            throw new SourcePreservationRefusal(sprintf(
+                'The value at %s is $%s, which the file\'s own code builds or uses, so the editor will not replace it with a copy of its value. Change it in the file, or write it as plain data.',
+                PhpArraySourceDocument::describePath($path),
+                $name,
+            ));
+        }
+
+        $written = $this->document->resolveNode($node);
+
+        if ($written !== $node) {
+            $this->hosts[] = $name;
+
+            try {
+                $this->diff($written, $old, $new, $path);
+            } finally {
+                array_pop($this->hosts);
+            }
+
+            return;
+        }
+
+        $variable = $this->document->variable($name);
+
+        if ($variable?->value !== null && ! $this->isPlainData($variable->value)) {
+            throw new SourcePreservationRefusal(sprintf(
+                'The value at %s is $%s, which %d values share and which holds comments, variables or expressions a copy of it would lose. Change it in the file.',
+                PhpArraySourceDocument::describePath($path),
+                $name,
+                $this->document->referenceCount($name),
+            ));
+        }
+
+        $this->retargetVariable($node, $path, $new);
+    }
+
+    /**
+     * Retargets a value written as a variable reference to data.
      *
      * A string edited under a nowdoc named nowhere else is edited between
      * the nowdoc's markers. Anything else leaves the variable alone -- other
      * entries name it -- and this entry gets a variable of its own for
-     * text, or the literal itself for a number or flag.
+     * text, or the literal itself for a number, flag or array.
      *
      * @param array<int, int|string> $path
      */
@@ -697,7 +1065,7 @@ final class ArraySourceWriter
             }
 
             $fresh = $this->claimVariable($name);
-            $this->edits[] = $this->document->defineVariableEdit($fresh, $new);
+            $this->edits[] = $this->document->defineVariableEdit($fresh, $new, $this->findHost());
             $this->edits[] = $this->document->replaceValueEdit($path, '$' . $fresh);
 
             return;
@@ -716,7 +1084,7 @@ final class ArraySourceWriter
     {
         if (is_string($value) && str_contains($value, "\n")) {
             $fresh = $this->claimVariable(self::stemFor($path));
-            $this->edits[] = $this->document->defineVariableEdit($fresh, $value);
+            $this->edits[] = $this->document->defineVariableEdit($fresh, $value, $this->findHost());
 
             return '$' . $fresh;
         }
@@ -796,6 +1164,15 @@ final class ArraySourceWriter
             static fn(string $line): string => $line === '' ? $line : '  ' . $line,
             $lines,
         ));
+    }
+
+    /**
+     * Returns the variable written as data the diff is inside, which any
+     * variable it defines must precede.
+     */
+    private function findHost(): ?string
+    {
+        return $this->hosts === [] ? null : $this->hosts[count($this->hosts) - 1];
     }
 
     /**

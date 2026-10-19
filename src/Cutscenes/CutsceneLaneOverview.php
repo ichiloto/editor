@@ -4,6 +4,10 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Cutscenes;
 
+use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
+use Ichiloto\Engine\Animations\Timelines\EffectTimelineLibrary;
+use Throwable;
+
 /**
  * A duration projection over a cinematic's command tree: how long each
  * command, lane and block is authored to take, and where the play waits on
@@ -33,12 +37,13 @@ final class CutsceneLaneOverview
      * Builds the overview of a command list.
      *
      * @param array<int, mixed> $commands
+     * @param EffectTimelineLibrary|null $effects The project's effect timelines, so a field effect's length is known.
      */
-    public static function of(array $commands, string $rootKey = 'commands'): self
+    public static function of(array $commands, string $rootKey = 'commands', ?EffectTimelineLibrary $effects = null): self
     {
         /** @var array<int, array{depth: int, key: string, label: string, seconds: float, marks: string[], kind: string}> $rows */
         $rows = [];
-        [$seconds, $marks] = self::walkList($commands, $rootKey, 0, $rows);
+        [$seconds, $marks] = self::walkList($commands, $rootKey, 0, $rows, $effects);
 
         return new self($rows, $seconds, $marks);
     }
@@ -72,7 +77,7 @@ final class CutsceneLaneOverview
      * @param array<int, array<string, mixed>> $rows
      * @return array{0: float, 1: string[]}
      */
-    private static function walkList(array $commands, string $prefix, int $depth, array &$rows): array
+    private static function walkList(array $commands, string $prefix, int $depth, array &$rows, ?EffectTimelineLibrary $effects): array
     {
         $total = 0.0;
         $marks = [];
@@ -83,7 +88,7 @@ final class CutsceneLaneOverview
             }
 
             $key = $prefix . '.' . $index;
-            [$seconds, $commandMarks] = self::walkCommand($command, $key, $depth, $rows);
+            [$seconds, $commandMarks] = self::walkCommand($command, $key, $depth, $rows, $effects);
             $total += $seconds;
             $marks = [...$marks, ...$commandMarks];
         }
@@ -96,7 +101,7 @@ final class CutsceneLaneOverview
      * @param array<int, array<string, mixed>> $rows
      * @return array{0: float, 1: string[]}
      */
-    private static function walkCommand(array $command, string $key, int $depth, array &$rows): array
+    private static function walkCommand(array $command, string $key, int $depth, array &$rows, ?EffectTimelineLibrary $effects): array
     {
         $type = strval($command['type'] ?? '?');
 
@@ -115,7 +120,7 @@ final class CutsceneLaneOverview
                     $laneRowIndex = count($rows);
                     $laneKey = $key . '.lanes.' . $laneIndex;
                     $rows[] = ['depth' => $depth + 1, 'key' => $laneKey, 'label' => 'lane ' . $laneId, 'seconds' => 0.0, 'marks' => [], 'kind' => 'lane'];
-                    [$laneSeconds, $laneMarks] = self::walkList($laneCommands, $laneKey, $depth + 2, $rows);
+                    [$laneSeconds, $laneMarks] = self::walkList($laneCommands, $laneKey, $depth + 2, $rows, $effects);
                     $rows[$laneRowIndex]['seconds'] = $laneSeconds;
                     $rows[$laneRowIndex]['marks'] = $laneMarks;
                     $longest = max($longest, $laneSeconds);
@@ -130,7 +135,7 @@ final class CutsceneLaneOverview
             case 'sequence':
                 $rowIndex = count($rows);
                 $rows[] = ['depth' => $depth, 'key' => $key, 'label' => 'sequence', 'seconds' => 0.0, 'marks' => [], 'kind' => 'block'];
-                [$seconds, $marks] = self::walkList(is_array($command['commands'] ?? null) ? $command['commands'] : [], $key . '.commands', $depth + 1, $rows);
+                [$seconds, $marks] = self::walkList(is_array($command['commands'] ?? null) ? $command['commands'] : [], $key . '.commands', $depth + 1, $rows, $effects);
                 $rows[$rowIndex]['seconds'] = $seconds;
                 $rows[$rowIndex]['marks'] = $marks;
 
@@ -149,7 +154,7 @@ final class CutsceneLaneOverview
 
                     $armRowIndex = count($rows);
                     $rows[] = ['depth' => $depth + 1, 'key' => $key . '.' . $arm, 'label' => $arm, 'seconds' => 0.0, 'marks' => [], 'kind' => 'arm'];
-                    [$armSeconds, $armMarks] = self::walkList($command[$arm], $key . '.' . $arm, $depth + 2, $rows);
+                    [$armSeconds, $armMarks] = self::walkList($command[$arm], $key . '.' . $arm, $depth + 2, $rows, $effects);
                     $rows[$armRowIndex]['seconds'] = $armSeconds;
                     $rows[$armRowIndex]['marks'] = $armMarks;
                     $longest = max($longest, $armSeconds);
@@ -175,7 +180,7 @@ final class CutsceneLaneOverview
                     $optionKey = $key . '.options.' . $optionIndex;
                     $optionRowIndex = count($rows);
                     $rows[] = ['depth' => $depth + 1, 'key' => $optionKey, 'label' => sprintf('option %d', $optionIndex + 1), 'seconds' => 0.0, 'marks' => [], 'kind' => 'arm'];
-                    [$optionSeconds, $optionMarks] = self::walkList(is_array($option['then'] ?? null) ? $option['then'] : [], $optionKey, $depth + 2, $rows);
+                    [$optionSeconds, $optionMarks] = self::walkList(is_array($option['then'] ?? null) ? $option['then'] : [], $optionKey, $depth + 2, $rows, $effects);
                     $rows[$optionRowIndex]['seconds'] = $optionSeconds;
                     $rows[$optionRowIndex]['marks'] = $optionMarks;
                     $longest = max($longest, $optionSeconds);
@@ -185,7 +190,7 @@ final class CutsceneLaneOverview
                 if (is_array($command['cancel'] ?? null)) {
                     $cancelRowIndex = count($rows);
                     $rows[] = ['depth' => $depth + 1, 'key' => $key . '.cancel', 'label' => 'cancel', 'seconds' => 0.0, 'marks' => [], 'kind' => 'arm'];
-                    [$cancelSeconds, $cancelMarks] = self::walkList($command['cancel'], $key . '.cancel', $depth + 2, $rows);
+                    [$cancelSeconds, $cancelMarks] = self::walkList($command['cancel'], $key . '.cancel', $depth + 2, $rows, $effects);
                     $rows[$cancelRowIndex]['seconds'] = $cancelSeconds;
                     $rows[$cancelRowIndex]['marks'] = $cancelMarks;
                     $longest = max($longest, $cancelSeconds);
@@ -198,7 +203,7 @@ final class CutsceneLaneOverview
                 return [$longest, $rows[$rowIndex]['marks']];
         }
 
-        [$seconds, $marks] = self::estimate($command);
+        [$seconds, $marks] = self::estimate($command, $effects);
         $rows[] = ['depth' => $depth, 'key' => $key, 'label' => CutsceneOutline::summarize($command), 'seconds' => $seconds, 'marks' => $marks, 'kind' => 'command'];
 
         return [$seconds, $marks];
@@ -210,7 +215,7 @@ final class CutsceneLaneOverview
      * @param array<string, mixed> $command
      * @return array{0: float, 1: string[]}
      */
-    public static function estimate(array $command): array
+    public static function estimate(array $command, ?EffectTimelineLibrary $effects = null): array
     {
         $type = strval($command['type'] ?? '');
         $seconds = static fn(string $key, float $default): float => max(0.0, is_numeric($command[$key] ?? null) ? floatval($command[$key]) : $default);
@@ -224,7 +229,9 @@ final class CutsceneLaneOverview
             'common_event' => [0.0, [self::UNKNOWN]],
             'move_route' => [self::routeSeconds($command), []],
             'camera' => [self::cameraSeconds($command), []],
-            'field_animation' => [self::animationSeconds($command), []],
+            'field_animation' => array_key_exists('effect', $command)
+                ? self::effectSeconds($command['effect'], $effects)
+                : [self::animationSeconds($command), []],
             'cinematic_music' => [max($seconds('fadeIn', 0.0), 0.0), []],
             default => [0.0, []],
         };
@@ -280,6 +287,34 @@ final class CutsceneLaneOverview
     /**
      * @param array<string, mixed> $command
      */
+    /**
+     * The length of a field effect as its timeline is authored: the longer
+     * of its terminal and graphical sequences, since the play waits for the
+     * presentation in use. Without the timeline it is marked, not guessed.
+     *
+     * @return array{0: float, 1: string[]}
+     */
+    private static function effectSeconds(mixed $effect, ?EffectTimelineLibrary $effects): array
+    {
+        if (! is_string($effect) || $effects === null) {
+            return [0.0, [self::UNKNOWN]];
+        }
+
+        $seconds = 0.0;
+
+        foreach (EffectPresentation::cases() as $presentation) {
+            try {
+                $timeline = $effects->load($effect, false, $presentation);
+            } catch (Throwable) {
+                return [0.0, [self::UNKNOWN]];
+            }
+
+            $seconds = max($seconds, intval($timeline->defaults['lengthFrames'] ?? 0) / max(1, $timeline->fps));
+        }
+
+        return [$seconds, []];
+    }
+
     private static function animationSeconds(array $command): float
     {
         $frames = is_array($command['frames'] ?? null) ? count($command['frames']) : 0;

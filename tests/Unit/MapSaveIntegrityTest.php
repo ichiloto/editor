@@ -250,20 +250,31 @@ it('refuses an edit inside an opaque expression, naming the map, file and path, 
         ->and(tripletState($map))->toBe($before, 'and wrote nothing');
 });
 
-it('replaces a variable-backed value with plain data while the shared variable survives for its other users', function () {
+it('refuses an edit to a value the file builds in code, naming the variable, and writes nothing', function () {
     $root = authoredMapProject();
     $map = authoredMap($root);
+    $before = tripletState($map);
+    $script = $map->getEventField('W', ['data', 'script']);
 
-    // W's script is written as `$watchScript`. Replacing the value is safe:
-    // the entry gets the literal, the prelude variable stays untouched for
-    // anything else that names it.
-    $map->setEventField('W', ['data', 'script'], [['type' => 'text', 'name' => 'X', 'text' => 'Rewritten.']]);
-    $map->save();
-    $data = (string) file_get_contents($map->dataPath);
+    // W's script is `$watchScript`, which the file fills with a `require`.
+    // Writing the edited script as a literal would leave that code running
+    // for nothing, so the edit is refused before anything is written.
+    $refusal = null;
 
-    expect($data)->toContain("\$watchScript = require dirname(__DIR__, 2) . '/Events/harbour-watch.php';")
-        ->and($data)->toContain('Rewritten.')
-        ->and($map->getEventField('W', ['data', 'script']))->toBe([['type' => 'text', 'name' => 'X', 'text' => 'Rewritten.']]);
+    try {
+        $map->setEventField('W', ['data', 'script'], [['type' => 'text', 'name' => 'X', 'text' => 'Rewritten.']]);
+    } catch (MapSourceRefusal $thrown) {
+        $refusal = $thrown;
+    }
+
+    expect($refusal)->not->toBeNull()
+        ->and($refusal->getMessage())->toContain('test-map.data.php')
+        ->and($refusal->getMessage())->toContain('events.W.data.script')
+        ->and($refusal->getMessage())->toContain('$watchScript')
+        ->and($refusal->getMessage())->toContain('own code builds or uses')
+        ->and($map->getEventField('W', ['data', 'script']))->toBe($script)
+        ->and($map->isDirty())->toBeFalse()
+        ->and(tripletState($map))->toBe($before, 'and wrote nothing');
 });
 
 it('keeps opaque siblings byte-identical while a safe edit lands beside them', function () {
@@ -444,6 +455,45 @@ it('reads two id-less NPCs sharing a name as an ambiguous identity, and validati
 
 // -- First save, creation and move --------------------------------------------
 
+it('refuses executable grid source at load without running its side effect', function (string $member) {
+    $root = authoredMapProject();
+    $sourcePath = $root . "/assets/Maps/test-map/test-map.{$member}.php";
+    $marker = $root . '/grid-was-executed';
+    file_put_contents($sourcePath, "<?php\nfile_put_contents(" . var_export($marker, true) . ", 'yes');\nreturn 'x';\n");
+
+    expect(fn() => authoredMap($root))->toThrow(MapSourceRefusal::class, "test-map.{$member}.php");
+    expect(is_file($marker))->toBeFalse();
+})->with(['map', 'event']);
+
+it('refuses an externally replaced grid before save, duplicate or move changes files', function (string $member, string $action) {
+    $root = authoredMapProject();
+    $map = authoredMap($root);
+    if ($action === 'dirty save') {
+        $map->setTileSymbol(1, 1, '~');
+    }
+
+    $sourcePath = $member === 'map' ? $map->mapPath : $map->eventPath;
+    file_put_contents($sourcePath, "<?php\nreturn strtoupper('not a literal grid');\n");
+    $before = sourceHashTree($root);
+    $dirtyBefore = $map->isDirty();
+
+    $operation = static function () use ($map, $root, $action): void {
+        if ($action === 'duplicate') {
+            $map->duplicateTo($root . '/assets/Maps/copy', 'copy', 'Copy');
+        } elseif ($action === 'move') {
+            $map->moveTo('district/harbour');
+        } else {
+            $map->save();
+        }
+    };
+
+    expect($operation)->toThrow(MapSourceRefusal::class, basename($sourcePath));
+    expect(sourceHashTree($root))->toBe($before)
+        ->and($map->isDirty())->toBe($dirtyBefore)
+        ->and(is_dir($root . '/assets/Maps/copy'))->toBeFalse()
+        ->and(is_dir($root . '/assets/Maps/district'))->toBeFalse();
+})->with(['map', 'event'])->with(['clean save', 'dirty save', 'duplicate', 'move']);
+
 it('leaves no partial folder when a first save fails', function () {
     $root = authoredMapProject();
     ProjectMap::createBlank($root . '/assets/Maps/new-quarter', 'new-quarter', 'New Quarter');
@@ -533,7 +583,7 @@ it('moves a map only through the explicit move, carrying its authored source byt
         ->and($movedData)->toContain("'station'     => ['x' => 3, 'y' => 1],");
 });
 
-it('refuses a move when a staged grid member no longer evaluates at its destination', function (string $member) {
+it('removes executable grid sources from the move contract before a transaction starts', function (string $member) {
     $root = authoredMapProject();
     $map = authoredMap($root);
     $portableData = str_replace(
@@ -545,7 +595,6 @@ it('refuses a move when a staged grid member no longer evaluates at its destinat
     $portableData = str_replace("'script' => require dirname(__DIR__, 2) . '/Events/harbour-watch.php',", "'script' => [],", $portableData);
     file_put_contents($map->dataPath, $portableData);
 
-    $map = authoredMap($root);
     $sourcePath = $member === 'map' ? $map->mapPath : $map->eventPath;
     $sharedPath = $root . '/assets/Maps/shared-' . $member . '.php';
     file_put_contents($sharedPath, "<?php\n\nreturn " . var_export(require $sourcePath, true) . ";\n");
@@ -553,11 +602,10 @@ it('refuses a move when a staged grid member no longer evaluates at its destinat
         $sourcePath,
         "<?php\n\nreturn require dirname(__DIR__) . '/shared-{$member}.php';\n",
     );
-    $map = authoredMap($root);
     $before = tripletState($map);
 
     expect(fn() => $map->moveTo('district/harbour'))
-        ->toThrow(RuntimeException::class, "harbour.{$member}.php does not evaluate at district/harbour");
+        ->toThrow(MapSourceRefusal::class, "test-map.{$member}.php");
     expect(is_dir($root . '/assets/Maps/district'))->toBeFalse()
         ->and(tripletState($map))->toBe($before);
 })->with(['map', 'event']);
@@ -572,15 +620,12 @@ it('restores source file and directory metadata when installed move validation f
     );
     $portableData = str_replace("'script' => \$watchScript,", "'script' => [],", $portableData);
     $portableData = str_replace("'script' => require dirname(__DIR__, 2) . '/Events/harbour-watch.php',", "'script' => [],", $portableData);
-    file_put_contents($map->dataPath, $portableData);
-
-    $mapText = require $map->mapPath;
-    file_put_contents(
-        $map->mapPath,
-        "<?php\n\nrequire " . var_export($map->eventPath, true) . ";\n\nreturn "
-            . var_export($mapText, true)
-            . ";\n",
+    $portableData = str_replace(
+        'return [',
+        "if (basename(__DIR__) === 'harbour') { throw new \\RuntimeException('destination data refusal'); }\n\nreturn [",
+        $portableData,
     );
+    file_put_contents($map->dataPath, $portableData);
     $map = authoredMap($root);
 
     if ($retainSourceDirectory) {
@@ -601,7 +646,7 @@ it('restores source file and directory metadata when installed move validation f
     $fileBefore = stat($map->dataPath);
 
     expect(fn() => $map->moveTo('district/harbour'))
-        ->toThrow(RuntimeException::class, 'harbour.map.php does not evaluate at district/harbour');
+        ->toThrow(RuntimeException::class, 'harbour.data.php does not evaluate at district/harbour');
     clearstatcache(true, $map->directory);
     $directoryAfter = stat($map->directory);
     $fileAfter = stat($map->dataPath);
@@ -633,18 +678,14 @@ it('validates a move after the obsolete source directory has left the runtime vi
     );
     $portableData = str_replace("'script' => \$watchScript,", "'script' => [],", $portableData);
     $portableData = str_replace("'script' => require dirname(__DIR__, 2) . '/Events/harbour-watch.php',", "'script' => [],", $portableData);
-    file_put_contents($map->dataPath, $portableData);
-
-    $mapText = require $map->mapPath;
     $sourceDirectory = $map->directory;
-    file_put_contents(
-        $map->mapPath,
-        "<?php\n\nreturn basename(__DIR__) === 'test-map' || ! is_dir("
-            . var_export($sourceDirectory, true)
-            . ') ? '
-            . var_export($mapText, true)
-            . " : '';\n",
+    $portableData = str_replace(
+        'return [',
+        "if (basename(__DIR__) === 'harbour' && is_dir(" . var_export($sourceDirectory, true)
+            . ")) { throw new \\RuntimeException('old map directory still exists'); }\n\nreturn [",
+        $portableData,
     );
+    file_put_contents($map->dataPath, $portableData);
     $map = authoredMap($root);
     $moved = $map->moveTo('district/harbour');
 
@@ -664,13 +705,10 @@ it('holds the old map identity through validation so a nested move cannot claim 
     );
     $portableData = str_replace("'script' => \$watchScript,", "'script' => [],", $portableData);
     $portableData = str_replace("'script' => require dirname(__DIR__, 2) . '/Events/harbour-watch.php',", "'script' => [],", $portableData);
-    file_put_contents($map->dataPath, $portableData);
-
-    $mapText = require $map->mapPath;
     $mapsRoot = $root . '/assets/Maps';
-    file_put_contents(
-        $map->mapPath,
-        "<?php\n\nif (basename(__DIR__) === 'new') {\n"
+    $portableData = str_replace(
+        'return [',
+        "if (basename(__DIR__) === 'new') {\n"
             . "    try {\n"
             . '        $other = \\Ichiloto\\Editor\\ProjectMap::fromDirectory('
             . var_export($mapsRoot, true)
@@ -682,10 +720,10 @@ it('holds the old map identity through validation so a nested move cannot claim 
             . "        // The outer move owns test-map until validation ends.\n"
             . "    }\n\n"
             . "    throw new \\RuntimeException('force the outer rollback');\n"
-            . "}\n\nreturn "
-            . var_export($mapText, true)
-            . ";\n",
+            . "}\n\nreturn [",
+        $portableData,
     );
+    file_put_contents($map->dataPath, $portableData);
     $map = authoredMap($root);
     $other = ProjectMap::fromDirectory($mapsRoot, $mapsRoot . '/other');
     $mapBefore = tripletState($map);
@@ -698,7 +736,7 @@ it('holds the old map identity through validation so a nested move cannot claim 
         ->and(is_dir($mapsRoot . '/new'))->toBeFalse();
 });
 
-it('moves a map whose authored grid declares a named function', function (string $member) {
+it('removes named-function grid sources from Editor loading', function (string $member) {
     $root = authoredMapProject();
     $dataPath = $root . '/assets/Maps/test-map/test-map.data.php';
     $portableData = str_replace(
@@ -719,17 +757,11 @@ it('moves a map whose authored grid declares a named function', function (string
     );
     file_put_contents($sourcePath, rtrim($source) . "\n}\n\nreturn {$function}();\n");
 
-    $map = authoredMap($root);
-    $moved = $map->moveTo('district/harbour');
-
-    expect($moved->mapId)->toBe('district/harbour')
-        ->and(is_dir($root . '/assets/Maps/test-map'))->toBeFalse()
-        ->and((string) file_get_contents(
-            $member === 'map' ? $moved->mapPath : $moved->eventPath,
-        ))->toContain("function {$function}(): string");
+    expect(fn() => authoredMap($root))->toThrow(MapSourceRefusal::class, "test-map.{$member}.php");
+    expect(is_dir($root . '/assets/Maps/district'))->toBeFalse();
 })->with(['map', 'event']);
 
-it('evaluates a moved triplet in runtime order when members share declarations', function () {
+it('removes grid calls into data-file declarations', function () {
     $root = authoredMapProject();
     $dataPath = $root . '/assets/Maps/test-map/test-map.data.php';
     $mapPath = $root . '/assets/Maps/test-map/test-map.map.php';
@@ -749,15 +781,11 @@ it('evaluates a moved triplet in runtime order when members share declarations',
     file_put_contents($dataPath, $portableData);
     file_put_contents($mapPath, "<?php\n\nreturn editorSharedMapGridFixture();\n");
 
-    $map = authoredMap($root);
-    $moved = $map->moveTo('district/harbour');
-
-    expect($moved->mapId)->toBe('district/harbour')
-        ->and($moved->getWidth())->toBe($map->getWidth())
-        ->and((string) file_get_contents($moved->mapPath))->toContain('editorSharedMapGridFixture()');
+    expect(fn() => authoredMap($root))->toThrow(MapSourceRefusal::class, 'test-map.map.php');
+    expect(function_exists('editorSharedMapGridFixture'))->toBeFalse();
 });
 
-it('evaluates staged map members under their final basenames', function () {
+it('removes filename-dependent executable grid sources', function () {
     $root = authoredMapProject();
     $dataPath = $root . '/assets/Maps/test-map/test-map.data.php';
     $mapPath = $root . '/assets/Maps/test-map/test-map.map.php';
@@ -778,11 +806,8 @@ it('evaluates staged map members under their final basenames', function () {
             . var_export($mapText, true) . " : '';\n",
     );
 
-    $map = authoredMap($root);
-    $moved = $map->moveTo('district/harbour');
-
-    expect($moved->mapId)->toBe('district/harbour')
-        ->and(basename($moved->mapPath))->toBe('harbour.map.php');
+    expect(fn() => authoredMap($root))->toThrow(MapSourceRefusal::class, 'test-map.map.php');
+    expect(is_dir($root . '/assets/Maps/district'))->toBeFalse();
 });
 
 it('moves preserved map data containing an object without reconstructing it in the editor process', function () {
@@ -811,7 +836,7 @@ it('moves preserved map data containing an object without reconstructing it in t
         ->and($reloaded->getEditableData()['opaque']->label)->toBe('preserved');
 });
 
-it('fingerprints the final shared object state after the complete map load unit', function () {
+it('removes grid mutation of shared data-file objects', function () {
     $root = authoredMapProject();
     $dataPath = $root . '/assets/Maps/test-map/test-map.data.php';
     $mapPath = $root . '/assets/Maps/test-map/test-map.map.php';
@@ -834,11 +859,7 @@ it('fingerprints the final shared object state after the complete map load unit'
         "<?php\n\n\$shared->label = 'after-grid';\n\nreturn " . var_export($mapText, true) . ";\n",
     );
 
-    $map = authoredMap($root);
-    $moved = $map->moveTo('district/harbour');
-
-    expect($moved->getEditableData()['opaque']->label)->toBe('after-grid')
-        ->and(ProjectMap::fromDirectory($root . '/assets/Maps', $moved->directory)->getEditableData()['opaque']->label)->toBe('after-grid');
+    expect(fn() => authoredMap($root))->toThrow(MapSourceRefusal::class, 'test-map.map.php');
 });
 
 // -- Editor-level flows -------------------------------------------------------

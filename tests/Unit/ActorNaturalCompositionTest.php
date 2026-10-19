@@ -150,7 +150,7 @@ it('shows and edits both layers without writing while looking', function () {
     callEditorMethod($editor, 'openDatabaseAtCategory', 'actors');
 
     $rowFor = static function (Editor $editor, string $field): array {
-        foreach (callEditorMethod($editor, 'getDatabaseActorSettingsFields') as $row) {
+        foreach (callEditorMethod($editor, 'getDatabaseSettingsFields') as $row) {
             if (($row['field'] ?? null) === $field) {
                 return $row;
             }
@@ -158,7 +158,7 @@ it('shows and edits both layers without writing while looking', function () {
 
         return [];
     };
-    $labels = array_column(callEditorMethod($editor, 'getDatabaseActorSettingsFields'), 'label');
+    $labels = array_column(callEditorMethod($editor, 'getDatabaseSettingsFields'), 'label');
 
     // Both layers are on the pane, named for what they do, with what they
     // come to beside them.
@@ -168,7 +168,7 @@ it('shows and edits both layers without writing while looking', function () {
         ->and($rowFor($editor, 'actorNaturalAdjustments.attack')['value'])->toBe('4')
         ->and($rowFor($editor, 'naturalVariants.awakened.attack')['value'])->toBe('12');
 
-    foreach (callEditorMethod($editor, 'getDatabaseActorSettingsFields') as $row) {
+    foreach (callEditorMethod($editor, 'getDatabaseSettingsFields') as $row) {
         if (($row['label'] ?? null) === '  In force') {
             expect($row['value'])->toContain('+16 attack');
         }
@@ -179,7 +179,7 @@ it('shows and edits both layers without writing while looking', function () {
 
     // Editing the fixed layer moves what is in force, without touching the
     // variant that is added to it.
-    callEditorMethod($editor, 'applyDatabaseFieldValue', 'actorNaturalAdjustments.attack', '10');
+    callEditorMethod($editor, 'applyDatabaseFieldValueRecorded', array_values(array_filter(callEditorMethod($editor, 'getDatabaseSettingsFields'), static fn(array $row): bool => ($row['field'] ?? null) === 'actorNaturalAdjustments.attack'))[0], '10');
 
     /** @var ProjectWorkspace $workspace */
     $workspace = getEditorProperty($editor, 'workspace');

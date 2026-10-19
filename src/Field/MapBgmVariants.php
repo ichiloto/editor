@@ -156,61 +156,14 @@ final class MapBgmVariants
     }
 
     /**
-     * The keys the condition line carries per type, beyond type/name/negate.
-     */
-    private const array CONDITION_KEYS = [
-        'switch' => ['value'],
-        'event' => [],
-        'variable' => ['op', 'value'],
-        'item' => ['quantity'],
-        'key_item' => ['quantity'],
-        'quest' => ['status'],
-    ];
-
-    /**
      * Why one variant's conditions cannot go through the condition editor,
-     * or null when the editor can carry them faithfully.
-     *
-     * Committing the editor writes what the condition line carries; a
-     * condition type the line cannot express, or an authored key outside
-     * the line's vocabulary, would be silently dropped on commit, so such
-     * a variant's conditions are refused by name instead. The track stays
-     * editable either way.
+     * or null when the editor can carry them faithfully
+     * ({@see ConditionCodec::findCarryIssue()}). The track stays editable
+     * either way.
      */
     public function conditionsIssueAt(int $index): ?string
     {
-        $conditions = $this->rows[$index]['conditions'] ?? [];
-
-        if (! is_array($conditions) || ! array_is_list($conditions)) {
-            return sprintf(
-                'the conditions are %s, not a list',
-                is_array($conditions) ? 'a keyed array' : get_debug_type($conditions),
-            );
-        }
-
-        foreach ($conditions as $conditionIndex => $condition) {
-            if (! is_array($condition)) {
-                return sprintf('condition %d is %s, not an array', $conditionIndex + 1, get_debug_type($condition));
-            }
-
-            if (ConditionCodec::decode(ConditionCodec::encode($condition)) === null) {
-                return sprintf('condition %d holds a shape the condition editor cannot carry', $conditionIndex + 1);
-            }
-
-            $type = strval($condition['type'] ?? '');
-            $carried = ['type', 'name', 'negate', ...(self::CONDITION_KEYS[$type] ?? [])];
-            $extra = array_diff(array_keys($condition), $carried);
-
-            if ($extra !== []) {
-                return sprintf(
-                    'condition %d carries "%s", which the condition editor would drop',
-                    $conditionIndex + 1,
-                    implode('", "', array_map(strval(...), $extra)),
-                );
-            }
-        }
-
-        return null;
+        return ConditionCodec::findCarryIssue($this->rows[$index]['conditions'] ?? []);
     }
 
     /**

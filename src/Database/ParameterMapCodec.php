@@ -133,7 +133,9 @@ final class ParameterMapCodec
 
     /**
      * Returns a map with authored scalars replaced and everything the line
-     * cannot carry kept exactly as it was.
+     * cannot carry kept exactly as it was, where it was: a hidden value stays
+     * after the parameter it followed, so a line read back unchanged leaves
+     * the map as stored.
      *
      * @param array<string, mixed> $existing The parameters as stored.
      * @param array<string, scalar> $authored The parameters read off the line.
@@ -141,12 +143,27 @@ final class ParameterMapCodec
      */
     public static function merge(array $existing, array $authored): array
     {
-        $merged = $authored;
+        $leading = [];
+        $hiddenAfter = [];
+        $anchor = null;
 
         foreach ($existing as $name => $value) {
-            if (! is_scalar($value) && ! array_key_exists($name, $authored)) {
-                $merged[$name] = $value;
+            if (array_key_exists($name, $authored)) {
+                $anchor = $name;
+            } elseif (is_scalar($value)) {
+                continue;
+            } elseif ($anchor === null) {
+                $leading[$name] = $value;
+            } else {
+                $hiddenAfter[$anchor][$name] = $value;
             }
+        }
+
+        $merged = $leading;
+
+        foreach ($authored as $name => $value) {
+            $merged[$name] = $value;
+            $merged += $hiddenAfter[$name] ?? [];
         }
 
         return $merged;

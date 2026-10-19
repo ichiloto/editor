@@ -48,6 +48,16 @@ $payload = json_decode((string) file_get_contents($caseFile), true, flags: JSON_
 // a real game.
 $projectRoot = sys_get_temp_dir() . '/ichiloto-bgm-parity-' . bin2hex(random_bytes(4));
 mkdir($projectRoot . '/assets/Data', 0755, true);
+// This subprocess has no suite to clean up after it: it removes its project
+// itself when it ends, normally or not.
+register_shutdown_function(static function () use ($projectRoot): void {
+    chdir(sys_get_temp_dir());
+    foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator($projectRoot, FilesystemIterator::SKIP_DOTS),
+        RecursiveIteratorIterator::CHILD_FIRST) as $entry) {
+        $entry->isDir() ? rmdir($entry->getPathname()) : unlink($entry->getPathname());
+    }
+    rmdir($projectRoot);
+});
 file_put_contents($projectRoot . '/assets/Data/items.php', <<<'PHP'
 <?php
 

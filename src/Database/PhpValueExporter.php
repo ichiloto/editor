@@ -191,6 +191,12 @@ final class PhpValueExporter
         $reflection = new ReflectionClass($value);
         $constructor = $reflection->getConstructor();
 
+        // Writing 'new' needs a constructor anyone may call: a class built only through its own factories, such as
+        // one with a private constructor, would be written back as a file that cannot load.
+        if (! $reflection->isInstantiable()) {
+            return null;
+        }
+
         if ($constructor === null) {
             // Nothing to rebuild it from. An object carrying state with no
             // constructor to put it back would be exported as an empty shell,

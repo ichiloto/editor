@@ -2,8 +2,11 @@
 
 declare(strict_types=1);
 
+use Ichiloto\Editor\Cutscenes\CutsceneHydration;
 use Ichiloto\Editor\Cutscenes\CutsceneLibrary;
 use Ichiloto\Editor\Editor;
+use Ichiloto\Editor\ProjectDirectoryContext;
+use Ichiloto\Engine\Rendering\Transport\RendererSessionConfig;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Editor\UI\CutscenesScreen;
 
@@ -121,6 +124,44 @@ return [
 PHP_SOURCE;
 }
 
+/** A summon project whose lantern wisp has a terminal and a graphical sequence, its art a synthetic sheet. */
+function stagedSummonProject(): string
+{
+    $root = cutsceneProject();
+    file_put_contents($root . '/assets/Cutscenes/Summons/lantern-wisp/lantern-wisp.timeline.php', <<<'PHP_SOURCE'
+<?php
+
+return [
+  'formatVersion' => 1,
+  'presentations' => [
+    'terminal' => [
+      'fps' => 12,
+      'lengthFrames' => 24,
+      'tracks' => [
+        ['type' => 'glyph', 'id' => 'wisp', 'keyframes' => [['frame' => 0, 'duration' => 24, 'content' => '*', 'position' => ['x' => 10, 'y' => 5]]]],
+      ],
+      'cues' => [['id' => 'flare', 'frame' => 12, 'type' => 'applyEffect']],
+    ],
+    'graphical' => [
+      'fps' => 12,
+      'lengthFrames' => 24,
+      'restFrame' => 12,
+      'tracks' => [
+        // The wisp itself.
+        ['type' => 'image', 'id' => 'wisp-art', 'asset' => 'Graphics/Summons/Wisp.png', 'sheet' => ['columns' => 2, 'rows' => 1],
+          'keyframes' => [['frame' => 0, 'duration' => 24, 'sourceFrame' => 0]]],
+      ],
+      'cues' => [['id' => 'flare', 'frame' => 12, 'type' => 'applyEffect']],
+    ],
+  ],
+];
+PHP_SOURCE);
+    mkdir($root . '/assets/Graphics/Summons', 0o777, true);
+    writeTilesetTestPng($root . '/assets/Graphics/Summons/Wisp.png', 16, 8);
+
+    return $root;
+}
+
 /**
  * A throwaway project holding the cinematic and the summon.
  */
@@ -146,34 +187,17 @@ function cutsceneProject(): string
  */
 function writeFireballSkill(string $root): void
 {
-    file_put_contents($root . '/assets/Data/skills.php', <<<'PHP_SOURCE'
-<?php
-
-use Ichiloto\Engine\Entities\Effects\SkillEffects\HPDamageSkillEffect;
-use Ichiloto\Engine\Entities\Enumerations\ItemScopeNumber;
-use Ichiloto\Engine\Entities\Enumerations\ItemScopeSide;
-use Ichiloto\Engine\Entities\Enumerations\ItemScopeStatus;
-use Ichiloto\Engine\Entities\Enumerations\Occasion;
-use Ichiloto\Engine\Entities\ItemScope;
-use Ichiloto\Engine\Entities\Skills\MagicSkill;
-use Ichiloto\Engine\Entities\Skills\SkillInvocation;
-
-return [
-  new MagicSkill(
-    'Fireball',
-    'A burst of flame.',
-    'FIR',
-    4,
-    0,
-    new ItemScope(ItemScopeSide::ENEMY, ItemScopeNumber::ONE, ItemScopeStatus::ALIVE),
-    Occasion::BATTLE_SCREEN,
-    new SkillInvocation('$1 casts Fireball!', 0, 0, 1, 10),
-    [
-      new HPDamageSkillEffect('$user->stats->magicAttack * 3', NULL, 0.2, false),
-    ],
-  ),
-];
-PHP_SOURCE);
+    writeSkillRecords($root, new \Ichiloto\Engine\Entities\Skills\MagicSkill(
+        'Fireball',
+        'A burst of flame.',
+        'FIR',
+        4,
+        0,
+        new \Ichiloto\Engine\Entities\ItemScope(),
+        \Ichiloto\Engine\Entities\Enumerations\Occasion::BATTLE_SCREEN,
+        new \Ichiloto\Engine\Entities\Skills\SkillInvocation('$1 casts Fireball!', 0, 0, 1, 10),
+        [new \Ichiloto\Engine\Entities\Effects\SkillEffects\HPDamageSkillEffect('$user->stats->magicAttack * 3', null, 0.2, false)],
+    ));
 }
 
 /**
@@ -464,4 +488,110 @@ function require_pair_data(string $literal): array
     $value = eval('return ' . $literal . ';');
 
     return $value;
+}
+
+/**
+ * An original flat field effect: one glyph track and a sound cue, with a
+ * comment the editor must keep.
+ */
+function emberSparkTimeline(): string
+{
+    return <<<'PHP_SOURCE'
+<?php
+
+// Ember Spark: a small flicker over its target.
+return [
+  'fps' => 10,
+  'lengthFrames' => 6,
+  'tracks' => [[
+    'id' => 'spark',
+    'type' => 'glyph',
+    'keyframes' => [
+      ['frame' => 0, 'duration' => 3, 'content' => '*', 'position' => ['x' => 0, 'y' => 0], 'color' => 'yellow'],
+      ['frame' => 3, 'duration' => 3, 'content' => '+', 'position' => ['x' => 1, 'y' => 0], 'color' => 'red'],
+    ],
+  ]],
+  'cues' => [['id' => 'crackle', 'frame' => 0, 'type' => 'playSound', 'payload' => ['sound' => 'crackle']]],
+];
+PHP_SOURCE;
+}
+
+/**
+ * An original battle effect with separate terminal and graphical sequences:
+ * a glyph stroke in the terminal, a two-frame image stroke on screen.
+ */
+function duskSlashTimeline(): string
+{
+    return <<<'PHP_SOURCE'
+<?php
+
+return [
+  'presentations' => [
+    'terminal' => [
+      'fps' => 12,
+      'lengthFrames' => 4,
+      'tracks' => [[
+        'id' => 'stroke',
+        'type' => 'glyph',
+        'facing' => 'west',
+        'keyframes' => [['frame' => 0, 'duration' => 4, 'content' => '/', 'position' => ['x' => 0, 'y' => 0]]],
+      ]],
+    ],
+    'graphical' => [
+      'fps' => 12,
+      'lengthFrames' => 2,
+      'restFrame' => 1,
+      'tracks' => [[
+        'id' => 'stroke-art',
+        'type' => 'image',
+        'asset' => 'Graphics/Effects/dusk-slash.png',
+        'sheet' => ['columns' => 2, 'rows' => 1],
+        'facing' => 'west',
+        'keyframes' => [['frame' => 0, 'sourceFrame' => 0], ['frame' => 1, 'sourceFrame' => 1]],
+      ]],
+    ],
+  ],
+];
+PHP_SOURCE;
+}
+
+/** A project holding the two original effects under assets/Animations. */
+function effectProject(): string
+{
+    $root = cutsceneProject();
+    foreach (['ember-spark' => emberSparkTimeline(), 'dusk-slash' => duskSlashTimeline()] as $id => $source) {
+        @mkdir($root . '/assets/Animations/' . $id, 0o777, true);
+        file_put_contents($root . '/assets/Animations/' . $id . '/' . $id . '.timeline.php', $source);
+    }
+    @mkdir($root . '/assets/Graphics/Effects', 0o777, true);
+    writeTilesetTestPng($root . '/assets/Graphics/Effects/dusk-slash.png', 32, 16);
+
+    return $root;
+}
+
+/** The harbour cinematic of {@see cutsceneProject()}, as the Engine reads it. */
+function harbourDefinition(string $root): \Ichiloto\Engine\Cutscenes\Cinematics\CinematicDefinition
+{
+    $folder = $root . '/assets/Cutscenes/Cinematics/harbour-lanterns';
+    $data = ProjectDirectoryContext::run($root, static fn(): mixed => require $folder . '/harbour-lanterns.data.php');
+    $script = ProjectDirectoryContext::run($root, static fn(): mixed => require $folder . '/harbour-lanterns.script.php');
+
+    return CutsceneHydration::cinematic($data, $script, $root);
+}
+
+/** The editor window's READY: what its graphical view can draw, as the game's renderer says it. */
+function previewWindowReady(): string
+{
+    return json_encode(['protocol' => 2, 'type' => 'ready', 'capabilities' => [
+        RendererSessionConfig::SPRITE_SOURCE_RECT, RendererSessionConfig::GRAPHICAL_CANVAS, RendererSessionConfig::CANVAS_OVERLAY,
+        RendererSessionConfig::CANVAS_CLIP_OPACITY, RendererSessionConfig::FRAME_VIEWPORT, RendererSessionConfig::FIELD_MOTION,
+        RendererSessionConfig::SPRITE_LIFT, RendererSessionConfig::CANVAS_IMAGE_TONE, RendererSessionConfig::CANVAS_IMAGE_FLIP,
+    ]]);
+}
+
+/** @param list<array{type: string, payload: array<string, mixed>}> $messages */
+function previewFrameGenerations(array $messages): array
+{
+    return array_values(array_filter(array_map(static fn(array $message): ?int => $message['type'] === 'frame'
+        ? ($message['payload']['generation'] ?? null) : null, $messages), static fn(?int $generation): bool => $generation !== null));
 }

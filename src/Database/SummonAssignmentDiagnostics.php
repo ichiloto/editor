@@ -65,7 +65,7 @@ final class SummonAssignmentDiagnostics
      * @param mixed $assignments The actor's `summons` value as authored.
      * @return array<int, array{id: string, problems: array<int, array{message: string, hint: string}>}> One row per assignment, in order.
      */
-    public function forActor(string $actorName, string $className, mixed $assignments): array
+    public function forActor(string $actorId, string $className, mixed $assignments): array
     {
         if (! is_array($assignments) || ! array_is_list($assignments)) {
             return [['id' => '', 'problems' => [['message' => 'Its summon assignments are malformed.', 'hint' => 'Use a list of summon ids.']]]];
@@ -99,7 +99,7 @@ final class SummonAssignmentDiagnostics
                 continue;
             }
 
-            if (! $this->isEligible($definition, $actorName, $className)) {
+            if (! $this->isEligible($definition, $actorId, $className)) {
                 $problems[] = ['message' => sprintf('It is not eligible to hold summon "%s".', $summonId), 'hint' => 'Change the actor assignment or the generic wielder policy.'];
             }
 
@@ -118,7 +118,7 @@ final class SummonAssignmentDiagnostics
      *
      * @param array<string, mixed> $definition
      */
-    public function isEligible(array $definition, string $actorName, string $className): bool
+    public function isEligible(array $definition, string $actorId, string $className): bool
     {
         $wielders = is_array($definition['wielders'] ?? null) ? $definition['wielders'] : null;
 
@@ -130,7 +130,8 @@ final class SummonAssignmentDiagnostics
         $mode = is_string($modeValue) ? strtolower(trim($modeValue)) : '';
 
         return match ($mode) {
-            'characters' => in_array($actorName, (array) ($wielders['characters'] ?? []), true),
+            // By the actor's stable id, as the Engine matches it, never its display name.
+            'characters' => in_array(strtolower(trim($actorId)), array_map(static fn(mixed $id): string => is_string($id) ? strtolower(trim($id)) : '', (array) ($wielders['characters'] ?? [])), true),
             'roles' => in_array($className, (array) ($wielders['roles'] ?? []), true),
             'all' => true,
             default => false,

@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Database;
 
+use Ichiloto\Editor\Dialogue\DialogueLineSpeaker;
 use Ichiloto\Editor\Inspector\InputControlType;
+use Ichiloto\Engine\Messaging\Dialogue\Presentation\DialogueContext;
 
 /**
  * One editable field on a Database record.
@@ -40,6 +42,9 @@ final readonly class RecordField
      * types this surface may author, when the runtime restricts it to fewer
      * than the writer's full vocabulary (a transactional boundary rejects
      * quest acceptance). Null offers everything the writer applies.
+     * @param bool $uniqueAcrossRecords For a list field, whether a member may
+     * be held by one record of the category at most (an animation role plays
+     * one animation), so taking one another record holds is refused.
      */
     public function __construct(
         public string $key,
@@ -56,7 +61,22 @@ final readonly class RecordField
         public ?string $displayDefault = null,
         public ?string $blankLabel = null,
         public ?array $writeTypes = null,
+        public bool $uniqueAcrossRecords = false,
+        /** For a line's emotion, how the line names its speaker, whose catalogue emotions it is chosen from. */
+        public ?DialogueLineSpeaker $dialogueSpeaker = null,
     ) {
+    }
+
+    /**
+     * Returns a dialogue line's emotion: chosen among the emotions the line's speaker has in the game's dialogue
+     * catalogue, as the rule says who speaks. Absent, the Engine shows Neutral.
+     *
+     * @param DialogueLineSpeaker $speaker How the line names its speaker.
+     * @return self The field.
+     */
+    public static function emotion(DialogueLineSpeaker $speaker): self
+    {
+        return new self('emotion', 'Emotion', removeWhenEmpty: true, displayDefault: DialogueContext::DEFAULT_EMOTION, dialogueSpeaker: $speaker);
     }
 
     /**
@@ -122,6 +142,7 @@ final readonly class RecordField
             $this->displayDefault,
             $this->blankLabel,
             $this->writeTypes,
+            dialogueSpeaker: $this->dialogueSpeaker,
         );
     }
 
@@ -135,9 +156,10 @@ final readonly class RecordField
      * @param string $key The payload key.
      * @param string $label The settings-pane label.
      * @param bool $removeWhenEmpty Whether `false` drops the key (matching engine defaults).
+     * @param string|null $displayDefault What an absent key reads as, such as the engine's `false`.
      * @return self
      */
-    public static function boolean(string $key, string $label, bool $removeWhenEmpty = true): self
+    public static function boolean(string $key, string $label, bool $removeWhenEmpty = true, ?string $displayDefault = null): self
     {
         return new self(
             $key,
@@ -145,6 +167,7 @@ final readonly class RecordField
             InputControlType::BOOLEAN,
             ['false', 'true'],
             $removeWhenEmpty,
+            displayDefault: $displayDefault,
         );
     }
 }

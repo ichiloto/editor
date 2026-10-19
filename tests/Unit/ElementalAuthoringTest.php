@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use Ichiloto\Editor\Database\AffinityEditor;
 use Ichiloto\Editor\Database\ElementAffinityCodec;
+use Ichiloto\Editor\Database\InventoryCatalog;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Database\RecordSchemaCatalog;
 use Ichiloto\Editor\Database\ReferenceCatalog;
@@ -11,27 +12,21 @@ use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Engine\Entities\Inventory\Armor;
 
 /**
- * Writes an element enum into a project the way a real one declares it.
+ * Declares a project's elements the way a real one does, in system.php.
  *
  * @param string $root The project root.
  * @return void
  */
-function writeElementTypes(string $root): void
+function writeProjectElements(string $root): void
 {
-    if (! is_dir($root . '/assets/Data/Types')) {
-        mkdir($root . '/assets/Data/Types', 0o777, true);
-    }
-
-    // Overwrites any fixture enum so the expected cases are exactly these.
-    file_put_contents($root . '/assets/Data/Types/ElementType.php', <<<'PHP'
+    // The list system.php declares, which the game's element registry reads.
+    file_put_contents($root . '/assets/Data/system.php', <<<'PHP'
     <?php
 
-    enum ElementType: string
-    {
-      case FIRE = 'Fire';
-      case ICE = 'Ice';
-      case WATER = 'Water';
-    }
+    return [
+      'title' => 'Elements Test',
+      'elements' => ['Fire', 'Ice', 'Water'],
+    ];
     PHP);
 }
 
@@ -55,7 +50,7 @@ it('describes the named effects in words and keeps a custom value', function () 
 
 it('reads the elements a project declares', function () {
     $root = makeTemporaryProject();
-    writeElementTypes($root);
+    writeProjectElements($root);
 
     $catalog = new ReferenceCatalog(ProjectWorkspace::fromProject($root));
 
@@ -88,9 +83,9 @@ it('builds a ward list by picking and cycling, never typing', function () {
     expect($editor->encoded())->toBe('Fire: -1');
 });
 
-it('authors an armor ward end to end, into the engine object', function () {
+it('authors an armor ward end to end, into the definition the game builds', function () {
     $root = makeTemporaryProject();
-    writeElementTypes($root);
+    writeProjectElements($root);
 
     $database = ProjectRecordDatabase::fromProject($root, RecordSchemaCatalog::forKey('armors'));
     $index = $database->addRecord();
@@ -100,29 +95,30 @@ it('authors an armor ward end to end, into the engine object', function () {
 
     $reloaded = ProjectRecordDatabase::fromProject($root, RecordSchemaCatalog::forKey('armors'));
     $labels = $reloaded->getEntryLabels();
-    $armor = $reloaded->getRecords()[array_search('Flame Ward', $labels, true)]->toArray();
+    $armor = InventoryCatalog::readDefinition($reloaded->getRecords()[array_search('Flame Ward', $labels, true)]);
 
     expect($armor)->toBeInstanceOf(Armor::class)
         ->and($armor->elementAffinities)->toBe(['Fire' => 0.5, 'Ice' => 2.0])
-        // The engine's own lookup, on the object the editor wrote.
+        // The engine's own lookup, on the definition the editor wrote.
         ->and($armor->getElementMultiplier('Fire'))->toBe(0.5);
 });
 
 it('gives a weapon an attack element and takes it away again', function () {
     $root = makeTemporaryProject();
-    writeElementTypes($root);
+    writeProjectElements($root);
 
     $database = ProjectRecordDatabase::fromProject($root, RecordSchemaCatalog::forKey('weapons'));
     $index = $database->addRecord();
     $database->setField($index, 'element', 'Fire');
 
-    expect($database->getRecords()[$index]->toArray()->element)->toBe('Fire');
+    expect(InventoryCatalog::readDefinition($database->getRecords()[$index])?->element)->toBe('Fire');
 
     // '(None)' is what the picker's clearing entry commits: an optional
     // reference must have a way back to nothing.
     $database->setField($index, 'element', '(None)');
 
-    expect($database->getRecords()[$index]->toArray()->element)->toBeNull();
+    expect($database->getRecords()[$index]->get('element'))->toBeNull()
+        ->and(InventoryCatalog::readDefinition($database->getRecords()[$index]))->not->toBeNull();
 });
 
 it('declares the element fields as picked, cycled, or row-built', function () {
@@ -142,4 +138,28 @@ it('declares the element fields as picked, cycled, or row-built', function () {
         // get the same editor.
         ->and($fields['enemies']['elementAffinities']->isReadOnly)->toBeFalse()
         ->and($fields['enemies']['elementAffinities']->codec->value)->toBe('affinities');
+});
+
+it('authors elements in Types, offering them before they are saved, the Engine\'s own when none are listed', function () {
+    $root = makeTemporaryProject();
+    writeProjectElements($root);
+    $workspace = ProjectWorkspace::fromProject($root);
+    $types = $workspace->getRecordDatabase('types');
+    $authoring = new Ichiloto\Editor\Database\RecordAuthoring();
+
+    $added = $authoring->addItem($types, 0, [], 'elementList');
+    $types->setField(0, ProjectRecordDatabase::subFieldId('element', (int) $added->index, 'name'), 'Shadow');
+
+    expect($types->getEntryLabels())->toBe(['Elements'])
+        ->and(new ReferenceCatalog($workspace)->valuesFor('elements'))->toBe(['Shadow', 'Fire', 'Ice', 'Water']);
+
+    $types->save();
+    expect((require $root . '/assets/Data/system.php')['elements'])->toBe(['Shadow', 'Fire', 'Ice', 'Water']);
+
+    foreach ([3, 2, 1, 0] as $index) {
+        $authoring->removeItem($types, 0, [], ProjectRecordDatabase::subFieldId('element', $index, 'name'));
+    }
+
+    expect(new ReferenceCatalog($workspace)->valuesFor('elements'))
+        ->toBe(array_map(static fn($element): string => $element->value, Ichiloto\Engine\Entities\Enumerations\ElementType::cases()));
 });

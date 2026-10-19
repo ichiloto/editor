@@ -149,12 +149,12 @@ it('narrows a Database entry list with / and moves selection inside it', functio
 
     // Oracle is index 1 in classes.php; the selection follows the filter.
     expect(callEditorMethod($editor, 'getVisibleDatabaseEntryIndexes'))->toBe([1])
-        ->and(getEditorProperty($editor, 'databaseSelectedClassIndex'))->toBe(1);
+        ->and(getEditorProperty($editor, 'databaseSelectedRecordIndexes')['classes'] ?? 0)->toBe(1);
 
     // Down inside a one-row filter cannot walk onto a hidden entry.
     callEditorMethod($editor, 'dispatchInput', "\033[B");
 
-    expect(getEditorProperty($editor, 'databaseSelectedClassIndex'))->toBe(1);
+    expect(getEditorProperty($editor, 'databaseSelectedRecordIndexes')['classes'] ?? 0)->toBe(1);
 
     callEditorMethod($editor, 'dispatchInput', "\033");
 
