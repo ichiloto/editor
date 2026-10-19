@@ -9,6 +9,7 @@ use Ichiloto\Editor\Database\RecordField;
 use Ichiloto\Editor\Database\RecordRefusal;
 use Ichiloto\Editor\Database\RecordSchema;
 use Ichiloto\Editor\Database\RecordStorage;
+use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Engine\Messaging\Dialogue\Presentation\DialoguePresentationCatalog;
 use Throwable;
 
@@ -48,21 +49,22 @@ final class DialogueSpeakerFields
     /**
      * A new label, which saves at once as the Engine admits it: bound to the identity of that id when there is one,
      * else to the catalogue's first identity for the author to change, as a new text role starts on the project's
-     * first font.
+     * first font. The identities are the catalogue's as the workspace holds it, so a portrait added earlier in the
+     * session can be named at once.
      */
-    public static function makeBlank(string $name, string $projectRoot): array
+    public static function makeBlank(string $name, string $projectRoot, ?ReferenceCatalog $references = null): array
     {
         if (trim($name) === '') {
             throw new RecordRefusal('A speaker name is the label lines are spoken under; it cannot be empty.');
         }
         try {
-            $catalogue = DialoguePresentationCatalog::load(rtrim($projectRoot, '/') . '/assets');
+            $catalogue = $references?->getDialoguePresentationCatalog() ?? DialoguePresentationCatalog::load(rtrim($projectRoot, '/') . '/assets');
         } catch (Throwable $error) {
             throw new RecordRefusal('The dialogue catalogue cannot be read: ' . $error->getMessage(), previous: $error);
         }
         $identities = array_map(strval(...), [...array_keys($catalogue->actors), ...array_keys($catalogue->resources)]);
         if ($identities === []) {
-            throw new RecordRefusal('A speaker name shows a dialogue portrait. Add one under Dialogue Portraits and save it first.');
+            throw new RecordRefusal('A speaker name shows a dialogue portrait. Add one under Dialogue Portraits first.');
         }
 
         return ['name' => $name, 'identity' => in_array($name, $identities, true) ? $name : $identities[0]];

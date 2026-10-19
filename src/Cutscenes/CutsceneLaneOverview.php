@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Cutscenes;
 
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
-use Ichiloto\Engine\Animations\Timelines\EffectTimelineLibrary;
+use Ichiloto\Editor\Database\ProjectCatalogs;
 use Throwable;
 
 /**
@@ -37,9 +37,9 @@ final class CutsceneLaneOverview
      * Builds the overview of a command list.
      *
      * @param array<int, mixed> $commands
-     * @param EffectTimelineLibrary|null $effects The project's effect timelines, so a field effect's length is known.
+     * @param ProjectCatalogs|null $effects The project's catalogues, so a field effect's length is known as the workspace holds it.
      */
-    public static function of(array $commands, string $rootKey = 'commands', ?EffectTimelineLibrary $effects = null): self
+    public static function of(array $commands, string $rootKey = 'commands', ?ProjectCatalogs $effects = null): self
     {
         /** @var array<int, array{depth: int, key: string, label: string, seconds: float, marks: string[], kind: string}> $rows */
         $rows = [];
@@ -77,7 +77,7 @@ final class CutsceneLaneOverview
      * @param array<int, array<string, mixed>> $rows
      * @return array{0: float, 1: string[]}
      */
-    private static function walkList(array $commands, string $prefix, int $depth, array &$rows, ?EffectTimelineLibrary $effects): array
+    private static function walkList(array $commands, string $prefix, int $depth, array &$rows, ?ProjectCatalogs $effects): array
     {
         $total = 0.0;
         $marks = [];
@@ -101,7 +101,7 @@ final class CutsceneLaneOverview
      * @param array<int, array<string, mixed>> $rows
      * @return array{0: float, 1: string[]}
      */
-    private static function walkCommand(array $command, string $key, int $depth, array &$rows, ?EffectTimelineLibrary $effects): array
+    private static function walkCommand(array $command, string $key, int $depth, array &$rows, ?ProjectCatalogs $effects): array
     {
         $type = strval($command['type'] ?? '?');
 
@@ -215,7 +215,7 @@ final class CutsceneLaneOverview
      * @param array<string, mixed> $command
      * @return array{0: float, 1: string[]}
      */
-    public static function estimate(array $command, ?EffectTimelineLibrary $effects = null): array
+    public static function estimate(array $command, ?ProjectCatalogs $effects = null): array
     {
         $type = strval($command['type'] ?? '');
         $seconds = static fn(string $key, float $default): float => max(0.0, is_numeric($command[$key] ?? null) ? floatval($command[$key]) : $default);
@@ -294,7 +294,7 @@ final class CutsceneLaneOverview
      *
      * @return array{0: float, 1: string[]}
      */
-    private static function effectSeconds(mixed $effect, ?EffectTimelineLibrary $effects): array
+    private static function effectSeconds(mixed $effect, ?ProjectCatalogs $effects): array
     {
         if (! is_string($effect) || $effects === null) {
             return [0.0, [self::UNKNOWN]];
@@ -304,7 +304,7 @@ final class CutsceneLaneOverview
 
         foreach (EffectPresentation::cases() as $presentation) {
             try {
-                $timeline = $effects->load($effect, false, $presentation);
+                $timeline = $effects->loadEffectTimeline($effect, false, $presentation);
             } catch (Throwable) {
                 return [0.0, [self::UNKNOWN]];
             }

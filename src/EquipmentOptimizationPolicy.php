@@ -31,7 +31,8 @@ final class EquipmentOptimizationPolicy
     /**
      * Where a project declares its policy.
      */
-    public const string RELATIVE_PATH = 'assets/Data/equipment-optimization.php';
+    public const string ASSET_PATH = 'Data/equipment-optimization.php';
+    public const string RELATIVE_PATH = 'assets/' . self::ASSET_PATH;
 
     /**
      * The keys the engine's policy constructor takes, in its own order.
@@ -103,21 +104,16 @@ final class EquipmentOptimizationPolicy
     }
 
     /**
-     * Returns the policy a project declares, or null when it declares none.
+     * Returns the policy a project declares as its Optimize pages hold it,
+     * unsaved edits included, or null when it declares none.
      *
-     * @param string $projectRoot The project root.
+     * @param ProjectWorkspace $workspace The project.
      * @return array<string, mixed>|null The authored payload.
      */
-    public static function declaredIn(string $projectRoot): ?array
+    public static function declaredIn(ProjectWorkspace $workspace): ?array
     {
-        $path = rtrim($projectRoot, '/') . '/' . self::RELATIVE_PATH;
-
-        if (! is_file($path)) {
-            return null;
-        }
-
         try {
-            $payload = (static fn(): mixed => require $path)();
+            $payload = $workspace->catalogs->readData(self::ASSET_PATH)['payload'];
         } catch (Throwable) {
             return null;
         }
@@ -132,16 +128,16 @@ final class EquipmentOptimizationPolicy
      * the engine's own registry does; a preview that quietly showed declared
      * numbers instead would be describing a policy the game does not have.
      *
-     * @param string $projectRoot The project root.
+     * @param ProjectWorkspace $workspace The project.
      * @return object|null The engine policy, or null when it cannot be built.
      */
-    public static function enginePolicyFor(string $projectRoot): ?object
+    public static function enginePolicyFor(ProjectWorkspace $workspace): ?object
     {
         if (! self::isAvailable()) {
             return null;
         }
 
-        $declared = self::declaredIn($projectRoot);
+        $declared = self::declaredIn($workspace);
 
         if ($declared === null) {
             return new \Ichiloto\Engine\Entities\EquipmentOptimization\LegacyEqualWeightEquipmentOptimizationPolicy();
@@ -169,24 +165,24 @@ final class EquipmentOptimizationPolicy
     /**
      * Returns whether a project has declared a policy of its own.
      *
-     * @param string $projectRoot The project root.
+     * @param ProjectWorkspace $workspace The project.
      * @return bool True when it has.
      */
-    public static function isDeclaredIn(string $projectRoot): bool
+    public static function isDeclaredIn(ProjectWorkspace $workspace): bool
     {
-        return self::declaredIn($projectRoot) !== null;
+        return self::declaredIn($workspace) !== null;
     }
 
     /**
      * Describes which policy a preview is showing, naming the fallback for
      * what it is.
      *
-     * @param string $projectRoot The project root.
+     * @param ProjectWorkspace $workspace The project.
      * @return string The description.
      */
-    public static function describeSource(string $projectRoot): string
+    public static function describeSource(ProjectWorkspace $workspace): string
     {
-        if (self::isDeclaredIn($projectRoot)) {
+        if (self::isDeclaredIn($workspace)) {
             return sprintf('declared by this project · %s', self::RELATIVE_PATH);
         }
 
@@ -206,7 +202,7 @@ final class EquipmentOptimizationPolicy
      */
     public static function rank(ProjectWorkspace $workspace, ProjectActor $actor, string $semanticSlot): array
     {
-        $policy = self::enginePolicyFor($workspace->projectRoot);
+        $policy = self::enginePolicyFor($workspace);
 
         if ($policy === null || ! class_exists(\Ichiloto\Engine\Entities\EquipmentSlot::class)) {
             return [];

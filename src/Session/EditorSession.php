@@ -3663,17 +3663,9 @@ final class EditorSession
      */
     private function readProposedBattlerBindings(): ?array
     {
-        $root = $this->workspace->projectRoot;
-        $file = PhpDataFile::load($root . DIRECTORY_SEPARATOR . RecordSchemaCatalog::BATTLERS_PATH, $root);
-        $payload = is_array($file->payload) ? $file->payload : null;
-        foreach (DatabaseCatalog::getEmbedded() as $category) {
-            $database = $this->workspace->getRecordDatabase($category->key);
-            if ($database !== null && $database->isDirty()) {
-                $payload = $database->foldInto($payload ?? []);
-            }
-        }
+        $payload = $this->workspace->catalogs->readData(BattlerBindings::FILE)['payload'];
 
-        return $payload;
+        return is_array($payload) ? $payload : null;
     }
 
     /**

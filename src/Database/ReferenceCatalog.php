@@ -255,7 +255,7 @@ final class ReferenceCatalog
             'equipment_availabilities' => $this->equipmentVocabulary('availability'),
             'equipment_acquisition_policies' => $this->equipmentVocabulary('acquisitionPolicy'),
             'equipment_special_properties' => $this->equipmentVocabulary('specialProperty'),
-            'permanent_growth' => PermanentGrowthCatalog::fromProject($this->workspace->projectRoot)->ids(),
+            'permanent_growth' => $this->workspace->catalogs->loadPermanentGrowth()->ids(),
             'knowledge_record_types' => $this->knowledgeRecordTypes(),
             'knowledge_observations' => $this->knowledgeObservations(),
             'knowledge_subjects' => $this->knowledgeIds('subjects'),
@@ -306,7 +306,7 @@ final class ReferenceCatalog
             // The battle roles an animation can play, as the Engine resolves them.
             'animation_roles' => \Ichiloto\Engine\Animations\ActionAnimationResolver::getSupportedRoles(),
             // Effect timelines are folders the Engine lists by stable id.
-            'effects' => new EffectTimelineLibrary($this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets')->findTimelineIds(),
+            'effects' => $this->workspace->catalogs->listEffectTimelineIds(),
             'stage_timelines' => $this->stageTimelineIds(),
             'field_resources' => array_map(strval(...), array_keys($this->loadFieldResourceNames())),
             'text_roles' => $this->loadTextRoleIds(),
@@ -351,19 +351,7 @@ final class ReferenceCatalog
      */
     public function getFieldPresentationCatalog(): FieldPresentationCatalog
     {
-        $assets = $this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets';
-        $database = $this->workspace->getRecordDatabase(\Ichiloto\Editor\Field\FieldResourceFields::CATEGORY);
-        if ($database === null) {
-            return ProjectDirectoryContext::run($this->workspace->projectRoot, static fn(): FieldPresentationCatalog => FieldPresentationCatalog::load($assets));
-        }
-        if (($reason = $database->getReadOnlyReason()) !== null) {
-            throw new \InvalidArgumentException($reason);
-        }
-        $file = PhpDataFile::load($database->backingFilePath(), $this->workspace->projectRoot);
-        $payload = $database->foldInto(is_array($file->payload) ? $file->payload : []);
-
-        return ProjectDirectoryContext::run($this->workspace->projectRoot,
-            static fn(): FieldPresentationCatalog => FieldPresentationCatalog::fromArray($payload, $assets));
+        return $this->workspace->catalogs->loadFieldPresentation();
     }
 
     /**
@@ -375,7 +363,7 @@ final class ReferenceCatalog
     private function loadTextRoleIds(): array
     {
         try {
-            $catalog = ProjectTextCatalog::load($this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets');
+            $catalog = $this->workspace->catalogs->loadTextCatalog();
         } catch (Throwable) {
             return [];
         }
@@ -411,20 +399,20 @@ final class ReferenceCatalog
 
     private function stageTimelineIds(): array
     {
-        $library = new EffectTimelineLibrary($this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets');
+        $catalogs = $this->workspace->catalogs;
 
-        return ProjectDirectoryContext::run($this->workspace->projectRoot, static fn(): array => array_values(array_filter(
-            $library->findTimelineIds(),
-            static function (string $id) use ($library): bool {
+        return array_values(array_filter(
+            $catalogs->listEffectTimelineIds(),
+            static function (string $id) use ($catalogs): bool {
                 try {
-                    $library->loadStage($id);
+                    $catalogs->loadEffectTimeline($id, forStage: true);
 
                     return true;
                 } catch (Throwable) {
                     return false;
                 }
             },
-        )));
+        ));
     }
 
     /** @return string[] The catalogue's basic skills usable in battle, in catalogue order. */
@@ -828,7 +816,7 @@ final class ReferenceCatalog
         }
 
         if ($category === 'permanent_growth') {
-            $catalog = PermanentGrowthCatalog::fromProject($this->workspace->projectRoot);
+            $catalog = $this->workspace->catalogs->loadPermanentGrowth();
             $labels = [];
 
             foreach ($catalog->ids() as $id) {
@@ -1056,19 +1044,11 @@ final class ReferenceCatalog
      */
     private function knowledgeCatalog(): array
     {
-        $path = rtrim($this->workspace->projectRoot, '/') . '/assets/Data/knowledge.php';
-
-        if (! is_file($path)) {
-            return [];
-        }
-
         try {
-            $catalog = (static fn(): mixed => require $path)();
+            return $this->workspace->catalogs->readKnowledgeData();
         } catch (\Throwable) {
             return [];
         }
-
-        return is_array($catalog) ? $catalog : [];
     }
 
     /**
@@ -1122,12 +1102,11 @@ final class ReferenceCatalog
      */
     private function loadTilesetNames(): array
     {
-        $assetRoot = rtrim($this->workspace->projectRoot, '/') . '/assets';
+        $catalogs = $this->workspace->catalogs;
         $names = [];
-        foreach (glob($assetRoot . '/' . Tileset::DIRECTORY . '/*.php') ?: [] as $file) {
-            $id = basename($file, '.php');
+        foreach ($catalogs->listTilesetIds() as $id) {
             try {
-                $names[$id] = Tileset::load($assetRoot, $id)->name;
+                $names[$id] = $catalogs->loadTileset($id)->name;
             } catch (\Throwable) {
                 continue;
             }
@@ -1163,9 +1142,7 @@ final class ReferenceCatalog
      */
     public function getDialoguePresentationCatalog(): DialoguePresentationCatalog
     {
-        $whole = $this->getDialogueCatalogPayload();
-
-        return $whole === null ? DialoguePresentationCatalog::load($this->getAssetRoot()) : DialogueCatalogFile::createCatalog($whole);
+        return $this->workspace->catalogs->loadDialoguePresentation();
     }
 
     /**
@@ -1182,11 +1159,9 @@ final class ReferenceCatalog
         if ($portraits?->schema->projection === null || $speakers?->schema->projection === null) {
             return null;
         }
-        $rows = static fn(ProjectRecordDatabase $database): array => array_map(
-            static fn(ProjectRecord $record): array => (array) $record->toArray(), $database->getRecords());
-        $whole = $portraits->schema->projection->write(['schema' => DialogueCatalogFile::SCHEMA], $rows($portraits));
+        $whole = $this->workspace->catalogs->readData(DialoguePresentationCatalog::FILE)['payload'];
 
-        return $speakers->schema->projection->write($whole, $rows($speakers));
+        return is_array($whole) ? $whole : ['schema' => DialogueCatalogFile::SCHEMA];
     }
 
     /**
@@ -1235,20 +1210,11 @@ final class ReferenceCatalog
     {
         // The project's own categories as the Place Categories page holds them, unsaved edits included.
         $database = $this->workspace->getRecordDatabase(\Ichiloto\Editor\Field\MapCategoryFields::CATEGORY);
-        if ($database === null) {
-            return \Ichiloto\Engine\Field\MapCategoryCatalog::load(dirname($this->workspace->getMapsRoot()));
-        }
-        if (($reason = $database->getReadOnlyReason()) !== null) {
+        if (($reason = $database?->getReadOnlyReason()) !== null) {
             throw new \InvalidArgumentException($reason);
         }
-        $records = [];
-        foreach ($database->getRecords() as $record) {
-            $row = (array) $record->toArray();
-            $id = (string) ($row['id'] ?? '');
-            unset($row['id']);
-            $records[$id] = $row;
-        }
-        return new \Ichiloto\Engine\Field\MapCategoryCatalog($records);
+
+        return $this->workspace->catalogs->loadMapCategories();
     }
 
     /**
@@ -1261,7 +1227,8 @@ final class ReferenceCatalog
     private function loadArenaNames(): array
     {
         try {
-            return $this->arenaNames ??= BattlePresentationCatalog::load(rtrim($this->workspace->projectRoot, '/') . '/assets')?->getArenaChoices() ?? [];
+            // Arenas are the code-owned catalogue's alone, which no page edits.
+            return $this->arenaNames ??= BattlePresentationCatalog::loadCode(rtrim($this->workspace->projectRoot, '/') . '/assets')?->getArenaChoices() ?? [];
         } catch (\Throwable) {
             return $this->arenaNames = [];
         }

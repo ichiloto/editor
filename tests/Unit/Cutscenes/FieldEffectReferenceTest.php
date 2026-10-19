@@ -137,11 +137,27 @@ it('accepts a once-played field effect in cinematics and event scripts', functio
 it('times a field effect by its timeline and marks one it cannot read', function () {
     $root = cutsceneProject();
     writeFieldEffectTimeline($root, 'lantern-glow', lengthFrames: 15);
-    $effects = new EffectTimelineLibrary($root . '/assets');
+    $effects = ProjectWorkspace::fromProject($root)->catalogs;
     $glow = ['type' => 'field_animation', 'effect' => 'lantern-glow', 'target' => ['kind' => 'player']];
     $missing = ['type' => 'field_animation', 'effect' => 'nowhere', 'target' => ['kind' => 'player']];
 
     expect(CutsceneLaneOverview::estimate($glow, $effects))->toBe([1.5, []])
         ->and(CutsceneLaneOverview::estimate($missing, $effects))->toBe([0.0, [CutsceneLaneOverview::UNKNOWN]])
         ->and(CutsceneLaneOverview::estimate($glow))->toBe([0.0, [CutsceneLaneOverview::UNKNOWN]]);
+});
+
+it('times a field effect by its timeline as the Cutscenes workspace holds it, before it is saved', function () {
+    $root = cutsceneProject();
+    writeFieldEffectTimeline($root, 'lantern-glow', lengthFrames: 15);
+    $workspace = ProjectWorkspace::fromProject($root);
+    $glow = ['type' => 'field_animation', 'effect' => 'lantern-glow', 'target' => ['kind' => 'player']];
+    $asset = $workspace->cutscenes?->find(CutsceneType::EFFECT, 'lantern-glow') ?? throw new RuntimeException('No lantern-glow effect.');
+    $payload = $asset->payload();
+    $payload['lengthFrames'] = 25;
+    $payload['tracks'][0]['keyframes'][0]['duration'] = 25;
+    $asset->apply($payload);
+
+    expect($asset->isDirty())->toBeTrue()
+        ->and(CutsceneLaneOverview::estimate($glow, $workspace->catalogs))->toBe([2.5, []])
+        ->and(new EffectTimelineLibrary($root . '/assets')->load('lantern-glow')->defaults['lengthFrames'])->toBe(15);
 });

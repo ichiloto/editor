@@ -12,7 +12,6 @@ use Ichiloto\Editor\Inspector\MapLandmarkFields;
 use Ichiloto\Editor\Inspector\MapTerrainFields;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
-use Ichiloto\Engine\Field\MapCategoryCatalog;
 use InvalidArgumentException;
 use Throwable;
 
@@ -91,7 +90,7 @@ final class MapValidator
         try {
             $block = MapAtlas::readBlock($map);
             MapAtlas::resolveGlobal($map, $block, static fn(string $id): ?ProjectMap => $mapsById[$id] ?? null,
-                MapCategoryCatalog::load($map->getAssetRoot()));
+                $map->loadMapCategories());
         } catch (InvalidArgumentException $error) {
             return [Issue::warning($map->mapId, 'Atlas: ' . $error->getMessage())];
         }
@@ -110,7 +109,7 @@ final class MapValidator
     {
         try {
             $problem = MapLandmarkFields::findProblem($map, MapLandmarks::readMap($map)->entries,
-                MapCategoryCatalog::load($map->getAssetRoot()));
+                $map->loadMapCategories());
         } catch (InvalidArgumentException $error) {
             $problem = $error->getMessage();
         }

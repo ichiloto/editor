@@ -12463,16 +12463,12 @@ final class Editor
      */
     private function loadInventoryLootDialogEntries(LootType $lootType): array
     {
-        $itemsPath = $this->projectRoot . '/assets/Data/items.php';
-
-        if (! is_file($itemsPath)) {
-            return [];
-        }
-
-        $items = require $itemsPath;
-
-        if (! is_array($items)) {
-            return [];
+        // The items, weapons and armors as their pages hold them, unsaved edits included.
+        $items = [];
+        foreach (InventoryCatalog::CATEGORIES as $category) {
+            foreach ($this->workspace?->getRecordDatabase($category)?->getRecords() ?? [] as $record) {
+                $items[] = InventoryCatalog::readDefinition($record);
+            }
         }
 
         $entries = [];
@@ -12509,7 +12505,7 @@ final class Editor
      */
     private function loadSkillLootDialogEntries(LootType $lootType): array
     {
-        $catalog = SkillCatalog::load($this->projectRoot . '/assets');
+        $catalog = $this->workspace?->loadSkillCatalog() ?? SkillCatalog::load($this->projectRoot . '/assets');
         $skills = $lootType === LootType::SPELL ? $catalog->getSpells() : $catalog->getAbilities();
         $entries = [];
 

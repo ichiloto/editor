@@ -21,7 +21,7 @@ use Ichiloto\Editor\UI\CutscenesScreen;
 use Ichiloto\Editor\Validation\EffectValidator;
 use Ichiloto\Engine\Animations\Timelines\EffectCadence;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
-use Ichiloto\Engine\Animations\Timelines\EffectTimelineLibrary;
+use Ichiloto\Editor\Database\ProjectCatalogs;
 use Ichiloto\Engine\Battle\BattlePacing;
 use Ichiloto\Engine\Battle\BattleTurnTimings;
 use Ichiloto\Engine\Battle\Enumerations\BattleActionCategory;
@@ -56,7 +56,6 @@ trait CutscenePreviewPane
     /** The row under the cursor in the duration overview. */
     private int $cutsceneOverviewCursor = 0;
     /** The open project's effect timelines, read once, so the overview can time field effects. */
-    private ?EffectTimelineLibrary $cutsceneEffectLibrary = null;
     /** The asset payload the running preview was built from. */
     private string $cinematicPreviewFingerprint = '';
     /** @var array<string, bool> Effect id => previewed as battle plays it (else as the field does), once the author chose. */
@@ -1326,21 +1325,12 @@ trait CutscenePreviewPane
     }
 
     /**
-     * Returns the open project's effect timelines, or null with no project.
+     * Returns the open project's catalogues, whose effect timelines are as the
+     * workspace holds them, or null with no project.
      */
-    private function getEffectLibrary(): ?EffectTimelineLibrary
+    private function getEffectLibrary(): ?ProjectCatalogs
     {
-        if (! $this->workspace instanceof ProjectWorkspace) {
-            return null;
-        }
-
-        $assetRoot = $this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets';
-
-        if ($this->cutsceneEffectLibrary?->assetRoot !== $assetRoot) {
-            $this->cutsceneEffectLibrary = new EffectTimelineLibrary($assetRoot);
-        }
-
-        return $this->cutsceneEffectLibrary;
+        return $this->workspace instanceof ProjectWorkspace ? $this->workspace->catalogs : null;
     }
 
     /**

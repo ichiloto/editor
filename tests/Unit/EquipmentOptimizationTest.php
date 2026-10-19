@@ -308,15 +308,15 @@ it('names the legacy fallback as a fallback rather than as the project\'s policy
 
     $root = makeTemporaryProject('ichiloto-optimize-');
     writeOptimizeInventory($root);
+    $workspace = ProjectWorkspace::fromProject($root);
 
-    expect(EquipmentOptimizationPolicy::isDeclaredIn($root))->toBeFalse()
-        ->and(EquipmentOptimizationPolicy::describeSource($root))
+    expect(EquipmentOptimizationPolicy::isDeclaredIn($workspace))->toBeFalse()
+        ->and(EquipmentOptimizationPolicy::describeSource($workspace))
         ->toContain('legacy equal weight')
         ->toContain('compatibility fallback')
-        ->and(EquipmentOptimizationPolicy::enginePolicyFor($root))
+        ->and(EquipmentOptimizationPolicy::enginePolicyFor($workspace))
         ->toBeInstanceOf(\Ichiloto\Engine\Entities\EquipmentOptimization\LegacyEqualWeightEquipmentOptimizationPolicy::class);
 
-    $workspace = ProjectWorkspace::fromProject($root);
     $ranked = EquipmentOptimizationPolicy::rank($workspace, $workspace->actorDatabase->getActors()[0], 'weapon');
 
     // Without a declared policy every score is the engine's compatibility
@@ -325,8 +325,8 @@ it('names the legacy fallback as a fallback rather than as the project\'s policy
 
     writeOptimizePolicy($root, "  'statWeights' => ['attack' => 1],");
 
-    expect(EquipmentOptimizationPolicy::describeSource($root))->toContain('declared by this project')
-        ->and(EquipmentOptimizationPolicy::enginePolicyFor($root))
+    expect(EquipmentOptimizationPolicy::describeSource($workspace))->toContain('declared by this project')
+        ->and(EquipmentOptimizationPolicy::enginePolicyFor($workspace))
         ->toBeInstanceOf(\Ichiloto\Engine\Entities\EquipmentOptimization\DeclaredEquipmentOptimizationPolicy::class);
 });
 

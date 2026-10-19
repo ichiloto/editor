@@ -1245,10 +1245,10 @@ final class ProjectRecordDatabase
                 // across the whole file rather than this category alone.
                 $name = $this->makeUniqueName('New ' . ucwords($this->schema->entryNoun));
                 $payload = $projectRoot === null
-                    ? ($this->schema->makeBlank)($name, '')
+                    ? ($this->schema->makeBlank)($name, '', $this->authoringReferences)
                     : ProjectDirectoryContext::run(
                         $projectRoot,
-                        fn(string $root): mixed => ($this->schema->makeBlank)($name, $root),
+                        fn(string $root): mixed => ($this->schema->makeBlank)($name, $root, $this->authoringReferences),
                     );
             } catch (RecordRefusal $refusal) {
                 // The factory's own reason, such as what the project lacks.
@@ -2135,6 +2135,42 @@ final class ProjectRecordDatabase
     public function backingFilePath(): string
     {
         return realpath($this->path) ?: $this->path;
+    }
+
+    /**
+     * What one of this category's record files holds as the category stands:
+     * a dirty record's file as a save would write it, or a deleted record's
+     * file as gone. Null when the category is not kept a file per record or
+     * holds no unsaved change for the file, so the file on disk is current.
+     *
+     * @return array{exists: bool, payload: mixed}|null
+     */
+    public function readCurrentRecordFile(string $path): ?array
+    {
+        if ($this->schema->storage !== RecordStorage::DIRECTORY) {
+            return null;
+        }
+        $path = self::canonicalizePath($path);
+        foreach ($this->stagedDeletions as $deleted) {
+            if (self::canonicalizePath($deleted) === $path) {
+                return ['exists' => false, 'payload' => null];
+            }
+        }
+        foreach ($this->records as $record) {
+            if ($record->file instanceof PhpDataFile && $record->isDirty() && self::canonicalizePath($record->file->path) === $path) {
+                return ['exists' => true, 'payload' => $this->composeRecordFilePayload($record)];
+            }
+        }
+
+        return null;
+    }
+
+    /** A path as one file is known by, whether or not it exists yet. */
+    public static function canonicalizePath(string $path): string
+    {
+        $folder = realpath(dirname($path));
+
+        return $folder === false ? $path : $folder . DIRECTORY_SEPARATOR . basename($path);
     }
 
     /**
