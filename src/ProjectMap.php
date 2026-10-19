@@ -962,14 +962,18 @@ final class ProjectMap
 
     /**
      * The map's graphics as the game loads them, from its current tile
-     * layers, unsaved edits included, or null when it has none.
+     * layers and its tileset as the workspace holds it, unsaved edits
+     * included, or null when it has none.
      *
      * @throws InvalidArgumentException When the game would refuse them.
      */
     public function loadGraphics(): ?MapGraphics
     {
-        return MapGraphics::fromSources($this->getTileLayerSources(), $this->mapId, $this->getMapDataField(['tileset']),
-            $this->getLayerSet(), $this->getAssetRoot(), $this->getMapDataField([MapGraphics::SETTINGS_KEY]));
+        $tilesetId = $this->getMapDataField(['tileset']);
+
+        return MapGraphics::fromSources($this->getTileLayerSources(), $this->mapId, $tilesetId,
+            $this->getLayerSet(), $this->getAssetRoot(), $this->getMapDataField([MapGraphics::SETTINGS_KEY]),
+            is_string($tilesetId) ? $this->loadTileset() : null);
     }
     /** The project's asset root, where tilesets and their sheets live. */
     public function getAssetRoot(): string

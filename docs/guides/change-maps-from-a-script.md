@@ -95,11 +95,11 @@ for you:
 Edits are made in order and held in memory, and every later change reads
 them: a field resource, tileset piece, place category, skill, effect timeline,
 database record or world object made earlier in the batch is usable by the
-changes after it, before anything is written. Painting, piece lists, pickers
-and the validation `changes.commit` runs all read these current records. The
-map world the GUI draws, battle previews and the cinematic preview field still
-read the saved tileset, items, enemies and summons until the Engine can take
-them from the Editor; commit or save first when one of those must show an edit.
+changes after it, before anything is written. Painting, piece lists, pickers,
+the map world the GUI draws and the validation `changes.commit` runs all read
+these current records. Battle previews and the cinematic preview field still
+read the saved items, enemies, summons and maps until the Engine can take them
+from the Editor; commit or save first when one of those must show an edit.
 Inserting or removing rows, and creating or duplicating a map, write their
 files when they run; a refused batch undoes them. Inserting or removing rows
 needs no pending edits, so put it first, or in its own batch.

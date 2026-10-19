@@ -303,8 +303,10 @@ skills, item record problems, summons and effect timelines. Code-owned files
 (`battle.php`, `transitions.php`) and files written at once (save
 compatibility, animation conversion) read disk by design.
 
+The map world and graphics checks pass the current tileset to
+`MapGraphics::fromSources` (Engine f473173).
+
 Remaining, waiting on the Engine taking caller-supplied data:
-- [ ] Map world and graphics checks: `MapGraphics::fromSources` loads the tileset itself.
 - [ ] Battle previews and battle test choices: `ItemStore`, `EnemyStore` and
   `SummonCutsceneLibrary` read disk, and `SkillCatalog::getProjectCatalog()`
   caches per asset root inside the Editor's process.

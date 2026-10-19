@@ -59,6 +59,8 @@ it('paints with a tileset piece as edited earlier in the same change set, and li
     expect($painted)->toMatchArray(['status' => 'applied', 'changed' => 1, 'glyphs' => 0])
         ->and(readCurrentBuildingRows($session)[0])->toBe(' /  ')
         ->and(array_column($session->listPieces('test-map')['pieces'], 'id'))->toBe(['surface'])
+        // The map world draws with the tileset as edited, not as saved.
+        ->and(array_keys(getSessionMap($session)->loadGraphics()?->tileset->pieces ?? []))->toBe(['surface'])
         ->and((string) file_get_contents($root . '/assets/Data/Tilesets/home.php'))->toBe($tileset);
 
     expect($session->commitChanges()['status'])->toBe('saved')
