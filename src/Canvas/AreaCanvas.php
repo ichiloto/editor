@@ -270,27 +270,10 @@ trait AreaCanvas
         return true;
     }
 
-    /**
-     * The selection as an area shape: a rectangle when it fills one exactly,
-     * as the author would write it, otherwise its exact cells in reading order.
-     *
-     * @return array<string, mixed>
-     */
+    /** @return array<string, mixed> The selection as the area shape it is written as. */
     private function readAreaSelectionShape(): array
     {
-        $cells = array_values($this->areaSelection);
-        usort($cells, static fn(array $a, array $b): int => [$a[1], $a[0]] <=> [$b[1], $b[0]]);
-        if ($cells === []) {
-            return ['cells' => []];
-        }
-        $xs = array_column($cells, 0);
-        $ys = array_column($cells, 1);
-        $width = max($xs) - min($xs) + 1;
-        $height = max($ys) - min($ys) + 1;
-
-        return $width * $height === count($cells)
-            ? ['x' => min($xs), 'y' => min($ys), 'width' => $width, 'height' => $height]
-            : ['cells' => $cells];
+        return MapAreaAuthoring::createShapeFor(array_values($this->areaSelection));
     }
 
     /**

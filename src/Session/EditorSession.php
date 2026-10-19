@@ -2027,14 +2027,44 @@ final class EditorSession
      * Declares a named area: logical territory the map owns, which events
      * bind to as their subject and landmarks anchor to. One undo step.
      *
-     * @param array<string, mixed> $area The Engine's CellArea shape: `{cells: [[x, y], ...]}` or `{x, y, width, height}`.
-     * @return array{revision: int, changed: bool}
+     * @param string|null $id The area's id; null takes the first free `area-N`, to be renamed.
+     * @param array<string, mixed> $area The Engine's CellArea shape: `{cells: [[x, y], ...]}` or `{x, y, width, height}`
+     *     ({@see self::readAreaShape()} reads selected cells as one).
+     * @return array{revision: int, changed: bool, id: string}
      * @throws SessionRefusal When the map is unknown, stale or read-only, the id is taken or not an area id, or the
      *     area is empty, malformed or off the map.
      */
-    public function createArea(string $mapId, int $revision, string $id, array $area): array
+    public function createArea(string $mapId, int $revision, ?string $id, array $area): array
     {
-        return $this->changeAreas($mapId, $revision, static fn(MapAreaAuthoring $areas): ?Command => $areas->createArea($id, $area));
+        $map = $this->requireCurrentMap($mapId, $revision);
+        try {
+            $id ??= MapAreaAuthoring::findUnusedId($map);
+        } catch (MapAreaRefusal $refusal) {
+            throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+        }
+
+        return [...$this->changeAreas($mapId, $revision, static fn(MapAreaAuthoring $areas): ?Command => $areas->createArea($id, $area)), 'id' => $id];
+    }
+
+    /**
+     * The area shape a request names: its `area` as written, or its selected
+     * `cells`, written as a rectangle when they fill one.
+     *
+     * @param array<string, mixed> $params
+     * @return array<string, mixed>
+     * @throws SessionRefusal When it names neither.
+     */
+    public static function readAreaShape(array $params): array
+    {
+        if (is_array($params['area'] ?? null)) {
+            return $params['area'];
+        }
+        $cells = $params['cells'] ?? null;
+        if (is_array($cells) && array_all($cells, static fn(mixed $cell): bool => is_array($cell) && is_int($cell[0] ?? null) && is_int($cell[1] ?? null))) {
+            return MapAreaAuthoring::createShapeFor(array_map(static fn(array $cell): array => [$cell[0], $cell[1]], $cells));
+        }
+
+        throw new SessionRefusal('Name the area as "area" (cells, or x, y, width and height) or as selected "cells".');
     }
 
     /**

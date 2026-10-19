@@ -187,3 +187,18 @@ it('renames and deletes areas, and binds an event to one, through the rows both 
         ->and(fn() => $session->addInspectorListEntry('test-map', $revision(), findLandmarkRow($session, ['target' => 'map-areas'])['key']))
             ->toThrow(SessionRefusal::class, 'Select cells on the map, then make an area of them.');
 });
+
+it('makes an area of selected cells under the first free id, writing a filled rectangle as one', function () {
+    [, , $session] = createLandmarkProject();
+    $revision = static fn(): int => $session->readMap('test-map')['revision'];
+
+    $first = $session->createArea('test-map', $revision(), null, EditorSession::readAreaShape(['cells' => [[1, 1], [0, 1], [0, 0], [1, 0]]]));
+    $second = $session->createArea('test-map', $revision(), null, EditorSession::readAreaShape(['cells' => [[2, 0], [3, 1]]]));
+
+    expect([$first['id'], $second['id']])->toBe(['area-1', 'area-2'])
+        ->and(array_column($session->readAreas('test-map')['areas'], 'area', 'id'))->toBe([
+            'area-1' => ['x' => 0, 'y' => 0, 'width' => 2, 'height' => 2],
+            'area-2' => ['cells' => [[2, 0], [3, 1]]],
+        ])
+        ->and(fn() => EditorSession::readAreaShape(['cells' => 'everywhere']))->toThrow(SessionRefusal::class, 'Name the area');
+});

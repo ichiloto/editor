@@ -287,6 +287,46 @@ final readonly class MapAreaAuthoring
     }
 
     /**
+     * The shape an author writes for selected cells: a rectangle when they
+     * fill one exactly, otherwise the exact cells in reading order. Both
+     * editors write selections through it.
+     *
+     * @param list<array{int, int}> $cells
+     * @return array<string, mixed>
+     */
+    public static function createShapeFor(array $cells): array
+    {
+        $unique = [];
+        foreach ($cells as [$x, $y]) {
+            $unique[$x . ',' . $y] = [(int) $x, (int) $y];
+        }
+        $cells = array_values($unique);
+        usort($cells, static fn(array $a, array $b): int => [$a[1], $a[0]] <=> [$b[1], $b[0]]);
+        if ($cells === []) {
+            return ['cells' => []];
+        }
+        $xs = array_column($cells, 0);
+        $ys = array_column($cells, 1);
+        $width = max($xs) - min($xs) + 1;
+        $height = max($ys) - min($ys) + 1;
+
+        return $width * $height === count($cells)
+            ? ['x' => min($xs), 'y' => min($ys), 'width' => $width, 'height' => $height]
+            : ['cells' => $cells];
+    }
+
+    /** The first `area-N` id the map does not hold, for an area made before it is named. */
+    public static function findUnusedId(ProjectMap $map): string
+    {
+        $ids = array_column(self::readEntries($map), 'id');
+        for ($number = 1; ; $number++) {
+            if (! in_array('area-' . $number, $ids, true)) {
+                return 'area-' . $number;
+            }
+        }
+    }
+
+    /**
      * The cells an area shape covers, for an interface drawing a selection.
      *
      * @param array<string, mixed> $area
