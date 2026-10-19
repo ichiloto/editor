@@ -6,13 +6,13 @@ namespace Ichiloto\Editor\Validation;
 
 use Ichiloto\Editor\Cutscenes\CutsceneAsset;
 use Ichiloto\Editor\Cutscenes\CutsceneType;
+use Ichiloto\Editor\Database\ProjectCatalogs;
 use Ichiloto\Editor\ProjectConfig;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Engine\Animations\Field\FieldEffectManager;
 use Ichiloto\Engine\Animations\Field\FieldPresentationCatalog;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
-use Ichiloto\Engine\Animations\Timelines\EffectTimelineLibrary;
 use Ichiloto\Engine\Cutscenes\Presentation\PartyStageSelection;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandReference;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandRegistry;
@@ -36,17 +36,16 @@ final class EffectValidator
     /** @return Issue[] */
     public function validate(ProjectWorkspace $workspace): array
     {
-        $assetRoot = $workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets';
         $issues = [];
         $uses = self::findUses($workspace, $issues);
-        $library = new EffectTimelineLibrary($assetRoot);
+        $catalogs = $workspace->catalogs;
         ksort($uses);
 
         foreach ($uses as $effect => $contexts) {
             foreach ($contexts as $context => $places) {
                 if ($context === 'stage') {
                     try {
-                        $library->loadStage($effect);
+                        $catalogs->loadEffectTimeline($effect, forStage: true);
                         $asset = $workspace->cutscenes?->find(CutsceneType::EFFECT, $effect)
                             ?? throw new \RuntimeException('The effect timeline could not be read.');
                         $asset->compileEffect(EffectPresentation::TERMINAL, false, forStage: true);
@@ -59,7 +58,7 @@ final class EffectValidator
                 }
                 foreach (EffectPresentation::cases() as $presentation) {
                     try {
-                        $library->load($effect, $context === 'battle', $presentation);
+                        $catalogs->loadEffectTimeline($effect, $context === 'battle', $presentation);
                     } catch (Throwable $failure) {
                         $issues[] = Issue::error($places[0], sprintf('Effect %s cannot be played in %s for the %s presentation: %s',
                             $effect, $context, $presentation->value, $failure->getMessage()),
@@ -78,18 +77,18 @@ final class EffectValidator
      * the Engine plays it on the field for each presentation: it must load,
      * and it must play once, since loops belong to a map's own effects.
      *
-     * @param EffectTimelineLibrary $library The project's timelines.
+     * @param ProjectCatalogs $catalogs The project's catalogues, whose timelines are as the workspace holds them.
      * @param string $effect The effect's stable id.
      * @param string $where Where the command is.
      * @return Issue[]
      */
-    public static function checkOneShotFieldEffect(EffectTimelineLibrary $library, string $effect, string $where): array
+    public static function checkOneShotFieldEffect(ProjectCatalogs $catalogs, string $effect, string $where): array
     {
         $issues = [];
 
         foreach (EffectPresentation::cases() as $presentation) {
             try {
-                $timeline = $library->load($effect, false, $presentation);
+                $timeline = $catalogs->loadEffectTimeline($effect, false, $presentation);
             } catch (Throwable $failure) {
                 $issues[] = Issue::error($where, sprintf('Its effect %s cannot be played on the field for the %s presentation: %s',
                     $effect, $presentation->value, $failure->getMessage()),
@@ -119,7 +118,6 @@ final class EffectValidator
      */
     public static function findUses(ProjectWorkspace $workspace, array &$issues = []): array
     {
-        $assetRoot = $workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets';
         $uses = [];
         $use = static function (string $effect, bool $battle, string $where) use (&$uses): void {
             $uses[$effect][$battle ? 'battle' : 'field'][] = $where;
@@ -164,11 +162,10 @@ final class EffectValidator
             }
         }
 
-        foreach (glob($assetRoot . DIRECTORY_SEPARATOR . Tileset::DIRECTORY . DIRECTORY_SEPARATOR . '*.php') ?: [] as $file) {
-            $id = basename($file, '.php');
-
+        $catalogs = $workspace->catalogs;
+        foreach ($catalogs->listTilesetIds() as $id) {
             try {
-                $tileset = Tileset::load($assetRoot, $id);
+                $tileset = $catalogs->loadTileset($id);
             } catch (Throwable) {
                 continue; // Map graphics validation reports an unreadable tileset.
             }

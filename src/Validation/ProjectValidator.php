@@ -18,6 +18,7 @@ use Ichiloto\Editor\Events\ProjectScriptCommands;
 use Ichiloto\Editor\Field\MapEncounters;
 use Ichiloto\Editor\Field\ProjectNpc;
 use Ichiloto\Editor\ActorStatPreview;
+use Ichiloto\Editor\Database\ProjectCatalogs;
 use Ichiloto\Editor\EquipmentOptimizationPolicy;
 use Ichiloto\Editor\PermanentGrowthCatalog;
 use Ichiloto\Editor\ProjectActor;
@@ -25,7 +26,6 @@ use Ichiloto\Editor\ProjectDirectoryContext;
 use Ichiloto\Editor\ProjectQuest;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
-use Ichiloto\Engine\Animations\Timelines\EffectTimelineLibrary;
 use Ichiloto\Engine\Battle\Presentation\BattlePresentationCatalog;
 use Ichiloto\Engine\Rendering\Tilesets\Tileset;
 use Ichiloto\Engine\Core\WorldConditionType;
@@ -86,12 +86,10 @@ class ProjectValidator
   protected array $legacyCommonEventIds = [];
 
   /**
-   * @var string|null The project root, for the catalogue a command names.
+   * @var ProjectWorkspace|null The project being validated, for the catalogues a command names.
    */
-  protected ?string $projectRootForKnowledge = null;
+  protected ?ProjectWorkspace $validatedWorkspace = null;
 
-  /** The project's effect timelines, read once per validation. */
-  protected ?EffectTimelineLibrary $effectLibrary = null;
 
   /**
    * The arena keys the project's battle presentation declares, read once per
@@ -116,8 +114,7 @@ class ProjectValidator
    */
   public function validate(ProjectWorkspace $workspace): array
   {
-    $this->projectRootForKnowledge = $workspace->projectRoot;
-    $this->effectLibrary = new EffectTimelineLibrary($workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets');
+    $this->validatedWorkspace = $workspace;
     $this->readArenaKeys($workspace);
     $this->knowledgeCatalogData = null;
     $this->commonEventScripts = $this->eventScriptsById($workspace);
@@ -464,17 +461,18 @@ class ProjectValidator
   protected function checkPermanentGrowth(ProjectWorkspace $workspace): array
   {
     $where = PermanentGrowthCatalog::RELATIVE_PATH;
-    $path = rtrim($workspace->projectRoot, '/') . '/' . $where;
-
-    if (! is_file($path)) {
-      return [];
-    }
 
     try {
-      $payload = (static fn(): mixed => require $path)();
+      $file = $workspace->catalogs->readData(PermanentGrowthCatalog::ASSET_PATH);
     } catch (Throwable $throwable) {
       return [Issue::error($where, 'The definitions could not be loaded: ' . $throwable->getMessage())];
     }
+
+    if (! $file['exists']) {
+      return [];
+    }
+
+    $payload = $file['payload'];
 
     if (! is_array($payload)) {
       return [Issue::error($where, 'The file must return a list of definitions.')];
@@ -544,17 +542,18 @@ class ProjectValidator
   protected function checkOptimizationPolicy(ProjectWorkspace $workspace): array
   {
     $where = EquipmentOptimizationPolicy::RELATIVE_PATH;
-    $path = rtrim($workspace->projectRoot, '/') . '/' . $where;
-
-    if (! is_file($path)) {
-      return [];
-    }
 
     try {
-      $policy = (static fn(): mixed => require $path)();
+      $file = $workspace->catalogs->readData(EquipmentOptimizationPolicy::ASSET_PATH);
     } catch (Throwable $throwable) {
       return [Issue::error($where, 'The policy could not be loaded: ' . $throwable->getMessage())];
     }
+
+    if (! $file['exists']) {
+      return [];
+    }
+
+    $policy = $file['payload'];
 
     if (! is_array($policy)) {
       return [Issue::error($where, 'The file must return the policy as an array.')];
@@ -572,12 +571,12 @@ class ProjectValidator
       }
     }
 
-    if (EquipmentOptimizationPolicy::isAvailable() && EquipmentOptimizationPolicy::enginePolicyFor($workspace->projectRoot) === null) {
+    if (EquipmentOptimizationPolicy::isAvailable() && EquipmentOptimizationPolicy::enginePolicyFor($workspace) === null) {
       // The engine refuses a weight key it does not have and a weight that
       // is not an integer, by throwing rather than by ignoring them.
       $issues[] = Issue::error(
         $where,
-        $this->describePolicyRefusal($workspace->projectRoot),
+        $this->describePolicyRefusal($workspace),
         'Until this is fixed the game falls back to the legacy equal-weight policy.'
       );
     }
@@ -699,12 +698,12 @@ class ProjectValidator
    * Returns why the engine refused to build the declared policy, in its own
    * words.
    *
-   * @param string $projectRoot The project root.
+   * @param ProjectWorkspace $workspace The project.
    * @return string The message.
    */
-  protected function describePolicyRefusal(string $projectRoot): string
+  protected function describePolicyRefusal(ProjectWorkspace $workspace): string
   {
-    $declared = EquipmentOptimizationPolicy::declaredIn($projectRoot) ?? [];
+    $declared = EquipmentOptimizationPolicy::declaredIn($workspace) ?? [];
 
     try {
       new \Ichiloto\Engine\Entities\EquipmentOptimization\DeclaredEquipmentOptimizationPolicy(
@@ -767,17 +766,17 @@ class ProjectValidator
 
   protected function checkKnowledgeCatalog(ProjectWorkspace $workspace): array
   {
-    $path = rtrim($workspace->projectRoot, '/') . '/assets/Data/knowledge.php';
-
-    if (! is_file($path)) {
-      return [];
-    }
-
     try {
-      $catalog = (static fn(): mixed => require $path)();
+      $file = $workspace->catalogs->readData(ProjectCatalogs::KNOWLEDGE_FILE);
     } catch (Throwable $throwable) {
       return [Issue::error('assets/Data/knowledge.php', 'The catalogue could not be loaded: ' . $throwable->getMessage())];
     }
+
+    if (! $file['exists']) {
+      return [];
+    }
+
+    $catalog = $file['payload'];
 
     if (! is_array($catalog)) {
       return [Issue::error('assets/Data/knowledge.php', 'The catalogue must return an array.')];
@@ -1045,19 +1044,11 @@ class ProjectValidator
       return $this->knowledgeCatalogData;
     }
 
-    $path = rtrim($this->projectRootForKnowledge ?? '', '/') . '/assets/Data/knowledge.php';
-
-    if ($this->projectRootForKnowledge === null || ! is_file($path)) {
-      return $this->knowledgeCatalogData = [];
-    }
-
     try {
-      $catalog = (static fn(): mixed => require $path)();
+      return $this->knowledgeCatalogData = $this->validatedWorkspace?->catalogs->readKnowledgeData() ?? [];
     } catch (Throwable) {
       return $this->knowledgeCatalogData = [];
     }
-
-    return $this->knowledgeCatalogData = is_array($catalog) ? $catalog : [];
   }
 
   /**
@@ -1389,7 +1380,7 @@ class ProjectValidator
         ltrim((string) strstr($problem, ':'), ': '),
         'Each item, weapon and armor is one record file; correct the file named in Database > Items, Weapons or Armors.',
       ),
-      $workspace->loadItemCatalog()->getProblems(),
+      $workspace->catalogs->listItemRecordProblems(),
     );
   }
 
@@ -1401,8 +1392,7 @@ class ProjectValidator
    */
   protected function checkSummons(ProjectWorkspace $workspace): array
   {
-    $root = $workspace->projectRoot . '/assets/Cutscenes/Summons';
-    $paths = glob($root . '/*/*.data.php') ?: [];
+    $paths = $workspace->catalogs->listSummonDataPaths();
 
     if ($paths === []) {
       return $this->checkActorSummonAssignments($workspace, []);
@@ -1419,11 +1409,10 @@ class ProjectValidator
     $issues = [];
 
     foreach ($paths as $path) {
-      $file = ProjectDirectoryContext::run(
+      $data = ($workspace->readCurrentData($path) ?? ['payload' => ProjectDirectoryContext::run(
         $workspace->projectRoot,
         static fn(): PhpDataFile => PhpDataFile::load($path),
-      );
-      $data = $file->payload;
+      )->payload])['payload'];
       $fallbackId = basename(dirname($path));
 
       if (! is_array($data)) {
@@ -1885,7 +1874,7 @@ class ProjectValidator
     $this->arenaCatalogProblem = null;
 
     try {
-      $catalog = BattlePresentationCatalog::load($workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets');
+      $catalog = $workspace->catalogs->loadBattlePresentation();
       $this->arenaKeys = $catalog === null ? null : array_map(strval(...), array_keys($catalog->getArenaChoices()));
     } catch (Throwable $problem) {
       $this->arenaCatalogProblem = $problem->getMessage();
@@ -4449,7 +4438,7 @@ class ProjectValidator
       return $issues;
     }
 
-    return $this->effectLibrary === null ? [] : EffectValidator::checkOneShotFieldEffect($this->effectLibrary, $effect, $where);
+    return $this->validatedWorkspace === null ? [] : EffectValidator::checkOneShotFieldEffect($this->validatedWorkspace->catalogs, $effect, $where);
   }
 
   /**

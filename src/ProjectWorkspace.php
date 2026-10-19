@@ -9,6 +9,8 @@ use Ichiloto\Editor\Cutscenes\CutsceneLibrary;
 use Ichiloto\Editor\Database\DatabaseCatalog;
 use Ichiloto\Editor\Database\EngineDataBootstrap;
 use Ichiloto\Editor\Database\ProjectRecord;
+use Ichiloto\Editor\Database\PhpDataFile;
+use Ichiloto\Editor\Database\ProjectCatalogs;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Database\QuestReferences;
 use Ichiloto\Editor\Database\RecordSchema;
@@ -21,7 +23,6 @@ use Ichiloto\Editor\Storage\FileSetTransaction;
 use Ichiloto\Editor\Storage\FilesystemFileSetOperations;
 use Ichiloto\Engine\Core\ProjectFormat;
 use Ichiloto\Engine\Entities\Elements\ElementRegistry;
-use Ichiloto\Engine\Entities\Inventory\ItemCatalog;
 use Ichiloto\Engine\Entities\Skills\SkillCatalog;
 use Ichiloto\Engine\Field\MapGraphics;
 use RecursiveDirectoryIterator;
@@ -38,6 +39,8 @@ final readonly class ProjectWorkspace
 {
     /** Preview title and map metadata lines preceding the rendered grid. */
     public const int CANVAS_HEADER_ROWS = 2;
+    /** The project's catalogues as this workspace holds them, unsaved edits included. */
+    public ProjectCatalogs $catalogs;
     /**
      * @param ProjectMap[] $maps
      * @param array<string, ProjectRecordDatabase> $recordDatabases Schema-driven categories, keyed by category key.
@@ -70,8 +73,9 @@ final readonly class ProjectWorkspace
         );
         $references = new ReferenceCatalog($this);
         foreach ($this->recordDatabases as $database) { $database->useAuthoringReferences($references); }
-        // A map's world objects name field resources as the Field Resources page holds them, unsaved edits included.
-        foreach ($this->maps as $map) { $map->useFieldCatalog($references->getFieldPresentationCatalog(...)); }
+        // A map names its tileset and field resources as their pages hold them, unsaved edits included.
+        $this->catalogs = new ProjectCatalogs($this);
+        foreach ($this->maps as $map) { $map->useCatalogs($this->catalogs); }
         $this->cutscenes?->useAuthoringReferences($references);
     }
 
@@ -113,6 +117,53 @@ final readonly class ProjectWorkspace
     }
 
     /**
+     * What a project data file holds as the workspace stands: the payload
+     * its loaded databases would write to it now, every unsaved edit folded
+     * in, including those of an open change set; or null when none holds an
+     * unsaved edit for it, so the file on disk is current. A file several
+     * categories share (items, weapons and armors) is read once from disk
+     * and each dirty category folds its part in, as a save would. Every
+     * reader of a catalogue or record by its path reads it through here
+     * ({@see \Ichiloto\Editor\Database\ProjectCatalogs}), so an edit made
+     * earlier in a session reaches the reads after it before anything is
+     * written.
+     *
+     * @return array{exists: bool, payload: mixed}|null
+     */
+    public function readCurrentData(string $path): ?array
+    {
+        $path = ProjectRecordDatabase::canonicalizePath($path);
+        $sharing = array_values(array_filter($this->recordDatabases, static fn(ProjectRecordDatabase $database): bool =>
+            $database->isDirty() && $database->sharesBackingFile() && ProjectRecordDatabase::canonicalizePath($database->backingFilePath()) === $path));
+        if ($sharing !== []) {
+            $file = PhpDataFile::load($path, $this->projectRoot);
+            $payload = is_array($file->payload) ? $file->payload : [];
+            foreach ($sharing as $database) {
+                $payload = $database->foldInto($payload);
+            }
+
+            return ['exists' => true, 'payload' => $payload];
+        }
+        foreach ($this->recordDatabases as $database) {
+            $current = $database->isDirty() ? $database->readCurrentRecordFile($path) : null;
+            if ($current !== null) {
+                return $current;
+            }
+        }
+        // A cinematic, summon or effect holds its files as the Cutscenes workspace edits them.
+        foreach ($this->cutscenes?->dirtyAssets() ?? [] as $asset) {
+            foreach ($asset->paths() as $assetPath) {
+                if (ProjectRecordDatabase::canonicalizePath($assetPath) === $path) {
+                    return $asset->isDeleted() ? ['exists' => false, 'payload' => null]
+                        : ['exists' => true, 'payload' => $assetPath === $asset->partnerPath() ? $asset->partner() : $asset->data()];
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * Returns the schema-driven database for a category key.
      *
      * @param string $categoryKey The Database category key.
@@ -124,26 +175,15 @@ final readonly class ProjectWorkspace
     }
 
     /**
-     * Reads the project's skill catalogue as saved: every skill record, as
-     * the runtime reads them, identified and classified as the runtime
-     * finds them.
+     * Reads the project's skill catalogue as the workspace holds it: every
+     * skill record, unsaved edits included, as the runtime reads them,
+     * identified and classified as the runtime finds them.
      *
      * @return SkillCatalog
      */
     public function loadSkillCatalog(): SkillCatalog
     {
-        return SkillCatalog::load($this->projectRoot . DIRECTORY_SEPARATOR . 'assets');
-    }
-
-    /**
-     * Reads the project's inventory catalogue as saved: every item, weapon
-     * and armor record, as the runtime reads them.
-     *
-     * @return ItemCatalog
-     */
-    public function loadItemCatalog(): ItemCatalog
-    {
-        return ItemCatalog::load($this->projectRoot . DIRECTORY_SEPARATOR . 'assets');
+        return $this->catalogs->loadSkillCatalog();
     }
 
     /**

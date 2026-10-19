@@ -14,7 +14,6 @@ use Ichiloto\Editor\History\GenericCommand;
 use Ichiloto\Editor\History\SourceSetRequired;
 use Ichiloto\Editor\Inspector\InputControl;
 use Ichiloto\Editor\Inspector\InputControlType;
-use Ichiloto\Editor\PermanentGrowthCatalog;
 use Ichiloto\Editor\ProjectActor;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Engine\Entities\Enumerations\WeaponType;
@@ -406,7 +405,7 @@ final class ActorAuthoring
             return [];
         }
 
-        $catalog = PermanentGrowthCatalog::fromProject($workspace->projectRoot);
+        $catalog = $workspace->catalogs->loadPermanentGrowth();
         $assumed = $this->assumedGrowthFor($actor);
         $rows = [
             ['label' => 'Resolved Stats', 'value' => '', 'editable' => false, 'field' => ''],
@@ -481,7 +480,6 @@ final class ActorAuthoring
             return [];
         }
 
-        $root = $workspace->projectRoot;
         $slot = $this->optimizeSlotFor($actor);
         $rows = [
             ['label' => 'Optimize Preview', 'value' => '', 'editable' => false, 'field' => ''],
@@ -490,7 +488,7 @@ final class ActorAuthoring
                 // project that has declared none is not being scored by its
                 // own rules at all.
                 'label' => '  Policy',
-                'value' => EquipmentOptimizationPolicy::describeSource($root),
+                'value' => EquipmentOptimizationPolicy::describeSource($workspace),
                 'editable' => false,
                 'field' => '',
             ],

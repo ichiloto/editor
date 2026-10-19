@@ -29,7 +29,7 @@ final class TroopFormationValidator
         $assets = $workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets';
         $layoutFile = 'assets/' . BattlePresentationCatalog::FILE;
         try {
-            $catalog = BattlePresentationCatalog::load($assets);
+            $catalog = $workspace->catalogs->loadBattlePresentation();
         } catch (Throwable $problem) {
             return [Issue::error($layoutFile, sprintf('The battle presentation cannot be read, so no formation can be checked: %s', $problem->getMessage()),
                 sprintf('Correct %s.', $layoutFile))];

@@ -292,6 +292,27 @@ This scope does not replace the map source-integrity work or authorize a new GUI
 implementation. Keep runtime availability and TUI authoring completion separate
 until both have been verified.
 
+### Current records across readers (status 2026-10-19)
+
+Every Editor reader of a catalogue or data record reads the workspace's
+current state through `ProjectWorkspace::readCurrentData()` and
+`ProjectCatalogs`, falling back to disk only for records with no unsaved edit:
+tilesets, field resources, place categories, text roles, dialogue, permanent
+growth, knowledge, Optimize policy, battler bindings, player presentation,
+skills, item record problems, summons and effect timelines. Code-owned files
+(`battle.php`, `transitions.php`) and files written at once (save
+compatibility, animation conversion) read disk by design.
+
+Remaining, waiting on the Engine taking caller-supplied data:
+- [ ] Map world and graphics checks: `MapGraphics::fromSources` loads the tileset itself.
+- [ ] Battle previews and battle test choices: `ItemStore`, `EnemyStore` and
+  `SummonCutsceneLibrary` read disk, and `SkillCatalog::getProjectCatalog()`
+  caches per asset root inside the Editor's process.
+- [ ] GUI sign previews: `WorldSignPlayback` loads the text catalogue itself.
+- [ ] Cinematic preview field: `MapManager`, `FieldEffectManager`,
+  `KnowledgeCatalog::fromProject()` and `PlayerPresentationConfig::load()` read
+  the project from disk.
+
 ### Registered command lists (planned)
 
 The Engine lets a registered script command declare any number of `list`

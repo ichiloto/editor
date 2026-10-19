@@ -54,7 +54,7 @@ final class MapCompletenessCheck
                 $resolve,
                 // The resources as this session holds them: one added in the same change set resolves.
                 self::readFieldCatalog($map),
-                requiresGraphics: glob($map->getAssetRoot() . '/' . Tileset::DIRECTORY . '/*.php') !== [],
+                requiresGraphics: $map->listTilesetIds() !== [],
             );
         } catch (Throwable $failure) {
             // The map's own reading checks say why it cannot be read; nothing is judged as complete.

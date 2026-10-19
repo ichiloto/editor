@@ -9,7 +9,6 @@ use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Engine\Cutscenes\Summons\SummonCutsceneDefinition;
-use Ichiloto\Engine\Cutscenes\Summons\SummonCutsceneLibrary;
 use Ichiloto\Engine\Entities\Skills\SkillCatalog;
 use Ichiloto\Engine\Exceptions\InvalidSaveCompatibilityManifestException;
 use Ichiloto\Engine\IO\SaveCompatibility\ContentReferenceCategory;
@@ -458,15 +457,9 @@ final class SaveCompatibilityValidator
      */
     private function summonIds(ProjectWorkspace $workspace): array
     {
-        $root = $workspace->projectRoot . '/assets/Cutscenes/Summons';
-
-        if (! is_dir($root)) {
-            return [];
-        }
-
         return array_values(array_unique(array_map(
             static fn(SummonCutsceneDefinition $definition): string => $definition->id,
-            new SummonCutsceneLibrary($root)->load(),
+            $workspace->catalogs->loadSummons(),
         )));
     }
 

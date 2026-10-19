@@ -415,7 +415,8 @@ final class MapGraphicsValidator
         }
 
         try {
-            return Tileset::load($map->getAssetRoot(), $tilesetId);
+            // As the Tilesets page holds it, unsaved edits included.
+            return $map->loadTileset();
         } catch (Throwable $error) {
             $issues[] = Issue::error(
                 $map->mapId,

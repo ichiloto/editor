@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor;
 
+use Ichiloto\Editor\Database\ProjectCatalogs;
 use Ichiloto\Editor\Cutscenes\Source\ArraySourceWriter;
 use Ichiloto\Editor\Cutscenes\Source\PhpArraySourceDocument;
 use Ichiloto\Editor\Cutscenes\Source\SourcePreservationRefusal;
@@ -71,8 +72,8 @@ final class ProjectMap
      */
     private ?string $dataSourceIssue = null;
 
-    /** @var (Closure(): \Ichiloto\Engine\Animations\Field\FieldPresentationCatalog)|null Its workspace's field presentation. */
-    private ?Closure $fieldCatalog = null;
+    /** The catalogues this map's content names, as its workspace holds them; null for a map read on its own. */
+    private ?ProjectCatalogs $catalogs = null;
 
     /**
      * The data file's raw bytes when its source cannot be parsed for
@@ -427,15 +428,13 @@ final class ProjectMap
     }
 
     /**
-     * Reads the field presentation this map's world objects name resources
-     * from through its workspace, unsaved edits included
-     * ({@see \Ichiloto\Editor\Database\ReferenceCatalog::getFieldPresentationCatalog()}).
-     *
-     * @param Closure(): \Ichiloto\Engine\Animations\Field\FieldPresentationCatalog $catalog
+     * Reads the catalogues this map's content names (its tileset, the field
+     * resources its world objects use) through its workspace, unsaved edits
+     * included ({@see ProjectCatalogs}).
      */
-    public function useFieldCatalog(Closure $catalog): void
+    public function useCatalogs(ProjectCatalogs $catalogs): void
     {
-        $this->fieldCatalog = $catalog;
+        $this->catalogs = $catalogs;
     }
 
     /**
@@ -445,8 +444,35 @@ final class ProjectMap
      */
     public function getFieldCatalog(): \Ichiloto\Engine\Animations\Field\FieldPresentationCatalog
     {
-        return $this->fieldCatalog !== null ? ($this->fieldCatalog)()
-            : \Ichiloto\Engine\Animations\Field\FieldPresentationCatalog::load($this->getAssetRoot());
+        return $this->catalogs?->loadFieldPresentation()
+            ?? \Ichiloto\Engine\Animations\Field\FieldPresentationCatalog::load($this->getAssetRoot());
+    }
+
+    /**
+     * The id of every tileset this map could name: its workspace's, as the
+     * Tilesets page holds them, or the project's files for a map read on its
+     * own.
+     *
+     * @return list<string>
+     */
+    public function listTilesetIds(): array
+    {
+        return $this->catalogs?->listTilesetIds()
+            ?? array_map(static fn(string $file): string => basename($file, '.php'),
+                glob($this->getAssetRoot() . '/' . Tileset::DIRECTORY . '/*.php') ?: []);
+    }
+
+    /**
+     * The place categories this map's atlas and landmarks name: its
+     * workspace's, as the Place Categories page holds them, or the project's
+     * file for a map read on its own.
+     *
+     * @throws InvalidArgumentException With the Engine's reason when they are refused.
+     */
+    public function loadMapCategories(): \Ichiloto\Engine\Field\MapCategoryCatalog
+    {
+        return $this->catalogs?->loadMapCategories()
+            ?? \Ichiloto\Engine\Field\MapCategoryCatalog::load($this->getAssetRoot());
     }
 
     public function getLayers(): array
@@ -931,7 +957,7 @@ final class ProjectMap
             throw new InvalidArgumentException(sprintf('Its tileset is %s, not a tileset id.', get_debug_type($id)));
         }
 
-        return Tileset::load($this->getAssetRoot(), $id);
+        return $this->catalogs?->loadTileset($id) ?? Tileset::load($this->getAssetRoot(), $id);
     }
 
     /**
