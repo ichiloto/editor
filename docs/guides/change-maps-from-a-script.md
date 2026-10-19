@@ -176,6 +176,17 @@ after its name; write `event:a; !event:b`.
 | Landmark id | `inspector.apply` with `{target: map-landmarks, index, field: id}`; other maps' atlas parents follow the rename |
 | NPC id | `npc.create {..., id?}`, `npc.assignId {..., id?}`, or the NPC's Id row with `npc.apply` |
 
+Two NPCs may anchor on one tile only as phases the game never shows
+together: one has a visibility condition (its Visible When row) that the
+other negates, such as `!event:evidence` and `event:evidence`, or
+`switch:door` and `switch:door:false`. Variable `==` and `!=` against the
+same value count too. Nothing else does, however disjoint it looks: quest
+statuses, variable ranges and item counts can hold together. So give the
+phases their conditions first, then move one onto the other's tile. A move,
+create or conditions edit that would leave two NPCs visible on one tile at
+once is refused with nothing changed, and validation reports such a tile.
+In the terminal editor, Enter on that tile steps through its phases.
+
 `worldObjects.move` moves an object with what shows it in the terminal: its
 anchor, the cells it covers and their glyphs, with the tiles those glyphs
 draw. Moving only the anchor (`worldObjects.place`) leaves its glyphs behind.

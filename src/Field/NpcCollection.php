@@ -91,7 +91,29 @@ final class NpcCollection
     }
 
     /**
-     * Returns the position of the NPC anchored at a tile, if any.
+     * Returns the positions of every NPC anchored at a tile, in order. More
+     * than one stands there only as phases whose visibility conditions
+     * exclude each other.
+     *
+     * @param int $x The column.
+     * @param int $y The row.
+     * @return list<int> The positions.
+     */
+    public function indicesAt(int $x, int $y): array
+    {
+        $indices = [];
+
+        foreach ($this->npcs as $index => $npc) {
+            if ($npc->getX() === $x && $npc->getY() === $y) {
+                $indices[] = $index;
+            }
+        }
+
+        return $indices;
+    }
+
+    /**
+     * Returns the position of the first NPC anchored at a tile, if any.
      *
      * @param int $x The column.
      * @param int $y The row.

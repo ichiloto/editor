@@ -2179,10 +2179,12 @@ final class Editor
                 return true;
             }
 
-            $under = $map->getNpcs()->indexAt($this->cursorX, $this->cursorY);
+            $under = $map->getNpcs()->indicesAt($this->cursorX, $this->cursorY);
 
-            if ($under !== null) {
-                $this->selectNpc($under);
+            if ($under !== []) {
+                // Phases of one presence share a tile: Enter steps through them.
+                $current = array_search($this->selectedNpcIndex, $under, true);
+                $this->selectNpc($under[$current === false ? 0 : ($current + 1) % count($under)]);
                 $this->setStatus(sprintf('Selected %s.', $this->describeSelectedNpc()));
                 $this->renderCanvasArea();
 

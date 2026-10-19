@@ -50,8 +50,8 @@ it('refuses NPC changes the rules forbid, naming what stands in the way', functi
     $revision = $session->readMap('test-map')['revision'];
 
     expect(fn() => $session->createNpc('test-map', $revision, 20, 1, 'Out'))->toThrow(SessionRefusal::class, '20,1 is outside the map.')
-        ->and(fn() => $session->createNpc('test-map', $revision, 2, 1, 'On Ann'))->toThrow(SessionRefusal::class, 'Ann already stands at 2,1.')
-        ->and(fn() => $session->moveNpc('test-map', $revision, 0, 6, 3))->toThrow(SessionRefusal::class, 'Bob already stands at 6,3.')
+        ->and(fn() => $session->createNpc('test-map', $revision, 2, 1, 'On Ann'))->toThrow(SessionRefusal::class, 'Ann already stands at 2,1 while both can be visible.')
+        ->and(fn() => $session->moveNpc('test-map', $revision, 0, 6, 3))->toThrow(SessionRefusal::class, 'Bob already stands at 6,3 while both can be visible.')
         ->and(fn() => $session->duplicateNpc('test-map', $revision, 9))->toThrow(SessionRefusal::class, 'test-map has no NPC 9.')
         ->and(fn() => $session->deleteNpc('test-map', $revision, 0))
             ->toThrow(SessionRefusal::class, "Ann is named by NPC Bob script - resolve those before deleting.\n- NPC Bob script")

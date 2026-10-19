@@ -1475,3 +1475,23 @@ it('allows an NPC on an event while the event keeps a free tile, and reports one
         ->toContain('NPC Keeper: It starts on event marker E (ChestEventTrigger) at (5, 1), and NPCs cover every tile of that event')
         ->and(implode("\n", npcIssueLines($covered, Severity::ERROR)))->not->toContain('event marker');
 });
+
+it('steps through the phases sharing a tile with Enter on the canvas', function () {
+    [$root] = npcProject([
+        ['id' => 'ivara', 'name' => 'Ivara', 'x' => 2, 'y' => 1, 'conditions' => [['type' => 'event', 'name' => 'evidence', 'negate' => true]]],
+        ['id' => 'ann', 'name' => 'Ann', 'x' => 6, 'y' => 1],
+        ['id' => 'ivara-returned', 'name' => 'Ivara Returned', 'x' => 2, 'y' => 1, 'conditions' => [['type' => 'event', 'name' => 'evidence']]],
+    ]);
+    $editor = npcEditor($root);
+    setEditorProperty($editor, 'cursorX', 2);
+    setEditorProperty($editor, 'cursorY', 1);
+    $selected = [];
+
+    foreach ([1, 2, 3] as $press) {
+        callEditorMethod($editor, 'dispatchInput', "\r");
+        $selected[] = getEditorProperty($editor, 'selectedNpcIndex');
+    }
+
+    expect($selected)->toBe([2, 0, 2])
+        ->and(npcMap($editor)->getNpcs()->count())->toBe(3);
+});

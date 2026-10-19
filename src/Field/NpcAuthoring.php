@@ -9,6 +9,7 @@ use Ichiloto\Editor\Database\RecordChange;
 use Ichiloto\Editor\Database\RecordItem;
 use Ichiloto\Editor\Database\RecordRefusal;
 use Ichiloto\Editor\Database\Slug;
+use Ichiloto\Editor\Database\WorldConditionExclusion;
 use Ichiloto\Editor\History\Command;
 use Ichiloto\Editor\History\GenericCommand;
 use Ichiloto\Editor\MapSourceRefusal;
@@ -56,15 +57,16 @@ final readonly class NpcAuthoring
      *
      * @param string $name The display name; blank takes {@see DEFAULT_NAME}.
      * @param string|null $id The id; null derives one from the name.
-     * @throws NpcRefusal When the tile is outside the map or another NPC anchors there, or the id is not one or is taken.
+     * @throws NpcRefusal When the tile is outside the map or another NPC anchors there while both can be visible, or the id is not one or is taken.
      * @throws MapSourceRefusal When the map's source cannot take the change.
      */
     public function create(ProjectMap $map, int $x, int $y, string $name, ?string $id = null): NpcChange
     {
         $before = $map->getNpcs();
-        $this->assertPlaceable($map, $before, null, $x, $y);
+        $this->assertInsideMap($map, $x, $y);
         $name = trim($name) === '' ? self::DEFAULT_NAME : trim($name);
         $npc = ProjectNpc::createAt($id === null ? $before->uniqueIdFor($name) : self::requireChosenId($before, null, $id), $name, $x, $y);
+        $this->assertPlaceable($map, $before, null, $npc);
         $after = $before->withAdded($npc);
         $map->setNpcs($after);
 
@@ -75,7 +77,7 @@ final readonly class NpcAuthoring
      * Moves an NPC's anchor to a tile. A move to where it already stands
      * changes nothing.
      *
-     * @throws NpcRefusal When there is no such NPC, the tile is outside the map, or another NPC anchors there.
+     * @throws NpcRefusal When there is no such NPC, the tile is outside the map, or another NPC anchors there while both can be visible.
      * @throws MapSourceRefusal When the map's source cannot take the change.
      */
     public function move(ProjectMap $map, int $index, int $x, int $y): NpcChange
@@ -87,8 +89,8 @@ final readonly class NpcAuthoring
             return new NpcChange(null, $index, $npc);
         }
 
-        $this->assertPlaceable($map, $before, $index, $x, $y);
         $moved = $npc->movedTo($x, $y);
+        $this->assertPlaceable($map, $before, $index, $moved);
         $after = $before->withReplaced($index, $moved);
         $map->setNpcs($after);
 
@@ -110,7 +112,7 @@ final readonly class NpcAuthoring
         $copy = $npc->asCopyWithId($before->uniqueIdFor($npc->getName()));
         $x = $npc->getX() + $npc->getSpriteWidth();
 
-        if ($x < $map->getWidth() && $before->indexAt($x, $npc->getY()) === null) {
+        if ($x < $map->getWidth() && $before->indicesAt($x, $npc->getY()) === []) {
             $copy = $copy->movedTo($x, $npc->getY());
         }
 
@@ -217,11 +219,12 @@ final readonly class NpcAuthoring
      * id; otherwise the id stays and the change says what names it. The
      * rename and its id are one undo step. The Id row changes the id as
      * {@see setId()} does. The X and Y rows move the NPC, under the same tile
-     * rules as {@see move()}.
+     * rules as {@see move()}, and so does a visibility edit to an NPC sharing
+     * its tile with another.
      *
      * @param array<int, int|string> $framePath The frame the row belongs to; [] for the NPC itself.
      * @param array<string, mixed> $field The row, as {@see NpcInspector::getFields()} gave it.
-     * @throws NpcRefusal When there is no such NPC or frame, or a coordinate leaves the map or lands on another NPC.
+     * @throws NpcRefusal When there is no such NPC or frame, a coordinate leaves the map, or a move or visibility edit leaves two NPCs on one tile visible at once.
      * @throws MapSourceRefusal When the map's source cannot take the change.
      */
     public function applyField(NpcInspector $inspector, int $index, array $framePath, array $field, string $rawValue): NpcChange
@@ -254,10 +257,12 @@ final readonly class NpcAuthoring
             $placed = $after->get($index);
             $was = $before->get($index);
 
-            if ($framePath === [] && in_array($fieldId, ['x', 'y'], true) && $placed !== null && $was !== null
-                && ($placed->getX() !== $was->getX() || $placed->getY() !== $was->getY())) {
-                // A coordinate row is a move: the tile rules a move keeps apply.
-                $this->assertPlaceable($map, $before, $index, $placed->getX(), $placed->getY());
+            if ($placed !== null && $was !== null && ($placed->getX() !== $was->getX() || $placed->getY() !== $was->getY()
+                || $placed->getConditions() !== $was->getConditions())) {
+                // A coordinate row is a move, and a visibility edit can make
+                // phases sharing a tile visible together: the tile rules a
+                // move keeps apply to both.
+                $this->assertPlaceable($map, $before, $index, $placed);
             }
 
             if ($framePath === [] && $fieldId === 'name') {
@@ -425,21 +430,44 @@ final readonly class NpcAuthoring
     }
 
     /**
-     * Refuses a tile outside the map or one another NPC anchors to.
+     * Refuses a tile outside the map, or one another NPC anchors to while
+     * both can be visible.
+     *
+     * The game shows an NPC only while its visibility conditions hold, so
+     * two NPCs may share a tile as phases of one presence when their
+     * conditions provably exclude each other ({@see WorldConditionExclusion}).
+     * Any other pair would be two bodies on one tile.
      *
      * @param int|null $ownIndex The NPC being placed, when it is already on the map.
+     * @param ProjectNpc $npc The NPC as it would stand, conditions included.
      * @throws NpcRefusal
      */
-    private function assertPlaceable(ProjectMap $map, NpcCollection $npcs, ?int $ownIndex, int $x, int $y): void
+    private function assertPlaceable(ProjectMap $map, NpcCollection $npcs, ?int $ownIndex, ProjectNpc $npc): void
+    {
+        $x = $npc->getX();
+        $y = $npc->getY();
+        $this->assertInsideMap($map, $x, $y);
+
+        foreach ($npcs->indicesAt($x, $y) as $occupant) {
+            $other = $npcs->get($occupant);
+
+            if ($occupant === $ownIndex || $other === null
+                || WorldConditionExclusion::proveExclusive($npc->getConditions(), $other->getConditions())) {
+                continue;
+            }
+
+            throw new NpcRefusal(sprintf(
+                '%s already stands at %d,%d while both can be visible. Give one a condition the other negates, such as event:x and !event:x, to share the tile.',
+                $other->getName(), $x, $y,
+            ));
+        }
+    }
+
+    /** @throws NpcRefusal */
+    private function assertInsideMap(ProjectMap $map, int $x, int $y): void
     {
         if ($x < 0 || $y < 0 || $x >= $map->getWidth() || $y >= $map->getHeight()) {
             throw new NpcRefusal(sprintf('%d,%d is outside the map.', $x, $y));
-        }
-
-        $occupant = $npcs->indexAt($x, $y);
-
-        if ($occupant !== null && $occupant !== $ownIndex) {
-            throw new NpcRefusal(sprintf('%s already stands at %d,%d.', $npcs->get($occupant)?->getName() ?? 'An NPC', $x, $y));
         }
     }
 
