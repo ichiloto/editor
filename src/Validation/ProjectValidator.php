@@ -12,6 +12,7 @@ use Ichiloto\Editor\Database\ProjectRecord;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\Database\SummonAssignmentDiagnostics;
+use Ichiloto\Editor\Database\WorldConditionExclusion;
 use Ichiloto\Editor\Events\CommandMapContext;
 use Ichiloto\Editor\Events\ProjectScriptCommands;
 use Ichiloto\Editor\Field\MapEncounters;
@@ -2114,7 +2115,7 @@ class ProjectValidator
    * @param string $where Where it lives.
    * @param int $width The map width.
    * @param int $height The map height.
-   * @param array<int, array{x: int, y: int, name: string, where: string, wanders: bool, width: int}> $anchors Anchors seen so far, appended to.
+   * @param array<int, array{x: int, y: int, name: string, where: string, wanders: bool, width: int, conditions: array<int|string, mixed>}> $anchors Anchors seen so far, appended to.
    * @param string $name The NPC's name.
    * @param int|string $index The entry index.
    * @return Issue[] The issues found.
@@ -2159,6 +2160,7 @@ class ProjectValidator
       'where' => $where,
       'wanders' => strval($entry['movement'] ?? 'fixed') === 'wander',
       'width' => ProjectNpc::glyphWidth($sprite),
+      'conditions' => is_array($entry['conditions'] ?? null) ? $entry['conditions'] : [],
     ];
 
     if ($x < 0 || $y < 0 || $x >= $width || $y >= $height) {
@@ -2577,11 +2579,12 @@ class ProjectValidator
    * celebration area). Only when fixed NPCs cover every tile of the area can
    * the event never fire; a wanderer only blocks it while there. Two NPCs on
    * one tile: `npcAt` finds the first, so the second can never be spoken to
-   * while both stand still.
+   * while both stand still, unless their visibility conditions exclude each
+   * other, as phases of one presence do.
    *
    * @param ProjectMap $map The map.
    * @param ProjectWorkspace $workspace The project.
-   * @param array<int, array{x: int, y: int, name: string, where: string, wanders: bool, width: int}> $anchors The NPC anchors.
+   * @param array<int, array{x: int, y: int, name: string, where: string, wanders: bool, width: int, conditions: array<int|string, mixed>}> $anchors The NPC anchors.
    * @return Issue[] The issues found.
    */
   protected function checkNpcCollisions(ProjectMap $map, ProjectWorkspace $workspace, array $anchors): array
@@ -2604,7 +2607,9 @@ class ProjectValidator
 
     foreach ($anchors as $index => $anchor) {
       foreach ($anchors as $otherIndex => $other) {
-        if ($otherIndex <= $index) {
+        // Phases whose visibility conditions exclude each other are never
+        // on the field together, so they may share or overlap a tile.
+        if ($otherIndex <= $index || WorldConditionExclusion::proveExclusive($anchor['conditions'], $other['conditions'])) {
           continue;
         }
 

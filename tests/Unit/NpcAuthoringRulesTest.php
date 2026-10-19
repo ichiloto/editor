@@ -55,7 +55,7 @@ it('creates an NPC under an id its name derives, and refuses a tile outside the 
         ->and($blank->npc?->getName())->toBe(NpcAuthoring::DEFAULT_NAME)
         ->and($blank->npc?->getId())->toBe('new-npc')
         ->and(fn() => $authoring->create($map, 12, 0, 'Out'))->toThrow(NpcRefusal::class, '12,0 is outside the map.')
-        ->and(fn() => $authoring->create($map, 2, 1, 'Stacked'))->toThrow(NpcRefusal::class, 'Gate Guard already stands at 2,1.')
+        ->and(fn() => $authoring->create($map, 2, 1, 'Stacked'))->toThrow(NpcRefusal::class, 'Gate Guard already stands at 2,1 while both can be visible.')
         ->and($map->getNpcs()->count())->toBe(3);
 
     // The command puts back exactly the collection; nothing else is involved.
@@ -76,7 +76,7 @@ it('moves an NPC within the map onto a free tile, and changes nothing for its ow
 
     expect($authoring->move($map, 0, 2, 1)->command)->toBeNull()
         ->and(fn() => $authoring->move($map, 0, -1, 1))->toThrow(NpcRefusal::class, '-1,1 is outside the map.')
-        ->and(fn() => $authoring->move($map, 0, 6, 3))->toThrow(NpcRefusal::class, 'Bob already stands at 6,3.')
+        ->and(fn() => $authoring->move($map, 0, 6, 3))->toThrow(NpcRefusal::class, 'Bob already stands at 6,3 while both can be visible.')
         ->and(fn() => $authoring->move($map, 7, 1, 1))->toThrow(NpcRefusal::class, 'test-map has no NPC 7.')
         ->and($map->isDirty())->toBeFalse();
 
@@ -181,7 +181,7 @@ it('applies the move rules to the coordinate rows, leaving nothing changed when 
     $inspector = new NpcInspector($map);
 
     expect(fn() => $authoring->applyField($inspector, 0, [], npcRulesRow($inspector, 0, 'x'), '6'))
-        ->toThrow(NpcRefusal::class, 'Bob already stands at 6,1.')
+        ->toThrow(NpcRefusal::class, 'Bob already stands at 6,1 while both can be visible.')
         ->and(fn() => $authoring->applyField($inspector, 0, [], npcRulesRow($inspector, 0, 'y'), '9'))
         ->toThrow(NpcRefusal::class, '2,9 is outside the map.')
         ->and($map->getNpcs()->get(0)?->getX())->toBe(2)
@@ -246,6 +246,6 @@ it('warns in the terminal Inspector when a coordinate edit would stack an NPC, r
     callEditorMethod($editor, 'applyNpcFieldValueRecorded', $x, '6');
 
     expect($map->getNpcs()->get(0)?->getX())->toBe(2)
-        ->and(getEditorProperty($editor, 'statusMessage'))->toBe('Bob already stands at 6,1.')
+        ->and(getEditorProperty($editor, 'statusMessage'))->toBe('Bob already stands at 6,1 while both can be visible. Give one a condition the other negates, such as event:x and !event:x, to share the tile.')
         ->and(getEditorProperty($editor, 'history')->count())->toBe(0);
 });

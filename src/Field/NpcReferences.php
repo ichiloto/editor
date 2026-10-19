@@ -62,11 +62,11 @@ final class NpcReferences
             $label = sprintf('%s event %s', $map->mapId, strval($marker));
             $script = (array) ($data['script'] ?? []);
 
-            if (trim(strval($data['npcId'] ?? '')) === $npcId || $this->commandsName($script, $npcId)) {
+            if (self::readText($data['npcId'] ?? null) === $npcId || $this->commandsName($script, $npcId)) {
                 $found[] = $label;
             }
 
-            $scriptId = trim(strval($data['scriptId'] ?? ''));
+            $scriptId = self::readText($data['scriptId'] ?? null);
 
             if ($scriptId !== '') {
                 $usedScripts[$scriptId] ??= $label;
@@ -106,7 +106,7 @@ final class NpcReferences
                 continue;
             }
 
-            if (trim(strval($data['startMap'] ?? '')) !== $map->mapId) {
+            if (self::readText($data['startMap'] ?? null) !== $map->mapId) {
                 continue;
             }
 
@@ -167,9 +167,11 @@ final class NpcReferences
                 continue;
             }
 
-            $scriptId = trim(strval($node['id'] ?? ''));
+            // Only a common_event command's id names a script; elsewhere an
+            // id may be any reference, structured ones included.
+            $scriptId = ($node['type'] ?? null) === 'common_event' ? self::readText($node['id'] ?? null) : '';
 
-            if (($node['type'] ?? null) === 'common_event' && $scriptId !== '') {
+            if ($scriptId !== '') {
                 $started[$scriptId] ??= $owner;
             }
 
@@ -180,7 +182,9 @@ final class NpcReferences
     /**
      * Determines whether commands name the NPC, however deeply nested: a
      * `move_route` for subject `npc`, or any subject, target or cast entry
-     * of kind `npc`, by `npcId` or `id`.
+     * of kind `npc`, by `npcId` or `id`. A structured subject such as
+     * `['kind' => 'npc', 'id' => ...]` is itself a nested reference, read
+     * when the walk reaches it, as the Engine's subject resolver reads it.
      *
      * @param array<int|string, mixed> $commands The commands.
      * @param string $npcId The id.
@@ -193,9 +197,8 @@ final class NpcReferences
                 continue;
             }
 
-            $namesNpc = strtolower(trim(strval($node['kind'] ?? $node['subject'] ?? ''))) === 'npc';
-
-            if ($namesNpc && trim(strval($node['npcId'] ?? $node['id'] ?? '')) === $npcId) {
+            if (strtolower(self::readText($node['kind'] ?? $node['subject'] ?? null)) === 'npc'
+                && self::readText($node['npcId'] ?? $node['id'] ?? null) === $npcId) {
                 return true;
             }
 
@@ -205,5 +208,16 @@ final class NpcReferences
         }
 
         return false;
+    }
+
+    /**
+     * Returns an authored id, kind or map id as trimmed text, or an empty
+     * string when it is not text. A structured value, such as a subject
+     * written as `['kind' => 'npc', 'id' => ...]`, is a reference of its own
+     * that the walk reads where it stands, not text of the node holding it.
+     */
+    private static function readText(mixed $value): string
+    {
+        return is_string($value) || is_int($value) ? trim((string) $value) : '';
     }
 }
