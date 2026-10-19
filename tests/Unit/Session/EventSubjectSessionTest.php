@@ -97,3 +97,72 @@ it('binds an event through a batch and writes it once the map is valid', functio
         ->and((require $root . '/assets/Maps/test-map/test-map.data.php')['events']['E']['subject'])->toBe(['kind' => 'world_object', 'id' => 'lockers'])
         ->and(array_filter($outcome['issues'], static fn(array $issue): bool => str_starts_with((string) $issue['code'], 'event.')))->toBe([]);
 });
+
+/**
+ * The subject project with event E as the given trigger, its data and any
+ * extra root fields.
+ *
+ * @param array<string, mixed> $data
+ * @param array<string, mixed> $root
+ */
+function eventSubjectProjectAs(string $className, array $data, array $root = []): string
+{
+    $root_ = eventSubjectProject();
+    $file = $root_ . '/assets/Maps/test-map/test-map.data.php';
+    $map = require $file;
+    $map['events']['E'] = ['class' => $className, 'data' => $data, ...$root];
+    file_put_contents($file, "<?php\n\nreturn " . var_export($map, true) . ";\n");
+
+    return $root_;
+}
+
+/** The validator's errors about event E, as where and message. @return list<string> */
+function readEventSubjectErrors(EditorSession $session): array
+{
+    return array_values(array_map(
+        static fn(array $issue): string => $issue['where'] . ': ' . $issue['message'],
+        array_filter($session->validateProject(['test-map'])['issues'],
+            static fn(array $issue): bool => $issue['severity'] === 'error' && str_contains((string) $issue['where'] . ' ' . $issue['message'], 'E'),
+        ),
+    ));
+}
+
+it('binds a Story Script event to its object and saves, reloads and validates it clean', function (string $className, array $data) {
+    $root = eventSubjectProjectAs($className, $data);
+    $session = EditorSession::open($root);
+    $errorsBefore = readEventSubjectErrors($session);
+
+    $session->setEventSubject('test-map', $session->readMap('test-map')['revision'], 'E', 'lockers');
+    $session->saveMap('test-map');
+    $saved = EditorSession::open($root);
+
+    expect(getSessionMap($saved)->getEventDefinition('E'))->toMatchArray(['class' => $className, 'subject' => ['kind' => 'world_object', 'id' => 'lockers']])
+        ->and(readResolvedEventCells($saved, 'E'))->toBe([[1, 1], [2, 1]])
+        ->and(readEventSubjectErrors($saved))->toBe($errorsBefore);
+})->with([
+    'Story Script' => ['Ichiloto\\Engine\\Events\\Triggers\\ScriptEventTrigger', ['script' => [['type' => 'text', 'text' => 'Lockers.']], 'mode' => 'action', 'reusable' => true]],
+    'Dialogue' => ['Ichiloto\\Engine\\Events\\Triggers\\DialogueEventTrigger', ['dialogue' => [['name' => '', 'text' => 'Lockers.']]]],
+]);
+
+it('still refuses a Story Script event\'s unknown root and data fields and a subject naming no object', function () {
+    $root = eventSubjectProjectAs(
+        'Ichiloto\\Engine\\Events\\Triggers\\ScriptEventTrigger',
+        ['script' => [['type' => 'text', 'text' => 'Lockers.']], 'mode' => 'sometimes', 'colour' => 'red'],
+        ['trigger' => 'step'],
+    );
+    $session = EditorSession::open($root);
+    $session->setEventSubject('test-map', $session->readMap('test-map')['revision'], 'E', 'lockers');
+    $session->saveMap('test-map');
+    // The object the subject names is gone from the source.
+    $file = $root . '/assets/Maps/test-map/test-map.data.php';
+    $map = require $file;
+    $map['events']['E']['subject']['id'] = 'no-such-object';
+    file_put_contents($file, "<?php\n\nreturn " . var_export($map, true) . ";\n");
+    $errors = implode("\n", readEventSubjectErrors(EditorSession::open($root)));
+
+    expect($errors)->toContain('ScriptEventTrigger uses unsupported root field "trigger".')
+        ->and($errors)->toContain('ScriptEventTrigger uses unsupported data field "colour".')
+        ->and($errors)->toContain('ScriptEventTrigger uses unsupported mode "sometimes".')
+        ->and($errors)->toContain("subject 'no-such-object' was not found")
+        ->and($errors)->not->toContain('unsupported root field "subject"');
+});

@@ -2034,7 +2034,7 @@ final class RecordSchemaCatalog
     /**
      * Returns one map event as a record pane ({@see \Ichiloto\Editor\Events\EventRecordPane}).
      *
-     * Every trigger class reads the same root fields (EventTriggerFactory):
+     * Every map event shares one envelope ({@see \Ichiloto\Engine\Events\MapEventDefinition}):
      * the conditions that make it available, the message shown while they
      * do not hold, the writes made when it completes, and the conditions
      * that delay its cue. They are offered on every event and written only

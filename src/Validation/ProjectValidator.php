@@ -37,7 +37,9 @@ use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandFieldKind;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandRegistry;
 use Ichiloto\Engine\Events\Interpreter\EventInterpreter;
 use Ichiloto\Engine\Events\Interpreter\MovementRouteRunner;
+use Ichiloto\Engine\Events\MapEventDefinition;
 use Ichiloto\Engine\Events\Triggers\EventCueKind;
+use Ichiloto\Engine\Events\Triggers\ScriptEventTrigger;
 use Ichiloto\Engine\IO\Console\TerminalText;
 use InvalidArgumentException;
 use Throwable;
@@ -4078,13 +4080,13 @@ class ProjectValidator
     array $npcIdsByMap,
   ): array {
     $issues = [];
-    $allowedRootFields = ['class', 'data', 'conditions', 'sets', 'whenBlocked', 'cue', 'facing', 'engagement'];
-
-    foreach (array_diff(array_keys($definition), $allowedRootFields) as $field) {
+    // The Engine owns both vocabularies: the envelope every map event shares
+    // (whose combinations MapEventResolver checks) and this trigger's data.
+    foreach (array_diff(array_keys($definition), MapEventDefinition::ROOT_FIELDS) as $field) {
       $issues[] = Issue::error(
         $where,
         sprintf('ScriptEventTrigger uses unsupported root field "%s".', $field),
-        'Use class, data, conditions, sets, whenBlocked, cue, facing, or engagement.'
+        sprintf('Use %s.', implode(', ', MapEventDefinition::ROOT_FIELDS))
       );
     }
 
@@ -4094,13 +4096,11 @@ class ProjectValidator
       return [...$issues, Issue::error($where, 'ScriptEventTrigger data is malformed.', 'Store its settings in a data array.')];
     }
 
-    $allowedDataFields = ['scriptId', 'script', 'mode', 'reusable'];
-
-    foreach (array_diff(array_keys($data), $allowedDataFields) as $field) {
+    foreach (array_diff(array_keys($data), ScriptEventTrigger::DATA_FIELDS) as $field) {
       $issues[] = Issue::error(
         $where,
         sprintf('ScriptEventTrigger uses unsupported data field "%s".', $field),
-        'Use scriptId, script, mode, or reusable.'
+        sprintf('Use %s.', implode(', ', ScriptEventTrigger::DATA_FIELDS))
       );
     }
 
@@ -4138,13 +4138,13 @@ class ProjectValidator
       }
     }
 
-    $mode = strval($data['mode'] ?? 'action');
+    $mode = strval($data['mode'] ?? ScriptEventTrigger::MODE_ACTION);
 
-    if (! in_array($mode, ['action', 'auto'], true)) {
+    if (! in_array($mode, ScriptEventTrigger::MODES, true)) {
       $issues[] = Issue::error(
         $where,
         sprintf('ScriptEventTrigger uses unsupported mode "%s".', $mode),
-        'Choose action or auto.'
+        sprintf('Choose %s.', implode(' or ', ScriptEventTrigger::MODES))
       );
     }
 

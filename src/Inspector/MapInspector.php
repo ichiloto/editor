@@ -33,11 +33,13 @@ use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\Validation\ChestRewardValidator;
 use Ichiloto\Editor\Validation\Issue;
 use Ichiloto\Engine\Core\Enumerations\MovementHeading;
+use Ichiloto\Engine\Cutscenes\Cinematics\CinematicCommandSchema;
 use Ichiloto\Engine\Events\Enumerations\ChestType;
 use Ichiloto\Engine\Events\Enumerations\EventEngagement;
 use Ichiloto\Engine\Events\Enumerations\LootType;
 use Ichiloto\Engine\Events\Triggers\DialogueEventTrigger;
 use Ichiloto\Engine\Events\Triggers\EventCueKind;
+use Ichiloto\Engine\Events\Triggers\ScriptEventTrigger;
 use Ichiloto\Engine\Events\Triggers\ShopEventTrigger;
 use Ichiloto\Engine\Field\PlayerSpriteSet;
 use Ichiloto\Engine\Messaging\Dialogue\ConditionalDialogue;
@@ -1642,7 +1644,9 @@ final readonly class MapInspector
         if (is_array($eventData)) {
             // The type's optional data is offered as it reads when absent,
             // and stays out of the stored event until an author sets it.
-            $optional = EventTypeCatalog::findByClass(is_string($definition['class'] ?? null) ? $definition['class'] : null)?->optionalData ?? [];
+            $className = is_string($definition['class'] ?? null) ? ltrim($definition['class'], '\\') : null;
+            $optional = EventTypeCatalog::findByClass($className)?->optionalData ?? [];
+            $modes = self::listEventModes($className);
             $hasPresentation = array_key_exists('presentation', $optional) || array_key_exists('presentation', $eventData);
             $presentation = $eventData['presentation'] ?? null;
             if ($hasPresentation) { unset($eventData['presentation'], $optional['presentation']); }
@@ -1650,10 +1654,14 @@ final readonly class MapInspector
             $spawnSprite = $eventData['spawnSprite'] ?? null;
             unset($eventData['spawnSprite']);
             $pages = self::readDialoguePages($shown);
-            $fields = array_map(static function (array $field) use ($optional): array {
+            $fields = array_map(static function (array $field) use ($optional, $modes): array {
                 $path = array_values((array) ($field['path'] ?? []));
                 if (count($path) === 2 && array_key_exists((string) $path[1], $optional)) {
                     $field['optional'] = true;
+                }
+                if ($path === ['data', 'mode'] && $modes !== null) {
+                    $field['options'] = $modes;
+                    unset($field['control']);
                 }
 
                 return $field;
@@ -2114,6 +2122,21 @@ final readonly class MapInspector
     }
 
     /**
+     * Returns the modes a trigger class runs in, as the Engine exports them,
+     * or null for a class that reads no mode.
+     *
+     * @return list<string>|null
+     */
+    private static function listEventModes(?string $className): ?array
+    {
+        return match ($className) {
+            ScriptEventTrigger::class => ScriptEventTrigger::MODES,
+            CinematicCommandSchema::CINEMATIC_TRIGGER_CLASS => CinematicCommandSchema::CINEMATIC_TRIGGER_MODES,
+            default => null,
+        };
+    }
+
+    /**
      * Adds event context, pickers, and enum controls to flattened fields.
      *
      * @param array<int, array<string, mixed>> $fields The raw fields.
@@ -2131,11 +2154,6 @@ final readonly class MapInspector
             $field['target'] = 'event';
 
             $path = array_values((array) ($field['path'] ?? []));
-
-            if ($path === ['data', 'mode']) {
-                $field['options'] = ['action', 'auto'];
-                unset($field['control']);
-            }
 
             $choices = match ($path) {
                 ['cue', 'kind'] => self::EVENT_CUE_KIND_CHOICES,

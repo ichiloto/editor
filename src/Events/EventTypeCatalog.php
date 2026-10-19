@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Events;
 
 use Ichiloto\Engine\Core\Enumerations\MovementHeading;
+use Ichiloto\Engine\Events\MapEventDefinition;
 use Ichiloto\Engine\Events\Triggers\ChestEventTrigger;
 use Ichiloto\Engine\Events\Triggers\CinematicEventTrigger;
 use Ichiloto\Engine\Events\Triggers\DialogueEventTrigger;
@@ -16,11 +17,11 @@ use Ichiloto\Engine\Events\Triggers\TransferPlayerTrigger;
 /**
  * Lists valid event types that can be assigned in the editor.
  *
- * A type owns its class and its data. The root fields every trigger reads
- * whatever its class (`conditions`, `sets`, `whenBlocked`, `cue` and its
- * `conditions`, `facing`, `engagement`) belong to no type: they are offered
- * on every event and written only when an author sets them
- * ({@see EventRecordPane}).
+ * A type owns its class and its data. The envelope every map event shares
+ * whatever its class ({@see MapEventDefinition::ROOT_FIELDS}) belongs to no
+ * type: its conditions, writes, blocked message, cue, facing and engagement
+ * are offered on every event and written only when an author sets them
+ * ({@see EventRecordPane}); its subject and area have their own operations.
  */
 final class EventTypeCatalog
 {
@@ -45,7 +46,7 @@ final class EventTypeCatalog
                 description: 'Runs a resumable event script by stable script id.',
                 defaultData: [
                     'scriptId' => '',
-                    'mode' => 'action',
+                    'mode' => ScriptEventTrigger::MODE_ACTION,
                     'reusable' => false,
                 ],
                 defaultDefinitionFields: ['cue' => ['symbol' => '', 'color' => 'bright-yellow']],
