@@ -19,8 +19,11 @@ namespace Ichiloto\Editor\Database;
  *   variable:name[:set|add][:v]  -> ['type' => 'variable', 'name', 'op', 'value']
  *   quest:id[:confirm|grant]     -> ['type' => 'quest', 'name', 'confirm']
  *
- * Entries are separated by `;`. Unparseable segments are dropped rather than
- * written back as garbage.
+ * Entries are separated by `;` ({@see WorldStateLine}); a name or value
+ * escapes its backslash, `:` and `;` with a backslash, so any name the Engine
+ * accepts round-trips. A line is read only as written: a part the type does
+ * not take, or a value it cannot be, makes the entry unreadable, never
+ * rewritten.
  *
  * @package Ichiloto\Editor\Database
  */
@@ -125,11 +128,13 @@ final class WorldWriteCodec
                 break;
         }
 
-        return implode(':', $parts);
+        return WorldStateLine::joinParts($parts);
     }
 
     /**
-     * Decodes the one-line form back into write arrays.
+     * Decodes the one-line form back into write arrays, leaving out an entry
+     * it cannot read: for showing a line this codec wrote. A line an author or
+     * a client submits is read by {@see decodeAllStrictly()}.
      *
      * @param string $value The encoded writes.
      * @return array<int, array<string, mixed>> The writes.
@@ -138,7 +143,7 @@ final class WorldWriteCodec
     {
         $sets = [];
 
-        foreach (explode(';', $value) as $segment) {
+        foreach (WorldStateLine::splitEntries($value) as $segment) {
             $set = self::decode($segment);
 
             if ($set !== null) {
@@ -150,66 +155,107 @@ final class WorldWriteCodec
     }
 
     /**
-     * Decodes the one-line form, refusing it whole when any segment cannot
-     * be read, so a typed write is never dropped without a word.
+     * Decodes the one-line form, refusing it whole when any entry cannot be
+     * read as written, so a typed write is never dropped or reinterpreted
+     * without a word.
      *
      * @param string $value The encoded writes.
      * @return array<int, array<string, mixed>> The writes.
-     * @throws \InvalidArgumentException Naming the first unreadable segment.
+     * @throws \InvalidArgumentException Naming the first unreadable entry and why.
      */
     public static function decodeAllStrictly(string $value): array
     {
         $sets = [];
 
-        foreach (explode(';', $value) as $segment) {
+        foreach (WorldStateLine::splitEntries($value) as $segment) {
             if (trim($segment) === '') {
                 continue;
             }
 
-            $sets[] = self::decode($segment) ?? throw new \InvalidArgumentException(sprintf(
-                'Write "%s" cannot be read: write type:name[:extras] with a type of %s.',
-                trim($segment),
-                implode(', ', self::TYPES),
-            ));
+            $set = self::parse($segment);
+            if (is_string($set)) {
+                throw new \InvalidArgumentException(sprintf('Write "%s" cannot be read: %s Nothing was changed.', trim($segment), $set));
+            }
+            $sets[] = $set;
         }
 
         return $sets;
     }
 
     /**
-     * Decodes one segment.
+     * Decodes one entry.
      *
-     * @param string $segment The segment.
-     * @return array<string, mixed>|null The write, or null when unparseable.
+     * @param string $segment The entry.
+     * @return array<string, mixed>|null The write, or null when it cannot be read as written.
      */
     public static function decode(string $segment): ?array
     {
-        $parts = array_map(trim(...), explode(':', trim($segment)));
-        $type = strtolower($parts[0] ?? '');
+        $set = self::parse($segment);
+
+        return is_array($set) ? $set : null;
+    }
+
+    /**
+     * Reads one entry exactly as written.
+     *
+     * @return array<string, mixed>|string The write, or why it cannot be read.
+     */
+    private static function parse(string $segment): array|string
+    {
+        if (trim($segment) === '') {
+            return 'it is empty.';
+        }
+        try {
+            $parts = WorldStateLine::splitParts(trim($segment));
+        } catch (\InvalidArgumentException $error) {
+            return $error->getMessage();
+        }
+        $type = strtolower($parts[0]);
         $name = $parts[1] ?? '';
 
-        if ($name === '' || ! in_array($type, self::TYPES, true)) {
-            return null;
+        if (! in_array($type, self::TYPES, true)) {
+            return sprintf('write type:name[:extras] with a type of %s.', implode(', ', self::TYPES));
+        }
+        if ($name === '') {
+            return sprintf('the %s write needs a name.', $type);
+        }
+        $extras = array_slice($parts, 2);
+        $allowed = ['switch' => 1, 'event' => 0, 'variable' => 2, 'quest' => 1][$type];
+        if (count($extras) > $allowed) {
+            return sprintf('the %s write takes %s after its name, not "%s"; write a colon or semicolon inside a name as \\: or \\;.',
+                $type, ['switch' => 'at most true or false', 'event' => 'nothing', 'variable' => 'at most set or add and a value',
+                    'quest' => 'at most confirm or grant'][$type], implode(':', array_slice($extras, $allowed)));
         }
 
         $set = ['type' => $type, 'name' => $name];
 
         switch ($type) {
             case 'switch':
-                if (isset($parts[2])) {
-                    $set['value'] = strtolower($parts[2]) !== 'false';
+                if (isset($extras[0])) {
+                    $state = strtolower($extras[0]);
+                    if (! in_array($state, ['true', 'false'], true)) {
+                        return sprintf('a switch is set true or false, not "%s".', $extras[0]);
+                    }
+                    $set['value'] = $state === 'true';
                 }
 
                 break;
             case 'variable':
-                $op = strtolower($parts[2] ?? 'set');
-                $set['op'] = $op === 'add' ? 'add' : 'set';
-                $rawValue = $parts[3] ?? ($op === 'add' ? '1' : '0');
+                $op = strtolower($extras[0] ?? 'set');
+                if (! in_array($op, ['set', 'add'], true)) {
+                    return sprintf('a variable write is set or add, not "%s".', $extras[0]);
+                }
+                $set['op'] = $op;
+                $rawValue = $extras[1] ?? ($op === 'add' ? '1' : '0');
                 $set['value'] = is_numeric($rawValue) ? $rawValue + 0 : $rawValue;
                 break;
             case 'quest':
-                if (isset($parts[2])) {
-                    $set['confirm'] = strtolower($parts[2]) !== 'grant';
+                if (isset($extras[0])) {
+                    $mode = strtolower($extras[0]);
+                    if (! in_array($mode, ['confirm', 'grant'], true)) {
+                        return sprintf('a quest write is confirm or grant, not "%s".', $extras[0]);
+                    }
+                    $set['confirm'] = $mode === 'confirm';
                 }
 
                 break;
