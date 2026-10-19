@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Ichiloto\Editor;
 
 use Ichiloto\Editor\Database\InnPresentationFields;
+use Ichiloto\Engine\Audio\Enumerations\SystemSound;
 use Ichiloto\Engine\Localization\EngineMessageTerms;
 use Ichiloto\Engine\Rendering\FieldViewport;
 
@@ -27,6 +28,24 @@ final class ProjectConfig extends ProjectSettingsFile
      */
     public const array ENGINE_REFERENCES = [self::INN_PRESENTATION => 'stage_timelines'];
 
+    /** Settings under these paths each name one audio file, chosen from the project's own folder for that kind. */
+    private const array ENGINE_REFERENCE_PREFIXES = ['audio.sounds.' => 'sfx', 'audio.bgm.' => 'bgm'];
+
+    /** The reference kind a setting is chosen from, or null when it is written as a plain value. */
+    public static function getEngineReference(string $path): ?string
+    {
+        if (isset(self::ENGINE_REFERENCES[$path])) {
+            return self::ENGINE_REFERENCES[$path];
+        }
+        foreach (self::ENGINE_REFERENCE_PREFIXES as $prefix => $reference) {
+            if (str_starts_with($path, $prefix) && strlen($path) > strlen($prefix)) {
+                return $reference;
+            }
+        }
+
+        return null;
+    }
+
     public function __construct(string $projectRoot)
     {
         parent::__construct($projectRoot, 'config.php');
@@ -40,6 +59,10 @@ final class ProjectConfig extends ProjectSettingsFile
     protected function listEngineSettings(): array
     {
         $settings = array_map(static fn(mixed $default): array => ['default' => $default], self::ENGINE_DEFAULTS);
+        // Every sound the Engine plays for itself is offered, so a game can choose one it has not set yet.
+        foreach (SystemSound::cases() as $sound) {
+            $settings['audio.sounds.' . $sound->value] = ['default' => null];
+        }
         foreach (EngineMessageTerms::listTerms() as $path => $term) {
             // A message that inherits the project's own vocabulary wording reads as that wording here, as the game
             // reads it, taken from this project's file, never from another project's loaded runtime state.
