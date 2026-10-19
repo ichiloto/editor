@@ -91,6 +91,9 @@ use Ichiloto\Editor\History\SourceSetRequired;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Editor\Storage\FileSetTransactionFailure;
+use Ichiloto\Editor\Storage\SaveSet;
+use Ichiloto\Editor\Storage\SaveSetAdoptionFailure;
+use Ichiloto\Editor\Storage\SaveSetRefusal;
 use Ichiloto\Editor\Storage\WorkspaceSave;
 use Ichiloto\Editor\Validation\MapGraphicsValidator;
 use Ichiloto\Editor\Validation\Issue;
@@ -5442,15 +5445,26 @@ final class EditorSession
      * set is refused when a map it changed has any error (a defect the player
      * would meet), whether the change set made it or found it there, or when
      * it leaves a new error anywhere else (a door on another map now leading
-     * nowhere). Warnings never refuse it. Its maps are saved through their
-     * own transactions, then any other unsaved change it made.
+     * nowhere). Warnings never refuse it.
+     *
+     * Everything it left unsaved -- databases, cutscenes, maps and the save
+     * relocations its maps need -- is then written as one transaction: every
+     * document works out its file and proves the staged bytes read back as
+     * what it holds before any file is installed, and a file that cannot be
+     * installed puts back the ones already installed. A document that refuses
+     * refuses the change set exactly as an error does: nothing is written,
+     * and the change set is undone. Should a document fail to take up what it
+     * wrote once every file is installed, the change set is saved and
+     * `reason` says which, to reload before editing further.
      *
      * @param bool $relocateSaves Whether saves standing where a changed map is now solid may move to open floor;
      *     without it such a change set is refused, naming where they would move.
      * @param bool $checkOnly Whether to only report what committing would find, then undo the change set.
-     * @return array{status: 'saved'|'refused'|'checked', maps: list<string>, saved: list<string>, issues: list<array<string, ?string>>,
-     *     blocking: int, relocated: list<string>, reason?: ?string, unrestored?: int}
-     * @throws SessionRefusal When no change set is open, or a save fails part way (the message names what was written).
+     * @return array{status: 'saved'|'refused'|'checked', maps: list<string>, saved: list<string>, written: array<string, list<string>>,
+     *     issues: list<array<string, ?string>>, blocking: int, relocated: list<string>, backupFailures: list<string>,
+     *     reason?: ?string, unrestored?: int, unrestoredFiles?: list<string>}
+     *     `written` names each document written and the files it wrote or removed, relative to the project root.
+     * @throws SessionRefusal When no change set is open.
      */
     public function commitChanges(bool $relocateSaves = false, bool $checkOnly = false): array
     {
@@ -5462,8 +5476,8 @@ final class EditorSession
             && (in_array($issue->map, $changed, true) || ! isset($before[self::identifyIssue($issue)]))));
         $reported = array_values(array_filter($issues, static fn(Issue $issue): bool => in_array($issue->map, $changed, true)
             || in_array($issue, $blocking, true)));
-        $outcome = ['maps' => $changed, 'saved' => [], 'issues' => array_map(static fn(Issue $issue): array => $issue->describe(), $reported),
-            'blocking' => count($blocking), 'relocated' => []];
+        $outcome = ['maps' => $changed, 'saved' => [], 'written' => [], 'issues' => array_map(static fn(Issue $issue): array => $issue->describe(), $reported),
+            'blocking' => count($blocking), 'relocated' => [], 'backupFailures' => []];
 
         $relocations = [];
         foreach ($changed as $mapId) {
@@ -5485,33 +5499,38 @@ final class EditorSession
                 ...($unrestored > 0 ? ['unrestored' => $unrestored] : [])];
         }
 
-        $this->changeSet = null;
-        // What the maps name (a field resource, a cinematic, a common event) is written before the maps, by the
-        // same Save All the editors use; a map whose save moves saves is then saved on its own, its moves allowed.
         $unsaved = array_values(array_filter($changed, fn(string $mapId): bool => ($this->getMapsById()[$mapId] ?? null)?->isDirty() === true));
-        $rest = $this->saveAll();
-        if ($rest['failures'] !== []) {
-            throw new SessionRefusal('The change set was not fully saved: ' . implode('; ', $rest['failures']));
-        }
-        foreach ($unsaved as $mapId) {
-            $map = $this->getMapsById()[$mapId] ?? null;
-            if ($map === null) {
-                continue;
+        $backupFailures = [];
+        $backup = function (string ...$paths) use (&$backupFailures): void {
+            if ($this->backups->isEnabled() && $paths !== []) {
+                $backupFailures = $this->backups->backup(...$paths)['failed'];
             }
-            if ($map->isDirty()) {
-                try {
-                    $result = $this->saveMap($mapId);
-                    if (($result['status'] ?? null) === 'question') {
-                        $result = $this->saveMap($mapId, 'write', $result['confirm']);
-                        $outcome['relocated'] = [...$outcome['relocated'], ...($result['relocated'] ?? [])];
-                    }
-                } catch (SessionRefusal $refusal) {
-                    throw new SessionRefusal(sprintf('%s was not saved: %s Already saved: %s.', $mapId, $refusal->getMessage(),
-                        implode(', ', $outcome['saved']) ?: 'every other change'), previous: $refusal);
-                }
-            }
-            $outcome['saved'][] = $mapId;
+        };
+
+        try {
+            $saves = WorkspaceSave::prepareAll($this->workspace, $relocateSaves ? fn(Command $step) => $this->history->record($step) : null);
+            $written = SaveSet::commit($this->workspace->projectRoot, $saves, $backup);
+        } catch (SaveSetAdoptionFailure $partial) {
+            // The files are written: the change set is, though the editor's view of it is not current.
+            $written = $partial->written;
+            $outcome['reason'] = $partial->getMessage();
+        } catch (Throwable $refusal) {
+            $unrestored = $this->rollBackChanges($changes);
+            $files = $refusal instanceof SaveSetRefusal ? $refusal->unrestored : [];
+
+            return ['status' => 'refused', ...$outcome, 'relocated' => $relocations, 'backupFailures' => array_values($backupFailures),
+                'reason' => ($files === [] ? 'Nothing was written: ' : 'The change set was not written, and some files could not be put back: ')
+                    . $refusal->getMessage(),
+                ...($unrestored > 0 ? ['unrestored' => $unrestored] : []),
+                ...($files === [] ? [] : ['unrestoredFiles' => array_map($this->describeProjectPath(...), $files)])];
         }
+
+        $this->changeSet = null;
+        $outcome['saved'] = $unsaved;
+        $outcome['relocated'] = $relocateSaves ? $relocations : [];
+        $outcome['backupFailures'] = array_values($backupFailures);
+        $outcome['written'] = array_map(fn(array $paths): array => array_map($this->describeProjectPath(...), $paths),
+            array_filter($written, static fn(array $paths): bool => $paths !== []));
 
         return ['status' => 'saved', ...$outcome];
     }
@@ -5568,6 +5587,21 @@ final class EditorSession
         }
 
         return $unrestored;
+    }
+
+    /** A file of the project as the project names it: relative to its root. */
+    private function describeProjectPath(string $path): string
+    {
+        // A file found through the root's real path names it as well as one found through the root as opened.
+        foreach (array_unique([$this->workspace->projectRoot, realpath($this->workspace->projectRoot) ?: $this->workspace->projectRoot]) as $root) {
+            $root = rtrim($root, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
+
+            if (str_starts_with($path, $root)) {
+                return substr($path, strlen($root));
+            }
+        }
+
+        return $path;
     }
 
     /** An issue's identity, to tell an issue found before a change set from one it made. */

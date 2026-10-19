@@ -13,7 +13,8 @@ use Ichiloto\Editor\Database\PhpValueExporter;
 use Ichiloto\Editor\Database\ProjectRecord;
 use Ichiloto\Editor\Storage\FileSetOperations;
 use Ichiloto\Editor\Storage\FileSetTransaction;
-use Ichiloto\Editor\Storage\FilesystemFileSetOperations;
+use Ichiloto\Editor\Storage\PreparedSave;
+use Ichiloto\Editor\Storage\SaveSet;
 use RuntimeException;
 use Throwable;
 
@@ -234,32 +235,47 @@ abstract class ProjectSettingsFile
     /** Saves all pending settings together, never a second whole-value rewrite. */
     public function save(?FileSetOperations $files = null): void
     {
-        if (! $this->isDirty()) { return; }
+        $prepared = $this->prepareSave();
+        if ($prepared !== null) {
+            SaveSet::commitOne($this->projectRoot, $prepared, files: $files);
+        }
+    }
+
+    /**
+     * Works out the settings save without writing it: the file with every
+     * pending setting composed into it, and the proof that the staged file
+     * holds each changed setting. Null when nothing is pending.
+     *
+     * @throws SourcePreservationRefusal When a setting cannot be written into the file's own source.
+     */
+    public function prepareSave(): ?PreparedSave
+    {
+        if (! $this->isDirty()) { return null; }
         foreach ($this->records as $path => $record) {
             if ($record->isDirty() && $record->get('value') !== $this->originalValues[$path]) { $this->assertAcceptableValue($path, $record->get('value')); }
         }
         $source = $this->getSource();
-        $transaction = new FileSetTransaction($this->projectRoot, $files ?? new FilesystemFileSetOperations());
-        $transaction->write($this->path, $source);
-        try {
-            $staged = $transaction->stage();
-            if ((string) file_get_contents($this->path) !== $this->persistedSource) {
-                throw new SourcePreservationRefusal($this->relativePath . ' changed on disk. Reload before saving; pending edits were not written.');
-            }
-            $evaluated = PhpDataFile::evaluateIsolated($staged[$this->path], $this->projectRoot);
-            foreach ($this->records as $path => $record) {
-                if ($record->get('value') === $this->originalValues[$path]) { continue; }
-                if ($this->readValue(is_array($evaluated) ? $evaluated : [], $path) !== $record->get('value')) {
-                    throw new SourcePreservationRefusal('The staged ' . $this->relativePath . ' does not preserve ' . $path . '.');
+
+        return new PreparedSave(
+            $this->relativePath,
+            fn(FileSetTransaction $transaction) => $transaction->write($this->path, $source),
+            function (array $staged): void {
+                if ((string) file_get_contents($this->path) !== $this->persistedSource) {
+                    throw new SourcePreservationRefusal($this->relativePath . ' changed on disk. Reload before saving; pending edits were not written.');
                 }
-            }
-            $transaction->commit();
-        } catch (Throwable $error) {
-            $transaction->rollBack();
-            throw $error;
-        }
-        $this->persistedSource = $source;
-        foreach ($this->records as $record) { $record->markClean(); }
+                $evaluated = PhpDataFile::evaluateIsolated($staged[$this->path], $this->projectRoot);
+                foreach ($this->records as $path => $record) {
+                    if ($record->get('value') === $this->originalValues[$path]) { continue; }
+                    if ($this->readValue(is_array($evaluated) ? $evaluated : [], $path) !== $record->get('value')) {
+                        throw new SourcePreservationRefusal('The staged ' . $this->relativePath . ' does not preserve ' . $path . '.');
+                    }
+                }
+            },
+            function () use ($source): void {
+                $this->persistedSource = $source;
+                foreach ($this->records as $record) { $record->markClean(); }
+            },
+        );
     }
 
     private function createFieldEdit(?PhpArraySourceDocument $document, string $path, string $literal, bool $allowArray = false): array

@@ -97,6 +97,7 @@ final class FileSetTransaction
      */
     public function write(string $path, string $contents): void
     {
+        $this->assertUndeclared($path);
         $this->targets[] = ['path' => $path, 'intent' => self::INTENT_WRITE, 'contents' => $contents];
     }
 
@@ -105,13 +106,38 @@ final class FileSetTransaction
      */
     public function remove(string $path): void
     {
+        $this->assertUndeclared($path);
         $this->targets[] = ['path' => $path, 'intent' => self::INTENT_REMOVE, 'contents' => null];
     }
 
-    /** Requires the source used to build this proposal to remain unchanged. */
+    /**
+     * Requires the source used to build this proposal to remain unchanged.
+     * Two documents of one set that read the same file must have read the
+     * same bytes.
+     */
     public function expectSource(string $path, ?string $contents, bool $allowMissing = false): void
     {
-        $this->expectedSources[$path] = ['contents' => $contents, 'allowMissing' => $allowMissing];
+        $expected = ['contents' => $contents, 'allowMissing' => $allowMissing];
+
+        if (isset($this->expectedSources[$path]) && $this->expectedSources[$path]['contents'] !== $contents) {
+            throw new FileSetTransactionFailure(sprintf('%s was read twice with different contents', basename($path)));
+        }
+
+        $this->expectedSources[$path] = $expected;
+    }
+
+    /** Whether any source is required to remain unchanged. */
+    public function hasExpectedSources(): bool
+    {
+        return $this->expectedSources !== [];
+    }
+
+    /** A path is one target: two proposals for one file would race each other. */
+    private function assertUndeclared(string $path): void
+    {
+        if (in_array($path, $this->paths(), true)) {
+            throw new FileSetTransactionFailure(sprintf('%s is written twice in one transaction', basename($path)));
+        }
     }
 
     /** Checks loaded bytes without staging, creating folders or adopting new baselines. */

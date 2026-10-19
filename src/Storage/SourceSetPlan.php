@@ -77,6 +77,48 @@ final class SourceSetPlan
         return $this->getChangedPaths();
     }
 
+    /**
+     * Works out applying the plan without writing it, for {@see SaveSet} to
+     * install with the rest of a change set: every proposed file, every
+     * source it read required unchanged, and each staged file proven to read
+     * back as planned. Once installed, the plan counts as applied, so
+     * {@see revert()} undoes it.
+     */
+    public function prepareApply(string $label): PreparedSave
+    {
+        if ($this->applied) {
+            throw new RuntimeException("The {$this->subject} is already applied.");
+        }
+        $this->assertSourcesUnchanged();
+
+        return new PreparedSave(
+            $label,
+            function (FileSetTransaction $transaction): void {
+                foreach ($this->watched as $path => $source) {
+                    $transaction->expectSource($path, $source);
+                }
+                foreach ($this->proposals as $path => $source) {
+                    if ($this->originals[$path] === null) {
+                        // A file the plan creates must not exist until it does.
+                        $transaction->expectSource($path, null);
+                    }
+                    $transaction->write($path, $source);
+                }
+            },
+            function (array $staged): void {
+                foreach ($this->proposals as $path => $source) {
+                    $value = ($this->readBack)($path, $staged[$path]);
+                    if (serialize($value) !== serialize($this->afterValues[$path])) {
+                        throw new RuntimeException("{$path} would not read back as the planned {$this->subject}; nothing was written.");
+                    }
+                }
+            },
+            function (): void {
+                $this->applied = true;
+            },
+        );
+    }
+
     public function revert(): void
     {
         if ($this->applied) {

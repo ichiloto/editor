@@ -129,3 +129,72 @@ it('keeps a landmark anchored to an event once the event is bound to a world obj
         ->and($data['landmarks'][0])->toMatchArray(['id' => 'lamp-trial', 'anchor' => ['event' => 'E']])
         ->and(json_encode($data['landmarks'][0]['name']))->toContain('Lamp Trial');
 });
+
+it('names every document a change set wrote, and the files each wrote', function () {
+    $root = atomicSceneProject();
+    $session = EditorSession::open($root);
+    $session->beginChanges();
+    applyAtomicRebuild($session);
+
+    $outcome = $session->commitChanges();
+
+    expect($outcome['status'])->toBe('saved', json_encode($outcome['issues']))
+        ->and($outcome['saved'])->toBe(['harbour'])
+        ->and($outcome['written'])->toBe([
+            'common_events' => ['assets/Events/lamp-duplicate.php'],
+            'field_resources' => ['assets/Data/Presentation/field.php'],
+            'cinematic harbour-lanterns' => ['assets/Cutscenes/Cinematics/harbour-lanterns/harbour-lanterns.script.php'],
+            'map harbour' => ['assets/Maps/harbour/harbour.data.php', 'assets/Maps/harbour/harbour.event.php'],
+        ])
+        ->and($session->listUnsavedChanges())->toBe([]);
+});
+
+it('writes nothing when the last document of a change set would not read back, and says so', function () {
+    $root = atomicSceneProject();
+    // A value the map's file makes anew each time it is read: the staged
+    // data can never read back as the map the editor holds.
+    $mapPath = $root . '/assets/Maps/harbour/harbour.data.php';
+    file_put_contents($mapPath, str_replace("return array (", "return array (\n  'readAt' => hrtime(true),", (string) file_get_contents($mapPath)));
+    $before = sourceHashTree($root . '/assets');
+    $session = EditorSession::open($root);
+    $session->beginChanges();
+    applyAtomicRebuild($session);
+
+    $outcome = $session->commitChanges();
+
+    expect($outcome['status'])->toBe('refused')
+        ->and($outcome['blocking'])->toBe(0)
+        ->and($outcome['reason'])->toStartWith('Nothing was written: map harbour: ')
+        ->and($outcome['reason'])->toContain('would not read back as the edited map')
+        ->and($outcome['saved'])->toBe([])
+        ->and($outcome['written'])->toBe([])
+        ->and(sourceHashTree($root . '/assets'))->toBe($before)
+        ->and($session->listUnsavedChanges())->toBe([]);
+});
+
+it('writes a change set\'s documents and the save relocations its map needs together, and undo removes the step', function () {
+    $root = atomicSceneProject();
+    // The quay is where the game starts, so saves may stand on its floor.
+    file_put_contents($root . '/assets/Maps/collisions.php', "<?php\nuse Ichiloto\\Engine\\Events\\Enumerations\\CollisionType;\n"
+        . "return ['#' => CollisionType::SOLID, '=' => CollisionType::SOLID, ' ' => CollisionType::NONE];\n");
+    file_put_contents($root . '/assets/Data/system.php', "<?php\n\nreturn ['startingPositions' => ['player' => "
+        . "['destinationMap' => 'harbour', 'spawnPoint' => ['x' => 5, 'y' => 3], 'spawnSprite' => ['South']]]];\n");
+    $manifestPath = $root . '/assets/Data/save-compatibility.php';
+    $manifest = (string) file_get_contents($manifestPath);
+    $session = EditorSession::open($root);
+    $session->beginChanges();
+    applyAtomicRebuild($session);
+    $map = $session->readMap('harbour');
+    $session->paint('harbour', $map['revision'], $map['baseLayer'], [[6, 4]], '#');
+
+    $outcome = $session->commitChanges(relocateSaves: true);
+
+    expect($outcome)->toMatchArray(['status' => 'saved', 'saved' => ['harbour'], 'relocated' => ['x 6, y 4 to x 6, y 5']])
+        ->and(array_keys($outcome['written']))->toBe(['common_events', 'field_resources', 'cinematic harbour-lanterns', 'save relocations for harbour', 'map harbour'])
+        ->and((require $manifestPath)['migrations'])->toBe([['from' => 0, 'to' => 1,
+            'relocations' => [['map' => 'harbour', 'cells' => [[6, 4]], 'to' => [6, 5]]]]])
+        ->and($session->listUnsavedChanges())->toBe([]);
+
+    $session->undo();
+    expect(file_get_contents($manifestPath))->toBe($manifest);
+});

@@ -6,7 +6,9 @@ namespace Ichiloto\Editor\Database;
 
 use Ichiloto\Editor\Field\PlayerPresentationFields;
 
-use Ichiloto\Editor\IO\AtomicFile;
+use Ichiloto\Editor\Storage\FileSetTransaction;
+use Ichiloto\Editor\Storage\PreparedSave;
+use Ichiloto\Editor\Storage\SaveSet;
 use Ichiloto\Editor\Cutscenes\Source\PhpArraySourceDocument;
 use Ichiloto\Editor\Cutscenes\Source\SourceNode;
 use Ichiloto\Editor\Cutscenes\Source\SourceUnreadable;
@@ -1741,18 +1743,35 @@ final class ProjectRecordDatabase
      */
     public function save(): void
     {
+        $prepared = $this->prepareSave();
+
+        if ($prepared !== null) {
+            SaveSet::commitOne(dirname($this->path), $prepared);
+        }
+    }
+
+    /**
+     * Works out the category's save without writing it, for {@see SaveSet}
+     * to install alone or with the rest of a change set: its own file, its
+     * share of a file other categories edit too, or a file per record and
+     * the record files it deleted. A category the map owns hands its records
+     * to the map now, which the map's own save writes. Null when nothing
+     * diverges from the last save; writing would only canonicalize authored
+     * formatting.
+     *
+     * @throws RuntimeException When the category is read-only or its files cannot take its edits.
+     */
+    public function prepareSave(): ?PreparedSave
+    {
         if (! $this->isEditable()) {
             throw new RuntimeException(sprintf('%s is read-only: %s.', $this->schema->entryNoun, $this->readOnlyReason));
         }
         if ($this->settings !== null) {
-            $this->settings->save();
-            return;
+            return $this->settings->prepareSave();
         }
 
         if (! $this->isDirty()) {
-            // Nothing diverges from the last save; writing would only
-            // canonicalize authored formatting.
-            return;
+            return null;
         }
 
         foreach ($this->getRecords() as $record) {
@@ -1767,25 +1786,26 @@ final class ProjectRecordDatabase
         if ($this->schema->storage === RecordStorage::LIST_FILE) {
             // The transaction adopts the written file and cleans every
             // category it wrote for, this one included.
-            SharedFileTransaction::commit([$this]);
-
-            return;
+            return SharedFileTransaction::prepare([$this]);
         }
 
-        match ($this->schema->storage) {
-            RecordStorage::DIRECTORY => $this->saveDirectory(),
-            RecordStorage::CONFIG_SUBTREE => null,
-            RecordStorage::MAP_OWNED => $this->writeBack !== null
-                ? ($this->writeBack)(array_map(static fn(ProjectRecord $record): array|object => $record->toArray(), $this->getRecords()))
-                : null,
-            RecordStorage::LIST_FILE => null,
+        $clean = function (): void {
+            foreach ($this->records as $record) {
+                $record->markClean();
+            }
+
+            $this->captureBaseline();
         };
 
-        foreach ($this->records as $record) {
-            $record->markClean();
+        if ($this->schema->storage === RecordStorage::DIRECTORY) {
+            return $this->prepareDirectorySave($clean);
         }
 
-        $this->captureBaseline();
+        if ($this->schema->storage === RecordStorage::MAP_OWNED && $this->writeBack !== null) {
+            ($this->writeBack)(array_map(static fn(ProjectRecord $record): array|object => $record->toArray(), $this->getRecords()));
+        }
+
+        return PreparedSave::adoptOnly($this->schema->key, $clean);
     }
 
     /**
@@ -2990,11 +3010,15 @@ final class ProjectRecordDatabase
         }
     }
 
-    private function saveDirectory(): void
+    /**
+     * The save of a category kept a file per record: each dirty record's
+     * file, and the files of records it deleted.
+     *
+     * @param \Closure(): void $clean Cleans the category once its files are installed.
+     */
+    private function prepareDirectorySave(\Closure $clean): PreparedSave
     {
-        if (! is_dir($this->path) && ! mkdir($this->path, 0777, true) && ! is_dir($this->path)) {
-            throw new RuntimeException("Unable to create {$this->path}.");
-        }
+        $writes = [];
 
         foreach ($this->records as $record) {
             $file = $record->file;
@@ -3005,14 +3029,34 @@ final class ProjectRecordDatabase
                 continue;
             }
 
-            $file->save($this->composeRecordFilePayload($record));
+            $payload = $this->composeRecordFilePayload($record);
+            $writes[] = [$file, $payload, $file->composeContents($payload, checkDisk: true)];
         }
 
-        foreach ($this->stagedDeletions as $path) {
-            @unlink($path);
-        }
+        // A record written where a deleted one lived replaces it.
+        $written = array_map(static fn(array $write): string => $write[0]->path, $writes);
+        $deletions = array_values(array_diff($this->stagedDeletions, $written));
 
-        $this->stagedDeletions = [];
+        return new PreparedSave(
+            $this->schema->key,
+            static function (FileSetTransaction $transaction) use ($writes, $deletions): void {
+                foreach ($writes as [$file, , $contents]) {
+                    $file->expectUnchanged($transaction);
+                    $transaction->write($file->path, $contents);
+                }
+                foreach ($deletions as $path) {
+                    $transaction->remove($path);
+                }
+            },
+            adopt: function () use ($writes, $clean): void {
+                foreach ($writes as [$file, $payload, $contents]) {
+                    $file->adoptWritten($payload, $contents);
+                }
+
+                $this->stagedDeletions = [];
+                $clean();
+            },
+        );
     }
 
     /**

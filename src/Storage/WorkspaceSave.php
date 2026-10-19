@@ -4,13 +4,19 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Storage;
 
+use Closure;
 use Ichiloto\Editor\Backup\BackupWriter;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Database\SharedFileTransaction;
+use Ichiloto\Editor\History\Command;
 use Ichiloto\Editor\Maps\SaveRelocationPlanner;
+use Ichiloto\Editor\ProjectActorDatabase;
+use Ichiloto\Editor\ProjectSettingsFile;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Editor\Validation\MapValidator;
 use Ichiloto\Editor\Validation\Severity;
+use LogicException;
+use RuntimeException;
 use Throwable;
 
 /**
@@ -19,9 +25,80 @@ use Throwable;
  * on. One document's failure never stops the others. A map whose save would
  * move its folder is skipped, because that move needs its own confirmation
  * on the map. Both editors' Save All runs this.
+ *
+ * A change set is the opposite case: everything it changed is written
+ * together or not at all. {@see prepareAll()} works out every document's
+ * save first, and {@see SaveSet} installs them as one transaction.
  */
 final class WorkspaceSave
 {
+    /**
+     * Works out the save of every unsaved document of a workspace, writing
+     * nothing, for a change set to install as one {@see SaveSet}: its
+     * databases, then its cutscenes, then its maps, each map after the save
+     * relocations it needs. What the maps name is declared before them, as
+     * Save All writes it.
+     *
+     * @param (Closure(Command): void)|null $recordRelocation Records the undo step of a map's save relocations once
+     *     they are installed; null refuses a map whose save would move existing saves.
+     * @return list<PreparedSave>
+     * @throws RuntimeException When a document cannot take its edits, a map would move its folder, or a map needs
+     *     save relocations that were not allowed. Nothing is written.
+     */
+    public static function prepareAll(ProjectWorkspace $workspace, ?Closure $recordRelocation = null): array
+    {
+        $saves = [];
+
+        foreach (SharedFileTransaction::groupByPath($workspace->listSaveableDatabases()) as $group) {
+            $dirty = array_filter($group, static fn(object $database): bool => $database->isDirty());
+
+            if ($dirty === []) {
+                continue;
+            }
+
+            $shared = reset($dirty);
+
+            if ($shared instanceof ProjectRecordDatabase && $shared->sharesBackingFile()) {
+                $saves[] = SharedFileTransaction::prepare(array_values($dirty));
+                continue;
+            }
+
+            foreach ($dirty as $database) {
+                $saves = [...$saves, ...match (true) {
+                    $database instanceof ProjectActorDatabase => $database->prepareSaves(),
+                    $database instanceof ProjectRecordDatabase, $database instanceof ProjectSettingsFile => [$database->prepareSave()],
+                    default => throw new LogicException(sprintf('%s cannot be saved with a change set.', get_debug_type($database))),
+                }];
+            }
+        }
+
+        $saves = [...$saves, ...($workspace->cutscenes?->prepareSaves() ?? [])];
+
+        foreach ($workspace->maps as $map) {
+            if (! $map->isDirty()) {
+                continue;
+            }
+
+            if ($map->willMoveOnSave()) {
+                throw new RuntimeException(sprintf('%s would move its folder when saved; save it on its own.', $map->mapId));
+            }
+
+            $relocation = SaveRelocationPlanner::plan($map, $workspace->projectRoot);
+
+            if ($relocation !== null) {
+                if ($recordRelocation === null) {
+                    throw new RuntimeException(sprintf('Saving %s moves existing saves; allow the relocations first.', $map->mapId));
+                }
+
+                $saves[] = $relocation->prepareApply($recordRelocation);
+            }
+
+            $saves[] = $map->prepareSave();
+        }
+
+        return array_values(array_filter($saves));
+    }
+
     public static function saveAll(ProjectWorkspace $workspace, BackupWriter $backups): WorkspaceSaveResult
     {
         $backupFailures = [];

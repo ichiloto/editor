@@ -16,6 +16,8 @@ use Ichiloto\Editor\Storage\FileSetOperations;
 use Ichiloto\Editor\Storage\FileSetTransactionFailure;
 use Ichiloto\Editor\Storage\FilesystemFileSetOperations;
 use Ichiloto\Editor\Storage\FileSetTransaction;
+use Ichiloto\Editor\Storage\PreparedSave;
+use Ichiloto\Editor\Storage\SaveSet;
 use Ichiloto\Engine\Core\CellArea;
 use Ichiloto\Engine\Field\MapGraphics;
 use Ichiloto\Engine\Field\MapGridSource;
@@ -276,12 +278,18 @@ final class ProjectMap
         bool $reserveFolder = false,
     ): FileSetTransaction {
         $transaction = new FileSetTransaction($directory, $files ?? new FilesystemFileSetOperations(), $reserveFolder);
+        $this->expectLoadedSources($transaction);
+        return $transaction;
+    }
+
+    /** Requires the map's members to hold what it loaded. */
+    private function expectLoadedSources(FileSetTransaction $transaction): void
+    {
         // Missing data can be recovered from the loaded source. An existing
         // file must still match it; the transaction captures metadata before
         // reading, so a failed move restores the original access time too.
         $transaction->expectSource($this->dataPath, $this->baselineDataSource, allowMissing: true);
         $this->layers->expectSources($transaction);
-        return $transaction;
     }
 
     /**
@@ -2492,6 +2500,24 @@ final class ProjectMap
      */
     public function save(?callable $backup = null, ?FileSetOperations $files = null): string
     {
+        $target = $this->resolveSaveTarget();
+        SaveSet::commitOne($target['directory'], $this->prepareSave(), $backup, $files);
+
+        return $target['mapId'];
+    }
+
+    /**
+     * Works out this map's save without writing it: the members that
+     * changed, and the proof that the staged data file evaluates to exactly
+     * the map being saved -- run where the game would run it, so relative
+     * requires resolve. {@see SaveSet} installs it, alone or with the rest of
+     * a change set. A map with nothing to write still proves its sources
+     * are the ones it loaded.
+     *
+     * @throws MapSourceRefusal When the map's sources cannot take its edits; nothing is written.
+     */
+    public function prepareSave(): PreparedSave
+    {
         $this->assertEditable();
         if (($this->loadedData['worldObjects'] ?? null) !== ($this->editableData['worldObjects'] ?? null)) {
             try {
@@ -2506,7 +2532,8 @@ final class ProjectMap
         $target = $this->resolveSaveTarget();
         $moving = $target['directory'] !== $this->directory;
         $this->assertGridSourcesCanonical();
-        $transaction = $this->createSourceTransaction($target['directory'], $files);
+        $label = sprintf('map %s', $this->mapId);
+        $expectLoaded = fn(FileSetTransaction $transaction) => $this->expectLoadedSources($transaction);
 
         $tripletExists = is_file($this->dataPath)
             && count($this->layers->getSources()) > 0
@@ -2515,8 +2542,7 @@ final class ProjectMap
         if (! $this->isDirty() && ! $moving && is_dir($this->directory) && $tripletExists) {
             // Nothing diverges from the last save: writing would only
             // canonicalize hand-authored formatting and churn mtimes.
-            $transaction->commit();
-            return $target['mapId'];
+            return new PreparedSave($label, $expectLoaded);
         }
 
         $this->validateLayerContracts();
@@ -2538,71 +2564,65 @@ final class ProjectMap
         if (! $moving && ! $writeData && ! $writeMap && ! $writeEvent) {
             // Dirty by fingerprint but identical in content: a same-value
             // round trip. Clean without writing.
-            $transaction->commit();
-            $this->adoptWritten($dataSource, $mapPayload, $eventPayload);
-
-            return $target['mapId'];
+            return new PreparedSave($label, $expectLoaded, adopt: fn() => $this->adoptWritten($dataSource, $mapPayload, $eventPayload));
         }
 
-        if ($writeData || $moving) {
-            $transaction->write($target['dataPath'], $dataSource);
-        }
-        $this->layers->stageChanges($transaction, $moving ? $target['directory'] : null, $moving ? basename($target['directory']) : null, $moving);
-        if ($moving) {
-            $transaction->remove($this->dataPath);
-        }
+        return new PreparedSave(
+            $label,
+            function (FileSetTransaction $transaction) use ($expectLoaded, $target, $moving, $writeData, $dataSource): void {
+                $expectLoaded($transaction);
+                if ($writeData || $moving) {
+                    $transaction->write($target['dataPath'], $dataSource);
+                }
+                $this->layers->stageChanges($transaction, $moving ? $target['directory'] : null, $moving ? basename($target['directory']) : null, $moving);
+                if ($moving) {
+                    $transaction->remove($this->dataPath);
+                }
+            },
+            function (array $staged) use ($target, $moving, $writeData): void {
+                if (! $writeData && ! $moving) {
+                    return;
+                }
 
-        // Stage everything beside its destination, then prove the staged
-        // data file evaluates to exactly the map being saved -- run where
-        // the game would run it, so relative requires resolve.
-        $staged = $transaction->stage();
+                try {
+                    $evaluatedFingerprint = null;
+                    $evaluated = $this->evaluateFile($staged[$target['dataPath']] ?? $target['dataPath'], $evaluatedFingerprint);
+                } catch (\Throwable $throwable) {
+                    throw new RuntimeException(sprintf(
+                        '%s: the rewritten %s could not be evaluated (%s); nothing was written.',
+                        $this->mapId,
+                        basename($target['dataPath']),
+                        $throwable->getMessage(),
+                    ), previous: $throwable);
+                }
 
-        if ($writeData || $moving) {
-            try {
-                $evaluatedFingerprint = null;
-                $evaluated = $this->evaluateFile($staged[$target['dataPath']] ?? $target['dataPath'], $evaluatedFingerprint);
-            } catch (\Throwable $throwable) {
-                $transaction->rollBack();
+                if (! is_array($evaluated) || $evaluatedFingerprint !== PhpDataFile::valueFingerprint($this->editableData)) {
+                    throw new RuntimeException(sprintf(
+                        '%s: the rewritten %s would not read back as the edited map; nothing was written.',
+                        $this->mapId,
+                        basename($target['dataPath']),
+                    ));
+                }
+            },
+            function () use ($target, $moving, $dataSource, $mapPayload, $eventPayload): void {
+                if ($this->layers->legacy && is_dir($target['directory'] . '/layers')
+                    && array_diff(scandir($target['directory'] . '/layers') ?: [], ['.', '..']) === []) {
+                    @rmdir($target['directory'] . '/layers');
+                }
 
-                throw new RuntimeException(sprintf(
-                    '%s: the rewritten %s could not be evaluated (%s); nothing was written.',
-                    $this->mapId,
-                    basename($target['dataPath']),
-                    $throwable->getMessage(),
-                ), previous: $throwable);
-            }
+                if ($moving) {
+                    // The transaction removed the triplet; the folder follows only
+                    // when nothing else of the author's lives in it.
+                    if (is_dir($this->directory) && array_diff(scandir($this->directory) ?: [], ['.', '..']) === []) {
+                        @rmdir($this->directory);
+                    }
 
-            if (! is_array($evaluated) || $evaluatedFingerprint !== PhpDataFile::valueFingerprint($this->editableData)) {
-                $transaction->rollBack();
+                    self::deleteEmptyParentDirectories(dirname($this->directory), $this->getMapsRoot());
+                }
 
-                throw new RuntimeException(sprintf(
-                    '%s: the rewritten %s would not read back as the edited map; nothing was written.',
-                    $this->mapId,
-                    basename($target['dataPath']),
-                ));
-            }
-        }
-
-        $transaction->commit($backup);
-
-        if ($this->layers->legacy && is_dir($target['directory'] . '/layers')
-            && array_diff(scandir($target['directory'] . '/layers') ?: [], ['.', '..']) === []) {
-            @rmdir($target['directory'] . '/layers');
-        }
-
-        if ($moving) {
-            // The transaction removed the triplet; the folder follows only
-            // when nothing else of the author's lives in it.
-            if (is_dir($this->directory) && array_diff(scandir($this->directory) ?: [], ['.', '..']) === []) {
-                @rmdir($this->directory);
-            }
-
-            self::deleteEmptyParentDirectories(dirname($this->directory), $this->getMapsRoot());
-        }
-
-        $this->adoptWritten($dataSource, $mapPayload, $eventPayload);
-
-        return $target['mapId'];
+                $this->adoptWritten($dataSource, $mapPayload, $eventPayload);
+            },
+        );
     }
 
     /**

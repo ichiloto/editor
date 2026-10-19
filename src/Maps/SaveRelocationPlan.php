@@ -6,6 +6,7 @@ namespace Ichiloto\Editor\Maps;
 
 use Ichiloto\Editor\History\Command;
 use Ichiloto\Editor\History\GenericCommand;
+use Ichiloto\Editor\Storage\PreparedSave;
 use Ichiloto\Editor\Storage\SourceSetPlan;
 
 /**
@@ -68,6 +69,22 @@ final class SaveRelocationPlan
         $sources->apply();
 
         return new GenericCommand('Add save relocations', static fn() => $sources->apply(), static fn() => $sources->revert());
+    }
+
+    /**
+     * Works out writing the manifest step without writing it, for a change
+     * set to install with the map whose save needs it. The step that removes
+     * it again is recorded once it is installed.
+     *
+     * @param \Closure(Command): void $record Records the undo step.
+     */
+    public function prepareApply(\Closure $record): PreparedSave
+    {
+        $sources = $this->sources;
+
+        return $sources->prepareApply(sprintf('save relocations for %s', $this->mapId))->withAdoption(static fn() => $record(
+            new GenericCommand('Add save relocations', static fn() => $sources->apply(), static fn() => $sources->revert()),
+        ));
     }
 
     public function revert(): void

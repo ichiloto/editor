@@ -10,6 +10,8 @@ use Ichiloto\Editor\Cutscenes\Source\SourcePreservationRefusal;
 use Ichiloto\Editor\Cutscenes\Source\SourceUnreadable;
 use Ichiloto\Editor\Storage\FileSetTransaction;
 use Ichiloto\Editor\Storage\FileSetTransactionFailure;
+use Ichiloto\Editor\Storage\PreparedSave;
+use Ichiloto\Editor\Storage\SaveSet;
 use Ichiloto\Editor\Database\InnPresentationFields;
 use Ichiloto\Editor\Database\PhpValueExporter;
 use Ichiloto\Editor\Database\ReferenceCatalog;
@@ -762,11 +764,17 @@ final class CutsceneAsset
     private function createSourceTransaction(): FileSetTransaction
     {
         $transaction = new FileSetTransaction($this->folder);
+        $this->expectLoadedSources($transaction);
+        return $transaction;
+    }
+
+    /** Requires each member to hold what it was loaded with. */
+    private function expectLoadedSources(FileSetTransaction $transaction): void
+    {
         foreach ($this->paths() as $path) {
             // Null requires an unwritten/deleted member to remain absent.
             $transaction->expectSource($path, $this->baselineSources[$path] ?? null, allowMissing: true);
         }
-        return $transaction;
     }
 
     /** Checks both source edits without writing, so unsupported expressions never enter history. */
@@ -804,7 +812,8 @@ final class CutsceneAsset
      * file it had already touched. A deleted asset's pair is removed through
      * the same boundary. Nothing here advances until the whole operation
      * succeeds, so the pair on disk is always the complete old one or the
-     * complete new one.
+     * complete new one. {@see prepareSave()} works the save out; a change
+     * set installs it with every other document it changed.
      *
      * @param callable(string ...$paths): void|null $backup Called with the paths about to be overwritten, before they are.
      * @param ReferenceCatalog|null $references The workspace's live authoring references.
@@ -813,15 +822,33 @@ final class CutsceneAsset
      */
     public function save(?callable $backup = null, ?ReferenceCatalog $references = null): bool
     {
-        $transaction = $this->createSourceTransaction();
-        $transaction->assertSourcesUnchanged();
+        $prepared = $this->prepareSave($references);
+
+        return $prepared !== null && SaveSet::commitOne($this->folder, $prepared, $backup) !== [];
+    }
+
+    /**
+     * Works out this asset's save without writing it: both proposed sources,
+     * each touched only where it changed, and the proof that each staged
+     * file reads back as the edited side and hydrates through the engine. A
+     * deleted asset's save removes its pair. {@see SaveSet} installs it,
+     * alone or with the rest of a change set. Null when there is nothing to
+     * save.
+     *
+     * @param ReferenceCatalog|null $references The workspace's live authoring references.
+     * @throws RuntimeException When the asset is read-only or its sources cannot take the edits; nothing is written.
+     */
+    public function prepareSave(?ReferenceCatalog $references = null): ?PreparedSave
+    {
+        $this->assertSourcesUnchanged();
+        $label = sprintf('%s %s', $this->type->noun(), $this->id);
         if ($this->isDeleted) {
-            return $this->delete($backup);
+            return $this->prepareDeletion($label);
         }
 
         $missing = array_any($this->paths(), static fn(string $path): bool => ! is_file($path));
         if (! $this->isDirty() && ! $this->isNew && ! $missing) {
-            return false;
+            return null;
         }
 
         if ($this->readOnlyReason !== null) {
@@ -831,7 +858,6 @@ final class CutsceneAsset
         $this->assertInnPresentationsValid($references);
         $this->assertMovementRoutesValid();
 
-        // 1. Both proposed sources, each touched only where it changed.
         $hasData = $this->type->hasDataFile();
         $dataSource = $hasData ? $this->proposedSource($this->dataDocument, $this->loadedData, $this->data, 'data') : '';
         $partnerSource = $this->proposedSource($this->partnerDocument, $this->loadedPartner, $this->partner, $this->type->partnerNoun());
@@ -841,46 +867,36 @@ final class CutsceneAsset
         if (! $writeData && ! $writePartner) {
             // Dirty by fingerprint but identical in source: a same-value
             // round trip. Clean without writing.
-            $this->adoptWritten($this->dataDocument?->source ?? $dataSource, $this->partnerDocument?->source ?? $partnerSource);
+            $kept = [$this->dataDocument?->source ?? $dataSource, $this->partnerDocument?->source ?? $partnerSource];
 
-            return false;
+            return PreparedSave::adoptOnly($label, fn() => $this->adoptWritten(...$kept));
         }
 
-        if ($writeData) {
-            $transaction->write($this->dataPath(), $dataSource);
-        }
-
-        if ($writePartner) {
-            $transaction->write($this->partnerPath(), $partnerSource);
-        }
-
-        // 2. Stage both, then read back the exact bytes that will be
-        //    installed -- evaluated where the game would evaluate them.
-        $staged = $transaction->stage();
-
-        try {
-            $evaluatedData = $hasData
-                ? $this->evaluateSide($staged[$this->dataPath()] ?? $this->dataPath(), $this->data, basename($this->dataPath()), 'data')
-                : [];
-            $evaluatedPartner = $this->evaluateSide($staged[$this->partnerPath()] ?? $this->partnerPath(), $this->partner, basename($this->partnerPath()), $this->type->partnerNoun());
-
-            // 3. Hydrate and compile through the engine.
-            $this->hydrate($evaluatedData, $evaluatedPartner);
-        } catch (Throwable $throwable) {
-            // Nothing has been installed: drop the staged copies and leave
-            // both files exactly as they were.
-            $transaction->rollBack();
-
-            throw $throwable;
-        }
-
-        // 4. Back up once, then install the pair or restore it.
-        $transaction->commit($backup);
-
-        $this->adoptWritten($dataSource, $partnerSource);
-        $this->isNew = false;
-
-        return true;
+        return new PreparedSave(
+            $label,
+            function (FileSetTransaction $transaction) use ($writeData, $writePartner, $dataSource, $partnerSource): void {
+                $this->expectLoadedSources($transaction);
+                if ($writeData) {
+                    $transaction->write($this->dataPath(), $dataSource);
+                }
+                if ($writePartner) {
+                    $transaction->write($this->partnerPath(), $partnerSource);
+                }
+            },
+            // The exact bytes that will be installed, read back where the
+            // game would evaluate them, then hydrated through the engine.
+            function (array $staged) use ($hasData): void {
+                $evaluatedData = $hasData
+                    ? $this->evaluateSide($staged[$this->dataPath()] ?? $this->dataPath(), $this->data, basename($this->dataPath()), 'data')
+                    : [];
+                $evaluatedPartner = $this->evaluateSide($staged[$this->partnerPath()] ?? $this->partnerPath(), $this->partner, basename($this->partnerPath()), $this->type->partnerNoun());
+                $this->hydrate($evaluatedData, $evaluatedPartner);
+            },
+            function () use ($dataSource, $partnerSource): void {
+                $this->adoptWritten($dataSource, $partnerSource);
+                $this->isNew = false;
+            },
+        );
     }
 
     /**
@@ -1011,29 +1027,38 @@ final class CutsceneAsset
      * @param callable(string ...$paths): void|null $backup
      * @throws FileSetTransactionFailure When the pair could not be removed.
      */
-    private function delete(?callable $backup): bool
+    /**
+     * The save that removes a deleted asset's pair. Only the two files are
+     * the asset's; anything else in the folder is left for its author, and
+     * the folder goes only when empty.
+     */
+    private function prepareDeletion(string $label): PreparedSave
     {
-        if (! is_dir($this->folder)) {
-            // Never written: nothing on disk to take away.
+        $forget = function (): void {
             $this->baselineSources = [];
             $this->captureBaseline();
+        };
 
-            return false;
+        if (! is_dir($this->folder)) {
+            // Never written: nothing on disk to take away.
+            return PreparedSave::adoptOnly($label, $forget);
         }
 
-        $transaction = $this->createSourceTransaction();
-
-        foreach ($this->paths() as $path) {
-            $transaction->remove($path);
-        }
-
-        // Only the two files are the asset's; anything else in the folder is
-        // left for its author, and the folder goes only when empty.
-        $transaction->commit($backup);
-        $this->baselineSources = [];
-        $this->captureBaseline();
-
-        return true;
+        return new PreparedSave(
+            $label,
+            function (FileSetTransaction $transaction): void {
+                $this->expectLoadedSources($transaction);
+                foreach ($this->paths() as $path) {
+                    $transaction->remove($path);
+                }
+            },
+            adopt: function () use ($forget): void {
+                if (is_dir($this->folder) && (scandir($this->folder) ?: []) === ['.', '..']) {
+                    @rmdir($this->folder);
+                }
+                $forget();
+            },
+        );
     }
 
     /**
