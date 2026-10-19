@@ -163,3 +163,22 @@ it('accepts the engine role alias when reading an actor class', function () {
         removeDirectoryRecursively($root);
     }
 });
+
+it('saves a class cleared and chosen again where the file already holds it', function () {
+    $root = makeTemporaryProject();
+
+    try {
+        $path = $root . '/assets/Data/Actors/Kaelion.php';
+        file_put_contents($path, str_replace("    'level' => 1,", "    'class' => 'Vanguard',\n    'level' => 1,", (string) file_get_contents($path)));
+        $actor = ProjectActor::fromFile($path);
+
+        $actor->setField('class', 'none');
+        $actor->setField('class', 'Oracle');
+        $actor->save();
+
+        expect((string) file_get_contents($path))->toContain("    'class' => 'Oracle',\n    'level' => 1,")
+            ->and((require $path)['data']['class'])->toBe('Oracle');
+    } finally {
+        removeDirectoryRecursively($root);
+    }
+});

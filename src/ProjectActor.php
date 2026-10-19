@@ -11,6 +11,8 @@ use Ichiloto\Editor\Cutscenes\Source\SourceNode;
 use Ichiloto\Editor\Cutscenes\Source\SourcePreservationRefusal;
 use Ichiloto\Editor\Database\PhpDataFile;
 use Ichiloto\Editor\Storage\FileSetTransaction;
+use Ichiloto\Editor\Storage\PreparedSave;
+use Ichiloto\Editor\Storage\SaveSet;
 
 use Ichiloto\Engine\Entities\Enumerations\WeaponType;
 use InvalidArgumentException;
@@ -754,19 +756,28 @@ final class ProjectActor
      */
     public function save(): void
     {
+        SaveSet::commitOne(dirname($this->path), $this->prepareSave());
+    }
+
+    /**
+     * Works out the actor's save without writing it: its file, and the proof
+     * that the staged file reads back as the edited actor.
+     */
+    public function prepareSave(): PreparedSave
+    {
         $source = $this->getProposedSource();
-        $transaction = new FileSetTransaction(dirname($this->path));
-        $transaction->write($this->path, $source);
-        try {
-            $staged = $transaction->stage();
-            $this->validateStagedSource($staged[$this->path]);
-            $transaction->commit();
-        } catch (\Throwable $failure) {
-            $transaction->rollBack();
-            throw $failure;
-        }
-        $this->writtenSource = $source;
-        $this->captureBaseline();
+        // The file keeps its authored key order: the actor holds what it reads back as.
+        $this->payload = PhpArraySourceDocument::parse($source)->alignValue($this->payload);
+
+        return new PreparedSave(
+            sprintf('actor %s', $this->id),
+            fn(FileSetTransaction $transaction) => $transaction->write($this->path, $source),
+            fn(array $staged) => $this->validateStagedSource($staged[$this->path]),
+            function () use ($source): void {
+                $this->writtenSource = $source;
+                $this->captureBaseline();
+            },
+        );
     }
 
     /** Preflights edits without writing or flattening authored PHP.

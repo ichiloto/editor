@@ -6,6 +6,8 @@ namespace Ichiloto\Editor;
 
 use Ichiloto\Engine\Entities\Actors\ActorDefinition;
 use Ichiloto\Engine\Util\Stores\ActorStore;
+use Ichiloto\Editor\Storage\FileSetTransaction;
+use Ichiloto\Editor\Storage\PreparedSave;
 use Throwable;
 
 use RuntimeException;
@@ -269,6 +271,40 @@ final class ProjectActorDatabase
                 previous: $firstFailure,
             );
         }
+    }
+
+    /**
+     * Works out the actor saves without writing any: the staged deletions,
+     * then every dirty actor's file, for a change set to install together.
+     *
+     * @return list<PreparedSave>
+     */
+    public function prepareSaves(): array
+    {
+        $saves = [];
+        $deletions = $this->pendingDeletions;
+
+        if ($deletions !== []) {
+            $saves[] = new PreparedSave(
+                'actor deletions',
+                static function (FileSetTransaction $transaction) use ($deletions): void {
+                    foreach ($deletions as $path) {
+                        $transaction->remove($path);
+                    }
+                },
+                adopt: function (): void {
+                    $this->pendingDeletions = [];
+                },
+            );
+        }
+
+        foreach ($this->actors as $actor) {
+            if ($actor->isDirty()) {
+                $saves[] = $actor->prepareSave();
+            }
+        }
+
+        return $saves;
     }
 
     /**

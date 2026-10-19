@@ -285,3 +285,57 @@ it('draws the previewed cinematic in the window\'s graphical view through the se
     expect(fn() => $session->exchangeCinematicScene([$ready]))->toThrow(SessionRefusal::class, 'No cinematic is being previewed')
         ->and(sourceHashTree($root))->toBe($before);
 });
+
+it('replaces a branch arm\'s only route with a new one built row by row, and saves what it reads back', function () {
+    $root = cutsceneProject();
+    $file = $root . '/assets/Cutscenes/Cinematics/harbour-lanterns/harbour-lanterns.script.php';
+    file_put_contents($file, <<<'PHP'
+<?php
+
+return [
+  [
+    'type' => 'branch',
+    'conditions' => [
+      ['type' => 'event', 'name' => 'a', 'negate' => true],
+    ],
+    'then' => [[
+      'type' => 'move_route', 'subject' => 'player', 'remember' => 'caller-entry',
+      'waypoints' => [['y' => 1],
+['x' => 3], ['y' => 2] ], 'secondsPerStep' => 0.1,
+    ]],
+    'else' => [],
+  ],
+];
+PHP);
+    $session = EditorSession::open($root);
+    $category = 'cutscenes/cinematic';
+    $frame = ['commands', 0, 'then'];
+    $setRow = function (string $name, string $value, array $entry) use ($session, $category, $frame): void {
+        $row = array_find($session->readDatabaseRecord($category, 0, $frame)['rows'],
+            static fn(array $row): bool => ($row['name'] ?? $row['label']) === $name && ($row['entry'] ?? null) === $entry);
+        $session->applyDatabaseRecord($category, 0, $row['key'], $value);
+    };
+
+    $session->removeDatabaseItem($category, 0, $session->readDatabaseRecord($category, 0, $frame)['rows'][0]['key']);
+    $session->addDatabaseItem($category, 0, ['frame' => $frame]);
+    foreach (['Type' => 'move_route', 'Subject' => 'player', 'Route Mode' => 'waypoints', 'Remember As' => 'caller-entry', 'Seconds Per Step' => '0.1'] as $name => $value) {
+        $setRow($name, $value, [0]);
+    }
+    foreach ([['Y' => '31'], ['X' => '47'], ['Y' => '20']] as $n => $point) {
+        $mode = array_find($session->readDatabaseRecord($category, 0, $frame)['rows'],
+            static fn(array $row): bool => ($row['name'] ?? '') === 'Route Mode' && ($row['entry'] ?? null) === [0]);
+        $session->addDatabaseItem($category, 0, $mode['key'], true);
+        foreach ($point as $name => $value) {
+            $setRow($name, $value, [0, $n]);
+        }
+    }
+    $saved = $session->saveAll();
+
+    expect($saved['failures'])->toBe([])
+        // The route keeps the key order the file wrote it in.
+        ->and((require $file)[0]['then'])->toBe([[
+            'type' => 'move_route', 'subject' => 'player', 'remember' => 'caller-entry',
+            'waypoints' => [['y' => 31], ['x' => 47], ['y' => 20]], 'secondsPerStep' => 0.1,
+        ]])
+        ->and((string) file_get_contents($file))->toContain("['type' => 'event', 'name' => 'a', 'negate' => true],");
+});

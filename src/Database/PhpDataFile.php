@@ -9,6 +9,7 @@ use Ichiloto\Editor\Cutscenes\Source\PhpArraySourceDocument;
 use Ichiloto\Editor\Cutscenes\Source\SourceUnreadable;
 use Ichiloto\Editor\IO\AtomicFile;
 use Ichiloto\Editor\ProjectDirectoryContext;
+use Ichiloto\Editor\Storage\FileSetTransaction;
 use RuntimeException;
 use Throwable;
 
@@ -567,9 +568,30 @@ final class PhpDataFile
         }
 
         AtomicFile::write($this->path, $contents);
-        // The file now reads as this payload, so the next save edits from here.
+        $this->adoptWritten($payload, $contents);
+    }
+
+    /**
+     * Adopts what a save wrote: the file now reads as this payload, so the
+     * next save edits from here.
+     */
+    public function adoptWritten(mixed $payload, string $contents): void
+    {
         $this->payload = $payload;
         $this->source = $contents;
+    }
+
+    /**
+     * Requires the file to hold what it was read as when a transaction
+     * installs a save of it, or to be absent when it was.
+     */
+    public function expectUnchanged(FileSetTransaction $transaction): void
+    {
+        if ($this->source !== null) {
+            $transaction->expectSource($this->path, $this->source);
+        } elseif (! $this->exists) {
+            $transaction->expectSource($this->path, null);
+        }
     }
 
     /**

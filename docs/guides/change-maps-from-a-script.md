@@ -100,10 +100,17 @@ files when they run; a refused batch undoes them. Inserting or removing rows
 needs no pending edits, so put it first, or in its own batch.
 
 The batch alone writes. When it is valid, `changes.commit` saves everything
-it changed: databases (field resources, common events and the rest) and
-cutscenes first, then maps, each through its own transaction. So
-`database.save`, `map.save` and `project.saveAll` are refused inside a batch;
-leave them out. Moving or deleting a map is refused too, since it clears the
+it changed, databases (field resources, common events and the rest),
+cutscenes, maps and the save relocations its maps need, as one transaction.
+Every file is worked out and staged first, and each document proves its
+staged file reads back as what it holds. Only then is any file installed,
+and a file that cannot be installed puts back the ones already installed.
+So the batch is written whole or not at all. A document that refuses here
+refuses the batch as an error does: nothing is written, the batch is undone,
+and `reason` starts with `Nothing was written:` and names the document. A
+saved result's `written` names each document written and the files it wrote
+or removed. `database.save`, `map.save` and `project.saveAll` are refused
+inside a batch; leave them out. Moving or deleting a map is refused too, since it clears the
 undo history a refused batch relies on. Deleting a database record inside a
 batch removes its file only when the batch is written.
 

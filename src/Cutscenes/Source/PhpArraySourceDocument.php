@@ -246,6 +246,53 @@ final class PhpArraySourceDocument
     }
 
     /**
+     * Returns a value with its keyed entries in the order this source writes
+     * them, however deeply nested, as the file reads back once written.
+     *
+     * The source-preserving writer keeps an authored key where it stands and
+     * places a new key where the value orders it, so an edit that set a key
+     * again, or rebuilt an entry, may hold the same keys in another order
+     * than the file. That order is the file's: an editor holding the value
+     * adopts it, so its value is the one the file reads back as. Lists keep
+     * the order the value gives, and keys the source does not hold stay
+     * after the ones it does.
+     *
+     * @param array<array-key, mixed> $value
+     * @return array<array-key, mixed>
+     */
+    public function alignValue(array $value): array
+    {
+        return $this->alignToNode($this->root(), $value);
+    }
+
+    /**
+     * @param array<array-key, mixed> $value
+     * @return array<array-key, mixed>
+     */
+    private function alignToNode(SourceNode $node, array $value): array
+    {
+        $node = $this->resolveNode($node);
+
+        if ($node->kind !== SourceNode::ARRAY || $node->hasOpaqueKey) {
+            return $value;
+        }
+
+        $ordered = [];
+
+        foreach ($node->entries as $index => $entry) {
+            $key = $node->isList ? $index : $entry->key;
+
+            if ($key === null || ! array_key_exists($key, $value)) {
+                continue;
+            }
+
+            $ordered[$key] = is_array($value[$key]) ? $this->alignToNode($entry->value, $value[$key]) : $value[$key];
+        }
+
+        return $ordered + $value;
+    }
+
+    /**
      * Returns whether a reference names a value the file builds with its own
      * code -- or a variable it never assigns at the top level -- rather than
      * one it writes as data.

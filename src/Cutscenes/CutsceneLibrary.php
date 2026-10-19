@@ -12,6 +12,7 @@ use Ichiloto\Editor\History\GenericCommand;
 use Ichiloto\Editor\Database\RecordSchema;
 use Ichiloto\Editor\Database\RecordSchemaCatalog;
 use Ichiloto\Editor\Database\ReferenceCatalog;
+use Ichiloto\Editor\Storage\PreparedSave;
 use RuntimeException;
 use Throwable;
 
@@ -654,6 +655,30 @@ final class CutsceneLibrary
         }
 
         return ['saved' => $saved, 'failed' => $failed];
+    }
+
+    /**
+     * Works out every dirty asset's save without writing any, for a change
+     * set to install together with the rest of what it changed.
+     *
+     * @return list<PreparedSave>
+     * @throws RuntimeException When an asset is read-only or its sources cannot take its edits.
+     */
+    public function prepareSaves(): array
+    {
+        $saves = [];
+
+        foreach (CutsceneType::cases() as $type) {
+            foreach ($this->assets($type) as $asset) {
+                $prepared = $asset->isDirty() ? $asset->prepareSave($this->authoringReferences) : null;
+
+                if ($prepared !== null) {
+                    $saves[] = $prepared->withAdoption(fn() => $this->forgetDeleted($type));
+                }
+            }
+        }
+
+        return $saves;
     }
 
     /**
