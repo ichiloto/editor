@@ -204,7 +204,7 @@ final readonly class MapLandmarkFields
         $anchors = $landmarks->describeAnchors();
         $free = array_find($anchors, static fn(array $anchor): bool => $anchor['landmark'] === null)
             ?? throw new InvalidArgumentException($anchors === []
-                ? 'This map has no placed event, world object or legacy transfer to mark.'
+                ? 'This map has no placed event, world object, area or legacy transfer to mark.'
                 : 'Every event, world object and legacy transfer here already anchors a landmark.');
         $added = $landmarks->addLandmark($free['anchor']);
         return ['entries' => $added['entries'], 'summary' => sprintf('Added landmark %s on %s; choose its anchor and kind.', $added['id'], $free['label'])];

@@ -204,6 +204,7 @@ final readonly class MapInspector
             // Where the region map pins it, beside where the atlas places it.
             MapStationField::describeField($map),
             ...MapTerrainFields::describeMapFields($map),
+            ...MapAreaFields::describeMapFields($map),
             ...$this->getLandmarkFields()->describeMapFields($map),
         ];
     }
@@ -241,6 +242,7 @@ final readonly class MapInspector
                 'target' => 'event-type',
                 'marker' => $marker,
             ],
+            ...MapAreaFields::describeSubjectFields($map, $marker),
         ];
 
         if ($bounds !== null) {
@@ -351,6 +353,7 @@ final readonly class MapInspector
             'event-type' => $this->applyEventType($map, (string) $field['marker'], $rawValue),
             'event-bounds' => $this->applyEventBounds($map, (string) $field['marker'], (string) $field['field'], (int) $value),
             MapLandmarkFields::TARGET, MapLandmarkFields::EVENT_TARGET, MapLandmarkFields::OBJECT_TARGET => $this->applyLandmarkValue($map, $field, $value),
+            MapAreaFields::TARGET, MapAreaFields::SUBJECT_TARGET => MapAreaFields::applyValue($map, $field, $rawValue),
             MapAtlasFields::TARGET => $this->applyAtlasValue($map, $field, $value),
             MapTerrainFields::TARGET => $this->applyTerrainValue($map, $field, $value),
             MapStationField::TARGET => $this->applyStationValue($map, (string) $value),
@@ -613,6 +616,11 @@ final readonly class MapInspector
             return $this->editLandmarkList($map, fn(): array => $this->getLandmarkFields()->addEntry($map), 'add');
         }
 
+        if (($field['target'] ?? null) === MapAreaFields::TARGET) {
+            // An area is its cells, which are chosen on the map, not here.
+            throw new InspectorRefusal('Select cells on the map, then make an area of them.');
+        }
+
         if (($field['target'] ?? null) === 'map-bgm-variants' && is_array($field['bgmVariantList'] ?? null)) {
             $variants = $this->requireEditableBgmVariants($map);
 
@@ -669,6 +677,10 @@ final readonly class MapInspector
 
         if (($field['target'] ?? null) === MapLandmarkFields::TARGET && is_array($field['landmarkList'] ?? null)) {
             return $this->editLandmarkList($map, fn(): array => $this->getLandmarkFields()->removeEntry($map, $field), 'remove');
+        }
+
+        if (($field['target'] ?? null) === MapAreaFields::TARGET && is_array($field['areaList'] ?? null)) {
+            return MapAreaFields::removeEntry($map, $field);
         }
 
         if (($field['target'] ?? null) === 'map-bgm-variants' && is_array($field['bgmVariantList'] ?? null)) {

@@ -156,6 +156,24 @@ Engine would refuse makes the row refuse the whole line, and nothing changes.
 `event:a & !event:b` is refused, because the event condition takes nothing
 after its name; write `event:a; !event:b`.
 
+## Named Areas
+
+A map's `areas` name territory it owns, with no art, passage or discovery of
+their own. An entry is `['id' => ..., 'area' => ...]`, the area either exact
+`cells` (`['cells' => [[x, y], ...]]`) or a rectangle (`x`, `y`, `width`,
+`height`); the Engine reads every edit against the map's physical grid and
+refuses a duplicate or malformed id, an empty area, a repeated cell or a cell
+off the map, naming the area. `areas.create` and `areas.setArea` take the
+area as written (`area`), or selected `cells`, which are written as a
+rectangle when they fill one. An event bound with
+`{kind: area, id}` covers the area's cells and follows its reshaping; a
+landmark anchors to it with `area:<id>`. `areas.rename` rewrites the events
+and landmarks naming the area in the same undo step; `areas.delete` is
+refused while one names it, listing them. All of these work inside a batch,
+so an area made earlier in the batch can be bound and anchored to before
+anything is written. Row and column inserts move areas with the lines; a
+removal through one of an area's exact cells is refused until it is reshaped.
+
 ## Which Request Makes Which Change
 
 | Change | Request |
@@ -168,7 +186,9 @@ after its name; write `event:a; !event:b`.
 | Collision | `map.paintOccupancy`, `occupancy.stampPiece` |
 | Resize | `map.insertLines`, `map.removeLines` (with an `answer`), or the map's size rows |
 | Events | `event.create {map, cells, type, marker?}`, `event.move {map, marker, dx, dy}`, `event.bounds`, `event.destination`, `event.delete`; fields with `inspector.apply` |
-| Bind an event to the object it describes | `event.subject {map, marker, subject}`; `subject: null` with `cells` unbinds it |
+| Bind an event to the object or area it describes | `event.subject {map, marker, subject}`, `subject` as `{kind: world_object, id}` or `{kind: area, id}` (a bare id names a world object); `subject: null` with `cells` unbinds it |
+| Named areas | `areas.read {map}`; `areas.create {map, id?, area or cells}` (no `id` takes the first free `area-N`); `areas.setArea {map, id, area or cells}`; `areas.rename {map, id, to}`; `areas.delete {map, id}` |
+| A landmark anchored to an area | the landmark's anchor row (`inspector.apply` with `{target: map-landmarks, field: anchor, index}`), value `area:<id>` |
 | An event's conditions, writes, blocked message, cue conditions | `inspector.apply` with `{target: event-record, marker, field, frame: []}`, `field` one of `conditions`, `sets`, `whenBlocked`, `cue.conditions`; the value is a condition or write line (`conditions.grammar`), empty removes it |
 | A Story Script event's inline commands | `inspector.read {map, event, frame: ["script"]}`, then `inspector.apply`/`add`/`remove` with the frame's row keys; the first command goes on the `frameEmpty` row |
 | Dialogue pages with conditions and writes, talk-to id | the event's `variantList`, `variantNConditions`, `variantNSets`, `variantNLineM...` rows; the Talk-To Id row sets `npcId` |

@@ -28,6 +28,9 @@ use InvalidArgumentException;
 /** A transient record view. Only the map owns or persists these declarations. */
 final readonly class WorldObjectAuthoring
 {
+    /** The event subject kind that names a world object, one of {@see \Ichiloto\Engine\Events\MapEventDefinition::SUBJECT_KINDS}. */
+    public const string SUBJECT_KIND = 'world_object';
+
     public function __construct(public ProjectMap $map, private ReferenceCatalog $references) {}
 
     public static function readEntries(ProjectMap $map): array
