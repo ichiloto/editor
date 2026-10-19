@@ -21,8 +21,9 @@ use Throwable;
 /**
  * The project's named field resources: reusable whole images, such as a tree,
  * that maps place by reference. A resource owns its art, its ground contact
- * (pivot) and an optional authoring stamp of physical cells; it owns no map
- * collision, which only map occupancy holds. The Engine's catalogue admits the
+ * (pivot), an optional authoring stamp of physical cells and an optional
+ * doorway where its art paints an opening; it owns no map collision, which
+ * only map occupancy holds. The Engine's catalogue admits the
  * file, so the editor refuses a save it would refuse.
  */
 final class FieldResourceFields
@@ -42,7 +43,7 @@ final class FieldResourceFields
             makeBlank: self::makeBlank(...),
             projection: new KeyedDictionaryProjection('resources'),
             fieldsFor: self::getFields(...),
-            subLists: [self::getStampList()],
+            subLists: [self::getStampList(), self::getDoorwayList()],
             saveCheck: self::checkCatalog(...),
             prepareEdit: self::checkEdit(...),
             requireUnchangedSource: true,
@@ -132,6 +133,18 @@ final class FieldResourceFields
                 new RecordField('type', 'Physical Type', options: array_map(static fn(CollisionType $type): string => $type->name, $types),
                     enumClass: CollisionType::class)],
             blank: ['x' => 0, 'y' => 0, 'type' => CollisionType::SOLID], heading: 'Occupancy Stamp', removeWhenEmpty: true);
+    }
+
+    /**
+     * The optional doorway: cells relative to a placement's anchor where the art paints an opening the player walks
+     * through. Validation requires an entrance under each one wherever the resource is placed; the art conforms to the
+     * map, so a doorway that misses its entrance is corrected here or in the art, never by moving the entrance.
+     */
+    private static function getDoorwayList(): RecordSubList
+    {
+        return new RecordSubList(key: 'doorway', prefix: 'doorway', singular: 'doorway cell',
+            fields: [new RecordField('x', 'Offset X', InputControlType::INTEGER), new RecordField('y', 'Offset Y', InputControlType::INTEGER)],
+            blank: ['x' => 0, 'y' => 0], heading: 'Doorway', removeWhenEmpty: true);
     }
 
     /** A stable id is refused as it is typed, by the Engine's own rule, rather than at the save. */

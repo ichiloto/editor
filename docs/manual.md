@@ -843,6 +843,16 @@ Inspector lists the map's areas under **Areas**: rename one there, and the
 events and landmarks naming it follow in the same undo step, or remove it.
 An event's **Bound To** row chooses its own painted cells, a world object or an
 area; choosing its own cells again keeps it on the cells its subject gave it.
+
+Under **Speakers** an event names the NPCs who speak its lines, chosen from
+the map's NPCs that have an id. Adding one (`a` on the heading or a speaker,
+or the GUI's add) names the nearest NPC not yet listed; choose another on its
+row, and delete the row to remove it. Naming a speaker moves no one:
+validation reports, as `event.speaker`, a speaker who is not on the map, is
+never shown while the event can run, wanders freely or stands more than one
+cell from the event, so stand them beside it or bind the event to what they
+stand at. An NPC an event names as a speaker keeps its id and cannot be
+deleted until the event stops naming it.
 Inserting or removing map rows and columns moves areas with the lines; a
 removal through one of an area's exact cells is refused until you reshape it.
 
@@ -1329,7 +1339,12 @@ trunk base) and may carry an occupancy stamp: cells relative to a placement's
 anchor and the physical type a brush gives each when it places the resource.
 The stamp is applied only by an explicit authoring placement; a resource never
 adds collision to a map by itself, and changing a stamp never changes cells an
-earlier placement stamped. Only the `resources` dictionary is edited; the
+earlier placement stamped. A resource whose art paints an opening, such as a
+cave mouth or a door, lists those cells under **Doorway**, relative to a
+placement's anchor; validation then requires an entrance (a transfer event)
+under each doorway cell wherever the resource is placed, so correct the
+doorway here or the art itself when they disagree, never the map's entrance.
+Only the `resources` dictionary is edited; the
 catalogue's cues and action prompt are kept exactly as written. A new resource
 starts on the project's first image for the author to replace, an id is refused
 as it is typed if the Engine would refuse it, and a save the Engine would refuse

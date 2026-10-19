@@ -54,6 +54,12 @@ rule as its `code`:
   malformed event, an event layer that does not match the map.
 - `chest.reward`: a chest whose reward the Engine cannot give, or that has
   none chosen.
+- `event.speaker`: an event's speaker who is not an NPC on the map, is never
+  shown while the event can run, wanders freely or stands more than one cell
+  from the event's area.
+- `object.doorway`: a world object whose resource paints a doorway with no
+  entrance (transfer event) under it, or an entrance inside an object's
+  covered cells behind its ground row, where the art hides the player.
 
 The Editor's project checks add the rest `ichiloto validate` reports, also as
 errors: floor the player can reach with no tile, an event the player can
@@ -209,6 +215,8 @@ batches.
 | Collision | `map.paintOccupancy`, `occupancy.stampPiece` |
 | Resize | `map.insertLines`, `map.removeLines` (with an `answer`), or the map's size rows |
 | Events | `event.create {map, cells, type, marker?}`, `event.move {map, marker, dx, dy}`, `event.bounds`, `event.destination`, `event.delete`; fields with `inspector.apply` |
+| Name who speaks an event | `inspector.add {map, key: {target: event-speakers, marker}}` names the nearest NPC not yet listed; `inspector.apply` with `{target: event-speakers, marker, field: speaker, index}` and an NPC id chooses another; `inspector.remove` with that key removes it |
+| A resource's doorway | the field resource's Doorway list: `database.add` on its heading (`child: true`), then `database.apply` its `doorway<N>X` / `doorway<N>Y` rows |
 | Bind an event to the object or area it describes | `event.subject {map, marker, subject}`, `subject` as `{kind: world_object, id}` or `{kind: area, id}` (a bare id names a world object); `subject: null` with `cells` unbinds it |
 | Named areas | `areas.read {map}`; `areas.create {map, id?, area or cells}` (no `id` takes the first free `area-N`); `areas.setArea {map, id, area or cells}`; `areas.rename {map, id, to}`; `areas.delete {map, id}` |
 | A landmark anchored to an area | the landmark's anchor row (`inspector.apply` with `{target: map-landmarks, field: anchor, index}`), value `area:<id>` |

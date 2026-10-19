@@ -14,8 +14,8 @@ use Throwable;
  * Finding what names an NPC's stable id.
  *
  * A `move_route` whose subject is `npc` names it by `npcId`, a camera or
- * cinematic subject of kind `npc` by `npcId` or `id`, and a dialogue event by
- * its data's `npcId`. Knowing what points at an id is what lets the editor
+ * cinematic subject of kind `npc` by `npcId` or `id`, a dialogue event by
+ * its data's `npcId`, and any map event by its `speakers`. Knowing what points at an id is what lets the editor
  * refuse to delete an NPC something still expects, and keep the id of one
  * something already names when it is renamed.
  *
@@ -64,6 +64,8 @@ final class NpcReferences
 
             if (self::readText($data['npcId'] ?? null) === $npcId || $this->commandsName($script, $npcId)) {
                 $found[] = $label;
+            } elseif (in_array($npcId, array_map(self::readText(...), (array) ($definition['speakers'] ?? [])), true)) {
+                $found[] = $label . ' (speaker)';
             }
 
             $scriptId = self::readText($data['scriptId'] ?? null);
