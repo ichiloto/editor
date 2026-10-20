@@ -139,7 +139,7 @@ final class RecordSchemaCatalog
             \Ichiloto\Editor\Field\MapCategoryFields::getSchema(),
             DialoguePortraitFields::getSchema(),
             DialogueSpeakerFields::getSchema(),
-            WaymarkStyleFields::getSchema(),
+            FieldCueFields::getSchema(),
             self::configuration($graphical),
             self::types(),
             self::tilesets($graphical),

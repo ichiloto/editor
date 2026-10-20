@@ -90,17 +90,18 @@ it('authors the game waymark style in field.php with the Engine defaults and ref
   mkdir($root . '/assets/Data/Presentation', 0777, true);
   file_put_contents($root . '/assets/Data/Presentation/field.php', "<?php\n\n// Field bindings.\nreturn [\n  'cues' => [],\n];\n");
   $session = EditorSession::open($root);
-  $records = $session->listDatabaseRecords('waymark_style')['records'];
+  $records = $session->listDatabaseRecords('field_cues')['records'];
   $symbol = array_search('waymarks.symbol', $records, true);
-  $value = array_find($session->readDatabaseRecord('waymark_style', $symbol)['rows'],
+  $value = array_find($session->readDatabaseRecord('field_cues', $symbol)['rows'],
     static fn(array $row): bool => ($row['key']['field'] ?? null) === 'value');
 
-  expect($records)->toBe(['waymarks.color', 'waymarks.symbol', 'waymarks.inset'])->and($value['value'])->toBe('!');
-  expect(fn() => $session->applyDatabaseRecord('waymark_style', $symbol, $value['key'], '!!'))
+  expect(array_values(array_filter($records, static fn(string $path): bool => str_starts_with($path, 'waymarks.'))))
+    ->toBe(['waymarks.color', 'waymarks.symbol', 'waymarks.inset'])->and($value['value'])->toBe('!');
+  expect(fn() => $session->applyDatabaseRecord('field_cues', $symbol, $value['key'], '!!'))
     ->toThrow('The waymark symbol must occupy exactly one terminal cell.');
 
-  $session->applyDatabaseRecord('waymark_style', $symbol, $value['key'], '*');
-  $session->saveDatabase('waymark_style');
+  $session->applyDatabaseRecord('field_cues', $symbol, $value['key'], '*');
+  $session->saveDatabase('field_cues');
   $source = file_get_contents($root . '/assets/Data/Presentation/field.php');
 
   expect($source)->toContain('// Field bindings.')

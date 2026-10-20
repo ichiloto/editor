@@ -34,7 +34,7 @@ final class DatabaseCatalog
             new DatabaseCategoryDefinition(\Ichiloto\Editor\Field\MapCategoryFields::CATEGORY, 'Place Categories', 'Name the kinds of place a game marks on its maps beyond inn, shop, home and organization.', true),
             new DatabaseCategoryDefinition('common_events', 'Common Events', 'Author cutscene and event command lists.', true),
             new DatabaseCategoryDefinition('quests', 'Quests', 'Author quests, objectives, and rewards.', true),
-            new DatabaseCategoryDefinition(WaymarkStyleFields::CATEGORY, 'Waymarks', 'Choose how objective waymarks look on the field: colour, symbol and edge inset.', true),
+            new DatabaseCategoryDefinition(FieldCueFields::CATEGORY, 'Field Cues', 'Choose how cue marks and objective waymarks read on any ground: plate, bob, pointers and Terminal cell.', true),
             new DatabaseCategoryDefinition('skits', 'Skits', 'Write optional party banter scenes.', true),
             new DatabaseCategoryDefinition(\Ichiloto\Editor\Dialogue\DialoguePortraitFields::CATEGORY, 'Dialogue Portraits', 'Choose the portraits, skit busts and emotions dialogue shows for each speaker.', true),
             new DatabaseCategoryDefinition(\Ichiloto\Editor\Dialogue\DialogueSpeakerFields::CATEGORY, 'Speaker Names', 'Bind the names lines are spoken under to the portraits they show.', true),
