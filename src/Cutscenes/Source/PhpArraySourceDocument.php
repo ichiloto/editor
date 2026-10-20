@@ -1071,9 +1071,11 @@ final class PhpArraySourceDocument
 
     /**
      * Applies planned edits together, from the end of the file forward, and
-     * reads the result again.
+     * reads the result again. Edits at one place apply in reverse of the
+     * order they were planned, so text inserted there reads in planned
+     * order: each insertion lands ahead of the ones applied before it.
      *
-     * @param array<int, array{0: int, 1: int, 2: string}> $edits The edits.
+     * @param array<int, array{0: int, 1: int, 2: string}> $edits The edits, in planned order.
      * @return self The rewritten document.
      */
     public function withEdits(array $edits): self
@@ -1082,7 +1084,10 @@ final class PhpArraySourceDocument
             return $this;
         }
 
-        usort($edits, static fn(array $a, array $b): int => [$b[0], $b[1]] <=> [$a[0], $a[1]]);
+        $edits = array_values($edits);
+        $order = array_keys($edits);
+        usort($order, static fn(int $a, int $b): int => [$edits[$b][0], $edits[$b][1], $b] <=> [$edits[$a][0], $edits[$a][1], $a]);
+        $edits = array_map(static fn(int $index): array => $edits[$index], $order);
         $source = $this->source;
         $previousStart = null;
 
