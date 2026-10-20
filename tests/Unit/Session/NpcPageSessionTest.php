@@ -174,3 +174,17 @@ it('reports what a moved event leaves behind and undoes the whole move as one st
         ->and(fn() => $session->adoptEventOnNpc('test-map', $session->readMap('test-map')['revision'], 'E', 'nobody'))
             ->toThrow(SessionRefusal::class, 'has no NPC nobody');
 });
+
+it('carries an older save alias through a repeating event that moves onto its NPC', function () {
+    $root = npcPageProject(['class' => 'Ichiloto\\Engine\\Events\\Triggers\\ScriptEventTrigger',
+        'data' => ['mode' => 'action', 'scriptId' => 'briefing'], 'speakers' => ['mentor']]);
+    file_put_contents($root . '/assets/Data/save-compatibility.php', "<?php\n\nreturn [\n  'contentVersion' => 0,\n  'migrations' => [],\n"
+        . "  'aliases' => [\n    'one_shot_events' => [\n      ['from' => 'old-map:B', 'to' => 'test-map:E'],\n    ],\n  ],\n  'tombstones' => [],\n];\n");
+
+    $result = ChangeBatch::apply($root, [['method' => 'npc.adoptEvent', 'params' => ['map' => 'test-map', 'marker' => 'E']]]);
+    $manifest = Ichiloto\Engine\IO\SaveCompatibility\SaveCompatibilityManifest::fromProjectRoot($root);
+
+    expect($result['status'])->toBe('saved')
+        ->and($manifest->resolveOneShotEvent('old-map:B', 'old.save'))->toBe('test-map:mentor/briefing')
+        ->and(NpcPages::fromEntry((require $root . '/assets/Maps/test-map/test-map.data.php')['npcs'][0])->pages[0]->reusable)->toBeTrue();
+});

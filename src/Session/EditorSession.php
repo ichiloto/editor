@@ -1987,7 +1987,7 @@ final class EditorSession
     {
         $map = $this->requireCurrentMap($mapId, $revision);
         try {
-            $plan = NpcEventAdoption::plan($map, $marker, $npcId);
+            $plan = NpcEventAdoption::plan($map, $marker, $npcId, $this->isAliasTarget(ContentReferenceCategory::ONE_SHOT_EVENT, "{$map->mapId}:{$marker}"));
             $alias = $plan->alias === null ? null : SaveManifestAlias::plan($this->workspace->projectRoot, $this->workspace->projectId,
                 ContentReferenceCategory::ONE_SHOT_EVENT, $plan->alias['from'], $plan->alias['to']);
         } catch (NpcRefusal|RuntimeException $refusal) {
@@ -2018,6 +2018,19 @@ final class EditorSession
             'alias' => $plan->alias,
             'waymarks' => $this->describeEventWaymarks($map->mapId, $marker),
         ];
+    }
+
+    /** Whether the save compatibility manifest sends some older identity to this one. */
+    private function isAliasTarget(ContentReferenceCategory $category, string $identity): bool
+    {
+        try {
+            $manifest = PhpDataFile::evaluateIsolated($this->workspace->projectRoot . '/' . SaveManifestStep::PATH, $this->workspace->projectRoot);
+        } catch (Throwable) {
+            return false;
+        }
+        $aliases = is_array($manifest) ? (array) ($manifest['aliases'][$category->value] ?? []) : [];
+
+        return array_any($aliases, static fn(mixed $alias): bool => is_array($alias) && ($alias['to'] ?? null) === $identity);
     }
 
     /** @return list<string> The quest objectives whose waymarks name a map event. */

@@ -20,9 +20,8 @@ use Throwable;
  * saved identity that moved (a one-shot event that became an NPC page) is
  * read as its new identity by every save, whatever its content version. An
  * alias needs no version step. The manifest is rewritten through the
- * source-preserving writer and read back as the Engine's
- * SaveCompatibilityManifest reads it, so an alias the game would refuse is
- * never written.
+ * source-preserving writer and read back as the game reads it, so an alias
+ * the game would refuse is never written.
  *
  * @package Ichiloto\Editor\Maps
  */
@@ -64,15 +63,20 @@ final class SaveManifestAlias
         } catch (SourceUnreadable|SourcePreservationRefusal $refusal) {
             throw new RuntimeException(sprintf('%s cannot take the alias: %s', SaveManifestStep::PATH, rtrim($refusal->getMessage(), '.')), previous: $refusal);
         }
-        // An alias loads no project class, so the staged manifest is read back here as the Engine reads it.
-        $readBack = static function (string $path, string $staged) use ($projectRoot, $projectId): mixed {
+        // Steps that name project migration classes are read as the game reads them, loading those classes;
+        // a manifest naming none is read here as the Engine reads it.
+        $namesClasses = array_any((array) ($manifest['migrations'] ?? []), static fn(mixed $step): bool => is_array($step) && isset($step['class']));
+        $readBack = static function (string $path, string $staged) use ($projectRoot, $projectId, $namesClasses): mixed {
             try {
+                if ($namesClasses) {
+                    return ProjectMigrationProbe::readManifest($projectRoot, $projectId, $staged);
+                }
                 $value = PhpDataFile::evaluateIsolated($staged, $projectRoot);
                 SaveCompatibilityManifest::fromArray($projectId, is_array($value) ? $value : [], SaveManifestStep::PATH);
 
                 return $value;
             } catch (Throwable $refusal) {
-                throw new RuntimeException(sprintf('The game would refuse the alias: %s; nothing was written.', $refusal->getMessage()), previous: $refusal);
+                throw new RuntimeException(sprintf('The game would refuse the alias: %s; nothing was written.', rtrim($refusal->getMessage(), '.')), previous: $refusal);
             }
         };
 

@@ -43,7 +43,7 @@ final class NpcEventAdoption
      * @param array<string, mixed> $entry The NPC entry with the new page first.
      * @param array<string, mixed> $page The new page.
      * @param list<string> $dropped What the event had that a page does not.
-     * @param array{from: string, to: string}|null $alias The one-shot completion to carry, when the event ran once.
+     * @param array{from: string, to: string}|null $alias The saved identity to carry: when the event ran once, or saves already alias to it.
      */
     private function __construct(
         public readonly int $npcIndex,
@@ -57,9 +57,10 @@ final class NpcEventAdoption
 
     /**
      * @param string|null $npcId The NPC to own it; the event's first speaker when null.
+     * @param bool $aliased Whether saves already alias another identity to this event, so its own must follow the move.
      * @throws NpcRefusal When the event is not a story event an NPC can own, or the NPC cannot take it.
      */
-    public static function plan(ProjectMap $map, string $marker, ?string $npcId = null): self
+    public static function plan(ProjectMap $map, string $marker, ?string $npcId = null, bool $aliased = false): self
     {
         $event = $map->getEventDefinition($marker) ?? throw new NpcRefusal("{$map->mapId} has no event {$marker}.");
         $class = ltrim(strval($event['class'] ?? ''), '\\');
@@ -95,7 +96,7 @@ final class NpcEventAdoption
         $base = strval($action['scriptId'] ?? $action['cinematicId'] ?? '') ?: 'event-' . strtolower($marker);
         $id = $base;
         for ($n = 2; in_array($id, $existing, true); $n++) { $id = "{$base}-{$n}"; }
-        if ($runsOnce || isset($action['scriptId']) || isset($action['cinematicId'])) { $page['id'] = $id; }
+        if ($runsOnce || $aliased || isset($action['scriptId']) || isset($action['cinematicId'])) { $page['id'] = $id; }
         foreach (['conditions', 'sets'] as $field) {
             if (is_array($event[$field] ?? null) && $event[$field] !== []) { $page[$field] = array_values($event[$field]); }
         }
@@ -130,7 +131,7 @@ final class NpcEventAdoption
             if (array_key_exists($field, $event) && $event[$field] !== [] && $event[$field] !== null) { $dropped[] = $what; }
         }
 
-        return new self($index, $npcId, $entry, $page, $dropped, $runsOnce ? [
+        return new self($index, $npcId, $entry, $page, $dropped, $runsOnce || $aliased ? [
             'from' => "{$map->mapId}:{$marker}",
             'to' => "{$map->mapId}:" . NpcPages::getCompletionMarker($npcId, $id),
         ] : null);

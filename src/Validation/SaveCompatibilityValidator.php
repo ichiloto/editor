@@ -422,7 +422,7 @@ final class SaveCompatibilityValidator
                 }
             }
 
-            // An NPC page that runs once saves its completion beside the map's events.
+            // An NPC page with an id is a saved identity beside the map's events, as each event marker is.
             foreach (is_array($map->getEditableData()['npcs'] ?? null) ? $map->getEditableData()['npcs'] : [] as $entry) {
                 try {
                     $pages = is_array($entry) ? NpcPages::fromEntry($entry) : null;
@@ -430,7 +430,7 @@ final class SaveCompatibilityValidator
                     continue; // npc.page reports it.
                 }
                 foreach ($pages?->pages ?? [] as $page) {
-                    if (! $page->reusable && $page->id !== null && $pages->npcId !== null) {
+                    if ($page->id !== null && $pages->npcId !== null) {
                         $ids[] = $map->mapId . ':' . NpcPages::getCompletionMarker($pages->npcId, $page->id);
                     }
                 }
