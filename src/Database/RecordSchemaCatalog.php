@@ -1495,7 +1495,7 @@ final class RecordSchemaCatalog
                 $value = array_key_exists('default', $row) ? $row['default'] : ($row['value'] ?? null);
                 $default = array_key_exists('default', $row) ? ProjectRecord::stringify($row['default']) : null;
 
-                $reference = ProjectConfig::ENGINE_REFERENCES[strval($row['path'] ?? '')] ?? null;
+                $reference = ProjectConfig::getEngineReference(strval($row['path'] ?? ''));
 
                 return [
                     new RecordField('path', 'Setting', isReadOnly: true),
