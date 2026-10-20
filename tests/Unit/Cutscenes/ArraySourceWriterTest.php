@@ -339,18 +339,19 @@ it('removes only an indented inline entry and its heading in other existing list
         ->and($rewritten)->toBe(str_replace("    // Removed entry owns this heading.\n    ['id'=>'first'],", '', $source));
 })->with(['npcs', 'tracks', 'cues']);
 
-it('removes an entry that shares a line with the one before it without leaving spaces behind', function (string $remove, string $expected) {
+it('removes an entry that shares a line with the one before it without leaving spaces behind', function (array $remove, string $expected) {
     $source = "<?php\nreturn [\n    [\n        'enemy' => 'Bat',\n        'position' => [15, 7], 'placement' => ['x' => 1], 'floor' => 25,\n    ],\n];\n";
     $old = evaluateSource($source);
     $new = $old;
-    unset($new[0][$remove]);
+    foreach ($remove as $key) { unset($new[0][$key]); }
     $rewritten = ArraySourceWriter::rewrite(PhpArraySourceDocument::parse($source), $old, $new)->source;
     expect(evaluateSource($rewritten))->toBe($new)
         ->and($rewritten)->toContain($expected . "\n")
         ->and($rewritten)->not->toMatch('/[ \t]\n/');
 })->with([
-    'last on its line' => ['floor', "        'position' => [15, 7], 'placement' => ['x' => 1],"],
-    'between two' => ['placement', "        'position' => [15, 7], 'floor' => 25,"],
+    'last on its line' => [['floor'], "        'position' => [15, 7], 'placement' => ['x' => 1],"],
+    'between two' => [['placement'], "        'position' => [15, 7], 'floor' => 25,"],
+    'two neighbours together' => [['placement', 'floor'], "        'position' => [15, 7],"],
 ]);
 
 it('rewrites the real Last Legend summon timelines to themselves and back from any change', function () {
