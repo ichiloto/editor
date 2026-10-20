@@ -179,7 +179,7 @@ it('creates and edits a Story Script\'s inline commands with the shared command 
     expect($saved['script'][0])->toBe(['type' => 'text', 'name' => '', 'text' => 'Halt.'])
         ->and($saved['script'][1]['type'])->toBe('branch')
         ->and($saved['script'][1]['then'][0]['type'])->toBe('set_switch')
-        ->and($saved['scriptId'])->toBe('')
+        ->and($saved)->not->toHaveKey('scriptId')
         ->and($request('inspector.read', ['map' => 'test-map', 'event' => $marker, 'frame' => ['script', 9, 'then']])['error']['message'])
             ->toContain('no longer on the event');
 });

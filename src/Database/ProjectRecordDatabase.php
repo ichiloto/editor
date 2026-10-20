@@ -1270,8 +1270,8 @@ final class ProjectRecordDatabase
      * takes no new records, or the project lacks what a new one needs.
      *
      * @param string|null $identity The identity the record is for, when it is
-     * made for something that already has one (an enemy's battle art); a
-     * fresh unique one when null.
+     * made for something that already has one (an enemy's battle art), or the
+     * name an event script's file takes; a fresh unique one when null.
      * @return int The new record index.
      * @throws RecordRefusal With the reason an author reads, including an identity that already has a record.
      */
@@ -1325,7 +1325,10 @@ final class ProjectRecordDatabase
             }
         }
 
-        if ($identity !== null) {
+        if ($identity !== null && $this->isNamedByFile()) {
+            // An event script's name is its file's: scripts and triggers name it by that.
+            $recordId = $this->requireNewFileName($identity);
+        } elseif ($identity !== null) {
             if ($identityKey === null || ! is_array($payload)) {
                 throw new RecordRefusal(sprintf('%s entries are not made for a given name.', ucfirst($this->schema->entryNoun)));
             }
@@ -1816,6 +1819,16 @@ final class ProjectRecordDatabase
         if ($prepared !== null) {
             SaveSet::commitOne(dirname($this->path), $prepared);
         }
+    }
+
+    /**
+     * What writes this category's file: the settings file a settings
+     * category edits through (Terms and Configuration both write
+     * `config.php` through it), or the category itself.
+     */
+    public function getFileWriter(): ProjectSettingsFile|self
+    {
+        return $this->settings ?? $this;
     }
 
     /**
@@ -5099,6 +5112,36 @@ final class ProjectRecordDatabase
         }
 
         return $candidate;
+    }
+
+    /** Whether a record's name is the stem of its own file, as an event script's is. */
+    private function isNamedByFile(): bool
+    {
+        return $this->schema->storage === RecordStorage::DIRECTORY && $this->schema->identityKey === null
+            && $this->schema->listPayloadKey !== null;
+    }
+
+    /**
+     * Refuses a name a new per-file record cannot take as its file stem: one
+     * that is not already in id form, or one another record or file has.
+     *
+     * @return string The name, as the file stem.
+     * @throws RecordRefusal With the reason an author reads.
+     */
+    private function requireNewFileName(string $name): string
+    {
+        $name = trim($name);
+        if ($name === '' || Slug::of($name) !== $name) {
+            throw new RecordRefusal(sprintf('A %s name is written in lower case with hyphens, such as "%s".',
+                $this->schema->entryNoun, Slug::of($name) ?: 'payday-notice'));
+        }
+        $taken = array_any($this->getRecords(), static fn(ProjectRecord $record): bool => $record->recordId === $name)
+            || is_file($this->path . DIRECTORY_SEPARATOR . $name . '.php');
+        if ($taken) {
+            throw new RecordRefusal(sprintf('There is already an %s named %s.', $this->schema->entryNoun, $name));
+        }
+
+        return $name;
     }
 
     /**
