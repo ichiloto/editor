@@ -15,6 +15,7 @@ use LogicException;
 use Ichiloto\Editor\ActorStatPreview;
 use Ichiloto\Editor\Database\Projections\BattlerBindingProjection;
 use Ichiloto\Editor\Database\Projections\KeyedListProjection;
+use Ichiloto\Editor\Actors\ActorAuthoring;
 use Ichiloto\Editor\Database\Projections\KnowledgeEnemyMappingProjection;
 use Ichiloto\Editor\Database\Projections\KnowledgeRecordTypeProjection;
 use Ichiloto\Editor\Database\Projections\KnowledgeReportProjection;
@@ -36,6 +37,8 @@ use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandField;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandFieldKind;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandReference;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandRegistry;
+use Ichiloto\Engine\Battle\Events\BattleEventSpan;
+use Ichiloto\Engine\Events\Interpreter\EventExecutionScope;
 use Ichiloto\Engine\Events\Interpreter\EventInterpreter;
 use Ichiloto\Engine\Events\Triggers\DialogueEventTrigger;
 use Ichiloto\Engine\Events\Triggers\ScriptEventTrigger;
@@ -350,10 +353,50 @@ final class RecordSchemaCatalog
                     // The graphical battle's own placement: the point its feet stand on
                     // and its contain limits, never the terminal position above.
                     new RecordField('graphicalPlacement', 'Battle Placement', codec: RecordFieldCodec::BATTLER_SLOT, removeWhenEmpty: true),
+                    // Damage cannot take the member below this share of its HP, so an event page can end the
+                    // fight first (a concession); 0 lets it be knocked out.
+                    new RecordField('knockoutFloorPercent', 'Cannot Fall Below HP %', InputControlType::INTEGER, removeWhenEmpty: true),
                 ],
                 // The enemy is chosen when a member is added (TroopAuthoring).
                 blank: ['enemy' => '', 'position' => [15, 7]],
+                // Event pages name members by index; they follow a member that moves.
+                remapIndexReferences: TroopEventPageContract::remapMembers(...),
             ),
+            subLists: [self::troopEventPageList()],
+            // The Engine reads event pages when a battle starts; a page it would refuse is refused here.
+            saveCheck: TroopEventPageContract::checkTroops(...),
+        );
+    }
+
+    /**
+     * A troop's battle event pages, the Engine's BattleEventPage: when each
+     * runs over the paused battle and the battle commands it runs. Every
+     * given condition must hold; members are chosen from the troop itself.
+     */
+    private static function troopEventPageList(): RecordSubList
+    {
+        return new RecordSubList(
+            key: 'events',
+            prefix: 'page',
+            singular: 'event page',
+            fields: [
+                new RecordField('name', 'Name', removeWhenEmpty: true),
+                new RecordField('span', 'Span', options: array_map(static fn(BattleEventSpan $span): string => $span->value, BattleEventSpan::cases())),
+                // 0 or blank leaves a condition out.
+                new RecordField('conditions.turn', 'Turn', InputControlType::INTEGER, removeWhenEmpty: true),
+                new RecordField('conditions.turnEvery', 'Then Every N Turns', InputControlType::INTEGER, removeWhenEmpty: true),
+                RecordField::troopMember('conditions.enemy', 'Enemy', required: false),
+                new RecordField('conditions.enemyHpPercent', 'Enemy HP At Or Below %', InputControlType::INTEGER, removeWhenEmpty: true),
+                RecordField::reference('conditions.actor', 'Party Member', 'actor_ids', allowsNone: true),
+                new RecordField('conditions.actorHpPercent', 'Party Member HP At Or Below %', InputControlType::INTEGER, removeWhenEmpty: true),
+                new RecordField('conditions.world', 'World Conditions', removeWhenEmpty: true, codec: RecordFieldCodec::CONDITIONS),
+            ],
+            // A new page opens the battle, as RPG Maker's first page does; its commands are added in its frame.
+            blank: ['span' => BattleEventSpan::BATTLE->value, 'conditions' => ['turn' => 1], 'commands' => []],
+            commandArms: ['commands' => 'Commands'],
+            heading: 'Event Pages',
+            removeWhenEmpty: true,
+            armCommandList: self::eventCommandList('commands', scope: EventExecutionScope::BATTLE),
         );
     }
 
@@ -1347,6 +1390,11 @@ final class RecordSchemaCatalog
                 new RecordField('stateResistances', 'State Resistances', removeWhenEmpty: true, codec: RecordFieldCodec::KEY_VALUES),
                 RecordField::reference('knowledgeSubjectId', 'Knowledge Subject', 'knowledge_subjects', allowsNone: true),
                 self::counterAttackField(),
+                // What the enemy attacks with when none of its patterns
+                // applies: a battle-usable basic skill, or the Engine's own
+                // attack, the same choice an actor makes.
+                new RecordField('attackSkill', 'Attack Skill', reference: 'attack_skills', removeWhenEmpty: true,
+                    allowsNone: true, displayDefault: ActorAuthoring::BUILT_IN_ATTACK),
             ],
             labelKey: 'name',
             identityKey: 'name',
@@ -1605,7 +1653,8 @@ final class RecordSchemaCatalog
                     ['type' => 'text', 'name' => '', 'text' => 'Something happens.'],
                 ],
             ],
-            subList: self::eventCommandList('commands', $graphical),
+            // A reusable script is what cinematic sessions call, so it is edited with their full vocabulary.
+            subList: CutsceneSchemas::cinematicCommandList('commands', $graphical, ['type' => 'text', 'name' => '', 'text' => 'Something happens.']),
             listPayloadKey: 'commands',
         );
     }
@@ -2285,22 +2334,26 @@ final class RecordSchemaCatalog
      * @param string $key The payload key holding the list.
      * @return RecordSubList The command list.
      */
-    public static function eventCommandList(string $key, bool $graphical = false): RecordSubList
+    public static function eventCommandList(string $key, bool $graphical = false, EventExecutionScope $scope = EventExecutionScope::FIELD): RecordSubList
     {
+        $types = self::getEventCommandTypes($scope);
+        $offered = static fn(array $byType): array => array_intersect_key($byType, array_flip($types));
+
         return new RecordSubList(
             key: $key,
             prefix: 'command',
             singular: 'command',
             fields: [
-                new RecordField('type', 'Type', options: self::getEventCommandTypes()),
+                new RecordField('type', 'Type', options: $types),
             ],
             blank: ['type' => 'text', 'name' => '', 'text' => 'Something happens.'],
-            variants: self::eventCommandVariants($graphical),
+            // A scope offers only the commands its scripts may run: a battle page never shows a transfer.
+            variants: $offered(self::eventCommandVariants($graphical)),
             variantKey: 'type',
-            nestedLists: [
+            nestedLists: $offered([
                 'move_route' => static fn(array $entry): ?RecordSubList => MovementRouteFields::getPointList($entry, graphical: $graphical),
                 ...self::getRegisteredCommandLists($graphical),
-            ],
+            ]),
             prepareEdit: static fn(array $entry, string $field): array => MovementRouteFields::prepareEdit(
                 InnPresentationFields::prepareEdit($entry, $field), $field),
         );
@@ -2460,9 +2513,24 @@ final class RecordSchemaCatalog
      *
      * @return list<string>
      */
-    public static function getEventCommandTypes(): array
+    public static function getEventCommandTypes(EventExecutionScope $scope = EventExecutionScope::FIELD): array
     {
-        return [...self::EVENT_COMMAND_TYPES, ...ScriptCommandRegistry::getCatalog()->types];
+        return [
+            ...array_values(array_filter(self::EVENT_COMMAND_TYPES, $scope->allowsBuiltInCommand(...))),
+            ...self::getRegisteredCommandTypes($scope),
+        ];
+    }
+
+    /**
+     * Returns the registered command types scripts in the scope may use: a
+     * battle page's `concede` is never offered to a field script.
+     *
+     * @return list<string>
+     */
+    public static function getRegisteredCommandTypes(EventExecutionScope $scope = EventExecutionScope::FIELD): array
+    {
+        return array_values(array_keys(array_filter(ScriptCommandRegistry::getCatalog()->definitions,
+            static fn(ScriptCommandDefinition $definition): bool => $definition->runsIn($scope))));
     }
 
     /**
@@ -2568,11 +2636,14 @@ final class RecordSchemaCatalog
             ScriptCommandFieldKind::NUMBER => [new RecordField($field->key, $field->label, InputControlType::FLOAT)],
             ScriptCommandFieldKind::BOOLEAN => [RecordField::boolean($field->key, $field->label, removeWhenEmpty: false)],
             ScriptCommandFieldKind::OPTION => [new RecordField($field->key, $field->label, options: $field->options, removeWhenEmpty: ! $field->required)],
-            ScriptCommandFieldKind::REFERENCE => [RecordField::reference(
+            // A troop member is the owning troop's own, never a project resource.
+            ScriptCommandFieldKind::REFERENCE => [$field->reference === ScriptCommandReference::TROOP_MEMBER
+                ? RecordField::troopMember($field->key, $field->label, $field->required) : RecordField::reference(
                 $field->key,
                 $field->label,
                 ProjectScriptCommands::getReferenceCategory($field->reference
-                    ?? throw new LogicException("Reference field {$field->key} names no resource.")),
+                    ?? throw new LogicException("Reference field {$field->key} names no resource."))
+                    ?? throw new LogicException("Reference field {$field->key} names no project resource."),
                 allowsNone: ! $field->required,
             )],
             ScriptCommandFieldKind::POSITION => [

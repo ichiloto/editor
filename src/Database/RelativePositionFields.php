@@ -21,6 +21,8 @@ final class RelativePositionFields
     public const string ID_FIELD = 'at.id';
     public const string OFFSET_X_FIELD = 'offset.x';
     public const string OFFSET_Y_FIELD = 'offset.y';
+    /** A staged visual's place on a feature of the named world object's art, which the object's resource declares. */
+    public const string ATTACHMENT_FIELD = 'at.attachment';
 
     /** The reference each named subject kind's stable id is chosen from. */
     private const array ID_REFERENCES = [
@@ -52,12 +54,15 @@ final class RelativePositionFields
 
     /**
      * The fields of a point: its absolute fields and a subject choice while it is absolute, or the subject, its id
-     * and the offset once it is relative. Independent coordinates and an offset are never offered together.
+     * and the offset once it is relative. Independent coordinates and an offset are never offered together. A
+     * staged visual relative to a world object may sit on one of its attachments instead, which owns its cell and
+     * point, so it then takes no offset.
      *
      * @param list<RecordField> $absoluteFields
+     * @param bool $attachable Whether the point places a staged visual, the one thing an attachment holds.
      * @return list<RecordField>
      */
-    public static function getFields(array $entry, array $absoluteFields, bool $cinematic, bool $graphical): array
+    public static function getFields(array $entry, array $absoluteFields, bool $cinematic, bool $graphical, bool $attachable = false): array
     {
         $kinds = self::getSubjectKinds($cinematic, $graphical);
         $kind = new RecordField(self::KIND_FIELD, 'Relative To', options: ['', ...$kinds], removeWhenEmpty: true,
@@ -70,6 +75,12 @@ final class RelativePositionFields
         $id = self::getSubjectIdField(self::ID_FIELD, $selected);
         if ($id !== null) {
             $fields[] = $id;
+        }
+        if ($attachable && $selected === 'world_object') {
+            $fields[] = RecordField::entryChoice(self::ATTACHMENT_FIELD, 'Attachment', 'world_object_attachments', '(object anchor)');
+            if (is_string($entry['at']['attachment'] ?? null)) {
+                return $fields;
+            }
         }
         return [
             ...$fields,
@@ -113,8 +124,15 @@ final class RelativePositionFields
      */
     public static function prepareEdit(array $entry, string $field, Closure $validate): array
     {
-        if (! in_array($field, [self::KIND_FIELD, self::ID_FIELD, self::OFFSET_X_FIELD, self::OFFSET_Y_FIELD], true)) {
+        if (! in_array($field, [self::KIND_FIELD, self::ID_FIELD, self::OFFSET_X_FIELD, self::OFFSET_Y_FIELD, self::ATTACHMENT_FIELD], true)) {
             return $entry;
+        }
+        if (in_array($field, [self::KIND_FIELD, self::ID_FIELD], true) && is_array($entry['at'] ?? null)) {
+            // An attachment belongs to the object it was chosen on.
+            unset($entry['at']['attachment']);
+        }
+        if ($field === self::ATTACHMENT_FIELD && is_string($entry['at']['attachment'] ?? null)) {
+            unset($entry['offset']);
         }
         if ($field === self::KIND_FIELD) {
             $kind = is_array($entry['at'] ?? null) ? ($entry['at']['kind'] ?? null) : null;
@@ -158,6 +176,9 @@ final class RelativePositionFields
             isset(self::ID_REFERENCES[$kind]) => sprintf('%s %s', self::ID_REFERENCES[$kind][1], strval($at['id'] ?? '(no id)')),
             default => '(no subject)',
         };
+        if (is_string($at['attachment'] ?? null)) {
+            return sprintf('on %s of %s', $at['attachment'], $subject);
+        }
         $offset = is_array($entry['offset'] ?? null) ? $entry['offset'] : [];
         $x = intval($offset['x'] ?? 0);
         $y = intval($offset['y'] ?? 0);

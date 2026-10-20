@@ -40,3 +40,31 @@ it('adds a troop member by choosing its enemy, names the troop after its members
     callEditorMethod($editor, 'dispatchInput', "\x1a");
     expect($troops->countSubItems(0))->toBe(2);
 });
+
+it('adds a troop event page from its heading and its battle commands inside it, keeping the member picker for members', function (): void {
+    $root = troopPageProject();
+    $editor = deletionEditor($root);
+    openDatabaseCategory($editor, 'troops');
+    $troops = getEditorProperty($editor, 'workspace')->getRecordDatabase('troops');
+    $picker = getEditorProperty($editor, 'referencePicker');
+
+    expect(callEditorMethod($editor, 'selectDatabaseFieldById', 'pageList'))->not->toBeFalse();
+    callEditorMethod($editor, 'dispatchInput', 'O');
+    expect($picker->isOpen())->toBeFalse()
+        ->and($troops->getSubItems(0, 'events'))->toHaveCount(1)
+        ->and($troops->countSubItems(0))->toBe(2);
+
+    setEditorProperty($editor, 'databaseFocus', 'database_settings');
+    callEditorMethod($editor, 'selectDatabaseFieldById', 'page0Commands');
+    callEditorMethod($editor, 'dispatchInput', "\n");
+    expect(getEditorProperty($editor, 'databaseCommandFramePath'))->toBe(['events', 0, 'commands']);
+    callEditorMethod($editor, 'dispatchInput', 'O');
+    expect($picker->isOpen())->toBeFalse()
+        ->and($troops->getFrameCommands(0, ['events', 0, 'commands']))->toHaveCount(1)
+        ->and(callEditorMethod($editor, 'getSelectedDatabaseFieldId'))->toBe('command0Type');
+
+    callEditorMethod($editor, 'dispatchInput', "\x1b");
+    callEditorMethod($editor, 'selectDatabaseFieldById', 'member0Enemy');
+    callEditorMethod($editor, 'dispatchInput', 'O');
+    expect($picker->isOpen())->toBeTrue();
+});

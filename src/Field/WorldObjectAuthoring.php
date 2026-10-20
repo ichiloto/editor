@@ -43,6 +43,28 @@ final readonly class WorldObjectAuthoring
     }
 
     /**
+     * The attachments a map's world object offers: those its resource declares, as the map's field catalogue holds
+     * them, with the object's anchor that their cells are relative to. Null for an inline object, an unknown one or
+     * a map or catalogue that cannot be read; validation reports why.
+     *
+     * @return array{anchor: array{x: int, y: int}, attachments: list<\Ichiloto\Engine\Field\WorldObjectAttachment>}|null
+     */
+    public static function findAttachments(ProjectMap $map, string $objectId): ?array
+    {
+        try {
+            $entry = array_find(self::readEntries($map), static fn(array $entry): bool => ($entry['id'] ?? null) === $objectId);
+            $resource = is_string($entry['resource'] ?? null) ? $map->getFieldCatalog()->getResource($entry['resource']) : null;
+        } catch (InvalidArgumentException|MapSourceRefusal) {
+            return null;
+        }
+        $anchor = $entry['anchor'] ?? null;
+        if ($resource === null || !is_int($anchor['x'] ?? null) || !is_int($anchor['y'] ?? null)) {
+            return null;
+        }
+        return ['anchor' => ['x' => $anchor['x'], 'y' => $anchor['y']], 'attachments' => $resource->attachments];
+    }
+
+    /**
      * The glyph and tile coverage of a map's world objects at rest, as the field applies it: an object covers its
      * cells only while it can be drawn, so its base role's current frame resolves, or its sign board can be read.
      * An object without art covers its cells by design. Validation uses it to judge what the field still shows as

@@ -77,9 +77,9 @@ final class ProjectScriptCommands
      * Returns the Editor reference category for a resource a command names.
      *
      * @param ScriptCommandReference $reference The resource.
-     * @return string The ReferenceCatalog category.
+     * @return string|null The ReferenceCatalog category; null for a troop member, which the owning troop holds.
      */
-    public static function getReferenceCategory(ScriptCommandReference $reference): string
+    public static function getReferenceCategory(ScriptCommandReference $reference): ?string
     {
         return match ($reference) {
             // The item store resolves every inventory definition.
@@ -92,6 +92,8 @@ final class ProjectScriptCommands
             ScriptCommandReference::ACTOR => 'actors',
             ScriptCommandReference::STAGE_TIMELINE => 'stage_timelines',
             ScriptCommandReference::INCOME_SCHEDULE => 'income_schedules',
+            // The owning troop's members: chosen from that troop, checked by the Engine's page validation.
+            ScriptCommandReference::TROOP_MEMBER => null,
         };
     }
 }
