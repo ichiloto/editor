@@ -70,8 +70,8 @@ final class NpcEventAdoption
         if (strtolower(trim(strval($data['mode'] ?? ''))) === ScriptEventTrigger::MODE_AUTO) {
             throw new NpcRefusal("Event {$marker} starts when the player arrives; talking to an NPC cannot start it.");
         }
-        if (($event['subject']['kind'] ?? null) === 'world_object') {
-            throw new NpcRefusal("Event {$marker} belongs to the world object it is bound to.");
+        if (is_array($event['subject'] ?? null)) {
+            throw new NpcRefusal("Event {$marker} belongs to the object or place it is bound to.");
         }
         $speakers = array_values(array_filter((array) ($event['speakers'] ?? []), is_string(...)));
         $npcId ??= $speakers[0] ?? throw new NpcRefusal("Event {$marker} names no speaker; choose the NPC who delivers it.");
