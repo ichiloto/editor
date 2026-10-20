@@ -82,6 +82,9 @@ final readonly class ProjectWorkspace
         );
         $references = new ReferenceCatalog($this);
         foreach ($this->recordDatabases as $database) { $database->useAuthoringReferences($references); }
+        // A reusable script chooses its map-local subjects on the map its callers run it on.
+        $this->getRecordDatabase('common_events')?->useRecordReferences(
+            static fn(\Ichiloto\Editor\Database\ProjectRecord $record): ReferenceCatalog => $references->createCommonEventContext($record->recordId));
         // A map names its tileset and field resources as their pages hold them, unsaved edits included.
         $this->catalogs = new ProjectCatalogs($this);
         foreach ($this->maps as $map) { $map->useCatalogs($this->catalogs); }

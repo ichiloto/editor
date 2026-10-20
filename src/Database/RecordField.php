@@ -48,6 +48,10 @@ final readonly class RecordField
      * @param string|null $referenceMapKey For a map-local reference (an event
      * marker, an NPC), the entry field naming the map its choices come from,
      * when that is not the map the author has selected.
+     * @param string|null $entryChoices For a field chosen among values its own
+     * entry decides (an attachment of the world object the entry names), the
+     * source {@see ReferenceCatalog::listEntryChoices()} reads them from. The
+     * row offers them as options, and an edit outside them is refused.
      */
     public function __construct(
         public string $key,
@@ -68,6 +72,7 @@ final readonly class RecordField
         /** For a line's emotion, how the line names its speaker, whose catalogue emotions it is chosen from. */
         public ?DialogueLineSpeaker $dialogueSpeaker = null,
         public ?string $referenceMapKey = null,
+        public ?string $entryChoices = null,
     ) {
     }
 
@@ -81,6 +86,15 @@ final readonly class RecordField
     {
         return new self($key, $label, InputControlType::INTEGER, removeWhenEmpty: ! $required,
             codec: RecordFieldCodec::TROOP_MEMBER, allowsNone: ! $required);
+    }
+
+    /**
+     * Returns an optional field chosen among the values its own entry
+     * decides, read from a {@see ReferenceCatalog::listEntryChoices()} source.
+     */
+    public static function entryChoice(string $key, string $label, string $source, string $noneLabel): self
+    {
+        return new self($key, $label, options: [''], removeWhenEmpty: true, displayDefault: $noneLabel, entryChoices: $source);
     }
 
     /**
@@ -174,6 +188,7 @@ final readonly class RecordField
             $this->blankLabel,
             $this->writeTypes,
             dialogueSpeaker: $this->dialogueSpeaker,
+            entryChoices: $this->entryChoices,
         );
     }
 

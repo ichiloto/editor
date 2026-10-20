@@ -1653,7 +1653,8 @@ final class RecordSchemaCatalog
                     ['type' => 'text', 'name' => '', 'text' => 'Something happens.'],
                 ],
             ],
-            subList: self::eventCommandList('commands', $graphical),
+            // A reusable script is what cinematic sessions call, so it is edited with their full vocabulary.
+            subList: CutsceneSchemas::cinematicCommandList('commands', $graphical, ['type' => 'text', 'name' => '', 'text' => 'Something happens.']),
             listPayloadKey: 'commands',
         );
     }
