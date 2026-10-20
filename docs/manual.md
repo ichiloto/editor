@@ -778,6 +778,11 @@ character says is read in the pane rather than in the edit buffer.
   setting it back to `false` removes the key, the game's default. It affects
   only the talk turn: wandering and `move_route` still turn the NPC. The
   validator reports a `directionFix` that is not `true` or `false`.
+- **Stands facing.** The heading the NPC stands with when its map loads,
+  such as a clerk facing the door their desk is approached from. It stores
+  `'facing' => 'north'` and shows that heading's directional sprite; clearing
+  it removes the key, which the game reads as `south`. Talking turns the NPC and back
+  to it. The validator warns about a facing that is not one of the four.
 - **Directional sprites.** Optional glyphs shown when the NPC turns; the base
   sprite covers a heading you leave blank. Resting the Inspector cursor on a
   `Facing …` row previews that glyph on the canvas in the NPC's place.
@@ -1271,6 +1276,7 @@ skill's effects, a quest's rewards) listed under them.
 | Animations | `assets/Data/animations.php` | Editable | Same |
 | Tilesets | `assets/Data/Tilesets/*.php` | Editable - name, RPG Maker sheets, missing-art tile, above and table tiles, shadow, and pieces by id with their glyphs and tiles | Same |
 | Common Events | `assets/Events/*.php` | Editable | Same |
+| Income | `assets/Data/income.php` (`schedules`) | Editable - cadence, interval, idle timeout, pay, delivery, run conditions and an ordered pay-rate table; the id follows the name until a script names it | Same |
 | Quests | `assets/Data/quests.php` | Editable - objectives (the target picked by type) with their waymarks, reward items with quantities, prerequisites, optional; the id follows the name until something refers to it | Same |
 | Field Cues | `assets/Data/Presentation/field.php` (`cueStyle`, `cues`, `waymarks`) | Editable - one row per setting: bob height and seconds, edge pointer spacing across and up or down, Terminal background and bold; each cue colour's mark effect, plate image and its eight pointer images and turns; the waymark colour, one-cell symbol and edge inset. Engine defaults show until set | Same |
 | Skits | `assets/Data/Skits/*.php` | Editable | Same |
@@ -1733,6 +1739,39 @@ definitions claim fails loudly rather than resolving to either), stats that
 are canonical but not stage-capable, and quest writes. A missing file means
 no rules and no finding, exactly as the runtime treats it.
 
+### Income
+
+Recurring pay for the party, in `assets/Data/income.php`: a salary, a
+stipend, rent. A project without the file has no income; saving the first
+schedule creates it. The Engine's income guide (`docs/income.md` in the
+Engine) describes the runtime.
+
+Each schedule has:
+
+- a `Name`, shown as the title of its notices; the `Id` follows the name until
+  a script names the schedule, and then stays, so `payday`, `collect_income`
+  and `adjust_income` keep resolving. A schedule a script names cannot be
+  deleted; the status line lists the scripts;
+- `Runs When`, the shared world-condition editor: while the conditions do not
+  hold, nothing is counted and `payday` pays nothing;
+- `Counts`, the cadence: `active_time` (seconds of play, menus and idle time
+  excluded), `steps`, `battles` (battles won) or `event` (only `payday`);
+- `Pays Every`, the seconds, steps or won battles per payment. The `event`
+  cadence has none, and changing to it drops the value;
+- `Idle After (s)`, for `active_time` only: how long without input before play
+  stops counting. The Engine's 120 shows until set;
+- `Pay`, the amount per period;
+- `Delivery`: `deposit` (straight into party gold, the default) or `hold`
+  (kept until a `collect_income` command collects it);
+- `Pay Rates`, an ordered table flattened into the pane as `Rate 1 When`,
+  `Rate 1 Pay`, and so on; `Shift+O`/`Shift+X` add and remove a row. The first
+  row whose conditions hold when a payment is made sets that payment, so a
+  rank variable, a story event or a quest can set the pay. `Pay` applies when
+  no row holds.
+
+Validation reads each schedule as the game will and names every one the game
+would refuse. The notices' wording lives in Terms (`messages.income.*`).
+
 ### Terms
 
 The `vocab` and `messages` trees of the project's `config.php`, flattened to
@@ -2002,7 +2041,7 @@ Supported command types, matching the engine's interpreter:
 | `branch` | Conditions, Then (fixed), Else (fixed) |
 
 Registered commands follow the built-in ones in the `Type` options: the
-Engine's `shop` and `inn`, then any the project declares in
+Engine's `shop`, `inn`, `payday`, `collect_income` and `adjust_income`, then any the project declares in
 `assets/Data/script-commands.php` (see the Engine's story events guide). Their
 rows come from their declarations:
 
@@ -2010,6 +2049,9 @@ rows come from their declarations:
 | --- | --- |
 | `shop` | Buy Rate, Sell Rate, Merchandise (Item, Price) |
 | `inn` | Question, Speaker, Cost, Wake At X / Y, Rest Music, Result Variable |
+| `payday` | Schedule (picked from Income), Result Variable |
+| `collect_income` | Schedule (picked from Income), Result Variable |
+| `adjust_income` | Schedule (picked from Income), Amount (negative for a deduction) |
 
 A command's first list, such as a shop's merchandise, is edited like a
 route's steps: with the settings cursor on one of its entry rows, `Shift+O`
@@ -2075,6 +2117,16 @@ Start Map), or says why it cannot: the player, party actors and staged actors ar
 placed only while the scene runs, and a common event runs on whichever map calls
 it. A relative point is changed through its subject and offset, never by a map
 click.
+
+The same waypoints and independent staged actors also name the way their
+character faces once there, the Engine's end facing. `Facing` fixes a cardinal;
+`Face Toward` picks a subject from the same list as `Relative To`, then its id in
+the `Face Toward …` row (the player and the leading party actor take none). The
+character turns toward that subject's cell when the leg or staging begins; an
+even diagonal faces north or south. Choosing one clears the other. A waypoint
+with neither keeps its last step's heading (`(last step)`); a staged actor with
+neither faces south. A visual bound to a real subject inherits its heading and
+offers neither row. A subject still waiting for its id refuses Save.
 
 `Remember As` declares a session-local identity. `Recorded Route` selects only
 declarations in that script invocation and its referenced common events,

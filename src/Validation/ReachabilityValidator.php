@@ -107,6 +107,8 @@ final class ReachabilityValidator
             ReachabilityProblemKind::BLOCKED_ENTRANCE => [Severity::ERROR, 'Point the arrival at open floor the player can stand on.'],
             ReachabilityProblemKind::UNREACHABLE_NPC => [Severity::WARNING, 'Leave a free cell beside it, or move what stands in the way.'],
             ReachabilityProblemKind::NO_ENTRANCE => [Severity::WARNING, 'Fine for a map kept for content still to come; connect it when it is ready.'],
+            ReachabilityProblemKind::DETOURED_APPROACH => [Severity::WARNING,
+                'Turn the desk and its speaker toward the way the player comes in, move the event to that side, or let it answer from there.'],
         };
 
         return $severity === null ? null

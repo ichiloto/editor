@@ -54,6 +54,10 @@ use Ichiloto\Engine\Rendering\Tilesets\Tileset;
 use Ichiloto\Engine\Rendering\Tilesets\TilesetPiece;
 use Ichiloto\Engine\Rendering\Tilesets\TilesetSheet;
 use Ichiloto\Engine\Quests\QuestObjectiveType;
+use Ichiloto\Engine\Income\IncomeCadence;
+use Ichiloto\Engine\Income\IncomeCatalog;
+use Ichiloto\Engine\Income\IncomeDelivery;
+use Ichiloto\Engine\Income\IncomeSchedule;
 use Ichiloto\Engine\Quests\QuestWaymarkSubject;
 use Ichiloto\Engine\Battle\Enumerations\BattleEngineType;
 use Ichiloto\Engine\Battle\Presentation\BattlePoseRole;
@@ -116,6 +120,7 @@ final class RecordSchemaCatalog
         $schemas = [
             self::classes(),
             self::quests(),
+            self::incomeSchedules(),
             self::system(),
             self::states(),
             self::troops(),
@@ -1125,6 +1130,85 @@ final class RecordSchemaCatalog
     }
 
     /**
+     * Income schedules -- the `schedules` list of `assets/Data/income.php`,
+     * the file the Engine's IncomeCatalog reads. A project without the file
+     * has no income; the first saved schedule creates it.
+     *
+     * A schedule's id follows its name until a script names it, so payday,
+     * collect_income and adjust_income keep resolving. Its pay table is an
+     * ordered list of condition rows; the first that holds sets the pay.
+     *
+     * @return RecordSchema
+     */
+    private static function incomeSchedules(): RecordSchema
+    {
+        $fields = [
+            new RecordField('id', 'Id', isReadOnly: true),
+            new RecordField('name', 'Name'),
+            new RecordField('conditions', 'Runs When', removeWhenEmpty: true, codec: RecordFieldCodec::CONDITIONS),
+            new RecordField('cadence', 'Counts', options: IncomeCadence::values()),
+            // Seconds of active play, steps or won battles, by cadence.
+            'interval' => new RecordField('interval', 'Pays Every', InputControlType::INTEGER, removeWhenEmpty: true),
+            'idleTimeout' => new RecordField(
+                'idleTimeout',
+                'Idle After (s)',
+                InputControlType::INTEGER,
+                removeWhenEmpty: true,
+                displayDefault: strval(IncomeSchedule::DEFAULT_IDLE_TIMEOUT),
+            ),
+            new RecordField('amount', 'Pay', InputControlType::INTEGER),
+            new RecordField(
+                'delivery',
+                'Delivery',
+                options: IncomeDelivery::values(),
+                removeWhenEmpty: true,
+                displayDefault: IncomeDelivery::DEPOSIT->value,
+            ),
+        ];
+
+        return new RecordSchema(
+            key: 'income_schedules',
+            entryNoun: 'income schedule',
+            storage: RecordStorage::LIST_FILE,
+            relativePath: 'assets/' . IncomeCatalog::FILE,
+            fields: array_values($fields),
+            // Only an active-time schedule has an idle timeout, and the event
+            // cadence has no interval: changing the cadence drops what no longer applies.
+            fieldsFor: static function (array $row) use ($fields): array {
+                $cadence = IncomeCadence::tryFrom(strval($row['cadence'] ?? '')) ?? IncomeCadence::ACTIVE_TIME;
+                $shaped = $fields;
+                if (! $cadence->isCounted()) { unset($shaped['interval']); }
+                if ($cadence !== IncomeCadence::ACTIVE_TIME) { unset($shaped['idleTimeout']); }
+                return array_values($shaped);
+            },
+            labelKey: 'name',
+            identityKey: 'id',
+            blank: [
+                'id' => 'new-income',
+                'name' => 'New Income',
+                'cadence' => IncomeCadence::ACTIVE_TIME->value,
+                'interval' => 3600,
+                'amount' => 0,
+            ],
+            projection: new KeyedListProjection('schedules'),
+            subList: new RecordSubList(
+                key: 'rates',
+                prefix: 'rate',
+                singular: 'rate',
+                fields: [
+                    // Required at runtime: a row without conditions would always hold.
+                    new RecordField('conditions', 'When', codec: RecordFieldCodec::CONDITIONS),
+                    new RecordField('amount', 'Pay', InputControlType::INTEGER),
+                ],
+                blank: ['conditions' => [], 'amount' => 0],
+                heading: 'Pay Rates',
+                removeWhenEmpty: true,
+            ),
+            identityFollowsLabel: true,
+        );
+    }
+
+    /**
      * An objective's waymarks: where it sends the player. Each names a map
      * and at most one stable subject on it, chosen from that map's own
      * events, NPCs, world objects or landmarks, never coordinates. Its
@@ -2063,6 +2147,8 @@ final class RecordSchemaCatalog
                 new RecordField('movement', 'Movement', options: ProjectNpc::MOVEMENTS, displayDefault: 'fixed'),
                 // RPG Maker's Direction Fix: false (the default) is not written.
                 RecordField::boolean('directionFix', 'Direction Fix', displayDefault: 'false'),
+                // The heading it stands with when its map loads; cleared, it is absent and stands facing south.
+                new RecordField('facing', 'Stands Facing', options: ProjectNpc::DIRECTIONS, removeWhenEmpty: true, displayDefault: 'south'),
                 new RecordField('wanderArea.x', 'Wander X', InputControlType::INTEGER, removeWhenEmpty: true),
                 new RecordField('wanderArea.y', 'Wander Y', InputControlType::INTEGER, removeWhenEmpty: true),
                 new RecordField('wanderArea.width', 'Wander Width', InputControlType::INTEGER, removeWhenEmpty: true),

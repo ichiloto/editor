@@ -94,6 +94,7 @@ final class MovementRouteFields
                 fields: $axes,
                 blank: [],
                 prepareEdit: static function (array $point, string $field): array {
+                    $point = EndFacingFields::prepareEdit($point, $field);
                     $validate = static fn(array $point) => self::assertPathOptions(['waypoints' => [$point]]);
                     if (RelativePositionFields::isRelative($point) || $field === RelativePositionFields::KIND_FIELD) {
                         $point = RelativePositionFields::prepareEdit($point, $field, $validate);
@@ -102,7 +103,11 @@ final class MovementRouteFields
                     $validate($point);
                     return $point;
                 },
-                getFields: static fn(array $point): array => RelativePositionFields::getFields($point, $axes, $cinematic, $graphical),
+                // Arriving, the subject keeps its last step's heading unless the waypoint names an end facing.
+                getFields: static fn(array $point): array => [
+                    ...RelativePositionFields::getFields($point, $axes, $cinematic, $graphical),
+                    ...EndFacingFields::getFields($point, $cinematic, $graphical, '(last step)'),
+                ],
             ),
             default => null,
         };

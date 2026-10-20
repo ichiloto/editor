@@ -67,18 +67,39 @@ final class RelativePositionFields
         }
         $selected = is_array($entry['at'] ?? null) ? strval($entry['at']['kind'] ?? '') : '';
         $fields = [$kind];
-        if (isset(self::ID_REFERENCES[$selected])) {
-            [$reference, $label] = self::ID_REFERENCES[$selected];
-            // The leading party actor needs no id; every other named subject does.
-            $fields[] = $selected === 'party_actor'
-                ? RecordField::reference(self::ID_FIELD, $label, $reference, allowsNone: true, noneLabel: '(leading party actor)')
-                : RecordField::reference(self::ID_FIELD, $label, $reference);
+        $id = self::getSubjectIdField(self::ID_FIELD, $selected);
+        if ($id !== null) {
+            $fields[] = $id;
         }
         return [
             ...$fields,
             new RecordField(self::OFFSET_X_FIELD, 'Offset X', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '0'),
             new RecordField(self::OFFSET_Y_FIELD, 'Offset Y', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '0'),
         ];
+    }
+
+    /**
+     * The stable id a subject reference of this kind is chosen with, or null when the kind names no id. The
+     * leading party actor needs no id; every other named subject does.
+     *
+     * @param string $labelPrefix Tells the row apart from another subject's id in the same entry.
+     */
+    public static function getSubjectIdField(string $key, string $kind, string $labelPrefix = ''): ?RecordField
+    {
+        if (! isset(self::ID_REFERENCES[$kind])) {
+            return null;
+        }
+        [$reference, $label] = self::ID_REFERENCES[$kind];
+        $label = $labelPrefix . $label;
+        return $kind === 'party_actor'
+            ? RecordField::reference($key, $label, $reference, allowsNone: true, noneLabel: '(leading party actor)')
+            : RecordField::reference($key, $label, $reference);
+    }
+
+    /** Whether a subject reference of this kind carries a stable id. */
+    public static function namesSubjectId(string $kind): bool
+    {
+        return isset(self::ID_REFERENCES[$kind]);
     }
 
     /**

@@ -6,6 +6,7 @@ namespace Ichiloto\Editor;
 
 use FilesystemIterator;
 use Ichiloto\Editor\Cutscenes\CutsceneLibrary;
+use Ichiloto\Editor\Cutscenes\CutsceneType;
 use Ichiloto\Editor\Database\DatabaseCatalog;
 use Ichiloto\Editor\Database\EngineDataBootstrap;
 use Ichiloto\Editor\Database\ProjectRecord;
@@ -17,12 +18,14 @@ use Ichiloto\Editor\Database\RecordSchema;
 use Ichiloto\Editor\Database\RecordSchemaCatalog;
 use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\Events\ProjectScriptCommands;
+use Ichiloto\Editor\Events\ScriptCommandUses;
 use Ichiloto\Editor\Maps\MapFolder;
 use Ichiloto\Editor\Storage\FileSetOperations;
 use Ichiloto\Editor\Storage\FileSetTransaction;
 use Ichiloto\Editor\Storage\FilesystemFileSetOperations;
 use Ichiloto\Engine\Core\ProjectFormat;
 use Ichiloto\Engine\Entities\Elements\ElementRegistry;
+use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandReference;
 use Ichiloto\Engine\Entities\Skills\SkillCatalog;
 use Ichiloto\Engine\Field\MapGraphics;
 use RecursiveDirectoryIterator;
@@ -65,6 +68,12 @@ final readonly class ProjectWorkspace
         $this->getRecordDatabase('quests')?->useIdentityReferences(
             fn(string $questId): bool => new QuestReferences($this)->exist($questId),
         );
+        // An income schedule's id follows its name until a script names it, and stays while one does.
+        $incomeUses = fn(string $id): array => ScriptCommandUses::findReferenceUses($this,
+            $this->cutscenes?->assets(CutsceneType::CINEMATIC) ?? [],
+            ScriptCommandReference::INCOME_SCHEDULE)[$id] ?? [];
+        $this->getRecordDatabase('income_schedules')?->useIdentityReferences(fn(string $id): bool => $incomeUses($id) !== []);
+        $this->getRecordDatabase('income_schedules')?->useDeletionReferences($incomeUses);
         // Marker roles follow the place categories as their page holds them, unsaved edits included.
         $this->menuPresentation?->useCategoryCatalog(fn(): \Ichiloto\Engine\Field\MapCategoryCatalog => new ReferenceCatalog($this)->getMapCategoryCatalog());
         // A place category stays while a landmark names it.

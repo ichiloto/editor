@@ -10,6 +10,7 @@ use Ichiloto\Editor\Database\ProjectCatalogs;
 use Ichiloto\Editor\ProjectConfig;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Editor\Database\ReferenceCatalog;
+use Ichiloto\Editor\Events\ScriptCommandUses;
 use Ichiloto\Engine\Animations\Field\FieldEffectManager;
 use Ichiloto\Engine\Animations\Field\FieldPresentationCatalog;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
@@ -227,7 +228,7 @@ final class EffectValidator
             }
         }
 
-        self::visitCommands($workspace, $workspace->cutscenes?->assets(CutsceneType::CINEMATIC) ?? [], null,
+        ScriptCommandUses::visitCommands($workspace, $workspace->cutscenes?->assets(CutsceneType::CINEMATIC) ?? [], null,
             static function (array $command, string $where) use ($name): void {
                 $definition = is_string($command['type'] ?? null) ? (ScriptCommandRegistry::getCatalog()->definitions[$command['type']] ?? null) : null;
                 foreach ($definition?->fields ?? [] as $field) {
@@ -274,51 +275,6 @@ final class EffectValidator
      */
     public static function visitFieldAnimations(ProjectWorkspace $workspace, iterable $cinematics, \Closure $visit): void
     {
-        self::visitCommands($workspace, $cinematics, 'field_animation', $visit);
-    }
-
-    /**
-     * Visits every command of a type a script runs: map events, event
-     * scripts and cinematics, at any depth of branches, lanes and choices.
-     * What cannot be read is not visited; validation reports it.
-     *
-     * @param iterable<CutsceneAsset> $cinematics The project's cinematics, as the editor holds them.
-     * @param \Closure(array<array-key, mixed>, string): void $visit Given the command and where it is.
-     */
-    private static function visitCommands(ProjectWorkspace $workspace, iterable $cinematics, ?string $type, \Closure $visit): void
-    {
-        $collect = static function (mixed $value, string $where) use (&$collect, $visit, $type): void {
-            if (! is_array($value)) {
-                return;
-            }
-
-            if (($type === null && is_string($value['type'] ?? null)) || ($type !== null && ($value['type'] ?? null) === $type)) {
-                $visit($value, $where);
-            }
-
-            foreach ($value as $nested) {
-                $collect($nested, $where);
-            }
-        };
-
-        foreach ($workspace->maps as $map) {
-            foreach ((array) ($map->getEditableData()['events'] ?? []) as $marker => $definition) {
-                $collect($definition, sprintf('map %s event %s', $map->mapId, strval($marker)));
-            }
-            foreach ((array) ($map->getEditableData()['npcs'] ?? []) as $index => $npc) {
-                $id = is_array($npc) && is_string($npc['id'] ?? null) ? $npc['id'] : strval($index);
-                $collect($npc, sprintf('map %s NPC %s', $map->mapId, $id));
-            }
-        }
-
-        foreach ($workspace->getRecordDatabase('common_events')?->getRecords() ?? [] as $record) {
-            $script = (array) $record->toArray();
-            $scriptId = trim(strval($script['__scriptId'] ?? ''));
-            $collect($script, sprintf('event script %s', $scriptId !== '' ? $scriptId : '(unnamed)'));
-        }
-
-        foreach ($cinematics as $cinematic) {
-            $collect([$cinematic->data(), $cinematic->partner()], sprintf('cinematic %s', $cinematic->id));
-        }
+        ScriptCommandUses::visitCommands($workspace, $cinematics, 'field_animation', $visit);
     }
 }
