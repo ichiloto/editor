@@ -3966,6 +3966,8 @@ class ProjectValidator
       $issues = [
         ...$issues,
         ...$this->checkConditions((array) ($npc['conditions'] ?? []), $where, $known),
+        // An NPC's cue is the same contract as an event's, checked the same way.
+        ...$this->checkEventCue($npc['cue'] ?? null, $where, $known),
         ...$this->checkDialogueVariants((array) ($npc['dialogue'] ?? []), $where, $known),
         ...$this->checkCommands(
           (array) ($npc['script'] ?? []),

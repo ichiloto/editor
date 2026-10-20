@@ -745,6 +745,7 @@ category uses - pickers, condition lines, world-write rows, command frames,
 | Appearance | `Sprite`, `Facing North/South/East/West`, `Graphical Sprites` |
 | Movement | `Movement` (`fixed` / `wander`), `Direction Fix` (`false` / `true`), and while wandering `Wander X/Y/Width/Height` |
 | Visibility | `Visible When` - a condition line |
+| Cue | `Cue Symbol` (one cell; empty means no cue), `Cue Colour`, `Cue When` - the same cue an event shows, drawn above the NPC with the game's Field Cues treatment |
 | Interaction | `Script` (a command frame), then one `Dialogue variant N` heading per variant with its rows `When`, `Then Set`, `Script Commands`, `Line 1 Speaker`, `Line 1 Text`, … |
 | Completion Writes | `After Talking` - world-write rows |
 
@@ -1271,7 +1272,7 @@ skill's effects, a quest's rewards) listed under them.
 | Tilesets | `assets/Data/Tilesets/*.php` | Editable - name, RPG Maker sheets, missing-art tile, above and table tiles, shadow, and pieces by id with their glyphs and tiles | Same |
 | Common Events | `assets/Events/*.php` | Editable | Same |
 | Quests | `assets/Data/quests.php` | Editable - objectives (the target picked by type) with their waymarks, reward items with quantities, prerequisites, optional; the id follows the name until something refers to it | Same |
-| Waymarks | `assets/Data/Presentation/field.php` (`waymarks`) | Editable - one row per setting: the waymark colour, its one-cell symbol and the edge inset, showing the Engine's defaults until set | Same |
+| Field Cues | `assets/Data/Presentation/field.php` (`cueStyle`, `cues`, `waymarks`) | Editable - one row per setting: the cue plate image, bob height and seconds, edge pointer spacing across and up or down, Terminal background and bold; each cue colour's mark effect and its eight pointer images and turns; the waymark colour, one-cell symbol and edge inset. Engine defaults show until set | Same |
 | Skits | `assets/Data/Skits/*.php` | Editable | Same |
 | Knowledge | `assets/Data/knowledge.php` | Editable | Same |
 | Knowledge Reports | `assets/Data/knowledge.php` | Editable | Same |

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor;
 
+use Closure;
 use Ichiloto\Editor\Cutscenes\Source\ArraySourceWriter;
 use Ichiloto\Editor\Cutscenes\Source\PhpArraySourceDocument;
 use Ichiloto\Editor\Cutscenes\Source\SourceNode;
@@ -197,6 +198,34 @@ abstract class ProjectSettingsFile
         $this->composeSource([$path => $value]);
     }
 
+    /**
+     * The whole file's data as it would be saved: what it holds with every
+     * pending setting, and these proposed values, written over it. A setting
+     * set to nothing that the file drops when empty is left out.
+     *
+     * @param array<string, mixed> $overrides Proposed values by path.
+     * @return array<array-key, mixed>
+     */
+    protected function readPendingPayload(array $overrides = []): array
+    {
+        $values = [];
+        foreach ($this->records as $path => $record) { $values[$path] = $record->get('value'); }
+        $payload = $this->payload;
+        foreach ([...$values, ...$overrides] as $path => $value) {
+            $segments = $this->splitPath((string) $path);
+            $last = array_pop($segments);
+            $node = &$payload;
+            foreach ($segments as $segment) {
+                if (! is_array($node[$segment] ?? null)) { $node[$segment] = []; }
+                $node = &$node[$segment];
+            }
+            if ($value === null && $this->isRemovedWhenEmpty((string) $path)) { unset($node[$last]); } else { $node[$last] = $value; }
+            unset($node);
+        }
+
+        return $payload;
+    }
+
     /** The value a setting holds now, pending edits included, or what the file holds where none was read. */
     protected function getCurrentValue(string $path): mixed
     {
@@ -230,6 +259,51 @@ abstract class ProjectSettingsFile
             $document = $document->withEdits([$edit]);
         }
         return $document?->source ?? $this->persistedSource;
+    }
+
+    /**
+     * Rewrites the file's data structurally, as a migration does, and saves
+     * it at once through the source-preserving writer: comments and untouched
+     * entries stay as written. Refused while settings are pending, so the two
+     * kinds of edit never mix.
+     *
+     * @param Closure(array<array-key, mixed>): array<array-key, mixed> $change The data as it should be.
+     * @return bool Whether anything changed.
+     * @throws SourcePreservationRefusal
+     */
+    protected function rewritePayload(Closure $change, ?FileSetOperations $files = null): bool
+    {
+        if ($this->issue !== null || $this->document === null) {
+            throw new SourcePreservationRefusal($this->issue ?? $this->relativePath . ' cannot be preserved.');
+        }
+        if ($this->isDirty()) {
+            throw new SourcePreservationRefusal('Save or discard the pending ' . $this->relativePath . ' settings first.');
+        }
+        $new = $change($this->payload);
+        if ($new === $this->payload) { return false; }
+        $document = ArraySourceWriter::rewrite($this->document, $this->payload, $new);
+        $source = $document->source;
+        SaveSet::commitOne($this->projectRoot, new PreparedSave(
+            $this->relativePath,
+            fn(FileSetTransaction $transaction) => $transaction->write($this->path, $source),
+            function (array $staged) use ($new): void {
+                if ((string) file_get_contents($this->path) !== $this->persistedSource) {
+                    throw new SourcePreservationRefusal($this->relativePath . ' changed on disk. Reload before saving.');
+                }
+                if (PhpDataFile::evaluateIsolated($staged[$this->path], $this->projectRoot) !== $new) {
+                    throw new SourcePreservationRefusal('The staged ' . $this->relativePath . ' does not read back as rewritten.');
+                }
+            },
+            function () use ($source, $new, $document): void {
+                $this->persistedSource = $source;
+                $this->payload = $new;
+                $this->document = $document;
+                $this->records = [];
+                $this->originalValues = [];
+            },
+        ), files: $files);
+
+        return true;
     }
 
     /** Saves all pending settings together, never a second whole-value rewrite. */

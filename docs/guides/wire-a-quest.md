@@ -61,9 +61,10 @@ map, the exit that leads there is marked instead.
 
 Waymarks store the subject's stable id, never coordinates, so moving an NPC
 or an event moves its waymark too. Validation reports a waymark whose map or
-subject no longer exists. The `Waymarks` Database category sets how they
+subject no longer exists. The `Field Cues` Database category sets how they
 look: a terminal colour (which also picks the cue art drawn in graphics), a
-one-cell symbol and how far edge arrows sit in from the edge.
+one-cell symbol and how far edge markers sit in from the edge, along with the
+cue plate, bob and pointer images every cue mark shares.
 
 ## Condition Lines
 

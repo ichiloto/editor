@@ -963,7 +963,7 @@ Objective waymarks (PT-19, 20 October 2026) extend the same quest surface: each
 objective has a headed `Waymarks` list whose entries pick a map and then one of
 its events, NPCs, world objects or landmarks (a map-scoped reference: the
 picker reads the map the entry names, in both editors), plus a `Shows When`
-condition line. The `Waymarks` category edits the game's waymark style in
+condition line. The `Field Cues` category edits the game's cue treatment, cue pointers and waymark style in
 `field.php`. Story cue kind no longer draws edge arrows in the Engine; the
 inspector keeps offering it as classification.
 

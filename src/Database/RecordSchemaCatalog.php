@@ -139,7 +139,7 @@ final class RecordSchemaCatalog
             \Ichiloto\Editor\Field\MapCategoryFields::getSchema(),
             DialoguePortraitFields::getSchema(),
             DialogueSpeakerFields::getSchema(),
-            WaymarkStyleFields::getSchema(),
+            FieldCueFields::getSchema(),
             self::configuration($graphical),
             self::types(),
             self::tilesets($graphical),
@@ -2063,6 +2063,10 @@ final class RecordSchemaCatalog
                 new RecordField('wanderArea.height', 'Wander Height', InputControlType::INTEGER, removeWhenEmpty: true),
                 // Visibility
                 new RecordField('conditions', 'Visible When', removeWhenEmpty: true, codec: RecordFieldCodec::CONDITIONS),
+                // Cue: the same guidance an event shows, drawn above the NPC. No symbol, no cue.
+                new RecordField('cue.symbol', 'Cue Symbol', removeWhenEmpty: true),
+                new RecordField('cue.color', 'Cue Colour', options: FieldCueFields::COLORS, removeWhenEmpty: true, displayDefault: 'bright-yellow'),
+                new RecordField('cue.conditions', 'Cue When', removeWhenEmpty: true, codec: RecordFieldCodec::CONDITIONS),
                 // Completion writes
                 new RecordField('sets', 'After Talking', removeWhenEmpty: true, codec: RecordFieldCodec::WORLD_WRITES),
             ],
