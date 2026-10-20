@@ -188,7 +188,8 @@ trait CutsceneValidation
             }
         }
 
-        $context = ['castIds' => $castIds, 'checkpoints' => $checkpoints, 'map' => ScriptMapState::startOn($startMap !== '' ? $startMap : null, $npcIds), 'npcIdsByMap' => $npcIdsByMap, 'seenCheckpoints' => []];
+        $context = ['castIds' => $castIds, 'checkpoints' => $checkpoints, 'map' => ScriptMapState::startOn($startMap !== '' ? $startMap : null, $npcIds), 'npcIdsByMap' => $npcIdsByMap, 'seenCheckpoints' => [],
+            'attachmentsByMap' => $this->readAttachmentsByMap($workspace)];
         foreach ((array) ($data['cast'] ?? []) as $entry) {
             if (is_array($entry) && is_array($entry['at'] ?? null)) {
                 $issues = [...$issues, ...$this->checkCinematicSubject(['subject' => $entry['at']], $where . ' cast', $context)];
@@ -201,11 +202,33 @@ trait CutsceneValidation
     }
 
     /**
+     * The attachments each map's world objects offer, by map and object id, as their field resources declare them.
+     *
+     * @return array<string, array<string, list<string>>>
+     */
+    protected function readAttachmentsByMap(ProjectWorkspace $workspace): array
+    {
+        $byMap = [];
+        foreach ($workspace->maps as $map) {
+            try {
+                $entries = \Ichiloto\Editor\Field\WorldObjectAuthoring::readEntries($map);
+            } catch (\InvalidArgumentException) {
+                continue;
+            }
+            foreach ($entries as $entry) {
+                $found = is_string($entry['id'] ?? null) ? \Ichiloto\Editor\Field\WorldObjectAuthoring::findAttachments($map, $entry['id']) : null;
+                $byMap[$map->mapId][strval($entry['id'] ?? '')] = array_map(static fn($attachment): string => $attachment->id, $found['attachments'] ?? []);
+            }
+        }
+        return $byMap;
+    }
+
+    /**
      * Walks a cinematic command list, nested blocks and lanes included.
      *
      * @param array<int, mixed> $commands
      * @param array<string, string[]> $known
-     * @param array{castIds: string[], checkpoints: string[], map: ScriptMapState, npcIdsByMap: array<string, string[]>, seenCheckpoints: string[]} $context
+     * @param array{castIds: string[], checkpoints: string[], map: ScriptMapState, npcIdsByMap: array<string, string[]>, seenCheckpoints: string[], attachmentsByMap: array<string, array<string, list<string>>>} $context
      * @return Issue[]
      */
     protected function walkCinematicCommands(
@@ -379,7 +402,7 @@ trait CutsceneValidation
      * Event files, cast ids, current-map NPCs, and recursion safety.
      *
      * @param array<string, string[]> $known
-     * @param array{castIds: string[], checkpoints: string[], map: ScriptMapState, npcIdsByMap: array<string, string[]>, seenCheckpoints: string[]} $context
+     * @param array{castIds: string[], checkpoints: string[], map: ScriptMapState, npcIdsByMap: array<string, string[]>, seenCheckpoints: string[], attachmentsByMap: array<string, array<string, list<string>>>} $context
      * @param string[] $commonEventStack
      * @return Issue[]
      */
@@ -428,7 +451,7 @@ trait CutsceneValidation
      * NPC on the map the cinematic is on.
      *
      * @param array<string, mixed> $command
-     * @param array{castIds: string[], checkpoints: string[], map: ScriptMapState, npcIdsByMap: array<string, string[]>, seenCheckpoints: string[]} $context
+     * @param array{castIds: string[], checkpoints: string[], map: ScriptMapState, npcIdsByMap: array<string, string[]>, seenCheckpoints: string[], attachmentsByMap: array<string, array<string, list<string>>>} $context
      * @return Issue[]
      */
     protected function checkCinematicSubject(array $command, string $where, array $context): array
@@ -436,6 +459,16 @@ trait CutsceneValidation
         $subject = $command['subject'] ?? $command['target'] ?? null;
         $kind = is_array($subject) ? strtolower(trim(strval($subject['kind'] ?? ''))) : strtolower(trim(strval($subject ?? '')));
         $fields = is_array($subject) ? $subject : $command;
+
+        if ($kind === 'world_object' && is_string($fields['attachment'] ?? null)) {
+            $objectId = trim(strval($fields['id'] ?? ''));
+            foreach ($context['map']->mapIds ?? [] as $mapId) {
+                if (! in_array($fields['attachment'], $context['attachmentsByMap'][$mapId][$objectId] ?? [], true)) {
+                    return [Issue::error($where, sprintf('It sits on attachment "%s" of world object "%s", which %s does not offer.', $fields['attachment'], $objectId, $mapId),
+                        'Choose an attachment the object\'s field resource declares, or declare it on the resource.')];
+                }
+            }
+        }
 
         if ($kind === 'staged_actor') {
             return $this->checkStagedActorReference(trim(strval($fields['actorId'] ?? $fields['id'] ?? '')), $where, $context);
@@ -453,7 +486,7 @@ trait CutsceneValidation
     }
 
     /**
-     * @param array{castIds: string[], checkpoints: string[], map: ScriptMapState, npcIdsByMap: array<string, string[]>, seenCheckpoints: string[]} $context
+     * @param array{castIds: string[], checkpoints: string[], map: ScriptMapState, npcIdsByMap: array<string, string[]>, seenCheckpoints: string[], attachmentsByMap: array<string, array<string, list<string>>>} $context
      * @return Issue[]
      */
     protected function checkStagedActorReference(string $actorId, string $where, array $context): array

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Maps;
 
 use Ichiloto\Editor\Field\MapLandmarks;
+use Ichiloto\Editor\Field\WorldObjectAuthoring;
 use Ichiloto\Editor\Field\NpcCollection;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Engine\Field\MapLandmarkAnchors;
@@ -13,7 +14,7 @@ use InvalidArgumentException;
 /**
  * Where the subjects a relative position may name stand on one map as it is authored, unsaved edits included: its
  * NPCs by stable id, its world objects at their anchors and its event markers at their first cell, read through the
- * Engine's own anchor adapter. Subjects that only exist while a scene runs (the player, party actors, staged actors)
+ * Engine's own anchor adapter, and the terminal cells of the attachments their resources declare. Subjects that only exist while a scene runs (the player, party actors, staged actors)
  * are named as such, never guessed.
  */
 final readonly class MapSubjectCells
@@ -23,6 +24,8 @@ final readonly class MapSubjectCells
         private NpcCollection $npcs,
         private ?MapLandmarkAnchors $anchors,
         private ?string $anchorIssue,
+        /** @var array<string, array<string, array{int, int}>> Attachment cells by object id, then attachment id. */
+        private array $attachments = [],
     ) {
     }
 
@@ -30,16 +33,34 @@ final readonly class MapSubjectCells
     public static function readMap(ProjectMap $map): self
     {
         try {
-            return new self($map->mapId, $map->getNpcs(), MapLandmarks::readAnchors($map), null);
+            return new self($map->mapId, $map->getNpcs(), MapLandmarks::readAnchors($map), null, self::readAttachments($map));
         } catch (InvalidArgumentException $error) {
             return new self($map->mapId, $map->getNpcs(), null, $error->getMessage());
         }
     }
 
+    /** @return array<string, array<string, array{int, int}>> */
+    private static function readAttachments(ProjectMap $map): array
+    {
+        try {
+            $entries = WorldObjectAuthoring::readEntries($map);
+        } catch (InvalidArgumentException) {
+            return [];
+        }
+        $cells = [];
+        foreach ($entries as $entry) {
+            $found = is_string($entry['id'] ?? null) ? WorldObjectAuthoring::findAttachments($map, $entry['id']) : null;
+            foreach ($found['attachments'] ?? [] as $attachment) {
+                $cells[$entry['id']][$attachment->id] = [$found['anchor']['x'] + $attachment->cellX, $found['anchor']['y'] + $attachment->cellY];
+            }
+        }
+        return $cells;
+    }
+
     /**
      * The cell a subject reference stands on, or why it has none here.
      *
-     * @param array<string, mixed> $reference An `at` reference: kind and optional id.
+     * @param array<string, mixed> $reference An `at` reference: kind, optional id and, on a world object, optional attachment.
      * @return array{cell: array{int, int}|null, issue: string|null}
      */
     public function resolveCell(array $reference): array
@@ -48,6 +69,12 @@ final readonly class MapSubjectCells
         $id = is_string($reference['id'] ?? null) ? $reference['id'] : '';
         if (in_array($kind, ['npc', 'world_object', 'marker'], true) && $id === '') {
             return self::describeIssue('Choose the subject this position is relative to.');
+        }
+        if ($kind === 'world_object' && is_string($reference['attachment'] ?? null)) {
+            $cell = $this->attachments[$id][$reference['attachment']] ?? null;
+            return $cell === null
+                ? self::describeIssue(sprintf('World object %s on map %s has no attachment %s.', $id, $this->mapId, $reference['attachment']))
+                : ['cell' => $cell, 'issue' => null];
         }
 
         return match ($kind) {

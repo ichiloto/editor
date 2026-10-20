@@ -134,3 +134,28 @@ it('authors a resource doorway as cells relative to its anchor with their entran
     expect(fn() => $session->saveDatabase(FieldResourceFields::CATEGORY))->toThrow(SessionRefusal::class)
         ->and((string) file_get_contents($path))->toBe($before);
 });
+
+it('authors resource attachments as anchor-relative terminal cells and art points, which the Engine reads back', function () {
+    [, $path, $session] = createFieldResourceProject();
+    $heading = array_find($session->readDatabaseRecord(FieldResourceFields::CATEGORY, 0)['rows'],
+        static fn(array $row): bool => ($row['listHeading'] ?? false) === true && str_starts_with((string) $row['label'], 'Attachments'));
+    expect($heading)->not->toBeNull();
+    $session->addDatabaseItem(FieldResourceFields::CATEGORY, 0, $heading['key'], true);
+    applyResourceRow($session, 0, 'attachment0Id', 'aerial');
+    applyResourceRow($session, 0, 'attachment0Cellx', '5');
+    applyResourceRow($session, 0, 'attachment0Celly', '-4');
+    applyResourceRow($session, 0, 'attachment0Pointx', '0.78');
+    applyResourceRow($session, 0, 'attachment0Pointy', '0.05');
+    $session->saveDatabase(FieldResourceFields::CATEGORY);
+
+    $written = require $path;
+    expect($written['resources']['oak']['attachments'])->toBe([['id' => 'aerial', 'cell' => ['x' => 5, 'y' => -4], 'point' => ['x' => 0.78, 'y' => 0.05]]])
+        ->and((string) file_get_contents($path))->toContain('// Authored cue bindings stay as written.')
+        ->and(FieldPresentationCatalog::fromArray($written, dirname($path, 3))->getResource('oak')->findAttachment('aerial')?->toArray())
+            ->toBe(['id' => 'aerial', 'cell' => ['x' => 5, 'y' => -4], 'point' => ['x' => 0.78, 'y' => 0.05]]);
+    // A point off the art refuses at the save, unwritten.
+    $before = (string) file_get_contents($path);
+    applyResourceRow($session, 0, 'attachment0Pointy', '1.5');
+    expect(fn() => $session->saveDatabase(FieldResourceFields::CATEGORY))->toThrow(SessionRefusal::class)
+        ->and((string) file_get_contents($path))->toBe($before);
+});

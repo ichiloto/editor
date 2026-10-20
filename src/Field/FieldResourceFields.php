@@ -44,7 +44,7 @@ final class FieldResourceFields
             makeBlank: self::makeBlank(...),
             projection: new KeyedDictionaryProjection('resources'),
             fieldsFor: self::getFields(...),
-            subLists: [self::getStampList(), self::getDoorwayList()],
+            subLists: [self::getStampList(), self::getDoorwayList(), self::getAttachmentList()],
             saveCheck: self::checkCatalog(...),
             prepareEdit: self::checkEdit(...),
             requireUnchangedSource: true,
@@ -149,6 +149,22 @@ final class FieldResourceFields
                 new RecordField('entrance', 'Entrance (on the door, or in front of it)',
                     options: array_column(DoorwayEntrance::cases(), 'value'), displayDefault: DoorwayEntrance::ON->value)],
             blank: ['x' => 0, 'y' => 0], heading: 'Doorway', removeWhenEmpty: true);
+    }
+
+    /**
+     * The optional attachments: named features of the art where visuals attach, such as an aerial a signal pulses
+     * on. Each has the terminal cell that shows it, relative to a placement's anchor, and its point on the art,
+     * normalized like the ground contact. When the art is replaced or re-cropped, the point is updated here once and
+     * every visual staged on the feature follows it.
+     */
+    private static function getAttachmentList(): RecordSubList
+    {
+        return new RecordSubList(key: 'attachments', prefix: 'attachment', singular: 'attachment',
+            fields: [new RecordField('id', 'Stable Id'),
+                new RecordField('cell.x', 'Terminal Cell X', InputControlType::INTEGER), new RecordField('cell.y', 'Terminal Cell Y', InputControlType::INTEGER),
+                new RecordField('point.x', 'Art Point X (0..1)', InputControlType::FLOAT), new RecordField('point.y', 'Art Point Y (0..1)', InputControlType::FLOAT)],
+            blank: ['id' => 'attachment', 'cell' => ['x' => 0, 'y' => 0], 'point' => ['x' => .5, 'y' => .5]], heading: 'Attachments',
+            removeWhenEmpty: true);
     }
 
     /** A stable id is refused as it is typed, by the Engine's own rule, rather than at the save. */
