@@ -15,6 +15,7 @@ use LogicException;
 use Ichiloto\Editor\ActorStatPreview;
 use Ichiloto\Editor\Database\Projections\BattlerBindingProjection;
 use Ichiloto\Editor\Database\Projections\KeyedListProjection;
+use Ichiloto\Editor\Actors\ActorAuthoring;
 use Ichiloto\Editor\Database\Projections\KnowledgeEnemyMappingProjection;
 use Ichiloto\Editor\Database\Projections\KnowledgeRecordTypeProjection;
 use Ichiloto\Editor\Database\Projections\KnowledgeReportProjection;
@@ -1263,6 +1264,11 @@ final class RecordSchemaCatalog
                 new RecordField('stateResistances', 'State Resistances', removeWhenEmpty: true, codec: RecordFieldCodec::KEY_VALUES),
                 RecordField::reference('knowledgeSubjectId', 'Knowledge Subject', 'knowledge_subjects', allowsNone: true),
                 self::counterAttackField(),
+                // What the enemy attacks with when none of its patterns
+                // applies: a battle-usable basic skill, or the Engine's own
+                // attack, the same choice an actor makes.
+                new RecordField('attackSkill', 'Attack Skill', reference: 'attack_skills', removeWhenEmpty: true,
+                    allowsNone: true, displayDefault: ActorAuthoring::BUILT_IN_ATTACK),
             ],
             labelKey: 'name',
             identityKey: 'name',
