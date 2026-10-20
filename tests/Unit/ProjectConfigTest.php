@@ -208,3 +208,30 @@ it('edits a setting authored as a case of an enum with no values, by the case\'s
     expect((require $root . '/config.php')['ui']['dialogue']['window']['position'])
         ->toBe(\Ichiloto\Engine\UI\Windows\Enumerations\WindowPosition::BOTTOM);
 });
+
+it('chooses system sounds and music from the project\'s audio folders, offering every sound the engine plays', function () {
+    $root = createZoomProject("  'audio' => ['bgm' => ['title' => 'title-theme'], 'sounds' => ['cursor' => 'cursor-tick']],\n");
+    foreach (['SFX/cursor-tick.mp3', 'SFX/sweep-hit.mp3', 'BGM/title-theme.mp3'] as $file) {
+        is_dir(dirname($root . '/assets/Audio/' . $file)) || mkdir(dirname($root . '/assets/Audio/' . $file), 0o777, true);
+        file_put_contents($root . '/assets/Audio/' . $file, 'audio');
+    }
+    $workspace = ProjectWorkspace::fromProject($root);
+    $database = $workspace->getRecordDatabase('configuration');
+    $valueField = static function (string $path) use ($database): array {
+        $index = array_search($path, $database->getEntryLabels(), true);
+        expect($index)->not->toBeFalse();
+        return array_find($database->getSettingsFields($index), static fn(array $field): bool => ($field['field'] ?? null) === 'value');
+    };
+
+    // battle_start is not in the project's file, yet it is offered, chosen from the sound folder.
+    expect($valueField('audio.sounds.cursor')['reference'] ?? null)->toBe('sfx')
+        ->and($valueField('audio.sounds.battle_start')['reference'] ?? null)->toBe('sfx')
+        ->and($valueField('audio.bgm.title')['reference'] ?? null)->toBe('bgm');
+
+    setConfiguration($workspace, 'audio.sounds.battle_start', 'sweep-hit');
+    $workspace->config->save();
+
+    $saved = require $root . '/config.php';
+    expect($saved['audio']['sounds'])->toBe(['cursor' => 'cursor-tick', 'battle_start' => 'sweep-hit'])
+        ->and((string) file_get_contents($root . '/config.php'))->toContain('// Keep header.', "strtoupper('keep')");
+});
