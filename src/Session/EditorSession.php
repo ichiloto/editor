@@ -62,6 +62,7 @@ use Ichiloto\Editor\Field\FieldSpriteFields;
 use Ichiloto\Editor\Field\CharacterSheetPreview;
 use Ichiloto\Editor\Field\NpcChange;
 use Ichiloto\Editor\Field\NpcInspector;
+use Ichiloto\Editor\Field\NpcEventAdoption;
 use Ichiloto\Editor\Field\NpcRefusal;
 use Ichiloto\Editor\Field\ProjectNpc;
 use Ichiloto\Editor\History\Command;
@@ -74,6 +75,7 @@ use Ichiloto\Editor\Inspector\InspectorRefusal;
 use Ichiloto\Editor\Inspector\MapInspector;
 use Ichiloto\Editor\Inspector\MapLandmarkFields;
 use Ichiloto\Editor\MapSourceRefusal;
+use Ichiloto\Editor\Maps\SaveManifestAlias;
 use Ichiloto\Editor\Playtest\PlaytestLauncher;
 use Ichiloto\Editor\Playtest\PlaytestLaunch;
 use Ichiloto\Editor\Playtest\PlaytestRun;
@@ -146,6 +148,7 @@ use Ichiloto\Engine\Cutscenes\Summons\SummonCutsceneDefinition;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasImage;
 use Closure;
 use InvalidArgumentException;
+use Ichiloto\Engine\IO\SaveCompatibility\ContentReferenceCategory;
 use RuntimeException;
 use Throwable;
 use WeakReference;
@@ -1966,6 +1969,73 @@ final class EditorSession
         $this->runEdit(static fn(): Command => EventAuthoring::deleteEvent($map, $marker));
 
         return ['revision' => $this->getMapRevision($map)];
+    }
+
+    /**
+     * Moves a story event an NPC delivers onto that NPC as its first page,
+     * as one undo step ({@see NpcEventAdoption}): the page keeps the event's
+     * conditions, writes, cue, action and one-shot completion, the event and
+     * its cells go, and a one-shot event's saved completion is aliased to the
+     * page so old saves keep it. Quest waymarks that named the event are
+     * listed for repointing at the NPC; validation refuses them until then.
+     *
+     * @param string|null $npcId The NPC to own it; the event's first speaker when null.
+     * @return array{revision: int, npc: string, index: int, page: array<string, mixed>, dropped: list<string>, alias: ?array{from: string, to: string}, waymarks: list<string>}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, or the event or NPC cannot take the move.
+     */
+    public function adoptEventOnNpc(string $mapId, int $revision, string $marker, ?string $npcId = null): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        try {
+            $plan = NpcEventAdoption::plan($map, $marker, $npcId);
+            $alias = $plan->alias === null ? null : SaveManifestAlias::plan($this->workspace->projectRoot, $this->workspace->projectId,
+                ContentReferenceCategory::ONE_SHOT_EVENT, $plan->alias['from'], $plan->alias['to']);
+        } catch (NpcRefusal|RuntimeException $refusal) {
+            throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+        }
+        $before = $map->getNpcs();
+        $after = $before->withReplaced($plan->npcIndex, new ProjectNpc($plan->entry));
+        $map->setNpcs($after);
+        try {
+            $deleted = EventAuthoring::deleteEvent($map, $marker);
+            $alias?->apply();
+        } catch (EventRefusal|MapSourceRefusal|RuntimeException $refusal) {
+            $map->setNpcs($before);
+            throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+        }
+        $commands = [new GenericCommand('NPC page', static fn() => $map->setNpcs($after), static fn() => $map->setNpcs($before)), $deleted];
+        if ($alias !== null) {
+            $commands[] = new GenericCommand('Save alias', static fn() => $alias->apply(), static fn() => $alias->revert());
+        }
+        $this->history->record(new CommandGroup(sprintf('Move event %s onto %s', $marker, $plan->npcId), $commands));
+
+        return [
+            'revision' => $this->getMapRevision($map),
+            'npc' => $plan->npcId,
+            'index' => $plan->npcIndex,
+            'page' => $plan->page,
+            'dropped' => $plan->dropped,
+            'alias' => $plan->alias,
+            'waymarks' => $this->describeEventWaymarks($map->mapId, $marker),
+        ];
+    }
+
+    /** @return list<string> The quest objectives whose waymarks name a map event. */
+    private function describeEventWaymarks(string $mapId, string $marker): array
+    {
+        $found = [];
+        foreach ($this->workspace->getRecordDatabase('quests')?->getRecords() ?? [] as $quest) {
+            $data = $quest->toArray();
+            foreach ((array) ($data['objectives'] ?? []) as $o => $objective) {
+                foreach (is_array($objective) ? (array) ($objective['waymarks'] ?? []) : [] as $w => $waymark) {
+                    if (is_array($waymark) && ($waymark['map'] ?? null) === $mapId && ($waymark['event'] ?? null) === $marker) {
+                        $found[] = sprintf('quest %s objective %d waymark %d', strval($data['id'] ?? '?'), intval($o) + 1, intval($w) + 1);
+                    }
+                }
+            }
+        }
+
+        return $found;
     }
 
     /**

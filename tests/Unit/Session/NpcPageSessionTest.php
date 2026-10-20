@@ -132,3 +132,45 @@ it('marks the rows of a page, not of its lines, as ordered for the graphical edi
     expect($ordered('variant0Conditions'))->toBeTrue()->and($ordered('variant0Cuesymbol'))->toBeTrue()
         ->and($ordered('variant0Line0Text'))->toBeFalse()->and($ordered('name'))->toBeFalse();
 });
+
+it('moves a one-shot story event onto its NPC as the first page, carrying its saved completion, in one change set', function () {
+    $root = npcPageProject(['class' => 'Ichiloto\\Engine\\Events\\Triggers\\ScriptEventTrigger', 'conditions' => [['type' => 'event', 'name' => 'arrived']],
+        'cue' => ['symbol' => '!', 'color' => 'bright-yellow'], 'whenBlocked' => 'Not yet.',
+        'data' => ['mode' => 'action', 'reusable' => false, 'scriptId' => 'briefing'], 'speakers' => ['mentor', 'aide']]);
+    $events = (string) file_get_contents($root . '/assets/Maps/test-map/test-map.event.php');
+
+    $result = ChangeBatch::apply($root, [['method' => 'npc.adoptEvent', 'params' => ['map' => 'test-map', 'marker' => 'E']]]);
+    $data = require $root . '/assets/Maps/test-map/test-map.data.php';
+    $manifest = require $root . '/assets/Data/save-compatibility.php';
+    $pages = NpcPages::fromEntry($data['npcs'][0]);
+
+    expect($result['status'])->toBe('saved')
+        ->and($data['events'] ?? [])->not->toHaveKey('E')
+        ->and((string) file_get_contents($root . '/assets/Maps/test-map/test-map.event.php'))->not->toBe($events)
+        ->and(getSessionMap(EditorSession::open($root))->getEventArea('E'))->toBeNull()
+        ->and($pages->pages[0]->id)->toBe('briefing')->and($pages->pages[0]->reusable)->toBeFalse()
+        ->and($pages->pages[0]->conditions)->toBe([['type' => 'event', 'name' => 'arrived']])
+        ->and($pages->pages[0]->cue?->symbol)->toBe('!')->and($pages->pages[0]->speakers)->toBe(['aide'])
+        ->and($pages->pages[1]->lines)->toBe([['text' => 'Ready when you are.']])
+        ->and($manifest['aliases']['one_shot_events'])->toBe([['from' => 'test-map:E', 'to' => 'test-map:mentor/briefing']])
+        ->and(Ichiloto\Engine\IO\SaveCompatibility\SaveCompatibilityManifest::fromProjectRoot($root)->resolveOneShotEvent('test-map:E', 'old.save'))
+            ->toBe('test-map:mentor/briefing');
+});
+
+it('reports what a moved event leaves behind and undoes the whole move as one step', function () {
+    $root = npcPageProject(['class' => 'Ichiloto\\Engine\\Events\\Triggers\\ScriptEventTrigger', 'whenBlocked' => 'Not yet.',
+        'data' => ['mode' => 'action', 'reusable' => false, 'scriptId' => 'briefing'], 'speakers' => ['mentor']]);
+    $manifest = (string) file_get_contents($root . '/assets/Data/save-compatibility.php');
+    $session = EditorSession::open($root);
+    $moved = $session->adoptEventOnNpc('test-map', $session->readMap('test-map')['revision'], 'E');
+
+    expect($moved['npc'])->toBe('mentor')->and($moved['dropped'])->toBe(['its blocked message'])
+        ->and($moved['alias'])->toBe(['from' => 'test-map:E', 'to' => 'test-map:mentor/briefing'])
+        ->and(getSessionMap($session)->getEventDefinition('E'))->toBeNull();
+    $session->undo();
+    expect(getSessionMap($session)->getEventDefinition('E'))->not->toBeNull()
+        ->and(getSessionMap($session)->getNpcs()->get(0)->getDialogue())->toBe([['text' => 'Ready when you are.']])
+        ->and((string) file_get_contents($root . '/assets/Data/save-compatibility.php'))->toBe($manifest)
+        ->and(fn() => $session->adoptEventOnNpc('test-map', $session->readMap('test-map')['revision'], 'E', 'nobody'))
+            ->toThrow(SessionRefusal::class, 'has no NPC nobody');
+});

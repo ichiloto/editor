@@ -772,7 +772,8 @@ character says is read in the pane rather than in the edit buffer.
   plain lines with the cue on the NPC, as they always were. Validation
   reports a page an earlier page always pre-empts, and a story event an
   NPC delivers from a separate cell (`event.npc-interaction`): move it
-  onto that NPC's pages.
+  onto that NPC's pages. The session's `npc.adoptEvent` does that move as
+  one undo step, keeping a run-once event's saved completion for old saves.
 
 - **Map-owned appearance.** For a fixed interaction already drawn on a map
   layer (such as a mounted notice on `fixtures`), clear the `Sprite` text
