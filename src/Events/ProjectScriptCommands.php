@@ -91,6 +91,7 @@ final class ProjectScriptCommands
             ScriptCommandReference::QUEST => 'quests',
             ScriptCommandReference::ACTOR => 'actors',
             ScriptCommandReference::STAGE_TIMELINE => 'stage_timelines',
+            ScriptCommandReference::INCOME_SCHEDULE => 'income_schedules',
         };
     }
 }
