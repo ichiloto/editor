@@ -88,14 +88,21 @@ final class NpcReferences
             self::collectStartedScripts($other->getScript(), $label . ' script', $usedScripts);
 
             foreach ($other->getDialogueAsVariants() as $index => $variant) {
-                $variantLabel = sprintf('%s dialogue variant %d', $label, $index + 1);
+                $variantLabel = sprintf('%s page %d', $label, $index + 1);
                 $script = (array) ($variant['script'] ?? []);
 
                 if ($this->commandsName($script, $npcId)) {
                     $found[] = $variantLabel;
+                } elseif (in_array($npcId, array_map(self::readText(...), (array) ($variant['speakers'] ?? [])), true)) {
+                    $found[] = $variantLabel . ' (speaker)';
                 }
 
                 self::collectStartedScripts($script, $variantLabel, $usedScripts);
+                $scriptId = self::readText($variant['scriptId'] ?? null);
+
+                if ($scriptId !== '') {
+                    $usedScripts[$scriptId] ??= $variantLabel;
+                }
             }
         }
 

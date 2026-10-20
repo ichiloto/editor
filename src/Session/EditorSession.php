@@ -62,6 +62,7 @@ use Ichiloto\Editor\Field\FieldSpriteFields;
 use Ichiloto\Editor\Field\CharacterSheetPreview;
 use Ichiloto\Editor\Field\NpcChange;
 use Ichiloto\Editor\Field\NpcInspector;
+use Ichiloto\Editor\Field\NpcEventAdoption;
 use Ichiloto\Editor\Field\NpcRefusal;
 use Ichiloto\Editor\Field\ProjectNpc;
 use Ichiloto\Editor\History\Command;
@@ -74,6 +75,7 @@ use Ichiloto\Editor\Inspector\InspectorRefusal;
 use Ichiloto\Editor\Inspector\MapInspector;
 use Ichiloto\Editor\Inspector\MapLandmarkFields;
 use Ichiloto\Editor\MapSourceRefusal;
+use Ichiloto\Editor\Maps\SaveManifestAlias;
 use Ichiloto\Editor\Playtest\PlaytestLauncher;
 use Ichiloto\Editor\Playtest\PlaytestLaunch;
 use Ichiloto\Editor\Playtest\PlaytestRun;
@@ -146,6 +148,7 @@ use Ichiloto\Engine\Cutscenes\Summons\SummonCutsceneDefinition;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasImage;
 use Closure;
 use InvalidArgumentException;
+use Ichiloto\Engine\IO\SaveCompatibility\ContentReferenceCategory;
 use RuntimeException;
 use Throwable;
 use WeakReference;
@@ -1848,7 +1851,21 @@ final class EditorSession
             'frameLabel' => $frame === [] || $marker === null ? null : $this->createMapInspector($map)->describeEventFrame($map, $marker, $frame),
             'rows' => $this->describePlacementRows(array_map(self::describeRow(...), $this->collectInspectorFields($map, $marker, $frame)),
                 ['kind' => 'event', 'map' => $mapId, 'marker' => $marker]),
+            // A story event an NPC delivers names that NPC, so an interface can offer `npc.adoptEvent`.
+            'deliveredBy' => $marker === null ? null : self::describeDeliveringNpc($map, $marker),
         ];
+    }
+
+    /** @return array{npc: string, name: string}|null The NPC an event could move onto as a page, or null. */
+    private static function describeDeliveringNpc(ProjectMap $map, string $marker): ?array
+    {
+        try {
+            $plan = NpcEventAdoption::plan($map, $marker);
+        } catch (NpcRefusal) {
+            return null;
+        }
+
+        return ['npc' => $plan->npcId, 'name' => $map->getNpcs()->get($plan->npcIndex)?->getName() ?? $plan->npcId];
     }
 
     /**
@@ -1966,6 +1983,86 @@ final class EditorSession
         $this->runEdit(static fn(): Command => EventAuthoring::deleteEvent($map, $marker));
 
         return ['revision' => $this->getMapRevision($map)];
+    }
+
+    /**
+     * Moves a story event an NPC delivers onto that NPC as its first page,
+     * as one undo step ({@see NpcEventAdoption}): the page keeps the event's
+     * conditions, writes, cue, action and one-shot completion, the event and
+     * its cells go, and a one-shot event's saved completion is aliased to the
+     * page so old saves keep it. Quest waymarks that named the event are
+     * listed for repointing at the NPC; validation refuses them until then.
+     *
+     * @param string|null $npcId The NPC to own it; the event's first speaker when null.
+     * @return array{revision: int, npc: string, index: int, page: array<string, mixed>, dropped: list<string>, alias: ?array{from: string, to: string}, waymarks: list<string>}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, or the event or NPC cannot take the move.
+     */
+    public function adoptEventOnNpc(string $mapId, int $revision, string $marker, ?string $npcId = null): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        try {
+            $plan = NpcEventAdoption::plan($map, $marker, $npcId, $this->isAliasTarget(ContentReferenceCategory::ONE_SHOT_EVENT, "{$map->mapId}:{$marker}"));
+            $alias = $plan->alias === null ? null : SaveManifestAlias::plan($this->workspace->projectRoot, $this->workspace->projectId,
+                ContentReferenceCategory::ONE_SHOT_EVENT, $plan->alias['from'], $plan->alias['to']);
+        } catch (NpcRefusal|RuntimeException $refusal) {
+            throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+        }
+        $before = $map->getNpcs();
+        $after = $before->withReplaced($plan->npcIndex, new ProjectNpc($plan->entry));
+        $map->setNpcs($after);
+        try {
+            $deleted = EventAuthoring::deleteEvent($map, $marker);
+            $alias?->apply();
+        } catch (EventRefusal|MapSourceRefusal|RuntimeException $refusal) {
+            $map->setNpcs($before);
+            throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+        }
+        $commands = [new GenericCommand('NPC page', static fn() => $map->setNpcs($after), static fn() => $map->setNpcs($before)), $deleted];
+        if ($alias !== null) {
+            $commands[] = new GenericCommand('Save alias', static fn() => $alias->apply(), static fn() => $alias->revert());
+        }
+        $this->history->record(new CommandGroup(sprintf('Move event %s onto %s', $marker, $plan->npcId), $commands));
+
+        return [
+            'revision' => $this->getMapRevision($map),
+            'npc' => $plan->npcId,
+            'index' => $plan->npcIndex,
+            'page' => $plan->page,
+            'dropped' => $plan->dropped,
+            'alias' => $plan->alias,
+            'waymarks' => $this->describeEventWaymarks($map->mapId, $marker),
+        ];
+    }
+
+    /** Whether the save compatibility manifest sends some older identity to this one. */
+    private function isAliasTarget(ContentReferenceCategory $category, string $identity): bool
+    {
+        try {
+            $manifest = PhpDataFile::evaluateIsolated($this->workspace->projectRoot . '/' . SaveManifestStep::PATH, $this->workspace->projectRoot);
+        } catch (Throwable) {
+            return false;
+        }
+        $aliases = is_array($manifest) ? (array) ($manifest['aliases'][$category->value] ?? []) : [];
+
+        return array_any($aliases, static fn(mixed $alias): bool => is_array($alias) && ($alias['to'] ?? null) === $identity);
+    }
+
+    /** @return list<string> The quest objectives whose waymarks name a map event. */
+    private function describeEventWaymarks(string $mapId, string $marker): array
+    {
+        $found = [];
+        foreach ($this->workspace->getRecordDatabase('quests')?->getRecords() ?? [] as $quest) {
+            $data = $quest->toArray();
+            foreach ((array) ($data['objectives'] ?? []) as $o => $objective) {
+                foreach (is_array($objective) ? (array) ($objective['waymarks'] ?? []) : [] as $w => $waymark) {
+                    if (is_array($waymark) && ($waymark['map'] ?? null) === $mapId && ($waymark['event'] ?? null) === $marker) {
+                        $found[] = sprintf('quest %s objective %d waymark %d', strval($data['id'] ?? '?'), intval($o) + 1, intval($w) + 1);
+                    }
+                }
+            }
+        }
+
+        return $found;
     }
 
     /**
@@ -4867,6 +4964,29 @@ final class EditorSession
     }
 
     /**
+     * Moves the page an NPC row belongs to one place earlier (step -1) or
+     * later (step 1), as one undo step: talking runs the first available
+     * page. A row of no page changes nothing.
+     *
+     * @param array<string, mixed> $key A row's key, as `readNpc` gave it.
+     * @return array{revision: int, changed: bool, index: ?int, id: ?string, followedId: ?string, idReferences: list<string>}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, or the NPC is unknown.
+     */
+    public function moveNpcItem(string $mapId, int $revision, int $index, array $key, int $step): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        $inspector = new NpcInspector($map, graphical: true, references: new ReferenceCatalog($this->workspace, $map));
+        $fieldId = is_string($key['field'] ?? null) ? $key['field'] : '';
+
+        if ($step !== -1 && $step !== 1) {
+            throw new SessionRefusal('A page moves one place: step -1 or 1.');
+        }
+
+        return $this->applyNpcChange($map,
+            static fn(NpcAuthoring $authoring): NpcChange => $authoring->moveSubItem($inspector, $index, $fieldId, $step));
+    }
+
+    /**
      * Removes the item an NPC row belongs to (a route step, command,
      * dialogue line or variant) as one undo step; a row that belongs to none
      * changes nothing.
@@ -4948,7 +5068,15 @@ final class EditorSession
         // Keyed whether or not it can be edited; a read-only row is `info`.
         $named = is_string($fieldId) && $fieldId !== NpcInspector::ASSIGN_ID_FIELD;
 
-        return self::describeRecordRow($records, $index, $frame, $field, $named ? 'npc' : null);
+        $row = self::describeRecordRow($records, $index, $frame, $field, $named ? 'npc' : null);
+
+        // A page's own rows (not its lines) can move it: talking runs the first available page, so order is meaning.
+        $item = $named && $frame === [] ? $records->locateItem($index, [], (string) $fieldId) : null;
+        if ($item?->kind === RecordItem::ENTRY && $item->framePath === [] && $item->childIndex === null && $item->listKey === null) {
+            $row['ordered'] = true;
+        }
+
+        return $row;
     }
 
     /**
@@ -5964,6 +6092,7 @@ final class EditorSession
             'itemNoun' => is_string($field['itemNoun'] ?? null) ? $field['itemNoun'] : null,
             'listHeading' => ($field['listHeading'] ?? false) === true ? true : null,
             'childNoun' => is_string($field['childNoun'] ?? null) ? $field['childNoun'] : null,
+            'ordered' => ($field['ordered'] ?? false) === true ? true : null,
             'multiline' => $control?->type === InputControlType::MULTILINE ? true : null,
             'key' => $key,
         ], static fn(mixed $value): bool => $value !== null);

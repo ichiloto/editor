@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Validation;
 
+use Ichiloto\Engine\Field\NpcPages;
 use Ichiloto\Editor\Database\InventoryCatalog;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\ProjectMap;
@@ -435,6 +436,20 @@ final class SaveCompatibilityValidator
             foreach (array_keys(is_array($map->getEditableData()['events'] ?? null) ? $map->getEditableData()['events'] : []) as $marker) {
                 if (is_string($marker)) {
                     $ids[] = $map->mapId . ':' . $marker;
+                }
+            }
+
+            // An NPC page with an id is a saved identity beside the map's events, as each event marker is.
+            foreach (is_array($map->getEditableData()['npcs'] ?? null) ? $map->getEditableData()['npcs'] : [] as $entry) {
+                try {
+                    $pages = is_array($entry) ? NpcPages::fromEntry($entry) : null;
+                } catch (\InvalidArgumentException) {
+                    continue; // npc.page reports it.
+                }
+                foreach ($pages?->pages ?? [] as $page) {
+                    if ($page->id !== null && $pages->npcId !== null) {
+                        $ids[] = $map->mapId . ':' . NpcPages::getCompletionMarker($pages->npcId, $page->id);
+                    }
                 }
             }
         }

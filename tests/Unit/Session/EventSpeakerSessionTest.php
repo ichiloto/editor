@@ -10,7 +10,8 @@ use Ichiloto\Editor\Session\SessionRefusal;
 /**
  * An event names the NPCs who speak it, chosen from its map's NPCs, and the
  * Engine's rule says when a speaker stands away from it. Synthetic project:
- * the graphics test map's inspection E at 3,0, a clerk beside it, a guard
+ * the graphics test map's arrival scene E at 3,0 (a scene the player walks
+ * into, so it stays an event), a clerk beside it, a guard
  * across the room and a passer-by with no id.
  */
 function eventSpeakerProject(): string
@@ -18,7 +19,7 @@ function eventSpeakerProject(): string
     $root = mapGraphicsProject();
     $path = $root . '/assets/Maps/test-map/test-map.data.php';
     file_put_contents($path, str_replace("'events' => [],", "'events' => [
-        'E' => ['class' => 'Ichiloto\\\\Engine\\\\Events\\\\Triggers\\\\DialogueEventTrigger', 'data' => ['dialogue' => [['name' => 'Clerk', 'text' => 'Next.']]]],
+        'E' => ['class' => 'Ichiloto\\\\Engine\\\\Events\\\\Triggers\\\\ScriptEventTrigger', 'data' => ['mode' => 'auto', 'script' => [['type' => 'text', 'name' => 'Clerk', 'text' => 'Next.']]]],
     ], 'npcs' => [
         ['id' => 'guard', 'name' => 'Guard', 'sprite' => '', 'x' => 0, 'y' => 1],
         ['id' => 'clerk', 'name' => 'Clerk', 'sprite' => '', 'x' => 2, 'y' => 1],

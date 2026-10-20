@@ -228,7 +228,8 @@ batches.
 | Which way a waypoint or staged actor faces once there | the same entry's Facing row (north, east, south, west), or its Face Toward row (the same subject kinds) and then its Face Toward id row; choosing one clears the other |
 | A map's region-map cell | `inspector.apply` with `{target: map-station, field: station}`, value `x, y`, empty removes it |
 | World objects | `worldObjects.create`, `worldObjects.move {map, id, dx, dy}`, `worldObjects.place`, `worldObjects.apply`, `worldObjects.add`, `worldObjects.remove`, `worldObjects.delete` |
-| NPCs | `npc.create`, `npc.move`, `npc.apply`, `npc.add`, `npc.remove`, `npc.duplicate`, `npc.delete` |
+| NPCs | `npc.create`, `npc.move`, `npc.apply`, `npc.add`, `npc.reorder`, `npc.remove`, `npc.duplicate`, `npc.delete` |
+| Move a story event onto the NPC who delivers it | `npc.adoptEvent {map, marker, npc?}`: the event becomes the NPC's first page (its conditions, writes, cue, action and run-once), its cells are cleared, a run-once event's saved completion is aliased to the page, and the result lists what was dropped and the quest waymarks to repoint at the NPC (`database.apply` on the waymark's NPC row) |
 | Map fields (name, kind, music, encounters, atlas, landmarks) | `inspector.apply` with the map row's key |
 | New map | `map.create {name, kind, width, height, id?}`; `id` is its folder, such as `town/inn/cellar` |
 | Copy or move a map | `map.duplicate {map, to?}`; `map.move {map, to}` asks first, then `{map, to, destination, confirm: true}` |

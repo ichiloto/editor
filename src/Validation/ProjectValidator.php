@@ -4,6 +4,7 @@ namespace Ichiloto\Editor\Validation;
 
 use Ichiloto\Editor\Database\TroopEventPageContract;
 use Ichiloto\Editor\ProjectConfig;
+use Ichiloto\Engine\Messaging\Dialogue\ConditionalDialogue;
 use Ichiloto\Engine\Quests\QuestWaymark;
 use Ichiloto\Editor\Database\BattleEntryActorResolver;
 use Ichiloto\Editor\Database\BattleEntryRuleContract;
@@ -2518,14 +2519,9 @@ class ProjectValidator
       );
     }
 
-    $isVariantList = false;
-
-    foreach ($dialogue as $page) {
-      if (is_array($page) && (isset($page['lines']) || isset($page['script']) || isset($page['conditions']))) {
-        $isVariantList = true;
-        break;
-      }
-    }
+    // The Engine's own test, so the editor never disagrees with the game about which it is reading.
+    $isVariantList = ConditionalDialogue::isVariantList($dialogue);
+    $isPage = static fn(array $page): bool => array_intersect(array_keys($page), ConditionalDialogue::VARIANT_FIELDS) !== [];
 
     foreach ($dialogue as $position => $page) {
       if (! is_array($page)) {
@@ -2535,7 +2531,7 @@ class ProjectValidator
       $ordinal = is_int($position) ? $position + 1 : strval($position);
 
       if ($isVariantList) {
-        if (! isset($page['lines']) && ! isset($page['script']) && ! isset($page['conditions'])) {
+        if (! $isPage($page)) {
           $issues[] = Issue::error(
             $where,
             sprintf('Dialogue entry %s is a plain page inside a list of variants.', $ordinal),
@@ -4092,6 +4088,7 @@ class ProjectValidator
         // An NPC's cue is the same contract as an event's, checked the same way.
         ...$this->checkEventCue($npc['cue'] ?? null, $where, $known),
         ...$this->checkDialogueVariants((array) ($npc['dialogue'] ?? []), $where, $known),
+        ...$this->checkNpcPageReferences((array) ($npc['dialogue'] ?? []), $where, $known),
         ...$this->checkCommands(
           (array) ($npc['script'] ?? []),
           $where,
@@ -4478,6 +4475,46 @@ class ProjectValidator
    * @param array<string, string[]> $known What the project defines.
    * @return Issue[] The issues found.
    */
+  /**
+   * Checks what an NPC's pages name beyond their lines: the event script or
+   * Cinematic a page runs, and its cue. Their shape is the Engine's
+   * `npc.page` rule, reported with the map's completeness.
+   *
+   * @param array<int, mixed> $dialogue The NPC's dialogue as authored.
+   * @param array<string, string[]> $known What the project defines.
+   * @return Issue[] The issues found.
+   */
+  protected function checkNpcPageReferences(array $dialogue, string $where, array $known): array
+  {
+    if (! ConditionalDialogue::isVariantList(array_values(array_filter($dialogue, is_array(...))))) {
+      return [];
+    }
+
+    $issues = [];
+
+    foreach ($dialogue as $index => $page) {
+      if (! is_array($page)) {
+        continue;
+      }
+
+      $here = sprintf('%s page %d', $where, intval($index) + 1);
+
+      if (is_string($page['scriptId'] ?? null) && trim($page['scriptId']) !== '') {
+        $issues = [...$issues, ...$this->checkReference(trim($page['scriptId']), 'common_events', 'event script', $here, $known)];
+      }
+
+      if (is_string($page['cinematicId'] ?? null) && trim($page['cinematicId']) !== '') {
+        $issues = [...$issues, ...$this->checkReference(trim($page['cinematicId']), 'cinematics', 'Cinematic', $here, $known)];
+      }
+
+      if (array_key_exists('cue', $page)) {
+        $issues = [...$issues, ...$this->checkEventCue($page['cue'], $here, $known)];
+      }
+    }
+
+    return $issues;
+  }
+
   protected function checkDialogueVariants(array $dialogue, string $where, array $known): array
   {
     $issues = [];

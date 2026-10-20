@@ -1940,6 +1940,13 @@ final class Editor
             return;
         }
 
+        if (($input === '[' || $input === ']') && $this->databaseCommandFramePath === []) {
+            // Talking runs the first available page: the order is the NPC's priority.
+            $this->moveDatabaseNpcPage($input === '[' ? -1 : 1);
+
+            return;
+        }
+
         if (str_contains($input, "\033[A") || str_contains($input, "\033[B")) {
             // Skip group headings: they are labels, not rows to land on.
             $fields = $this->getInspectorFields();
@@ -1985,6 +1992,45 @@ final class Editor
     private function removeDatabaseNpcSubItem(): void
     {
         $this->changeNpcSubItem(false);
+    }
+
+    /**
+     * Moves the page at the Inspector cursor one place earlier or later
+     * through the shared NPC authoring rules, as one undo step, keeping the
+     * cursor on the moved page.
+     *
+     * @param int $step -1 for earlier, 1 for later.
+     * @return void
+     */
+    private function moveDatabaseNpcPage(int $step): void
+    {
+        $authoring = $this->createNpcAuthoring();
+        $index = $this->selectedNpcIndex;
+
+        if (! $authoring instanceof NpcAuthoring || $index === null || $this->npcInspector === null) {
+            return;
+        }
+
+        $fieldId = (string) ($this->getDatabaseSettingsFields()[$this->databaseSelectedSettingIndex]['field'] ?? '');
+
+        try {
+            $change = $authoring->moveSubItem($this->npcInspector, $index, $fieldId, $step);
+        } catch (NpcRefusal $refusal) {
+            $this->reportNpcRefusal($refusal);
+
+            return;
+        }
+
+        $this->recordNpcChange($change, $index, $index);
+
+        if (preg_match('/^variant(\d+)(.*)$/', $fieldId, $matches) === 1) {
+            $moved = 'variant' . (intval($matches[1]) + $step) . $matches[2];
+            $at = array_search($moved, array_map(static fn(array $field): string => (string) ($field['field'] ?? ''), $this->getDatabaseSettingsFields()), true);
+            $this->databaseSelectedSettingIndex = is_int($at) ? $at : $this->databaseSelectedSettingIndex;
+        }
+
+        $this->clampDatabaseSettingSelection();
+        $this->requestFullRender();
     }
 
     /**

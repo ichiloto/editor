@@ -2198,10 +2198,10 @@ final class RecordSchemaCatalog
                 new RecordField('wanderArea.height', 'Wander Height', InputControlType::INTEGER, removeWhenEmpty: true),
                 // Visibility
                 new RecordField('conditions', 'Visible When', removeWhenEmpty: true, codec: RecordFieldCodec::CONDITIONS),
-                // Cue: the same guidance an event shows, drawn above the NPC. No symbol, no cue.
-                new RecordField('cue.symbol', 'Cue Symbol', removeWhenEmpty: true),
-                new RecordField('cue.color', 'Cue Colour', options: FieldCueFields::COLORS, removeWhenEmpty: true, displayDefault: 'bright-yellow'),
-                new RecordField('cue.conditions', 'Cue When', removeWhenEmpty: true, codec: RecordFieldCodec::CONDITIONS),
+                // Cue of an NPC whose only page is its top-level script: the
+                // same guidance an event shows, drawn above the NPC. Pages
+                // otherwise carry their own cue. No symbol, no cue.
+                ...self::cueFields(),
                 // Completion writes
                 new RecordField('sets', 'After Talking', removeWhenEmpty: true, codec: RecordFieldCodec::WORLD_WRITES),
             ],
@@ -2230,8 +2230,22 @@ final class RecordSchemaCatalog
                 ),
                 DialogueLineSpeaker::forNpcLine(),
                 ['text' => 'Something to say.'],
-                // A variant's own script, edited as a frame like a branch arm.
+                // A page's own script, edited as a frame like a branch arm.
                 ['script' => 'Script'],
+                // An NPC's dialogue variants are its interaction pages ({@see \Ichiloto\Engine\Field\NpcPages}):
+                // a page may instead run a shared event script or a Cinematic,
+                // run once, stage other speakers and show its own cue.
+                singular: 'page',
+                pageFields: [
+                    ...self::cueFields(),
+                    new RecordField('scriptId', 'Event Script', removeWhenEmpty: true, reference: 'common_events', allowsNone: true),
+                    new RecordField('cinematicId', 'Cinematic', removeWhenEmpty: true, reference: 'cinematics', allowsNone: true),
+                    // Absent reads as the Engine's default: the page repeats.
+                    new RecordField('reusable', 'Repeats', InputControlType::BOOLEAN, ['false', 'true'], displayDefault: 'true'),
+                    // Names a one-shot page's saved completion.
+                    new RecordField('id', 'Page Id', removeWhenEmpty: true),
+                    new RecordField('speakers', 'Staged Speakers', removeWhenEmpty: true, codec: RecordFieldCodec::CSV_TOKENS),
+                ],
             ),
             // The NPC's inline script: the shared command vocabulary, in a
             // frame. The runtime runs it INSTEAD of dialogue when non-empty.
@@ -2299,15 +2313,17 @@ final class RecordSchemaCatalog
      * @param array<string, mixed> $blankLine A new line.
      * @param array<string, string> $commandArms The command lists a variant runs, key => label.
      */
-    private static function dialogueVariantList(RecordField $speaker, DialogueLineSpeaker $speakerRule, array $blankLine, array $commandArms = []): RecordSubList
+    private static function dialogueVariantList(RecordField $speaker, DialogueLineSpeaker $speakerRule, array $blankLine, array $commandArms = [],
+        string $singular = 'dialogue variant', array $pageFields = []): RecordSubList
     {
         return new RecordSubList(
             key: 'dialogue',
             prefix: 'variant',
-            singular: 'dialogue variant',
+            singular: $singular,
             fields: [
                 new RecordField('conditions', 'When', removeWhenEmpty: true, codec: RecordFieldCodec::CONDITIONS),
                 new RecordField('sets', 'Then Set', removeWhenEmpty: true, codec: RecordFieldCodec::WORLD_WRITES),
+                ...$pageFields,
             ],
             blank: ['lines' => [$blankLine]],
             nestedLists: [
@@ -2321,6 +2337,21 @@ final class RecordSchemaCatalog
             ],
             commandArms: $commandArms,
         );
+    }
+
+    /**
+     * Returns the rows of a cue, the Engine's EventCue contract: symbol,
+     * colour, the conditions delaying it and its authored kind.
+     *
+     * @return list<RecordField>
+     */
+    private static function cueFields(): array
+    {
+        return [
+            new RecordField('cue.symbol', 'Cue Symbol', removeWhenEmpty: true),
+            new RecordField('cue.color', 'Cue Colour', options: FieldCueFields::COLORS, removeWhenEmpty: true, displayDefault: 'bright-yellow'),
+            new RecordField('cue.conditions', 'Cue When', removeWhenEmpty: true, codec: RecordFieldCodec::CONDITIONS),
+        ];
     }
 
     /**
