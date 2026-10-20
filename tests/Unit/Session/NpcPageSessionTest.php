@@ -190,3 +190,14 @@ it('carries an older save alias through a repeating event that moves onto its NP
         ->and($manifest->resolveOneShotEvent('old-map:B', 'old.save'))->toBe('test-map:mentor/briefing')
         ->and(NpcPages::fromEntry((require $root . '/assets/Maps/test-map/test-map.data.php')['npcs'][0])->pages[0]->reusable)->toBeTrue();
 });
+
+it('names the NPC who delivers a story event for an interface to offer the move, and nobody for an object or arrival', function () {
+    $session = EditorSession::open(npcPageProject(['class' => 'Ichiloto\\Engine\\Events\\Triggers\\ScriptEventTrigger',
+        'data' => ['mode' => 'action', 'scriptId' => 'briefing'], 'speakers' => ['mentor']]));
+    $arrival = EditorSession::open(npcPageProject(['class' => 'Ichiloto\\Engine\\Events\\Triggers\\ScriptEventTrigger',
+        'data' => ['mode' => 'auto', 'scriptId' => 'briefing'], 'speakers' => ['mentor']]));
+
+    expect($session->readInspector('test-map', 'E')['deliveredBy'])->toBe(['npc' => 'mentor', 'name' => 'Mentor'])
+        ->and($arrival->readInspector('test-map', 'E')['deliveredBy'])->toBeNull()
+        ->and($session->readInspector('test-map')['deliveredBy'])->toBeNull();
+});

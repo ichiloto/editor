@@ -1851,7 +1851,21 @@ final class EditorSession
             'frameLabel' => $frame === [] || $marker === null ? null : $this->createMapInspector($map)->describeEventFrame($map, $marker, $frame),
             'rows' => $this->describePlacementRows(array_map(self::describeRow(...), $this->collectInspectorFields($map, $marker, $frame)),
                 ['kind' => 'event', 'map' => $mapId, 'marker' => $marker]),
+            // A story event an NPC delivers names that NPC, so an interface can offer `npc.adoptEvent`.
+            'deliveredBy' => $marker === null ? null : self::describeDeliveringNpc($map, $marker),
         ];
+    }
+
+    /** @return array{npc: string, name: string}|null The NPC an event could move onto as a page, or null. */
+    private static function describeDeliveringNpc(ProjectMap $map, string $marker): ?array
+    {
+        try {
+            $plan = NpcEventAdoption::plan($map, $marker);
+        } catch (NpcRefusal) {
+            return null;
+        }
+
+        return ['npc' => $plan->npcId, 'name' => $map->getNpcs()->get($plan->npcIndex)?->getName() ?? $plan->npcId];
     }
 
     /**
