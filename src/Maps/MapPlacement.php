@@ -14,7 +14,7 @@ final class MapPlacement
 {
     /** The source keys a subject-relative point is authored with. */
     private const array RELATIVE_KEYS = [RelativePositionFields::KIND_FIELD, RelativePositionFields::ID_FIELD,
-        RelativePositionFields::OFFSET_X_FIELD, RelativePositionFields::OFFSET_Y_FIELD];
+        RelativePositionFields::OFFSET_X_FIELD, RelativePositionFields::OFFSET_Y_FIELD, RelativePositionFields::ATTACHMENT_FIELD];
 
     /** Decorate the existing event paths, including inline scripts and nested arms. */
     public static function describeEventFields(array $definition, array $fields): array

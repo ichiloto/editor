@@ -414,3 +414,57 @@ it('chooses world objects on the map a cinematic starts on, and refuses ids that
         ->and(array_find($session->readDatabaseRecord('cutscenes/cinematic', 0, $frame)['rows'],
             static fn(array $row): bool => isset($row['mapPlacement']))['mapPlacement']['points'][0]['point'])->toBe([6, 4]);
 });
+
+it('places a staged visual on an attachment its world object resource declares, offered by that object alone', function () {
+    $root = cutsceneProject();
+    $mapPath = $root . '/assets/Maps/harbour/harbour.data.php';
+    $map = require $mapPath;
+    $map['worldObjects'] = [['id' => 'relay', 'resource' => 'relay-tower', 'anchor' => ['x' => 6, 'y' => 3]],
+        ['id' => 'beacon', 'anchor' => ['x' => 2, 'y' => 3], 'pivot' => ['x' => 0.5, 'y' => 1.0], 'sprites2d' => null]];
+    file_put_contents($mapPath, "<?php\nreturn " . var_export($map, true) . ";\n");
+    @mkdir($root . '/assets/Data/Presentation', 0777, true);
+    file_put_contents($root . '/assets/Data/Presentation/field.php', "<?php\nreturn " . var_export(['resources' => ['relay-tower' => [
+        'name' => 'Synthetic relay', 'pivot' => ['x' => 0.5, 'y' => 1.0], 'sprites2d' => ['asset' => 'Graphics/relay.png', 'cells' => ['width' => 3, 'height' => 4]],
+        'attachments' => [['id' => 'aerial', 'cell' => ['x' => 1, 'y' => -2], 'point' => ['x' => 0.8, 'y' => 0.05]],
+            ['id' => 'lamp', 'cell' => ['x' => -1, 'y' => 0], 'point' => ['x' => 0.1, 'y' => 0.9]]],
+    ]]], true) . ";\n");
+    $path = writeRelativeScript($root, [['type' => 'stage_actor', 'id' => 'pulse', 'sprite' => ['*'], 'x' => 1, 'y' => 1]]);
+    $session = EditorSession::open($root);
+    $frame = ['commands'];
+
+    $session->applyDatabaseRecord('cutscenes/cinematic', 0, relativeRow($session, $frame, [0], 'Relative To')['key'], 'world_object');
+    $session->applyDatabaseRecord('cutscenes/cinematic', 0, relativeRow($session, $frame, [0], 'World Object')['key'], 'beacon');
+    // An inline object declares no attachments.
+    expect(relativeRow($session, $frame, [0], 'Attachment')['options'])->toBe(['']);
+    $session->applyDatabaseRecord('cutscenes/cinematic', 0, relativeRow($session, $frame, [0], 'Offset X')['key'], '2');
+    $session->applyDatabaseRecord('cutscenes/cinematic', 0, relativeRow($session, $frame, [0], 'World Object')['key'], 'relay');
+    $attachment = relativeRow($session, $frame, [0], 'Attachment');
+    expect($attachment['options'])->toBe(['', 'aerial', 'lamp'])
+        ->and(fn() => $session->applyDatabaseRecord('cutscenes/cinematic', 0, $attachment['key'], 'chimney'))
+        ->toThrow(SessionRefusal::class, 'not one this entry offers');
+    $session->applyDatabaseRecord('cutscenes/cinematic', 0, $attachment['key'], 'aerial');
+    $rows = $session->readDatabaseRecord('cutscenes/cinematic', 0, $frame)['rows'];
+    // The attachment owns the visual's place: the offset is dropped and no longer offered.
+    expect(array_filter($rows, static fn(array $row): bool => ($row['entry'] ?? []) === [0] && str_starts_with((string) ($row['name'] ?? ''), 'Offset')))->toBe([])
+        ->and(array_find($rows, static fn(array $row): bool => isset($row['mapPlacement']))['mapPlacement']['points'][0]['point'])->toBe([7, 1]);
+    $session->saveDatabase('cutscenes/cinematic');
+    expect((require $path)[0])->toBe(['type' => 'stage_actor', 'id' => 'pulse', 'sprite' => ['*'],
+        'at' => ['kind' => 'world_object', 'id' => 'relay', 'attachment' => 'aerial']])
+        ->and(file_get_contents($path))->toContain('// Staging authored by hand.');
+
+    // Validation reports a visual whose attachment the resource no longer declares.
+    expect(array_map(static fn($issue): string => $issue->message, validateProject($root)))
+        ->not->toContain('It sits on attachment "aerial" of world object "relay", which harbour does not offer.');
+    writeRelativeScript($root, [['type' => 'stage_actor', 'id' => 'pulse', 'sprite' => ['*'],
+        'at' => ['kind' => 'world_object', 'id' => 'relay', 'attachment' => 'chimney']]]);
+    expect(array_map(static fn($issue): string => $issue->message, validateProject($root)))
+        ->toContain('It sits on attachment "chimney" of world object "relay", which harbour does not offer.');
+    writeRelativeScript($root, [['type' => 'stage_actor', 'id' => 'pulse', 'sprite' => ['*'],
+        'at' => ['kind' => 'world_object', 'id' => 'relay', 'attachment' => 'aerial']]]);
+
+    // Choosing another object drops an attachment that belonged to the first.
+    $session = EditorSession::open($root);
+    $session->applyDatabaseRecord('cutscenes/cinematic', 0, relativeRow($session, $frame, [0], 'World Object')['key'], 'beacon');
+    $session->saveDatabase('cutscenes/cinematic');
+    expect((require $path)[0]['at'])->toBe(['kind' => 'world_object', 'id' => 'beacon']);
+});

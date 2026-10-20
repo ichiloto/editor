@@ -347,7 +347,7 @@ final class CutsceneSchemas
         // A visual bound to a real subject inherits its position: it is never placed relative to another subject,
         // and the graphical editor that binds it offers no coordinates either.
         $position = match (true) {
-            ! isset($entry['subject']) => RelativePositionFields::getFields($entry, $axes, cinematic: true, graphical: $graphical),
+            ! isset($entry['subject']) => RelativePositionFields::getFields($entry, $axes, cinematic: true, graphical: $graphical, attachable: true),
             $graphical => [],
             default => $axes,
         };

@@ -76,6 +76,12 @@ final class ProjectRecordDatabase
         $this->recordReferences = $scope;
     }
 
+    /** The references a record chooses from: its own scope where it owns one, else the project's. */
+    private function findRecordReferences(ProjectRecord $record): ?ReferenceCatalog
+    {
+        return ($this->recordReferences === null ? null : ($this->recordReferences)($record)) ?? $this->authoringReferences;
+    }
+
     private function coerceReferenceField(ProjectRecord $record, RecordField $field, string $rawValue, array $ownerPath = []): mixed
     {
         $authored = (array) $record->toArray();
@@ -86,7 +92,14 @@ final class ProjectRecordDatabase
             throw new \InvalidArgumentException(sprintf('%s cannot be edited as a line: %s. Nothing was changed.', $field->label, $issue));
         }
         $value = self::coerce($field, $rawValue);
-        $references = ($this->recordReferences === null ? null : ($this->recordReferences)($record)) ?? $this->authoringReferences;
+        $references = $this->findRecordReferences($record);
+        if ($references !== null && $field->entryChoices !== null && $value !== null) {
+            // The choices read what the field lives in, as its row does.
+            $holder = self::readNested((array) $record->toArray(), implode('.', array_slice($ownerPath === [] ? explode('.', $field->key) : $ownerPath, 0, -1)));
+            if (! in_array($value, $references->listEntryChoices($field->entryChoices, is_array($holder) ? $holder : []), true)) {
+                throw new \InvalidArgumentException(sprintf('%s "%s" is not one this entry offers; choose one of its own.', $field->label, strval($value)));
+            }
+        }
         if ($references !== null && in_array($field->reference, ['actor_ids', 'stage_timelines', 'cinematic_movement_routes', 'map_world_objects'], true) && $value !== null) {
             $choices = $field->reference === 'cinematic_movement_routes'
                 ? $references->getMovementRouteIds($record, $ownerPath)
@@ -584,12 +597,19 @@ final class ProjectRecordDatabase
      * @param array<string, mixed> $owner The record holding the entry.
      * @return list<array<string, mixed>>
      */
-    private function describeEntryField(RecordField $field, array $row, array $entry, array $owner): array
+    private function describeEntryField(RecordField $field, array $row, array $entry, array $owner, ?ReferenceCatalog $references = null): array
     {
         if ($field->referenceMapKey !== null) {
             // A map-local reference reads the map its own entry names.
             $map = self::readNested($entry, $field->referenceMapKey);
             $row['referenceMap'] = is_string($map) ? $map : '';
+        }
+        if ($field->entryChoices !== null && $references !== null && ($row['editable'] ?? true) !== false) {
+            $holder = self::readNested($entry, implode('.', array_slice(explode('.', $field->key), 0, -1)));
+            $values = $references->listEntryChoices($field->entryChoices, is_array($holder) ? $holder : []);
+            $row['options'] = ['', ...$values];
+            $row['choices'] = [['value' => '', 'label' => $field->noneLabel()],
+                ...array_map(static fn(string $value): array => ['value' => $value, 'label' => $value], $values)];
         }
         if ($field->dialogueSpeaker === null || $this->authoringReferences === null) {
             return [$row];
@@ -657,7 +677,8 @@ final class ProjectRecordDatabase
             }
 
             foreach ($record->getEntries($subList) as $entryIndex => $entry) {
-                $fields = [...$fields, ...$this->describeSubEntryFields($subList, $entryIndex, $entry, $isEditable, [], (array) $record->toArray())];
+                $fields = [...$fields, ...$this->describeSubEntryFields($subList, $entryIndex, $entry, $isEditable, [], (array) $record->toArray(),
+                    $this->findRecordReferences($record))];
             }
         }
 
@@ -678,7 +699,8 @@ final class ProjectRecordDatabase
      * @param array<string, mixed> $owner The record the entry belongs to, whose own name an NPC's line speaks under.
      * @return array<int, array<string, mixed>> The field descriptors.
      */
-    private function describeSubEntryFields(RecordSubList $subList, int $entryIndex, array $entry, bool $isEditable, array $basePath, array $owner = []): array
+    private function describeSubEntryFields(RecordSubList $subList, int $entryIndex, array $entry, bool $isEditable, array $basePath, array $owner = [],
+        ?ReferenceCatalog $references = null): array
     {
         $fields = [];
 
@@ -693,7 +715,7 @@ final class ProjectRecordDatabase
                 sprintf('%s %d %s', ucfirst($subList->singular), $entryIndex + 1, $field->label),
                 self::readNested($entry, $field->key),
             ), 'entry' => [$entryIndex], 'entryLabel' => sprintf('%s %d', ucfirst($subList->singular), $entryIndex + 1), 'name' => $field->label, 'sourceKey' => $field->key,
-                'dataPath' => [...($basePath === [] ? explode('.', $subList->key) : $basePath), $entryIndex, ...explode('.', $field->key)]], $entry, $owner)];
+                'dataPath' => [...($basePath === [] ? explode('.', $subList->key) : $basePath), $entryIndex, ...explode('.', $field->key)]], $entry, $owner, $references)];
         }
 
         $variant = $subList->variantKey !== null ? strval($entry[$subList->variantKey] ?? '') : '';
@@ -809,7 +831,7 @@ final class ProjectRecordDatabase
                         $field->label,
                     ),
                     self::readNested($nestedEntry, $field->key),
-                ), $nestedEntry, $owner)];
+                ), $nestedEntry, $owner, $references)];
             }
 
             foreach ($nestedList->armsFor($nestedEntry) as $armKey => $armLabel) {
@@ -4267,7 +4289,8 @@ final class ProjectRecordDatabase
 
         foreach ($commands as $entryIndex => $entry) {
             if (is_array($entry)) {
-                $fields = [...$fields, ...$this->describeSubEntryFields($subList, $entryIndex, $entry, $isEditable, $framePath, (array) $record->toArray())];
+                $fields = [...$fields, ...$this->describeSubEntryFields($subList, $entryIndex, $entry, $isEditable, $framePath, (array) $record->toArray(),
+                    $this->findRecordReferences($record))];
             }
         }
 

@@ -588,6 +588,26 @@ final class ReferenceCatalog
      * The map whose NPCs, world objects and markers a subject reference names: the explicitly selected map, or
      * without one a cinematic's declared start map.
      */
+    /**
+     * The values a field chooses among that its own entry decides ({@see RecordField::$entryChoices}), read from
+     * what the field lives in. `world_object_attachments`: the attachments declared by the resource of the world
+     * object a subject reference (`at`) names, on the subject map; none until it names an object that has some.
+     *
+     * @param array<string, mixed> $holder What the field lives in.
+     * @return list<string>
+     * @throws InvalidArgumentException For a source nothing reads.
+     */
+    public function listEntryChoices(string $source, array $holder): array
+    {
+        if ($source !== 'world_object_attachments') {
+            throw new InvalidArgumentException(sprintf('There is no entry choice source %s.', $source));
+        }
+        $objectId = ($holder['kind'] ?? null) === 'world_object' ? ($holder['id'] ?? null) : null;
+        $map = $this->getSubjectMap();
+        $found = $map === null || !is_string($objectId) ? null : \Ichiloto\Editor\Field\WorldObjectAuthoring::findAttachments($map, $objectId);
+        return array_map(static fn(\Ichiloto\Engine\Field\WorldObjectAttachment $attachment): string => $attachment->id, $found['attachments'] ?? []);
+    }
+
     public function getSubjectMap(): ?ProjectMap
     {
         if ($this->currentMap !== null) {
