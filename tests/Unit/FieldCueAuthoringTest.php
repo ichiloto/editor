@@ -75,10 +75,11 @@ it('authors the cue treatment and pointer images as rows with the Engine default
   $session = EditorSession::open($root);
   $records = $session->listDatabaseRecords('field_cues')['records'];
 
-  expect($records)->toContain('cueStyle.plate', 'cueStyle.bob.height', 'cueStyle.bob.seconds', 'cueStyle.pointerSpacing.x', 'cueStyle.pointerSpacing.y',
+  expect($records)->toContain('cues.bright-yellow.plate', 'cueStyle.bob.height', 'cueStyle.bob.seconds', 'cueStyle.pointerSpacing.x', 'cueStyle.pointerSpacing.y',
     'cueStyle.terminal.background', 'cueStyle.terminal.bold', 'cues.bright-yellow.effect',
     'cues.bright-yellow.pointer.east.asset', 'cues.bright-yellow.pointer.east.quarterTurns', 'waymarks.color')
-    ->and(cueRow($session, 'cueStyle.plate')['row'])->toMatchArray(['kind' => 'reference', 'reference' => 'png_assets'])
+    ->and(cueRow($session, 'cues.bright-yellow.plate')['row'])->toMatchArray(['kind' => 'reference', 'reference' => 'png_assets'])
+    ->and($records)->not->toContain('cueStyle.plate')
     ->and(cueRow($session, 'cueStyle.terminal.background')['row']['value'])->toBe('black')
     ->and(cueRow($session, 'cues.bright-yellow.effect')['row'])->toMatchArray(['kind' => 'reference', 'reference' => 'effects']);
 
@@ -86,7 +87,7 @@ it('authors the cue treatment and pointer images as rows with the Engine default
   expect(fn() => $session->applyDatabaseRecord('field_cues', $height['index'], $height['row']['key'], '13'))
     ->toThrow('A cue bob height must be 0..12 logical pixels.');
   $session->applyDatabaseRecord('field_cues', $height['index'], $height['row']['key'], '3');
-  $plate = cueRow($session, 'cueStyle.plate');
+  $plate = cueRow($session, 'cues.bright-yellow.plate');
   $session->applyDatabaseRecord('field_cues', $plate['index'], $plate['row']['key'], 'Graphics/System/CuePlate.png');
   foreach (FieldPresentationCatalog::DIRECTIONS as $direction) {
     $asset = cueRow($session, "cues.bright-yellow.pointer.{$direction}.asset");
@@ -98,7 +99,7 @@ it('authors the cue treatment and pointer images as rows with the Engine default
   $catalog = FieldPresentationCatalog::load($root . '/assets');
 
   expect(file_get_contents($root . '/assets/Data/Presentation/field.php'))->toContain('// Colour selects replaceable artwork.')
-    ->and($catalog->cueStyle->bobHeight)->toBe(3)->and($catalog->cueStyle->plate)->toBe('Graphics/System/CuePlate.png')
+    ->and($catalog->cueStyle->bobHeight)->toBe(3)->and($catalog->cues['bright-yellow']['plate'])->toBe('Graphics/System/CuePlate.png')
     ->and($catalog->cues['bright-yellow']['pointer']['south'])->toBe(['asset' => 'Graphics/System/CuePointer.png', 'quarterTurns' => 1])
     ->and(count($catalog->cues['bright-yellow']['pointer']))->toBe(8);
 });

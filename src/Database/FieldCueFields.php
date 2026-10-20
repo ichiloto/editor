@@ -11,10 +11,9 @@ use Ichiloto\Engine\Animations\Field\FieldWaymarkStyle;
 
 /**
  * Field Cues: how the game draws cue marks and objective waymarks, one row
- * per setting. The cue style keeps marks readable on any ground (a plate,
- * a gentle bob, the edge pointer's spacing, and the Terminal cell's
- * background and bold); each cue colour names its upright mark effect and
- * the eight pointer images an edge marker turns; the waymark style picks the
+ * per setting. The cue style keeps marks readable on any ground (a gentle bob, the edge pointer's spacing, and the Terminal cell's
+ * background and bold); each cue colour names its upright mark effect, the
+ * plate behind it and the eight pointer images an edge marker turns; the waymark style picks the
  * colour, symbol and edge inset. Both editors offer it, since the Terminal
  * draws cues too. FieldPresentationSettings owns the file.
  */
@@ -63,7 +62,8 @@ final class FieldCueFields
                 $path === FieldPresentationSettings::WAYMARKS . '.inset' => new RecordField('value',
                     sprintf('Edge inset (0..%d cells)', FieldWaymarkStyle::MAX_INSET), InputControlType::INTEGER, displayDefault: $default),
                 $path === FieldPresentationSettings::WAYMARKS . '.symbol' => new RecordField('value', 'Symbol (one cell)', displayDefault: $default),
-                $path === "{$style}.plate" => RecordField::reference('value', 'Plate image', 'png_assets', allowsNone: true, noneLabel: '(no plate)'),
+                str_starts_with($path, FieldPresentationSettings::CUES . '.') && str_ends_with($path, '.plate')
+                    => RecordField::reference('value', 'Plate image', 'png_assets', allowsNone: true, noneLabel: '(no plate)'),
                 $path === "{$style}.bob.height" => new RecordField('value',
                     sprintf('Bob height (0..%d px)', FieldCueStyle::MAX_BOB_HEIGHT), InputControlType::INTEGER, displayDefault: $default),
                 $path === "{$style}.bob.seconds" => new RecordField('value', 'Bob seconds (0.4..4)', InputControlType::FLOAT, displayDefault: $default),
