@@ -891,7 +891,7 @@ trait CutscenesWorkspace
             ],
             CutsceneType::SUMMON => [
                 'Identity' => ['id', 'name', 'description', 'moveName', 'version', 'linkedSummonId', 'linkedActionId', 'tags'],
-                'Lore' => ['lore', 'element', 'strengths', 'weaknesses', 'attributes', 'authoring'],
+                'Lore' => ['lore', 'element', 'elementAffinities', 'effectiveAgainst', 'strengths', 'weaknesses', 'attributes', 'authoring'],
                 'Availability' => ['availability.conditions'],
                 'Wielders' => ['wielders.mode', 'wielders.roles', 'wielders.characters', 'wielders.tenancy'],
                 'Playback' => ['playback.defaultSpeed', 'playback.allowSkip', 'playback.loopPreview', 'transitionIn.type', 'transitionIn.durationMs', 'transitionIn.color', 'transitionOut.type', 'transitionOut.durationMs', 'transitionOut.color', 'effectTiming.mode', 'effectTiming.cueId', 'effectTiming.frame', 'targetPresentation.mode', 'targetPresentation.showCasterNameBanner'],

@@ -45,6 +45,23 @@ it('edits a summon field as one undo step and saves it to its data file', functi
         ->and(fn() => $session->readDatabaseRecord('cutscenes/nothing', 0))->toThrow(SessionRefusal::class);
 });
 
+it('authors a summon\'s element affinities and effective-against elements and saves them to its data file', function () {
+    $root = cutsceneProject();
+    $session = EditorSession::open($root);
+    $row = static fn(string $label): array => array_find($session->readDatabaseRecord('cutscenes/summon', 0)['rows'],
+        static fn(array $row): bool => trim($row['label']) === $label);
+    $file = $root . '/assets/Cutscenes/Summons/lantern-wisp/lantern-wisp.data.php';
+
+    expect($session->applyDatabaseRecord('cutscenes/summon', 0, $row('Element Affinities')['key'], 'Fire: 0.25; Water: 1.5')['changed'])->toBeTrue()
+        ->and($session->applyDatabaseRecord('cutscenes/summon', 0, $row('Effective Against')['key'], 'Ice')['changed'])->toBeTrue();
+    $session->saveAll();
+    $data = (static fn(string $path): array => require $path)($file);
+
+    expect($data['elementAffinities'])->toBe(['Fire' => 0.25, 'Water' => 1.5])
+        ->and($data['effectiveAgainst'])->toBe(['Ice'])
+        ->and($session->listUnsavedChanges())->toBe([]);
+});
+
 it('saves a summon category as the Database window saves any category', function () {
     $root = cutsceneProject();
     $session = EditorSession::open($root);
