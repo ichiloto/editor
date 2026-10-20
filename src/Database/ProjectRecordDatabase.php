@@ -586,6 +586,11 @@ final class ProjectRecordDatabase
      */
     private function describeEntryField(RecordField $field, array $row, array $entry, array $owner): array
     {
+        if ($field->referenceMapKey !== null) {
+            // A map-local reference reads the map its own entry names.
+            $map = self::readNested($entry, $field->referenceMapKey);
+            $row['referenceMap'] = is_string($map) ? $map : '';
+        }
         if ($field->dialogueSpeaker === null || $this->authoringReferences === null) {
             return [$row];
         }
@@ -761,6 +766,19 @@ final class ProjectRecordDatabase
 
         if ($nestedList === null) {
             return \Ichiloto\Editor\Maps\MapPlacement::describeFields($entry, $fields);
+        }
+
+        if ($nestedList->heading !== '') {
+            // A headed nested list (an objective's waymarks) is added to from its heading, so the
+            // entry's own rows keep adding entries of the entry's own list.
+            $fields[] = [
+                'label' => sprintf('%s %d %s', ucfirst($subList->singular), $entryIndex + 1, $nestedList->heading),
+                'value' => sprintf('%d', count($nestedList->readEntries(self::readNested($entry, $nestedList->key)))),
+                'field' => $subList->prefix . $entryIndex . ucfirst($nestedList->prefix) . 'List',
+                'entry' => [$entryIndex],
+                'entryLabel' => sprintf('%s %d', ucfirst($subList->singular), $entryIndex + 1),
+                'name' => $nestedList->heading,
+            ];
         }
 
         foreach ($nestedList->readEntries(self::readNested($entry, $nestedList->key)) as $nestedIndex => $nestedEntry) {
@@ -1659,6 +1677,10 @@ final class ProjectRecordDatabase
             return null;
         }
 
+        if (! self::isNestedListRow($subList->prefix, $parentIndex, $nestedList, $fieldId)) {
+            return null;
+        }
+
         $nestedIndex = null;
         $pattern = '/^'
             . preg_quote($subList->prefix, '/')
@@ -1931,6 +1953,7 @@ final class ProjectRecordDatabase
         return match ($relativePath) {
             'config.php' => new ProjectConfig($projectRoot),
             MenuPresentationSettings::RELATIVE_PATH => new MenuPresentationSettings($projectRoot),
+            \Ichiloto\Editor\FieldPresentationSettings::RELATIVE_PATH => new \Ichiloto\Editor\FieldPresentationSettings($projectRoot),
             default => throw new RuntimeException(sprintf('%s has no settings owner.', $relativePath)),
         };
     }
@@ -3272,6 +3295,10 @@ final class ProjectRecordDatabase
             return null;
         }
 
+        if (! self::isNestedListRow($frameList->prefix, $parentIndex, $nestedList, $fieldId)) {
+            return null;
+        }
+
         $nestedIndex = null;
         $pattern = '/^'
             . preg_quote($frameList->prefix, '/')
@@ -3284,6 +3311,16 @@ final class ProjectRecordDatabase
         }
 
         return ['parentIndex' => $parentIndex, 'nestedIndex' => $nestedIndex, 'list' => $nestedList];
+    }
+
+    /**
+     * Whether a row adds to and removes from a nested list: any row of its
+     * parent entry, or only its heading and its own entries' rows where the
+     * list is headed.
+     */
+    private static function isNestedListRow(string $prefix, int $parentIndex, RecordSubList $nestedList, string $fieldId): bool
+    {
+        return $nestedList->heading === '' || str_starts_with($fieldId, $prefix . $parentIndex . ucfirst($nestedList->prefix));
     }
 
     /**

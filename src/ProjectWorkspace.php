@@ -259,7 +259,8 @@ final readonly class ProjectWorkspace
         $projectConfig = new ProjectConfig($projectRoot);
         // Each settings file has one owner, shared by every category over it.
         $menuPresentation = new MenuPresentationSettings($projectRoot);
-        $settingsFiles = ['config.php' => $projectConfig, MenuPresentationSettings::RELATIVE_PATH => $menuPresentation];
+        $settingsFiles = ['config.php' => $projectConfig, MenuPresentationSettings::RELATIVE_PATH => $menuPresentation,
+            FieldPresentationSettings::RELATIVE_PATH => new FieldPresentationSettings($projectRoot)];
         // Before any schema is built: the command editor offers, and Engine
         // validation accepts, exactly this project's registered commands.
         $scriptCommands = ProjectScriptCommands::fromProject($projectRoot);

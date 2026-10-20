@@ -83,6 +83,8 @@ final class ReferenceCatalog
         'elements',
         'map_npcs',
         'map_world_objects',
+        // A map's minimap landmarks, by stable id.
+        'map_landmarks',
         'world_object_tile_layers',
         // A map event condition's marker, listed for the map that condition names.
         'map_event_markers',
@@ -265,6 +267,7 @@ final class ReferenceCatalog
             // at once and a deleted one is gone.
             'map_npcs' => $this->getSubjectMap()?->getNpcs()->ids() ?? [],
             'map_world_objects' => $this->getSubjectMap() === null ? [] : array_column(\Ichiloto\Editor\Field\WorldObjectAuthoring::readEntries($this->getSubjectMap()), 'id'),
+            'map_landmarks' => array_values(array_filter(array_column($this->readSubjectMapLandmarks(), 'id'), is_string(...))),
             'world_object_tile_layers' => $this->currentMap === null ? [] : array_column($this->currentMap->describeTileLayers()['layers'], 'name'),
             // Only meaningful for a named map; the session lists them for the map a condition names.
             'map_event_markers' => [],
@@ -566,6 +569,18 @@ final class ReferenceCatalog
         ]));
     }
 
+    /** @return list<array<string, mixed>> The landmark declarations of the map a reference reads, or none when unreadable. */
+    private function readSubjectMapLandmarks(): array
+    {
+        $map = $this->getSubjectMap();
+        if ($map === null) { return []; }
+        try {
+            return \Ichiloto\Editor\Field\MapLandmarks::readMap($map)->entries;
+        } catch (\InvalidArgumentException) {
+            return [];
+        }
+    }
+
     /**
      * The map whose NPCs, world objects and markers a subject reference names: the explicitly selected map, or
      * without one a cinematic's declared start map.
@@ -734,6 +749,23 @@ final class ReferenceCatalog
      */
     public function labelsFor(string $category): array
     {
+        if ($category === 'event_markers') {
+            // Each event read as what it is ("H · Script tracks"), from the map the picker reads.
+            $map = $this->getSubjectMap();
+            return $map === null ? [] : $this->listMapEventMarkers($map->mapId)['labels'];
+        }
+
+        if ($category === 'map_landmarks') {
+            $labels = [];
+            foreach ($this->readSubjectMapLandmarks() as $entry) {
+                $name = is_array($entry['name'] ?? null) ? ($entry['name']['default'] ?? null) : ($entry['name'] ?? null);
+                if (is_string($entry['id'] ?? null) && is_string($name) && $name !== '') {
+                    $labels[$entry['id']] = sprintf('%s (%s)', $name, $entry['id']);
+                }
+            }
+            return $labels;
+        }
+
         if ($category === 'tilesets') {
             return $this->loadTilesetNames();
         }
