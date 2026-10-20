@@ -51,3 +51,21 @@ it('judges floor left untiled by an unsaved edit before it is saved', function (
 
     expect($untiled())->toBe(['1 cell the player can reach has no tile, so the field shows the background there: (2, 1).']);
 });
+
+it('warns when the player meets a faced event from the side where it does not answer', function () {
+    $root = unsavedReachabilityProject();
+    // A room entered at its north-west corner; the solid chest at (3, 2) answers only to a player south of it, facing north.
+    file_put_contents($root . '/assets/Maps/test-map/test-map.map.php', "<?php\n\nreturn <<<'ICHILOTO_MAP'\n#######\n#     #\n#  #  #\n#     #\n#######\nICHILOTO_MAP;\n");
+    file_put_contents($root . '/assets/Maps/test-map/test-map.event.php', "<?php\n\nreturn <<<'ICHILOTO_EVENT_MAP'\n       \n       \n   E   \n       \n       \nICHILOTO_EVENT_MAP;\n");
+    $data = $root . '/assets/Maps/test-map/test-map.data.php';
+    file_put_contents($data, str_replace("'class' => 'Ichiloto\\Engine\\Events\\Triggers\\ChestEventTrigger',",
+        "'class' => 'Ichiloto\\Engine\\Events\\Triggers\\ChestEventTrigger', 'engagement' => 'facing', 'facing' => ['North'],",
+        (string) file_get_contents($data)));
+    $issues = array_values(array_filter(EditorSession::open($root)->validateProject(['test-map'])['issues'],
+        static fn(array $issue): bool => str_contains($issue['message'], 'walks')));
+
+    expect(array_map(static fn(array $issue): array => [$issue['severity'], $issue['message']], $issues))->toBe([[
+        'warning',
+        'Arriving from the starting position, the player first reaches event E (ChestEventTrigger) at (3, 2) on (3, 1), where it does not answer, and walks 2 more steps round to (3, 3) to use it.',
+    ]]);
+});

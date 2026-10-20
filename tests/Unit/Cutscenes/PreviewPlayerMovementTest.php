@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use Ichiloto\Engine\Field\Enumerations\StepOrigin;
 use Ichiloto\Editor\Cutscenes\Preview\PreviewField;
 use Ichiloto\Engine\Core\Enumerations\MovementHeading;
 use Ichiloto\Engine\Core\Vector2;
@@ -62,7 +63,7 @@ it('uses the runtime step at the callers pace and ends the walking presentation 
         expect($field->mapFailure)->toBeNull();
         $field->run(function () use ($field): void {
             $player = $field->scene->player;
-            expect($field->scene->moveAtPace(0.4, fn(): bool => $player->tryMove(Vector2::right(), $field->scene->camera)))
+            expect($field->scene->moveAtPace(0.4, fn(): bool => $player->tryMove(Vector2::right(), $field->scene->camera, StepOrigin::PLAYER_INPUT)))
                 ->toBeTrue()
                 ->and([$player->position->x, $player->position->y])->toBe([5.0, 4.0])
                 ->and($player->heading)->toBe(MovementHeading::EAST)
@@ -90,7 +91,7 @@ it('faces a blocked cell without moving or leaving a stale walking slide', funct
         expect($field->mapFailure)->toBeNull();
         $field->run(function () use ($field): void {
             $player = $field->scene->player;
-            expect($player->tryMove(Vector2::left(), $field->scene->camera))->toBeFalse()
+            expect($player->tryMove(Vector2::left(), $field->scene->camera, StepOrigin::PLAYER_INPUT))->toBeFalse()
                 ->and([$player->position->x, $player->position->y])->toBe([1.0, 1.0])
                 ->and($player->heading)->toBe(MovementHeading::WEST)
                 ->and($player->sprite)->toBe(['W'])
@@ -112,11 +113,11 @@ it('scrolls following previews through the shared map camera and leaves detached
             $player = $field->scene->player;
             $camera = $field->scene->camera;
             $before = clone $camera->position;
-            expect($player->tryMove(Vector2::right(), $camera))->toBeTrue()
+            expect($player->tryMove(Vector2::right(), $camera, StepOrigin::PLAYER_INPUT))->toBeTrue()
                 ->and($camera->position->x)->toBe($before->x + 1);
             $camera->detach();
             $detached = clone $camera->position;
-            expect($player->tryMove(Vector2::down(), $camera))->toBeTrue()
+            expect($player->tryMove(Vector2::down(), $camera, StepOrigin::PLAYER_INPUT))->toBeTrue()
                 ->and([$camera->position->x, $camera->position->y])->toBe([$detached->x, $detached->y]);
         });
     } finally {
@@ -142,7 +143,7 @@ it('keeps ordinary map events and encounter bookkeeping out of shared preview mo
         $field->run(function () use ($field): void {
             expect($field->scene->player->findEventMarkerPosition('g'))->toBeNull()
                 ->and($field->scene->encounterManager)->toBeNull()
-                ->and($field->scene->player->tryMove(Vector2::right(), $field->scene->camera))->toBeTrue();
+                ->and($field->scene->player->tryMove(Vector2::right(), $field->scene->camera, StepOrigin::PLAYER_INPUT))->toBeTrue();
         });
         $field->advance(1.0);
         expect($field->scene->finishedSessions)->toBe([])

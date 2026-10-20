@@ -107,9 +107,10 @@ final class StagedActorFields
         if (($entry['type'] ?? null) !== 'stage_actor' && ($entry['kind'] ?? null) !== 'staged_actor') {
             return $entry;
         }
-        return RelativePositionFields::prepareEdit($entry, $field, static function (array $actor): void {
-            CinematicStageManager::validateBinding($actor);
-        });
+        return RelativePositionFields::prepareEdit(EndFacingFields::prepareEdit($entry, $field), $field,
+            static function (array $actor): void {
+                CinematicStageManager::validateBinding($actor);
+            });
     }
 
     /** Changing a representation clears only the fields owned by the old representation. */

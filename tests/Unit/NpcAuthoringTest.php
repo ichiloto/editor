@@ -1523,3 +1523,38 @@ it('moves the page under the cursor with [ and ], keeping the cursor on it, as o
     callEditorMethod($editor, 'performUndo');
     expect($texts())->toBe(['Hello.', 'You made it.']);
 });
+
+it('stands an NPC facing a chosen heading, removed when cleared, and the game loads it', function () {
+    $entry = ['id' => 'clerk', 'name' => 'Clerk', 'sprite' => 'C', 'x' => 3, 'y' => 2, 'movement' => 'fixed', 'dialogue' => [['text' => 'Welcome.']]];
+    [$root, $path] = npcProject([$entry]);
+    $source = file_get_contents($path);
+    $editor = npcEditor($root);
+    $map = npcMap($editor);
+    callEditorMethod($editor, 'selectNpc', 0);
+
+    $ids = array_map(static fn(array $f): string => (string) ($f['field'] ?? ''), callEditorMethod($editor, 'getInspectorFields'));
+    expect($ids[array_search('directionFix', $ids, true) + 1])->toBe('facing')
+        ->and(npcField($editor, 'facing')['label'])->toContain('Stands Facing')
+        ->and(npcField($editor, 'facing')['value'])->toBe('south');
+
+    setNpcField($editor, 'facing', 'north');
+    callEditorMethod($editor, 'saveSelectedMap');
+    expect(npcsOnDisk($path)[0])->toBe($entry + ['facing' => 'north']);
+    $scene = new class extends \Ichiloto\Engine\Scenes\Game\GameScene {
+        public function __construct()
+        {
+            $this->currentMapId = 'test-map';
+            $this->gameState = new \Ichiloto\Engine\Core\GameState();
+            $this->party = new \Ichiloto\Engine\Entities\Party();
+        }
+    };
+    $manager = new \Ichiloto\Engine\Field\NpcManager($scene);
+    $manager->configure(npcsOnDisk($path));
+    expect($manager->findById('clerk')?->heading)->toBe(\Ichiloto\Engine\Core\Enumerations\MovementHeading::NORTH);
+
+    // Clearing it returns to the game's default, south, by removing the key.
+    setNpcField($editor, 'facing', '');
+    expect($map->getNpcs()->get(0)?->toArray())->not->toHaveKey('facing');
+    callEditorMethod($editor, 'saveSelectedMap');
+    expect(file_get_contents($path))->toBe($source);
+});

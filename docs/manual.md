@@ -796,6 +796,11 @@ character says is read in the pane rather than in the edit buffer.
   setting it back to `false` removes the key, the game's default. It affects
   only the talk turn: wandering and `move_route` still turn the NPC. The
   validator reports a `directionFix` that is not `true` or `false`.
+- **Stands facing.** The heading the NPC stands with when its map loads,
+  such as a clerk facing the door their desk is approached from. It stores
+  `'facing' => 'north'` and shows that heading's directional sprite; clearing
+  it removes the key, which the game reads as `south`. Talking turns the NPC and back
+  to it. The validator warns about a facing that is not one of the four.
 - **Directional sprites.** Optional glyphs shown when the NPC turns; the base
   sprite covers a heading you leave blank. Resting the Inspector cursor on a
   `Facing …` row previews that glyph on the canvas in the NPC's place.
@@ -2130,6 +2135,16 @@ Start Map), or says why it cannot: the player, party actors and staged actors ar
 placed only while the scene runs, and a common event runs on whichever map calls
 it. A relative point is changed through its subject and offset, never by a map
 click.
+
+The same waypoints and independent staged actors also name the way their
+character faces once there, the Engine's end facing. `Facing` fixes a cardinal;
+`Face Toward` picks a subject from the same list as `Relative To`, then its id in
+the `Face Toward …` row (the player and the leading party actor take none). The
+character turns toward that subject's cell when the leg or staging begins; an
+even diagonal faces north or south. Choosing one clears the other. A waypoint
+with neither keeps its last step's heading (`(last step)`); a staged actor with
+neither faces south. A visual bound to a real subject inherits its heading and
+offers neither row. A subject still waiting for its id refuses Save.
 
 `Remember As` declares a session-local identity. `Recorded Route` selects only
 declarations in that script invocation and its referenced common events,
