@@ -36,8 +36,8 @@ it('creates ScriptEventTrigger through the active event type catalog and inspect
     $definition = $workspace->maps[0]->getEventDefinition('E');
 
     expect($definition['class'] ?? null)->toBe(ScriptEventTrigger::class)
+        // An empty script id is no script: it is offered, and written once chosen.
         ->and($definition['data'] ?? null)->toBe([
-            'scriptId' => '',
             'mode' => 'action',
             'reusable' => false,
         ])

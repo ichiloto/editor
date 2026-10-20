@@ -45,11 +45,13 @@ final class EventTypeCatalog
                 className: ScriptEventTrigger::class,
                 description: 'Runs a resumable event script by stable script id.',
                 defaultData: [
-                    'scriptId' => '',
                     'mode' => ScriptEventTrigger::MODE_ACTION,
                     'reusable' => false,
                 ],
                 defaultDefinitionFields: ['cue' => ['symbol' => '', 'color' => 'bright-yellow']],
+                // The script runs by id or from the event's own commands; an
+                // empty id is no script, so it is written only once chosen.
+                optionalData: ['scriptId' => ''],
             ),
             new EventTypeDefinition(
                 label: 'Cinematic',
