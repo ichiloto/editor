@@ -9,7 +9,7 @@ use Ichiloto\Editor\Database\RecordChange;
 use Ichiloto\Editor\Database\RecordItem;
 use Ichiloto\Editor\Database\RecordRefusal;
 use Ichiloto\Editor\Database\Slug;
-use Ichiloto\Editor\Database\WorldConditionExclusion;
+use Ichiloto\Engine\Core\WorldConditionExclusion;
 use Ichiloto\Editor\History\Command;
 use Ichiloto\Editor\History\GenericCommand;
 use Ichiloto\Editor\MapSourceRefusal;

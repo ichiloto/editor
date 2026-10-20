@@ -3096,6 +3096,8 @@ final class ProjectRecordDatabase
         $written = array_map(static fn(array $write): string => $write[0]->path, $writes);
         $deletions = array_values(array_diff($this->stagedDeletions, $written));
 
+        $projectRoot = $this->projectRoot;
+
         return new PreparedSave(
             $this->schema->key,
             static function (FileSetTransaction $transaction) use ($writes, $deletions): void {
@@ -3105,6 +3107,17 @@ final class ProjectRecordDatabase
                 }
                 foreach ($deletions as $path) {
                     $transaction->remove($path);
+                }
+            },
+            // Each staged file, evaluated as the game reads it, must be the record the editor holds.
+            static function (array $staged) use ($writes, $projectRoot): void {
+                foreach ($writes as [$file, $payload]) {
+                    $path = $staged[$file->path] ?? $file->path;
+                    $read = static fn(): mixed => require $path;
+                    $evaluated = $projectRoot !== null && is_dir($projectRoot) ? ProjectDirectoryContext::run($projectRoot, static fn(): mixed => $read()) : $read();
+                    if ($evaluated !== $payload) {
+                        throw new RuntimeException(sprintf('%s would not read back as the edited record; nothing was written.', basename($file->path)));
+                    }
                 }
             },
             adopt: function () use ($writes, $clean): void {

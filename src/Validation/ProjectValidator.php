@@ -13,7 +13,7 @@ use Ichiloto\Editor\Database\ProjectRecord;
 use Ichiloto\Editor\Database\ProjectRecordDatabase;
 use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\Database\SummonAssignmentDiagnostics;
-use Ichiloto\Editor\Database\WorldConditionExclusion;
+use Ichiloto\Engine\Core\WorldConditionExclusion;
 use Ichiloto\Editor\Events\CommandMapContext;
 use Ichiloto\Editor\Events\ProjectScriptCommands;
 use Ichiloto\Editor\Field\MapEncounters;

@@ -106,3 +106,21 @@ it('refuses to save a resource the Engine would refuse, writing nothing', functi
     expect(fn() => $session->saveDatabase(FieldResourceFields::CATEGORY))->toThrow(SessionRefusal::class)
         ->and((string) file_get_contents($path))->toBe($before);
 });
+
+it('authors a resource doorway as cells relative to its anchor, which the Engine reads back', function () {
+    [, $path, $session] = createFieldResourceProject();
+    $heading = array_find($session->readDatabaseRecord(FieldResourceFields::CATEGORY, 0)['rows'],
+        static fn(array $row): bool => ($row['listHeading'] ?? false) === true && str_starts_with((string) $row['label'], 'Doorway'));
+    expect($heading)->not->toBeNull();
+    $session->addDatabaseItem(FieldResourceFields::CATEGORY, 0, $heading['key'], true);
+    $session->addDatabaseItem(FieldResourceFields::CATEGORY, 0, $heading['key'], true);
+    applyResourceRow($session, 0, 'doorway1X', '1');
+    applyResourceRow($session, 0, 'doorway1Y', '-1');
+    $session->saveDatabase(FieldResourceFields::CATEGORY);
+
+    $written = require $path;
+    expect($written['resources']['oak']['doorway'])->toBe([['x' => 0, 'y' => 0], ['x' => 1, 'y' => -1]])
+        ->and((string) file_get_contents($path))->toContain('// Authored cue bindings stay as written.')
+        ->and(FieldPresentationCatalog::fromArray($written, dirname($path, 3))->getResource('oak')->doorway)
+            ->toBe([['x' => 0, 'y' => 0], ['x' => 1, 'y' => -1]]);
+});

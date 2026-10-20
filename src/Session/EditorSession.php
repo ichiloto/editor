@@ -5655,14 +5655,10 @@ final class EditorSession
         $outcome = ['maps' => $changed, 'saved' => [], 'written' => [], 'issues' => array_map(static fn(Issue $issue): array => $issue->describe(), $reported),
             'blocking' => count($blocking), 'relocated' => [], 'backupFailures' => []];
 
-        $relocations = [];
-        foreach ($changed as $mapId) {
-            $map = $this->getMapsById()[$mapId] ?? null;
-            $plan = $map instanceof ProjectMap && $map->isDirty() ? SaveRelocationPlanner::plan($map, $this->workspace->projectRoot) : null;
-            if ($plan !== null) {
-                $relocations = [...$relocations, ...$plan->describeMoves()];
-            }
-        }
+        $changedMaps = array_values(array_filter(array_map(fn(string $mapId): ?ProjectMap => $this->getMapsById()[$mapId] ?? null, $changed),
+            static fn(?ProjectMap $map): bool => $map?->isDirty() === true));
+        // The change set writes one manifest step for every map that moves saves.
+        $relocations = SaveRelocationPlanner::planAll($changedMaps, $this->workspace->projectRoot)?->describeMoves() ?? [];
         $reason = match (true) {
             $blocking !== [] => sprintf('%d error%s the player would meet.', count($blocking), count($blocking) === 1 ? '' : 's'),
             // A manifest step is a migration class or declared position edits, never both.
@@ -5901,7 +5897,7 @@ final class EditorSession
             },
             default => 'info',
         };
-        $list = $field['list'] ?? $field['encounterList'] ?? $field['bgmVariantList'] ?? $field['landmarkList'] ?? $field['areaList'] ?? null;
+        $list = $field['list'] ?? $field['encounterList'] ?? $field['bgmVariantList'] ?? $field['landmarkList'] ?? $field['areaList'] ?? $field['speakerList'] ?? null;
 
         // The terminal nests a row by indenting its label; an interface is given the depth instead.
         $label = (string) ($field['label'] ?? '');

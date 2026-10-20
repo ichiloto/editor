@@ -106,3 +106,45 @@ it('appends after the last entry when the closing bracket shares its line, keepi
     expect($written)->toBe("<?php\nreturn [\n  'tracks' => [\n    ['type' => 'image', 'sheet' => ['columns' => 2],\n      'keyframes' => [['frame' => 0]],\n      'fit' => 'contain',\n      'depth' => 'behind'{$comma}],\n    ['type' => 'text'],\n  ],\n];\n")
         ->and(eval('?>' . $written))->toBe($new);
 })->with(['without a trailing comma' => '', 'with a trailing comma' => ',']);
+
+it('writes entries that land at one place in the order the new list holds them', function () {
+    // An edited command matched by its speaker's name further down leaves two new
+    // commands to go ahead of it at the same offset; they must keep their order.
+    $source = "<?php\n\nreturn [\n  ['type' => 'text', 'name' => 'Ivara', 'text' => 'Old line.'],\n"
+        . "  ['type' => 'text', 'name' => '', 'text' => 'Narration.'],\n  ['type' => 'record_event', 'name' => 'done'],\n];\n";
+    $old = require_once_source($source);
+    $new = [
+        ['type' => 'move_route', 'subject' => 'npc', 'npcId' => 'first'],
+        ['type' => 'move_route', 'subject' => 'npc', 'npcId' => 'second'],
+        ['type' => 'text', 'name' => 'Ivara', 'text' => 'New line.'],
+        ['type' => 'record_event', 'name' => 'done'],
+    ];
+
+    $written = ArraySourceWriter::rewrite(PhpArraySourceDocument::parse($source), $old, $new)->source;
+
+    expect(require_once_source($written))->toBe($new);
+});
+
+it('keeps queued insertions at one offset in their queued order', function () {
+    $source = "<?php\n\nreturn [\n  'a',\n  'z',\n];\n";
+    $document = PhpArraySourceDocument::parse($source);
+
+    $written = $document->withEdits([
+        $document->insertEntryEdit([], 1, null, "'b'"),
+        $document->insertEntryEdit([], 1, null, "'c'"),
+    ])->source;
+
+    expect(require_once_source($written))->toBe(['a', 'b', 'c', 'z']);
+});
+
+/** Evaluates a returned PHP array source without leaving a file behind. */
+function require_once_source(string $source): mixed
+{
+    $path = tempnam(sys_get_temp_dir(), 'ichiloto-source-');
+    file_put_contents($path, $source);
+    try {
+        return require $path;
+    } finally {
+        unlink($path);
+    }
+}

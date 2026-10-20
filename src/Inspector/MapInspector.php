@@ -243,6 +243,7 @@ final readonly class MapInspector
                 'marker' => $marker,
             ],
             ...MapAreaFields::describeSubjectFields($map, $marker),
+            ...MapSpeakerFields::describeEventFields($map, $marker),
         ];
 
         if ($bounds !== null) {
@@ -354,6 +355,7 @@ final readonly class MapInspector
             'event-bounds' => $this->applyEventBounds($map, (string) $field['marker'], (string) $field['field'], (int) $value),
             MapLandmarkFields::TARGET, MapLandmarkFields::EVENT_TARGET, MapLandmarkFields::OBJECT_TARGET => $this->applyLandmarkValue($map, $field, $value),
             MapAreaFields::TARGET, MapAreaFields::SUBJECT_TARGET => MapAreaFields::applyValue($map, $field, $rawValue),
+            MapSpeakerFields::TARGET => MapSpeakerFields::applyValue($map, $field, $rawValue),
             MapAtlasFields::TARGET => $this->applyAtlasValue($map, $field, $value),
             MapTerrainFields::TARGET => $this->applyTerrainValue($map, $field, $value),
             MapStationField::TARGET => $this->applyStationValue($map, (string) $value),
@@ -621,6 +623,10 @@ final readonly class MapInspector
             throw new InspectorRefusal('Select cells on the map, then make an area of them.');
         }
 
+        if (($field['target'] ?? null) === MapSpeakerFields::TARGET) {
+            return MapSpeakerFields::addSpeaker($map, $field);
+        }
+
         if (($field['target'] ?? null) === 'map-bgm-variants' && is_array($field['bgmVariantList'] ?? null)) {
             $variants = $this->requireEditableBgmVariants($map);
 
@@ -681,6 +687,10 @@ final readonly class MapInspector
 
         if (($field['target'] ?? null) === MapAreaFields::TARGET && is_array($field['areaList'] ?? null)) {
             return MapAreaFields::removeEntry($map, $field);
+        }
+
+        if (($field['target'] ?? null) === MapSpeakerFields::TARGET && isset($field['index'])) {
+            return MapSpeakerFields::removeSpeaker($map, $field);
         }
 
         if (($field['target'] ?? null) === 'map-bgm-variants' && is_array($field['bgmVariantList'] ?? null)) {
