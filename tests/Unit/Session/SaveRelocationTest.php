@@ -188,3 +188,20 @@ it('writes the relocations of every map saved together as one manifest step', fu
         ->and(readSaveManifest($root)['contentVersion'])->toBe(1)
         ->and($recorded)->toHaveCount(1);
 });
+
+it('lands no save inside a bound event its own cell was not already in', function () {
+    $root = mapLineRemovalProject();
+    $home = $root . '/assets/Maps/home/home.data.php';
+    // An automatic event bound to a named area on the floor a relocation would otherwise choose.
+    file_put_contents($home, str_replace("'events' => [", "'areas' => [['id' => 'porch', 'area' => ['cells' => [[2, 4]]]]],\n  'events' => [\n    'Z' => ['class' => 'Ichiloto\\\\Engine\\\\Events\\\\Triggers\\\\ScriptEventTrigger',"
+        . " 'subject' => ['kind' => 'area', 'id' => 'porch'], 'data' => ['mode' => 'auto', 'reusable' => true, 'scriptId' => 'home-only']],",
+        (string) file_get_contents($home)));
+    $session = EditorSession::open($root);
+    $map = $session->readMap('home');
+    $session->paint('home', $map['revision'], $map['baseLayer'], [[2, 3]], '#');
+
+    $question = $session->saveMap('home');
+
+    expect($question['relocations'])->toHaveCount(1)
+        ->and($question['relocations'][0]['to'])->not->toBe([2, 4]);
+});

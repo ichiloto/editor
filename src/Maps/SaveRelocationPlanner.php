@@ -8,12 +8,14 @@ use Ichiloto\Editor\Database\PhpDataFile;
 use Ichiloto\Editor\ProjectDirectoryContext;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\Storage\SourceSetPlan;
+use Ichiloto\Engine\Core\CellArea;
 use Ichiloto\Engine\Events\Enumerations\CollisionType;
 use Ichiloto\Engine\Field\MapCollisionResolver;
 use Ichiloto\Engine\Field\MapSourceReader;
 use Ichiloto\Engine\Field\NpcPlacement;
 use Ichiloto\Engine\Field\Reachability\MapReachabilityReport;
 use Ichiloto\Engine\Field\Reachability\ProjectReachability;
+use Ichiloto\Engine\Field\Validation\MapEventResolver;
 use RuntimeException;
 use Throwable;
 
@@ -134,13 +136,17 @@ final class SaveRelocationPlanner
             return [];
         }
 
-        // A save lands on plain floor: never on grass, an exit, a save point, an event or an NPC.
+        // A save lands on plain floor: never on grass, an exit, a save point or an NPC, and never inside an event
+        // its own cell was not already in, painted or bound to an object or area, so loading it starts nothing new.
         $events = self::readEventCells($map);
-        $canLand = static fn(int $x, int $y): bool => ($grid[$y][$x] ?? null) === CollisionType::NONE->value
-            && $passable($x, $y) && $report->isReachable($x, $y) && ! isset($events["{$x},{$y}"]);
+        $areas = self::readEventAreas($map);
+        $canLandFrom = static fn(int $fromX, int $fromY): \Closure => static fn(int $x, int $y): bool
+            => ($grid[$y][$x] ?? null) === CollisionType::NONE->value
+            && $passable($x, $y) && $report->isReachable($x, $y) && ! isset($events["{$x},{$y}"])
+            && ! array_any($areas, static fn(CellArea $area): bool => $area->containsCell($x, $y) && ! $area->containsCell($fromX, $fromY));
         $groups = [];
         foreach ($blocked as [$x, $y]) {
-            $landing = self::findLanding($x, $y, $passable, $canLand, $grid);
+            $landing = self::findLanding($x, $y, $passable, $canLandFrom($x, $y), $grid);
             if ($landing === null && ! $report->isReachable($x, $y)) {
                 // A map the player reaches nowhere today holds no save a relocation could place.
                 continue;
@@ -191,6 +197,15 @@ final class SaveRelocationPlanner
         }
 
         return $best === null ? null : [$best[0], $best[1]];
+    }
+
+    /** @return list<CellArea> Every event's cells as the Engine resolves them, bound events included. */
+    private static function readEventAreas(ProjectMap $map): array
+    {
+        $events = MapEventResolver::inspect($map->getEditableData(), $map->getEventLayerCells(), $map->mapId)->events;
+
+        return array_values(array_map(static fn(array $event): CellArea => CellArea::fromArray($event['area'], 'Event area'),
+            array_filter($events, static fn(array $event): bool => is_array($event['area'] ?? null))));
     }
 
     /** @return array<string, true> Event markers, where a loaded save must not stand. */
