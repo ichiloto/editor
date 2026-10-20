@@ -1150,6 +1150,40 @@ it('checks a summon alias against the summons the project defines', function () 
     expect($missing)->toBe(['Alias target "cinder" is not defined in the current summons catalog.']);
 });
 
+it('checks a knowledge subject alias against the subjects the project declares', function () {
+    $root = makeTemporaryProject();
+    writeLoadableSampleMap($root);
+    writeConsistentQuests($root);
+    writeConsistentSkits($root);
+    writeConsistentEnemies($root);
+    file_put_contents($root . '/assets/Data/knowledge.php', "<?php\n\nreturn " . var_export([
+        'recordTypes' => ['creature'],
+        'subjects' => [['id' => 'creature.brush-wolf', 'recordType' => 'creature', 'displayName' => 'Brush Wolf', 'quickCard' => 'A wolf.']],
+    ], true) . ";\n");
+    writeSaveCompatibilityManifest($root, <<<'PHP'
+    <?php
+
+    return [
+      'contentVersion' => 0,
+      'migrations' => [],
+      'aliases' => [
+        'knowledge_subjects' => [
+          ['from' => 'creature.wolf', 'to' => 'creature.brush-wolf'],
+          ['from' => 'creature.fox', 'to' => 'creature.vixen'],
+        ],
+      ],
+      'tombstones' => [],
+    ];
+    PHP);
+
+    $missing = array_map(
+        static fn(Issue $issue): string => $issue->message,
+        issuesMentioning(validateProject($root), 'is not defined in the current'),
+    );
+
+    expect($missing)->toBe(['Alias target "creature.vixen" is not defined in the current knowledge_subjects catalog.']);
+});
+
 it('reads keys in long array syntax as nested, as var_export writes them, and still finds a real duplicate', function () {
     $root = makeTemporaryProject();
     $path = $root . '/assets/Maps/test-map/test-map.data.php';
