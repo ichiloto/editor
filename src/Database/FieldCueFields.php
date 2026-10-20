@@ -12,7 +12,7 @@ use Ichiloto\Engine\Animations\Field\FieldWaymarkStyle;
 /**
  * Field Cues: how the game draws cue marks and objective waymarks, one row
  * per setting. The cue style keeps marks readable on any ground (a plate,
- * a gentle bob, the edge pointer's distance, and the Terminal cell's
+ * a gentle bob, the edge pointer's spacing, and the Terminal cell's
  * background and bold); each cue colour names its upright mark effect and
  * the eight pointer images an edge marker turns; the waymark style picks the
  * colour, symbol and edge inset. Both editors offer it, since the Terminal
@@ -67,8 +67,9 @@ final class FieldCueFields
                 $path === "{$style}.bob.height" => new RecordField('value',
                     sprintf('Bob height (0..%d px)', FieldCueStyle::MAX_BOB_HEIGHT), InputControlType::INTEGER, displayDefault: $default),
                 $path === "{$style}.bob.seconds" => new RecordField('value', 'Bob seconds (0.4..4)', InputControlType::FLOAT, displayDefault: $default),
-                $path === "{$style}.pointerDistance" => new RecordField('value',
-                    sprintf('Pointer distance (0..%d px)', FieldCueStyle::MAX_POINTER_DISTANCE), InputControlType::INTEGER, displayDefault: $default),
+                $path === "{$style}.pointerSpacing.x", $path === "{$style}.pointerSpacing.y" => new RecordField('value',
+                    sprintf('Pointer spacing %s (0..%d px)', str_ends_with($path, '.x') ? 'across' : 'up or down',
+                        FieldCueStyle::MAX_POINTER_SPACING), InputControlType::INTEGER, displayDefault: $default),
                 $path === "{$style}.terminal.bold" => RecordField::boolean('value', 'Bold'),
                 str_ends_with($path, '.effect') => RecordField::reference('value', 'Mark effect', 'effects'),
                 str_contains($path, '.pointer.') && str_ends_with($path, '.asset')

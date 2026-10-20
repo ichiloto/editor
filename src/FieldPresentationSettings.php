@@ -45,7 +45,8 @@ final class FieldPresentationSettings extends ProjectSettingsFile
         }
         $style = new FieldCueStyle();
         foreach (['plate' => $style->plate, 'bob.height' => $style->bobHeight, 'bob.seconds' => $style->bobSeconds,
-            'pointerDistance' => $style->pointerDistance, 'terminal.background' => $style->terminalBackground,
+            'pointerSpacing.x' => $style->pointerSpacingX, 'pointerSpacing.y' => $style->pointerSpacingY,
+            'terminal.background' => $style->terminalBackground,
             'terminal.bold' => $style->terminalBold] as $key => $default) {
             $settings[self::CUE_STYLE . '.' . $key] = ['default' => $default];
         }

@@ -75,7 +75,7 @@ it('authors the cue treatment and pointer images as rows with the Engine default
   $session = EditorSession::open($root);
   $records = $session->listDatabaseRecords('field_cues')['records'];
 
-  expect($records)->toContain('cueStyle.plate', 'cueStyle.bob.height', 'cueStyle.bob.seconds', 'cueStyle.pointerDistance',
+  expect($records)->toContain('cueStyle.plate', 'cueStyle.bob.height', 'cueStyle.bob.seconds', 'cueStyle.pointerSpacing.x', 'cueStyle.pointerSpacing.y',
     'cueStyle.terminal.background', 'cueStyle.terminal.bold', 'cues.bright-yellow.effect',
     'cues.bright-yellow.pointer.east.asset', 'cues.bright-yellow.pointer.east.quarterTurns', 'waymarks.color')
     ->and(cueRow($session, 'cueStyle.plate')['row'])->toMatchArray(['kind' => 'reference', 'reference' => 'png_assets'])
