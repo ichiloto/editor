@@ -574,9 +574,23 @@ final class PhpArraySourceDocument
         $indent = $this->lineIndentBefore($entry->start);
 
         if ($indent === null) {
-            // The entry shares its line with something before it: only its
-            // own bytes and separator are its block.
-            return [$entry->start, $entry->separatorEnd];
+            // The entry shares its line with something before it: its own
+            // bytes and separator are its block, with the spaces that set it
+            // apart: those after it when another entry follows on the line,
+            // else those before it, so no line is left with trailing spaces.
+            $after = $entry->separatorEnd;
+            while ($after < strlen($this->source) && ($this->source[$after] === ' ' || $this->source[$after] === "\t")) {
+                $after++;
+            }
+            if ($after < strlen($this->source) && $this->source[$after] !== "\n" && $this->source[$after] !== "\r") {
+                return [$entry->start, $after];
+            }
+            $before = $entry->start;
+            while ($before > 0 && ($this->source[$before - 1] === ' ' || $this->source[$before - 1] === "\t")) {
+                $before--;
+            }
+
+            return [$before, $entry->separatorEnd];
         }
 
         $start = $this->lineStartOf($entry->start);
