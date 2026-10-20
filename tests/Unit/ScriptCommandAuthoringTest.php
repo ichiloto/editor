@@ -77,12 +77,12 @@ it('maps every Engine command reference to an Editor resource category', functio
 it('reads a project\'s declared commands without loading their handlers', function (): void {
     $root = makeTemporaryProject();
 
-    expect(ProjectScriptCommands::fromProject($root)->catalog->types)->toBe(['shop', 'inn', 'end_battle', 'concede']);
+    expect(ProjectScriptCommands::fromProject($root)->catalog->types)->toBe(['shop', 'inn', 'payday', 'collect_income', 'adjust_income', 'end_battle', 'concede']);
 
     writeCarriageDeclarations($root);
     $commands = ProjectScriptCommands::fromProject($root);
 
-    expect($commands->catalog->types)->toBe(['shop', 'inn', 'end_battle', 'concede', 'hire_carriage'])
+    expect($commands->catalog->types)->toBe(['shop', 'inn', 'payday', 'collect_income', 'adjust_income', 'end_battle', 'concede', 'hire_carriage'])
         ->and($commands->catalog->findDefinition('hire_carriage')?->handlerClass)->toBe('Project\\Commands\\HireCarriage')
         ->and(class_exists('Project\\Commands\\HireCarriage', false))->toBeFalse()
         ->and($commands->declarationProblem)->toBeNull();
@@ -97,7 +97,7 @@ it('offers the open project\'s registered commands with their declared fields', 
     $inn = registeredVariantFields('inn');
     $carriage = registeredVariantFields('hire_carriage');
 
-    expect($list->fields[0]->options)->toBe([...RecordSchemaCatalog::EVENT_COMMAND_TYPES, 'shop', 'inn', 'hire_carriage'])
+    expect($list->fields[0]->options)->toBe([...RecordSchemaCatalog::EVENT_COMMAND_TYPES, 'shop', 'inn', 'payday', 'collect_income', 'adjust_income', 'hire_carriage'])
         ->and(array_keys($shop))->toBe(['buyRate', 'sellRate'])
         ->and($shop['sellRate']->type)->toBe(InputControlType::FLOAT)
         ->and(array_keys($inn))->toBe(['confirmDialogue.text', 'confirmDialogue.name', 'cost', 'spawnPoint.x', 'spawnPoint.y', 'bgm', 'presentation', 'resultVariable'])

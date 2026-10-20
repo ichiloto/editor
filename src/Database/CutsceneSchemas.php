@@ -71,11 +71,6 @@ final class CutsceneSchemas
     public const array SUMMON_IMAGE_ANCHORS = ['target', 'caster', 'screen', 'stage'];
 
     /**
-     * Cardinal facings a staged actor and a movement route step use.
-     */
-    public const array FACINGS = ['north', 'south', 'east', 'west'];
-
-    /**
      * Returns the cinematic category: one record per asset, its metadata as
      * fields, its cast as a sub-list, and its script and finalizer as
      * command lists opened as frames.
@@ -360,7 +355,7 @@ final class CutsceneSchemas
             new RecordField('sprite', 'Sprite', InputControlType::MULTILINE, codec: RecordFieldCodec::LINES, removeWhenEmpty: true),
             new RecordField('asset', 'Asset', removeWhenEmpty: true),
             ...$position,
-            new RecordField('facing', 'Facing', options: self::FACINGS, removeWhenEmpty: true, displayDefault: 'south'),
+            ...EndFacingFields::getFields($entry, cinematic: true, graphical: $graphical, facingDefault: 'south'),
             RecordField::boolean('visible', 'Visible', removeWhenEmpty: false, displayDefault: 'true'),
             RecordField::boolean('collision', 'Collision'),
             new RecordField('sprites.north', 'Sprite North', InputControlType::MULTILINE, codec: RecordFieldCodec::LINES, removeWhenEmpty: true),
@@ -375,7 +370,8 @@ final class CutsceneSchemas
 
         if (isset($entry['subject'])) {
             $fields = array_values(array_filter($fields, static fn(RecordField $field): bool
-                => ! in_array($field->key, ['facing', 'collision'], true)));
+                => ! in_array($field->key, [EndFacingFields::FACING_FIELD, EndFacingFields::KIND_FIELD, EndFacingFields::ID_FIELD,
+                    'collision'], true)));
         }
 
         return [...$fields, ...StagedActorFields::getFields($entry)];

@@ -91,6 +91,7 @@ final class ProjectScriptCommands
             ScriptCommandReference::QUEST => 'quests',
             ScriptCommandReference::ACTOR => 'actors',
             ScriptCommandReference::STAGE_TIMELINE => 'stage_timelines',
+            ScriptCommandReference::INCOME_SCHEDULE => 'income_schedules',
             // The owning troop's members: chosen from that troop, checked by the Engine's page validation.
             ScriptCommandReference::TROOP_MEMBER => null,
         };
