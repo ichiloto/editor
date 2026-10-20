@@ -16,6 +16,8 @@ use Ichiloto\Editor\Database\SummonAssignmentDiagnostics;
 use Ichiloto\Engine\Core\WorldConditionExclusion;
 use Ichiloto\Editor\Events\CommandMapContext;
 use Ichiloto\Editor\Events\ProjectScriptCommands;
+use Ichiloto\Editor\Field\MapAreaAuthoring;
+use Ichiloto\Editor\Field\MapAreaRefusal;
 use Ichiloto\Editor\Field\MapEncounters;
 use Ichiloto\Editor\Field\ProjectNpc;
 use Ichiloto\Editor\ActorStatPreview;
@@ -28,6 +30,7 @@ use Ichiloto\Editor\ProjectQuest;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Engine\Battle\Presentation\BattlePresentationCatalog;
+use Ichiloto\Engine\Field\EncounterEntry;
 use Ichiloto\Engine\Rendering\Tilesets\Tileset;
 use Ichiloto\Engine\Core\WorldConditionType;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicScriptValidator;
@@ -1858,6 +1861,7 @@ class ProjectValidator
       }
     }
 
+    $issues = [...$issues, ...$this->checkEncounterAreas($map, $rows)];
     $issues = [...$issues, ...$this->checkBattleArena($encounters->mapArena(), $map->mapId, 'The encounters')];
 
     foreach ($rows as $row) {
@@ -1865,6 +1869,51 @@ class ProjectValidator
     }
 
     return [...$issues, ...$this->checkEncounterRate($map, $encounters), ...$this->checkEncounterTiles($map, $encounters), ...$this->checkEncounterTroopDuplicates($map)];
+  }
+
+  /**
+   * Checks that every area an encounter troop is limited to is one the map
+   * declares, and that its scope is one the engine reads: the engine never
+   * meets a troop whose scope it cannot place, rather than meeting it
+   * map-wide.
+   *
+   * @param array<int, array{name: string, areas: list<string>}> $rows
+   * @return Issue[] The issues found.
+   */
+  protected function checkEncounterAreas(ProjectMap $map, array $rows): array
+  {
+    $scoped = array_filter($rows, static fn(array $row): bool => $row['areas'] !== []);
+
+    if ($scoped === []) {
+      return [];
+    }
+
+    try {
+      $declared = array_keys(MapAreaAuthoring::readCatalog($map)->areas);
+    } catch (MapAreaRefusal) {
+      // The areas themselves are reported where they are declared.
+      return [];
+    }
+
+    $issues = [];
+
+    foreach ($scoped as $row) {
+      if (EncounterEntry::getFromValue(['weight' => 1, MapEncounters::AREAS_KEY => $row['areas']]) === null) {
+        $issues[] = Issue::error($map->mapId,
+          sprintf('The troop "%s" is limited to areas the engine cannot read (%s), so it is never met.', $row['name'], implode(', ', $row['areas'])),
+          'List each of the map\'s area ids once.');
+
+        continue;
+      }
+
+      foreach (array_diff($row['areas'], $declared) as $area) {
+        $issues[] = Issue::error($map->mapId,
+          sprintf('The troop "%s" is limited to the area "%s", which this map does not declare, so it is never met.', $row['name'], $area),
+          $declared === [] ? 'Declare the area on the map first.' : sprintf('This map\'s areas are %s.', implode(', ', $declared)));
+      }
+    }
+
+    return $issues;
   }
 
   /**

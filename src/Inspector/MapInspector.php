@@ -24,6 +24,8 @@ use Ichiloto\Editor\Events\EventTypeDefinition;
 use Ichiloto\Editor\Field\MapBgmVariants;
 use Ichiloto\Editor\Field\MapEncounters;
 use Ichiloto\Editor\Field\MapAtlas;
+use Ichiloto\Editor\Field\MapAreaAuthoring;
+use Ichiloto\Editor\Field\MapAreaRefusal;
 use Ichiloto\Editor\Field\MapLandmarks;
 use Ichiloto\Editor\History\Command;
 use Ichiloto\Editor\History\CommandGroup;
@@ -77,6 +79,9 @@ final readonly class MapInspector
     public const string MAP_KIND_NONE = 'Not set';
     public const string MAP_ARENA_NONE = '(default arena)';
     public const string ENCOUNTER_ARENA_NONE = '(map arena)';
+
+    /** An encounter row met anywhere the map counts steps. */
+    public const string ENCOUNTER_AREAS_NONE = '(whole map)';
 
     /** Classification is authored explicitly, never inferred from cue presentation. */
     public const array EVENT_CUE_KIND_CHOICES = [
@@ -1347,6 +1352,38 @@ final readonly class MapInspector
     }
 
     /**
+     * Reads typed area ids for an encounter row: the map's named areas,
+     * separated by commas or spaces, or none for the whole map.
+     *
+     * @return list<string>
+     * @throws InspectorRefusal When the map's areas cannot be read, or one is not declared.
+     */
+    private function requireEncounterAreas(ProjectMap $map, string $value): array
+    {
+        $value = trim($value);
+
+        if ($value === '' || $value === self::ENCOUNTER_AREAS_NONE) {
+            return [];
+        }
+
+        try {
+            $declared = array_keys(MapAreaAuthoring::readCatalog($map)->areas);
+        } catch (MapAreaRefusal $error) {
+            throw new InspectorRefusal($error->getMessage());
+        }
+
+        $areas = array_values(array_unique(preg_split('/[\s,]+/', $value, flags: PREG_SPLIT_NO_EMPTY) ?: []));
+        $unknown = array_diff($areas, $declared);
+
+        if ($unknown !== []) {
+            throw new InspectorRefusal(sprintf('%s %s no area of this map; its areas are %s.', implode(', ', $unknown),
+                count($unknown) === 1 ? 'names' : 'name', $declared === [] ? 'none yet (select cells on the map to make one)' : implode(', ', $declared)));
+        }
+
+        return $areas;
+    }
+
+    /**
      * @param Closure(): array{entries: list<array<string, mixed>>, summary: string} $edit
      * @throws InspectorRefusal When the list cannot take the edit or the map would not load the result.
      */
@@ -1401,6 +1438,7 @@ final readonly class MapInspector
             'weight' => $encounters->withWeightAt($index, (int) $value),
             'troop' => $encounters->withTroopAt($index, (string) $value),
             'arena' => $encounters->withArenaAt($index, $this->requireArena((string) $value, self::ENCOUNTER_ARENA_NONE)),
+            'areas' => $encounters->withAreasAt($index, $this->requireEncounterAreas($map, (string) $value)),
             'mapArena' => $encounters->withMapArena($this->requireArena((string) $value, self::MAP_ARENA_NONE)),
             default => null,
         };
@@ -1499,6 +1537,17 @@ final readonly class MapInspector
                 'control' => new InputControl(InputControlType::INTEGER, $usable ? (string) (int) $weight : '1'),
                 'target' => 'map-encounters',
                 'field' => 'weight',
+                'index' => $index,
+                'encounterList' => ['index' => $index],
+            ];
+
+            // Typed as area ids, the way the Terminal names an area elsewhere.
+            $fields[] = [
+                'label' => '    Areas',
+                'value' => $row['areas'] === [] ? self::ENCOUNTER_AREAS_NONE : implode(', ', $row['areas']),
+                'control' => new InputControl(InputControlType::TEXT, implode(', ', $row['areas'])),
+                'target' => 'map-encounters',
+                'field' => 'areas',
                 'index' => $index,
                 'encounterList' => ['index' => $index],
             ];

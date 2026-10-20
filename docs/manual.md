@@ -1017,6 +1017,15 @@ rows beneath it edit the engine's own `encounters` block:
   troop is its weight over the sum. Two rows can never name the same troop:
   PHP would keep the last weight and discard the other without a word, so
   the editor refuses the edit and says which row already has it.
+- Each troop row has `Areas`: the map's named areas (see `Areas` above the
+  map's events) the troop is met in, typed as area ids separated by commas,
+  or left empty for `(whole map)`. A troop with areas is met only while the
+  player stands in one of them, and a step where no troop can be met does not
+  count, so a map whose troops all live in areas is quiet between them. Only
+  the map's declared areas are accepted. Renaming an area renames it in every
+  troop that names it, in the same undo step, and an area a troop names
+  cannot be deleted until the troop no longer names it. Written
+  `'Roost Bats' => ['weight' => 3, 'areas' => ['east-roost']]`.
 - `Rate` is the **average** number of steps between fights, not an exact
   interval - the engine rolls each gap between half and one-and-a-half
   times this value. Until you set one it shows `(engine default: 15)`, and
