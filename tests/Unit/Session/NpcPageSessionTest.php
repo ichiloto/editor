@@ -123,3 +123,12 @@ it('keeps an NPC named as a staged speaker from being renamed away', function ()
     expect(fn() => $session->applyNpc('test-map', $revision, 1, npcSessionRow($session->readNpc('test-map', 1), 'id')['key'], 'clerk'))
         ->toThrow(SessionRefusal::class, 'NPC Mentor page 1 (speaker)');
 });
+
+it('marks the rows of a page, not of its lines, as ordered for the graphical editor', function () {
+    $session = EditorSession::open(npcPageProject());
+    $rows = $session->readNpc('test-map', 0)['rows'];
+    $ordered = static fn(string $field): bool => (array_find($rows, static fn(array $row): bool => ($row['key']['field'] ?? null) === $field)['ordered'] ?? false) === true;
+
+    expect($ordered('variant0Conditions'))->toBeTrue()->and($ordered('variant0Cuesymbol'))->toBeTrue()
+        ->and($ordered('variant0Line0Text'))->toBeFalse()->and($ordered('name'))->toBeFalse();
+});

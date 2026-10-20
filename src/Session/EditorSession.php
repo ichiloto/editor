@@ -4971,7 +4971,15 @@ final class EditorSession
         // Keyed whether or not it can be edited; a read-only row is `info`.
         $named = is_string($fieldId) && $fieldId !== NpcInspector::ASSIGN_ID_FIELD;
 
-        return self::describeRecordRow($records, $index, $frame, $field, $named ? 'npc' : null);
+        $row = self::describeRecordRow($records, $index, $frame, $field, $named ? 'npc' : null);
+
+        // A page's own rows (not its lines) can move it: talking runs the first available page, so order is meaning.
+        $item = $named && $frame === [] ? $records->locateItem($index, [], (string) $fieldId) : null;
+        if ($item?->kind === RecordItem::ENTRY && $item->framePath === [] && $item->childIndex === null && $item->listKey === null) {
+            $row['ordered'] = true;
+        }
+
+        return $row;
     }
 
     /**
@@ -5987,6 +5995,7 @@ final class EditorSession
             'itemNoun' => is_string($field['itemNoun'] ?? null) ? $field['itemNoun'] : null,
             'listHeading' => ($field['listHeading'] ?? false) === true ? true : null,
             'childNoun' => is_string($field['childNoun'] ?? null) ? $field['childNoun'] : null,
+            'ordered' => ($field['ordered'] ?? false) === true ? true : null,
             'multiline' => $control?->type === InputControlType::MULTILINE ? true : null,
             'key' => $key,
         ], static fn(mixed $value): bool => $value !== null);
