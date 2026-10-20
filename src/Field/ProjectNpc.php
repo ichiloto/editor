@@ -12,7 +12,8 @@ use Ichiloto\Editor\Dialogue\DialogueVariants;
  * The runtime contract, verbatim from `NpcManager::configure()`: `name`,
  * `x`, `y` required; `sprite` (default `@`); `movement` `fixed`|`wander`;
  * `directionFix` (bool, default false: true keeps the heading when the
- * player talks to it instead of turning to face the player);
+ * player talks to it instead of turning to face the player); `facing`
+ * (north|east|south|west, default south: the heading it stands with);
  * optional `wanderArea` {x,y,width,height}, unbounded when omitted;
  * `dialogue` (plain pages or conditional variants); `script` (event
  * commands, which take precedence over dialogue when non-empty);
@@ -34,7 +35,7 @@ final class ProjectNpc
      * The fields the runtime reads, in the order a fresh entry is written.
      */
     public const array KNOWN_FIELDS = [
-        'id', 'name', 'sprite', 'x', 'y', 'movement', 'directionFix', 'wanderArea', 'sprites',
+        'id', 'name', 'sprite', 'x', 'y', 'movement', 'facing', 'directionFix', 'wanderArea', 'sprites',
         'conditions', 'dialogue', 'script', 'sets', 'sprites2d', 'cue',
     ];
 
