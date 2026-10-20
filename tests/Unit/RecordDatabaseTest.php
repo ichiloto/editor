@@ -419,3 +419,47 @@ it('edits literal terms while preserving inline config comments byte for byte', 
 
     removeDirectoryRecursively($root);
 });
+
+it('authors how a state behaves outside battle and refuses a state the Engine could not read', function (): void {
+    $root = makeTemporaryProject();
+    $database = loadRecordDatabase($root, 'states');
+    $fields = array_column($database->getSettingsFields(0), null, 'field');
+
+    expect($fields)->toHaveKeys(['label', 'fieldTickSteps', 'fieldTickKnocksOut', 'curedByRest'])
+        ->and($fields['curedByRest']['value'] ?? null)->not->toBe('false');
+
+    $database->setField(0, 'label', 'PSN');
+    $database->setField(0, 'fieldTickSteps', '8');
+    $database->setField(1, 'curedByRest', 'false');
+    $database->save();
+    $payload = require $root . '/assets/Data/states.php';
+
+    expect($payload[0])->toMatchArray(['label' => 'PSN', 'fieldTickSteps' => 8])
+        ->and($payload[0])->not->toHaveKeys(['fieldTickKnocksOut', 'curedByRest'])
+        ->and($payload[1]['curedByRest'])->toBeFalse();
+
+    $database->setField(0, 'fieldTickSteps', '-3');
+    expect(fn() => $database->save())->toThrow('fieldTickSteps must be a whole number of steps');
+    expect((require $root . '/assets/Data/states.php')[0]['fieldTickSteps'])->toBe(8);
+});
+
+it('authors an item cure through the states it removes and keeps value effects apart', function (): void {
+    $root = makeTemporaryProject();
+    $database = loadRecordDatabase($root, 'items');
+    $entry = $database->addSubItem(1);
+
+    expect(array_column($database->getSettingsFields(1), 'field'))->toContain('effect' . $entry . 'Value')
+        ->not->toContain('effect' . $entry . 'StateIds');
+
+    $database->setField(1, 'effect' . $entry . 'Type', 'remove_state');
+    $fields = array_column($database->getSettingsFields(1), 'field');
+
+    expect($fields)->toContain('effect' . $entry . 'StateIds')->not->toContain('effect' . $entry . 'Value');
+
+    $database->setField(1, 'effect' . $entry . 'Name', 'Cure Poison');
+    $database->setField(1, 'effect' . $entry . 'StateIds', 'poison');
+    $database->save();
+    $antidote = (require $root . '/assets/Data/Items/0002-antidote.php')['data'];
+
+    expect($antidote['effects'])->toBe([['type' => 'remove_state', 'name' => 'Cure Poison', 'description' => 'Recovers HP', 'stateIds' => ['poison']]]);
+});
