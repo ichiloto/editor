@@ -43,6 +43,28 @@ from its type and target.
 
 Press `Ctrl+S` to save the category.
 
+## Point The Way
+
+Each objective has a `Waymarks` row. A waymark tells the player where to go:
+the field shows it on screen, or as an arrow hugging the screen edge when it
+is off screen, and the local and world maps mark it. When it is on another
+map, the exit that leads there is marked instead.
+
+- `Shift+O` on an objective's `Waymarks` row adds a waymark to it (on the
+  objective's other rows it still adds an objective).
+- Pick its `Map` first. `Event`, `NPC`, `Object` and `Landmark` then offer
+  what that map holds; choose one, or none to mean the whole map. Choosing
+  one clears the others, since a waymark points at one thing.
+- `Shows When` takes a condition line. Use it for phases (show the next
+  step only once the previous one's flag is set) and for free-order work
+  (several waymarks, each hidden once its own part is done).
+
+Waymarks store the subject's stable id, never coordinates, so moving an NPC
+or an event moves its waymark too. Validation reports a waymark whose map or
+subject no longer exists. The `Waymarks` Database category sets how they
+look: a terminal colour (which also picks the cue art drawn in graphics), a
+one-cell symbol and how far edge arrows sit in from the edge.
+
 ## Condition Lines
 
 Quest prerequisites, skit conditions, and event `branch` arms share one grammar,

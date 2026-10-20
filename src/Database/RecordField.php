@@ -45,6 +45,9 @@ final readonly class RecordField
      * @param bool $uniqueAcrossRecords For a list field, whether a member may
      * be held by one record of the category at most (an animation role plays
      * one animation), so taking one another record holds is refused.
+     * @param string|null $referenceMapKey For a map-local reference (an event
+     * marker, an NPC), the entry field naming the map its choices come from,
+     * when that is not the map the author has selected.
      */
     public function __construct(
         public string $key,
@@ -64,7 +67,23 @@ final readonly class RecordField
         public bool $uniqueAcrossRecords = false,
         /** For a line's emotion, how the line names its speaker, whose catalogue emotions it is chosen from. */
         public ?DialogueLineSpeaker $dialogueSpeaker = null,
+        public ?string $referenceMapKey = null,
     ) {
+    }
+
+    /**
+     * Returns a reference to something on a map the entry itself names: a
+     * quest waymark's event marker is chosen from the waymark's map.
+     *
+     * @param string $key The payload key.
+     * @param string $label The settings-pane label.
+     * @param string $category The map-local kind of resource it names.
+     * @param string $mapKey The entry field holding the map id.
+     * @return self The field, unset by default.
+     */
+    public static function mapReference(string $key, string $label, string $category, string $mapKey): self
+    {
+        return new self($key, $label, removeWhenEmpty: true, reference: $category, allowsNone: true, referenceMapKey: $mapKey);
     }
 
     /**

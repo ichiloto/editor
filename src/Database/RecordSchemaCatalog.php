@@ -52,6 +52,7 @@ use Ichiloto\Engine\Rendering\Tilesets\Tileset;
 use Ichiloto\Engine\Rendering\Tilesets\TilesetPiece;
 use Ichiloto\Engine\Rendering\Tilesets\TilesetSheet;
 use Ichiloto\Engine\Quests\QuestObjectiveType;
+use Ichiloto\Engine\Quests\QuestWaymarkSubject;
 use Ichiloto\Engine\Battle\Enumerations\BattleEngineType;
 use Ichiloto\Engine\Battle\Presentation\BattlePoseRole;
 use Ichiloto\Engine\Battle\Presentation\BattlePresentationCatalog;
@@ -137,6 +138,7 @@ final class RecordSchemaCatalog
             \Ichiloto\Editor\Field\MapCategoryFields::getSchema(),
             DialoguePortraitFields::getSchema(),
             DialogueSpeakerFields::getSchema(),
+            WaymarkStyleFields::getSchema(),
             self::configuration($graphical),
             self::types(),
             self::tilesets($graphical),
@@ -1063,6 +1065,7 @@ final class RecordSchemaCatalog
                 blank: ['type' => QuestObjectiveType::TALK_TO->value, 'target' => 'New Target'],
                 variants: $variants,
                 variantKey: 'type',
+                nestedLists: ['*' => self::questWaymarks()],
             ),
             subLists: [
                 new RecordSubList(
@@ -1080,6 +1083,35 @@ final class RecordSchemaCatalog
                 ),
             ],
             identityFollowsLabel: true,
+        );
+    }
+
+    /**
+     * An objective's waymarks: where it sends the player. Each names a map
+     * and at most one stable subject on it, chosen from that map's own
+     * events, NPCs, world objects or landmarks, never coordinates. Its
+     * conditions say when it shows: a phase, or one part of free-order work.
+     */
+    private static function questWaymarks(): RecordSubList
+    {
+        $subjects = array_map(static fn(QuestWaymarkSubject $subject): string => $subject->value, QuestWaymarkSubject::cases());
+
+        return new RecordSubList(
+            key: 'waymarks',
+            prefix: 'waymark',
+            singular: 'waymark',
+            fields: [
+                RecordField::reference('map', 'Map', 'maps'),
+                RecordField::mapReference(QuestWaymarkSubject::EVENT->value, 'Event', 'event_markers', 'map'),
+                RecordField::mapReference(QuestWaymarkSubject::NPC->value, 'NPC', 'map_npcs', 'map'),
+                RecordField::mapReference(QuestWaymarkSubject::OBJECT->value, 'Object', 'map_world_objects', 'map'),
+                RecordField::mapReference(QuestWaymarkSubject::LANDMARK->value, 'Landmark', 'map_landmarks', 'map'),
+                new RecordField('conditions', 'Shows When', removeWhenEmpty: true, codec: RecordFieldCodec::CONDITIONS),
+            ],
+            blank: ['map' => ''],
+            exclusiveFields: [$subjects],
+            heading: 'Waymarks',
+            removeWhenEmpty: true,
         );
     }
 

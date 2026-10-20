@@ -1260,7 +1260,8 @@ skill's effects, a quest's rewards) listed under them.
 | Animations | `assets/Data/animations.php` | Editable | Same |
 | Tilesets | `assets/Data/Tilesets/*.php` | Editable - name, RPG Maker sheets, missing-art tile, above and table tiles, shadow, and pieces by id with their glyphs and tiles | Same |
 | Common Events | `assets/Events/*.php` | Editable | Same |
-| Quests | `assets/Data/quests.php` | Editable - objectives (the target picked by type), reward items with quantities, prerequisites, optional; the id follows the name until something refers to it | Same |
+| Quests | `assets/Data/quests.php` | Editable - objectives (the target picked by type) with their waymarks, reward items with quantities, prerequisites, optional; the id follows the name until something refers to it | Same |
+| Waymarks | `assets/Data/Presentation/field.php` (`waymarks`) | Editable - one row per setting: the waymark colour, its one-cell symbol and the edge inset, showing the Engine's defaults until set | Same |
 | Skits | `assets/Data/Skits/*.php` | Editable | Same |
 | Knowledge | `assets/Data/knowledge.php` | Editable | Same |
 | Knowledge Reports | `assets/Data/knowledge.php` | Editable | Same |
