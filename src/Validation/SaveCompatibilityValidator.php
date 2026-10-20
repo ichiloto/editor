@@ -349,7 +349,24 @@ final class SaveCompatibilityValidator
             ),
             ContentReferenceCategory::SUMMON => $this->summonIds($workspace),
             ContentReferenceCategory::STORY_EVENT => null,
+            // A retired subject folds into one the knowledge catalogue still declares.
+            ContentReferenceCategory::KNOWLEDGE_SUBJECT => $this->knowledgeSubjectIds($workspace),
         };
+    }
+
+    /**
+     * The knowledge subjects the project declares; null when the catalogue
+     * cannot be read, which its own validation reports.
+     *
+     * @return string[]|null
+     */
+    private function knowledgeSubjectIds(ProjectWorkspace $workspace): ?array
+    {
+        try {
+            return array_map(static fn(object $subject): string => $subject->id, $workspace->catalogs->loadKnowledgeCatalog()->subjects());
+        } catch (Throwable) {
+            return null;
+        }
     }
 
     /**

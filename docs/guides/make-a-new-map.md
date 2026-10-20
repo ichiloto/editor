@@ -90,6 +90,10 @@ neither is written to the file by just looking. `Del` removes the row the
 cursor is in; removing the last row turns encounters off and removes the
 block entirely.
 
+A troop that lives in one part of the map, such as bats at a roost, is limited
+to that part by its `Areas` row: make a named area from cells on the map, then
+type its id there. Steps outside every troop's areas never start a fight.
+
 ## Save
 
 Press `Ctrl+S`.

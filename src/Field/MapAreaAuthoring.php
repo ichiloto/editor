@@ -20,9 +20,9 @@ use InvalidArgumentException;
  * area in the Engine's CellArea shape: exact `cells`, or `x`, `y`, `width`
  * and `height`. Every edit is checked by the Engine's own reader
  * ({@see MapAreaCatalog}) against the map's physical grid before it lands,
- * and is one undo step. Renaming an area rewrites the events and landmarks
- * that name it in the same step; deleting one they name is refused, naming
- * them.
+ * and is one undo step. Renaming an area rewrites the events, landmarks and
+ * encounter troops that name it in the same step; deleting one they name is
+ * refused, naming them.
  *
  * @package Ichiloto\Editor\Field
  */
@@ -125,8 +125,8 @@ final readonly class MapAreaAuthoring
     }
 
     /**
-     * Gives an area a new id, and every event and landmark naming it the new
-     * id, as one undo step. Null when the id is unchanged.
+     * Gives an area a new id, and every event, landmark and encounter troop
+     * naming it the new id, as one undo step. Null when the id is unchanged.
      *
      * @throws MapAreaRefusal When there is no such area, or the new id is taken or not an area id.
      */
@@ -158,13 +158,17 @@ final readonly class MapAreaAuthoring
                 }
                 $this->map->setMapDataField([MapLandmarks::KEY], $landmarks);
             }
+            $encounters = MapEncounters::fromMap($this->map);
+            if ($encounters->isSupported() && $encounters->troopsInArea($id) !== []) {
+                $this->map->setMapDataField([MapEncounters::KEY], $encounters->withAreaRenamed($id, $to));
+            }
         });
     }
 
     /**
      * Removes an area nothing names.
      *
-     * @throws MapAreaRefusal When there is no such area, or an event or landmark names it.
+     * @throws MapAreaRefusal When there is no such area, or an event, landmark or encounter troop names it.
      */
     public function deleteArea(string $id): Command
     {
@@ -181,8 +185,8 @@ final readonly class MapAreaAuthoring
     }
 
     /**
-     * What names an area: events bound to it as their subject, and landmarks
-     * anchored to it.
+     * What names an area: events bound to it as their subject, landmarks
+     * anchored to it, and encounter troops met in it.
      *
      * @return list<string>
      */
@@ -195,7 +199,11 @@ final readonly class MapAreaAuthoring
             }
         }
 
-        return [...$found, ...MapLandmarks::describeAnchorReferences($map, [self::ANCHOR_KIND => $id])];
+        $encounters = MapEncounters::fromMap($map);
+        $troops = $encounters->isSupported() ? $encounters->troopsInArea($id) : [];
+
+        return [...$found, ...MapLandmarks::describeAnchorReferences($map, [self::ANCHOR_KIND => $id]),
+            ...array_map(static fn(string $troop): string => sprintf('%s encounter %s', $map->mapId, $troop), $troops)];
     }
 
     /** Whether an event definition is bound to the area as its subject. */
@@ -254,7 +262,7 @@ final readonly class MapAreaAuthoring
     }
 
     /**
-     * Runs an edit of the map's areas, events and landmarks, and returns the
+     * Runs an edit of the map's areas, events, landmarks and encounters, and returns the
      * command that redoes and undoes exactly it. Null when it changed
      * nothing. An edit that throws has changed nothing.
      *
@@ -263,7 +271,7 @@ final readonly class MapAreaAuthoring
     private function record(string $label, callable $edit): ?Command
     {
         $map = $this->map;
-        $keys = [self::KEY, 'events', MapLandmarks::KEY];
+        $keys = [self::KEY, 'events', MapLandmarks::KEY, MapEncounters::KEY];
         $capture = static fn(): array => array_combine($keys, array_map(
             static fn(string $key): array => [$map->hasMapDataField([$key]), $map->getMapDataField([$key])], $keys));
         $restore = static function (array $state) use ($map): void {
