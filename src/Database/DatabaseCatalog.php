@@ -64,7 +64,11 @@ final class DatabaseCatalog
             new DatabaseCategoryDefinition(\Ichiloto\Editor\Field\TextRoleFields::CATEGORY,
             'Text Roles', 'How text such as a sign\'s label is set: the project\'s fonts, size and colour.', true),
             new DatabaseCategoryDefinition(MenuThemeFields::CATEGORY,
-            'Menu Theme', 'The shared menu theme: the minimap atlas\'s corner sizes, margin, markers and frame, and icon images.', true)];
+            'Menu Theme', 'The shared menu theme: the minimap atlas\'s corner sizes, margin, markers and frame, and icon images.', true),
+            new DatabaseCategoryDefinition(BattleArenaFields::CATEGORY,
+            'Battle Arenas', 'Battle backgrounds and the ground battlers stand on in each.', true),
+            new DatabaseCategoryDefinition(BattleArenaFields::DEFAULT_CATEGORY,
+            'Default Battle Arena', 'The arena a battle that names none is fought on.', true)];
     }
 
     /**

@@ -106,7 +106,7 @@ it('makes one record per battler, and keeps battle art out of the terminal\'s ca
         ->and(fn() => $session->describeBattlerArt('troops', 'Pair'))->toThrow(SessionRefusal::class, 'actors or enemies');
 });
 
-it('previews an actor in the lead party slot with its art as set, unsaved edits included', function () {
+it('previews an actor in the party formation\'s front slot with its art as set, unsaved edits included', function () {
     $root = battlerArtProject();
     writeTilesetTestPng($root . '/assets/Graphics/Actors/Kaelion.png', 50, 100);
     $session = EditorSession::open($root);
@@ -119,7 +119,8 @@ it('previews an actor in the lead party slot with its art as set, unsaved edits 
     $preview = $session->readActorPreview($actor);
 
     expect($preview['formationIssue'])->toBeNull()
-        ->and($preview['formation']['party'][0])->toMatchArray(['name' => 'Kaelion', 'ground' => ['x' => 1050.0, 'y' => 420.0]])
+        // A party of one stands in the formation's front slot.
+        ->and($preview['formation']['party'][0])->toMatchArray(['name' => 'Kaelion', 'ground' => ['x' => 1180.0, 'y' => 560.0]])
         ->and($preview['formation']['party'][0]['image']['asset'] ?? null)->toBe('Graphics/Actors/Kaelion.png')
         ->and($preview['formation']['members'])->toBe([])
         ->and($session->describeBattlerArt('actors', $identity))->toMatchArray(['index' => $art, 'owner' => 'data']);

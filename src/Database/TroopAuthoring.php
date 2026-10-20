@@ -6,6 +6,7 @@ namespace Ichiloto\Editor\Database;
 
 use Ichiloto\Editor\Cutscenes\Source\SourcePreservationRefusal;
 use Ichiloto\Editor\History\GenericCommand;
+use Ichiloto\Engine\Battle\Presentation\BattleStageSlot;
 use RuntimeException;
 
 /**
@@ -107,6 +108,63 @@ final readonly class TroopAuthoring
 
         return new RecordChange(new GenericCommand(
             'Clear members',
+            static fn() => $record->restorePayload($after),
+            static fn() => $record->restorePayload($before),
+        ), $index);
+    }
+
+    /**
+     * Places every member of a troop in its graphical formation at once, as
+     * one step: each member gets the place given, as the Engine's stage
+     * place array, or none (null), which the battle then arranges beside
+     * the others. Align, arranging automatically and dragging one member of
+     * a troop the battle arranges all place every member together, so no
+     * member moves except the one the author moved. The Engine's place rules
+     * decide what is accepted.
+     *
+     * @param list<?array<string, int|float>> $places One per member, in member order.
+     * @throws RecordRefusal When the troops cannot be written, there is no such troop, the count differs or a place is refused.
+     */
+    public function placeMembers(ProjectRecordDatabase $troops, int $index, array $places, string $label): RecordChange
+    {
+        $list = $this->requireMembers($troops, $index);
+        $record = $troops->getRecordByIndex($index);
+        $members = $troops->getSubItems($index, $list->key);
+        if (! array_is_list($places) || count($places) !== count($members)) {
+            throw new RecordRefusal(sprintf('A troop of %d members needs %d places, one each.', count($members), count($members)));
+        }
+        $placed = [];
+        foreach ($members as $member => $entry) {
+            $entry = is_array($entry) ? $entry : [];
+            unset($entry['graphicalPlacement']);
+            if ($places[$member] !== null) {
+                try {
+                    $place = BattleStageSlot::fromArray($places[$member], sprintf('member %d\'s battle placement', $member + 1))->toArray();
+                    // Whole canvas units stay integers, as an author writes them; the rest keep two decimals.
+                    $entry['graphicalPlacement'] = array_map(static fn(float $value): int|float => round($value, 2) === floor($value)
+                        ? (int) $value : round($value, 2), $place);
+                } catch (\InvalidArgumentException $refused) {
+                    throw new RecordRefusal($refused->getMessage(), previous: $refused);
+                }
+            }
+            $placed[] = $entry;
+        }
+        if ($placed === $members) {
+            return new RecordChange(null, $index);
+        }
+        $before = $record->toArray();
+        $record->setEntries($list, $placed);
+        $after = $record->toArray();
+        try {
+            $troops->assertSourceAccepts($index);
+        } catch (SourcePreservationRefusal|SourceIdentityConflict|RuntimeException $refused) {
+            $record->restorePayload($before);
+
+            throw new RecordRefusal($refused->getMessage(), previous: $refused);
+        }
+
+        return new RecordChange(new GenericCommand(
+            $label,
             static fn() => $record->restorePayload($after),
             static fn() => $record->restorePayload($before),
         ), $index);

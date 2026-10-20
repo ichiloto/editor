@@ -1292,19 +1292,24 @@ final class ReferenceCatalog
     }
 
     /**
-     * Returns the arenas the project's battle presentation declares, key =>
-     * display name, in authored order: none for a project without one, or
-     * whose presentation cannot be read, which validation reports.
+     * Returns the arenas the project declares, key => display name, in
+     * authored order: those its battle presentation code declares, then
+     * those bound as data (unsaved edits included). None for a project
+     * without either, or whose arenas cannot be read, which validation
+     * reports.
      *
      * @return array<string, string>
      */
     private function loadArenaNames(): array
     {
         try {
-            // Arenas are the code-owned catalogue's alone, which no page edits.
-            return $this->arenaNames ??= BattlePresentationCatalog::loadCode(rtrim($this->workspace->projectRoot, '/') . '/assets')?->getArenaChoices() ?? [];
+            // The code never changes in a session; the data is read as it is now.
+            $this->arenaNames ??= BattlePresentationCatalog::loadCode(rtrim($this->workspace->projectRoot, '/') . '/assets')?->getArenaChoices() ?? [];
+            $data = array_map(static fn(array $arena): string => $arena['name'], $this->workspace->catalogs->loadArenaBindings()?->arenas ?? []);
+
+            return [...$this->arenaNames, ...$data];
         } catch (\Throwable) {
-            return $this->arenaNames = [];
+            return [];
         }
     }
 

@@ -4,7 +4,10 @@ declare(strict_types=1);
 
 use Ichiloto\Editor\Session\EditorSession;
 
-/** A project whose battle has two arenas, two party slots and a troop of two. */
+/**
+ * A project whose battle has two arenas, two party slots and a troop of two, one placed. With no ground declared,
+ * feet stand from the canvas top to the battle UI's top at 600, so a place's depth is 600 less its feet's height.
+ */
 function troopFormationProject(): string
 {
     $root = makeTemporaryProject();
@@ -14,7 +17,7 @@ function troopFormationProject(): string
 use Ichiloto\Engine\Battle\Presentation\BattleArenaDefinition;
 use Ichiloto\Engine\Battle\Presentation\BattleCanvasLayout;
 use Ichiloto\Engine\Battle\Presentation\BattlePresentationCatalog;
-use Ichiloto\Engine\Battle\Presentation\BattlerSlot;
+use Ichiloto\Engine\Battle\Presentation\BattleStageSlot;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasImage;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasRectangle;
 
@@ -24,7 +27,7 @@ return new BattlePresentationCatalog(
     arenas: ['arena.road' => $arena('Road', 'Road.png'), 'arena.cave' => $arena('Cave', 'Cave.png')],
     actors: [],
     enemies: [],
-    ui: new BattleCanvasLayout(1350, 720, partySlots: [new BattlerSlot(1050, 420, 180, 260), new BattlerSlot(1180, 560, 180, 260)]),
+    ui: new BattleCanvasLayout(1350, 720, partySlots: [new BattleStageSlot(1050, 180, 180, 260), new BattleStageSlot(1180, 40, 180, 260)]),
     defaultArena: 'arena.cave',
 );
 PHP);
@@ -36,7 +39,7 @@ return [
         'name' => 'Pair',
         'enemies' => [
             // The leader, placed for the graphical battle.
-            ['enemy' => 'Regular Bat', 'position' => [15, 7], 'graphicalPlacement' => ['x' => 260, 'y' => 300, 'width' => 275, 'height' => 190]],
+            ['enemy' => 'Regular Bat', 'position' => [15, 7], 'graphicalPlacement' => ['x' => 260, 'depth' => 300, 'width' => 275, 'height' => 190]],
             ['enemy' => 'Regular Bat', 'position' => [15, 20]],
         ],
     ],

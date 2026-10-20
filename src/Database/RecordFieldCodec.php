@@ -97,14 +97,15 @@ enum RecordFieldCodec: string
     case SOURCE_RECT = 'source_rect';
 
     /**
-     * A battler slot, the Engine's BattlerSlot, stored as `['x' => x,
-     * 'y' => y, 'width' => w, 'height' => h]` with an optional
-     * `'displayScale' => s`, shown as `x, y, width, height` or
-     * `x, y, width, height, s`: a battler's graphical placement. Whole or
-     * not at all, so one edit moves it as one step, and its display scale
-     * is kept.
+     * A battler's place in a graphical formation, the Engine's
+     * BattleStageSlot, stored as `['x' => x, 'depth' => d, 'width' => w,
+     * 'height' => h]` with an optional `'displayScale' => s`, shown as
+     * `x, depth, width, height` or `x, depth, width, height, s`: the feet's
+     * canvas column and how far back from the arena ground's near edge they
+     * stand, so it stands on any arena's ground. Whole or not at all, so one
+     * edit moves it as one step, and its display scale is kept.
      */
-    case BATTLER_SLOT = 'battler_slot';
+    case STAGE_SLOT = 'stage_slot';
 
     /**
      * A project's battle test, the Engine's ProjectBattleTest: the troop to
