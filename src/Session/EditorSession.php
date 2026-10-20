@@ -4867,6 +4867,29 @@ final class EditorSession
     }
 
     /**
+     * Moves the page an NPC row belongs to one place earlier (step -1) or
+     * later (step 1), as one undo step: talking runs the first available
+     * page. A row of no page changes nothing.
+     *
+     * @param array<string, mixed> $key A row's key, as `readNpc` gave it.
+     * @return array{revision: int, changed: bool, index: ?int, id: ?string, followedId: ?string, idReferences: list<string>}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, or the NPC is unknown.
+     */
+    public function moveNpcItem(string $mapId, int $revision, int $index, array $key, int $step): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        $inspector = new NpcInspector($map, graphical: true, references: new ReferenceCatalog($this->workspace, $map));
+        $fieldId = is_string($key['field'] ?? null) ? $key['field'] : '';
+
+        if ($step !== -1 && $step !== 1) {
+            throw new SessionRefusal('A page moves one place: step -1 or 1.');
+        }
+
+        return $this->applyNpcChange($map,
+            static fn(NpcAuthoring $authoring): NpcChange => $authoring->moveSubItem($inspector, $index, $fieldId, $step));
+    }
+
+    /**
      * Removes the item an NPC row belongs to (a route step, command,
      * dialogue line or variant) as one undo step; a row that belongs to none
      * changes nothing.

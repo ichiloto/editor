@@ -227,7 +227,7 @@ batches.
 | A route waypoint or staged actor placed relative to a subject | the waypoint's or actor's Relative To row (player, npc, world_object, staged_actor, party_actor, marker), then its id row and Offset X / Offset Y rows: `database.apply` in a cinematic (`database.record {category: "cutscenes/cinematic", index, frame: ["commands"]}`), `npc.apply` in an NPC script, `inspector.apply` in an event script. A relative point follows its subject and is not shifted by row or column inserts |
 | A map's region-map cell | `inspector.apply` with `{target: map-station, field: station}`, value `x, y`, empty removes it |
 | World objects | `worldObjects.create`, `worldObjects.move {map, id, dx, dy}`, `worldObjects.place`, `worldObjects.apply`, `worldObjects.add`, `worldObjects.remove`, `worldObjects.delete` |
-| NPCs | `npc.create`, `npc.move`, `npc.apply`, `npc.add`, `npc.remove`, `npc.duplicate`, `npc.delete` |
+| NPCs | `npc.create`, `npc.move`, `npc.apply`, `npc.add`, `npc.reorder`, `npc.remove`, `npc.duplicate`, `npc.delete` |
 | Map fields (name, kind, music, encounters, atlas, landmarks) | `inspector.apply` with the map row's key |
 | New map | `map.create {name, kind, width, height, id?}`; `id` is its folder, such as `town/inn/cellar` |
 | Copy or move a map | `map.duplicate {map, to?}`; `map.move {map, to}` asks first, then `{map, to, destination, confirm: true}` |

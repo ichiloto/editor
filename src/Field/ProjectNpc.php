@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Field;
 
 use Ichiloto\Editor\Dialogue\DialogueVariants;
+use Ichiloto\Engine\Messaging\Dialogue\ConditionalDialogue;
 
 /**
  * One map-local NPC, as the engine's `Field\Npc` will read it.
@@ -14,8 +15,10 @@ use Ichiloto\Editor\Dialogue\DialogueVariants;
  * `directionFix` (bool, default false: true keeps the heading when the
  * player talks to it instead of turning to face the player);
  * optional `wanderArea` {x,y,width,height}, unbounded when omitted;
- * `dialogue` (plain pages or conditional variants); `script` (event
- * commands, which take precedence over dialogue when non-empty);
+ * `dialogue` (plain lines, or the NPC's interaction pages as the Engine's
+ * `NpcPages` reads them); `script` (event commands, which take precedence
+ * over dialogue when non-empty); `cue` (only beside plain lines or a
+ * script: pages carry their own);
  * `conditions` (visibility); `sets` (world writes after each conversation);
  * `id` (stable map-local identity, targeted by `move_route`); `sprites`
  * (directional glyphs, either case of key accepted on load).
@@ -262,13 +265,69 @@ final class ProjectNpc
      */
     public function hasDialogueVariants(): bool
     {
-        foreach ($this->getDialogue() as $entry) {
-            if (isset($entry['lines']) || isset($entry['script']) || isset($entry['conditions'])) {
-                return true;
-            }
+        return ConditionalDialogue::isVariantList($this->getDialogue());
+    }
+
+    /**
+     * Returns the NPC's pages as the editor edits them: plain lines folded
+     * into one page that also carries the NPC's cue, since the cue belongs
+     * to the page talking runs. An NPC whose top-level script replaces its
+     * dialogue keeps its cue with the script.
+     *
+     * @return array<int, array<string, mixed>> The pages.
+     */
+    public function getPages(): array
+    {
+        $pages = $this->getDialogueAsVariants();
+        $cue = $this->payload['cue'] ?? null;
+
+        if (is_array($cue) && $this->getScript() === [] && ! $this->hasDialogueVariants() && count($pages) === 1) {
+            $pages[0]['cue'] = $cue;
         }
 
-        return false;
+        return $pages;
+    }
+
+    /**
+     * Writes pages back into an entry in their stored form: one page of
+     * plain lines (with at most a cue) is stored as plain lines, its cue on
+     * the NPC, so content authored that way is saved that way. Once the
+     * pages become a list, the cue {@see getPages()} copied onto the first
+     * page stays there alone. A top-level script keeps the NPC's cue.
+     *
+     * @param array<string, mixed> $entry The entry, its other fields as edited.
+     * @param array<int, mixed> $pages The pages.
+     * @return array<string, mixed> The entry to store.
+     */
+    public static function storePages(array $entry, array $pages): array
+    {
+        // A page that runs an action without lines keeps no empty line list.
+        $pages = array_map(static fn(array $page): array => ($page['lines'] ?? null) === []
+            && array_intersect(array_keys($page), ['script', 'scriptId', 'cinematicId']) !== [] ? array_diff_key($page, ['lines' => true]) : $page,
+            array_values(array_filter($pages, is_array(...))));
+        $only = $pages[0] ?? null;
+        $script = array_filter((array) ($entry['script'] ?? []), is_array(...)) !== [];
+
+        if (! $script && count($pages) === 1 && array_diff(array_keys($only), ['lines', 'cue']) === []) {
+            if (is_array($only['cue'] ?? null)) {
+                $entry['cue'] = $only['cue'];
+            } else {
+                unset($entry['cue']);
+            }
+            unset($pages[0]['cue']);
+        } elseif (! $script && is_array($entry['cue'] ?? null) && ($only['cue'] ?? null) === $entry['cue']) {
+            unset($entry['cue']);
+        }
+
+        $dialogue = self::dialogueFromVariants($pages);
+
+        if ($dialogue === []) {
+            unset($entry['dialogue']);
+        } else {
+            $entry['dialogue'] = $dialogue;
+        }
+
+        return $entry;
     }
 
     /**

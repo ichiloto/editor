@@ -340,6 +340,27 @@ final readonly class NpcAuthoring
     }
 
     /**
+     * Moves the page a row of the NPC's record pane belongs to one place
+     * earlier or later. Talking runs the first available page, so the order
+     * is the NPC's priority. A row of no page changes nothing.
+     *
+     * @param string $fieldId Any row of the page: its conditions, cue or a line.
+     * @param int $step -1 for earlier, 1 for later.
+     * @throws NpcRefusal When there is no such NPC.
+     * @throws MapSourceRefusal When the map's source cannot take the change.
+     */
+    public function moveSubItem(NpcInspector $inspector, int $index, string $fieldId, int $step): NpcChange
+    {
+        $records = $inspector->records();
+        $item = $records->locateItem($index, [], $fieldId);
+
+        return $this->changeRows($inspector, $index, [], 'NPC page move',
+            static fn(RecordAuthoring $authoring): RecordChange => $item === null || $item->framePath !== []
+                ? new RecordChange(null)
+                : $authoring->moveEntry($records, $index, $item->entryIndex, $step, $item->listKey));
+    }
+
+    /**
      * Makes one item change through the record pane and writes it back to
      * the map, as one undo step over the map's NPCs.
      *

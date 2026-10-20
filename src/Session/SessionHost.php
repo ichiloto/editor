@@ -619,6 +619,13 @@ final class SessionHost
                 self::requireInt($params, 'index'),
                 is_array($params['key'] ?? null) ? $params['key'] : throw new InvalidRequest('"key" must be a row key npc.read gave, or {"frame": [...]}.'),
             ),
+            'npc.reorder' => $session->moveNpcItem(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireInt($params, 'index'),
+                is_array($params['key'] ?? null) ? $params['key'] : throw new InvalidRequest('"key" must be the row key npc.read gave.'),
+                self::requireInt($params, 'step'),
+            ),
             'npc.remove' => $session->removeNpcItem(
                 self::requireString($params, 'map'),
                 self::requireInt($params, 'revision'),

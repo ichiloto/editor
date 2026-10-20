@@ -104,7 +104,7 @@ it('authors the cue treatment and pointer images as rows with the Engine default
     ->and(count($catalog->cues['bright-yellow']['pointer']))->toBe(8);
 });
 
-it('authors an NPC cue with the same contract as an event cue, under its own Cue heading', function () {
+it('authors an NPC cue on the page talking runs, stored on the NPC while its lines are its only page', function () {
   $root = makeTemporaryProject();
   $session = EditorSession::open($root);
   $index = $session->createNpc('test-map', $session->readMap('test-map')['revision'], 2, 2, 'Halen', 'halen')['index'];
@@ -112,17 +112,28 @@ it('authors an NPC cue with the same contract as an event cue, under its own Cue
   $row = static fn(string $field): array => array_find($session->readNpc('test-map', $index)['rows'],
     static fn(array $row): bool => ($row['key']['field'] ?? null) === $field);
 
-  expect(array_column($rows, 'label'))->toContain('Cue')
-    ->and($row('cue.color')['kind'])->toBe('options');
-  $session->applyNpc('test-map', $session->readMap('test-map')['revision'], $index, $row('cue.symbol')['key'], '!');
-  $session->applyNpc('test-map', $session->readMap('test-map')['revision'], $index, $row('cue.color')['key'], 'bright-cyan');
-  $session->applyNpc('test-map', $session->readMap('test-map')['revision'], $index, $row('cue.conditions')['key'], '!event:halen_rescued');
+  // One place to author it: the page's own rows, never a second NPC-level Cue group.
+  expect(array_column($rows, 'label'))->toContain('Page 1')->not->toContain('Cue')
+    ->and($row('variant0Cuecolor')['kind'])->toBe('options');
+  $session->applyNpc('test-map', $session->readMap('test-map')['revision'], $index, $row('variant0Cuesymbol')['key'], '!');
+  $session->applyNpc('test-map', $session->readMap('test-map')['revision'], $index, $row('variant0Cuecolor')['key'], 'bright-cyan');
+  $session->applyNpc('test-map', $session->readMap('test-map')['revision'], $index, $row('variant0Cueconditions')['key'], '!event:halen_rescued');
   $session->saveMap('test-map');
   $npc = (require $root . '/assets/Maps/test-map/test-map.data.php')['npcs'][$index];
   $cue = Ichiloto\Engine\Events\Triggers\EventCue::fromArray($npc['cue']);
 
   expect($cue->symbol)->toBe('!')->and($cue->color)->toBe('bright-cyan')
-    ->and($cue->conditions)->toBe([['type' => 'event', 'name' => 'halen_rescued', 'negate' => true]]);
+    ->and($cue->conditions)->toBe([['type' => 'event', 'name' => 'halen_rescued', 'negate' => true]])
+    ->and($npc['dialogue'])->toBe([['text' => 'Hello.']]);
+
+  // A condition makes the lines a page list: the cue moves onto that page, the one the Engine reads.
+  $session->applyNpc('test-map', $session->readMap('test-map')['revision'], $index, $row('variant0Conditions')['key'], 'event:halen_found');
+  $session->saveMap('test-map');
+  $npc = (require $root . '/assets/Maps/test-map/test-map.data.php')['npcs'][$index];
+
+  expect($npc)->not->toHaveKey('cue')
+    ->and($npc['dialogue'][0]['cue']['symbol'])->toBe('!')
+    ->and(Ichiloto\Engine\Field\NpcPages::fromEntry($npc)->pages[0]->cue?->color)->toBe('bright-cyan');
 });
 
 it('reports an NPC cue the Engine would refuse, as it does an event cue', function () {

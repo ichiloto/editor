@@ -213,6 +213,37 @@ final readonly class RecordAuthoring
     }
 
     /**
+     * Moves an entry of the record's own list one or more places, as one
+     * undo step: order is meaning for lists read first-match, such as an
+     * NPC's pages. Moving past either end changes nothing.
+     *
+     * @param string|null $listKey The inline list; the record's own when null.
+     * @throws RecordRefusal When the category or record is read-only or gone, or there is no such list.
+     */
+    public function moveEntry(ProjectRecordDatabase $database, int $index, int $entryIndex, int $step, ?string $listKey = null): RecordChange
+    {
+        $list = $this->requireList($database, $index, [], $listKey);
+        $entries = $database->getSubItems($index, $listKey);
+        $to = $entryIndex + $step;
+
+        if ($step === 0 || ! isset($entries[$entryIndex], $entries[$to])) {
+            return new RecordChange(null, $entryIndex);
+        }
+
+        $move = static function (int $from, int $at) use ($database, $index, $listKey): void {
+            $entry = $database->removeSubItem($index, $from, $listKey);
+            if (is_array($entry)) { $database->insertSubItem($index, $at, $entry, $listKey); }
+        };
+        $move($entryIndex, $to);
+
+        return new RecordChange(new GenericCommand(
+            sprintf('%s move', ucfirst($list->singular)),
+            static fn() => $move($entryIndex, $to),
+            static fn() => $move($to, $entryIndex),
+        ), $to);
+    }
+
+    /**
      * Removes an entry of the record's own list, or a command of a frame,
      * with everything under it.
      *

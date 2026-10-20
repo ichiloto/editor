@@ -797,7 +797,7 @@ it('authors an explicit empty base sprite through Inspector input and round-trip
     $manager = new \Ichiloto\Engine\Field\NpcManager($scene);
     $manager->configure(npcsOnDisk($path));
     expect($manager->findById('notice')?->sprite)->toBe('')
-        ->and($manager->findById('notice')?->dialogue)->toBe($entry['dialogue'])
+        ->and($manager->findById('notice')?->pages)->toEqual(\Ichiloto\Engine\Field\NpcPages::fromEntry($entry))
         ->and($manager->npcAt(3, 2)?->id)->toBe('notice')
         ->and($manager->visibleNpcs())->toHaveCount(1);
 
@@ -1263,7 +1263,7 @@ it('enters and leaves script frames from the hosted Inspector with Enter and Esc
     restNpcCursorOn($editor, 'variant1Script');
     callEditorMethod($editor, 'dispatchInput', "\r");
     expect(getEditorProperty($editor, 'databaseCommandFramePath'))->toBe([1, 'script'])
-        ->and(getEditorProperty($editor, 'statusMessage'))->toBe('Dialogue › Dialogue variant 2 › Script.');
+        ->and(getEditorProperty($editor, 'statusMessage'))->toBe('Dialogue › Page 2 › Script.');
     callEditorMethod($editor, 'dispatchInput', 'O');
     expect($map->getNpcs()->get(0)?->getDialogue()[1]['script'])->toHaveCount(1);
     callEditorMethod($editor, 'dispatchInput', "\033");
@@ -1379,7 +1379,7 @@ it('types shortcut glyphs into hosted text fields and the name prompt instead of
 
 // -- Readable rows ---------------------------------------------------------
 
-it('heads each dialogue variant and shortens its rows, without touching field ids', function () {
+it('heads each NPC page and shortens its rows, without touching field ids', function () {
     [$root] = npcProject([['id' => 'a', 'name' => 'Ann', 'sprite' => 'A', 'x' => 2, 'y' => 1, 'dialogue' => [
         ['lines' => [['text' => 'Hi.']]],
         ['conditions' => [['type' => 'switch', 'name' => 'gate_open']], 'lines' => [['text' => 'The gate is open.']]],
@@ -1392,20 +1392,26 @@ it('heads each dialogue variant and shortens its rows, without touching field id
             static fn(array $f): array => ['label' => (string) ($f['label'] ?? ''), 'field' => $f['field'] ?? null, 'editable' => $f['editable'] ?? null],
             callEditorMethod($editor, 'getInspectorFields'),
         ),
-        static fn(array $r): bool => str_starts_with($r['label'], 'Dialogue variant') || str_starts_with((string) $r['field'], 'variant'),
+        static fn(array $r): bool => preg_match('/^Page \d/', $r['label']) === 1 || str_starts_with((string) $r['field'], 'variant'),
     ));
+    $page = ['When', 'Then Set', 'Cue Symbol', 'Cue Colour', 'Cue When', 'Event Script', 'Cinematic', 'Repeats', 'Page Id',
+        'Staged Speakers', 'Script Commands', 'Line 1 Speaker', 'Line 1 Emotion', 'Line 1 Text'];
+    $fields = static fn(int $n): array => ["variant{$n}Conditions", "variant{$n}Sets", "variant{$n}Cuesymbol", "variant{$n}Cuecolor",
+        "variant{$n}Cueconditions", "variant{$n}ScriptId", "variant{$n}CinematicId", "variant{$n}Reusable", "variant{$n}Id",
+        "variant{$n}Speakers", "variant{$n}Script", "variant{$n}Line0Name", "variant{$n}Line0Emotion", "variant{$n}Line0Text"];
+    $next = count($page) + 1;
 
-    expect($rows[0])->toBe(['label' => 'Dialogue variant 1', 'field' => null, 'editable' => false])
-        ->and(callEditorMethod($editor, 'getInspectorFields')[array_search('Dialogue variant 1', array_column(callEditorMethod($editor, 'getInspectorFields'), 'label'), true)]['value'])->toBe('')
-        ->and(array_column(array_slice($rows, 1, 6), 'label'))->toBe(['When', 'Then Set', 'Script Commands', 'Line 1 Speaker', 'Line 1 Emotion', 'Line 1 Text'])
-        ->and(array_column(array_slice($rows, 1, 6), 'field'))->toBe(['variant0Conditions', 'variant0Sets', 'variant0Script', 'variant0Line0Name', 'variant0Line0Emotion', 'variant0Line0Text'])
-        // The second variant's heading carries its condition line as its
-        // value: "Dialogue variant 2 · when switch:gate_open" on a wide pane,
+    expect($rows[0])->toBe(['label' => 'Page 1', 'field' => null, 'editable' => false])
+        ->and(callEditorMethod($editor, 'getInspectorFields')[array_search('Page 1', array_column(callEditorMethod($editor, 'getInspectorFields'), 'label'), true)]['value'])->toBe('')
+        ->and(array_column(array_slice($rows, 1, count($page)), 'label'))->toBe($page)
+        ->and(array_column(array_slice($rows, 1, count($page)), 'field'))->toBe($fields(0))
+        // The second page's heading carries its condition line as its
+        // value: "Page 2 · when switch:gate_open" on a wide pane,
         // the "when …" wrapped under the heading on a narrow one.
-        ->and($rows[7]['label'])->toBe('Dialogue variant 2')
-        ->and($rows[7]['editable'])->toBeFalse()
-        ->and(preg_replace('/\s+/', ' ', implode(' ', callEditorMethod($editor, 'getDatabaseSettingsLines'))))->toContain('Dialogue variant 2 when switch:gate_open')
-        ->and(array_column(array_slice($rows, 8, 6), 'field'))->toBe(['variant1Conditions', 'variant1Sets', 'variant1Script', 'variant1Line0Name', 'variant1Line0Emotion', 'variant1Line0Text']);
+        ->and($rows[$next]['label'])->toBe('Page 2')
+        ->and($rows[$next]['editable'])->toBeFalse()
+        ->and(preg_replace('/\s+/', ' ', implode(' ', callEditorMethod($editor, 'getDatabaseSettingsLines'))))->toContain('Page 2 · when switch:gate_open')
+        ->and(array_column(array_slice($rows, $next + 1, count($page)), 'field'))->toBe($fields(1));
 });
 
 it('wraps a long dialogue line in the hosted Inspector, keeps the edited row single, and maps rows to fields', function () {
@@ -1494,4 +1500,26 @@ it('steps through the phases sharing a tile with Enter on the canvas', function 
 
     expect($selected)->toBe([2, 0, 2])
         ->and(npcMap($editor)->getNpcs()->count())->toBe(3);
+});
+
+it('moves the page under the cursor with [ and ], keeping the cursor on it, as one undo step', function () {
+    [$root] = npcProject([['id' => 'a', 'name' => 'Ann', 'sprite' => 'A', 'x' => 2, 'y' => 1, 'dialogue' => [
+        ['lines' => [['text' => 'Hello.']]],
+        ['conditions' => [['type' => 'event', 'name' => 'arrived']], 'lines' => [['text' => 'You made it.']]],
+    ]]]);
+    $editor = npcEditor($root);
+    callEditorMethod($editor, 'selectNpc', 0);
+    setEditorProperty($editor, 'focusedPane', 'inspector');
+    restNpcCursorOn($editor, 'variant1Line0Text');
+    $map = callEditorMethod($editor, 'getSelectedMap');
+    $texts = static fn(): array => array_map(static fn(array $page): string => $page['lines'][0]['text'], $map->getNpcs()->get(0)->getDialogue());
+
+    callEditorMethod($editor, 'dispatchInput', '[');
+    $selected = callEditorMethod($editor, 'getInspectorFields')[getEditorProperty($editor, 'databaseSelectedSettingIndex')]['field'] ?? null;
+
+    expect($texts())->toBe(['You made it.', 'Hello.'])->and($selected)->toBe('variant0Line0Text');
+    callEditorMethod($editor, 'dispatchInput', '[');
+    expect($texts())->toBe(['You made it.', 'Hello.']);
+    callEditorMethod($editor, 'performUndo');
+    expect($texts())->toBe(['Hello.', 'You made it.']);
 });

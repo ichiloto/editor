@@ -18,8 +18,11 @@ use Ichiloto\Editor\ProjectMap;
  * flows back into `ProjectMap::setNpcs()`, which is what the map persists
  * and fingerprints; this class holds no persisted state of its own.
  *
- * Dialogue is presented as variants (plain pages folded into one) and
- * unfolded on the way back, so a file authored as pages is saved as pages.
+ * Dialogue is presented as the NPC's interaction pages (plain lines folded
+ * into one page, carrying the NPC's cue) and unfolded on the way back, so a
+ * file authored as lines is saved as lines ({@see ProjectNpc::getPages()}).
+ * The NPC-level Cue rows are shown only beside a top-level script, the one
+ * page that has no page rows of its own.
  *
  * The rows every interface lists for one NPC come from {@see getFields()}:
  * the record layer's own rows under headings, with the notes an author
@@ -113,6 +116,13 @@ final class NpcInspector
 
         foreach (self::SECTIONS as $title => $ids) {
             $rows = [];
+
+            if ($title === 'Cue' && $npc !== null && $npc->getScript() === []
+                && ! (is_array($npc->toArray()['cue'] ?? null) && $npc->hasDialogueVariants())) {
+                // Pages carry their own cue; dropping the rows keeps one place to author it.
+                foreach ($ids as $id) { unset($byId[$id]); }
+                continue;
+            }
 
             foreach ($ids as $id) {
                 foreach ($byId[$id] ?? [] as $field) {
@@ -252,7 +262,7 @@ final class NpcInspector
         foreach ($this->map->getNpcs()->toMapData() as $entry) {
             if (is_array($entry)) {
                 $npc = new ProjectNpc($entry);
-                $entry['dialogue'] = $npc->getDialogueAsVariants();
+                $entry['dialogue'] = $npc->getPages();
 
                 if ($entry['dialogue'] === []) {
                     unset($entry['dialogue']);
@@ -271,7 +281,7 @@ final class NpcInspector
 
                 foreach ($written as $entry) {
                     if (is_array($entry) && isset($entry['dialogue']) && is_array($entry['dialogue'])) {
-                        $entry['dialogue'] = ProjectNpc::dialogueFromVariants($entry['dialogue']);
+                        $entry = ProjectNpc::storePages($entry, $entry['dialogue']);
                     }
 
                     $stored[] = $entry;

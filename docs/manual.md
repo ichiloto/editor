@@ -745,16 +745,34 @@ category uses - pickers, condition lines, world-write rows, command frames,
 | Appearance | `Sprite`, `Facing North/South/East/West`, `Graphical Sprites` |
 | Movement | `Movement` (`fixed` / `wander`), `Direction Fix` (`false` / `true`), and while wandering `Wander X/Y/Width/Height` |
 | Visibility | `Visible When` - a condition line |
-| Cue | `Cue Symbol` (one cell; empty means no cue), `Cue Colour`, `Cue When` - the same cue an event shows, drawn above the NPC with the game's Field Cues treatment |
-| Interaction | `Script` (a command frame), then one `Dialogue variant N` heading per variant with its rows `When`, `Then Set`, `Script Commands`, `Line 1 Speaker`, `Line 1 Text`, … |
+| Cue | Only beside a top-level `Script`: `Cue Symbol` (one cell; empty means no cue), `Cue Colour`, `Cue When`. Pages carry their own cue |
+| Interaction | `Script` (a command frame), then one `Page N` heading per page with its rows `When`, `Then Set`, `Cue Symbol`, `Cue Colour`, `Cue When`, `Event Script`, `Cinematic`, `Repeats`, `Page Id`, `Staged Speakers`, `Script Commands`, `Line 1 Speaker`, `Line 1 Text`, … |
 | Completion Writes | `After Talking` - world-write rows |
 
 Rows read as the game will read them: an unset `Movement` shows `fixed`, an
 unset `Direction Fix` shows `false`, an unset `Sprite` shows `@`. Fields the game does not read are listed in a
-`Preserved fields` row and written back untouched. Each dialogue variant is a
-heading (`Dialogue variant 2 · when switch:gate_open` once it has a
+`Preserved fields` row and written back untouched. Each page is a
+heading (`Page 2 · when switch:gate_open` once it has a
 condition) with short row labels under it, and long lines wrap, so what a
 character says is read in the pane rather than in the edit buffer.
+
+- **Pages.** An NPC's pages are what talking to it does, as RPG Maker's
+  event pages: talking runs the first page whose `When` holds, so put the
+  most advanced story page first and an unconditional page last. `[` / `]`
+  on any row of a page moves it one place earlier or later. A page shows
+  its lines, then runs its `Script Commands`, its `Event Script` or its
+  `Cinematic` (one of them), and applies `Then Set`. Its cue is the NPC's
+  guidance while it is the page talking would run, so a story beat the NPC
+  delivers needs no separate event or stand-in cell, and a quest waymark
+  on the NPC follows the cue. `Repeats: false` retires the page once its
+  action completes; such a page needs a `Page Id`, which names its
+  completion in saves. `Staged Speakers` lists the other NPCs (by id,
+  comma-separated) its scene stages; each must stand beside this NPC
+  whenever the page can run. Lines alone with at most a cue are saved as
+  plain lines with the cue on the NPC, as they always were. Validation
+  reports a page an earlier page always pre-empts, and a story event an
+  NPC delivers from a separate cell (`event.npc-interaction`): move it
+  onto that NPC's pages.
 
 - **Map-owned appearance.** For a fixed interaction already drawn on a map
   layer (such as a mounted notice on `fixtures`), clear the `Sprite` text

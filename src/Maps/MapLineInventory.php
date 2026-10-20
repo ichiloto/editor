@@ -144,6 +144,15 @@ final class MapLineInventory
                 if (is_array($variant) && is_array($variant['script'] ?? null)) {
                     $this->walkCommands($variant['script'], ['npcs', $index, 'dialogue', $variantIndex, 'script'], $here, $file);
                 }
+                // A page runs a shared event script or a Cinematic as a map event does.
+                $scriptId = is_array($variant) ? trim(strval($variant['scriptId'] ?? '')) : '';
+                if ($scriptId !== '') {
+                    $this->addCommonEventStart($scriptId, $here);
+                }
+                $cinematicId = is_array($variant) ? trim(strval($variant['cinematicId'] ?? '')) : '';
+                if ($cinematicId !== '') {
+                    $this->cinematicTriggerMaps[$cinematicId][] = $mapId;
+                }
             }
         }
 

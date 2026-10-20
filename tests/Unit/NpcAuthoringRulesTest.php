@@ -225,7 +225,7 @@ it('groups an NPC\'s rows under headings and leaves a frame that no longer resol
     $inspector = new NpcInspector($map);
     $labels = array_map(static fn(array $row): string => trim((string) $row['label']), $inspector->getFields(0) ?? []);
 
-    expect($labels)->toContain('Identity', 'Placement', 'Movement', 'Preserved fields', 'Dialogue variant 1', 'Line 1 Text')
+    expect($labels)->toContain('Identity', 'Placement', 'Movement', 'Preserved fields', 'Page 1', 'Line 1 Text')
         ->and($inspector->getFields(0, [5, 'then']))->toBeNull()
         ->and($inspector->getFields(0, ['script']))->not->toBeNull();
 });
