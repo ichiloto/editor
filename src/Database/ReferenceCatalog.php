@@ -646,6 +646,17 @@ final class ReferenceCatalog
         return new self($this->workspace, $this->currentMap, $cutscene, $this->movementCommands);
     }
 
+    /**
+     * A reusable event script's references: its map-local subjects are on the map its callers run it on, when they
+     * all run it on one ({@see \Ichiloto\Editor\Events\CommonEventMaps}); otherwise it names none.
+     */
+    public function createCommonEventContext(string $scriptId): self
+    {
+        $maps = \Ichiloto\Editor\Events\CommonEventMaps::read($this->workspace)->findMaps($scriptId);
+        $map = count($maps) === 1 ? array_find($this->workspace->maps, static fn(ProjectMap $map): bool => $map->mapId === $maps[0]) : null;
+        return new self($this->workspace, $map, null, $this->movementCommands);
+    }
+
     /** A projection keeps the actual invocation as reference owner, rather than its one displayed command. */
     public function createMovementContext(array $commands): self
     {

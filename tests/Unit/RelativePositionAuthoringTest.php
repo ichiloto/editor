@@ -468,3 +468,40 @@ it('places a staged visual on an attachment its world object resource declares, 
     $session->saveDatabase('cutscenes/cinematic');
     expect((require $path)[0]['at'])->toBe(['kind' => 'world_object', 'id' => 'beacon']);
 });
+
+it('stages a visual on an attachment in a reusable script, choosing on the map its callers run it on', function () {
+    $root = cutsceneProject();
+    $mapPath = $root . '/assets/Maps/harbour/harbour.data.php';
+    $map = require $mapPath;
+    $map['worldObjects'] = [['id' => 'relay', 'resource' => 'relay-tower', 'anchor' => ['x' => 6, 'y' => 3]]];
+    file_put_contents($mapPath, "<?php\nreturn " . var_export($map, true) . ";\n");
+    @mkdir($root . '/assets/Data/Presentation', 0777, true);
+    file_put_contents($root . '/assets/Data/Presentation/field.php', "<?php\nreturn " . var_export(['resources' => ['relay-tower' => [
+        'name' => 'Synthetic relay', 'pivot' => ['x' => 0.5, 'y' => 1.0], 'sprites2d' => ['asset' => 'Graphics/relay.png', 'cells' => ['width' => 3, 'height' => 4]],
+        'attachments' => [['id' => 'aerial', 'cell' => ['x' => 1, 'y' => -2], 'point' => ['x' => 0.8, 'y' => 0.05]]],
+    ]]], true) . ";\n");
+    $script = $root . '/assets/Events/relay-staging.php';
+    file_put_contents($script, "<?php\n// Staged by hand.\nreturn [\n  ['type' => 'stage_actor', 'id' => 'pulse', 'sprite' => '*', 'x' => 7, 'y' => 1],\n];\n");
+    $session = EditorSession::open($root);
+    $index = array_search('relay-staging', $session->listDatabaseRecords('common_events')['records'], true);
+    $frame = [];
+
+    // Nothing calls it yet, so it runs on no known map and offers no world object.
+    $session->applyDatabaseRecord('common_events', $index, relativeRow($session, $frame, [0], 'Relative To', 'common_events', $index)['key'], 'world_object');
+    $object = relativeRow($session, $frame, [0], 'World Object', 'common_events', $index);
+    expect(fn() => $session->applyDatabaseRecord('common_events', $index, $object['key'], 'relay'))->toThrow(SessionRefusal::class);
+
+    // The cinematic starting on the harbour calls it, so it chooses on the harbour.
+    writeRelativeScript($root, [['type' => 'common_event', 'id' => 'relay-staging']]);
+    $session = EditorSession::open($root);
+    $session->applyDatabaseRecord('common_events', $index, relativeRow($session, $frame, [0], 'Relative To', 'common_events', $index)['key'], 'world_object');
+    $session->applyDatabaseRecord('common_events', $index, relativeRow($session, $frame, [0], 'World Object', 'common_events', $index)['key'], 'relay');
+    $attachment = relativeRow($session, $frame, [0], 'Attachment', 'common_events', $index);
+    expect($attachment['options'])->toBe(['', 'aerial']);
+    $session->applyDatabaseRecord('common_events', $index, $attachment['key'], 'aerial');
+    $session->saveDatabase('common_events');
+
+    expect(require $script)->toBe([['type' => 'stage_actor', 'id' => 'pulse', 'sprite' => '*',
+        'at' => ['kind' => 'world_object', 'id' => 'relay', 'attachment' => 'aerial']]])
+        ->and(file_get_contents($script))->toContain('// Staged by hand.');
+});

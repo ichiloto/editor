@@ -383,7 +383,7 @@ final class CutsceneSchemas
      * the interpreter understands, each with its fields, nested blocks as
      * frames, and routes, lanes and camera points as nested lists.
      */
-    public static function cinematicCommandList(string $key, bool $graphical = false): RecordSubList
+    public static function cinematicCommandList(string $key, bool $graphical = false, array $blank = ['type' => 'wait', 'seconds' => 0.5]): RecordSubList
     {
         return new RecordSubList(
             key: $key,
@@ -392,7 +392,7 @@ final class CutsceneSchemas
             fields: [
                 new RecordField('type', 'Type', options: [...CinematicCommandSchema::COMMAND_TYPES, ...ScriptCommandRegistry::getCatalog()->types]),
             ],
-            blank: ['type' => 'wait', 'seconds' => 0.5],
+            blank: $blank,
             variants: self::cinematicCommandVariants($graphical),
             variantKey: 'type',
             nestedLists: [

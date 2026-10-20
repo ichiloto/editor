@@ -2132,6 +2132,14 @@ the object's current art, so replacing the art carries it along. It takes no
 offset, and choosing another object or subject clears the attachment.
 Validation reports a visual whose attachment the resource no longer declares.
 
+A common event (a reusable event script) is edited with the full cinematic
+command vocabulary, staging included, since cinematic sessions call it. Its
+map-local choices (world objects, their attachments) are on the map its callers
+run it on: a map whose events or NPCs call it, a cinematic's Start Map, or the
+map a calling script runs on. When its callers run it on several maps, or none
+yet, it offers no map-local choice. A transfer earlier in a caller is not
+followed here; validation follows it.
+
 The same waypoints and independent staged actors also name the way their
 character faces once there, the Engine's end facing. `Facing` fixes a cardinal;
 `Face Toward` picks a subject from the same list as `Relative To`, then its id in
