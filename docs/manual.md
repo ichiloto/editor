@@ -1341,11 +1341,14 @@ trunk base) and may carry an occupancy stamp: cells relative to a placement's
 anchor and the physical type a brush gives each when it places the resource.
 The stamp is applied only by an explicit authoring placement; a resource never
 adds collision to a map by itself, and changing a stamp never changes cells an
-earlier placement stamped. A resource whose art paints an opening, such as a
-cave mouth or a door, lists those cells under **Doorway**, relative to a
-placement's anchor; validation then requires an entrance (a transfer event)
-under each doorway cell wherever the resource is placed, so correct the
-doorway here or the art itself when they disagree, never the map's entrance.
+earlier placement stamped. A resource whose art paints a door, such as a cave
+mouth or a town's front door, lists those cells under **Doorway**, relative to
+a placement's anchor, each with its **Entrance**: `on` (the default) when the
+player walks onto the painted opening, `front` when the door is painted on a
+solid face and entered from the cell directly below it. Validation then
+requires an entrance (a transfer event) exactly there wherever the resource is
+placed, and none on a `front` door itself, so correct the doorway here or the
+art itself when they disagree, never the map's entrance.
 Only the `resources` dictionary is edited; the
 catalogue's cues and action prompt are kept exactly as written. A new resource
 starts on the project's first image for the author to replace, an id is refused
