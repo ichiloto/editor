@@ -48,6 +48,13 @@ final readonly class RecordSubList
      * @param string|null $valueField For a keyed list whose values are not entries of their own (a
      * piece's tiles: a layer name keyed to its rows): the field each entry carries its value as.
      * @param Closure(array, string): array|null $prepareEdit Normalizes dependent fields after a field edit, before mutation.
+     * @param RecordSubList|null $armCommandList The command list this list's command arms hold, at
+     * every depth; the shared field-script command list when null. A troop's event pages hold the
+     * battle-scoped one.
+     * @param Closure(array<string, mixed>, Closure(int): ?int): array<string, mixed>|null $remapIndexReferences
+     * Rewrites the record's references to this list's entries by index when an entry is removed or
+     * inserted (a troop's event pages naming members), through the map from old index to new; null
+     * from the map is a removed entry, which the closure refuses with a RecordRefusal while it is named.
      */
     public function __construct(
         public string $key,
@@ -69,6 +76,8 @@ final readonly class RecordSubList
         public ?Closure $prepareEdit = null,
         /** Dynamic entry fields independent of a persisted variant discriminator. */
         public ?Closure $getFields = null,
+        public ?RecordSubList $armCommandList = null,
+        public ?Closure $remapIndexReferences = null,
     ) {
     }
 

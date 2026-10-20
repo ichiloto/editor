@@ -93,6 +93,8 @@ final readonly class TroopAuthoring
             return new RecordChange(null, $index);
         }
         $before = $record->toArray();
+        // A page that still names a member keeps the troop's members.
+        TroopEventPageContract::remapMembers((array) $before, static fn(int $member): ?int => null);
         $record->setEntries($list, []);
         $after = $record->toArray();
         try {

@@ -2,6 +2,7 @@
 
 namespace Ichiloto\Editor\Validation;
 
+use Ichiloto\Editor\Database\TroopEventPageContract;
 use Ichiloto\Engine\Quests\QuestWaymark;
 use Ichiloto\Editor\Database\BattleEntryActorResolver;
 use Ichiloto\Editor\Database\BattleEntryRuleContract;
@@ -1243,6 +1244,19 @@ class ProjectValidator
           'troop ' . $name,
           sprintf('It has invalid escapePolicy "%s".', is_scalar($policy) ? strval($policy) : get_debug_type($policy)),
           'Use allowed or forbidden, or omit the field to use the allowed default.',
+        );
+      }
+    }
+
+    foreach ($database->getRecords() as $record) {
+      $problem = is_array($record->toArray()) ? TroopEventPageContract::findProblem((array) $record->toArray()) : null;
+
+      if ($problem !== null) {
+        // The Engine refuses the troop when its battle starts, with this message.
+        $issues[] = Issue::error(
+          'troop ' . (trim(strval($record->get('name') ?? '')) ?: '(unnamed)'),
+          $problem,
+          'Fix the event page or member in the troop, as the message says.',
         );
       }
     }
@@ -3307,6 +3321,7 @@ class ProjectValidator
       ...$this->checkSkitReferences($workspace, $known),
       ...$this->checkMapReferences($workspace, $known),
       ...$this->checkScriptReferences($workspace, $known),
+      ...$this->checkTroopEventReferences($workspace, $known),
       ...$this->checkAchievementReferences($workspace, $known),
     ];
   }
@@ -3419,6 +3434,33 @@ class ProjectValidator
    * @param array<string, string[]> $known What the project defines.
    * @return Issue[] The issues found.
    */
+  /**
+   * Checks what each troop event page's commands name (items, sounds,
+   * Common Events, switches) as a script's commands are checked.
+   *
+   * @param array<string, string[]> $known What the project defines.
+   * @return Issue[]
+   */
+  protected function checkTroopEventReferences(ProjectWorkspace $workspace, array $known): array
+  {
+    $database = $workspace->getRecordDatabase('troops');
+    $issues = [];
+
+    foreach ($database instanceof ProjectRecordDatabase ? $database->getRecords() : [] as $record) {
+      $name = trim(strval($record->get('name') ?? '')) ?: '(unnamed)';
+      $pages = $record->get('events');
+
+      foreach (is_array($pages) ? $pages : [] as $page => $entry) {
+        if (is_array($entry) && is_array($entry['commands'] ?? null)) {
+          $issues = [...$issues, ...$this->checkCommands($entry['commands'],
+            sprintf('troop %s event page %d', $name, intval($page) + 1), $known)];
+        }
+      }
+    }
+
+    return $issues;
+  }
+
   protected function checkScriptReferences(ProjectWorkspace $workspace, array $known): array
   {
     $database = $workspace->getRecordDatabase('common_events');
@@ -4608,8 +4650,10 @@ class ProjectValidator
     $check = function (ScriptCommandField $field, array $data) use (&$check, $where, $known): array {
       $value = ScriptCommandField::readPath($data, $field->key);
 
-      if ($field->kind === ScriptCommandFieldKind::REFERENCE && $field->reference !== null && is_string($value)) {
-        return $this->checkReference($value, ProjectScriptCommands::getReferenceCategory($field->reference), strtolower($field->label), $where, $known);
+      $category = $field->reference === null ? null : ProjectScriptCommands::getReferenceCategory($field->reference);
+
+      if ($field->kind === ScriptCommandFieldKind::REFERENCE && $category !== null && is_string($value)) {
+        return $this->checkReference($value, $category, strtolower($field->label), $where, $known);
       }
 
       if ($field->kind !== ScriptCommandFieldKind::LIST || ! is_array($value)) {

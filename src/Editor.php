@@ -3065,7 +3065,8 @@ final class Editor
         // Troops tab adds one; Shift+N names the troop after its members and
         // Shift+C clears them.
         if ($this->getSelectedDatabaseCategoryDefinition()->key === 'troops') {
-            if ($this->isShiftLetterShortcut($input, 'O')) {
+            // On an event page, or inside one's commands, Shift+O adds there instead.
+            if ($this->isShiftLetterShortcut($input, 'O') && $this->isTroopMemberContext()) {
                 $this->openTroopMemberPicker();
                 return;
             }
@@ -5399,6 +5400,8 @@ final class Editor
         $lines[] = '                     a troop member starts from its enemy';
         $lines[] = '  Shift+C / Shift+N  clear a troop\'s members, or name';
         $lines[] = '                     the troop after them';
+        $lines[] = '                     On Event Pages, Shift+O adds a page;';
+        $lines[] = '                     Enter on its Commands opens them';
         $lines[] = '  Del                the same, on the settings field';
         $lines[] = '                     the cursor is on';
         $lines[] = '  Enter              edit, or open the picker on a field';
@@ -9008,7 +9011,9 @@ final class Editor
             return;
         }
 
-        if ($database->hasCommandFrames()) {
+        // Inside a frame the frame's commands; at a record's root with lists beside its own (a troop's
+        // event pages), the list the cursor's row belongs to, as for any record.
+        if ($database->hasCommandFrames() && ($this->databaseCommandFramePath !== [] || $database->schema->subLists === [])) {
             $this->addDatabaseFrameItem($database, $subList);
             return;
         }
@@ -9034,6 +9039,18 @@ final class Editor
         if ($database->schema->key === 'skits') {
             $this->selectNewSkitActor($entryIndex);
         }
+    }
+
+    /** Whether the cursor is on the troop's own rows or members, not its event pages or their commands. */
+    private function isTroopMemberContext(): bool
+    {
+        $database = $this->getSelectedRecordDatabase();
+        if ($this->databaseCommandFramePath !== [] || ! $database instanceof ProjectRecordDatabase) {
+            return $this->databaseCommandFramePath === [];
+        }
+        $item = $database->locateItem($this->getSelectedRecordIndex(), [], $this->getSelectedDatabaseFieldId());
+
+        return $item?->listKey === null || $item->listKey === TroopAuthoring::MEMBERS;
     }
 
     /** Opens the project's enemies to add a member to the selected troop, fighting the one chosen. */
@@ -9144,7 +9161,7 @@ final class Editor
             return;
         }
 
-        if ($database->hasCommandFrames()) {
+        if ($database->hasCommandFrames() && ($this->databaseCommandFramePath !== [] || $database->schema->subLists === [])) {
             $this->removeDatabaseFrameItem($database, $subList);
             return;
         }

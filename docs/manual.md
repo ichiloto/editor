@@ -1364,6 +1364,12 @@ solid face and entered from the cell directly below it. Validation then
 requires an entrance (a transfer event) exactly there wherever the resource is
 placed, and none on a `front` door itself, so correct the doorway here or the
 art itself when they disagree, never the map's entrance.
+A resource whose art has a feature visuals attach to, such as an aerial a
+signal pulses on, lists it under **Attachments**: a **Stable Id**, the
+**Terminal Cell X/Y** that shows the feature, relative to a placement's anchor,
+and the **Art Point X/Y (0..1)** where it is on the image, measured like the
+ground contact. When the art is replaced or re-cropped, update the art point
+here once; every visual staged on the feature follows it.
 Only the `resources` dictionary is edited; the
 catalogue's cues and action prompt are kept exactly as written. A new resource
 starts on the project's first image for the author to replace, an id is refused
@@ -1644,8 +1650,26 @@ Engine's arrangement rule.
 
 `Battle Music` names a track in `assets/Audio/BGM` that the battle plays in
 place of the project's battle theme; left unset, the project's theme plays.
-Keys the editor does not show, such as a troop's `id` and its battle `events`,
-are kept as they are.
+Keys the editor does not show, such as a troop's `id`, are kept as they are.
+
+A member's `Cannot Fall Below HP %` (the Engine's `knockoutFloorPercent`,
+0 to 99) holds it above that share of its HP against every kind of battle
+damage, so an event page can end the fight before an ordinary knockout.
+
+`Event Pages` are the troop's battle events, as in RPG Maker. `Shift+O` on the
+heading adds a page that runs on turn 1. A page has a `Name`, a `Span`
+(`battle`: once per battle; `turn`: once per turn; `moment`: at every check
+where its conditions hold) and conditions, every one of which must hold:
+`Turn` with `Then Every N Turns`, `Enemy` (chosen from the troop's own members,
+as `1 · Djin`) with `Enemy HP At Or Below %`, `Party Member` with `Party Member
+HP At Or Below %`, and `World Conditions` (switches, variables, story events).
+A blank or 0 leaves a condition out. `Enter` on its `Commands` opens them; the
+command types offered are the ones a battle page can run, including `concede`
+(an enemy yields: it counts as defeated, stays on screen and does not fade out
+like a knockout) and `end_battle` (victory, escape or defeat). A member a page
+names cannot be removed until the page names another, and pages follow their
+members when another member is removed. Saving refuses a page the Engine would
+refuse, with the Engine's own message, and validation reports the same.
 
 A troop may also declare a `Classification` - `ordinary` or `boss` - which
 battle-entry rules match against. An omitted classification is the engine's
@@ -2126,6 +2150,22 @@ Start Map), or says why it cannot: the player, party actors and staged actors ar
 placed only while the scene runs, and a common event runs on whichever map calls
 it. A relative point is changed through its subject and offset, never by a map
 click.
+
+An independent staged visual relative to a world object may also sit on one of
+the **Attachments** its field resource declares, such as an aerial: the
+`Attachment` row offers that object's attachments. The visual then shows on the
+attachment's terminal cell and, in the graphical game, centred on its point of
+the object's current art, so replacing the art carries it along. It takes no
+offset, and choosing another object or subject clears the attachment.
+Validation reports a visual whose attachment the resource no longer declares.
+
+A common event (a reusable event script) is edited with the full cinematic
+command vocabulary, staging included, since cinematic sessions call it. Its
+map-local choices (world objects, their attachments) are on the map its callers
+run it on: a map whose events or NPCs call it, a cinematic's Start Map, or the
+map a calling script runs on. When its callers run it on several maps, or none
+yet, it offers no map-local choice. A transfer earlier in a caller is not
+followed here; validation follows it.
 
 The same waypoints and independent staged actors also name the way their
 character faces once there, the Engine's end facing. `Facing` fixes a cardinal;

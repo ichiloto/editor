@@ -76,6 +76,12 @@ final class ProjectRecordDatabase
         $this->recordReferences = $scope;
     }
 
+    /** The references a record chooses from: its own scope where it owns one, else the project's. */
+    private function findRecordReferences(ProjectRecord $record): ?ReferenceCatalog
+    {
+        return ($this->recordReferences === null ? null : ($this->recordReferences)($record)) ?? $this->authoringReferences;
+    }
+
     private function coerceReferenceField(ProjectRecord $record, RecordField $field, string $rawValue, array $ownerPath = []): mixed
     {
         $authored = (array) $record->toArray();
@@ -86,7 +92,14 @@ final class ProjectRecordDatabase
             throw new \InvalidArgumentException(sprintf('%s cannot be edited as a line: %s. Nothing was changed.', $field->label, $issue));
         }
         $value = self::coerce($field, $rawValue);
-        $references = ($this->recordReferences === null ? null : ($this->recordReferences)($record)) ?? $this->authoringReferences;
+        $references = $this->findRecordReferences($record);
+        if ($references !== null && $field->entryChoices !== null && $value !== null) {
+            // The choices read what the field lives in, as its row does.
+            $holder = self::readNested((array) $record->toArray(), implode('.', array_slice($ownerPath === [] ? explode('.', $field->key) : $ownerPath, 0, -1)));
+            if (! in_array($value, $references->listEntryChoices($field->entryChoices, is_array($holder) ? $holder : []), true)) {
+                throw new \InvalidArgumentException(sprintf('%s "%s" is not one this entry offers; choose one of its own.', $field->label, strval($value)));
+            }
+        }
         if ($references !== null && in_array($field->reference, ['actor_ids', 'stage_timelines', 'cinematic_movement_routes', 'map_world_objects'], true) && $value !== null) {
             $choices = $field->reference === 'cinematic_movement_routes'
                 ? $references->getMovementRouteIds($record, $ownerPath)
@@ -134,10 +147,17 @@ final class ProjectRecordDatabase
         }
     }
 
-    private function writeRecordEntries(ProjectRecord $record, RecordSubList $list, array $entries): void
+    /**
+     * @param (\Closure(int): ?int)|null $indexMap How entries' indexes moved, for a list whose entries the
+     *   record names by index; null when none moved.
+     */
+    private function writeRecordEntries(ProjectRecord $record, RecordSubList $list, array $entries, ?\Closure $indexMap = null): void
     {
         $draft = clone $record;
         $draft->setEntries($list, $entries);
+        if ($indexMap !== null && $list->remapIndexReferences !== null) {
+            $draft->restorePayload(($list->remapIndexReferences)((array) $draft->toArray(), $indexMap));
+        }
         $this->assertProposedRecord($record, $draft);
         $record->restorePayload($draft->toArray());
     }
@@ -584,12 +604,29 @@ final class ProjectRecordDatabase
      * @param array<string, mixed> $owner The record holding the entry.
      * @return list<array<string, mixed>>
      */
-    private function describeEntryField(RecordField $field, array $row, array $entry, array $owner): array
+    private function describeEntryField(RecordField $field, array $row, array $entry, array $owner, ?ReferenceCatalog $references = null): array
     {
+        if ($field->codec === RecordFieldCodec::TROOP_MEMBER && ($row['editable'] ?? true) !== false) {
+            // Chosen among the owning troop's own members, by number and enemy.
+            $labels = array_map(static fn(mixed $member, int $index): string => sprintf('%d · %s', $index + 1,
+                is_array($member) ? trim(strval($member['enemy'] ?? '')) : ''), array_values((array) ($owner['enemies'] ?? [])),
+                array_keys(array_values((array) ($owner['enemies'] ?? []))));
+            $current = self::readNested($entry, $field->key);
+            unset($row['control']);
+            $row['options'] = $field->allowsNone ? ['None', ...$labels] : $labels;
+            $row['value'] = is_int($current) ? ($labels[$current] ?? sprintf('Member %d (not in this troop)', $current + 1)) : 'None';
+        }
         if ($field->referenceMapKey !== null) {
             // A map-local reference reads the map its own entry names.
             $map = self::readNested($entry, $field->referenceMapKey);
             $row['referenceMap'] = is_string($map) ? $map : '';
+        }
+        if ($field->entryChoices !== null && $references !== null && ($row['editable'] ?? true) !== false) {
+            $holder = self::readNested($entry, implode('.', array_slice(explode('.', $field->key), 0, -1)));
+            $values = $references->listEntryChoices($field->entryChoices, is_array($holder) ? $holder : []);
+            $row['options'] = ['', ...$values];
+            $row['choices'] = [['value' => '', 'label' => $field->noneLabel()],
+                ...array_map(static fn(string $value): array => ['value' => $value, 'label' => $value], $values)];
         }
         if ($field->dialogueSpeaker === null || $this->authoringReferences === null) {
             return [$row];
@@ -657,7 +694,11 @@ final class ProjectRecordDatabase
             }
 
             foreach ($record->getEntries($subList) as $entryIndex => $entry) {
-                $fields = [...$fields, ...$this->describeSubEntryFields($subList, $entryIndex, $entry, $isEditable, [], (array) $record->toArray())];
+                // A list beside the record's own roots its entries' frames at its key, so a
+                // command arm there (a troop event page's commands) is not read as the record's own list.
+                $fields = [...$fields, ...$this->describeSubEntryFields($subList, $entryIndex, $entry, $isEditable,
+                    $subList === $this->schema->subList ? [] : [$subList->key], (array) $record->toArray(),
+                    $this->findRecordReferences($record))];
             }
         }
 
@@ -678,7 +719,8 @@ final class ProjectRecordDatabase
      * @param array<string, mixed> $owner The record the entry belongs to, whose own name an NPC's line speaks under.
      * @return array<int, array<string, mixed>> The field descriptors.
      */
-    private function describeSubEntryFields(RecordSubList $subList, int $entryIndex, array $entry, bool $isEditable, array $basePath, array $owner = []): array
+    private function describeSubEntryFields(RecordSubList $subList, int $entryIndex, array $entry, bool $isEditable, array $basePath, array $owner = [],
+        ?ReferenceCatalog $references = null): array
     {
         $fields = [];
 
@@ -693,7 +735,7 @@ final class ProjectRecordDatabase
                 sprintf('%s %d %s', ucfirst($subList->singular), $entryIndex + 1, $field->label),
                 self::readNested($entry, $field->key),
             ), 'entry' => [$entryIndex], 'entryLabel' => sprintf('%s %d', ucfirst($subList->singular), $entryIndex + 1), 'name' => $field->label, 'sourceKey' => $field->key,
-                'dataPath' => [...($basePath === [] ? explode('.', $subList->key) : $basePath), $entryIndex, ...explode('.', $field->key)]], $entry, $owner)];
+                'dataPath' => [...($basePath === [] ? explode('.', $subList->key) : $basePath), $entryIndex, ...explode('.', $field->key)]], $entry, $owner, $references)];
         }
 
         $variant = $subList->variantKey !== null ? strval($entry[$subList->variantKey] ?? '') : '';
@@ -809,7 +851,7 @@ final class ProjectRecordDatabase
                         $field->label,
                     ),
                     self::readNested($nestedEntry, $field->key),
-                ), $nestedEntry, $owner)];
+                ), $nestedEntry, $owner, $references)];
             }
 
             foreach ($nestedList->armsFor($nestedEntry) as $armKey => $armLabel) {
@@ -1561,7 +1603,7 @@ final class ProjectRecordDatabase
         $entries = $record->getEntries($subList);
         $position = $at === null ? count($entries) : max(0, min(count($entries), $at));
         array_splice($entries, $position, 0, [self::withUniqueKey($subList, $entries, $entry ?? $subList->blank)]);
-        $this->writeRecordEntries($record, $subList, $entries);
+        $this->writeRecordEntries($record, $subList, $entries, static fn(int $old): int => $old >= $position ? $old + 1 : $old);
         $this->touchState();
 
         return $position;
@@ -1590,7 +1632,11 @@ final class ProjectRecordDatabase
         }
 
         [$removed] = array_splice($entries, $entryIndex, 1);
-        $this->writeRecordEntries($record, $subList, $entries);
+        $this->writeRecordEntries($record, $subList, $entries, static fn(int $old): ?int => match (true) {
+            $old === $entryIndex => null,
+            $old > $entryIndex => $old - 1,
+            default => $old,
+        });
         $this->touchState();
 
         return $removed;
@@ -1616,7 +1662,7 @@ final class ProjectRecordDatabase
         $entries = $record->getEntries($subList);
         $entryIndex = max(0, min(count($entries), $entryIndex));
         array_splice($entries, $entryIndex, 0, [$entry]);
-        $this->writeRecordEntries($record, $subList, $entries);
+        $this->writeRecordEntries($record, $subList, $entries, static fn(int $old): int => $old >= $entryIndex ? $old + 1 : $old);
         $this->touchState();
     }
 
@@ -3738,6 +3784,19 @@ final class ProjectRecordDatabase
 
         $trimmed = trim($rawValue);
 
+        if ($field->codec === RecordFieldCodec::TROOP_MEMBER) {
+            if ($trimmed === '' || $trimmed === 'None') {
+                if ($field->removeWhenEmpty) { return null; }
+                throw new \InvalidArgumentException(sprintf('%s must name a member of this troop.', $field->label));
+            }
+            // Chosen as "1 · Djin"; the file holds the member's index.
+            if (preg_match('/\A(?:Member\s+)?(\d+)/', $trimmed, $match) !== 1 || intval($match[1]) < 1) {
+                throw new \InvalidArgumentException(sprintf('%s must name a member of this troop by its number.', $field->label));
+            }
+
+            return intval($match[1]) - 1;
+        }
+
         if ($field->codec === RecordFieldCodec::POINT) {
             if ($trimmed === '' && $field->removeWhenEmpty) {
                 return null;
@@ -3990,6 +4049,7 @@ final class ProjectRecordDatabase
             RecordFieldCodec::POINT => is_array($value)
                 ? implode(', ', array_map(strval(...), array_values($value)))
                 : ProjectRecord::stringify($value),
+            RecordFieldCodec::TROOP_MEMBER => is_int($value) ? sprintf('Member %d', $value + 1) : 'None',
             RecordFieldCodec::BATTLE_TEST => is_array($value)
                 ? (string) json_encode($value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
                 : ProjectRecord::stringify($value),
@@ -4131,7 +4191,9 @@ final class ProjectRecordDatabase
         return array_key_exists('choice', $variants)
             || array_key_exists('branch', $variants)
             || ($subList !== null && $subList->commandArms !== [])
-            || $this->schema->commandLists !== [];
+            || $this->schema->commandLists !== []
+            // A list beside the record's own whose entries carry commands (a troop's event pages).
+            || array_any($this->schema->subLists, static fn(RecordSubList $list): bool => $list->commandArms !== []);
     }
 
     /**
@@ -4184,6 +4246,13 @@ final class ProjectRecordDatabase
             return $this->schema->commandLists[$rootKey];
         }
 
+        $root = $rootKey === null ? null : $this->schema->findInlineSubList($rootKey);
+
+        if ($root?->armCommandList !== null) {
+            // A list whose arms hold their own vocabulary (a troop event page's battle commands).
+            return $root->armCommandList;
+        }
+
         // Descended from the sub-list into a command arm: commands from here
         // down. The catalog's shared command list is what every arm holds.
         return RecordSchemaCatalog::eventCommandList('commands', $this->graphical);
@@ -4205,6 +4274,12 @@ final class ProjectRecordDatabase
     {
         $framePath = array_values($framePath);
         $count = count($framePath);
+
+        if ($count === 3 && is_string($framePath[0]) && $this->isSecondarySubList($framePath[0])) {
+            // An arm of an entry in a list beside the record's own: it closes back to the record.
+            return ['frame' => [], 'landing' => ($this->schema->findInlineSubList($framePath[0])?->prefix ?? 'command') . intval($framePath[1])];
+        }
+
         $chunk = $count === 1 && is_string($framePath[0])
             ? 1
             : ((is_string($framePath[$count - 3] ?? null) && is_int($framePath[$count - 2] ?? null) && is_string($framePath[$count - 1] ?? null) && is_int($framePath[$count - 4] ?? null)) ? 4 : 2);
@@ -4231,11 +4306,17 @@ final class ProjectRecordDatabase
     {
         $first = $framePath[0] ?? null;
 
-        if (is_string($first) && array_key_exists($first, $this->schema->commandLists)) {
+        if (is_string($first) && (array_key_exists($first, $this->schema->commandLists) || $this->isSecondarySubList($first))) {
             return [$first, array_slice($framePath, 1)];
         }
 
         return [$this->schema->subList?->key, $framePath];
+    }
+
+    /** Whether a key names an inline list beside the record's own (a troop's event pages). */
+    private function isSecondarySubList(string $key): bool
+    {
+        return array_any($this->schema->subLists, static fn(RecordSubList $list): bool => $list->key === $key);
     }
 
     /**
@@ -4267,7 +4348,8 @@ final class ProjectRecordDatabase
 
         foreach ($commands as $entryIndex => $entry) {
             if (is_array($entry)) {
-                $fields = [...$fields, ...$this->describeSubEntryFields($subList, $entryIndex, $entry, $isEditable, $framePath, (array) $record->toArray())];
+                $fields = [...$fields, ...$this->describeSubEntryFields($subList, $entryIndex, $entry, $isEditable, $framePath, (array) $record->toArray(),
+                    $this->findRecordReferences($record))];
             }
         }
 
@@ -4595,6 +4677,13 @@ final class ProjectRecordDatabase
 
         if ($rootKey !== null && array_key_exists($rootKey, $this->schema->commandLists)) {
             return self::describeFrameFrom($relative, ucfirst($rootKey), null);
+        }
+
+        if ($rootKey !== null && $this->isSecondarySubList($rootKey)) {
+            $list = $this->schema->findInlineSubList($rootKey);
+
+            return self::describeFrameFrom($relative, $list?->heading !== '' && $list !== null ? $list->heading : ucfirst($rootKey),
+                $list === null ? null : ucfirst($list->singular));
         }
 
         $subList = $this->schema->subList;
