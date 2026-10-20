@@ -102,3 +102,36 @@ it('authors the cue treatment and pointer images as rows with the Engine default
     ->and($catalog->cues['bright-yellow']['pointer']['south'])->toBe(['asset' => 'Graphics/System/CuePointer.png', 'quarterTurns' => 1])
     ->and(count($catalog->cues['bright-yellow']['pointer']))->toBe(8);
 });
+
+it('authors an NPC cue with the same contract as an event cue, under its own Cue heading', function () {
+  $root = makeTemporaryProject();
+  $session = EditorSession::open($root);
+  $index = $session->createNpc('test-map', $session->readMap('test-map')['revision'], 2, 2, 'Halen', 'halen')['index'];
+  $rows = $session->readNpc('test-map', $index)['rows'];
+  $row = static fn(string $field): array => array_find($session->readNpc('test-map', $index)['rows'],
+    static fn(array $row): bool => ($row['key']['field'] ?? null) === $field);
+
+  expect(array_column($rows, 'label'))->toContain('Cue')
+    ->and($row('cue.color')['kind'])->toBe('options');
+  $session->applyNpc('test-map', $session->readMap('test-map')['revision'], $index, $row('cue.symbol')['key'], '!');
+  $session->applyNpc('test-map', $session->readMap('test-map')['revision'], $index, $row('cue.color')['key'], 'bright-cyan');
+  $session->applyNpc('test-map', $session->readMap('test-map')['revision'], $index, $row('cue.conditions')['key'], '!event:halen_rescued');
+  $session->saveMap('test-map');
+  $npc = (require $root . '/assets/Maps/test-map/test-map.data.php')['npcs'][$index];
+  $cue = Ichiloto\Engine\Events\Triggers\EventCue::fromArray($npc['cue']);
+
+  expect($cue->symbol)->toBe('!')->and($cue->color)->toBe('bright-cyan')
+    ->and($cue->conditions)->toBe([['type' => 'event', 'name' => 'halen_rescued', 'negate' => true]]);
+});
+
+it('reports an NPC cue the Engine would refuse, as it does an event cue', function () {
+  $root = makeTemporaryProject();
+  $file = $root . '/assets/Maps/test-map/test-map.data.php';
+  $data = require $file;
+  $data['npcs'] = [['id' => 'halen', 'name' => 'Halen', 'x' => 1, 'y' => 1, 'sprite' => '@', 'cue' => ['symbol' => '!!', 'color' => 'bright-yellow']]];
+  file_put_contents($file, '<?php return ' . var_export($data, true) . ';');
+  $messages = array_map(static fn($issue): string => $issue->message,
+    (new Ichiloto\Editor\Validation\ProjectValidator())->validate(Ichiloto\Editor\ProjectWorkspace::fromProject($root)));
+
+  expect(implode("\n", $messages))->toContain('does not occupy exactly one terminal cell');
+});

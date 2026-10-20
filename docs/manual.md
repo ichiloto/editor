@@ -745,6 +745,7 @@ category uses - pickers, condition lines, world-write rows, command frames,
 | Appearance | `Sprite`, `Facing North/South/East/West`, `Graphical Sprites` |
 | Movement | `Movement` (`fixed` / `wander`), `Direction Fix` (`false` / `true`), and while wandering `Wander X/Y/Width/Height` |
 | Visibility | `Visible When` - a condition line |
+| Cue | `Cue Symbol` (one cell; empty means no cue), `Cue Colour`, `Cue When` - the same cue an event shows, drawn above the NPC with the game's Field Cues treatment |
 | Interaction | `Script` (a command frame), then one `Dialogue variant N` heading per variant with its rows `When`, `Then Set`, `Script Commands`, `Line 1 Speaker`, `Line 1 Text`, … |
 | Completion Writes | `After Talking` - world-write rows |
 
