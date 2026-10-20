@@ -15,6 +15,7 @@ use Ichiloto\Editor\Database\RecordSubList;
 use Ichiloto\Editor\Inspector\InputControlType;
 use Ichiloto\Engine\Animations\Field\FieldPresentationCatalog;
 use Ichiloto\Engine\Events\Enumerations\CollisionType;
+use Ichiloto\Engine\Field\Enumerations\DoorwayEntrance;
 use Ichiloto\Engine\Field\WorldObjectResource;
 use Throwable;
 
@@ -136,14 +137,17 @@ final class FieldResourceFields
     }
 
     /**
-     * The optional doorway: cells relative to a placement's anchor where the art paints an opening the player walks
-     * through. Validation requires an entrance under each one wherever the resource is placed; the art conforms to the
-     * map, so a doorway that misses its entrance is corrected here or in the art, never by moving the entrance.
+     * The optional doorway: cells relative to a placement's anchor where the art paints a door, and where each door's
+     * entrance lies: on the painted opening (the default) or in front of a door painted on a solid face. Validation
+     * requires each placement's doors to meet an entrance exactly so; the art conforms to the map, so a doorway that
+     * misses its entrance is corrected here or in the art, never by moving the entrance.
      */
     private static function getDoorwayList(): RecordSubList
     {
         return new RecordSubList(key: 'doorway', prefix: 'doorway', singular: 'doorway cell',
-            fields: [new RecordField('x', 'Offset X', InputControlType::INTEGER), new RecordField('y', 'Offset Y', InputControlType::INTEGER)],
+            fields: [new RecordField('x', 'Offset X', InputControlType::INTEGER), new RecordField('y', 'Offset Y', InputControlType::INTEGER),
+                new RecordField('entrance', 'Entrance (on the door, or in front of it)',
+                    options: array_column(DoorwayEntrance::cases(), 'value'), displayDefault: DoorwayEntrance::ON->value)],
             blank: ['x' => 0, 'y' => 0], heading: 'Doorway', removeWhenEmpty: true);
     }
 

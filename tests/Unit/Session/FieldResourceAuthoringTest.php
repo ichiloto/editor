@@ -7,6 +7,7 @@ use Ichiloto\Editor\Field\FieldResourceFields;
 use Ichiloto\Editor\Session\EditorSession;
 use Ichiloto\Editor\Session\SessionRefusal;
 use Ichiloto\Engine\Animations\Field\FieldPresentationCatalog;
+use Ichiloto\Engine\Field\Enumerations\DoorwayEntrance;
 use Ichiloto\Engine\Events\Enumerations\CollisionType;
 
 /**
@@ -107,7 +108,7 @@ it('refuses to save a resource the Engine would refuse, writing nothing', functi
         ->and((string) file_get_contents($path))->toBe($before);
 });
 
-it('authors a resource doorway as cells relative to its anchor, which the Engine reads back', function () {
+it('authors a resource doorway as cells relative to its anchor with their entrance, which the Engine reads back', function () {
     [, $path, $session] = createFieldResourceProject();
     $heading = array_find($session->readDatabaseRecord(FieldResourceFields::CATEGORY, 0)['rows'],
         static fn(array $row): bool => ($row['listHeading'] ?? false) === true && str_starts_with((string) $row['label'], 'Doorway'));
@@ -116,11 +117,20 @@ it('authors a resource doorway as cells relative to its anchor, which the Engine
     $session->addDatabaseItem(FieldResourceFields::CATEGORY, 0, $heading['key'], true);
     applyResourceRow($session, 0, 'doorway1X', '1');
     applyResourceRow($session, 0, 'doorway1Y', '-1');
+    applyResourceRow($session, 0, 'doorway1Entrance', 'front');
     $session->saveDatabase(FieldResourceFields::CATEGORY);
 
     $written = require $path;
-    expect($written['resources']['oak']['doorway'])->toBe([['x' => 0, 'y' => 0], ['x' => 1, 'y' => -1]])
+    expect($written['resources']['oak']['doorway'])->toBe([['x' => 0, 'y' => 0], ['x' => 1, 'y' => -1, 'entrance' => 'front']])
         ->and((string) file_get_contents($path))->toContain('// Authored cue bindings stay as written.')
         ->and(FieldPresentationCatalog::fromArray($written, dirname($path, 3))->getResource('oak')->doorway)
-            ->toBe([['x' => 0, 'y' => 0], ['x' => 1, 'y' => -1]]);
+            ->toBe([['x' => 0, 'y' => 0, 'entrance' => DoorwayEntrance::ON], ['x' => 1, 'y' => -1, 'entrance' => DoorwayEntrance::FRONT]]);
+    // The first door shows its default relation; a relation the Engine does not know refuses at the save, unwritten.
+    $rows = $session->readDatabaseRecord(FieldResourceFields::CATEGORY, 0)['rows'];
+    $entrance = array_find($rows, static fn(array $row): bool => ($row['key']['field'] ?? null) === 'doorway0Entrance');
+    expect($entrance['value'] ?? $entrance['displayDefault'] ?? null)->toBe('on');
+    $before = (string) file_get_contents($path);
+    applyResourceRow($session, 0, 'doorway0Entrance', 'behind');
+    expect(fn() => $session->saveDatabase(FieldResourceFields::CATEGORY))->toThrow(SessionRefusal::class)
+        ->and((string) file_get_contents($path))->toBe($before);
 });
