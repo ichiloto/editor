@@ -181,7 +181,9 @@ it('carries an older save alias through a repeating event that moves onto its NP
     file_put_contents($root . '/assets/Data/save-compatibility.php', "<?php\n\nreturn [\n  'contentVersion' => 0,\n  'migrations' => [],\n"
         . "  'aliases' => [\n    'one_shot_events' => [\n      ['from' => 'old-map:B', 'to' => 'test-map:E'],\n    ],\n  ],\n  'tombstones' => [],\n];\n");
 
-    $result = ChangeBatch::apply($root, [['method' => 'npc.adoptEvent', 'params' => ['map' => 'test-map', 'marker' => 'E']]]);
+    // The repeating page always answers, so the plain lines it hides go with it, as validation requires.
+    $result = ChangeBatch::apply($root, [['method' => 'npc.adoptEvent', 'params' => ['map' => 'test-map', 'marker' => 'E']],
+        ['method' => 'npc.remove', 'params' => ['map' => 'test-map', 'index' => 0, 'key' => ['target' => 'npc', 'field' => 'variant1Conditions', 'frame' => []]]]]);
     $manifest = Ichiloto\Engine\IO\SaveCompatibility\SaveCompatibilityManifest::fromProjectRoot($root);
 
     expect($result['status'])->toBe('saved')
