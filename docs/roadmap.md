@@ -407,9 +407,12 @@ Order of work, each a complete slice before the next:
    graphical battle too. Waiting on Engine contracts requested on
    2026-10-17: the enemy arrangement rule (Align, and the starting terminal
    position and battle placement of a new member, today the blank
-   `[15, 7]` and none), battle event pages (conditions, span, commands
-   through the shared command editor) and arenas as authorable data. Battle
-   events do not run in the Engine yet.
+   `[15, 7]` and none) and arenas as authorable data. Battle event pages are
+   done (2026-10-20): `Event Pages` beside the members, with conditions, span
+   and battle commands through the shared command frames, members chosen from
+   the troop, pages renumbered when a member is removed, `Cannot Fall Below
+   HP %` per member, and saves and validation checked by the Engine's
+   `BattleEventPage`.
 
 Acceptance criteria:
 

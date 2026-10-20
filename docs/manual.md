@@ -1629,8 +1629,26 @@ Engine's arrangement rule.
 
 `Battle Music` names a track in `assets/Audio/BGM` that the battle plays in
 place of the project's battle theme; left unset, the project's theme plays.
-Keys the editor does not show, such as a troop's `id` and its battle `events`,
-are kept as they are.
+Keys the editor does not show, such as a troop's `id`, are kept as they are.
+
+A member's `Cannot Fall Below HP %` (the Engine's `knockoutFloorPercent`,
+0 to 99) holds it above that share of its HP against every kind of battle
+damage, so an event page can end the fight before an ordinary knockout.
+
+`Event Pages` are the troop's battle events, as in RPG Maker. `Shift+O` on the
+heading adds a page that runs on turn 1. A page has a `Name`, a `Span`
+(`battle`: once per battle; `turn`: once per turn; `moment`: at every check
+where its conditions hold) and conditions, every one of which must hold:
+`Turn` with `Then Every N Turns`, `Enemy` (chosen from the troop's own members,
+as `1 · Djin`) with `Enemy HP At Or Below %`, `Party Member` with `Party Member
+HP At Or Below %`, and `World Conditions` (switches, variables, story events).
+A blank or 0 leaves a condition out. `Enter` on its `Commands` opens them; the
+command types offered are the ones a battle page can run, including `concede`
+(an enemy yields: it counts as defeated, stays on screen and does not fade out
+like a knockout) and `end_battle` (victory, escape or defeat). A member a page
+names cannot be removed until the page names another, and pages follow their
+members when another member is removed. Saving refuses a page the Engine would
+refuse, with the Engine's own message, and validation reports the same.
 
 A troop may also declare a `Classification` - `ordinary` or `boss` - which
 battle-entry rules match against. An omitted classification is the engine's

@@ -72,6 +72,18 @@ final readonly class RecordField
     }
 
     /**
+     * Returns a member of the troop that owns the entry, chosen by number and
+     * enemy name and stored as its index in the troop's enemies.
+     *
+     * @param bool $required Whether the entry must name one; an optional one can be None.
+     */
+    public static function troopMember(string $key, string $label, bool $required = true): self
+    {
+        return new self($key, $label, InputControlType::INTEGER, removeWhenEmpty: ! $required,
+            codec: RecordFieldCodec::TROOP_MEMBER, allowsNone: ! $required);
+    }
+
+    /**
      * Returns a reference to something on a map the entry itself names: a
      * quest waymark's event marker is chosen from the waymark's map.
      *

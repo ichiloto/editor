@@ -113,4 +113,11 @@ enum RecordFieldCodec: string
      * one line of JSON; a value the Engine would not read is refused.
      */
     case BATTLE_TEST = 'battle_test';
+
+    /**
+     * A member of the troop that owns the entry, stored as its 0-based index
+     * in the troop's `enemies` and chosen as "1 · Djin": what a troop event
+     * page's conditions and battle commands name an enemy by.
+     */
+    case TROOP_MEMBER = 'troop_member';
 }

@@ -13,7 +13,6 @@ use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasImageFit;
 use Ichiloto\Engine\Animations\Timelines\EffectTimelineLibrary;
 use Ichiloto\Engine\Cutscenes\Cinematics\CinematicCommandSchema;
 use Ichiloto\Engine\Cutscenes\Presentation\CinematicStage;
-use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandRegistry;
 use Ichiloto\Engine\Cutscenes\Summons\SummonEffectTiming;
 
 /**
@@ -394,7 +393,7 @@ final class CutsceneSchemas
             prefix: 'command',
             singular: 'command',
             fields: [
-                new RecordField('type', 'Type', options: [...CinematicCommandSchema::COMMAND_TYPES, ...ScriptCommandRegistry::getCatalog()->types]),
+                new RecordField('type', 'Type', options: [...CinematicCommandSchema::COMMAND_TYPES, ...RecordSchemaCatalog::getRegisteredCommandTypes()]),
             ],
             blank: ['type' => 'wait', 'seconds' => 0.5],
             variants: self::cinematicCommandVariants($graphical),

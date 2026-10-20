@@ -62,6 +62,11 @@ afterEach(function (): void {
 
 it('maps every Engine command reference to an Editor resource category', function (): void {
     foreach (ScriptCommandReference::cases() as $reference) {
+        if ($reference === ScriptCommandReference::TROOP_MEMBER) {
+            // A troop member belongs to the troop that owns the page, never to the project's resources.
+            expect(ProjectScriptCommands::getReferenceCategory($reference))->toBeNull();
+            continue;
+        }
         expect(ProjectScriptCommands::getReferenceCategory($reference))->toBeString()->not->toBeEmpty();
     }
 
@@ -72,12 +77,12 @@ it('maps every Engine command reference to an Editor resource category', functio
 it('reads a project\'s declared commands without loading their handlers', function (): void {
     $root = makeTemporaryProject();
 
-    expect(ProjectScriptCommands::fromProject($root)->catalog->types)->toBe(['shop', 'inn']);
+    expect(ProjectScriptCommands::fromProject($root)->catalog->types)->toBe(['shop', 'inn', 'end_battle', 'concede']);
 
     writeCarriageDeclarations($root);
     $commands = ProjectScriptCommands::fromProject($root);
 
-    expect($commands->catalog->types)->toBe(['shop', 'inn', 'hire_carriage'])
+    expect($commands->catalog->types)->toBe(['shop', 'inn', 'end_battle', 'concede', 'hire_carriage'])
         ->and($commands->catalog->findDefinition('hire_carriage')?->handlerClass)->toBe('Project\\Commands\\HireCarriage')
         ->and(class_exists('Project\\Commands\\HireCarriage', false))->toBeFalse()
         ->and($commands->declarationProblem)->toBeNull();
