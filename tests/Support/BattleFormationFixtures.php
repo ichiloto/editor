@@ -148,9 +148,9 @@ function summonBattlePreviewProject(array $wielders = []): string
     writeFireballSkill($root);
     // The battle reads enemies the way the game loads them, one file each through the project's barrel.
     writeRegularBatEnemy($root);
-    // A graphical battle places every enemy it fights.
+    // One member placed; the battle arranges the other beside it.
     file_put_contents($root . '/assets/Data/troops.php', str_replace("['enemy' => 'Regular Bat', 'position' => [15, 20]]",
-        "['enemy' => 'Regular Bat', 'position' => [15, 20], 'graphicalPlacement' => ['x' => 420, 'y' => 380, 'width' => 275, 'height' => 190]]",
+        "['enemy' => 'Regular Bat', 'position' => [15, 20], 'graphicalPlacement' => ['x' => 420, 'depth' => 220, 'width' => 275, 'height' => 190]]",
         (string) file_get_contents($root . '/assets/Data/troops.php')));
     file_put_contents($root . '/assets/Data/enemies.php', "<?php\n\nreturn Ichiloto\\Engine\\Entities\\Enemies\\EnemyCatalog::loadProjectEnemies(dirname(__DIR__));\n");
 
