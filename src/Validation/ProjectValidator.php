@@ -3,6 +3,7 @@
 namespace Ichiloto\Editor\Validation;
 
 use Ichiloto\Editor\Database\TroopEventPageContract;
+use Ichiloto\Editor\ProjectConfig;
 use Ichiloto\Engine\Quests\QuestWaymark;
 use Ichiloto\Editor\Database\BattleEntryActorResolver;
 use Ichiloto\Editor\Database\BattleEntryRuleContract;
@@ -3318,12 +3319,32 @@ class ProjectValidator
     ];
 
     return [
+      ...$this->checkConfigReferences($workspace, $known),
       ...$this->checkSkitReferences($workspace, $known),
       ...$this->checkMapReferences($workspace, $known),
       ...$this->checkScriptReferences($workspace, $known),
       ...$this->checkTroopEventReferences($workspace, $known),
       ...$this->checkAchievementReferences($workspace, $known),
     ];
+  }
+
+  /**
+   * Checks the config.php settings that name another resource, where this
+   * validation knows the resources of that kind.
+   *
+   * @param array<string, string[]> $known What the project defines.
+   * @return Issue[] The issues found.
+   */
+  protected function checkConfigReferences(ProjectWorkspace $workspace, array $known): array
+  {
+    $issues = [];
+    foreach (ProjectConfig::ENGINE_REFERENCES as $path => $category) {
+      $value = $workspace->config?->getRecord($path)->get('value');
+      if (is_string($value) && isset($known[$category])) {
+        $issues = [...$issues, ...$this->checkReference($value, $category, 'setting ' . $path, 'config.php: ' . $path, $known)];
+      }
+    }
+    return $issues;
   }
 
   /**

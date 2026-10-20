@@ -15,18 +15,21 @@ final class ProjectConfig extends ProjectSettingsFile
     public const string FIELD_ZOOM = 'graphics.field.zoom';
     /** The inn's rest stage timeline when an inn names none of its own (InnStay). */
     public const string INN_PRESENTATION = 'graphics.inn.presentation';
+    /** The event script a save point runs, else the Engine's save point notice (SaveFeatures). */
+    public const string SAVE_POINT_SCRIPT = 'save.point_script';
 
     /**
      * Settings the engine reads with a default when the file leaves them
      * out, by path, with that default.
      */
-    private const array ENGINE_DEFAULTS = [self::FIELD_ZOOM => FieldViewport::DEFAULT_ZOOM, self::INN_PRESENTATION => null];
+    private const array ENGINE_DEFAULTS = [self::FIELD_ZOOM => FieldViewport::DEFAULT_ZOOM, self::INN_PRESENTATION => null,
+        self::SAVE_POINT_SCRIPT => null];
 
     /**
      * Settings that name another resource, by path, with the reference kind
      * ({@see \Ichiloto\Editor\Database\ReferenceCatalog}) they are chosen from.
      */
-    public const array ENGINE_REFERENCES = [self::INN_PRESENTATION => 'stage_timelines'];
+    public const array ENGINE_REFERENCES = [self::INN_PRESENTATION => 'stage_timelines', self::SAVE_POINT_SCRIPT => 'common_events'];
 
     /** Settings under these paths each name one audio file, chosen from the project's own folder for that kind. */
     private const array ENGINE_REFERENCE_PREFIXES = ['audio.sounds.' => 'sfx', 'audio.bgm.' => 'bgm'];

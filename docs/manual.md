@@ -1829,6 +1829,13 @@ written back as the case. A setting the engine reads with a default is listed
 even where the file leaves it out, showing that default; choosing the default
 writes nothing.
 
+#### Save Point Script
+
+`save.point_script` is the event script that runs when the player steps onto a
+save point, picked from the project's event scripts (None keeps the Engine's
+save point notice, worded in Terms as `messages.save.point_prompt` and
+`messages.save.point_title`). Validation names a script that does not exist.
+
 #### Field Zoom
 
 Open **Database > Configuration > graphics.field.zoom**. Enter a finite number
