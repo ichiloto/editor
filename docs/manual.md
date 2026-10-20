@@ -778,6 +778,11 @@ character says is read in the pane rather than in the edit buffer.
   setting it back to `false` removes the key, the game's default. It affects
   only the talk turn: wandering and `move_route` still turn the NPC. The
   validator reports a `directionFix` that is not `true` or `false`.
+- **Stands facing.** The heading the NPC stands with when its map loads,
+  such as a clerk facing the door their desk is approached from. It stores
+  `'facing' => 'north'` and shows that heading's directional sprite; clearing
+  it removes the key, which the game reads as `south`. Talking turns the NPC and back
+  to it. The validator warns about a facing that is not one of the four.
 - **Directional sprites.** Optional glyphs shown when the NPC turns; the base
   sprite covers a heading you leave blank. Resting the Inspector cursor on a
   `Facing …` row previews that glyph on the canvas in the NPC's place.

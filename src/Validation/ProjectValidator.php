@@ -2258,6 +2258,15 @@ class ProjectValidator
       );
     }
 
+    if (array_key_exists('facing', $entry)
+      && (! is_string($entry['facing']) || ! in_array(strtolower(trim($entry['facing'])), ProjectNpc::DIRECTIONS, true))) {
+      $issues[] = Issue::warning(
+        $where,
+        sprintf('Its facing %s is not north, south, east or west.', is_string($entry['facing']) ? "\"{$entry['facing']}\"" : get_debug_type($entry['facing'])),
+        'The game stands it facing south instead. Choose one of the four headings.'
+      );
+    }
+
     if (! array_key_exists('wanderArea', $entry)) {
       return $issues;
     }
