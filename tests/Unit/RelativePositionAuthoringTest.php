@@ -101,6 +101,63 @@ it('refuses relative waypoints the Engine would refuse and clears coordinates or
     expect(require $path)->toBe(eval('?>' . $original));
 });
 
+it('authors a waypoint end facing through the session, one kind at a time', function () {
+    $root = cutsceneProject();
+    $path = writeRelativeScript($root, [['type' => 'move_route', 'subject' => 'player',
+        'waypoints' => [['at' => ['kind' => 'npc', 'id' => 'keeper'], 'offset' => ['x' => -2]]]]]);
+    $original = file_get_contents($path);
+    $session = EditorSession::open($root);
+    $frame = ['commands'];
+
+    expect(relativeRow($session, $frame, [0, 0], 'Facing')['value'])->toBe('(last step)')
+        ->and(relativeRow($session, $frame, [0, 0], 'Face Toward')['options'])
+        ->toBe(['', ...CinematicCommandSchema::export()['endFacing']['subjectKinds']]);
+    $session->applyDatabaseRecord('cutscenes/cinematic', 0, relativeRow($session, $frame, [0, 0], 'Face Toward')['key'], 'npc');
+    // A subject still waiting for its id is a draft the save completes, never written.
+    expect(fn() => $session->saveDatabase('cutscenes/cinematic'))->toThrow(InvalidArgumentException::class, 'requires an id')
+        ->and(file_get_contents($path))->toBe($original);
+    $id = relativeRow($session, $frame, [0, 0], 'Face Toward NPC');
+    expect($id['reference'])->toBe('map_npcs');
+    $session->applyDatabaseRecord('cutscenes/cinematic', 0, $id['key'], 'keeper');
+    $session->saveDatabase('cutscenes/cinematic');
+    expect((require $path)[0]['waypoints'][0])->toBe(['at' => ['kind' => 'npc', 'id' => 'keeper'], 'offset' => ['x' => -2],
+        'faceToward' => ['kind' => 'npc', 'id' => 'keeper']])
+        ->and(file_get_contents($path))->toContain('// Staging authored by hand.');
+
+    // A fixed facing replaces the subject, and choosing a subject again replaces the facing.
+    $session->applyDatabaseRecord('cutscenes/cinematic', 0, relativeRow($session, $frame, [0, 0], 'Facing')['key'], 'west');
+    $session->saveDatabase('cutscenes/cinematic');
+    expect((require $path)[0]['waypoints'][0])->toBe(['at' => ['kind' => 'npc', 'id' => 'keeper'], 'offset' => ['x' => -2], 'facing' => 'west']);
+    $session->applyDatabaseRecord('cutscenes/cinematic', 0, relativeRow($session, $frame, [0, 0], 'Face Toward')['key'], 'player');
+    $session->saveDatabase('cutscenes/cinematic');
+    expect((require $path)[0]['waypoints'][0])->toBe(['at' => ['kind' => 'npc', 'id' => 'keeper'], 'offset' => ['x' => -2],
+        'faceToward' => ['kind' => 'player']]);
+
+    foreach (range(1, 4) as $ignored) { $session->undo(); }
+    $session->saveDatabase('cutscenes/cinematic');
+    expect(require $path)->toBe(eval('?>' . $original));
+});
+
+it('authors a staged actor end facing and offers none on a bound visual', function () {
+    $root = cutsceneProject();
+    $path = writeRelativeScript($root, [['type' => 'stage_actor', 'id' => 'guide', 'sprite' => ['G'], 'x' => 6, 'y' => 3,
+        'facing' => 'north']]);
+    $session = EditorSession::open($root);
+    $frame = ['commands'];
+
+    expect(relativeRow($session, $frame, [0], 'Facing')['value'])->toBe('north');
+    $session->applyDatabaseRecord('cutscenes/cinematic', 0, relativeRow($session, $frame, [0], 'Face Toward')['key'], 'npc');
+    $session->applyDatabaseRecord('cutscenes/cinematic', 0, relativeRow($session, $frame, [0], 'Face Toward NPC')['key'], 'keeper');
+    $session->saveDatabase('cutscenes/cinematic');
+    expect(require $path)->toBe([['type' => 'stage_actor', 'id' => 'guide', 'sprite' => ['G'], 'x' => 6, 'y' => 3,
+        'faceToward' => ['kind' => 'npc', 'id' => 'keeper']]]);
+
+    $keys = static fn(array $entry, bool $graphical): array => array_map(static fn($field): string => $field->key,
+        CutsceneSchemas::stagedActorFields($graphical, $entry));
+    expect($keys(['id' => 'a', 'x' => 1, 'y' => 1], false))->toContain('facing', 'faceToward.kind')
+        ->and($keys(['id' => 'a', 'subject' => ['kind' => 'player']], true))->not->toContain('facing', 'faceToward.kind');
+});
+
 it('offers only the subject kinds each owner can resolve, from the Engine contract', function () {
     $exported = CinematicCommandSchema::export()['relativePosition'];
     expect($exported['fields'])->toBe(['at', 'offset'])
