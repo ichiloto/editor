@@ -2013,7 +2013,13 @@ Cutscene and event command lists, one file per script under `assets/Events`.
 A map's `ScriptEventTrigger` runs the script whose `scriptId` matches the
 filename stem.
 
-The entry list shows script ids. The settings pane flattens the command list:
+The entry list shows script ids. A script made from the Terminal is named
+`new-event-script`; the GUI editor's session (`database.create` with an
+`identity`) and editor change batches can name it at creation, in id form
+(`payday-notice`), and that name becomes its file. A name another script or
+file already has is refused.
+
+The settings pane flattens the command list:
 each command contributes a `Command N Type` row plus the rows that type uses.
 Changing the type changes the rows beneath it.
 
