@@ -11,8 +11,8 @@ use Ichiloto\Engine\Animations\Field\FieldWaymarkStyle;
 /**
  * The settings of the game's field presentation catalog (Engine
  * FieldPresentationCatalog) that are edited by path: the cue treatment
- * (`cueStyle`), each cue colour's binding (its mark effect and the eight
- * pointer images an edge marker turns) and the objective waymark style.
+ * (`cueStyle`), each cue colour's binding (its mark effect, its plate and the
+ * eight pointer images an edge marker turns) and the objective waymark style.
  * Resources keep their own owner. Defaults and the values accepted are the
  * Engine's own, read from its types, never restated here.
  */
@@ -44,13 +44,14 @@ final class FieldPresentationSettings extends ProjectSettingsFile
             $settings[self::WAYMARKS . '.' . $key] = ['default' => $default];
         }
         $style = new FieldCueStyle();
-        foreach (['plate' => $style->plate, 'bob.height' => $style->bobHeight, 'bob.seconds' => $style->bobSeconds,
+        foreach (['bob.height' => $style->bobHeight, 'bob.seconds' => $style->bobSeconds,
             'pointerSpacing.x' => $style->pointerSpacingX, 'pointerSpacing.y' => $style->pointerSpacingY,
             'terminal.background' => $style->terminalBackground,
             'terminal.bold' => $style->terminalBold] as $key => $default) {
             $settings[self::CUE_STYLE . '.' . $key] = ['default' => $default];
         }
         foreach (array_keys(is_array($this->payload[self::CUES] ?? null) ? $this->payload[self::CUES] : []) as $color) {
+            $settings[self::CUES . ".{$color}.plate"] = ['default' => null];
             foreach (FieldPresentationCatalog::DIRECTIONS as $direction) {
                 $settings[self::CUES . ".{$color}.pointer.{$direction}.asset"] = ['default' => null];
                 $settings[self::CUES . ".{$color}.pointer.{$direction}.quarterTurns"] = ['default' => 0];
@@ -63,8 +64,7 @@ final class FieldPresentationSettings extends ProjectSettingsFile
     /** A plate, a background or a pointer chosen away is no key at all, so the Engine's own treatment applies. */
     protected function isRemovedWhenEmpty(string $path): bool
     {
-        return in_array($path, [self::CUE_STYLE . '.plate'], true)
-            || (str_starts_with($path, self::CUES . '.') && str_ends_with($path, '.asset'));
+        return str_starts_with($path, self::CUES . '.') && (str_ends_with($path, '.asset') || str_ends_with($path, '.plate'));
     }
 
     /**
