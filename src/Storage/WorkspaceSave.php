@@ -49,6 +49,9 @@ final class WorkspaceSave
     public static function prepareAll(ProjectWorkspace $workspace, ?Closure $recordRelocation = null): array
     {
         $saves = [];
+        // Categories editing through one settings file (Terms and Configuration write `config.php`
+        // through the project configuration) are prepared once, by that file, wherever they are listed.
+        $writers = [];
 
         foreach (SharedFileTransaction::groupByPath($workspace->listSaveableDatabases()) as $group) {
             $dirty = array_filter($group, static fn(object $database): bool => $database->isDirty());
@@ -65,6 +68,11 @@ final class WorkspaceSave
             }
 
             foreach ($dirty as $database) {
+                $writer = $database instanceof ProjectRecordDatabase ? $database->getFileWriter() : $database;
+                if (isset($writers[spl_object_id($writer)])) {
+                    continue;
+                }
+                $writers[spl_object_id($writer)] = true;
                 $saves = [...$saves, ...match (true) {
                     $database instanceof ProjectActorDatabase => $database->prepareSaves(),
                     $database instanceof ProjectRecordDatabase, $database instanceof ProjectSettingsFile => [$database->prepareSave()],

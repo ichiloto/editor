@@ -1776,6 +1776,16 @@ final class ProjectRecordDatabase
     }
 
     /**
+     * What writes this category's file: the settings file a settings
+     * category edits through (Terms and Configuration both write
+     * `config.php` through it), or the category itself.
+     */
+    public function getFileWriter(): ProjectSettingsFile|self
+    {
+        return $this->settings ?? $this;
+    }
+
+    /**
      * Works out the category's save without writing it, for {@see SaveSet}
      * to install alone or with the rest of a change set: its own file, its
      * share of a file other categories edit too, or a file per record and
