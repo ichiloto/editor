@@ -12,6 +12,7 @@ use Ichiloto\Engine\Events\Enumerations\CollisionType;
 use Ichiloto\Engine\Field\MapCollisionResolver;
 use Ichiloto\Engine\Field\MapSourceReader;
 use Ichiloto\Engine\Field\NpcPlacement;
+use Ichiloto\Engine\Field\Reachability\MapReachabilityReport;
 use Ichiloto\Engine\Field\Reachability\ProjectReachability;
 use RuntimeException;
 use Throwable;
@@ -42,20 +43,75 @@ final class SaveRelocationPlanner
      */
     public static function plan(ProjectMap $map, string $projectRoot): ?SaveRelocationPlan
     {
-        return ProjectDirectoryContext::run($projectRoot, static fn(string $root): ?SaveRelocationPlan => self::buildPlan($map, $root));
+        return self::planAll([$map], $projectRoot);
     }
 
-    private static function buildPlan(ProjectMap $map, string $root): ?SaveRelocationPlan
+    /**
+     * Plans the relocations of every given map as one manifest step, the
+     * step a change set writing those maps together adds: the manifest is
+     * written once, whichever of its maps move saves.
+     *
+     * @param list<ProjectMap> $maps
+     * @throws RuntimeException When the manifest cannot be read or rewritten; nothing is written.
+     */
+    public static function planAll(array $maps, string $projectRoot): ?SaveRelocationPlan
+    {
+        return ProjectDirectoryContext::run($projectRoot, static fn(string $root): ?SaveRelocationPlan => self::buildPlan($maps, $root));
+    }
+
+    /** @param list<ProjectMap> $maps */
+    private static function buildPlan(array $maps, string $root): ?SaveRelocationPlan
     {
         $manifestPath = $root . '/' . SaveManifestStep::PATH;
-        if (! is_file($manifestPath) || ! $map->isDirty()) {
+        $maps = array_values(array_filter($maps, static fn(ProjectMap $map): bool => $map->isDirty()));
+        if (! is_file($manifestPath) || $maps === []) {
             return null;
         }
-        $report = ProjectReachability::analyze($root . '/assets')->reports[$map->mapId] ?? null;
-        if ($report === null) {
+        $reachability = ProjectReachability::analyze($root . '/assets');
+        $relocations = [];
+        $moving = [];
+        foreach ($maps as $map) {
+            $report = $reachability->reports[$map->mapId] ?? null;
+            $found = $report === null ? [] : self::planMap($map, $root, $report);
+            if ($found !== []) {
+                $relocations = [...$relocations, ...$found];
+                $moving[] = $map->mapId;
+            }
+        }
+        if ($relocations === []) {
             return null;
+        }
+        $label = implode(', ', $moving);
+
+        $source = (string) file_get_contents($manifestPath);
+        try {
+            $manifest = PhpDataFile::evaluateIsolated($manifestPath, $root);
+        } catch (Throwable $failure) {
+            throw new RuntimeException(sprintf('%s could not be read, so the saves standing where %s is now taken cannot be moved: %s',
+                SaveManifestStep::PATH, $label, $failure->getMessage()), previous: $failure);
+        }
+        $next = SaveManifestStep::append($source, $manifest, ['relocations' => $relocations]);
+        if (is_string($next)) {
+            throw new RuntimeException(sprintf('%s cannot take the save relocations %s needs: %s. Add the step %s by hand.',
+                SaveManifestStep::PATH, $label, $next, var_export(SaveManifestStep::describe($manifest, ['relocations' => $relocations]), true)));
         }
 
+        $sources = new SourceSetPlan($root, [$manifestPath => $source], [$manifestPath => $source], [$manifestPath => $next['source']],
+            [$manifestPath => PhpDataFile::getComparableValue($manifest)], [$manifestPath => PhpDataFile::getComparableValue($next['value'])],
+            static fn(): array => [$manifestPath],
+            static fn(string $path, string $staged): mixed => PhpDataFile::getComparableValue(PhpDataFile::evaluateIsolated($staged, $root)),
+            'save relocations', 'Save compatibility manifest');
+
+        return new SaveRelocationPlan($label, $relocations, $next['value']['contentVersion'], $sources);
+    }
+
+    /**
+     * One map's relocations, against today's reachability.
+     *
+     * @return list<array{map: string, cells: list<array{int, int}>, to: array{int, int}}>
+     */
+    private static function planMap(ProjectMap $map, string $root, MapReachabilityReport $report): array
+    {
         $grid = $map->getResolvedCollisionMap();
         $npcs = self::readNpcCells((array) ($map->getEditableData()['npcs'] ?? []));
         $passable = static fn(int $x, int $y): bool => isset($grid[$y][$x]) && ! isset($npcs["{$x},{$y}"])
@@ -75,7 +131,7 @@ final class SaveRelocationPlanner
             }
         }
         if ($blocked === []) {
-            return null;
+            return [];
         }
 
         // A save lands on plain floor: never on grass, an exit, a save point, an event or an NPC.
@@ -94,31 +150,8 @@ final class SaveRelocationPlanner
             $groups[implode(',', $landing)]['to'] = $landing;
             $groups[implode(',', $landing)]['cells'][] = [$x, $y];
         }
-        if ($groups === []) {
-            return null;
-        }
-        $relocations = array_map(static fn(array $group): array => ['map' => $map->mapId, 'cells' => $group['cells'], 'to' => $group['to']], array_values($groups));
 
-        $source = (string) file_get_contents($manifestPath);
-        try {
-            $manifest = PhpDataFile::evaluateIsolated($manifestPath, $root);
-        } catch (Throwable $failure) {
-            throw new RuntimeException(sprintf('%s could not be read, so the saves standing where %s is now taken cannot be moved: %s',
-                SaveManifestStep::PATH, $map->mapId, $failure->getMessage()), previous: $failure);
-        }
-        $next = SaveManifestStep::append($source, $manifest, ['relocations' => $relocations]);
-        if (is_string($next)) {
-            throw new RuntimeException(sprintf('%s cannot take the save relocations %s needs: %s. Add the step %s by hand.',
-                SaveManifestStep::PATH, $map->mapId, $next, var_export(SaveManifestStep::describe($manifest, ['relocations' => $relocations]), true)));
-        }
-
-        $sources = new SourceSetPlan($root, [$manifestPath => $source], [$manifestPath => $source], [$manifestPath => $next['source']],
-            [$manifestPath => PhpDataFile::getComparableValue($manifest)], [$manifestPath => PhpDataFile::getComparableValue($next['value'])],
-            static fn(): array => [$manifestPath],
-            static fn(string $path, string $staged): mixed => PhpDataFile::getComparableValue(PhpDataFile::evaluateIsolated($staged, $root)),
-            'save relocations', 'Save compatibility manifest');
-
-        return new SaveRelocationPlan($map->mapId, $relocations, $next['value']['contentVersion'], $sources);
+        return array_map(static fn(array $group): array => ['map' => $map->mapId, 'cells' => $group['cells'], 'to' => $group['to']], array_values($groups));
     }
 
     /**

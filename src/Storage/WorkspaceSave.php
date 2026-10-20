@@ -11,6 +11,7 @@ use Ichiloto\Editor\Database\SharedFileTransaction;
 use Ichiloto\Editor\History\Command;
 use Ichiloto\Editor\Maps\SaveRelocationPlanner;
 use Ichiloto\Editor\ProjectActorDatabase;
+use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectSettingsFile;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Editor\Validation\MapValidator;
@@ -74,25 +75,26 @@ final class WorkspaceSave
 
         $saves = [...$saves, ...($workspace->cutscenes?->prepareSaves() ?? [])];
 
-        foreach ($workspace->maps as $map) {
-            if (! $map->isDirty()) {
-                continue;
-            }
+        $dirtyMaps = array_values(array_filter($workspace->maps, static fn(ProjectMap $map): bool => $map->isDirty()));
 
+        foreach ($dirtyMaps as $map) {
             if ($map->willMoveOnSave()) {
                 throw new RuntimeException(sprintf('%s would move its folder when saved; save it on its own.', $map->mapId));
             }
+        }
 
-            $relocation = SaveRelocationPlanner::plan($map, $workspace->projectRoot);
+        // One manifest step holds every map's relocations: the manifest is written once.
+        $relocation = SaveRelocationPlanner::planAll($dirtyMaps, $workspace->projectRoot);
 
-            if ($relocation !== null) {
-                if ($recordRelocation === null) {
-                    throw new RuntimeException(sprintf('Saving %s moves existing saves; allow the relocations first.', $map->mapId));
-                }
-
-                $saves[] = $relocation->prepareApply($recordRelocation);
+        if ($relocation !== null) {
+            if ($recordRelocation === null) {
+                throw new RuntimeException(sprintf('Saving %s moves existing saves; allow the relocations first.', $relocation->mapId));
             }
 
+            $saves[] = $relocation->prepareApply($recordRelocation);
+        }
+
+        foreach ($dirtyMaps as $map) {
             $saves[] = $map->prepareSave();
         }
 

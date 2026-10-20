@@ -163,3 +163,28 @@ it('reviews the relocation in the terminal editor before Ctrl+S writes both', fu
     expect(readSaveManifest($root)['contentVersion'])->toBe(1)
         ->and(getEditorProperty($editor, 'workspace')->getMapByIndex(0)->isDirty())->toBeFalse();
 });
+
+it('writes the relocations of every map saved together as one manifest step', function () {
+    $root = mapLineRemovalProject();
+    // A door from home's floor into town makes the town's floor reachable too.
+    $home = $root . '/assets/Maps/home';
+    file_put_contents($home . '/home.event.php', Ichiloto\Engine\Field\MapGridSource::buildSource("      \n T  W \n      \n D  S \n      ", 'AUTHORED'));
+    file_put_contents($home . '/home.data.php', str_replace("'events' => [", "'events' => [\n    'T' => ['class' => 'Ichiloto\\\\Engine\\\\Events\\\\Triggers\\\\TransferPlayerTrigger',"
+        . " 'data' => ['destinationMap' => 'town', 'spawnPoint' => ['x' => 2, 'y' => 1], 'spawnSprite' => ['North']]],", (string) file_get_contents($home . '/home.data.php')));
+    $workspace = Ichiloto\Editor\ProjectWorkspace::fromProject($root);
+    foreach ($workspace->maps as $map) {
+        if (in_array($map->mapId, ['home', 'town'], true)) {
+            [$x, $y] = $map->mapId === 'home' ? [2, 3] : [3, 1];
+            $map->setLayerCell($map->getLayers()[0]['id'], $x, $y, '#');
+        }
+    }
+    $recorded = [];
+
+    Ichiloto\Editor\Storage\SaveSet::commit($root, WorkspaceSave::prepareAll($workspace, static function ($step) use (&$recorded): void { $recorded[] = $step; }));
+
+    $steps = readSaveManifest($root)['migrations'];
+    expect($steps)->toHaveCount(1)
+        ->and(array_values(array_unique(array_column($steps[0]['relocations'], 'map'))))->toBe(['home', 'town'])
+        ->and(readSaveManifest($root)['contentVersion'])->toBe(1)
+        ->and($recorded)->toHaveCount(1);
+});
