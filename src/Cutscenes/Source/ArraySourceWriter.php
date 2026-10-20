@@ -270,7 +270,8 @@ final class ArraySourceWriter
                 continue;
             }
 
-            $literal = $this->literalFor($value, [...$path, $key]);
+            // An array whose entries share their lines takes a new entry the same way when it fits.
+            $literal = $this->literalFor($value, [...$path, $key], $this->sharesEntryLines($node));
             $anchor = $this->findFollowingEntry($node, $old, array_slice($keys, $position + 1));
 
             if ($anchor === null) {
@@ -558,14 +559,22 @@ final class ArraySourceWriter
         // same way, joined after the last entry.
         $last = $node->entries === [] ? null : $node->entries[count($node->entries) - 1];
 
-        if ($last !== null && $this->document->lineIndentBefore($last->start) === null) {
-            $keyText = $key === null ? '' : var_export($key, true) . ' => ';
-            $this->appends[$id]['inline'][] = $keyText . $literal;
+        if ($last !== null && $this->sharesEntryLines($node)) {
+            // A value too long for the line continues under the line it joins.
+            $this->appends[$id]['inline'][] = $this->document->renderInlineEntry($key, $literal, $last->start);
 
             return;
         }
 
         $this->appends[$id]['lines'][] = $this->document->renderEntryLine($node, $key, $literal);
+    }
+
+    /** Whether an array's entries share their lines, as a one-line objective's keys do. */
+    private function sharesEntryLines(SourceNode $node): bool
+    {
+        $last = $node->entries === [] ? null : $node->entries[count($node->entries) - 1];
+
+        return $last !== null && $this->document->lineIndentBefore($last->start) === null;
     }
 
     /**
@@ -1109,7 +1118,8 @@ final class ArraySourceWriter
         $lines = ['['];
 
         foreach ($value as $key => $item) {
-            $literal = self::indentContinuation($this->literalFor($item, [...$path, $key]));
+            // A child that fits on its line stays there, as authors write a condition or a point.
+            $literal = self::indentContinuation($this->literalFor($item, [...$path, $key], true));
             $lines[] = $isList
                 ? "  {$literal},"
                 : '  ' . var_export($key, true) . " => {$literal},";
