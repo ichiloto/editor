@@ -64,6 +64,8 @@ final class ReferenceCatalog
         'armor_types',
         'skills',
         'quests',
+        // Income schedules, by stable id, for the income script commands.
+        'income_schedules',
         'maps',
         'items',
         'weapons',
@@ -232,6 +234,7 @@ final class ReferenceCatalog
             // skill files; a reference names the skill wherever it lives.
             'skills' => $this->workspace->getSkillNames(),
             'quests' => array_map(static fn(ProjectQuest $quest): string => $quest->getId(), $this->workspace->getQuests()),
+            'income_schedules' => array_keys($this->incomeScheduleNames()),
             'maps' => $this->workspace->mapIds,
             // A shop's stock is whatever the engine's ItemStore holds, and
             // that is everything in items.php: items, weapons and armors
@@ -770,6 +773,14 @@ final class ReferenceCatalog
             return $this->loadTilesetNames();
         }
 
+        if ($category === 'income_schedules') {
+            $labels = [];
+            foreach ($this->incomeScheduleNames() as $id => $name) {
+                $labels[$id] = sprintf('%s (%s)', $name, $id);
+            }
+            return $labels;
+        }
+
         if ($category === 'battle_arenas') {
             return $this->loadArenaNames();
         }
@@ -1284,6 +1295,24 @@ final class ReferenceCatalog
         }
         sort($paths);
         return $paths;
+    }
+
+    /**
+     * The project's income schedules as the Income page holds them, unsaved
+     * edits included: name by stable id.
+     *
+     * @return array<string, string>
+     */
+    private function incomeScheduleNames(): array
+    {
+        $names = [];
+        foreach ($this->workspace->getRecordDatabase('income_schedules')?->getRecords() ?? [] as $record) {
+            $id = trim(strval($record->get('id')));
+            if ($id !== '') {
+                $names[$id] = trim(strval($record->get('name'))) ?: $id;
+            }
+        }
+        return $names;
     }
 
     /**

@@ -148,6 +148,7 @@ class ProjectValidator
       ...new TroopFormationValidator()->validate($workspace),
       ...new BattleTestValidator()->validate($workspace),
       ...new ProgressionValidator()->validate($workspace),
+      ...new IncomeValidator()->validate($workspace),
       ...$this->checkDefinitionIdentities($workspace),
       ...$this->checkActorDefinitions($workspace),
       ...new ActorReferenceValidator()->validate($workspace),
@@ -3241,6 +3242,7 @@ class ProjectValidator
       'animations' => $catalog->valuesFor('animations'),
       'effects' => $catalog->valuesFor('effects'),
       'actors' => $catalog->valuesFor('actors'),
+      'income_schedules' => $catalog->valuesFor('income_schedules'),
     ];
 
     return [
