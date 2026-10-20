@@ -2113,6 +2113,16 @@ placed only while the scene runs, and a common event runs on whichever map calls
 it. A relative point is changed through its subject and offset, never by a map
 click.
 
+The same waypoints and independent staged actors also name the way their
+character faces once there, the Engine's end facing. `Facing` fixes a cardinal;
+`Face Toward` picks a subject from the same list as `Relative To`, then its id in
+the `Face Toward …` row (the player and the leading party actor take none). The
+character turns toward that subject's cell when the leg or staging begins; an
+even diagonal faces north or south. Choosing one clears the other. A waypoint
+with neither keeps its last step's heading (`(last step)`); a staged actor with
+neither faces south. A visual bound to a real subject inherits its heading and
+offers neither row. A subject still waiting for its id refuses Save.
+
 `Remember As` declares a session-local identity. `Recorded Route` selects only
 declarations in that script invocation and its referenced common events,
 including nested command arms, not other NPCs, dialogue variants, map events or
