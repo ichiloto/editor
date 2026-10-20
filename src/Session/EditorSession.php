@@ -5933,6 +5933,8 @@ final class EditorSession
                 'destination' => 'maps',
                 default => null,
             },
+            // The map a map-local reference's choices come from, when its entry names one ('' until it does).
+            'referenceMap' => $kind === 'reference' && is_string($field['referenceMap'] ?? null) ? $field['referenceMap'] : null,
             // What the value looks like, when the reference names a picture: shown with the row and in its picker.
             'media' => $kind === 'reference' ? ReferenceCatalog::describeMedia((string) $field['reference']) : null,
             'imagePreview' => is_array($field['imagePreview'] ?? null) ? $field['imagePreview'] : null,

@@ -250,3 +250,22 @@ it('reads a record with the summaries the terminal shows beside it', function ()
         ->and($state['panes'])->toBe([])
         ->and($session->readDatabaseRecord('common_events', 0, [3, 'then'])['panes'])->toBe([]);
 });
+
+it('serves the field and rest state fields and an item cure\'s state picker to the graphical editor', function () {
+    $session = EditorSession::open(makeTemporaryProject());
+    $state = $session->readDatabaseRecord('states', 0);
+
+    foreach (['label', 'fieldTickSteps', 'fieldTickKnocksOut', 'curedByRest'] as $field) {
+        expect(databaseSessionRow($state, $field)['key'])->toMatchArray(['target' => 'record', 'field' => $field]);
+    }
+
+    expect($session->applyDatabaseRecord('states', 0, databaseSessionRow($state, 'fieldTickSteps')['key'], '6')['changed'])->toBeTrue();
+
+    $session->addDatabaseItem('items', 1, ['frame' => []]);
+    $item = $session->readDatabaseRecord('items', 1);
+    $session->applyDatabaseRecord('items', 1, databaseSessionRow($item, 'effect0Type')['key'], 'remove_state');
+    $cure = databaseSessionRow($session->readDatabaseRecord('items', 1), 'effect0StateIds');
+
+    expect($cure['key'])->toMatchArray(['target' => 'record', 'field' => 'effect0StateIds'])
+        ->and(json_encode($cure))->toContain('states');
+});

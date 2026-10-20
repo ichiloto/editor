@@ -2,6 +2,7 @@
 
 namespace Ichiloto\Editor\Validation;
 
+use Ichiloto\Engine\Quests\QuestWaymark;
 use Ichiloto\Editor\Database\BattleEntryActorResolver;
 use Ichiloto\Editor\Database\BattleEntryRuleContract;
 use Ichiloto\Editor\Database\InventoryCatalog;
@@ -3037,7 +3038,7 @@ class ProjectValidator
 
       $issues = [
         ...$issues,
-        ...$this->checkObjectives($quest, $where, $workspace->mapIds, $items, $foes, $known),
+        ...$this->checkObjectives($quest, $where, $workspace->mapIds, $items, $foes, $known, $workspace),
         ...$this->checkConditions($quest->getPrerequisites(), $where, $known, true),
       ];
     }
@@ -3063,6 +3064,7 @@ class ProjectValidator
     array $items,
     array $foes,
     array $known,
+    ?ProjectWorkspace $workspace = null,
   ): array
   {
     $objectives = $quest->getObjectives();
@@ -3110,6 +3112,8 @@ class ProjectValidator
         ];
       }
 
+      $issues = [...$issues, ...$this->checkWaymarks($objective['waymarks'] ?? [], $where, $mapIds, $known, $workspace)];
+
       if ($target === '') {
         $issues[] = Issue::error($where, sprintf('A "%s" objective names no target.', $type), 'It can never advance.');
         continue;
@@ -3129,6 +3133,54 @@ class ProjectValidator
           'The objective can never be satisfied.'
         );
       }
+    }
+
+    return $issues;
+  }
+
+  /**
+   * Checks an objective's waymarks: the Engine's own shape rules, a map the
+   * project defines, a subject that map still has, and their conditions.
+   *
+   * @param mixed $waymarks The authored list.
+   * @param string[] $mapIds Every map in the project.
+   * @param array<string, string[]> $known Known project references.
+   * @return Issue[] The issues found.
+   */
+  protected function checkWaymarks(mixed $waymarks, string $where, array $mapIds, array $known, ?ProjectWorkspace $workspace): array
+  {
+    if (! is_array($waymarks) || ! array_is_list($waymarks)) {
+      return [Issue::error($where, 'An objective has malformed waymarks.', 'Use a list of waymarks, each naming a map.')];
+    }
+
+    $issues = [];
+    $categories = ['event' => 'event_markers', 'npc' => 'map_npcs', 'object' => 'map_world_objects', 'landmark' => 'map_landmarks'];
+
+    foreach ($waymarks as $index => $entry) {
+      $at = sprintf('%s waymark %d', $where, $index + 1);
+
+      try {
+        $waymark = QuestWaymark::fromArray($entry);
+      } catch (InvalidArgumentException $exception) {
+        $issues[] = Issue::error($at, 'The waymark cannot be read: ' . $exception->getMessage(), 'The quest is skipped until it is fixed.');
+        continue;
+      }
+
+      if (! in_array($waymark->map, $mapIds, true)) {
+        $issues[] = Issue::error($at, sprintf('The waymark names the map "%s", which the project does not define.', $waymark->map),
+          'Choose one of the project\'s maps.');
+        continue;
+      }
+
+      $map = $workspace === null ? null : (new ReferenceCatalog($workspace))->findMap($waymark->map);
+
+      if ($waymark->subject !== null && $map !== null
+        && ! in_array($waymark->subjectId, (new ReferenceCatalog($workspace, $map))->valuesFor($categories[$waymark->subject->value]), true)) {
+        $issues[] = Issue::error($at, sprintf('The waymark points at %s "%s", which %s does not have.',
+          $waymark->subject->value, $waymark->subjectId, $waymark->map), 'It would never be shown; choose what is on that map now.');
+      }
+
+      $issues = [...$issues, ...$this->checkConditions($waymark->conditions, $at, $known)];
     }
 
     return $issues;

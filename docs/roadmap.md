@@ -959,6 +959,14 @@ defaults. Invalid kinds are rejected even when the symbol is blank. Actual
 Terminal controls and the GUI session wire are checked; native picker pixels
 remain unobserved.
 
+Objective waymarks (PT-19, 20 October 2026) extend the same quest surface: each
+objective has a headed `Waymarks` list whose entries pick a map and then one of
+its events, NPCs, world objects or landmarks (a map-scoped reference: the
+picker reads the map the entry names, in both editors), plus a `Shows When`
+condition line. The `Waymarks` category edits the game's waymark style in
+`field.php`. Story cue kind no longer draws edge arrows in the Engine; the
+inspector keeps offering it as classification.
+
 ## Sequencing notes
 - Phase 1 is days of work and transforms perceived quality; do it first and
   ship it alone.

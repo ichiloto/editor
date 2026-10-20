@@ -855,7 +855,7 @@ final class PhpArraySourceDocument
      * Renders one entry for a line it shares with others: no indentation of
      * its own and no separator, continuation lines under the line it joins.
      */
-    private function renderInlineEntry(int|string|null $key, string $literal, int $at): string
+    public function renderInlineEntry(int|string|null $key, string $literal, int $at): string
     {
         return self::renderEntry($key, self::reindent($literal, $this->getLineIndent($at)));
     }

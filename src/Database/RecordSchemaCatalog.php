@@ -26,6 +26,7 @@ use Ichiloto\Editor\ProjectConfig;
 use Ichiloto\Editor\Field\ProjectNpc;
 use Ichiloto\Editor\Inspector\InputControlType;
 use Ichiloto\Editor\PermanentGrowthCatalog;
+use Ichiloto\Engine\Entities\States\State;
 use Ichiloto\Engine\Entities\States\StateDisposition;
 use Ichiloto\Engine\Scenes\Arena\ProjectBattleTest;
 use Ichiloto\Engine\Animations\AnimationTargetPosition;
@@ -52,6 +53,7 @@ use Ichiloto\Engine\Rendering\Tilesets\Tileset;
 use Ichiloto\Engine\Rendering\Tilesets\TilesetPiece;
 use Ichiloto\Engine\Rendering\Tilesets\TilesetSheet;
 use Ichiloto\Engine\Quests\QuestObjectiveType;
+use Ichiloto\Engine\Quests\QuestWaymarkSubject;
 use Ichiloto\Engine\Battle\Enumerations\BattleEngineType;
 use Ichiloto\Engine\Battle\Presentation\BattlePoseRole;
 use Ichiloto\Engine\Battle\Presentation\BattlePresentationCatalog;
@@ -137,6 +139,7 @@ final class RecordSchemaCatalog
             \Ichiloto\Editor\Field\MapCategoryFields::getSchema(),
             DialoguePortraitFields::getSchema(),
             DialogueSpeakerFields::getSchema(),
+            WaymarkStyleFields::getSchema(),
             self::configuration($graphical),
             self::types(),
             self::tilesets($graphical),
@@ -189,6 +192,13 @@ final class RecordSchemaCatalog
                 new RecordField('tickFormula', 'Tick Formula', removeWhenEmpty: true),
                 RecordField::boolean('preventsAction', 'Prevents Action'),
                 RecordField::boolean('persistsAfterBattle', 'Persists After Battle'),
+                // The badge text menus and battle show where no icon art is bound.
+                new RecordField('label', 'Badge Label', removeWhenEmpty: true, displayDefault: '(from the name)'),
+                // Outside battle: steps walked per turn of the tick formula, and whether that can knock out.
+                new RecordField('fieldTickSteps', 'Field Steps Per Turn', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '(not in the field)'),
+                RecordField::boolean('fieldTickKnocksOut', 'Field Ticks Knock Out'),
+                // Inns and full party recovery cure it unless the author says otherwise.
+                RecordField::boolean('curedByRest', 'Cured By Rest', removeWhenEmpty: false, displayDefault: 'true'),
                 // Whether it harms, enhances or is neutral to its bearer; battle poses follow it.
                 new RecordField('disposition', 'Disposition',
                     options: array_map(static fn(StateDisposition $disposition): string => $disposition->value, StateDisposition::cases()),
@@ -204,7 +214,30 @@ final class RecordSchemaCatalog
                 'icon' => '',
                 'description' => '',
             ],
+            saveCheck: self::checkStates(...),
         );
+    }
+
+    /**
+     * Why the Engine could not read the states file as it would be saved: each
+     * entry goes through the Engine's own state reader, which would otherwise
+     * skip an invalid state at runtime.
+     *
+     * @param array<array-key, mixed> $whole The states, as they would be saved.
+     * @param string $projectRoot The project root.
+     * @return string|null Why, or null when every state reads.
+     */
+    public static function checkStates(array $whole, string $projectRoot): ?string
+    {
+        foreach ($whole as $index => $entry) {
+            try {
+                State::fromArray(is_array($entry) ? $entry : []);
+            } catch (\InvalidArgumentException $error) {
+                return sprintf('State %d could not be read as it would be saved: %s', intval($index) + 1, $error->getMessage());
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -441,11 +474,17 @@ final class RecordSchemaCatalog
                     new RecordField('type', 'Type', options: array_keys(ItemRecord::EFFECTS)),
                     new RecordField('name', 'Name'),
                     new RecordField('description', 'Description'),
-                    new RecordField('value', 'Value', InputControlType::INTEGER),
-                    new RecordField('successRate', 'Success Rate', InputControlType::FLOAT),
-                    new RecordField('valueBasis', 'Value Basis', options: $enumValues(ValueBasis::cases()), removeWhenEmpty: true, displayDefault: ValueBasis::ACTUAL->value),
                 ],
                 blank: ['type' => 'hp_recovery', 'name' => 'Recover HP', 'description' => 'Recovers HP', 'value' => 50, 'successRate' => 1.0],
+                // A cure names the states it removes; every other effect carries a value.
+                variants: array_map(static fn(string $type): array => $type === 'remove_state'
+                    ? [new RecordField('stateIds', 'States', reference: 'states', codec: RecordFieldCodec::CSV_LIST)]
+                    : [
+                        new RecordField('value', 'Value', InputControlType::INTEGER),
+                        new RecordField('successRate', 'Success Rate', InputControlType::FLOAT),
+                        new RecordField('valueBasis', 'Value Basis', options: $enumValues(ValueBasis::cases()), removeWhenEmpty: true, displayDefault: ValueBasis::ACTUAL->value),
+                    ], array_combine(array_keys(ItemRecord::EFFECTS), array_keys(ItemRecord::EFFECTS))),
+                variantKey: 'type',
                 removeWhenEmpty: true,
             ),
             makeBlank: static fn(string $name): array => [
@@ -1063,6 +1102,7 @@ final class RecordSchemaCatalog
                 blank: ['type' => QuestObjectiveType::TALK_TO->value, 'target' => 'New Target'],
                 variants: $variants,
                 variantKey: 'type',
+                nestedLists: ['*' => self::questWaymarks()],
             ),
             subLists: [
                 new RecordSubList(
@@ -1080,6 +1120,35 @@ final class RecordSchemaCatalog
                 ),
             ],
             identityFollowsLabel: true,
+        );
+    }
+
+    /**
+     * An objective's waymarks: where it sends the player. Each names a map
+     * and at most one stable subject on it, chosen from that map's own
+     * events, NPCs, world objects or landmarks, never coordinates. Its
+     * conditions say when it shows: a phase, or one part of free-order work.
+     */
+    private static function questWaymarks(): RecordSubList
+    {
+        $subjects = array_map(static fn(QuestWaymarkSubject $subject): string => $subject->value, QuestWaymarkSubject::cases());
+
+        return new RecordSubList(
+            key: 'waymarks',
+            prefix: 'waymark',
+            singular: 'waymark',
+            fields: [
+                RecordField::reference('map', 'Map', 'maps'),
+                RecordField::mapReference(QuestWaymarkSubject::EVENT->value, 'Event', 'event_markers', 'map'),
+                RecordField::mapReference(QuestWaymarkSubject::NPC->value, 'NPC', 'map_npcs', 'map'),
+                RecordField::mapReference(QuestWaymarkSubject::OBJECT->value, 'Object', 'map_world_objects', 'map'),
+                RecordField::mapReference(QuestWaymarkSubject::LANDMARK->value, 'Landmark', 'map_landmarks', 'map'),
+                new RecordField('conditions', 'Shows When', removeWhenEmpty: true, codec: RecordFieldCodec::CONDITIONS),
+            ],
+            blank: ['map' => ''],
+            exclusiveFields: [$subjects],
+            heading: 'Waymarks',
+            removeWhenEmpty: true,
         );
     }
 

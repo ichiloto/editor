@@ -10777,6 +10777,20 @@ final class Editor
         $category = (string) ($field['reference'] ?? '');
         $label = (string) ($field['label'] ?? 'Reference');
         $catalog = $this->referenceCatalog();
+
+        if (is_string($field['referenceMap'] ?? null)) {
+            // A map-local reference chooses from the map its own entry names.
+            $map = $field['referenceMap'] === '' ? null : $catalog->findMap($field['referenceMap']);
+
+            if ($map === null) {
+                $this->setStatus('Choose a map for this entry first.', StatusLevel::WARN);
+                $this->renderDatabasePanes(['settings']);
+
+                return true;
+            }
+
+            $catalog = new ReferenceCatalog($this->workspace, $map);
+        }
         $values = $catalog->valuesFor($category);
         $labels = $catalog->labelsFor($category);
 
