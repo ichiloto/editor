@@ -31,3 +31,17 @@ it('refuses a name that is not in id form or that a script already has', functio
         ->and(fn() => $session->createDatabaseRecord('common_events', 'dresser-note'))
         ->toThrow(SessionRefusal::class, 'There is already an event script named dresser-note.');
 });
+
+it('authors which event script a common_event command runs, picked from the project\'s scripts', function () {
+    $root = makeTemporaryProject();
+    $session = EditorSession::open($root);
+    $index = $session->createDatabaseRecord('common_events', 'payday-notice')['index'];
+    $key = static fn(string $field): array => ['target' => 'record', 'field' => $field, 'frame' => []];
+
+    $session->applyDatabaseRecord('common_events', $index, $key('command0Type'), 'common_event');
+    $session->applyDatabaseRecord('common_events', $index, $key('command0Id'), 'dresser-note');
+    $session->saveDatabase('common_events');
+
+    expect(require $root . '/assets/Events/payday-notice.php')->toBe([['type' => 'common_event', 'id' => 'dresser-note']])
+        ->and(array_column($session->listReferences(null, 'common_events'), 'value'))->toContain('dresser-note', 'payday-notice');
+});

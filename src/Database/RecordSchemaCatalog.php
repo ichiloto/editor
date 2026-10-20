@@ -2410,6 +2410,10 @@ final class RecordSchemaCatalog
             'accept_quest' => [
                 RecordField::reference('id', 'Quest', 'quests'),
             ],
+            // Runs another event script, chosen as cinematics choose theirs.
+            'common_event' => [
+                RecordField::reference('id', 'Event Script', 'common_events'),
+            ],
             'move_player' => [
                 new RecordField('x', 'X', InputControlType::INTEGER),
                 new RecordField('y', 'Y', InputControlType::INTEGER),

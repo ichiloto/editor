@@ -2038,6 +2038,7 @@ Supported command types, matching the engine's interpreter:
 | `play_sound` | Sound |
 | `play_music` | Music |
 | `accept_quest` | Quest Id |
+| `common_event` | Event Script |
 | `knowledge` | Operation, Subject, Report, Replacement Report, Observation, Outcome, Source, Confidence |
 | `move_player` | X, Y |
 | `move_route` | Subject, NPC Id, Wait, Seconds Per Step, Speed, Steps |
