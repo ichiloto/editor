@@ -102,7 +102,8 @@ it('aligns, arranges automatically and moves one member as one undo step each, t
     $session->saveDatabase('troops');
     expect((string) file_get_contents($root . '/assets/Data/troops.php'))->toContain('// The leader, placed for the graphical battle.')
         // Whole canvas units are written as integers, the rest to two decimals.
-        ->toMatch("/'width' => 1, 'height' => 1\]/")->toMatch("/'depth' => \\d+\\.\\d{1,2},/");
+        ->toMatch("/'width' => 1, 'height' => 1\]/")
+        ->not->toMatch("/'(x|depth)' => \\d+\\.(\\d{3,}|0+)[,\\]]/");
 });
 
 it('refuses a placement still at a fixed canvas height and names how to place it again', function () {
