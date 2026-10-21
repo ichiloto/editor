@@ -23,6 +23,7 @@ use Ichiloto\Editor\Cutscenes\Preview\PreviewGame;
 use Ichiloto\Editor\Canvas\CanvasTool;
 use Ichiloto\Editor\Canvas\ToolGeometry;
 use Ichiloto\Engine\Events\MapEventDefinition;
+use Ichiloto\Engine\Entities\Enemies\EnemyHabitat;
 use Ichiloto\Engine\Rendering\Tilesets\TileId;
 use Ichiloto\Engine\Field\MapPhysicalOccupancy;
 use Ichiloto\Engine\Rendering\Tilesets\TilesetPiece;
@@ -3530,19 +3531,19 @@ final class EditorSession
     }
 
     /**
-     * Replaces one side's footing on a battle arena, as one undo step: the
-     * polygon its battlers may plant their feet in, as canvas points in
-     * order. No points removes it, so the side stands anywhere on its ground.
+     * Replaces a battle arena's land or water footing, as one undo step: the
+     * polygon battlers of that habitat may plant their feet in, as canvas
+     * points in order. No points removes it.
      *
      * @param list<array{x: int|float, y: int|float}> $points
      * @return array{changed: bool, records: list<string>}
      * @throws SessionRefusal When the arena is unknown or read-only, or the polygon is refused.
      */
-    public function setArenaFooting(int $index, bool $party, array $points): array
+    public function setArenaFooting(int $index, EnemyHabitat $habitat, array $points): array
     {
         $arenas = $this->requireRecordDatabase(BattleArenaFields::CATEGORY);
-        $change = $this->changeRecord(static fn(): RecordChange => BattleArenaFields::setFooting($arenas, $index, $party, $points,
-            $party ? 'Set party footing' : 'Set enemy footing'));
+        $change = $this->changeRecord(static fn(): RecordChange => BattleArenaFields::setFooting($arenas, $index, $habitat, $points,
+            sprintf('Set %s footing', $habitat->value)));
 
         return ['changed' => $change->command !== null, 'records' => $arenas->getEntryLabels()];
     }
@@ -4046,6 +4047,8 @@ final class EditorSession
         // A theme formation holds so many; without one the battle arranges the whole party.
         $partyIds = array_values($catalog->ui->partySlots === [] ? $partyIds : array_slice($partyIds, 0, count($catalog->ui->partySlots)));
 
+        // Each enemy stands where its habitat lives, as in battle.
+        $enemies = array_map(fn(array $entry): array => ['habitat' => $this->readEnemyHabitat($entry['enemyId']), ...$entry], $enemies);
         try {
             $formation = BattleFormationLayout::compose($catalog, $arena, $enemies, $partyIds, $assetRoot);
         } catch (\InvalidArgumentException|\RuntimeException $error) {
@@ -4071,12 +4074,26 @@ final class EditorSession
             // Where feet may stand on this arena, so a canvas can show it and turn a dragged point into a place.
             'ground' => [...$formation->staging->ground->toArray(), 'partyCompression' => $formation->staging->partyCompression,
                 'enemyCompression' => $formation->staging->enemyCompression],
-            // Each side's footing on this arena as canvas points, none where a side may stand anywhere on its ground.
-            'footing' => ['enemies' => self::describeFooting($formation->arena?->footing->enemies ?? []),
-                'party' => self::describeFooting($formation->arena?->footing->party ?? [])],
+            // The arena's land and water footing as canvas points; an arena marking neither is land throughout.
+            'footing' => ['land' => self::describeFooting($formation->arena?->footing->land ?? []),
+                'water' => self::describeFooting($formation->arena?->footing->water ?? [])],
             'party' => $party,
             'partySource' => $partySource,
         ], $clearance];
+    }
+
+    /**
+     * Where an enemy lives as its record holds it now; land for an enemy
+     * the project does not define or a habitat it cannot read, which the
+     * enemy's own record reports.
+     */
+    private function readEnemyHabitat(string $enemy): EnemyHabitat
+    {
+        $record = array_find($this->requireRecordDatabase('enemies')->getRecords(),
+            static fn($entry): bool => $entry->get('name') === $enemy);
+        $habitat = $record?->get('habitat');
+
+        return is_string($habitat) ? EnemyHabitat::tryFrom($habitat) ?? EnemyHabitat::LAND : EnemyHabitat::LAND;
     }
 
     /**

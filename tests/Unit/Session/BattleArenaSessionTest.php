@@ -6,6 +6,7 @@ use Ichiloto\Editor\Database\BattleArenaFields;
 use Ichiloto\Editor\Database\DatabaseCatalog;
 use Ichiloto\Editor\Session\EditorSession;
 use Ichiloto\Editor\Session\SessionRefusal;
+use Ichiloto\Engine\Entities\Enemies\EnemyHabitat;
 
 /**
  * The graphical editor authors battle arenas as data: each background and the
@@ -108,42 +109,61 @@ it('previews an arena with its ground, the starting party and a troop standing o
         ->and(fn() => $session->readArenaPreview(7))->toThrow(SessionRefusal::class);
 });
 
-it('sets a side\'s footing as one step, stands the troop on it, and lists its points as rows', function () {
+it('sets an arena\'s land footing as one step, stands the troop on it, and lists its points as rows', function () {
     [, $path, $session] = createBattleArenaProject();
-    $road = [['x' => 400, 'y' => 300], ['x' => 675, 'y' => 300], ['x' => 675, 'y' => 600], ['x' => 600.5, 'y' => 600]];
-    expect($session->setArenaFooting(0, false, $road)['changed'])->toBeTrue()
-        ->and($session->setArenaFooting(0, false, $road)['changed'])->toBeFalse();
+    $road = [['x' => 400, 'y' => 300], ['x' => 1350, 'y' => 300], ['x' => 1350, 'y' => 600], ['x' => 600.5, 'y' => 600]];
+    expect($session->setArenaFooting(0, EnemyHabitat::LAND, $road)['changed'])->toBeTrue()
+        ->and($session->setArenaFooting(0, EnemyHabitat::LAND, $road)['changed'])->toBeFalse();
     $preview = $session->readArenaPreview(0);
 
-    expect($preview['footing']['enemies'])->toBe([['x' => 400.0, 'y' => 300.0], ['x' => 675.0, 'y' => 300.0],
-            ['x' => 675.0, 'y' => 600.0], ['x' => 600.5, 'y' => 600.0]])
-        ->and($preview['footing']['party'])->toBe([])
-        ->and(findArenaRow($session, 0, 'enemyFootingList')['value'])->toBe('4')
-        ->and(findArenaRow($session, 0, 'enemyFooting3X')['value'])->toBe('600.5')
+    expect($preview['footing']['land'])->toBe([['x' => 400.0, 'y' => 300.0], ['x' => 1350.0, 'y' => 300.0],
+            ['x' => 1350.0, 'y' => 600.0], ['x' => 600.5, 'y' => 600.0]])
+        ->and($preview['footing']['water'])->toBe([])
+        ->and(findArenaRow($session, 0, 'landFootingList')['value'])->toBe('4')
+        ->and(findArenaRow($session, 0, 'landFooting3X')['value'])->toBe('600.5')
         ->and(array_map(static fn(array $member): float => $member['battler']['ground']['x'], $preview['members']))
         ->each->toBeGreaterThanOrEqual(400.0);
 
     $session->saveDatabase(BattleArenaFields::CATEGORY);
-    expect((require $path)['arenas']['arena.road']['enemyFooting'])->toBe($road)
+    expect((require $path)['arenas']['arena.road']['footing'])->toBe(['land' => $road])
         ->and((string) file_get_contents($path))->toContain('// Each background and where its ground begins.');
 
     // A point typed on its row is the same footing, read the same way.
-    $session->applyDatabaseRecord(BattleArenaFields::CATEGORY, 0, findArenaRow($session, 0, 'enemyFooting0X')['key'], '420');
-    expect($session->readArenaPreview(0)['footing']['enemies'][0])->toBe(['x' => 420.0, 'y' => 300.0]);
+    $session->applyDatabaseRecord(BattleArenaFields::CATEGORY, 0, findArenaRow($session, 0, 'landFooting0X')['key'], '420');
+    expect($session->readArenaPreview(0)['footing']['land'][0])->toBe(['x' => 420.0, 'y' => 300.0]);
     $session->undo();
     $session->undo();
-    expect($session->readArenaPreview(0)['footing']['enemies'])->toBe([]);
+    expect($session->readArenaPreview(0)['footing']['land'])->toBe([]);
 });
 
-it('refuses a footing that is not a polygon, and removes the footing when given no points', function () {
+it('refuses a footing that is not a polygon or is for the air, and removes the footing when given no points', function () {
     [, $path, $session] = createBattleArenaProject();
-    expect(fn() => $session->setArenaFooting(0, true, [['x' => 1, 'y' => 1], ['x' => 2, 'y' => 2]]))
+    expect(fn() => $session->setArenaFooting(0, EnemyHabitat::WATER, [['x' => 1, 'y' => 1], ['x' => 2, 'y' => 2]]))
         ->toThrow(SessionRefusal::class, 'footing')
-        ->and(fn() => $session->setArenaFooting(0, true, [['x' => 1, 'y' => 'low'], ['x' => 2, 'y' => 2], ['x' => 3, 'y' => 1]]))
-        ->toThrow(SessionRefusal::class, 'Party Footing[0]');
-    $session->setArenaFooting(0, true, [['x' => 700, 'y' => 300], ['x' => 1300, 'y' => 300], ['x' => 1300, 'y' => 600]]);
-    $session->setArenaFooting(0, true, []);
+        ->and(fn() => $session->setArenaFooting(0, EnemyHabitat::WATER, [['x' => 1, 'y' => 'low'], ['x' => 2, 'y' => 2], ['x' => 3, 'y' => 1]]))
+        ->toThrow(SessionRefusal::class, 'Water Footing[0]')
+        ->and(fn() => $session->setArenaFooting(0, EnemyHabitat::AIR, [['x' => 1, 'y' => 1], ['x' => 9, 'y' => 1], ['x' => 9, 'y' => 9]]))
+        ->toThrow(SessionRefusal::class, 'air battlers stand over either');
+    $session->setArenaFooting(0, EnemyHabitat::WATER, [['x' => 0, 'y' => 300], ['x' => 600, 'y' => 300], ['x' => 600, 'y' => 600]]);
+    $session->setArenaFooting(0, EnemyHabitat::WATER, []);
     $session->saveDatabase(BattleArenaFields::CATEGORY);
 
-    expect((require $path)['arenas']['arena.road'])->not->toHaveKey('partyFooting');
+    expect((require $path)['arenas']['arena.road'])->not->toHaveKey('footing');
+});
+
+it('stands an enemy where its habitat lives, authored on its record', function () {
+    [$root] = createBattleArenaProject();
+    writeRegularBatEnemy($root);
+    $session = EditorSession::open($root);
+    $water = [['x' => 0, 'y' => 300], ['x' => 300, 'y' => 300], ['x' => 300, 'y' => 600], ['x' => 0, 'y' => 600]];
+    $session->setArenaFooting(0, EnemyHabitat::WATER, $water);
+    $session->setArenaFooting(0, EnemyHabitat::LAND, [['x' => 300, 'y' => 300], ['x' => 1350, 'y' => 300], ['x' => 1350, 'y' => 600], ['x' => 300, 'y' => 600]]);
+    $habitat = array_find($session->readDatabaseRecord('enemies', 0)['rows'], static fn(array $row): bool => ($row['key']['field'] ?? null) === 'habitat');
+    expect($habitat['value'])->toBe('land')
+        ->and(array_map(static fn(array $member): float => $member['battler']['ground']['x'], $session->readArenaPreview(0)['members']))
+        ->each->toBeGreaterThanOrEqual(300.0);
+
+    $session->applyDatabaseRecord('enemies', 0, $habitat['key'], 'water');
+    expect(array_map(static fn(array $member): float => $member['battler']['ground']['x'], $session->readArenaPreview(0)['members']))
+        ->each->toBeLessThanOrEqual(300.0);
 });
