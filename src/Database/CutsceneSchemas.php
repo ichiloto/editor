@@ -132,8 +132,15 @@ final class CutsceneSchemas
             // Lore and metadata.
             new RecordField('lore', 'Lore', removeWhenEmpty: true),
             RecordField::reference('element', 'Element', 'elements', allowsNone: true, noneLabel: '(none)'),
-            new RecordField('strengths', 'Strengths', codec: RecordFieldCodec::CSV_LIST, removeWhenEmpty: true),
-            new RecordField('weaknesses', 'Weaknesses', codec: RecordFieldCodec::CSV_LIST, removeWhenEmpty: true),
+            // Elemental affinities share the enemy contract: element to multiplier, read as Assess-style tiers.
+            // Omitted means not recorded, which the Summons menu shows as such rather than as "none".
+            new RecordField('elementAffinities', 'Element Affinities', removeWhenEmpty: true, codec: RecordFieldCodec::AFFINITIES,
+                displayDefault: '(not recorded)'),
+            new RecordField('effectiveAgainst', 'Effective Against', codec: RecordFieldCodec::CSV_LIST, reference: 'elements',
+                removeWhenEmpty: true, displayDefault: '(not recorded)'),
+            // Free-text matchups from before the affinity contract; the Summons menu still shows them.
+            new RecordField('strengths', 'Legacy Strengths', codec: RecordFieldCodec::CSV_LIST, removeWhenEmpty: true),
+            new RecordField('weaknesses', 'Legacy Weaknesses', codec: RecordFieldCodec::CSV_LIST, removeWhenEmpty: true),
             new RecordField('attributes', 'Attributes', codec: RecordFieldCodec::KEY_VALUES, removeWhenEmpty: true),
             new RecordField('authoring', 'Authoring Metadata', codec: RecordFieldCodec::KEY_VALUES, removeWhenEmpty: true),
             // Availability: omitted is open; declared conditions must hold.
