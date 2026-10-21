@@ -63,6 +63,8 @@ final class ReferenceCatalog
         'weapon_types',
         'armor_types',
         'skills',
+        // The regions every Mastery Map shares, by id.
+        'mastery_regions',
         'quests',
         // Income schedules, by stable id, for the income script commands.
         'income_schedules',
@@ -233,6 +235,8 @@ final class ReferenceCatalog
             // Spells and abilities may be authored in any of the Engine's
             // skill files; a reference names the skill wherever it lives.
             'skills' => $this->workspace->getSkillNames(),
+            'mastery_regions' => array_map(static fn(ProjectRecord $record): string => strval($record->get('id')),
+                $this->workspace->getRecordDatabase(MasteryFields::REGIONS)?->getRecords() ?? []),
             'quests' => array_map(static fn(ProjectQuest $quest): string => $quest->getId(), $this->workspace->getQuests()),
             'income_schedules' => array_keys($this->incomeScheduleNames()),
             'maps' => $this->workspace->mapIds,

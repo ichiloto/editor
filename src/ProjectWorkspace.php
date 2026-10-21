@@ -17,6 +17,7 @@ use Ichiloto\Editor\Database\QuestReferences;
 use Ichiloto\Editor\Database\RecordSchema;
 use Ichiloto\Editor\Database\RecordSchemaCatalog;
 use Ichiloto\Editor\Database\ReferenceCatalog;
+use Ichiloto\Editor\Database\MasteryFields;
 use Ichiloto\Editor\Database\SkillReferences;
 use Ichiloto\Editor\Events\ProjectScriptCommands;
 use Ichiloto\Editor\Events\ScriptCommandUses;
@@ -198,9 +199,10 @@ final readonly class ProjectWorkspace
     public function describeSkillUses(string $skill): array
     {
         $records = [];
-        foreach (['classes' => 'Class', 'enemies' => 'Enemy', 'skills' => 'Skill', 'states' => 'State'] as $category => $noun) {
+        foreach (['classes' => 'Class', 'enemies' => 'Enemy', 'skills' => 'Skill', 'states' => 'State',
+            MasteryFields::MAPS => 'Mastery Map of'] as $category => $noun) {
             foreach ($this->getRecordDatabase($category)?->getRecords() ?? [] as $record) {
-                $label = sprintf('%s %s', $noun, strval($record->get('name') ?? $record->recordId));
+                $label = sprintf('%s %s', $noun, strval($record->get('name') ?? $record->get('actor') ?? $record->recordId));
                 if ($category === 'skills' && $record->get('name') === $skill) { continue; }
                 $records[$label] = $record->toArray();
             }

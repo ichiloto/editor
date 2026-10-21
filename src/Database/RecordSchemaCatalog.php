@@ -133,6 +133,8 @@ final class RecordSchemaCatalog
             self::armors(),
             self::enemies(),
             self::skills(),
+            MasteryFields::getRegionSchema(),
+            MasteryFields::getMapSchema($graphical),
             self::skits(),
             self::knowledgeSubjects(),
             self::knowledgeReports(),

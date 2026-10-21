@@ -1987,7 +1987,7 @@ final class ProjectRecordDatabase
             $records[] = new ProjectRecord($payload, false, $filename, $stem, $file);
         }
 
-        return new self($schema, $path, $records, null);
+        return new self($schema, $path, $records, null, projectRoot: $projectRoot);
     }
 
     /**
@@ -3149,6 +3149,14 @@ final class ProjectRecordDatabase
 
             $payload = $this->composeRecordFilePayload($record);
             $writes[] = [$file, $payload, $file->composeContents($payload, checkDisk: true)];
+        }
+
+        // A category that checks its records through the Engine refuses one it could not read before anything is written.
+        foreach ($writes as [$file, $payload]) {
+            if ($this->schema->saveCheck !== null
+                && ($reason = ($this->schema->saveCheck)(is_array($payload) ? $payload : [], (string) $this->projectRoot())) !== null) {
+                throw new RecordRefusal(sprintf('%s: %s', basename($file->path), $reason));
+            }
         }
 
         // A record written where a deleted one lived replaces it.
