@@ -31,6 +31,8 @@ use Ichiloto\Editor\PermanentGrowthCatalog;
 use Ichiloto\Engine\Entities\States\State;
 use Ichiloto\Engine\Entities\States\StateDisposition;
 use Ichiloto\Engine\Scenes\Arena\ProjectBattleTest;
+use Ichiloto\Engine\Progression\LevelUpRecovery;
+use Ichiloto\Engine\Progression\ProgressionSettings;
 use Ichiloto\Engine\Animations\AnimationTargetPosition;
 use Ichiloto\Editor\Events\ProjectScriptCommands;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandDefinition;
@@ -1053,8 +1055,13 @@ final class RecordSchemaCatalog
                 new RecordField('battle.activeTime.speedFactorPercent', 'Time Gauge Speed Factor %', InputControlType::INTEGER),
                 new RecordField('battle.activeTime.openingVariance', 'Time Gauge Opening Variance', InputControlType::INTEGER, removeWhenEmpty: true),
                 new RecordField('battle.activeTime.openingSpeedFactorPercent', 'Time Gauge Opening Speed %', InputControlType::INTEGER, removeWhenEmpty: true),
-                // The Engine's ProgressionSettings: a level gained refills HP and MP unless the project turns it off.
-                RecordField::boolean('progression.restoreVitalsOnLevelUp', 'Level Up Restores HP/MP', removeWhenEmpty: false, displayDefault: 'true'),
+                // The Engine's ProgressionSettings: what a level gained does to current HP and MP.
+                new RecordField(
+                    'progression.' . ProgressionSettings::LEVEL_UP_RECOVERY,
+                    'Level Up HP/MP',
+                    options: array_map(static fn(LevelUpRecovery $mode): string => $mode->value, LevelUpRecovery::cases()),
+                    displayDefault: LevelUpRecovery::FULL->value,
+                ),
                 // Test settings, as RPG Maker keeps its Battle Test: normal play never reads them.
                 new RecordField(ProjectBattleTest::SYSTEM_KEY, 'Battle Test', removeWhenEmpty: true, codec: RecordFieldCodec::BATTLE_TEST),
             ],
