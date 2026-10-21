@@ -1338,7 +1338,7 @@ final class ProjectRecordDatabase
             $payload[$identityKey] = $identity;
             $recordId = $identity;
         } elseif (is_array($payload) && $identityKey !== null && array_key_exists($identityKey, $payload)) {
-            $payload[$identityKey] = $this->makeUniqueIdentity($payload[$identityKey]);
+            $payload[$identityKey] = $this->makeUniqueIdentity($identity ?? $payload[$identityKey]);
             $recordId = strval($payload[$identityKey]);
         }
         if (is_array($payload)) {
@@ -1528,16 +1528,19 @@ final class ProjectRecordDatabase
     }
 
     /**
-     * Duplicates a record below itself, with a fresh unique identity.
+     * Duplicates a record below itself, with a fresh unique identity: the
+     * one given, made unique, else one made from the original's. A per-file
+     * copy's file is named after that identity.
      *
      * List-file and per-file categories duplicate; a per-file copy gets a
      * file of its own. Object-backed records' copies would need their own
      * source decisions, which nothing requires yet.
      *
      * @param int $index The record to copy.
+     * @param string|null $identity What the copy is to be called.
      * @return int|null The copy's index, or null when nothing was copied.
      */
-    public function duplicateRecord(int $index): ?int
+    public function duplicateRecord(int $index, ?string $identity = null): ?int
     {
         if (! $this->duplicateRecordSupported()) {
             return null;
@@ -1554,7 +1557,7 @@ final class ProjectRecordDatabase
         $recordId = '';
 
         if ($identityKey !== null && array_key_exists($identityKey, $payload)) {
-            $payload[$identityKey] = $this->makeUniqueIdentity($payload[$identityKey]);
+            $payload[$identityKey] = $this->makeUniqueIdentity($identity ?? $payload[$identityKey]);
             $recordId = strval($payload[$identityKey]);
         }
         // A copy cannot hold what one record holds alone (an animation's

@@ -4498,15 +4498,17 @@ final class EditorSession
     }
 
     /**
-     * Duplicates a record below itself under a fresh identity, as one undo step.
+     * Duplicates a record below itself under a fresh identity, as one undo
+     * step: the one given (made unique) when the copy is to be something of
+     * its own, so its file is named for it.
      *
      * @return array{index: int, records: list<string>} The copy's index, and the labels afterwards.
      * @throws SessionRefusal When the category or record is unknown or read-only, or the record cannot be duplicated.
      */
-    public function duplicateDatabaseRecord(string $category, int $index): array
+    public function duplicateDatabaseRecord(string $category, int $index, ?string $identity = null): array
     {
         $database = $this->requireCategory($category);
-        $change = $this->changeRecord(static fn(): RecordChange => $database->duplicateRecord($index));
+        $change = $this->changeRecord(static fn(): RecordChange => $database->duplicateRecord($index, $identity));
 
         return ['index' => (int) $change->index, 'records' => $database->getRecordLabels()];
     }

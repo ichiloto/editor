@@ -132,7 +132,7 @@ final readonly class ActorCategory implements DatabaseCategory
         return $this->authoring->createActor($this->workspace);
     }
 
-    public function duplicateRecord(int $index): RecordChange
+    public function duplicateRecord(int $index, ?string $identity = null): RecordChange
     {
         throw new RecordRefusal('Actors cannot be duplicated: each one is a character with its own identity. Create a new actor instead.');
     }

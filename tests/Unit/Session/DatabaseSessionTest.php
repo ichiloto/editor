@@ -269,3 +269,19 @@ it('serves the field and rest state fields and an item cure\'s state picker to t
     expect($cure['key'])->toMatchArray(['target' => 'record', 'field' => 'effect0StateIds'])
         ->and(json_encode($cure))->toContain('states');
 });
+
+it('duplicates a record under the name it is meant to have, its file named for it', function () {
+    $root = troopFormationProject();
+    writeRegularBatEnemy($root);
+    $session = EditorSession::open($root);
+
+    expect($session->duplicateDatabaseRecord('enemies', 0, 'Cave Bat'))->toMatchArray(['index' => 1, 'records' => ['Regular Bat', 'Cave Bat']])
+        // A name another record holds is made unique, as an unnamed copy's is.
+        ->and($session->duplicateDatabaseRecord('enemies', 0, 'Cave Bat')['records'])->toContain('Cave Bat-2')
+        ->and(fn() => $session->duplicateDatabaseRecord('enemies', 0, ' '))->toThrow(SessionRefusal::class, 'needs a name');
+
+    $session->saveDatabase('enemies');
+    $copy = require $root . '/assets/Data/Enemies/cave-bat.php';
+    expect($copy['data']['name'])->toBe('Cave Bat')
+        ->and($copy['data']['stats'])->toBe((require $root . '/assets/Data/Enemies/regular-bat.php')['data']['stats']);
+});

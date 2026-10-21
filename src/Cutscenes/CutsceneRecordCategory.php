@@ -121,11 +121,11 @@ final readonly class CutsceneRecordCategory implements DatabaseCategory
         return new RecordChange($command, $this->findIndex($asset->id));
     }
 
-    public function duplicateRecord(int $index): RecordChange
+    public function duplicateRecord(int $index, ?string $identity = null): RecordChange
     {
         $id = $this->library->ids($this->type)[$index] ?? throw new RecordRefusal(sprintf('There is no %s %d.', $this->type->noun(), $index));
         try {
-            ['asset' => $copy, 'command' => $command] = $this->library->duplicateAsset($this->type, $id);
+            ['asset' => $copy, 'command' => $command] = $this->library->duplicateAsset($this->type, $id, $identity);
         } catch (RuntimeException $failure) {
             throw new RecordRefusal($failure->getMessage(), previous: $failure);
         }
