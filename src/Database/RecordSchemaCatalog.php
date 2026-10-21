@@ -155,7 +155,8 @@ final class RecordSchemaCatalog
             self::battlerArt('enemies'),
             self::battleScaleReference(),
             ...($graphical ? [PlayerPresentationFields::getSchema(), \Ichiloto\Editor\Field\FieldResourceFields::getSchema(),
-                \Ichiloto\Editor\Field\TextRoleFields::getSchema(), MenuThemeFields::getSchema()] : []),
+                \Ichiloto\Editor\Field\TextRoleFields::getSchema(), MenuThemeFields::getSchema(),
+                BattleArenaFields::getSchema(), BattleArenaFields::getDefaultSchema()] : []),
         ];
 
         $keyed = [];
@@ -350,9 +351,11 @@ final class RecordSchemaCatalog
                     RecordField::reference('enemy', 'Enemy', 'enemies'),
                     new RecordField('position.0', 'X', InputControlType::INTEGER),
                     new RecordField('position.1', 'Y', InputControlType::INTEGER),
-                    // The graphical battle's own placement: the point its feet stand on
-                    // and its contain limits, never the terminal position above.
-                    new RecordField('graphicalPlacement', 'Battle Placement', codec: RecordFieldCodec::BATTLER_SLOT, removeWhenEmpty: true),
+                    // The graphical battle's own placement: the column its feet stand on and how far back
+                    // from any arena ground's near edge, and its contain limits; never the terminal position above.
+                    // Without one the battle arranges the member beside the others.
+                    new RecordField('graphicalPlacement', 'Battle Placement', codec: RecordFieldCodec::STAGE_SLOT, removeWhenEmpty: true,
+                        displayDefault: '(arranged by the battle)'),
                     // Damage cannot take the member below this share of its HP, so an event page can end the
                     // fight first (a concession); 0 lets it be knocked out.
                     new RecordField('knockoutFloorPercent', 'Cannot Fall Below HP %', InputControlType::INTEGER, removeWhenEmpty: true),

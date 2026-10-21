@@ -15,14 +15,16 @@ function formationClearanceProject(int $y): string
     $root = battlerArtProject();
     $layout = $root . '/assets/Data/Presentation/battle.php';
     file_put_contents($layout, str_replace(
-        'partySlots: [new BattlerSlot(1050, 420, 180, 260), new BattlerSlot(1180, 560, 180, 260)])',
-        'partySlots: [new BattlerSlot(1050, 420, 180, 260), new BattlerSlot(1180, 560, 180, 260)], '
-            . 'battlerArea: new CanvasRectangle(0, 80, 1350, 452), enemyArea: new CanvasRectangle(0, 80, 675, 452))',
+        'partySlots: [new BattleStageSlot(1050, 180, 180, 260), new BattleStageSlot(1180, 40, 180, 260)])',
+        'partySlots: [new BattleStageSlot(1050, 180, 180, 260), new BattleStageSlot(1180, 40, 180, 260)], '
+            . 'battlerArea: new CanvasRectangle(0, 80, 1350, 520), enemyArea: new CanvasRectangle(0, 80, 675, 520))',
         (string) file_get_contents($layout),
     ));
     $troops = $root . '/assets/Data/troops.php';
     // Every member placed: the clearance check is what these tests are about.
-    file_put_contents($troops, str_replace(["'y' => 300,", "            ['enemy' => 'Regular Bat', 'position' => [15, 20]],\n"], ["'y' => {$y},", ""], (string) file_get_contents($troops)));
+    // The ground runs from the battler area's top to the battle UI's top at 600, so feet at $y stand 600 - $y back.
+    $depth = 600 - $y;
+    file_put_contents($troops, str_replace(["'depth' => 300,", "            ['enemy' => 'Regular Bat', 'position' => [15, 20]],\n"], ["'depth' => {$depth},", ""], (string) file_get_contents($troops)));
     $session = EditorSession::open($root);
     $index = $session->createDatabaseRecord('battler_enemies', 'Regular Bat')['index'];
     setBattlerRow($session, $index, 'artwork.image', 'Graphics/Enemies/Bat.png');
@@ -53,7 +55,7 @@ it('reports a troop member whose art reaches above the battler area, and leaves 
     $member = EditorSession::open($root)->readTroopFormation(0)['members'][0];
     $issues = readTroopClearanceIssues($root);
 
-    expect($member['placement'])->toMatchArray(['x' => 260, 'y' => 200])
+    expect($member['placement'])->toMatchArray(['x' => 260, 'depth' => 400])
         ->and($member['battler']['ground'])->toEqual(['x' => 260, 'y' => 200])
         ->and(implode(' ', $member['battler']['diagnostics']))->toContain('outside the authored battler area')
         ->and($issues)->not->toBe([])
@@ -70,11 +72,16 @@ it('shows an enemy preview beside a party member it stands clear of, with what i
         ->and($battler['image']['asset'])->toBe('Graphics/Enemies/Bat.png');
 });
 
-it('reports a member with no battle placement, which the graphical battle refuses to start without', function () {
-    $issues = array_values(array_filter(new TroopFormationValidator()->validate(ProjectWorkspace::fromProject(troopFormationProject())),
-        static fn(Issue $issue): bool => str_contains($issue->message, 'no battle placement')));
+it('arranges a member with no battle placement instead of refusing the troop, and reports an unreadable one', function () {
+    $root = troopFormationProject();
+    $issues = array_values(array_filter(new TroopFormationValidator()->validate(ProjectWorkspace::fromProject($root)),
+        static fn(Issue $issue): bool => $issue->severity === \Ichiloto\Editor\Validation\Severity::ERROR));
+    expect($issues)->toBe([]);
 
+    $troops = $root . '/assets/Data/troops.php';
+    file_put_contents($troops, str_replace("'depth' => 300", "'y' => 300", (string) file_get_contents($troops)));
+    $issues = array_values(array_filter(new TroopFormationValidator()->validate(ProjectWorkspace::fromProject($root)),
+        static fn(Issue $issue): bool => str_starts_with($issue->where, 'assets/Data/troops.php')));
     expect($issues)->toHaveCount(1)
-        ->and($issues[0]->where)->toBe('assets/Data/troops.php: Pair')
-        ->and($issues[0]->message)->toContain('Regular Bat (member 2)');
+        ->and($issues[0]->message)->toContain('Regular Bat (member 1)', 'y is a fixed canvas height');
 });

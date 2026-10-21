@@ -404,10 +404,14 @@ Order of work, each a complete slice before the next:
    (`id`, `events`) kept, a new troop or member never assuming a game's
    enemy, and validation of a member with no battle placement. The GUI page
    (canvas, member and enemy lists, member-driven inspector) works without a
-   graphical battle too. Waiting on Engine contracts requested on
-   2026-10-17: the enemy arrangement rule (Align, and the starting terminal
-   position and battle placement of a new member, today the blank
-   `[15, 7]` and none) and arenas as authorable data. Battle event pages are
+   graphical battle too. The enemy arrangement rule landed with PT-44
+   (2026-10-20): Engine `BattleStaging` stands unplaced members itself, Align
+   writes its arrangement, Arrange Automatically clears placements, and
+   dragging a member places every member as it stands, each one undo step;
+   placements are stage places (`x, depth`) on each arena's ground. Arenas
+   are authorable data (`Battle Arenas`, `Default Battle Arena`, GUI
+   editor). Still open: a new member's starting terminal position (the
+   blank `[15, 7]`). Battle event pages are
    done (2026-10-20): `Event Pages` beside the members, with conditions, span
    and battle commands through the shared command frames, members chosen from
    the troop, pages renumbered when a member is removed, `Cannot Fall Below
