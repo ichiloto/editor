@@ -7,6 +7,8 @@ namespace Ichiloto\Editor\Database;
 use Ichiloto\Editor\Cutscenes\Source\SourcePreservationRefusal;
 use Ichiloto\Editor\History\GenericCommand;
 use Ichiloto\Engine\Battle\Presentation\BattleStageSlot;
+use Ichiloto\Engine\Battle\Presentation\TerminalBattleEffects;
+use Ichiloto\Engine\Core\Vector2;
 use RuntimeException;
 
 /**
@@ -32,21 +34,25 @@ final readonly class TroopAuthoring
     }
 
     /**
-     * Adds a member fighting the enemy named, after the last one. The
-     * member starts at the members list's blank terminal position and with
-     * no graphical placement, which it is given on the formation canvas.
+     * Adds a member fighting the enemy named, after the last one, standing
+     * at a terminal position (the Engine's place for it beside the members
+     * there, {@see \Ichiloto\Engine\Battle\Presentation\TerminalBattleEffects::findTroopPlace()})
+     * and with no graphical placement, so the graphical battle arranges it
+     * beside the placed members until it is placed on the formation canvas.
      *
      * @param list<string> $enemies The enemies the project has, by name.
+     * @param array<string, list<string>> $sprites Each enemy's terminal sprite rows, by name ({@see EnemySprites}).
      * @throws RecordRefusal When the troops cannot be written, there is no such troop, or the project has no such enemy.
      */
-    public function addMember(ProjectRecordDatabase $troops, int $index, string $enemy, array $enemies): RecordChange
+    public function addMember(ProjectRecordDatabase $troops, int $index, string $enemy, array $enemies, array $sprites = []): RecordChange
     {
         $enemy = trim($enemy);
         if (! in_array($enemy, $enemies, true)) {
             throw new RecordRefusal($enemy === '' ? 'Choose the enemy the new member fights.' : sprintf('The project has no enemy named %s.', $enemy));
         }
         $list = $this->requireMembers($troops, $index);
-        $at = $troops->addSubItem($index, [...$list->blank, 'enemy' => $enemy], listKey: $list->key);
+        $entry = [...$list->blank, 'enemy' => $enemy, 'position' => $this->findTerminalPlace($troops, $index, $list->key, $sprites, $enemy)];
+        $at = $troops->addSubItem($index, $entry, listKey: $list->key);
         $entry = $at === null ? null : ($troops->getSubItems($index, $list->key)[$at] ?? null);
         if ($at === null || ! is_array($entry)) {
             throw new RecordRefusal(sprintf('A member cannot be added to %s.', $this->describeTroop($troops, $index)));
@@ -64,6 +70,28 @@ final readonly class TroopAuthoring
             static fn() => $troops->insertSubItem($index, $at, $entry, $list->key),
             static fn() => $troops->removeSubItem($index, $at, $list->key),
         ), $at);
+    }
+
+    /**
+     * Where the Engine stands a new member fighting an enemy on the troop's
+     * terminal field, beside the members there with readable positions, by
+     * their sprites as the terminal battle draws them.
+     *
+     * @param array<string, list<string>> $sprites
+     * @return list<int>
+     */
+    private function findTerminalPlace(ProjectRecordDatabase $troops, int $index, string $listKey, array $sprites, string $enemy): array
+    {
+        $members = [];
+        foreach ($troops->getSubItems($index, $listKey) as $member) {
+            $position = is_array($member) && is_array($member['position'] ?? null) ? array_values($member['position']) : [];
+            if (is_int($position[0] ?? null) && is_int($position[1] ?? null)) {
+                $members[] = ['position' => new Vector2($position[0], $position[1]), 'sprite' => $sprites[trim(strval($member['enemy'] ?? ''))] ?? []];
+            }
+        }
+        $place = new TerminalBattleEffects()->findTroopPlace($members, $sprites[$enemy] ?? []);
+
+        return [(int) $place->x, (int) $place->y];
     }
 
     /**

@@ -54,6 +54,7 @@ use Ichiloto\Editor\Database\ReferenceCatalog;
 use Ichiloto\Editor\Database\SummonAssignmentDiagnostics;
 use Ichiloto\Editor\Actors\ActorAuthoring;
 use Ichiloto\Editor\Database\RecordSubList;
+use Ichiloto\Editor\Database\EnemySprites;
 use Ichiloto\Editor\Database\TroopAuthoring;
 use Ichiloto\Editor\Database\ReferencePicker;
 use Ichiloto\Editor\Debug\Debug;
@@ -9124,7 +9125,9 @@ final class Editor
 
         $recordIndex = $this->getSelectedRecordIndex();
         $enemies = $this->referenceCatalog()->valuesFor('enemies');
-        $change = $this->applyRecordChange(static fn(): RecordChange => new TroopAuthoring()->addMember($database, $recordIndex, $enemy, $enemies));
+        // It stands on the terminal field where the Engine puts a new member beside those there.
+        $sprites = new EnemySprites($this->workspace->projectRoot)->readByEnemy($this->workspace->getRecordDatabase('enemies'));
+        $change = $this->applyRecordChange(static fn(): RecordChange => new TroopAuthoring()->addMember($database, $recordIndex, $enemy, $enemies, $sprites));
         if ($change === null) {
             return;
         }

@@ -16,6 +16,7 @@ use Ichiloto\Editor\Cutscenes\CutsceneType;
 use Ichiloto\Editor\Database\CutsceneSchemas;
 use Ichiloto\Editor\Cutscenes\Preview\TimelinePreviewSession;
 use Ichiloto\Editor\ProjectDirectoryContext;
+use Ichiloto\Editor\Database\EnemySprites;
 use Ichiloto\Editor\Canvas\PieceRole;
 use Ichiloto\Editor\Canvas\PiecePlacer;
 use Ichiloto\Editor\Audio\AudioAudition;
@@ -3478,15 +3479,22 @@ final class EditorSession
      * stand on this arena, the bounds its idle art is drawn in, that art, and
      * its body span at battle scale. The arena is a preview only, as in RPG
      * Maker's Troops tab: a troop is placed once for every arena, standing on
-     * each arena's own ground, and choosing one writes nothing.
+     * each arena's own ground, and choosing one writes nothing. With
+     * `$moving` (a member, a column and a depth) the formation is composed
+     * as moving that member there would leave it ({@see placeTroopMember()}),
+     * so a drag shows the battle's own picture as it goes; nothing is written.
      *
+     * @param array{0: int, 1: float, 2: float}|null $moving
      * @return array<string, mixed>
-     * @throws SessionRefusal When the troop is unknown or the project has no graphical battle.
+     * @throws SessionRefusal When the troop is unknown, the project has no graphical battle, or the move is refused.
      */
-    public function readTroopFormation(int $index, ?string $arena = null): array
+    public function readTroopFormation(int $index, ?string $arena = null, ?array $moving = null): array
     {
         $catalog = $this->requireBattleLayoutCatalog('arrange troops on');
         ['members' => $members, 'places' => $places] = $this->readTroopPlaces($index);
+        if ($moving !== null) {
+            $places = $this->getMovedPlaces($index, ...$moving);
+        }
         $enemies = array_map(static fn(array $member, ?BattleStageSlot $place): array => ['enemyId' => $member['enemy'], 'slot' => $place],
             $members, $places);
         [$formation, $view, $clearance] = $this->composeFormation($catalog, $arena, $enemies);
@@ -3505,16 +3513,20 @@ final class EditorSession
      * the starting party standing on it, and a troop beside them, all as
      * the Engine stands them, so an author marks the ground by its picture.
      * The troop is the one chosen, else the first with members. It reads
-     * the arena as it is now, unsaved edits included.
+     * the arena as it is now, unsaved edits included. `$ground` holds ground
+     * fields as they stand while being dragged, laid over the arena's own and
+     * read by the Engine as authored ground is, so a drag shows the battle's
+     * picture as it goes; nothing is written.
      *
+     * @param array<string, mixed> $ground
      * @return array<string, mixed>
-     * @throws SessionRefusal When the arena or troop is unknown, or the project has no graphical battle.
+     * @throws SessionRefusal When the arena or troop is unknown, the project has no graphical battle, or the ground is refused.
      */
-    public function readArenaPreview(int $index, ?int $troop = null): array
+    public function readArenaPreview(int $index, ?int $troop = null, array $ground = []): array
     {
         $record = $this->requireRecordDatabase(BattleArenaFields::CATEGORY)->getRecordByIndex($index)
             ?? throw new SessionRefusal(sprintf('%s has no record %d.', BattleArenaFields::CATEGORY, $index));
-        $catalog = $this->requireBattleLayoutCatalog('preview arenas on');
+        $catalog = $this->requireBattleLayoutCatalog('preview arenas on', $ground === [] ? [] : [(string) $record->get('id') => $ground]);
         $troops = $this->requireRecordDatabase('troops');
         $troop ??= array_key_first(array_filter($troops->getRecords(), static fn($entry): bool => $entry->getSubList('enemies') !== []));
         ['members' => $members, 'places' => $places] = $troop === null ? ['members' => [], 'places' => []] : $this->readTroopPlaces($troop);
@@ -3567,6 +3579,19 @@ final class EditorSession
      */
     public function placeTroopMember(int $index, int $member, float $x, float $depth): array
     {
+        return $this->placeTroopMembers($index, array_map(static fn(BattleStageSlot $place): array => $place->toArray(),
+            $this->getMovedPlaces($index, $member, $x, $depth)), 'Move member');
+    }
+
+    /**
+     * Each member's place once one member moves to a column and depth: every
+     * other member where it stands now, so one the battle arranged stays put.
+     *
+     * @return list<BattleStageSlot>
+     * @throws SessionRefusal When the troop or member is unknown, or the place is refused.
+     */
+    private function getMovedPlaces(int $index, int $member, float $x, float $depth): array
+    {
         $places = $this->arrangeTroop($index, false);
         $moved = $places[$member] ?? throw new SessionRefusal(sprintf('The troop has no member %d.', $member + 1));
         try {
@@ -3575,8 +3600,7 @@ final class EditorSession
             throw new SessionRefusal($error->getMessage(), previous: $error);
         }
 
-        return $this->placeTroopMembers($index, array_map(static fn(BattleStageSlot $place): array => $place->toArray(), $places),
-            'Move member');
+        return $places;
     }
 
     /**
@@ -3659,11 +3683,13 @@ final class EditorSession
      * ({@see readTroopFormation()}), or why there is none, so a game with
      * only a terminal battle still composes its troops here. Align places
      * every member where the Engine's arrangement stands it ({@see alignTroop()}).
+     * A member being dragged (`$moving`) is drawn where it would stand, unwritten.
      *
+     * @param array{0: int, 1: float, 2: float}|null $moving
      * @return array{members: list<array<string, mixed>>, enemies: list<string>, formation: ?array<string, mixed>, formationIssue: ?string, align: array{available: bool, reason: ?string}}
      * @throws SessionRefusal When the troop is unknown.
      */
-    public function readTroopPage(int $index, ?string $arena = null): array
+    public function readTroopPage(int $index, ?string $arena = null, ?array $moving = null): array
     {
         $record = $this->requireRecordDatabase('troops')->getRecordByIndex($index)
             ?? throw new SessionRefusal(sprintf('troops has no record %d.', $index));
@@ -3684,7 +3710,7 @@ final class EditorSession
             'align' => ['available' => true, 'reason' => null],
         ];
         try {
-            $page['formation'] = $this->readTroopFormation($index, $arena);
+            $page['formation'] = $this->readTroopFormation($index, $arena, $moving);
         } catch (SessionRefusal $refusal) {
             $page['formationIssue'] = $refusal->getMessage();
         }
@@ -3694,7 +3720,10 @@ final class EditorSession
 
     /**
      * Adds a member fighting one of the project's enemies to a troop, as one
-     * undo step ({@see TroopAuthoring::addMember()}).
+     * undo step ({@see TroopAuthoring::addMember()}): on the terminal field
+     * where the Engine stands a new member beside those there, by their
+     * sprites as the terminal battle draws them; in the graphical battle
+     * arranged beside the placed members until it is placed.
      *
      * @return array{changed: bool, member: int, records: list<string>}
      * @throws SessionRefusal When the troop is unknown or read-only, or the project has no such enemy.
@@ -3703,7 +3732,8 @@ final class EditorSession
     {
         $troops = $this->requireRecordDatabase('troops');
         $enemies = $this->listEnemyNames();
-        $change = $this->changeRecord(fn(): RecordChange => $this->troopAuthoring->addMember($troops, $index, $enemy, $enemies));
+        $sprites = new EnemySprites($this->workspace->projectRoot)->readByEnemy($this->workspace->getRecordDatabase('enemies'));
+        $change = $this->changeRecord(fn(): RecordChange => $this->troopAuthoring->addMember($troops, $index, $enemy, $enemies, $sprites));
 
         return ['changed' => true, 'member' => (int) $change->index, 'records' => $troops->getEntryLabels()];
     }
@@ -3838,29 +3868,19 @@ final class EditorSession
      */
     private function readEnemySprite(mixed $imagePath): array
     {
-        if (! is_string($imagePath) || trim($imagePath) === '') {
-            return ['issue' => 'No sprite is chosen.'];
-        }
-        $root = $this->workspace->projectRoot;
-        $folder = realpath($root . '/assets/Graphics/Enemies');
-        $file = realpath($root . '/assets/Graphics/Enemies/' . $imagePath . '.txt');
-        if ($folder === false || $file === false || ! str_starts_with($file, $folder . DIRECTORY_SEPARATOR)) {
-            return ['issue' => sprintf('Graphics/Enemies/%s.txt is not a sprite in this project.', $imagePath)];
-        }
-
-        return ['lines' => array_values(array_map(strval(...), (array) ProjectDirectoryContext::run(
-            $root,
-            static fn(): array => (array) graphics('Enemies/' . $imagePath),
-        )))];
+        return new EnemySprites($this->workspace->projectRoot)->readSprite($imagePath);
     }
 
     /**
      * The project's battle presentation, when it lays battles out on a
      * graphical canvas: its presentation code, with the battle art bound as
      * data as it is now, unsaved edits included, so a preview shows the art
-     * being set.
+     * being set. `$grounds` lays ground fields over arenas' own, by arena
+     * id, as a drag stands them, without writing them.
+     *
+     * @param array<string, array<string, mixed>> $grounds
      */
-    private function requireBattleLayoutCatalog(string $purpose): BattlePresentationCatalog
+    private function requireBattleLayoutCatalog(string $purpose, array $grounds = []): BattlePresentationCatalog
     {
         $assets = $this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets';
         try {
@@ -3870,6 +3890,12 @@ final class EditorSession
                 $catalog = $catalog->bindBattlers(BattlerBindings::getFromArray($bindings, $assets));
             }
             $arenas = $catalog === null ? null : $this->workspace->catalogs->readData(BattleArenaBindings::FILE)['payload'];
+            foreach ($grounds as $id => $ground) {
+                if (is_array($arenas) && is_array($arenas['arenas'][$id] ?? null)) {
+                    $declared = $arenas['arenas'][$id]['ground'] ?? [];
+                    $arenas['arenas'][$id]['ground'] = [...(is_array($declared) ? $declared : []), ...$ground];
+                }
+            }
             if ($catalog !== null && is_array($arenas)) {
                 $catalog = $catalog->bindArenas(BattleArenaBindings::getFromArray($arenas));
             }
@@ -4006,8 +4032,11 @@ final class EditorSession
 
     /**
      * Composes enemies with the starting party over an arena, and describes
-     * what every formation view shares: the canvas, the arenas with the one
-     * previewed and its backgrounds, and the party in its slots. Also returns
+     * what every formation view shares: the canvas and the picture of it the
+     * battle draws at rest (background and battlers, cropped and scaled as
+     * the battle draws them, for the frontend to paint with the renderer),
+     * the arenas with the one previewed and its backgrounds, and the party
+     * in its slots. Also returns
      * the Engine's clearance diagnostics for party and enemies, by position,
      * which include each battler's own.
      *
@@ -4030,6 +4059,8 @@ final class EditorSession
 
         try {
             $formation = BattleFormationLayout::compose($catalog, $arena, $enemies, $partyIds, $assetRoot);
+            // The picture is the battle's own canvas at rest, which the frontend paints with the renderer itself.
+            $canvas = $formation->composeCanvas()->toArray();
         } catch (\InvalidArgumentException|\RuntimeException $error) {
             throw new SessionRefusal('The formation cannot be composed: ' . $error->getMessage(), previous: $error);
         }
@@ -4047,6 +4078,7 @@ final class EditorSession
         return [$formation, [
             'assetRoot' => $assetRoot,
             'canvas' => ['width' => $formation->layout->width, 'height' => $formation->layout->height],
+            'picture' => $canvas,
             'arenas' => $arenas,
             'arena' => $chosen === false ? null : (string) $chosen,
             'backgrounds' => array_map(self::describeCanvasImage(...), $formation->backgrounds),

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 use Ichiloto\Editor\Database\TroopAuthoring;
 use Ichiloto\Editor\Session\EditorSession;
+use Ichiloto\Engine\Battle\Presentation\TerminalBattleEffects;
+use Ichiloto\Engine\Core\Vector2;
 use Ichiloto\Editor\Session\SessionRefusal;
 
 it('reads a troop page with its members, the enemies to add from and its formation', function () {
@@ -36,8 +38,13 @@ it('adds a member by its enemy as one undo step, keeping the file\'s comments an
     $session = EditorSession::open($root);
 
     $added = $session->addTroopMember(0, 'Marsh Wisp');
+    // It stands on the terminal field where the Engine puts a new member beside the two bats, by their sprites.
+    $bat = ['/\\o/\\', " ' '"];
+    $place = new TerminalBattleEffects()->findTroopPlace([['position' => new Vector2(15, 7), 'sprite' => $bat],
+        ['position' => new Vector2(15, 20), 'sprite' => $bat]], ['~*~']);
     expect($added['member'])->toBe(2)
-        ->and($session->readTroopPage(0)['members'][2])->toBe(['enemy' => 'Marsh Wisp', 'position' => [15, 7], 'placement' => null])
+        ->and($session->readTroopPage(0)['members'][2])->toBe(['enemy' => 'Marsh Wisp', 'position' => [(int) $place->x, (int) $place->y], 'placement' => null])
+        ->and([(int) $place->x, (int) $place->y])->not->toBe([15, 7])
         ->and(fn() => $session->addTroopMember(0, 'Dragon'))->toThrow(SessionRefusal::class, 'Dragon')
         ->and(fn() => $session->addTroopMember(0, ''))->toThrow(SessionRefusal::class, 'Choose');
 

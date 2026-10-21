@@ -35,6 +35,18 @@ it('reads a troop formation as the Engine composes it over a previewed arena, th
         ->and(fn() => $session->readTroopFormation(0, 'arena.moon'))->toThrow(SessionRefusal::class, 'arena.moon');
 });
 
+it('sends the picture the battle draws at rest, for the frontend to paint with the renderer itself', function () {
+    $session = EditorSession::open(troopFormationProject());
+    $picture = $session->readTroopFormation(0)['picture'];
+
+    // The cave's background as the arena places it; the members have no art yet, so the battle draws only their names.
+    expect([$picture['width'], $picture['height']])->toBe([1350, 720])
+        ->and(array_column($picture['images'], 'asset'))->toBe(['Graphics/Battlebacks/Cave.png'])
+        ->and($picture['images'][0]['destination'])->toEqual(['x' => 0, 'y' => 0, 'width' => 1350, 'height' => 720])
+        // An arena whose background file is missing draws nothing behind the battlers, as in battle.
+        ->and($session->readTroopFormation(0, 'arena.road')['picture']['images'])->toBe([]);
+});
+
 it('moves a member by its battle placement as one undo step, keeping the troop file\'s comments and the terminal position', function () {
     $root = troopFormationProject();
     $session = EditorSession::open($root);
@@ -108,4 +120,20 @@ it('refuses a placement still at a fixed canvas height and names how to place it
     expect($session->readTroopFormation(0)['members'][0]['issue'])->toContain('y is a fixed canvas height');
     $session->arrangeTroopAutomatically(0);
     expect($session->readTroopFormation(0)['members'][0])->not->toHaveKey('issue');
+});
+
+it('draws a member being dragged where it would stand, every other member where it stands, without writing', function () {
+    $root = troopFormationProject();
+    $session = EditorSession::open($root);
+    $before = (string) file_get_contents($root . '/assets/Data/troops.php');
+    $standing = $session->readTroopFormation(0)['members'];
+    $moving = $session->readTroopFormation(0, moving: [0, 500.0, 120.0])['members'];
+
+    expect($moving[0]['place'])->toBe(['x' => 500.0, 'depth' => 120.0])
+        ->and($moving[0]['battler']['ground'])->toBe(['x' => 500.0, 'y' => 480.0])
+        ->and($moving[1]['place'])->toBe($standing[1]['place'])
+        ->and($session->readTroopFormation(0)['members'][0]['place'])->toBe(['x' => 260.0, 'depth' => 300.0])
+        ->and($session->listUnsavedChanges())->toBe([])
+        ->and((string) file_get_contents($root . '/assets/Data/troops.php'))->toBe($before)
+        ->and(fn() => $session->readTroopFormation(0, moving: [5, 500.0, 120.0]))->toThrow(SessionRefusal::class, 'member 6');
 });

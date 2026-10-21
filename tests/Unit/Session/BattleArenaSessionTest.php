@@ -107,3 +107,18 @@ it('previews an arena with its ground, the starting party and a troop standing o
     expect($session->readArenaPreview(0)['ground']['top'])->toBe(350.0)
         ->and(fn() => $session->readArenaPreview(7))->toThrow(SessionRefusal::class);
 });
+
+it('previews a ground edge as it is dragged, read as authored ground, without writing it', function () {
+    [, $path, $session] = createBattleArenaProject();
+    $before = (string) file_get_contents($path);
+    $dragged = $session->readArenaPreview(0, ground: ['top' => 420]);
+
+    // The troop stands on the dragged ground; the arena itself is unchanged, saved and unsaved.
+    expect($dragged['ground']['top'])->toBe(420.0)
+        ->and(array_map(static fn(array $member): float => $member['battler']['ground']['y'], $dragged['members']))->each->toBeGreaterThanOrEqual(420.0)
+        ->and($session->readArenaPreview(0)['ground']['top'])->toBe(300.0)
+        ->and($session->listUnsavedChanges())->toBe([])
+        ->and((string) file_get_contents($path))->toBe($before)
+        // A ground the battle would refuse is refused here too.
+        ->and(fn() => $session->readArenaPreview(0, ground: ['top' => 650]))->toThrow(SessionRefusal::class);
+});
