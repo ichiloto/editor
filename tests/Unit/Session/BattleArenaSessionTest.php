@@ -167,3 +167,16 @@ it('stands an enemy where its habitat lives, authored on its record', function (
     expect(array_map(static fn(array $member): float => $member['battler']['ground']['x'], $session->readArenaPreview(0)['members']))
         ->each->toBeLessThanOrEqual(300.0);
 });
+
+it('sets an arena\'s light on battlers\' shadows, refusing a colour the battle cannot read before writing', function () {
+    [, $path, $session] = createBattleArenaProject();
+    $session->applyDatabaseRecord(BattleArenaFields::CATEGORY, 0, findArenaRow($session, 0, 'shadow.strength')['key'], '1.5');
+    $session->applyDatabaseRecord(BattleArenaFields::CATEGORY, 0, findArenaRow($session, 0, 'shadow.color')['key'], '#201008');
+    $session->saveDatabase(BattleArenaFields::CATEGORY);
+    expect((require $path)['arenas']['arena.road']['shadow'])->toBe(['strength' => 1.5, 'color' => '#201008']);
+
+    $file = (string) file_get_contents($path);
+    $session->applyDatabaseRecord(BattleArenaFields::CATEGORY, 0, findArenaRow($session, 0, 'shadow.color')['key'], 'brown');
+    expect(fn() => $session->saveDatabase(BattleArenaFields::CATEGORY))->toThrow(SessionRefusal::class, 'arenas.arena.road.shadow.color')
+        ->and(file_get_contents($path))->toBe($file);
+});

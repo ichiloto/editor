@@ -61,6 +61,10 @@ final class BattleArenaFields
                     displayDefault: '(the theme\'s gap above the battle UI)'),
                 new RecordField('ground.perspective', 'Far Edge Scale', InputControlType::FLOAT, removeWhenEmpty: true,
                     displayDefault: '1 (no perspective)'),
+                // The arena's light on battlers' contact shadows: darker in a mine, softer on bright grass.
+                new RecordField('shadow.strength', 'Shadow Strength', InputControlType::FLOAT, removeWhenEmpty: true,
+                    displayDefault: '1 (the theme\'s)'),
+                new RecordField('shadow.color', 'Shadow Colour (#rrggbb)', removeWhenEmpty: true, displayDefault: '(the theme\'s)'),
             ],
             labelKey: 'name',
             identityKey: 'id',
