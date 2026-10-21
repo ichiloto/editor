@@ -43,7 +43,11 @@ it('keeps poses as the role-keyed map the battle reads', function () {
 
     $written = require $root . '/assets/' . BattlerBindings::FILE;
 
-    expect($written['enemies']['Regular Bat']['poses'])->toBe(['attack' => ['image' => 'Graphics/Enemies/BatAttack.png']])
+    setBattlerRow($session, $index, 'pose0BakedShadow', 'true');
+    $session->saveDatabase('battler_enemies');
+    $written = require $root . '/assets/' . BattlerBindings::FILE;
+
+    expect($written['enemies']['Regular Bat']['poses'])->toBe(['attack' => ['image' => 'Graphics/Enemies/BatAttack.png', 'bakedShadow' => true]])
         ->and(BattlerBindings::load($root . '/assets')->enemyPoses['Regular Bat']->roles)->toHaveKey('attack');
 });
 

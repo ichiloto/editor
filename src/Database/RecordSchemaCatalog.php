@@ -1990,6 +1990,9 @@ final class RecordSchemaCatalog
                         new RecordField('loop', 'Loops', InputControlType::BOOLEAN, removeWhenEmpty: true, displayDefault: 'true'),
                         new RecordField('restFrame', 'Rest Frame', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '0'),
                         new RecordField('scaleSpan', 'Body Span', InputControlType::FLOAT, removeWhenEmpty: true),
+                        // Whether this pose's art paints its own shadow, where the battler's other art does not.
+                        new RecordField('bakedShadow', 'Art Paints Its Shadow', InputControlType::BOOLEAN, removeWhenEmpty: true,
+                            displayDefault: '(the battler\'s)'),
                     ],
                     blank: ['role' => BattlePoseRole::IDLE->value, 'image' => ''],
                     heading: 'Poses',
