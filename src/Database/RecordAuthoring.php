@@ -392,15 +392,19 @@ final readonly class RecordAuthoring
     }
 
     /**
-     * Duplicates a record below itself, under a fresh identity. The copy's
-     * index is the change's.
+     * Duplicates a record below itself, under a fresh identity: the one given
+     * (made unique), else one made from the original's. The copy's index is
+     * the change's.
      *
      * @throws RecordRefusal When the category or record is read-only or gone, or the record cannot be duplicated.
      */
-    public function duplicateRecord(ProjectRecordDatabase $database, int $index): RecordChange
+    public function duplicateRecord(ProjectRecordDatabase $database, int $index, ?string $identity = null): RecordChange
     {
         $this->requireRecord($database, $index);
-        $copyIndex = $database->duplicateRecord($index);
+        if ($identity !== null && trim($identity) === '') {
+            throw new RecordRefusal(sprintf('A %s copy needs a name.', $database->schema->entryNoun));
+        }
+        $copyIndex = $database->duplicateRecord($index, $identity === null ? null : trim($identity));
         $copy = $copyIndex === null ? null : $database->getRecordByIndex($copyIndex);
 
         if ($copyIndex === null || $copy === null) {

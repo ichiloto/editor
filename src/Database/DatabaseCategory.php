@@ -93,8 +93,14 @@ interface DatabaseCategory
      */
     public function createRecord(?string $identity = null): RecordChange;
 
-    /** @throws RecordRefusal When the record cannot be duplicated. */
-    public function duplicateRecord(int $index): RecordChange;
+    /**
+     * Copies a record below itself under a fresh identity: the one given
+     * (made unique) when the copy is meant to be something of its own, so
+     * its identity and file are named for it from the start.
+     *
+     * @throws RecordRefusal When the record cannot be duplicated.
+     */
+    public function duplicateRecord(int $index, ?string $identity = null): RecordChange;
 
     /** @throws RecordRefusal When the record cannot be deleted. */
     public function deleteRecord(int $index): RecordChange;

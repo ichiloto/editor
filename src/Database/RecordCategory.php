@@ -108,9 +108,9 @@ final readonly class RecordCategory implements DatabaseCategory
         return $this->authoring->createRecord($this->database, $identity);
     }
 
-    public function duplicateRecord(int $index): RecordChange
+    public function duplicateRecord(int $index, ?string $identity = null): RecordChange
     {
-        return $this->authoring->duplicateRecord($this->database, $index);
+        return $this->authoring->duplicateRecord($this->database, $index, $identity);
     }
 
     public function deleteRecord(int $index): RecordChange
