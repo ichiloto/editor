@@ -410,8 +410,13 @@ Order of work, each a complete slice before the next:
    dragging a member places every member as it stands, each one undo step;
    placements are stage places (`x, depth`) on each arena's ground. Arenas
    are authorable data (`Battle Arenas`, `Default Battle Arena`, GUI
-   editor). Still open: a new member's starting terminal position (the
-   blank `[15, 7]`). Battle event pages are
+   editor). A new member stands on the terminal field where the Engine
+   places it beside the members there (`TerminalBattleEffects::findTroopPlace()`,
+   read from their sprites through `EnemySprites`), in both editors
+   (2026-10-21). A troop composed and kept in the battle test is added by
+   `TroopAuthoring::addTroop()`: as a new record in the editor that launched
+   the test (handed back through the launch's data root), or written straight
+   into the project by `ProjectTroopKeeper` for the Console. Battle event pages are
    done (2026-10-20): `Event Pages` beside the members, with conditions, span
    and battle commands through the shared command frames, members chosen from
    the troop, pages renumbered when a member is removed, `Cannot Fall Below
