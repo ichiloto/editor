@@ -178,7 +178,7 @@ it('sets how a battler meets the ground: its body rises by its hover, and its sh
     setBattlerRow($session, $index, 'artwork.image', 'Graphics/Enemies/Bat.png');
     $grounded = $session->readEnemyPreview(0)['formation']['members'][0]['battler'];
     setBattlerRow($session, $index, 'grounding.hover', '0.4');
-    setBattlerRow($session, $index, 'grounding.shadow', 'artwork');
+    setBattlerRow($session, $index, 'grounding.shadow', 'none');
     $hovering = $session->readEnemyPreview(0)['formation']['members'][0]['battler'];
 
     // The body rises; the feet stay where the battle stands it.
@@ -187,8 +187,11 @@ it('sets how a battler meets the ground: its body rises by its hover, and its sh
         ->and($grounded['bounds']['y'] - $hovering['bounds']['y'])->toEqualWithDelta($hovering['lift'], .000001);
 
     $session->saveDatabase('battler_enemies');
-    expect((require $root . '/assets/' . BattlerBindings::FILE)['enemies']['Regular Bat']['grounding'])->toBe(['hover' => 0.4, 'shadow' => 'artwork'])
+    expect((require $root . '/assets/' . BattlerBindings::FILE)['enemies']['Regular Bat']['grounding'])->toBe(['hover' => 0.4, 'shadow' => 'none'])
 ;
     setBattlerRow($session, $index, 'grounding.shadow', 'painted');
     expect(fn() => $session->saveDatabase('battler_enemies'))->toThrow(SessionRefusal::class, 'grounding.shadow');
+    // Art painting its own shadow cannot hover: the shadow would rise with the body.
+    setBattlerRow($session, $index, 'grounding.shadow', 'artwork');
+    expect(fn() => $session->saveDatabase('battler_enemies'))->toThrow(SessionRefusal::class, 'cannot hover');
 });
