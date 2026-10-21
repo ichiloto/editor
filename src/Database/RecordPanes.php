@@ -294,6 +294,7 @@ final class RecordPanes
             [
                 sprintf('Gold: %d', $quest->getRewardGold()),
                 sprintf('EXP: %d', $quest->getRewardExperience()),
+                sprintf('SP: %d', $quest->getRewardSkillPoints()),
                 sprintf('Items: %s', $quest->getRewardItemsString() === '' ? '-' : $quest->getRewardItemsString()),
                 '',
                 'Prereqs',

@@ -71,6 +71,12 @@ final readonly class ProjectQuest
         return max(0, intval($this->getRewards()['experience'] ?? 0));
     }
 
+    /** The Mastery points (SP) the quest gives every travelling member. */
+    public function getRewardSkillPoints(): int
+    {
+        return max(0, intval($this->getRewards()['skillPoints'] ?? 0));
+    }
+
     /**
      * Returns the reward items as a comma-separated string.
      */

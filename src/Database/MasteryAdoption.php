@@ -15,8 +15,9 @@ use RuntimeException;
  * Moves a character's own skills from their actor file onto their Mastery
  * Map, so the map is the one place they are learned. Each skill the actor
  * file says they know becomes a node known from the start; each learnable
- * becomes a node costing the EXP its requirement asked for, for the author to
- * place and price; skills their role teaches stay with the role. The actor's
+ * becomes a node carrying the EXP its requirement asked for as its cost, for
+ * the author to place and reprice in Mastery points (SP); skills their role
+ * teaches stay with the role. New nodes follow the map's own. The actor's
  * learned lists and learnables are then emptied. Saves are untouched: a
  * character keeps what a save says they know.
  *
@@ -62,7 +63,6 @@ final class MasteryAdoption
             $mapIndex = array_find_key($mapPayloads, static fn(mixed $payload): bool => is_array($payload) && ($payload['actor'] ?? null) === $actorId);
             $map = $mapIndex === null ? ['actor' => $actorId, 'nodes' => []] : $mapPayloads[$mapIndex];
             $onMap = array_map(static fn(array $node): string => strval($node['skill'] ?? ''), (array) ($map['nodes'] ?? []));
-            $order = max([0, ...array_map(static fn(array $node): int => intval($node['order'] ?? 0), (array) ($map['nodes'] ?? []))]);
             $ids = array_map(static fn(array $node): string => strval($node['id'] ?? ''), (array) ($map['nodes'] ?? []));
             $added = [];
             $emptied = $actor;
@@ -90,7 +90,7 @@ final class MasteryAdoption
                 $ids[] = $id;
                 $onMap[] = $skill;
                 $map['nodes'][] = $nodes[] = ['id' => $id, 'skill' => $skill, 'region' => $regions[0]->id, 'cost' => $cost,
-                    'opensAtLevel' => 1, 'order' => ++$order];
+                    'opensAtLevel' => 1];
             }
 
             $actorSource = (string) file_get_contents($actorPath);
