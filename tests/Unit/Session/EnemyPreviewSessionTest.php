@@ -21,9 +21,9 @@ it('previews an enemy as its terminal sprite and at battle scale where the battl
         ->and($preview['formationIssue'])->toBeNull()
         ->and($preview['formation']['arena'])->toBe('arena.cave')
         ->and($preview['formation']['party'][0])->toMatchArray(['name' => 'Kaelion', 'ground' => ['x' => 1180.0, 'y' => 560.0]])
-        // A troop of it alone: centred on the enemies' half, its feet on the ground's near edge.
-        ->and($bat)->toMatchArray(['enemy' => 'Regular Bat', 'placement' => null, 'place' => ['x' => 337.5, 'depth' => 0.0]])
-        ->and($bat['battler']['ground'])->toBe(['x' => 337.5, 'y' => 600.0])
+        // A troop of it alone: centred on the enemies' half, facing the middle of the party's formation (depths 180 and 40).
+        ->and($bat)->toMatchArray(['enemy' => 'Regular Bat', 'placement' => null, 'place' => ['x' => 337.5, 'depth' => 110.0]])
+        ->and($bat['battler']['ground'])->toBe(['x' => 337.5, 'y' => 490.0])
         ->and($bat['battler']['diagnostics'])->toBe(['Base battler artwork unavailable: Regular Bat'])
         ->and($session->readEnemyPreview(0, 'arena.road')['formation']['arena'])->toBe('arena.road')
         ->and($session->listUnsavedChanges())->toBe([]);
@@ -56,7 +56,7 @@ it('stands a tall enemy whole on the ground, at battle scale, where the battle s
     $battle = (string) file_get_contents($root . '/assets/Data/Presentation/battle.php');
     $battle = str_replace(['use Ichiloto\Engine\Battle\Presentation\BattleStageSlot;', "    actors: [],\n    enemies: [],"], [
         "use Ichiloto\\Engine\\Battle\\Presentation\\BattleStageSlot;\nuse Ichiloto\\Engine\\Battle\\Presentation\\{BattlerArtwork, BattleScale, BattlerScale};",
-        // At three times the party's height the bat stands 450 tall, 180 wide: whole from feet on the near edge at 600.
+        // At three times the party's height the bat stands 450 tall, 180 wide: whole from its feet facing the party's middle at 490.
         "    actors: ['Kaelion' => new BattlerArtwork('Graphics/Actors/Kaelion.png', 10, 10, 5, 10)],\n"
         . "    enemies: ['Regular Bat' => new BattlerArtwork('Graphics/Enemies/Bat.png', 4, 10, 2, 10)],\n"
         . "    scale: new BattleScale('Kaelion', 150, actors: ['Kaelion' => new BattlerScale(1, 1)], enemies: ['Regular Bat' => new BattlerScale(3, 1)]),",
@@ -66,6 +66,6 @@ it('stands a tall enemy whole on the ground, at battle scale, where the battle s
     $preview = EditorSession::open($root)->readEnemyPreview(0);
 
     expect($preview['formationIssue'])->toBeNull()
-        ->and($preview['formation']['members'][0]['battler']['ground'])->toBe(['x' => 337.5, 'y' => 600.0])
-        ->and($preview['formation']['members'][0]['battler']['bounds'])->toBe(['x' => 247.5, 'y' => 150.0, 'width' => 180.0, 'height' => 450.0]);
+        ->and($preview['formation']['members'][0]['battler']['ground'])->toBe(['x' => 337.5, 'y' => 490.0])
+        ->and($preview['formation']['members'][0]['battler']['bounds'])->toBe(['x' => 247.5, 'y' => 40.0, 'width' => 180.0, 'height' => 450.0]);
 });

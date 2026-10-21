@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Database;
 
 use Ichiloto\Editor\Dialogue\DialogueLineSpeaker;
+use Ichiloto\Engine\Battle\Presentation\BattlerContact;
+use Ichiloto\Engine\Entities\Enemies\EnemyHabitat;
 use Ichiloto\Editor\Dialogue\DialoguePortraitFields;
 use Ichiloto\Editor\Dialogue\DialogueSpeakerFields;
 use Ichiloto\Editor\Field\PlayerPresentationFields;
@@ -30,6 +32,8 @@ use Ichiloto\Editor\PermanentGrowthCatalog;
 use Ichiloto\Engine\Entities\States\State;
 use Ichiloto\Engine\Entities\States\StateDisposition;
 use Ichiloto\Engine\Scenes\Arena\ProjectBattleTest;
+use Ichiloto\Engine\Progression\LevelUpRecovery;
+use Ichiloto\Engine\Progression\ProgressionSettings;
 use Ichiloto\Engine\Animations\AnimationTargetPosition;
 use Ichiloto\Editor\Events\ProjectScriptCommands;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandDefinition;
@@ -1052,8 +1056,13 @@ final class RecordSchemaCatalog
                 new RecordField('battle.activeTime.speedFactorPercent', 'Time Gauge Speed Factor %', InputControlType::INTEGER),
                 new RecordField('battle.activeTime.openingVariance', 'Time Gauge Opening Variance', InputControlType::INTEGER, removeWhenEmpty: true),
                 new RecordField('battle.activeTime.openingSpeedFactorPercent', 'Time Gauge Opening Speed %', InputControlType::INTEGER, removeWhenEmpty: true),
-                // The Engine's ProgressionSettings: a level gained refills HP and MP unless the project turns it off.
-                RecordField::boolean('progression.restoreVitalsOnLevelUp', 'Level Up Restores HP/MP', removeWhenEmpty: false, displayDefault: 'true'),
+                // The Engine's ProgressionSettings: what a level gained does to current HP and MP.
+                new RecordField(
+                    'progression.' . ProgressionSettings::LEVEL_UP_RECOVERY,
+                    'Level Up HP/MP',
+                    options: array_map(static fn(LevelUpRecovery $mode): string => $mode->value, LevelUpRecovery::cases()),
+                    displayDefault: LevelUpRecovery::FULL->value,
+                ),
                 // Test settings, as RPG Maker keeps its Battle Test: normal play never reads them.
                 new RecordField(ProjectBattleTest::SYSTEM_KEY, 'Battle Test', removeWhenEmpty: true, codec: RecordFieldCodec::BATTLE_TEST),
             ],
@@ -1398,6 +1407,9 @@ final class RecordSchemaCatalog
                 new RecordField('elementAffinities', 'Element Affinities', removeWhenEmpty: true, codec: RecordFieldCodec::AFFINITIES),
                 new RecordField('stateResistances', 'State Resistances', removeWhenEmpty: true, codec: RecordFieldCodec::KEY_VALUES),
                 RecordField::reference('knowledgeSubjectId', 'Knowledge Subject', 'knowledge_subjects', allowsNone: true),
+                // Where it lives, so a graphical battle stands it on its arena's land or water, or in the air over either.
+                new RecordField('habitat', 'Habitat', options: array_column(EnemyHabitat::cases(), 'value'), removeWhenEmpty: true,
+                    displayDefault: EnemyHabitat::LAND->value),
                 self::counterAttackField(),
                 // What the enemy attacks with when none of its patterns
                 // applies: a battle-usable basic skill, or the Engine's own
@@ -1943,6 +1955,18 @@ final class RecordSchemaCatalog
                 new RecordField('scale.relativeSize', 'Size', InputControlType::FLOAT, removeWhenEmpty: true),
                 new RecordField('scale.sourceSpan', 'Body Span', InputControlType::FLOAT, removeWhenEmpty: true),
                 new RecordField('scale.horizontal', 'Measured Across', InputControlType::BOOLEAN, removeWhenEmpty: true, displayDefault: 'false'),
+                // How it meets the surface: its elevation in reference heights (positive rises, negative sinks below the
+                // surface line), what is drawn where it meets it, and whether its art already paints its own shadow.
+                new RecordField('grounding.elevation', 'Elevation', InputControlType::FLOAT, removeWhenEmpty: true,
+                    displayDefault: $actors ? '0 (standing)' : '(the theme\'s for air enemies, else 0)'),
+                new RecordField('grounding.contact', 'Surface Contact', options: array_column(BattlerContact::cases(), 'value'),
+                    removeWhenEmpty: true, displayDefault: '(from habitat and elevation)'),
+                new RecordField('grounding.bakedShadow', 'Art Paints Its Shadow', InputControlType::BOOLEAN, removeWhenEmpty: true,
+                    displayDefault: 'false'),
+                new RecordField('grounding.contactWidth', 'Contact Width', InputControlType::FLOAT, removeWhenEmpty: true,
+                    displayDefault: '1 (the theme\'s)'),
+                new RecordField('grounding.contactOpacity', 'Contact Strength', InputControlType::FLOAT, removeWhenEmpty: true,
+                    displayDefault: '1 (the theme\'s)'),
             ],
             labelKey: BattlerBindingProjection::IDENTITY,
             identityKey: BattlerBindingProjection::IDENTITY,

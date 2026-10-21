@@ -24,6 +24,7 @@ use Ichiloto\Editor\Cutscenes\Preview\PreviewGame;
 use Ichiloto\Editor\Canvas\CanvasTool;
 use Ichiloto\Editor\Canvas\ToolGeometry;
 use Ichiloto\Engine\Events\MapEventDefinition;
+use Ichiloto\Engine\Entities\Enemies\EnemyHabitat;
 use Ichiloto\Engine\Rendering\Tilesets\TileId;
 use Ichiloto\Engine\Field\MapPhysicalOccupancy;
 use Ichiloto\Engine\Rendering\Tilesets\TilesetPiece;
@@ -3513,19 +3514,22 @@ final class EditorSession
      * the Engine stands them, so an author marks the ground by its picture.
      * The troop is the one chosen, else the first with members. It reads
      * the arena as it is now, unsaved edits included. `$ground` holds ground
-     * fields as they stand while being dragged, laid over the arena's own and
-     * read by the Engine as authored ground is, so a drag shows the battle's
+     * fields and `$footing` footing polygons (by habitat, `land` or `water`)
+     * as they stand while being dragged, laid over the arena's own and read
+     * by the Engine as authored ones are, so a drag shows the battle's
      * picture as it goes; nothing is written.
      *
      * @param array<string, mixed> $ground
+     * @param array<string, mixed> $footing
      * @return array<string, mixed>
-     * @throws SessionRefusal When the arena or troop is unknown, the project has no graphical battle, or the ground is refused.
+     * @throws SessionRefusal When the arena or troop is unknown, the project has no graphical battle, or the ground or footing is refused.
      */
-    public function readArenaPreview(int $index, ?int $troop = null, array $ground = []): array
+    public function readArenaPreview(int $index, ?int $troop = null, array $ground = [], array $footing = []): array
     {
         $record = $this->requireRecordDatabase(BattleArenaFields::CATEGORY)->getRecordByIndex($index)
             ?? throw new SessionRefusal(sprintf('%s has no record %d.', BattleArenaFields::CATEGORY, $index));
-        $catalog = $this->requireBattleLayoutCatalog('preview arenas on', $ground === [] ? [] : [(string) $record->get('id') => $ground]);
+        $catalog = $this->requireBattleLayoutCatalog('preview arenas on', $ground === [] && $footing === [] ? []
+            : [(string) $record->get('id') => ['ground' => $ground, 'footing' => $footing]]);
         $troops = $this->requireRecordDatabase('troops');
         $troop ??= array_key_first(array_filter($troops->getRecords(), static fn($entry): bool => $entry->getSubList('enemies') !== []));
         ['members' => $members, 'places' => $places] = $troop === null ? ['members' => [], 'places' => []] : $this->readTroopPlaces($troop);
@@ -3538,6 +3542,24 @@ final class EditorSession
         $troopNames = array_map(static fn($entry): string => (string) $entry->get('name'), $troops->getRecords());
 
         return [...$view, 'members' => $members, 'troop' => $troop, 'troops' => array_values($troopNames)];
+    }
+
+    /**
+     * Replaces a battle arena's land or water footing, as one undo step: the
+     * polygon battlers of that habitat may plant their feet in, as canvas
+     * points in order. No points removes it.
+     *
+     * @param list<array{x: int|float, y: int|float}> $points
+     * @return array{changed: bool, records: list<string>}
+     * @throws SessionRefusal When the arena is unknown or read-only, or the polygon is refused.
+     */
+    public function setArenaFooting(int $index, EnemyHabitat $habitat, array $points): array
+    {
+        $arenas = $this->requireRecordDatabase(BattleArenaFields::CATEGORY);
+        $change = $this->changeRecord(static fn(): RecordChange => BattleArenaFields::setFooting($arenas, $index, $habitat, $points,
+            sprintf('Set %s footing', $habitat->value)));
+
+        return ['changed' => $change->command !== null, 'records' => $arenas->getEntryLabels()];
     }
 
     /**
@@ -3866,12 +3888,12 @@ final class EditorSession
      * The project's battle presentation, when it lays battles out on a
      * graphical canvas: its presentation code, with the battle art bound as
      * data as it is now, unsaved edits included, so a preview shows the art
-     * being set. `$grounds` lays ground fields over arenas' own, by arena
-     * id, as a drag stands them, without writing them.
+     * being set. `$drags` lays ground fields and footing polygons over
+     * arenas' own, by arena id, as a drag stands them, without writing them.
      *
-     * @param array<string, array<string, mixed>> $grounds
+     * @param array<string, array{ground: array<string, mixed>, footing: array<string, mixed>}> $drags
      */
-    private function requireBattleLayoutCatalog(string $purpose, array $grounds = []): BattlePresentationCatalog
+    private function requireBattleLayoutCatalog(string $purpose, array $drags = []): BattlePresentationCatalog
     {
         $assets = $this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets';
         try {
@@ -3881,10 +3903,15 @@ final class EditorSession
                 $catalog = $catalog->bindBattlers(BattlerBindings::getFromArray($bindings, $assets));
             }
             $arenas = $catalog === null ? null : $this->workspace->catalogs->readData(BattleArenaBindings::FILE)['payload'];
-            foreach ($grounds as $id => $ground) {
-                if (is_array($arenas) && is_array($arenas['arenas'][$id] ?? null)) {
-                    $declared = $arenas['arenas'][$id]['ground'] ?? [];
-                    $arenas['arenas'][$id]['ground'] = [...(is_array($declared) ? $declared : []), ...$ground];
+            foreach ($drags as $id => ['ground' => $ground, 'footing' => $footing]) {
+                if (! is_array($arenas) || ! is_array($arenas['arenas'][$id] ?? null)) {
+                    continue;
+                }
+                foreach (['ground' => $ground, 'footing' => $footing] as $key => $dragged) {
+                    $declared = $arenas['arenas'][$id][$key] ?? [];
+                    if ($dragged !== []) {
+                        $arenas['arenas'][$id][$key] = [...(is_array($declared) ? $declared : []), ...$dragged];
+                    }
                 }
             }
             if ($catalog !== null && is_array($arenas)) {
@@ -4048,6 +4075,8 @@ final class EditorSession
         // A theme formation holds so many; without one the battle arranges the whole party.
         $partyIds = array_values($catalog->ui->partySlots === [] ? $partyIds : array_slice($partyIds, 0, count($catalog->ui->partySlots)));
 
+        // Each enemy stands where its habitat lives, as in battle.
+        $enemies = array_map(fn(array $entry): array => ['habitat' => $this->readEnemyHabitat($entry['enemyId']), ...$entry], $enemies);
         try {
             $formation = BattleFormationLayout::compose($catalog, $arena, $enemies, $partyIds, $assetRoot);
             // The picture is the battle's own canvas at rest, which the frontend paints with the renderer itself.
@@ -4076,9 +4105,35 @@ final class EditorSession
             // Where feet may stand on this arena, so a canvas can show it and turn a dragged point into a place.
             'ground' => [...$formation->staging->ground->toArray(), 'partyCompression' => $formation->staging->partyCompression,
                 'enemyCompression' => $formation->staging->enemyCompression],
+            // The arena's land and water footing as canvas points; an arena marking neither is land throughout.
+            'footing' => ['land' => self::describeFooting($formation->arena?->footing->land ?? []),
+                'water' => self::describeFooting($formation->arena?->footing->water ?? [])],
             'party' => $party,
             'partySource' => $partySource,
         ], $clearance];
+    }
+
+    /**
+     * Where an enemy lives as its record holds it now; land for an enemy
+     * the project does not define or a habitat it cannot read, which the
+     * enemy's own record reports.
+     */
+    private function readEnemyHabitat(string $enemy): EnemyHabitat
+    {
+        $record = array_find($this->requireRecordDatabase('enemies')->getRecords(),
+            static fn($entry): bool => $entry->get('name') === $enemy);
+        $habitat = $record?->get('habitat');
+
+        return is_string($habitat) ? EnemyHabitat::tryFrom($habitat) ?? EnemyHabitat::LAND : EnemyHabitat::LAND;
+    }
+
+    /**
+     * @param list<array{0: float, 1: float}> $polygon
+     * @return list<array{x: float, y: float}>
+     */
+    private static function describeFooting(array $polygon): array
+    {
+        return array_map(static fn(array $point): array => ['x' => $point[0], 'y' => $point[1]], $polygon);
     }
 
     /**
@@ -4117,7 +4172,21 @@ final class EditorSession
             'bodySpan' => $battler->bodySpan,
             'horizontal' => $battler->horizontal,
             'diagnostics' => array_values(array_map(strval(...), $diagnostics)),
+            // What is drawn where it meets the surface, as the area a canvas draws it in, and how far its body rises or sinks.
+            'contact' => self::describeContact($battler),
+            'offset' => $battler->offset,
         ];
+    }
+
+    /** @return array{kind: string, x: float, y: float, width: float, height: float, opacity: float}|null */
+    private static function describeContact(BattleFormationBattler $battler): ?array
+    {
+        $drawn = $battler->contactComposites[0] ?? $battler->contactImages[0] ?? null;
+        if ($drawn === null) { return null; }
+        $destination = $drawn->destination;
+
+        return ['kind' => $battler->contact->value, 'x' => $destination->x, 'y' => $destination->y,
+            'width' => $destination->width, 'height' => $destination->height, 'opacity' => $drawn->opacity];
     }
 
     /** @return array<string, mixed> An image's asset, where it is drawn and the part of the asset it shows. */

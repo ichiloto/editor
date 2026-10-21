@@ -90,14 +90,17 @@ it('aligns, arranges automatically and moves one member as one undo step each, t
     $session->placeTroopMember(0, 0, 300, 120);
     $members = $session->readTroopFormation(0)['members'];
     expect($members[0]['placement'])->toMatchArray(['x' => 300, 'depth' => 120])
-        ->and($members[1]['place'])->toBe($arranged[1]['place'])
-        ->and([$members[1]['placement']['x'], $members[1]['placement']['depth']])->toEqual([$arranged[1]['place']['x'], $arranged[1]['place']['depth']]);
+        // Placements are written to two decimals.
+        ->and(array_values($members[1]['place']))->toEqualWithDelta(array_values($arranged[1]['place']), .01)
+        ->and([$members[1]['placement']['x'], $members[1]['placement']['depth']])
+        ->toEqualWithDelta([$arranged[1]['place']['x'], $arranged[1]['place']['depth']], .01);
 
     $session->alignTroop(0);
     $aligned = $session->readTroopFormation(0)['members'];
     expect(array_column($aligned, 'placement'))->each->not->toBeNull()
-        // The front member stands on the ground's near edge.
-        ->and(min(array_map(static fn(array $member): float => $member['place']['depth'], $aligned)))->toBe(0.0);
+        // The troop faces the party: its middle stands at the middle of the theme's party formation (depths 180 and 40).
+        ->and((min($depths = array_map(static fn(array $member): float => $member['place']['depth'], $aligned)) + max($depths)) / 2)
+        ->toEqualWithDelta(110.0, .01);
 
     $session->arrangeTroopAutomatically(0);
     $automatic = $session->readTroopFormation(0)['members'];
@@ -109,7 +112,10 @@ it('aligns, arranges automatically and moves one member as one undo step each, t
     $session->undo();
     expect(array_column($session->readTroopFormation(0)['members'], 'placement'))->each->not->toBeNull();
     $session->saveDatabase('troops');
-    expect((string) file_get_contents($root . '/assets/Data/troops.php'))->toContain('// The leader, placed for the graphical battle.', "'depth' => 0");
+    expect((string) file_get_contents($root . '/assets/Data/troops.php'))->toContain('// The leader, placed for the graphical battle.')
+        // Whole canvas units are written as integers, the rest to two decimals.
+        ->toMatch("/'width' => 1, 'height' => 1\]/")
+        ->not->toMatch("/'(x|depth)' => \\d+\\.(\\d{3,}|0+)[,\\]]/");
 });
 
 it('refuses a placement still at a fixed canvas height and names how to place it again', function () {

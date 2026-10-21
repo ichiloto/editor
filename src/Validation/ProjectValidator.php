@@ -3,6 +3,8 @@
 namespace Ichiloto\Editor\Validation;
 
 use Ichiloto\Editor\Database\TroopEventPageContract;
+use Ichiloto\Engine\Entities\Enemies\EnemyHabitat;
+use Ichiloto\Engine\Battle\Presentation\BattleFooting;
 use Ichiloto\Editor\ProjectConfig;
 use Ichiloto\Engine\Messaging\Dialogue\ConditionalDialogue;
 use Ichiloto\Engine\Quests\QuestWaymark;
@@ -110,6 +112,22 @@ class ProjectValidator
   /** Why the battle presentation cannot be read, or null. */
   protected ?string $arenaCatalogProblem = null;
 
+  /**
+   * Each arena's footing and the arena a battle naming none is fought on,
+   * read with the arena keys.
+   *
+   * @var array<string, BattleFooting>
+   */
+  protected array $arenaFootings = [];
+  protected ?string $defaultArena = null;
+
+  /**
+   * Each troop's members with where they live, read once per validation.
+   *
+   * @var array<string, list<array{enemy: string, habitat: EnemyHabitat}>>
+   */
+  protected array $troopHabitats = [];
+
   protected const string TRANSFER_TRIGGER = 'TransferPlayerTrigger';
   protected const string SCRIPT_TRIGGER = 'ScriptEventTrigger';
 
@@ -123,6 +141,7 @@ class ProjectValidator
   {
     $this->validatedWorkspace = $workspace;
     $this->readArenaKeys($workspace);
+    $this->troopHabitats = $this->readTroopHabitats($workspace);
     $this->knowledgeCatalogData = null;
     $this->commonEventScripts = $this->eventScriptsById($workspace);
     $this->cinematicCommonEventIds = [];
@@ -1882,6 +1901,7 @@ class ProjectValidator
 
     foreach ($rows as $row) {
       $issues = [...$issues, ...$this->checkBattleArena($row['arena'], $map->mapId, sprintf('The encounter with "%s"', $row['name']))];
+      $issues = [...$issues, ...$this->checkEncounterHabitats($map, $row['name'], $row['arena'] ?? $encounters->mapArena())];
     }
 
     return [...$issues, ...$this->checkEncounterRate($map, $encounters), ...$this->checkEncounterTiles($map, $encounters), ...$this->checkEncounterTroopDuplicates($map)];
@@ -1939,13 +1959,87 @@ class ProjectValidator
   {
     $this->arenaKeys = null;
     $this->arenaCatalogProblem = null;
+    $this->arenaFootings = [];
+    $this->defaultArena = null;
 
     try {
       $catalog = $workspace->catalogs->loadBattlePresentation();
       $this->arenaKeys = $catalog === null ? null : array_map(strval(...), array_keys($catalog->getArenaChoices()));
+      $this->arenaFootings = array_map(static fn($arena): BattleFooting => $arena->footing, $catalog?->arenas ?? []);
+      $this->defaultArena = $catalog?->defaultArena;
     } catch (Throwable $problem) {
       $this->arenaCatalogProblem = $problem->getMessage();
     }
+  }
+
+  /**
+   * Each troop's members with where they live, from the troops and enemies
+   * as they are now. An enemy the project does not define, or whose habitat
+   * cannot be read, is reported where it is authored, so it is left out.
+   *
+   * @return array<string, list<array{enemy: string, habitat: EnemyHabitat}>>
+   */
+  protected function readTroopHabitats(ProjectWorkspace $workspace): array
+  {
+    $troops = $workspace->getRecordDatabase('troops');
+    $enemies = $workspace->getRecordDatabase('enemies');
+
+    if (! $troops instanceof ProjectRecordDatabase || ! $enemies instanceof ProjectRecordDatabase) {
+      return [];
+    }
+
+    $habitats = [];
+
+    foreach ($enemies->getRecords() as $record) {
+      $habitat = $record->get('habitat');
+      $habitats[strval($record->get('name'))] = $habitat === null ? EnemyHabitat::LAND : (is_string($habitat) ? EnemyHabitat::tryFrom($habitat) : null);
+    }
+
+    $members = [];
+
+    foreach ($troops->getRecords() as $record) {
+      foreach ($record->getSubList('enemies') as $member) {
+        $enemy = is_array($member) && is_string($member['enemy'] ?? null) ? $member['enemy'] : null;
+
+        if ($enemy !== null && ($habitats[$enemy] ?? null) !== null) {
+          $members[strval($record->get('name'))][] = ['enemy' => $enemy, 'habitat' => $habitats[$enemy]];
+        }
+      }
+    }
+
+    return $members;
+  }
+
+  /**
+   * Checks that every member of an encounter's troop has somewhere to stand
+   * on the arena it is fought on: a water creature needs the arena's water,
+   * a land beast its land. Graphical presentation only, so a battle still
+   * starts; the member would stand wherever its side's area allows.
+   *
+   * @return Issue[] The issues found.
+   */
+  protected function checkEncounterHabitats(ProjectMap $map, string $troop, mixed $arena): array
+  {
+    $arena = is_string($arena) && $arena !== '' ? $arena : $this->defaultArena;
+    $footing = $arena === null ? null : ($this->arenaFootings[$arena] ?? null);
+
+    if ($footing === null) {
+      return [];
+    }
+
+    $issues = [];
+
+    foreach ($this->troopHabitats[$troop] ?? [] as ['enemy' => $enemy, 'habitat' => $habitat]) {
+      if (! $footing->hasFootingFor($habitat)) {
+        $issues[$enemy] = Issue::warning($map->mapId,
+          sprintf('The encounter with "%s" is fought on the arena "%s", which has no %s for %s to stand on.',
+            $troop, $arena, $habitat->value, $enemy),
+          sprintf('Mark the arena\'s %s footing on its Battle Arenas page, fight this troop on another arena, or change %s\'s habitat.',
+            $habitat->value, $enemy));
+      }
+    }
+
+    return array_values($issues);
   }
 
   /**

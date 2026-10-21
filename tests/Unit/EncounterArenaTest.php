@@ -150,3 +150,33 @@ it('reports an arena a battle names that the battle presentation does not declar
 
     expect($errors($root))->toContain('The encounter with "Pair" names the arena "arena.road", but the project declares no battle presentation to draw it in.');
 });
+
+it('warns when an encounter fights an enemy on an arena with nowhere for its habitat to stand', function () {
+    $root = encounterArenaProject();
+    writeRegularBatEnemy($root);
+    $bat = $root . '/assets/Data/Enemies/regular-bat.php';
+    $setHabitat = static fn(string $habitat) => file_put_contents($bat,
+        (string) preg_replace("/'habitat' => '\\w+',\\n|(?='imagePath')/", "'habitat' => '{$habitat}',\n  ", (string) file_get_contents($bat), 1));
+    $warnings = static fn(): string => implode("\n", array_map(
+        static fn($issue): string => $issue->where . ': ' . $issue->message,
+        array_filter(new ProjectValidator()->validate(ProjectWorkspace::fromProject($root)), static fn($issue): bool => $issue->severity === Severity::WARNING),
+    ));
+    $habitatWarning = 'The encounter with "Pair" is fought on the arena "arena.road", which has no %s for Regular Bat to stand on.';
+
+    // An arena marking no footing is land throughout: a land or air enemy stands there, a water creature cannot.
+    expect($warnings())->not->toContain('to stand on');
+    $setHabitat('water');
+    expect($warnings())->toContain(sprintf($habitatWarning, 'water'));
+
+    // Marking the road's water gives it somewhere, and takes its land away.
+    $battle = $root . '/assets/Data/Presentation/battle.php';
+    file_put_contents($battle, str_replace("'arena.road' => \$arena('Road', 'Road.png')",
+        "'arena.road' => new BattleArenaDefinition('Road', \$arena('Road', 'Road.png')->background,"
+        . " footing: new \\Ichiloto\\Engine\\Battle\\Presentation\\BattleFooting(water: [[0, 300], [600, 300], [600, 600]]))",
+        (string) file_get_contents($battle)));
+    expect($warnings())->not->toContain('to stand on');
+    $setHabitat('land');
+    expect($warnings())->toContain(sprintf($habitatWarning, 'land'));
+    $setHabitat('air');
+    expect($warnings())->not->toContain('to stand on');
+});

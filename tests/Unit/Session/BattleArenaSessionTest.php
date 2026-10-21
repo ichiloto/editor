@@ -6,6 +6,7 @@ use Ichiloto\Editor\Database\BattleArenaFields;
 use Ichiloto\Editor\Database\DatabaseCatalog;
 use Ichiloto\Editor\Session\EditorSession;
 use Ichiloto\Editor\Session\SessionRefusal;
+use Ichiloto\Engine\Entities\Enemies\EnemyHabitat;
 
 /**
  * The graphical editor authors battle arenas as data: each background and the
@@ -121,4 +122,90 @@ it('previews a ground edge as it is dragged, read as authored ground, without wr
         ->and((string) file_get_contents($path))->toBe($before)
         // A ground the battle would refuse is refused here too.
         ->and(fn() => $session->readArenaPreview(0, ground: ['top' => 650]))->toThrow(SessionRefusal::class);
+});
+
+it('sets an arena\'s land footing as one step, stands the troop on it, and lists its points as rows', function () {
+    [, $path, $session] = createBattleArenaProject();
+    $road = [['x' => 400, 'y' => 300], ['x' => 1350, 'y' => 300], ['x' => 1350, 'y' => 600], ['x' => 600.5, 'y' => 600]];
+    expect($session->setArenaFooting(0, EnemyHabitat::LAND, $road)['changed'])->toBeTrue()
+        ->and($session->setArenaFooting(0, EnemyHabitat::LAND, $road)['changed'])->toBeFalse();
+    $preview = $session->readArenaPreview(0);
+
+    expect($preview['footing']['land'])->toBe([['x' => 400.0, 'y' => 300.0], ['x' => 1350.0, 'y' => 300.0],
+            ['x' => 1350.0, 'y' => 600.0], ['x' => 600.5, 'y' => 600.0]])
+        ->and($preview['footing']['water'])->toBe([])
+        ->and(findArenaRow($session, 0, 'landFootingList')['value'])->toBe('4')
+        ->and(findArenaRow($session, 0, 'landFooting3X')['value'])->toBe('600.5')
+        ->and(array_map(static fn(array $member): float => $member['battler']['ground']['x'], $preview['members']))
+        ->each->toBeGreaterThanOrEqual(400.0);
+
+    $session->saveDatabase(BattleArenaFields::CATEGORY);
+    expect((require $path)['arenas']['arena.road']['footing'])->toBe(['land' => $road])
+        ->and((string) file_get_contents($path))->toContain('// Each background and where its ground begins.');
+
+    // A point typed on its row is the same footing, read the same way.
+    $session->applyDatabaseRecord(BattleArenaFields::CATEGORY, 0, findArenaRow($session, 0, 'landFooting0X')['key'], '420');
+    expect($session->readArenaPreview(0)['footing']['land'][0])->toBe(['x' => 420.0, 'y' => 300.0]);
+    $session->undo();
+    $session->undo();
+    expect($session->readArenaPreview(0)['footing']['land'])->toBe([]);
+});
+
+it('refuses a footing that is not a polygon or is for the air, and removes the footing when given no points', function () {
+    [, $path, $session] = createBattleArenaProject();
+    expect(fn() => $session->setArenaFooting(0, EnemyHabitat::WATER, [['x' => 1, 'y' => 1], ['x' => 2, 'y' => 2]]))
+        ->toThrow(SessionRefusal::class, 'footing')
+        ->and(fn() => $session->setArenaFooting(0, EnemyHabitat::WATER, [['x' => 1, 'y' => 'low'], ['x' => 2, 'y' => 2], ['x' => 3, 'y' => 1]]))
+        ->toThrow(SessionRefusal::class, 'Water Footing[0]')
+        ->and(fn() => $session->setArenaFooting(0, EnemyHabitat::AIR, [['x' => 1, 'y' => 1], ['x' => 9, 'y' => 1], ['x' => 9, 'y' => 9]]))
+        ->toThrow(SessionRefusal::class, 'air battlers stand over either');
+    $session->setArenaFooting(0, EnemyHabitat::WATER, [['x' => 0, 'y' => 300], ['x' => 600, 'y' => 300], ['x' => 600, 'y' => 600]]);
+    $session->setArenaFooting(0, EnemyHabitat::WATER, []);
+    $session->saveDatabase(BattleArenaFields::CATEGORY);
+
+    expect((require $path)['arenas']['arena.road'])->not->toHaveKey('footing');
+});
+
+it('stands an enemy where its habitat lives, authored on its record', function () {
+    [$root] = createBattleArenaProject();
+    writeRegularBatEnemy($root);
+    $session = EditorSession::open($root);
+    $water = [['x' => 0, 'y' => 300], ['x' => 300, 'y' => 300], ['x' => 300, 'y' => 600], ['x' => 0, 'y' => 600]];
+    $session->setArenaFooting(0, EnemyHabitat::WATER, $water);
+    $session->setArenaFooting(0, EnemyHabitat::LAND, [['x' => 300, 'y' => 300], ['x' => 1350, 'y' => 300], ['x' => 1350, 'y' => 600], ['x' => 300, 'y' => 600]]);
+    $habitat = array_find($session->readDatabaseRecord('enemies', 0)['rows'], static fn(array $row): bool => ($row['key']['field'] ?? null) === 'habitat');
+    expect($habitat['value'])->toBe('land')
+        ->and(array_map(static fn(array $member): float => $member['battler']['ground']['x'], $session->readArenaPreview(0)['members']))
+        ->each->toBeGreaterThanOrEqual(300.0);
+
+    $session->applyDatabaseRecord('enemies', 0, $habitat['key'], 'water');
+    expect(array_map(static fn(array $member): float => $member['battler']['ground']['x'], $session->readArenaPreview(0)['members']))
+        ->each->toBeLessThanOrEqual(300.0);
+});
+
+it('sets an arena\'s light on battlers\' shadows, refusing a colour the battle cannot read before writing', function () {
+    [, $path, $session] = createBattleArenaProject();
+    $session->applyDatabaseRecord(BattleArenaFields::CATEGORY, 0, findArenaRow($session, 0, 'shadow.strength')['key'], '1.5');
+    $session->applyDatabaseRecord(BattleArenaFields::CATEGORY, 0, findArenaRow($session, 0, 'shadow.color')['key'], '#201008');
+    $session->saveDatabase(BattleArenaFields::CATEGORY);
+    expect((require $path)['arenas']['arena.road']['shadow'])->toBe(['strength' => 1.5, 'color' => '#201008']);
+
+    $file = (string) file_get_contents($path);
+    $session->applyDatabaseRecord(BattleArenaFields::CATEGORY, 0, findArenaRow($session, 0, 'shadow.color')['key'], 'brown');
+    expect(fn() => $session->saveDatabase(BattleArenaFields::CATEGORY))->toThrow(SessionRefusal::class, 'arenas.arena.road.shadow.color')
+        ->and(file_get_contents($path))->toBe($file);
+});
+
+it('previews a footing as its corner is dragged, read as authored footing, without writing it', function () {
+    [, $path, $session] = createBattleArenaProject();
+    $before = (string) file_get_contents($path);
+    $water = [['x' => 0, 'y' => 300], ['x' => 300, 'y' => 300], ['x' => 300, 'y' => 600], ['x' => 0, 'y' => 600]];
+    $dragged = $session->readArenaPreview(0, footing: ['land' => [['x' => 500, 'y' => 300], ['x' => 1350, 'y' => 300], ['x' => 1350, 'y' => 600], ['x' => 500, 'y' => 600]], 'water' => $water]);
+
+    expect($dragged['footing']['land'][0])->toBe(['x' => 500.0, 'y' => 300.0])
+        ->and(array_map(static fn(array $member): float => $member['battler']['ground']['x'], $dragged['members']))->each->toBeGreaterThanOrEqual(500.0)
+        ->and($session->readArenaPreview(0)['footing']['land'])->toBe([])
+        ->and($session->listUnsavedChanges())->toBe([])
+        ->and((string) file_get_contents($path))->toBe($before)
+        ->and(fn() => $session->readArenaPreview(0, footing: ['land' => [['x' => 1, 'y' => 1]]]))->toThrow(SessionRefusal::class);
 });
