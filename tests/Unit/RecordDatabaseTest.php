@@ -443,6 +443,25 @@ it('authors how a state behaves outside battle and refuses a state the Engine co
     expect((require $root . '/assets/Data/states.php')[0]['fieldTickSteps'])->toBe(8);
 });
 
+it('authors a protective state and cover, and refuses a protection the Engine could not read', function (): void {
+    $root = makeTemporaryProject();
+    $database = loadRecordDatabase($root, 'states');
+
+    expect(array_column($database->getSettingsFields(0), 'field'))->toContain('damageTakenRate', 'coversAllies');
+
+    $database->setField(0, 'damageTakenRate', '0.5');
+    $database->setField(1, 'coversAllies', 'true');
+    $database->save();
+    $payload = require $root . '/assets/Data/states.php';
+
+    expect($payload[0]['damageTakenRate'])->toBe(0.5)
+        ->and($payload[1]['coversAllies'])->toBeTrue()
+        ->and($payload[1])->not->toHaveKey('damageTakenRate');
+
+    $database->setField(0, 'damageTakenRate', '-1');
+    expect(fn() => $database->save())->toThrow('damageTakenRate cannot be negative');
+});
+
 it('authors an item cure through the states it removes and keeps value effects apart', function (): void {
     $root = makeTemporaryProject();
     $database = loadRecordDatabase($root, 'items');
@@ -462,4 +481,15 @@ it('authors an item cure through the states it removes and keeps value effects a
     $antidote = (require $root . '/assets/Data/Items/0002-antidote.php')['data'];
 
     expect($antidote['effects'])->toBe([['type' => 'remove_state', 'name' => 'Cure Poison', 'description' => 'Recovers HP', 'stateIds' => ['poison']]]);
+});
+
+it('writes a new state the way the file writes its others, one field to a line', function (): void {
+    $root = makeTemporaryProject();
+    $database = loadRecordDatabase($root, 'states');
+    (new \Ichiloto\Editor\Database\RecordAuthoring())->createRecord($database);
+    $database->save();
+    $lines = file($root . '/assets/Data/states.php', FILE_IGNORE_NEW_LINES) ?: [];
+
+    expect(array_filter($lines, static fn(string $line): bool => str_contains($line, "'id' =>") && str_contains($line, "'name' =>")))->toBe([])
+        ->and(array_column(require $root . '/assets/Data/states.php', 'id'))->toContain('new-state');
 });

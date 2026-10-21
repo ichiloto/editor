@@ -34,6 +34,10 @@ use Ichiloto\Editor\Database\ConditionCodec;
 use Ichiloto\Editor\Database\ConditionEditor;
 use Ichiloto\Editor\Animations\LegacyAnimationConversion;
 use Ichiloto\Editor\Database\DatabaseCatalog;
+use Ichiloto\Editor\Database\MasteryAdoption;
+use Ichiloto\Editor\Database\MasteryAuthoring;
+use Ichiloto\Editor\Database\MasteryFields;
+use Ichiloto\Editor\Database\SkillReferences;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Engine\Animations\Timelines\EffectCadence;
 use Ichiloto\Editor\Database\ElementAffinityCodec;
@@ -225,6 +229,7 @@ final class EditorSession
 
     /** How a troop's members are composed, as the terminal editor composes them. */
     private readonly TroopAuthoring $troopAuthoring;
+    private readonly MasteryAuthoring $masteryAuthoring;
 
     /**
      * Where each map's revisions count from. A map read afresh, when a file
@@ -253,6 +258,7 @@ final class EditorSession
         $this->workspace = $workspace;
         $this->actorAuthoring = new ActorAuthoring(graphical: true);
         $this->troopAuthoring = new TroopAuthoring();
+        $this->masteryAuthoring = new MasteryAuthoring();
     }
 
     /** Opens the project at a root, as the terminal editor opens it. */
@@ -4408,6 +4414,135 @@ final class EditorSession
         $change = $this->changeRecord(static fn(): RecordChange => $database->duplicateRecord($index));
 
         return ['index' => (int) $change->index, 'records' => $database->getRecordLabels()];
+    }
+
+    /**
+     * Retires a skill from everything that names it, at once and as one undo
+     * step: what classes teach, what actors know, can learn, attack or counter
+     * with, what enemies use, what skills and states counter with. With a
+     * replacement, each moves onto it (a list already holding it drops the old
+     * entry) and saves that knew the skill read the replacement; without one,
+     * each is removed and saves drop the skill. The skill is then free to
+     * delete. Asks before writing, as every file set does.
+     *
+     * @param string|null $replacement The skill that takes its place, or null to remove it from everything.
+     * @return array<string, mixed> The question, or what was written.
+     * @throws SessionRefusal When a skill is unknown, the replacement is itself, the two are a spell and an ability, it is a summon's action, or edits are pending.
+     */
+    public function retireSkill(int $index, ?string $replacement = null, ?string $answer = null, ?string $confirm = null): array
+    {
+        $this->requireCategory('skills');
+        $database = $this->workspace->getRecordDatabase('skills') ?? throw new SessionRefusal('This project has no skills.');
+        $record = $database->getRecordByIndex($index) ?? throw new SessionRefusal(sprintf('There is no skill %d.', $index));
+        $name = strval($record->get('name'));
+        $isMagic = strval($record->get('kind')) === 'magic';
+        if ($replacement !== null) {
+            $target = array_find($database->getRecords(), static fn($candidate): bool => strval($candidate->get('name')) === $replacement)
+                ?? throw new SessionRefusal(sprintf('There is no skill named %s to take its place.', $replacement));
+            if ($target === $record) {
+                throw new SessionRefusal(sprintf('%s cannot take its own place.', $name));
+            }
+            if ($isMagic !== (strval($target->get('kind')) === 'magic')) {
+                throw new SessionRefusal(sprintf('%s and %s must both be spells or both abilities: saves keep the two apart.', $name, $replacement));
+            }
+        }
+        if ($this->workspace->loadSkillCatalog()->isSummonAction($name)) {
+            throw new SessionRefusal(sprintf('%s is a summon\'s action and follows its summon.', $name));
+        }
+        if ($answer === null && $this->workspace->hasUnsavedChanges()) {
+            throw new SessionRefusal(sprintf('Save or undo pending edits before retiring %s. No files were changed.', $name));
+        }
+        try {
+            $plan = SkillReferences::planRetirement($this->workspace->projectRoot, $this->workspace->projectId, $name, $replacement, $isMagic);
+        } catch (RuntimeException $failure) {
+            throw new SessionRefusal($failure->getMessage(), previous: $failure);
+        }
+        if ($plan === null) {
+            return ['changed' => false, 'records' => $this->requireCategory('skills')->getRecordLabels()];
+        }
+        $paths = array_map(fn(string $path): string => substr($path, strlen($this->workspace->projectRoot) + 1), $plan->getChangedPaths());
+        $required = $replacement === null
+            ? new SourceSetRequired($plan, sprintf('Retire %s', $name), 'this skill retirement',
+                sprintf('Remove %s from everything that names it? Saves that knew it drop it.', $name), $paths)
+            : new SourceSetRequired($plan, sprintf('Retire %s into %s', $name, $replacement), 'this skill retirement',
+                sprintf('Move everything that names %s onto %s, and let saves read %s as %s?', $name, $replacement, $name, $replacement), $paths);
+
+        return $this->writeSourceSet($required, $answer, fn(): array => $this->requireCategory('skills')->getRecordLabels(), $confirm);
+    }
+    /**
+     * A Mastery Map as the graphical page draws it: the regions, and each node
+     * with its place on the map and what it builds on.
+     *
+     * @return array{regions: list<array{id: string, name: string}>, nodes: list<array<string, mixed>>, issue: ?string}
+     * @throws SessionRefusal When the map is unknown.
+     */
+    public function readMasteryPage(int $index): array
+    {
+        try {
+            return $this->masteryAuthoring->readPage($this->requireRecordDatabase(MasteryFields::MAPS),
+                $this->workspace->getRecordDatabase(MasteryFields::REGIONS), $index);
+        } catch (RecordRefusal $refusal) {
+            throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+        }
+    }
+
+    /**
+     * Places a node on its map, as fractions (0 to 1) of the map's width and height, as one undo step.
+     *
+     * @return array{changed: bool, records: list<string>}
+     */
+    public function placeMasteryNode(int $index, string $node, float $x, float $y): array
+    {
+        $maps = $this->requireRecordDatabase(MasteryFields::MAPS);
+        $change = $this->changeRecord(fn(): RecordChange => $this->masteryAuthoring->placeNode($maps, $index, $node, $x, $y));
+
+        return ['changed' => $change->command !== null, 'records' => $this->requireCategory(MasteryFields::MAPS)->getRecordLabels()];
+    }
+
+    /**
+     * Makes one node build on another, or stop doing so, as one undo step.
+     *
+     * @return array{changed: bool, records: list<string>}
+     */
+    public function toggleMasteryRequirement(int $index, string $node, string $requires): array
+    {
+        $maps = $this->requireRecordDatabase(MasteryFields::MAPS);
+        $change = $this->changeRecord(fn(): RecordChange => $this->masteryAuthoring->toggleRequirement($maps,
+            $this->workspace->getRecordDatabase(MasteryFields::REGIONS), $index, $node, $requires));
+
+        return ['changed' => $change->command !== null, 'records' => $this->requireCategory(MasteryFields::MAPS)->getRecordLabels()];
+    }
+
+    /**
+     * Moves a character's own skills from their actor file onto their Mastery
+     * Map, at once and as one undo step: known skills become nodes known from
+     * the start, learnables become nodes costing their EXP requirement, skills
+     * their role teaches stay with the role, and the actor's lists are emptied.
+     * Asks before writing, as every file set does.
+     *
+     * @return array<string, mixed> The question, or what was written.
+     * @throws SessionRefusal When the actor is unknown, no regions are declared, edits are pending, or a file cannot take it.
+     */
+    public function adoptMasterySkills(string $actorId, ?string $answer = null, ?string $confirm = null): array
+    {
+        if ($answer === null && $this->workspace->hasUnsavedChanges()) {
+            throw new SessionRefusal(sprintf('Save or undo pending edits before moving %s\'s skills. No files were changed.', $actorId));
+        }
+        try {
+            $adoption = MasteryAdoption::plan($this->workspace->projectRoot, $actorId);
+        } catch (RuntimeException $failure) {
+            throw new SessionRefusal($failure->getMessage(), previous: $failure);
+        }
+        if ($adoption === null) {
+            return ['changed' => false, 'nodes' => []];
+        }
+        $paths = array_map(fn(string $path): string => substr($path, strlen($this->workspace->projectRoot) + 1), $adoption['plan']->getChangedPaths());
+        $required = new SourceSetRequired($adoption['plan'], sprintf('Move %s\'s skills onto their Mastery Map', $actorId), 'this skill move',
+            sprintf('Move %s\'s own skills onto their Mastery Map (%s), and empty the actor\'s skill lists?', $actorId,
+                $adoption['nodes'] === [] ? 'no new nodes' : implode(', ', $adoption['nodes'])), $paths);
+        $result = $this->writeSourceSet($required, $answer, fn(): array => $this->requireCategory(MasteryFields::MAPS)->getRecordLabels(), $confirm);
+
+        return [...$result, 'nodes' => $adoption['nodes']];
     }
 
     /**

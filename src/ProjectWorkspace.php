@@ -17,6 +17,8 @@ use Ichiloto\Editor\Database\QuestReferences;
 use Ichiloto\Editor\Database\RecordSchema;
 use Ichiloto\Editor\Database\RecordSchemaCatalog;
 use Ichiloto\Editor\Database\ReferenceCatalog;
+use Ichiloto\Editor\Database\MasteryFields;
+use Ichiloto\Editor\Database\SkillReferences;
 use Ichiloto\Editor\Events\ProjectScriptCommands;
 use Ichiloto\Editor\Events\ScriptCommandUses;
 use Ichiloto\Editor\Maps\MapFolder;
@@ -80,6 +82,8 @@ final readonly class ProjectWorkspace
         $this->getRecordDatabase(\Ichiloto\Editor\Field\MapCategoryFields::CATEGORY)?->useDeletionReferences(
             fn(string $category): array => \Ichiloto\Editor\Field\MapLandmarks::describeCategoryReferences($this->maps, $category),
         );
+        // A skill stays while a class, actor, enemy, skill or state names it; skills.retire moves or removes those first.
+        $this->getRecordDatabase('skills')?->useDeletionReferences(fn(string $skill): array => $this->describeSkillUses($skill));
         $references = new ReferenceCatalog($this);
         foreach ($this->recordDatabases as $database) { $database->useAuthoringReferences($references); }
         // A reusable script chooses its map-local subjects on the map its callers run it on.
@@ -184,6 +188,30 @@ final readonly class ProjectWorkspace
     public function getRecordDatabase(string $categoryKey): ?ProjectRecordDatabase
     {
         return $this->recordDatabases[$categoryKey] ?? null;
+    }
+
+    /**
+     * Says what names a skill, unsaved edits included: classes, actors,
+     * enemies, other skills and states, in words.
+     *
+     * @return list<string>
+     */
+    public function describeSkillUses(string $skill): array
+    {
+        $records = [];
+        foreach (['classes' => 'Class', 'enemies' => 'Enemy', 'skills' => 'Skill', 'states' => 'State',
+            MasteryFields::MAPS => 'Mastery Map of'] as $category => $noun) {
+            foreach ($this->getRecordDatabase($category)?->getRecords() ?? [] as $record) {
+                $label = sprintf('%s %s', $noun, strval($record->get('name') ?? $record->get('actor') ?? $record->recordId));
+                if ($category === 'skills' && $record->get('name') === $skill) { continue; }
+                $records[$label] = $record->toArray();
+            }
+        }
+        foreach ($this->actorDatabase->getActors() as $actor) {
+            $records['Actor ' . $actor->getName()] = $actor->getData();
+        }
+
+        return SkillReferences::describe($records, $skill);
     }
 
     /**
