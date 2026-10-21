@@ -14,6 +14,7 @@ use Ichiloto\Engine\Animations\Timelines\CompiledEffectTimeline;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Engine\Animations\Timelines\EffectTimelineLibrary;
 use Ichiloto\Engine\Battle\Presentation\BattlePresentationCatalog;
+use Ichiloto\Engine\Battle\Presentation\BattleArenaBindings;
 use Ichiloto\Engine\Battle\Presentation\BattlerBindings;
 use Ichiloto\Engine\Cutscenes\Summons\SummonCutsceneDefinition;
 use Ichiloto\Engine\Cutscenes\Summons\SummonCutsceneLibrary;
@@ -234,9 +235,28 @@ final readonly class ProjectCatalogs
     }
 
     /**
+     * The battle arenas (`Data/Presentation/arenas.php`) as the Battle Arenas
+     * page holds them; null when the project declares none.
+     *
+     * @throws Throwable With the Engine's reason when they are refused.
+     */
+    public function loadArenaBindings(): ?BattleArenaBindings
+    {
+        $current = $this->readCurrent(BattleArenaBindings::FILE);
+        if ($current === null) {
+            return BattleArenaBindings::load($this->getAssetRoot());
+        }
+        if (! $current['exists']) {
+            return null;
+        }
+
+        return BattleArenaBindings::getFromArray(is_array($current['payload']) ? $current['payload'] : []);
+    }
+
+    /**
      * The battle presentation: the code-owned catalogue
      * (`Data/Presentation/battle.php`, which no page edits) with the current
-     * battler bindings bound to it. Null when the project has none.
+     * battler bindings and arenas bound to it. Null when the project has none.
      *
      * @throws Throwable With the Engine's reason when it is refused.
      */
@@ -247,8 +267,10 @@ final readonly class ProjectCatalogs
             return null;
         }
         $bindings = $this->loadBattlerBindings();
+        $catalog = $bindings === null ? $catalog : $catalog->bindBattlers($bindings);
+        $arenas = $this->loadArenaBindings();
 
-        return $bindings === null ? $catalog : $catalog->bindBattlers($bindings);
+        return $arenas === null ? $catalog : $catalog->bindArenas($arenas);
     }
 
     /** The player's presentation (`Data/Entities/player.php`) as the Player page holds it. */

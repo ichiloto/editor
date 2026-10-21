@@ -7,7 +7,6 @@ namespace Ichiloto\Editor\Validation;
 use Ichiloto\Editor\Database\EngineDataBootstrap;
 use Ichiloto\Editor\ProjectDirectoryContext;
 use Ichiloto\Editor\ProjectWorkspace;
-use Ichiloto\Engine\Battle\Presentation\BattlePresentationCatalog;
 use Ichiloto\Engine\Cutscenes\Summons\SummonCutsceneLibrary;
 use Ichiloto\Engine\Scenes\Arena\ProjectBattleTest;
 use Ichiloto\Engine\Util\Config\ConfigStore;
@@ -52,7 +51,7 @@ final class BattleTestValidator
         $arena = $test->setup?->arena ?? $test->arena;
         if ($arena !== null) {
             try {
-                $arenas = BattlePresentationCatalog::loadCode($workspace->projectRoot . '/assets')?->getArenaChoices() ?? [];
+                $arenas = $workspace->catalogs->loadBattlePresentation()?->getArenaChoices() ?? [];
             } catch (Throwable) {
                 $arenas = null;
             }
