@@ -4203,6 +4203,9 @@ final class EditorSession
             ],
             'flipX' => $image->flipX ?: null,
             'flipY' => $image->flipY ?: null,
+            // Only this part shows, as a sunk body shows only above its surface line.
+            'clip' => $image->clipRect === null ? null : ['x' => $image->clipRect->x, 'y' => $image->clipRect->y,
+                'width' => $image->clipRect->width, 'height' => $image->clipRect->height],
         ], static fn(mixed $value): bool => $value !== null);
     }
 
