@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Ichiloto\Editor;
 
 use Ichiloto\Editor\Database\ProjectCatalogs;
+use Ichiloto\Editor\Events\EventTypeCatalog;
 use Ichiloto\Editor\Cutscenes\Source\ArraySourceWriter;
 use Ichiloto\Editor\Cutscenes\Source\PhpArraySourceDocument;
 use Ichiloto\Editor\Cutscenes\Source\SourcePreservationRefusal;
@@ -1771,6 +1772,7 @@ final class ProjectMap
     private function writeData(array $next): void
     {
         $this->assertSourcesUnchanged();
+        $next = $this->dropAbsentOptionalEventData($next);
         if ($next === $this->editableData) {
             // Setting data to what it already is neither dirties nor
             // deserves a history entry at the call site.
@@ -1780,6 +1782,36 @@ final class ProjectMap
         $document = $this->assertDataPreservable($next);
         $this->editableData = $document->alignValue($next);
         $this->touchState();
+    }
+
+    /**
+     * An event this write adds or changes keeps none of its type's optional
+     * data that reads as absent (a Story Script's empty script id): the
+     * Engine reads it as unset, and the game's checks would read it as a
+     * script that does not exist. Events the write leaves alone keep their
+     * source as authored.
+     *
+     * @param array<string, mixed> $next
+     * @return array<string, mixed>
+     */
+    private function dropAbsentOptionalEventData(array $next): array
+    {
+        foreach ((array) ($next['events'] ?? []) as $marker => $event) {
+            if (! is_array($event) || ! is_array($event['data'] ?? null)
+                || $event === ($this->editableData['events'][$marker] ?? null)) {
+                continue;
+            }
+            $className = is_string($event['class'] ?? null) ? ltrim($event['class'], '\\') : null;
+            foreach (EventTypeCatalog::findByClass($className)?->optionalData ?? [] as $key => $absent) {
+                $value = $event['data'][$key] ?? null;
+                if (array_key_exists($key, $event['data']) && ($value === $absent
+                    || (is_string($value) && is_string($absent) && trim($value) === trim($absent)))) {
+                    unset($next['events'][$marker]['data'][$key]);
+                }
+            }
+        }
+
+        return $next;
     }
 
     /**
