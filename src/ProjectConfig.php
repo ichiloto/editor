@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor;
 
+use Ichiloto\Engine\Localization\Vocabulary;
+
 use Ichiloto\Editor\Database\InnPresentationFields;
 use Ichiloto\Engine\Audio\Enumerations\SystemSound;
 use Ichiloto\Engine\Localization\EngineMessageTerms;
@@ -65,6 +67,11 @@ final class ProjectConfig extends ProjectSettingsFile
         // Every sound the Engine plays for itself is offered, so a game can choose one it has not set yet.
         foreach (SystemSound::cases() as $sound) {
             $settings['audio.sounds.' . $sound->value] = ['default' => null];
+        }
+        // The Engine's own wording for terms many screens share, such as the level in rows ("Lv"), is offered
+        // even where the project leaves it out, so a game rewords it once.
+        foreach (Vocabulary::DEFAULTS as $path => $default) {
+            $settings['vocab.' . $path] = ['default' => $default];
         }
         foreach (EngineMessageTerms::listTerms() as $path => $term) {
             // A message that inherits the project's own vocabulary wording reads as that wording here, as the game

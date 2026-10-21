@@ -235,3 +235,18 @@ it('chooses system sounds and music from the project\'s audio folders, offering 
     expect($saved['audio']['sounds'])->toBe(['cursor' => 'cursor-tick', 'battle_start' => 'sweep-hit'])
         ->and((string) file_get_contents($root . '/config.php'))->toContain('// Keep header.', "strtoupper('keep')");
 });
+
+it('offers the Engine\'s shared terms, such as the level in rows, so a game rewords each once', function () {
+    $root = createZoomProject();
+    $workspace = ProjectWorkspace::fromProject($root);
+    $database = $workspace->getRecordDatabase('terms');
+    $labels = $database->getEntryLabels();
+    $index = array_search('vocab.stats.level_short', $labels, true);
+
+    expect($index)->not->toBeFalse()->and($labels)->toContain('vocab.stats.level')
+        ->and($database->getRecordByIndex($index)->get('default'))->toBe('Lv');
+
+    $database->setField($index, 'value', 'Lvl');
+    $workspace->config->save();
+    expect((require $root . '/config.php')['vocab']['stats'])->toBe(['level_short' => 'Lvl']);
+});
