@@ -153,7 +153,6 @@ use Ichiloto\Editor\Cutscenes\Preview\PreviewField;
 use Ichiloto\Engine\Battle\Presentation\BattleCommandTimeline;
 use Ichiloto\Engine\Cutscenes\Summons\SummonCompiledCutscene;
 use Ichiloto\Engine\Cutscenes\Summons\SummonCutsceneDefinition;
-use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasComposite;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasImage;
 use Closure;
 use InvalidArgumentException;
@@ -4142,19 +4141,21 @@ final class EditorSession
             'bodySpan' => $battler->bodySpan,
             'horizontal' => $battler->horizontal,
             'diagnostics' => array_values(array_map(strval(...), $diagnostics)),
-            // Its contact shadow on the ground at its feet, as an ellipse a canvas can draw, and how high its body hovers.
-            'shadow' => $battler->shadow === null ? null : self::describeShadow($battler->shadow),
-            'lift' => $battler->lift,
+            // What is drawn where it meets the surface, as the area a canvas draws it in, and how far its body rises or sinks.
+            'contact' => self::describeContact($battler),
+            'offset' => $battler->offset,
         ];
     }
 
-    /** @return array{x: float, y: float, width: float, height: float, opacity: float, color: array<string, int|string>} */
-    private static function describeShadow(CanvasComposite $shadow): array
+    /** @return array{kind: string, x: float, y: float, width: float, height: float, opacity: float}|null */
+    private static function describeContact(BattleFormationBattler $battler): ?array
     {
-        $destination = $shadow->destination;
+        $drawn = $battler->contactComposites[0] ?? $battler->contactImages[0] ?? null;
+        if ($drawn === null) { return null; }
+        $destination = $drawn->destination;
 
-        return ['x' => $destination->x, 'y' => $destination->y, 'width' => $destination->width, 'height' => $destination->height,
-            'opacity' => $shadow->opacity, 'color' => $shadow->operations[0]->data['brush']['stops'][0]['color']];
+        return ['kind' => $battler->contact->value, 'x' => $destination->x, 'y' => $destination->y,
+            'width' => $destination->width, 'height' => $destination->height, 'opacity' => $drawn->opacity];
     }
 
     /** @return array<string, mixed> An image's asset, where it is drawn and the part of the asset it shows. */

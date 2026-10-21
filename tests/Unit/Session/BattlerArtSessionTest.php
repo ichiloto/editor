@@ -171,27 +171,32 @@ it('names unsaved battle art among the unsaved changes, as the status bar counts
     expect($session->listUnsavedChanges())->toBe([]);
 });
 
-it('sets how a battler meets the ground: its body rises by its hover, and its shadow is declared', function () {
+it('sets how a battler meets the surface: its body rises or sinks by its elevation, and its contact is declared', function () {
     $root = battlerArtProject();
     $session = EditorSession::open($root);
     $index = $session->createDatabaseRecord('battler_enemies', 'Regular Bat')['index'];
     setBattlerRow($session, $index, 'artwork.image', 'Graphics/Enemies/Bat.png');
     $grounded = $session->readEnemyPreview(0)['formation']['members'][0]['battler'];
-    setBattlerRow($session, $index, 'grounding.hover', '0.4');
-    setBattlerRow($session, $index, 'grounding.shadow', 'none');
-    $hovering = $session->readEnemyPreview(0)['formation']['members'][0]['battler'];
+    setBattlerRow($session, $index, 'grounding.elevation', '0.4');
+    $risen = $session->readEnemyPreview(0)['formation']['members'][0]['battler'];
+    setBattlerRow($session, $index, 'grounding.elevation', '-0.2');
+    setBattlerRow($session, $index, 'grounding.contact', 'burrow');
+    $sunk = $session->readEnemyPreview(0)['formation']['members'][0]['battler'];
 
-    // The body rises; the feet stay where the battle stands it.
-    expect($hovering['ground'])->toBe($grounded['ground'])
-        ->and($hovering['lift'])->toBeGreaterThan(0.0)
-        ->and($grounded['bounds']['y'] - $hovering['bounds']['y'])->toEqualWithDelta($hovering['lift'], .000001);
+    // The body rises or sinks; the feet stay where the battle stands it, and the burrow rings it there.
+    expect([$risen['ground'], $sunk['ground']])->toBe([$grounded['ground'], $grounded['ground']])
+        ->and($risen['offset'])->toBeGreaterThan(0.0)->and($sunk['offset'])->toBeLessThan(0.0)
+        ->and($grounded['bounds']['y'] - $risen['bounds']['y'])->toEqualWithDelta($risen['offset'], .000001)
+        ->and($sunk['contact']['kind'])->toBe('burrow')
+        ->and($sunk['contact']['y'] + $sunk['contact']['height'] / 2)->toEqualWithDelta($sunk['ground']['y'], .5);
 
     $session->saveDatabase('battler_enemies');
-    expect((require $root . '/assets/' . BattlerBindings::FILE)['enemies']['Regular Bat']['grounding'])->toBe(['hover' => 0.4, 'shadow' => 'none'])
-;
-    setBattlerRow($session, $index, 'grounding.shadow', 'painted');
-    expect(fn() => $session->saveDatabase('battler_enemies'))->toThrow(SessionRefusal::class, 'grounding.shadow');
-    // Art painting its own shadow cannot hover: the shadow would rise with the body.
-    setBattlerRow($session, $index, 'grounding.shadow', 'artwork');
-    expect(fn() => $session->saveDatabase('battler_enemies'))->toThrow(SessionRefusal::class, 'cannot hover');
+    expect((require $root . '/assets/' . BattlerBindings::FILE)['enemies']['Regular Bat']['grounding'])
+        ->toBe(['elevation' => -0.2, 'contact' => 'burrow']);
+    setBattlerRow($session, $index, 'grounding.contact', 'splash');
+    expect(fn() => $session->saveDatabase('battler_enemies'))->toThrow(SessionRefusal::class, 'grounding.contact');
+    // Art painting its own shadow stands at the height it was painted, with that shadow.
+    setBattlerRow($session, $index, 'grounding.contact', 'shadow');
+    setBattlerRow($session, $index, 'grounding.bakedShadow', 'true');
+    expect(fn() => $session->saveDatabase('battler_enemies'))->toThrow(SessionRefusal::class, 'stands at the height it was painted');
 });

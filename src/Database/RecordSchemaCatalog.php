@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Database;
 
 use Ichiloto\Editor\Dialogue\DialogueLineSpeaker;
-use Ichiloto\Engine\Battle\Presentation\BattlerShadowSource;
+use Ichiloto\Engine\Battle\Presentation\BattlerContact;
 use Ichiloto\Engine\Entities\Enemies\EnemyHabitat;
 use Ichiloto\Editor\Dialogue\DialoguePortraitFields;
 use Ichiloto\Editor\Dialogue\DialogueSpeakerFields;
@@ -1948,15 +1948,17 @@ final class RecordSchemaCatalog
                 new RecordField('scale.relativeSize', 'Size', InputControlType::FLOAT, removeWhenEmpty: true),
                 new RecordField('scale.sourceSpan', 'Body Span', InputControlType::FLOAT, removeWhenEmpty: true),
                 new RecordField('scale.horizontal', 'Measured Across', InputControlType::BOOLEAN, removeWhenEmpty: true, displayDefault: 'false'),
-                // How it meets the ground: how high its body hovers over its feet, in reference heights, and who
-                // draws its contact shadow (the Engine, its artwork, or nobody) with its width and strength.
-                new RecordField('grounding.hover', 'Hover Height', InputControlType::FLOAT, removeWhenEmpty: true,
-                    displayDefault: $actors ? '0 (on the ground)' : '(the theme\'s flier height for air enemies, else 0)'),
-                new RecordField('grounding.shadow', 'Shadow', options: array_column(BattlerShadowSource::cases(), 'value'),
-                    removeWhenEmpty: true, displayDefault: BattlerShadowSource::ENGINE->value),
-                new RecordField('grounding.shadowWidth', 'Shadow Width', InputControlType::FLOAT, removeWhenEmpty: true,
+                // How it meets the surface: its elevation in reference heights (positive rises, negative sinks below the
+                // surface line), what is drawn where it meets it, and whether its art already paints its own shadow.
+                new RecordField('grounding.elevation', 'Elevation', InputControlType::FLOAT, removeWhenEmpty: true,
+                    displayDefault: $actors ? '0 (standing)' : '(the theme\'s for air enemies, else 0)'),
+                new RecordField('grounding.contact', 'Surface Contact', options: array_column(BattlerContact::cases(), 'value'),
+                    removeWhenEmpty: true, displayDefault: '(from habitat and elevation)'),
+                new RecordField('grounding.bakedShadow', 'Art Paints Its Shadow', InputControlType::BOOLEAN, removeWhenEmpty: true,
+                    displayDefault: 'false'),
+                new RecordField('grounding.contactWidth', 'Contact Width', InputControlType::FLOAT, removeWhenEmpty: true,
                     displayDefault: '1 (the theme\'s)'),
-                new RecordField('grounding.shadowOpacity', 'Shadow Strength', InputControlType::FLOAT, removeWhenEmpty: true,
+                new RecordField('grounding.contactOpacity', 'Contact Strength', InputControlType::FLOAT, removeWhenEmpty: true,
                     displayDefault: '1 (the theme\'s)'),
             ],
             labelKey: BattlerBindingProjection::IDENTITY,
