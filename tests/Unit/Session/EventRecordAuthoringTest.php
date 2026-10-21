@@ -184,6 +184,36 @@ it('creates and edits a Story Script\'s inline commands with the shared command 
             ->toContain('no longer on the event');
 });
 
+it('drops an existing Story Script\'s empty script id when the event is edited, leaving untouched events as authored', function () {
+    $root = eventRecordProject();
+    $path = eventRecordDataPath($root);
+    file_put_contents($path, str_replace("'scriptId' => 'harbour-watch',", "'scriptId' => '',", file_get_contents($path)));
+    $session = EditorSession::open($root);
+    $row = static function (string $label) use ($session): array {
+        $read = $session->readInspector('test-map', 'S');
+        return ['revision' => $read['revision'], 'key' => array_find($read['rows'], static fn(array $row): bool
+            => ($row['key']['target'] ?? null) === 'event' && ($row['label'] ?? null) === $label)['key']
+            ?? throw new RuntimeException('Missing row ' . $label)];
+    };
+
+    // Saving another event leaves this one's source alone.
+    $dialogue = $session->readInspector('test-map', 'D');
+    $session->applyInspector('test-map', $dialogue['revision'], array_find($dialogue['rows'], static fn(array $row): bool
+        => ($row['key']['target'] ?? null) === 'event' && ($row['key']['marker'] ?? null) === 'D'
+        && ($row['key']['path'] ?? null) !== null && ($row['kind'] ?? null) === 'text')['key'], 'Hello.');
+    $session->saveMap('test-map');
+    expect((require $path)['events']['S']['data'])->toHaveKey('scriptId');
+
+    ['revision' => $revision, 'key' => $key] = $row('Mode');
+    $session->applyInspector('test-map', $revision, $key, 'action');
+    $session->saveMap('test-map');
+    $saved = (require $path)['events']['S'];
+    expect($saved['data'])->not->toHaveKey('scriptId')
+        ->and($saved['data']['mode'])->toBe('action')
+        ->and($saved['data']['script'])->toHaveCount(2)
+        ->and(file_get_contents($path))->toContain('// Timed by the author.');
+});
+
 it('edits an authored inline script in place, keeping its comments and expressions, and refuses what the source cannot take', function () {
     $root = eventRecordProject();
     $session = EditorSession::open($root);
