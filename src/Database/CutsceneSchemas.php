@@ -8,6 +8,7 @@ use Ichiloto\Editor\Cutscenes\CutsceneAsset;
 use Ichiloto\Editor\Inspector\InputControlType;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Engine\Animations\Timelines\EffectCadence;
+use Ichiloto\Engine\Animations\Timelines\EffectFacingTarget;
 use Ichiloto\Engine\Animations\Timelines\EffectImageAttachment;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasImageFit;
 use Ichiloto\Engine\Animations\Timelines\EffectTimelineLibrary;
@@ -665,6 +666,11 @@ final class CutsceneSchemas
         $anchors = [
             new RecordField('anchor', 'Anchor', options: ['target', 'caster', 'screen'], removeWhenEmpty: true, displayDefault: 'target'),
             new RecordField('facing', 'Facing', options: ['', 'west', 'east'], removeWhenEmpty: true, displayDefault: '(undirected)'),
+            // Battle only, with a facing: a stroke turns toward its recipient; a ward raised in
+            // front of a battler turns toward that battler's opponents, wherever its caster stands.
+            new RecordField('toward', 'Faces Toward',
+                options: ['', ...array_map(static fn(EffectFacingTarget $target): string => $target->value, EffectFacingTarget::cases())],
+                removeWhenEmpty: true, displayDefault: EffectFacingTarget::RECIPIENT->value),
         ];
 
         return new RecordSubList(
@@ -683,7 +689,7 @@ final class CutsceneSchemas
                 'image' => static fn(array $entry): array => $graphical && self::isOnStage($entry)
                     ? self::stageImageTrackFields()
                     : [new RecordField('anchor', 'Anchor', options: $graphical ? self::SUMMON_IMAGE_ANCHORS : ['target', 'caster', 'screen'],
-                        removeWhenEmpty: true, displayDefault: 'target'), $anchors[1], ...self::imageTrackFields(sharedWithField: true)],
+                        removeWhenEmpty: true, displayDefault: 'target'), $anchors[1], $anchors[2], ...self::imageTrackFields(sharedWithField: true)],
                 'glyph' => $anchors,
                 'text' => $anchors,
                 'flash' => $anchors,
