@@ -4453,7 +4453,7 @@ final class EditorSession
             throw new SessionRefusal($failure->getMessage(), previous: $failure);
         }
         if ($plan === null) {
-            return ['changed' => false, 'records' => $database->getRecordLabels()];
+            return ['changed' => false, 'records' => $this->requireCategory('skills')->getRecordLabels()];
         }
         $paths = array_map(fn(string $path): string => substr($path, strlen($this->workspace->projectRoot) + 1), $plan->getChangedPaths());
         $required = $replacement === null

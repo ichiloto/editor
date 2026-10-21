@@ -97,3 +97,13 @@ it('removes a skill retired without a replacement from everything that names it,
         ->and((require $root . '/assets/Data/save-compatibility.php')['aliases'])->toBe([])
         ->and(EditorSession::open($root)->deleteDatabaseRecord('skills', 0)['records'])->toBe(['New Cut', 'Guard Up', 'Spark']);
 });
+
+it('has nothing to write when nothing names a skill and saves already follow it', function () {
+    $root = skillRetirementProject();
+    $session = EditorSession::open($root);
+    $question = $session->retireSkill(0, 'New Cut');
+    $session->retireSkill(0, 'New Cut', 'write', $question['confirm']);
+
+    expect(EditorSession::open($root)->retireSkill(0, 'New Cut'))->toBe(['changed' => false, 'records' => ['Old Cut', 'New Cut', 'Guard Up', 'Spark']])
+        ->and(EditorSession::open($root)->retireSkill(3))->toBe(['changed' => false, 'records' => ['Old Cut', 'New Cut', 'Guard Up', 'Spark']]);
+});
