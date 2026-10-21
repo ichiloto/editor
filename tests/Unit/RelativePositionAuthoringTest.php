@@ -158,6 +158,41 @@ it('authors a staged actor end facing and offers none on a bound visual', functi
         ->and($keys(['id' => 'a', 'subject' => ['kind' => 'player']], true))->not->toContain('facing', 'faceToward.kind');
 });
 
+it('shows a replacement keeping its current facing and writes a facing only when the author picks one', function () {
+    $root = cutsceneProject();
+    $path = writeRelativeScript($root, [['type' => 'stage_actor', 'id' => 'guide', 'sprite' => ['G'], 'x' => 6, 'y' => 3, 'facing' => 'east'],
+        ['type' => 'stage_actor', 'id' => 'guide', 'sprite' => ['G'], 'replace' => true]]);
+    $original = file_get_contents($path);
+    $session = EditorSession::open($root);
+    $frame = ['commands'];
+
+    expect(relativeRow($session, $frame, [1], 'Facing')['value'])->toBe('(keep current facing)')
+        ->and(relativeRow($session, $frame, [0], 'Facing')['value'])->toBe('east');
+    // Editing another row of the replacement leaves its facing undeclared.
+    $session->applyDatabaseRecord('cutscenes/cinematic', 0, relativeRow($session, $frame, [1], 'Sprite')['key'], 'H');
+    $session->saveDatabase('cutscenes/cinematic');
+    expect((require $path)[1])->toBe(['type' => 'stage_actor', 'id' => 'guide', 'sprite' => ['H'], 'replace' => true])
+        ->and(file_get_contents($path))->not->toBe($original);
+    $session->applyDatabaseRecord('cutscenes/cinematic', 0, relativeRow($session, $frame, [1], 'Facing')['key'], 'west');
+    $session->saveDatabase('cutscenes/cinematic');
+    expect((require $path)[1]['facing'])->toBe('west');
+    $session->applyDatabaseRecord('cutscenes/cinematic', 0, relativeRow($session, $frame, [1], 'Facing')['key'], '');
+    $session->saveDatabase('cutscenes/cinematic');
+    expect((require $path)[1])->not->toHaveKey('facing')
+        ->and(relativeRow($session, $frame, [1], 'Facing')['value'])->toBe('(keep current facing)');
+    // The Terminal editor reads the same rows.
+    $library = ProjectWorkspace::fromProject($root)->cutscenes ?? throw new RuntimeException('The Terminal workspace has no cutscenes.');
+    $terminal = array_find($library->records(CutsceneType::CINEMATIC)->getFrameSettingsFields(0, $frame),
+        static fn(array $row): bool => ($row['entry'] ?? []) === [1] && ($row['name'] ?? '') === 'Facing');
+    expect($terminal['value'] ?? null)->toBe('(keep current facing)');
+
+    // A new visual still starts facing south, as the Engine stages it.
+    $labels = static fn(array $entry): array => array_column(array_map(static fn($field): array => get_object_vars($field),
+        CutsceneSchemas::stagedActorFields(false, $entry)), 'displayDefault', 'key');
+    expect($labels(['id' => 'a', 'x' => 1, 'y' => 1])['facing'])->toBe('south')
+        ->and($labels(['id' => 'a', 'replace' => true])['facing'])->toBe('(keep current facing)');
+});
+
 it('offers only the subject kinds each owner can resolve, from the Engine contract', function () {
     $exported = CinematicCommandSchema::export()['relativePosition'];
     expect($exported['fields'])->toBe(['at', 'offset'])
