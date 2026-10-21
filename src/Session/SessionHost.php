@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Session;
 
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
+use Ichiloto\Engine\Entities\Enemies\EnemyHabitat;
 use Ichiloto\Editor\Console\ConsoleBinary;
 use Ichiloto\Editor\Console\ProjectCreator;
 use Ichiloto\Editor\Playtest\PlaytestStart;
@@ -481,6 +482,12 @@ final class SessionHost
             'troops.autoName' => $session->nameTroopAfterMembers(self::requireInt($params, 'index')),
             'arenas.preview' => $session->readArenaPreview(self::requireInt($params, 'index'),
                 is_int($params['troop'] ?? null) ? $params['troop'] : null),
+            'arenas.setFooting' => $session->setArenaFooting(self::requireInt($params, 'index'),
+                match ($params['habitat'] ?? null) {
+                    'land' => EnemyHabitat::LAND,
+                    'water' => EnemyHabitat::WATER,
+                    default => throw new InvalidRequest('"habitat" must be "land" or "water".'),
+                }, self::requireArray($params, 'points')),
             'troops.align' => $session->alignTroop(self::requireInt($params, 'index')),
             'troops.arrangeAutomatically' => $session->arrangeTroopAutomatically(self::requireInt($params, 'index')),
             'troops.placeMember' => $session->placeTroopMember(self::requireInt($params, 'index'), self::requireInt($params, 'member'),

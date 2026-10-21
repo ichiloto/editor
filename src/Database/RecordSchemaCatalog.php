@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Database;
 
 use Ichiloto\Editor\Dialogue\DialogueLineSpeaker;
+use Ichiloto\Engine\Entities\Enemies\EnemyHabitat;
 use Ichiloto\Editor\Dialogue\DialoguePortraitFields;
 use Ichiloto\Editor\Dialogue\DialogueSpeakerFields;
 use Ichiloto\Editor\Field\PlayerPresentationFields;
@@ -1405,6 +1406,9 @@ final class RecordSchemaCatalog
                 new RecordField('elementAffinities', 'Element Affinities', removeWhenEmpty: true, codec: RecordFieldCodec::AFFINITIES),
                 new RecordField('stateResistances', 'State Resistances', removeWhenEmpty: true, codec: RecordFieldCodec::KEY_VALUES),
                 RecordField::reference('knowledgeSubjectId', 'Knowledge Subject', 'knowledge_subjects', allowsNone: true),
+                // Where it lives, so a graphical battle stands it on its arena's land or water, or in the air over either.
+                new RecordField('habitat', 'Habitat', options: array_column(EnemyHabitat::cases(), 'value'), removeWhenEmpty: true,
+                    displayDefault: EnemyHabitat::LAND->value),
                 self::counterAttackField(),
                 // What the enemy attacks with when none of its patterns
                 // applies: a battle-usable basic skill, or the Engine's own
