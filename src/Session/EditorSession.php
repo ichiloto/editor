@@ -35,6 +35,7 @@ use Ichiloto\Editor\Database\ConditionEditor;
 use Ichiloto\Editor\Animations\LegacyAnimationConversion;
 use Ichiloto\Editor\Database\DatabaseCatalog;
 use Ichiloto\Editor\Database\MasteryAdoption;
+use Ichiloto\Editor\Database\MasteryAuthoring;
 use Ichiloto\Editor\Database\MasteryFields;
 use Ichiloto\Editor\Database\SkillReferences;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
@@ -228,6 +229,7 @@ final class EditorSession
 
     /** How a troop's members are composed, as the terminal editor composes them. */
     private readonly TroopAuthoring $troopAuthoring;
+    private readonly MasteryAuthoring $masteryAuthoring;
 
     /**
      * Where each map's revisions count from. A map read afresh, when a file
@@ -256,6 +258,7 @@ final class EditorSession
         $this->workspace = $workspace;
         $this->actorAuthoring = new ActorAuthoring(graphical: true);
         $this->troopAuthoring = new TroopAuthoring();
+        $this->masteryAuthoring = new MasteryAuthoring();
     }
 
     /** Opens the project at a root, as the terminal editor opens it. */
@@ -4466,6 +4469,50 @@ final class EditorSession
 
         return $this->writeSourceSet($required, $answer, fn(): array => $this->requireCategory('skills')->getRecordLabels(), $confirm);
     }
+    /**
+     * A Mastery Map as the graphical page draws it: the regions, and each node
+     * with its place on the map and what it builds on.
+     *
+     * @return array{regions: list<array{id: string, name: string}>, nodes: list<array<string, mixed>>, issue: ?string}
+     * @throws SessionRefusal When the map is unknown.
+     */
+    public function readMasteryPage(int $index): array
+    {
+        try {
+            return $this->masteryAuthoring->readPage($this->requireRecordDatabase(MasteryFields::MAPS),
+                $this->workspace->getRecordDatabase(MasteryFields::REGIONS), $index);
+        } catch (RecordRefusal $refusal) {
+            throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+        }
+    }
+
+    /**
+     * Places a node on its map, as fractions (0 to 1) of the map's width and height, as one undo step.
+     *
+     * @return array{changed: bool, records: list<string>}
+     */
+    public function placeMasteryNode(int $index, string $node, float $x, float $y): array
+    {
+        $maps = $this->requireRecordDatabase(MasteryFields::MAPS);
+        $change = $this->changeRecord(fn(): RecordChange => $this->masteryAuthoring->placeNode($maps, $index, $node, $x, $y));
+
+        return ['changed' => $change->command !== null, 'records' => $this->requireCategory(MasteryFields::MAPS)->getRecordLabels()];
+    }
+
+    /**
+     * Makes one node build on another, or stop doing so, as one undo step.
+     *
+     * @return array{changed: bool, records: list<string>}
+     */
+    public function toggleMasteryRequirement(int $index, string $node, string $requires): array
+    {
+        $maps = $this->requireRecordDatabase(MasteryFields::MAPS);
+        $change = $this->changeRecord(fn(): RecordChange => $this->masteryAuthoring->toggleRequirement($maps,
+            $this->workspace->getRecordDatabase(MasteryFields::REGIONS), $index, $node, $requires));
+
+        return ['changed' => $change->command !== null, 'records' => $this->requireCategory(MasteryFields::MAPS)->getRecordLabels()];
+    }
+
     /**
      * Moves a character's own skills from their actor file onto their Mastery
      * Map, at once and as one undo step: known skills become nodes known from

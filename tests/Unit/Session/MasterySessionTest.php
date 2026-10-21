@@ -122,3 +122,27 @@ it('moves a character\'s own skills onto their map, leaves role skills to the ro
     expect(file_get_contents($actor))->toBe($before)
         ->and(glob($root . '/assets/Data/Mastery/*.php') ?: [])->toBe([]);
 });
+
+it('gives the map page every node\'s place, moves a node and links two nodes, each one undo step', function () {
+    $root = masteryProject();
+    mkdir($root . '/assets/Data/Mastery');
+    file_put_contents($root . '/assets/Data/Mastery/kaelion.php', "<?php\n\nreturn [\n  'actor' => 'Kaelion',\n  'nodes' => [\n    ['id' => 'cut', 'skill' => 'Cut', 'region' => 'blades', 'cost' => 0, 'opensAtLevel' => 1, 'order' => 1],\n    ['id' => 'spark', 'skill' => 'Spark', 'region' => 'storms', 'cost' => 50, 'opensAtLevel' => 2, 'order' => 2],\n  ],\n];\n");
+    $session = EditorSession::open($root);
+    $page = $session->readMasteryPage(0);
+
+    expect(array_column($page['regions'], 'id'))->toBe(['blades', 'storms'])
+        ->and(array_map(static fn(array $node): array => [$node['id'], $node['x'], $node['placed']], $page['nodes']))
+            ->toBe([['cut', 0.25, false], ['spark', 0.75, false]]);
+
+    $session->placeMasteryNode(0, 'spark', 0.6, 0.4);
+    $session->toggleMasteryRequirement(0, 'spark', 'cut');
+    $moved = array_column($session->readMasteryPage(0)['nodes'], null, 'id')['spark'];
+
+    expect([$moved['x'], $moved['y'], $moved['placed'], $moved['requires']])->toBe([0.6, 0.4, true, ['cut']])
+        ->and(fn() => $session->toggleMasteryRequirement(0, 'cut', 'spark'))->toThrow(SessionRefusal::class, 'loop')
+        ->and(fn() => $session->placeMasteryNode(0, 'cut', 1.5, 0.2))->toThrow(SessionRefusal::class, 'between 0 and 1');
+
+    $session->undo();
+    $session->undo();
+    expect(array_column($session->readMasteryPage(0)['nodes'], null, 'id')['spark']['placed'])->toBeFalse();
+});
