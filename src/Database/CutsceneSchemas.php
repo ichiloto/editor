@@ -133,8 +133,11 @@ final class CutsceneSchemas
             new RecordField('lore', 'Lore', removeWhenEmpty: true),
             RecordField::reference('element', 'Element', 'elements', allowsNone: true, noneLabel: '(none)'),
             // Elemental affinities share the enemy contract: element to multiplier, read as Assess-style tiers.
-            new RecordField('elementAffinities', 'Element Affinities', removeWhenEmpty: true, codec: RecordFieldCodec::AFFINITIES),
-            new RecordField('effectiveAgainst', 'Effective Against', codec: RecordFieldCodec::CSV_LIST, reference: 'elements', removeWhenEmpty: true),
+            // Omitted means not recorded, which the Summons menu shows as such rather than as "none".
+            new RecordField('elementAffinities', 'Element Affinities', removeWhenEmpty: true, codec: RecordFieldCodec::AFFINITIES,
+                displayDefault: '(not recorded)'),
+            new RecordField('effectiveAgainst', 'Effective Against', codec: RecordFieldCodec::CSV_LIST, reference: 'elements',
+                removeWhenEmpty: true, displayDefault: '(not recorded)'),
             // Free-text matchups from before the affinity contract; the Summons menu still shows them.
             new RecordField('strengths', 'Legacy Strengths', codec: RecordFieldCodec::CSV_LIST, removeWhenEmpty: true),
             new RecordField('weaknesses', 'Legacy Weaknesses', codec: RecordFieldCodec::CSV_LIST, removeWhenEmpty: true),
