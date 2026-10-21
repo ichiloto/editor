@@ -482,3 +482,14 @@ it('authors an item cure through the states it removes and keeps value effects a
 
     expect($antidote['effects'])->toBe([['type' => 'remove_state', 'name' => 'Cure Poison', 'description' => 'Recovers HP', 'stateIds' => ['poison']]]);
 });
+
+it('writes a new state the way the file writes its others, one field to a line', function (): void {
+    $root = makeTemporaryProject();
+    $database = loadRecordDatabase($root, 'states');
+    (new \Ichiloto\Editor\Database\RecordAuthoring())->createRecord($database);
+    $database->save();
+    $lines = file($root . '/assets/Data/states.php', FILE_IGNORE_NEW_LINES) ?: [];
+
+    expect(array_filter($lines, static fn(string $line): bool => str_contains($line, "'id' =>") && str_contains($line, "'name' =>")))->toBe([])
+        ->and(array_column(require $root . '/assets/Data/states.php', 'id'))->toContain('new-state');
+});
