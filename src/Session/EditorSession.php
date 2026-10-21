@@ -34,6 +34,8 @@ use Ichiloto\Editor\Database\ConditionCodec;
 use Ichiloto\Editor\Database\ConditionEditor;
 use Ichiloto\Editor\Animations\LegacyAnimationConversion;
 use Ichiloto\Editor\Database\DatabaseCatalog;
+use Ichiloto\Editor\Database\MasteryAdoption;
+use Ichiloto\Editor\Database\MasteryFields;
 use Ichiloto\Editor\Database\SkillReferences;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Engine\Animations\Timelines\EffectCadence;
@@ -4464,6 +4466,38 @@ final class EditorSession
 
         return $this->writeSourceSet($required, $answer, fn(): array => $this->requireCategory('skills')->getRecordLabels(), $confirm);
     }
+    /**
+     * Moves a character's own skills from their actor file onto their Mastery
+     * Map, at once and as one undo step: known skills become nodes known from
+     * the start, learnables become nodes costing their EXP requirement, skills
+     * their role teaches stay with the role, and the actor's lists are emptied.
+     * Asks before writing, as every file set does.
+     *
+     * @return array<string, mixed> The question, or what was written.
+     * @throws SessionRefusal When the actor is unknown, no regions are declared, edits are pending, or a file cannot take it.
+     */
+    public function adoptMasterySkills(string $actorId, ?string $answer = null, ?string $confirm = null): array
+    {
+        if ($answer === null && $this->workspace->hasUnsavedChanges()) {
+            throw new SessionRefusal(sprintf('Save or undo pending edits before moving %s\'s skills. No files were changed.', $actorId));
+        }
+        try {
+            $adoption = MasteryAdoption::plan($this->workspace->projectRoot, $actorId);
+        } catch (RuntimeException $failure) {
+            throw new SessionRefusal($failure->getMessage(), previous: $failure);
+        }
+        if ($adoption === null) {
+            return ['changed' => false, 'nodes' => []];
+        }
+        $paths = array_map(fn(string $path): string => substr($path, strlen($this->workspace->projectRoot) + 1), $adoption['plan']->getChangedPaths());
+        $required = new SourceSetRequired($adoption['plan'], sprintf('Move %s\'s skills onto their Mastery Map', $actorId), 'this skill move',
+            sprintf('Move %s\'s own skills onto their Mastery Map (%s), and empty the actor\'s skill lists?', $actorId,
+                $adoption['nodes'] === [] ? 'no new nodes' : implode(', ', $adoption['nodes'])), $paths);
+        $result = $this->writeSourceSet($required, $answer, fn(): array => $this->requireCategory(MasteryFields::MAPS)->getRecordLabels(), $confirm);
+
+        return [...$result, 'nodes' => $adoption['nodes']];
+    }
+
     /**
      * Deletes a record as one undo step; the file changes on save.
      *

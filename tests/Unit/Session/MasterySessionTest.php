@@ -96,3 +96,29 @@ it('leaves each node\'s place on the map to the GUI editor and keeps it through 
         ->and((require $root . '/assets/Data/Mastery/kaelion.php')['nodes'][0])->toMatchArray(['order' => 4, 'position' => ['x' => 0.2, 'y' => 0.3]])
         ->and(masteryRow($graphical->readDatabaseRecord(MasteryFields::MAPS, 0), 'node0Positionx')['value'])->toBe('0.2');
 });
+
+it('moves a character\'s own skills onto their map, leaves role skills to the role, and undoes as one step', function () {
+    $root = masteryProject();
+    writeSkillRecords($root, new SpecialSkill('Cut', 'Cuts.', '', 2, 0), new MagicSkill('Spark', 'Shocks.', '', 4, 0),
+        new SpecialSkill('Rally', 'Rallies.', '', 3, 0));
+    $actor = $root . '/assets/Data/Actors/Kaelion.php';
+    $source = (string) file_get_contents($actor);
+    file_put_contents($actor, str_replace("    'images' => [", "    'class' => 'Vanguard',\n    'abilities' => [\n      'learned' => ['Cut', 'Rally'],\n      'learnables' => [\n        ['skill' => 'Spark', 'requirement' => ['experienceRequired' => 300]],\n      ],\n    ],\n    'images' => [", $source));
+    $classes = $root . '/assets/Data/classes.php';
+    file_put_contents($classes, preg_replace("/'name' => 'Vanguard',\n/", "'name' => 'Vanguard',\n    'skillsToLearn' => [['level' => 2, 'skill' => 'Rally']],\n", (string) file_get_contents($classes), 1));
+    $before = (string) file_get_contents($actor);
+    $session = EditorSession::open($root);
+
+    $question = $session->adoptMasterySkills('Kaelion');
+    $session->adoptMasterySkills('Kaelion', 'write', $question['confirm']);
+    $map = MasteryCatalog::load($root . '/assets')->findMap('Kaelion');
+    $abilities = (require $actor)['data']['abilities'];
+
+    expect($question['question'])->toContain('Cut, Spark')
+        ->and(array_map(static fn($node) => [$node->skill, $node->cost], array_values($map?->nodes ?? [])))->toBe([['Cut', 0], ['Spark', 300]])
+        ->and($abilities)->toBe(['learned' => [], 'learnables' => []]);
+
+    $session->undo();
+    expect(file_get_contents($actor))->toBe($before)
+        ->and(glob($root . '/assets/Data/Mastery/*.php') ?: [])->toBe([]);
+});

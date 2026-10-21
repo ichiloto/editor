@@ -522,6 +522,8 @@ final class SessionHost
             'database.create' => $session->createDatabaseRecord(self::requireString($params, 'category'), self::readOptionalString($params, 'identity')),
             'database.duplicate' => $session->duplicateDatabaseRecord(self::requireString($params, 'category'), self::requireInt($params, 'index')),
             'database.delete' => $session->deleteDatabaseRecord(self::requireString($params, 'category'), self::requireInt($params, 'index')),
+            'mastery.adopt' => $session->adoptMasterySkills(self::requireString($params, 'actor'),
+                self::readOptionalString($params, 'answer'), self::readOptionalString($params, 'confirm')),
             'skills.retire' => $session->retireSkill(self::requireInt($params, 'index'), self::readOptionalString($params, 'replacement'),
                 self::readOptionalString($params, 'answer'), self::readOptionalString($params, 'confirm')),
             'database.move' => $session->moveDatabaseRecord(
