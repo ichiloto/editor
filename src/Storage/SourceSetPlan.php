@@ -48,6 +48,51 @@ final class SourceSetPlan
         private readonly string $family,
     ) {}
 
+    /**
+     * One plan that writes what each of several plans writes, together: each
+     * file is read back the way the plan that changes it reads it. The plans
+     * must change different files.
+     *
+     * @param list<SourceSetPlan> $plans The plans, none applied.
+     * @throws RuntimeException When two plans change the same file, or one is already applied.
+     */
+    public static function combine(string $subject, string $family, array $plans): self
+    {
+        $watched = $originals = $proposals = $before = $after = $owners = [];
+        $root = null;
+        foreach ($plans as $plan) {
+            if ($plan->applied) {
+                throw new RuntimeException("The {$plan->subject} is already applied.");
+            }
+            $root ??= $plan->root;
+            foreach ($plan->proposals as $path => $source) {
+                if (isset($owners[$path])) {
+                    throw new RuntimeException("{$path} is changed by both the {$owners[$path]->subject} and the {$plan->subject}.");
+                }
+                $owners[$path] = $plan;
+                $originals[$path] = $plan->originals[$path];
+                $proposals[$path] = $source;
+                $before[$path] = $plan->beforeValues[$path];
+                $after[$path] = $plan->afterValues[$path];
+            }
+            $watched += $plan->watched;
+        }
+
+        return new self(
+            (string) $root,
+            $watched,
+            $originals,
+            $proposals,
+            $before,
+            $after,
+            static fn(): array => array_values(array_unique(array_merge(...array_map(
+                static fn(SourceSetPlan $plan): array => ($plan->findWatchedPaths)(), $plans)))),
+            static fn(string $path, string $staged): mixed => ($owners[$path]->readBack)($path, $staged),
+            $subject,
+            $family,
+        );
+    }
+
     /** @return list<string> */
     public function getChangedPaths(): array { return array_keys($this->proposals); }
 

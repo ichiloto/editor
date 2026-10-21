@@ -34,6 +34,7 @@ use Ichiloto\Editor\Database\ConditionCodec;
 use Ichiloto\Editor\Database\ConditionEditor;
 use Ichiloto\Editor\Animations\LegacyAnimationConversion;
 use Ichiloto\Editor\Database\DatabaseCatalog;
+use Ichiloto\Editor\Database\SkillReferences;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Engine\Animations\Timelines\EffectCadence;
 use Ichiloto\Editor\Database\ElementAffinityCodec;
@@ -4408,6 +4409,53 @@ final class EditorSession
         $change = $this->changeRecord(static fn(): RecordChange => $database->duplicateRecord($index));
 
         return ['index' => (int) $change->index, 'records' => $database->getRecordLabels()];
+    }
+
+    /**
+     * Moves everything that names a skill onto its replacement, at once and as
+     * one undo step: what classes teach, what actors know, can learn, attack
+     * or counter with, what enemies use, what skills and states counter with.
+     * Saves that knew the skill read it as the replacement. A list that
+     * already holds the replacement drops the old entry. The old skill is then
+     * free to delete. Asks before writing, as every file set does.
+     *
+     * @return array<string, mixed> The question, or what was written.
+     * @throws SessionRefusal When either skill is unknown, they are the same, a spell and an ability, or a summon's action, or edits are pending.
+     */
+    public function redirectSkill(int $index, string $replacement, ?string $answer = null, ?string $confirm = null): array
+    {
+        $this->requireCategory('skills');
+        $database = $this->workspace->getRecordDatabase('skills') ?? throw new SessionRefusal('This project has no skills.');
+        $record = $database->getRecordByIndex($index) ?? throw new SessionRefusal(sprintf('There is no skill %d.', $index));
+        $name = strval($record->get('name'));
+        $target = array_find($database->getRecords(), static fn($candidate): bool => strval($candidate->get('name')) === $replacement)
+            ?? throw new SessionRefusal(sprintf('There is no skill named %s to take its place.', $replacement));
+        if ($target === $record) {
+            throw new SessionRefusal(sprintf('%s cannot take its own place.', $name));
+        }
+        $isMagic = strval($record->get('kind')) === 'magic';
+        if ($isMagic !== (strval($target->get('kind')) === 'magic')) {
+            throw new SessionRefusal(sprintf('%s and %s must both be spells or both abilities: saves keep the two apart.', $name, $replacement));
+        }
+        if ($this->workspace->loadSkillCatalog()->isSummonAction($name)) {
+            throw new SessionRefusal(sprintf('%s is a summon\'s action and follows its summon.', $name));
+        }
+        if ($answer === null && $this->workspace->hasUnsavedChanges()) {
+            throw new SessionRefusal(sprintf('Save or undo pending edits before moving %s. No files were changed.', $name));
+        }
+        try {
+            $plan = SkillReferences::planRedirect($this->workspace->projectRoot, $this->workspace->projectId, $name, $replacement, $isMagic);
+        } catch (RuntimeException $failure) {
+            throw new SessionRefusal($failure->getMessage(), previous: $failure);
+        }
+        if ($plan === null) {
+            return ['changed' => false, 'records' => $database->getRecordLabels()];
+        }
+        $paths = array_map(fn(string $path): string => substr($path, strlen($this->workspace->projectRoot) + 1), $plan->getChangedPaths());
+        $required = new SourceSetRequired($plan, sprintf('Retire %s into %s', $name, $replacement), 'this skill move',
+            sprintf('Move everything that names %s onto %s, and let saves read %s as %s?', $name, $replacement, $name, $replacement), $paths);
+
+        return $this->writeSourceSet($required, $answer, fn(): array => $this->requireCategory('skills')->getRecordLabels(), $confirm);
     }
 
     /**
