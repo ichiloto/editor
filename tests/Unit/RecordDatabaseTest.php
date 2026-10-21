@@ -443,6 +443,25 @@ it('authors how a state behaves outside battle and refuses a state the Engine co
     expect((require $root . '/assets/Data/states.php')[0]['fieldTickSteps'])->toBe(8);
 });
 
+it('authors a protective state and cover, and refuses a protection the Engine could not read', function (): void {
+    $root = makeTemporaryProject();
+    $database = loadRecordDatabase($root, 'states');
+
+    expect(array_column($database->getSettingsFields(0), 'field'))->toContain('damageTakenRate', 'coversAllies');
+
+    $database->setField(0, 'damageTakenRate', '0.5');
+    $database->setField(1, 'coversAllies', 'true');
+    $database->save();
+    $payload = require $root . '/assets/Data/states.php';
+
+    expect($payload[0]['damageTakenRate'])->toBe(0.5)
+        ->and($payload[1]['coversAllies'])->toBeTrue()
+        ->and($payload[1])->not->toHaveKey('damageTakenRate');
+
+    $database->setField(0, 'damageTakenRate', '-1');
+    expect(fn() => $database->save())->toThrow('damageTakenRate cannot be negative');
+});
+
 it('authors an item cure through the states it removes and keeps value effects apart', function (): void {
     $root = makeTemporaryProject();
     $database = loadRecordDatabase($root, 'items');
