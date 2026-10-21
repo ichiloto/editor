@@ -113,6 +113,31 @@ it("sets and removes a track's battle facing as an ordinary field, and the Engin
         ->and($asset->isDirty())->toBeFalse();
 });
 
+it("sets what a facing track turns toward as an ordinary field, and the Engine still plays it", function () {
+    $root = effectProject();
+    $editor = effectsEditor($root);
+    selectEffect($editor, 'ember-spark');
+    $asset = libraryOf($editor)->find(CutsceneType::EFFECT, 'ember-spark');
+
+    selectCutsceneField($editor, 'commandListTracks');
+    pressKeys($editor, "\n");
+    $ids = cutsceneFieldIds($editor);
+    $facing = array_values(array_filter($ids, static fn(string $id): bool => str_ends_with(strtolower($id), 'facing')))[0];
+    $toward = array_values(array_filter($ids, static fn(string $id): bool => str_ends_with(strtolower($id), 'toward')))[0];
+
+    expect(cutsceneField($editor, $toward)['options'])->toBe(['', 'recipient', 'opponents']);
+
+    setCutsceneField($editor, $facing, 'west');
+    setCutsceneField($editor, $toward, 'opponents');
+    expect($asset->payload()['tracks'][0])->toMatchArray(['facing' => 'west', 'toward' => 'opponents'])
+        ->and($asset->compiledEffect(EffectPresentation::TERMINAL, true))->not->toBeNull();
+
+    setCutsceneField($editor, $toward, '');
+    setCutsceneField($editor, $facing, '');
+    expect($asset->payload()['tracks'][0])->not->toHaveKey('toward')
+        ->and($asset->isDirty())->toBeFalse();
+});
+
 it("sets and removes a battle image's attachment and pivot as whole fields, and the Engine still plays it", function () {
     $root = effectProject();
     $editor = effectsEditor($root);
