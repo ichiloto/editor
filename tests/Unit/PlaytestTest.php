@@ -9,6 +9,7 @@ use Ichiloto\Editor\Playtest\PlaytestLaunch;
 use Ichiloto\Editor\Playtest\PlaytestLauncher;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Engine\Core\GameLaunchContext;
+use Ichiloto\Engine\Scenes\Arena\LaunchTroopHandOver;
 use Ichiloto\Engine\Core\GameStartupMode;
 use Ichiloto\Engine\Field\MapGridSource;
 use Ichiloto\Engine\Field\MapSourceReader;
@@ -107,6 +108,8 @@ it('says where each kind of playtest starts in the launch context the Engine rea
             ->and($cinematic->cinematicId)->toBe('dawn-crossing')
             ->and($battle->mode)->toBeNull()
             ->and($battle->battleTest->troop)->toBe('Pair')
+            // A troop composed in the battle test comes back to the editor through the launch's data root.
+            ->and($battle->keepTroops)->toBeTrue()->and($title->keepTroops)->toBeFalse()
             ->and($battle->battleTest->toArray())->toBe(['troop' => 'Pair', 'members' => [['actor' => 'Kaelion', 'level' => 3]]]);
     } finally {
         array_walk($launches, static fn(PlaytestLaunch $launch) => $launch->destroy());
@@ -370,6 +373,34 @@ it('reports how a failed playtest ended once its data root is gone', function ()
         expect($run->getExitCode())->toBe(3)
             ->and(is_dir($launch->dataRoot))->toBeFalse()
             ->and($run->readLogTail())->toContain('renderer missing');
+    } finally {
+        $run->stop();
+        $launch->destroy();
+    }
+});
+
+it('takes the troops a battle test kept, even once the game has ended and its data root is gone', function (): void {
+    $root = playtestProject();
+    $scratch = playtestScratch();
+    $launch = PlaytestLaunch::fromBattleTest($root, ['troop' => 'Pair']);
+    $console = $scratch . '/slow-console.php';
+    file_put_contents($console, '<?php usleep(400000); exit(0);');
+    $run = (new PlaytestLauncher($console))->start($launch, 'gpui');
+    $members = [['enemy' => 'Regular Bat', 'position' => [40, 12]]];
+
+    try {
+        // The game hands a kept troop over while it runs, as LaunchTroopHandOver does.
+        new LaunchTroopHandOver($launch->dataRoot)->keepTroop($members);
+        expect($run->countKeptTroops())->toBe(1);
+        $deadline = microtime(true) + 5;
+        while ($run->isRunning() && microtime(true) < $deadline) {
+            usleep(20000);
+        }
+
+        expect(is_dir($launch->dataRoot))->toBeFalse()
+            ->and($run->countKeptTroops())->toBe(1)
+            ->and($run->takeKeptTroops())->toBe([$members])
+            ->and($run->takeKeptTroops())->toBe([]);
     } finally {
         $run->stop();
         $launch->destroy();

@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use Ichiloto\Editor\Database\ProjectTroopKeeper;
 use Ichiloto\Editor\Database\TroopAuthoring;
 use Ichiloto\Editor\Session\EditorSession;
 use Ichiloto\Engine\Battle\Presentation\TerminalBattleEffects;
@@ -117,4 +118,23 @@ it('sets a troop\'s battle music from the project\'s tracks, and unsetting it le
     $session->applyDatabaseRecord('troops', 0, $music['key'], '');
     $session->saveDatabase('troops');
     expect((require $root . '/assets/Data/troops.php')[0])->not->toHaveKey('bgm');
+});
+
+it('keeps a troop composed in a battle test as a new troop named after its members, keeping the file\'s comments', function () {
+    $root = troopPageProject();
+    $troops = $root . '/assets/Data/troops.php';
+    $keeper = new ProjectTroopKeeper($root);
+    $members = [['enemy' => 'Marsh Wisp', 'position' => [40, 12]],
+        ['enemy' => 'Regular Bat', 'position' => [12, 4], 'graphicalPlacement' => ['x' => 300.0, 'depth' => 40.5, 'width' => 120.0, 'height' => 90.0]]];
+
+    expect($keeper->keepTroop($members))->toBe('Kept as Marsh Wisp, Regular Bat in Troops.')
+        ->and($keeper->keepTroop($members))->toBe('Kept as Marsh Wisp, Regular Bat 2 in Troops.');
+    $data = require $troops;
+    expect((string) file_get_contents($troops))->toContain('// The leader, placed for the graphical battle.')
+        ->and(array_column($data, 'name'))->toBe(['Pair', 'Marsh Wisp, Regular Bat', 'Marsh Wisp, Regular Bat 2'])
+        ->and($data[1]['enemies'][0])->toBe(['enemy' => 'Marsh Wisp', 'position' => [40, 12]])
+        ->and($data[1]['enemies'][1]['graphicalPlacement'])->toBe(['x' => 300, 'depth' => 40.5, 'width' => 120, 'height' => 90])
+        // A member the project has no enemy for is refused, and nothing is written.
+        ->and(fn() => $keeper->keepTroop([['enemy' => 'Dragon', 'position' => [1, 2]]]))->toThrow(RuntimeException::class, 'Dragon')
+        ->and(count(require $troops))->toBe(3);
 });

@@ -76,12 +76,15 @@ final class PlaytestLaunch
      * A battle test, as the Engine's ProjectBattleTest writes it: the troop,
      * and the party and arena when it sets them. It is the battle test as the
      * author has it now, unsaved edits included; the project's own is not read.
+     * A troop composed in it and kept is handed back through the launch's
+     * data root ({@see PlaytestRun::takeKeptTroops()}), never written into
+     * the project by the game.
      *
      * @param array<string, mixed> $battleTest
      */
     public static function fromBattleTest(string $projectRoot, array $battleTest): self
     {
-        return self::prepare($projectRoot, ['battleTest' => $battleTest]);
+        return self::prepare($projectRoot, ['battleTest' => $battleTest, 'keepTroops' => true]);
     }
 
     /** Where the launch's own output goes: the play command's, and the game's standard output. */
@@ -148,11 +151,8 @@ final class PlaytestLaunch
         if ($project === false || ! is_dir($project)) {
             throw new RuntimeException("The project to playtest is not at {$projectRoot}.");
         }
-        try {
-            GameLaunchContext::fromArray($intent);
-        } catch (InvalidArgumentException $invalid) {
-            throw new RuntimeException('The game cannot start that way: ' . $invalid->getMessage(), previous: $invalid);
-        }
+        // Checked before anything is made; keeping troops needs the data root made next, so it is checked with it.
+        self::validateIntent(array_diff_key($intent, ['keepTroops' => true]));
 
         $created = sys_get_temp_dir() . DIRECTORY_SEPARATOR . uniqid('ichiloto-playtest-', true);
         if (! @mkdir($created, 0o700, true) && ! is_dir($created)) {
@@ -169,6 +169,7 @@ final class PlaytestLaunch
             touch($root . DIRECTORY_SEPARATOR . self::LOG_DIRECTORY . DIRECTORY_SEPARATOR . 'playtest.log');
             LaunchDataRoot::validate($root, $project);
             $context = [...$intent, 'dataRoot' => $root];
+            self::validateIntent($context);
             self::encodeContext($context);
         } catch (InvalidArgumentException $invalid) {
             self::removeTree($root);
@@ -181,6 +182,19 @@ final class PlaytestLaunch
         }
 
         return new self($project, $root, $context, $mapId, $x, $y);
+    }
+
+    /**
+     * @param array<string, mixed> $context
+     * @throws RuntimeException When the Engine would not start the game that way.
+     */
+    private static function validateIntent(array $context): void
+    {
+        try {
+            GameLaunchContext::fromArray($context);
+        } catch (InvalidArgumentException $invalid) {
+            throw new RuntimeException('The game cannot start that way: ' . $invalid->getMessage(), previous: $invalid);
+        }
     }
 
     /**

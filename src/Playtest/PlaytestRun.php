@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Playtest;
 
+use Ichiloto\Engine\Scenes\Arena\LaunchTroopHandOver;
+
 /**
  * A playtest running in the background ({@see PlaytestLauncher::start()}).
  * It owns its launch: once the game has exited, or has been stopped, the end
@@ -18,6 +20,9 @@ final class PlaytestRun
     private bool $stopped = false;
     /** The log as the run left it, kept once its data root is gone. */
     private ?string $finalLog = null;
+
+    /** @var list<list<array<string, mixed>>> Troops the battle test kept, taken from the data root before it is removed. */
+    private array $keptTroops = [];
 
     /**
      * @param resource $process The play command's process.
@@ -78,6 +83,26 @@ final class PlaytestRun
         return $this->stopped;
     }
 
+    /** How many troops a battle test has kept that are not yet taken. */
+    public function countKeptTroops(): int
+    {
+        return count($this->keptTroops) + ($this->isRunning() ? LaunchTroopHandOver::countKept($this->launch->dataRoot) : 0);
+    }
+
+    /**
+     * The troops a battle test has kept since last taken, oldest first, each
+     * its members ({@see LaunchTroopHandOver}); each is taken once.
+     *
+     * @return list<list<array<string, mixed>>>
+     */
+    public function takeKeptTroops(): array
+    {
+        $kept = [...$this->keptTroops, ...($this->isRunning() ? LaunchTroopHandOver::takeKept($this->launch->dataRoot) : [])];
+        $this->keptTroops = [];
+
+        return $kept;
+    }
+
     /** The end of the play command's output, for saying why a run failed. */
     public function readLogTail(int $lines = 12): string
     {
@@ -97,6 +122,8 @@ final class PlaytestRun
             proc_close($this->process);
         }
         $this->finalLog = self::readLog($this->launch->getLogPath());
+        // Troops kept in the last moments are taken before the data root goes.
+        $this->keptTroops = [...$this->keptTroops, ...LaunchTroopHandOver::takeKept($this->launch->dataRoot)];
         $this->launch->destroy();
     }
 

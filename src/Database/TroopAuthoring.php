@@ -199,6 +199,73 @@ final readonly class TroopAuthoring
     }
 
     /**
+     * Adds a troop of the members given, as composed in a battle test, after
+     * the last troop, named after its members (numbered when another troop
+     * has that name), as one undo step. Each member names its enemy, its
+     * terminal position and, when it was placed, its graphical placement;
+     * one without a placement is arranged by the graphical battle.
+     *
+     * @param list<array<string, mixed>> $members
+     * @param list<string> $enemies The enemies the project has, by name.
+     * @throws RecordRefusal When the troops cannot be written, there is no member, or a member is refused.
+     */
+    public function addTroop(ProjectRecordDatabase $troops, array $members, array $enemies): RecordChange
+    {
+        if (! $troops->isEditable()) {
+            throw new RecordRefusal(sprintf('Read-only: %s.', $troops->getReadOnlyReason() ?? 'the troops cannot be written'));
+        }
+        $list = $troops->schema->findInlineSubList(self::MEMBERS) ?? throw new RecordRefusal('Troops have no members list to compose.');
+        if ($members === [] || ! array_is_list($members)) {
+            throw new RecordRefusal('A troop needs a member; add an enemy first.');
+        }
+        $entries = [];
+        foreach ($members as $number => $member) {
+            $enemy = is_array($member) ? trim(strval($member['enemy'] ?? '')) : '';
+            if (! in_array($enemy, $enemies, true)) {
+                throw new RecordRefusal(sprintf('Member %d fights %s, which the project has no enemy named.', $number + 1, $enemy === '' ? 'nothing' : $enemy));
+            }
+            $position = is_array($member['position'] ?? null) ? array_values($member['position']) : [];
+            if (count($position) !== 2 || ! is_int($position[0]) || ! is_int($position[1])) {
+                throw new RecordRefusal(sprintf('Member %d needs a terminal position of two whole numbers.', $number + 1));
+            }
+            $entry = [...$list->blank, 'enemy' => $enemy, 'position' => $position];
+            if (isset($member['graphicalPlacement'])) {
+                try {
+                    $place = BattleStageSlot::fromArray($member['graphicalPlacement'], sprintf('member %d\'s battle placement', $number + 1))->toArray();
+                } catch (\InvalidArgumentException $refused) {
+                    throw new RecordRefusal($refused->getMessage(), previous: $refused);
+                }
+                $entry['graphicalPlacement'] = array_map(static fn(float $value): int|float => round($value, 2) === floor($value)
+                    ? (int) $value : round($value, 2), $place);
+            }
+            $entries[] = $entry;
+        }
+        $name = self::describeMembers(array_column($entries, 'enemy'));
+        $taken = array_map(static fn($record): string => strtolower(trim(strval($record->get($troops->schema->labelKey)))), $troops->getRecords());
+        $unique = $name;
+        for ($number = 2; in_array(strtolower($unique), $taken, true); $number++) {
+            $unique = sprintf('%s %d', $name, $number);
+        }
+        $index = $this->records->createRecord($troops)->index;
+        $record = $troops->getRecordByIndex((int) $index) ?? throw new RecordRefusal('A troop cannot be created from the editor.');
+        $record->set($troops->schema->labelKey, $unique);
+        $record->setEntries($list, $entries);
+        try {
+            $troops->assertSourceAccepts((int) $index);
+        } catch (SourcePreservationRefusal|SourceIdentityConflict|RuntimeException $refused) {
+            $troops->removeRecord((int) $index);
+
+            throw new RecordRefusal($refused->getMessage(), previous: $refused);
+        }
+
+        return new RecordChange(new GenericCommand(
+            sprintf('Add troop %s', $unique),
+            static fn() => $troops->insertRecord((int) $index, $record),
+            static fn() => $troops->removeRecord((int) $index),
+        ), $index);
+    }
+
+    /**
      * Names the troop after its members, through its name row's own rules.
      * The name another troop already has gets a number after it, since a
      * troop is known by its name.

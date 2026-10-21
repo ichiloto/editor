@@ -680,6 +680,7 @@ final class SessionHost
                 : throw new InvalidRequest('"battleTest" must be a battle test object.')),
             'battleTest.start' => $session->startBattleTest(array_key_exists('troop', $params) ? self::requireInt($params, 'troop') : null),
             'battleTest.status' => $session->describeBattleTestRun(),
+            'battleTest.keepTroops' => $session->addKeptBattleTestTroops(),
             'battleTest.stop' => $session->stopBattleTest(),
             default => throw new InvalidRequest(sprintf('Unknown method "%s".', $method)),
         };

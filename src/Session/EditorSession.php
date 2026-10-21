@@ -127,7 +127,6 @@ use Ichiloto\Editor\Database\BattleArenaFields;
 use Ichiloto\Engine\Battle\Presentation\BattleFormationBattler;
 use Ichiloto\Engine\Battle\Presentation\BattleFormationLayout;
 use Ichiloto\Engine\Battle\Presentation\BattleStageSlot;
-use Ichiloto\Engine\Battle\Presentation\BattleStaging;
 use Ichiloto\Editor\Database\EngineDataBootstrap;
 use Ichiloto\Engine\Cutscenes\Summons\SummonCutsceneLibrary;
 use Ichiloto\Engine\Scenes\Arena\BattleTestChoices;
@@ -3615,18 +3614,10 @@ final class EditorSession
     {
         $catalog = $this->requireBattleLayoutCatalog('arrange troops on');
         ['members' => $members, 'places' => $places] = $this->readTroopPlaces($index);
-        $assets = $this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets';
-        $bodies = [];
-        foreach ($members as $position => $member) {
-            $art = $catalog->enemies[$member['enemy']] ?? null;
-            $size = $art === null ? null : \Ichiloto\Engine\Rendering\Sprites\PngAssetPreflight::getAvailableSize($assets, $art->asset);
-            $bodies[] = BattleFormationLayout::getStandingSize($size === null ? null : $art->clampedTo($size['width'], $size['height']),
-                $catalog->enemyPoses[$member['enemy']] ?? null, $catalog->scale?->getProfile($member['enemy'], false), $catalog->scale,
-                $places[$position], $assets);
-        }
         try {
-            return BattleStaging::arrange($catalog->ui, false, $bodies, $all ? [] : $places);
-        } catch (\InvalidArgumentException $error) {
+            return BattleFormationLayout::arrangeTroop($catalog, array_column($members, 'enemy'), $all ? [] : $places,
+                $this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets');
+        } catch (\InvalidArgumentException|\RuntimeException $error) {
             throw new SessionRefusal('The troop cannot be arranged: ' . $error->getMessage(), previous: $error);
         }
     }
@@ -5765,10 +5756,36 @@ final class EditorSession
         return [
             'running' => $running,
             'troop' => $run === null ? null : $this->battleTestTroop,
+            // Troops composed in the test and kept there, waiting to be added ({@see addKeptBattleTestTroops()}).
+            'keptTroops' => $run?->countKeptTroops() ?? 0,
             'stopped' => $run?->wasStopped() ?? false,
             'exitCode' => $exitCode,
             'log' => $run !== null && ! $running && ! $run->wasStopped() && $exitCode !== 0 ? $run->readLogTail() : null,
         ];
+    }
+
+    /**
+     * Adds the troops a battle test composed and kept, each after the last
+     * troop and named after its members, one undo step each, unsaved until
+     * Troops is saved ({@see TroopAuthoring::addTroop()}).
+     *
+     * @return array{changed: bool, names: list<string>, refused: list<string>, records: list<string>}
+     */
+    public function addKeptBattleTestTroops(): array
+    {
+        $troops = $this->requireRecordDatabase('troops');
+        $enemies = $this->listEnemyNames();
+        $names = $refused = [];
+        foreach ($this->battleTestRun?->takeKeptTroops() ?? [] as $members) {
+            try {
+                $change = $this->changeRecord(fn(): RecordChange => $this->troopAuthoring->addTroop($troops, $members, $enemies));
+                $names[] = $troops->getEntryLabel($troops->getRecordByIndex((int) $change->index));
+            } catch (SessionRefusal $refusal) {
+                $refused[] = $refusal->getMessage();
+            }
+        }
+
+        return ['changed' => $names !== [], 'names' => $names, 'refused' => $refused, 'records' => $troops->getEntryLabels()];
     }
 
     /**
