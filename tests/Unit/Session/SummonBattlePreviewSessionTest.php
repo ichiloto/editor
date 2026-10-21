@@ -5,6 +5,9 @@ declare(strict_types=1);
 use Ichiloto\Editor\Session\EditorSession;
 use Ichiloto\Editor\Session\SessionRefusal;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
+use Ichiloto\Engine\Battle\BattleTurnTimings;
+use Ichiloto\Engine\Battle\Enumerations\BattleActionCategory;
+use Ichiloto\Engine\Battle\Enumerations\BattlePace;
 
 /** A summon previewed as the battle test plays it, through the Engine's command preview. Synthetic fixtures only. */
 
@@ -31,6 +34,16 @@ it('previews a summon cast by the battle test party at its troop, for both rende
         ->and($session->readSummonBattlePreview(0, PHP_INT_MAX)['frame'])->toBe($first['totalFrames'] - 1)
         ->and($session->readSummonBattlePreview(0, $target))->toBe($atTarget)
         ->and($session->listUnsavedChanges())->toBe([]);
+});
+
+it('paces the previewed summon as the battle paces it, by its action type', function () {
+    $phases = EditorSession::open(summonBattlePreviewProject())->readSummonBattlePreview(0, 0)['phases'];
+    // Even the fastest summon pacing steps forward longer than the slowest ordinary attack.
+    $summon = BattleTurnTimings::fromTotalDuration(BattleActionCategory::SUMMON->totalDurationSeconds(BattlePace::FAST));
+    $attack = BattleTurnTimings::fromTotalDuration(BattleActionCategory::PHYSICAL_ATTACK->totalDurationSeconds(BattlePace::SLOW));
+
+    expect($phases['advance']['length'])->toBeGreaterThanOrEqual((int) floor($summon->stepForward * 120))
+        ->and($phases['advance']['length'])->toBeGreaterThan((int) ceil($attack->stepForward * 120));
 });
 
 it('previews the summon as it stands, unsaved edits included', function () {
