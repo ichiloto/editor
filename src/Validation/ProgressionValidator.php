@@ -28,7 +28,7 @@ final class ProgressionValidator
             ProgressionSettings::fromArray($system['progression']);
         } catch (InvalidArgumentException $invalid) {
             return [Issue::error(self::WHERE, 'The game cannot read its progression rules: ' . $invalid->getMessage(),
-                'Set Level Up Restores HP/MP in Database > System, which writes true or false, and remove any other progression key.')];
+                'Choose Level Up HP/MP in Database > System (full, increase or none), and remove any other progression key.')];
         }
 
         return [];
