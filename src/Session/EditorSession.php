@@ -34,6 +34,10 @@ use Ichiloto\Editor\Database\ConditionCodec;
 use Ichiloto\Editor\Database\ConditionEditor;
 use Ichiloto\Editor\Animations\LegacyAnimationConversion;
 use Ichiloto\Editor\Database\DatabaseCatalog;
+use Ichiloto\Editor\Database\MasteryAdoption;
+use Ichiloto\Editor\Database\MasteryAuthoring;
+use Ichiloto\Editor\Database\MasteryFields;
+use Ichiloto\Editor\Database\SkillReferences;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
 use Ichiloto\Engine\Animations\Timelines\EffectCadence;
 use Ichiloto\Editor\Database\ElementAffinityCodec;
@@ -113,13 +117,16 @@ use Ichiloto\Engine\Rendering\Sprites\CharacterSheet;
 use Ichiloto\Engine\Rendering\Transport\RendererGridConfig;
 use Ichiloto\Engine\Rendering\Presentation\PresentationWorld;
 use Ichiloto\Engine\Battle\Presentation\BattlePresentationCatalog;
+use Ichiloto\Engine\Battle\Presentation\BattleArenaBindings;
 use Ichiloto\Engine\Battle\Presentation\BattlerBindings;
 use Ichiloto\Editor\Database\PhpDataFile;
 use Ichiloto\Editor\Database\RecordSchemaCatalog;
 use Ichiloto\Editor\Database\TroopAuthoring;
+use Ichiloto\Editor\Database\BattleArenaFields;
 use Ichiloto\Engine\Battle\Presentation\BattleFormationBattler;
 use Ichiloto\Engine\Battle\Presentation\BattleFormationLayout;
-use Ichiloto\Engine\Battle\Presentation\BattlerSlot;
+use Ichiloto\Engine\Battle\Presentation\BattleStageSlot;
+use Ichiloto\Engine\Battle\Presentation\BattleStaging;
 use Ichiloto\Editor\Database\EngineDataBootstrap;
 use Ichiloto\Engine\Cutscenes\Summons\SummonCutsceneLibrary;
 use Ichiloto\Engine\Scenes\Arena\BattleTestChoices;
@@ -222,6 +229,7 @@ final class EditorSession
 
     /** How a troop's members are composed, as the terminal editor composes them. */
     private readonly TroopAuthoring $troopAuthoring;
+    private readonly MasteryAuthoring $masteryAuthoring;
 
     /**
      * Where each map's revisions count from. A map read afresh, when a file
@@ -250,6 +258,7 @@ final class EditorSession
         $this->workspace = $workspace;
         $this->actorAuthoring = new ActorAuthoring(graphical: true);
         $this->troopAuthoring = new TroopAuthoring();
+        $this->masteryAuthoring = new MasteryAuthoring();
     }
 
     /** Opens the project at a root, as the terminal editor opens it. */
@@ -3462,42 +3471,184 @@ final class EditorSession
      * A troop's graphical formation as an arranger draws it, composed by the
      * Engine's BattleFormationLayout, the placement the battle itself uses:
      * the battle canvas, the project's arenas with the one previewed and its
-     * backgrounds, the starting party in its slots, and each member's enemy,
-     * battle placement and (once placed) where its feet stand, the bounds its
-     * idle art is drawn in, that art, and its body span at battle scale. The
-     * arena is a preview only, as in RPG Maker's Troops tab: a troop is placed
-     * once for every arena, and choosing one writes nothing.
+     * backgrounds, the ground battlers stand on there (its edges, perspective
+     * and how much each side's depth is compressed to fit it), the starting
+     * party in its slots, and each member's enemy, authored placement (null
+     * when the battle arranges it), the place it stands at, where its feet
+     * stand on this arena, the bounds its idle art is drawn in, that art, and
+     * its body span at battle scale. The arena is a preview only, as in RPG
+     * Maker's Troops tab: a troop is placed once for every arena, standing on
+     * each arena's own ground, and choosing one writes nothing.
      *
      * @return array<string, mixed>
      * @throws SessionRefusal When the troop is unknown or the project has no graphical battle.
      */
     public function readTroopFormation(int $index, ?string $arena = null): array
     {
+        $catalog = $this->requireBattleLayoutCatalog('arrange troops on');
+        ['members' => $members, 'places' => $places] = $this->readTroopPlaces($index);
+        $enemies = array_map(static fn(array $member, ?BattleStageSlot $place): array => ['enemyId' => $member['enemy'], 'slot' => $place],
+            $members, $places);
+        [$formation, $view, $clearance] = $this->composeFormation($catalog, $arena, $enemies);
+        foreach ($formation->enemies as $position => $battler) {
+            $place = $formation->staging->enemyPlaces[$position];
+            $members[$position]['place'] = ['x' => $place->x, 'depth' => $place->depth];
+            $members[$position]['battler'] = self::describeFormationBattler($battler, $clearance['enemies'][$position]);
+        }
+
+        return [...$view, 'members' => $members];
+    }
+
+    /**
+     * A battle arena as its page shows it: its background on the battle
+     * canvas with the ground it declares (or inherits) drawn by its edges,
+     * the starting party standing on it, and a troop beside them, all as
+     * the Engine stands them, so an author marks the ground by its picture.
+     * The troop is the one chosen, else the first with members. It reads
+     * the arena as it is now, unsaved edits included.
+     *
+     * @return array<string, mixed>
+     * @throws SessionRefusal When the arena or troop is unknown, or the project has no graphical battle.
+     */
+    public function readArenaPreview(int $index, ?int $troop = null): array
+    {
+        $record = $this->requireRecordDatabase(BattleArenaFields::CATEGORY)->getRecordByIndex($index)
+            ?? throw new SessionRefusal(sprintf('%s has no record %d.', BattleArenaFields::CATEGORY, $index));
+        $catalog = $this->requireBattleLayoutCatalog('preview arenas on');
+        $troops = $this->requireRecordDatabase('troops');
+        $troop ??= array_key_first(array_filter($troops->getRecords(), static fn($entry): bool => $entry->getSubList('enemies') !== []));
+        ['members' => $members, 'places' => $places] = $troop === null ? ['members' => [], 'places' => []] : $this->readTroopPlaces($troop);
+        $enemies = array_map(static fn(array $member, ?BattleStageSlot $place): array => ['enemyId' => $member['enemy'], 'slot' => $place],
+            $members, $places);
+        [$formation, $view, $clearance] = $this->composeFormation($catalog, (string) $record->get('id'), $enemies);
+        foreach ($formation->enemies as $position => $battler) {
+            $members[$position]['battler'] = self::describeFormationBattler($battler, $clearance['enemies'][$position]);
+        }
+        $troopNames = array_map(static fn($entry): string => (string) $entry->get('name'), $troops->getRecords());
+
+        return [...$view, 'members' => $members, 'troop' => $troop, 'troops' => array_values($troopNames)];
+    }
+
+    /**
+     * Places every member of a troop where the Engine arranges it, written as
+     * each member's placement, as one undo step: RPG Maker's Align.
+     *
+     * @return array{changed: bool, records: list<string>}
+     * @throws SessionRefusal When the troop is unknown or read-only, or the project has no graphical battle.
+     */
+    public function alignTroop(int $index): array
+    {
+        $places = array_map(static fn(BattleStageSlot $place): array => $place->toArray(), $this->arrangeTroop($index, true));
+
+        return $this->placeTroopMembers($index, $places, 'Align members');
+    }
+
+    /**
+     * Removes every member's placement, as one undo step, so the battle
+     * arranges the troop itself from the current art, on every arena.
+     *
+     * @return array{changed: bool, records: list<string>}
+     * @throws SessionRefusal When the troop is unknown or read-only.
+     */
+    public function arrangeTroopAutomatically(int $index): array
+    {
+        $count = count($this->readTroopPlaces($index)['members']);
+
+        return $this->placeTroopMembers($index, array_fill(0, $count, null), 'Arrange members automatically');
+    }
+
+    /**
+     * Moves one member to a place, as one undo step. Every other member is
+     * placed where it stands now, so one the battle arranged does not move
+     * when this one does.
+     *
+     * @return array{changed: bool, records: list<string>}
+     * @throws SessionRefusal When the troop or member is unknown, the troop is read-only, or the place is refused.
+     */
+    public function placeTroopMember(int $index, int $member, float $x, float $depth): array
+    {
+        $places = $this->arrangeTroop($index, false);
+        $moved = $places[$member] ?? throw new SessionRefusal(sprintf('The troop has no member %d.', $member + 1));
+        try {
+            $places[$member] = new BattleStageSlot($x, $depth, $moved->width, $moved->height, $moved->displayScale);
+        } catch (\InvalidArgumentException $error) {
+            throw new SessionRefusal($error->getMessage(), previous: $error);
+        }
+
+        return $this->placeTroopMembers($index, array_map(static fn(BattleStageSlot $place): array => $place->toArray(), $places),
+            'Move member');
+    }
+
+    /**
+     * Each member of a troop with the place the battle stands it at: its own
+     * placement, or the Engine's arrangement beside the placed ones; with
+     * `$all`, the Engine's arrangement for every member.
+     *
+     * @return list<BattleStageSlot>
+     * @throws SessionRefusal When the troop is unknown or the project has no graphical battle.
+     */
+    private function arrangeTroop(int $index, bool $all): array
+    {
+        $catalog = $this->requireBattleLayoutCatalog('arrange troops on');
+        ['members' => $members, 'places' => $places] = $this->readTroopPlaces($index);
+        $assets = $this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets';
+        $bodies = [];
+        foreach ($members as $position => $member) {
+            $art = $catalog->enemies[$member['enemy']] ?? null;
+            $size = $art === null ? null : \Ichiloto\Engine\Rendering\Sprites\PngAssetPreflight::getAvailableSize($assets, $art->asset);
+            $bodies[] = BattleFormationLayout::getStandingSize($size === null ? null : $art->clampedTo($size['width'], $size['height']),
+                $catalog->enemyPoses[$member['enemy']] ?? null, $catalog->scale?->getProfile($member['enemy'], false), $catalog->scale,
+                $places[$position], $assets);
+        }
+        try {
+            return BattleStaging::arrange($catalog->ui, false, $bodies, $all ? [] : $places);
+        } catch (\InvalidArgumentException $error) {
+            throw new SessionRefusal('The troop cannot be arranged: ' . $error->getMessage(), previous: $error);
+        }
+    }
+
+    /**
+     * @param list<?array<string, int|float>> $places
+     * @return array{changed: bool, records: list<string>}
+     */
+    private function placeTroopMembers(int $index, array $places, string $label): array
+    {
+        $troops = $this->requireRecordDatabase('troops');
+        $change = $this->changeRecord(fn(): RecordChange => $this->troopAuthoring->placeMembers($troops, $index, $places, $label));
+
+        return ['changed' => $change->command !== null, 'records' => $troops->getEntryLabels()];
+    }
+
+    /**
+     * A troop's members as authored (enemy, authored placement or null, and
+     * why a placement cannot be read) and the place each stands at when it
+     * is readable, null for the battle to arrange.
+     *
+     * @return array{members: list<array<string, mixed>>, places: list<?BattleStageSlot>}
+     * @throws SessionRefusal When the troop is unknown.
+     */
+    private function readTroopPlaces(int $index): array
+    {
         $record = $this->requireRecordDatabase('troops')->getRecordByIndex($index)
             ?? throw new SessionRefusal(sprintf('troops has no record %d.', $index));
-        $catalog = $this->requireBattleLayoutCatalog('arrange troops on');
-
-        $members = $placed = $placedMembers = [];
-        foreach ($record->getSubList('enemies') as $memberIndex => $entry) {
+        $members = $places = [];
+        foreach ($record->getSubList('enemies') as $entry) {
             $enemy = is_array($entry) ? (string) ($entry['enemy'] ?? '') : '';
             $placement = is_array($entry) && is_array($entry['graphicalPlacement'] ?? null) ? $entry['graphicalPlacement'] : null;
-            $members[$memberIndex] = ['enemy' => $enemy, 'placement' => $placement, 'battler' => null];
-            if ($placement === null) {
-                continue;
+            $member = ['enemy' => $enemy, 'placement' => $placement, 'place' => null, 'battler' => null];
+            $place = null;
+            if ($placement !== null) {
+                try {
+                    $place = BattleStageSlot::fromArray($placement, 'Battle Placement');
+                } catch (\InvalidArgumentException $error) {
+                    $member['issue'] = $error->getMessage();
+                }
             }
-            try {
-                $placed[] = ['enemyId' => $enemy, 'slot' => BattlerSlot::fromArray($placement, 'Battle Placement')];
-                $placedMembers[] = $memberIndex;
-            } catch (\InvalidArgumentException $error) {
-                $members[$memberIndex]['issue'] = $error->getMessage();
-            }
-        }
-        [$formation, $view, $clearance] = $this->composeFormation($catalog, $arena, $placed);
-        foreach ($formation->enemies as $position => $battler) {
-            $members[$placedMembers[$position]]['battler'] = self::describeFormationBattler($battler, $clearance['enemies'][$position]);
+            $members[] = $member;
+            $places[] = $place;
         }
 
-        return [...$view, 'members' => array_values($members)];
+        return ['members' => $members, 'places' => $places];
     }
 
     /**
@@ -3506,8 +3657,8 @@ final class EditorSession
      * and its battle placement; the project's enemies a member can be added
      * from; and its graphical formation over a previewed arena
      * ({@see readTroopFormation()}), or why there is none, so a game with
-     * only a terminal battle still composes its troops here. Align waits for
-     * the Engine's rule for arranging enemies, and says so.
+     * only a terminal battle still composes its troops here. Align places
+     * every member where the Engine's arrangement stands it ({@see alignTroop()}).
      *
      * @return array{members: list<array<string, mixed>>, enemies: list<string>, formation: ?array<string, mixed>, formationIssue: ?string, align: array{available: bool, reason: ?string}}
      * @throws SessionRefusal When the troop is unknown.
@@ -3530,7 +3681,7 @@ final class EditorSession
             'enemies' => $this->listEnemyNames(),
             'formation' => null,
             'formationIssue' => null,
-            'align' => ['available' => false, 'reason' => 'Align needs the Engine\'s rule for arranging enemies, which it does not have yet.'],
+            'align' => ['available' => true, 'reason' => null],
         ];
         try {
             $page['formation'] = $this->readTroopFormation($index, $arena);
@@ -3614,15 +3765,10 @@ final class EditorSession
     /**
      * An enemy as Database > Enemies shows it: its terminal sprite, read the
      * way the game reads it, and its battle art composed by the Engine's
-     * BattleFormationLayout at battle scale beside the starting party. Battle
-     * layouts define where the party stands, not enemies (troops place those),
-     * so the enemy stands opposite a party member, its slot mirrored across
-     * the canvas: a size comparison, not a battle position. It stands opposite
-     * the first member it stands clear beside by the Engine's formation
-     * clearance, else the first it fits on the canvas beside, so a creature
-     * taller than the lead's ground line is still shown whole, with what it
-     * does not clear. Both read the record as it is now, unsaved edits
-     * included. A project without a graphical battle still gets the sprite,
+     * BattleFormationLayout at battle scale beside the starting party, standing
+     * where the battle arranges a troop of this enemy alone on the previewed
+     * arena's ground, with what it does not clear. Both read the record as it
+     * is now, unsaved edits included. A project without a graphical battle still gets the sprite,
      * with the reason there is no art.
      *
      * @return array<string, mixed>
@@ -3637,31 +3783,13 @@ final class EditorSession
 
         try {
             $catalog = $this->requireBattleLayoutCatalog('preview enemies at battle scale on');
-            if ($catalog->ui->partySlots === []) {
-                throw new SessionRefusal('The battle layout has no party slot to stand an enemy beside.');
-            }
-            $composed = $firstRefusal = null;
-            foreach ($catalog->ui->partySlots as $party) {
-                $slot = new BattlerSlot($catalog->ui->width - $party->x, $party->y, $party->width, $party->height);
-                try {
-                    $candidate = $this->composeFormation($catalog, $arena, [['enemyId' => $name, 'slot' => $slot]]);
-                } catch (SessionRefusal $refusal) {
-                    $firstRefusal ??= $refusal;
-                    continue;
-                }
-                $composed ??= $candidate;
-                if ($candidate[2]['enemies'][0] === []) {
-                    $composed = $candidate;
-                    break;
-                }
-            }
-            if ($composed === null) {
-                throw $firstRefusal;
-            }
+            // Where the battle stands a troop of this enemy alone, on the previewed arena's ground.
+            $composed = $this->composeFormation($catalog, $arena, [['enemyId' => $name, 'slot' => null]]);
             [$formation, $view, $clearance] = $composed;
             $preview['formation'] = [...$view, 'members' => [[
                 'enemy' => $name,
                 'placement' => null,
+                'place' => ['x' => $formation->staging->enemyPlaces[0]->x, 'depth' => $formation->staging->enemyPlaces[0]->depth],
                 'battler' => self::describeFormationBattler($formation->enemies[0], $clearance['enemies'][0]),
             ]]];
         } catch (SessionRefusal $refusal) {
@@ -3740,6 +3868,10 @@ final class EditorSession
             $bindings = $catalog === null ? null : $this->readProposedBattlerBindings();
             if ($catalog !== null && $bindings !== null) {
                 $catalog = $catalog->bindBattlers(BattlerBindings::getFromArray($bindings, $assets));
+            }
+            $arenas = $catalog === null ? null : $this->workspace->catalogs->readData(BattleArenaBindings::FILE)['payload'];
+            if ($catalog !== null && is_array($arenas)) {
+                $catalog = $catalog->bindArenas(BattleArenaBindings::getFromArray($arenas));
             }
         } catch (\Throwable $error) {
             throw new SessionRefusal('The battle presentation cannot be read: ' . $error->getMessage(), previous: $error);
@@ -3879,7 +4011,7 @@ final class EditorSession
      * the Engine's clearance diagnostics for party and enemies, by position,
      * which include each battler's own.
      *
-     * @param list<array{enemyId: string, slot: BattlerSlot}> $enemies
+     * @param list<array{enemyId: string, slot: ?BattleStageSlot}> $enemies
      * @return array{0: BattleFormationLayout, 1: array<string, mixed>, 2: array{party: list<list<string>>, enemies: list<list<string>>}}
      */
     private function composeFormation(BattlePresentationCatalog $catalog, ?string $arena, array $enemies, ?string $lead = null): array
@@ -3893,7 +4025,8 @@ final class EditorSession
         if ($lead !== null) {
             $partyIds = [$lead, ...array_filter($partyIds, static fn(string $id): bool => $id !== $lead)];
         }
-        $partyIds = array_values(array_slice($partyIds, 0, count($catalog->ui->partySlots)));
+        // A theme formation holds so many; without one the battle arranges the whole party.
+        $partyIds = array_values($catalog->ui->partySlots === [] ? $partyIds : array_slice($partyIds, 0, count($catalog->ui->partySlots)));
 
         try {
             $formation = BattleFormationLayout::compose($catalog, $arena, $enemies, $partyIds, $assetRoot);
@@ -3917,6 +4050,9 @@ final class EditorSession
             'arenas' => $arenas,
             'arena' => $chosen === false ? null : (string) $chosen,
             'backgrounds' => array_map(self::describeCanvasImage(...), $formation->backgrounds),
+            // Where feet may stand on this arena, so a canvas can show it and turn a dragged point into a place.
+            'ground' => [...$formation->staging->ground->toArray(), 'partyCompression' => $formation->staging->partyCompression,
+                'enemyCompression' => $formation->staging->enemyCompression],
             'party' => $party,
             'partySource' => $partySource,
         ], $clearance];
@@ -4278,6 +4414,135 @@ final class EditorSession
         $change = $this->changeRecord(static fn(): RecordChange => $database->duplicateRecord($index));
 
         return ['index' => (int) $change->index, 'records' => $database->getRecordLabels()];
+    }
+
+    /**
+     * Retires a skill from everything that names it, at once and as one undo
+     * step: what classes teach, what actors know, can learn, attack or counter
+     * with, what enemies use, what skills and states counter with. With a
+     * replacement, each moves onto it (a list already holding it drops the old
+     * entry) and saves that knew the skill read the replacement; without one,
+     * each is removed and saves drop the skill. The skill is then free to
+     * delete. Asks before writing, as every file set does.
+     *
+     * @param string|null $replacement The skill that takes its place, or null to remove it from everything.
+     * @return array<string, mixed> The question, or what was written.
+     * @throws SessionRefusal When a skill is unknown, the replacement is itself, the two are a spell and an ability, it is a summon's action, or edits are pending.
+     */
+    public function retireSkill(int $index, ?string $replacement = null, ?string $answer = null, ?string $confirm = null): array
+    {
+        $this->requireCategory('skills');
+        $database = $this->workspace->getRecordDatabase('skills') ?? throw new SessionRefusal('This project has no skills.');
+        $record = $database->getRecordByIndex($index) ?? throw new SessionRefusal(sprintf('There is no skill %d.', $index));
+        $name = strval($record->get('name'));
+        $isMagic = strval($record->get('kind')) === 'magic';
+        if ($replacement !== null) {
+            $target = array_find($database->getRecords(), static fn($candidate): bool => strval($candidate->get('name')) === $replacement)
+                ?? throw new SessionRefusal(sprintf('There is no skill named %s to take its place.', $replacement));
+            if ($target === $record) {
+                throw new SessionRefusal(sprintf('%s cannot take its own place.', $name));
+            }
+            if ($isMagic !== (strval($target->get('kind')) === 'magic')) {
+                throw new SessionRefusal(sprintf('%s and %s must both be spells or both abilities: saves keep the two apart.', $name, $replacement));
+            }
+        }
+        if ($this->workspace->loadSkillCatalog()->isSummonAction($name)) {
+            throw new SessionRefusal(sprintf('%s is a summon\'s action and follows its summon.', $name));
+        }
+        if ($answer === null && $this->workspace->hasUnsavedChanges()) {
+            throw new SessionRefusal(sprintf('Save or undo pending edits before retiring %s. No files were changed.', $name));
+        }
+        try {
+            $plan = SkillReferences::planRetirement($this->workspace->projectRoot, $this->workspace->projectId, $name, $replacement, $isMagic);
+        } catch (RuntimeException $failure) {
+            throw new SessionRefusal($failure->getMessage(), previous: $failure);
+        }
+        if ($plan === null) {
+            return ['changed' => false, 'records' => $this->requireCategory('skills')->getRecordLabels()];
+        }
+        $paths = array_map(fn(string $path): string => substr($path, strlen($this->workspace->projectRoot) + 1), $plan->getChangedPaths());
+        $required = $replacement === null
+            ? new SourceSetRequired($plan, sprintf('Retire %s', $name), 'this skill retirement',
+                sprintf('Remove %s from everything that names it? Saves that knew it drop it.', $name), $paths)
+            : new SourceSetRequired($plan, sprintf('Retire %s into %s', $name, $replacement), 'this skill retirement',
+                sprintf('Move everything that names %s onto %s, and let saves read %s as %s?', $name, $replacement, $name, $replacement), $paths);
+
+        return $this->writeSourceSet($required, $answer, fn(): array => $this->requireCategory('skills')->getRecordLabels(), $confirm);
+    }
+    /**
+     * A Mastery Map as the graphical page draws it: the regions, and each node
+     * with its place on the map and what it builds on.
+     *
+     * @return array{regions: list<array{id: string, name: string}>, nodes: list<array<string, mixed>>, issue: ?string}
+     * @throws SessionRefusal When the map is unknown.
+     */
+    public function readMasteryPage(int $index): array
+    {
+        try {
+            return $this->masteryAuthoring->readPage($this->requireRecordDatabase(MasteryFields::MAPS),
+                $this->workspace->getRecordDatabase(MasteryFields::REGIONS), $index);
+        } catch (RecordRefusal $refusal) {
+            throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+        }
+    }
+
+    /**
+     * Places a node on its map, as fractions (0 to 1) of the map's width and height, as one undo step.
+     *
+     * @return array{changed: bool, records: list<string>}
+     */
+    public function placeMasteryNode(int $index, string $node, float $x, float $y): array
+    {
+        $maps = $this->requireRecordDatabase(MasteryFields::MAPS);
+        $change = $this->changeRecord(fn(): RecordChange => $this->masteryAuthoring->placeNode($maps, $index, $node, $x, $y));
+
+        return ['changed' => $change->command !== null, 'records' => $this->requireCategory(MasteryFields::MAPS)->getRecordLabels()];
+    }
+
+    /**
+     * Makes one node build on another, or stop doing so, as one undo step.
+     *
+     * @return array{changed: bool, records: list<string>}
+     */
+    public function toggleMasteryRequirement(int $index, string $node, string $requires): array
+    {
+        $maps = $this->requireRecordDatabase(MasteryFields::MAPS);
+        $change = $this->changeRecord(fn(): RecordChange => $this->masteryAuthoring->toggleRequirement($maps,
+            $this->workspace->getRecordDatabase(MasteryFields::REGIONS), $index, $node, $requires));
+
+        return ['changed' => $change->command !== null, 'records' => $this->requireCategory(MasteryFields::MAPS)->getRecordLabels()];
+    }
+
+    /**
+     * Moves a character's own skills from their actor file onto their Mastery
+     * Map, at once and as one undo step: known skills become nodes known from
+     * the start, learnables become nodes costing their EXP requirement, skills
+     * their role teaches stay with the role, and the actor's lists are emptied.
+     * Asks before writing, as every file set does.
+     *
+     * @return array<string, mixed> The question, or what was written.
+     * @throws SessionRefusal When the actor is unknown, no regions are declared, edits are pending, or a file cannot take it.
+     */
+    public function adoptMasterySkills(string $actorId, ?string $answer = null, ?string $confirm = null): array
+    {
+        if ($answer === null && $this->workspace->hasUnsavedChanges()) {
+            throw new SessionRefusal(sprintf('Save or undo pending edits before moving %s\'s skills. No files were changed.', $actorId));
+        }
+        try {
+            $adoption = MasteryAdoption::plan($this->workspace->projectRoot, $actorId);
+        } catch (RuntimeException $failure) {
+            throw new SessionRefusal($failure->getMessage(), previous: $failure);
+        }
+        if ($adoption === null) {
+            return ['changed' => false, 'nodes' => []];
+        }
+        $paths = array_map(fn(string $path): string => substr($path, strlen($this->workspace->projectRoot) + 1), $adoption['plan']->getChangedPaths());
+        $required = new SourceSetRequired($adoption['plan'], sprintf('Move %s\'s skills onto their Mastery Map', $actorId), 'this skill move',
+            sprintf('Move %s\'s own skills onto their Mastery Map (%s), and empty the actor\'s skill lists?', $actorId,
+                $adoption['nodes'] === [] ? 'no new nodes' : implode(', ', $adoption['nodes'])), $paths);
+        $result = $this->writeSourceSet($required, $answer, fn(): array => $this->requireCategory(MasteryFields::MAPS)->getRecordLabels(), $confirm);
+
+        return [...$result, 'nodes' => $adoption['nodes']];
     }
 
     /**
@@ -5508,7 +5773,7 @@ final class EditorSession
     private function readArenaChoices(): array
     {
         try {
-            $catalog = BattlePresentationCatalog::loadCode($this->workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets');
+            $catalog = $this->workspace->catalogs->loadBattlePresentation();
         } catch (\Throwable) {
             return [];
         }

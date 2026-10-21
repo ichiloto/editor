@@ -22,6 +22,8 @@ final class DatabaseCatalog
             new DatabaseCategoryDefinition('actors', 'Actors', 'Manage playable character records.', true),
             new DatabaseCategoryDefinition('classes', 'Classes', 'Define growth, roles, and class data.', true),
             new DatabaseCategoryDefinition('skills', 'Skills', 'Author active and passive skill entries.', true),
+            new DatabaseCategoryDefinition(MasteryFields::MAPS, 'Mastery Maps', 'Lay out each character\'s own skills: what each costs in EXP, when it opens and what it builds on.', true),
+            new DatabaseCategoryDefinition(MasteryFields::REGIONS, 'Mastery Regions', 'Name the regions every Mastery Map shares.', true),
             new DatabaseCategoryDefinition('items', 'Items', 'Manage consumables, key items, and resources.', true),
             new DatabaseCategoryDefinition('weapons', 'Weapons', 'Configure weapon stats and restrictions.', true),
             new DatabaseCategoryDefinition('armors', 'Armors', 'Configure armor stats and resistances.', true),
@@ -64,7 +66,11 @@ final class DatabaseCatalog
             new DatabaseCategoryDefinition(\Ichiloto\Editor\Field\TextRoleFields::CATEGORY,
             'Text Roles', 'How text such as a sign\'s label is set: the project\'s fonts, size and colour.', true),
             new DatabaseCategoryDefinition(MenuThemeFields::CATEGORY,
-            'Menu Theme', 'The shared menu theme: the minimap atlas\'s corner sizes, margin, markers and frame, and icon images.', true)];
+            'Menu Theme', 'The shared menu theme: the minimap atlas\'s corner sizes, margin, markers and frame, and icon images.', true),
+            new DatabaseCategoryDefinition(BattleArenaFields::CATEGORY,
+            'Battle Arenas', 'Battle backgrounds and the ground battlers stand on in each.', true),
+            new DatabaseCategoryDefinition(BattleArenaFields::DEFAULT_CATEGORY,
+            'Default Battle Arena', 'The arena a battle that names none is fought on.', true)];
     }
 
     /**

@@ -473,7 +473,7 @@ final class ArraySourceWriter
             $anchors[$j] = $anchor;
             if (isset($kept[$j])) { $anchor = $kept[$j]; }
         }
-        $inline = self::prefersInline($node);
+        $inline = $this->prefersInline($node);
         foreach ($new as $j => $item) {
             if (isset($kept[$j])) {
                 continue;
@@ -633,16 +633,18 @@ final class ArraySourceWriter
     /**
      * Returns whether a list writes each entry on one line -- a keyframe
      * list in the game's own timelines does -- so a new entry reads like its
-     * neighbours.
+     * neighbours. A list whose entries span several lines each (a states
+     * file) gets new entries written the same way.
      */
-    private static function prefersInline(SourceNode $list): bool
+    private function prefersInline(SourceNode $list): bool
     {
         if ($list->entries === []) {
             return false;
         }
 
         foreach ($list->entries as $entry) {
-            if ($entry->value->kind !== SourceNode::ARRAY) {
+            if ($entry->value->kind !== SourceNode::ARRAY
+                || str_contains(substr($this->document->source, $entry->value->start, $entry->value->end - $entry->value->start), "\n")) {
                 return false;
             }
         }

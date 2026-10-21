@@ -7,19 +7,20 @@ namespace Ichiloto\Editor\Validation;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Engine\Battle\Presentation\BattleFormationLayout;
 use Ichiloto\Engine\Battle\Presentation\BattlePresentationCatalog;
-use Ichiloto\Engine\Battle\Presentation\BattlerSlot;
+use Ichiloto\Engine\Battle\Presentation\BattleStageSlot;
 use InvalidArgumentException;
 use RuntimeException;
 use Throwable;
 
 /**
  * Checks the graphical battle formation by the Engine's own clearance
- * check: the starting party in its slots, then every placed troop beside
- * it, over the default arena. A battler whose visible art leaves the
- * layout's battler or enemy area, overlaps another, or leaves no room for
- * its target cursor is reported, never moved. The battle still runs, so
- * these are warnings; a formation the Engine cannot compose at all is an
- * error. Terminal battles are unaffected.
+ * check: the starting party in its slots, then every troop beside it as the
+ * battle stands it (placed members where placed, the rest arranged), over
+ * the default arena's ground. A battler whose visible art leaves the
+ * layout's battler or enemy area, stands on the same ground as another, or
+ * leaves no room for its target cursor is reported, never moved. The battle
+ * still runs, so these are warnings; a placement the Engine cannot read or a
+ * formation it cannot compose is an error. Terminal battles are unaffected.
  */
 final class TroopFormationValidator
 {
@@ -43,7 +44,9 @@ final class TroopFormationValidator
             $names[$actor->getDefinitionId()] = $actor->getName();
         }
         $starting = $workspace->getSystemField('startingParty');
-        $party = array_slice(array_values(array_filter(is_array($starting) ? $starting : [], is_string(...))), 0, count($catalog->ui->partySlots));
+        $starting = array_values(array_filter(is_array($starting) ? $starting : [], is_string(...)));
+        // A theme formation holds so many; without one the battle arranges the whole party.
+        $party = $catalog->ui->partySlots === [] ? $starting : array_slice($starting, 0, count($catalog->ui->partySlots));
 
         try {
             $alone = BattleFormationLayout::compose($catalog, null, [], $party, $assets)->getClearanceDiagnostics($assets);
@@ -63,22 +66,24 @@ final class TroopFormationValidator
         foreach ($workspace->getRecordDatabase('troops')?->getRecords() ?? [] as $record) {
             $troop = strval($record->get('name'));
             $where = sprintf('assets/Data/troops.php: %s', $troop);
-            $placed = $members = [];
+            // A member without a placement is arranged by the battle beside the others.
+            $placed = [];
+            $readable = true;
             foreach ($record->getSubList('enemies') as $index => $entry) {
-                if (!is_array($entry['graphicalPlacement'] ?? null)) {
-                    // The graphical battle needs a slot for every member and refuses to start without one.
-                    $issues[] = Issue::error($where, sprintf('%s (member %d) has no battle placement, so a graphical battle with this troop cannot start.',
-                        strval($entry['enemy'] ?? ''), $index + 1), 'Place it on the troop\'s formation canvas.');
-                    continue;
+                $slot = null;
+                if (is_array($entry['graphicalPlacement'] ?? null)) {
+                    try {
+                        $slot = BattleStageSlot::fromArray($entry['graphicalPlacement']);
+                    } catch (InvalidArgumentException $problem) {
+                        // The battle refuses the troop's graphics while any placement is unreadable.
+                        $issues[] = Issue::error($where, sprintf('%s (member %d): %s', strval($entry['enemy'] ?? ''), $index + 1, $problem->getMessage()),
+                            'Align the troop, arrange it automatically, or drag the member on the troop\'s formation canvas.');
+                        $readable = false;
+                    }
                 }
-                try {
-                    // A malformed placement is the troop schema's to report.
-                    $placed[] = ['enemyId' => strval($entry['enemy'] ?? ''), 'slot' => BattlerSlot::fromArray($entry['graphicalPlacement'])];
-                    $members[] = $index;
-                } catch (InvalidArgumentException) {
-                }
+                $placed[] = ['enemyId' => strval($entry['enemy'] ?? ''), 'slot' => $slot];
             }
-            if ($placed === []) {
+            if ($placed === [] || !$readable) {
                 continue;
             }
             try {
@@ -91,7 +96,7 @@ final class TroopFormationValidator
             foreach ($clearance['enemies'] as $position => $diagnostics) {
                 foreach ($diagnostics as $diagnostic) {
                     $issues[] = Issue::warning($where,
-                        sprintf('%s (member %d): %s', $placed[$position]['enemyId'], $members[$position] + 1, $diagnostic),
+                        sprintf('%s (member %d): %s', $placed[$position]['enemyId'], $position + 1, $diagnostic),
                         'Move it on the troop\'s formation canvas, or adjust its battle art size or ground point.');
                 }
             }

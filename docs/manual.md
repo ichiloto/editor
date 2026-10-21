@@ -1325,6 +1325,8 @@ skill's effects, a quest's rewards) listed under them.
 | Place Categories | `assets/Data/map-categories.php` (`categories`) | Editable - one record per category: stable id, name and translation key, and the generic category it specializes | Same |
 | Player Field Appearance | `assets/Data/Entities/player.php` | Not shown: graphical ownership and art | Choose fixed-player, selected party leader, or absent legacy selector; fixed sheet picker with index/layer controls |
 | Field Resources | `assets/Data/Presentation/field.php` (`resources`) | Not shown: graphical resources | One record per named resource, keyed by its stable id: name, ground contact, an image or a sign board, and an optional occupancy stamp |
+| Battle Arenas | `assets/Data/Presentation/arenas.php` (`arenas`) | Not shown: graphical battle presentation | One record per arena, keyed by its stable id (set when it is created): name, background image and optional crop, and the ground its picture shows: far edge (`Ground Far Edge`, just below the horizon or walkable edge), near edge and far-edge scale, each defaulting to the battle theme's. Every troop's formation stands on the chosen arena's ground |
+| Default Battle Arena | `assets/Data/Presentation/arenas.php` (`default`) | Not shown | The arena a battle that names none is fought on |
 | Text Roles | `assets/Data/Presentation/text.php` (`roles`) | Not shown: graphical text | One record per text role: the project's fonts, first choice first, a size and a colour |
 | Menu Theme | `assets/Data/Presentation/menus.php` (`atlas`, `icons`) | Not shown: graphical presentation | One row per setting: the minimap atlas's corner sizes, margin, marker size and frame, and an image per icon role |
 | Actor Battle Art, Enemy Battle Art, Battle Scale | `assets/Data/Presentation/battlers.php` | Not shown: graphical battle art | Editable from the actor's or enemy's own page (see Battle Art) |
@@ -1661,11 +1663,21 @@ Marsh Wisp`), numbering a name another troop already has. Each is one undo
 step. A new troop starts with no members.
 
 A new member starts at the blank terminal position and has no `Battle
-Placement` yet. Set its terminal `X`/`Y` here; its graphical placement is set
-on the GUI editor's troop canvas or typed into the row. A member without a
-battle placement is reported by validation, since the graphical battle will
-not start without one. Arranging members automatically (Align) waits for the
-Engine's arrangement rule.
+Placement`. Set its terminal `X`/`Y` here. The graphical battle stands every
+member without a placement itself, beside the placed ones, in a staggered
+echelon spaced by the members' current art, front rank on the ground's near
+edge. A placement is `x, depth, width, height` (and optionally a display
+scale): the column the member's feet stand on and how far back from the
+arena ground's near edge, in canvas units, so one formation stands on every
+arena's own ground; width and height are its movement and legacy fitting
+limits. Set it on the GUI editor's troop canvas (Align, Arrange
+Automatically, or dragging a member) or type it into the row. A placement
+written as a fixed canvas `y` (before October 2026) is refused with what to
+do: place the member again.
+
+The terminal and graphical positions are independent: the terminal `X`/`Y`
+never moves a graphical battler, and the graphical placement never changes
+the terminal battle.
 
 `Battle Music` names a track in `assets/Audio/BGM` that the battle plays in
 place of the project's battle theme; left unset, the project's theme plays.

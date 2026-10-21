@@ -63,6 +63,8 @@ final class ReferenceCatalog
         'weapon_types',
         'armor_types',
         'skills',
+        // The regions every Mastery Map shares, by id.
+        'mastery_regions',
         'quests',
         // Income schedules, by stable id, for the income script commands.
         'income_schedules',
@@ -233,6 +235,8 @@ final class ReferenceCatalog
             // Spells and abilities may be authored in any of the Engine's
             // skill files; a reference names the skill wherever it lives.
             'skills' => $this->workspace->getSkillNames(),
+            'mastery_regions' => array_map(static fn(ProjectRecord $record): string => strval($record->get('id')),
+                $this->workspace->getRecordDatabase(MasteryFields::REGIONS)?->getRecords() ?? []),
             'quests' => array_map(static fn(ProjectQuest $quest): string => $quest->getId(), $this->workspace->getQuests()),
             'income_schedules' => array_keys($this->incomeScheduleNames()),
             'maps' => $this->workspace->mapIds,
@@ -1292,19 +1296,24 @@ final class ReferenceCatalog
     }
 
     /**
-     * Returns the arenas the project's battle presentation declares, key =>
-     * display name, in authored order: none for a project without one, or
-     * whose presentation cannot be read, which validation reports.
+     * Returns the arenas the project declares, key => display name, in
+     * authored order: those its battle presentation code declares, then
+     * those bound as data (unsaved edits included). None for a project
+     * without either, or whose arenas cannot be read, which validation
+     * reports.
      *
      * @return array<string, string>
      */
     private function loadArenaNames(): array
     {
         try {
-            // Arenas are the code-owned catalogue's alone, which no page edits.
-            return $this->arenaNames ??= BattlePresentationCatalog::loadCode(rtrim($this->workspace->projectRoot, '/') . '/assets')?->getArenaChoices() ?? [];
+            // The code never changes in a session; the data is read as it is now.
+            $this->arenaNames ??= BattlePresentationCatalog::loadCode(rtrim($this->workspace->projectRoot, '/') . '/assets')?->getArenaChoices() ?? [];
+            $data = array_map(static fn(array $arena): string => $arena['name'], $this->workspace->catalogs->loadArenaBindings()?->arenas ?? []);
+
+            return [...$this->arenaNames, ...$data];
         } catch (\Throwable) {
-            return $this->arenaNames = [];
+            return [];
         }
     }
 

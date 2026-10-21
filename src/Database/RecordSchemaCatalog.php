@@ -133,6 +133,8 @@ final class RecordSchemaCatalog
             self::armors(),
             self::enemies(),
             self::skills(),
+            MasteryFields::getRegionSchema(),
+            MasteryFields::getMapSchema($graphical),
             self::skits(),
             self::knowledgeSubjects(),
             self::knowledgeReports(),
@@ -155,7 +157,8 @@ final class RecordSchemaCatalog
             self::battlerArt('enemies'),
             self::battleScaleReference(),
             ...($graphical ? [PlayerPresentationFields::getSchema(), \Ichiloto\Editor\Field\FieldResourceFields::getSchema(),
-                \Ichiloto\Editor\Field\TextRoleFields::getSchema(), MenuThemeFields::getSchema()] : []),
+                \Ichiloto\Editor\Field\TextRoleFields::getSchema(), MenuThemeFields::getSchema(),
+                BattleArenaFields::getSchema(), BattleArenaFields::getDefaultSchema()] : []),
         ];
 
         $keyed = [];
@@ -213,6 +216,10 @@ final class RecordSchemaCatalog
                     removeWhenEmpty: true, displayDefault: StateDisposition::HARMFUL->value),
                 // A bearer of this state counters while it is active.
                 self::counterAttackField(),
+                // Protection: scales every hit a guard could block (0.5 halves it, 0 blocks it).
+                new RecordField('damageTakenRate', 'Damage Taken Rate', InputControlType::FLOAT, removeWhenEmpty: true, displayDefault: '1 (unchanged)'),
+                // Cover: the bearer takes the single-target hits meant for its weakest ally.
+                RecordField::boolean('coversAllies', 'Covers Allies'),
             ],
             labelKey: 'name',
             identityKey: 'id',
@@ -350,9 +357,11 @@ final class RecordSchemaCatalog
                     RecordField::reference('enemy', 'Enemy', 'enemies'),
                     new RecordField('position.0', 'X', InputControlType::INTEGER),
                     new RecordField('position.1', 'Y', InputControlType::INTEGER),
-                    // The graphical battle's own placement: the point its feet stand on
-                    // and its contain limits, never the terminal position above.
-                    new RecordField('graphicalPlacement', 'Battle Placement', codec: RecordFieldCodec::BATTLER_SLOT, removeWhenEmpty: true),
+                    // The graphical battle's own placement: the column its feet stand on and how far back
+                    // from any arena ground's near edge, and its contain limits; never the terminal position above.
+                    // Without one the battle arranges the member beside the others.
+                    new RecordField('graphicalPlacement', 'Battle Placement', codec: RecordFieldCodec::STAGE_SLOT, removeWhenEmpty: true,
+                        displayDefault: '(arranged by the battle)'),
                     // Damage cannot take the member below this share of its HP, so an event page can end the
                     // fight first (a concession); 0 lets it be knocked out.
                     new RecordField('knockoutFloorPercent', 'Cannot Fall Below HP %', InputControlType::INTEGER, removeWhenEmpty: true),
@@ -1533,6 +1542,8 @@ final class RecordSchemaCatalog
         ];
         $variants['remove_state'] = [
             new RecordField('stateIds', 'States', reference: 'states', codec: RecordFieldCodec::CSV_LIST),
+            // Rolled for each listed state the target has (a 75% treatment cures three times in four).
+            new RecordField('chancePercent', 'Chance %', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '100'),
         ];
         $variants['modify_stat_stage'] = [
             new RecordField('stat', 'Stat', options: Character::buffableStats()),

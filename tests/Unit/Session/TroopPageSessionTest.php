@@ -10,13 +10,13 @@ it('reads a troop page with its members, the enemies to add from and its formati
     $page = EditorSession::open(troopPageProject())->readTroopPage(0);
 
     expect($page['members'])->toBe([
-        ['enemy' => 'Regular Bat', 'position' => [15, 7], 'placement' => ['x' => 260, 'y' => 300, 'width' => 275, 'height' => 190]],
+        ['enemy' => 'Regular Bat', 'position' => [15, 7], 'placement' => ['x' => 260, 'depth' => 300, 'width' => 275, 'height' => 190]],
         ['enemy' => 'Regular Bat', 'position' => [15, 20], 'placement' => null],
     ])
         ->and($page['enemies'])->toEqualCanonicalizing(['Regular Bat', 'Marsh Wisp'])
         ->and($page['formation']['members'])->toHaveCount(2)
         ->and($page['formationIssue'])->toBeNull()
-        ->and($page['align']['available'])->toBeFalse();
+        ->and($page['align'])->toBe(['available' => true, 'reason' => null]);
 });
 
 it('reads a troop page without a graphical battle, saying why there is no formation', function () {
@@ -68,7 +68,7 @@ it('removes one member and clears them all, each one undo step', function () {
     $session->undo();
     expect(array_column($session->readTroopPage(0)['members'], 'enemy'))->toBe(['Regular Bat', 'Marsh Wisp']);
     $session->undo();
-    expect($session->readTroopPage(0)['members'][0]['placement'])->toBe(['x' => 260, 'y' => 300, 'width' => 275, 'height' => 190]);
+    expect($session->readTroopPage(0)['members'][0]['placement'])->toBe(['x' => 260, 'depth' => 300, 'width' => 275, 'height' => 190]);
 });
 
 it('names a troop after its members, numbering a name another troop has', function () {
