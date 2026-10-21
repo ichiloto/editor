@@ -3530,6 +3530,24 @@ final class EditorSession
     }
 
     /**
+     * Replaces one side's footing on a battle arena, as one undo step: the
+     * polygon its battlers may plant their feet in, as canvas points in
+     * order. No points removes it, so the side stands anywhere on its ground.
+     *
+     * @param list<array{x: int|float, y: int|float}> $points
+     * @return array{changed: bool, records: list<string>}
+     * @throws SessionRefusal When the arena is unknown or read-only, or the polygon is refused.
+     */
+    public function setArenaFooting(int $index, bool $party, array $points): array
+    {
+        $arenas = $this->requireRecordDatabase(BattleArenaFields::CATEGORY);
+        $change = $this->changeRecord(static fn(): RecordChange => BattleArenaFields::setFooting($arenas, $index, $party, $points,
+            $party ? 'Set party footing' : 'Set enemy footing'));
+
+        return ['changed' => $change->command !== null, 'records' => $arenas->getEntryLabels()];
+    }
+
+    /**
      * Places every member of a troop where the Engine arranges it, written as
      * each member's placement, as one undo step: RPG Maker's Align.
      *
@@ -4053,9 +4071,21 @@ final class EditorSession
             // Where feet may stand on this arena, so a canvas can show it and turn a dragged point into a place.
             'ground' => [...$formation->staging->ground->toArray(), 'partyCompression' => $formation->staging->partyCompression,
                 'enemyCompression' => $formation->staging->enemyCompression],
+            // Each side's footing on this arena as canvas points, none where a side may stand anywhere on its ground.
+            'footing' => ['enemies' => self::describeFooting($formation->arena?->footing->enemies ?? []),
+                'party' => self::describeFooting($formation->arena?->footing->party ?? [])],
             'party' => $party,
             'partySource' => $partySource,
         ], $clearance];
+    }
+
+    /**
+     * @param list<array{0: float, 1: float}> $polygon
+     * @return list<array{x: float, y: float}>
+     */
+    private static function describeFooting(array $polygon): array
+    {
+        return array_map(static fn(array $point): array => ['x' => $point[0], 'y' => $point[1]], $polygon);
     }
 
     /**

@@ -107,3 +107,43 @@ it('previews an arena with its ground, the starting party and a troop standing o
     expect($session->readArenaPreview(0)['ground']['top'])->toBe(350.0)
         ->and(fn() => $session->readArenaPreview(7))->toThrow(SessionRefusal::class);
 });
+
+it('sets a side\'s footing as one step, stands the troop on it, and lists its points as rows', function () {
+    [, $path, $session] = createBattleArenaProject();
+    $road = [['x' => 400, 'y' => 300], ['x' => 675, 'y' => 300], ['x' => 675, 'y' => 600], ['x' => 600.5, 'y' => 600]];
+    expect($session->setArenaFooting(0, false, $road)['changed'])->toBeTrue()
+        ->and($session->setArenaFooting(0, false, $road)['changed'])->toBeFalse();
+    $preview = $session->readArenaPreview(0);
+
+    expect($preview['footing']['enemies'])->toBe([['x' => 400.0, 'y' => 300.0], ['x' => 675.0, 'y' => 300.0],
+            ['x' => 675.0, 'y' => 600.0], ['x' => 600.5, 'y' => 600.0]])
+        ->and($preview['footing']['party'])->toBe([])
+        ->and(findArenaRow($session, 0, 'enemyFootingList')['value'])->toBe('4')
+        ->and(findArenaRow($session, 0, 'enemyFooting3X')['value'])->toBe('600.5')
+        ->and(array_map(static fn(array $member): float => $member['battler']['ground']['x'], $preview['members']))
+        ->each->toBeGreaterThanOrEqual(400.0);
+
+    $session->saveDatabase(BattleArenaFields::CATEGORY);
+    expect((require $path)['arenas']['arena.road']['enemyFooting'])->toBe($road)
+        ->and((string) file_get_contents($path))->toContain('// Each background and where its ground begins.');
+
+    // A point typed on its row is the same footing, read the same way.
+    $session->applyDatabaseRecord(BattleArenaFields::CATEGORY, 0, findArenaRow($session, 0, 'enemyFooting0X')['key'], '420');
+    expect($session->readArenaPreview(0)['footing']['enemies'][0])->toBe(['x' => 420.0, 'y' => 300.0]);
+    $session->undo();
+    $session->undo();
+    expect($session->readArenaPreview(0)['footing']['enemies'])->toBe([]);
+});
+
+it('refuses a footing that is not a polygon, and removes the footing when given no points', function () {
+    [, $path, $session] = createBattleArenaProject();
+    expect(fn() => $session->setArenaFooting(0, true, [['x' => 1, 'y' => 1], ['x' => 2, 'y' => 2]]))
+        ->toThrow(SessionRefusal::class, 'footing')
+        ->and(fn() => $session->setArenaFooting(0, true, [['x' => 1, 'y' => 'low'], ['x' => 2, 'y' => 2], ['x' => 3, 'y' => 1]]))
+        ->toThrow(SessionRefusal::class, 'Party Footing[0]');
+    $session->setArenaFooting(0, true, [['x' => 700, 'y' => 300], ['x' => 1300, 'y' => 300], ['x' => 1300, 'y' => 600]]);
+    $session->setArenaFooting(0, true, []);
+    $session->saveDatabase(BattleArenaFields::CATEGORY);
+
+    expect((require $path)['arenas']['arena.road'])->not->toHaveKey('partyFooting');
+});

@@ -481,6 +481,12 @@ final class SessionHost
             'troops.autoName' => $session->nameTroopAfterMembers(self::requireInt($params, 'index')),
             'arenas.preview' => $session->readArenaPreview(self::requireInt($params, 'index'),
                 is_int($params['troop'] ?? null) ? $params['troop'] : null),
+            'arenas.setFooting' => $session->setArenaFooting(self::requireInt($params, 'index'),
+                match ($params['side'] ?? null) {
+                    'party' => true,
+                    'enemies' => false,
+                    default => throw new InvalidRequest('"side" must be "party" or "enemies".'),
+                }, self::requireArray($params, 'points')),
             'troops.align' => $session->alignTroop(self::requireInt($params, 'index')),
             'troops.arrangeAutomatically' => $session->arrangeTroopAutomatically(self::requireInt($params, 'index')),
             'troops.placeMember' => $session->placeTroopMember(self::requireInt($params, 'index'), self::requireInt($params, 'member'),
