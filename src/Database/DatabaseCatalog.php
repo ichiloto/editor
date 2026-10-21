@@ -22,6 +22,8 @@ final class DatabaseCatalog
             new DatabaseCategoryDefinition('actors', 'Actors', 'Manage playable character records.', true),
             new DatabaseCategoryDefinition('classes', 'Classes', 'Define growth, roles, and class data.', true),
             new DatabaseCategoryDefinition('skills', 'Skills', 'Author active and passive skill entries.', true),
+            new DatabaseCategoryDefinition(MasteryFields::MAPS, 'Mastery Maps', 'Lay out each character\'s own skills: what each costs in EXP, when it opens and what it builds on.', true),
+            new DatabaseCategoryDefinition(MasteryFields::REGIONS, 'Mastery Regions', 'Name the regions every Mastery Map shares.', true),
             new DatabaseCategoryDefinition('items', 'Items', 'Manage consumables, key items, and resources.', true),
             new DatabaseCategoryDefinition('weapons', 'Weapons', 'Configure weapon stats and restrictions.', true),
             new DatabaseCategoryDefinition('armors', 'Armors', 'Configure armor stats and resistances.', true),

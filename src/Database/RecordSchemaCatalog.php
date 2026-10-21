@@ -133,6 +133,8 @@ final class RecordSchemaCatalog
             self::armors(),
             self::enemies(),
             self::skills(),
+            MasteryFields::getRegionSchema(),
+            MasteryFields::getMapSchema($graphical),
             self::skits(),
             self::knowledgeSubjects(),
             self::knowledgeReports(),
@@ -214,6 +216,10 @@ final class RecordSchemaCatalog
                     removeWhenEmpty: true, displayDefault: StateDisposition::HARMFUL->value),
                 // A bearer of this state counters while it is active.
                 self::counterAttackField(),
+                // Protection: scales every hit a guard could block (0.5 halves it, 0 blocks it).
+                new RecordField('damageTakenRate', 'Damage Taken Rate', InputControlType::FLOAT, removeWhenEmpty: true, displayDefault: '1 (unchanged)'),
+                // Cover: the bearer takes the single-target hits meant for its weakest ally.
+                RecordField::boolean('coversAllies', 'Covers Allies'),
             ],
             labelKey: 'name',
             identityKey: 'id',
@@ -1536,6 +1542,8 @@ final class RecordSchemaCatalog
         ];
         $variants['remove_state'] = [
             new RecordField('stateIds', 'States', reference: 'states', codec: RecordFieldCodec::CSV_LIST),
+            // Rolled for each listed state the target has (a 75% treatment cures three times in four).
+            new RecordField('chancePercent', 'Chance %', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '100'),
         ];
         $variants['modify_stat_stage'] = [
             new RecordField('stat', 'Stat', options: Character::buffableStats()),

@@ -90,3 +90,18 @@ it('seeds a new skill with the action-name battle message and previews what each
         ->and($lines(2))->toContain('Shows: Ember')
         ->and($lines(2))->toContain('%1 = who acts, %2 = this skill, blank = no message');
 });
+
+it('authors a treatment chance on a cure and the Engine reads it back', function () {
+    $root = skillRecordsProject();
+    $skills = loadRecordDatabase($root, 'skills');
+    $field = static fn(string $name): string => ProjectRecordDatabase::subFieldId('effect', 0, $name);
+
+    $skills->setField(1, $field('type'), 'remove_state');
+    $skills->setField(1, $field('stateIds'), 'poison');
+    $skills->setField(1, $field('chancePercent'), '75');
+    $skills->save();
+
+    expect($skills->getRecordByIndex(1)?->get('effects'))->toBe([['type' => 'remove_state', 'stateIds' => ['poison'], 'chancePercent' => 75]])
+        ->and(SkillCatalog::load($root . '/assets')->findSkill('Lunge')?->effects[0]?->chancePercent)->toBe(75)
+        ->and(SkillCatalog::load($root . '/assets')->getProblems())->toBe([]);
+});
