@@ -4412,39 +4412,43 @@ final class EditorSession
     }
 
     /**
-     * Moves everything that names a skill onto its replacement, at once and as
-     * one undo step: what classes teach, what actors know, can learn, attack
-     * or counter with, what enemies use, what skills and states counter with.
-     * Saves that knew the skill read it as the replacement. A list that
-     * already holds the replacement drops the old entry. The old skill is then
-     * free to delete. Asks before writing, as every file set does.
+     * Retires a skill from everything that names it, at once and as one undo
+     * step: what classes teach, what actors know, can learn, attack or counter
+     * with, what enemies use, what skills and states counter with. With a
+     * replacement, each moves onto it (a list already holding it drops the old
+     * entry) and saves that knew the skill read the replacement; without one,
+     * each is removed and saves drop the skill. The skill is then free to
+     * delete. Asks before writing, as every file set does.
      *
+     * @param string|null $replacement The skill that takes its place, or null to remove it from everything.
      * @return array<string, mixed> The question, or what was written.
-     * @throws SessionRefusal When either skill is unknown, they are the same, a spell and an ability, or a summon's action, or edits are pending.
+     * @throws SessionRefusal When a skill is unknown, the replacement is itself, the two are a spell and an ability, it is a summon's action, or edits are pending.
      */
-    public function redirectSkill(int $index, string $replacement, ?string $answer = null, ?string $confirm = null): array
+    public function retireSkill(int $index, ?string $replacement = null, ?string $answer = null, ?string $confirm = null): array
     {
         $this->requireCategory('skills');
         $database = $this->workspace->getRecordDatabase('skills') ?? throw new SessionRefusal('This project has no skills.');
         $record = $database->getRecordByIndex($index) ?? throw new SessionRefusal(sprintf('There is no skill %d.', $index));
         $name = strval($record->get('name'));
-        $target = array_find($database->getRecords(), static fn($candidate): bool => strval($candidate->get('name')) === $replacement)
-            ?? throw new SessionRefusal(sprintf('There is no skill named %s to take its place.', $replacement));
-        if ($target === $record) {
-            throw new SessionRefusal(sprintf('%s cannot take its own place.', $name));
-        }
         $isMagic = strval($record->get('kind')) === 'magic';
-        if ($isMagic !== (strval($target->get('kind')) === 'magic')) {
-            throw new SessionRefusal(sprintf('%s and %s must both be spells or both abilities: saves keep the two apart.', $name, $replacement));
+        if ($replacement !== null) {
+            $target = array_find($database->getRecords(), static fn($candidate): bool => strval($candidate->get('name')) === $replacement)
+                ?? throw new SessionRefusal(sprintf('There is no skill named %s to take its place.', $replacement));
+            if ($target === $record) {
+                throw new SessionRefusal(sprintf('%s cannot take its own place.', $name));
+            }
+            if ($isMagic !== (strval($target->get('kind')) === 'magic')) {
+                throw new SessionRefusal(sprintf('%s and %s must both be spells or both abilities: saves keep the two apart.', $name, $replacement));
+            }
         }
         if ($this->workspace->loadSkillCatalog()->isSummonAction($name)) {
             throw new SessionRefusal(sprintf('%s is a summon\'s action and follows its summon.', $name));
         }
         if ($answer === null && $this->workspace->hasUnsavedChanges()) {
-            throw new SessionRefusal(sprintf('Save or undo pending edits before moving %s. No files were changed.', $name));
+            throw new SessionRefusal(sprintf('Save or undo pending edits before retiring %s. No files were changed.', $name));
         }
         try {
-            $plan = SkillReferences::planRedirect($this->workspace->projectRoot, $this->workspace->projectId, $name, $replacement, $isMagic);
+            $plan = SkillReferences::planRetirement($this->workspace->projectRoot, $this->workspace->projectId, $name, $replacement, $isMagic);
         } catch (RuntimeException $failure) {
             throw new SessionRefusal($failure->getMessage(), previous: $failure);
         }
@@ -4452,12 +4456,14 @@ final class EditorSession
             return ['changed' => false, 'records' => $database->getRecordLabels()];
         }
         $paths = array_map(fn(string $path): string => substr($path, strlen($this->workspace->projectRoot) + 1), $plan->getChangedPaths());
-        $required = new SourceSetRequired($plan, sprintf('Retire %s into %s', $name, $replacement), 'this skill move',
-            sprintf('Move everything that names %s onto %s, and let saves read %s as %s?', $name, $replacement, $name, $replacement), $paths);
+        $required = $replacement === null
+            ? new SourceSetRequired($plan, sprintf('Retire %s', $name), 'this skill retirement',
+                sprintf('Remove %s from everything that names it? Saves that knew it drop it.', $name), $paths)
+            : new SourceSetRequired($plan, sprintf('Retire %s into %s', $name, $replacement), 'this skill retirement',
+                sprintf('Move everything that names %s onto %s, and let saves read %s as %s?', $name, $replacement, $name, $replacement), $paths);
 
         return $this->writeSourceSet($required, $answer, fn(): array => $this->requireCategory('skills')->getRecordLabels(), $confirm);
     }
-
     /**
      * Deletes a record as one undo step; the file changes on save.
      *

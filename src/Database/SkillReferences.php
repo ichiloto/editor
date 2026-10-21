@@ -67,16 +67,20 @@ final class SkillReferences
     }
 
     /**
-     * Plans moving every reference to a skill onto its replacement, with the
-     * save alias that lets saves which knew the old skill read the
-     * replacement. A list that already holds the replacement drops the old
-     * entry instead of holding the skill twice.
+     * Plans retiring a skill. With a replacement, every reference moves onto
+     * it, a list that already holds the replacement drops the old entry
+     * instead of holding the skill twice, and saves that knew the old skill
+     * read the replacement. Without one, every reference goes: a list member,
+     * the list entry it belongs to (a class grant, a learnable, an enemy
+     * action), a counter, or an attack skill (the built-in attack takes over);
+     * saves that knew the skill drop it, as the Engine drops any skill it no
+     * longer has.
      *
-     * @param bool $isMagic Whether both skills are spells (saves keep spells and abilities apart).
-     * @return SourceSetPlan|null The plan, or null when nothing names the skill and saves already follow it.
+     * @param bool $isMagic Whether the skills are spells (saves keep spells and abilities apart).
+     * @return SourceSetPlan|null The plan, or null when nothing names the skill and saves need nothing.
      * @throws RuntimeException When a reference is not a literal the plan can rewrite, or saves already send the skill elsewhere.
      */
-    public static function planRedirect(string $projectRoot, string $projectId, string $skill, string $replacement, bool $isMagic): ?SourceSetPlan
+    public static function planRetirement(string $projectRoot, string $projectId, string $skill, ?string $replacement, bool $isMagic): ?SourceSetPlan
     {
         return ProjectDirectoryContext::run($projectRoot, static function (string $root) use ($projectId, $skill, $replacement, $isMagic): ?SourceSetPlan {
             $paths = self::findSourcePaths($root);
@@ -87,7 +91,7 @@ final class SkillReferences
                 $source = (string) file_get_contents($path);
                 $watched[$path] = $source;
                 $payload = $payloads[$index] ?? null;
-                [$edits, $moved] = self::planMove($source, $payload, $skill, $replacement);
+                [$edits, $moved] = self::planFile($source, $payload, $skill, $replacement);
                 if ($edits === []) {
                     continue;
                 }
@@ -97,6 +101,7 @@ final class SkillReferences
                 $after[$path] = $moved;
             }
 
+            $subject = $replacement === null ? sprintf('retirement of %s', $skill) : sprintf('retirement of %s into %s', $skill, $replacement);
             $plans = [];
             if ($proposals !== []) {
                 $plans[] = new SourceSetPlan(
@@ -108,12 +113,12 @@ final class SkillReferences
                     $after,
                     static fn(): array => self::findSourcePaths($root),
                     static fn(string $path, string $staged): mixed => PhpDataFile::getComparableValue(PhpDataFile::evaluateIsolated($staged, $root)),
-                    sprintf('move of %s onto %s', $skill, $replacement),
+                    $subject,
                     'Project class, actor, enemy, skill and state files',
                 );
             }
-            $alias = SaveManifestAlias::plan($root, $projectId, $isMagic ? ContentReferenceCategory::SPELL : ContentReferenceCategory::ABILITY,
-                $skill, $replacement);
+            $alias = $replacement === null ? null : SaveManifestAlias::plan($root, $projectId,
+                $isMagic ? ContentReferenceCategory::SPELL : ContentReferenceCategory::ABILITY, $skill, $replacement);
             if ($alias !== null) {
                 $plans[] = $alias;
             }
@@ -121,18 +126,17 @@ final class SkillReferences
             return match (count($plans)) {
                 0 => null,
                 1 => $plans[0],
-                default => SourceSetPlan::combine(sprintf('retirement of %s into %s', $skill, $replacement),
-                    'Project skill references and save compatibility manifest', $plans),
+                default => SourceSetPlan::combine($subject, 'Project skill references and save compatibility manifest', $plans),
             };
         });
     }
 
     /**
-     * Plans one file's move: the source edits, and the value the file reads back as afterwards.
+     * Plans one file's part of a retirement: the source edits, and the value the file reads back as afterwards.
      *
      * @return array{0: list<array{0: int, 1: int, 2: string}>, 1: mixed}
      */
-    private static function planMove(string $source, mixed $payload, string $skill, string $replacement): array
+    private static function planFile(string $source, mixed $payload, string $skill, ?string $replacement): array
     {
         $references = self::findReferences($payload);
         $mine = array_values(array_filter($references, static fn(array $reference): bool => $reference['skill'] === $skill));
@@ -144,23 +148,23 @@ final class SkillReferences
         $removals = [];
         foreach ($mine as $reference) {
             $path = $reference['path'];
-            // The list member the reference is, or the list entry (a class's grant, an actor's learnable) it belongs to.
-            $member = $reference['inList'] ? $path : array_slice($path, 0, -1);
-            $list = array_slice($member, 0, -1);
-            $position = end($member);
-            $holdsReplacement = is_int($position) && array_any($references, static fn(array $other): bool =>
+            $removal = self::findRemovalPath($reference);
+            $list = array_slice($removal, 0, -1);
+            $position = end($removal);
+            $holdsReplacement = $replacement !== null && is_int($position) && array_any($references, static fn(array $other): bool =>
                 $other['skill'] === $replacement && count($other['path']) > count($list)
                 && array_slice($other['path'], 0, count($list)) === $list && $other['path'][count($list)] !== $position);
-            if ($holdsReplacement) {
-                $removals[implode("\0", $member)] = $member;
+            if ($replacement === null || $holdsReplacement) {
+                $removals[implode("\0", $removal)] = $removal;
                 continue;
             }
             $edits[] = $document->replaceValueEdit($path, var_export($replacement, true));
             $payload = self::withValue($payload, $path, $replacement);
         }
-        // Later members first, so each removal leaves the earlier positions it names in place.
+        // Within a list, later members go first, so each removal leaves the positions the others name in place.
         $ordered = array_values($removals);
-        usort($ordered, static fn(array $a, array $b): int => end($b) <=> end($a));
+        usort($ordered, static fn(array $a, array $b): int =>
+            [implode("\0", array_slice($a, 0, -1)), end($b)] <=> [implode("\0", array_slice($b, 0, -1)), end($a)]);
         foreach ($ordered as $member) {
             $edits[] = $document->removeEntryEdit($member);
             $payload = self::withoutMember($payload, $member);
@@ -169,6 +173,24 @@ final class SkillReferences
         return [$edits, $payload];
     }
 
+    /**
+     * What goes when a reference goes: the list member itself, the list entry
+     * a `skill` field belongs to, the whole counter a counter skill names, or
+     * the attack skill field.
+     *
+     * @param array{path: list<int|string>, skill: string, inList: bool} $reference
+     * @return list<int|string>
+     */
+    private static function findRemovalPath(array $reference): array
+    {
+        $path = $reference['path'];
+        if ($reference['inList'] || end($path) === 'attackSkill') {
+            return $path;
+        }
+        $owner = array_slice($path, 0, -1);
+
+        return is_int(end($owner)) || end($owner) === 'counterAttack' ? $owner : $path;
+    }
     /** @param list<int|string> $path */
     private static function withValue(mixed $value, array $path, string $replacement): mixed
     {

@@ -55,8 +55,8 @@ it('moves everything that names a skill onto its replacement, keeping comments, 
     $root = skillRetirementProject();
     $session = EditorSession::open($root);
 
-    $question = $session->redirectSkill(0, 'New Cut');
-    $written = $session->redirectSkill(0, 'New Cut', 'write', $question['confirm']);
+    $question = $session->retireSkill(0, 'New Cut');
+    $written = $session->retireSkill(0, 'New Cut', 'write', $question['confirm']);
     $actor = (string) file_get_contents($root . '/assets/Data/Actors/Kaelion.php');
     $data = (require $root . '/assets/Data/Actors/Kaelion.php')['data'];
     $classes = require $root . '/assets/Data/classes.php';
@@ -76,7 +76,24 @@ it('moves everything that names a skill onto its replacement, keeping comments, 
 it('refuses moving a skill onto itself, an unknown skill, or across spells and abilities', function () {
     $session = EditorSession::open(skillRetirementProject());
 
-    expect(fn() => $session->redirectSkill(0, 'Old Cut'))->toThrow(SessionRefusal::class, 'its own place')
-        ->and(fn() => $session->redirectSkill(0, 'Missing'))->toThrow(SessionRefusal::class, 'no skill named Missing')
-        ->and(fn() => $session->redirectSkill(0, 'Spark'))->toThrow(SessionRefusal::class, 'both be spells or both abilities');
+    expect(fn() => $session->retireSkill(0, 'Old Cut'))->toThrow(SessionRefusal::class, 'its own place')
+        ->and(fn() => $session->retireSkill(0, 'Missing'))->toThrow(SessionRefusal::class, 'no skill named Missing')
+        ->and(fn() => $session->retireSkill(0, 'Spark'))->toThrow(SessionRefusal::class, 'both be spells or both abilities');
+});
+
+it('removes a skill retired without a replacement from everything that names it, and saves simply drop it', function () {
+    $root = skillRetirementProject();
+    $session = EditorSession::open($root);
+
+    $question = $session->retireSkill(0);
+    $session->retireSkill(0, null, 'write', $question['confirm']);
+    $data = (require $root . '/assets/Data/Actors/Kaelion.php')['data'];
+    $classes = require $root . '/assets/Data/classes.php';
+
+    expect($question['question'])->toContain('Remove Old Cut from everything that names it')
+        ->and($data['abilities']['learned'])->toBe(['Guard Up'])
+        ->and(array_column($data['abilities']['learnables'], 'skill'))->toBe(['New Cut'])
+        ->and($classes[0]['skillsToLearn'])->toBe([])
+        ->and((require $root . '/assets/Data/save-compatibility.php')['aliases'])->toBe([])
+        ->and(EditorSession::open($root)->deleteDatabaseRecord('skills', 0)['records'])->toBe(['New Cut', 'Guard Up', 'Spark']);
 });

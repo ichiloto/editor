@@ -81,7 +81,7 @@ final readonly class ProjectWorkspace
         $this->getRecordDatabase(\Ichiloto\Editor\Field\MapCategoryFields::CATEGORY)?->useDeletionReferences(
             fn(string $category): array => \Ichiloto\Editor\Field\MapLandmarks::describeCategoryReferences($this->maps, $category),
         );
-        // A skill stays while a class, actor, enemy, skill or state names it; retiring it moves those first (skills.redirect).
+        // A skill stays while a class, actor, enemy, skill or state names it; skills.retire moves or removes those first.
         $this->getRecordDatabase('skills')?->useDeletionReferences(fn(string $skill): array => $this->describeSkillUses($skill));
         $references = new ReferenceCatalog($this);
         foreach ($this->recordDatabases as $database) { $database->useAuthoringReferences($references); }
