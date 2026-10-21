@@ -363,7 +363,9 @@ final class CutsceneSchemas
             new RecordField('sprite', 'Sprite', InputControlType::MULTILINE, codec: RecordFieldCodec::LINES, removeWhenEmpty: true),
             new RecordField('asset', 'Asset', removeWhenEmpty: true),
             ...$position,
-            ...EndFacingFields::getFields($entry, cinematic: true, graphical: $graphical, facingDefault: 'south'),
+            // An independent replacement that names no facing keeps the visual's current heading in the Engine.
+            ...EndFacingFields::getFields($entry, cinematic: true, graphical: $graphical,
+                facingDefault: ($entry['replace'] ?? false) === true && ! isset($entry['subject']) ? '(keep current facing)' : 'south'),
             RecordField::boolean('visible', 'Visible', removeWhenEmpty: false, displayDefault: 'true'),
             RecordField::boolean('collision', 'Collision'),
             new RecordField('sprites.north', 'Sprite North', InputControlType::MULTILINE, codec: RecordFieldCodec::LINES, removeWhenEmpty: true),
