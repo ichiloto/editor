@@ -198,7 +198,7 @@ it('counts a waymark on the event that starts the battle whose troop page sets t
 
     expect(guidanceGaps($project([$toDuel])))->toBe([])
         ->and(array_map(static fn(Issue $issue): string => $issue->message, guidanceGaps($project([]))))
-        ->toHaveCount(1)->each->toContain('no objective of a main quest leads');
+        ->toHaveCount(1)->each->toContain('no objective or start waymark of a main quest leads');
 });
 
 it('counts a waymark leading to the map whose encounters bring that battle', function () {
