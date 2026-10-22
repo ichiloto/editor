@@ -210,6 +210,12 @@ final class SessionHost
                 self::requireString($params, 'mark'),
                 self::requireInt($params, 'tile'),
             ),
+            'tilesets.appearance' => $session->setTileAppearance(
+                self::requireInt($params, 'index'),
+                self::requireString($params, 'tileset'),
+                self::requireSelectors($params),
+                self::readOptionalString($params, 'appearance'),
+            ),
             'audio.play' => $session->playAudio(self::requireString($params, 'kind'), self::requireString($params, 'name')),
             'audio.stop' => $session->stopAudio(),
             'audio.status' => $session->describeAudio(),
@@ -279,6 +285,7 @@ final class SessionHost
                 self::requireString($params, 'layer'), self::requireInt($params, 'x'), self::requireInt($params, 'y'), self::readChoices($params)),
             'selection.clipboard' => $session->describeClipboard(),
             'map.coverage' => $session->readCoverage(self::requireString($params, 'map')),
+            'map.passageAgreement' => $session->readPassageAgreement(self::requireString($params, 'map')),
             'layer.drawTiles' => $session->drawLayerTiles(
                 self::requireString($params, 'map'),
                 self::requireInt($params, 'revision'),
@@ -727,6 +734,21 @@ final class SessionHost
         } catch (\InvalidArgumentException $error) {
             throw new InvalidRequest(sprintf('"%s": %s', $key, $error->getMessage()), previous: $error);
         }
+    }
+
+    /**
+     * @param array<string, mixed> $params
+     * @return list<int|string>
+     */
+    private static function requireSelectors(array $params): array
+    {
+        $selectors = $params['selectors'] ?? null;
+        if (! is_array($selectors) || ! array_is_list($selectors) || ! array_all($selectors, static fn(mixed $selector): bool
+            => is_int($selector) || is_string($selector))) {
+            throw new InvalidRequest('"selectors" must be a list of tile identities and sheet names.');
+        }
+
+        return $selectors;
     }
 
     /** @param array<string, mixed> $params */

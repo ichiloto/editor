@@ -992,9 +992,15 @@ final class ProjectMap
     /** @return int[][] The same physical cells the Engine installs at map load. */
     public function getResolvedCollisionMap(): array
     {
+        return $this->getPhysicalOccupancy()->collisionGrid;
+    }
+
+    /** The map's physical cells as the Engine resolves them at load: declared occupancy, or its glyphs by the collision dictionary. */
+    public function getPhysicalOccupancy(): MapPhysicalOccupancy
+    {
         $dictionary = $this->hasMapDataField([MapPhysicalOccupancy::DATA_KEY]) ? [] : $this->loadCollisionDictionary();
 
-        return MapCollisionResolver::resolveMap($this->layers->getLayerSet(), $this->editableData, $dictionary)->collisionGrid;
+        return MapCollisionResolver::resolveMap($this->layers->getLayerSet(), $this->editableData, $dictionary);
     }
 
     /**

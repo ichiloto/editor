@@ -77,7 +77,7 @@ final class MapCompletenessCheck
      * its workspace holds it; null when it names none, so a map of inline
      * objects never depends on the catalogue.
      */
-    private static function readFieldCatalog(ProjectMap $map): ?FieldPresentationCatalog
+    public static function readFieldCatalog(ProjectMap $map): ?FieldPresentationCatalog
     {
         $objects = $map->getEditableData()['worldObjects'] ?? [];
 
