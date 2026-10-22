@@ -86,9 +86,9 @@ Validation warns where the wayfinder would have nothing authored to lead with:
 
 - A main quest's prerequisite, or a door that turns the player back
   (`whenBlocked`), needs a story flag that nothing in the project sets, or
-  that no objective of a main quest leads to. An objective leads to a flag
-  when it tracks the flag, or when its waymark points at what sets it: the
-  event or NPC, or, for a flag set in a battle (its script after
+  that no objective or start waymark of a main quest leads to. An objective
+  leads to a flag when it tracks the flag, or when its waymark points at what
+  sets it: the event or NPC, or, for a flag set in a battle (its script after
   `start_battle`, or the troop's event pages), the event that starts the
   battle or the map whose encounters bring it.
 - Nothing in the project starts a main quest, or nothing leads to what does.
@@ -97,8 +97,15 @@ Validation warns where the wayfinder would have nothing authored to lead with:
 
 Guidance counts only when it can show before the step: a waymark waiting for
 the step, or a quest that needs it, does not lead to it. A start waymark
-disappears once its quest starts, so it leads only to what starts its quest
-(and to a flag set by the same NPC page or event). Should a gap reach the
+disappears once its quest starts, so it leads to what starts its quest (and
+to a flag set by the same NPC page or event). When whoever starts the quest
+is there, or speaks, only once a flag is set, the quest cannot start before
+that step, so its start waymarks lead to whatever sets the flag too. That is
+how to lead between quests through a step that opens the next one: give the
+next quest `Prereqs` the player already meets (`quest:<previous>:completed`)
+and two start waymarks, one on what sets the flag shown while it is unset
+(`!event:<flag>`), and one on the giver shown once it is set
+(`event:<flag>`). Should a gap reach the
 game anyway, the game leads to what takes the next step itself and notes the
 gap in `logs/warning.log`; close it with an authored waymark all the same.
 

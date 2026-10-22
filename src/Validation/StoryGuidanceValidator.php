@@ -31,7 +31,8 @@ use Throwable;
 final class StoryGuidanceValidator
 {
     private const string HINT = 'Track the step with an objective of the quest that is active then, with a waymark on '
-        . 'where the player opens it, so the wayfinder keeps leading.';
+        . 'where the player opens it, or lead there with a start waymark of the quest that can start only once it is open, '
+        . 'so the wayfinder keeps leading.';
     private const string START_HINT = 'Give the quest a start waymark on where it starts, or lead there with an objective '
         . 'of the main quest active before it, so the wayfinder keeps leading.';
 
@@ -81,7 +82,7 @@ final class StoryGuidanceValidator
         $message = $index->findSetters($gate->flag) === []
             ? sprintf('%s needs "%s", but nothing in the project sets it: no event, NPC, event script, cinematic or battle, '
                 . 'so the wayfinder cannot lead to it.', $what, $gate->flag)
-            : sprintf('%s needs "%s", but no objective of a main quest leads the player to it, so the wayfinder shows nothing until it is set.',
+            : sprintf('%s needs "%s", but no objective or start waymark of a main quest leads the player to it, so the wayfinder shows nothing until it is set.',
                 $what, $gate->flag);
 
         return new Issue(Severity::WARNING, $gate->quest !== null ? sprintf('quest %s', $gate->quest->id)
