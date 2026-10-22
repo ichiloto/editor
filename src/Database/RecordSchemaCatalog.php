@@ -152,6 +152,7 @@ final class RecordSchemaCatalog
             self::optimizeExclusions(),
             self::commonEvents($graphical),
             self::terms(),
+            WordFormFields::getSchema(),
             \Ichiloto\Editor\Field\MapCategoryFields::getSchema(),
             DialoguePortraitFields::getSchema(),
             DialogueSpeakerFields::getSchema(),

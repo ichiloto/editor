@@ -177,6 +177,7 @@ class ProjectValidator
       ...new ProgressionValidator()->validate($workspace),
       ...new MasteryValidator()->validate($workspace),
       ...new IncomeValidator()->validate($workspace),
+      ...new WordFormValidator()->validate($workspace),
       ...$this->checkDefinitionIdentities($workspace),
       ...$this->checkActorDefinitions($workspace),
       ...new ActorReferenceValidator()->validate($workspace),
