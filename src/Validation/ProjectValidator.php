@@ -192,7 +192,7 @@ class ProjectValidator
       ...new SaveCompatibilityValidator()->validate($workspace),
       ...new ScreenTransitionValidator()->validate($workspace),
       ...new ReachabilityValidator()->validate($workspace),
-      ...new StoryGuidanceValidator($this->commonEventScripts)->validate($workspace),
+      ...new StoryGuidanceValidator()->validate($workspace),
       ...new EffectValidator()->validate($workspace),
     ];
 
