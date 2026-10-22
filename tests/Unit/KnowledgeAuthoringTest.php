@@ -274,3 +274,41 @@ it('allows the first record in a projected category omitted from a shared file',
 
     expect((require $path)['reports'][0]['id'] ?? null)->toBe('report.first');
 });
+
+it('labels a record type and links a summon record without disturbing the bare ids', function () {
+    $root = makeTemporaryProject('ichiloto-knowledge-');
+    $path = writeKnowledgeCatalog($root);
+
+    $types = knowledgeDatabase($root, 'knowledge_record_types');
+    $index = $types->addRecord();
+    $types->setField($index, 'type', 'summon');
+    $types->setField($index, 'label', 'Synthetic Spirits');
+    $types->save();
+
+    $subjects = knowledgeDatabase($root, 'knowledge_subjects');
+    $index = $subjects->addRecord();
+    $subjects->setField($index, 'id', 'summon.wisp');
+    $subjects->setField($index, 'recordType', 'summon');
+    $subjects->setField($index, 'displayName', 'Wisp');
+    $subjects->setField($index, 'quickCard', '');
+    $subjects->setField($index, 'summon', 'wisp');
+    $subjects->save();
+
+    $after = require $path;
+    expect($after['recordTypes'])->toBe(['creature', 'person', ['id' => 'summon', 'label' => 'Synthetic Spirits']])
+        ->and($after['subjects'][2]['summon'])->toBe('wisp')
+        ->and($after['subjects'][0])->not->toHaveKey('summon')
+        ->and(knowledgeDatabase($root, 'knowledge_record_types')->getRecordByIndex(2)?->get('label'))->toBe('Synthetic Spirits');
+
+    $catalog = ProjectDirectoryContext::run($root, static fn(): mixed => new \Ichiloto\Engine\Progress\Knowledge\KnowledgeCatalog(
+        (static fn(): mixed => require $root . '/assets/Data/knowledge.php')(),
+    ));
+    expect($catalog->getRecordType('summon')?->name)->toBe('Synthetic Spirits')
+        ->and($catalog->subject('summon.wisp')?->summonId)->toBe('wisp');
+
+    // Clearing the label writes the bare id back.
+    $types = knowledgeDatabase($root, 'knowledge_record_types');
+    $types->setField(2, 'label', '');
+    $types->save();
+    expect((require $path)['recordTypes'])->toBe(['creature', 'person', 'summon']);
+});

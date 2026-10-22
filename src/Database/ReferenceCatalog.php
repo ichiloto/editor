@@ -19,6 +19,7 @@ use Ichiloto\Editor\Dialogue\DialogueSpeakerFields;
 use Ichiloto\Engine\Messaging\Dialogue\Presentation\DialoguePresentationCatalog;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Engine\Animations\Field\FieldPresentationCatalog;
+use Ichiloto\Engine\Progress\Knowledge\KnowledgeRecordType;
 use Ichiloto\Engine\Rendering\Presentation\Text\ProjectTextCatalog;
 use Ichiloto\Engine\Animations\Timelines\EffectTimelineLibrary;
 use Ichiloto\Engine\Battle\CounterAttackRule;
@@ -1055,10 +1056,17 @@ final class ReferenceCatalog
     {
         $catalog = $this->knowledgeCatalog();
 
-        return array_values(array_filter(
-            array_map(strval(...), (array) ($catalog['recordTypes'] ?? [])),
-            static fn(string $type): bool => trim($type) !== '',
-        ));
+        $types = [];
+
+        foreach ((array) ($catalog['recordTypes'] ?? []) as $entry) {
+            try {
+                $types[] = KnowledgeRecordType::fromEntry($entry)->id;
+            } catch (InvalidArgumentException) {
+                // Validation reports an entry the runtime cannot read.
+            }
+        }
+
+        return $types;
     }
 
     /**

@@ -2,6 +2,7 @@
 
 namespace Ichiloto\Editor\Validation;
 
+use Ichiloto\Editor\Cutscenes\CutsceneType;
 use Ichiloto\Editor\Database\TroopEventPageContract;
 use Ichiloto\Engine\Entities\Enemies\EnemyHabitat;
 use Ichiloto\Engine\Battle\Presentation\BattleFooting;
@@ -50,6 +51,7 @@ use Ichiloto\Engine\Events\MapEventDefinition;
 use Ichiloto\Engine\Events\Triggers\EventCueKind;
 use Ichiloto\Engine\Events\Triggers\ScriptEventTrigger;
 use Ichiloto\Engine\IO\Console\TerminalText;
+use Ichiloto\Engine\Progress\Knowledge\KnowledgeRecordType;
 use InvalidArgumentException;
 use Throwable;
 use Symfony\Component\Console\Formatter\OutputFormatterStyle;
@@ -824,7 +826,15 @@ class ProjectValidator
       }
     }
 
-    $recordTypes = array_map(strval(...), (array) ($catalog['recordTypes'] ?? []));
+    $summons = $workspace->cutscenes?->ids(CutsceneType::SUMMON) ?? [];
+    $recordTypes = [];
+    foreach ((array) ($catalog['recordTypes'] ?? []) as $entry) {
+      try {
+        $recordTypes[] = KnowledgeRecordType::fromEntry($entry)->id;
+      } catch (InvalidArgumentException) {
+        // checkKnowledgeIdentities() reports an entry the runtime cannot read.
+      }
+    }
     $subjectIds = [];
 
     foreach ((array) ($catalog['subjects'] ?? []) as $index => $subject) {
@@ -855,7 +865,14 @@ class ProjectValidator
       }
 
       if (trim(strval($subject['quickCard'] ?? '')) === '') {
-        $issues[] = Issue::error($where, sprintf('%s has no quick card.', $label), 'A record shows its quick card first.');
+        $issues[] = Issue::warning($where, sprintf('%s has no quick card yet.', $label),
+          'Its record lists and counts without one; write it when its wording is ready.');
+      }
+
+      $summon = trim(strval($subject['summon'] ?? ''));
+      if ($summon !== '' && ! in_array($summon, $summons, true)) {
+        $issues[] = Issue::warning($where, sprintf('%s is a record of the summon "%s", which the project does not have.', $label, $summon),
+          'Its record shows no Summon Info until it names a summon the project has.');
       }
     }
 
@@ -1146,13 +1163,18 @@ class ProjectValidator
     $issues = [];
     $recordTypes = [];
 
-    foreach ((array) ($catalog['recordTypes'] ?? []) as $index => $type) {
-      $type = is_scalar($type) ? trim(strval($type)) : '';
+    foreach ((array) ($catalog['recordTypes'] ?? []) as $index => $entry) {
+      $type = is_scalar($entry) ? trim(strval($entry)) : (is_array($entry) && is_scalar($entry['id'] ?? null) ? trim(strval($entry['id'])) : '');
 
       if ($type === '') {
         $issues[] = Issue::error($where, sprintf('Record type %s is empty.', strval($index)));
 
         continue;
+      }
+
+      if (is_array($entry) && array_diff(array_keys($entry), ['id', 'label']) !== []) {
+        $issues[] = Issue::error($where, sprintf('Record type "%s" holds more than its id and label.', $type),
+          'The runtime refuses the catalogue until it is only an id, or an id with a label.');
       }
 
       if (isset($recordTypes[$type])) {

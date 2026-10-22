@@ -114,6 +114,7 @@ it('reports a knowledge catalogue that points at what it does not declare', func
         ['id' => 'creature.rat', 'recordType' => 'creature', 'displayName' => 'Rat', 'quickCard' => 'A rat.'],
         ['id' => 'creature.rat', 'recordType' => 'creature', 'displayName' => 'Rat again', 'quickCard' => 'The same id.'],
         ['id' => 'person.ghost', 'recordType' => 'apparition', 'displayName' => 'Ghost', 'quickCard' => ''],
+        ['id' => 'creature.wisp', 'recordType' => 'creature', 'displayName' => 'Wisp', 'quickCard' => 'A wisp.', 'summon' => 'absent'],
         [
           'id' => 'creature.bat',
           'recordType' => 'creature',
@@ -135,12 +136,14 @@ it('reports a knowledge catalogue that points at what it does not declare', func
 
     expect($errors)->toContain('Subject id "creature.rat" is declared more than once')
         ->toContain('record type "apparition", which the catalogue does not declare')
-        ->toContain('person.ghost has no quick card')
         ->toContain('creature.bat is related to "creature.moth"')
         ->toContain('The enemy "Sewer Rat" maps to the subject "creature.nothing"')
         ->toContain('report.one concerns the subject "creature.unknown"')
         ->toContain('Report id "report.one" is declared more than once')
-        ->and($warnings)->toContain('disagrees with "report.absent"');
+        ->and($errors)->not->toContain('quick card')
+        // A card may wait for its writer; it is flagged, not refused.
+        ->and($warnings)->toContain('disagrees with "report.absent"', 'person.ghost has no quick card yet',
+            'creature.wisp is a record of the summon "absent", which the project does not have');
 });
 
 it('refuses a catalogue that would ship what only the author should know', function () {

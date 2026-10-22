@@ -681,6 +681,9 @@ final class RecordSchemaCatalog
                 new RecordField('habitats', 'Habitats', codec: RecordFieldCodec::CSV_LIST, removeWhenEmpty: true),
                 new RecordField('observations', 'Observations', codec: RecordFieldCodec::CSV_LIST, removeWhenEmpty: true),
                 new RecordField('displayOrder', 'Display Order', InputControlType::INTEGER, step: 10),
+                // A summon met in battle: its record reads that summon's
+                // Summon Info rather than a copy of it.
+                new RecordField('summon', 'Summon', removeWhenEmpty: true, reference: 'summons', allowsNone: true, displayDefault: '(none)'),
                 // A subject the party has not met yet is authored, but not
                 // listed, until something discovers it.
                 RecordField::boolean('hidden', 'Hidden Until Discovered'),
@@ -759,7 +762,7 @@ final class RecordSchemaCatalog
      * Knowledge record types — the `recordTypes` list of the catalogue.
      *
      * The kinds of record a project declares, and the only kinds a subject
-     * can be.
+     * can be, each with the label players see it called.
      *
      * @return RecordSchema
      */
@@ -770,10 +773,14 @@ final class RecordSchemaCatalog
             entryNoun: 'record type',
             storage: RecordStorage::LIST_FILE,
             relativePath: 'assets/Data/knowledge.php',
-            fields: [new RecordField('type', 'Record Type')],
+            fields: [
+                new RecordField('type', 'Record Type'),
+                // What players see the kind called; without one they see its id.
+                new RecordField('label', 'Label'),
+            ],
             labelKey: 'type',
             identityKey: 'type',
-            blank: ['type' => 'new-record-type'],
+            blank: ['type' => 'new-record-type', 'label' => ''],
             projection: new KnowledgeRecordTypeProjection(),
         );
     }
