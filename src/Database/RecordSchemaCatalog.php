@@ -1311,7 +1311,8 @@ final class RecordSchemaCatalog
     /**
      * Classes — `assets/Data/classes.php`, the plain data the engine's
      * `ClassStore` reads: growth curves, equipment types, skills learned by
-     * level. A class is addressed by its numeric id; new ones take the next.
+     * level, and the curriculum of Mastery nodes the role recommends. A class
+     * is addressed by its numeric id; new ones take the next.
      *
      * @return RecordSchema
      */
@@ -1339,6 +1340,8 @@ final class RecordSchemaCatalog
                 new RecordField('maxLevel', 'Max Level', InputControlType::INTEGER),
                 new RecordField('equipment.weapons', 'Weapon Types', codec: RecordFieldCodec::CSV_LIST, reference: 'weapon_types'),
                 new RecordField('equipment.armor', 'Armor Types', codec: RecordFieldCodec::CSV_LIST, reference: 'armor_types'),
+                // The Mastery nodes the role recommends, by node id; a guide, never a limit.
+                new RecordField('curriculum', 'Curriculum', codec: RecordFieldCodec::CSV_LIST, removeWhenEmpty: true),
                 new RecordField('experienceCurve.baseValue', 'EXP Base', InputControlType::INTEGER),
                 new RecordField('experienceCurve.extraValue', 'EXP Extra', InputControlType::INTEGER),
                 new RecordField('experienceCurve.accelerationA', 'EXP Accel A', InputControlType::INTEGER),

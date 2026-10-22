@@ -42,6 +42,22 @@ it('edits what the engine reads in its own source: curves, equipment types and s
         ->and((require $path)[0])->toBe((require makeTemporaryProject() . '/assets/Data/classes.php')[0]);
 });
 
+it('edits a role\'s curriculum of Mastery nodes in its own source, and drops the key once it is emptied', function () {
+    $root = makeTemporaryProject();
+    $path = $root . '/assets/Data/classes.php';
+    $classes = classRecords($root);
+
+    $classes->setField(0, 'curriculum', 'burn-i, rend');
+    $classes->save();
+    $recommended = (require $path)[0]['curriculum'] ?? null;
+    $classes = classRecords($root);
+    $classes->setField(0, 'curriculum', '');
+    $classes->save();
+
+    expect($recommended)->toBe(['burn-i', 'rend'])
+        ->and((require $path)[0])->not->toHaveKey('curriculum');
+});
+
 it('gives a new class the next id and a name of its own', function () {
     $classes = classRecords(makeTemporaryProject());
     $index = $classes->addRecord();
