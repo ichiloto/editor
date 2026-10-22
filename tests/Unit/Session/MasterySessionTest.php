@@ -296,3 +296,33 @@ it('warns where a discipline, its own trunk or a branch has no summary for Info,
     expect($validate())->toBe([])
         ->and(MasteryCatalog::load($root . '/assets')->tree->regions[1]->trunkDescription)->toBe('What its own skills cover.');
 });
+
+it('moves a branch within another branch of its region as a sub-family, keeping its node ids, and refuses one within another region', function () {
+    $root = masteryProject();
+    writeSkillRecords($root, new SpecialSkill('Cut', 'Cuts.', '', 2, 0), new MagicSkill('Spark', 'Shocks.', '', 4, 0),
+        new MagicSkill('Haste', 'Hurries.', '', 6, 0));
+    $settings = $root . '/assets/Data/mastery.php';
+    // An authored source with a comment the move must keep.
+    file_put_contents($settings, str_replace("];\n", "  'branches' => [\n    // Odd forces.\n    ['id' => 'odd', 'region' => 'storms', 'name' => 'Odd', 'kind' => 'non-elemental', 'nodes' => []],\n"
+        . "    ['id' => 'hours', 'region' => 'blades', 'name' => 'Hours', 'kind' => 'aspect', 'nodes' => [\n      ['id' => 'haste', 'kind' => 'application', 'skill' => 'Haste'],\n    ]],\n  ],\n];\n",
+        file_get_contents($settings)));
+    $session = EditorSession::open($root);
+    $branch = static fn(): array => $session->readDatabaseRecord(MasteryFields::BRANCHES, 1);
+    $choices = array_column($session->listReferences(null, MasteryFields::BRANCHES), 'value');
+
+    // Within a branch of another region, the Engine could not read the tree.
+    $session->applyDatabaseRecord(MasteryFields::BRANCHES, 1, masteryRow($branch(), 'within')['key'], 'odd');
+    expect($choices)->toBe(['odd', 'hours'])
+        ->and(fn() => $session->saveDatabase(MasteryFields::BRANCHES))->toThrow(SessionRefusal::class, 'in another region');
+
+    $session->applyDatabaseRecord(MasteryFields::BRANCHES, 1, masteryRow($branch(), 'region')['key'], 'storms');
+    $session->saveDatabase(MasteryFields::BRANCHES);
+    $tree = MasteryCatalog::load($root . '/assets')->tree;
+    $board = new \Ichiloto\Engine\Progression\Mastery\MasteryBoard($tree);
+
+    expect($tree->branches['hours']->within)->toBe('odd')
+        ->and($tree->nodes['haste']->region)->toBe('storms')
+        ->and(array_map(static fn($family): string => $family->id, $board->getFamilies('storms')))->toBe(['odd', 'trunk:storms'])
+        ->and($board->findFamily('odd')->nodes)->toBe(['haste'])
+        ->and(file_get_contents($settings))->toContain('// Odd forces.')->toContain("'within' => 'odd'");
+});

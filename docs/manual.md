@@ -1522,7 +1522,12 @@ The mastery tree, in `assets/Data/mastery.php`, is shared by every
 character: anyone can reach any node. Its regions (Mastery Regions) hold
 nodes on their trunks, ungraded applications not yet placed on a branch.
 Its branches (Mastery Branches) each grow from a region and practise one
-element, one aspect, or the region's non-elemental practice; their nodes
+element, one aspect, or the region's non-elemental practice. A branch may
+instead grow Within Branch another branch of its region: the game shows it
+as a sub-family inside that branch's family, with its own heading, Summary
+and count, and where the outer branch has a foundation, the sub-family's
+chain grows from it. Its node ids stay as they are, so saves are unaffected.
+Their nodes
 are listed in the order they progress, and each node's kind places it in
 the chain. A foundation comes first and may grant a skill or nothing yet;
 graded applications (I, II, III) climb from it; advanced applications

@@ -66,6 +66,8 @@ final class ReferenceCatalog
         'skills',
         // The regions every Mastery Map shares, by id.
         'mastery_regions',
+        // The mastery tree's branches, by id: what a branch may grow within.
+        MasteryFields::BRANCHES,
         // Every node of the mastery tree, by id: what a character's map gives terms for.
         MasteryFields::NODES,
         'quests',
@@ -241,6 +243,8 @@ final class ReferenceCatalog
             'mastery_regions' => array_map(static fn(ProjectRecord $record): string => strval($record->get('id')),
                 $this->workspace->getRecordDatabase(MasteryFields::REGIONS)?->getRecords() ?? []),
             MasteryFields::NODES => $this->masteryNodeIds(),
+            MasteryFields::BRANCHES => array_map(static fn(ProjectRecord $record): string => strval($record->get('id')),
+                $this->workspace->getRecordDatabase(MasteryFields::BRANCHES)?->getRecords() ?? []),
             'quests' => array_map(static fn(ProjectQuest $quest): string => $quest->getId(), $this->workspace->getQuests()),
             'income_schedules' => array_keys($this->incomeScheduleNames()),
             'maps' => $this->workspace->mapIds,

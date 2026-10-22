@@ -19,7 +19,8 @@ use Throwable;
 /**
  * The Mastery categories: the mastery tree every character shares, kept in
  * `assets/Data/mastery.php` as its regions (each with the nodes on its
- * trunk) and its branches (each with its nodes in the order they progress),
+ * trunk) and its branches (each with its nodes in the order they progress,
+ * growing from a region or within another branch of it as a sub-family),
  * and one map per character (`assets/Data/Mastery/*.php`) stating that
  * character's own terms for tree nodes. Both editors write them through
  * these records, and the Engine's own readers refuse a tree or map it could
@@ -82,6 +83,8 @@ final class MasteryFields
             fields: [
                 new RecordField('id', 'Stable Id', isReadOnly: true),
                 RecordField::reference('region', 'Region', self::REGIONS),
+                // The branch of the same region it grows within, as a sub-family of that branch's family; none grows from the region.
+                new RecordField('within', 'Within Branch', reference: self::BRANCHES, removeWhenEmpty: true, allowsNone: true, displayDefault: '(the region)'),
                 new RecordField('name', 'Name'),
                 new RecordField('kind', 'Kind', options: array_column(MasteryBranchKind::cases(), 'value')),
                 // An element branch practises one of the project's elements.
