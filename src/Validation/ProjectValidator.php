@@ -1715,6 +1715,7 @@ class ProjectValidator
           ...$this->checkLayers($map),
           ...MapGraphicsValidator::validate($map),
           ...MapGraphicsValidator::validateCoverage($map),
+          ...PassageAgreementCheck::validate($map),
           ...$this->checkRetiredMapData($map),
           ...MapCompletenessCheck::validate($map, $this->inventoryCatalog),
           ...$this->checkDoors($map, $workspace->mapIds),

@@ -57,7 +57,9 @@ use Ichiloto\Engine\Entities\Skills\SkillCatalog;
 use Ichiloto\Engine\Entities\Skills\SkillDraft;
 use Ichiloto\Engine\Entities\Skills\SkillRecord;
 use Ichiloto\Engine\Entities\Skills\SkillResolutionScope;
+use Ichiloto\Engine\Rendering\Tilesets\TileAppearance;
 use Ichiloto\Engine\Rendering\Tilesets\Tileset;
+use Ichiloto\Engine\Rendering\Tilesets\TilesetAppearance;
 use Ichiloto\Engine\Rendering\Tilesets\TilesetPiece;
 use Ichiloto\Engine\Rendering\Tilesets\TilesetSheet;
 use Ichiloto\Engine\Quests\QuestObjectiveType;
@@ -1849,7 +1851,9 @@ final class RecordSchemaCatalog
      * or as tables, the shadow its raised tiles cast, the tile that marks
      * missing art, and the pieces maps are built from, keyed by piece id:
      * a stamped piece's glyph rows with its tile rows on each tile layer, or
-     * a connected piece's glyph and tile for each shape of a line.
+     * a connected piece's glyph and tile for each shape of a line. The
+     * graphical editor also edits what tiles show at ground level, which
+     * validation alone reads.
      *
      * @return RecordSchema
      */
@@ -1891,6 +1895,13 @@ final class RecordSchemaCatalog
                 new RecordField('shadows.casters', 'Shadow Casters', codec: RecordFieldCodec::CSV_TOKENS, removeWhenEmpty: true),
                 new RecordField('shadows.width', 'Shadow Width', InputControlType::FLOAT, removeWhenEmpty: true),
                 new RecordField('shadows.opacity', 'Shadow Opacity', InputControlType::FLOAT, removeWhenEmpty: true),
+                // What tiles show at ground level, for validation alone: graphical authoring, so the GUI editor's.
+                ...($graphical ? array_map(static fn(TileAppearance $class): RecordField => new RecordField(
+                    TilesetAppearance::DATA_KEY . '.' . $class->value,
+                    'Appearance: ' . ucfirst($class->value),
+                    codec: RecordFieldCodec::CSV_TOKENS,
+                    removeWhenEmpty: true,
+                ), TileAppearance::cases()) : []),
             ],
             labelKey: 'name',
             identityKey: null,

@@ -25,6 +25,7 @@ use Ichiloto\Editor\Canvas\CanvasTool;
 use Ichiloto\Editor\Canvas\ToolGeometry;
 use Ichiloto\Engine\Events\MapEventDefinition;
 use Ichiloto\Engine\Entities\Enemies\EnemyHabitat;
+use Ichiloto\Engine\Rendering\Tilesets\TileAppearance;
 use Ichiloto\Engine\Rendering\Tilesets\TileId;
 use Ichiloto\Engine\Field\MapPhysicalOccupancy;
 use Ichiloto\Engine\Rendering\Tilesets\TilesetPiece;
@@ -109,6 +110,7 @@ use Ichiloto\Editor\Storage\SaveSetAdoptionFailure;
 use Ichiloto\Editor\Storage\SaveSetRefusal;
 use Ichiloto\Editor\Storage\WorkspaceSave;
 use Ichiloto\Editor\Validation\MapGraphicsValidator;
+use Ichiloto\Editor\Validation\PassageAgreementCheck;
 use Ichiloto\Editor\Validation\Issue;
 use Ichiloto\Editor\Validation\MapValidator;
 use Ichiloto\Editor\Validation\ProjectValidator;
@@ -833,6 +835,10 @@ final class EditorSession
             'missingArt' => $tileset->missingArt,
             'above' => $tileset->above,
             'tables' => $tileset->tables,
+            // What each tile shown reads as at ground level, for validation, and where that comes from.
+            'appearance' => (object) \Ichiloto\Editor\Maps\TilesetAuthoring::describeAppearance($tileset,
+                array_merge(...array_map(static fn(array $tab): array => array_merge(...$tab['ids']), $tabs) ?: [[]])),
+            'appearanceSheets' => (object) array_map(static fn(TileAppearance $class): string => $class->value, $tileset->appearance->sheets),
             // The tiles shown that can be tables, so an interface offers the mark only where it holds.
             'tableTiles' => array_values(array_filter(array_merge(...array_map(static fn(array $tab): array => array_merge(...$tab['ids']), $tabs) ?: [[]]),
                 static fn(int $tile): bool => TileId::getSheet($tile) === TilesetSheet::A2)),
@@ -934,6 +940,69 @@ final class EditorSession
             implode(', ', $marked ? [...$kept, $flag] : $kept));
 
         return [...$result, 'marked' => $marked];
+    }
+
+    /**
+     * Sets what tiles or whole sheets of a tileset record show at ground
+     * level ({@see \Ichiloto\Engine\Rendering\Tilesets\TilesetAppearance}), or
+     * with null takes their own class away so they read by their sheet again,
+     * as one undo step through the record's Appearance rows. Validation alone
+     * reads the classes; passage never changes. A selection the Engine would
+     * refuse, such as one sheet named for two classes, changes nothing.
+     *
+     * @param list<int|string> $selectors Tile identities and sheet names.
+     * @return array{changed: bool, records: list<string>}
+     * @throws SessionRefusal When the record changed, a selector or class is unknown, or the result would be refused.
+     */
+    public function setTileAppearance(int $index, string $tilesetId, array $selectors, ?string $appearance): array
+    {
+        $class = $appearance === null ? null : (TileAppearance::tryFrom($appearance)
+            ?? throw new SessionRefusal(sprintf('%s is not a tile appearance; choose %s.', $appearance,
+                implode(', ', array_column(TileAppearance::cases(), 'value')))));
+        $record = $this->requireRecordDatabase('tilesets')->getRecordByIndex($index)
+            ?? throw new SessionRefusal(sprintf('tilesets has no record %d.', $index));
+        if ($record->recordId !== $tilesetId) {
+            throw new SessionRefusal('That tileset record changed; read the tileset list again.');
+        }
+        if ($selectors === []) {
+            throw new SessionRefusal('Choose tiles or a sheet first.');
+        }
+        $data = (array) $record->toArray();
+        try {
+            $fields = \Ichiloto\Editor\Maps\TilesetAuthoring::planAppearance($data, $selectors, $class);
+        } catch (InvalidArgumentException $error) {
+            throw new SessionRefusal($error->getMessage(), previous: $error);
+        }
+        if ($fields === []) {
+            return ['changed' => false, 'records' => $this->requireCategory('tilesets')->getRecordLabels()];
+        }
+
+        return $this->applyDatabaseRecordValues('tilesets', $index, array_map(static fn(string $field, string $value): array
+            => ['key' => ['field' => $field, 'frame' => []], 'value' => $value], array_keys($fields), $fields),
+            $class === null ? 'Clear tile appearance' : sprintf('Tile appearance: %s', $class->value));
+    }
+
+    /**
+     * The cells of a map where what it shows disagrees with what its
+     * collision lets the player do ({@see PassageAgreementCheck}), unsaved
+     * edits included, each with its rule: what a collision view marks.
+     * `available` is false for a map without graphics, or whose graphics
+     * cannot be read.
+     *
+     * @return array{map: string, revision: int, available: bool, cells: list<array{0: int, 1: int, 2: string}>}
+     * @throws SessionRefusal When the map is unknown.
+     */
+    public function readPassageAgreement(string $mapId): array
+    {
+        $map = $this->requireMap($mapId);
+        $cells = PassageAgreementCheck::listFlaggedCells($map);
+
+        return [
+            'map' => $map->mapId,
+            'revision' => $this->getMapRevision($map),
+            'available' => $cells !== null,
+            'cells' => array_map(static fn(array $cell): array => [$cell['x'], $cell['y'], $cell['rule']], $cells ?? []),
+        ];
     }
 
     /**

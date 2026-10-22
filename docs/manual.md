@@ -250,6 +250,16 @@ does not erase collision already stamped into a map. The TUI preserves recipes
 through existing record edits without adding graphical authoring controls.
 Native acceptance of the physical brushes and footprint controls remains open.
 
+The GUI tileset view's **Appearance** mode sets what tiles show at ground
+level, for validation alone: choose Ground, Water, Barrier or Overhead (art
+over the player, or a light decoration that says nothing about the ground),
+then click a tile or drag over several; **Sheet default** takes a tile's own
+class away, and **Whole sheet** sets the selected tile's whole sheet. Each is
+one undo step through the tileset record's Appearance rows. Badges show each
+tile's class, filled when authored and outlined when its sheet kind's default
+decides; `?` marks a tile no class covers yet. Passage never changes. The TUI
+preserves the classes through record edits without offering the graphical mode.
+
 Gameplay and event layers use the same Paint/Normal modes, tools, mouse strokes,
 selection, colour, clipboard and undo. The layer inspector lists terminal layer
 visibility only. Ordinary glyph edits do not rewrite graphical decoration.
@@ -543,6 +553,18 @@ which glyphs:
 
 These are art still to do, not faults: the game plays the same either way,
 so saving a map does not warn about them; `ichiloto validate` reports them.
+
+Validation also warns where what a map shows disagrees with what it lets the
+player do, by the Engine's passage agreement rule (see the Engine's graphical
+field guide, *Look and passage*): solid cells that show only walkable ground
+(invisible walls), walkable cells that show water, a barrier or a world
+object's art (walk-throughs), and world objects whose art leaves most of their
+solid footprint bare. Each warning names its cells; the GUI editor's
+**Collision** tool marks every one over the map with a coloured outline and
+corner flag, counted by kind in its options. They are warnings, never
+refusals: change the art or the collision as the map needs. A tile whose
+ground appearance is unknown is not judged; give it one in the GUI tileset
+view's **Appearance** mode.
 
 Text catalogues in `assets/Graphics/Tilesets/*.txt` appear as Facade brushes in
 `Ctrl+P`. Separate multi-row shapes with blank lines. Select a brush to target
