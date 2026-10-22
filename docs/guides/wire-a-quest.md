@@ -66,6 +66,16 @@ look: a terminal colour (which also picks the cue art drawn in graphics), a
 one-cell symbol and how far edge markers sit in from the edge, along with the
 cue plate, bob and pointer images every cue mark shares.
 
+Keep the story path led. Validation warns when a main quest's prerequisite,
+or a door that turns the player back (`whenBlocked`), needs a story flag that
+no objective of a main quest leads to, or that nothing in the project sets.
+An objective leads to a flag when it tracks the flag, or when its waymark
+points at what sets it: the event or NPC, or, for a flag set in a battle
+(its script after `start_battle`, or the troop's event pages), the event that
+starts the battle or the map whose encounters bring it. Should a gap reach
+the game anyway, the game leads to what takes the next step itself and notes
+the gap in `logs/warning.log`; close it with an objective all the same.
+
 ## Condition Lines
 
 Quest prerequisites, skit conditions, and event `branch` arms share one grammar,
