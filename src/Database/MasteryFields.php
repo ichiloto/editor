@@ -49,7 +49,10 @@ final class MasteryFields
                 // Branches grow from a region by its id, so the id stays as it was made.
                 new RecordField('id', 'Stable Id', isReadOnly: true),
                 new RecordField('name', 'Name'),
-                new RecordField('description', 'Description', removeWhenEmpty: true),
+                // What the discipline covers; the game's Info shows it on the discipline.
+                new RecordField('description', 'Summary', removeWhenEmpty: true),
+                // What the region's own trunk nodes cover; the game's Info shows it on the family they form.
+                new RecordField('trunkDescription', 'Trunk Summary', removeWhenEmpty: true),
             ],
             labelKey: 'name',
             identityKey: 'id',
@@ -83,7 +86,8 @@ final class MasteryFields
                 new RecordField('kind', 'Kind', options: array_column(MasteryBranchKind::cases(), 'value')),
                 // An element branch practises one of the project's elements.
                 new RecordField('element', 'Element', reference: 'elements', removeWhenEmpty: true, allowsNone: true, displayDefault: '(none)'),
-                new RecordField('description', 'Description', removeWhenEmpty: true),
+                // What the branch covers; the game's Info shows it on the family and its foundation.
+                new RecordField('description', 'Summary', removeWhenEmpty: true),
             ],
             labelKey: 'name',
             identityKey: 'id',

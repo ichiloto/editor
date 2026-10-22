@@ -1538,7 +1538,11 @@ leave out a chain step. A node whose skill is a draft, or that nothing
 prices, is unavailable: the game offers it to nobody until its author
 finishes it. So is a foundation that grants no skill while nothing built on
 it can be learned yet. A character who learns a node built on such a
-foundation counts the foundation as learned too.
+foundation counts the foundation as learned too. Each region and branch
+has a Summary, and a region with trunk nodes also has a Trunk Summary for
+the family those nodes form: the game's Info shows them on the
+discipline, the family and its foundation. Validation warns where one is
+missing, because Info then offers nothing there.
 
 Items, weapons and armors are one file each under `assets/Data/Items`,
 `Weapons` and `Armors`, returning `['class' => InventoryItem::class, 'data'
