@@ -139,6 +139,7 @@ it('gives the map page every node\'s place, moves a node and links two nodes, ea
 
     expect(array_column($page['regions'], 'id'))->toBe(['blades', 'storms'])
         ->and($page['pointsLabel'])->toBe('SP')
+        ->and($page['levelLabel'])->toBe('Lv')
         ->and(array_map(static fn(array $node): array => [$node['id'], $node['x'], $node['placed']], $page['nodes']))
             ->toBe([['cut', 0.25, false], ['spark', 0.75, false]]);
 
@@ -155,14 +156,15 @@ it('gives the map page every node\'s place, moves a node and links two nodes, ea
     expect(array_column($session->readMasteryPage(0)['nodes'], null, 'id')['spark']['placed'])->toBeFalse();
 });
 
-it('names prices on the map page in the project\'s own word for Mastery points', function () {
+it('names prices and levels on the map page in the project\'s own words for Mastery points and the level', function () {
     $root = masteryProject();
     $config = $root . '/config.php';
-    file_put_contents($config, preg_replace("/'vocab' => \\[/", "'vocab' => [\n    'mastery' => ['points' => 'JP'],", (string) file_get_contents($config), 1));
+    file_put_contents($config, preg_replace("/'vocab' => \\[/", "'vocab' => [\n    'mastery' => ['points' => 'JP'],\n    'stats' => ['level_short' => 'Lvl'],", (string) file_get_contents($config), 1));
     mkdir($root . '/assets/Data/Mastery');
     file_put_contents($root . '/assets/Data/Mastery/kaelion.php', "<?php\n\nreturn ['actor' => 'Kaelion', 'nodes' => [['id' => 'cut', 'skill' => 'Cut', 'region' => 'blades']]];\n");
+    $page = EditorSession::open($root)->readMasteryPage(0);
 
-    expect(EditorSession::open($root)->readMasteryPage(0)['pointsLabel'])->toBe('JP');
+    expect([$page['pointsLabel'], $page['levelLabel']])->toBe(['JP', 'Lvl']);
 });
 
 it('gives an enemy and a quest the Mastery points they reward, and leaves records without them unchanged', function () {

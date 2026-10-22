@@ -57,6 +57,19 @@ final class ProjectConfig extends ProjectSettingsFile
     }
 
     /**
+     * A shared display term as this project words it in its own file (`vocab.<path>`), else the Engine's
+     * wording ({@see Vocabulary::DEFAULTS}). A blank term keeps the Engine's, as a label cannot be blank
+     * ({@see Vocabulary::getLabel()}).
+     */
+    public function getTermLabel(string $path): string
+    {
+        $term = $this->getRecord('vocab.' . $path)->get('value');
+        $term = is_string($term) ? trim($term) : '';
+
+        return $term !== '' ? $term : (Vocabulary::DEFAULTS[$path] ?? '');
+    }
+
+    /**
      * The settings the engine reads with a default, then every message the Engine says, by its path in config.php,
      * with its default, what it accepts and what it is for: each is offered even where the project leaves it out,
      * so any game can reword it.

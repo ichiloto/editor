@@ -4570,20 +4570,22 @@ final class EditorSession
     }
     /**
      * A Mastery Map as the graphical page draws it: the regions, and each node
-     * with its place on the map and what it builds on.
+     * with its place on the map and what it builds on, and the project's words
+     * for the price and level each card names.
      *
-     * @return array{regions: list<array{id: string, name: string}>, nodes: list<array<string, mixed>>, issue: ?string}
+     * @return array{regions: list<array{id: string, name: string}>, nodes: list<array<string, mixed>>, issue: ?string,
+     *     pointsLabel: string, levelLabel: string}
      * @throws SessionRefusal When the map is unknown.
      */
     public function readMasteryPage(int $index): array
     {
         try {
-            // Each card names its price in the project's own word for Mastery points.
-            $points = $this->workspace->config?->getRecord('vocab.' . MasteryVocabulary::POINTS)->get('value');
+            // Each card names its price and level in the project's own words for Mastery points and the level.
+            $term = fn(string $path): string => $this->workspace->config?->getTermLabel($path) ?? Vocabulary::DEFAULTS[$path];
 
             return [...$this->masteryAuthoring->readPage($this->requireRecordDatabase(MasteryFields::MAPS),
                 $this->workspace->getRecordDatabase(MasteryFields::REGIONS), $index),
-                'pointsLabel' => is_string($points) && trim($points) !== '' ? trim($points) : Vocabulary::DEFAULTS[MasteryVocabulary::POINTS]];
+                'pointsLabel' => $term(MasteryVocabulary::POINTS), 'levelLabel' => $term('stats.level_short')];
         } catch (RecordRefusal $refusal) {
             throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
         }
