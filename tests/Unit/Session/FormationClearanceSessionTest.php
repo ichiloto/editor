@@ -85,3 +85,22 @@ it('arranges a member with no battle placement instead of refusing the troop, an
     expect($issues)->toHaveCount(1)
         ->and($issues[0]->message)->toContain('Regular Bat (member 1)', 'y is a fixed canvas height');
 });
+
+it('warns of a terminal position that leaves out a member\'s target badge, and leaves it where it stands', function () {
+    $root = enemyPreviewProject();
+    // Only the terminal field's issues: this fixture's bat has no graphical battle art.
+    $terminal = static fn(string $root): array => array_values(array_filter(readTroopClearanceIssues($root),
+        static fn(Issue $issue): bool => str_contains($issue->message, 'on the terminal field')));
+    expect($terminal($root))->toBe([]);
+
+    $troops = $root . '/assets/Data/troops.php';
+    file_put_contents($troops, str_replace("'position' => [15, 20]", "'position' => [15, 1]", (string) file_get_contents($troops)));
+    $source = (string) file_get_contents($troops);
+    $issues = $terminal($root);
+
+    expect($issues)->toHaveCount(1)
+        ->and($issues[0]->severity)->toBe(\Ichiloto\Editor\Validation\Severity::WARNING)
+        ->and($issues[0]->where)->toBe('assets/Data/troops.php: Pair')
+        ->and($issues[0]->message)->toBe('Regular Bat (member 2) on the terminal field leaves no room above it for its target badge.')
+        ->and(file_get_contents($troops))->toBe($source);
+});

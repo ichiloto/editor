@@ -4,10 +4,13 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Validation;
 
+use Ichiloto\Editor\Database\EnemySprites;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Engine\Battle\Presentation\BattleFormationLayout;
 use Ichiloto\Engine\Battle\Presentation\BattlePresentationCatalog;
 use Ichiloto\Engine\Battle\Presentation\BattleStageSlot;
+use Ichiloto\Engine\Battle\Presentation\TerminalBattleEffects;
+use Ichiloto\Engine\Core\Vector2;
 use InvalidArgumentException;
 use RuntimeException;
 use Throwable;
@@ -20,12 +23,53 @@ use Throwable;
  * layout's battler or enemy area, stands on the same ground as another, or
  * leaves no room for its target cursor is reported, never moved. The battle
  * still runs, so these are warnings; a placement the Engine cannot read or a
- * formation it cannot compose is an error. Terminal battles are unaffected.
+ * formation it cannot compose is an error. Each member's terminal position is
+ * checked separately, by the terminal battle's own troop zone.
  */
 final class TroopFormationValidator
 {
     /** @return Issue[] */
     public function validate(ProjectWorkspace $workspace): array
+    {
+        return [...$this->validateTerminal($workspace), ...$this->validateGraphical($workspace)];
+    }
+
+    /**
+     * Warns of a member whose terminal position leaves out its target badge,
+     * its focus marker, its step towards the party or the field's bottom.
+     *
+     * @return Issue[]
+     */
+    private function validateTerminal(ProjectWorkspace $workspace): array
+    {
+        $troops = $workspace->getRecordDatabase('troops')?->getRecords() ?? [];
+        if ($troops === []) {
+            return [];
+        }
+        $sprites = new EnemySprites($workspace->projectRoot)->readByEnemy($workspace->getRecordDatabase('enemies'));
+        $field = new TerminalBattleEffects();
+        $issues = [];
+        foreach ($troops as $record) {
+            $where = sprintf('assets/Data/troops.php: %s', strval($record->get('name')));
+            foreach ($record->getSubList('enemies') as $index => $entry) {
+                $enemy = strval($entry['enemy'] ?? '');
+                $position = is_array($entry['position'] ?? null) ? array_values($entry['position']) : [];
+                // An unreadable sprite is reported where enemies are checked.
+                if (($sprites[$enemy] ?? []) === [] || !is_int($position[0] ?? null) || !is_int($position[1] ?? null)) {
+                    continue;
+                }
+                foreach ($field->getTroopPlaceProblems(new Vector2($position[0], $position[1]), $sprites[$enemy]) as $problem) {
+                    $issues[] = Issue::warning($where, sprintf('%s (member %d) on the terminal field %s.', $enemy, $index + 1, $problem),
+                        'Move it on the troop\'s terminal field.');
+                }
+            }
+        }
+
+        return $issues;
+    }
+
+    /** @return Issue[] */
+    private function validateGraphical(ProjectWorkspace $workspace): array
     {
         $assets = $workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets';
         $layoutFile = 'assets/' . BattlePresentationCatalog::FILE;
