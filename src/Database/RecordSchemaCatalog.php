@@ -1544,7 +1544,7 @@ final class RecordSchemaCatalog
                 allowsNone: true,
                 displayDefault: '(Legacy fallback)',
             ),
-            // The values still awaiting the author (cost, occasion, scope, effects, effects.0.formula), left out of the record
+            // The values still awaiting the author (cost, occasion, scope, effects, effects.0.formula, effects.0.variance), left out of the record
             // until assigned: the Engine keeps such a record as a draft nobody can learn or cast, and never guesses them.
             new RecordField(SkillDraft::KEY, 'Awaiting Author', codec: RecordFieldCodec::CSV_LIST, removeWhenEmpty: true, displayDefault: '(none)'),
         ];
