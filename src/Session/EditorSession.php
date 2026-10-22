@@ -2059,12 +2059,17 @@ final class EditorSession
         return array_any($aliases, static fn(mixed $alias): bool => is_array($alias) && ($alias['to'] ?? null) === $identity);
     }
 
-    /** @return list<string> The quest objectives whose waymarks name a map event. */
+    /** @return list<string> The quest objectives and quest starts whose waymarks name a map event. */
     private function describeEventWaymarks(string $mapId, string $marker): array
     {
         $found = [];
         foreach ($this->workspace->getRecordDatabase('quests')?->getRecords() ?? [] as $quest) {
             $data = $quest->toArray();
+            foreach ((array) ($data['startWaymarks'] ?? []) as $w => $waymark) {
+                if (is_array($waymark) && ($waymark['map'] ?? null) === $mapId && ($waymark['event'] ?? null) === $marker) {
+                    $found[] = sprintf('quest %s start waymark %d', strval($data['id'] ?? '?'), intval($w) + 1);
+                }
+            }
             foreach ((array) ($data['objectives'] ?? []) as $o => $objective) {
                 foreach (is_array($objective) ? (array) ($objective['waymarks'] ?? []) : [] as $w => $waymark) {
                     if (is_array($waymark) && ($waymark['map'] ?? null) === $mapId && ($waymark['event'] ?? null) === $marker) {

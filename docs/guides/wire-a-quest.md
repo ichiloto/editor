@@ -66,15 +66,41 @@ look: a terminal colour (which also picks the cue art drawn in graphics), a
 one-cell symbol and how far edge markers sit in from the edge, along with the
 cue plate, bob and pointer images every cue mark shares.
 
-Keep the story path led. Validation warns when a main quest's prerequisite,
-or a door that turns the player back (`whenBlocked`), needs a story flag that
-no objective of a main quest leads to, or that nothing in the project sets.
-An objective leads to a flag when it tracks the flag, or when its waymark
-points at what sets it: the event or NPC, or, for a flag set in a battle
-(its script after `start_battle`, or the troop's event pages), the event that
-starts the battle or the map whose encounters bring it. Should a gap reach
-the game anyway, the game leads to what takes the next step itself and notes
-the gap in `logs/warning.log`; close it with an objective all the same.
+## Lead To The Quest's Start
+
+Objectives only lead once the quest is in the journal. To lead the player to
+whoever hands it over before that, use the quest's `Start Waymarks` heading:
+
+- `Shift+O` on the `Start Waymarks` row adds a start waymark.
+- Pick its `Map`, then the `NPC` or `Event` that starts the quest, the same
+  way as an objective's waymark. `Shows When` limits it further.
+
+A start waymark shows while the quest can start: it is not yet accepted or
+finished and its `Prereqs` hold. Once the quest is accepted its objectives
+take over. The story's opening is the first main quest's start waymark: a
+new game leads to its giver.
+
+## Keep The Story Path Led
+
+Validation warns where the wayfinder would have nothing authored to lead with:
+
+- A main quest's prerequisite, or a door that turns the player back
+  (`whenBlocked`), needs a story flag that nothing in the project sets, or
+  that no objective of a main quest leads to. An objective leads to a flag
+  when it tracks the flag, or when its waymark points at what sets it: the
+  event or NPC, or, for a flag set in a battle (its script after
+  `start_battle`, or the troop's event pages), the event that starts the
+  battle or the map whose encounters bring it.
+- Nothing in the project starts a main quest, or nothing leads to what does.
+  The warning names where the quest starts. Lead there with the quest's own
+  start waymark, or with an objective of the main quest active before it.
+
+Guidance counts only when it can show before the step: a waymark waiting for
+the step, or a quest that needs it, does not lead to it. A start waymark
+disappears once its quest starts, so it leads only to what starts its quest
+(and to a flag set by the same NPC page or event). Should a gap reach the
+game anyway, the game leads to what takes the next step itself and notes the
+gap in `logs/warning.log`; close it with an authored waymark all the same.
 
 ## Condition Lines
 
