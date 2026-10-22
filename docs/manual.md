@@ -1530,11 +1530,15 @@ follow the highest grade; a special grade runs from its demi phase to the
 full phase that extends it. Each node builds on the step before it, plus
 anything it also requires. A node may carry a price and opening level for
 everyone; without a price, only characters whose own map prices it can
-learn it. A character's Mastery Map states their own terms for some nodes:
-those replace the tree's terms for them in full, including what the node
-builds on, and validation warns where their terms leave out a chain step.
-A node whose skill is a draft, or that nothing prices, is unavailable: the
-game offers it to nobody until its author finishes it.
+learn it. Validation warns where the tree prices a node below the step it
+builds on, or opens it earlier. A character's Mastery Map states their own
+terms for some nodes: those replace the tree's terms for them in full,
+including what the node builds on, and validation warns where their terms
+leave out a chain step. A node whose skill is a draft, or that nothing
+prices, is unavailable: the game offers it to nobody until its author
+finishes it. So is a foundation that grants no skill while nothing built on
+it can be learned yet. A character who learns a node built on such a
+foundation counts the foundation as learned too.
 
 Items, weapons and armors are one file each under `assets/Data/Items`,
 `Weapons` and `Armors`, returning `['class' => InventoryItem::class, 'data'

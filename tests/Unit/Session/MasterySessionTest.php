@@ -222,6 +222,33 @@ it('gives an enemy and a quest the Mastery points they reward, and leaves record
         ->and((require $root . '/assets/Data/quests.php')[0]['rewards']['skillPoints'] ?? null)->toBe(30);
 });
 
+it('warns where the tree prices or opens a rung below the one it builds on, and stays quiet for a rising ladder', function (array $terms, array $flagged) {
+    $root = masteryProject();
+    writeSkillRecords($root, new SpecialSkill('Cut', 'Cuts.', '', 2, 0), new MagicSkill('Spark', 'Shocks.', '', 4, 0),
+        new MagicSkill('Bolt', 'Shocks more.', '', 8, 0), new MagicSkill('Storm Call', 'Shocks all.', '', 16, 0));
+    $node = static fn(string $id, array $data): array => ['id' => $id, ...$data, ...$terms[$id]];
+    file_put_contents($root . '/assets/Data/mastery.php', '<?php return ' . var_export(['regions' => [['id' => 'storms', 'name' => 'Storms']], 'branches' => [
+        ['id' => 'storm', 'region' => 'storms', 'name' => 'Storm', 'kind' => 'aspect', 'nodes' => [
+            $node('storm', ['kind' => 'foundation', 'name' => 'Storm']),
+            $node('spark', ['kind' => 'application', 'grade' => 1, 'skill' => 'Spark']),
+            $node('bolt', ['kind' => 'application', 'grade' => 2, 'skill' => 'Bolt']),
+            $node('storm-call', ['kind' => 'advanced', 'skill' => 'Storm Call']),
+        ]],
+    ]], true) . ';');
+    $issues = array_values(array_filter(new \Ichiloto\Editor\Validation\MasteryValidator()->validate(\Ichiloto\Editor\ProjectWorkspace::fromProject($root)),
+        static fn($issue): bool => $issue->code === \Ichiloto\Editor\Validation\MasteryValidator::LADDER));
+
+    expect(array_map(static fn($issue): string => strstr($issue->message, ' (', true), $issues))->toBe($flagged);
+})->with([
+    'rising' => [['storm' => ['cost' => 10, 'opensAtLevel' => 2], 'spark' => ['cost' => 20, 'opensAtLevel' => 3],
+        'bolt' => ['cost' => 90, 'opensAtLevel' => 6], 'storm-call' => ['cost' => 1045, 'opensAtLevel' => 20]], []],
+    'a grade cheaper than the grade below' => [['storm' => ['cost' => 10, 'opensAtLevel' => 2], 'spark' => ['cost' => 20, 'opensAtLevel' => 3],
+        'bolt' => ['cost' => 15, 'opensAtLevel' => 6], 'storm-call' => ['cost' => 1045, 'opensAtLevel' => 20]], ['Bolt']],
+    'an advanced application opening before the highest grade' => [['storm' => ['cost' => 10, 'opensAtLevel' => 2], 'spark' => ['cost' => 20, 'opensAtLevel' => 3],
+        'bolt' => ['cost' => 90, 'opensAtLevel' => 6], 'storm-call' => ['cost' => 1045, 'opensAtLevel' => 5]], ['Storm Call']],
+    'an unpriced rung is not compared' => [['storm' => [], 'spark' => ['cost' => 5, 'opensAtLevel' => 1], 'bolt' => [], 'storm-call' => ['cost' => 1, 'opensAtLevel' => 1]], []],
+]);
+
 it('reports what awaits an author: draft skills, unpriced nodes, ungranted foundations and terms that skip a chain step', function () {
     $root = masteryProject();
     file_put_contents($root . '/assets/Data/Skills/0099-tempest.php', '<?php return ' . var_export(['class' => \Ichiloto\Engine\Entities\Skills\Skill::class,

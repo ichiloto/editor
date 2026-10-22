@@ -8,13 +8,16 @@ use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Engine\Entities\Skills\SkillCatalog;
 use Ichiloto\Engine\Progression\Mastery\MasteryBranchKind;
 use Ichiloto\Engine\Progression\Mastery\MasteryCatalog;
+use Ichiloto\Engine\Progression\Mastery\MasteryNodeDefinition;
+use Ichiloto\Engine\Progression\Mastery\MasteryTree;
 use InvalidArgumentException;
 
 /**
  * Checks the mastery tree and the characters' maps as the Engine reads them,
  * and reports what still awaits an author: skill records whose values are
  * unassigned, tree nodes nothing prices yet, foundations that grant no skill
- * yet, and a character's own terms that leave out a node's chain step. A
+ * yet, a ladder step the tree prices or opens below the step it builds on,
+ * and a character's own terms that leave out a node's chain step. A
  * tree or map the Engine cannot read is an error; the rest are warnings,
  * since the game runs and simply offers nobody those nodes.
  */
@@ -24,6 +27,7 @@ final class MasteryValidator
     public const string UNPRICED = 'mastery.unpriced';
     public const string UNGRANTED = 'mastery.foundation-ungranted';
     public const string UNCHAINED = 'mastery.unchained';
+    public const string LADDER = 'mastery.ladder';
 
     /** @return Issue[] */
     public function validate(ProjectWorkspace $workspace): array
@@ -63,6 +67,7 @@ final class MasteryValidator
                 $issues[] = new Issue(Severity::WARNING, $where, sprintf('The foundation %s grants no skill yet; learning it opens its branch and nothing more.', $foundation->label),
                     'Choose the skill it grants once its author defines one.', self::UNGRANTED);
             }
+            $issues = [...$issues, ...$this->checkLadder($tree, $branch->nodes, $where)];
         }
         foreach ($tree->regions as $region) {
             $unpriced = array_values(array_filter($region->nodes, static fn($node): bool => $node->cost === null));
@@ -81,6 +86,34 @@ final class MasteryValidator
                     sprintf('%s learns %s without %s, the step before it in %s.', $actor, $node->label, $tree->nodes[$step]->label, $branch?->name ?? $node->region),
                     sprintf('Make %s require %s in %s\'s own terms (Database > Mastery Maps), or leave it if %s starts there.', $node->label,
                         $tree->nodes[$step]->label, $actor, $actor), self::UNCHAINED);
+            }
+        }
+
+        return $issues;
+    }
+
+    /**
+     * One warning per node whose terms on the tree undercut the step it
+     * builds on: a higher rung costs at least as much, and opens no earlier,
+     * than the rung below it. Characters' own terms may differ.
+     *
+     * @param list<MasteryNodeDefinition> $nodes
+     * @return Issue[]
+     */
+    private function checkLadder(MasteryTree $tree, array $nodes, string $where): array
+    {
+        $issues = [];
+        foreach ($nodes as $node) {
+            $step = $tree->findChainPredecessor($node);
+            if ($step === null || $node->cost === null || $step->cost === null) {
+                continue;
+            }
+            $level = $node->opensAtLevel ?? 1;
+            $stepLevel = $step->opensAtLevel ?? 1;
+            if ($node->cost < $step->cost || $level < $stepLevel) {
+                $issues[] = new Issue(Severity::WARNING, $where, sprintf('%s (cost %d, level %d) costs less or opens earlier than %s (cost %d, level %d), the step it builds on.',
+                    $node->label, $node->cost, $level, $step->label, $step->cost, $stepLevel),
+                    sprintf('Give %s a cost and opening level at or above %s\'s (Database > Mastery Branches).', $node->label, $step->label), self::LADDER);
             }
         }
 
