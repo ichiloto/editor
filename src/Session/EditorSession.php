@@ -147,6 +147,8 @@ use Ichiloto\Engine\Animations\AnimationLibrary;
 use Ichiloto\Engine\Animations\Timelines\CompiledEffectTimeline;
 use Ichiloto\Engine\Core\Vector2;
 use Ichiloto\Engine\Entities\Skills\SkillCatalog;
+use Ichiloto\Engine\Localization\Vocabulary;
+use Ichiloto\Engine\Progression\Mastery\MasteryVocabulary;
 use Ichiloto\Editor\Cutscenes\Preview\CinematicPreviewOrigin;
 use Ichiloto\Editor\Cutscenes\Preview\CinematicPreviewSession;
 use Ichiloto\Editor\Cutscenes\Preview\PreviewField;
@@ -4576,8 +4578,12 @@ final class EditorSession
     public function readMasteryPage(int $index): array
     {
         try {
-            return $this->masteryAuthoring->readPage($this->requireRecordDatabase(MasteryFields::MAPS),
-                $this->workspace->getRecordDatabase(MasteryFields::REGIONS), $index);
+            // Each card names its price in the project's own word for Mastery points.
+            $points = $this->workspace->config?->getRecord('vocab.' . MasteryVocabulary::POINTS)->get('value');
+
+            return [...$this->masteryAuthoring->readPage($this->requireRecordDatabase(MasteryFields::MAPS),
+                $this->workspace->getRecordDatabase(MasteryFields::REGIONS), $index),
+                'pointsLabel' => is_string($points) && trim($points) !== '' ? trim($points) : Vocabulary::DEFAULTS[MasteryVocabulary::POINTS]];
         } catch (RecordRefusal $refusal) {
             throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
         }

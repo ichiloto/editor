@@ -47,15 +47,22 @@ it('authors a character\'s map node by node, and the Engine reads it back', func
     foreach ([0, 1] as $node) {
         $session->addDatabaseItem(MasteryFields::MAPS, $index, ['frame' => []], false);
     }
-    authorMasteryNode($session, $index, 0, ['Id' => 'cut', 'Skill' => 'Cut', 'Region' => 'blades', 'Order' => 1]);
+    authorMasteryNode($session, $index, 0, ['Id' => 'cut', 'Skill' => 'Cut', 'Region' => 'blades']);
     authorMasteryNode($session, $index, 1, ['Id' => 'spark', 'Skill' => 'Spark', 'Region' => 'storms', 'Cost' => 50,
-        'OpensAtLevel' => 3, 'Requires' => 'cut', 'Order' => 2]);
+        'OpensAtLevel' => 3, 'Requires' => 'cut', 'Hidden' => 'true']);
+    $read = $session->readDatabaseRecord(MasteryFields::MAPS, $index);
     $session->saveDatabase(MasteryFields::MAPS);
     $map = MasteryCatalog::load($root . '/assets')->findMap('Kaelion');
 
     expect(array_keys($map?->nodes ?? []))->toBe(['cut', 'spark'])
         ->and($map->nodes['spark']->requires)->toBe(['cut'])
-        ->and($map->nodes['spark']->cost)->toBe(50);
+        ->and($map->nodes['spark']->cost)->toBe(50)
+        ->and($map->nodes['spark']->hidden)->toBeTrue()
+        ->and($map->nodes['cut']->hidden)->toBeFalse()
+        // A node's price is in Mastery points, and nodes have no study order of their own.
+        ->and(masteryRow($read, 'node1Cost')['label'] ?? null)->toContain('SP')
+        ->and(array_filter(array_map(static fn(array $row): string => strval($row['key']['field'] ?? ''), $read['rows']),
+            static fn(string $field): bool => str_ends_with($field, 'Order')))->toBe([]);
 });
 
 it('refuses saving a map the Engine could not read, naming why', function () {
@@ -85,15 +92,15 @@ it('refuses a node in an undeclared region and keeps a skill a map teaches from 
 it('leaves each node\'s place on the map to the GUI editor and keeps it through Terminal edits', function () {
     $root = masteryProject();
     mkdir($root . '/assets/Data/Mastery');
-    file_put_contents($root . '/assets/Data/Mastery/kaelion.php', "<?php\n\nreturn [\n  'actor' => 'Kaelion',\n  'nodes' => [\n    ['id' => 'cut', 'skill' => 'Cut', 'region' => 'blades', 'cost' => 0, 'opensAtLevel' => 1, 'order' => 1, 'position' => ['x' => 0.2, 'y' => 0.3]],\n  ],\n];\n");
+    file_put_contents($root . '/assets/Data/Mastery/kaelion.php', "<?php\n\nreturn [\n  'actor' => 'Kaelion',\n  'nodes' => [\n    ['id' => 'cut', 'skill' => 'Cut', 'region' => 'blades', 'cost' => 0, 'opensAtLevel' => 1, 'position' => ['x' => 0.2, 'y' => 0.3]],\n  ],\n];\n");
     $terminal = loadRecordDatabase($root, MasteryFields::MAPS);
     $terminalFields = array_column($terminal->getSettingsFields(0), 'field');
-    $terminal->setField(0, 'node0Order', '4');
+    $terminal->setField(0, 'node0Cost', '40');
     $terminal->save();
     $graphical = EditorSession::open($root);
 
-    expect($terminalFields)->toContain('node0Order')->not->toContain('node0Positionx')
-        ->and((require $root . '/assets/Data/Mastery/kaelion.php')['nodes'][0])->toMatchArray(['order' => 4, 'position' => ['x' => 0.2, 'y' => 0.3]])
+    expect($terminalFields)->toContain('node0Cost')->not->toContain('node0Positionx')
+        ->and((require $root . '/assets/Data/Mastery/kaelion.php')['nodes'][0])->toMatchArray(['cost' => 40, 'position' => ['x' => 0.2, 'y' => 0.3]])
         ->and(masteryRow($graphical->readDatabaseRecord(MasteryFields::MAPS, 0), 'node0Positionx')['value'])->toBe('0.2');
 });
 
@@ -126,11 +133,12 @@ it('moves a character\'s own skills onto their map, leaves role skills to the ro
 it('gives the map page every node\'s place, moves a node and links two nodes, each one undo step', function () {
     $root = masteryProject();
     mkdir($root . '/assets/Data/Mastery');
-    file_put_contents($root . '/assets/Data/Mastery/kaelion.php', "<?php\n\nreturn [\n  'actor' => 'Kaelion',\n  'nodes' => [\n    ['id' => 'cut', 'skill' => 'Cut', 'region' => 'blades', 'cost' => 0, 'opensAtLevel' => 1, 'order' => 1],\n    ['id' => 'spark', 'skill' => 'Spark', 'region' => 'storms', 'cost' => 50, 'opensAtLevel' => 2, 'order' => 2],\n  ],\n];\n");
+    file_put_contents($root . '/assets/Data/Mastery/kaelion.php', "<?php\n\nreturn [\n  'actor' => 'Kaelion',\n  'nodes' => [\n    ['id' => 'cut', 'skill' => 'Cut', 'region' => 'blades', 'cost' => 0, 'opensAtLevel' => 1],\n    ['id' => 'spark', 'skill' => 'Spark', 'region' => 'storms', 'cost' => 50, 'opensAtLevel' => 2],\n  ],\n];\n");
     $session = EditorSession::open($root);
     $page = $session->readMasteryPage(0);
 
     expect(array_column($page['regions'], 'id'))->toBe(['blades', 'storms'])
+        ->and($page['pointsLabel'])->toBe('SP')
         ->and(array_map(static fn(array $node): array => [$node['id'], $node['x'], $node['placed']], $page['nodes']))
             ->toBe([['cut', 0.25, false], ['spark', 0.75, false]]);
 
@@ -145,4 +153,35 @@ it('gives the map page every node\'s place, moves a node and links two nodes, ea
     $session->undo();
     $session->undo();
     expect(array_column($session->readMasteryPage(0)['nodes'], null, 'id')['spark']['placed'])->toBeFalse();
+});
+
+it('names prices on the map page in the project\'s own word for Mastery points', function () {
+    $root = masteryProject();
+    $config = $root . '/config.php';
+    file_put_contents($config, preg_replace("/'vocab' => \\[/", "'vocab' => [\n    'mastery' => ['points' => 'JP'],", (string) file_get_contents($config), 1));
+    mkdir($root . '/assets/Data/Mastery');
+    file_put_contents($root . '/assets/Data/Mastery/kaelion.php', "<?php\n\nreturn ['actor' => 'Kaelion', 'nodes' => [['id' => 'cut', 'skill' => 'Cut', 'region' => 'blades']]];\n");
+
+    expect(EditorSession::open($root)->readMasteryPage(0)['pointsLabel'])->toBe('JP');
+});
+
+it('gives an enemy and a quest the Mastery points they reward, and leaves records without them unchanged', function () {
+    $root = masteryProject();
+    writeRegularBatEnemy($root);
+    $session = EditorSession::open($root);
+    $enemy = $session->readDatabaseRecord('enemies', 0);
+    $quest = $session->readDatabaseRecord('quests', 0);
+    $enemySource = (string) file_get_contents($root . '/assets/Data/Enemies/regular-bat.php');
+
+    expect(masteryRow($enemy, 'rewards.skillPoints')['label'] ?? null)->toBe('Reward SP')
+        ->and(masteryRow($quest, 'rewards.skillPoints')['label'] ?? null)->toBe('Reward SP')
+        ->and($enemySource)->not->toContain('skillPoints');
+
+    $session->applyDatabaseRecord('enemies', 0, masteryRow($enemy, 'rewards.skillPoints')['key'], '12');
+    $session->applyDatabaseRecord('quests', 0, masteryRow($quest, 'rewards.skillPoints')['key'], '30');
+    $session->saveDatabase('enemies');
+    $session->saveDatabase('quests');
+
+    expect((require $root . '/assets/Data/Enemies/regular-bat.php')['data']['rewards']['skillPoints'] ?? null)->toBe(12)
+        ->and((require $root . '/assets/Data/quests.php')[0]['rewards']['skillPoints'] ?? null)->toBe(30);
 });

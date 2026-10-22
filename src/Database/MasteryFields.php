@@ -57,11 +57,13 @@ final class MasteryFields
             new RecordField('id', 'Id'),
             RecordField::reference('skill', 'Skill', 'skills'),
             RecordField::reference('region', 'Region', self::REGIONS),
-            new RecordField('cost', 'Cost (EXP)', InputControlType::INTEGER),
+            // The Mastery points (SP) a character spends to learn it; 0 is learned as soon as it opens.
+            new RecordField('cost', 'Cost (SP)', InputControlType::INTEGER),
             new RecordField('opensAtLevel', 'Opens At Level', InputControlType::INTEGER),
             // The ids of the nodes this one builds on, from the same map.
             new RecordField('requires', 'Requires', codec: RecordFieldCodec::CSV_LIST, removeWhenEmpty: true),
-            new RecordField('order', 'Study Order', InputControlType::INTEGER),
+            // Menus show ??? for it while it is locked.
+            RecordField::boolean('hidden', 'Secret Until Unlocked'),
             ...($graphical ? [
                 new RecordField('position.x', 'Map X (0 to 1)', InputControlType::FLOAT, removeWhenEmpty: true),
                 new RecordField('position.y', 'Map Y (0 to 1)', InputControlType::FLOAT, removeWhenEmpty: true),
@@ -83,7 +85,7 @@ final class MasteryFields
                 prefix: 'node',
                 singular: 'node',
                 fields: $nodeFields,
-                blank: ['id' => 'new-node', 'skill' => '', 'region' => '', 'cost' => 0, 'opensAtLevel' => 1, 'order' => 0],
+                blank: ['id' => 'new-node', 'skill' => '', 'region' => '', 'cost' => 0, 'opensAtLevel' => 1],
                 heading: 'Nodes',
             ),
             saveCheck: self::checkMap(...),

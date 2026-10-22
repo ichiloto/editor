@@ -1144,6 +1144,8 @@ final class RecordSchemaCatalog
                 RecordField::boolean('optional', 'Optional'),
                 new RecordField('rewards.gold', 'Reward Gold', InputControlType::INTEGER, removeWhenEmpty: true),
                 new RecordField('rewards.experience', 'Reward EXP', InputControlType::INTEGER, removeWhenEmpty: true),
+                // Mastery points (SP) every travelling member earns with the EXP.
+                new RecordField('rewards.skillPoints', 'Reward SP', InputControlType::INTEGER, removeWhenEmpty: true),
                 new RecordField('prerequisites', 'Prereqs', removeWhenEmpty: true, codec: RecordFieldCodec::CONDITIONS),
             ],
             labelKey: 'name',
@@ -1403,6 +1405,8 @@ final class RecordSchemaCatalog
                 new RecordField('stats.grace', 'Grace', InputControlType::INTEGER),
                 new RecordField('stats.evasion', 'Evasion', InputControlType::INTEGER),
                 new RecordField('rewards.experience', 'Reward EXP', InputControlType::INTEGER),
+                // Mastery points (SP) every travelling member earns with the EXP; an enemy without them gives none.
+                new RecordField('rewards.skillPoints', 'Reward SP', InputControlType::INTEGER, removeWhenEmpty: true),
                 new RecordField('rewards.gold', 'Reward Gold', InputControlType::INTEGER),
                 new RecordField('elementAffinities', 'Element Affinities', removeWhenEmpty: true, codec: RecordFieldCodec::AFFINITIES),
                 new RecordField('stateResistances', 'State Resistances', removeWhenEmpty: true, codec: RecordFieldCodec::KEY_VALUES),
