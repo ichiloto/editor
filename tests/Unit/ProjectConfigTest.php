@@ -250,3 +250,30 @@ it('offers the Engine\'s shared terms, such as the level in rows, so a game rewo
     $workspace->config->save();
     expect((require $root . '/config.php')['vocab']['stats'])->toBe(['level_short' => 'Lvl']);
 });
+
+it('offers each engine sound\'s own volume beside its track and refuses one outside its range', function () {
+    $root = createZoomProject("  'audio' => ['sounds' => ['counter' => 'tick-loop']],\n");
+    is_dir($root . '/assets/Audio/SFX') || mkdir($root . '/assets/Audio/SFX', 0o777, true);
+    file_put_contents($root . '/assets/Audio/SFX/tick-loop.wav', 'audio');
+    $workspace = ProjectWorkspace::fromProject($root);
+    $database = $workspace->getRecordDatabase('configuration');
+    $valueField = static function (string $path) use ($database): array {
+        $index = array_search($path, $database->getEntryLabels(), true);
+        expect($index)->not->toBeFalse();
+        return array_find($database->getSettingsFields($index), static fn(array $field): bool => ($field['field'] ?? null) === 'value');
+    };
+
+    expect($valueField('audio.sounds.counter')['reference'] ?? null)->toBe('sfx')
+        ->and($valueField('audio.sound_volumes.counter')['reference'] ?? null)->toBeNull()
+        ->and($valueField('audio.sound_volumes.cursor'))->not->toBeEmpty();
+
+    foreach (['101', '-1'] as $outside) {
+        expect(fn() => setConfiguration($workspace, 'audio.sound_volumes.counter', $outside))->toThrow(InvalidArgumentException::class);
+    }
+    expect($workspace->config->isDirty())->toBeFalse();
+
+    setConfiguration($workspace, 'audio.sound_volumes.counter', '35');
+    $workspace->config->save();
+
+    expect((require $root . '/config.php')['audio'])->toBe(['sounds' => ['counter' => 'tick-loop'], 'sound_volumes' => ['counter' => 35]]);
+});

@@ -64,9 +64,11 @@ final class ProjectConfig extends ProjectSettingsFile
     protected function listEngineSettings(): array
     {
         $settings = array_map(static fn(mixed $default): array => ['default' => $default], self::ENGINE_DEFAULTS);
-        // Every sound the Engine plays for itself is offered, so a game can choose one it has not set yet.
+        // Every sound the Engine plays for itself is offered, so a game can choose one it has not set yet,
+        // with its own volume beside it, so a dense sound can sit under the music.
         foreach (SystemSound::cases() as $sound) {
-            $settings['audio.sounds.' . $sound->value] = ['default' => null];
+            $settings[$sound->getConfigPath()] = ['default' => null];
+            $settings[$sound->getVolumeConfigPath()] = ['default' => SystemSound::DEFAULT_VOLUME];
         }
         // The Engine's own wording for terms many screens share, such as the level in rows ("Lv"), is offered
         // even where the project leaves it out, so a game rewords it once.
@@ -89,8 +91,8 @@ final class ProjectConfig extends ProjectSettingsFile
 
     /**
      * Refuses a value the engine would not accept at a path, before anything
-     * changes: a field zoom outside its range, or an inn presentation that
-     * is not a timeline identity.
+     * changes: a field zoom outside its range, a system sound volume outside
+     * its range, or an inn presentation that is not a timeline identity.
      *
      * @throws \InvalidArgumentException
      */
@@ -100,9 +102,23 @@ final class ProjectConfig extends ProjectSettingsFile
             || ! is_finite((float) $value) || $value < FieldViewport::MIN_ZOOM || $value > FieldViewport::MAX_ZOOM)) {
             throw new \InvalidArgumentException(sprintf('Field zoom must be a finite number from %g to %g.', FieldViewport::MIN_ZOOM, FieldViewport::MAX_ZOOM));
         }
+        if (self::isSoundVolume($path) && (! is_int($value) || $value < SystemSound::MIN_VOLUME || $value > SystemSound::MAX_VOLUME)) {
+            throw new \InvalidArgumentException(sprintf('A sound volume must be a whole number from %d to %d.',
+                SystemSound::MIN_VOLUME, SystemSound::MAX_VOLUME));
+        }
         if ($path === self::INN_PRESENTATION && $value !== null) {
             InnPresentationFields::assertValid($value, complete: $complete);
         }
+    }
+
+    /** Whether a path holds one of the Engine's system sound volumes. */
+    private static function isSoundVolume(string $path): bool
+    {
+        foreach (SystemSound::cases() as $sound) {
+            if ($path === $sound->getVolumeConfigPath()) { return true; }
+        }
+
+        return false;
     }
 
     /** The inn's rest presentation is one setting, a whole timeline binding. */
