@@ -12,7 +12,8 @@ use Ichiloto\Editor\Validation\Severity;
  *
  * The shared fixture's quests were lifted from a bigger project and reference
  * its maps and items, which is itself a real finding rather than a reason not
- * to have a clean baseline.
+ * to have a clean baseline. The errand is handed over at the map's chest, and
+ * its start waymark leads there, so the story guidance check has no gap.
  *
  * @param string $root The project root.
  * @return void
@@ -26,6 +27,7 @@ function writeConsistentQuests(string $root): void
       [
         'id' => 'errand',
         'name' => 'An Errand',
+        'startWaymarks' => [['map' => 'test-map', 'event' => 'E']],
         'objectives' => [
           ['type' => 'reach_map', 'target' => 'test-map'],
           ['type' => 'collect', 'target' => 'S-Potion'],
@@ -34,6 +36,12 @@ function writeConsistentQuests(string $root): void
       ],
     ];
     PHP);
+    // Inserted in place, so the map's other lines stay as the cases that edit them expect.
+    editTestMapData($root, static fn(string $source): string => str_replace(
+        "'class' => 'Ichiloto\\Engine\\Events\\Triggers\\ChestEventTrigger',",
+        "'class' => 'Ichiloto\\Engine\\Events\\Triggers\\ChestEventTrigger',\n      'sets' => [['type' => 'quest', 'name' => 'errand']],",
+        $source,
+    ));
 }
 
 /**

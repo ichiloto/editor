@@ -1180,9 +1180,11 @@ final class RecordSchemaCatalog
                 blank: ['type' => QuestObjectiveType::TALK_TO->value, 'target' => 'New Target'],
                 variants: $variants,
                 variantKey: 'type',
-                nestedLists: ['*' => self::questWaymarks()],
+                nestedLists: ['*' => self::questWaymarks('waymarks', 'waymark', 'waymark', 'Waymarks')],
             ),
             subLists: [
+                // Where the quest starts, shown while it can start, so the player is led to its giver.
+                self::questWaymarks('startWaymarks', 'startWaymark', 'start waymark', 'Start Waymarks'),
                 new RecordSubList(
                     key: 'rewards.items',
                     prefix: 'reward',
@@ -1281,19 +1283,20 @@ final class RecordSchemaCatalog
     }
 
     /**
-     * An objective's waymarks: where it sends the player. Each names a map
-     * and at most one stable subject on it, chosen from that map's own
-     * events, NPCs, world objects or landmarks, never coordinates. Its
-     * conditions say when it shows: a phase, or one part of free-order work.
+     * Quest waymarks: where an objective sends the player, or, for a quest's
+     * start waymarks, where it starts. Each names a map and at most one
+     * stable subject on it, chosen from that map's own events, NPCs, world
+     * objects or landmarks, never coordinates. Its conditions say when it
+     * shows: a phase, or one part of free-order work.
      */
-    private static function questWaymarks(): RecordSubList
+    private static function questWaymarks(string $key, string $prefix, string $singular, string $heading): RecordSubList
     {
         $subjects = array_map(static fn(QuestWaymarkSubject $subject): string => $subject->value, QuestWaymarkSubject::cases());
 
         return new RecordSubList(
-            key: 'waymarks',
-            prefix: 'waymark',
-            singular: 'waymark',
+            key: $key,
+            prefix: $prefix,
+            singular: $singular,
             fields: [
                 RecordField::reference('map', 'Map', 'maps'),
                 RecordField::mapReference(QuestWaymarkSubject::EVENT->value, 'Event', 'event_markers', 'map'),
@@ -1304,7 +1307,7 @@ final class RecordSchemaCatalog
             ],
             blank: ['map' => ''],
             exclusiveFields: [$subjects],
-            heading: 'Waymarks',
+            heading: $heading,
             removeWhenEmpty: true,
         );
     }

@@ -3229,6 +3229,7 @@ class ProjectValidator
         ...$issues,
         ...$this->checkObjectives($quest, $where, $workspace->mapIds, $items, $foes, $known, $workspace),
         ...$this->checkConditions($quest->getPrerequisites(), $where, $known, true),
+        ...$this->checkWaymarks($quest->getStartWaymarks(), $where . ' start', $workspace->mapIds, $known, $workspace),
       ];
     }
 
@@ -3328,8 +3329,9 @@ class ProjectValidator
   }
 
   /**
-   * Checks an objective's waymarks: the Engine's own shape rules, a map the
-   * project defines, a subject that map still has, and their conditions.
+   * Checks a list of quest waymarks (an objective's, or a quest's start
+   * waymarks): the Engine's own shape rules, a map the project defines, a
+   * subject that map still has, and their conditions.
    *
    * @param mixed $waymarks The authored list.
    * @param string[] $mapIds Every map in the project.
@@ -3339,7 +3341,7 @@ class ProjectValidator
   protected function checkWaymarks(mixed $waymarks, string $where, array $mapIds, array $known, ?ProjectWorkspace $workspace): array
   {
     if (! is_array($waymarks) || ! array_is_list($waymarks)) {
-      return [Issue::error($where, 'An objective has malformed waymarks.', 'Use a list of waymarks, each naming a map.')];
+      return [Issue::error($where, 'The waymarks are malformed.', 'Use a list of waymarks, each naming a map.')];
     }
 
     $issues = [];

@@ -57,9 +57,11 @@ function guidanceGaps(string $root): array
         static fn(Issue $issue): bool => str_contains($issue->message, 'wayfinder')));
 }
 
+/** The opening quest, led to its giver by a start waymark unless a case replaces it. */
 function errandQuest(array $objectives, array $extra = []): array
 {
-    return ['id' => 'errand', 'name' => 'Errand', 'description' => '', 'objectives' => [
+    return ['id' => 'errand', 'name' => 'Errand', 'description' => '',
+        'startWaymarks' => [['map' => 'test-map', 'npc' => 'keeper']], 'objectives' => [
         ['type' => 'reach_map', 'target' => 'test-map', 'waymarks' => [['map' => 'test-map']]],
         ...$objectives,
     ], ...$extra];
@@ -110,17 +112,63 @@ it('does not count a quest that starts only where the flag is set', function () 
     $pages = [['lines' => [['name' => 'Keeper', 'text' => 'Go.']],
         'sets' => [['type' => 'quest', 'name' => 'errand'], ['type' => 'event', 'name' => 'gate_opened']]]];
 
-    expect(guidanceGaps(writeGuidanceProject([errandQuest([gateObjective()])], $pages)))->toHaveCount(1);
+    $gaps = guidanceGaps(writeGuidanceProject([errandQuest([gateObjective()], ['startWaymarks' => []])], $pages));
+
+    expect(array_map(static fn(Issue $issue): string => $issue->where, $gaps))->toContain('test-map event D')
+        // Its start waymark leads there through the keeper, who hands over the errand and opens the gate at once.
+        ->and(guidanceGaps(writeGuidanceProject([errandQuest([gateObjective()])], $pages)))->toBe([]);
 });
 
-it('warns at a main quest whose prerequisite no objective leads to', function () {
-    $next = ['id' => 'next', 'name' => 'Next Step', 'description' => '',
-        'prerequisites' => [['type' => 'event', 'name' => 'gate_opened']],
-        'objectives' => [['type' => 'reach_map', 'target' => 'test-map']]];
-    $gaps = guidanceGaps(writeGuidanceProject([errandQuest([]), $next]));
+/** A notice board (event N) that hands over the next quest. */
+function nextQuestBoard(): array
+{
+    return ['N' => ['class' => 'Ichiloto\\Engine\\Events\\Triggers\\ScriptEventTrigger',
+        'sets' => [['type' => 'quest', 'name' => 'next']], 'data' => ['mode' => 'action', 'reusable' => true]]];
+}
 
-    expect(array_map(static fn(Issue $issue): string => $issue->where, $gaps))->toContain('quest next', 'test-map event D')
-        ->and(guidanceGaps(writeGuidanceProject([errandQuest([gateObjective()]), $next])))->toBe([]);
+function nextQuest(array $extra = []): array
+{
+    return ['id' => 'next', 'name' => 'Next Step', 'description' => '',
+        'prerequisites' => [['type' => 'event', 'name' => 'gate_opened']],
+        'startWaymarks' => [['map' => 'test-map', 'event' => 'N']],
+        'objectives' => [['type' => 'reach_map', 'target' => 'test-map']], ...$extra];
+}
+
+it('warns at a main quest whose prerequisite no objective leads to', function () {
+    $gaps = guidanceGaps(writeGuidanceProject([errandQuest([]), nextQuest()], events: nextQuestBoard()));
+
+    expect(array_map(static fn(Issue $issue): string => $issue->where, $gaps))->toBe(['quest next', 'test-map event D'])
+        ->and(guidanceGaps(writeGuidanceProject([errandQuest([gateObjective()]), nextQuest()], events: nextQuestBoard())))->toBe([]);
+});
+
+/* Quest starts: what starts each main quest is led to before it starts. */
+
+it('warns at a main quest whose start nothing leads to, on the map where it starts', function () {
+    $gaps = guidanceGaps(writeGuidanceProject([errandQuest([gateObjective()], ['startWaymarks' => []])]));
+
+    expect($gaps)->toHaveCount(1)
+        ->and($gaps[0]->severity)->toBe(Severity::WARNING)
+        ->and($gaps[0]->where)->toBe('quest errand')
+        ->and($gaps[0]->map)->toBe('test-map')
+        ->and($gaps[0]->message)->toContain('starts at test-map NPC keeper page 2', 'no start waymark')
+        ->and($gaps[0]->hint)->toContain('start waymark');
+});
+
+it('counts an objective of the quest before it leading to where the next quest starts', function () {
+    $toBoard = ['type' => 'flag', 'target' => 'board_read', 'waymarks' => [['map' => 'test-map', 'event' => 'N']]];
+    $project = static fn(array $errandObjectives): string => writeGuidanceProject(
+        [errandQuest([gateObjective(), ...$errandObjectives]), nextQuest(['startWaymarks' => []])], events: nextQuestBoard());
+
+    expect(array_map(static fn(Issue $issue): string => $issue->where, guidanceGaps($project([]))))->toBe(['quest next'])
+        ->and(guidanceGaps($project([$toBoard])))->toBe([]);
+});
+
+it('warns at a main quest nothing in the project starts', function () {
+    $gaps = guidanceGaps(writeGuidanceProject([errandQuest([gateObjective()]), nextQuest()]));
+
+    expect(array_map(static fn(Issue $issue): string => $issue->where, $gaps))->toBe(['quest next'])
+        ->and($gaps[0]->message)->toContain('Nothing in the project starts the quest "Next Step"')
+        ->and($gaps[0]->map)->toBeNull();
 });
 
 /* Battles: a troop's event page opens the gate in its battle. */

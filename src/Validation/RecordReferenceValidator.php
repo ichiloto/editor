@@ -49,8 +49,8 @@ final class RecordReferenceValidator
         'skits' => null,
         // ProjectValidator::checkScriptReferences, with the map and cast each script runs with.
         'common_events' => null,
-        // ProjectValidator::checkQuests: what an objective names depends on its type.
-        'quests' => ['objectives'],
+        // ProjectValidator::checkQuests: what an objective names depends on its type, and start waymarks name map subjects.
+        'quests' => ['objectives', 'startWaymarks'],
     ];
 
     /** @var array<string, list<string>> What each kind holds, read once per validation. */

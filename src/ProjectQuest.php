@@ -52,6 +52,16 @@ final readonly class ProjectQuest
     }
 
     /**
+     * The quest's start waymarks as authored, where it leads the player before it starts.
+     *
+     * @return mixed A list of waymarks, or whatever malformed value the file holds, for validation to report.
+     */
+    public function getStartWaymarks(): mixed
+    {
+        return $this->payload['startWaymarks'] ?? [];
+    }
+
+    /**
      * @return array<string, mixed>
      */
     public function getRewards(): array

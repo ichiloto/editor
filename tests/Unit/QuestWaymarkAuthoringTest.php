@@ -110,7 +110,7 @@ it('authors the game waymark style in field.php with the Engine defaults and ref
       $root . '/assets')->waymarks->symbol)->toBe('*');
 });
 
-it('keeps Shift+O on an objective adding an objective, and adds a waymark from its Waymarks heading', function () {
+it('keeps Shift+O on an objective adding an objective, and adds a waymark from its Waymarks or Start Waymarks heading', function () {
   $root = makeTemporaryProject();
   $editor = createEditorForTesting($root);
   setEditorProperty($editor, 'workspace', ProjectWorkspace::fromProject($root));
@@ -129,10 +129,49 @@ it('keeps Shift+O on an objective adding an objective, and adds a waymark from i
   callEditorMethod($editor, 'dispatchInput', 'O');
   $select('objective0WaymarkList');
   callEditorMethod($editor, 'dispatchInput', 'O');
+  $select('startWaymarkList');
+  callEditorMethod($editor, 'dispatchInput', 'O');
   ob_end_clean();
   $objectives = $database->getSubItems(0);
 
   expect($objectives)->toHaveCount(3)
     ->and($objectives[0]['waymarks'] ?? [])->toHaveCount(1)
-    ->and($objectives[1]['waymarks'] ?? [])->toBe([]);
+    ->and($objectives[1]['waymarks'] ?? [])->toBe([])
+    ->and($database->getSubItems(0, 'startWaymarks'))->toHaveCount(1);
+});
+
+it('authors a quest\'s start waymarks from their heading, as a picked map and subject saved in the Engine shape', function () {
+  $root = makeTemporaryProject();
+  $session = EditorSession::open($root);
+  $heading = waymarkRow($session, 'startWaymarkList');
+
+  expect($heading)->not->toBeNull();
+  $session->addDatabaseItem('quests', 0, $heading['key']);
+  $session->applyDatabaseRecord('quests', 0, waymarkRow($session, 'startWaymark0Map')['key'], 'test-map');
+  $event = waymarkRow($session, 'startWaymark0Event');
+
+  expect($event)->toMatchArray(['kind' => 'reference', 'reference' => 'event_markers', 'referenceMap' => 'test-map']);
+  $session->applyDatabaseRecord('quests', 0, $event['key'], 'E');
+  $session->saveDatabase('quests');
+  $quests = require $root . '/assets/Data/quests.php';
+
+  expect($quests[0]['startWaymarks'])->toBe([['map' => 'test-map', 'event' => 'E']])
+    ->and(Quest::fromArray($quests[0])->startWaymarks[0]->subjectId)->toBe('E')
+    // The objectives keep their own waymarks.
+    ->and($quests[0]['objectives'][0]['waymarks'] ?? [])->toBe([]);
+});
+
+it('reports start waymarks that name a missing map or a subject the map lacks', function () {
+  $root = makeTemporaryProject();
+  $file = $root . '/assets/Data/quests.php';
+  $quests = require $file;
+  $quests[0]['startWaymarks'] = [['map' => 'no-such-map'], ['map' => 'test-map', 'event' => 'Z'], ['map' => 'test-map', 'event' => 'E']];
+  file_put_contents($file, '<?php return ' . var_export($quests, true) . ';');
+  $issues = array_values(array_filter((new ProjectValidator())->validate(ProjectWorkspace::fromProject($root)),
+    static fn($issue): bool => str_contains($issue->where, 'start waymark')));
+
+  expect(array_map(static fn($issue): string => $issue->where, $issues))->toBe([
+    sprintf('quest %s start waymark 1', $quests[0]['id']), sprintf('quest %s start waymark 2', $quests[0]['id'])])
+    ->and($issues[0]->message)->toContain('no-such-map')
+    ->and($issues[1]->message)->toContain('event "Z"');
 });
