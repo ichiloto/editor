@@ -1511,7 +1511,7 @@ skill takes the next number and goes last. `skills.php` is the barrel that
 loads the folder.
 
 A skill whose values its author has not decided yet (its MP cost, when it
-can be used, whom it reaches, its effects, or one effect's amount), or whose effect the
+can be used, whom it reaches, its effects, or one effect's amount or spread), or whose effect the
 Engine does not offer yet, lists those values under Awaiting Author
 (`unassigned`) and leaves them out of the record. The Engine keeps it as a
 draft: its name is taken and the mastery tree can place it, but nobody can
