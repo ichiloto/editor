@@ -53,6 +53,7 @@ final class DatabaseCatalog
             new DatabaseCategoryDefinition('system', 'System', 'Configure system-wide project settings.', true),
             new DatabaseCategoryDefinition('configuration', 'Configuration', 'Adjust saving, accessibility, interface, graphics, audio and inn settings.', true),
             new DatabaseCategoryDefinition('types', 'Types', 'Manage element and weapon-type tables.', true),
+            new DatabaseCategoryDefinition(WordFormFields::CATEGORY, 'Word Forms', 'Give names their own singular and plural forms where the English rules would get them wrong.', true),
             new DatabaseCategoryDefinition('terms', 'Terms', 'Customize UI labels and message terms.', true),
         ];
     }

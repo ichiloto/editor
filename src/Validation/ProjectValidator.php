@@ -177,6 +177,7 @@ class ProjectValidator
       ...new ProgressionValidator()->validate($workspace),
       ...new MasteryValidator()->validate($workspace),
       ...new IncomeValidator()->validate($workspace),
+      ...new WordFormValidator()->validate($workspace),
       ...$this->checkDefinitionIdentities($workspace),
       ...$this->checkActorDefinitions($workspace),
       ...new ActorReferenceValidator()->validate($workspace),
@@ -191,6 +192,7 @@ class ProjectValidator
       ...new SaveCompatibilityValidator()->validate($workspace),
       ...new ScreenTransitionValidator()->validate($workspace),
       ...new ReachabilityValidator()->validate($workspace),
+      ...new StoryGuidanceValidator($this->commonEventScripts)->validate($workspace),
       ...new EffectValidator()->validate($workspace),
     ];
 
