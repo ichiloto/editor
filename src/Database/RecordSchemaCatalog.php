@@ -54,6 +54,7 @@ use Ichiloto\Engine\Entities\Enumerations\ItemScopeStatus;
 use Ichiloto\Engine\Entities\Enumerations\Occasion;
 use Ichiloto\Engine\Entities\Skills\Skill;
 use Ichiloto\Engine\Entities\Skills\SkillCatalog;
+use Ichiloto\Engine\Entities\Skills\SkillDraft;
 use Ichiloto\Engine\Entities\Skills\SkillRecord;
 use Ichiloto\Engine\Entities\Skills\SkillResolutionScope;
 use Ichiloto\Engine\Rendering\Tilesets\Tileset;
@@ -138,6 +139,7 @@ final class RecordSchemaCatalog
             self::enemies(),
             self::skills(),
             MasteryFields::getRegionSchema(),
+            MasteryFields::getBranchSchema(),
             MasteryFields::getMapSchema($graphical),
             self::skits(),
             self::knowledgeSubjects(),
@@ -1542,6 +1544,9 @@ final class RecordSchemaCatalog
                 allowsNone: true,
                 displayDefault: '(Legacy fallback)',
             ),
+            // The values still awaiting the author (cost, occasion, scope, effects, effects.0.formula), left out of the record
+            // until assigned: the Engine keeps such a record as a draft nobody can learn or cast, and never guesses them.
+            new RecordField(SkillDraft::KEY, 'Awaiting Author', codec: RecordFieldCodec::CSV_LIST, removeWhenEmpty: true, displayDefault: '(none)'),
         ];
         // Only a spell has an effect type; left out, the Engine infers it
         // from the spell's effects.

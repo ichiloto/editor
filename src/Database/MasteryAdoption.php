@@ -9,17 +9,20 @@ use Ichiloto\Editor\Cutscenes\Source\PhpArraySourceDocument;
 use Ichiloto\Editor\ProjectDirectoryContext;
 use Ichiloto\Editor\Storage\SourceSetPlan;
 use Ichiloto\Engine\Progression\Mastery\MasteryCatalog;
+use Ichiloto\Engine\Progression\Mastery\MasteryNodeKind;
 use RuntimeException;
 
 /**
  * Moves a character's own skills from their actor file onto their Mastery
  * Map, so the map is the one place they are learned. Each skill the actor
- * file says they know becomes a node known from the start; each learnable
- * becomes a node carrying the EXP its requirement asked for as its cost, for
- * the author to place and reprice in Mastery points (SP); skills their role
- * teaches stay with the role. New nodes follow the map's own. The actor's
- * learned lists and learnables are then emptied. Saves are untouched: a
- * character keeps what a save says they know.
+ * file says they know gets terms known from the start; each learnable gets
+ * terms carrying the EXP its requirement asked for as its cost, for the
+ * author to reprice in Mastery points (SP); skills their role teaches stay
+ * with the role. The terms are for the tree node that teaches the skill; a
+ * skill the tree does not place yet gets a node on the first region's trunk,
+ * for the author to place on a branch. New terms follow the map's own. The
+ * actor's learned lists and learnables are then emptied. Saves are
+ * untouched: a character keeps what a save says they know.
  *
  * @package Ichiloto\Editor\Database
  */
@@ -37,17 +40,20 @@ final class MasteryAdoption
     public static function plan(string $projectRoot, string $actorId): ?array
     {
         return ProjectDirectoryContext::run($projectRoot, static function (string $root) use ($actorId): ?array {
-            $regions = MasteryCatalog::load($root . '/assets')->regions;
+            $catalog = MasteryCatalog::load($root . '/assets');
+            $regions = $catalog->regions;
             if ($regions === []) {
                 throw new RuntimeException('Declare the Mastery regions first: a node needs a region to sit in.');
             }
             $actorPaths = glob($root . '/assets/Data/Actors/*.php') ?: [];
             $mapPaths = glob($root . '/assets/' . MasteryCatalog::DIRECTORY . '/*.php') ?: [];
             $classesPath = $root . '/assets/Data/classes.php';
+            $settingsPath = $root . '/assets/' . MasteryCatalog::SETTINGS;
             $payloads = array_map(PhpDataFile::getComparableValue(...),
-                PhpDataFile::evaluateIsolatedFiles([...$actorPaths, ...$mapPaths, ...(is_file($classesPath) ? [$classesPath] : [])], $root));
+                PhpDataFile::evaluateIsolatedFiles([...$actorPaths, ...$mapPaths, $settingsPath, ...(is_file($classesPath) ? [$classesPath] : [])], $root));
             $actorPayloads = array_slice($payloads, 0, count($actorPaths));
             $mapPayloads = array_slice($payloads, count($actorPaths), count($mapPaths));
+            $settings = (array) $payloads[count($actorPaths) + count($mapPaths)];
             $classes = is_file($classesPath) ? (array) end($payloads) : [];
 
             $actorIndex = array_find_key($actorPayloads, static fn(mixed $payload): bool => is_array($payload)
@@ -62,8 +68,9 @@ final class MasteryAdoption
 
             $mapIndex = array_find_key($mapPayloads, static fn(mixed $payload): bool => is_array($payload) && ($payload['actor'] ?? null) === $actorId);
             $map = $mapIndex === null ? ['actor' => $actorId, 'nodes' => []] : $mapPayloads[$mapIndex];
-            $onMap = array_map(static fn(array $node): string => strval($node['skill'] ?? ''), (array) ($map['nodes'] ?? []));
-            $ids = array_map(static fn(array $node): string => strval($node['id'] ?? ''), (array) ($map['nodes'] ?? []));
+            $onMap = array_map(static fn(array $node): string => strval($node['id'] ?? ''), (array) ($map['nodes'] ?? []));
+            $ids = array_keys($catalog->tree->nodes);
+            $upgradedSettings = $settings;
             $added = [];
             $emptied = $actor;
             foreach (['abilities', 'magic'] as $book) {
@@ -82,19 +89,24 @@ final class MasteryAdoption
                 return null;
             }
             $nodes = [];
+            $placed = [];
             foreach ($added as ['skill' => $skill, 'cost' => $cost]) {
-                if ($skill === '' || in_array($skill, $taught, true) || in_array($skill, $onMap, true)) {
+                $id = $catalog->tree->findSkillNode($skill)?->id ?? $placed[$skill] ?? null;
+                if ($skill === '' || in_array($skill, $taught, true) || ($id !== null && in_array($id, $onMap, true))) {
                     continue;
                 }
-                $id = Slug::unique($skill, $ids, 'node');
-                $ids[] = $id;
-                $onMap[] = $skill;
-                $map['nodes'][] = $nodes[] = ['id' => $id, 'skill' => $skill, 'region' => $regions[0]->id, 'cost' => $cost,
-                    'opensAtLevel' => 1];
+                if ($id === null) {
+                    $id = $placed[$skill] = Slug::unique($skill, $ids, 'node');
+                    $ids[] = $id;
+                    $upgradedSettings['regions'][0]['nodes'][] = ['id' => $id, 'kind' => MasteryNodeKind::APPLICATION->value, 'skill' => $skill];
+                }
+                $onMap[] = $id;
+                $map['nodes'][] = ['id' => $id, 'cost' => $cost, 'opensAtLevel' => 1];
+                $nodes[] = $skill;
             }
 
             $actorSource = (string) file_get_contents($actorPath);
-            $watched = [$actorPath => $actorSource];
+            $watched = [$actorPath => $actorSource, $settingsPath => (string) file_get_contents($settingsPath)];
             foreach ($mapPaths as $path) {
                 $watched[$path] = (string) file_get_contents($path);
             }
@@ -103,6 +115,12 @@ final class MasteryAdoption
             $before = [$actorPath => $actor];
             $after = [$actorPath => $emptied];
             $created = null;
+            if ($upgradedSettings !== $settings) {
+                $originals[$settingsPath] = $watched[$settingsPath];
+                $proposals[$settingsPath] = ArraySourceWriter::rewrite(PhpArraySourceDocument::parse($watched[$settingsPath]), $settings, $upgradedSettings)->source;
+                $before[$settingsPath] = $settings;
+                $after[$settingsPath] = $upgradedSettings;
+            }
             if ($nodes !== []) {
                 $mapPath = $mapIndex === null
                     ? $root . '/assets/' . MasteryCatalog::DIRECTORY . '/' . Slug::of($actorId) . '.php'
@@ -127,11 +145,11 @@ final class MasteryAdoption
                 $before,
                 $after,
                 // A map the plan creates is its own change, not part of the family it read.
-                static fn(): array => array_values(array_diff([$actorPath, ...(glob($root . '/assets/' . MasteryCatalog::DIRECTORY . '/*.php') ?: [])], [$created])),
+                static fn(): array => array_values(array_diff([$actorPath, $settingsPath, ...(glob($root . '/assets/' . MasteryCatalog::DIRECTORY . '/*.php') ?: [])], [$created])),
                 static fn(string $path, string $staged): mixed => PhpDataFile::getComparableValue(PhpDataFile::evaluateIsolated($staged, $root)),
                 sprintf('move of %s\'s skills onto their Mastery Map', $actorId),
-                'The actor and Mastery Map files',
-            ), 'nodes' => array_column($nodes, 'skill')];
+                'The actor, mastery tree and Mastery Map files',
+            ), 'nodes' => $nodes];
         });
     }
 }

@@ -66,6 +66,8 @@ final class ReferenceCatalog
         'skills',
         // The regions every Mastery Map shares, by id.
         'mastery_regions',
+        // Every node of the mastery tree, by id: what a character's map gives terms for.
+        MasteryFields::NODES,
         'quests',
         // Income schedules, by stable id, for the income script commands.
         'income_schedules',
@@ -238,6 +240,7 @@ final class ReferenceCatalog
             'skills' => $this->workspace->getSkillNames(),
             'mastery_regions' => array_map(static fn(ProjectRecord $record): string => strval($record->get('id')),
                 $this->workspace->getRecordDatabase(MasteryFields::REGIONS)?->getRecords() ?? []),
+            MasteryFields::NODES => $this->masteryNodeIds(),
             'quests' => array_map(static fn(ProjectQuest $quest): string => $quest->getId(), $this->workspace->getQuests()),
             'income_schedules' => array_keys($this->incomeScheduleNames()),
             'maps' => $this->workspace->mapIds,
@@ -1343,6 +1346,29 @@ final class ReferenceCatalog
         }
         sort($paths);
         return $paths;
+    }
+
+    /**
+     * Every node of the mastery tree, by id, as the regions and branches are
+     * being edited: trunk nodes region by region, then each branch's nodes.
+     *
+     * @return list<string>
+     */
+    private function masteryNodeIds(): array
+    {
+        $ids = [];
+        foreach ([MasteryFields::REGIONS, MasteryFields::BRANCHES] as $category) {
+            foreach ($this->workspace->getRecordDatabase($category)?->getRecords() ?? [] as $record) {
+                foreach ($record->getSubList('nodes') as $node) {
+                    $id = trim(strval($node['id'] ?? ''));
+                    if ($id !== '') {
+                        $ids[] = $id;
+                    }
+                }
+            }
+        }
+
+        return array_values(array_unique($ids));
     }
 
     /**

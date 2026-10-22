@@ -14,8 +14,8 @@ use RuntimeException;
 /**
  * Where a project names a skill by its identity (its name): what a class
  * teaches, what an actor knows, can learn, attacks or counters with, what an
- * enemy uses, what a skill or state counters with, what a Mastery Map
- * teaches. Retiring a skill into another moves every one of these to the
+ * enemy uses, what a skill or state counters with, what a node of the
+ * mastery tree teaches. Retiring a skill into another moves every one of these to the
  * replacement in their own source, and saves that knew the old skill read it
  * as the replacement.
  *
@@ -24,9 +24,9 @@ use RuntimeException;
 final class SkillReferences
 {
     /** The data files that name skills, relative to the project root. */
-    private const array SINGLE_FILES = ['assets/Data/classes.php', 'assets/Data/states.php'];
+    private const array SINGLE_FILES = ['assets/Data/classes.php', 'assets/Data/states.php', 'assets/Data/mastery.php'];
     /** The folders of one-record files that name skills. */
-    private const array FOLDERS = ['assets/Data/Actors', 'assets/Data/Enemies', 'assets/Data/Skills', 'assets/Data/Mastery'];
+    private const array FOLDERS = ['assets/Data/Actors', 'assets/Data/Enemies', 'assets/Data/Skills'];
 
     private function __construct()
     {

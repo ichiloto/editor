@@ -36,6 +36,9 @@ use Ichiloto\Editor\Database\PhpValueExporter;
  */
 final class ArraySourceWriter
 {
+    /** The longest a value written on one line may be; a longer one is written an entry per line. */
+    private const int INLINE_WIDTH = 100;
+
     /**
      * Entries queued for the end of an array, per parent node: several
      * appends into one array become one composable edit at flush time.
@@ -150,6 +153,13 @@ final class ArraySourceWriter
             return;
         }
 
+        if (is_array($new) && $this->outgrowsItsLine($node, $new, $path)) {
+            // Plain data written on one line that would grow past the width is written an entry per line instead.
+            $this->edits[] = $this->document->replaceValueEdit($path, $this->literalFor($new, $path, true, true));
+
+            return;
+        }
+
         if (is_array($new)) {
             $this->diffArray($node, is_array($old) ? $old : null, $new, $path);
 
@@ -189,6 +199,44 @@ final class ArraySourceWriter
                 PhpArraySourceDocument::describePath($path),
             )),
         };
+    }
+
+    /**
+     * Whether plain data the file writes on one line would run past the
+     * width written that way with its new value.
+     *
+     * @param array<array-key, mixed> $new
+     * @param array<int, int|string> $path
+     */
+    private function outgrowsItsLine(SourceNode $node, array $new, array $path): bool
+    {
+        if ($node->kind !== SourceNode::ARRAY || $path === [] || ! $this->isPlainData($node)
+            || str_contains(substr($this->document->source, $node->start, $node->end - $node->start), "\n")
+            || ! $this->fitsOnOneLine($new)) {
+            return false;
+        }
+
+        $line = self::renderOneLine($new);
+
+        // Text with line breaks is written as a variable, which this leaves to the entry-by-entry diff.
+        return strlen($line) > self::INLINE_WIDTH && ! str_contains($line, "\n");
+    }
+
+    /**
+     * A plain value written on one line, as an entry that fits there is.
+     *
+     * @param array<array-key, mixed> $value
+     */
+    private static function renderOneLine(array $value): string
+    {
+        $isList = array_is_list($value);
+        $parts = [];
+        foreach ($value as $key => $item) {
+            $literal = is_array($item) ? self::renderOneLine($item) : PhpValueExporter::export($item);
+            $parts[] = $isList ? $literal : var_export($key, true) . ' => ' . $literal;
+        }
+
+        return '[' . implode(', ', $parts) . ']';
     }
 
     /** Whether an array's source is only literal keys and values, with no comment, expression or variable in it. */
@@ -1090,8 +1138,10 @@ final class ArraySourceWriter
      * text with a line break so that art stays art.
      *
      * @param array<int, int|string> $path
+     * @param bool $inline Whether to write it on one line when it fits: because its neighbours are, or as a child.
+     * @param bool $child Whether it is a child of a value being written, which keeps to one line only within the width.
      */
-    private function literalFor(mixed $value, array $path, bool $inline = false): string
+    private function literalFor(mixed $value, array $path, bool $inline = false, bool $child = false): string
     {
         if (is_string($value) && str_contains($value, "\n")) {
             $fresh = $this->claimVariable(self::stemFor($path));
@@ -1105,26 +1155,28 @@ final class ArraySourceWriter
         }
 
         $isList = array_is_list($value);
+        // Each child is written once: a child that fits on its line stays there, as authors write a condition or a point.
+        $parts = [];
+
+        foreach ($value as $key => $item) {
+            $literal = $this->literalFor($item, [...$path, $key], true, true);
+            $parts[] = $isList ? $literal : var_export($key, true) . ' => ' . $literal;
+        }
 
         if ($inline && $this->fitsOnOneLine($value)) {
-            $parts = [];
+            $literal = '[' . implode(', ', $parts) . ']';
 
-            foreach ($value as $key => $item) {
-                $literal = $this->literalFor($item, [...$path, $key], true);
-                $parts[] = $isList ? $literal : var_export($key, true) . ' => ' . $literal;
+            // An entry matches its neighbours' lines; a child's small values in a long list still make a line nobody
+            // reads at once, so past the width it is written one per line.
+            if (! $child || strlen($literal) <= self::INLINE_WIDTH) {
+                return $literal;
             }
-
-            return '[' . implode(', ', $parts) . ']';
         }
 
         $lines = ['['];
 
-        foreach ($value as $key => $item) {
-            // A child that fits on its line stays there, as authors write a condition or a point.
-            $literal = self::indentContinuation($this->literalFor($item, [...$path, $key], true));
-            $lines[] = $isList
-                ? "  {$literal},"
-                : '  ' . var_export($key, true) . " => {$literal},";
+        foreach ($parts as $part) {
+            $lines[] = '  ' . self::indentContinuation($part) . ',';
         }
 
         $lines[] = ']';

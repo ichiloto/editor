@@ -10,16 +10,17 @@ use Ichiloto\Engine\Entities\Skills\SpecialSkill;
 use Ichiloto\Engine\Progression\Mastery\MasteryCatalog;
 
 /**
- * Mastery regions and maps through the editor session: each character's map
- * authored node by node, its place on the graphical map left to the GUI
- * editor, and a map the Engine could not read refused before anything is
- * written. Synthetic fixtures only.
+ * The mastery tree and maps through the editor session: the tree's regions
+ * and branches, each character's own terms authored node by node, their
+ * place on the graphical map left to the GUI editor, and a tree or map the
+ * Engine could not read refused before anything is written. Synthetic
+ * fixtures only.
  */
 function masteryProject(): string
 {
     $root = makeTemporaryProject();
     writeSkillRecords($root, new SpecialSkill('Cut', 'Cuts.', '', 2, 0), new MagicSkill('Spark', 'Shocks.', '', 4, 0));
-    file_put_contents($root . '/assets/Data/mastery.php', "<?php\n\nreturn [\n  'regions' => [\n    ['id' => 'blades', 'name' => 'Blades'],\n    ['id' => 'storms', 'name' => 'Storms'],\n  ],\n];\n");
+    file_put_contents($root . '/assets/Data/mastery.php', "<?php\n\nreturn [\n  'regions' => [\n    ['id' => 'blades', 'name' => 'Blades', 'nodes' => [\n      ['id' => 'cut', 'kind' => 'application', 'skill' => 'Cut'],\n    ]],\n    ['id' => 'storms', 'name' => 'Storms', 'nodes' => [\n      ['id' => 'spark', 'kind' => 'application', 'skill' => 'Spark'],\n    ]],\n  ],\n];\n");
 
     return $root;
 }
@@ -47,14 +48,14 @@ it('authors a character\'s map node by node, and the Engine reads it back', func
     foreach ([0, 1] as $node) {
         $session->addDatabaseItem(MasteryFields::MAPS, $index, ['frame' => []], false);
     }
-    authorMasteryNode($session, $index, 0, ['Id' => 'cut', 'Skill' => 'Cut', 'Region' => 'blades']);
-    authorMasteryNode($session, $index, 1, ['Id' => 'spark', 'Skill' => 'Spark', 'Region' => 'storms', 'Cost' => 50,
-        'OpensAtLevel' => 3, 'Requires' => 'cut', 'Hidden' => 'true']);
+    authorMasteryNode($session, $index, 0, ['Id' => 'cut']);
+    authorMasteryNode($session, $index, 1, ['Id' => 'spark', 'Cost' => 50, 'OpensAtLevel' => 3, 'Requires' => 'cut', 'Hidden' => 'true']);
     $read = $session->readDatabaseRecord(MasteryFields::MAPS, $index);
     $session->saveDatabase(MasteryFields::MAPS);
     $map = MasteryCatalog::load($root . '/assets')->findMap('Kaelion');
 
-    expect(array_keys($map?->nodes ?? []))->toBe(['cut', 'spark'])
+    expect(array_keys($map?->terms ?? []))->toBe(['cut', 'spark'])
+        ->and($map->nodes['spark']->skill)->toBe('Spark')
         ->and($map->nodes['spark']->requires)->toBe(['cut'])
         ->and($map->nodes['spark']->cost)->toBe(50)
         ->and($map->nodes['spark']->hidden)->toBeTrue()
@@ -70,29 +71,57 @@ it('refuses saving a map the Engine could not read, naming why', function () {
     $session = EditorSession::open($root);
     $index = $session->createDatabaseRecord(MasteryFields::MAPS, 'Kaelion')['index'];
     $session->addDatabaseItem(MasteryFields::MAPS, $index, ['frame' => []], false);
-    authorMasteryNode($session, $index, 0, ['Id' => 'spark', 'Skill' => 'Spark', 'Region' => 'storms', 'Requires' => 'missing']);
+    authorMasteryNode($session, $index, 0, ['Id' => 'spark', 'Requires' => 'missing']);
 
     expect(fn() => $session->saveDatabase(MasteryFields::MAPS))->toThrow(SessionRefusal::class, 'requires unknown node missing')
         ->and(glob($root . '/assets/Data/Mastery/*.php') ?: [])->toBe([]);
 });
 
-it('refuses a node in an undeclared region and keeps a skill a map teaches from being deleted', function () {
+it('refuses terms for a node the tree lacks, and keeps a skill the tree teaches from being deleted', function () {
     $root = masteryProject();
     $session = EditorSession::open($root);
     $index = $session->createDatabaseRecord(MasteryFields::MAPS, 'Kaelion')['index'];
     $session->addDatabaseItem(MasteryFields::MAPS, $index, ['frame' => []], false);
-    authorMasteryNode($session, $index, 0, ['Id' => 'cut', 'Skill' => 'Cut', 'Region' => 'blades']);
+    $nodes = masteryRow($session->readDatabaseRecord(MasteryFields::MAPS, $index), 'node0Id');
+    $session->applyDatabaseRecord(MasteryFields::MAPS, $index, $nodes['key'], 'nowhere');
 
-    authorMasteryNode($session, $index, 0, ['Region' => 'nowhere']);
+    expect(fn() => $session->saveDatabase(MasteryFields::MAPS))->toThrow(SessionRefusal::class, 'does not have')
+        ->and(fn() => $session->deleteDatabaseRecord('skills', 0))->toThrow(SessionRefusal::class, 'Mastery region Blades');
+});
 
-    expect(fn() => $session->saveDatabase(MasteryFields::MAPS))->toThrow(SessionRefusal::class, 'unknown region "nowhere"')
-        ->and(fn() => $session->deleteDatabaseRecord('skills', 0))->toThrow(SessionRefusal::class, 'Mastery Map of Kaelion');
+it('grows a branch whose nodes chain from its foundation, and refuses a ladder the Engine could not read', function () {
+    $root = masteryProject();
+    writeSkillRecords($root, new SpecialSkill('Cut', 'Cuts.', '', 2, 0), new MagicSkill('Spark', 'Shocks.', '', 4, 0),
+        new MagicSkill('Spark II', 'Shocks harder.', '', 8, 0));
+    $session = EditorSession::open($root);
+    $index = $session->createDatabaseRecord(MasteryFields::BRANCHES, 'lightning')['index'];
+    $branch = static fn(): array => $session->readDatabaseRecord(MasteryFields::BRANCHES, $index);
+    $session->applyDatabaseRecord(MasteryFields::BRANCHES, $index, masteryRow($branch(), 'region')['key'], 'storms');
+    foreach ([0, 1] as $node) {
+        $session->addDatabaseItem(MasteryFields::BRANCHES, $index, ['frame' => []], false);
+    }
+    foreach ([['node0Id', 'lightning'], ['node0Kind', 'foundation'], ['node0Name', 'Lightning'], ['node1Id', 'spark-ii'],
+        ['node1Skill', 'Spark II'], ['node1Grade', '2'], ['node1Cost', '90']] as [$field, $value]) {
+        $session->applyDatabaseRecord(MasteryFields::BRANCHES, $index, masteryRow($branch(), $field)['key'], $value);
+    }
+
+    // A second grade with no first is a broken ladder.
+    expect(fn() => $session->saveDatabase(MasteryFields::BRANCHES))->toThrow(SessionRefusal::class, 'without a gap');
+
+    $session->applyDatabaseRecord(MasteryFields::BRANCHES, $index, masteryRow($branch(), 'node1Grade')['key'], '1');
+    $session->saveDatabase(MasteryFields::BRANCHES);
+    $tree = MasteryCatalog::load($root . '/assets')->tree;
+
+    expect(array_keys($tree->branches))->toBe(['lightning'])
+        ->and($tree->getRequirements($tree->nodes['spark-ii']))->toBe(['lightning'])
+        ->and($tree->nodes['spark-ii']->cost)->toBe(90)
+        ->and(array_keys((require $root . '/assets/Data/mastery.php')))->toBe(['regions', 'branches']);
 });
 
 it('leaves each node\'s place on the map to the GUI editor and keeps it through Terminal edits', function () {
     $root = masteryProject();
     mkdir($root . '/assets/Data/Mastery');
-    file_put_contents($root . '/assets/Data/Mastery/kaelion.php', "<?php\n\nreturn [\n  'actor' => 'Kaelion',\n  'nodes' => [\n    ['id' => 'cut', 'skill' => 'Cut', 'region' => 'blades', 'cost' => 0, 'opensAtLevel' => 1, 'position' => ['x' => 0.2, 'y' => 0.3]],\n  ],\n];\n");
+    file_put_contents($root . '/assets/Data/Mastery/kaelion.php', "<?php\n\nreturn [\n  'actor' => 'Kaelion',\n  'nodes' => [\n    ['id' => 'cut', 'cost' => 0, 'opensAtLevel' => 1, 'position' => ['x' => 0.2, 'y' => 0.3]],\n  ],\n];\n");
     $terminal = loadRecordDatabase($root, MasteryFields::MAPS);
     $terminalFields = array_column($terminal->getSettingsFields(0), 'field');
     $terminal->setField(0, 'node0Cost', '40');
@@ -107,10 +136,11 @@ it('leaves each node\'s place on the map to the GUI editor and keeps it through 
 it('moves a character\'s own skills onto their map, leaves role skills to the role, and undoes as one step', function () {
     $root = masteryProject();
     writeSkillRecords($root, new SpecialSkill('Cut', 'Cuts.', '', 2, 0), new MagicSkill('Spark', 'Shocks.', '', 4, 0),
-        new SpecialSkill('Rally', 'Rallies.', '', 3, 0));
+        new SpecialSkill('Rally', 'Rallies.', '', 3, 0), new SpecialSkill('Lunge', 'Lunges.', '', 3, 0));
     $actor = $root . '/assets/Data/Actors/Kaelion.php';
+    $settings = (string) file_get_contents($root . '/assets/Data/mastery.php');
     $source = (string) file_get_contents($actor);
-    file_put_contents($actor, str_replace("    'images' => [", "    'class' => 'Vanguard',\n    'abilities' => [\n      'learned' => ['Cut', 'Rally'],\n      'learnables' => [\n        ['skill' => 'Spark', 'requirement' => ['experienceRequired' => 300]],\n      ],\n    ],\n    'images' => [", $source));
+    file_put_contents($actor, str_replace("    'images' => [", "    'class' => 'Vanguard',\n    'abilities' => [\n      'learned' => ['Cut', 'Rally', 'Lunge'],\n      'learnables' => [\n        ['skill' => 'Spark', 'requirement' => ['experienceRequired' => 300]],\n      ],\n    ],\n    'images' => [", $source));
     $classes = $root . '/assets/Data/classes.php';
     file_put_contents($classes, preg_replace("/'name' => 'Vanguard',\n/", "'name' => 'Vanguard',\n    'skillsToLearn' => [['level' => 2, 'skill' => 'Rally']],\n", (string) file_get_contents($classes), 1));
     $before = (string) file_get_contents($actor);
@@ -121,27 +151,31 @@ it('moves a character\'s own skills onto their map, leaves role skills to the ro
     $map = MasteryCatalog::load($root . '/assets')->findMap('Kaelion');
     $abilities = (require $actor)['data']['abilities'];
 
-    expect($question['question'])->toContain('Cut, Spark')
-        ->and(array_map(static fn($node) => [$node->skill, $node->cost], array_values($map?->nodes ?? [])))->toBe([['Cut', 0], ['Spark', 300]])
+    // Terms go to the tree node that teaches each skill; a skill the tree does not place yet joins the first region's trunk.
+    expect($question['question'])->toContain('Cut, Lunge, Spark')
+        ->and(array_map(static fn($terms) => [$map->nodes[$terms->id]->skill, $terms->cost], array_values($map?->terms ?? [])))
+            ->toBe([['Cut', 0], ['Lunge', 0], ['Spark', 300]])
+        ->and($map->nodes['lunge']->region)->toBe('blades')
         ->and($abilities)->toBe(['learned' => [], 'learnables' => []]);
 
     $session->undo();
     expect(file_get_contents($actor))->toBe($before)
+        ->and(file_get_contents($root . '/assets/Data/mastery.php'))->toBe($settings)
         ->and(glob($root . '/assets/Data/Mastery/*.php') ?: [])->toBe([]);
 });
 
 it('gives the map page every node\'s place, moves a node and links two nodes, each one undo step', function () {
     $root = masteryProject();
     mkdir($root . '/assets/Data/Mastery');
-    file_put_contents($root . '/assets/Data/Mastery/kaelion.php', "<?php\n\nreturn [\n  'actor' => 'Kaelion',\n  'nodes' => [\n    ['id' => 'cut', 'skill' => 'Cut', 'region' => 'blades', 'cost' => 0, 'opensAtLevel' => 1],\n    ['id' => 'spark', 'skill' => 'Spark', 'region' => 'storms', 'cost' => 50, 'opensAtLevel' => 2],\n  ],\n];\n");
+    file_put_contents($root . '/assets/Data/Mastery/kaelion.php', "<?php\n\nreturn [\n  'actor' => 'Kaelion',\n  'nodes' => [\n    ['id' => 'cut', 'cost' => 0, 'opensAtLevel' => 1],\n    ['id' => 'spark', 'cost' => 50, 'opensAtLevel' => 2],\n  ],\n];\n");
     $session = EditorSession::open($root);
     $page = $session->readMasteryPage(0);
 
     expect(array_column($page['regions'], 'id'))->toBe(['blades', 'storms'])
         ->and($page['pointsLabel'])->toBe('SP')
         ->and($page['levelLabel'])->toBe('Lv')
-        ->and(array_map(static fn(array $node): array => [$node['id'], $node['x'], $node['placed']], $page['nodes']))
-            ->toBe([['cut', 0.25, false], ['spark', 0.75, false]]);
+        ->and(array_map(static fn(array $node): array => [$node['id'], $node['name'], $node['region'], $node['x'], $node['placed']], $page['nodes']))
+            ->toBe([['cut', 'Cut', 'blades', 0.25, false], ['spark', 'Spark', 'storms', 0.75, false]]);
 
     $session->placeMasteryNode(0, 'spark', 0.6, 0.4);
     $session->toggleMasteryRequirement(0, 'spark', 'cut');
@@ -161,7 +195,7 @@ it('names prices and levels on the map page in the project\'s own words for Mast
     $config = $root . '/config.php';
     file_put_contents($config, preg_replace("/'vocab' => \\[/", "'vocab' => [\n    'mastery' => ['points' => 'JP'],\n    'stats' => ['level_short' => 'Lvl'],", (string) file_get_contents($config), 1));
     mkdir($root . '/assets/Data/Mastery');
-    file_put_contents($root . '/assets/Data/Mastery/kaelion.php', "<?php\n\nreturn ['actor' => 'Kaelion', 'nodes' => [['id' => 'cut', 'skill' => 'Cut', 'region' => 'blades']]];\n");
+    file_put_contents($root . '/assets/Data/Mastery/kaelion.php', "<?php\n\nreturn ['actor' => 'Kaelion', 'nodes' => [['id' => 'cut']]];\n");
     $page = EditorSession::open($root)->readMasteryPage(0);
 
     expect([$page['pointsLabel'], $page['levelLabel']])->toBe(['JP', 'Lvl']);
@@ -186,4 +220,29 @@ it('gives an enemy and a quest the Mastery points they reward, and leaves record
 
     expect((require $root . '/assets/Data/Enemies/regular-bat.php')['data']['rewards']['skillPoints'] ?? null)->toBe(12)
         ->and((require $root . '/assets/Data/quests.php')[0]['rewards']['skillPoints'] ?? null)->toBe(30);
+});
+
+it('reports what awaits an author: draft skills, unpriced nodes, ungranted foundations and terms that skip a chain step', function () {
+    $root = masteryProject();
+    file_put_contents($root . '/assets/Data/Skills/0099-tempest.php', '<?php return ' . var_export(['class' => \Ichiloto\Engine\Entities\Skills\Skill::class,
+        'data' => ['kind' => 'magic', 'name' => 'Tempest', 'description' => '', 'icon' => '', 'cooldown' => 0, 'occasion' => 'Battle Screen',
+            'scope' => ['side' => 'Enemy', 'number' => 'All', 'status' => 'Alive'], 'invocation' => ['speed' => 0, 'accuracy' => 0, 'repeat' => 1, 'apGain' => 0],
+            'effects' => [['type' => 'hp_damage']], 'unassigned' => ['cost', 'effects.0.formula']]], true) . ';');
+    file_put_contents($root . '/assets/Data/mastery.php', '<?php return ' . var_export(['regions' => [['id' => 'storms', 'name' => 'Storms']], 'branches' => [
+        ['id' => 'storm', 'region' => 'storms', 'name' => 'Storm', 'kind' => 'aspect', 'nodes' => [
+            ['id' => 'storm', 'kind' => 'foundation', 'name' => 'Storm'],
+            ['id' => 'spark', 'kind' => 'application', 'grade' => 1, 'skill' => 'Spark', 'cost' => 40],
+            ['id' => 'tempest', 'kind' => 'advanced', 'skill' => 'Tempest'],
+        ]],
+    ]], true) . ';');
+    mkdir($root . '/assets/Data/Mastery');
+    file_put_contents($root . '/assets/Data/Mastery/kaelion.php', "<?php\n\nreturn ['actor' => 'Kaelion', 'nodes' => [['id' => 'spark', 'cost' => 0]]];\n");
+    $issues = new \Ichiloto\Editor\Validation\MasteryValidator()->validate(\Ichiloto\Editor\ProjectWorkspace::fromProject($root));
+    $codes = array_map(static fn($issue): ?string => $issue->code, $issues);
+
+    expect(array_filter($issues, static fn($issue): bool => $issue->severity === \Ichiloto\Editor\Validation\Severity::ERROR))->toBe([])
+        ->and($codes)->toBe(['skill.unassigned', 'mastery.unpriced', 'mastery.foundation-ungranted', 'mastery.unchained'])
+        ->and($issues[0]->message)->toContain('Tempest awaits author values (cost, effects.0.formula)')
+        ->and($issues[1]->message)->toContain('Storm, Tempest')
+        ->and($issues[3]->message)->toContain('Kaelion learns Spark without Storm');
 });

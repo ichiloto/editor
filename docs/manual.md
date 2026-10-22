@@ -1294,6 +1294,9 @@ skill's effects, a quest's rewards) listed under them.
 | Actors | `assets/Data/Actors/*.php` | Editable | Same, plus `images.field2d` artwork selected for the established actor id |
 | Classes | `assets/Data/classes.php` | Editable - levels, the experience curve, every stat curve, equipment types and skills learned | Same |
 | Skills | `assets/Data/Skills/*.php` | Editable - one data record per numbered file, attacks, abilities and spells alike, with their effects; `skills.php` loads them | Same |
+| Mastery Regions | `assets/Data/mastery.php` (`regions`) | Editable - the regions of the mastery tree every character shares, each with the nodes on its trunk | Same |
+| Mastery Branches | `assets/Data/mastery.php` (`branches`) | Editable - each region's branches (element, aspect or non-elemental) with their nodes in the order they progress | Same |
+| Mastery Maps | `assets/Data/Mastery/*.php` | Editable - one file per character stating their own terms for tree nodes: price, opening level, what each builds on | Same, plus a graphical page that places and links the character's nodes |
 | Items | `assets/Data/Items/*.php` | Editable - one data record per numbered file, with scope, occasion, animation and effects; `items.php` loads Items, Weapons and Armors | Same |
 | Weapons | `assets/Data/Weapons/*.php` | Editable - one data record per numbered file, with type, stats, element, affinities and equipment metadata | Same |
 | Armors | `assets/Data/Armors/*.php` | Editable - one data record per numbered file, armor or accessory, with type, slot, stats and affinities | Same |
@@ -1506,6 +1509,32 @@ kind, drops the values only the old one read. Files are numbered
 (`0001-attack.php`) because menus list skills in file order; a new or copied
 skill takes the next number and goes last. `skills.php` is the barrel that
 loads the folder.
+
+A skill whose values its author has not decided yet (its MP cost, when it
+can be used, whom it reaches, its effects, or one effect's amount), or whose effect the
+Engine does not offer yet, lists those values under Awaiting Author
+(`unassigned`) and leaves them out of the record. The Engine keeps it as a
+draft: its name is taken and the mastery tree can place it, but nobody can
+learn, cast or be given it, and nothing guesses the missing values.
+Validation lists every draft and what it awaits.
+
+The mastery tree, in `assets/Data/mastery.php`, is shared by every
+character: anyone can reach any node. Its regions (Mastery Regions) hold
+nodes on their trunks, ungraded applications not yet placed on a branch.
+Its branches (Mastery Branches) each grow from a region and practise one
+element, one aspect, or the region's non-elemental practice; their nodes
+are listed in the order they progress, and each node's kind places it in
+the chain. A foundation comes first and may grant a skill or nothing yet;
+graded applications (I, II, III) climb from it; advanced applications
+follow the highest grade; a special grade runs from its demi phase to the
+full phase that extends it. Each node builds on the step before it, plus
+anything it also requires. A node may carry a price and opening level for
+everyone; without a price, only characters whose own map prices it can
+learn it. A character's Mastery Map states their own terms for some nodes:
+those replace the tree's terms for them in full, including what the node
+builds on, and validation warns where their terms leave out a chain step.
+A node whose skill is a draft, or that nothing prices, is unavailable: the
+game offers it to nobody until its author finishes it.
 
 Items, weapons and armors are one file each under `assets/Data/Items`,
 `Weapons` and `Armors`, returning `['class' => InventoryItem::class, 'data'

@@ -785,3 +785,40 @@ it('aligns a value with the key order its source writes, lists keeping their own
     expect($document->alignValue(['list' => [1, 3], 'route' => ['waypoints' => [['x' => 2, 'y' => 1]], 'remember' => 'here'], 'extra' => true, 'type' => 'move']))
         ->toBe(['type' => 'move', 'route' => ['remember' => 'here', 'waypoints' => [['y' => 1, 'x' => 2]]], 'list' => [1, 3], 'extra' => true]);
 });
+
+it('writes a new entry\'s long list of small values one per line, and keeps a short one on its line', function () {
+    $source = "<?php\n\nreturn [\n  'branches' => [\n  ],\n];\n";
+    $old = ['branches' => []];
+    $nodes = array_map(static fn(int $grade): array => ['id' => "spark-{$grade}", 'kind' => 'application', 'grade' => $grade, 'skill' => "Spark {$grade}"], range(1, 3));
+    $new = ['branches' => [['id' => 'storm', 'tags' => ['a', 'b'], 'nodes' => $nodes]]];
+
+    $written = \Ichiloto\Editor\Cutscenes\Source\ArraySourceWriter::rewrite(\Ichiloto\Editor\Cutscenes\Source\PhpArraySourceDocument::parse($source), $old, $new)->source;
+
+    $path = tempnam(sys_get_temp_dir(), 'ichiloto-writer-') . '.php';
+    file_put_contents($path, $written);
+    $read = require $path;
+    unlink($path);
+
+    expect($read)->toBe($new)
+        ->and($written)->toContain("'tags' => ['a', 'b'],")
+        ->and($written)->toContain("        ['id' => 'spark-1', 'kind' => 'application', 'grade' => 1, 'skill' => 'Spark 1'],\n")
+        ->and(max(array_map('strlen', explode("\n", $written))))->toBeLessThan(110);
+});
+
+it('writes a one-line list that grows past the width an entry per line, and leaves one that still fits on its line', function () {
+    $source = "<?php\n\nreturn [\n  'short' => ['a'],\n  'nodes' => [['id' => 'warp', 'kind' => 'advanced', 'skill' => 'Warp']],\n];\n";
+    $old = ['short' => ['a'], 'nodes' => [['id' => 'warp', 'kind' => 'advanced', 'skill' => 'Warp']]];
+    $new = ['short' => ['a', 'b'], 'nodes' => [['id' => 'accelerate', 'kind' => 'application', 'skill' => 'Accelerate'],
+        ['id' => 'crawl', 'kind' => 'application', 'skill' => 'Crawl'], ['id' => 'warp', 'kind' => 'advanced', 'skill' => 'Warp']]];
+
+    $written = ArraySourceWriter::rewrite(PhpArraySourceDocument::parse($source), $old, $new)->source;
+    $path = tempnam(sys_get_temp_dir(), 'ichiloto-writer-') . '.php';
+    file_put_contents($path, $written);
+    $read = require $path;
+    unlink($path);
+
+    expect($read)->toBe($new)
+        ->and($written)->toContain("'short' => ['a', 'b'],")
+        ->and($written)->toContain("    ['id' => 'crawl', 'kind' => 'application', 'skill' => 'Crawl'],\n")
+        ->and(max(array_map('strlen', explode("\n", $written))))->toBeLessThan(110);
+});

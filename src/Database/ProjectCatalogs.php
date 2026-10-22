@@ -21,7 +21,7 @@ use Ichiloto\Engine\Cutscenes\Summons\SummonCutsceneLibrary;
 use Ichiloto\Engine\Entities\Inventory\ItemCatalog;
 use Ichiloto\Engine\Entities\Inventory\ItemRecord;
 use Ichiloto\Engine\Entities\Skills\SkillCatalog;
-use Ichiloto\Engine\Entities\Skills\SkillRecord;
+use Ichiloto\Engine\Entities\Skills\SkillDraft;
 use Ichiloto\Engine\Field\MapCategoryCatalog;
 use Ichiloto\Engine\Field\PlayerPresentationConfig;
 use Ichiloto\Engine\Messaging\Dialogue\Presentation\DialoguePresentationCatalog;
@@ -300,16 +300,22 @@ final readonly class ProjectCatalogs
         if ($database === null) {
             $disk = SkillCatalog::load($this->getAssetRoot());
             $skills = [];
+            $drafts = [];
             foreach ($disk->getSkills() as $name => $skill) {
                 $skills[$disk->getSourceFile((string) $name) ?? (string) $name] = $skill;
             }
+            foreach ($disk->getDrafts() as $name => $draft) {
+                $drafts[$disk->getSourceFile((string) $name) ?? (string) $name] = $draft;
+            }
 
-            return SkillCatalog::fromSkills($skills, $disk->getProblems(), $this->loadSummons());
+            return SkillCatalog::fromSkills($skills, $disk->getProblems(), $this->loadSummons(), $drafts);
         }
 
-        [$skills, $problems] = self::readRecordFiles($database, SkillRecord::readSkill(...));
+        // A record still awaiting its author's values reads as a draft, as the Engine reads it.
+        [$records, $problems] = self::readRecordFiles($database, SkillCatalog::readRecordData(...));
+        $drafts = array_filter($records, static fn(mixed $record): bool => $record instanceof SkillDraft);
 
-        return SkillCatalog::fromSkills($skills, $problems, $this->loadSummons());
+        return SkillCatalog::fromSkills(array_diff_key($records, $drafts), $problems, $this->loadSummons(), $drafts);
     }
 
     /**
