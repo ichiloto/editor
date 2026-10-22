@@ -200,7 +200,7 @@ final readonly class ProjectWorkspace
     {
         $records = [];
         foreach (['classes' => 'Class', 'enemies' => 'Enemy', 'skills' => 'Skill', 'states' => 'State',
-            MasteryFields::MAPS => 'Mastery Map of'] as $category => $noun) {
+            MasteryFields::REGIONS => 'Mastery region', MasteryFields::BRANCHES => 'Mastery branch'] as $category => $noun) {
             foreach ($this->getRecordDatabase($category)?->getRecords() ?? [] as $record) {
                 $label = sprintf('%s %s', $noun, strval($record->get('name') ?? $record->get('actor') ?? $record->recordId));
                 if ($category === 'skills' && $record->get('name') === $skill) { continue; }

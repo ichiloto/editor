@@ -1,0 +1,102 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Ichiloto\Editor\Validation;
+
+use Ichiloto\Editor\ProjectWorkspace;
+use Ichiloto\Engine\Entities\Skills\SkillCatalog;
+use Ichiloto\Engine\Progression\Mastery\MasteryBranchKind;
+use Ichiloto\Engine\Progression\Mastery\MasteryCatalog;
+use InvalidArgumentException;
+
+/**
+ * Checks the mastery tree and the characters' maps as the Engine reads them,
+ * and reports what still awaits an author: skill records whose values are
+ * unassigned, tree nodes nothing prices yet, foundations that grant no skill
+ * yet, and a character's own terms that leave out a node's chain step. A
+ * tree or map the Engine cannot read is an error; the rest are warnings,
+ * since the game runs and simply offers nobody those nodes.
+ */
+final class MasteryValidator
+{
+    public const string UNASSIGNED = 'skill.unassigned';
+    public const string UNPRICED = 'mastery.unpriced';
+    public const string UNGRANTED = 'mastery.foundation-ungranted';
+    public const string UNCHAINED = 'mastery.unchained';
+
+    /** @return Issue[] */
+    public function validate(ProjectWorkspace $workspace): array
+    {
+        $skills = $workspace->loadSkillCatalog();
+        $catalog = MasteryCatalog::load($workspace->projectRoot . '/assets', $skills);
+        $issues = [
+            // The catalogue names the settings file from assets/, and a map by its file in the maps folder.
+            ...array_map(static fn(string $problem): Issue => Issue::error(
+                str_starts_with($problem, MasteryCatalog::SETTINGS) ? 'assets/' . MasteryCatalog::SETTINGS : sprintf('assets/%s/%s', MasteryCatalog::DIRECTORY, strstr($problem, ':', true)),
+                ltrim((string) strstr($problem, ':'), ': '),
+                'Correct it in Database > Mastery Regions, Mastery Branches or Mastery Maps; until then the game reads no Mastery from it.'),
+                $catalog->problems),
+            ...$this->checkDrafts($skills),
+        ];
+        try {
+            $elements = $workspace->getElementIdentities();
+        } catch (InvalidArgumentException) {
+            // The elements' own check reports them.
+            $elements = null;
+        }
+        $tree = $catalog->tree;
+        foreach ($tree->branches as $branch) {
+            $where = sprintf('%s: branch %s', 'assets/' . MasteryCatalog::SETTINGS, $branch->id);
+            if ($branch->kind === MasteryBranchKind::ELEMENT && $elements !== null && ! in_array($branch->element, $elements, true)) {
+                $issues[] = Issue::error($where, sprintf('Branch %s practises element "%s", which the project does not have.', $branch->name, $branch->element),
+                    'Choose one of the project\'s elements (Database > Types) on the branch.');
+            }
+            $unpriced = array_values(array_filter($branch->nodes, static fn($node): bool => $node->cost === null));
+            if ($unpriced !== []) {
+                $issues[] = new Issue(Severity::WARNING, $where, sprintf('%s has no price yet for %s: only characters whose own map prices them can learn them.',
+                    $branch->name, implode(', ', array_map(static fn($node): string => $node->label, $unpriced))),
+                    'Price them on the branch (Database > Mastery Branches), or in a character\'s own terms.', self::UNPRICED);
+            }
+            $foundation = $branch->findFoundation();
+            if ($foundation !== null && $foundation->skill === null) {
+                $issues[] = new Issue(Severity::WARNING, $where, sprintf('The foundation %s grants no skill yet; learning it opens its branch and nothing more.', $foundation->label),
+                    'Choose the skill it grants once its author defines one.', self::UNGRANTED);
+            }
+        }
+        foreach ($tree->regions as $region) {
+            $unpriced = array_values(array_filter($region->nodes, static fn($node): bool => $node->cost === null));
+            if ($unpriced !== []) {
+                $issues[] = new Issue(Severity::WARNING, sprintf('assets/%s: region %s', MasteryCatalog::SETTINGS, $region->id),
+                    sprintf('The %s trunk has no price yet for %s: only characters whose own map prices them can learn them.', $region->name,
+                        implode(', ', array_map(static fn($node): string => $node->label, $unpriced))),
+                    'Price them on the region (Database > Mastery Regions), or in a character\'s own terms.', self::UNPRICED);
+            }
+        }
+        foreach ($catalog->getMaps() as $actor => $map) {
+            foreach ($map->findUnchainedTerms() as $id => $step) {
+                $node = $tree->nodes[$id];
+                $branch = $tree->branches[$node->branch ?? ''] ?? null;
+                $issues[] = new Issue(Severity::WARNING, sprintf('assets/%s: %s', MasteryCatalog::DIRECTORY, $actor),
+                    sprintf('%s learns %s without %s, the step before it in %s.', $actor, $node->label, $tree->nodes[$step]->label, $branch?->name ?? $node->region),
+                    sprintf('Make %s require %s in %s\'s own terms (Database > Mastery Maps), or leave it if %s starts there.', $node->label,
+                        $tree->nodes[$step]->label, $actor, $actor), self::UNCHAINED);
+            }
+        }
+
+        return $issues;
+    }
+
+    /** @return Issue[] One warning per skill record still awaiting its author's values. */
+    private function checkDrafts(SkillCatalog $skills): array
+    {
+        $issues = [];
+        foreach ($skills->getDrafts() as $name => $draft) {
+            $issues[] = new Issue(Severity::WARNING, 'assets/Data/' . ($skills->getSourceFile($name) ?? SkillCatalog::DIRECTORY),
+                sprintf('%s awaits author values (%s); nobody can learn, cast or be given it until they are assigned.', $name, implode(', ', $draft->unassigned)),
+                'Assign the values in Database > Skills and clear Awaiting Author.', self::UNASSIGNED);
+        }
+
+        return $issues;
+    }
+}

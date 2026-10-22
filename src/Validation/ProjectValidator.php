@@ -175,6 +175,7 @@ class ProjectValidator
       ...new TroopFormationValidator()->validate($workspace),
       ...new BattleTestValidator()->validate($workspace),
       ...new ProgressionValidator()->validate($workspace),
+      ...new MasteryValidator()->validate($workspace),
       ...new IncomeValidator()->validate($workspace),
       ...$this->checkDefinitionIdentities($workspace),
       ...$this->checkActorDefinitions($workspace),

@@ -4584,7 +4584,7 @@ final class EditorSession
             $term = fn(string $path): string => $this->workspace->config?->getTermLabel($path) ?? Vocabulary::DEFAULTS[$path];
 
             return [...$this->masteryAuthoring->readPage($this->requireRecordDatabase(MasteryFields::MAPS),
-                $this->workspace->getRecordDatabase(MasteryFields::REGIONS), $index),
+                $this->workspace->getRecordDatabase(MasteryFields::REGIONS), $this->workspace->getRecordDatabase(MasteryFields::BRANCHES), $index),
                 'pointsLabel' => $term(MasteryVocabulary::POINTS), 'levelLabel' => $term('stats.level_short')];
         } catch (RecordRefusal $refusal) {
             throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
@@ -4613,7 +4613,7 @@ final class EditorSession
     {
         $maps = $this->requireRecordDatabase(MasteryFields::MAPS);
         $change = $this->changeRecord(fn(): RecordChange => $this->masteryAuthoring->toggleRequirement($maps,
-            $this->workspace->getRecordDatabase(MasteryFields::REGIONS), $index, $node, $requires));
+            $this->workspace->getRecordDatabase(MasteryFields::REGIONS), $this->workspace->getRecordDatabase(MasteryFields::BRANCHES), $index, $node, $requires));
 
         return ['changed' => $change->command !== null, 'records' => $this->requireCategory(MasteryFields::MAPS)->getRecordLabels()];
     }
