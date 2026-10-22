@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 use Ichiloto\Editor\Database\ConditionCodec;
 use Ichiloto\Editor\Database\RecordSchemaCatalog;
+use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandDefinition;
+use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandRegistry;
+use Ichiloto\Engine\Events\Interpreter\EventExecutionScope;
 
 it('round-trips the engine condition grammar', function (): void {
     $encoded = 'quest:breakfast-duty:active; !switch:door_open:false; item:S-Potion:3; variable:gold:>=:100';
@@ -216,8 +219,11 @@ it('offers every built-in and registered command type as a cycleable option', fu
     }
 
     expect($typeRow)->not->toBeNull();
-    // The interpreter's own commands, then the Engine's registered services.
-    expect($typeRow['options'])->toBe([...RecordSchemaCatalog::EVENT_COMMAND_TYPES, 'shop', 'inn']);
+    // The interpreter's own commands, then every service the Engine registers for field scripts, as it registers them.
+    $registered = array_keys(array_filter(ScriptCommandRegistry::getCatalog()->definitions,
+        static fn(ScriptCommandDefinition $definition): bool => $definition->runsIn(EventExecutionScope::FIELD)));
+    expect($typeRow['options'])->toBe([...RecordSchemaCatalog::EVENT_COMMAND_TYPES, ...$registered])
+        ->and($registered)->toContain('shop', 'inn');
 
     removeDirectoryRecursively($root);
 });
