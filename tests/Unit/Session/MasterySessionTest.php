@@ -227,8 +227,8 @@ it('warns where the tree prices or opens a rung below the one it builds on, and 
     writeSkillRecords($root, new SpecialSkill('Cut', 'Cuts.', '', 2, 0), new MagicSkill('Spark', 'Shocks.', '', 4, 0),
         new MagicSkill('Bolt', 'Shocks more.', '', 8, 0), new MagicSkill('Storm Call', 'Shocks all.', '', 16, 0));
     $node = static fn(string $id, array $data): array => ['id' => $id, ...$data, ...$terms[$id]];
-    file_put_contents($root . '/assets/Data/mastery.php', '<?php return ' . var_export(['regions' => [['id' => 'storms', 'name' => 'Storms']], 'branches' => [
-        ['id' => 'storm', 'region' => 'storms', 'name' => 'Storm', 'kind' => 'aspect', 'nodes' => [
+    file_put_contents($root . '/assets/Data/mastery.php', '<?php return ' . var_export(['regions' => [['id' => 'storms', 'name' => 'Storms', 'description' => 'Weather.']], 'branches' => [
+        ['id' => 'storm', 'region' => 'storms', 'name' => 'Storm', 'kind' => 'aspect', 'description' => 'Storms.', 'nodes' => [
             $node('storm', ['kind' => 'foundation', 'name' => 'Storm']),
             $node('spark', ['kind' => 'application', 'grade' => 1, 'skill' => 'Spark']),
             $node('bolt', ['kind' => 'application', 'grade' => 2, 'skill' => 'Bolt']),
@@ -255,8 +255,8 @@ it('reports what awaits an author: draft skills, unpriced nodes, ungranted found
         'data' => ['kind' => 'magic', 'name' => 'Tempest', 'description' => '', 'icon' => '', 'cooldown' => 0, 'occasion' => 'Battle Screen',
             'scope' => ['side' => 'Enemy', 'number' => 'All', 'status' => 'Alive'], 'invocation' => ['speed' => 0, 'accuracy' => 0, 'repeat' => 1, 'apGain' => 0],
             'effects' => [['type' => 'hp_damage']], 'unassigned' => ['cost', 'effects.0.formula']]], true) . ';');
-    file_put_contents($root . '/assets/Data/mastery.php', '<?php return ' . var_export(['regions' => [['id' => 'storms', 'name' => 'Storms']], 'branches' => [
-        ['id' => 'storm', 'region' => 'storms', 'name' => 'Storm', 'kind' => 'aspect', 'nodes' => [
+    file_put_contents($root . '/assets/Data/mastery.php', '<?php return ' . var_export(['regions' => [['id' => 'storms', 'name' => 'Storms', 'description' => 'Weather.']], 'branches' => [
+        ['id' => 'storm', 'region' => 'storms', 'name' => 'Storm', 'kind' => 'aspect', 'description' => 'Storms.', 'nodes' => [
             ['id' => 'storm', 'kind' => 'foundation', 'name' => 'Storm'],
             ['id' => 'spark', 'kind' => 'application', 'grade' => 1, 'skill' => 'Spark', 'cost' => 40],
             ['id' => 'tempest', 'kind' => 'advanced', 'skill' => 'Tempest'],
@@ -272,4 +272,27 @@ it('reports what awaits an author: draft skills, unpriced nodes, ungranted found
         ->and($issues[0]->message)->toContain('Tempest awaits author values (cost, effects.0.formula)')
         ->and($issues[1]->message)->toContain('Storm, Tempest')
         ->and($issues[3]->message)->toContain('Kaelion learns Spark without Storm');
+});
+
+it('warns where a discipline, its own trunk or a branch has no summary for Info, and edits the summaries', function () {
+    $root = masteryProject();
+    $validate = static fn(): array => array_values(array_filter(new \Ichiloto\Editor\Validation\MasteryValidator()
+        ->validate(\Ichiloto\Editor\ProjectWorkspace::fromProject($root)), static fn($issue): bool => $issue->code === 'mastery.summary-missing'));
+
+    expect(array_map(static fn($issue): string => $issue->message, $validate()))->toBe([
+        'Blades has no summary: Info offers nothing on it.', 'The Blades trunk has no summary: Info offers nothing on the family its own nodes form.',
+        'Storms has no summary: Info offers nothing on it.', 'The Storms trunk has no summary: Info offers nothing on the family its own nodes form.',
+    ])->and($validate()[0]->severity)->toBe(\Ichiloto\Editor\Validation\Severity::WARNING);
+
+    $session = EditorSession::open($root);
+    foreach ([0, 1] as $index) {
+        foreach (['description' => 'What it covers.', 'trunkDescription' => 'What its own skills cover.'] as $field => $text) {
+            $session->applyDatabaseRecord(MasteryFields::REGIONS, $index, masteryRow($session->readDatabaseRecord(MasteryFields::REGIONS, $index), $field)['key'], $text);
+        }
+    }
+    $session->saveDatabase(MasteryFields::REGIONS);
+    MasteryCatalog::forgetProjectCatalogs();
+
+    expect($validate())->toBe([])
+        ->and(MasteryCatalog::load($root . '/assets')->tree->regions[1]->trunkDescription)->toBe('What its own skills cover.');
 });

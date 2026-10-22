@@ -17,7 +17,8 @@ use InvalidArgumentException;
  * and reports what still awaits an author: skill records whose values are
  * unassigned, tree nodes nothing prices yet, foundations that grant no skill
  * yet, a ladder step the tree prices or opens below the step it builds on,
- * and a character's own terms that leave out a node's chain step. A
+ * a region, trunk or branch without the summary its Info shows, and a
+ * character's own terms that leave out a node's chain step. A
  * tree or map the Engine cannot read is an error; the rest are warnings,
  * since the game runs and simply offers nobody those nodes.
  */
@@ -28,6 +29,7 @@ final class MasteryValidator
     public const string UNGRANTED = 'mastery.foundation-ungranted';
     public const string UNCHAINED = 'mastery.unchained';
     public const string LADDER = 'mastery.ladder';
+    public const string UNSUMMARISED = 'mastery.summary-missing';
 
     /** @return Issue[] */
     public function validate(ProjectWorkspace $workspace): array
@@ -68,8 +70,21 @@ final class MasteryValidator
                     'Choose the skill it grants once its author defines one.', self::UNGRANTED);
             }
             $issues = [...$issues, ...$this->checkLadder($tree, $branch->nodes, $where)];
+            if (trim($branch->description) === '') {
+                $issues[] = new Issue(Severity::WARNING, $where, sprintf('%s has no summary: Info offers nothing on its family or its foundation.', $branch->name),
+                    'Write its Summary in Database > Mastery Branches.', self::UNSUMMARISED);
+            }
         }
         foreach ($tree->regions as $region) {
+            $regionWhere = sprintf('assets/%s: region %s', MasteryCatalog::SETTINGS, $region->id);
+            if (trim($region->description) === '') {
+                $issues[] = new Issue(Severity::WARNING, $regionWhere, sprintf('%s has no summary: Info offers nothing on it.', $region->name),
+                    'Write its Summary in Database > Mastery Regions.', self::UNSUMMARISED);
+            }
+            if ($region->nodes !== [] && trim($region->trunkDescription) === '') {
+                $issues[] = new Issue(Severity::WARNING, $regionWhere, sprintf('The %s trunk has no summary: Info offers nothing on the family its own nodes form.', $region->name),
+                    'Write its Trunk Summary in Database > Mastery Regions.', self::UNSUMMARISED);
+            }
             $unpriced = array_values(array_filter($region->nodes, static fn($node): bool => $node->cost === null));
             if ($unpriced !== []) {
                 $issues[] = new Issue(Severity::WARNING, sprintf('assets/%s: region %s', MasteryCatalog::SETTINGS, $region->id),
