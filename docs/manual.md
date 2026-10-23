@@ -1625,8 +1625,10 @@ Their nodes
 are listed in the order they progress, and each node's kind places it in
 the chain. A foundation comes first and may grant a skill or nothing yet;
 graded applications (I, II, III) climb from it; advanced applications
-follow the highest grade; a special grade runs from its demi phase to the
-full phase that extends it. Each node builds on the step before it, plus
+follow the highest grade, and an advanced application that Extends another
+(a single-target spell's multi-target evolution) follows that one and
+stands below it on the board; a special grade runs from its demi phase to
+the full phase that extends it. Each node builds on the step before it, plus
 anything it also requires. A node may carry a price and opening level for
 everyone; without a price, only characters whose own map prices it can
 learn it. Validation warns where the tree prices a node below the step it
