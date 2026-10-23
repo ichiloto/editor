@@ -479,6 +479,13 @@ tiles, so its glyph shows in the graphical field until the art is bound. On a
 map with its own collision, the kind's passage is written into the cells
 where nothing stands above it.
 
+A kind's `Corner Sheet` (chosen among the project's PNG assets) draws its
+edges on the corners between cells instead of in each cell, so diagonal
+shorelines and bends are smooth curves rather than stair steps. Painting,
+the terminal, collision and saves are unchanged: the kind still writes the
+same glyph and autotile. Validation warns when a map shows a kind whose
+corner sheet cannot be drawn; those cells show their glyphs.
+
 Only a map painted in terrain kinds is painted by kind (`'terrainKinds' =>
 true` in its data file). Until then `K` says how to convert it:
 `ichiloto map:convert-kinds <map>` lists the map's glyphs and the kinds, and

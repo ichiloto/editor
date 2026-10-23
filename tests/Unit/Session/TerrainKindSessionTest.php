@@ -268,6 +268,30 @@ describe('authoring kinds', function () {
             ->and($thicket->piece->tiles)->toBe([]);
     });
 
+    it('chooses a kind\'s corner sheet among the project\'s PNG assets, so its edges are drawn on the corners between cells', function () {
+        $root = terrainKindProject();
+        writeTilesetTestPng($root . '/assets/Graphics/Tilesets/Meadow.corners.png', 8, 8);
+        $session = EditorSession::open($root);
+        $field = Ichiloto\Editor\Database\ProjectRecordDatabase::subFieldId('kind', 0, 'art.corners');
+        $row = terrainKindRecordRows($session)[$field];
+
+        expect($row['label'])->toBe('Terrain kind 1 Corner Sheet')
+            ->and($row['reference'] ?? null)->toBe('png_assets')
+            ->and($row['value'])->toBe('(edges in each cell)');
+        $session->applyDatabaseRecord('tilesets', 0, $row['key'], 'Graphics/Tilesets/Meadow.corners.png');
+        $session->saveDatabase('tilesets');
+        $meadow = Ichiloto\Engine\Rendering\Tilesets\Tileset::load($root . '/assets', 'home')->kinds['meadow'];
+        expect($meadow->cornerEdged)->toBeTrue()
+            ->and($meadow->art)->toBe(['layer' => 'floor', 'tile' => 2816, 'corners' => 'Graphics/Tilesets/Meadow.corners.png'])
+            // The kind is still painted with the same glyph and autotile.
+            ->and($meadow->piece->tiles)->toBe(['floor' => [['2816']]]);
+
+        // Choosing none draws its edges in each cell again.
+        $session->applyDatabaseRecord('tilesets', 0, terrainKindRecordRows($session)[$field]['key'], '');
+        $session->saveDatabase('tilesets');
+        expect(Ichiloto\Engine\Rendering\Tilesets\Tileset::load($root . '/assets', 'home')->kinds['meadow']->cornerEdged)->toBeFalse();
+    });
+
     it('reports a tileset\'s kinds awaiting art, and refuses a kind the Engine would refuse', function () {
         $session = EditorSession::open(terrainKindProject());
         $warning = array_values(array_filter($session->validateProject()['issues'],

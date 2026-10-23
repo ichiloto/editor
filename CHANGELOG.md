@@ -4,6 +4,12 @@
 
 ### Added
 
+- Database > Tilesets, Terrain Kinds: `Corner Sheet` chooses a kind's corner
+  sheet among the project's PNG assets, so its edges are drawn on the corners
+  between cells; none draws them in each cell. Validation warns when a map
+  shows a kind whose corner sheet cannot be drawn, and judges see-through
+  ground by the corner tiles a corner-edged kind draws on its cells and the
+  cells beside them.
 - Stacked pieces: stamping a piece on one of its tileset's stacks lays each
   tile into the cell's stack in depth order (further south, then further east,
   in front), refusing a cell that would overfill the stack. Database >

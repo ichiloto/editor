@@ -70,3 +70,42 @@ it('reads the artwork as it is now, so replacing an opaque sheet with a see-thro
     writeTransparentTestPng($root . '/assets/Graphics/Tilesets/Home_A2.png', 32, 24);
     expect(findSeeThroughWarnings($root))->toHaveCount(1);
 });
+
+/** Adds a corner-edged pond kind on the `water` tile layer, its corner sheet one still phase of 2-pixel tiles. */
+function writeCornerPondTileset(string $root, bool $usable = true): void
+{
+    $path = $root . '/assets/Data/Tilesets/home.php';
+    $data = require $path;
+    $data['kinds'] = ['pond' => ['name' => 'Pond', 'layer' => 'terrain', 'glyph' => '<fg=blue>~</>', 'passage' => 'solid', 'atlas' => 'water',
+        'art' => ['layer' => 'water', 'tile' => 2864, 'corners' => 'Graphics/Tilesets/Pond.corners.png']]];
+    file_put_contents($path, "<?php\n\nreturn " . var_export($data, true) . ";\n");
+    writeTransparentTestPng($root . '/assets/Graphics/Tilesets/Pond.corners.png', $usable ? 8 : 6, 8);
+}
+
+it('judges a corner-edged kind by the corner tiles it draws, on its own cells and those beside them', function () {
+    $root = mapGraphicsProject();
+    writeCornerPondTileset($root);
+    writeTileLayer($root . '/assets/Maps/test-map', '03.water.tiles.php', "2864 0 0 0\n0 0 0 0");
+
+    // Ground lies beneath the pond and every cell beside it.
+    expect(findSeeThroughWarnings($root))->toBe([]);
+
+    // Its own opaque autotile would have hidden the hole; its see-through corner tiles show the background there and beside it.
+    writeTileLayer($root . '/assets/Maps/test-map', '01.floor.tiles.php', "0 0 2816 2816\n0 2816 2816 2816");
+    expect(findSeeThroughWarnings($root))->toBe(['3 cells can show the background through see-through ground tiles in some animation frame,'
+        . ' a dark seam in the game: (0, 0), (1, 0), (0, 1).']);
+});
+
+it('warns when a corner-edged kind the map shows cannot be drawn from its corner sheet', function () {
+    $root = mapGraphicsProject();
+    writeCornerPondTileset($root, usable: false);
+    writeTileLayer($root . '/assets/Maps/test-map', '03.water.tiles.php', "2864 0 0 0\n0 0 0 0");
+    $messages = array_map(static fn($issue): string => $issue->message,
+        MapGraphicsValidator::validate(ProjectWorkspace::fromProject($root)->getMapByIndex(0)));
+
+    expect(array_values(array_filter($messages, static fn(string $message): bool => str_contains($message, 'corner sheet'))))
+        ->toHaveCount(1)
+        ->and(implode(' ', $messages))->toContain('Tileset home kind pond corner sheet is unusable: Graphics/Tilesets/Pond.corners.png is 6x8')
+        // Its cells show their glyphs, never a hole, so see-through ground does not report them.
+        ->and(findSeeThroughWarnings($root))->toBe([]);
+});
