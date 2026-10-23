@@ -123,6 +123,24 @@ describe('conversion', function () {
             ->and(terrainKindTiles($session)['floor'][0][2])->toBe(2816);
     });
 
+    it('lets the kinds take over the map\'s atlas classifications of the glyphs they convert or name, keeping the rest', function () {
+        $root = terrainKindProject("..x.\n..##");
+        $data = $root . '/assets/Maps/test-map/test-map.data.php';
+        // The old map classifies its glyphs itself: '.' and 'x' convert to kinds, '^' names one, '#' stays as it is.
+        file_put_contents($data, str_replace("'events' => [],", "'events' => [], 'atlas' => ['terrain' => ['terrain' => ['symbols' => "
+            . "['.' => 'ground', 'x' => 'obstacle', '^' => 'obstacle', '#' => 'boundary']]]],", (string) file_get_contents($data)));
+        $session = EditorSession::open($root);
+
+        expect(array_column($session->previewKindConversion('test-map', ['.' => 'meadow', 'x' => 'peaks'])['atlasBindings'], 'glyph'))
+            ->toBe(['.', 'x', '^']);
+        convertTerrainKindMap($session, ['.' => 'meadow', 'x' => 'peaks']);
+
+        $map = terrainKindMap($session);
+        expect($map->getMapDataField(['atlas']))->toBe(['terrain' => ['terrain' => ['symbols' => ['#' => 'boundary']]]]);
+        $session->undo();
+        expect($map->getMapDataField(['atlas', 'terrain', 'terrain', 'symbols']))->toBe(['.' => 'ground', 'x' => 'obstacle', '^' => 'obstacle', '#' => 'boundary']);
+    });
+
     it('converts through a change batch, as agents and scripts change maps, writing nothing when only checked', function () {
         $root = terrainKindProject();
         $hashes = sourceHashTree($root);

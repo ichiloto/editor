@@ -826,7 +826,7 @@ final class EditorSession
                 'connected' => $piece->connects !== null,
                 'width' => $piece->width,
                 'height' => $piece->height,
-                'tileLayers' => array_keys($piece->connects === null ? $piece->tiles : $piece->shapeTiles),
+                'tileLayers' => $tileset->getPieceTileLayers($piece),
                 'picture' => PiecePlacer::buildPicture($piece),
                 'operations' => $world?->operations,
                 'connections' => \Ichiloto\Editor\Maps\ConnectedPiecePreview::describe($tileset, $piece, $assetRoot, $sheetIssues),
@@ -1193,6 +1193,8 @@ final class EditorSession
         } catch (MapSourceRefusal $refusal) {
             return ['map' => $map->mapId, 'pieces' => [], 'issue' => $refusal->getMessage()];
         }
+        // Loading the pieces loaded the tileset, so it reads here.
+        $tileset = $map->loadTileset();
         $described = [];
         foreach ($pieces as $piece) {
             try {
@@ -1210,7 +1212,7 @@ final class EditorSession
                 'connected' => $piece->connects !== null,
                 'width' => $piece->width,
                 'height' => $piece->height,
-                'tileLayers' => array_keys($piece->connects === null ? $piece->tiles : $piece->shapeTiles),
+                'tileLayers' => $tileset?->getPieceTileLayers($piece) ?? [],
                 'picture' => PiecePlacer::buildPicture($piece),
                 'occupancy' => PhysicalOccupancyEditor::exportRecipe($piece),
             ];

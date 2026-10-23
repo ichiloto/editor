@@ -98,7 +98,8 @@ final class MapValidator
         // Terrain names the map's own source layers, which the parent chain does not read.
         $terrain = MapTerrainFields::findProblem($map, $block);
 
-        return $terrain === null ? [] : [Issue::warning($map->mapId, 'Atlas terrain: ' . $terrain)];
+        // The game refuses to prepare a map whose atlas terrain it cannot read, so the player would meet it.
+        return $terrain === null ? [] : [Issue::error($map->mapId, 'Atlas terrain: ' . $terrain)];
     }
 
     /**

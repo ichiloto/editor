@@ -485,13 +485,38 @@ true` in its data file). Until then `K` says how to convert it:
 `--kind ';=grassland' --kind '~=water' ...` maps each old glyph to a kind,
 shows each mapping's cells and the collision it changes, and converts the map
 through the Editor's validated change set (`--check` writes nothing). A glyph
-that already names a kind must be mapped too, so nothing is reread unseen.
+that already names a kind must be mapped too, so nothing is reread unseen. A
+kind owns its glyph's atlas role, so the map's own atlas classifications of
+the glyphs it converts, and of glyphs that name kinds on that layer, go with
+the conversion; the preview lists them. Validation reports atlas terrain the
+game cannot read as an error, since the game refuses to prepare that map.
 
 Validation warns about cells whose glyph and tiles show different kinds,
 about cells of kinds awaiting art, and lists each tileset's kinds awaiting
 art. A troop of the map's encounters can be limited to terrains (the
 inspector's `Terrains` row, offered on maps painted in kinds), typed as the
 encounter terrains the map's kinds meet.
+
+### Stacked Pieces
+
+Some decorations overlap their neighbours, such as the peaks over a world
+map's mountains and the crests over its hills. A tileset declares the tile
+layers they stack on (Database > Tilesets, Stacks: an id and its tile layers,
+bottom to top, such as `relief-1, relief-2, relief-3, relief-4`), and a piece
+stacks by putting its tiles on the stack's first layer. Such a piece is
+decoration alone: its glyphs are spaces, and it has no physical footprint,
+effect or kept layers, so it never changes passage, encounters or the atlas.
+
+Stamping a stacked piece lays each of its tiles into the cell's stack in
+depth order, whichever was placed first: an object whose bottom row is
+further south draws in front, and of two on one row the one further east.
+The map gets the stack's tile layers as they are first needed, in the
+stack's order. A cell holds at most one tile per stack layer, so a stamp
+that would overfill one is refused and changes nothing; stamping the same
+piece on the same cells again adds nothing. Each tile of a stack's pieces
+belongs to one piece cell, so a cell's objects are read back from its tiles.
+Removing one object from a stack is a remaining GUI capability; repainting a
+cell's terrain kind clears its stack with the terrain's other tile layers.
 
 ### Map Graphics
 

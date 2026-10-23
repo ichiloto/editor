@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Stacked pieces: stamping a piece on one of its tileset's stacks lays each
+  tile into the cell's stack in depth order (further south, then further east,
+  in front), refusing a cell that would overfill the stack. Database >
+  Tilesets authors Stacks.
+
+### Fixed
+
+- Converting a map to terrain kinds removes the map's own atlas
+  classifications of the glyphs it converts and of glyphs that name kinds,
+  which the kinds now own; before, Last Legend's converted overworld kept
+  `':' => 'obstacle'` beside the desert kind's `:` and the game refused to
+  prepare it. Atlas terrain the game cannot read is reported as an error, not
+  a warning.
+
 ## 0.5.0
 
 Ichiloto Editor 0.5.0 delivers a full-screen terminal workspace for authoring,

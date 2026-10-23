@@ -1855,7 +1855,8 @@ final class RecordSchemaCatalog
      * missing art, the pieces maps are built from, keyed by piece id:
      * a stamped piece's glyph rows with its tile rows on each tile layer, or
      * a connected piece's glyph and tile for each shape of a line, and the
-     * terrain kinds world maps are painted in ({@see terrainKindList()}). The
+     * terrain kinds world maps are painted in ({@see terrainKindList()}) and
+     * the tile layers whose tiles stack ({@see tilesetStackList()}). The
      * graphical editor also edits what tiles show at ground level, which
      * validation alone reads.
      *
@@ -1948,7 +1949,31 @@ final class RecordSchemaCatalog
                 ],
                 keyField: 'id',
             ),
-            subLists: [self::terrainKindList()],
+            subLists: [self::terrainKindList(), self::tilesetStackList()],
+        );
+    }
+
+    /**
+     * A tileset's stacks, the Engine's TilesetStack, keyed by stack id: the
+     * tile layers, bottom to top, whose tiles a stacked piece is laid across
+     * in depth order, so overlapping decorations such as mountain peaks draw
+     * as the field orders them. A piece stacks by putting its tiles on the
+     * stack's first layer.
+     */
+    private static function tilesetStackList(): RecordSubList
+    {
+        return new RecordSubList(
+            key: 'stacks',
+            prefix: 'stack',
+            singular: 'stack',
+            fields: [
+                new RecordField('id', 'Id'),
+                new RecordField('layers', 'Tile Layers', codec: RecordFieldCodec::CSV_TOKENS),
+            ],
+            blank: ['id' => 'new-stack', 'layers' => ['stack-1', 'stack-2']],
+            heading: 'Stacks',
+            removeWhenEmpty: true,
+            keyField: 'id',
         );
     }
 
