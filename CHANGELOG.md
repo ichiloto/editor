@@ -4,6 +4,10 @@
 
 ### Added
 
+- Database > Tilesets, Terrain Kinds: `Joins` names a corner-edged kind's join
+  group. Kinds on one tile layer naming the same group share one edge, so a
+  river runs into a lake or the sea with no bank between them; validation's
+  see-through ground check reads the joined edges as the game draws them.
 - Database > Tilesets, Terrain Kinds: `Corner Sheet` chooses a kind's corner
   sheet among the project's PNG assets, so its edges are drawn on the corners
   between cells; none draws them in each cell. Validation warns when a map

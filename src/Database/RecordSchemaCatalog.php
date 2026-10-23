@@ -1983,7 +1983,8 @@ final class RecordSchemaCatalog
      * terrain, its atlas role, the ground kind a feature stands on (chosen
      * among the tileset's own ground kinds), and its autotile, or that its
      * art is still to be drawn. A corner sheet, chosen among the project's
-     * PNG assets, draws the kind's edges on the corners between cells.
+     * PNG assets, draws the kind's edges on the corners between cells, and
+     * corner-edged kinds naming one join group share one edge where they meet.
      */
     private static function terrainKindList(): RecordSubList
     {
@@ -2007,6 +2008,8 @@ final class RecordSchemaCatalog
                 // Choosing a corner sheet draws the kind's edges on the corners between cells; none keeps them in each cell.
                 new RecordField('art.' . TerrainKind::CORNERS, 'Corner Sheet', reference: 'png_assets', removeWhenEmpty: true, allowsNone: true,
                     displayDefault: '(edges in each cell)'),
+                // Corner-edged kinds naming one group, such as a river and a lake, meet with no bank between them.
+                new RecordField('art.' . TerrainKind::JOINS, 'Joins', removeWhenEmpty: true, displayDefault: '(edges against every kind)'),
                 new RecordField('keeps', 'Keeps Tile Layers', codec: RecordFieldCodec::CSV_TOKENS, removeWhenEmpty: true),
             ],
             blank: ['id' => 'new-kind', 'name' => 'New kind', 'layer' => 'terrain', 'glyph' => '<fg=green>.</>',
