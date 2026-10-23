@@ -329,7 +329,8 @@ final class MapGraphicsValidator
         // when that sheet is unusable, its glyph shows and checkCornerSheets() says why.
         $cornerTiles = $tileset->getCornerTiles();
         $cornerSheets = self::readCornerSheets($map, $tileset, $layers)['usable'];
-        $corners = array_map(static fn(MapTileLayer $layer): array => CornerShape::resolveLayer($layer->tiles, array_keys($cornerSheets)), $layers);
+        $corners = array_map(static fn(MapTileLayer $layer): array => CornerShape::resolveLayer($layer->tiles, array_keys($cornerSheets),
+            $tileset->getCornerJoins()), $layers);
         // One reader per pass, so replaced artwork is read as it is now.
         $coverage = new TileCoverage($tileset, $map->getAssetRoot());
         $verdicts = [];

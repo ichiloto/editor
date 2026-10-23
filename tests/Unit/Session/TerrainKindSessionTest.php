@@ -292,6 +292,31 @@ describe('authoring kinds', function () {
         expect(Ichiloto\Engine\Rendering\Tilesets\Tileset::load($root . '/assets', 'home')->kinds['meadow']->cornerEdged)->toBeFalse();
     });
 
+    it('names a corner-edged kind\'s join group, so kinds of one group share one edge', function () {
+        $root = terrainKindProject();
+        writeTilesetTestPng($root . '/assets/Graphics/Tilesets/Meadow.corners.png', 8, 8);
+        $session = EditorSession::open($root);
+        $corners = Ichiloto\Editor\Database\ProjectRecordDatabase::subFieldId('kind', 0, 'art.corners');
+        $joins = Ichiloto\Editor\Database\ProjectRecordDatabase::subFieldId('kind', 0, 'art.joins');
+        $row = terrainKindRecordRows($session)[$joins];
+
+        expect($row['label'])->toBe('Terrain kind 1 Joins')
+            ->and($row['value'])->toBe('(edges against every kind)');
+        $session->applyDatabaseRecord('tilesets', 0, terrainKindRecordRows($session)[$corners]['key'], 'Graphics/Tilesets/Meadow.corners.png');
+        $session->applyDatabaseRecord('tilesets', 0, terrainKindRecordRows($session)[$joins]['key'], 'green');
+        $session->saveDatabase('tilesets');
+        $tileset = Ichiloto\Engine\Rendering\Tilesets\Tileset::load($root . '/assets', 'home');
+        expect($tileset->kinds['meadow']->joins)->toBe('green')
+            ->and($tileset->kinds['meadow']->art)->toBe(['layer' => 'floor', 'tile' => 2816, 'corners' => 'Graphics/Tilesets/Meadow.corners.png',
+                'joins' => 'green'])
+            ->and($tileset->getCornerJoins())->toBe([2816 => [2816]]);
+
+        // Leaving it empty draws the kind's edge against every other kind again.
+        $session->applyDatabaseRecord('tilesets', 0, terrainKindRecordRows($session)[$joins]['key'], '');
+        $session->saveDatabase('tilesets');
+        expect(Ichiloto\Engine\Rendering\Tilesets\Tileset::load($root . '/assets', 'home')->kinds['meadow']->joins)->toBeNull();
+    });
+
     it('reports a tileset\'s kinds awaiting art, and refuses a kind the Engine would refuse', function () {
         $session = EditorSession::open(terrainKindProject());
         $warning = array_values(array_filter($session->validateProject()['issues'],

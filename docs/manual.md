@@ -486,6 +486,13 @@ the terminal, collision and saves are unchanged: the kind still writes the
 same glyph and autotile. Validation warns when a map shows a kind whose
 corner sheet cannot be drawn; those cells show their glyphs.
 
+A corner-edged kind's `Joins` names a join group, such as `water`. Kinds on
+the same tile layer naming one group share one edge: a river runs into a lake
+or the sea with no bank between them, and each still shows its own water.
+Leave it empty for a kind that draws its edge against every other kind. The
+tileset refuses a join on a kind without a corner sheet, and kinds of one
+group that paint different tile layers.
+
 Only a map painted in terrain kinds is painted by kind (`'terrainKinds' =>
 true` in its data file). Until then `K` says how to convert it:
 `ichiloto map:convert-kinds <map>` lists the map's glyphs and the kinds, and
