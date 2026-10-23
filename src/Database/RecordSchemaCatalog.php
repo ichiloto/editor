@@ -2230,22 +2230,24 @@ final class RecordSchemaCatalog
      *
      * The engine's `ParameterChanges` is one shape for weapons and armor
      * alike, so both author all of it: a shield that grants attack and a
-     * sword that grants defence are both things a project may want.
+     * sword that grants defence are both things a project may want. A
+     * parameter the record leaves out changes nothing, so clearing a row
+     * removes it rather than writing a zero.
      *
      * @return RecordField[]
      */
     private static function parameterChangeFields(): array
     {
         return [
-            new RecordField('parameterChanges.attack', 'Attack', InputControlType::INTEGER),
-            new RecordField('parameterChanges.defence', 'Defence', InputControlType::INTEGER),
-            new RecordField('parameterChanges.magicAttack', 'Magic Attack', InputControlType::INTEGER),
-            new RecordField('parameterChanges.magicDefence', 'Magic Defence', InputControlType::INTEGER),
-            new RecordField('parameterChanges.speed', 'Speed', InputControlType::INTEGER),
-            new RecordField('parameterChanges.grace', 'Grace', InputControlType::INTEGER),
-            new RecordField('parameterChanges.evasion', 'Evasion', InputControlType::INTEGER),
-            new RecordField('parameterChanges.totalHp', 'Max HP', InputControlType::INTEGER),
-            new RecordField('parameterChanges.totalMp', 'Max MP', InputControlType::INTEGER),
+            new RecordField('parameterChanges.attack', 'Attack', InputControlType::INTEGER, removeWhenEmpty: true),
+            new RecordField('parameterChanges.defence', 'Defence', InputControlType::INTEGER, removeWhenEmpty: true),
+            new RecordField('parameterChanges.magicAttack', 'Magic Attack', InputControlType::INTEGER, removeWhenEmpty: true),
+            new RecordField('parameterChanges.magicDefence', 'Magic Defence', InputControlType::INTEGER, removeWhenEmpty: true),
+            new RecordField('parameterChanges.speed', 'Speed', InputControlType::INTEGER, removeWhenEmpty: true),
+            new RecordField('parameterChanges.grace', 'Grace', InputControlType::INTEGER, removeWhenEmpty: true),
+            new RecordField('parameterChanges.evasion', 'Evasion', InputControlType::INTEGER, removeWhenEmpty: true),
+            new RecordField('parameterChanges.totalHp', 'Max HP', InputControlType::INTEGER, removeWhenEmpty: true),
+            new RecordField('parameterChanges.totalMp', 'Max MP', InputControlType::INTEGER, removeWhenEmpty: true),
         ];
     }
 

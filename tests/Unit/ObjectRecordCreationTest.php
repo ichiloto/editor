@@ -82,6 +82,26 @@ it('creates a weapon and an item the same way', function () {
         ->and($item)->toBeInstanceOf(Item::class);
 });
 
+it('drops a cleared parameter change instead of writing a zero', function () {
+    $root = makeTemporaryProject();
+    $database = objectCategoryOn($root, 'armors');
+    $index = $database->addRecord();
+
+    // An accessory made from the armor blank starts with its Defence; the
+    // author clears it and gives Evasion instead.
+    $database->setField($index, 'name', 'Test Band');
+    $database->setField($index, 'kind', 'accessory');
+    $database->setField($index, 'parameterChanges.defence', '');
+    $database->setField($index, 'parameterChanges.evasion', '3');
+    $database->save();
+
+    $reloaded = objectCategoryOn($root, 'armors');
+    $record = $reloaded->getRecords()[array_search('Test Band', $reloaded->getEntryLabels(), true)];
+
+    expect($record->get('parameterChanges'))->toBe(['evasion' => 3])
+        ->and(InventoryCatalog::readDefinition($record)?->parameterChanges->defence)->toBe(0);
+});
+
 it('numbers a second new armor instead of colliding, in name and in identity', function () {
     $database = objectCategoryOn(makeTemporaryProject(), 'armors');
 
