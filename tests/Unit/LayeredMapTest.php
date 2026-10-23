@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use Ichiloto\Editor\Canvas\CanvasEditor;
 use Ichiloto\Editor\MapSourceRefusal;
 use Ichiloto\Editor\Maps\MapLayers;
 use Ichiloto\Editor\Field\NpcCollection;
@@ -161,6 +162,42 @@ it('rejects externally changed or newly added layers without overwriting author 
         ->and($map->isDirty())->toBeTrue()
         ->and(sourceHashTree($map->directory))->toBe($before);
 })->with([false, true]);
+
+it('sets many cells as one edit, and refuses the whole edit when a layer changed on disk', function () {
+    $map = loadLayeredMap(layeredMapProject());
+    $map->setLayerCells('map:1', [
+        ['x' => 0, 'y' => 0, 'symbol' => 'A', 'prefix' => '<fg=green>', 'suffix' => '</>'],
+        ['x' => 1, 'y' => 0, 'symbol' => 'B'],
+        ['x' => 99, 'y' => 99, 'symbol' => 'C'],
+    ]);
+    expect($map->getLayerSymbol('map:1', 0, 0))->toBe('A')
+        ->and($map->getLayerCellStyle('map:1', 0, 0))->toBe(['prefix' => '<fg=green>', 'suffix' => '</>'])
+        ->and($map->getLayerSymbol('map:1', 1, 0))->toBe('B');
+
+    $pending = $map->captureLayerSnapshot();
+    file_put_contents($map->directory . '/layers/04.buildings.map.php', MapGridSource::buildSource("new \n    ", 'OTHER'));
+    expect(fn() => $map->setLayerCells('map:1', [['x' => 0, 'y' => 1, 'symbol' => 'Y'], ['x' => 1, 'y' => 1, 'symbol' => 'Z']]))
+        ->toThrow(MapSourceRefusal::class)
+        ->and($map->captureLayerSnapshot())->toBe($pending);
+});
+
+it('writes a stroke as one edit in which each write sees the writes before it', function () {
+    $map = loadLayeredMap(layeredMapProject());
+    $original = [$map->getLayerSymbol('map:1', 0, 0), $map->getLayerCellStyle('map:1', 0, 0)];
+    [$stroke, $changed] = CanvasEditor::writeCells($map, 'map:1', [
+        ['x' => 0, 'y' => 0, 'symbol' => 'A', 'style' => ['prefix' => '<fg=red>', 'suffix' => '</>']],
+        ['x' => 1, 'y' => 0, 'symbol' => 'B', 'style' => ['prefix' => '', 'suffix' => '']],
+        ['x' => 0, 'y' => 0, 'symbol' => 'C', 'style' => ['prefix' => '<fg=blue>', 'suffix' => '</>']],
+    ], 'Paint');
+    expect($changed)->toBe(3)
+        ->and($map->getLayerSymbol('map:1', 0, 0))->toBe('C')
+        ->and($map->getLayerCellStyle('map:1', 0, 0))->toBe(['prefix' => '<fg=blue>', 'suffix' => '</>'])
+        ->and($map->getLayerSymbol('map:1', 1, 0))->toBe('B');
+    $stroke->undo();
+    expect([$map->getLayerSymbol('map:1', 0, 0), $map->getLayerCellStyle('map:1', 0, 0)])->toBe($original);
+    $stroke->execute();
+    expect($map->getLayerSymbol('map:1', 0, 0))->toBe('C');
+});
 
 it('converts legacy only when a layer is created and undo restores the original file shape', function () {
     $root = makeTemporaryProject();

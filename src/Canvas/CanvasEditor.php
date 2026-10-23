@@ -180,25 +180,34 @@ final class CanvasEditor
     {
         $stroke = new PaintStrokeCommand($map, $layer, $label);
         $changed = 0;
+        // Each write reads the cell as the writes before it left it, then all are set as one edit.
+        $pending = [];
 
         foreach ($writes as $write) {
             if (! $map->hasLayerCell($layer, $write['x'], $write['y'])) {
                 continue;
             }
 
-            $oldSymbol = $map->getLayerSymbol($layer, $write['x'], $write['y']);
-            $oldStyle = $map->getLayerCellStyle($layer, $write['x'], $write['y']);
+            $key = $write['x'] . ',' . $write['y'];
+            $oldSymbol = $pending[$key]['symbol'] ?? $map->getLayerSymbol($layer, $write['x'], $write['y']);
+            $oldStyle = isset($pending[$key])
+                ? ['prefix' => $pending[$key]['prefix'], 'suffix' => $pending[$key]['suffix']]
+                : $map->getLayerCellStyle($layer, $write['x'], $write['y']);
             [$newPrefix, $newSuffix] = isset($write['style'])
                 ? [$write['style']['prefix'], $write['style']['suffix']]
                 : self::resolvePaintStyle($write['symbol'], $write['color'] ?? null, $oldStyle);
-            $map->setLayerCell($layer, $write['x'], $write['y'], $write['symbol'], $newPrefix, $newSuffix);
-            $newSymbol = $map->getLayerSymbol($layer, $write['x'], $write['y']);
+            $newSymbol = ProjectMap::normalizeSymbol($write['symbol']);
+            unset($pending[$key]);
+            $pending[$key] = ['x' => $write['x'], 'y' => $write['y'], 'symbol' => $newSymbol, 'prefix' => $newPrefix, 'suffix' => $newSuffix];
             $stroke->appendCell($write['x'], $write['y'], $oldSymbol, $newSymbol, $oldStyle['prefix'], $oldStyle['suffix'],
                 $newPrefix, $newSuffix);
 
             if ($oldSymbol !== $newSymbol || $oldStyle['prefix'] !== $newPrefix || $oldStyle['suffix'] !== $newSuffix) {
                 $changed++;
             }
+        }
+        if ($pending !== []) {
+            $map->setLayerCells($layer, array_values($pending));
         }
 
         return [$stroke, $changed];
