@@ -16,6 +16,8 @@ use Ichiloto\Engine\Field\MapLayerSet;
 use Ichiloto\Engine\Field\MapTileLayer;
 use Ichiloto\Engine\Rendering\Sprites\PngAssetPreflight;
 use Ichiloto\Engine\Rendering\Tilesets\AutotileShape;
+use Ichiloto\Engine\Rendering\Tilesets\CornerShape;
+use Ichiloto\Engine\Rendering\Tilesets\CornerSheet;
 use Ichiloto\Engine\Rendering\Tilesets\TileCoverage;
 use Ichiloto\Engine\Rendering\Tilesets\TileId;
 use Ichiloto\Engine\Rendering\Tilesets\Tileset;
@@ -71,6 +73,7 @@ final class MapGraphicsValidator
             $issues = [
                 ...$issues,
                 ...self::checkSheets($map, $tileset),
+                ...self::checkCornerSheets($map, $tileset, $layers),
                 ...self::checkProvidedSheets($map, $tileset, $layers),
             ];
         }
@@ -307,7 +310,8 @@ final class MapGraphicsValidator
      * Warns for cells where ground tiles (the A1 to A5 sheets) leave the background showing: a tile with see-through
      * edges that blend into the ground beneath it, with no ground authored beneath it, shows the background through
      * those edges as a dark seam in the game. Every animation frame counts, by the Engine's own tile coverage. Upper
-     * sheet props and world objects are see-through by design and are not judged.
+     * sheet props and world objects are see-through by design and are not judged. A corner-edged kind is judged by
+     * what it draws: its corner tiles' quarters, on its own cells and the cells beside them.
      *
      * @param list<MapTileLayer> $layers The readable tile layers.
      * @return list<Issue>
@@ -321,26 +325,35 @@ final class MapGraphicsValidator
         }
         usort($layers, static fn(MapTileLayer $a, MapTileLayer $b): int => $a->order <=> $b->order);
         $grids = array_map(static fn(MapTileLayer $layer): array => AutotileShape::resolveLayer($layer->tiles), $layers);
+        // A corner-edged kind's own tile draws nothing by itself; the corner tiles its sheet draws stand for it, or,
+        // when that sheet is unusable, its glyph shows and checkCornerSheets() says why.
+        $cornerTiles = $tileset->getCornerTiles();
+        $cornerSheets = self::readCornerSheets($map, $tileset, $layers)['usable'];
+        $corners = array_map(static fn(MapTileLayer $layer): array => CornerShape::resolveLayer($layer->tiles, array_keys($cornerSheets)), $layers);
         // One reader per pass, so replaced artwork is read as it is now.
         $coverage = new TileCoverage($tileset, $map->getAssetRoot());
         $verdicts = [];
         $cells = [];
         foreach ($grids[0] ?? [] as $y => $row) {
             foreach ($row as $x => $_) {
-                $stack = [];
-                foreach ($grids as $grid) {
+                $stack = $shares = [];
+                foreach ($grids as $index => $grid) {
                     $tile = (int) ($grid[$y][$x] ?? TileId::EMPTY);
                     $sheet = $tile === TileId::EMPTY ? null : TileId::getSheet($tile);
-                    if (in_array($sheet, self::GROUND_SHEETS, true) && in_array($sheet->value, $usable, true)) {
+                    if (in_array($sheet, self::GROUND_SHEETS, true) && in_array($sheet->value, $usable, true)
+                        && ! CornerShape::isCornerTile($tile, $cornerTiles)) {
                         $stack[] = $tile;
                     }
+                    foreach ($corners[$index][$y][$x] ?? [] as $cornerTile => $cases) {
+                        $shares[] = [$cornerTile, $cases];
+                    }
                 }
-                if ($stack === []) {
+                if ($stack === [] && $shares === []) {
                     continue;
                 }
-                $signature = implode(',', $stack);
+                $signature = implode(',', $stack) . '|' . implode(',', array_map(static fn(array $share): string => implode(':', $share), $shares));
                 if (! isset($verdicts[$signature])) {
-                    $verdicts[$signature] = $coverage->findUncovered($stack);
+                    $verdicts[$signature] = $coverage->findUncovered($stack, $shares);
                     if ($verdicts[$signature]['diagnostic'] !== null) {
                         // The artwork or GD cannot be read: say so once, never guess that the cells are covered.
                         return [Issue::warning($map->mapId, 'Its ground could not be checked for see-through edges: '
@@ -523,6 +536,53 @@ final class MapGraphicsValidator
         }
 
         return $issues;
+    }
+
+    /**
+     * Warns for each corner-edged kind the map shows whose corner sheet the Engine cannot draw from.
+     *
+     * @param list<MapTileLayer> $layers
+     * @return list<Issue>
+     */
+    private static function checkCornerSheets(ProjectMap $map, Tileset $tileset, array $layers): array
+    {
+        return array_map(static fn(string $problem): Issue => Issue::warning($map->mapId, $problem,
+            'Those cells show their terminal glyphs. Replace the corner sheet, choose another in Database > Tilesets, or choose none to draw the kind\'s edges in each cell.'),
+            self::readCornerSheets($map, $tileset, $layers)['problems']);
+    }
+
+    /**
+     * The corner sheets of the corner-edged kinds the map's tile layers show, read as the Engine reads them, and why
+     * any cannot be drawn from.
+     *
+     * @param list<MapTileLayer> $layers
+     * @return array{usable: array<int, CornerSheet>, problems: list<string>}
+     */
+    private static function readCornerSheets(ProjectMap $map, Tileset $tileset, array $layers): array
+    {
+        $tileSize = $tileset->getUsableSheets($map->getAssetRoot())['tileSize'] ?? null;
+        $cornerTiles = $tileset->getCornerTiles();
+        $shown = [];
+        foreach ($layers as $layer) {
+            foreach ($layer->getUsedIds() as $id) {
+                if (CornerShape::isCornerTile($id, $cornerTiles)) {
+                    $shown[TileId::getFlagId($id)] = true;
+                }
+            }
+        }
+        $usable = $problems = [];
+        foreach ($tileSize === null ? [] : $tileset->kinds as $kind) {
+            if (! $kind->cornerEdged || ! isset($shown[$kind->art['tile']])) {
+                continue;
+            }
+            try {
+                $usable[$kind->art['tile']] = CornerSheet::read($kind, $map->getAssetRoot(), $tileSize);
+            } catch (RuntimeException | InvalidArgumentException $error) {
+                $problems[] = sprintf('Tileset %s kind %s corner sheet is unusable: %s', $tileset->id, $kind->id, $error->getMessage());
+            }
+        }
+
+        return ['usable' => $usable, 'problems' => $problems];
     }
 
     /**

@@ -1982,7 +1982,8 @@ final class RecordSchemaCatalog
      * the glyph and colour it paints, its passage on foot, its encounter
      * terrain, its atlas role, the ground kind a feature stands on (chosen
      * among the tileset's own ground kinds), and its autotile, or that its
-     * art is still to be drawn.
+     * art is still to be drawn. A corner sheet, chosen among the project's
+     * PNG assets, draws the kind's edges on the corners between cells.
      */
     private static function terrainKindList(): RecordSubList
     {
@@ -2003,6 +2004,9 @@ final class RecordSchemaCatalog
                     displayDefault: 'false'),
                 new RecordField('art.layer', 'Art Tile Layer', removeWhenEmpty: true, displayDefault: '(awaiting art)'),
                 new RecordField('art.tile', 'Art Autotile', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '(awaiting art)'),
+                // Choosing a corner sheet draws the kind's edges on the corners between cells; none keeps them in each cell.
+                new RecordField('art.' . TerrainKind::CORNERS, 'Corner Sheet', reference: 'png_assets', removeWhenEmpty: true, allowsNone: true,
+                    displayDefault: '(edges in each cell)'),
                 new RecordField('keeps', 'Keeps Tile Layers', codec: RecordFieldCodec::CSV_TOKENS, removeWhenEmpty: true),
             ],
             blank: ['id' => 'new-kind', 'name' => 'New kind', 'layer' => 'terrain', 'glyph' => '<fg=green>.</>',
