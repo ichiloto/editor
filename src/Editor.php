@@ -137,6 +137,7 @@ final class Editor
     use \Ichiloto\Editor\Canvas\LayerCanvas;
     use \Ichiloto\Editor\Canvas\AreaCanvas;
     use \Ichiloto\Editor\Canvas\PieceCanvas;
+    use \Ichiloto\Editor\Canvas\TerrainKindCanvas;
     use \Ichiloto\Editor\Canvas\MapLineCanvas;
     use \Ichiloto\Editor\Canvas\TreeCanvas;
     use \Ichiloto\Editor\Canvas\GlyphTileCanvas;
@@ -1370,6 +1371,7 @@ final class Editor
             KeyBinding::when($this->isNormalModeCommand('i'), $this->enterPaintMode(...), 'i', 'Canvas: enter Paint mode (every key paints; Esc returns to Normal)'),
             KeyBinding::when($this->isNormalModeCommand('L'), fn() => $this->openCanvasLayerPicker(), 'L', 'Canvas: choose the layer to edit'),
             KeyBinding::when($this->isNormalModeCommand('P'), fn() => $this->openPiecePicker(), 'P', 'Canvas: choose a tileset piece to place (Enter stamps or draws it, Esc when done)'),
+            KeyBinding::when($this->isNormalModeCommand('K'), fn() => $this->openKindPicker(), 'K', 'Canvas: choose a terrain kind to paint (Enter paints it, Esc when done)'),
             KeyBinding::when($this->isNormalModeCommand('T'), fn() => $this->drawTilesForLayerGlyphs(), 'T', 'Canvas: draw the tiles for the glyphs already on this layer'),
             KeyBinding::when($this->isNormalModeCommand(']'), fn() => $this->cycleCanvasLayer(), ']', 'Canvas: next layer'),
             KeyBinding::when($this->isNormalModeCommand('['), fn() => $this->cycleCanvasLayer(-1), '[', 'Canvas: previous layer'),
@@ -5596,6 +5598,7 @@ final class Editor
         $items = [
             ...$this->buildLayerPaletteItems(),
             ...$this->buildPiecePaletteItems(),
+            ...$this->buildKindPaletteItems(),
             ...$this->buildMapLinePaletteItems(),
             ...$this->buildTreePaletteItems(),
             new PaletteItem('Save Map', 'Ctrl+S', fn() => $this->saveSelectedMap()),
@@ -7489,6 +7492,12 @@ final class Editor
             if (($field['canvasPiece'] ?? false) === true) {
                 $this->closeEventOptionDialog();
                 $this->choosePiece((string) $selectedEntry['value']);
+                return;
+            }
+
+            if (($field['canvasKind'] ?? false) === true) {
+                $this->closeEventOptionDialog();
+                $this->chooseKind((string) $selectedEntry['value']);
                 return;
             }
 
@@ -14791,21 +14800,22 @@ final class Editor
                             sprintf('PAINT %s  Enter:Anchor/Draw  Esc:Normal', $this->canvasTool->label()), 'PAINT  Esc:Normal']),
                 ),
                 $this->getActivePiecePlacement() !== null => $this->getPiecePlacementHelp($layout['centerWidth']) ?? '',
-                default => $this->fitHelp(
+                // A map painted in terrain kinds offers them beside the pieces.
+                default => (fn(string $pieces): string => $this->fitHelp(
                     $layout['centerWidth'],
-                    'i:Paint b/l/r/R/s:Tool L:Layer P:Piece o:Colour v:Hide d:Dim ?:Help',
-                    'i:Paint b/l/r/R/s:Tool L:Layer P:Piece o:Colour ?:Help',
-                    'i:Paint b/l/r/R/s:Tool L:Layer P:Piece ?:Help',
+                    "i:Paint b/l/r/R/s:Tool L:Layer {$pieces} o:Colour v:Hide d:Dim ?:Help",
+                    "i:Paint b/l/r/R/s:Tool L:Layer {$pieces} o:Colour ?:Help",
+                    "i:Paint b/l/r/R/s:Tool L:Layer {$pieces} ?:Help",
                     'i:Paint b/l/r/R/s:Tool L:Layer ?:Help',
-                    'i:Paint L:Layer P:Piece v:Hide d:Dim o:Colour ?:Help',
-                    'i:Paint L:Layer P:Piece v:Hide d:Dim',
-                    'i:Paint L:Layer P:Piece ?:Help',
+                    "i:Paint L:Layer {$pieces} v:Hide d:Dim o:Colour ?:Help",
+                    "i:Paint L:Layer {$pieces} v:Hide d:Dim",
+                    "i:Paint L:Layer {$pieces} ?:Help",
                     'i:Paint L:Layer v:Hide d:Dim',
                     'i:Paint L:Layer ?:Help',
                     'i:Paint  m:Map  e:Event  n:NPC  c:Chars  o:Colour  ?:Help',
                     'i:Paint m:Map e:Event n:NPC c:Chars o:Colour',
                     'i:Paint  m:Map  e:Event',
-                ),
+                ))(($this->getSelectedMap() instanceof ProjectMap && $this->getSelectedMap()->isPaintedInKinds()) ? 'P:Piece K:Kind' : 'P:Piece'),
             },
             position: ['x' => 2 + $layout['leftWidth'] + $layout['gutter'], 'y' => 5],
             width: $layout['centerWidth'],

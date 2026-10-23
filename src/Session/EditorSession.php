@@ -19,6 +19,7 @@ use Ichiloto\Editor\ProjectDirectoryContext;
 use Ichiloto\Editor\Database\EnemySprites;
 use Ichiloto\Editor\Canvas\PieceRole;
 use Ichiloto\Editor\Canvas\PiecePlacer;
+use Ichiloto\Editor\Canvas\TerrainKindPainter;
 use Ichiloto\Editor\Audio\AudioAudition;
 use Ichiloto\Editor\Cutscenes\Preview\PreviewGame;
 use Ichiloto\Editor\Canvas\CanvasTool;
@@ -28,6 +29,7 @@ use Ichiloto\Engine\Entities\Enemies\EnemyHabitat;
 use Ichiloto\Engine\Rendering\Tilesets\TileAppearance;
 use Ichiloto\Engine\Rendering\Tilesets\TileId;
 use Ichiloto\Engine\Field\MapPhysicalOccupancy;
+use Ichiloto\Engine\Rendering\Tilesets\TerrainKind;
 use Ichiloto\Engine\Rendering\Tilesets\TilesetPiece;
 use Ichiloto\Engine\Rendering\Transport\Exceptions\RendererProtocolException;
 use Ichiloto\Engine\Rendering\Transport\Exceptions\RendererTransportException;
@@ -94,6 +96,7 @@ use Ichiloto\Editor\Maps\MapLinePlan;
 use Ichiloto\Editor\Maps\MapLinePlanner;
 use Ichiloto\Editor\Maps\MapLayers;
 use Ichiloto\Editor\Maps\MapReferences;
+use Ichiloto\Editor\Maps\TerrainKindConversion;
 use Ichiloto\Editor\Maps\TilePalette;
 use Ichiloto\Editor\Maps\TreeBrush;
 use Ichiloto\Editor\Maps\SaveManifestStep;
@@ -1292,6 +1295,188 @@ final class EditorSession
         }
 
         return $pieces[$pieceId] ?? throw new SessionRefusal(sprintf("%s is no longer in the map's tileset. Choose a piece again.", $pieceId));
+    }
+
+    /**
+     * The terrain kinds a map's tileset declares, for a kind palette: each
+     * kind's glyph in its colour, passage, encounter terrain, ground and
+     * atlas role, and whether its art is still to be drawn. `painted` says
+     * whether the map is painted in kinds; until it is, `issue` says how to
+     * convert it, and no kind can be painted.
+     *
+     * @return array{map: string, tileset: mixed, painted: bool, kinds: list<array<string, mixed>>, issue: ?string}
+     * @throws SessionRefusal When the map is unknown.
+     */
+    public function listKinds(string $mapId): array
+    {
+        $map = $this->requireMap($mapId);
+        try {
+            $kinds = TerrainKindPainter::readTilesetKinds($map);
+        } catch (MapSourceRefusal $refusal) {
+            return ['map' => $map->mapId, 'tileset' => $map->getMapDataField(['tileset']), 'painted' => false, 'kinds' => [],
+                'issue' => $refusal->getMessage()];
+        }
+        $issue = null;
+        try {
+            TerrainKindPainter::loadKinds($map);
+        } catch (MapSourceRefusal $refusal) {
+            $issue = $refusal->getMessage();
+        }
+        $described = [];
+        foreach ($kinds as $kind) {
+            try {
+                PiecePlacer::findLayer($map, $kind->piece);
+                $layerIssue = null;
+            } catch (MapSourceRefusal $refusal) {
+                $layerIssue = $refusal->getMessage();
+            }
+            $picture = PiecePlacer::buildPicture($kind->piece);
+            $described[] = [
+                'id' => $kind->id,
+                'name' => $kind->name,
+                'layer' => $kind->layer,
+                'layerLabel' => MapLayers::formatLabel($kind->layer),
+                'layerIssue' => $layerIssue,
+                'glyph' => $kind->symbol,
+                'color' => $picture[0][0]['color'] ?? null,
+                'passage' => $kind->passage->value,
+                'encounters' => $kind->encounters,
+                'ground' => $kind->ground === null ? null : $kinds[$kind->ground]->name,
+                'atlas' => $kind->atlas,
+                'awaitingArt' => $kind->awaitingArt,
+                'tileLayers' => array_keys($kind->piece->tiles),
+            ];
+        }
+
+        return ['map' => $map->mapId, 'tileset' => $map->getMapDataField(['tileset']), 'painted' => $issue === null,
+            'kinds' => $described, 'issue' => $issue];
+    }
+
+    /**
+     * What painting a kind between two corners would write, for a preview:
+     * each cell as [x, y, glyph, colour] ({@see PiecePlacer::getPreviewCells()}).
+     *
+     * @param array{0: int, 1: int} $from
+     * @param array{0: int, 1: int} $to
+     * @return array{cells: list<array{0: int, 1: int, 2: string, 3: ?string}>}
+     * @throws SessionRefusal When the map or the kind is unknown, or the map is not painted in kinds.
+     */
+    public function previewKind(string $mapId, string $kindId, array $from, array $to): array
+    {
+        $map = $this->requireMap($mapId);
+        $kind = $this->requireKind($map, $kindId);
+        $cells = [];
+        foreach (PiecePlacer::getPreviewCells($map, $kind->piece, ['x' => $from[0], 'y' => $from[1]], ['x' => $to[0], 'y' => $to[1]]) as $y => $row) {
+            foreach ($row as $x => $cell) {
+                if ($cell !== null && $x >= 0 && $y >= 0 && $x < $map->getWidth() && $y < $map->getHeight()) {
+                    $cells[] = [$x, $y, $cell['symbol'], $cell['color']];
+                }
+            }
+        }
+
+        return ['cells' => $cells];
+    }
+
+    /**
+     * Paints a kind over the area between two corners as one undo step: its
+     * glyph and its tiles, and on a map with declared occupancy its collision
+     * ({@see TerrainKindPainter::paintArea()}).
+     *
+     * @param array{0: int, 1: int} $from
+     * @param array{0: int, 1: int} $to
+     * @return array{status: 'applied', changed: bool, cells: int, revision: int}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, the kind is unknown, or the paint is refused.
+     */
+    public function paintKind(string $mapId, int $revision, string $kindId, array $from, array $to): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        if ($map->getGridSourceIssue() !== null) {
+            throw new SessionRefusal(sprintf('%s is read-only: %s', $mapId, $map->getGridSourceIssue()));
+        }
+        $kind = $this->requireKind($map, $kindId);
+        try {
+            ['command' => $command, 'cells' => $cells] = TerrainKindPainter::paintArea($map, $kind,
+                ['x' => $from[0], 'y' => $from[1]], ['x' => $to[0], 'y' => $to[1]], 'Paint ' . $kind->name);
+        } catch (MapSourceRefusal $refusal) {
+            throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+        }
+        if ($command !== null) {
+            $this->history->record($command);
+        }
+
+        return ['status' => 'applied', 'changed' => $command !== null, 'cells' => $cells, 'revision' => $this->getMapRevision($map)];
+    }
+
+    /**
+     * The kind a cell shows in both presentations, for picking it up: on the
+     * topmost gameplay layer that shows one there; null when none does.
+     *
+     * @return array{kind: ?string}
+     * @throws SessionRefusal When the map is unknown.
+     */
+    public function readKindAt(string $mapId, int $x, int $y): array
+    {
+        $map = $this->requireMap($mapId);
+        foreach (array_reverse($map->getLayers()) as $layer) {
+            if ($layer['id'] === MapLayers::EVENT || $layer['decoration']) {
+                continue;
+            }
+            $kind = TerrainKindPainter::findKindAt($map, $layer['id'], $x, $y);
+            if ($kind !== null) {
+                return ['kind' => $kind->id];
+            }
+        }
+
+        return ['kind' => null];
+    }
+
+    /**
+     * What converting a map to terrain kinds would do, changing nothing
+     * ({@see TerrainKindConversion::preview()}).
+     *
+     * @param array<string, string> $mapping Kind ids by old plain glyph.
+     * @return array<string, mixed>
+     * @throws SessionRefusal When the map is unknown or the mapping is refused.
+     */
+    public function previewKindConversion(string $mapId, array $mapping): array
+    {
+        try {
+            return TerrainKindConversion::preview($this->requireMap($mapId), $mapping);
+        } catch (MapSourceRefusal $refusal) {
+            throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+        }
+    }
+
+    /**
+     * Converts a map to terrain kinds as one undo step ({@see TerrainKindConversion::apply()}).
+     *
+     * @param array<string, string> $mapping Kind ids by old plain glyph.
+     * @return array{status: 'applied', changed: bool, cells: int, revision: int}
+     * @throws SessionRefusal When the map is unknown or stale, or the conversion is refused.
+     */
+    public function convertToKinds(string $mapId, int $revision, array $mapping): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        try {
+            ['command' => $command, 'cells' => $cells] = TerrainKindConversion::apply($map, $mapping);
+        } catch (MapSourceRefusal $refusal) {
+            throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+        }
+        if ($command !== null) {
+            $this->history->record($command);
+        }
+
+        return ['status' => 'applied', 'changed' => $command !== null, 'cells' => $cells, 'revision' => $this->getMapRevision($map)];
+    }
+
+    /** @throws SessionRefusal When the map cannot be painted in kinds, or has no kind with the id. */
+    private function requireKind(ProjectMap $map, string $kindId): TerrainKind
+    {
+        try {
+            return TerrainKindPainter::requireKind($map, $kindId);
+        } catch (MapSourceRefusal $refusal) {
+            throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+        }
     }
 
     /**

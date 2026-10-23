@@ -11,6 +11,7 @@ use Ichiloto\Editor\Storage\SourceSetPlan;
 use Ichiloto\Engine\Core\CellArea;
 use Ichiloto\Engine\Events\Enumerations\CollisionType;
 use Ichiloto\Engine\Field\MapCollisionResolver;
+use Ichiloto\Engine\Field\MapTerrainKinds;
 use Ichiloto\Engine\Field\MapSourceReader;
 use Ichiloto\Engine\Field\NpcPlacement;
 use Ichiloto\Engine\Field\Reachability\MapReachabilityReport;
@@ -261,7 +262,8 @@ final class SaveRelocationPlanner
         }
         $source = MapSourceReader::readFiles(MapSourceReader::resolvePaths($root . '/assets/Maps', $mapId));
         $walkable = [];
-        foreach (MapCollisionResolver::resolveMap($source['layers'], $source['data'], $dictionary)->collisionGrid as $y => $row) {
+        $kinds = MapTerrainKinds::loadForMap($root . '/assets', $source['data']);
+        foreach (MapCollisionResolver::resolveMap($source['layers'], $source['data'], $dictionary, $kinds)->collisionGrid as $y => $row) {
             foreach ($row as $x => $value) {
                 if (! CollisionType::from($value)->blocksMovement()) {
                     $walkable["{$x},{$y}"] = true;

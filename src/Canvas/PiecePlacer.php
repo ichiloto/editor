@@ -200,10 +200,25 @@ final class PiecePlacer
     public static function stampArea(ProjectMap $map, TilesetPiece $piece, array $from, array $to, ?string $fallbackColor,
         string $label = 'Piece stamp'): array
     {
+        $origins = self::getAreaOrigins($piece, $from, $to);
+
+        return ['command' => self::stampOrigins($map, $piece, $origins, $fallbackColor, $label), 'origins' => $origins];
+    }
+
+    /**
+     * Stamps whole copies of an item piece with their top-left cells at the
+     * given origins, as one undo step, by the rules of {@see stampArea()}.
+     *
+     * @param list<array{x: int, y: int}> $origins
+     * @return ?Command The applied, unrecorded edit, or null when it changed nothing.
+     * @throws MapSourceRefusal When the piece is connected, its layer is missing or a copy falls off the map.
+     */
+    public static function stampOrigins(ProjectMap $map, TilesetPiece $piece, array $origins, ?string $fallbackColor,
+        string $label = 'Piece stamp'): ?Command
+    {
         if ($piece->connects !== null) {
             throw new MapSourceRefusal(sprintf('%s is drawn as connected cells, not stamped. Nothing was changed.', $piece->name));
         }
-        $origins = self::getAreaOrigins($piece, $from, $to);
         $sources = $piece->getSourceGrid();
         $writes = $assigned = [];
         foreach ($origins as ['x' => $x, 'y' => $y]) {
@@ -246,12 +261,9 @@ final class PiecePlacer
         $tilesAfter = $map->getTileLayerSources();
         [$stroke] = CanvasEditor::writeCells($map, $layer, $writes, $label);
 
-        return [
-            'command' => $stroke->hasChanges() || $tilesAfter !== $tilesBefore
-                ? CanvasEditor::combineStrokeWithTiles($label, $map, $stroke, $tilesBefore, $tilesAfter)
-                : null,
-            'origins' => $origins,
-        ];
+        return $stroke->hasChanges() || $tilesAfter !== $tilesBefore
+            ? CanvasEditor::combineStrokeWithTiles($label, $map, $stroke, $tilesBefore, $tilesAfter)
+            : null;
     }
 
     /**

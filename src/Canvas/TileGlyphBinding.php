@@ -36,7 +36,7 @@ final readonly class TileGlyphBinding
     public static function fromMap(ProjectMap $map): self
     {
         try {
-            $pieces = $map->loadTileset()?->pieces ?? [];
+            $pieces = $map->loadPlacements();
         } catch (InvalidArgumentException | RuntimeException) {
             $pieces = [];
         }

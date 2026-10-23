@@ -159,7 +159,7 @@ final class MapGraphicsValidator
             $owners = MapGraphics::resolveLayerOwners($map->getMapDataField([MapGraphics::SETTINGS_KEY]),
                 array_map(static fn(MapTileLayer $layer): string => $layer->name, $layers),
                 array_column(array_filter($map->getLayers(), static fn(array $layer): bool =>
-                    $layer['id'] !== MapLayers::EVENT && ! $layer['decoration']), 'name'), $tileset, $map->mapId);
+                    $layer['id'] !== MapLayers::EVENT && ! $layer['decoration']), 'name'), $tileset, $map->mapId, $map->isPaintedInKinds());
         } catch (Throwable) {
             // The terminal layers' and tile layer settings' own checks report why.
             return null;
@@ -181,7 +181,8 @@ final class MapGraphicsValidator
     private static function checkStalePieceTiles(ProjectMap $map, Tileset $tileset, array $layers): array
     {
         $drawn = [];
-        foreach ($tileset->pieces as $piece) {
+        $placements = $tileset->getPlacements($map->isPaintedInKinds());
+        foreach ($placements as $piece) {
             foreach (PieceRole::readPiece($piece) as $roles) {
                 foreach ($roles as $role) {
                     foreach ($role->tiles as $tileLayer => $cells) {
@@ -193,7 +194,7 @@ final class MapGraphicsValidator
             }
         }
         // A tile a glyph-less piece also draws, such as a stone wall cap, may stand on any cell.
-        foreach (TileGlyphBinding::findFreeEntries($tileset->pieces) as $tileLayer => $entries) {
+        foreach (TileGlyphBinding::findFreeEntries($placements) as $tileLayer => $entries) {
             foreach ($entries as $entry => $_) {
                 unset($drawn[$tileLayer][(int) $entry]);
             }
@@ -211,7 +212,7 @@ final class MapGraphicsValidator
             if ($layer['id'] === MapLayers::EVENT || $layer['decoration']) {
                 continue;
             }
-            $planner = GlyphTilePlanner::fromPieces($tileset->pieces, $layer['name']);
+            $planner = GlyphTilePlanner::fromPieces($placements, $layer['name']);
             for ($y = 0; $y < $map->getHeight(); $y++) {
                 for ($x = 0; $x < $map->getWidth(); $x++) {
                     if (! $map->hasLayerCell($layer['id'], $x, $y) || ($glyph = $map->getLayerSymbol($layer['id'], $x, $y)) === ' ') {

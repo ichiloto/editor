@@ -8,6 +8,7 @@ use Ichiloto\Editor\Database\InventoryCatalog;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Engine\Animations\Field\FieldPresentationCatalog;
 use Ichiloto\Engine\Field\Validation\MapCompletenessValidator;
+use Ichiloto\Engine\Field\Validation\MapTerrainKindRule;
 use Ichiloto\Engine\Field\Validation\MapValidationIssue;
 use Ichiloto\Engine\Rendering\Tilesets\Tileset;
 use Throwable;
@@ -108,10 +109,21 @@ final class MapCompletenessCheck
             $message = $cells === [] ? $issue->message : sprintf('%s. At %s%s%s.', rtrim($issue->message, '.'),
                 count($cells) === 1 ? '' : sprintf('%d cells: ', count($cells)), implode(', ', $named), $rest > 0 ? " and {$rest} more" : '');
             $where = $issue->marker === null ? $map->mapId : sprintf('%s event %s', $map->mapId, $issue->marker);
-            $issues[] = new Issue(Severity::ERROR, $where, $message, self::describeHint($map, $issue), $issue->rule, $map->mapId);
+            $issues[] = new Issue(self::isWarning($issue) ? Severity::WARNING : Severity::ERROR, $where, $message,
+                self::describeHint($map, $issue), $issue->rule, $map->mapId);
         }
 
         return $issues;
+    }
+
+    /**
+     * Findings an author weighs rather than errors the player meets: a glyph
+     * and tiles showing different terrain kinds, and cells of a kind whose
+     * art is still to be drawn. The map plays, saves and loads unchanged.
+     */
+    private static function isWarning(MapValidationIssue $issue): bool
+    {
+        return in_array($issue->rule, [MapTerrainKindRule::DISAGREEMENT, MapTerrainKindRule::AWAITING_ART], true);
     }
 
     /** The fix, in the author's terms where the Editor knows a better one than the Engine's. */

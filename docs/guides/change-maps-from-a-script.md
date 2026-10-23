@@ -138,6 +138,9 @@ or with the GUI editor open, these reads give every id a change needs:
 | `worldObjects.read {map, id}` | A world object's rows, for `worldObjects.apply`. |
 | `npc.read {map, index, frame?}` | An NPC's rows, for `npc.apply`. |
 | `pieces.list {map}` | The pieces the map's tileset can stamp. |
+| `kinds.list {map}` | The terrain kinds of the map's tileset, and whether the map is painted in them (`painted`, with an `issue` saying how to convert it when not). |
+| `kinds.at {map, x, y}` | The kind a cell shows in both its glyph and its tiles, or null. |
+| `kinds.previewConversion {map, mapping?}` | What converting the map would do: each mapped glyph's cells, the glyphs left, those that already name a kind (`reread`) and the collision changes. Without a mapping it lists the map's glyphs. |
 | `event.types` | Event type labels for `event.create`. |
 | `references.list {map, category}` | The values a reference row accepts, such as `inventory` ids. |
 
@@ -211,6 +214,8 @@ batches.
 | Draw the tiles a layer's glyphs need | `layer.drawTiles {map, layer}` |
 | Paint or stamp tiles | `tiles.paint`, `tiles.stamp` |
 | Stamp a tileset piece | `pieces.place {map, piece, from, to, color?}` |
+| Paint a terrain kind | `kinds.paint {map, kind, from, to}` on a map painted in kinds; its glyph, its tiles and, under declared occupancy, its collision |
+| Convert a map to terrain kinds | `kinds.convert {map, mapping}`, such as `{";": "grassland", "~": "water"}`; or `ichiloto map:convert-kinds` |
 | Layers | `layer.create`, `layer.rename`, `layer.remove`, `layer.reorder`, `layer.decoration`; tile layers `tileLayer.*` |
 | Collision | `map.paintOccupancy`, `occupancy.stampPiece` |
 | Resize | `map.insertLines`, `map.removeLines` (with an `answer`), or the map's size rows |

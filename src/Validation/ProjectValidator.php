@@ -375,7 +375,8 @@ class ProjectValidator
   /**
    * Checks every tileset as the Engine reads it, unsaved edits included:
    * one the Engine refuses leaves every map that names it without its
-   * pieces and graphics, used by a map yet or not.
+   * pieces and graphics, used by a map yet or not. Terrain kinds still
+   * awaiting their art are listed.
    *
    * @param ProjectWorkspace $workspace The project.
    * @return Issue[] The issues found.
@@ -386,7 +387,17 @@ class ProjectValidator
 
     foreach ($workspace->getRecordDatabase('tilesets')?->getRecords() ?? [] as $record) {
       try {
-        Tileset::fromArray($record->recordId, (array) $record->toArray());
+        $tileset = Tileset::fromArray($record->recordId, (array) $record->toArray());
+        // A kind whose art is still to be drawn paints its glyph alone, by an authored state, until its autotile is bound.
+        $awaiting = array_filter($tileset->kinds, static fn(\Ichiloto\Engine\Rendering\Tilesets\TerrainKind $kind): bool => $kind->awaitingArt);
+        if ($awaiting !== []) {
+          $issues[] = Issue::warning(
+            sprintf('assets/%s/%s.php', Tileset::DIRECTORY, $record->recordId),
+            sprintf('%d terrain %s awaiting art: %s. Maps show %s glyph graphically.', count($awaiting), count($awaiting) === 1 ? 'kind is' : 'kinds are',
+              implode(', ', array_map(static fn($kind): string => $kind->name, $awaiting)), count($awaiting) === 1 ? 'its' : 'their'),
+            'Bind each kind\'s autotile in Database > Tilesets once its art is drawn.',
+          );
+        }
       } catch (InvalidArgumentException $refused) {
         $issues[] = Issue::error(
           sprintf('assets/%s/%s.php', Tileset::DIRECTORY, $record->recordId),
@@ -1922,7 +1933,7 @@ class ProjectValidator
       }
     }
 
-    $issues = [...$issues, ...$this->checkEncounterAreas($map, $rows)];
+    $issues = [...$issues, ...$this->checkEncounterAreas($map, $rows), ...$this->checkEncounterTerrains($map, $rows)];
     $issues = [...$issues, ...$this->checkBattleArena($encounters->mapArena(), $map->mapId, 'The encounters')];
 
     foreach ($rows as $row) {
@@ -1931,6 +1942,50 @@ class ProjectValidator
     }
 
     return [...$issues, ...$this->checkEncounterRate($map, $encounters), ...$this->checkEncounterTiles($map, $encounters), ...$this->checkEncounterTroopDuplicates($map)];
+  }
+
+  /**
+   * Checks that every encounter terrain a troop is limited to is one the
+   * map's terrain kinds meet, in a scope the engine reads: the engine never
+   * meets such a troop rather than meeting it on any terrain.
+   *
+   * @param array<int, array{name: string, terrains: list<string>}> $rows
+   * @return Issue[] The issues found.
+   */
+  protected function checkEncounterTerrains(ProjectMap $map, array $rows): array
+  {
+    $scoped = array_filter($rows, static fn(array $row): bool => $row['terrains'] !== []);
+
+    if ($scoped === []) {
+      return [];
+    }
+
+    try {
+      $known = $map->loadTerrainKinds()?->getEncounterTerrains();
+    } catch (InvalidArgumentException) {
+      // The kinds themselves are reported with the map's completeness.
+      return [];
+    }
+
+    $issues = [];
+
+    foreach ($scoped as $row) {
+      if (EncounterEntry::getFromValue(['weight' => 1, MapEncounters::TERRAINS_KEY => $row['terrains']]) === null) {
+        $issues[] = Issue::error($map->mapId,
+          sprintf('The troop "%s" is limited to terrains the engine cannot read (%s), so it is never met.', $row['name'], implode(', ', $row['terrains'])),
+          'List each encounter terrain id once.');
+
+        continue;
+      }
+
+      foreach (array_diff($row['terrains'], $known ?? []) as $terrain) {
+        $issues[] = Issue::error($map->mapId,
+          sprintf('The troop "%s" is limited to the encounter terrain "%s", which no terrain kind of this map meets, so it is never met.', $row['name'], $terrain),
+          $known === null ? 'Paint the map in terrain kinds first.' : sprintf('This map\'s kinds meet %s.', $known === [] ? 'no encounter terrain' : implode(', ', $known)));
+      }
+    }
+
+    return $issues;
   }
 
   /**
