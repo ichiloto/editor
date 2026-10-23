@@ -230,10 +230,17 @@ it('refuses referenced and opaque cinematic deletions before source history or r
         ->and(file_get_contents($file))->toBe($source)
         ->and($session->undo()['maps'])->toBe([]);
     file_put_contents($dataFile, "<?php return ['id'=>'fixture-cutscene', 'name'=>'Fixture', 'startMap'=>'test-map', 'cast'=>[]];");
-    file_put_contents($scriptFile, "<?php return array_filter([]);");
+    // A helper's result is proved by the plain data it loaded as; a closure the game would run later is not.
+    file_put_contents($scriptFile, "<?php \$wait = static fn(): array => ['type'=>'wait','seconds'=>0.5];
+        return [\$wait(), ['type'=>'wait','seconds'=>0.5,'until'=>static fn(): bool => true]];");
     $opaque = EditorSession::open($root);
     expect(fn() => $opaque->deleteWorldObject('test-map', $opaque->readMap('test-map')['revision'], 'fixture-prop'))
-        ->toThrow(SessionRefusal::class, 'opaque authored source');
+        ->toThrow(SessionRefusal::class, 'fixture-cutscene');
+    file_put_contents($scriptFile, "<?php \$wait = static fn(float \$seconds): array => ['type'=>'wait','seconds'=>\$seconds];
+        return [\$wait(0.5), \$wait(1.0)];");
+    $helper = EditorSession::open($root);
+    $helper->deleteWorldObject('test-map', $helper->readMap('test-map')['revision'], 'fixture-prop');
+    expect($helper->readMap('test-map')['worldObjects'])->toBe([]);
     file_put_contents($scriptFile, "<?php return [['type'=>'wait','seconds'=>0.5]];");
     $safe = EditorSession::open($root);
     $safe->deleteWorldObject('test-map', $safe->readMap('test-map')['revision'], 'fixture-prop');
@@ -243,6 +250,39 @@ it('refuses referenced and opaque cinematic deletions before source history or r
     $safe->redo();
     $safe->saveMap('test-map');
     expect(EditorSession::open($root)->readMap('test-map')['worldObjects'])->toBe([]);
+});
+
+it('proves enum case values, included scripts and helper results by the plain data they load as before deleting an object', function () {
+    [$root, $file] = createWorldObjectProject();
+    $script = $root . '/assets/Events/scribe.php';
+    $authored = (string) file_get_contents($file);
+    $write = static function (string $heading) use ($file, $authored): void {
+        file_put_contents($file, str_replace("'events' => [],", "'events' => [], 'npcs' => [['name' => 'Scribe', 'sprite' => '@', 'x' => 0, 'y' => 0,
+            'script' => require dirname(__DIR__, 2) . '/Events/scribe.php', 'heading' => {$heading}]],", $authored));
+    };
+    $refusal = static function (string $root): string {
+        $session = EditorSession::open($root);
+        try {
+            $session->deleteWorldObject('test-map', $session->readMap('test-map')['revision'], 'fixture-prop');
+        } catch (SessionRefusal $error) {
+            return $error->getMessage();
+        }
+        return '';
+    };
+
+    // An included script and an enum case's value load as plain data, and nothing in them names the object.
+    file_put_contents($script, "<?php return [['type' => 'text', 'name' => 'Scribe', 'text' => 'Ink dries slowly here.']];");
+    $write('\Ichiloto\Engine\Core\Enumerations\MovementHeading::NORTH->value');
+    expect($refusal($root))->toBe('');
+
+    // What the included script loads as is read for references like the map itself.
+    file_put_contents($script, "<?php return [['type' => 'camera', 'operation' => 'focus', 'target' => ['kind' => 'world_object', 'id' => 'fixture-prop']]];");
+    expect($refusal($root))->toContain('test-map NPC Scribe.script.0.target');
+
+    // An enum case itself is an object, not plain data, so its source cannot vouch for it.
+    file_put_contents($script, '<?php return [];');
+    $write('\Ichiloto\Engine\Core\Enumerations\MovementHeading::NORTH');
+    expect($refusal($root))->toContain('npcs.0.heading: opaque authored source');
 });
 
 it('reorders explicit variants durably with undo and refuses invalid preview selection', function () {
