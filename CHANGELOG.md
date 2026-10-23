@@ -11,6 +11,11 @@
 
 ### Fixed
 
+- Painting a terrain kind clears a stack by whole object instead of by cell:
+  an object goes when the paint covers every cell it shows on and otherwise
+  stays whole, so painting the road beside a range no longer crops the peaks
+  that overhang it. Painting part of an object no longer removes that part.
+
 - Converting a map to terrain kinds removes the map's own atlas
   classifications of the glyphs it converts and of glyphs that name kinds,
   which the kinds now own; before, Last Legend's converted overworld kept
