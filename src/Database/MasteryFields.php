@@ -175,7 +175,7 @@ final class MasteryFields
                 // Its rung on the branch's ladder of basic applications: 1 for I.
                 new RecordField('grade', 'Grade', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '(ungraded)'),
                 new RecordField('phase', 'Special Phase', options: ['', ...array_column(MasteryPhase::cases(), 'value')], removeWhenEmpty: true, displayDefault: '(none)'),
-                // A full phase extends its demi phase, by node id.
+                // A full phase extends its demi phase, and an evolution the advanced application it carries further, by node id.
                 new RecordField('extends', 'Extends', removeWhenEmpty: true, displayDefault: '(none)'),
             ]),
             // Its price on the tree's terms, for characters whose own map does not price it; without one, only they can learn it.
