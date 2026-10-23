@@ -27,8 +27,9 @@ use Ichiloto\Engine\Rendering\Tilesets\TilesetPiece;
 trait PieceCanvas
 {
     /**
-     * @var array{map: ProjectMap, piece: TilesetPiece, anchor: array{x: int, y: int}|null}|null The piece being placed, on the
-     *     map it was chosen for, with the cell a connected piece's next draw starts from.
+     * @var array{map: ProjectMap, piece: TilesetPiece, anchor: array{x: int, y: int}|null, kind?: \Ichiloto\Engine\Rendering\Tilesets\TerrainKind}|null
+     *     The piece being placed, on the map it was chosen for, with the cell a connected piece's next draw starts from;
+     *     a terrain kind being painted places its piece ({@see TerrainKindCanvas}).
      */
     private ?array $piecePlacement = null;
 
@@ -209,6 +210,10 @@ trait PieceCanvas
         if ($placement === null) {
             return;
         }
+        if (isset($placement['kind'])) {
+            $this->paintKindArea($placement['map'], $placement['kind'], $placement['anchor']);
+            return;
+        }
         if ($placement['piece']->connects === null) {
             $this->stampPieceArea($placement['map'], $placement['piece'], $placement['anchor']);
             return;
@@ -227,6 +232,9 @@ trait PieceCanvas
         $placement = $this->getActivePiecePlacement();
         if ($placement === null) {
             return null;
+        }
+        if (isset($placement['kind'])) {
+            return $this->reloadKindPlacement($placement);
         }
         $pieces = $this->loadCanvasPieces($placement['map']);
         $piece = $pieces[$placement['piece']->id] ?? null;
@@ -416,12 +424,13 @@ trait PieceCanvas
         $piece = $placement['piece'];
         $escape = $placement['anchor'] === null ? 'Esc:Done' : 'Esc:Unanchor';
         if ($piece->connects === null) {
-            $enter = $placement['anchor'] === null ? 'Enter:Stamp' : 'Enter:Fill';
+            $title = isset($placement['kind']) ? 'KIND' : 'PIECE';
+            $enter = $placement['anchor'] === null ? (isset($placement['kind']) ? 'Enter:Paint' : 'Enter:Stamp') : 'Enter:Fill';
             return $this->fitHelp(
                 $windowWidth,
-                sprintf('PIECE %s  %s  Drag:Fill  %s', $piece->name, $enter, $escape),
-                sprintf('PIECE %s %s %s', $piece->name, $enter, $escape),
-                "PIECE {$enter} {$escape}",
+                sprintf('%s %s  %s  Drag:Fill  %s', $title, $piece->name, $enter, $escape),
+                sprintf('%s %s %s %s', $title, $piece->name, $enter, $escape),
+                "{$title} {$enter} {$escape}",
                 "{$enter} {$escape}",
                 $escape,
             );

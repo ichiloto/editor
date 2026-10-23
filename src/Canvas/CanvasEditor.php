@@ -438,7 +438,7 @@ final class CanvasEditor
         // Connected pieces: every drawn, erased and neighbouring wall cell takes its shape.
         foreach ($connected as $layerId => $pieces) {
             foreach ($pieces as $pieceId => $cells) {
-                $piece = $map->loadTileset()?->pieces[$pieceId] ?? null;
+                $piece = $map->loadPlacements()[$pieceId] ?? null;
                 if ($piece === null) {
                     continue;
                 }
@@ -540,7 +540,7 @@ final class CanvasEditor
             return null;
         }
         try {
-            $pieces = $map->loadTileset()?->pieces ?? [];
+            $pieces = $map->loadPlacements();
         } catch (InvalidArgumentException | RuntimeException) {
             return null;
         }

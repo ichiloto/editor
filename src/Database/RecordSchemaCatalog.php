@@ -57,6 +57,9 @@ use Ichiloto\Engine\Entities\Skills\SkillCatalog;
 use Ichiloto\Engine\Entities\Skills\SkillDraft;
 use Ichiloto\Engine\Entities\Skills\SkillRecord;
 use Ichiloto\Engine\Entities\Skills\SkillResolutionScope;
+use Ichiloto\Engine\Field\MapAtlasTerrain;
+use Ichiloto\Engine\Rendering\Tilesets\TerrainKind;
+use Ichiloto\Engine\Rendering\Tilesets\TerrainPassage;
 use Ichiloto\Engine\Rendering\Tilesets\TileAppearance;
 use Ichiloto\Engine\Rendering\Tilesets\Tileset;
 use Ichiloto\Engine\Rendering\Tilesets\TilesetAppearance;
@@ -1849,9 +1852,10 @@ final class RecordSchemaCatalog
      * name, so the file keeps its name when the tileset is renamed. A
      * tileset names its RPG Maker sheets, the tiles drawn above characters
      * or as tables, the shadow its raised tiles cast, the tile that marks
-     * missing art, and the pieces maps are built from, keyed by piece id:
+     * missing art, the pieces maps are built from, keyed by piece id:
      * a stamped piece's glyph rows with its tile rows on each tile layer, or
-     * a connected piece's glyph and tile for each shape of a line. The
+     * a connected piece's glyph and tile for each shape of a line, and the
+     * terrain kinds world maps are painted in ({@see terrainKindList()}). The
      * graphical editor also edits what tiles show at ground level, which
      * validation alone reads.
      *
@@ -1944,8 +1948,46 @@ final class RecordSchemaCatalog
                 ],
                 keyField: 'id',
             ),
+            subLists: [self::terrainKindList()],
         );
     }
+
+    /**
+     * A tileset's terrain kinds, the Engine's TerrainKind, keyed by kind id:
+     * the glyph and colour it paints, its passage on foot, its encounter
+     * terrain, its atlas role, the ground kind a feature stands on (chosen
+     * among the tileset's own ground kinds), and its autotile, or that its
+     * art is still to be drawn.
+     */
+    private static function terrainKindList(): RecordSubList
+    {
+        return new RecordSubList(
+            key: 'kinds',
+            prefix: 'kind',
+            singular: 'terrain kind',
+            fields: [
+                new RecordField('id', 'Id'),
+                new RecordField('name', 'Name'),
+                new RecordField('layer', 'Glyph Layer'),
+                new RecordField('glyph', 'Glyph'),
+                new RecordField('passage', 'Passage', options: array_column(TerrainPassage::cases(), 'value')),
+                new RecordField('encounters', 'Encounter Terrain', removeWhenEmpty: true, displayDefault: '(no encounters)'),
+                new RecordField('atlas', 'Atlas Role', options: MapAtlasTerrain::ROLES),
+                RecordField::entryChoice('ground', 'Stands On', 'terrain_grounds', '(a ground kind)'),
+                new RecordField('art.' . TerrainKind::AWAITING_ART, 'Awaiting Art', InputControlType::BOOLEAN, removeWhenEmpty: true,
+                    displayDefault: 'false'),
+                new RecordField('art.layer', 'Art Tile Layer', removeWhenEmpty: true, displayDefault: '(awaiting art)'),
+                new RecordField('art.tile', 'Art Autotile', InputControlType::INTEGER, removeWhenEmpty: true, displayDefault: '(awaiting art)'),
+                new RecordField('keeps', 'Keeps Tile Layers', codec: RecordFieldCodec::CSV_TOKENS, removeWhenEmpty: true),
+            ],
+            blank: ['id' => 'new-kind', 'name' => 'New kind', 'layer' => 'terrain', 'glyph' => '<fg=green>.</>',
+                'art' => [TerrainKind::AWAITING_ART => true], 'passage' => TerrainPassage::WALK->value, 'atlas' => 'ground'],
+            heading: 'Terrain Kinds',
+            removeWhenEmpty: true,
+            keyField: 'id',
+        );
+    }
+
     /**
      * A counter attack: the skill a battler responds with when a physical
      * hit lands on it, after the attacker returns, never chaining. It is off

@@ -82,6 +82,7 @@ final readonly class MapInspector
 
     /** An encounter row met anywhere the map counts steps. */
     public const string ENCOUNTER_AREAS_NONE = '(whole map)';
+    public const string ENCOUNTER_TERRAINS_NONE = '(any terrain)';
 
     /** Classification is authored explicitly, never inferred from cue presentation. */
     public const array EVENT_CUE_KIND_CHOICES = [
@@ -1352,6 +1353,49 @@ final readonly class MapInspector
     }
 
     /**
+     * The encounter terrains the map's terrain kinds meet, or null when the
+     * map is not painted in kinds or they cannot be read.
+     *
+     * @return list<string>|null
+     */
+    private function readEncounterTerrains(ProjectMap $map): ?array
+    {
+        try {
+            return $map->loadTerrainKinds()?->getEncounterTerrains();
+        } catch (\InvalidArgumentException) {
+            return null;
+        }
+    }
+
+    /**
+     * Reads typed encounter terrain ids for an encounter row: terrains the
+     * map's terrain kinds meet, separated by commas or spaces, or none for any.
+     *
+     * @return list<string>
+     * @throws InspectorRefusal When the map is not painted in kinds, or a terrain is none of its kinds'.
+     */
+    private function requireEncounterTerrains(ProjectMap $map, string $value): array
+    {
+        $value = trim($value);
+
+        if ($value === '' || $value === self::ENCOUNTER_TERRAINS_NONE) {
+            return [];
+        }
+
+        $known = $this->readEncounterTerrains($map)
+            ?? throw new InspectorRefusal('This map is not painted in terrain kinds, so its troops cannot be limited to terrains.');
+        $terrains = array_values(array_unique(preg_split('/[\s,]+/', $value, flags: PREG_SPLIT_NO_EMPTY) ?: []));
+        $unknown = array_diff($terrains, $known);
+
+        if ($unknown !== []) {
+            throw new InspectorRefusal(sprintf('%s %s no encounter terrain of this map\'s kinds; they are %s.', implode(', ', $unknown),
+                count($unknown) === 1 ? 'names' : 'name', $known === [] ? 'none' : implode(', ', $known)));
+        }
+
+        return $terrains;
+    }
+
+    /**
      * Reads typed area ids for an encounter row: the map's named areas,
      * separated by commas or spaces, or none for the whole map.
      *
@@ -1439,6 +1483,7 @@ final readonly class MapInspector
             'troop' => $encounters->withTroopAt($index, (string) $value),
             'arena' => $encounters->withArenaAt($index, $this->requireArena((string) $value, self::ENCOUNTER_ARENA_NONE)),
             'areas' => $encounters->withAreasAt($index, $this->requireEncounterAreas($map, (string) $value)),
+            'terrains' => $encounters->withTerrainsAt($index, $this->requireEncounterTerrains($map, (string) $value)),
             'mapArena' => $encounters->withMapArena($this->requireArena((string) $value, self::MAP_ARENA_NONE)),
             default => null,
         };
@@ -1551,6 +1596,20 @@ final readonly class MapInspector
                 'index' => $index,
                 'encounterList' => ['index' => $index],
             ];
+
+            // Typed as encounter terrain ids, offered on a map painted in terrain kinds or a row that names some.
+            $terrains = $this->readEncounterTerrains($map);
+            if ($terrains !== null || $row['terrains'] !== []) {
+                $fields[] = [
+                    'label' => '    Terrains',
+                    'value' => $row['terrains'] === [] ? self::ENCOUNTER_TERRAINS_NONE : implode(', ', $row['terrains']),
+                    'control' => new InputControl(InputControlType::TEXT, implode(', ', $row['terrains'])),
+                    'target' => 'map-encounters',
+                    'field' => 'terrains',
+                    'index' => $index,
+                    'encounterList' => ['index' => $index],
+                ];
+            }
 
             if ($this->graphical) {
                 $fields[] = [

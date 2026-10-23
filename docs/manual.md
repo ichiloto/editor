@@ -456,6 +456,43 @@ layer, or one per shape:
 An A4 wall top can be the one entry for every shape, since the autotile shapes
 its own edges.
 
+### Terrain Kinds
+
+A world map is painted in terrain kinds: grassland, woodland, mountains,
+water and the like, declared in its tileset (Database > Tilesets, Terrain
+Kinds). A kind is the cell's identity; its glyph in its colour and its
+autotile are its two presentations, and its passage and encounters come with
+it. `K` on the canvas opens the kind picker for the layer being edited, one
+entry per kind with its glyph, whether it is walkable, its encounters, the
+ground a feature stands on and whether its art is still to be drawn. The
+picker opens on the kind under the cursor. Choosing one paints it like an
+item piece: `Enter` paints the cursor's cell and anchors there, `Enter` again
+fills the area to the cursor, a mouse drag fills the area it covers, and `Esc`
+drops the anchor and then ends painting. The canvas border shows
+`KIND <name> Enter:Paint Drag:Fill Esc:Done`.
+
+Painting a kind makes the cell's terrain the kind's alone, as one undo step:
+the tiles the layer's tile layers held there are cleared, except the layers
+the kind keeps (a substrate beneath it), then its glyph is written in its own
+colour and its autotile with its ground's. A kind awaiting its art draws no
+tiles, so its glyph shows in the graphical field until the art is bound. On a
+map with its own collision, the kind's passage is written into the cells
+where nothing stands above it.
+
+Only a map painted in terrain kinds is painted by kind (`'terrainKinds' =>
+true` in its data file). Until then `K` says how to convert it:
+`ichiloto map:convert-kinds <map>` lists the map's glyphs and the kinds, and
+`--kind ';=grassland' --kind '~=water' ...` maps each old glyph to a kind,
+shows each mapping's cells and the collision it changes, and converts the map
+through the Editor's validated change set (`--check` writes nothing). A glyph
+that already names a kind must be mapped too, so nothing is reread unseen.
+
+Validation warns about cells whose glyph and tiles show different kinds,
+about cells of kinds awaiting art, and lists each tileset's kinds awaiting
+art. A troop of the map's encounters can be limited to terrains (the
+inspector's `Terrains` row, offered on maps painted in kinds), typed as the
+encounter terrains the map's kinds meet.
+
 ### Map Graphics
 
 A map's [kind](#map-kind) names its tileset in its data file

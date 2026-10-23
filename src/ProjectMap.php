@@ -29,6 +29,7 @@ use Ichiloto\Engine\Field\MapLayerSet;
 use Ichiloto\Engine\Rendering\Presentation\PresentationLayerPolicy;
 use Ichiloto\Engine\Field\MapCollisionResolver;
 use Ichiloto\Engine\Field\MapPhysicalOccupancy;
+use Ichiloto\Engine\Field\MapTerrainKinds;
 use Ichiloto\Engine\Events\Enumerations\CollisionType;
 use Ichiloto\Engine\IO\Console\TerminalText;
 use Ichiloto\Engine\IO\Console\SgrStyleState;
@@ -724,7 +725,7 @@ final class ProjectMap
         $rank = array_flip(array_column($gameplay, 'name'));
         try {
             $owners = MapGraphics::resolveLayerOwners($this->getMapDataField([MapGraphics::SETTINGS_KEY]), [...$names, $name],
-                array_keys($rank), $this->loadTileset(), $this->mapId);
+                array_keys($rank), $this->loadTileset(), $this->mapId, $this->isPaintedInKinds());
         } catch (InvalidArgumentException | RuntimeException) {
             return null;
         }
@@ -769,7 +770,7 @@ final class ProjectMap
         }
         try {
             $owners = MapGraphics::resolveLayerOwners($this->getMapDataField([MapGraphics::SETTINGS_KEY]), $names, $gameplay,
-                $tileset, $this->mapId);
+                $tileset, $this->mapId, $this->isPaintedInKinds());
         } catch (InvalidArgumentException) {
             return [];
         }
@@ -838,7 +839,7 @@ final class ProjectMap
         try {
             $offsets = MapGraphics::readLayerOffsets($settings, $names, $this->mapId);
             $movesWith = MapGraphics::readLayersMovingWith($settings, $names, $gameplay, $this->mapId);
-            $owners = MapGraphics::resolveLayerOwners($settings, $names, $gameplay, $tileset, $this->mapId);
+            $owners = MapGraphics::resolveLayerOwners($settings, $names, $gameplay, $tileset, $this->mapId, $this->isPaintedInKinds());
         } catch (InvalidArgumentException $error) {
             $offsets = $movesWith = $owners = [];
             $issue = $error->getMessage();
@@ -974,7 +975,33 @@ final class ProjectMap
 
         return MapGraphics::fromSources($this->getTileLayerSources(), $this->mapId, $tilesetId,
             $this->getLayerSet(), $this->getAssetRoot(), $this->getMapDataField([MapGraphics::SETTINGS_KEY]),
-            is_string($tilesetId) ? $this->loadTileset() : null);
+            is_string($tilesetId) ? $this->loadTileset() : null, $this->isPaintedInKinds());
+    }
+
+    /**
+     * Everything an editor places on this map from its tileset, by id: its
+     * pieces and, when the map is painted in terrain kinds, its kinds'
+     * pieces ({@see Tileset::getPlacements()}). None without a tileset.
+     *
+     * @return array<string, \Ichiloto\Engine\Rendering\Tilesets\TilesetPiece>
+     * @throws InvalidArgumentException|RuntimeException When the tileset cannot be read.
+     */
+    public function loadPlacements(): array
+    {
+        return $this->loadTileset()?->getPlacements($this->isPaintedInKinds()) ?? [];
+    }
+
+    /**
+     * Whether the map is painted in its tileset's terrain kinds. A malformed
+     * declaration counts as not, and is reported by validation.
+     */
+    public function isPaintedInKinds(): bool
+    {
+        try {
+            return MapTerrainKinds::isDeclared($this->editableData);
+        } catch (InvalidArgumentException) {
+            return false;
+        }
     }
     /** The project's asset root, where tilesets and their sheets live. */
     public function getAssetRoot(): string
@@ -1000,7 +1027,46 @@ final class ProjectMap
     {
         $dictionary = $this->hasMapDataField([MapPhysicalOccupancy::DATA_KEY]) ? [] : $this->loadCollisionDictionary();
 
-        return MapCollisionResolver::resolveMap($this->layers->getLayerSet(), $this->editableData, $dictionary);
+        return MapCollisionResolver::resolveMap($this->layers->getLayerSet(), $this->editableData, $dictionary, $this->loadTerrainKinds());
+    }
+
+    /**
+     * The collision a trial of this map would resolve to, read as
+     * {@see getPhysicalOccupancy()} reads the map itself: its declared
+     * occupancy, or the trial's glyphs by the project's dictionary, with the
+     * terrain kinds the trial data opts into. Nothing changes.
+     *
+     * @param array<string, mixed> $data The trial's map data.
+     * @return int[][]
+     * @throws InvalidArgumentException When the trial's collision cannot be resolved.
+     */
+    public function resolveTrialCollision(MapLayerSet $layers, array $data, ?MapTerrainKinds $kinds): array
+    {
+        $dictionary = array_key_exists(MapPhysicalOccupancy::DATA_KEY, $data) ? [] : $this->loadCollisionDictionary();
+
+        return MapCollisionResolver::resolveMap($layers, $data, $dictionary, $kinds)->collisionGrid;
+    }
+
+    /**
+     * The terrain kinds the map is painted in, from its tileset as the
+     * workspace holds it, or null when the map does not opt into kinds
+     * ({@see MapTerrainKinds}).
+     *
+     * @throws InvalidArgumentException When the map opts in and its tileset cannot be read or has no kinds.
+     */
+    public function loadTerrainKinds(): ?MapTerrainKinds
+    {
+        if (! MapTerrainKinds::isDeclared($this->editableData)) {
+            return null;
+        }
+        try {
+            $tileset = $this->loadTileset();
+        } catch (\Throwable $error) {
+            throw new InvalidArgumentException(sprintf('The map is painted in terrain kinds, but its tileset cannot be read, so its passage is unknown: %s',
+                $error->getMessage()), previous: $error);
+        }
+
+        return new MapTerrainKinds($tileset ?? throw new InvalidArgumentException('The map is painted in terrain kinds but names no tileset.'));
     }
 
     /**
@@ -1083,7 +1149,8 @@ final class ProjectMap
 
                 return false;
             }
-            $occupancy = MapCollisionResolver::resolveLegacyOccupancy($this->layers->getLayerSet(), $this->loadCollisionDictionary());
+            $occupancy = MapCollisionResolver::resolveLegacyOccupancy($this->layers->getLayerSet(), $this->loadCollisionDictionary(),
+                $this->loadTerrainKinds());
         } catch (InvalidArgumentException $error) {
             throw new MapSourceRefusal(rtrim($error->getMessage(), '.') . '. Nothing was changed.', previous: $error);
         }
@@ -1149,8 +1216,9 @@ final class ProjectMap
         $change($trial);
         $dictionary = $this->hasMapDataField([MapPhysicalOccupancy::DATA_KEY]) ? [] : $this->loadCollisionDictionary();
         try {
-            $before = MapCollisionResolver::resolveMap($this->layers->getLayerSet(), $this->editableData, $dictionary)->collisionGrid;
-            $after = MapCollisionResolver::resolveMap($trial->getLayerSet(), $this->editableData, $dictionary)->collisionGrid;
+            $kinds = $this->loadTerrainKinds();
+            $before = MapCollisionResolver::resolveMap($this->layers->getLayerSet(), $this->editableData, $dictionary, $kinds)->collisionGrid;
+            $after = MapCollisionResolver::resolveMap($trial->getLayerSet(), $this->editableData, $dictionary, $kinds)->collisionGrid;
         } catch (InvalidArgumentException $error) {
             throw new MapSourceRefusal(rtrim($error->getMessage(), '.') . '. Nothing was changed.', previous: $error);
         }

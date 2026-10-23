@@ -604,13 +604,24 @@ final class ReferenceCatalog
      * The values a field chooses among that its own entry decides ({@see RecordField::$entryChoices}), read from
      * what the field lives in. `world_object_attachments`: the attachments declared by the resource of the world
      * object a subject reference (`at`) names, on the subject map; none until it names an object that has some.
+     * `terrain_grounds`: the ground kinds of the tileset a terrain kind belongs to, those that stand on nothing,
+     * other than the kind itself.
      *
      * @param array<string, mixed> $holder What the field lives in.
+     * @param array<string, mixed> $owner The record holding the entry.
      * @return list<string>
      * @throws InvalidArgumentException For a source nothing reads.
      */
-    public function listEntryChoices(string $source, array $holder): array
+    public function listEntryChoices(string $source, array $holder, array $owner = []): array
     {
+        if ($source === 'terrain_grounds') {
+            // A keyed entry carries its key as its id while edited, and not as stored.
+            $self = array_diff_key($holder, ['id' => true]);
+            $kinds = is_array($owner['kinds'] ?? null) ? $owner['kinds'] : [];
+            return array_values(array_map(strval(...), array_keys(array_filter($kinds, static fn(mixed $kind, int|string $id): bool =>
+                is_array($kind) && ($kind['ground'] ?? null) === null && (string) $id !== ($holder['id'] ?? null)
+                && array_diff_key($kind, ['id' => true]) !== $self, ARRAY_FILTER_USE_BOTH))));
+        }
         if ($source !== 'world_object_attachments') {
             throw new InvalidArgumentException(sprintf('There is no entry choice source %s.', $source));
         }

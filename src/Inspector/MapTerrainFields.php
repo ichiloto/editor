@@ -8,6 +8,7 @@ use Ichiloto\Editor\Field\MapAtlas;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Engine\Field\MapAtlasDefinition;
 use Ichiloto\Engine\Field\MapAtlasTerrain;
+use Ichiloto\Engine\Field\MapTerrainKinds;
 use InvalidArgumentException;
 use Throwable;
 
@@ -109,9 +110,10 @@ final class MapTerrainFields
     public static function findProblem(ProjectMap $map, array $block): ?string
     {
         try {
-            $data = $block === [] ? [] : [MapAtlas::KEY => $block];
+            $data = ($block === [] ? [] : [MapAtlas::KEY => $block])
+                + array_intersect_key($map->getEditableData(), [MapTerrainKinds::DATA_KEY => true, 'tileset' => true]);
             MapAtlasDefinition::readMap($data);
-            MapAtlasTerrain::readMap($data, $map->getLayerSet());
+            MapAtlasTerrain::readMap($data, $map->getLayerSet(), $map->loadTerrainKinds());
             return null;
         } catch (InvalidArgumentException $error) {
             return $error->getMessage();

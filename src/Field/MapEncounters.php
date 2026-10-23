@@ -32,7 +32,8 @@ use InvalidArgumentException;
  * applies. Arenas are graphical presentation only: they change no weight,
  * no fight and nothing the terminal shows. An entry's `areas` names the
  * map's named areas the troop is met in; without them it is met anywhere the
- * map counts steps.
+ * map counts steps. Its `terrains` names encounter terrains of the map's
+ * terrain kinds, such as `woodland`; without them it is met on any.
  *
  * The engine reads it loosely -- a missing `rate` means fifteen steps, a
  * missing `tiles` means danger tiles only, a troop with a non-positive or
@@ -74,13 +75,15 @@ final class MapEncounters
 
     /** The entry key naming the map areas a troop is met in, the Engine's own. */
     public const string AREAS_KEY = EncounterEntry::AREAS_KEY;
+    /** The entry key naming the encounter terrains a troop is met on, the Engine's own. */
+    public const string TERRAINS_KEY = EncounterEntry::TERRAINS_KEY;
 
     /** The keys this model owns; everything else in the block is the author's. */
     private const array OWNED_KEYS = ['troops', 'rate', 'tiles', self::ARENA_KEY];
 
     /**
      * @param array<string, mixed>|null $block The authored block, or null when the map declares none.
-     * @param array<int, array{name: string, weight: mixed, arena: ?string, areas: list<string>, entry: ?array<string, mixed>}> $rows
+     * @param array<int, array{name: string, weight: mixed, arena: ?string, areas: list<string>, terrains: list<string>, entry: ?array<string, mixed>}> $rows
      *   The troop rows, in authored order: each one's weight and arena, and
      *   the entry as authored when it was written as a map.
      * @param string|null $unsupported Why this block cannot be edited, or null.
@@ -154,7 +157,14 @@ final class MapEncounters
                 return new self($block, [], sprintf('the troop "%s" has areas that are not a list of area ids', $name));
             }
 
-            $rows[] = ['name' => $name, 'weight' => $weight, 'arena' => $arena, 'areas' => $areas, 'entry' => $structured ? $entry : null];
+            $terrains = $structured ? ($entry[self::TERRAINS_KEY] ?? []) : [];
+
+            if (! is_array($terrains) || ! array_is_list($terrains) || array_any($terrains, static fn(mixed $id): bool => ! is_string($id))) {
+                return new self($block, [], sprintf('the troop "%s" has terrains that are not a list of encounter terrain ids', $name));
+            }
+
+            $rows[] = ['name' => $name, 'weight' => $weight, 'arena' => $arena, 'areas' => $areas, 'terrains' => $terrains,
+                'entry' => $structured ? $entry : null];
         }
 
         return new self($block, $rows, null);
@@ -187,7 +197,7 @@ final class MapEncounters
     /**
      * The troop rows, in authored order.
      *
-     * @return array<int, array{name: string, weight: mixed, arena: ?string, areas: list<string>, entry: ?array<string, mixed>}>
+     * @return array<int, array{name: string, weight: mixed, arena: ?string, areas: list<string>, terrains: list<string>, entry: ?array<string, mixed>}>
      */
     public function rows(): array
     {
@@ -379,6 +389,26 @@ final class MapEncounters
     }
 
     /**
+     * The block with one row limited to encounter terrains of the map's
+     * terrain kinds; an empty list lets the troop be met on any.
+     *
+     * @param list<string> $terrains
+     * @return array<string, mixed>|null
+     */
+    public function withTerrainsAt(int $index, array $terrains): ?array
+    {
+        $rows = $this->rows;
+
+        if (! array_key_exists($index, $rows)) {
+            return $this->block;
+        }
+
+        $rows[$index]['terrains'] = array_values(array_unique($terrains));
+
+        return $this->rebuilt($rows);
+    }
+
+    /**
      * The troops limited to a named area.
      *
      * @return list<string>
@@ -434,7 +464,7 @@ final class MapEncounters
         $this->assertFree($name, null);
         $rows = $this->rows;
         $position = $after === null ? count($rows) : min(count($rows), max(0, $after + 1));
-        array_splice($rows, $position, 0, [['name' => $name, 'weight' => max(1, $weight), 'arena' => null, 'areas' => [], 'entry' => null]]);
+        array_splice($rows, $position, 0, [['name' => $name, 'weight' => max(1, $weight), 'arena' => null, 'areas' => [], 'terrains' => [], 'entry' => null]]);
 
         return $this->rebuilt($rows);
     }
@@ -464,7 +494,7 @@ final class MapEncounters
      * authored as a map stays one, its other keys kept; a weight alone is
      * written as a weight, and becomes a map only when it gains an arena.
      *
-     * @param array<int, array{name: string, weight: mixed, arena: ?string, areas: list<string>, entry: ?array<string, mixed>}> $rows
+     * @param array<int, array{name: string, weight: mixed, arena: ?string, areas: list<string>, terrains: list<string>, entry: ?array<string, mixed>}> $rows
      * @param array<string, mixed> $changes Owned values to set; null removes one.
      * @return array<string, mixed>|null The block to write, or null to remove it.
      */
@@ -503,15 +533,15 @@ final class MapEncounters
     }
 
     /**
-     * Writes one row as its entry: as authored, with its weight, arena and areas.
+     * Writes one row as its entry: as authored, with its weight, arena, areas and terrains.
      *
-     * @param array{name: string, weight: mixed, arena: ?string, areas: list<string>, entry: ?array<string, mixed>} $row
+     * @param array{name: string, weight: mixed, arena: ?string, areas: list<string>, terrains: list<string>, entry: ?array<string, mixed>} $row
      */
     private static function entryFor(array $row): mixed
     {
         $weight = $row['weight'] ?? 1;
 
-        if ($row['entry'] === null && $row['arena'] === null && $row['areas'] === []) {
+        if ($row['entry'] === null && $row['arena'] === null && $row['areas'] === [] && $row['terrains'] === []) {
             return $weight;
         }
 
@@ -528,6 +558,12 @@ final class MapEncounters
             unset($entry[self::AREAS_KEY]);
         } else {
             $entry[self::AREAS_KEY] = $row['areas'];
+        }
+
+        if ($row['terrains'] === []) {
+            unset($entry[self::TERRAINS_KEY]);
+        } else {
+            $entry[self::TERRAINS_KEY] = $row['terrains'];
         }
 
         return $entry;

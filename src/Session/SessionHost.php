@@ -274,6 +274,25 @@ final class SessionHost
                 self::requireCell($params, 'to'),
                 self::readOptionalString($params, 'color'),
             ),
+            'kinds.list' => $session->listKinds(self::requireString($params, 'map')),
+            'kinds.preview' => $session->previewKind(
+                self::requireString($params, 'map'),
+                self::requireString($params, 'kind'),
+                self::requireCell($params, 'from'),
+                self::requireCell($params, 'to'),
+            ),
+            'kinds.paint' => $session->paintKind(
+                self::requireString($params, 'map'),
+                self::requireInt($params, 'revision'),
+                self::requireString($params, 'kind'),
+                self::requireCell($params, 'from'),
+                self::requireCell($params, 'to'),
+            ),
+            'kinds.at' => $session->readKindAt(self::requireString($params, 'map'), self::requireInt($params, 'x'), self::requireInt($params, 'y')),
+            'kinds.previewConversion' => $session->previewKindConversion(self::requireString($params, 'map'),
+                ($params['mapping'] ?? []) === [] ? [] : self::requireKindMapping($params)),
+            'kinds.convert' => $session->convertToKinds(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
+                self::requireKindMapping($params)),
             'map.pieceAt' => $session->readPieceAt(self::requireString($params, 'map'), self::requireString($params, 'layer'),
                 self::requireInt($params, 'x'), self::requireInt($params, 'y')),
             'selection.copy' => $session->copySelection(self::requireString($params, 'map'), self::requireString($params, 'layer'),
@@ -803,6 +822,23 @@ final class SessionHost
     }
 
     /** @param array<string, mixed> $params */
+    /**
+     * A conversion's mapping: terrain kind ids by old plain glyph.
+     *
+     * @param array<string, mixed> $params
+     * @return array<string, string>
+     */
+    private static function requireKindMapping(array $params): array
+    {
+        $mapping = $params['mapping'] ?? null;
+        if (! is_array($mapping) || $mapping === [] || array_is_list($mapping) && count($mapping) > 1
+            || ! array_all($mapping, static fn(mixed $kind): bool => is_string($kind))) {
+            throw new InvalidRequest('"mapping" must map old glyphs to terrain kind ids, such as {";": "grassland"}.');
+        }
+
+        return array_combine(array_map(strval(...), array_keys($mapping)), array_values($mapping));
+    }
+
     private static function readOptionalString(array $params, string $key): ?string
     {
         return match (true) {
