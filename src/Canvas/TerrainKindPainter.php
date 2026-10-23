@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ichiloto\Editor\Canvas;
 
+use Closure;
 use Ichiloto\Editor\History\Command;
 use Ichiloto\Editor\History\CommandGroup;
 use Ichiloto\Editor\History\GenericCommand;
@@ -14,6 +15,7 @@ use Ichiloto\Engine\Field\MapPhysicalOccupancy;
 use Ichiloto\Engine\Field\MapTerrainKinds;
 use Ichiloto\Engine\Rendering\Tilesets\TerrainKind;
 use Ichiloto\Engine\Rendering\Tilesets\TileId;
+use Ichiloto\Engine\Rendering\Tilesets\TilesetStack;
 use InvalidArgumentException;
 use RuntimeException;
 
@@ -161,6 +163,12 @@ final class TerrainKindPainter
      * the kind's alone, whatever stood there before, such as a tree an old
      * glyph drew or a kind's own tiles. Its tiles are painted next.
      *
+     * A stack holds whole objects ({@see TilesetStack}), so it is cleared by
+     * object, never by cell: an object goes, every tile of it, when the paint
+     * covers every cell it shows on, and stays whole when it also shows on a
+     * cell the paint leaves, such as a peak overhanging the road beside its
+     * range. Painting beside an object never crops it.
+     *
      * @param list<array{x: int, y: int}> $cells
      * @return ?Command The applied, unrecorded edit, or null when nothing was there.
      */
@@ -168,20 +176,31 @@ final class TerrainKindPainter
     {
         try {
             $owners = $map->loadGraphics()?->owners ?? [];
+            $stacks = $map->loadTileset()?->stacks ?? [];
         } catch (InvalidArgumentException | RuntimeException $error) {
             throw new MapSourceRefusal('The map\'s tile layers cannot be read, so the cells\' old tiles cannot be cleared: ' . $error->getMessage()
                 . ' Nothing was changed.', previous: $error);
         }
         $tiles = CanvasEditor::createTileReader($map);
+        $painted = [];
+        foreach ($cells as ['x' => $x, 'y' => $y]) {
+            $painted["{$x},{$y}"] = true;
+        }
         $writes = [];
         foreach ($owners as $tileLayer => $owner) {
             if ($owner !== $kind->layer || in_array($tileLayer, $kind->piece->keeps, true)) {
                 continue;
             }
+            $stack = array_find($stacks, static fn(TilesetStack $stack): bool => in_array((string) $tileLayer, $stack->layers, true));
             foreach ($cells as ['x' => $x, 'y' => $y]) {
-                if ($tiles((string) $tileLayer, $x, $y) !== (string) TileId::EMPTY) {
-                    $writes[$tileLayer][] = ['x' => $x, 'y' => $y, 'entry' => (string) TileId::EMPTY];
+                $entry = $tiles((string) $tileLayer, $x, $y);
+                if ($entry === (string) TileId::EMPTY) {
+                    continue;
                 }
+                if ($stack !== null && self::showsBeyond($stack, $map, $tiles, (int) $entry, $x, $y, $painted)) {
+                    continue;
+                }
+                $writes[$tileLayer][] = ['x' => $x, 'y' => $y, 'entry' => (string) TileId::EMPTY];
             }
         }
         if ($writes === []) {
@@ -195,6 +214,40 @@ final class TerrainKindPainter
             static fn() => $map->restoreTileLayerSources($after),
             static fn() => $map->restoreTileLayerSources($before),
         );
+    }
+
+    /**
+     * Whether the stacked object a cell's tile draws also shows on a cell
+     * outside the paint: one of its other cells still holds its tile there on
+     * one of the stack's layers. A tile no stacked piece draws belongs to no
+     * object, and is the cell's alone.
+     *
+     * @param Closure(string, int, int): string $tiles
+     * @param array<string, true> $painted
+     */
+    private static function showsBeyond(TilesetStack $stack, ProjectMap $map, Closure $tiles, int $tileId, int $x, int $y, array $painted): bool
+    {
+        $cell = $stack->locate($tileId);
+        if ($cell === null) {
+            return false;
+        }
+        ['piece' => $piece, 'column' => $column, 'row' => $row] = $cell;
+        $layers = array_values(array_intersect($stack->layers, $map->getTileLayerNames()));
+        foreach ($piece->tiles[$stack->getBaseLayer()] as $pieceRow => $entries) {
+            foreach ($entries as $pieceColumn => $entry) {
+                [$cellX, $cellY] = [$x - $column + $pieceColumn, $y - $row + $pieceRow];
+                if ((int) $entry === TileId::EMPTY || isset($painted["{$cellX},{$cellY}"])) {
+                    continue;
+                }
+                foreach ($layers as $layer) {
+                    if ($tiles($layer, $cellX, $cellY) === (string) $entry) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
     }
 
     /**

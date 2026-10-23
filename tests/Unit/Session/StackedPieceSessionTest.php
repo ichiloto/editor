@@ -93,3 +93,52 @@ it('refuses a cell that would hold more tiles than the stack has layers, changin
     expect(fn() => placeStackedPiece($session, 'rock', 1, 1))->toThrow(SessionRefusal::class, 'which has 2 layers')
         ->and(readStackLayers($session))->toBe($before);
 });
+
+/**
+ * The stacked crag and rock on the terrain-kind test map ({@see terrainKindProject()}), converted to its meadow kind,
+ * so painting the path kind clears the stack the terrain owns.
+ */
+function stackedKindSession(): EditorSession
+{
+    $root = terrainKindProject();
+    $path = $root . '/assets/Data/Tilesets/home.php';
+    $data = require $path;
+    $data['stacks'] = ['relief' => ['layers' => ['relief-a', 'relief-b']]];
+    $data['pieces'] = [
+        'crag' => ['name' => 'Crag', 'layer' => 'terrain', 'glyphs' => ['  ', '  '], 'tiles' => ['relief-a' => ['1 2', '3 4']]],
+        'rock' => ['name' => 'Rock', 'layer' => 'terrain', 'glyphs' => [' '], 'tiles' => ['relief-a' => ['9']]],
+    ];
+    file_put_contents($path, "<?php\n\nreturn " . var_export($data, true) . ";\n");
+    $session = EditorSession::open($root);
+    $session->convertToKinds('test-map', $session->readMap('test-map')['revision'], ['.' => 'meadow']);
+    placeStackedPiece($session, 'crag', 1, 0);
+    placeStackedPiece($session, 'rock', 3, 0);
+
+    return $session;
+}
+
+function paintStackedKind(EditorSession $session, array $from, array $to): void
+{
+    $session->paintKind('test-map', $session->readMap('test-map')['revision'], 'path', $from, $to);
+}
+
+it('keeps a stacked object whole when a kind is painted on only some of its cells, so painting beside it never crops it', function () {
+    $session = stackedKindSession();
+    expect(readStackLayers($session))->toBe(['relief-a' => [[0, 1, 2, 9], [0, 3, 4, 0]]]);
+
+    // The path takes the crag's lower-left cell and the whole rock: the crag still shows on three other cells.
+    paintStackedKind($session, [1, 1], [1, 1]);
+    paintStackedKind($session, [3, 0], [3, 0]);
+
+    expect(readStackLayers($session))->toBe(['relief-a' => [[0, 1, 2, 0], [0, 3, 4, 0]]]);
+});
+
+it('clears a stacked object, every tile of it, when one paint covers all of its cells', function () {
+    $session = stackedKindSession();
+
+    paintStackedKind($session, [1, 0], [2, 1]);
+
+    expect(readStackLayers($session))->toBe(['relief-a' => [[0, 0, 0, 9], [0, 0, 0, 0]]]);
+    $session->undo();
+    expect(readStackLayers($session))->toBe(['relief-a' => [[0, 1, 2, 9], [0, 3, 4, 0]]]);
+});

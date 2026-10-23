@@ -515,8 +515,11 @@ stack's order. A cell holds at most one tile per stack layer, so a stamp
 that would overfill one is refused and changes nothing; stamping the same
 piece on the same cells again adds nothing. Each tile of a stack's pieces
 belongs to one piece cell, so a cell's objects are read back from its tiles.
-Removing one object from a stack is a remaining GUI capability; repainting a
-cell's terrain kind clears its stack with the terrain's other tile layers.
+Removing one object from a stack is a remaining GUI capability. Repainting
+terrain kinds clears a stack by whole object: an object goes when the paint
+covers every cell it shows on, and stays whole when it also shows on a cell
+the paint leaves, so painting the road beside a range never crops the peak
+that overhangs it. To remove an object, paint over all of its cells at once.
 
 ### Map Graphics
 
