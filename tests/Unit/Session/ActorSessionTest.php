@@ -173,15 +173,15 @@ it('asks before an identity freeze that repairs other files at once, then writes
         ->and(sourceHashTree($root))->not->toBe($before)
         ->and(actorSessionRow($session->readDatabaseRecord('actors', $index), 'id'))->toMatchArray(['kind' => 'info', 'value' => 'Mira'])
         ->and($session->listDatabaseRecords('actors')['dirty'])->toBeFalse()
-        // The project was read again; a revision given before names nothing now.
-        ->and($reread['revision'])->toBeGreaterThan($map['revision'])
-        ->and(fn() => $session->deleteEvent($map['id'], $map['revision'], 'A'))->toThrow(SessionRefusal::class, 'changed since revision');
+        // The project was read again; the map the set never wrote holds what it did, so its revision stands.
+        ->and($reread['revision'])->toBe($map['revision']);
 
     $undone = $session->undo();
 
     expect($undone['label'])->toBe('Migrate actor identities and references')
         ->and($undone['databases'])->toContain('actors')
-        ->and($undone['revisions'][$map['id']])->toBeGreaterThan($reread['revision'])
+        ->and($undone['maps'])->toBe([])
+        ->and($session->describeMaps()[0]['revision'])->toBe($map['revision'])
         ->and(sourceHashTree($root))->toBe($before)
         ->and(actorSessionRow($session->readDatabaseRecord('actors', $index), 'id')['kind'])->toBe('action');
 });

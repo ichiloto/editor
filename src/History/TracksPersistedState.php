@@ -35,6 +35,14 @@ trait TracksPersistedState
     private string $currentFingerprint = '';
 
     /**
+     * The fingerprint of what this asset holds now, saved or not: two
+     * readings of one asset with the same fingerprint hold the same content.
+     */
+    public string $contentFingerprint {
+        get => $this->stateFingerprint();
+    }
+
+    /**
      * Builds the exact persisted form this asset's save would write.
      *
      * @return string The bytes, concatenated when the asset spans files.

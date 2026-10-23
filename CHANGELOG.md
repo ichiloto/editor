@@ -17,6 +17,16 @@
 
 ### Fixed
 
+- A `map:apply` batch or change set with a step that writes a set of files at
+  once (`skills.retire`, `mastery.adopt`, inserting or removing rows, an
+  actor's identity freeze) judges only the maps whose files changed. Reading
+  the project again from those files used to give every map a new revision,
+  so the batch counted every map as changed and errors already on maps it
+  never touched refused it. A map read again that holds what it did keeps its
+  revision, undo and redo of such a step name only the maps it changed, and
+  an open GUI editing canvas starts again on the map read afresh instead of
+  drawing the earlier reading.
+
 - Painting a terrain kind clears a stack by whole object instead of by cell:
   an object goes when the paint covers every cell it shows on and otherwise
   stays whole, so painting the road beside a range no longer crops the peaks
