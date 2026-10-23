@@ -17,6 +17,10 @@
 
 ### Fixed
 
+- Database > Weapons, Armors: clearing a parameter change (Attack, Defence,
+  Speed and the rest) removes it from the record instead of writing a zero, so
+  an accessory made from the armor blank can drop the Defence it started with.
+
 - A `map:apply` batch or change set with a step that writes a set of files at
   once (`skills.retire`, `mastery.adopt`, inserting or removing rows, an
   actor's identity freeze) judges only the maps whose files changed. Reading
