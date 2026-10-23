@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Ichiloto\Editor\Maps;
 
 use Ichiloto\Editor\Canvas\TerrainKindPainter;
+use Ichiloto\Editor\Field\MapAtlas;
 use Ichiloto\Editor\History\Command;
 use Ichiloto\Editor\History\CommandGroup;
 use Ichiloto\Editor\History\GenericCommand;
@@ -32,6 +33,9 @@ use InvalidArgumentException;
  * terrain becomes the kind's alone: tiles the old glyph left on the tile
  * layers its gameplay layer owns are cleared, except layers the kind keeps.
  * Glyphs nobody maps stay as they are, with the collision the dictionary gives them.
+ * A kind owns its glyph's atlas role on its layer, so the map's own atlas
+ * classifications of the glyphs it converts, and of glyphs that name kinds
+ * there, are removed with it (`atlasBindings`); the others stay.
  *
  * Events, transfers and NPCs are not touched. Saves standing where the map
  * becomes solid are moved through the existing save relocation when the map
@@ -51,7 +55,8 @@ final class TerrainKindConversion
      *
      * @param array<string, string> $mapping Kind ids by old plain glyph.
      * @return array{map: string, declares: bool, mappings: list<array{glyph: string, kind: string, name: string, layer: string, cells: int, awaitingArt: bool}>,
-     *     unmapped: list<array{glyph: string, layer: string, cells: int}>, reread: list<array{glyph: string, layer: string, cells: int}>, collision: array{changed: int, blocked: int, opened: int, cells: list<array{0: int, 1: int}>}}
+     *     unmapped: list<array{glyph: string, layer: string, cells: int}>, reread: list<array{glyph: string, layer: string, cells: int}>, collision: array{changed: int, blocked: int, opened: int, cells: list<array{0: int, 1: int}>},
+     *     atlasBindings: list<array{layer: string, glyph: string, role: string}>}
      * @throws MapSourceRefusal When the mapping cannot be applied.
      */
     public static function preview(ProjectMap $map, array $mapping): array
@@ -65,7 +70,37 @@ final class TerrainKindConversion
             'unmapped' => $plan['unmapped'],
             'reread' => $plan['reread'],
             'collision' => self::compareCollision($map, $plan),
+            'atlasBindings' => self::findReplacedAtlasBindings($map, $plan, $mapping),
         ];
+    }
+
+    /**
+     * The map's atlas classifications the kinds take over: on each kind layer,
+     * those of the glyphs the conversion maps and of glyphs that name a kind.
+     *
+     * @param array{terrain: MapTerrainKinds} $plan
+     * @param array<string, string> $mapping
+     * @return list<array{layer: string, glyph: string, role: string}>
+     */
+    private static function findReplacedAtlasBindings(ProjectMap $map, array $plan, array $mapping): array
+    {
+        try {
+            $terrain = MapAtlas::readTerrain(MapAtlas::readBlock($map));
+        } catch (InvalidArgumentException) {
+            return [];
+        }
+        $replaced = [];
+        foreach ($plan['terrain']->getLayers() as $layer) {
+            $symbols = $terrain[$layer]['symbols'] ?? [];
+            foreach (is_array($symbols) ? $symbols : [] as $glyph => $role) {
+                $glyph = (string) $glyph;
+                if (array_key_exists($glyph, $mapping) || $plan['terrain']->getKindsOn($layer, $glyph) !== []) {
+                    $replaced[] = ['layer' => $layer, 'glyph' => $glyph, 'role' => (string) $role];
+                }
+            }
+        }
+
+        return $replaced;
     }
 
     /**
@@ -93,6 +128,19 @@ final class TerrainKindConversion
             $commands[] = new GenericCommand($label,
                 static fn() => $map->setMapDataField([MapTerrainKinds::DATA_KEY], true),
                 static fn() => $map->setMapDataField([MapTerrainKinds::DATA_KEY], null),
+            );
+        }
+        $replaced = self::findReplacedAtlasBindings($map, $plan, $mapping);
+        if ($replaced !== []) {
+            $before = MapAtlas::readBlock($map);
+            $after = $before;
+            foreach ($replaced as ['layer' => $layer, 'glyph' => $glyph]) {
+                $after = MapAtlas::setTerrainSymbol($after, $layer, $glyph, null);
+            }
+            $map->setMapDataField([MapAtlas::KEY], $after === [] ? null : $after);
+            $commands[] = new GenericCommand($label,
+                static fn() => $map->setMapDataField([MapAtlas::KEY], $after === [] ? null : $after),
+                static fn() => $map->setMapDataField([MapAtlas::KEY], $before === [] ? null : $before),
             );
         }
         try {

@@ -10,8 +10,11 @@ use Ichiloto\Editor\MapSourceRefusal;
 use Ichiloto\Editor\Maps\MapLayers;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Engine\IO\Console\TerminalText;
+use Ichiloto\Engine\Rendering\Tilesets\TileId;
 use Ichiloto\Engine\Rendering\Tilesets\Tileset;
 use Ichiloto\Engine\Rendering\Tilesets\TilesetPiece;
+use Ichiloto\Engine\Rendering\Tilesets\TilesetStack;
+use InvalidArgumentException;
 
 /**
  * Places a map tileset's pieces the one way every interface does. An item
@@ -28,6 +31,11 @@ use Ichiloto\Engine\Rendering\Tilesets\TilesetPiece;
  * history. Like {@see CanvasEditor}, nothing here knows a cursor, a status
  * line or a dialog; refusals are thrown, never shown, and an area that cannot
  * be placed whole changes nothing.
+ *
+ * A piece on one of its tileset's stacks ({@see TilesetStack}), such as a
+ * mountain peak, is laid over what the stack's layers already hold: each of
+ * its cells joins the cell's tiles in depth order, so overlapping objects
+ * draw as the field orders them. It writes no glyph.
  */
 final class PiecePlacer
 {
@@ -249,7 +257,10 @@ final class PiecePlacer
             }
         }
         $tilesBefore = $map->getTileLayerSources();
-        if ($writes === []) {
+        $stack = self::findStack($map, $piece);
+        if ($stack !== null) {
+            $map->writeTileCells(self::layStacked($map, $piece, $stack, $origins));
+        } elseif ($writes === []) {
             foreach ($origins as ['x' => $x, 'y' => $y]) {
                 $map->writeTileEntries($piece->tiles, $x, $y);
             }
@@ -264,6 +275,91 @@ final class PiecePlacer
         return $stroke->hasChanges() || $tilesAfter !== $tilesBefore
             ? CanvasEditor::combineStrokeWithTiles($label, $map, $stroke, $tilesBefore, $tilesAfter)
             : null;
+    }
+
+    /** The stack the piece is laid on in the map's tileset, or null when it is stamped as authored. */
+    private static function findStack(ProjectMap $map, TilesetPiece $piece): ?TilesetStack
+    {
+        try {
+            return $map->loadTileset()?->getStackOf($piece);
+        } catch (\Throwable $error) {
+            throw new MapSourceRefusal('Pieces are unavailable: ' . $error->getMessage(), previous: $error);
+        }
+    }
+
+    /**
+     * The stack's entries in every cell a stacked piece's copies cover once
+     * they are laid there ({@see TilesetStack::layTile()}), keyed by tile
+     * layer in the stack's order, a layer left empty included.
+     *
+     * @param list<array{x: int, y: int}> $origins
+     * @return array<string, list<array{x: int, y: int, entry: string}>>
+     * @throws MapSourceRefusal When the map draws the stack's layers out of order, a cell holds an entry the stack cannot order, or a cell would hold more tiles than the stack has layers.
+     */
+    private static function layStacked(ProjectMap $map, TilesetPiece $piece, TilesetStack $stack, array $origins): array
+    {
+        $present = array_values(array_intersect($map->getTileLayerNames(), $stack->layers));
+        if ($present !== array_values(array_intersect($stack->layers, $present))) {
+            throw new MapSourceRefusal(sprintf('This map draws the tile layers of stack %s out of order (%s); they draw bottom to top as %s. Nothing was changed.',
+                $stack->id, implode(', ', $present), implode(', ', $stack->layers)));
+        }
+        $xs = array_column($origins, 'x');
+        $ys = array_column($origins, 'y');
+        $area = ['x' => min($xs), 'y' => min($ys), 'width' => max($xs) - min($xs) + $piece->width, 'height' => max($ys) - min($ys) + $piece->height];
+        $stacked = $map->readTileEntries($stack->layers, $area['x'], $area['y'], $area['width'], $area['height']);
+        $held = [];
+        foreach ($origins as ['x' => $x, 'y' => $y]) {
+            foreach ($piece->tiles[$stack->getBaseLayer()] as $row => $entries) {
+                foreach ($entries as $column => $entry) {
+                    $tileId = (int) $entry;
+                    if ($tileId === TileId::EMPTY) {
+                        continue;
+                    }
+                    [$cellX, $cellY] = [$x + $column, $y + $row];
+                    $key = "{$cellX},{$cellY}";
+                    $held[$key] ??= self::readStackedCell($stacked, $stack, $cellX - $area['x'], $cellY - $area['y'], $cellX, $cellY);
+                    try {
+                        $held[$key] = $stack->layTile($held[$key], $tileId, $cellX, $cellY);
+                    } catch (InvalidArgumentException $error) {
+                        throw new MapSourceRefusal(sprintf('%s does not fit at (%d, %d): %s Nothing was changed.', $piece->name, $x, $y, $error->getMessage()),
+                            previous: $error);
+                    }
+                }
+            }
+        }
+        $cells = array_fill_keys($stack->layers, []);
+        foreach ($held as $key => $tiles) {
+            [$cellX, $cellY] = array_map(intval(...), explode(',', $key));
+            foreach ($stack->layers as $index => $layer) {
+                $cells[$layer][] = ['x' => $cellX, 'y' => $cellY, 'entry' => (string) ($tiles[$index] ?? TileId::EMPTY)];
+            }
+        }
+
+        return $cells;
+    }
+
+    /**
+     * A cell's tiles on a stack's layers, bottom to top, empty ones left out.
+     *
+     * @param array<string, list<list<string>>> $stacked The stack's entries over an area, keyed by tile layer in the map's order.
+     * @return list<int>
+     * @throws MapSourceRefusal When an entry is not a plain tile.
+     */
+    private static function readStackedCell(array $stacked, TilesetStack $stack, int $column, int $row, int $x, int $y): array
+    {
+        $tiles = [];
+        foreach ($stacked as $layer => $rows) {
+            $entry = (string) ($rows[$row][$column] ?? '0');
+            if (! ctype_digit($entry)) {
+                throw new MapSourceRefusal(sprintf('Tile layer %s holds %s at (%d, %d), which stack %s cannot order. Nothing was changed.',
+                    $layer, $entry, $x, $y, $stack->id));
+            }
+            if ((int) $entry !== TileId::EMPTY) {
+                $tiles[] = (int) $entry;
+            }
+        }
+
+        return $tiles;
     }
 
     /**
