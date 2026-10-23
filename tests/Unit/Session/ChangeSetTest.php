@@ -251,3 +251,126 @@ it('asks a batch to choose the piece a glyph plays when several draw it, and pai
     expect(ChangeBatch::apply($root, [$paint])['status'])->toBe('saved')
         ->and(MapGridSource::readFile($root . '/assets/Maps/test-map/graphics/02.decor.tiles.php'))->toBe("0 5 0 0\n0 5 5 6");
 });
+
+/**
+ * The change set test project with a second map that already shows a raw
+ * glyph (an error), and a skill a class names, so retiring it writes a file
+ * set that never touches a map.
+ */
+function sourceSetChangeSetProject(): string
+{
+    $root = changeSetProject();
+    $maps = $root . '/assets/Maps';
+    mkdir($maps . '/broken-map');
+    copyDirectoryRecursively($maps . '/test-map', $maps . '/broken-map');
+    foreach (glob($maps . '/broken-map/test-map.*') ?: [] as $file) {
+        rename($file, $maps . '/broken-map/broken-' . substr(basename($file), strlen('test-')));
+    }
+    $data = $maps . '/broken-map/broken-map.data.php';
+    file_put_contents($data, str_replace("'Test Map'", "'Broken Map'", (string) file_get_contents($data)));
+    // A hole under a building glyph: the glyph shows raw, an error found before any change set.
+    file_put_contents($maps . '/broken-map/layers/01.terrain.map.php', MapGridSource::buildSource("....\n..  ", 'AUTHORED'));
+    writeTileLayer($maps . '/broken-map', '01.floor.tiles.php', "2816 2816 2816 2816\n2816 2816 0 0");
+    writeTileLayer($maps . '/broken-map', '02.decor.tiles.php', "0 5 0 0\n0 5 0 0");
+    writeSkillRecords($root,
+        new Ichiloto\Engine\Entities\Skills\SpecialSkill('Old Cut', 'Cuts.', '', 2, 0),
+        new Ichiloto\Engine\Entities\Skills\SpecialSkill('New Cut', 'Cuts well.', '', 4, 0),
+    );
+    $classes = $root . '/assets/Data/classes.php';
+    file_put_contents($classes, preg_replace("/'name' => 'Vanguard',\n/",
+        "'name' => 'Vanguard',\n    'skillsToLearn' => [\n      ['level' => 2, 'skill' => 'Old Cut'],\n    ],\n", (string) file_get_contents($classes), 1));
+
+    return $root;
+}
+
+/** The batch change that retires Old Cut into New Cut, writing its file set at once. */
+function sourceSetRetirement(): array
+{
+    return ['method' => 'skills.retire', 'params' => ['index' => 0, 'replacement' => 'New Cut'], 'answer' => 'write'];
+}
+
+it('starts the file set project with an error on the second map only', function () {
+    $session = EditorSession::open(sourceSetChangeSetProject());
+
+    expect($session->validateProject(['test-map'])['errors'])->toBe(0)
+        ->and($session->validateProject(['broken-map'])['errors'])->toBeGreaterThan(0);
+});
+
+it('judges only the maps a batch changed when a step writes a file set that reloads the project', function () {
+    $root = sourceSetChangeSetProject();
+    $buildings = changeSetLayer(EditorSession::open($root), 'buildings');
+
+    $outcome = ChangeBatch::apply($root, [
+        sourceSetRetirement(),
+        ['method' => 'map.paint', 'params' => ['map' => 'test-map', 'layer' => $buildings, 'cells' => [[1, 0]], 'symbol' => ' ']],
+    ]);
+
+    expect($outcome['status'])->toBe('saved')
+        ->and($outcome['maps'])->toBe(['test-map'])
+        ->and($outcome['blocking'])->toBe(0)
+        ->and(array_column($outcome['issues'], 'map'))->not->toContain('broken-map')
+        ->and((require $root . '/assets/Data/classes.php')[0]['skillsToLearn'])->toBe([['level' => 2, 'skill' => 'New Cut']])
+        ->and(MapGridSource::readFile($root . '/assets/Maps/test-map/layers/04.buildings.map.php'))->toBe("    \n xx ");
+    expect(ChangeBatch::apply($root, [['method' => 'skills.retire', 'params' => ['index' => 0], 'answer' => 'write']]))
+        ->toMatchArray(['status' => 'saved', 'maps' => [], 'blocking' => 0]);
+});
+
+it('still judges a map whose files a batch\'s file set rewrote, and an edit made to an untouched map', function () {
+    $root = sourceSetChangeSetProject();
+    $before = sourceHashTree($root . '/assets');
+    $buildings = changeSetLayer(EditorSession::open($root), 'buildings');
+
+    $rewritten = ChangeBatch::apply($root, [
+        ['method' => 'map.insertLines', 'params' => ['map' => 'broken-map', 'axis' => 'y', 'at' => 2, 'count' => 1], 'answer' => 'write'],
+    ]);
+    $edited = ChangeBatch::apply($root, [
+        sourceSetRetirement(),
+        ['method' => 'map.paint', 'params' => ['map' => 'broken-map', 'layer' => $buildings, 'cells' => [[1, 0]], 'symbol' => ' ']],
+    ]);
+
+    expect($rewritten['status'])->toBe('refused')
+        ->and($rewritten['maps'])->toBe(['broken-map'])
+        ->and(array_unique(array_column($rewritten['issues'], 'map')))->toBe(['broken-map'])
+        ->and($edited['status'])->toBe('refused')
+        ->and($edited['maps'])->toBe(['broken-map'])
+        ->and(sourceHashTree($root . '/assets'))->toBe($before);
+});
+
+it('keeps the revision of every map a file set never wrote, through its undo and redo', function () {
+    $session = EditorSession::open(sourceSetChangeSetProject());
+    $revision = static fn(string $map): int => $session->readMap($map)['revision'];
+    [$test, $broken] = [$revision('test-map'), $revision('broken-map')];
+
+    $question = $session->retireSkill(0, 'New Cut');
+    $session->retireSkill(0, 'New Cut', 'write', $question['confirm']);
+    expect([$revision('test-map'), $revision('broken-map')])->toBe([$test, $broken])
+        ->and($session->undo())->toMatchArray(['maps' => [], 'revisions' => []])
+        ->and($session->redo())->toMatchArray(['maps' => [], 'revisions' => []])
+        ->and([$revision('test-map'), $revision('broken-map')])->toBe([$test, $broken]);
+
+    // A file set that rewrites a map moves its revision on, and only its.
+    $question = $session->insertMapLines('test-map', $test, 'y', 2, 1);
+    $inserted = $session->insertMapLines('test-map', $test, 'y', 2, 1, 'write', $question['confirm']);
+    $undone = $session->undo();
+    expect($inserted['revision'])->toBeGreaterThan($test)
+        ->and($undone['maps'])->toBe(['test-map'])
+        ->and($undone['revisions']['test-map'])->toBeGreaterThan($inserted['revision'])
+        ->and($revision('broken-map'))->toBe($broken)
+        ->and(fn() => changeSetPaint($session, 'buildings', 1, 0, ' '))->not->toThrow(SessionRefusal::class)
+        ->and(fn() => $session->paint('test-map', $test, changeSetLayer($session, 'buildings'), [[2, 1]], ' '))
+            ->toThrow(SessionRefusal::class, 'changed since revision');
+});
+
+it('draws a map read afresh by a file set on a canvas of its own', function () {
+    $session = EditorSession::open(sourceSetChangeSetProject());
+    $first = $session->exchangeAuthoringCanvas('test-map', []);
+
+    $question = $session->retireSkill(0, 'New Cut');
+    $session->retireSkill(0, 'New Cut', 'write', $question['confirm']);
+    $after = $session->exchangeAuthoringCanvas('test-map', [], sessionId: $first['sessionId']);
+
+    expect($after['sessionId'])->not->toBe($first['sessionId'])
+        ->and($after['revision'])->toBe($first['revision'])
+        ->and($session->exchangeAuthoringCanvas('test-map', [], sessionId: $after['sessionId'])['sessionId'])->toBe($after['sessionId']);
+    $session->closeAuthoringCanvas('test-map');
+});

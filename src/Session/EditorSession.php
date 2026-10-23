@@ -240,12 +240,15 @@ final class EditorSession
     private readonly MasteryAuthoring $masteryAuthoring;
 
     /**
-     * Where each map's revisions count from. A map read afresh, when a file
-     * set written at once reloads the project or its undo puts the earlier
-     * one back, counts on from every revision given for it before, so one
-     * revision never names two states of a map.
+     * Where each map's revisions count from, with the last revision given
+     * and what the map held then. A map read afresh, when a file set written
+     * at once reloads the project or its undo puts the earlier one back,
+     * keeps that revision while it holds the same content, so a file set
+     * that never wrote a map leaves it unchanged; one that holds anything
+     * else counts on from it, so one revision never names two states of a
+     * map.
      *
-     * @var array<string, array{map: WeakReference<ProjectMap>, base: int, last: int}>
+     * @var array<string, array{map: WeakReference<ProjectMap>, base: int, last: int, content: string}>
      */
     private array $mapRevisions = [];
 
@@ -5282,8 +5285,9 @@ final class EditorSession
     /**
      * One exchange with a map's editing canvas: the window's answers in, what it should apply out. The canvas draws
      * the map as it stands in memory, unsaved edits included, through the Engine's frame composer, at a variant
-     * selection and preview time. One canvas lives per open map at its size; a resize starts a new one, whose new
-     * session id tells the window to start again, and answers meant for an earlier canvas are not applied to it.
+     * selection and preview time. One canvas lives per open map at its size; a resize, or the map read afresh when a
+     * file set written at once reloads the project, starts a new one, whose new session id tells the window to start
+     * again, and answers meant for an earlier canvas are not applied to it.
      *
      * @param list<string> $events The window's answers, as renderer event lines.
      * @param array<string, string> $variants
@@ -5294,7 +5298,7 @@ final class EditorSession
     {
         $map = $this->requireMap($mapId);
         $host = $this->authoringCanvases[$mapId] ?? null;
-        if ($host === null || $host->grid != \Ichiloto\Editor\Field\AuthoringCanvasHost::getGrid($map)) {
+        if ($host === null || ! $host->drawsMap($map)) {
             $host?->dispose();
             $host = $this->authoringCanvases[$mapId] = new \Ichiloto\Editor\Field\AuthoringCanvasHost($map, uniqid('canvas-', true));
         }
@@ -6511,7 +6515,8 @@ final class EditorSession
 
     /**
      * The maps a change set changed: every map whose revision moved since it
-     * began, and every map it made.
+     * began, and every map it made. A file set written at once moves only the
+     * revisions of the maps whose content it changed ({@see getMapRevision()}).
      *
      * @param array{revisions: array<string, int>} $changes
      * @return list<string>
@@ -6593,12 +6598,14 @@ final class EditorSession
         try { $command = $step(); }
         catch (MapSourceRefusal $error) { throw new SessionRefusal($error->getMessage(), previous: $error); }
         // A step that put another workspace in place (a file set written at
-        // once, or its undo) changed whatever it reloaded: everything.
+        // once, or its undo) read every category afresh. A map read afresh
+        // keeps its revision while it holds what it did, so only the maps
+        // the files changed are named.
         $reloaded = $this->workspace !== $workspace;
         $changed = $revisions = [];
         foreach ($this->getMapsById() as $mapId => $map) {
             $revision = $this->getMapRevision($map);
-            if ($reloaded || $revision !== ($before[$mapId] ?? null)) {
+            if ($revision !== ($before[$mapId] ?? null)) {
                 $changed[] = (string) $mapId;
                 $revisions[$mapId] = $revision;
             }
@@ -6820,29 +6827,29 @@ final class EditorSession
         return $this->getMapsById()[$mapId] ?? throw new SessionRefusal(sprintf('There is no map %s.', $mapId));
     }
 
-    /** @throws SessionRefusal When the map changed since the revision the caller saw. */
     /**
      * A map's revision as an interface is given it: its own state version,
-     * counted on from every revision given for an earlier reading of it.
+     * counted from the last revision given for an earlier reading of it. A
+     * reading that holds what that revision named keeps it; any other counts
+     * on from it.
      */
     private function getMapRevision(ProjectMap $map): int
     {
         $known = $this->mapRevisions[$map->mapId] ?? null;
 
         if ($known === null || $known['map']->get() !== $map) {
-            $known = [
-                'map' => WeakReference::create($map),
-                'base' => $known === null ? 0 : $known['last'] + 1 - $map->stateVersion(),
-                'last' => 0,
-            ];
+            $start = $known === null ? null : ($known['content'] === $map->contentFingerprint ? $known['last'] : $known['last'] + 1);
+            $known = ['map' => WeakReference::create($map), 'base' => $start === null ? 0 : $start - $map->stateVersion(), 'last' => 0, 'content' => ''];
         }
 
         $known['last'] = $known['base'] + $map->stateVersion();
+        $known['content'] = $map->contentFingerprint;
         $this->mapRevisions[$map->mapId] = $known;
 
         return $known['last'];
     }
 
+    /** @throws SessionRefusal When the map changed since the revision the caller saw. */
     private function requireCurrentMap(string $mapId, int $revision): ProjectMap
     {
         $map = $this->requireMap($mapId);

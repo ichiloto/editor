@@ -110,6 +110,12 @@ Inserting or removing rows, and creating or duplicating a map, write their
 files when they run; a refused batch undoes them. Inserting or removing rows
 needs no pending edits, so put it first, or in its own batch.
 
+A step that writes a set of files at once (inserting or removing rows,
+`skills.retire`, `mastery.adopt`, an actor's identity freeze) reads the
+project again from them. A map whose files the step did not change keeps its
+revision and is not one of the maps the batch changed, so errors already on
+maps the batch never touches do not refuse it.
+
 The batch alone writes. When it is valid, `changes.commit` saves everything
 it changed, databases (field resources, common events and the rest),
 cutscenes, maps and the save relocations its maps need, as one transaction.

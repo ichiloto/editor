@@ -53,6 +53,16 @@ final class AuthoringCanvasHost
         $this->signs = new AuthoringSignPlaybacks($map->getAssetRoot());
     }
 
+    /**
+     * Whether this canvas draws a map as it stands: that reading of it, at
+     * its size. A map read afresh (a file set written at once reloads the
+     * project) or resized needs a canvas of its own.
+     */
+    public function drawsMap(ProjectMap $map): bool
+    {
+        return $this->map === $map && $this->grid == self::getGrid($map);
+    }
+
     /** The grid a map's canvas draws: one renderer cell per map cell, within the renderer's limits. */
     public static function getGrid(ProjectMap $map): RendererGridConfig
     {
