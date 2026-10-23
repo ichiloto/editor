@@ -553,8 +553,10 @@ final class TreeBrush
     private function drawCanopy(array $glyphs): void
     {
         $layer = $this->findCanopyLayer()['id'] ?? throw new MapSourceRefusal('The canopy layer is missing. Nothing was changed.');
-        foreach ($this->findCanopyChanges($layer, $glyphs) as [$x, $y, $glyph, $prefix, $suffix]) {
-            $this->map->setLayerCell($layer, $x, $y, $glyph, $prefix, $suffix);
+        $changes = $this->findCanopyChanges($layer, $glyphs);
+        if ($changes !== []) {
+            $this->map->setLayerCells($layer, array_map(static fn(array $change): array => ['x' => $change[0], 'y' => $change[1],
+                'symbol' => $change[2], 'prefix' => $change[3], 'suffix' => $change[4]], $changes));
         }
     }
 

@@ -518,10 +518,32 @@ final class ProjectMap
 
     public function setLayerCell(string $layer, int $x, int $y, string $symbol, string $prefix = '', string $suffix = ''): void
     {
+        $this->setLayerCells($layer, [['x' => $x, 'y' => $y, 'symbol' => $symbol, 'prefix' => $prefix, 'suffix' => $suffix]]);
+    }
+
+    /**
+     * Sets many cells of one layer as one edit. The map's sources are checked
+     * against what it opened once for the whole edit, so a paint, a conversion
+     * or an undo of thousands of cells costs one check, as one cell does.
+     * Cells outside the layer are skipped.
+     *
+     * @param iterable<array{x: int, y: int, symbol: string, prefix?: string, suffix?: string}> $cells
+     * @throws MapSourceRefusal When the map is read-only or its sources changed on disk; nothing is set.
+     */
+    public function setLayerCells(string $layer, iterable $cells): void
+    {
         $this->assertEditable();
         $grid = $this->layers->getGrid($layer);
-        if (isset($grid->cells[$y][$x])) {
-            $grid->cells[$y][$x] = ['symbol' => self::normalizeSymbol($symbol), 'prefix' => $prefix, 'suffix' => $suffix];
+        $changed = false;
+        foreach ($cells as $cell) {
+            ['x' => $x, 'y' => $y] = $cell;
+            if (isset($grid->cells[$y][$x])) {
+                $grid->cells[$y][$x] = ['symbol' => self::normalizeSymbol($cell['symbol']), 'prefix' => $cell['prefix'] ?? '',
+                    'suffix' => $cell['suffix'] ?? ''];
+                $changed = true;
+            }
+        }
+        if ($changed) {
             $this->touchState();
         }
     }
@@ -3005,12 +3027,12 @@ final class ProjectMap
     }
 
     /**
-     * Normalizes input down to a single visible symbol.
+     * Normalizes input down to the single visible symbol a cell holds.
      *
      * @param string $symbol The raw input symbol.
      * @return string
      */
-    private static function normalizeSymbol(string $symbol): string
+    public static function normalizeSymbol(string $symbol): string
     {
         $symbols = self::toSymbols($symbol);
 
