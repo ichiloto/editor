@@ -12857,7 +12857,7 @@ final class Editor
         $category = (string) ($field['reference'] ?? '');
         $target = (string) ($field['target'] ?? '');
 
-        if ($category === '' || ! in_array($target, ['map', 'map-data', 'map-kind', 'map-encounters', 'map-bgm-variants', EventRecordPane::TARGET], true)) {
+        if ($category === '' || ! in_array($target, ['map', 'map-data', 'map-kind', MapInspector::ROLE_TARGET, 'map-encounters', 'map-bgm-variants', EventRecordPane::TARGET], true)) {
             return false;
         }
 

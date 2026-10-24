@@ -37,7 +37,8 @@ final class CanvasClipboard
             }
         }
         $tiles = $withTiles ? $map->readTileEntries($map->getTileLayersMovingWith($layerId), $x, $y, $width, $height) : [];
-        $clipboard->store($rows, $layerId, $styles, $tiles);
+        $source = array_find($map->getLayers(), static fn(array $layer): bool => $layer['id'] === $layerId);
+        $clipboard->store($rows, $layerId, $styles, $tiles, (string) ($source['name'] ?? ''));
     }
 
     /**
@@ -75,11 +76,15 @@ final class CanvasClipboard
         if ($clipboard->isEmpty()) {
             throw new MapSourceRefusal('The clipboard is empty: select part of the map and copy it first.');
         }
-        if ($clipboard->layer !== $layerId) {
-            $source = array_find($map->getLayers(), static fn(array $layer): bool => $layer['id'] === $clipboard->layer);
+        // A layer's id is its own map's; its name (terrain, buildings) is what it is on any map, so a block
+        // copied on one map pastes onto the layer of the same name on another.
+        $target = array_find($map->getLayers(), static fn(array $layer): bool => $layer['id'] === $layerId);
+        if ($clipboard->layerName !== '' ? ($target['name'] ?? null) !== $clipboard->layerName : $clipboard->layer !== $layerId) {
+            $source = $clipboard->layerName !== '' ? $clipboard->layerName
+                : array_find($map->getLayers(), static fn(array $layer): bool => $layer['id'] === $clipboard->layer)['name'] ?? null;
             throw new MapSourceRefusal($source === null
                 ? 'The clipboard holds a block from another layer; choose that layer before pasting.'
-                : sprintf('The clipboard holds a block from the %s layer; choose it before pasting.', MapLayers::formatLabel((string) $source['name'])));
+                : sprintf('The clipboard holds a block from the %s layer; choose it before pasting.', MapLayers::formatLabel((string) $source)));
         }
         $tiles = array_intersect_key($clipboard->projectTiles($x, $y, $map->getWidth(), $map->getHeight()),
             array_flip($map->getTileLayersMovingWith($layerId)));

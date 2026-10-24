@@ -35,6 +35,7 @@ final class DatabaseCatalog
             new DatabaseCategoryDefinition('animations', 'Animations', 'Create reusable keyframed effects.', true),
             new DatabaseCategoryDefinition('tilesets', 'Tilesets', 'Assign tiles and terrain behavior.', true),
             new DatabaseCategoryDefinition(\Ichiloto\Editor\Field\MapCategoryFields::CATEGORY, 'Place Categories', 'Name the kinds of place a game marks on its maps beyond inn, shop, home and organization.', true),
+            new DatabaseCategoryDefinition(\Ichiloto\Editor\Field\MapRoleFields::CATEGORY, 'Map Roles', 'Name what maps are to the world, such as overworld, outside or interior, and the roles each one\'s doors may lead to.', true),
             new DatabaseCategoryDefinition('common_events', 'Common Events', 'Author cutscene and event command lists.', true),
             new DatabaseCategoryDefinition('quests', 'Quests', 'Author quests, objectives, and rewards.', true),
             new DatabaseCategoryDefinition('income_schedules', 'Income', 'Pay the party on a schedule: salaries, stipends, rents.', true),

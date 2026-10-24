@@ -1708,6 +1708,7 @@ class ProjectValidator
   {
     $issues = [];
     $troops = $this->labelsOf($workspace, 'troops');
+    $mapsById = array_column(array_map(static fn(ProjectMap $map): array => ['id' => $map->mapId, 'map' => $map], $workspace->maps), 'map', 'id');
 
     foreach ($workspace->maps as $map) {
       if (($sourceIssue = $map->getGridSourceIssue()) !== null) {
@@ -1730,6 +1731,7 @@ class ProjectValidator
           ...$this->checkRetiredMapData($map),
           ...MapCompletenessCheck::validate($map, $this->inventoryCatalog),
           ...$this->checkDoors($map, $workspace->mapIds),
+          ...MapRoleCheck::validate($map, $mapsById),
           ...$this->checkEncounters($map, $troops),
           ...$this->checkNpcs($map, $workspace),
           ...$this->checkDuplicateKeys($map),

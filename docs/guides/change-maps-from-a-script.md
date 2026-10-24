@@ -65,7 +65,10 @@ The Editor's project checks add the rest `ichiloto validate` reports, also as
 errors: floor the player can reach with no tile, an event the player can
 never reach, an arrival on a cell they cannot stand on, a door or edge to a
 map that does not exist, a spawn point outside its map, unknown references,
-invalid scripts.
+invalid scripts, and a door, edge or scripted transport whose destination
+map's role is not one its own map's role leads to (`map.role-destination`;
+see Map Roles in the manual), or a map naming a role the project does not have
+(`map.role`).
 
 Warnings never refuse a change: tiles a piece draws whose glyph is gone, the
 missing-art placeholder, see-through ground, a map nothing reaches yet.
@@ -245,6 +248,7 @@ batches.
 | Retire a skill | `skills.retire {index, replacement?}` (asks; answer `write` with its `confirm`): every class grant, actor learned skill and learnable, attack and counter skill, enemy action and skill or state counter that names it moves onto the replacement (a list already holding the replacement drops the old entry) and saves read the old skill as the replacement; without a replacement each is removed and saves drop the skill. A replacement must be a spell for a spell and an ability for an ability, and a summon's action follows its summon. Then `database.delete` the skill, which is refused while anything still names it |
 | Move a story event onto the NPC who delivers it | `npc.adoptEvent {map, marker, npc?}`: the event becomes the NPC's first page (its conditions, writes, cue, action and run-once), its cells are cleared, a run-once event's saved completion is aliased to the page, and the result lists what was dropped and the quest waymarks to repoint at the NPC (`database.apply` on the waymark's NPC row) |
 | Map fields (name, kind, music, encounters, atlas, landmarks) | `inspector.apply` with the map row's key |
+| A map's role | `inspector.apply` with `{target: map-role, field: role}`, value a role id from the Map Roles page (`database.create {category: map_roles}`), empty removes it |
 | New map | `map.create {name, kind, width, height, id?}`; `id` is its folder, such as `town/inn/cellar` |
 | Copy or move a map | `map.duplicate {map, to?}`; `map.move {map, to}` asks first, then `{map, to, destination, confirm: true}` |
 | Landmark id | `inspector.apply` with `{target: map-landmarks, index, field: id}`; other maps' atlas parents follow the rename |

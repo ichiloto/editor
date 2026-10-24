@@ -43,6 +43,7 @@ use Ichiloto\Engine\Events\Triggers\DialogueEventTrigger;
 use Ichiloto\Engine\Events\Triggers\EventCueKind;
 use Ichiloto\Engine\Events\Triggers\ScriptEventTrigger;
 use Ichiloto\Engine\Events\Triggers\ShopEventTrigger;
+use Ichiloto\Engine\Field\MapRoleCatalog;
 use Ichiloto\Engine\Field\PlayerSpriteSet;
 use Ichiloto\Engine\Messaging\Dialogue\ConditionalDialogue;
 use Ichiloto\Engine\Messaging\Dialogue\Presentation\DialogueContext;
@@ -77,6 +78,8 @@ final readonly class MapInspector
 {
     public const string MAP_BGM_NONE = '(None)';
     public const string MAP_KIND_NONE = 'Not set';
+    /** What a map without a role shows on its Role row. */
+    public const string MAP_ROLE_NONE = 'Not set';
     public const string MAP_ARENA_NONE = '(default arena)';
     public const string ENCOUNTER_ARENA_NONE = '(map arena)';
 
@@ -166,6 +169,7 @@ final readonly class MapInspector
                 'target' => 'map',
                 'field' => 'region',
             ],
+            $this->buildMapRoleField($map),
             $this->buildMapKindField($map),
             [
                 'label' => 'Description',
@@ -365,6 +369,7 @@ final readonly class MapInspector
             MapAtlasFields::TARGET => $this->applyAtlasValue($map, $field, $value),
             MapTerrainFields::TARGET => $this->applyTerrainValue($map, $field, $value),
             MapStationField::TARGET => $this->applyStationValue($map, (string) $value),
+            self::ROLE_TARGET => $this->applyMapRole($map, trim((string) $value)),
             default => null,
         };
     }
@@ -960,6 +965,61 @@ final readonly class MapInspector
      *
      * @return array<string, mixed>
      */
+    /** The Role row's target: a map's role in the project's Map Roles, chosen, never typed. */
+    public const string ROLE_TARGET = 'map-role';
+
+    /**
+     * The map's Role row: what it is to the world (an overworld, an outside place, an interior), one of the
+     * project's map roles, whose destinations validation holds every way off the map to. Not set leaves the map
+     * unchecked; a role the project no longer has stays visible and says so.
+     *
+     * @return array<string, mixed>
+     */
+    public function buildMapRoleField(ProjectMap $map): array
+    {
+        $role = $map->getMapDataField([MapRoleCatalog::MAP_KEY]);
+        $labels = $this->references->labelsFor('map_roles');
+
+        return [
+            'label' => 'Role',
+            'value' => match (true) {
+                $role === null => self::MAP_ROLE_NONE,
+                ! is_string($role) => sprintf('%s · not a map role id', get_debug_type($role)),
+                ! isset($labels[$role]) => sprintf('%s · not in Map Roles', $role),
+                default => $labels[$role],
+            },
+            'selectedValue' => is_string($role) ? $role : '',
+            'reference' => 'map_roles',
+            'optional' => true,
+            'target' => self::ROLE_TARGET,
+            'field' => MapRoleCatalog::MAP_KEY,
+        ];
+    }
+
+    /**
+     * Makes the map one of the project's roles, or no role for an empty value, as one undo step.
+     *
+     * @throws InspectorRefusal When the role is not one the project has, or the roles cannot be read.
+     */
+    private function applyMapRole(ProjectMap $map, string $role): ?Command
+    {
+        if ($role !== '') {
+            try {
+                $known = $this->references->getMapRoleCatalog()->hasRole($role);
+            } catch (InvalidArgumentException $error) {
+                throw new InspectorRefusal('The map roles cannot be read: ' . $error->getMessage(), previous: $error);
+            }
+            if (! $known) {
+                throw new InspectorRefusal(sprintf('%s is not a map role. Choose one from the Map Roles page, or make it there first.', $role));
+            }
+        }
+        if ($map->getMapDataField([MapRoleCatalog::MAP_KEY]) === ($role === '' ? null : $role)) {
+            return null;
+        }
+
+        return $this->writeMapData($map, [MapRoleCatalog::MAP_KEY], $role === '' ? null : $role, 'Role');
+    }
+
     public function buildMapKindField(ProjectMap $map): array
     {
         $id = $map->getMapDataField(['tileset']);

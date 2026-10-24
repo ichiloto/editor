@@ -25,6 +25,11 @@ final class Clipboard
      * The layer the block was lifted from (a PaintStrokeCommand LAYER_* value).
      */
     public private(set) string $layer = '';
+    /**
+     * The source layer's name (terrain, buildings, fixtures): what the block is to any map, since a layer's id
+     * is its own map's and its tile layers follow it by name. Empty for a block stored without one.
+     */
+    public private(set) string $layerName = '';
     /** @var array<string, list<list<string>>> Tile entries by row, keyed by tile layer name. */
     private array $tiles = [];
 
@@ -35,13 +40,15 @@ final class Clipboard
      * @param string $layer The source layer.
      * @param array<int, array<int, array{prefix: string, suffix: string}>> $styles Optional tile styles, aligned with rows.
      * @param array<string, list<list<string>>> $tiles The tile entries that move with the block, by row, keyed by tile layer name.
+     * @param string $layerName The source layer's name, which a paste on another map matches.
      * @return void
      */
-    public function store(array $rows, string $layer, array $styles = [], array $tiles = []): void
+    public function store(array $rows, string $layer, array $styles = [], array $tiles = [], string $layerName = ''): void
     {
         $this->rows = array_values(array_map(static fn(array $row): array => array_values($row), $rows));
         $this->styles = array_values(array_map(static fn(array $row): array => array_values($row), $styles));
         $this->layer = $layer;
+        $this->layerName = $layerName;
         $this->tiles = $tiles;
     }
 
@@ -55,6 +62,7 @@ final class Clipboard
         $this->rows = [];
         $this->styles = [];
         $this->layer = '';
+        $this->layerName = '';
         $this->tiles = [];
     }
 

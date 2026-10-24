@@ -148,6 +148,19 @@ final readonly class ProjectCatalogs
     }
 
     /**
+     * The map roles as the Map Roles page holds them.
+     *
+     * @throws InvalidArgumentException With the Engine's reason when they are refused.
+     */
+    public function loadMapRoles(): \Ichiloto\Engine\Field\MapRoleCatalog
+    {
+        $current = $this->readCurrent(\Ichiloto\Engine\Field\MapRoleCatalog::FILE);
+
+        return $current === null ? \Ichiloto\Engine\Field\MapRoleCatalog::load($this->getAssetRoot())
+            : \Ichiloto\Engine\Field\MapRoleCatalog::fromArray($current['payload']);
+    }
+
+    /**
      * The text roles (`Data/Presentation/text.php`) as the Text Roles page
      * holds them; null when the project declares none.
      *

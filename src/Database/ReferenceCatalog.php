@@ -124,6 +124,8 @@ final class ReferenceCatalog
         'text_roles',
         'font_assets',
         'map_regions',
+        // A map's role, by stable id, from the Map Roles page.
+        'map_roles',
         'animation_roles',
         'battle_arenas',
         // The dialogue catalogue's identities, actor and non-actor, whose artwork lines show.
@@ -912,6 +914,19 @@ final class ReferenceCatalog
             return $labels;
         }
 
+        if ($category === 'map_roles') {
+            // Each role read by its name, from the catalogue as its page holds it.
+            $labels = [];
+            try {
+                $roles = $this->getMapRoleCatalog();
+                foreach ($roles->getIds() as $id) { $labels[$id] = sprintf('%s (%s)', $roles->getName($id), $id); }
+            } catch (\InvalidArgumentException) {
+                // An unreadable catalogue offers its ids as they are; validation names why.
+            }
+
+            return $labels;
+        }
+
         if ($category === 'permanent_growth') {
             $catalog = $this->workspace->catalogs->loadPermanentGrowth();
             $labels = [];
@@ -1308,6 +1323,21 @@ final class ReferenceCatalog
         }
 
         return DialogueEmotionFields::describeChoices($rule, $line, $owner, $catalogue);
+    }
+
+    /**
+     * The project's map roles as the Map Roles page holds them, unsaved edits included.
+     *
+     * @throws \InvalidArgumentException With the Engine's reason when they are refused.
+     */
+    public function getMapRoleCatalog(): \Ichiloto\Engine\Field\MapRoleCatalog
+    {
+        $database = $this->workspace->getRecordDatabase(\Ichiloto\Editor\Field\MapRoleFields::CATEGORY);
+        if (($reason = $database?->getReadOnlyReason()) !== null) {
+            throw new \InvalidArgumentException($reason);
+        }
+
+        return $this->workspace->catalogs->loadMapRoles();
     }
 
     public function getMapCategoryCatalog(): \Ichiloto\Engine\Field\MapCategoryCatalog
