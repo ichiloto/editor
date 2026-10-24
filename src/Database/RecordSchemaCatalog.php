@@ -159,6 +159,7 @@ final class RecordSchemaCatalog
             self::terms(),
             WordFormFields::getSchema(),
             \Ichiloto\Editor\Field\MapCategoryFields::getSchema(),
+            \Ichiloto\Editor\Field\MapRoleFields::getSchema(),
             DialoguePortraitFields::getSchema(),
             DialogueSpeakerFields::getSchema(),
             FieldCueFields::getSchema(),

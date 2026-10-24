@@ -477,6 +477,18 @@ final class ProjectMap
             ?? \Ichiloto\Engine\Field\MapCategoryCatalog::load($this->getAssetRoot());
     }
 
+    /**
+     * The map roles this map's role and its destinations' roles name: its workspace's, as the Map Roles page
+     * holds them, or the project's file for a map read on its own.
+     *
+     * @throws InvalidArgumentException With the Engine's reason when they are refused.
+     */
+    public function loadMapRoles(): \Ichiloto\Engine\Field\MapRoleCatalog
+    {
+        return $this->catalogs?->loadMapRoles()
+            ?? \Ichiloto\Engine\Field\MapRoleCatalog::load($this->getAssetRoot());
+    }
+
     public function getLayers(): array
     {
         return array_map(static function (array $layer): array {

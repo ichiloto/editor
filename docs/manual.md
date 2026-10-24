@@ -1050,6 +1050,16 @@ project's maps already use, so a region is spelled one way everywhere; it is
 never typed. Choosing one changes only the map data's `region`: the map stays
 in its folder under `assets/Maps`.
 
+### Map role
+
+`Role`, under `Region`, is what the map is to the world, one of the project's
+[Map Roles](#database-screen), shown by name, such as Overworld, Outside or
+Interior. Enter opens the picker; `None` removes it. It is stored as the map
+data's `role`. The role's **Leads To** decides where the map's doors and edges
+may lead, so an overworld whose role leads only to outside maps and dungeons
+cannot lead into an interior. A role the project no longer has stays visible
+as `id · not in Map Roles`, and validation names it.
+
 ### Map kind
 
 `Kind`, under `Region`, is the setting the map draws: one of the project's
@@ -1427,6 +1437,7 @@ skill's effects, a quest's rewards) listed under them.
 | Dialogue Portraits | `assets/Data/Presentation/dialogue.php` (`actors`, `resources`) | Editable - one record per speaker identity: what it speaks as (an actor, chosen, or a non-actor character with a stable id), its dialogue portrait and skit bust, and its emotions, each a name with its own portrait and bust, chosen as project images | Same, with each image shown beside its path |
 | Speaker Names | `assets/Data/Presentation/dialogue.php` (`speakers`) | Editable - one record per label lines are spoken under, and the dialogue portrait it shows | Same |
 | Place Categories | `assets/Data/map-categories.php` (`categories`) | Editable - one record per category: stable id, name and translation key, and the generic category it specializes | Same |
+| Map Roles | `assets/Data/map-roles.php` (`roles`) | Editable - one record per role: stable id, name and translation key, and the roles its maps may lead to | Same |
 | Player Field Appearance | `assets/Data/Entities/player.php` | Not shown: graphical ownership and art | Choose fixed-player, selected party leader, or absent legacy selector; fixed sheet picker with index/layer controls |
 | Field Resources | `assets/Data/Presentation/field.php` (`resources`) | Not shown: graphical resources | One record per named resource, keyed by its stable id: name, ground contact, an image or a sign board, and an optional occupancy stamp |
 | Battle Arenas | `assets/Data/Presentation/arenas.php` (`arenas`) | Not shown: graphical battle presentation | One record per arena, keyed by its stable id (set when it is created): name, background image and optional crop, and the ground its picture shows: far edge (`Ground Far Edge`, just below the horizon or walkable edge), near edge and far-edge scale, each defaulting to the battle theme's. Every troop's formation stands on the chosen arena's ground |
@@ -1474,6 +1485,18 @@ gives it one of its own. A new category starts as a kind of `inn`, the
 Engine's first generic category, for the author to change. Its id may change
 until a landmark uses it; while one does, the id stays and the category cannot
 be deleted.
+
+Map Roles name what a game's maps are to its world: an overworld, an outside
+place, an interior, a dungeon. Each record has a stable id, a name with its
+translation key, and **Leads To**, the roles a map of this role may lead to,
+chosen from the project's roles; `(any map)` leaves it unrestricted. A map
+chooses its role on its [Role](#map-role) row. Validation and the pre-save
+checks then hold every way off a map of a restricted role to those roles:
+transfer events, edge triggers and repeatable scripted transports, from events
+and NPC pages alike. A way to a map of another role is an error; a way to a map
+with no role is a warning, since it cannot be checked. A new role leads
+anywhere until the author chooses. Its id may change until a map is of it;
+while one is, the id stays and the role cannot be deleted.
 
 Field Resources are reusable whole images, such as a tree, that a map places by
 reference. A resource owns its art and its ground contact (the pivot, such as a
