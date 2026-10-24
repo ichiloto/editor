@@ -72,3 +72,22 @@ it('refuses an empty clipboard, another layer\'s block, or a selection off the m
     expect(fn() => $session->pasteSelection('test-map', $revision, $other, 0, 0))->toThrow(SessionRefusal::class, 'before pasting')
         ->and($session->readMap('test-map')['dirty'])->toBeFalse();
 });
+
+it('pastes a block copied on one map onto the layer of the same name on another, whatever its id there', function () {
+    $session = selectionSession();
+    $created = $session->createMap('Yard', 'home', 4, 2)['map'];
+    $session->createLayer($created, $session->readMap($created)['revision'], 'fixtures', false);
+    $session->createLayer($created, $session->readMap($created)['revision'], 'buildings', false);
+    $buildings = array_find($session->readMap($created)['layers'], static fn(array $layer): bool => $layer['name'] === 'buildings')['id'];
+    $fixtures = array_find($session->readMap($created)['layers'], static fn(array $layer): bool => $layer['name'] === 'fixtures')['id'];
+    // Its own map numbers the layer differently from the test map's buildings layer.
+    expect($buildings)->not->toBe('map:4');
+
+    $session->copySelection('test-map', 'map:4', 1, 0, 2, 2);
+    expect(fn() => $session->pasteSelection($created, $session->readMap($created)['revision'], $fixtures, 0, 0))
+        ->toThrow(SessionRefusal::class, 'from the Buildings layer');
+    expect($session->pasteSelection($created, $session->readMap($created)['revision'], $buildings, 2, 0))
+        ->toMatchArray(['status' => 'applied', 'changed' => 3]);
+    $rows = array_find($session->readMap($created)['layers'], static fn(array $layer): bool => $layer['id'] === $buildings)['rows'];
+    expect(array_map(static fn(array $row): string => implode('', $row), $rows))->toBe(['  / ', '  xx']);
+});
