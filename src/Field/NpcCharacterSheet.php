@@ -16,8 +16,8 @@ final class NpcCharacterSheet
     public static function validate(array $data, ?string $assetRoot = null): CharacterSheet
     {
         $sheet = CharacterSheet::fromArray($data);
-        if ($sheet->layer < PresentationLayerPolicy::WORLD || $sheet->layer >= PresentationLayerPolicy::UI) {
-            throw new RuntimeException('Automatic Game world sprites require layers 0..999; UI layers are reserved.');
+        if ($sheet->layer < PresentationLayerPolicy::WORLD || $sheet->layer >= PresentationLayerPolicy::FIELD_GUIDANCE) {
+            throw new RuntimeException('Automatic Game world sprites require layers 0..999; guidance and UI layers are reserved.');
         }
         if ($assetRoot !== null) {
             $image = PngAssetPreflight::inspect($assetRoot, $sheet->asset);
