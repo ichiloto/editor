@@ -56,6 +56,7 @@
   Tilesets authors Stacks.
 
 ### Fixed
+- `map:render` review pages carry their graphical stills inside the page, so they show when the page is opened or sent on its own; they used to reference the PNG files beside them and showed no pictures elsewhere.
 
 - A preview field's Terminal picture draws its world objects' Terminal cells,
   as the game's field does; cinematic and effect previews left them out.

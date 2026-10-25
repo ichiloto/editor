@@ -11,7 +11,9 @@ use RuntimeException;
  * Writes rendered views into a directory for review: for each view its
  * Terminal picture as `.ans` and as a page of its own, its graphical still as
  * a native-size PNG and, when asked, a scaled one, and one review page that
- * puts every view's Terminal picture and graphical still side by side.
+ * puts every view's Terminal picture and graphical still side by side. The
+ * review page carries its stills inside it, so it shows them wherever it is
+ * opened or sent on its own.
  */
 final class MapReviewWriter
 {
@@ -90,8 +92,8 @@ final class MapReviewWriter
             }
             $shown = $files['scaled-png'] ?? $files['png'] ?? null;
             $still = $shown === null ? '<p class="note">No graphical still was written.</p>'
-                : sprintf('<a href="%s"><img src="%s" alt="%s, graphical"></a>', $escape($files['png'] ?? $shown), $escape($shown),
-                    $escape($rendering->view->label));
+                : sprintf('<a href="%s"><img src="%s" alt="%s, graphical"></a>', $escape($files['png'] ?? $shown),
+                    $this->createImageSource($shown), $escape($rendering->view->label));
             $notes = $diagnostics === [] ? '' : '<ul class="notes">' . implode('', array_map(
                 static fn(string $note): string => '<li>' . $escape($note) . '</li>', $diagnostics)) . '</ul>';
             $sections .= sprintf("<section>\n<h2>%s</h2>\n<p class=\"facts\">%s <a href=\"%s\">Terminal page</a> · <a href=\"%s\">ANSI</a></p>\n%s"
@@ -110,6 +112,18 @@ final class MapReviewWriter
         $this->writeFile(self::REVIEW_PAGE, $page);
 
         return $this->directory . DIRECTORY_SEPARATOR . self::REVIEW_PAGE;
+    }
+
+    /** The still the review page shows, inside the page itself as a PNG data URI. */
+    private function createImageSource(string $name): string
+    {
+        $path = $this->directory . DIRECTORY_SEPARATOR . $name;
+        $bytes = file_get_contents($path);
+        if ($bytes === false) {
+            throw new RuntimeException(sprintf('%s cannot be read back for the review page.', $path));
+        }
+
+        return 'data:image/png;base64,' . base64_encode($bytes);
     }
 
     /** A view's stem, numbered when an earlier view of this writer took it. */
