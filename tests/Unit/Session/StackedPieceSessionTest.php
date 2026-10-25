@@ -70,6 +70,22 @@ it('lays overlapping pieces in depth order whichever is placed first, creating t
     'rocks first' => [[['rock', 2, 0], ['rock', 1, 1], ['crag', 1, 0]]],
 ]);
 
+it('lays copies at listed origins in one request as one undo step, as single placements would, and refuses one off the map', function () {
+    $session = stackedPieceSession();
+    $single = stackedPieceSession();
+    placeStackedPiece($single, 'rock', 2, 0);
+    placeStackedPiece($single, 'rock', 1, 1);
+
+    expect($session->placePieceCopies('test-map', $session->readMap('test-map')['revision'], 'rock', [[2, 0], [1, 1]]))
+        ->toMatchArray(['status' => 'applied', 'changed' => true, 'copies' => 2])
+        ->and(readStackLayers($session))->toBe(readStackLayers($single));
+    $session->undo();
+    expect(array_filter(readStackLayers($session), static fn(array $rows): bool => array_sum(array_merge(...$rows)) > 0))->toBe([]);
+
+    expect(fn() => $session->placePieceCopies('test-map', $session->readMap('test-map')['revision'], 'crag', [[0, 0], [3, 1]]))
+        ->toThrow(SessionRefusal::class, 'does not fit at (3, 1)');
+});
+
 it('lays a piece again on the same cells without doubling it, and undoes a placement as one step', function () {
     $session = stackedPieceSession();
     placeStackedPiece($session, 'crag', 0, 0);

@@ -1367,6 +1367,36 @@ final class EditorSession
         return ['status' => 'applied', 'changed' => $command !== null, 'copies' => $copies, 'cells' => $cells, 'revision' => $this->getMapRevision($map)];
     }
 
+    /**
+     * Stamps whole copies of a piece with their top-left cells at the listed
+     * origins, as one undo step: scattered copies, such as the peaks of a
+     * range, placed by a script in one request rather than one per copy.
+     * Copies follow the rules of {@see placePiece()}; a connected piece is
+     * drawn, not stamped, and is refused.
+     *
+     * @param list<array{0: int, 1: int}> $origins
+     * @return array{status: 'applied', changed: bool, copies: int, cells: int, revision: int}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, the piece is unknown or connected, or a copy falls off the map.
+     */
+    public function placePieceCopies(string $mapId, int $revision, string $pieceId, array $origins, ?string $color = null): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        if ($map->getGridSourceIssue() !== null) {
+            throw new SessionRefusal(sprintf('%s is read-only: %s', $mapId, $map->getGridSourceIssue()));
+        }
+        $piece = $this->requirePiece($map, $pieceId);
+        try {
+            $command = PiecePlacer::stampOrigins($map, $piece, array_map(static fn(array $cell): array => ['x' => $cell[0], 'y' => $cell[1]], $origins), $color);
+        } catch (MapSourceRefusal $refusal) {
+            throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+        }
+        if ($command !== null) {
+            $this->history->record($command);
+        }
+
+        return ['status' => 'applied', 'changed' => $command !== null, 'copies' => count($origins), 'cells' => 0, 'revision' => $this->getMapRevision($map)];
+    }
+
     /** @throws SessionRefusal When the map's tileset has no piece with the id. */
     private function requirePiece(ProjectMap $map, string $pieceId): TilesetPiece
     {

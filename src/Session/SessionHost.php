@@ -270,14 +270,17 @@ final class SessionHost
                 self::requireCell($params, 'to'),
                 self::readOptionalString($params, 'color'),
             ),
-            'pieces.place' => $session->placePiece(
-                self::requireString($params, 'map'),
-                self::requireInt($params, 'revision'),
-                self::requireString($params, 'piece'),
-                self::requireCell($params, 'from'),
-                self::requireCell($params, 'to'),
-                self::readOptionalString($params, 'color'),
-            ),
+            'pieces.place' => array_key_exists('origins', $params)
+                ? $session->placePieceCopies(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
+                    self::requireString($params, 'piece'), self::requireCells(['cells' => $params['origins']]), self::readOptionalString($params, 'color'))
+                : $session->placePiece(
+                    self::requireString($params, 'map'),
+                    self::requireInt($params, 'revision'),
+                    self::requireString($params, 'piece'),
+                    self::requireCell($params, 'from'),
+                    self::requireCell($params, 'to'),
+                    self::readOptionalString($params, 'color'),
+                ),
             'kinds.list' => $session->listKinds(self::requireString($params, 'map')),
             'kinds.preview' => $session->previewKind(
                 self::requireString($params, 'map'),
