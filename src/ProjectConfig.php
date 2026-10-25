@@ -9,6 +9,7 @@ use Ichiloto\Engine\Localization\Vocabulary;
 use Ichiloto\Editor\Database\InnPresentationFields;
 use Ichiloto\Engine\Audio\Enumerations\SystemSound;
 use Ichiloto\Engine\Localization\EngineMessageTerms;
+use Ichiloto\Engine\Field\PlayerDash;
 use Ichiloto\Engine\Rendering\FieldViewport;
 
 /** One source owner for config.php, shared by Terms and Configuration. */
@@ -19,13 +20,15 @@ final class ProjectConfig extends ProjectSettingsFile
     public const string INN_PRESENTATION = 'graphics.inn.presentation';
     /** The event script a save point runs, else the Engine's save point notice (SaveFeatures). */
     public const string SAVE_POINT_SCRIPT = 'save.point_script';
+    /** Always Dash's first value; the player changes it in Options and Config (PlayerDash). */
+    public const string ALWAYS_DASH = PlayerDash::CONFIG_ALWAYS_DASH;
 
     /**
      * Settings the engine reads with a default when the file leaves them
      * out, by path, with that default.
      */
     private const array ENGINE_DEFAULTS = [self::FIELD_ZOOM => FieldViewport::DEFAULT_ZOOM, self::INN_PRESENTATION => null,
-        self::SAVE_POINT_SCRIPT => null];
+        self::SAVE_POINT_SCRIPT => null, self::ALWAYS_DASH => false];
 
     /**
      * Settings that name another resource, by path, with the reference kind
@@ -105,7 +108,8 @@ final class ProjectConfig extends ProjectSettingsFile
     /**
      * Refuses a value the engine would not accept at a path, before anything
      * changes: a field zoom outside its range, a system sound volume outside
-     * its range, or an inn presentation that is not a timeline identity.
+     * its range, an inn presentation that is not a timeline identity, or an
+     * Always Dash that is not true or false.
      *
      * @throws \InvalidArgumentException
      */
@@ -121,6 +125,9 @@ final class ProjectConfig extends ProjectSettingsFile
         }
         if ($path === self::INN_PRESENTATION && $value !== null) {
             InnPresentationFields::assertValid($value, complete: $complete);
+        }
+        if ($path === self::ALWAYS_DASH && ! is_bool($value)) {
+            throw new \InvalidArgumentException('Always Dash must be true or false.');
         }
     }
 

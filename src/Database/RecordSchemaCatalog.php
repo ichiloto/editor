@@ -27,6 +27,7 @@ use Ichiloto\Editor\Database\Projections\OptimizationWeightProjection;
 use Ichiloto\Editor\EquipmentOptimizationPolicy;
 use Ichiloto\Editor\ProjectConfig;
 use Ichiloto\Editor\Field\ProjectNpc;
+use Ichiloto\Editor\Inspector\InputControl;
 use Ichiloto\Editor\Inspector\InputControlType;
 use Ichiloto\Editor\PermanentGrowthCatalog;
 use Ichiloto\Engine\Entities\States\State;
@@ -34,6 +35,7 @@ use Ichiloto\Engine\Entities\States\StateDisposition;
 use Ichiloto\Engine\Scenes\Arena\ProjectBattleTest;
 use Ichiloto\Engine\Progression\LevelUpRecovery;
 use Ichiloto\Engine\Progression\ProgressionSettings;
+use Ichiloto\Engine\Field\DashSettings;
 use Ichiloto\Engine\Animations\AnimationTargetPosition;
 use Ichiloto\Editor\Events\ProjectScriptCommands;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandDefinition;
@@ -1036,7 +1038,7 @@ final class RecordSchemaCatalog
     /**
      * System — `assets/Data/system.php`, one map the engine reads at start:
      * the title, starting gold, party, inventory and position, battle
-     * settings, and progression rules. Its elements are the Types category's. The file is the category's one record,
+     * settings, progression rules and the dash. Its elements are the Types category's. The file is the category's one record,
      * only ever edited. The starting party and inventory are lists of their
      * own; a party member is a bare actor id, as the file authors it.
      *
@@ -1079,13 +1081,18 @@ final class RecordSchemaCatalog
                     options: array_map(static fn(LevelUpRecovery $mode): string => $mode->value, LevelUpRecovery::cases()),
                     displayDefault: LevelUpRecovery::FULL->value,
                 ),
+                // The Engine's DashSettings: whether the player may dash, as RPG Maker's dash, and how much faster.
+                // A map turns it off in its own Inspector (Disable Dashing).
+                RecordField::boolean('dash.' . DashSettings::ENABLED, 'Dash', displayDefault: 'false'),
+                new RecordField('dash.' . DashSettings::SPEED_MULTIPLIER, 'Dash Speed Multiplier', InputControlType::FLOAT,
+                    removeWhenEmpty: true, displayDefault: InputControl::formatFloat(DashSettings::DEFAULT_SPEED_MULTIPLIER)),
                 // Test settings, as RPG Maker keeps its Battle Test: normal play never reads them.
                 new RecordField(ProjectBattleTest::SYSTEM_KEY, 'Battle Test', removeWhenEmpty: true, codec: RecordFieldCodec::BATTLE_TEST),
             ],
             labelKey: 'title',
             identityKey: null,
             // The keys System owns; its elements are the Types category's.
-            projection: new WholeFileProjection(['title', 'currency', 'startingPositions', 'startingParty', 'startingInventory', 'battle', 'progression', ProjectBattleTest::SYSTEM_KEY]),
+            projection: new WholeFileProjection(['title', 'currency', 'startingPositions', 'startingParty', 'startingInventory', 'battle', 'progression', DashSettings::KEY, ProjectBattleTest::SYSTEM_KEY]),
             subLists: [
                 new RecordSubList(
                     key: 'startingParty',
@@ -1713,8 +1720,8 @@ final class RecordSchemaCatalog
 
     /**
      * Configuration — the settings in the project's `config.php` that are not
-     * UI vocabulary: saving, accessibility, interface, graphics, audio and
-     * the inn. One row per setting, typed by what it holds (a switch, a
+     * UI vocabulary: saving, accessibility, interface, the field (Always
+     * Dash's first value), graphics, audio and the inn. One row per setting, typed by what it holds (a switch, a
      * number, a choice of the enum it is authored as). A setting the engine
      * reads with a default is offered even where the file leaves it out.
      * ProjectConfig owns the file and the rules a value must meet, such as
@@ -1735,7 +1742,7 @@ final class RecordSchemaCatalog
             ],
             labelKey: 'path',
             identityKey: 'path',
-            configPath: ['save', 'accessibility', 'ui', 'graphics', 'audio', 'inn'],
+            configPath: ['save', 'accessibility', 'ui', 'field', 'graphics', 'audio', 'inn'],
             subLists: $graphical ? InnPresentationFields::getBindingLists('value') : [],
             subListsFor: static fn(array $row): array => ($row['path'] ?? null) === ProjectConfig::INN_PRESENTATION
                 && ($list = InnPresentationFields::getBindingList($row['value'] ?? null, 'value')) !== null ? [$list->key] : [],
