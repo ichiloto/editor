@@ -7,8 +7,11 @@ namespace Ichiloto\Editor;
 use Ichiloto\Engine\Localization\Vocabulary;
 
 use Ichiloto\Editor\Database\InnPresentationFields;
+use Ichiloto\Engine\Audio\AudioManager;
+use Ichiloto\Engine\Audio\Enumerations\AudioBus;
 use Ichiloto\Engine\Audio\Enumerations\SystemSound;
 use Ichiloto\Engine\Localization\EngineMessageTerms;
+use Ichiloto\Engine\Field\PlayerDash;
 use Ichiloto\Engine\Rendering\FieldViewport;
 
 /** One source owner for config.php, shared by Terms and Configuration. */
@@ -19,13 +22,15 @@ final class ProjectConfig extends ProjectSettingsFile
     public const string INN_PRESENTATION = 'graphics.inn.presentation';
     /** The event script a save point runs, else the Engine's save point notice (SaveFeatures). */
     public const string SAVE_POINT_SCRIPT = 'save.point_script';
+    /** Always Dash's first value; the player changes it in Options and Config (PlayerDash). */
+    public const string ALWAYS_DASH = PlayerDash::CONFIG_ALWAYS_DASH;
 
     /**
      * Settings the engine reads with a default when the file leaves them
      * out, by path, with that default.
      */
     private const array ENGINE_DEFAULTS = [self::FIELD_ZOOM => FieldViewport::DEFAULT_ZOOM, self::INN_PRESENTATION => null,
-        self::SAVE_POINT_SCRIPT => null];
+        self::SAVE_POINT_SCRIPT => null, self::ALWAYS_DASH => false];
 
     /**
      * Settings that name another resource, by path, with the reference kind
@@ -77,6 +82,12 @@ final class ProjectConfig extends ProjectSettingsFile
     protected function listEngineSettings(): array
     {
         $settings = array_map(static fn(mixed $default): array => ['default' => $default], self::ENGINE_DEFAULTS);
+        // The volumes the game starts at: the master volume, and beneath it each bus's (Music, Sound Effects, Voice).
+        // The player changes them in Options and Config; their choices stay in player settings.
+        $settings[AudioManager::CONFIG_MASTER_VOLUME] = ['default' => AudioManager::DEFAULT_MASTER_VOLUME];
+        foreach (AudioBus::cases() as $bus) {
+            $settings[$bus->getVolumeConfigPath()] = ['default' => AudioBus::DEFAULT_VOLUME];
+        }
         // Every sound the Engine plays for itself is offered, so a game can choose one it has not set yet,
         // with its own volume beside it, so a dense sound can sit under the music.
         foreach (SystemSound::cases() as $sound) {
@@ -104,8 +115,9 @@ final class ProjectConfig extends ProjectSettingsFile
 
     /**
      * Refuses a value the engine would not accept at a path, before anything
-     * changes: a field zoom outside its range, a system sound volume outside
-     * its range, or an inn presentation that is not a timeline identity.
+     * changes: a field zoom outside its range, a master, bus or system sound
+     * volume outside its range, an inn presentation that is not a timeline
+     * identity, or an Always Dash that is not true or false.
      *
      * @throws \InvalidArgumentException
      */
@@ -115,23 +127,24 @@ final class ProjectConfig extends ProjectSettingsFile
             || ! is_finite((float) $value) || $value < FieldViewport::MIN_ZOOM || $value > FieldViewport::MAX_ZOOM)) {
             throw new \InvalidArgumentException(sprintf('Field zoom must be a finite number from %g to %g.', FieldViewport::MIN_ZOOM, FieldViewport::MAX_ZOOM));
         }
-        if (self::isSoundVolume($path) && (! is_int($value) || $value < SystemSound::MIN_VOLUME || $value > SystemSound::MAX_VOLUME)) {
-            throw new \InvalidArgumentException(sprintf('A sound volume must be a whole number from %d to %d.',
-                SystemSound::MIN_VOLUME, SystemSound::MAX_VOLUME));
+        if (self::isVolume($path) && (! is_int($value) || $value < AudioManager::MIN_VOLUME || $value > AudioManager::MAX_VOLUME)) {
+            throw new \InvalidArgumentException(sprintf('A volume must be a whole number from %d to %d.',
+                AudioManager::MIN_VOLUME, AudioManager::MAX_VOLUME));
         }
         if ($path === self::INN_PRESENTATION && $value !== null) {
             InnPresentationFields::assertValid($value, complete: $complete);
         }
+        if ($path === self::ALWAYS_DASH && ! is_bool($value)) {
+            throw new \InvalidArgumentException('Always Dash must be true or false.');
+        }
     }
 
-    /** Whether a path holds one of the Engine's system sound volumes. */
-    private static function isSoundVolume(string $path): bool
+    /** Whether a path holds a volume the Engine reads: the master volume, a bus's or a system sound's own. */
+    private static function isVolume(string $path): bool
     {
-        foreach (SystemSound::cases() as $sound) {
-            if ($path === $sound->getVolumeConfigPath()) { return true; }
-        }
-
-        return false;
+        return $path === AudioManager::CONFIG_MASTER_VOLUME
+            || array_any(AudioBus::cases(), static fn(AudioBus $bus): bool => $path === $bus->getVolumeConfigPath())
+            || array_any(SystemSound::cases(), static fn(SystemSound $sound): bool => $path === $sound->getVolumeConfigPath());
     }
 
     /** The inn's rest presentation is one setting, a whole timeline binding. */

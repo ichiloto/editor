@@ -42,6 +42,9 @@ enum RecordFieldCodec: string
     /** Optional physical stamping rows, encoded as JSON integers or null and stored as final CollisionType cases or null. */
     case PHYSICAL_FOOTPRINT = 'physical_footprint';
 
+    /** A stamped piece's painted doors, shown and typed as `2,4; 4,4 front` ({@see \Ichiloto\Editor\Maps\PieceDoorwayCodec}). */
+    case PIECE_DOORWAY = 'piece_doorway';
+
     /** An element => multiplier map, edited a row at a time. */
     case AFFINITIES = 'affinities';
 

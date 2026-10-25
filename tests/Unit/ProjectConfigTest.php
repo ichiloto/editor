@@ -277,3 +277,45 @@ it('offers each engine sound\'s own volume beside its track and refuses one outs
 
     expect((require $root . '/config.php')['audio'])->toBe(['sounds' => ['counter' => 'tick-loop'], 'sound_volumes' => ['counter' => 35]]);
 });
+
+it('offers Always Dash\'s first value as a switch the Engine reads, writing nothing until it changes', function () {
+    $root = createZoomProject();
+    $original = file_get_contents($root . '/config.php');
+    $workspace = ProjectWorkspace::fromProject($root);
+    expect($workspace->config->getRecord(ProjectConfig::ALWAYS_DASH)->toArray()['default'])->toBeFalse();
+    setConfiguration($workspace, ProjectConfig::ALWAYS_DASH, 'false');
+    expect($workspace->hasUnsavedChanges())->toBeFalse();
+    setConfiguration($workspace, ProjectConfig::ALWAYS_DASH, 'true');
+    $workspace->config->save();
+    expect((require $root . '/config.php')['field']['always_dash'])->toBeTrue()
+        ->and(file_get_contents($root . '/config.php'))->toContain("strtoupper('keep')");
+    expect(fn() => $workspace->config->assertAcceptableValue(ProjectConfig::ALWAYS_DASH, 'often'))->toThrow(InvalidArgumentException::class);
+    setConfiguration($workspace, ProjectConfig::ALWAYS_DASH, 'false');
+    $workspace->config->save();
+    expect((require $root . '/config.php')['field']['always_dash'] ?? false)->toBeFalse()
+        ->and($original)->not->toContain('always_dash');
+});
+
+it('offers the master volume and each bus volume a game starts at, writing nothing until one changes', function () {
+    $root = createZoomProject("  'audio' => ['master_volume' => 75],\n");
+    $original = file_get_contents($root . '/config.php');
+    $workspace = ProjectWorkspace::fromProject($root);
+    $labels = $workspace->getRecordDatabase('configuration')->getEntryLabels();
+
+    expect($labels)->toContain('audio.master_volume', 'audio.music_volume', 'audio.sfx_volume', 'audio.voice_volume')
+        ->and($workspace->config->getRecord('audio.music_volume')->toArray()['default'])->toBe(100)
+        ->and($workspace->config->getRecord('audio.master_volume')->get('value'))->toBe(75);
+
+    setConfiguration($workspace, 'audio.sfx_volume', '100');
+    expect($workspace->hasUnsavedChanges())->toBeFalse();
+    foreach (['audio.music_volume' => '101', 'audio.voice_volume' => '-1', 'audio.master_volume' => '120'] as $path => $outside) {
+        expect(fn() => setConfiguration($workspace, $path, $outside))->toThrow(InvalidArgumentException::class);
+    }
+    expect($workspace->config->isDirty())->toBeFalse()->and(file_get_contents($root . '/config.php'))->toBe($original);
+
+    setConfiguration($workspace, 'audio.music_volume', '80');
+    setConfiguration($workspace, 'audio.master_volume', '60');
+    $workspace->config->save();
+
+    expect((require $root . '/config.php')['audio'])->toBe(['master_volume' => 60, 'music_volume' => 80]);
+});

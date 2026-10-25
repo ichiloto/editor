@@ -28,6 +28,7 @@ use Ichiloto\Engine\Field\MapLayerSource;
 use Ichiloto\Engine\Field\MapLayerSet;
 use Ichiloto\Engine\Rendering\Presentation\PresentationLayerPolicy;
 use Ichiloto\Engine\Field\MapCollisionResolver;
+use Ichiloto\Engine\Field\MapEncounterTerrain;
 use Ichiloto\Engine\Field\MapPhysicalOccupancy;
 use Ichiloto\Engine\Field\MapTerrainKinds;
 use Ichiloto\Engine\Events\Enumerations\CollisionType;
@@ -1062,6 +1063,25 @@ final class ProjectMap
         $dictionary = $this->hasMapDataField([MapPhysicalOccupancy::DATA_KEY]) ? [] : $this->loadCollisionDictionary();
 
         return MapCollisionResolver::resolveMap($this->layers->getLayerSet(), $this->editableData, $dictionary, $this->loadTerrainKinds());
+    }
+
+    /**
+     * Each cell's encounter terrain as the Engine resolves it at map load
+     * (MapManager::prepareMap()): the terrain kinds' glyph walk, read with the
+     * dictionary the map's glyphs are read with, none under declared
+     * occupancy. Null for a map not painted in terrain kinds.
+     *
+     * @throws InvalidArgumentException When the map opts into kinds and they cannot be read.
+     */
+    public function resolveEncounterTerrain(): ?MapEncounterTerrain
+    {
+        $kinds = $this->loadTerrainKinds();
+        if ($kinds === null) {
+            return null;
+        }
+        $dictionary = $this->hasMapDataField([MapPhysicalOccupancy::DATA_KEY]) ? [] : $kinds->composeDictionary($this->loadCollisionDictionary());
+
+        return $kinds->resolveEncounterTerrain($this->layers->getLayerSet(), $dictionary);
     }
 
     /**

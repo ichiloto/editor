@@ -4,6 +4,23 @@
 
 ### Added
 
+- Configuration offers the volumes a game starts at: `audio.master_volume`
+  and, beneath it, `audio.music_volume`, `audio.sfx_volume` and
+  `audio.voice_volume`, each listed with its Engine default even where
+  `config.php` leaves it out and refused outside 0 to 100. Players set their
+  own in the game's Options and Config.
+- Dash authoring, as RPG Maker's: Database > System edits the Engine's
+  `system.dash` (Dash, Dash Speed Multiplier, greater than 1 and at most 4).
+  The map Inspector's Disable Dashing switch writes the map's `disableDashing`
+  and removes it again, in the Terminal editor and the GUI session alike.
+  Configuration offers Always Dash's first value (`field.always_dash`) under a
+  new `field` root. Validation reports a dash or a map value the Engine would
+  not read. The GUI session's walk measurement shows dashing seconds at the
+  authored speed, unsaved edits included, and says why when the player cannot
+  dash on the map.
+- A tileset piece's **Painted Doors** record row (GUI Database), typed as
+  `2,4; 4,4 front`, and each piece's doors in the pieces list. Glyph-footprint
+  and physical-recipe authoring keep a piece's doors.
 - Database > Tilesets, Terrain Kinds: `Joins` names a corner-edged kind's join
   group. Kinds on one tile layer naming the same group share one edge, so a
   river runs into a lake or the sea with no bank between them; validation's

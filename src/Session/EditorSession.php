@@ -28,6 +28,7 @@ use Ichiloto\Engine\Events\MapEventDefinition;
 use Ichiloto\Engine\Entities\Enemies\EnemyHabitat;
 use Ichiloto\Engine\Rendering\Tilesets\TileAppearance;
 use Ichiloto\Engine\Rendering\Tilesets\TileId;
+use Ichiloto\Engine\Field\DashSettings;
 use Ichiloto\Engine\Field\MapPhysicalOccupancy;
 use Ichiloto\Engine\Rendering\Tilesets\TerrainKind;
 use Ichiloto\Engine\Rendering\Tilesets\TilesetPiece;
@@ -163,6 +164,11 @@ use Ichiloto\Engine\Cutscenes\Summons\SummonCutsceneDefinition;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasImage;
 use Closure;
 use InvalidArgumentException;
+use Ichiloto\Editor\Field\MapWalkMeasurement;
+use Ichiloto\Editor\ProjectConfig;
+use Ichiloto\Engine\Battle\UI\BattleScreen;
+use Ichiloto\Engine\Rendering\FieldViewport;
+use Ichiloto\Engine\Rendering\Runtime\RendererRuntimeConfig;
 use Ichiloto\Engine\IO\SaveCompatibility\ContentReferenceCategory;
 use RuntimeException;
 use Throwable;
@@ -890,8 +896,8 @@ final class EditorSession
         }
         try {
             $declaration = $value === null ? null : \Ichiloto\Editor\Maps\PhysicalFootprintCodec::decodeRows($value);
-            // Graphical rows and effect admission do not own logical footprint geometry.
-            unset($piece['tiles'], $piece['effect'], $piece['occupancy']);
+            // Graphical rows, and the effect and doors found by them, do not own logical footprint geometry.
+            unset($piece['tiles'], $piece['effect'], $piece['occupancy'], $piece['doorway']);
             if ($declaration !== null) { $piece['occupancy'] = $declaration; }
             TilesetPiece::fromArray($pieceId, $piece, 'Tileset occupancy authoring');
         } catch (InvalidArgumentException $error) {
@@ -1009,6 +1015,66 @@ final class EditorSession
             'available' => $cells !== null,
             'cells' => array_map(static fn(array $cell): array => [$cell['x'], $cell['y'], $cell['rule']], $cells ?? []),
         ];
+    }
+
+    /**
+     * Measures a walk on a map, unsaved edits included ({@see MapWalkMeasurement}):
+     * the shortest walk from the first point through each waypoint to the last,
+     * its steps, walking and dashing seconds, the GPUI field screens it crosses
+     * and the encounters expected on the way. Read-only: nothing changes.
+     *
+     * Screens are counted in the field a GPUI session shows at the game's
+     * default graphical screen, the battle footprint in GPUI text cells
+     * ({@see \Ichiloto\Engine\Core\Game::resolveScreenSize()}), at the
+     * project's field zoom, as GameScene builds its field view.
+     *
+     * @param list<array{0: int, 1: int}> $points
+     * @return array<string, mixed>
+     * @throws SessionRefusal When the map is unknown or cannot be read as the game reads it.
+     */
+    public function measureWalk(string $mapId, array $points): array
+    {
+        $map = $this->requireMap($mapId);
+        $zoom = $this->workspace->config?->getRecord(ProjectConfig::FIELD_ZOOM)->get('value');
+        // The field falls back to its default zoom for a value it cannot use, and warns there.
+        $zoom = (is_int($zoom) || is_float($zoom)) && is_finite((float) $zoom)
+            && $zoom >= FieldViewport::MIN_ZOOM && $zoom <= FieldViewport::MAX_ZOOM ? (float) $zoom : FieldViewport::DEFAULT_ZOOM;
+        $view = new FieldViewport(new RendererGridConfig(BattleScreen::WIDTH, BattleScreen::HEIGHT,
+            RendererRuntimeConfig::GPUI_CELL_WIDTH, RendererRuntimeConfig::GPUI_CELL_HEIGHT), $zoom);
+        [$dashSpeed, $dashUnavailable] = $this->readDashSpeed($map);
+        try {
+            $measurement = new MapWalkMeasurement($map, $view, dashSpeedMultiplier: $dashSpeed, dashUnavailable: $dashUnavailable)
+                ->measure($points);
+        } catch (InvalidArgumentException|MapSourceRefusal $refusal) {
+            throw new SessionRefusal(sprintf('%s cannot be measured: %s', $mapId, $refusal->getMessage()), previous: $refusal);
+        }
+
+        return ['map' => $map->mapId, 'revision' => $this->getMapRevision($map), ...$measurement];
+    }
+
+    /**
+     * How many times faster than walking the player dashes on a map, by the Engine's own reading of the game's
+     * System dash and the map's Disable Dashing, unsaved edits included; or null and why the player cannot dash there.
+     *
+     * @return array{0: ?float, 1: ?string}
+     */
+    private function readDashSpeed(ProjectMap $map): array
+    {
+        $system = $this->workspace->getRecordDatabase('system')?->getRecordByIndex(0)?->toArray() ?? [];
+        try {
+            $dash = DashSettings::fromSystemData($system);
+            if (! $dash->enabled) {
+                // The measurement's own wording for a game without a dash.
+                return [null, null];
+            }
+            if (DashSettings::readMapDisablesDashing($map->getEditableData())) {
+                return [null, 'This map turns dashing off, so only walking time is shown.'];
+            }
+        } catch (InvalidArgumentException $invalid) {
+            return [null, sprintf('The game cannot read its dash (%s), so only walking time is shown.', $invalid->getMessage())];
+        }
+
+        return [$dash->speedMultiplier, null];
     }
 
     /**
@@ -1182,7 +1248,8 @@ final class EditorSession
      * The pieces of the map's tileset an author places ({@see PiecePlacer}),
      * in authored order: each with the gameplay layer its glyphs go on and
      * whether the map has it, whether it is drawn as connected cells rather
-     * than stamped whole, its size, and a picture of what it draws. A map
+     * than stamped whole, its size, a picture of what it draws, its physical
+     * recipe and the doors its art paints. A map
      * whose tileset offers none says why in `issue`.
      *
      * @return array{map: string, pieces: list<array<string, mixed>>, issue: ?string}
@@ -1218,6 +1285,8 @@ final class EditorSession
                 'tileLayers' => $tileset?->getPieceTileLayers($piece) ?? [],
                 'picture' => PiecePlacer::buildPicture($piece),
                 'occupancy' => PhysicalOccupancyEditor::exportRecipe($piece),
+                // Where its art paints doors, from its top-left cell; each map's entrances must meet them.
+                'doorway' => \Ichiloto\Engine\Field\Doorway::exportCells($piece->doorway),
             ];
         }
 
