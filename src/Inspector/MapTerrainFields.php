@@ -52,8 +52,8 @@ final class MapTerrainFields
                 'editable' => true, 'choices' => $roles, 'options' => array_column($roles, 'value'),
                 'target' => self::TARGET, 'field' => 'default', 'path' => [$layer->name]];
             $counts = [];
-            foreach ($layer->glyphs as $row) {
-                foreach ($row as $glyph) { $counts[$glyph] = ($counts[$glyph] ?? 0) + 1; }
+            for ($y = 0; $y < $layer->height; $y++) {
+                foreach ($layer->getRowGlyphs($y) as $glyph) { $counts[$glyph] = ($counts[$glyph] ?? 0) + 1; }
             }
             // A glyph classified here that the layer no longer holds stays listed, so it can be cleared.
             foreach (array_keys($symbols) as $glyph) { $counts[(string) $glyph] ??= 0; }

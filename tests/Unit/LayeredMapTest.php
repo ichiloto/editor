@@ -89,7 +89,7 @@ it('preserves ragged per-row dimensions when creating and round-tripping layers'
     $map->save();
     $loaded = loadLayeredMap($root);
     foreach ($loaded->getLayerSet()->layers as $layer) {
-        expect(array_map(count(...), $layer->grid))->toBe([4, 2]);
+        expect(array_map($layer->getRowLength(...), range(0, $layer->height - 1)))->toBe([4, 2]);
     }
     expect($loaded->getLayerSymbol($id, 1, 1))->toBe('i');
 });

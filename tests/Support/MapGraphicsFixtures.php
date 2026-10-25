@@ -82,5 +82,5 @@ function mapGraphicsProject(bool $ragged = false): string
  */
 function readTileRows(string $path): array
 {
-    return new Ichiloto\Engine\Field\MapTileLayer('layer', 0, $path, MapGridSource::readFile($path))->tiles;
+    return new Ichiloto\Engine\Field\MapTileLayer('layer', 0, $path, MapGridSource::readFile($path))->readTiles();
 }
