@@ -298,7 +298,7 @@ batches.
 | Draw the tiles a layer's glyphs need | `layer.drawTiles {map, layer}` |
 | Paint or stamp tiles | `tiles.paint`, `tiles.stamp` |
 | Stamp a tileset piece | `pieces.place {map, piece, from, to, color?}` |
-| Paint a terrain kind | `kinds.paint {map, kind, from, to}` on a map painted in kinds; its glyph, its tiles and, under declared occupancy, its collision |
+| Paint a terrain kind | `kinds.paint {map, kind, from, to}` on a map painted in kinds; its glyph, its tiles and, under declared occupancy, its collision. `{map, kind, cells}` paints listed `[x, y]` cells instead, for terrain no rectangle fits |
 | Convert a map to terrain kinds | `kinds.convert {map, mapping}`, such as `{";": "grassland", "~": "water"}`; or `ichiloto map:convert-kinds` |
 | Layers | `layer.create`, `layer.rename`, `layer.remove`, `layer.reorder`, `layer.decoration`; tile layers `tileLayer.*` |
 | Collision | `map.paintOccupancy`, `occupancy.stampPiece` |

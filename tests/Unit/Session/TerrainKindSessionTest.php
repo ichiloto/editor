@@ -182,6 +182,22 @@ describe('painting', function () {
             ->and(terrainKindTiles($session))->not->toHaveKey('canopy');
     });
 
+    it('paints a kind on listed cells in one undo step, as an area paint would, and refuses a cell off the map', function () {
+        $session = EditorSession::open(terrainKindProject());
+        convertTerrainKindMap($session);
+        $paint = static fn(array $cells): array => $session->paintKindCells('test-map', $session->readMap('test-map')['revision'], 'grove', $cells);
+
+        expect($paint([[0, 0], [3, 1], [0, 0]]))->toMatchArray(['changed' => true, 'cells' => 2])
+            ->and(terrainKindRows($session))->toBe(['♣...', '...♣'])
+            ->and(terrainKindTiles($session)['canopy'])->toBe([[2912, 0, 0, 0], [0, 0, 0, 2912]]);
+
+        $session->undo();
+        expect(terrainKindRows($session))->toBe(['....', '....']);
+
+        expect(fn() => $paint([[1, 0], [4, 0]]))->toThrow(SessionRefusal::class, 'x 4, y 0 is off test-map')
+            ->and(terrainKindRows($session))->toBe(['....', '....']);
+    });
+
     it('takes passage from the kind, and on declared occupancy writes it where the kind is the top layer', function () {
         $session = EditorSession::open(terrainKindProject());
         convertTerrainKindMap($session);

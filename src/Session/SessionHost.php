@@ -285,13 +285,16 @@ final class SessionHost
                 self::requireCell($params, 'from'),
                 self::requireCell($params, 'to'),
             ),
-            'kinds.paint' => $session->paintKind(
-                self::requireString($params, 'map'),
-                self::requireInt($params, 'revision'),
-                self::requireString($params, 'kind'),
-                self::requireCell($params, 'from'),
-                self::requireCell($params, 'to'),
-            ),
+            'kinds.paint' => array_key_exists('cells', $params)
+                ? $session->paintKindCells(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
+                    self::requireString($params, 'kind'), self::requireCells($params))
+                : $session->paintKind(
+                    self::requireString($params, 'map'),
+                    self::requireInt($params, 'revision'),
+                    self::requireString($params, 'kind'),
+                    self::requireCell($params, 'from'),
+                    self::requireCell($params, 'to'),
+                ),
             'kinds.at' => $session->readKindAt(self::requireString($params, 'map'), self::requireInt($params, 'x'), self::requireInt($params, 'y')),
             'kinds.previewConversion' => $session->previewKindConversion(self::requireString($params, 'map'),
                 ($params['mapping'] ?? []) === [] ? [] : self::requireKindMapping($params)),

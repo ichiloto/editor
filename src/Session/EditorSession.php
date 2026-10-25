@@ -1490,6 +1490,40 @@ final class EditorSession
     }
 
     /**
+     * Paints a kind on the listed cells as one undo step, as {@see paintKind()} paints an area: for terrain
+     * that follows no rectangle, such as a coast or a range, painted by a script in one request per kind.
+     *
+     * @param list<array{0: int, 1: int}> $cells
+     * @return array{status: 'applied', changed: bool, cells: int, revision: int}
+     * @throws SessionRefusal When the map is unknown, stale or read-only, the kind is unknown, a cell is off the map, or the paint is refused.
+     */
+    public function paintKindCells(string $mapId, int $revision, string $kindId, array $cells): array
+    {
+        $map = $this->requireCurrentMap($mapId, $revision);
+        if ($map->getGridSourceIssue() !== null) {
+            throw new SessionRefusal(sprintf('%s is read-only: %s', $mapId, $map->getGridSourceIssue()));
+        }
+        $kind = $this->requireKind($map, $kindId);
+        $unique = [];
+        foreach ($cells as [$x, $y]) {
+            if ($x < 0 || $y < 0 || $x >= $map->getWidth() || $y >= $map->getHeight()) {
+                throw new SessionRefusal(sprintf('x %d, y %d is off %s, which is %d by %d cells.', $x, $y, $mapId, $map->getWidth(), $map->getHeight()));
+            }
+            $unique["{$x},{$y}"] = ['x' => $x, 'y' => $y];
+        }
+        try {
+            $command = TerrainKindPainter::paintCells($map, $kind, array_values($unique), 'Paint ' . $kind->name);
+        } catch (MapSourceRefusal $refusal) {
+            throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+        }
+        if ($command !== null) {
+            $this->history->record($command);
+        }
+
+        return ['status' => 'applied', 'changed' => $command !== null, 'cells' => count($unique), 'revision' => $this->getMapRevision($map)];
+    }
+
+    /**
      * The kind a cell shows in both presentations, for picking it up: on the
      * topmost gameplay layer that shows one there; null when none does.
      *
