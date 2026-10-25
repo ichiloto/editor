@@ -4,6 +4,11 @@
 
 ### Added
 
+- Configuration offers the volumes a game starts at: `audio.master_volume`
+  and, beneath it, `audio.music_volume`, `audio.sfx_volume` and
+  `audio.voice_volume`, each listed with its Engine default even where
+  `config.php` leaves it out and refused outside 0 to 100. Players set their
+  own in the game's Options and Config.
 - Dash authoring, as RPG Maker's: Database > System edits the Engine's
   `system.dash` (Dash, Dash Speed Multiplier, greater than 1 and at most 4).
   The map Inspector's Disable Dashing switch writes the map's `disableDashing`

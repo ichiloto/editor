@@ -7,6 +7,8 @@ namespace Ichiloto\Editor;
 use Ichiloto\Engine\Localization\Vocabulary;
 
 use Ichiloto\Editor\Database\InnPresentationFields;
+use Ichiloto\Engine\Audio\AudioManager;
+use Ichiloto\Engine\Audio\Enumerations\AudioBus;
 use Ichiloto\Engine\Audio\Enumerations\SystemSound;
 use Ichiloto\Engine\Localization\EngineMessageTerms;
 use Ichiloto\Engine\Field\PlayerDash;
@@ -80,6 +82,12 @@ final class ProjectConfig extends ProjectSettingsFile
     protected function listEngineSettings(): array
     {
         $settings = array_map(static fn(mixed $default): array => ['default' => $default], self::ENGINE_DEFAULTS);
+        // The volumes the game starts at: the master volume, and beneath it each bus's (Music, Sound Effects, Voice).
+        // The player changes them in Options and Config; their choices stay in player settings.
+        $settings[AudioManager::CONFIG_MASTER_VOLUME] = ['default' => AudioManager::DEFAULT_MASTER_VOLUME];
+        foreach (AudioBus::cases() as $bus) {
+            $settings[$bus->getVolumeConfigPath()] = ['default' => AudioBus::DEFAULT_VOLUME];
+        }
         // Every sound the Engine plays for itself is offered, so a game can choose one it has not set yet,
         // with its own volume beside it, so a dense sound can sit under the music.
         foreach (SystemSound::cases() as $sound) {
@@ -107,9 +115,9 @@ final class ProjectConfig extends ProjectSettingsFile
 
     /**
      * Refuses a value the engine would not accept at a path, before anything
-     * changes: a field zoom outside its range, a system sound volume outside
-     * its range, an inn presentation that is not a timeline identity, or an
-     * Always Dash that is not true or false.
+     * changes: a field zoom outside its range, a master, bus or system sound
+     * volume outside its range, an inn presentation that is not a timeline
+     * identity, or an Always Dash that is not true or false.
      *
      * @throws \InvalidArgumentException
      */
@@ -119,9 +127,9 @@ final class ProjectConfig extends ProjectSettingsFile
             || ! is_finite((float) $value) || $value < FieldViewport::MIN_ZOOM || $value > FieldViewport::MAX_ZOOM)) {
             throw new \InvalidArgumentException(sprintf('Field zoom must be a finite number from %g to %g.', FieldViewport::MIN_ZOOM, FieldViewport::MAX_ZOOM));
         }
-        if (self::isSoundVolume($path) && (! is_int($value) || $value < SystemSound::MIN_VOLUME || $value > SystemSound::MAX_VOLUME)) {
-            throw new \InvalidArgumentException(sprintf('A sound volume must be a whole number from %d to %d.',
-                SystemSound::MIN_VOLUME, SystemSound::MAX_VOLUME));
+        if (self::isVolume($path) && (! is_int($value) || $value < AudioManager::MIN_VOLUME || $value > AudioManager::MAX_VOLUME)) {
+            throw new \InvalidArgumentException(sprintf('A volume must be a whole number from %d to %d.',
+                AudioManager::MIN_VOLUME, AudioManager::MAX_VOLUME));
         }
         if ($path === self::INN_PRESENTATION && $value !== null) {
             InnPresentationFields::assertValid($value, complete: $complete);
@@ -131,14 +139,12 @@ final class ProjectConfig extends ProjectSettingsFile
         }
     }
 
-    /** Whether a path holds one of the Engine's system sound volumes. */
-    private static function isSoundVolume(string $path): bool
+    /** Whether a path holds a volume the Engine reads: the master volume, a bus's or a system sound's own. */
+    private static function isVolume(string $path): bool
     {
-        foreach (SystemSound::cases() as $sound) {
-            if ($path === $sound->getVolumeConfigPath()) { return true; }
-        }
-
-        return false;
+        return $path === AudioManager::CONFIG_MASTER_VOLUME
+            || array_any(AudioBus::cases(), static fn(AudioBus $bus): bool => $path === $bus->getVolumeConfigPath())
+            || array_any(SystemSound::cases(), static fn(SystemSound $sound): bool => $path === $sound->getVolumeConfigPath());
     }
 
     /** The inn's rest presentation is one setting, a whole timeline binding. */
