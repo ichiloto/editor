@@ -94,9 +94,20 @@ it('refuses a retirement whose landings cannot be stood on, writing nothing', fu
     'grass' => ['field', [5, 2], null, 'x 5, y 2 (it is not plain floor (encounter))'],
     'off the map' => ['field', [9, 9], null, 'x 9, y 9 (it is off the map)'],
     'an unknown destination' => ['nowhere', [1, 1], null, 'There is no map nowhere for the saves on old-road to move into.'],
-    'the retired map itself' => ['old-road', [1, 1], null, 'retires "old-road" into itself'],
     'a malformed landing' => ['field', [1, 4], [['x' => 0, 'y' => 0, 'width' => 0, 'height' => 1, 'to' => [5, 4]]], 'landings[0] width must be a positive integer'],
 ]);
+
+it('retires a redrawn map into itself, its landings judged on the layout the session holds', function () {
+    $root = retirementProject();
+    $session = EditorSession::open($root);
+
+    expect(fn() => $session->retireMap('field', 'field', [2, 2]))->toThrow(SessionRefusal::class, 'x 2, y 2 (it is solid)');
+
+    $retired = $session->retireMap('field', 'field', [1, 4], [['x' => 0, 'y' => 0, 'width' => 4, 'height' => 2, 'to' => [5, 4]]]);
+
+    expect($retired)->toMatchArray(['map' => 'field', 'into' => 'field'])
+        ->and(readRetirementManifest($root)['migrations'][0]['mapRetirements'][0])->toMatchArray(['map' => 'field', 'into' => 'field', 'to' => [1, 4]]);
+});
 
 it('judges landings on the destination as the session holds it, unsaved edits included', function () {
     $root = retirementProject();

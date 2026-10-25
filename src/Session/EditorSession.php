@@ -6486,7 +6486,8 @@ final class EditorSession
      * stand on in `$into` as the session holds it, unsaved edits included
      * ({@see SaveLandingCells}): plain floor the player can reach, with no
      * event or NPC on it. `$map` may still exist; delete it afterwards with
-     * `map.delete`. The retirement adds no map alias: a one-shot event that
+     * `map.delete`. A map redrawn under its own ID retires into itself: the
+     * landings are then judged on its new layout. The retirement adds no map alias: a one-shot event that
      * moved follows it through {@see addSaveAlias()}.
      *
      * One undo step. Inside a change set it is undone with the change set,
@@ -6496,7 +6497,7 @@ final class EditorSession
      * @param array{int, int} $to Where saves no landing holds land on `$into`.
      * @param list<array<string, mixed>>|null $landings Rectangles of `$map` (`x`, `y`, `width`, `height`) and each one's `to`.
      * @return array{from: int, to: int, contentVersion: int, map: string, into: string}
-     * @throws SessionRefusal When the entry is malformed, `$into` is not a map or is `$map`, a landing cannot be
+     * @throws SessionRefusal When the entry is malformed, `$into` is not a map, a landing cannot be
      *     stood on, or the manifest cannot be read or take the step; nothing is written.
      */
     public function retireMap(string $map, string $into, array $to, ?array $landings = null): array

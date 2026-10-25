@@ -254,7 +254,12 @@ Every landing must be a cell a save can stand on in `into` as the session
 holds it, unsaved edits included: plain floor the player can reach, not
 grass, an exit or a save point, with no event or NPC on it. The request is
 refused with nothing written when a landing is not, naming each cell and why,
-and when `into` is not a map, `into` is `map`, or the entry is malformed.
+and when `into` is not a map or the entry is malformed.
+
+A map redrawn under its own ID retires into itself: `map` and `into` are the
+same, the rectangles are in its old layout's coordinates and the landings are
+judged on the new layout the session holds. Every save made on the old layout
+moves.
 `map` may still exist: retire it first, then delete it with `map.delete`
 outside the batch. A save that visited `map` has visited `into` too. The
 retirement adds no map alias, since an alias would make the two maps one and
