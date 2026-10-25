@@ -165,7 +165,10 @@ it('writes each view\'s pictures and a review page that sets every view\'s Termi
     $page = (string) file_get_contents($writer->writeReviewPage('Review'));
 
     expect($page)->toContain('The whole map')->toContain('Its west half')
-        ->toContain('src="test-map@0.5x.png"')->toContain('src="test-map@0,0,2,2@0.5x.png"')
+        // The page carries its stills, so it shows them when opened or sent on its own.
+        ->toContain('src="data:image/png;base64,' . base64_encode((string) file_get_contents($out . '/test-map@0.5x.png')) . '"')
+        ->toContain('src="data:image/png;base64,' . base64_encode((string) file_get_contents($out . '/test-map@0,0,2,2@0.5x.png')) . '"')
+        ->toContain('href="test-map.png"')
         ->and(substr_count($page, '<pre class="terminal">'))->toBe(2)
         ->and(getimagesize($out . '/test-map@0,0,2,2.png'))->toMatchArray([0 => 96, 1 => 96])
         ->and((string) file_get_contents($out . '/test-map.terminal.html'))->toStartWith('<!doctype html>')->toContain('<pre class="terminal">');
