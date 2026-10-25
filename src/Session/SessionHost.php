@@ -29,7 +29,8 @@ final class SessionHost
 {
     public const int PROTOCOL = 1;
 
-    private ?EditorSession $session = null;
+    /** The session the host serves, once a client has said hello. */
+    public private(set) ?EditorSession $session = null;
 
     /**
      * @param resource $input

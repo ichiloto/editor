@@ -33,6 +33,58 @@ Reports only what is wrong on the named maps and exits `1` on any of their
 errors. Use it to gate a commit on the maps it touched. Without `--map` it
 checks the whole project.
 
+## Rendering Maps For Review
+
+A map or building review shows both presentations: what the Terminal field
+draws and what the graphical field draws. `map:render` makes both from the
+project, the way the game draws them, so a review never needs a scratch
+renderer.
+
+```bash
+ichiloto map:render garden-of-roads/lanternrest-wayhouse-yard happyville/town-center@24,17,20,10 \
+  --directory path/to/game --out review --scale 0.5
+```
+
+Each argument is a view: a map id, or `MAP@X,Y,WIDTH,HEIGHT` for a rectangle
+of it in cells. For every view it writes, into `--out`:
+
+| File | Holds |
+| --- | --- |
+| `<view>.terminal.ans` | The Terminal field's characters and colours, one column per cell, as ANSI text. `cat` it in a terminal. |
+| `<view>.terminal.html` | The same picture as a page of its own: dark background, every colour kept. |
+| `<view>.png` | The graphical field at native size, one field cell 48 pixels square. |
+| `<view>@<scale>x.png` | The graphical field scaled down, with `--scale`. |
+
+and one `review.html` that sets every view's Terminal picture beside its
+graphical still, with the cells it shows and anything it could not draw.
+`<view>` is the map id with `/` written `--`, and the region when there is
+one.
+
+| Option | Does |
+| --- | --- |
+| `--player X,Y[,HEADING]` | Stands the player on a cell of every view, facing `north`, `east`, `south` (the default) or `west`. Use it to check that a door's art meets the cell the player enters by. |
+| `--actor ID` | Shows that actor's field art where `--player` stands, instead of the player's own. The Terminal keeps the player's sprite. |
+| `--views FILE` | Reads views from JSON, each with its own region, subject and label: `{"views": [{"map": "...", "region": "X,Y,W,H", "player": "X,Y,north", "actor": "...", "label": "..."}]}`. |
+| `--changes BATCH` | Renders the project as a batch would leave it, before it is applied. The batch is the one `map:apply` takes; nothing is written to the project. |
+| `--scale S` | Also writes each graphical still at scale `S` (above 0, below 1), such as `0.5` or `0.25`, for an overview. |
+| `--no-native` | Writes only the scaled still, for a map too large to draw at native size. |
+| `--font PATH` | The monospaced font glyph cells are drawn in on the graphical still. Without it the command uses the graphical renderer's own field font (Menlo on macOS) or another monospaced system font. |
+| `--title TEXT` | The review page's title. |
+| `--json` | Prints what was written as JSON: `status`, `review`, and each view's `files` and `diagnostics`. |
+
+Both pictures come from the game's own field, opened on the map as the Editor
+holds it: its NPCs and world objects stand where a new game shows them, at
+rest. The Terminal picture is what the field's camera draws through the
+Engine's Console. The graphical still is the world, tiles and sprites the
+Engine's frame composer sends a graphical renderer, drawn by the Editor in the
+renderer's paint order: tiles composed from their sheet pieces, corner-edged
+terrain, tile shadows, glyph cells no covering tile hides, and sprites on
+their cells' ground. It is a still of what the graphical field is sent, not a
+screenshot of a window. Sign labels need a renderer to lay out their text,
+so a sign shows its glyphs, and motion and animation are drawn at rest. Art
+that cannot be read is named under the view, and its cells keep their
+glyphs.
+
 ## What Counts As An Error
 
 An error is a defect the player would meet. The editors still save an

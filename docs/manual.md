@@ -706,6 +706,17 @@ or a dash the game could not read shows walking time only and says why (see Meas
 A Walk in [Change Maps From A Script](guides/change-maps-from-a-script.md)).
 The terminal editor keeps its workflow and has no measuring mode.
 
+**Rendering maps for review** draws a map, or a rectangle of it, both ways
+from the project: `ichiloto map:render MAP[@X,Y,WIDTH,HEIGHT] --out DIR`
+writes the Terminal field's characters and colours (`.ans` and a page of its
+own), a native-size PNG of the graphical field, and a `review.html` with the
+two side by side for every view. `--player X,Y[,HEADING]` stands the player
+on a cell for door checks, `--actor ID` shows an actor there, `--scale 0.5`
+adds an overview, and `--changes BATCH` renders a batch before it is applied,
+writing nothing. The session serves the same render to an editor as
+`EditorSession::renderMapReview()`, unsaved edits included. See Rendering
+Maps For Review in [Change Maps From A Script](guides/change-maps-from-a-script.md).
+
 **Pending, not implemented:** richer renderers will use a separate,
 RPG Maker-like GUI editor for graphical materials, atlases and crop authoring.
 The planned `ichiloto edit` entry point will offer a TUI/GUI choice; that choice
