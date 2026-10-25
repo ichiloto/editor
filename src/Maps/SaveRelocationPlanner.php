@@ -27,7 +27,8 @@ use Throwable;
  * furniture, a wall, painted collision; walkable grass, exits and save points
  * do not) or when an authored NPC now stands on it, added or moved. The plan
  * moves saves on each such cell to the nearest plain floor the player can
- * reach today, as one declared `relocations` step in the project's save
+ * reach once the change is saved, never a pocket the change itself walls
+ * off, as one declared `relocations` step in the project's save
  * compatibility manifest, for the author to review before the save writes
  * both. A project without a manifest, or a map not yet on disk, needs none.
  *
@@ -71,11 +72,17 @@ final class SaveRelocationPlanner
             return null;
         }
         $reachability = ProjectReachability::analyze($root . '/assets');
+        // Where saves land is judged on the maps as the change leaves them: a pocket it walls off is reachable today.
+        $unsaved = [];
+        foreach ($maps as $map) {
+            $unsaved[$map->mapId] = ['data' => $map->getEditableData(), 'layers' => $map->getLayerSet(), 'eventLayer' => $map->getEventLayerCells()];
+        }
+        $changed = ProjectReachability::analyze($root . '/assets', $unsaved);
         $relocations = [];
         $moving = [];
         foreach ($maps as $map) {
             $report = $reachability->reports[$map->mapId] ?? null;
-            $found = $report === null ? [] : self::planMap($map, $root, $report);
+            $found = $report === null ? [] : self::planMap($map, $root, $report, $changed->reports[$map->mapId] ?? null);
             if ($found !== []) {
                 $relocations = [...$relocations, ...$found];
                 $moving[] = $map->mapId;
@@ -109,11 +116,12 @@ final class SaveRelocationPlanner
     }
 
     /**
-     * One map's relocations, against today's reachability.
+     * One map's relocations: saves may stand where the player reaches today,
+     * and land where the player reaches once the map is saved.
      *
      * @return list<array{map: string, cells: list<array{int, int}>, to: array{int, int}}>
      */
-    private static function planMap(ProjectMap $map, string $root, MapReachabilityReport $report): array
+    private static function planMap(ProjectMap $map, string $root, MapReachabilityReport $report, ?MapReachabilityReport $changed): array
     {
         $grid = $map->getResolvedCollisionMap();
         $npcs = self::readNpcCells((array) ($map->getEditableData()['npcs'] ?? []));
@@ -143,7 +151,7 @@ final class SaveRelocationPlanner
         $areas = self::readEventAreas($map);
         $canLandFrom = static fn(int $fromX, int $fromY): \Closure => static fn(int $x, int $y): bool
             => ($grid[$y][$x] ?? null) === CollisionType::NONE->value
-            && $passable($x, $y) && $report->isReachable($x, $y) && ! isset($events["{$x},{$y}"])
+            && $passable($x, $y) && ($changed?->isReachable($x, $y) ?? false) && ! isset($events["{$x},{$y}"])
             && ! array_any($areas, static fn(CellArea $area): bool => $area->containsCell($x, $y) && ! $area->containsCell($fromX, $fromY));
         $groups = [];
         foreach ($blocked as [$x, $y]) {

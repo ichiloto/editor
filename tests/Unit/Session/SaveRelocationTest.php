@@ -105,9 +105,10 @@ it('moves no save off walkable grass or a save point, and moves saves off grass 
     $paint([[2, 1]], ' ');
     expect($session->saveMap('home'))->toHaveKey('saved');
 
-    // Grass that becomes solid does move the saves on it.
+    // Grass that becomes solid does move the saves on it, to floor reached once saved: the wall closes the
+    // north-west corner off, and the event at (4, 1) takes no save, so they land at (4, 2).
     $paint([[3, 1]], '#');
-    expect($session->saveMap('home')['relocations'])->toBe([['map' => 'home', 'cells' => [[3, 1]], 'to' => [2, 1]]]);
+    expect($session->saveMap('home')['relocations'])->toBe([['map' => 'home', 'cells' => [[3, 1]], 'to' => [4, 2]]]);
 });
 
 it('moves saves off walkable floor no route reaches today, since an older layout may have reached it', function () {
@@ -174,7 +175,8 @@ it('writes the relocations of every map saved together as one manifest step', fu
     $workspace = Ichiloto\Editor\ProjectWorkspace::fromProject($root);
     foreach ($workspace->maps as $map) {
         if (in_array($map->mapId, ['home', 'town'], true)) {
-            [$x, $y] = $map->mapId === 'home' ? [2, 3] : [3, 1];
+            // Home's wall leaves its door to town reachable, so both maps have floor to land saves on.
+            [$x, $y] = $map->mapId === 'home' ? [1, 2] : [3, 1];
             $map->setLayerCell($map->getLayers()[0]['id'], $x, $y, '#');
         }
     }
@@ -204,4 +206,15 @@ it('lands no save inside a bound event its own cell was not already in', functio
 
     expect($question['relocations'])->toHaveCount(1)
         ->and($question['relocations'][0]['to'])->not->toBe([2, 4]);
+});
+
+it('lands no save in a pocket the same change walls off, though the player reaches it today', function () {
+    $root = mapLineRemovalProject();
+    $session = EditorSession::open($root);
+    $map = $session->readMap('home');
+    // Walls at (3, 1) and (4, 3) wall the top row off behind the water and the bed: floor the player reaches today
+    // and no route reaches once saved. Saves on both walls land on the floor still reached, beside the start.
+    $session->paint('home', $map['revision'], $map['baseLayer'], [[3, 1], [4, 3]], '#');
+
+    expect($session->saveMap('home')['relocations'])->toBe([['map' => 'home', 'cells' => [[3, 1], [4, 3]], 'to' => [3, 3]]]);
 });
