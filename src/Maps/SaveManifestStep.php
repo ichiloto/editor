@@ -8,12 +8,16 @@ use Ichiloto\Editor\Cutscenes\Source\ArraySourceWriter;
 use Ichiloto\Editor\Cutscenes\Source\PhpArraySourceDocument;
 use Ichiloto\Editor\Cutscenes\Source\SourcePreservationRefusal;
 use Ichiloto\Editor\Cutscenes\Source\SourceUnreadable;
+use Ichiloto\Editor\Database\PhpDataFile;
+use Ichiloto\Engine\IO\SaveCompatibility\SaveCompatibilityManifest;
+use RuntimeException;
+use Throwable;
 
 /**
  * Appends one step to the project's save compatibility manifest: the content
  * version rises by one and existing saves apply the step as they load, its
- * declared position edits (map shifts, removals, relocations) or the project
- * migration class it names. The
+ * declared position edits (map shifts, removals, relocations, retirements)
+ * or the project migration class it names. The
  * manifest is rewritten through the source-preserving writer, so its
  * comments and layout survive; a manifest it cannot rewrite is reported, not
  * flattened.
@@ -70,6 +74,36 @@ final class SaveManifestStep
         $version = is_array($manifest) ? ($manifest['contentVersion'] ?? null) : null;
 
         return self::appendStep($source, $manifest, ['from' => $version, 'to' => is_int($version) ? $version + 1 : null, 'class' => $class]);
+    }
+
+    /**
+     * Reads a staged manifest back as the game reads it, for a source set
+     * plan: through the project's own autoloader ({@see ProjectMigrationProbe})
+     * when a step names a project migration class, which the Editor's process
+     * cannot load, else by the Engine's SaveCompatibilityManifest here.
+     *
+     * @param mixed $manifest The manifest as it will be written.
+     * @param string $change What the rewrite adds, for the refusal: "the alias".
+     * @return \Closure(string, string): mixed
+     */
+    public static function createReadBack(string $projectRoot, string $projectId, mixed $manifest, string $change): \Closure
+    {
+        $namesClasses = array_any(is_array($manifest) ? (array) ($manifest['migrations'] ?? []) : [],
+            static fn(mixed $step): bool => is_array($step) && isset($step['class']));
+
+        return static function (string $path, string $staged) use ($projectRoot, $projectId, $namesClasses, $change): mixed {
+            try {
+                if ($namesClasses) {
+                    return ProjectMigrationProbe::readManifest($projectRoot, $projectId, $staged);
+                }
+                $value = PhpDataFile::evaluateIsolated($staged, $projectRoot);
+                SaveCompatibilityManifest::fromArray($projectId, is_array($value) ? $value : [], self::PATH);
+
+                return $value;
+            } catch (Throwable $refusal) {
+                throw new RuntimeException(sprintf('The game would refuse %s: %s; nothing was written.', $change, rtrim($refusal->getMessage(), '.')), previous: $refusal);
+            }
+        };
     }
 
     /**

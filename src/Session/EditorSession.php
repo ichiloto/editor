@@ -101,6 +101,8 @@ use Ichiloto\Editor\Maps\TerrainKindConversion;
 use Ichiloto\Editor\Maps\TilePalette;
 use Ichiloto\Editor\Maps\TreeBrush;
 use Ichiloto\Editor\Maps\SaveManifestStep;
+use Ichiloto\Editor\Maps\SaveLandingCells;
+use Ichiloto\Editor\Maps\SaveMapRetirement;
 use Ichiloto\Editor\Maps\SaveMigrationRegistration;
 use Ichiloto\Editor\Maps\SaveRelocationPlanner;
 use Ichiloto\Editor\History\SourceSetCommand;
@@ -118,6 +120,7 @@ use Ichiloto\Editor\Validation\PassageAgreementCheck;
 use Ichiloto\Editor\Validation\Issue;
 use Ichiloto\Editor\Validation\MapValidator;
 use Ichiloto\Editor\Validation\ProjectValidator;
+use Ichiloto\Editor\Validation\SaveCompatibilityValidator;
 use Ichiloto\Editor\Validation\Severity;
 use Ichiloto\Engine\IO\Console\TerminalPresentationComposer;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\PresentationCanvas;
@@ -169,6 +172,7 @@ use Ichiloto\Editor\ProjectConfig;
 use Ichiloto\Engine\Battle\UI\BattleScreen;
 use Ichiloto\Engine\Rendering\FieldViewport;
 use Ichiloto\Engine\Rendering\Runtime\RendererRuntimeConfig;
+use Ichiloto\Engine\Field\Reachability\ProjectReachability;
 use Ichiloto\Engine\IO\SaveCompatibility\ContentReferenceCategory;
 use RuntimeException;
 use Throwable;
@@ -263,7 +267,11 @@ final class EditorSession
      * when it began, each map's revision then, and how many undo steps came
      * before it. Null when none is open.
      *
-     * @var array{baseline: list<Issue>, revisions: array<string, int>, steps: int, dropped: int}|null
+     * Requests that write the save manifest at once note what they wrote:
+     * `migrationRegistered`, and each map retirement by its step and map.
+     *
+     * @var array{baseline: list<Issue>, revisions: array<string, int>, steps: int, dropped: int, migrationRegistered?: bool,
+     *     retirements?: list<array{from: int, map: string}>}|null
      */
     private ?array $changeSet = null;
 
@@ -6436,6 +6444,182 @@ final class EditorSession
     }
 
     /**
+     * Retires a map in the save compatibility manifest: one new step whose
+     * `mapRetirements` entry moves every save standing on `$map` onto `$into`,
+     * at the `to` of the first landing rectangle holding its cell, else at
+     * `$to`, and marks `$into` visited for saves that visited `$map`. The
+     * content version rises by one. Every landing must be a cell a save can
+     * stand on in `$into` as the session holds it, unsaved edits included
+     * ({@see SaveLandingCells}): plain floor the player can reach, with no
+     * event or NPC on it. `$map` may still exist; delete it afterwards with
+     * `map.delete`. The retirement adds no map alias: a one-shot event that
+     * moved follows it through {@see addSaveAlias()}.
+     *
+     * One undo step. Inside a change set it is undone with the change set,
+     * and committing re-checks every landing it wrote against the maps as the
+     * change set leaves them, followed through the steps written after it.
+     *
+     * @param array{int, int} $to Where saves no landing holds land on `$into`.
+     * @param list<array<string, mixed>>|null $landings Rectangles of `$map` (`x`, `y`, `width`, `height`) and each one's `to`.
+     * @return array{from: int, to: int, contentVersion: int, map: string, into: string}
+     * @throws SessionRefusal When the entry is malformed, `$into` is not a map or is `$map`, a landing cannot be
+     *     stood on, or the manifest cannot be read or take the step; nothing is written.
+     */
+    public function retireMap(string $map, string $into, array $to, ?array $landings = null): array
+    {
+        $entry = ['map' => trim($map), 'into' => trim($into), ...($landings === null ? [] : ['landings' => $landings]), 'to' => $to];
+        try {
+            $retirement = SaveMapRetirement::readEntry($entry);
+        } catch (RuntimeException $refusal) {
+            throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+        }
+        if (! isset($this->getMapsById()[$retirement->into])) {
+            throw new SessionRefusal(sprintf('There is no map %s for the saves on %s to move into.', $retirement->into, $retirement->map));
+        }
+        $refusals = $this->describeLandingRefusals($this->workspace->analyzeReachability(),
+            array_map(static fn(array $cell): array => ['map' => $retirement->into, 'cell' => $cell], $retirement->getLandingCells()));
+        if ($refusals !== []) {
+            throw new SessionRefusal(sprintf('Saves on %s cannot land on %s at %s. Choose plain floor the player can reach, with no event or NPC on it.',
+                $retirement->map, $retirement->into, implode('; ', $refusals)));
+        }
+        try {
+            $planned = SaveMapRetirement::plan($this->workspace->projectRoot, $this->workspace->projectId, $entry);
+            $plan = $planned['plan'];
+            $plan->apply();
+        } catch (RuntimeException $refusal) {
+            throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+        }
+        $this->history->record(new GenericCommand(sprintf('Retire map %s', $retirement->map), static fn() => $plan->apply(), static fn() => $plan->revert()));
+        if ($this->changeSet !== null) {
+            $this->changeSet['retirements'][] = ['from' => $planned['from'], 'map' => $retirement->map];
+        }
+
+        return ['from' => $planned['from'], 'to' => $planned['to'], 'contentVersion' => $planned['to'], 'map' => $retirement->map, 'into' => $retirement->into];
+    }
+
+    /**
+     * Adds one alias to the save compatibility manifest, so every save reads
+     * the saved identity `$from` as `$to`, whatever its content version: a
+     * one-shot event that moved to another map (`old-map:Q` to `new-map:Q`),
+     * a renamed quest. `$to`, followed through the aliases already declared,
+     * must be a current identity of its category where the category has a
+     * catalogue, as validation requires. The staged manifest is read back as
+     * the game reads it. One undo step, and inside a change set it is undone
+     * with the change set.
+     *
+     * @param string $category A {@see ContentReferenceCategory} value, such as `one_shot_events`.
+     * @return array{category: string, from: string, to: string, added: bool} `added` is false when the manifest already had it.
+     * @throws SessionRefusal When the category is unknown, the target is not current, or the game would refuse the
+     *     alias; nothing is written.
+     */
+    public function addSaveAlias(string $category, string $from, string $to): array
+    {
+        $kind = ContentReferenceCategory::tryFrom(trim($category)) ?? throw new SessionRefusal(sprintf('%s is not a saved-content category; use one of %s.',
+            $category, implode(', ', array_map(static fn(ContentReferenceCategory $case): string => $case->value, ContentReferenceCategory::cases()))));
+        [$from, $to] = [trim($from), trim($to)];
+        if ($from === '' || $to === '') {
+            throw new SessionRefusal('Name both the saved identity and the identity it now reads as.');
+        }
+        $target = $this->followSaveAliases($kind, $to);
+        $known = new SaveCompatibilityValidator()->listKnownTargets($this->workspace, $kind);
+        if ($known !== null && ! in_array($target, $known, true)) {
+            throw new SessionRefusal(sprintf('%s is not a current %s identity, so saves cannot read %s as it. Create it first, or alias to one that exists.',
+                $target, $kind->value, $from));
+        }
+        try {
+            $plan = SaveManifestAlias::plan($this->workspace->projectRoot, $this->workspace->projectId, $kind, $from, $to);
+            $plan?->apply();
+        } catch (RuntimeException $refusal) {
+            throw new SessionRefusal($refusal->getMessage(), previous: $refusal);
+        }
+        if ($plan !== null) {
+            $this->history->record(new GenericCommand('Save alias', static fn() => $plan->apply(), static fn() => $plan->revert()));
+        }
+
+        return ['category' => $kind->value, 'from' => $from, 'to' => $to, 'added' => $plan !== null];
+    }
+
+    /** Where an identity ends through the aliases the manifest already declares for its category. */
+    private function followSaveAliases(ContentReferenceCategory $category, string $identity): string
+    {
+        try {
+            $manifest = PhpDataFile::evaluateIsolated($this->workspace->projectRoot . '/' . SaveManifestStep::PATH, $this->workspace->projectRoot);
+        } catch (Throwable) {
+            return $identity; // Planning the alias reports an unreadable manifest.
+        }
+        $aliases = [];
+        foreach (is_array($manifest) ? (array) ($manifest['aliases'][$category->value] ?? []) : [] as $alias) {
+            if (is_array($alias) && is_string($alias['from'] ?? null) && is_string($alias['to'] ?? null)) {
+                $aliases[trim($alias['from'])] = trim($alias['to']);
+            }
+        }
+        for ($seen = []; isset($aliases[$identity]) && ! isset($seen[$identity]); $identity = $aliases[$identity]) {
+            $seen[$identity] = true;
+        }
+
+        return $identity;
+    }
+
+    /**
+     * Why each save landing cannot be stood on, as the session holds its map.
+     *
+     * @param list<array{map: string, cell: array{int, int}}> $landings
+     * @return list<string> One `x 3, y 4 (it is solid)` per refused landing; empty when all may be stood on.
+     */
+    private function describeLandingRefusals(ProjectReachability $reachability, array $landings): array
+    {
+        $refusals = [];
+        $cells = [];
+        foreach ($landings as ['map' => $mapId, 'cell' => [$x, $y]]) {
+            $map = $this->getMapsById()[$mapId] ?? null;
+            $report = $reachability->reports[$mapId] ?? null;
+            $reason = match (true) {
+                $map === null => sprintf('%s is no map', $mapId),
+                $report === null => sprintf('%s cannot be read as the game reads it', $mapId),
+                default => ($cells[$mapId] ??= SaveLandingCells::readMap($map, $report))->findLandingRefusal($x, $y),
+            };
+            if ($reason !== null) {
+                $refusals[] = sprintf('x %d, y %d (%s)', $x, $y, $reason);
+            }
+        }
+
+        return $refusals;
+    }
+
+    /**
+     * Why the map retirements a change set wrote no longer land on open
+     * floor, once its edits and the steps written after them have moved the
+     * maps under them; null when every landing may still be stood on.
+     *
+     * @param array{retirements?: list<array{from: int, map: string}>} $changes
+     */
+    private function findRetirementRefusal(array $changes): ?string
+    {
+        $retirements = $changes['retirements'] ?? [];
+        if ($retirements === []) {
+            return null;
+        }
+        try {
+            $manifest = PhpDataFile::evaluateIsolated($this->workspace->projectRoot . '/' . SaveManifestStep::PATH, $this->workspace->projectRoot);
+            $reachability = $this->workspace->analyzeReachability();
+            $problems = [];
+            foreach ($retirements as ['from' => $from, 'map' => $map]) {
+                $landings = SaveMapRetirement::followLandings(is_array($manifest) ? $manifest : [], $from, $map);
+                $refused = $this->describeLandingRefusals($reachability, array_map(static fn(array $landing): array
+                    => ['map' => $landing['map'], 'cell' => $landing['cell']], $landings));
+                if ($refused !== []) {
+                    $problems[] = sprintf('saves on %s at %s', $map, implode('; ', $refused));
+                }
+            }
+        } catch (Throwable $failure) {
+            return sprintf('The map retirements this change set wrote could not be checked: %s', rtrim($failure->getMessage(), '.') . '.');
+        }
+
+        return $problems === [] ? null : sprintf('The change set leaves map retirement landings where saves cannot stand: %s. '
+            . 'Keep those cells plain floor the player can reach, or retire the map with other landings.', implode('; ', $problems));
+    }
+
+    /**
      * Opens a change set: edits made from here on are written only by
      * {@see commitChanges()}, and only when the project they leave is valid.
      * This is the write path for anyone changing maps without an author
@@ -6480,6 +6664,9 @@ final class EditorSession
      * would meet), whether the change set made it or found it there, or when
      * it leaves a new error anywhere else (a door on another map now leading
      * nowhere). Warnings never refuse it.
+     * A map retirement the change set wrote is checked again: each landing,
+     * moved by the save steps written after it, must still be a cell a save
+     * can stand on in the maps the change set leaves.
      *
      * Everything it left unsaved -- databases, cutscenes, maps and the save
      * relocations its maps need -- is then written as one transaction: every
@@ -6517,8 +6704,10 @@ final class EditorSession
             static fn(?ProjectMap $map): bool => $map?->isDirty() === true));
         // The change set writes one manifest step for every map that moves saves.
         $relocations = SaveRelocationPlanner::planAll($changedMaps, $this->workspace->projectRoot)?->describeMoves() ?? [];
+        $retirementRefusal = $blocking === [] ? $this->findRetirementRefusal($changes) : null;
         $reason = match (true) {
             $blocking !== [] => sprintf('%d error%s the player would meet.', count($blocking), count($blocking) === 1 ? '' : 's'),
+            $retirementRefusal !== null => $retirementRefusal,
             // A manifest step is a migration class or declared position edits, never both.
             $relocations !== [] && ($changes['migrationRegistered'] ?? false) => 'This change set registers a save migration class and moves saves off cells a changed map now takes. '
                 . 'The Engine has no save migration step that does both, so the change set is not written. Register the migration and change the map in separate change sets.',

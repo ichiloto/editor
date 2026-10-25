@@ -7,7 +7,6 @@ namespace Ichiloto\Editor\Validation;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Engine\Field\Reachability\MapReachabilityReport;
-use Ichiloto\Engine\Field\Reachability\ProjectReachability;
 use Ichiloto\Engine\Field\Reachability\ReachabilityProblem;
 use Ichiloto\Engine\Field\Reachability\ReachabilityProblemKind;
 use Ichiloto\Engine\Rendering\Tilesets\TileId;
@@ -30,13 +29,7 @@ final class ReachabilityValidator
     /** @return Issue[] */
     public function validate(ProjectWorkspace $workspace): array
     {
-        $unsaved = [];
-        foreach ($workspace->maps as $map) {
-            if ($map->isDirty()) {
-                $unsaved[$map->mapId] = ['data' => $map->getEditableData(), 'layers' => $map->getLayerSet(), 'eventLayer' => $map->getEventLayerCells()];
-            }
-        }
-        $project = ProjectReachability::analyze($workspace->projectRoot . DIRECTORY_SEPARATOR . 'assets', $unsaved);
+        $project = $workspace->analyzeReachability();
         $maps = array_column(array_map(static fn(ProjectMap $map): array => ['id' => $map->mapId, 'map' => $map], $workspace->maps), 'map', 'id');
         $untiled = [];
         foreach ($project->reports as $mapId => $report) {

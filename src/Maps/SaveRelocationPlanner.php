@@ -8,15 +8,12 @@ use Ichiloto\Editor\Database\PhpDataFile;
 use Ichiloto\Editor\ProjectDirectoryContext;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\Storage\SourceSetPlan;
-use Ichiloto\Engine\Core\CellArea;
 use Ichiloto\Engine\Events\Enumerations\CollisionType;
 use Ichiloto\Engine\Field\MapCollisionResolver;
 use Ichiloto\Engine\Field\MapTerrainKinds;
 use Ichiloto\Engine\Field\MapSourceReader;
-use Ichiloto\Engine\Field\NpcPlacement;
 use Ichiloto\Engine\Field\Reachability\MapReachabilityReport;
 use Ichiloto\Engine\Field\Reachability\ProjectReachability;
-use Ichiloto\Engine\Field\Validation\MapEventResolver;
 use RuntimeException;
 use Throwable;
 
@@ -116,11 +113,11 @@ final class SaveRelocationPlanner
     private static function planMap(ProjectMap $map, string $root, MapReachabilityReport $report): array
     {
         $grid = $map->getResolvedCollisionMap();
-        $npcs = self::readNpcCells((array) ($map->getEditableData()['npcs'] ?? []));
-        $passable = static fn(int $x, int $y): bool => isset($grid[$y][$x]) && ! isset($npcs["{$x},{$y}"])
-            && ! CollisionType::from($grid[$y][$x])->blocksMovement();
+        $cells = SaveLandingCells::readMap($map, $report);
+        $passable = $cells->isPassable(...);
         // An NPC already standing there on disk is no change: reachability lets saves stand where a wanderer starts.
-        $arrived = array_diff_key($npcs, self::readNpcCells(self::readSavedNpcs($root, $map->mapId)));
+        $arrived = array_diff_key(SaveLandingCells::readNpcCells((array) ($map->getEditableData()['npcs'] ?? [])),
+            SaveLandingCells::readNpcCells(self::readSavedNpcs($root, $map->mapId)));
         // Any cell walkable on disk may hold a save, even one no route reaches today: an older layout may have
         // reached it, and a save made there must never load inside what now takes it.
         $walkable = self::readSavedWalkableCells($root, $map->mapId);
@@ -137,14 +134,8 @@ final class SaveRelocationPlanner
             return [];
         }
 
-        // A save lands on plain floor: never on grass, an exit, a save point or an NPC, and never inside an event
-        // its own cell was not already in, painted or bound to an object or area, so loading it starts nothing new.
-        $events = self::readEventCells($map);
-        $areas = self::readEventAreas($map);
-        $canLandFrom = static fn(int $fromX, int $fromY): \Closure => static fn(int $x, int $y): bool
-            => ($grid[$y][$x] ?? null) === CollisionType::NONE->value
-            && $passable($x, $y) && $report->isReachable($x, $y) && ! isset($events["{$x},{$y}"])
-            && ! array_any($areas, static fn(CellArea $area): bool => $area->containsCell($x, $y) && ! $area->containsCell($fromX, $fromY));
+        // A save lands where SaveLandingCells allows, inside only the events its own cell was already in.
+        $canLandFrom = static fn(int $fromX, int $fromY): \Closure => static fn(int $x, int $y): bool => $cells->canLand($x, $y, [$fromX, $fromY]);
         $groups = [];
         foreach ($blocked as [$x, $y]) {
             $landing = self::findLanding($x, $y, $passable, $canLandFrom($x, $y), $grid);
@@ -200,52 +191,6 @@ final class SaveRelocationPlanner
         return $best === null ? null : [$best[0], $best[1]];
     }
 
-    /** @return list<CellArea> Every event's cells as the Engine resolves them, bound events included. */
-    private static function readEventAreas(ProjectMap $map): array
-    {
-        $events = MapEventResolver::inspect($map->getEditableData(), $map->getEventLayerCells(), $map->mapId)->events;
-
-        return array_values(array_map(static fn(array $event): CellArea => CellArea::fromArray($event['area'], 'Event area'),
-            array_filter($events, static fn(array $event): bool => is_array($event['area'] ?? null))));
-    }
-
-    /** @return array<string, true> Event markers, where a loaded save must not stand. */
-    private static function readEventCells(ProjectMap $map): array
-    {
-        $events = [];
-        for ($y = 0, $height = $map->getHeight(); $y < $height; $y++) {
-            for ($x = 0, $width = $map->getWidth(); $x < $width; $x++) {
-                if ($map->hasLayerCell(MapLayers::EVENT, $x, $y) && $map->getEventMarkerAt($x, $y) !== null) {
-                    $events["{$x},{$y}"] = true;
-                }
-            }
-        }
-
-        return $events;
-    }
-
-    /**
-     * Where NPCs stand when the map loads. Every NPC starts on its authored
-     * cell and a wanderer never steps onto the player, so these are the only
-     * cells an NPC can hold under a loaded save.
-     *
-     * @param array<mixed> $entries The map's `npcs` entries.
-     * @return array<string, true>
-     */
-    private static function readNpcCells(array $entries): array
-    {
-        $npcs = [];
-        foreach ($entries as $entry) {
-            $npc = NpcPlacement::fromArray($entry);
-            if ($npc !== null) {
-                $npcs["{$npc->x},{$npc->y}"] = true;
-            }
-        }
-
-        return $npcs;
-    }
-
-    /** @return array<mixed> The map's `npcs` entries as saved on disk. */
     /**
      * The cells of the map on disk that a player could stand on, by `x,y`:
      * walkable by its saved collision, reachable or not. None when the
@@ -274,6 +219,7 @@ final class SaveRelocationPlanner
         return $walkable;
     }
 
+    /** @return array<mixed> The map's `npcs` entries as saved on disk. */
     private static function readSavedNpcs(string $root, string $mapId): array
     {
         $source = MapSourceReader::readFiles(MapSourceReader::resolvePaths($root . '/assets/Maps', $mapId));

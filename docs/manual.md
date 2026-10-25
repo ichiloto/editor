@@ -3202,10 +3202,14 @@ those for abilities at abilities.
 
 Save migration steps are read as the Engine reads them: each declares a
 project class, or declared position edits, `mapShifts` for inserted rows and
-columns and `relocations` for cells authored content now occupies (map,
-cells, and a landing that is not one of them). A malformed step is an error.
-Relocations are written by hand when an NPC or furniture moves onto open
-floor; add them to a new step, never to an earlier one.
+columns, `mapRemovals` for removed ones, `relocations` for cells authored
+content now occupies (map, cells, and a landing that is not one of them) and
+`mapRetirements` for a retired map whose saves move onto another map (map,
+into, a landing `to`, and optional landing rectangles). A malformed step is
+an error, and so is a retirement whose saves end on no map of the project:
+its `into`, followed through later retirements and map aliases, must be a
+current map. Relocations are written by hand when an NPC or furniture moves
+onto open floor; add them to a new step, never to an earlier one.
 
 Reachability is checked as the game moves the player, from where the game
 starts and every way onto each map it can reach, never from where content

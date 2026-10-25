@@ -236,6 +236,54 @@ reads it, so a class that does not load or is not a migration is refused
 with nothing written, as is a manifest the source-preserving writer cannot
 rewrite. It is one undo step, and inside a batch it is undone with the batch.
 
+`saveCompatibility.retireMap {map, into, to, landings?}` retires a map whose
+places now stand on another map. It appends one step to
+`assets/Data/save-compatibility.php` with one `mapRetirements` entry and
+raises `contentVersion` by one. A save standing on `map` then loads onto
+`into`: at the `to` of the first landing rectangle that holds its cell, or at
+the entry's own `to`. Each landing is `{x, y, width, height, to}`: a
+rectangle in `map`'s coordinates and the cell on `into` its saves land on.
+For example:
+
+```json
+{"method": "saveCompatibility.retireMap", "params": {"map": "overworld", "into": "continent",
+  "landings": [{"x": 0, "y": 0, "width": 60, "height": 61, "to": [12, 40]}], "to": [30, 30]}}
+```
+
+Every landing must be a cell a save can stand on in `into` as the session
+holds it, unsaved edits included: plain floor the player can reach, not
+grass, an exit or a save point, with no event or NPC on it. The request is
+refused with nothing written when a landing is not, naming each cell and why,
+and when `into` is not a map, `into` is `map`, or the entry is malformed.
+`map` may still exist: retire it first, then delete it with `map.delete`
+outside the batch. A save that visited `map` has visited `into` too. The
+retirement adds no map alias, since an alias would make the two maps one and
+read every completed one-shot event `map:marker` as `into`'s own marker.
+
+`saveCompatibility.alias {category, from, to}` adds one alias, so every save
+reads the saved identity `from` as `to`. `category` is a saved-content
+category such as `maps`, `one_shot_events` or `quests`. A one-shot event that
+moved to another map keeps its completion this way:
+
+```json
+{"method": "saveCompatibility.alias", "params": {"category": "one_shot_events",
+  "from": "overworld/garden-of-roads:Q", "to": "garden-of-roads/high-shadow-reach:Q"}}
+```
+
+`to`, followed through the aliases already declared, must exist in its
+category where the category has a catalogue, such as a map's event marker
+for `one_shot_events`. An alias the game would refuse (a self-alias, a cycle,
+a source already sent elsewhere) is refused with nothing written, and an
+alias the manifest already holds gives `added: false`.
+
+Both are one undo step, staged and read back as the game reads the manifest,
+and inside a batch they are undone with the batch. `changes.commit` checks a
+retirement written in its batch again: each landing, moved by the steps
+written after it (rows inserted in the same batch move it), must still be a
+cell a save can stand on in the maps the batch leaves, or the batch is
+refused. Relocations `changes.commit` writes for the batch's maps go in a
+later step, so they move landed saves as they move any other save.
+
 The Engine reads a step as a migration class or as declared position edits,
 never both. So a batch that registers a class and also changes a map in a
 way that moves saves (the relocations `changes.commit` reports) is refused
@@ -273,6 +321,8 @@ batches.
 | Move a character's own skills onto their Mastery Map | `mastery.adopt {actor}` (asks; answer `write` with its `confirm`): each skill the actor file says they know gets terms known from the start (cost 0, level 1), each learnable terms costing its EXP requirement, for the tree node that teaches it (a skill the tree does not place yet joins the first region's trunk), skills their role teaches stay with the role, and the actor's learned lists and learnables are emptied; then edit the terms in the Mastery Maps category |
 | Place or link Mastery Map nodes | `mastery.page {index}` reads the regions and each node the map gives terms for, with the tree's `name`, `skill`, `region`, `branch` and `kind` and its place (`x`, `y` as fractions of the map; `placed` false where the Engine places it in its region); `mastery.placeNode {index, node, x, y}` places a node; `mastery.toggleRequirement {index, node, requires}` makes `node` build on `requires`, or stops it, refusing a loop. Each is one undo step |
 | Retire a skill | `skills.retire {index, replacement?}` (asks; answer `write` with its `confirm`): every class grant, actor learned skill and learnable, attack and counter skill, enemy action and skill or state counter that names it moves onto the replacement (a list already holding the replacement drops the old entry) and saves read the old skill as the replacement; without a replacement each is removed and saves drop the skill. A replacement must be a spell for a spell and an ability for an ability, and a summon's action follows its summon. Then `database.delete` the skill, which is refused while anything still names it |
+| Retire a map onto the map that took its places | `saveCompatibility.retireMap {map, into, to, landings?}`, then `map.delete {map}` outside the batch; see Save Migrations |
+| Let saves read a moved identity as its new one | `saveCompatibility.alias {category, from, to}`, such as a one-shot event `old-map:Q` to `new-map:Q` |
 | Move a story event onto the NPC who delivers it | `npc.adoptEvent {map, marker, npc?}`: the event becomes the NPC's first page (its conditions, writes, cue, action and run-once), its cells are cleared, a run-once event's saved completion is aliased to the page, and the result lists what was dropped and the quest waymarks to repoint at the NPC (`database.apply` on the waymark's NPC row) |
 | Map fields (name, kind, music, encounters, atlas, landmarks) | `inspector.apply` with the map row's key |
 | A map's role | `inspector.apply` with `{target: map-role, field: role}`, value a role id from the Map Roles page (`database.create {category: map_roles}`), empty removes it |

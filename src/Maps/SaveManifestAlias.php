@@ -11,7 +11,6 @@ use Ichiloto\Editor\Cutscenes\Source\SourceUnreadable;
 use Ichiloto\Editor\Database\PhpDataFile;
 use Ichiloto\Editor\Storage\SourceSetPlan;
 use Ichiloto\Engine\IO\SaveCompatibility\ContentReferenceCategory;
-use Ichiloto\Engine\IO\SaveCompatibility\SaveCompatibilityManifest;
 use RuntimeException;
 use Throwable;
 
@@ -63,22 +62,7 @@ final class SaveManifestAlias
         } catch (SourceUnreadable|SourcePreservationRefusal $refusal) {
             throw new RuntimeException(sprintf('%s cannot take the alias: %s', SaveManifestStep::PATH, rtrim($refusal->getMessage(), '.')), previous: $refusal);
         }
-        // Steps that name project migration classes are read as the game reads them, loading those classes;
-        // a manifest naming none is read here as the Engine reads it.
-        $namesClasses = array_any((array) ($manifest['migrations'] ?? []), static fn(mixed $step): bool => is_array($step) && isset($step['class']));
-        $readBack = static function (string $path, string $staged) use ($projectRoot, $projectId, $namesClasses): mixed {
-            try {
-                if ($namesClasses) {
-                    return ProjectMigrationProbe::readManifest($projectRoot, $projectId, $staged);
-                }
-                $value = PhpDataFile::evaluateIsolated($staged, $projectRoot);
-                SaveCompatibilityManifest::fromArray($projectId, is_array($value) ? $value : [], SaveManifestStep::PATH);
-
-                return $value;
-            } catch (Throwable $refusal) {
-                throw new RuntimeException(sprintf('The game would refuse the alias: %s; nothing was written.', rtrim($refusal->getMessage(), '.')), previous: $refusal);
-            }
-        };
+        $readBack = SaveManifestStep::createReadBack($projectRoot, $projectId, $next, 'the alias');
 
         return new SourceSetPlan($projectRoot, [$manifestPath => $source], [$manifestPath => $source], [$manifestPath => $rewritten],
             [$manifestPath => $manifest], [$manifestPath => $next],

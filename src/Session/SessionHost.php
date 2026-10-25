@@ -173,6 +173,10 @@ final class SessionHost
                 self::requireString($params, 'id'), self::requireInt($params, 'x'), self::requireInt($params, 'y'),
                 self::readOptionalString($params, 'resource'), self::readOptionalString($params, 'text')),
             'saveCompatibility.appendStep' => $session->registerSaveMigration(self::requireString($params, 'class')),
+            'saveCompatibility.retireMap' => $session->retireMap(self::requireString($params, 'map'), self::requireString($params, 'into'),
+                self::requireCell($params, 'to'), self::readOptionalLandings($params)),
+            'saveCompatibility.alias' => $session->addSaveAlias(self::requireString($params, 'category'), self::requireString($params, 'from'),
+                self::requireString($params, 'to')),
             'areas.read' => $session->readAreas(self::requireString($params, 'map')),
             'areas.create' => $session->createArea(self::requireString($params, 'map'), self::requireInt($params, 'revision'),
                 self::readOptionalString($params, 'id'), EditorSession::readAreaShape($params)),
@@ -898,6 +902,24 @@ final class SessionHost
         return is_array($cell) && array_is_list($cell) && count($cell) === 2 && is_int($cell[0]) && is_int($cell[1])
             ? $cell
             : throw new InvalidRequest(sprintf('"%s" must be an [x, y] integer pair.', $key));
+    }
+
+    /**
+     * A map retirement's landing rectangles, when given: a list of objects, each read by the Engine.
+     *
+     * @param array<string, mixed> $params
+     * @return list<array<string, mixed>>|null
+     */
+    private static function readOptionalLandings(array $params): ?array
+    {
+        $landings = $params['landings'] ?? null;
+        if ($landings === null) {
+            return null;
+        }
+
+        return is_array($landings) && array_is_list($landings) && array_all($landings, static fn(mixed $landing): bool => is_array($landing))
+            ? $landings
+            : throw new InvalidRequest('"landings" must be a list of {x, y, width, height, to} rectangles when given.');
     }
 
     /**

@@ -30,6 +30,7 @@ use Ichiloto\Engine\Entities\Elements\ElementRegistry;
 use Ichiloto\Engine\Events\Interpreter\Commands\ScriptCommandReference;
 use Ichiloto\Engine\Entities\Skills\SkillCatalog;
 use Ichiloto\Engine\Field\MapGraphics;
+use Ichiloto\Engine\Field\Reachability\ProjectReachability;
 use RecursiveDirectoryIterator;
 use InvalidArgumentException;
 use LogicException;
@@ -430,6 +431,22 @@ final readonly class ProjectWorkspace
             || ($this->config?->isDirty() ?? false)
             || ($this->menuPresentation?->isDirty() ?? false)
             || ($this->cutscenes?->hasUnsavedChanges() ?? false);
+    }
+
+    /**
+     * Analyses where the player can reach as saving would leave the project:
+     * maps with unsaved changes are read as this workspace holds them.
+     */
+    public function analyzeReachability(): ProjectReachability
+    {
+        $unsaved = [];
+        foreach ($this->maps as $map) {
+            if ($map->isDirty()) {
+                $unsaved[$map->mapId] = ['data' => $map->getEditableData(), 'layers' => $map->getLayerSet(), 'eventLayer' => $map->getEventLayerCells()];
+            }
+        }
+
+        return ProjectReachability::analyze($this->projectRoot . DIRECTORY_SEPARATOR . 'assets', $unsaved);
     }
 
     /**
