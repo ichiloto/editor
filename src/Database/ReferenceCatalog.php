@@ -32,6 +32,7 @@ use Ichiloto\Engine\Entities\Skills\Skill;
 use Ichiloto\Engine\Entities\Enumerations\WeaponType;
 use Ichiloto\Engine\Battle\Resolution\ResolutionKind;
 use Ichiloto\Engine\Entities\Magic\MagicEffectType;
+use Ichiloto\Engine\Battle\Insight\RevealFact;
 use Ichiloto\Engine\Entities\Skills\SkillResolutionScope;
 use InvalidArgumentException;
 use Throwable;
@@ -61,6 +62,8 @@ final class ReferenceCatalog
         'piece_connections',
         'resolution_scopes',
         'magic_effect_types',
+        // What a reveal effect can uncover about a foe: the Engine's own facts.
+        'reveal_facts',
         'weapon_types',
         'armor_types',
         'skills',
@@ -237,6 +240,7 @@ final class ReferenceCatalog
             'piece_connections' => [\Ichiloto\Engine\Rendering\Tilesets\TilesetPiece::LINES],
             'resolution_scopes' => array_map(static fn(SkillResolutionScope $scope): string => $scope->value, SkillResolutionScope::cases()),
             'magic_effect_types' => array_map(static fn(MagicEffectType $type): string => $type->value, MagicEffectType::cases()),
+            'reveal_facts' => array_map(static fn(RevealFact $fact): string => $fact->value, RevealFact::cases()),
             'weapon_types' => array_map(static fn(WeaponType $type): string => $type->value, WeaponType::cases()),
             'armor_types' => array_map(static fn(ArmorType $type): string => $type->value, ArmorType::cases()),
             // Spells and abilities may be authored in any of the Engine's

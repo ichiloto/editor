@@ -1663,7 +1663,9 @@ its effect type). The rest is cost, cooldown, occasion, scope, how it is
 invoked, its animation, and its effects: a list under the Effects heading,
 each a type with that type's own values (a formula with its element and
 variance for damage and recovery, a state for adding one, the states to
-remove, or a stat and its stages). Changing an effect's type, or a skill's
+remove, a stat and its stages, or what a reveal uncovers about a foe and
+its chance). A reveal's facts are picked from the Engine's own list: `hp`,
+`mp`, `stats` and `affinities` (the element that strikes the foe hardest). Changing an effect's type, or a skill's
 kind, drops the values only the old one read. Files are numbered
 (`0001-attack.php`) because menus list skills in file order; a new or copied
 skill takes the next number and goes last. `skills.php` is the barrel that
@@ -1780,7 +1782,9 @@ Status effects, read by the engine's `StateRegistry`.
 Fields: `Id`, `Name`, `Icon`, `Description`, `Duration Turns`, `Tick Formula`,
 `Prevents Action`, `Persists After Battle`, `Disposition` (`harmful`, the
 default, `beneficial` or `neutral`: whether it harms or enhances its bearer,
-which battle poses follow).
+which battle poses follow), and `Confusion Chance %` (0 to 100: the chance
+each turn that the bearer attacks a random battler of either side instead of
+acting as it chose).
 
 `Id` is the only field the engine requires. Optional fields disappear from the
 file when you clear them, so a state with no duration lasts until it is cured
