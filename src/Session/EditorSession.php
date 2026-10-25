@@ -6027,7 +6027,7 @@ final class EditorSession
      * call asks, and `write` with the question's `confirm` saves the map and
      * the relocation step together.
      *
-     * @return array{saved: string, warnings: list<string>, errors: list<array<string, ?string>>, backupFailures: list<string>, relocated: list<string>}
+     * @return array{saved: string, warnings: list<string>, errors: list<array<string, mixed>>, backupFailures: list<string>, relocated: list<string>}
      *     |array{status: 'question', map: string, question: string, answers: list<array{key: string, label: string, description: string}>,
      *         relocations: list<array{map: string, cells: list<array{int, int}>, to: array{int, int}}>, moves: list<string>,
      *         contentVersion: int, confirm: string}
@@ -6585,7 +6585,7 @@ final class EditorSession
      * included, by the same checks as `ichiloto validate`.
      *
      * @param list<string>|null $mapIds Only the issues about these maps; null for every issue.
-     * @return array{issues: list<array<string, ?string>>, errors: int, warnings: int}
+     * @return array{issues: list<array<string, mixed>>, errors: int, warnings: int}
      */
     /**
      * Checks one map as saving it does ({@see MapValidator}), unsaved edits
@@ -6897,7 +6897,7 @@ final class EditorSession
      *     without it such a change set is refused, naming where they would move.
      * @param bool $checkOnly Whether to only report what committing would find, then undo the change set.
      * @return array{status: 'saved'|'refused'|'checked', maps: list<string>, saved: list<string>, written: array<string, list<string>>,
-     *     issues: list<array<string, ?string>>, blocking: int, relocated: list<string>, backupFailures: list<string>,
+     *     issues: list<array<string, mixed>>, blocking: int, relocated: list<string>, backupFailures: list<string>,
      *     reason?: ?string, unrestored?: int, unrestoredFiles?: list<string>}
      *     `written` names each document written and the files it wrote or removed, relative to the project root.
      * @throws SessionRefusal When no change set is open.
