@@ -52,42 +52,20 @@ final class PlacedPieces
      */
     public static function findAt(ProjectMap $map, int $x, int $y): array
     {
+        $graphics = self::loadGraphics($map);
         $found = [];
-        foreach (self::findAll($map) as $copy) {
-            if ($x >= $copy['x'] && $y >= $copy['y'] && $x < $copy['x'] + $copy['piece']->width && $y < $copy['y'] + $copy['piece']->height) {
-                $found[] = $copy;
+        foreach ($graphics?->tileset->pieces ?? [] as $piece) {
+            // A stacked piece, such as a peak, is one of a cell's overlapping objects, not a thing placed on its own.
+            if ($piece->connects !== null || $graphics->tileset->getStackOf($piece) !== null) {
+                continue;
+            }
+            foreach ($graphics->findPieceStampsCovering($piece, $x, $y) as [$left, $top]) {
+                $found[] = ['piece' => $piece, 'x' => $left, 'y' => $top];
             }
         }
         usort($found, static fn(array $a, array $b): int => $a['piece']->width * $a['piece']->height <=> $b['piece']->width * $b['piece']->height);
 
         return $found;
-    }
-
-    /**
-     * Every stamped copy on the map, in the tileset's piece order and then
-     * row order.
-     *
-     * @return list<array{piece: TilesetPiece, x: int, y: int}>
-     * @throws MapSourceRefusal When the map's graphics cannot be read.
-     */
-    public static function findAll(ProjectMap $map): array
-    {
-        try {
-            $graphics = $map->loadGraphics();
-        } catch (Throwable $error) {
-            throw new MapSourceRefusal('The map\'s tiles cannot be read, so its pieces cannot be found: ' . $error->getMessage(), previous: $error);
-        }
-        $copies = [];
-        foreach ($graphics?->tileset->pieces ?? [] as $piece) {
-            if ($piece->connects !== null || $graphics->tileset->getStackOf($piece) !== null) {
-                continue;
-            }
-            foreach ($graphics->findPieceStamps($piece) as [$left, $top]) {
-                $copies[] = ['piece' => $piece, 'x' => $left, 'y' => $top];
-            }
-        }
-
-        return $copies;
     }
 
     /**
@@ -97,7 +75,17 @@ final class PlacedPieces
      */
     public static function isPlacedAt(ProjectMap $map, TilesetPiece $piece, int $x, int $y): bool
     {
-        return array_any(self::findAll($map), static fn(array $copy): bool => $copy['piece']->id === $piece->id && $copy['x'] === $x && $copy['y'] === $y);
+        return in_array([$x, $y], self::loadGraphics($map)?->findPieceStampsCovering($piece, $x, $y) ?? [], true);
+    }
+
+    /** @throws MapSourceRefusal When the map's graphics cannot be read. */
+    private static function loadGraphics(ProjectMap $map): ?\Ichiloto\Engine\Field\MapGraphics
+    {
+        try {
+            return $map->loadGraphics();
+        } catch (Throwable $error) {
+            throw new MapSourceRefusal('The map\'s tiles cannot be read, so its pieces cannot be found: ' . $error->getMessage(), previous: $error);
+        }
     }
 
     /**
