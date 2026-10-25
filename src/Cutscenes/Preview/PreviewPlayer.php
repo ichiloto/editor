@@ -8,6 +8,7 @@ use Ichiloto\Engine\Core\Enumerations\MovementHeading;
 use Ichiloto\Engine\Core\Rect;
 use Ichiloto\Engine\Core\Vector2;
 use Ichiloto\Engine\Events\Interfaces\EventInterface;
+use Ichiloto\Engine\Rendering\Sprites\CharacterSheet;
 use Ichiloto\Engine\Field\Player;
 use Ichiloto\Engine\Field\PlayerPresentationConfig;
 use Ichiloto\Engine\Scenes\Game\GameScene;
@@ -35,15 +36,18 @@ final class PreviewPlayer extends Player
     /**
      * The player of a preview scene, with the field art the project gives the
      * player ({@see PlayerPresentationConfig}), as the game's field builds it.
+     * A preview showing a particular character in the player's place gives
+     * their graphical art; the Terminal sprites stay the player's own.
      *
      * @param string[] $sprite
      */
-    public function __construct(GameScene $scene, Vector2 $position, array $sprite = ['@'])
+    public function __construct(GameScene $scene, Vector2 $position, array $sprite = ['@'],
+        MovementHeading $heading = MovementHeading::NONE, ?CharacterSheet $appearance = null)
     {
         $presentation = PlayerPresentationConfig::load();
-        parent::__construct($scene, 'Player', $position, new Rect(0, 0, 1, 1), $sprite,
+        parent::__construct($scene, 'Player', $position, new Rect(0, 0, 1, 1), $sprite, $heading,
             directionalSprites: $presentation->terminal->toArray(),
-            graphicalSprites: $presentation->graphical);
+            graphicalSprites: $appearance ?? $presentation->graphical);
     }
 
     public function render(): void

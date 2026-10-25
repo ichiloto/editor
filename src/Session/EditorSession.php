@@ -107,6 +107,9 @@ use Ichiloto\Editor\History\SourceSetCommand;
 use Ichiloto\Editor\History\CommandGroup;
 use Ichiloto\Editor\History\SourceSetRequired;
 use Ichiloto\Editor\ProjectMap;
+use Ichiloto\Editor\Review\MapRenderer;
+use Ichiloto\Editor\Review\MapRendering;
+use Ichiloto\Editor\Review\MapRenderView;
 use Ichiloto\Editor\ProjectWorkspace;
 use Ichiloto\Editor\Storage\FileSetTransactionFailure;
 use Ichiloto\Editor\Storage\SaveSet;
@@ -5384,6 +5387,24 @@ final class EditorSession
                 'cellWidth' => $host->grid->cellWidth, 'cellHeight' => $host->grid->cellHeight],
             'messages' => $messages, 'assetPaths' => $source?->assetPaths ?? [], 'diagnostics' => $source?->diagnostics ?? [],
             'graphicsIssue' => $source?->graphicsIssue];
+    }
+
+    /**
+     * Renders a map for review as the game draws it, both ways, as it stands,
+     * unsaved edits included: the Terminal field's picture and a still of the
+     * graphical field, for the whole map or a region, with the player or an
+     * actor on a cell when the view asks ({@see MapRenderer}). Nothing is
+     * written.
+     *
+     * @throws SessionRefusal When the view names an unknown map, actor or cells off the map, or the map cannot be loaded.
+     */
+    public function renderMapReview(MapRenderView $view): MapRendering
+    {
+        try {
+            return new MapRenderer($this->workspace)->render($view);
+        } catch (InvalidArgumentException|RuntimeException $error) {
+            throw new SessionRefusal($error->getMessage(), previous: $error);
+        }
     }
 
     /**

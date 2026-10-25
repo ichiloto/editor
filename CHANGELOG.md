@@ -4,6 +4,19 @@
 
 ### Added
 
+- Map review renders: `EditorSession::renderMapReview()` draws a map, or a
+  rectangle of it, both ways as the game draws it, unsaved edits included,
+  through the game's own field: the Terminal picture the field's camera draws
+  through the Engine's Console, and a still of the graphical field the
+  Engine's frame composer sends a renderer (world tiles, corner-edged terrain,
+  tile shadows, glyph cells, NPCs, world objects, and the player or an actor
+  on a cell), drawn by `Review\FieldStillRaster` in the renderer's paint
+  order. `Review\MapReviewWriter` writes each view as `.ans`, a Terminal
+  page, a native PNG and an optional scaled PNG, and one review page that
+  sets every view's Terminal picture beside its still.
+  `ChangeBatch::preview()` shows a session as a batch leaves it, then undoes
+  the batch, writing nothing. `PreviewField::openProjectMap()` opens the field
+  on a map as the Editor holds it, with the player optional.
 - Configuration offers the volumes a game starts at: `audio.master_volume`
   and, beneath it, `audio.music_volume`, `audio.sfx_volume` and
   `audio.voice_volume`, each listed with its Engine default even where
@@ -38,6 +51,16 @@
 
 ### Fixed
 
+- A preview field's Terminal picture draws its world objects' Terminal cells,
+  as the game's field does; cinematic and effect previews left them out.
+- A preview's graphical view draws field effects: the effect manager a
+  graphical view installs learns the window's capabilities, where before it
+  knew none and drew no effect.
+- A preview field's map events are bound to its world state, as the game's
+  are: an event cue shows in both pictures only while its event is
+  available, and the Terminal picture draws event cues, which it left out.
+  Before, the graphical view cued events whose conditions a new game has not
+  met.
 - Save relocations land saves only on floor the player reaches once the change
   is saved, and also move saves off floor the change walls off. A wall that
   closed off a pocket of floor reachable before the change could send saves into

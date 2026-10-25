@@ -6,11 +6,18 @@ namespace Ichiloto\Editor\Cutscenes\Preview;
 
 use Closure;
 use Ichiloto\Editor\ProjectDirectoryContext;
+use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Engine\Animations\Timelines\CompiledEffectTimeline;
 use Ichiloto\Engine\Animations\Timelines\EffectPresentation;
+use Ichiloto\Engine\Core\Enumerations\MovementHeading;
 use Ichiloto\Engine\Core\Vector2;
 use Ichiloto\Engine\IO\Console\Console;
+use Ichiloto\Engine\Rendering\FieldViewport;
+use Ichiloto\Engine\Rendering\Presentation\SceneFrameComposer;
+use Ichiloto\Engine\Rendering\Presentation\SceneFrameComposition;
+use Ichiloto\Engine\Rendering\Presentation\ScenePresentationContext;
 use Ichiloto\Engine\Rendering\Runtime\RendererRuntimeConfig;
+use Ichiloto\Engine\Rendering\Sprites\CharacterSheet;
 use Ichiloto\Engine\Rendering\Transport\RendererGridConfig;
 use Ichiloto\Engine\Util\Config\ConfigStore;
 use Ichiloto\Engine\Util\Config\PlaySettings;
@@ -90,6 +97,103 @@ final class PreviewField
         });
 
         return $field;
+    }
+
+    /**
+     * Opens the field on a map as the editor holds it, unsaved edits included
+     * ({@see PreviewMapManager::loadProjectMapForPreview()}), with the player
+     * standing on a cell facing a heading, or with nobody on it. A character
+     * shown in the player's place gives their graphical art. The camera
+     * follows the player, or holds the map's top-left corner without one.
+     * A map that cannot be loaded leaves undefined terrain and says why.
+     *
+     * @param Closure(): float $readTime The owner's clock, in seconds.
+     */
+    public static function openProjectMap(string $projectRoot, ProjectMap $map, ?Vector2 $spawn, int $width, int $height,
+        Closure $readTime, MovementHeading $heading = MovementHeading::NONE, ?CharacterSheet $appearance = null): self
+    {
+        $field = new self($projectRoot, $width, $height, $readTime);
+        $field->run(function () use ($field, $map, $spawn, $heading, $appearance): void {
+            $field->scene = new PreviewGameScene(new PreviewSceneManager(), $field->screenWidth, $field->screenHeight, $map->mapId);
+            $field->scene->installFieldEffects(EffectPresentation::TERMINAL);
+            $camera = $field->scene->previewCamera();
+            $field->presentation = new PreviewPresentation($field->screenWidth, $field->screenHeight);
+            $player = $spawn === null ? null : new PreviewPlayer($field->scene, $spawn, heading: $heading, appearance: $appearance);
+            if ($player !== null) {
+                $field->scene->installPlayer($player);
+            }
+            try {
+                $field->scene->previewMap->loadProjectMapForPreview($map);
+            } catch (Throwable) {
+                // The map manager owns the undefined terrain and its diagnostic.
+            }
+            if ($player !== null) {
+                $camera->attach($player);
+            } else {
+                $camera->detach();
+                $camera->moveTo(0, 0);
+            }
+        });
+
+        return $field;
+    }
+
+    /**
+     * Holds the camera still with its top-left as near a map cell as the map
+     * allows, instead of following the player.
+     */
+    public function holdCameraAt(int $x, int $y): void
+    {
+        $this->run(function () use ($x, $y): void {
+            $camera = $this->scene->previewCamera();
+            $camera->detach();
+            $camera->moveTo($x, $y);
+        });
+    }
+
+    /**
+     * The map cell the screen's top-left shows, as the camera projects the
+     * world: negative where a map smaller than the screen sits centred on it.
+     *
+     * @return array{x: int, y: int}
+     */
+    public function getCameraOrigin(): array
+    {
+        return $this->scene->previewCamera()->getWorldOrigin();
+    }
+
+    /**
+     * The game's graphical field as it stands, composed for a still picture
+     * by a renderer of the given capabilities that has no window to answer:
+     * the map's world, its sprites at this moment and the camera's viewport,
+     * as the editor window's graphical view composes them
+     * ({@see PreviewSceneHost}). The field cell is the graphical field's, so
+     * the camera keeps the screen it has; the Terminal picture is unchanged
+     * once the composition is taken.
+     *
+     * @param Closure(string): bool $supports The still renderer's capabilities.
+     */
+    public function composeStill(Closure $supports): SceneFrameComposition
+    {
+        $assetRoot = $this->projectRoot . '/assets';
+        $grid = new RendererGridConfig($this->screenWidth, $this->screenHeight, FieldViewport::TILE_SIZE, FieldViewport::TILE_SIZE);
+        $composition = null;
+        $this->run(function () use ($assetRoot, $grid, $supports, &$composition): void {
+            $this->scene->setPresentationContext(new ScenePresentationContext($grid, $supports,
+                collectPresentations: fn(): array => $this->presentation->getActivePresentations(), readTime: $this->readTime,
+                assetRoot: $assetRoot));
+            $this->scene->installFieldEffects(EffectPresentation::GRAPHICAL);
+            try {
+                $composition = new SceneFrameComposer($assetRoot)->composeFrame($this->scene, $grid, $supports,
+                    fn(array $excluded, array $worldLayers) => Console::capturePresentation($grid->columns, $grid->rows,
+                        $this->renderScene(...), $excluded, $worldLayers, $this->scene->getPresentationWorld() !== null));
+            } finally {
+                $this->scene->setPresentationContext(null);
+                $this->scene->installFieldEffects(EffectPresentation::TERMINAL);
+            }
+        });
+
+        return $composition ?? throw new \LogicException('The field composed no graphical picture.');
     }
 
     /**
@@ -255,6 +359,7 @@ final class PreviewField
     private function renderScene(): void
     {
         $this->scene->previewMap->render();
+        $this->scene->renderEventCues($this->scene->previewMap->eventTriggers);
         $this->scene->npcManager?->render();
         $this->scene->player?->render();
         $this->scene->cinematicStage?->render();
