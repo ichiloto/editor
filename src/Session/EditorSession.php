@@ -973,6 +973,53 @@ final class EditorSession
      */
     public function toggleTilesetMark(int $index, string $mark, int $tile): array
     {
+        $record = $this->requireRecordDatabase('tilesets')->getRecordByIndex($index)
+            ?? throw new SessionRefusal(sprintf('tilesets has no record %d.', $index));
+        $this->assertTileMarkable($mark, $tile);
+        $flag = TileId::getFlagId($tile);
+        $listed = array_values(array_filter(is_array($record->get($mark)) ? $record->get($mark) : [], is_int(...)));
+        $marked = ! array_any($listed, static fn(int $listedTile): bool => TileId::getFlagId($listedTile) === $flag);
+
+        return [...$this->setTilesetMarks($index, $mark, [$tile], $marked), 'marked' => $marked];
+    }
+
+    /**
+     * Gives several tiles of a tileset record a mark, or takes it from them,
+     * as one undo step through the record's Above Characters or Tables
+     * field: what a drag across a building's roof does. Tiles already as
+     * asked stay as they are.
+     *
+     * @param 'above'|'tables' $mark
+     * @param list<int> $tiles
+     * @return array{changed: bool, records: list<string>, tiles: int}
+     * @throws SessionRefusal When the record or mark is unknown, or a tile cannot take the mark.
+     */
+    public function setTilesetMarks(int $index, string $mark, array $tiles, bool $marked): array
+    {
+        $record = $this->requireRecordDatabase('tilesets')->getRecordByIndex($index)
+            ?? throw new SessionRefusal(sprintf('tilesets has no record %d.', $index));
+        if ($tiles === []) {
+            throw new SessionRefusal('Choose tiles to mark first.');
+        }
+        $flags = [];
+        foreach ($tiles as $tile) {
+            $this->assertTileMarkable($mark, $tile);
+            $flags[TileId::getFlagId($tile)] = true;
+        }
+        $listed = array_values(array_filter(is_array($record->get($mark)) ? $record->get($mark) : [], is_int(...)));
+        $present = array_map(TileId::getFlagId(...), $listed);
+        // Tiles marked already keep their place in the list, and new ones follow.
+        $next = $marked
+            ? [...$listed, ...array_values(array_diff(array_keys($flags), $present))]
+            : array_values(array_filter($listed, static fn(int $listedTile): bool => ! isset($flags[TileId::getFlagId($listedTile)])));
+        $result = $this->applyDatabaseRecord('tilesets', $index, ['field' => $mark, 'frame' => []], implode(', ', $next));
+
+        return [...$result, 'tiles' => count($flags)];
+    }
+
+    /** @throws SessionRefusal When the mark is not one, or the tile cannot take it. */
+    private function assertTileMarkable(string $mark, int $tile): void
+    {
         if (! in_array($mark, ['above', 'tables'], true)) {
             throw new SessionRefusal(sprintf('%s is not a tile mark; a tile is marked above characters or as a table.', $mark));
         }
@@ -982,16 +1029,6 @@ final class EditorSession
         if ($mark === 'tables' && TileId::getSheet($tile) !== TilesetSheet::A2) {
             throw new SessionRefusal(sprintf('Only A2 autotiles can be tables; tile %d is on sheet %s.', $tile, TileId::getSheet($tile)?->value ?? '?'));
         }
-        $record = $this->requireRecordDatabase('tilesets')->getRecordByIndex($index)
-            ?? throw new SessionRefusal(sprintf('tilesets has no record %d.', $index));
-        $flag = TileId::getFlagId($tile);
-        $listed = array_values(array_filter(is_array($record->get($mark)) ? $record->get($mark) : [], is_int(...)));
-        $kept = array_values(array_filter($listed, static fn(int $listedTile): bool => TileId::getFlagId($listedTile) !== $flag));
-        $marked = count($kept) === count($listed);
-        $result = $this->applyDatabaseRecord('tilesets', $index, ['field' => $mark, 'frame' => []],
-            implode(', ', $marked ? [...$kept, $flag] : $kept));
-
-        return [...$result, 'marked' => $marked];
     }
 
     /**

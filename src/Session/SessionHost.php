@@ -210,11 +210,14 @@ final class SessionHost
                 self::requireInt($params, 'index'), self::requireFootprintId($params, 'tileset'), self::requireFootprintId($params, 'piece'),
                 self::requireFootprint($params, 'expected'), self::requireFootprint($params, 'value'),
             ),
-            'tilesets.mark' => $session->toggleTilesetMark(
-                self::requireInt($params, 'index'),
-                self::requireString($params, 'mark'),
-                self::requireInt($params, 'tile'),
-            ),
+            'tilesets.mark' => array_key_exists('tiles', $params)
+                ? $session->setTilesetMarks(self::requireInt($params, 'index'), self::requireString($params, 'mark'), self::requireTileList($params),
+                    self::readOptionalBool($params, 'marked', true))
+                : $session->toggleTilesetMark(
+                    self::requireInt($params, 'index'),
+                    self::requireString($params, 'mark'),
+                    self::requireInt($params, 'tile'),
+                ),
             'tilesets.appearance' => $session->setTileAppearance(
                 self::requireInt($params, 'index'),
                 self::requireString($params, 'tileset'),
@@ -906,6 +909,20 @@ final class SessionHost
         $value = $params[$key] ?? $default;
 
         return is_bool($value) ? $value : throw new InvalidRequest(sprintf('"%s" must be a boolean when given.', $key));
+    }
+
+    /**
+     * A list of tile identities.
+     *
+     * @param array<string, mixed> $params
+     * @return list<int>
+     */
+    private static function requireTileList(array $params): array
+    {
+        $tiles = $params['tiles'] ?? null;
+
+        return is_array($tiles) && array_is_list($tiles) && array_all($tiles, static fn(mixed $tile): bool => is_int($tile))
+            ? $tiles : throw new InvalidRequest('"tiles" must be a list of tile identities.');
     }
 
     /**

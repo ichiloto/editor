@@ -48,9 +48,8 @@ function defineHutPiece(string $root, Closure $request): void
     expectAnswer($request('tileset.setOccupancy', ['index' => 0, 'tileset' => 'town', 'piece' => 'hut', 'expected' => null,
         'value' => [[null, null, null], [CollisionType::SOLID->value, CollisionType::SOLID->value, CollisionType::SOLID->value]]]));
     expectAnswer($request('tilesets.setPieceDoor', ['index' => 0, 'tileset' => 'town', 'piece' => 'hut', 'x' => 1, 'y' => 1, 'entrance' => 'front']));
-    foreach (getHutTiles()[0] as $roof) {
-        expectAnswer($request('tilesets.mark', ['index' => 0, 'mark' => 'above', 'tile' => $roof]));
-    }
+    // The roof is dragged across in one step, so it draws above characters walking behind the building.
+    expectAnswer($request('tilesets.mark', ['index' => 0, 'mark' => 'above', 'tiles' => getHutTiles()[0]]));
     expectAnswer($request('database.save', ['category' => 'tilesets']));
 }
 
@@ -202,6 +201,21 @@ it('defines a building piece over its cells: tiles, a glyph per cell, footprint,
         'tileLayer' => 'houses', 'rows' => [[263]]]))['id'])->toBe('hut-2');
     expectAnswer($request('history.undo'));
     expect(array_column(expectAnswer($request('tilesets.preview', ['index' => 0]))['authoring'], 'id'))->toBe(['hut']);
+});
+
+it('marks a dragged rectangle of tiles above characters, or takes the mark away, as one undo step', function () {
+    $root = createBuildingProject();
+    $request = createBuildingRpc($root);
+    $above = static fn(): array => expectAnswer($request('tilesets.preview', ['index' => 0]))['above'];
+    expectAnswer($request('tilesets.mark', ['index' => 0, 'mark' => 'above', 'tile' => 300]));
+    expect(expectAnswer($request('tilesets.mark', ['index' => 0, 'mark' => 'above', 'tiles' => [263, 300, 384]]))['tiles'])->toBe(3);
+    expect($above())->toBe([300, 263, 384]);
+    expectAnswer($request('history.undo'));
+    expect($above())->toBe([300]);
+    expectAnswer($request('history.redo'));
+    expectAnswer($request('tilesets.mark', ['index' => 0, 'mark' => 'above', 'tiles' => [263, 384], 'marked' => false]));
+    expect($above())->toBe([300])
+        ->and(expectRefusal($request('tilesets.mark', ['index' => 0, 'mark' => 'tables', 'tiles' => [263]])))->toContain('Only A2 autotiles can be tables');
 });
 
 it('places the building with its footprint, gives its painted door an entrance, moves and removes it whole, with undo and redo', function () {
