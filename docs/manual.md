@@ -2051,6 +2051,18 @@ save point, picked from the project's event scripts (None keeps the Engine's
 save point notice, worded in Terms as `messages.save.point_prompt` and
 `messages.save.point_title`). Validation names a script that does not exist.
 
+#### Volumes
+
+`audio.master_volume` (default `75`) and, beneath it, `audio.music_volume`,
+`audio.sfx_volume` and `audio.voice_volume` (default `100` each) are the
+volumes the game starts at, each a whole number from `0` to `100`. A sound
+plays at the master volume times its bus's volume times its own volume
+(`audio.sound_volumes.<sound>`), so a game sets how loud music sits beside
+sound effects and voices without editing any file. Players change all four
+in the game's Options and Config; their choices stay in their player
+settings, and these values only decide where a new player starts. A value
+outside the range is refused before anything changes.
+
 #### Always Dash
 
 `field.always_dash` is the first value of the player's Always Dash option, a
