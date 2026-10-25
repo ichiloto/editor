@@ -229,3 +229,26 @@ it('moves saves off floor an event moved onto, where loading would start it', fu
 
     expect($session->saveMap('home')['relocations'])->toBe([['map' => 'home', 'cells' => [[3, 1]], 'to' => [4, 1]]]);
 });
+
+it('moves no save off a map the player reaches nowhere, such as one just made and not yet joined to the world', function () {
+    $root = mapLineRemovalProject();
+    $session = EditorSession::open($root);
+    $session->createMap('Far field', null, 160, 120, 'far-field');
+    $map = $session->readMap('far-field');
+    // Its blank floor is walkable on disk; walling all of it in would otherwise plan a landing for every cell.
+    $cells = [];
+    for ($y = 0; $y < 120; $y++) {
+        for ($x = 0; $x < 160; $x++) {
+            $cells[] = [$x, $y];
+        }
+    }
+    $session->paint('far-field', $map['revision'], $map['baseLayer'], $cells, '#');
+    $manifest = (string) file_get_contents($root . '/assets/Data/save-compatibility.php');
+    $started = microtime(true);
+    $saved = $session->saveMap('far-field');
+
+    // Searching a landing for each of its cells took minutes on a map this size.
+    expect(microtime(true) - $started)->toBeLessThan(20.0)
+        ->and($saved)->toHaveKey('saved')
+        ->and((string) file_get_contents($root . '/assets/Data/save-compatibility.php'))->toBe($manifest);
+});

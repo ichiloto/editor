@@ -9,6 +9,7 @@ use Ichiloto\Editor\ProjectDirectoryContext;
 use Ichiloto\Editor\ProjectMap;
 use Ichiloto\Editor\Storage\SourceSetPlan;
 use Ichiloto\Engine\Core\CellArea;
+use Ichiloto\Engine\Core\Rect;
 use Ichiloto\Engine\Events\Enumerations\CollisionType;
 use Ichiloto\Engine\Field\MapCollisionResolver;
 use Ichiloto\Engine\Field\MapTerrainKinds;
@@ -126,6 +127,11 @@ final class SaveRelocationPlanner
     private static function planMap(ProjectMap $map, string $root, MapReachabilityReport $report, ?MapReachabilityReport $changed): array
     {
         $grid = $map->getResolvedCollisionMap();
+        // A map the player reaches nowhere today, such as one made in this change and not yet joined to the world,
+        // holds no save a relocation could place.
+        if (! $report->isAnyReachable(new Rect(0, 0, max(1, $map->getWidth()), max(1, $map->getHeight())))) {
+            return [];
+        }
         // Landings are judged on the map as the change leaves them: a pocket it walls off is no landing.
         $cells = $changed === null ? null : SaveLandingCells::readMap($map, $changed);
         $npcs = SaveLandingCells::readNpcCells((array) ($map->getEditableData()['npcs'] ?? []));
