@@ -241,6 +241,10 @@ it('places the building with its footprint, gives its painted door an entrance, 
     $doorway = static fn(): array => array_values(array_filter(expectAnswer($request('project.validate', ['maps' => ['town']]))['issues'],
         static fn(array $issue): bool => ($issue['code'] ?? null) === 'object.doorway'));
     expect(array_column($doorway(), 'message'))->toBe(["Piece 'hut' at 2,1 paints a door at 3,2 entered from the front, with no entrance at 3,3. At (3, 2)."]);
+    // The map on its own says the same, naming the cell so an editor can show it.
+    $checked = array_values(array_filter(expectAnswer($request('map.validate', ['map' => 'town']))['issues'],
+        static fn(array $issue): bool => $issue['code'] === 'object.doorway'));
+    expect($checked[0]['cells'])->toBe([[3, 2]])->and($checked[0]['hint'])->toContain('Place an entrance at each door');
 
     // The door's entrance goes on the cell in front of it, then leads inside like any transfer.
     $entrance = expectAnswer($request('pieces.addEntrance', ['map' => 'town', 'revision' => readTown($request)['revision'], 'piece' => 'hut',

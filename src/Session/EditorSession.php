@@ -6587,6 +6587,28 @@ final class EditorSession
      * @param list<string>|null $mapIds Only the issues about these maps; null for every issue.
      * @return array{issues: list<array<string, ?string>>, errors: int, warnings: int}
      */
+    /**
+     * Checks one map as saving it does ({@see MapValidator}), unsaved edits
+     * included, without the rest of the project: what an editor shows beside
+     * the map. Each issue names the cells it is about, when it names any.
+     *
+     * @return array{map: string, revision: int, issues: list<array<string, mixed>>, errors: int, warnings: int}
+     * @throws SessionRefusal When the map is unknown.
+     */
+    public function validateMap(string $mapId): array
+    {
+        $map = $this->requireMap($mapId);
+        $issues = MapValidator::validate($map, $this->getMapsById(), MapValidator::readInventoryCatalog($this->workspace));
+
+        return [
+            'map' => $map->mapId,
+            'revision' => $this->getMapRevision($map),
+            'issues' => array_map(static fn(Issue $issue): array => $issue->describe(), $issues),
+            'errors' => count(MapValidator::selectSeverity($issues, Severity::ERROR)),
+            'warnings' => count(MapValidator::selectSeverity($issues, Severity::WARNING)),
+        ];
+    }
+
     public function validateProject(?array $mapIds = null): array
     {
         $issues = new ProjectValidator()->validate($this->workspace);

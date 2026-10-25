@@ -110,7 +110,7 @@ final class MapCompletenessCheck
                 count($cells) === 1 ? '' : sprintf('%d cells: ', count($cells)), implode(', ', $named), $rest > 0 ? " and {$rest} more" : '');
             $where = $issue->marker === null ? $map->mapId : sprintf('%s event %s', $map->mapId, $issue->marker);
             $issues[] = new Issue(self::isWarning($issue) ? Severity::WARNING : Severity::ERROR, $where, $message,
-                self::describeHint($map, $issue), $issue->rule, $map->mapId);
+                self::describeHint($map, $issue), $issue->rule, $map->mapId, array_map(static fn(array $cell): array => [$cell[0], $cell[1]], $cells));
         }
 
         return $issues;

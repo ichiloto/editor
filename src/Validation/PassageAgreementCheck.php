@@ -41,7 +41,8 @@ final class PassageAgreementCheck
             $message = $cells === [] ? $issue->message : sprintf('%s At %s%s%s.', $issue->message,
                 count($cells) === 1 ? '' : sprintf('%d cells: ', count($cells)), implode(', ', $named), $rest > 0 ? " and {$rest} more" : '');
             $issues[] = new Issue(Severity::WARNING, $map->mapId, $message,
-                $issue->hint . ' The collision view of the GUI editor marks every cell.', $issue->rule, $map->mapId);
+                $issue->hint . ' The collision view of the GUI editor marks every cell.', $issue->rule, $map->mapId,
+                array_map(static fn(array $cell): array => [$cell[0], $cell[1]], $cells));
         }
 
         return $issues;

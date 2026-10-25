@@ -742,6 +742,7 @@ final class SessionHost
             'history.redo' => $session->redo(),
             'project.dirty' => ['dirty' => $session->hasUnsavedChanges(), 'unsaved' => $session->listUnsavedChanges()],
             'project.saveAll' => $session->saveAll(),
+            'map.validate' => $session->validateMap(self::requireString($params, 'map')),
             'project.validate' => $session->validateProject(array_key_exists('maps', $params) ? self::requireLines($params, 'maps') : null),
             'changes.begin' => $session->beginChanges(),
             'changes.commit' => $session->commitChanges(
