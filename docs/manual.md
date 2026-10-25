@@ -689,6 +689,12 @@ graphical editor. Glyph-keyed crop authoring (`tiles2d` and its cell
 overrides) has been removed along with the Engine's support for it; tilesets
 replace it.
 
+**Measuring walks** is a GUI editor tool: its Measure tool shows the
+shortest walk between cells with its steps, walking seconds, screens crossed
+and expected encounters, read from the session's `map.measure` (see Measuring
+A Walk in [Change Maps From A Script](guides/change-maps-from-a-script.md)).
+The terminal editor keeps its workflow and has no measuring mode.
+
 **Pending, not implemented:** richer renderers will use a separate,
 RPG Maker-like GUI editor for graphical materials, atlases and crop authoring.
 The planned `ichiloto edit` entry point will offer a TUI/GUI choice; that choice

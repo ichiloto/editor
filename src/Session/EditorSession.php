@@ -163,6 +163,11 @@ use Ichiloto\Engine\Cutscenes\Summons\SummonCutsceneDefinition;
 use Ichiloto\Engine\Rendering\Presentation\Canvas\CanvasImage;
 use Closure;
 use InvalidArgumentException;
+use Ichiloto\Editor\Field\MapWalkMeasurement;
+use Ichiloto\Editor\ProjectConfig;
+use Ichiloto\Engine\Battle\UI\BattleScreen;
+use Ichiloto\Engine\Rendering\FieldViewport;
+use Ichiloto\Engine\Rendering\Runtime\RendererRuntimeConfig;
 use Ichiloto\Engine\IO\SaveCompatibility\ContentReferenceCategory;
 use RuntimeException;
 use Throwable;
@@ -1009,6 +1014,40 @@ final class EditorSession
             'available' => $cells !== null,
             'cells' => array_map(static fn(array $cell): array => [$cell['x'], $cell['y'], $cell['rule']], $cells ?? []),
         ];
+    }
+
+    /**
+     * Measures a walk on a map, unsaved edits included ({@see MapWalkMeasurement}):
+     * the shortest walk from the first point through each waypoint to the last,
+     * its steps, walking and dashing seconds, the GPUI field screens it crosses
+     * and the encounters expected on the way. Read-only: nothing changes.
+     *
+     * Screens are counted in the field a GPUI session shows at the game's
+     * default graphical screen, the battle footprint in GPUI text cells
+     * ({@see \Ichiloto\Engine\Core\Game::resolveScreenSize()}), at the
+     * project's field zoom, as GameScene builds its field view.
+     *
+     * @param list<array{0: int, 1: int}> $points
+     * @return array<string, mixed>
+     * @throws SessionRefusal When the map is unknown or cannot be read as the game reads it.
+     */
+    public function measureWalk(string $mapId, array $points): array
+    {
+        $map = $this->requireMap($mapId);
+        $zoom = $this->workspace->config?->getRecord(ProjectConfig::FIELD_ZOOM)->get('value');
+        // The field falls back to its default zoom for a value it cannot use, and warns there.
+        $zoom = (is_int($zoom) || is_float($zoom)) && is_finite((float) $zoom)
+            && $zoom >= FieldViewport::MIN_ZOOM && $zoom <= FieldViewport::MAX_ZOOM ? (float) $zoom : FieldViewport::DEFAULT_ZOOM;
+        $view = new FieldViewport(new RendererGridConfig(BattleScreen::WIDTH, BattleScreen::HEIGHT,
+            RendererRuntimeConfig::GPUI_CELL_WIDTH, RendererRuntimeConfig::GPUI_CELL_HEIGHT), $zoom);
+        try {
+            // No game data authors a dash speed yet, so the measurement says it shows walking only.
+            $measurement = new MapWalkMeasurement($map, $view)->measure($points);
+        } catch (InvalidArgumentException|MapSourceRefusal $refusal) {
+            throw new SessionRefusal(sprintf('%s cannot be measured: %s', $mapId, $refusal->getMessage()), previous: $refusal);
+        }
+
+        return ['map' => $map->mapId, 'revision' => $this->getMapRevision($map), ...$measurement];
     }
 
     /**

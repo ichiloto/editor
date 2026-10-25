@@ -152,6 +152,7 @@ or with the GUI editor open, these reads give every id a change needs:
 | `kinds.previewConversion {map, mapping?}` | What converting the map would do: each mapped glyph's cells, the glyphs left, those that already name a kind (`reread`) and the collision changes. Without a mapping it lists the map's glyphs. |
 | `event.types` | Event type labels for `event.create`. |
 | `references.list {map, category}` | The values a reference row accepts, such as `inventory` ids. |
+| `map.measure {map, points}` | The shortest walk through `[x, y]` points in order (a start, any waypoints, an end), and its steps, seconds and expected encounters. See Measuring A Walk. |
 
 Layers are named by `id` in edits. An event row key looks like
 `{"target": "event", "marker": "C", "path": ["data", "loot"]}`.
@@ -196,6 +197,32 @@ refused while one names it, listing them. All of these work inside a batch,
 so an area made earlier in the batch can be bound and anchored to before
 anything is written. Row and column inserts move areas with the lines; a
 removal through one of an area's exact cells is refused until it is reshaped.
+
+## Measuring A Walk
+
+`map.measure {map, points}` measures how far a player walks, on request, and
+changes nothing. `points` lists two to 64 `[x, y]` cells: the start, any
+waypoints, then the end. The answer holds the whole walk as `path` (every cell,
+start included), `steps` with the steps `across` and `down`, `walkSeconds`
+(each step lasting the field's walk, `stepSeconds`), `screens` (steps across
+over the field view's columns plus steps down over its rows, for the GPUI field
+at the game's default screen and the project's field zoom, named in `view`),
+and one entry per leg in `legs`. Where the map has encounters, `encounters`
+gives the map's `rate`, the steps the walk counts toward an encounter
+(`countedSteps`, a danger tile counting twice on a map that counts every
+tile), the encounters `expected` on the way (counted steps over the rate,
+with no repel or lure assumed) and the `troops` that can be met along it;
+without encounters it is null. `dashSeconds` is null, with `dashUnavailable`
+saying why, while the game authors no dash speed.
+
+The walk is the game's: the Engine's movement over the map as the session
+holds it, unsaved edits included, so walls, fixed NPCs and cells that take the
+player off the map stand where the game puts them. Of the equally short walks
+it keeps its heading wherever it can. When a point cannot be stood on, a
+waypoint would leave the map, or no walk joins two points, `reachable` is
+false, `problem` says which, and `path` and `legs` are empty. A map the game
+could not load, such as one with an event marker that has no definition, is
+refused with the reason.
 
 ## Save Migrations
 
